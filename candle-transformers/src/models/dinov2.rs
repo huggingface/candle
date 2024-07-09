@@ -167,6 +167,8 @@ impl PatchEmbed {
             ..Default::default()
         };
         let proj = candle_nn::conv2d(in_chans, embed_dim, patch_size, config, vb.pp("proj"))?;
+        println!("Patch embed WEIGHTS");
+        print_tensor_statistics(proj.weight())?;
         let num_patches = (img_size / patch_size) * (img_size / patch_size);
         Ok(Self {
             proj,
@@ -256,15 +258,13 @@ impl DinoVisionTransformer {
         let (w0, h0) = ((w / PATCH_SIZE) as f64 + 0.1, (h / PATCH_SIZE) as f64 + 0.1);
         let patch_pos_embed = patch_pos_embed
             .reshape((1, sqrt_n as usize, sqrt_n as usize, dim))?
-            .transpose(2, 3)?
-            .transpose(1, 2)?;
+            .permute((0, 3, 1, 2))?;
         // This uses bicubic interpolation in the original implementation.
         let patch_pos_embed = patch_pos_embed.upsample_nearest2d(h0 as usize, w0 as usize)?;
         let el_count = patch_pos_embed.shape().elem_count();
         let patch_pos_embed =
             patch_pos_embed
-                .transpose(1, 2)?
-                .transpose(2, 3)?
+                .permute((0, 2, 3, 1))?
                 .reshape((1, el_count / dim, dim))?;
         Tensor::cat(&[&class_pos_embed, &patch_pos_embed], 1)
     }
@@ -272,8 +272,15 @@ impl DinoVisionTransformer {
     fn prepare_tokens_with_mask(&self, xs: &Tensor) -> Result<Tensor> {
         let (_b, _nc, w, h) = xs.dims4()?;
         let xs = self.patch_embed.forward(xs)?;
+        println!("Patch embed");
+        print_tensor_statistics(&xs)?;
         let xs = Tensor::cat(&[&self.cls_token, &xs], 1)?;
-        &xs + &self.interpolate_pos_encoding(&xs, w, h)?
+        println!("Cat tokens");
+        print_tensor_statistics(&xs)?;
+        let out = xs.add(&self.interpolate_pos_encoding(&xs, w, h)?)?;
+        println!("add interpolate encodings");
+        print_tensor_statistics(&out)?;
+        Ok(out)
     }
 
     fn get_intermediate_layers_not_chunked(
@@ -281,11 +288,18 @@ impl DinoVisionTransformer {
         xs: &Tensor,
         blocks_to_take: &[usize],
     ) -> Result<Vec<Tensor>> {
+        println!("Start get intermediate layers");
+        print_tensor_statistics(&xs)?;
+
         let mut xs = self.prepare_tokens_with_mask(xs)?;
+        println!("Post prep with mask");
+        print_tensor_statistics(&xs)?;
         let mut output = Vec::new();
         for (i, blk) in self.blocks.iter().enumerate() {
             xs = blk.forward(&xs)?;
             if blocks_to_take.contains(&i) {
+                println!("Taking block {i}");
+                print_tensor_statistics(&xs)?;
                 output.push(xs.clone());
             }
         }
@@ -317,7 +331,7 @@ impl DinoVisionTransformer {
             outputs
                 .iter()
                 .map(|out| self.norm.forward(out))
-                .collect::<Result<Vec<_>>>()?
+                .collect::<Result<Vec<Tensor>>>()?
         } else {
             outputs
         };
@@ -400,41 +414,4 @@ pub fn vit_large(vb: VarBuilder, vb_head: Option<VarBuilder>) -> Result<DinoVisi
 
 pub fn vit_giant(vb: VarBuilder, vb_head: Option<VarBuilder>) -> Result<DinoVisionTransformer> {
     DinoVisionTransformer::new(vb, vb_head, 40, 1536, 24)
-}
-
-fn print_tensor_statistics(tensor: &Tensor) -> Result<()> {
-    // General characteristics
-    println!("Tensor: {:?}", tensor);
-
-    let tensor = tensor.flatten_all().unwrap();
-
-    // Inline method to compute the minimum value over all elements
-    fn min_all(tensor: &Tensor) -> f32 {
-        let vec: Vec<f32> = tensor.to_vec1().unwrap();
-        vec.iter().cloned().min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal)).unwrap()
-    }
-
-    // Inline method to compute the maximum value over all elements
-    fn max_all(tensor: &Tensor) -> f32 {
-        let vec: Vec<f32> = tensor.to_vec1().unwrap();
-        vec.iter().cloned().max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal)).unwrap()
-    }
-
-    // Inline method to compute the mean value over all elements
-    fn mean_all(tensor: &Tensor) -> Result<f32> {
-        let vec: Vec<f32> = tensor.to_vec1()?;
-        Ok(vec.iter().sum::<f32>() / vec.len() as f32)
-    }
-
-    // Compute overall statistics
-    let min_val = min_all(&tensor);
-    let max_val = max_all(&tensor);
-    let mean_val = mean_all(&tensor)?;
-
-    println!("Overall statistics:");
-    println!("  Min: {:?}", min_val);
-    println!("  Max: {:?}", max_val);
-    println!("  Mean: {:?}", mean_val);
-
-    Ok(())
 }

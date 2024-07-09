@@ -347,12 +347,12 @@ pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
     println!("BGR Image");
     print_tensor_statistics_f64(&bgr_data)?;
 
-    // let index = Tensor::from_vec(vec![2u32, 1, 0], (3,), &Device::Cpu)?;
-    // let  rgb_data = bgr_data.index_select(&index, 2)?;
-    // println!("rgb Image");
-    // print_tensor_statistics(&rgb_data)?;
+    let index = Tensor::from_vec(vec![2u32, 1, 0], (3,), &Device::Cpu)?;
+    let  rgb_data = bgr_data.index_select(&index, 2)?;
+    println!("rgb Image");
+    print_tensor_statistics_f64(&rgb_data)?;
 
-    Ok((bgr_data, size.height as usize, size.width as usize))
+    Ok((rgb_data, size.height as usize, size.width as usize))
 }
 
 fn normalize_image(image: &Tensor, mean: &[f64; 3], std: &[f64; 3]) -> candle::Result<Tensor> {
@@ -377,7 +377,7 @@ pub fn post_process_image(
     print_tensor_statistics(&out);
     let out = scale_image(&out)?;
     println!("Post scaling");
-    print_tensor_statistics(&out);
+    print_tensor_statistics(&out)?;
 
     let out = if color_map {
         let spectral_r = SpectralRColormap::new();

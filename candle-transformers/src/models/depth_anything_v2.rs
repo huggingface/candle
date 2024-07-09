@@ -1,51 +1,14 @@
-use candle::D::Minus1;
-use candle::{Error, Module, Result, Tensor};
-use candle_nn::ops::Identity;
-use candle_nn::{
-    batch_norm, conv2d, conv2d_no_bias, conv_transpose2d, linear, seq, Activation, BatchNorm,
-    BatchNormConfig, Conv2d, Conv2dConfig, ConvTranspose2dConfig, Sequential, VarBuilder,
-};
 use std::cell::RefCell;
-use std::cmp::Ordering;
+
+use candle::{Module, Result, Tensor};
+use candle::D::Minus1;
+use candle_nn::{
+    Activation, batch_norm, BatchNorm, BatchNormConfig, conv2d, Conv2d, conv2d_no_bias, Conv2dConfig,
+    conv_transpose2d, ConvTranspose2dConfig, linear, seq, Sequential, VarBuilder,
+};
+use candle_nn::ops::Identity;
+
 use crate::models::dinov2::DinoVisionTransformer;
-
-
-fn print_tensor_statistics(tensor: &Tensor) -> Result<()> {
-    // General characteristics
-    println!("Tensor: {:?}", tensor);
-
-    let tensor = tensor.flatten_all().unwrap();
-
-    // Inline method to compute the minimum value over all elements
-    fn min_all(tensor: &Tensor) -> f32 {
-        let vec: Vec<f32> = tensor.to_vec1().unwrap();
-        vec.iter().cloned().min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal)).unwrap()
-    }
-
-    // Inline method to compute the maximum value over all elements
-    fn max_all(tensor: &Tensor) -> f32 {
-        let vec: Vec<f32> = tensor.to_vec1().unwrap();
-        vec.iter().cloned().max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal)).unwrap()
-    }
-
-    // Inline method to compute the mean value over all elements
-    fn mean_all(tensor: &Tensor) -> Result<f32> {
-        let vec: Vec<f32> = tensor.to_vec1()?;
-        Ok(vec.iter().sum::<f32>() / vec.len() as f32)
-    }
-
-    // Compute overall statistics
-    let min_val = min_all(&tensor);
-    let max_val = max_all(&tensor);
-    let mean_val = mean_all(&tensor)?;
-
-    println!("Overall statistics:");
-    println!("  Min: {:?}", min_val);
-    println!("  Max: {:?}", max_val);
-    println!("  Mean: {:?}", mean_val);
-
-    Ok(())
-}
 
 pub const PATCH_MULTIPLE: usize = 14;
 
@@ -186,29 +149,22 @@ impl ResidualConvUnit {
 impl Module for ResidualConvUnit {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let out = self.activation.forward(xs)?;
-        println!("ResidualConvUnit activation {out:?}");
         let out = self.conv1.forward(&out)?;
-        println!("ResidualConvUnit conv1 {out:?}");
         let out = if let Some(batch_norm1) = &self.batch_norm1 {
-            println!("ResidualConvUnit batch norm {out:?}");
             batch_norm1.forward_train(&out)?
         } else {
             out
         };
 
         let out = self.activation.forward(&out)?;
-        println!("ResidualConvUnit activation {out:?}");
         let out = self.conv2.forward(&out)?;
-        println!("ResidualConvUnit conv2 {out:?}");
         let out = if let Some(batch_norm2) = &self.batch_norm2 {
-            println!("ResidualConvUnit batch_norm2 {out:?}");
             batch_norm2.forward_train(&out)?
         } else {
             out
         };
 
         let out = out.add(xs)?;
-        println!("ResidualConvUnit skip_add {out:?}");
 
         Ok(out)
     }
@@ -260,20 +216,15 @@ impl FeatureFusionBlock {
 
 impl Module for FeatureFusionBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        println!("FeatureFusionBlock output {xs:?}");
-
         let out = if let Some(ref skip_add) = *self.skip_add.borrow() {
             let res = self.res_conv_unit1.forward(skip_add)?;
-            println!("FeatureFusionBlock resConfUnit1 {res:?}");
             let skip = xs.add(&res)?;
-            println!("FeatureFusionBlock skip_add {skip:?}");
             skip
         } else {
             xs.clone()
         };
 
         let out = self.res_conv_unit2.forward(&out)?;
-        println!("FeatureFusionBlock resConfUnit2 {out:?}");
         let (target_height, target_width) = if let Some(size) = *self.output_size.borrow() {
             size
         } else {
@@ -281,12 +232,11 @@ impl Module for FeatureFusionBlock {
             (h * 2, w * 2)
         };
 
-        let out = out.interpolate2d(target_height, target_width)?;
+        // let out = out.interpolate2d(target_height, target_width)?;
         let out = out.interpolate_bilinear2d(target_height, target_width, true)?;
-        println!("FeatureFusionBlock interpolate {out:?}");
 
         let out = self.output_conv.forward(&out)?;
-        println!("FeatureFusionBlock out_conv {out:?}");
+
         Ok(out)
     }
 }
@@ -490,7 +440,6 @@ impl DPTHead {
 
 impl Module for DPTHead {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        println!("Original xs: {xs:?}");
         let mut out: Vec<Tensor> = Vec::with_capacity(self.conf.layer_ids_vits.len());
         for i in 0..self.conf.layer_ids_vits.len() {
             let x = if self.conf.use_class_token {
@@ -503,9 +452,6 @@ impl Module for DPTHead {
             } else {
                 xs.get(i)?
             };
-            println!("{i} and {x:?}");
-
-            print_tensor_statistics(&x)?;
 
             let x_dims = x.dims();
             let x = x.permute((0, 2, 1))?.reshape((
@@ -514,40 +460,17 @@ impl Module for DPTHead {
                 self.patch_size.unwrap().0,
                 self.patch_size.unwrap().1,
             ))?;
-            println!("{i} permute and reshape {x:?}");
-            print_tensor_statistics(&x)?;
+
             let x = self.projections[i].forward(&x)?;
-            println!("{i} projection x {x:?}");
-            print_tensor_statistics(&x)?;
 
             let x = self.resize_layers[i].forward(&x)?;
-            println!("{i} resize x {x:?}");
-            print_tensor_statistics(&x)?;
             out.push(x);
         }
-
-
-        println!("layer_1 {:?}", &out[0]);
-        println!("layer_2 {:?}", &out[1]);
-        println!("layer_3 {:?}", &out[2]);
-        println!("layer_4 {:?}", &out[3]);
-        println!("");
-
 
         let layer_1_rn = self.scratch.layer1_rn.forward(&out[0])?;
         let layer_2_rn = self.scratch.layer2_rn.forward(&out[1])?;
         let layer_3_rn = self.scratch.layer3_rn.forward(&out[2])?;
         let layer_4_rn = self.scratch.layer4_rn.forward(&out[3])?;
-        println!("layer_1_rn {:?}", layer_1_rn);
-        println!("layer_2_rn {:?}", layer_2_rn);
-        println!("layer_3_rn {:?}", layer_3_rn);
-        println!("layer_4_rn {:?}", layer_4_rn);
-        println!("");
-
-        print_tensor_statistics(&layer_1_rn)?;
-        print_tensor_statistics(&layer_2_rn)?;
-        print_tensor_statistics(&layer_3_rn)?;
-        print_tensor_statistics(&layer_4_rn)?;
 
         let (_, _, output_height, output_width) = layer_3_rn.dims4()?;
         self.scratch
@@ -572,22 +495,10 @@ impl Module for DPTHead {
         self.scratch.refine_net1.set_skip_add(&layer_1_rn);
         let path1 = self.scratch.refine_net1.forward(&path2)?;
 
-        println!("path_1 {path1:?}");
-        println!("path_2 {path2:?}");
-        println!("path_3 {path3:?}");
-        println!("path_4 {path4:?}");
-        println!("");
-
         let out = self.scratch.output_conv1.forward(&path1)?;
-        println!("output_conv1 {out:?}");
 
-        print_tensor_statistics(&out)?;
         let out = out.interpolate_bilinear2d(self.image_size.unwrap().0, self.image_size.unwrap().1, true)?;
-        println!("interpolate {out:?}");
-        print_tensor_statistics(&out)?;
         let out = self.scratch.output_conv2.forward(&out)?;
-        println!("output_conv2 {out:?}");
-        print_tensor_statistics(&out)?;
 
         Ok(out)
     }
@@ -629,9 +540,6 @@ impl Module for DepthAnythingV2 {
             self.conf.use_class_token,
             true,
         )?;
-
-        println!("Found features");
-        print_tensor_statistics(&features)?;
 
         let depth = self.depth_head.forward(&features)?;
 
