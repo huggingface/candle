@@ -411,7 +411,7 @@ impl Tensor {
                         arg,
                         target_h,
                         target_w,
-                        align_corners,
+                        align_corners: _,
                     } => {
                         // TODO verify
                         let (_n, c, h, w) = arg.dims4()?;

@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 
-use candle::DType::{F32, F64, U8};
 use candle::{Device, Tensor};
+use candle::DType::U8;
 use candle_transformers::models::depth_anything_v2::PATCH_MULTIPLE;
 
 use crate::color_map::SpectralRColormap;
 
 // taken these from: https://huggingface.co/spaces/depth-anything/Depth-Anything-V2/blob/main/depth_anything_v2/dpt.py#L207
-const MAGIC_MEAN: [f64; 3] = [0.485, 0.456, 0.406];
-const MAGIC_STD: [f64; 3] = [0.229, 0.224, 0.225];
+const MAGIC_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+const MAGIC_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
 const LOWER_BOUND: &'static str = "lower_bound";
 const UPPER_BOUND: &'static str = "upper_bound";
@@ -28,10 +28,7 @@ pub fn load_and_prep_image(
     println!("Normalizing image");
     let image = normalize_image(&image, &MAGIC_MEAN, &MAGIC_STD)?;
 
-    // the original code does normalization in 64 bits before converting it to 32 when feeding it to the model.
-    // we're following that recipe here
     let image = image
-        .to_dtype(F32)?
         .permute((2, 0, 1))?
         .unsqueeze(0)?;
 
@@ -61,14 +58,9 @@ pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
         image::imageops::FilterType::CatmullRom,
     );
 
-    let img = img.into_rgb8();
+    let img = img.into_rgb32f();
     let data = img.into_raw();
-    let rgb_data = Tensor::from_vec(data, (target_height, target_width, 3), &Device::Cpu)?.to_dtype(F64)?;
-
-    let max_pixel_val = Tensor::try_from(255.0f64)?
-        .broadcast_as(rgb_data.shape())?;
-    let rgb_data = rgb_data.div(&max_pixel_val)?;
-
+    let rgb_data = Tensor::from_vec(data, (target_height, target_width, 3), &Device::Cpu)?;
 
     let index = Tensor::from_vec(vec![2u32, 1, 0], (3,), &Device::Cpu)?;
     let bgr_data = rgb_data.index_select(&index, 2)?;
@@ -76,7 +68,7 @@ pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
     Ok((bgr_data, original_height, original_width))
 }
 
-fn normalize_image(image: &Tensor, mean: &[f64; 3], std: &[f64; 3]) -> candle::Result<Tensor> {
+fn normalize_image(image: &Tensor, mean: &[f32; 3], std: &[f32; 3]) -> candle::Result<Tensor> {
     let shape = (1, 1, 3);
     let mean_tensor = Tensor::from_vec(mean.to_vec(), shape, &image.device())?;
     let std_tensor = Tensor::from_vec(std.to_vec(), shape, &image.device())?;
