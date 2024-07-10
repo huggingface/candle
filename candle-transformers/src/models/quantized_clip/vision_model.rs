@@ -6,14 +6,14 @@
 //! https://github.com/openai/CLIP
 //! https://github.com/huggingface/transformers/tree/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip
 
-use candle_core::{IndexOp, Result, Shape, Tensor, D};
+use candle::{IndexOp, Result, Shape, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
-use candle_transformers::quantized_nn;
+use crate::quantized_nn;
 
-use candle_transformers::models::clip;
-use candle_transformers::models::clip::text_model::Activation;
-use candle_transformers::quantized_var_builder::VarBuilder;
+use crate::models::clip;
+use crate::models::clip::text_model::Activation;
+use crate::quantized_var_builder::VarBuilder;
 use nn::{Conv2d, Conv2dConfig};
 
 use super::text_model::ClipEncoder;

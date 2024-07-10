@@ -1,10 +1,10 @@
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Module;
-use candle_transformers::quantized_nn;
+use super::quantized_nn;
 
-use candle_transformers::models::clip::text_model::Activation;
-use candle_transformers::models::clip::{self, EncoderConfig};
-use candle_transformers::quantized_var_builder::VarBuilder;
+use crate::models::clip::text_model::Activation;
+use crate::models::clip::{self, EncoderConfig};
+use crate::quantized_var_builder::VarBuilder;
 
 // ClipTextEmbeddings mostly based on the existing implementation in the stable diffision model.
 // TODO rewrite to be more similar to https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L142

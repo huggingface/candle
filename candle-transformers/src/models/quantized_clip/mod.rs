@@ -1,18 +1,20 @@
-use candle_core::{Tensor, Result};
-use candle_transformers::models::clip::text_model::Activation;
-use candle_transformers::models::clip;
+use candle::{Result, Tensor, D};
 
-use candle_transformers::quantized_nn as quantized_nn;
+use crate::models::clip;
+use crate::models::clip::text_model::ClipTextConfig;
+use crate::models::clip::vision_model::ClipVisionConfig;
+use crate::quantized_nn as quantized_nn;
+use crate::quantized_var_builder::VarBuilder;
 
-use candle_transformers::quantized_var_builder::VarBuilder;
+use super::clip::text_model::Activation;
 
 pub mod text_model;
 pub mod vision_model;
 
 #[derive(Clone, Debug)]
 pub enum EncoderConfig {
-    Text(text_model::ClipTextConfig),
-    Vision(vision_model::ClipVisionConfig),
+    Text(ClipTextConfig),
+    Vision(ClipVisionConfig),
 }
 
 impl EncoderConfig {
@@ -121,6 +123,6 @@ impl ClipModel {
 }
 
 pub fn div_l2_norm(v: &Tensor) -> Result<Tensor> {
-    let l2_norm = v.sqr()?.sum_keepdim(candle_core::D::Minus1)?.sqrt()?;
+    let l2_norm = v.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?;
     v.broadcast_div(&l2_norm)
 }
