@@ -231,8 +231,7 @@ impl Module for FeatureFusionBlock {
             (h * 2, w * 2)
         };
 
-        // let out = out.interpolate2d(target_height, target_width)?;
-        let out = out.interpolate_bilinear2d(target_height, target_width, true)?;
+        let out = out.interpolate2d(target_height, target_width)?;
 
         let out = self.output_conv.forward(&out)?;
 
@@ -496,7 +495,7 @@ impl Module for DPTHead {
 
         let out = self.scratch.output_conv1.forward(&path1)?;
 
-        let out = out.interpolate_bilinear2d(self.image_size.unwrap().0, self.image_size.unwrap().1, true)?;
+        let out = out.interpolate2d(self.image_size.unwrap().0, self.image_size.unwrap().1)?;
         let out = self.scratch.output_conv2.forward(&out)?;
 
         Ok(out)

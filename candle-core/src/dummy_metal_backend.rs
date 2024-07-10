@@ -195,9 +195,6 @@ impl crate::backend::BackendStorage for MetalStorage {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn upsample_bilinear2d(&self, _: &Layout, _: usize, _: usize, _: bool) -> Result<Self> {
-        Err(Error::NotCompiledWithMetalSupport)
-    }
 }
 
 impl crate::backend::BackendDevice for MetalDevice {

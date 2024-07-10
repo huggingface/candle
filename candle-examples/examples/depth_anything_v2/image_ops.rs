@@ -83,7 +83,7 @@ pub fn post_process_image(
     original_width: usize,
     color_map: bool,
 ) -> candle::Result<Tensor> {
-    let out = image.interpolate_bilinear2d(original_height, original_width, true)?;
+    let out = image.interpolate2d(original_height, original_width)?;
     let out = scale_image(&out)?;
 
     let out = if color_map {

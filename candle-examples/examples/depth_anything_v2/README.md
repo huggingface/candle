@@ -10,6 +10,3 @@ This example first instantiates the DINOv2 model and then proceeds to create Dep
 ```bash
 cargo run --features cuda,depth_anything_v2 --package candle-examples --example depth_anything_v2 -- --size s --color-map --image candle-examples/examples/yolo-v8/assets/bike.jpg 
 ```
-
-
-![Depth Estimation of Leading group, Giro d'Italia 2021](./assets/depth_bike.jpg)

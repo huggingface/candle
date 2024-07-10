@@ -1075,24 +1075,6 @@ impl Tensor {
         self.interpolate2d(target_h, target_w)
     }
 
-    /// Interpolate the input tensor to the `(target_h, target_w)` size, using bilinear interpolations
-    ///
-    /// The input tensor should have four dimensions, `(batch, channels, h, w)`, the returned
-    /// tensor also has four dimensions, `(batch, channels, target_h, target_w)`.
-    pub fn interpolate_bilinear2d(&self, target_h: usize, target_w: usize, align_corners: bool) -> Result<Self> {
-        let (n, c, _h, _w) = self.dims4()?;
-        let op = BackpropOp::new1(self, |arg| Op::UpsampleBilinear2D {
-            arg,
-            target_h,
-            target_w,
-            align_corners
-        });
-        let storage = self
-            .storage()
-            .upsample_bilinear2d(self.layout(), target_h, target_w, align_corners)?;
-        Ok(from_storage(storage, (n, c, target_h, target_w), op, false))
-    }
-
     /// 2D average pooling over an input tensor with multiple channels.
     ///
     /// The input tensor should have four dimensions, `(batch, channels, h, w)`, the returned
