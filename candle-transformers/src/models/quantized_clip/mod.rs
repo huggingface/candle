@@ -1,12 +1,10 @@
 use candle::{Result, Tensor, D};
 
 use crate::models::clip;
-use crate::models::clip::text_model::ClipTextConfig;
+use crate::models::clip::text_model::{ClipTextConfig, Activation};
 use crate::models::clip::vision_model::ClipVisionConfig;
 use crate::quantized_nn as quantized_nn;
 use crate::quantized_var_builder::VarBuilder;
-
-use super::clip::text_model::Activation;
 
 pub mod text_model;
 pub mod vision_model;

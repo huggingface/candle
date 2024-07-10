@@ -1,6 +1,6 @@
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Module;
-use super::quantized_nn;
+use crate::quantized_nn;
 
 use crate::models::clip::text_model::Activation;
 use crate::models::clip::{self, EncoderConfig};
