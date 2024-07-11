@@ -634,7 +634,8 @@ impl Tensor {
                         let zeros = arg.zeros_like()?;
                         let positive_mask = arg.gt(&zeros)?.to_dtype(arg.dtype())?;
                         let negative_mask = arg.le(&zeros)?.to_dtype(arg.dtype())?;
-                        let negative_exp_mask = ((negative_mask * arg.exp())? * *alpha)?;
+                        let negative_exp_mask =
+                            ((negative_mask * arg.exp()?.minimum(1.0))? * *alpha)?;
                         let combined_mask = (positive_mask + negative_exp_mask)?;
                         *sum_grad = sum_grad.add(&(grad * combined_mask)?)?
                     }
