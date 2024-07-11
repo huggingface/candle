@@ -10,21 +10,23 @@ mod utils;
 pub use utils::BufferOffset;
 use utils::{get_block_dims, linear_split};
 
-const AFFINE: &str = include_str!("affine.metal");
-const INDEXING: &str = include_str!("indexing.metal");
-const UNARY: &str = include_str!("unary.metal");
-const BINARY: &str = include_str!("binary.metal");
-const TERNARY: &str = include_str!("ternary.metal");
-const CAST: &str = include_str!("cast.metal");
-const CONV: &str = include_str!("conv.metal");
-const REDUCE: &str = include_str!("reduce.metal");
-const RANDOM: &str = include_str!("random.metal");
-const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
-const QUANTIZED: &str = include_str!("quantized.metal");
-const SORT: &str = include_str!("sort.metal");
+const AFFINE: &str = include_str!("kernels/affine.metal");
+const INDEXING: &str = include_str!("kernels/indexing.metal");
+const UNARY: &str = include_str!("kernels/unary.metal");
+const BINARY: &str = include_str!("kernels/binary.metal");
+const TERNARY: &str = include_str!("kernels/ternary.metal");
+const CAST: &str = include_str!("kernels/cast.metal");
+const CONV: &str = include_str!("kernels/conv.metal");
+const REDUCE: &str = include_str!("kernels/reduce.metal");
+const RANDOM: &str = include_str!("kernels/random.metal");
+const QUANTIZED: &str = include_str!("kernels/quantized.metal");
+const SORT: &str = include_str!("kernels/sort.metal");
+const MFA: &[u8] = include_bytes!("libraries/libMetalFlashAttention.metallib");
+const CANDLE: &[u8] = include_bytes!("libraries/libMetalFlashAttention.metallib");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
+    Candle,
     Affine,
     Indexing,
     Unary,
@@ -200,7 +202,7 @@ impl Kernels {
             Source::Random => RANDOM,
             Source::Quantized => QUANTIZED,
             Source::Sort => SORT,
-            Source::Mfa => panic!("Invalid lib"),
+            _ => panic!("Invalid lib"),
         }
     }
 
@@ -216,9 +218,15 @@ impl Kernels {
             Ok(lib.clone())
         } else {
             let lib = match source {
+                Source::Candle => {
+                    device.new_library_with_data(CANDLE).map_err(|e| {
+                        MetalKernelError::LoadLibraryError(format!(
+                            "Candle metal requires macosx > 13.0 or higher, cannot load candle: {e}"
+                        ))
+                    })?
+                }
                 Source::Mfa => {
-                    let source_data = MFA;
-                    device.new_library_with_data(source_data).map_err(|e| {
+                    device.new_library_with_data(MFA).map_err(|e| {
                         MetalKernelError::LoadLibraryError(format!(
                             "Candle metal requires macosx > 13.0 or higher, cannot load mfa: {e}"
                         ))

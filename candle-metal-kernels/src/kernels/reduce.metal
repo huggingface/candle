@@ -104,7 +104,7 @@ METAL_FUNC void argmax(
     threadgroup T * shared_memory,
     threadgroup uint * shared_indices
   ) {
-    // Elements summed in this block range from dst_id * el_to_sum_per_block 
+    // Elements summed in this block range from dst_id * el_to_sum_per_block
     // to (dst_id + 1) * el_to_sum_per_block.
     size_t start_idx = dst_id * el_to_sum_per_block;
     size_t stop_idx = start_idx + el_to_sum_per_block;
@@ -173,7 +173,7 @@ METAL_FUNC void reduce(
     threadgroup T * shared_memory,
     T (*fn)(T, T)
 ) {
-    // Elements summed in this block range from dst_id * el_to_sum_per_block 
+    // Elements summed in this block range from dst_id * el_to_sum_per_block
     // to (dst_id + 1) * el_to_sum_per_block.
     size_t start_idx = dst_id * el_to_sum_per_block;
     size_t stop_idx = start_idx + el_to_sum_per_block;
