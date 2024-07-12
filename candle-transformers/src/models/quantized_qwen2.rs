@@ -268,7 +268,7 @@ impl ModelWeights {
         let span_output = tracing::span!(tracing::Level::TRACE, "output");
 
         Ok(Self {
-            tok_embeddings: Embedding::new(tok_embeddings, embedding_length as usize),
+            tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
             layers,
             norm,
             output,
