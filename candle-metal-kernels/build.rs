@@ -37,10 +37,10 @@ fn kernel_source_files() -> Result<Vec<PathBuf>> {
 fn compile_kernel(kernel_path: impl AsRef<Path>) -> Result<PathBuf> {
     let out_dir = std::env::var("OUT_DIR")?;
 
-    let ir_file_name = format!(
-        "{}.ir",
-        kernel_path.as_ref().file_stem().unwrap().to_str().unwrap()
-    );
+    let file_stem = kernel_path.as_ref().file_stem().unwrap().to_str().unwrap();
+    let ir_file_name = format!("{}.ir", file_stem,);
+
+    println!("cargo:rerun-if-changed=src/{}.metal", file_stem);
 
     let output_file = Path::new(&out_dir).join(ir_file_name);
 
@@ -101,17 +101,15 @@ fn gen_metallibs_rs(metallibs: Vec<PathBuf>) -> Result<()> {
 
     let mut file = fs::File::create(&out_file)?;
 
-    // writeln!(file, "pub mod metallibs {{")?;
     for metallib in metallibs {
         let name = metallib.file_stem().unwrap().to_str().unwrap();
         writeln!(
             file,
-            "    pub const {}: &'static [u8] = include_bytes!(\"{}\");",
+            "pub const {}: &'static [u8] = include_bytes!(\"{}\");",
             name.to_case(Case::ScreamingSnake),
             metallib.display()
         )?;
     }
-    // writeln!(file, "}}")?;
 
     Ok(())
 }
