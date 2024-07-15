@@ -1,6 +1,6 @@
 use metal::{
     Buffer, CommandBufferRef, CompileOptions, ComputePipelineState, Device, Function,
-    FunctionConstantValues, Library, MTLDataType, MTLSize, NSUInteger,
+    FunctionConstantValues, Library, MTLDataType, MTLSize, NSUInteger, MTLGPUFamily,
 };
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -22,7 +22,7 @@ const RANDOM: &str = include_str!("kernels/random.metal");
 const QUANTIZED: &str = include_str!("kernels/quantized.metal");
 const SORT: &str = include_str!("kernels/sort.metal");
 const MFA: &[u8] = include_bytes!("libraries/libMetalFlashAttention.metallib");
-const CANDLE: &[u8] = include_bytes!("libraries/libMetalFlashAttention.metallib");
+const CANDLE: &[u8] = include_bytes!("libraries/candle.metallib");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
@@ -1473,6 +1473,21 @@ pub fn call_gemm(
     rhs_buffer: &Buffer,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
+    let prefer_async_copy = !device.supports_family(MTLGPUFamily::Apple9);
+    let mut ideal_grouping = false;
+    /*
+    let mut actual_groups = 1;
+    actual_groups *= divide(m, 48);
+    actual_groups *= divide(n, 48);
+    actual_groups *= b;
+
+    let core_count = get_device_core_count(device);
+    let ideal_grouping = if name == "sgemm" {
+        actual_groups <= core_count * 6
+    } else {
+        actual_groups <= core_count * 9
+    };
+    */
     assert!(rhs_stride.len() >= 2);
     assert!(lhs_stride.len() >= 2);
     let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
@@ -1543,14 +1558,16 @@ pub fn call_gemm(
         (113, Value::Bool(false)),
         (50_000, Value::Bool(false)),
         // End garbage
-        (200, Value::U16(m_simd)),
-        (201, Value::U16(n_simd)),
-        (202, Value::U16(k_simd)),
+        (200, Value::U16(32)),
+        (201, Value::U16(32)),
+        (202, Value::U16(32)),
+        (206, Value::Bool(prefer_async_copy)),
+        (207, Value::Bool(ideal_grouping)),
         (210, Value::U16(m_splits)),
         (211, Value::U16(n_splits)),
         (50_001, Value::Bool(fused_bias)),
     ]));
-    let pipeline = kernels.load_pipeline_with_constants(device, Source::Mfa, name, constants)?;
+    let pipeline = kernels.load_pipeline_with_constants(device, Source::Candle, name, constants)?;
     let m_group = m_simd * m_splits;
     let n_group = n_simd * n_splits;
 

@@ -1,7 +1,7 @@
 use std::process::Command;
 use std::{env, str};
 
-const COMPILED_KERNELS: [&str; 1] = ["reduce"];
+const COMPILED_KERNELS: [&str; 3] = ["event", "matrix_storage", "gemm"];
 
 enum Platform {
     MacOS,
