@@ -23,6 +23,10 @@ const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
 const QUANTIZED: &str = include_str!("quantized.metal");
 const SORT: &str = include_str!("sort.metal");
 
+mod metallibs {
+    include!(concat!(env!("OUT_DIR"), "/candle_metallibs.rs"));
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     Affine,
@@ -187,21 +191,29 @@ impl Kernels {
         }
     }
 
-    fn get_library_source(&self, source: Source) -> &'static str {
-        match source {
-            Source::Affine => AFFINE,
-            Source::Unary => UNARY,
-            Source::Binary => BINARY,
-            Source::Ternary => TERNARY,
-            Source::Indexing => INDEXING,
-            Source::Cast => CAST,
-            Source::Reduce => REDUCE,
-            Source::Conv => CONV,
-            Source::Random => RANDOM,
-            Source::Quantized => QUANTIZED,
-            Source::Sort => SORT,
-            Source::Mfa => panic!("Invalid lib"),
-        }
+    // fn get_library_source(&self, source: Source) -> &'static str {
+    //     match source {
+    //         Source::Affine => AFFINE,
+    //         Source::Unary => UNARY,
+    //         Source::Binary => BINARY,
+    //         Source::Ternary => TERNARY,
+    //         Source::Indexing => INDEXING,
+    //         Source::Cast => CAST,
+    //         Source::Reduce => REDUCE,
+    //         Source::Conv => CONV,
+    //         Source::Random => RANDOM,
+    //         Source::Quantized => QUANTIZED,
+    //         Source::Sort => SORT,
+    //         Source::Mfa => panic!("Invalid lib"),
+    //     }
+    // }
+
+    fn load_metallib(device: &Device, data: &[u8]) -> Result<Library, MetalKernelError> {
+        device.new_library_with_data(data).map_err(|e| {
+            MetalKernelError::LoadLibraryError(format!(
+                "Candle metal requires macosx > 13.0 or higher, cannot load mfa: {e}"
+            ))
+        })
     }
 
     /// Load the give library from its [`source`].
@@ -224,12 +236,23 @@ impl Kernels {
                         ))
                     })?
                 }
-                source => {
-                    let source_content = self.get_library_source(source);
-                    device
-                        .new_library_with_source(source_content, &CompileOptions::new())
-                        .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
-                }
+                Source::Affine => Self::load_metallib(device, metallibs::AFFINE)?,
+                Source::Indexing => Self::load_metallib(device, metallibs::INDEXING)?,
+                Source::Unary => Self::load_metallib(device, metallibs::UNARY)?,
+                Source::Binary => Self::load_metallib(device, metallibs::BINARY)?,
+                Source::Ternary => Self::load_metallib(device, metallibs::TERNARY)?,
+                Source::Cast => Self::load_metallib(device, metallibs::CAST)?,
+                Source::Reduce => Self::load_metallib(device, metallibs::REDUCE)?,
+                Source::Conv => Self::load_metallib(device, metallibs::CONV)?,
+                Source::Random => Self::load_metallib(device, metallibs::RANDOM)?,
+                Source::Quantized => Self::load_metallib(device, metallibs::QUANTIZED)?,
+                Source::Sort => Self::load_metallib(device, metallibs::SORT)?,
+                // source => {
+                //     let source_content = self.get_library_source(source);
+                //     device
+                //         .new_library_with_source(source_content, &CompileOptions::new())
+                //         .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
+                // }
             };
             libraries.insert(source, lib.clone());
             Ok(lib)
