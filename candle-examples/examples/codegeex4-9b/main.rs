@@ -1,9 +1,8 @@
 use clap::Parser;
-use codegeex4_candle::codegeex4::*;
+use use candle_transformers::models::codegeex4_9b::*;
 
 
 use candle_core::{DType, Device, Tensor};
-use candle_core as candle;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
