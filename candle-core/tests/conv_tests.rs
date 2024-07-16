@@ -730,6 +730,26 @@ fn conv2d_grad(dev: &Device) -> Result<()> {
             ]
         ]
     );
+
+    // Test the same, but then with the following properties, t & w are unmodified.
+    let padding = 1;
+    let outpadding = 1;
+    let dilation = 1;
+    let stride = 2;
+
+    let res = t.conv_transpose2d(&w, padding, outpadding, stride, dilation)?;
+    let loss = res.sqr()?.sum_all()?;
+    assert_eq!(test_utils::to_vec0_round(&loss, 0)?, 3627.0); // torch gives 3626.8560
+    dbg!("Get here");
+    let grads = loss.backward()?;
+    dbg!("Never get here?");
+    let grad_t = grads.get(&t).unwrap();
+    let grad_w = grads.get(&w).unwrap();
+    assert_eq!(grad_t.dims(), [1, 4, 7, 5]);
+    assert_eq!(grad_w.dims(), [4, 2, 3, 5]);
+    dbg!();
+
+
     Ok(())
 }
 
