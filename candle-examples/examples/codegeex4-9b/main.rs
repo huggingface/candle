@@ -1,6 +1,5 @@
+use candle_transformers::models::codegeex4_9b::*;
 use clap::Parser;
-use use candle_transformers::models::codegeex4_9b::*;
-
 
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
@@ -31,7 +30,7 @@ impl TextGeneration {
         repeat_last_n: usize,
         verbose_prompt: bool,
         device: &Device,
-	dtype: DType,
+        dtype: DType,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
@@ -42,11 +41,11 @@ impl TextGeneration {
             repeat_last_n,
             verbose_prompt,
             device: device.clone(),
-	    dtype,
+            dtype,
         }
     }
 
-    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<(),()> {
+    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<(), ()> {
         use std::io::Write;
         println!("starting the inference loop");
         let tokens = self.tokenizer.encode(prompt, true).expect("tokens error");
@@ -65,22 +64,24 @@ impl TextGeneration {
         };
         let mut tokens = tokens.get_ids().to_vec();
         let mut generated_tokens = 0usize;
-        
-        
+
         print!("{prompt}");
         std::io::stdout().flush().expect("output flush error");
         let start_gen = std::time::Instant::now();
-	
-	println!("\n start_gen");
-	println!("samplelen {}",sample_len);
-	let mut count = 0;
-	let mut result = vec!();
+
+        println!("\n start_gen");
+        println!("samplelen {}", sample_len);
+        let mut count = 0;
+        let mut result = vec![];
         for index in 0..sample_len {
-	    count += 1;
-	    println!("sample count {}",count);
+            count += 1;
+            println!("sample count {}", count);
             let context_size = if index > 0 { 1 } else { tokens.len() };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-            let input = Tensor::new(ctxt, &self.device).unwrap().unsqueeze(0).expect("create tensor input error");
+            let input = Tensor::new(ctxt, &self.device)
+                .unwrap()
+                .unsqueeze(0)
+                .expect("create tensor input error");
             let logits = self.model.forward(&input).unwrap();
             let logits = logits.squeeze(0).unwrap().to_dtype(self.dtype).unwrap();
             let logits = if self.repeat_penalty == 1. {
@@ -91,7 +92,8 @@ impl TextGeneration {
                     &logits,
                     self.repeat_penalty,
                     &tokens[start_at..],
-                ).unwrap()
+                )
+                .unwrap()
             };
 
             let next_token = self.logits_processor.sample(&logits).unwrap();
@@ -100,10 +102,13 @@ impl TextGeneration {
             if next_token == eos_token {
                 break;
             }
-	    println!("raw generate token {}",next_token);
-            let token = self.tokenizer.decode(&[next_token], true).expect("Token error");
+            println!("raw generate token {}", next_token);
+            let token = self
+                .tokenizer
+                .decode(&[next_token], true)
+                .expect("Token error");
             println!("[token:{token}]");
-	    result.push(token);
+            result.push(token);
             std::io::stdout().flush().unwrap();
         }
         let dt = start_gen.elapsed();
@@ -111,10 +116,10 @@ impl TextGeneration {
             "\n{generated_tokens} tokens generated ({:.2} token/s)",
             generated_tokens as f64 / dt.as_secs_f64(),
         );
-	println!("Result:");
-	for tokens in result {
-	    print!("{tokens}");
-	}
+        println!("Result:");
+        for tokens in result {
+            print!("{tokens}");
+        }
         Ok(())
     }
 }
@@ -123,9 +128,9 @@ impl TextGeneration {
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Run on CPU rather than on GPU.
-    #[arg(name="cache",short,long, default_value=".")]
+    #[arg(name = "cache", short, long, default_value = ".")]
     cache_path: String,
-    
+
     #[arg(long)]
     cpu: bool,
 
@@ -173,8 +178,7 @@ struct Args {
     repeat_last_n: usize,
 }
 
-fn main() -> Result<(),()> {
-    
+fn main() -> Result<(), ()> {
     let args = Args::parse();
     println!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
@@ -191,9 +195,11 @@ fn main() -> Result<(),()> {
     );
 
     let start = std::time::Instant::now();
-    println!("cache path {}",args.cache_path);
-    let api = hf_hub::api::sync::ApiBuilder::from_cache(hf_hub::Cache::new(args.cache_path.into())).build().unwrap();
-    
+    println!("cache path {}", args.cache_path);
+    let api = hf_hub::api::sync::ApiBuilder::from_cache(hf_hub::Cache::new(args.cache_path.into()))
+        .build()
+        .unwrap();
+
     let model_id = match args.model_id {
         Some(model_id) => model_id.to_string(),
         None => "THUDM/codegeex4-all-9b".to_string(),
@@ -207,11 +213,14 @@ fn main() -> Result<(),()> {
         Some(file) => std::path::PathBuf::from(file),
         None => api
             .model("THUDM/codegeex4-all-9b".to_string())
-            .get("tokenizer.json").unwrap(),
+            .get("tokenizer.json")
+            .unwrap(),
     };
     let filenames = match args.weight_file {
         Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json").unwrap(),
+        None => {
+            candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json").unwrap()
+        }
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).expect("Tokenizer Error");
@@ -220,9 +229,9 @@ fn main() -> Result<(),()> {
     let config = Config::codegeex4();
     let device = candle_examples::device(args.cpu).unwrap();
     let dtype = if device.is_cuda() {
-	DType::BF16
+        DType::BF16
     } else {
-	DType::F32
+        DType::F32
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device).unwrap() };
     let model = Model::new(&config, vb).unwrap();
@@ -239,7 +248,7 @@ fn main() -> Result<(),()> {
         args.repeat_last_n,
         args.verbose_prompt,
         &device,
-	dtype,
+        dtype,
     );
     pipeline.run(&args.prompt, args.sample_len)?;
     Ok(())

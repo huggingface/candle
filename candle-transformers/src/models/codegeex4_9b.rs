@@ -29,7 +29,7 @@ impl Config {
     pub fn codegeex4() -> Self {
         Self {
             num_layers: 40,
-	    padded_vocab_size: 151552,
+            padded_vocab_size: 151552,
             hidden_size: 4096,
             ffn_hidden_size: 13696,
             kv_channels: 128,
@@ -67,7 +67,8 @@ impl RotaryEmbedding {
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
         let t = Tensor::arange(0u32, cfg.seq_length as u32, dev)?
-            .to_dtype(dtype).expect("unalbe to dytpe in Rotray Embedding new")
+            .to_dtype(dtype)
+            .expect("unalbe to dytpe in Rotray Embedding new")
             .reshape((cfg.seq_length, 1))?;
         let freqs = t.matmul(&inv_freq)?;
         let cache = Tensor::stack(&[&freqs.cos()?, &freqs.sin()?], D::Minus1)?;
@@ -454,11 +455,11 @@ impl Transformer {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb_l = vb.pp("layers");
         let mut layers = Vec::with_capacity(cfg.num_layers);
-	println!("transofrmer layers create");
-	let mut count = 0;
+        println!("transofrmer layers create");
+        let mut count = 0;
         for layer_index in 0..cfg.num_layers {
-	    count += 1;
-	    println!("for layer index in {} total is {} ",count, cfg.num_layers);
+            count += 1;
+            println!("for layer index in {} total is {} ", count, cfg.num_layers);
             let block = Block::new(layer_index + 1, cfg, vb_l.pp(layer_index))?;
             layers.push(block)
         }
@@ -563,8 +564,7 @@ impl Model {
             false,
             vb.pp("output_layer"),
         )?;
-	
-	
+
         Ok(Self {
             embedding,
             encoder,
