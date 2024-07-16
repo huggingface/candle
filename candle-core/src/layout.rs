@@ -260,6 +260,31 @@ impl Layout {
             right_broadcast,
         })
     }
+
+    /// Reshapes a `Layout` to a new shape format. It further
+    /// checks that the new shape has the same element count,
+    /// returning an error otherwise.
+    pub fn reshape(&self, new_shape: &Shape) -> Result<Self> {
+        if new_shape.elem_count() != self.shape().elem_count() {
+            return Err(Error::InvalidReshape {
+                src_shape: self.shape().clone(),
+                dst_shape: new_shape.clone(),
+            }
+            .bt());
+        }
+
+        // Calculate new strides
+        let mut new_stride = vec![1; new_shape.rank()];
+        for i in (0..new_shape.rank() - 1).rev() {
+            new_stride[i] = new_stride[i + 1] * new_shape.dims()[i + 1];
+        }
+
+        Ok(Self {
+            shape: new_shape.clone(),
+            stride: new_stride,
+            start_offset: self.start_offset,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

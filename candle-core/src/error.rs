@@ -129,6 +129,9 @@ pub enum Error {
     #[error("cannot broadcast {src_shape:?} to {dst_shape:?}")]
     BroadcastIncompatibleShapes { src_shape: Shape, dst_shape: Shape },
 
+    #[error("cannot reshape {src_shape:?} to {dst_shape:?}")]
+    InvalidReshape { src_shape: Shape, dst_shape: Shape },
+
     #[error("cannot set variable {msg}")]
     CannotSetVar { msg: &'static str },
 
