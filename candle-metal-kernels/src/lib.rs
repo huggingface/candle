@@ -1,10 +1,14 @@
 use metal::{
     Buffer, CommandBufferRef, CompileOptions, ComputePipelineState, Device, Function,
-    FunctionConstantValues, Library, MTLDataType, MTLSize, NSUInteger, MTLGPUFamily,
+    FunctionConstantValues, Library, MTLDataType, MTLGPUFamily, MTLSize, NSUInteger,
 };
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::RwLock;
+
+mod ffi;
+mod gpu_info;
+use gpu_info::get_device_core_count;
 
 mod utils;
 pub use utils::BufferOffset;
@@ -218,20 +222,16 @@ impl Kernels {
             Ok(lib.clone())
         } else {
             let lib = match source {
-                Source::Candle => {
-                    device.new_library_with_data(CANDLE).map_err(|e| {
-                        MetalKernelError::LoadLibraryError(format!(
-                            "Candle metal requires macosx > 13.0 or higher, cannot load candle: {e}"
-                        ))
-                    })?
-                }
-                Source::Mfa => {
-                    device.new_library_with_data(MFA).map_err(|e| {
-                        MetalKernelError::LoadLibraryError(format!(
-                            "Candle metal requires macosx > 13.0 or higher, cannot load mfa: {e}"
-                        ))
-                    })?
-                }
+                Source::Candle => device.new_library_with_data(CANDLE).map_err(|e| {
+                    MetalKernelError::LoadLibraryError(format!(
+                        "Candle metal requires macosx > 13.0 or higher, cannot load candle: {e}"
+                    ))
+                })?,
+                Source::Mfa => device.new_library_with_data(MFA).map_err(|e| {
+                    MetalKernelError::LoadLibraryError(format!(
+                        "Candle metal requires macosx > 13.0 or higher, cannot load mfa: {e}"
+                    ))
+                })?,
                 source => {
                     let source_content = self.get_library_source(source);
                     device
@@ -1474,20 +1474,20 @@ pub fn call_gemm(
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let prefer_async_copy = !device.supports_family(MTLGPUFamily::Apple9);
+
     let mut ideal_grouping = false;
-    /*
-    let mut actual_groups = 1;
-    actual_groups *= divide(m, 48);
-    actual_groups *= divide(n, 48);
+    let mut actual_groups: usize = 1;
+    actual_groups *= divide(m, 48) as usize;
+    actual_groups *= divide(n, 48) as usize;
     actual_groups *= b;
 
     let core_count = get_device_core_count(device);
+    println!("Core count: {}", core_count);
     let ideal_grouping = if name == "sgemm" {
         actual_groups <= core_count * 6
     } else {
         actual_groups <= core_count * 9
     };
-    */
     assert!(rhs_stride.len() >= 2);
     assert!(lhs_stride.len() >= 2);
     let rhs_m1 = rhs_stride[rhs_stride.len() - 1];

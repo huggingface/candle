@@ -1,3 +1,5 @@
+#![allow(clippy::upper_case_acronyms)]
+
 use std::process::Command;
 use std::{env, str};
 
@@ -124,8 +126,10 @@ fn main() -> Result<(), String> {
     let sources = current_dir.join("src/kernels");
 
     for metal_file in COMPILED_KERNELS {
-        println!("cargo::rerun-if-changed={}", sources.join(format!("{metal_file}.metal")).display());
-        println!("cargo:warning=output {}", sources.join(format!("{metal_file}.metal")).display());
+        println!(
+            "cargo::rerun-if-changed={}",
+            sources.join(format!("{metal_file}.metal")).display()
+        );
     }
 
     let macos_sdk = get_xcode_sdk_path(Platform::MacOS).expect("Failed to get MacOS SDK path");
