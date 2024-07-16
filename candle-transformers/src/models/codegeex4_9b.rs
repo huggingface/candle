@@ -1,5 +1,5 @@
-use candle_transformers::models::with_tracing::{linear_b as linear, Linear};
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use crate::models::with_tracing::{linear_b as linear, Linear};
+use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 #[derive(Debug, Clone)]
