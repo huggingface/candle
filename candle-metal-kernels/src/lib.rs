@@ -6,9 +6,10 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::RwLock;
 
+#[cfg(target_os = "macos")]
 mod ffi;
-mod gpu_info;
-use gpu_info::get_device_core_count;
+mod gpu;
+use gpu::get_device_core_count;
 
 mod utils;
 pub use utils::BufferOffset;

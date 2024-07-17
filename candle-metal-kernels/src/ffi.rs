@@ -19,10 +19,10 @@ pub type IOOptionBits = u32;
 pub type CFNumberType = u32;
 
 pub const kIOMainPortDefault: mach_port_t = 0;
-pub const kIOServicePlane: *const c_char =
-    b"IOService\x00" as *const [u8; 10usize] as *const c_char;
-pub const MACH_PORT_NULL: i32 = 0;
+pub const kIOServicePlane: &str = "IOService\0";
 pub const kCFNumberSInt64Type: CFNumberType = 4;
+
+pub const MACH_PORT_NULL: i32 = 0;
 
 #[link(name = "IOKit", kind = "framework")]
 extern "C" {
@@ -40,7 +40,7 @@ extern "C" {
 
     pub fn IORegistryEntrySearchCFProperty(
         entry: io_registry_entry_t,
-        plane: *mut c_char,
+        plane: *const c_char,
         key: CFStringRef,
         allocator: CFAllocatorRef,
         options: IOOptionBits,
@@ -60,6 +60,6 @@ extern "C" {
     fn __CFStringMakeConstantString(c_str: *const c_char) -> CFStringRef;
 }
 
-pub fn cfstr(c_str: *const c_char) -> CFStringRef {
-    unsafe { __CFStringMakeConstantString(c_str) }
+pub fn cfstr(val: &str) -> CFStringRef {
+    unsafe { __CFStringMakeConstantString(val.as_ptr().cast()) }
 }
