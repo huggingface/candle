@@ -1,6 +1,6 @@
 use super::with_tracing::{layer_norm, linear, LayerNorm, Linear};
 use candle::{DType, Device, Result, Tensor};
-use candle_nn::{embedding, Embedding, Module, VarBuilder};
+use candle_nn::{embedding, init::DEFAULT_KAIMING_NORMAL, Embedding, Init, Module, VarBuilder};
 use serde::Deserialize;
 
 pub const DTYPE: DType = DType::F32;
@@ -13,7 +13,7 @@ pub enum HiddenAct {
     Relu,
 }
 
-struct HiddenActLayer {
+pub struct HiddenActLayer {
     act: HiddenAct,
     span: tracing::Span,
 }
@@ -486,5 +486,73 @@ impl BertModel {
         let embedding_output = self.embeddings.forward(input_ids, token_type_ids)?;
         let sequence_output = self.encoder.forward(&embedding_output)?;
         Ok(sequence_output)
+    }
+}
+
+struct BertPredictionHeadTransform {
+    dense: Linear,
+    act: HiddenActLayer,
+    layernorm: LayerNorm,
+    span: tracing::Span,
+}
+
+impl BertPredictionHeadTransform {
+    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+        let hidden_size = config.hidden_size;
+        let layer_norm_eps = config.layer_norm_eps;
+
+        let dense = linear(hidden_size, hidden_size, vb.pp("dense"))?;
+        let act = HiddenActLayer::new(HiddenAct::GeluApproximate);
+        let layernorm = layer_norm(hidden_size, layer_norm_eps, vb.pp("LayerNorm"))?;
+        Ok(Self {
+            dense,
+            act,
+            layernorm,
+            span: tracing::span!(tracing::Level::TRACE, "self-bert-pred-head-trans"),
+        })
+    }
+    pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let hidden_states = self.dense.forward(hidden_states)?;
+        let hidden_states = self.act.forward(&hidden_states)?;
+        let layer_output = self.layernorm.forward(&hidden_states)?;
+        Ok(layer_output)
+    }
+}
+
+pub struct BertPredictionHead {
+    transform: BertPredictionHeadTransform,
+    decoder: Linear,
+    span: tracing::Span,
+}
+
+pub fn linear_decoder(in_dim: usize, out_dim: usize, vs: VarBuilder) -> Result<Linear> {
+    let ws = vs.get((out_dim, in_dim), "bert.embeddings.word_embeddings.weight")?;
+    let bs = vs.get(out_dim, "cls.predictions.decoder.bias")?;
+
+    Ok(Linear::from_weights(ws, Some(bs)))
+}
+
+impl BertPredictionHead {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+        let hidden_size = config.hidden_size;
+        let vocab_size = config.vocab_size;
+        let transform =
+            BertPredictionHeadTransform::load(vb.pp("cls.predictions.transform"), config)?;
+        let decoder = linear_decoder(hidden_size, vocab_size, vb)?;
+
+        Ok(Self {
+            transform,
+            decoder,
+            span: tracing::span!(tracing::Level::TRACE, "self-bert-pred-head"),
+        })
+    }
+
+    pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let hidden_states = self.transform.forward(hidden_states)?;
+        let layer_output = self.decoder.forward(&hidden_states)?;
+
+        Ok(layer_output)
     }
 }

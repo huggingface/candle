@@ -62,6 +62,7 @@ pub mod rwkv_v5;
 pub mod rwkv_v6;
 pub mod segformer;
 pub mod segment_anything;
+pub mod splade;
 pub mod stable_diffusion;
 pub mod stable_lm;
 pub mod starcoder2;
