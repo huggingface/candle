@@ -590,6 +590,7 @@ fn run(args: Args) -> Result<()> {
             };
 
             latents = scheduler.step(&noise_pred, timestep, &latents)?;
+            device.synchronize();
             let dt = start_time.elapsed().as_secs_f32();
             println!("step {}/{n_steps} done, {:.2}s", timestep_index + 1, dt);
 
@@ -621,6 +622,7 @@ fn run(args: Args) -> Result<()> {
             },
             _ => {},
         };
+        device.synchronize();
         save_image(
             &vae,
             &latents,

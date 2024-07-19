@@ -68,8 +68,9 @@ pub fn queue_reduce_from_buffer_op(
         1,
         y,      
         z,
+        (reduction_length * dest_size) as usize,
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("reduce op:{:?}, dtype:{:?}", op, dtype), reduction_length * dest_size),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("reduce op:{:?}, dtype:{:?}", op, dtype)),
     );
     return Ok(());
 }

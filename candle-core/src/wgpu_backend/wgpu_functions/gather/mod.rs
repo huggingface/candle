@@ -34,8 +34,9 @@ pub fn queue_gather(
         (lay_index.shape().elem_count() as u32 + 63) / 64,
         1,
         1,
+        lay_index.shape().elem_count(),
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("gather : dtype{:?}", input_dtype),lay_index.shape().elem_count()),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("gather : dtype{:?}", input_dtype)),
     );
     return Ok(());
 }
@@ -73,8 +74,9 @@ pub fn queue_scatter_add_inplace(
         ((lay_index.shape().elem_count() / selected_index_length) as u32 + 63) / 64,
         1,
         1,
+        lay_index.shape().elem_count(),
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("scatter_add : dtype{:?}", input_dtype), lay_index.shape().elem_count()),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("scatter_add : dtype{:?}", input_dtype)),
     );
     return Ok(());
 }
@@ -110,8 +112,9 @@ pub fn queue_index_add_inplace(
         ((lay_input.shape().elem_count() / selected_index_length) as u32 + 63) / 64,
         1,
         1,
+        lay_input.shape().elem_count(),
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("scatter_add : dtype{:?}", input_dtype), lay_input.shape().elem_count()),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("scatter_add : dtype{:?}", input_dtype)),
     );
     return Ok(());
 }

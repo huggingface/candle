@@ -24,6 +24,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_plain = { workspace = true }
 tracing = { workspace = true }
+env_logger = "0.11.3"
+log = "0.4.22"
 
 [features]
 default = []

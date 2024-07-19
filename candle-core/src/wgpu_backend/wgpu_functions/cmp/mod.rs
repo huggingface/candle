@@ -44,8 +44,9 @@ pub fn queue_cmp_buffer_from_buffer(
         pipeline,
         bind_group,
         ((layout_input1.shape().elem_count() + 3) / 4) as u32,
+        layout_input1.shape().elem_count(),
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("cmp op:{:?}, dtype:{:?}", op, dtype), layout_input1.shape().elem_count()),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("cmp op:{:?}, dtype:{:?}", op, dtype)),
     );
     return Ok(());
 }

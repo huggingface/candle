@@ -40,13 +40,14 @@ pub fn queue_binary_buffer_from_buffer(
             buffer_input1,
             buffer_input2,
         );
+        let pipeline = dev.get_pipeline(super::Shader::Binary(dtype), Pipelines::BinaryBufferFromBufferContiguousBoth)?;
         enqueue_big(
             meta,
-            PipelineType(super::Shader::Binary(dtype),Pipelines::BinaryBufferFromBufferContiguousBoth),
+            pipeline,
             bind_group,
-            lay1.shape().elem_count() as u32,
+            lay1.shape().elem_count() as u32, 
             #[cfg(feature = "wgpu_debug")] 
-            crate::wgpu::device::QueueDebugInfo::new(&format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, Pipelines::BinaryBufferFromBufferContiguousBoth), lay1.shape().elem_count()),
+            crate::wgpu::device::QueueDebugInfo::new(&format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, Pipelines::BinaryBufferFromBufferContiguousBoth)),
         );
         return Ok(());
     } else {
@@ -70,7 +71,7 @@ pub fn queue_binary_buffer_from_buffer(
             bind_group,
             lay1.shape().elem_count() as u32,
             #[cfg(feature = "wgpu_debug")] 
-            crate::wgpu::device::QueueDebugInfo::new(&format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, pipeline_type), lay1.shape().elem_count()),
+            crate::wgpu::device::QueueDebugInfo::new(&format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, pipeline_type)),
         );
         return Ok(());
     }

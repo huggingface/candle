@@ -879,21 +879,16 @@ impl crate::backend::BackendStorage for WgpuStorage {
         layout1: &crate::Layout,
         layout2: &crate::Layout,
     ) -> crate::Result<Self> {
-        //mXk * kXn -> mXn * nXk
-        let m2 = m;
-        let n2 = k;
-        let k2 = n;
-
-        let buffer_dest = BufferReference::new(self.device(), batching * (m2 * k2) * 4);
+        let buffer_dest = BufferReference::new(self.device(), batching * (m * n) * 4);
         wgpu_functions::queue_matmul_buffer(
             self.device(),
             buffer_dest.clone(),
             self.buffer.clone(),
             rhs.buffer.clone(),
             batching as u32,
-            m2 as u32,
-            n2 as u32,
-            k2 as u32,
+            m as u32,
+            n as u32,
+            k as u32,
             layout1,
             layout2,
             self.dtype,

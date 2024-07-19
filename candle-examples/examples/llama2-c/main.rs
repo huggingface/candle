@@ -388,7 +388,7 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
             #[cfg(feature = "wgpu_debug")]{
                 let info = pollster::block_on(gpu.get_debug_info()).unwrap();
                 let map2 = candle::wgpu::debug_info::calulate_measurment(&info);
-                candle::wgpu::debug_info::save_list(&map2, "wgpu_infollama2-c_small.json").unwrap();
+                candle::wgpu::debug_info::save_list(&map2, "wgpu_infollama4-c_small.json").unwrap();
             }
         },
         _ => {},

@@ -106,6 +106,21 @@ pub struct Measurement {
     pub m_type : MeasurementType,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct PipelineInfo{
+    pub name : String,
+    pub consts : Vec<f64>
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ShaderInfo {
+    pub name : String,
+    pub pipelines : Vec<PipelineInfo>
+}
+
+
+
+
 pub fn calulate_measurment(map: &HashMap<String, Vec<(u64, u64, u32, u32, u32)>>) -> Vec<Measurement>{
     const NANO : f64 = 1e9;
     

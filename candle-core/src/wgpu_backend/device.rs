@@ -1,21 +1,22 @@
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
+use std::hash::Hash;
 
 use rand::SeedableRng;
-
 
 use crate::backend::BackendStorage;
 use crate::{notImplemented, wrongType, Layout};
 
 #[cfg(feature = "wgpu_debug")]
-use super::debug_info::{DebugInfo, Measurements,MInfo};
+use super::debug_info::{DebugInfo, Measurements,MInfo, ShaderInfo};
 
 use super::cache::{BindGroupReferenceBase, BindgroupId, BindgroupLayouts, BufferReference, ModelCache};
-use super::util::ToU32;
-use super::wgpu_functions::{DispatchIndirectArgs, MetaArray, Shader};
+use super::util::{ToF64, ToU32};
+use super::wgpu_functions::{MetaArray, Shader};
 use super::wgpu_functions::{self, create_buffer_init, unary::UnaryOperation};
 use super::WgpuStorage;
+
 
 #[derive(Debug)]
 pub (crate) enum MlQueue{
@@ -45,22 +46,39 @@ impl_to_u64!(u8 u16 u32 u64 usize);
 #[cfg(feature = "wgpu_debug")]
 #[derive(Debug)]
 pub struct QueueDebugInfo{
-    pub (crate) name : Option<String>,
-    pub (crate) output_size : u64,
+    pub (crate) name : String
 }
 
 #[cfg(feature = "wgpu_debug")]
 impl QueueDebugInfo {
-    pub fn new<T : Into<String>, O : ToU64>(name: T, output_size: O) -> Self {
-        Self { name : Some(name.into()), output_size: output_size.to_u64()}
+    pub fn new<T : Into<String>>(name: T) -> Self {
+        Self { name : name.into()}
     }
     // pub fn new_noname<O : ToU64>(output_size: O) -> Self {
     //     Self { name : None, output_size: output_size.to_u64() }
     // }
 }
 
+
+#[derive(Debug, Copy, Clone)]
+struct OrderedFloat(f64);
+
+impl PartialEq for OrderedFloat {
+    fn eq(&self, other: &OrderedFloat) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for OrderedFloat {}
+
+impl Hash for OrderedFloat {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub (crate) struct PipelineType(pub Shader, pub Pipelines);
+pub (crate) struct PipelineType(pub Shader, pub Pipelines, Vec<OrderedFloat>);
 
 
 
@@ -82,7 +100,7 @@ pub (crate) struct MlQueueDispatch{
     pub (crate) pipeline : PipelineType,
     pub (crate) bindgroup : DispatchedBindgroup,
     pub (crate) meta : u32,
-    
+    pub (crate) workload_size : usize, //the total size needed to calculate. Needed so we do not queue to many operations at once.
     #[cfg(feature = "wgpu_debug")]
     pub (crate) debug : QueueDebugInfo,
 }
@@ -90,7 +108,7 @@ pub (crate) struct MlQueueDispatch{
 #[derive(Debug)]
 pub struct ShaderModuleComputePipelines{
     shader : Arc<wgpu::ShaderModule>,
-    pipelines : Mutex<HashMap<Pipelines, Arc<wgpu::ComputePipeline>>>
+    pipelines : Mutex<HashMap<PipelineType, Arc<wgpu::ComputePipeline>>>
 }
 
 //a struct, where all operations are chunked 
@@ -98,13 +116,12 @@ pub struct ShaderModuleComputePipelines{
 pub struct QueueBuffer{
     pub (crate) command_queue : Vec<MlQueue>,
     pub (crate) meta_array : MetaArray,
-    pub (crate) indirect_array : Vec<DispatchIndirectArgs>,
     pub (crate) current_meta : u32
 }
 
 impl QueueBuffer {
     pub fn new() -> Self {
-        Self {  command_queue: vec![], meta_array :MetaArray::new(META_BUFFER_SIZE), indirect_array : vec![], current_meta : 0 }
+        Self {  command_queue: vec![], meta_array :MetaArray::new(META_BUFFER_SIZE), current_meta : 0 }
     }
 
     pub (crate) fn add_layout(&mut self, layout : &Layout){
@@ -138,14 +155,14 @@ pub struct WgpuDeviceInner{
     pub (crate) cached_bindgroup_reuse_counter : AtomicU32,
     pub (crate) cached_buffer_reuse_counter : AtomicU32,
     pub (crate) cached_buffer_inplace_counter : AtomicU32,
-    pub (crate) use_cache : bool
+    pub (crate) use_cache : bool,
+    #[cfg(feature = "wgpu_debug")]
+    pub debug : DebugInfo,
 }
 
 #[derive(Debug, Clone)]
 pub struct  WgpuDevice {
     pub inner : Arc<WgpuDeviceInner>,
-    #[cfg(feature = "wgpu_debug")]
-    pub debug : DebugInfo,
 }
 
 impl std::ops::Deref for WgpuDevice{
@@ -160,6 +177,7 @@ impl std::ops::Deref for WgpuDevice{
 pub (crate) enum Pipelines{
     UnaryFromBuffer,
     UnaryFromBufferContiguous,
+    UnaryFromBufferContiguousNoStartOffset,
     UnaryInplaceContiguous,
     BinaryBufferFromBuffer,
     BinaryBufferFromBufferContiguousBoth,
@@ -169,6 +187,7 @@ pub (crate) enum Pipelines{
     Matmul4Buffer,
     Matmul4endBuffer,
     Matmul5Buffer, 
+    Matmul7Buffer, 
     Matmul6Buffer,
     Matmul1endBuffer,
     Reduce,
@@ -182,6 +201,7 @@ pub (crate) enum Pipelines{
     Conv1DTranspose,
     IndexSelect,
     Copy2d,
+    Copy3d,
     Copy2dTranspose,
     CopyStrided,
     Copy,
@@ -202,8 +222,11 @@ pub (crate) enum Pipelines{
 
 
 
-pub (crate) const META_BUFFER_SIZE : u32 = 65536;
-//pub (crate) const META_BUFFER_SIZE : u32 = 1_000_000;
+//pub (crate) const META_BUFFER_SIZE : u32 = 65536;
+//pub (crate) const META_BUFFER_SIZE : u32 = 2048;
+pub (crate) const META_BUFFER_SIZE : u32 = 10*1024*1024; //10mb
+
+pub (crate) const MAX_WORKLOAD_SIZE : u64 = 1024u64*1024*1024*10; //10gb
 
 impl WgpuDevice{
     pub (crate) async fn create(_: usize) -> crate::Result<Self>{
@@ -235,6 +258,7 @@ impl WgpuDevice{
                     label: None,
                     required_features: features,
                     required_limits: limits,
+                    memory_hints : wgpu::MemoryHints::Performance
                 },
                 None,
             ).await.map_err(|err| crate::Error::WebGpu(err.to_string().into()))?;
@@ -296,7 +320,7 @@ impl WgpuDevice{
 
     #[cfg(feature = "wgpu_debug")]
     pub async fn get_debug_info_full(&self) -> crate::Result<Measurements>{
-        let data = wgpu_functions::read_data_from_gpu_async::<u64>(self, &self.debug.query_set_buffer).await;
+        let data = wgpu_functions::read_data_from_gpu_async_buffer::<u64>(self, &self.debug.query_set_buffer).await;
         let period = self.queue.get_timestamp_period();
         let mut result = Measurements::new(period);
         let mut last_end_time = 0u64;
@@ -335,11 +359,35 @@ impl WgpuDevice{
         return Ok(map);
     }
 
-    fn load_pipeline(device : &wgpu::Device, shader : Arc<wgpu::ShaderModule>, pipeline : Pipelines, pipeline_layout : &wgpu::PipelineLayout) -> wgpu::ComputePipeline{
-        let entry_point = match pipeline{
+    #[cfg(feature = "wgpu_debug")]
+    pub fn get_pipeline_info(&self) -> crate::Result<Vec<ShaderInfo>>{
+        use super::debug_info::{self, ShaderInfo};
+
+        let shaders = self.shader.lock().unwrap();
+
+        return Ok(shaders.iter().map(|(k, v)|{
+            let pipelines = v.pipelines.lock().unwrap();
+            let s = debug_info::ShaderInfo{    
+                name: format!("{:?}", k).to_owned(), 
+                pipelines: pipelines.iter().map(|(pk, pv)|{
+                    return debug_info::PipelineInfo { 
+                        name: format!("{:?}", pk.1).to_owned(), 
+                        consts : pk.2.iter().map(|f| f.0).collect()
+                     }
+                }).collect()
+
+            };
+            return s;
+        }
+        ).collect());
+    }
+
+    fn load_pipeline(device : &wgpu::Device, shader : Arc<wgpu::ShaderModule>, pipeline : &PipelineType, pipeline_layout : &wgpu::PipelineLayout) -> wgpu::ComputePipeline{
+        let entry_point = match pipeline.1{
             Pipelines::UnaryInplaceContiguous => "unary_inplace_contiguous",
             Pipelines::UnaryFromBuffer => "unary_from_buffer",
             Pipelines::UnaryFromBufferContiguous => "unary_from_buffer_contiguous",
+            Pipelines::UnaryFromBufferContiguousNoStartOffset => "unary_from_buffer_contiguous",
             Pipelines::BinaryBufferFromBuffer => "binary_buffer_from_buffer",
             Pipelines::BinaryBufferFromBufferContiguousBoth => "binary_buffer_from_buffer_contiguous_both",
             Pipelines::MatmulBuffer => "matmul1",
@@ -349,6 +397,7 @@ impl WgpuDevice{
             Pipelines::Matmul4endBuffer => "matmul4_end",
             Pipelines::Matmul1endBuffer => "matmul1_end",
             Pipelines::Matmul5Buffer => "matmul5",
+            Pipelines::Matmul7Buffer => "matmul7",
             Pipelines::Matmul6Buffer => "matmul6",
             Pipelines::Reduce => "reduce",
             Pipelines::ReduceIndex => "reduce_index",
@@ -366,6 +415,7 @@ impl WgpuDevice{
             Pipelines::ConvertF32ToU8 => "convert_f32_to_u8",
             Pipelines::IndexSelect => "index_select",
             Pipelines::Copy2d => "copy2d",
+            Pipelines::Copy3d => "copy3d",
             Pipelines::Copy2dTranspose => "copy2d_transpose",
             Pipelines::CopyStrided => "copy_strided",
             Pipelines::Copy => "copy",
@@ -379,29 +429,53 @@ impl WgpuDevice{
             Pipelines::IndexAddInplace => "index_add_inplace",
         };
         
-        return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: None,
-            layout: Some(pipeline_layout),
-            module: &shader,
-            entry_point: entry_point,
-        });
+       if pipeline.2.is_empty(){
+            return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: None,
+                layout: Some(pipeline_layout),
+                module: &shader,
+                entry_point: entry_point,
+                compilation_options : wgpu::PipelineCompilationOptions::default(),
+                cache : None
+            });
+        }
+        else{
+            let hmap : HashMap<_, _> = pipeline.2.iter().enumerate().map(|(index, value)| (format!("CONSTV_{index}"), value.0)).collect();
+
+            return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: None,
+                layout: Some(pipeline_layout),
+                module: &shader,
+                entry_point: entry_point,
+                compilation_options :  wgpu::PipelineCompilationOptions{
+                    constants: &hmap,
+                    zero_initialize_workgroup_memory: true,
+                    vertex_pulling_transform: false,
+                },
+                cache : None
+            });
+        }
     }
 
     pub (crate) fn get_pipeline(&self, shader : wgpu_functions::Shader, pipeline: Pipelines) -> crate::Result<PipelineType> {
-        return Ok(PipelineType(shader, pipeline));
+        return Ok(PipelineType(shader, pipeline, vec![]));
     }
 
-    pub (crate) fn get_pipeline2(&self, shader : wgpu_functions::Shader, pipeline: Pipelines, pipeline_layout : &wgpu::PipelineLayout) -> crate::Result<Arc<wgpu::ComputePipeline>> {
+    pub (crate) fn get_pipeline_const<T : ToF64>(&self, shader : wgpu_functions::Shader, pipeline: Pipelines, consts : Vec<T>) -> PipelineType {
+        return PipelineType(shader, pipeline, consts.into_iter().map(|f| OrderedFloat(f.to_f64())).collect());
+    }
+
+    pub (crate) fn get_pipeline2(&self, pipeline: &PipelineType, pipeline_layout : &wgpu::PipelineLayout) -> crate::Result<Arc<wgpu::ComputePipeline>> {
         let mut shaders = self.shader.lock().unwrap();
-        if !shaders.contains_key(&shader){
-            let s = wgpu_functions::get_shader(&self.device, wgpu_functions::load_shader(shader.clone())?);
-            shaders.insert(shader.clone(), ShaderModuleComputePipelines{ shader: Arc::new(s), pipelines: Mutex::new(HashMap::new())});
+        if !shaders.contains_key(&pipeline.0){
+            let s = wgpu_functions::get_shader(&self.device, wgpu_functions::load_shader(pipeline.0.clone())?);
+            shaders.insert(pipeline.0.clone(), ShaderModuleComputePipelines{ shader: Arc::new(s), pipelines: Mutex::new(HashMap::new())});
         }
      
-        if let Some(s) = shaders.get(&shader){
+        if let Some(s) = shaders.get(&pipeline.0){
             let mut pipelines = s.pipelines.lock().unwrap();
             if !pipelines.contains_key(&pipeline){
-                let p = crate::WgpuDevice::load_pipeline(&self.device, s.shader.clone(), pipeline.clone(),pipeline_layout);
+                let p = crate::WgpuDevice::load_pipeline(&self.device, s.shader.clone(), pipeline ,pipeline_layout);
                 pipelines.insert(pipeline.clone(), Arc::new(p));
             }
             
@@ -416,6 +490,10 @@ impl WgpuDevice{
             panic!("Not expected")
         }
     }
+
+    // pub async fn synchronize_async(&self) -> crate::Result<()> {
+    //     wgpu_functions::synchronize_async(self).await
+    // }
 }
 
 
@@ -523,6 +601,12 @@ impl crate::backend::BackendDevice for WgpuDevice{
         notImplemented!(set_seed)
     }
 
+    
+    #[cfg(target_arch = "wasm32")]
+    fn synchronize(&self) -> crate::Result<()> {
+        panic!("Synchronize is not possible on wasm. (on_submitted_work_done is currently not implemented in wgpu)");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     fn synchronize(&self) -> crate::Result<()> {
         wgpu_functions::synchronize(self)
     }

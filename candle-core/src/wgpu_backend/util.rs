@@ -44,6 +44,23 @@ impl ToU64 for usize {
     }
 }
 
+pub trait ToF64 {
+    fn to_f64(self) -> f64;
+}
+
+impl ToF64 for usize {
+    fn to_f64(self) -> f64 {
+        return self as f64;
+    }
+}
+
+impl ToF64 for u32 {
+    fn to_f64(self) -> f64 {
+        return self as f64;
+    }
+}
+
+
 #[derive(Debug)]
 pub(crate) struct HashMapMulti<K, V> {
     pub(crate) map: HashMap<K, Vec<V>>,

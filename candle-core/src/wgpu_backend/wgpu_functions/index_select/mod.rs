@@ -49,8 +49,9 @@ pub fn queue_index_select(
         (length + 7) / 8,
         ((index_length + 7) / 8) as u32,
         1,
+        length as usize * index_length,
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("index_select : dtype{:?}", input_dtype), length as usize * index_length),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("index_select : dtype{:?}", input_dtype)),
     );
     return Ok(());
 }

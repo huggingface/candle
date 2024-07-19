@@ -111,25 +111,25 @@ test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal, mm_layout
 
 #[test]
 fn big_matmul_webgpu()-> Result<()> {
-    //let b = 1;
-    let m = 17;
-    let n = 17;
-    let k = 17;
+    let b = 10;
+    let m = 33;
+    let n = 33;
+    let k = 33;
 
-    let lhs = Tensor::arange(0.0f32, (m*k) as f32,&Device::Cpu)?.reshape((m, k))?;
-    let rhs = Tensor::arange(0.0f32, (k*n) as f32,&Device::Cpu)?.reshape((k, n))?;
+    let lhs = Tensor::arange(0.0f32, (b*m*k) as f32,&Device::Cpu)?.reshape((b, m, k))?;
+    let rhs = Tensor::arange(0.0f32, (b*k*n) as f32,&Device::Cpu)?.reshape((b, k, n))?;
     //let lhs = Tensor::rand(0.0f32, 1.0f32, (b, m, k),&Device::Cpu).unwrap();
     //let rhs = Tensor::rand(0.0f32, 1.0f32, (b, k, n),&Device::Cpu).unwrap();
 
-    let t1 = lhs.matmul(&rhs)?.reshape((m,n))?;
+    let t1 = lhs.matmul(&rhs)?.reshape((b,m,n))?;
     let device = Device::new_webgpu_sync(0)?;
     let lhs = lhs.to_device(&device)?;
     let rhs = lhs.to_device(&device)?;
 
-    let t2 = lhs.matmul(&rhs)?.reshape((m,n))?;
+    let t2 = lhs.matmul(&rhs)?.reshape((b,m,n))?;
 
-    let m = test_utils::to_vec2_round(&t1, 3)?;
-    let m2 = test_utils::to_vec2_round(&t2, 3)?;
+    let m = test_utils::to_vec3_round(&t1, 3)?;
+    let m2 = test_utils::to_vec3_round(&t2, 3)?;
     
     assert_eq!(m, m2);
 

@@ -4,6 +4,7 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+use candle::D;
 use candle_transformers::models::stable_diffusion;
 use candle_transformers::models::wuerstchen;
 
@@ -17,6 +18,9 @@ const RESOLUTION_MULTIPLE: f64 = 42.67;
 const LATENT_DIM_SCALE: f64 = 10.67;
 const PRIOR_CIN: usize = 16;
 const DECODER_CIN: usize = 4;
+
+const TEST_NAME : &str = "3";
+
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -247,6 +251,8 @@ fn run(args: Args) -> Result<()> {
     };
     println!("generated prior text embeddings {prior_text_embeddings:?}");
 
+    let prior_text_embeddings = compare_read("vector/vector_p1.npy", &prior_text_embeddings)?;
+
     let text_embeddings = {
         let tokenizer = ModelFile::Tokenizer.get(tokenizer)?;
         let weights = ModelFile::Clip.get(clip_weights)?;
@@ -273,6 +279,8 @@ fn run(args: Args) -> Result<()> {
             (b_size, PRIOR_CIN, latent_height, latent_width),
             &device,
         )?;
+        
+        let mut latents = store_read("random_latents.npy",&latents)?;
 
         let prior = {
             let file = ModelFile::Prior.get(prior_weights)?;
@@ -290,25 +298,38 @@ fn run(args: Args) -> Result<()> {
                 vb,
             )?
         };
-        let prior_scheduler = wuerstchen::ddpm::DDPMWScheduler::new(60, Default::default())?;
+        let prior_scheduler = wuerstchen::ddpm::DDPMWScheduler::new(2, Default::default())?;
         let timesteps = prior_scheduler.timesteps();
         let timesteps = &timesteps[..timesteps.len() - 1];
         println!("prior denoising");
         for (index, &t) in timesteps.iter().enumerate() {
             let start_time = std::time::Instant::now();
             let latent_model_input = Tensor::cat(&[&latents, &latents], 0)?;
-            let ratio = (Tensor::ones(2, DType::F32, &device)? * t)?;
+            //let ratio = (Tensor::ones(2, DType::F32, &device)? * t)?;
+            
+            // let latent_model_input_cpu = Tensor::cat(&[&latent_cpu, &latent_cpu], 0)?;
+
+            // compare_tensor(&latent_model_input_cpu, &latent_model_input)?;
+
+            let ratio: Tensor = (Tensor::ones(2, DType::F32, &device)? * t)?;
+
+            let ratio = compare_read(&format!("vector/vector_a1_{index}.npy"),&ratio)?;
+
+            
             let noise_pred = prior.forward(&latent_model_input, &ratio, &prior_text_embeddings)?;
+            let noise_pred = compare_read(&format!("vector/vector_1_{index}.npy"),&noise_pred)?;
             let noise_pred = noise_pred.chunk(2, 0)?;
             let (noise_pred_text, noise_pred_uncond) = (&noise_pred[0], &noise_pred[1]);
             let noise_pred = (noise_pred_uncond
                 + ((noise_pred_text - noise_pred_uncond)? * PRIOR_GUIDANCE_SCALE)?)?;
-            latents = prior_scheduler.step(&noise_pred, t, &latents)?;
+            latents = prior_scheduler.step(&noise_pred, t, &latents, index)?;
             let dt = start_time.elapsed().as_secs_f32();
             println!("step {}/{} done, {:.2}s", index + 1, timesteps.len(), dt);
         }
         ((latents * 42.)? - 1.)?
     };
+
+    let image_embeddings = compare_read("vector/vector4.npy",&image_embeddings)?;
 
     println!("Building the vqgan.");
     let vqgan = {
@@ -351,8 +372,10 @@ fn run(args: Args) -> Result<()> {
             &device,
         )?;
 
+        latents = store_read("vector/vector5.npy",&latents)?;
+
         println!("diffusion process with prior {image_embeddings:?}");
-        let scheduler = wuerstchen::ddpm::DDPMWScheduler::new(12, Default::default())?;
+        let scheduler = wuerstchen::ddpm::DDPMWScheduler::new(2, Default::default())?;
         let timesteps = scheduler.timesteps();
         let timesteps = &timesteps[..timesteps.len() - 1];
         for (index, &t) in timesteps.iter().enumerate() {
@@ -360,7 +383,8 @@ fn run(args: Args) -> Result<()> {
             let ratio = (Tensor::ones(1, DType::F32, &device)? * t)?;
             let noise_pred =
                 decoder.forward(&latents, &ratio, &image_embeddings, Some(&text_embeddings))?;
-            latents = scheduler.step(&noise_pred, t, &latents)?;
+            let noise_pred = compare_read(&format!("vector/vector_6_{index}.npy"),&noise_pred)?;
+            latents = scheduler.step(&noise_pred, t, &latents, index + 10)?;
             let dt = start_time.elapsed().as_secs_f32();
             println!("step {}/{} done, {:.2}s", index + 1, timesteps.len(), dt);
         }
@@ -369,17 +393,106 @@ fn run(args: Args) -> Result<()> {
             idx + 1,
             num_samples
         );
+
+        match &device {
+            candle::Device::WebGpu(gpu) => {
+                gpu.print_bindgroup_reuseinfo2();
+                #[cfg(feature = "wgpu_debug")]{
+                    let info = pollster::block_on(gpu.get_debug_info()).unwrap();
+                    let map2 = candle::wgpu::debug_info::calulate_measurment(&info);
+                    candle::wgpu::debug_info::save_list(&map2, & format!("wgpu_wuerstchen_test_{TEST_NAME}_a.json")).unwrap();
+                }
+            },
+            _ => {},
+        };
+
         let image = vqgan.decode(&(&latents * 0.3764)?)?;
+        let image = compare_read(&format!("vector/vector_9.npy"),&image)?;
         let image = (image.clamp(0f32, 1f32)? * 255.)?.to_device(&Device::Cpu)?
             .to_dtype(DType::U8)?
             .i(0)?;
         let image_filename = output_filename(&final_image, idx + 1, num_samples, None);
-        candle_examples::save_image(&image, image_filename)?
+        candle_examples::save_image(&image, image_filename)?;
+
+        match &device {
+            candle::Device::WebGpu(gpu) => {
+                gpu.print_bindgroup_reuseinfo2();
+                #[cfg(feature = "wgpu_debug")]{
+                    let info = pollster::block_on(gpu.get_debug_info()).unwrap();
+                    let map2 = candle::wgpu::debug_info::calulate_measurment(&info);
+                    candle::wgpu::debug_info::save_list(&map2,& format!("wgpu_wuerstchen_test_{TEST_NAME}_b.json")).unwrap();
+                
+                
+                    let info: Vec<candle::wgpu::debug_info::ShaderInfo> = gpu.get_pipeline_info().unwrap();
+                    candle::wgpu::debug_info::save_list(&info,& format!("wgpu_wuerstchen_test_{TEST_NAME}_c.json")).unwrap();
+                }
+            },
+            _ => {},
+        };
+
+
     }
+
+
     Ok(())
 }
 
 fn main() -> Result<()> {
+    env_logger::builder().filter_level(log::LevelFilter::Info).init();
     let args = Args::parse();
     run(args)
 }
+
+
+
+fn compare_tensor(cpu : &Tensor, noncpu : &Tensor, name : &str) -> Result<()>{
+    let cpu2 = noncpu.to_device(&Device::Cpu)?;
+    let diff = (&cpu2 - cpu)?.abs()?;
+
+    let mean = diff.mean_all()?;
+
+    let mut dims: Vec<_> = (0..diff.rank()).collect();
+
+
+
+    let mut diff = diff.max(D::Minus1)?;
+
+    while dims.len() > 1 {
+        dims = (0..diff.rank()).collect();
+        diff = diff.max(D::Minus1)?;
+    }
+
+    let diff : f32 = diff.to_scalar()?;
+    let mean : f32 = mean.to_scalar()?;
+    log::warn!("Diff was: {diff}, mean: {mean}, name: {name}");
+    Ok(())
+}   
+
+fn compare_read(name : &str, current : &Tensor) -> Result<Tensor>{
+    println!("compare read {name}");
+    if current.device().is_cpu(){
+        current.write_npy(name)?;
+        return Ok(current.clone());
+    }
+    else{
+        let cmp = Tensor::read_npy(name)?;
+        compare_tensor(&cmp, current, name)?;
+        //return Ok(current.copy()?);
+
+        //let cmp = Tensor::read_npy(name)?;
+        //compare_tensor(&cmp, current, name)?;
+        return Ok(cmp.to_device(&current.device())?);
+    }
+}
+
+fn store_read(name : &str, current : &Tensor) -> Result<Tensor>{
+    if current.device().is_cpu(){
+        current.write_npy(name)?;
+        return Ok(current.clone());
+    }
+    else{
+        let cmp = Tensor::read_npy(name)?;
+        return Ok(cmp.to_device(&current.device())?);
+    }
+}
+

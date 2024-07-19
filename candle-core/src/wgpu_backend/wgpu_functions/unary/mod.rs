@@ -97,7 +97,7 @@ pub fn queue_unary_inplace_op(
             bind_group,
             layout.shape().elem_count() as u32,
             #[cfg(feature = "wgpu_debug")] 
-            crate::wgpu::device::QueueDebugInfo::new(&format!("unary_inplace_contiguoes op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryInplaceContiguous), input_layout.shape().elem_count()),
+            crate::wgpu::device::QueueDebugInfo::new(&format!("unary_inplace_contiguoes op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryInplaceContiguous)),
         );
     }
     else{
@@ -122,10 +122,17 @@ pub fn queue_unary_from_buffer_op(
         meta.add(scalar1);
         meta.add(scalar2);
         meta.add(dev.rand_state.lock().unwrap().next_u32());
-        meta.add(input_layout.start_offset());       //offset, do not change, will be checked at flush_gpu_command
+        meta.add(input_layout.start_offset());       //
         meta.add(input_layout.shape().elem_count()); //length 
 
-        let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryFromBufferContiguous)?;
+        let pipeline_type = 
+        if input_layout.start_offset() == 0{
+            Pipelines::UnaryFromBufferContiguousNoStartOffset
+        }
+        else{
+            Pipelines::UnaryFromBufferContiguous
+        };
+        let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), pipeline_type.clone())?;
 
         let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
         enqueue_big(
@@ -134,7 +141,7 @@ pub fn queue_unary_from_buffer_op(
             bind_group,
             input_layout.shape().elem_count() as u32,
             #[cfg(feature = "wgpu_debug")] 
-            crate::wgpu::device::QueueDebugInfo::new(&format!("unary op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryFromBufferContiguous), input_layout.shape().elem_count()),
+            crate::wgpu::device::QueueDebugInfo::new(&format!("unary op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, pipeline_type)),
         );
     } else {
         let mut meta = get_meta(&dev);
@@ -152,7 +159,7 @@ pub fn queue_unary_from_buffer_op(
             bind_group,
             input_layout.shape().elem_count() as u32,
             #[cfg(feature = "wgpu_debug")] 
-            crate::wgpu::device::QueueDebugInfo::new(&format!("unary op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryFromBuffer), input_layout.shape().elem_count()),
+            crate::wgpu::device::QueueDebugInfo::new(&format!("unary op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryFromBuffer)),
         );
     }
     return Ok(());

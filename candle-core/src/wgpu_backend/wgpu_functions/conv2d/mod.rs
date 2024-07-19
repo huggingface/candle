@@ -20,11 +20,22 @@ pub fn queue_conv2d(
     
     let mut meta = get_meta(&dev);
 
+    let const_vec = vec![
+        kernel_stride[3],//kernel_x_stride
+        //kernel_stride[2],//kernel_y_stride
+        //input_stride[2], //stride_y_in
+        input_stride[3], //stride_x_in
+        params.padding,
+        params.stride,
+        params.dilation,
+        input_layout.start_offset()];
+
+
     meta.add(params.b_size);
     meta.add(params.c_in);
     meta.add(params.k_w);
     meta.add(params.k_h);
-    meta.add(kernel_stride[3]); //kernel_x_stride
+    //meta.add(kernel_stride[3]); //kernel_x_stride
     meta.add(kernel_stride[2]); //kernel_y_stride
     meta.add(kernel_stride[1]); //kernel_c_stride
     meta.add(kernel_stride[0]); //kernel_b_stride
@@ -39,13 +50,13 @@ pub fn queue_conv2d(
     meta.add(input_stride[0]); //stride_batch_input
     meta.add(input_stride[1]); //stride_c_in
     meta.add(input_stride[2]); //stride_y_in
-    meta.add(input_stride[3]); //stride_x_in
-    meta.add(params.padding);
-    meta.add(params.stride);
-    meta.add(params.dilation);
-    meta.add(input_layout.start_offset());
+    //meta.add(input_stride[3]); //stride_x_in
+    //meta.add(params.padding);
+    //meta.add(params.stride);
+    //meta.add(params.dilation);
+    //meta.add(input_layout.start_offset());
 
-    let pipeline = dev.get_pipeline(super::Shader::Conv2D(dtype), Pipelines::Conv2D)?;
+    let pipeline = dev.get_pipeline_const(super::Shader::Conv2D(dtype), Pipelines::Conv2D, const_vec);
 
     let bind_group = create_bind_group_input2(
         buffer_dest,
@@ -57,11 +68,11 @@ pub fn queue_conv2d(
         pipeline,
         bind_group,
         (params.out_w() as u32 + 15) / 16,
-        (params.out_h() as u32 + 16) / 16,
+        (params.out_h() as u32 + 15) / 16,
         params.c_out as u32,
+        params.out_w() * params.out_h() * params.c_out * params.b_size * kernel_layout.shape().elem_count(),
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("conv2d, kernel:{:?} dtype:{:?}", dtype, kernel_layout.shape()), params.out_w() * params.out_h() * params.c_out * params.b_size * kernel_layout.shape().elem_count() )
-
+        crate::wgpu::device::QueueDebugInfo::new(&format!("conv2d, kernel:{:?}/{:?}, input: {:?}/{:?}, dtype:{:?}",kernel_layout.shape(), kernel_layout.stride(), input_layout.shape(), input_layout.shape(), dtype))
     );
     return Ok(());
 }
@@ -80,11 +91,22 @@ pub fn queue_conv2d_transpose(
     let kernel_stride = kernel_layout.stride();
     
     let mut meta = get_meta(&dev);
+    
+    let const_vec = vec![
+        kernel_stride[3],//kernel_x_stride
+        //kernel_stride[2],//kernel_y_stride
+        //input_stride[2], //stride_y_in
+        input_stride[3], //stride_x_in
+        params.padding,
+        params.stride,
+        params.dilation,
+        input_layout.start_offset()];
+    
     meta.add(params.b_size);
     meta.add(params.c_in);
     meta.add(params.k_w);
     meta.add(params.k_h);
-    meta.add(kernel_stride[3]); //kernel_x_stride
+    //meta.add(kernel_stride[3]); //kernel_x_stride
     meta.add(kernel_stride[2]); //kernel_y_stride
     meta.add(kernel_stride[0]); //kernel_c_stride
     meta.add(kernel_stride[1]); //kernel_b_stride
@@ -99,13 +121,13 @@ pub fn queue_conv2d_transpose(
     meta.add(input_stride[0]); //stride_batch_input
     meta.add(input_stride[1]); //stride_c_in
     meta.add(input_stride[2]); //stride_y_in
-    meta.add(input_stride[3]); //stride_x_in
-    meta.add(params.padding);
-    meta.add(params.stride);
-    meta.add(params.dilation);
-    meta.add(input_layout.start_offset());
+    //meta.add(input_stride[3]); //stride_x_in
+    //meta.add(params.padding);
+    //meta.add(params.stride);
+    //meta.add(params.dilation);
+    //meta.add(input_layout.start_offset());
 
-    let pipeline = dev.get_pipeline(super::Shader::Conv2D(dtype), Pipelines::Conv2DTranspose)?;
+    let pipeline = dev.get_pipeline_const(super::Shader::Conv2D(dtype), Pipelines::Conv2DTranspose, const_vec);
 
     let bind_group = create_bind_group_input2(
         buffer_dest,
@@ -116,10 +138,12 @@ pub fn queue_conv2d_transpose(
         meta,
         pipeline,
         bind_group,
-        ((params.out_w() - params.output_padding) as u32 + 7) / 8,
-        ((params.out_h() - params.output_padding) as u32 + 7) / 8,
+        ((params.out_w() - params.output_padding) as u32 + 15) / 16,
+        ((params.out_h() - params.output_padding) as u32 + 15) / 16,
         params.c_out as u32,
-        #[cfg(feature = "wgpu_debug")] crate::wgpu::device::QueueDebugInfo::new(&format!("conv2d_transpose, dtype:{:?}", dtype),params.out_w() * params.out_h() * params.c_out * params.b_size * kernel_layout.shape().elem_count()),
+        params.out_w() * params.out_h() * params.c_out * params.b_size * kernel_layout.shape().elem_count(),
+        #[cfg(feature = "wgpu_debug")] 
+        crate::wgpu::device::QueueDebugInfo::new(&format!("conv2d_transpose, kernel:{:?}/{:?}, input: {:?}/{:?}, dtype:{:?}",kernel_layout.shape(), kernel_layout.stride(), input_layout.shape(), input_layout.shape(), dtype))
     );
     return Ok(());
 }
@@ -175,7 +199,8 @@ pub fn queue_conv1d(
         (params.l_out() as u32 + 63) / 64,
         params.c_out as u32,
         1,
-        #[cfg(feature = "wgpu_debug")] crate::wgpu::device::QueueDebugInfo::new(&format!("conv1d, dtype:{:?}", dtype), params.l_out() * params.c_out * params.b_size * kernel_layout.shape().elem_count()),
+        params.l_out() * params.c_out * params.b_size * kernel_layout.shape().elem_count(),
+        #[cfg(feature = "wgpu_debug")] crate::wgpu::device::QueueDebugInfo::new(&format!("conv1d, dtype:{:?}", dtype)),
     );
     return Ok(());
 }
@@ -228,8 +253,9 @@ pub fn queue_conv1d_transpose(
         ((params.l_out() - params.output_padding) as u32 + 63) / 64,
         params.c_out as u32,
         1u32,
+        params.l_out() * params.c_out * params.b_size * kernel_layout.shape().elem_count(),
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("conv1d_transpose, dtype:{:?}", dtype), params.l_out() * params.c_out * params.b_size * kernel_layout.shape().elem_count()),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("conv1d_transpose, dtype:{:?}", dtype)),
     );
     return Ok(());
 }

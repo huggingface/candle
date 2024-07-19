@@ -56,8 +56,9 @@ pub fn queue_max_pool2d(
         (w_out as u32 + 7) / 8,
         (h_out as u32 + 7) / 8,
         c as u32,
+        h_out * w_out * b * c,
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("max_pool2d, dtype:{:?}", dtype),h_out * w_out * b * c ),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("max_pool2d, dtype:{:?}", dtype)),
     );
     return Ok(());
 }
@@ -115,8 +116,9 @@ pub fn queue_avg_pool2d(
         (w_out as u32 + 7) / 8,
         (h_out as u32 + 7) / 8,
         c as u32,
+        w_out * h_out * c * b,
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("avg_pool2d, dtype:{:?}", dtype),w_out * h_out * c * b),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("avg_pool2d, dtype:{:?}", dtype)),
     );
     return Ok(());
 }

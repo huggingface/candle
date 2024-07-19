@@ -21,8 +21,9 @@ pub fn queue_convert_u32_to_f32(
         pipeline,
         bind_group,
         input_layout.shape().elem_count() as u32,
+        input_layout.shape().elem_count(),
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("u32_to_f32"), input_layout.shape().elem_count()),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("u32_to_f32")),
     );
     return Ok(());
 }
@@ -44,8 +45,9 @@ pub fn queue_convert_u8_to_f32(
         pipeline,
         bind_group,
         input_layout.shape().elem_count() as u32,
+        input_layout.shape().elem_count(),
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("u8_to_f32"), input_layout.shape().elem_count()),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("u8_to_f32")),
     );
     return Ok(());
 }
@@ -67,8 +69,9 @@ pub fn queue_convert_f32_to_u32(
         pipeline,
         bind_group,
         input_layout.shape().elem_count() as u32,
+        input_layout.shape().elem_count(),
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("f32_to_u32"), input_layout.shape().elem_count()),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("f32_to_u32")),
     );
     return Ok(());
 }
@@ -93,8 +96,9 @@ pub fn queue_convert_u32_to_u8(
         pipeline,
         bind_group,
         ((size + 3) / 4) as u32,
+        size as usize,
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("u32_to_u8"), size),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("u32_to_u8")),
     );
     return Ok(());
 }
@@ -118,8 +122,9 @@ pub fn queue_convert_f32_to_u8(
         pipeline,
         bind_group,
         ((size + 3) / 4) as u32,
+        size as usize,
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("f32_to_u8"), size),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("f32_to_u8")),
     );
     return Ok(());
 }

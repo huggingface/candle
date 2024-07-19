@@ -3,21 +3,25 @@ use candle_core::{DType, Device, Tensor};
 use criterion::{black_box, criterion_group, Criterion, Throughput};
 use std::time::Instant;
 
+// fn run(a: &Tensor, b: &Tensor) {
+//     a.matmul(&b.t().unwrap()).unwrap();
+// }
+
 fn run(a: &Tensor, b: &Tensor) {
-    a.matmul(&b.t().unwrap()).unwrap();
+    a.matmul(&b).unwrap();
 }
 
-const ID : &'static str = "matmul5_16x2";
+const ID : &'static str = "matmul7_16x16";
 
 fn run_bench(c: &mut Criterion, device: &Device) {
     let b = 1;
     let m = 1;
-    let n = 2048;
-    let k = 2048;
+    let n = 2049;
+    let k = 2049;
 
     let dtype = DType::F32;
     let lhs = Tensor::zeros((b, m, k), dtype, device).unwrap();
-    let rhs = Tensor::zeros((b, n, k), dtype, device).unwrap();
+    let rhs = Tensor::zeros((b, k, n), dtype, device).unwrap();
 
     let flops = b * m * n * k;
 
@@ -51,7 +55,7 @@ fn run_bench(c: &mut Criterion, device: &Device) {
 
     let dtype = DType::F32;
     let lhs = Tensor::zeros((b, m, k), dtype, device).unwrap();
-    let rhs = Tensor::zeros((b, n, k), dtype, device).unwrap();
+    let rhs = Tensor::zeros((b, k, n), dtype, device).unwrap();
 
     let flops = b * m * n * k;
 

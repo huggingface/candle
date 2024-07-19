@@ -101,7 +101,7 @@
         await init();
         let m = new Model();
       
-        let result = await m.run(JSON.stringify({prompt : prompt, prior_steps: 60, vgan_steps : 20}));
+        let result = await m.run(JSON.stringify({prompt : prompt, prior_steps: 2, vgan_steps : 2}));
         console.log("Got Result");
         var blob = new Blob([result], {'type': 'image/png'});
         console.log("Loaded Blob");

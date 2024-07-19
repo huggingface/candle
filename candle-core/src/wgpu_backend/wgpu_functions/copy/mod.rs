@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{alloc::Layout, sync::Arc};
 
 use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
@@ -28,7 +28,7 @@ pub fn queue_copy_strided(
             bind_group,
             input_layout.shape().elem_count() as u32,
             #[cfg(feature = "wgpu_debug")] 
-            crate::wgpu::device::QueueDebugInfo::new(&format!("copy strided dtype:{:?}", dtype), input_layout.shape().elem_count()),
+            crate::wgpu::device::QueueDebugInfo::new(&format!("copy strided dtype:{:?}", dtype)),
         );
     }
     return Ok(());
@@ -101,7 +101,7 @@ pub fn queue_copy(
             bind_group,
             copy_size as u32,
             #[cfg(feature = "wgpu_debug")] 
-            crate::wgpu::device::QueueDebugInfo::new(&format!("copy strided dtype:{:?}", dtype), input_layout.shape().elem_count()),
+            crate::wgpu::device::QueueDebugInfo::new(&format!("copy strided dtype:{:?}", dtype)),
         );
     }
     return Ok(());
@@ -123,24 +123,26 @@ pub fn queue_copy2d(
     dest_offset: u32,
 ) -> crate::Result<()> {
     if buffer_dest.size > 0 && buffer_input.size > 0{
+
+        let const_vec = vec![
+            input_offset,
+            dest_offset];
         
         let mut meta = get_meta(&dev);
         meta.add(d1);
         meta.add(d2);
         meta.add(input_stride1);
         meta.add(dest_stride1);
-        meta.add(input_offset);
-        meta.add(dest_offset);
 
     
         let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
         
         let x = (d1 + 15) / 16;
-        let y = (d2 + 15) / 16;
+        let y = (((d2 + 7) / 8) + 15) / 16;
 
 
         if y > MAX_DISPATCH_SIZE{
-            let pipeline = dev.get_pipeline(super::Shader::Copy(dtype), Pipelines::Copy2dTranspose)?;
+            let pipeline = dev.get_pipeline_const(super::Shader::Copy(dtype), Pipelines::Copy2dTranspose, const_vec);
             enqueue_workgroups(
                 meta,
                 pipeline,
@@ -148,12 +150,13 @@ pub fn queue_copy2d(
                 y.min(65535),
                 x,
                 (y + 65534) / 65535,
+                (d1 * d2) as usize,
                 #[cfg(feature = "wgpu_debug")]
-                crate::wgpu::device::QueueDebugInfo::new(&format!("copy2dTranpose dtype:{:?}", dtype), d1 * d2),
+                crate::wgpu::device::QueueDebugInfo::new(&format!("copy2dTranpose d1: {d1}, d2: {d2}, input_stride1: {input_stride1}, dest_stride1:{dest_stride1},  dtype:{:?}", dtype)),
             );
         }
         else{
-            let pipeline = dev.get_pipeline(super::Shader::Copy(dtype), Pipelines::Copy2d)?;
+            let pipeline = dev.get_pipeline_const(super::Shader::Copy(dtype), Pipelines::Copy2d,const_vec);
             enqueue_workgroups(
                 meta,
                 pipeline,
@@ -161,10 +164,81 @@ pub fn queue_copy2d(
                 x.min(65535),
                 y,
                 (x + 65534) / 65535,
+                (d1 * d2) as usize,
                 #[cfg(feature = "wgpu_debug")]
-                crate::wgpu::device::QueueDebugInfo::new(&format!("copy2d dtype:{:?}", dtype), d1 * d2),
+                crate::wgpu::device::QueueDebugInfo::new(&format!("copy2d d1: {d1}, d2: {d2}, dtype:{:?}", dtype)),
             );
         }
+    }
+    return Ok(());
+}
+
+pub fn queue_copy3d(
+    dev: &WgpuDevice,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input: Arc<BufferReference>,
+    dtype: crate::DType,
+    input_layout: &crate::Layout,
+    input_shape : (u32, u32, u32), //b, m, k
+    dest_layout : &crate::Layout,
+) -> crate::Result<()> {
+    if buffer_dest.size > 0 && buffer_input.size > 0{
+        let mut input1_stride = input_layout.stride().iter().rev();
+
+    
+        let input1_stride_1 = *input1_stride.next().unwrap_or(&1); //k
+        let input1_stride_2 = *input1_stride.next().unwrap_or(&1); //m
+        let input1_stride_3 = *input1_stride.next().unwrap_or(&1); //b
+        
+        let mut dest_stride = dest_layout.stride().iter().rev();
+        let dest_stride_1 = *dest_stride.next().unwrap_or(&1);
+        let dest_stride_2 = *dest_stride.next().unwrap_or(&1);
+        let dest_stride_3 = *dest_stride.next().unwrap_or(&1);
+
+        // if input_shape.0 == 1 && input1_stride_1 == 1 && dest_stride_1 == 1  { //batch == 1
+        //     return queue_copy2d(dev, buffer_dest, buffer_input, dtype, input_shape.1, input_shape.2, input1_stride_2  as u32, dest_stride_2 as u32, input_layout.start_offset() as u32, 0)
+        // }
+        // else{
+            let dest_shape = dest_layout.shape().dims3()?;
+
+            let const_vec = vec![
+                input_layout.start_offset(),
+                dest_stride_1,
+                dest_stride_2,
+                dest_stride_3,
+                input1_stride_1,
+                input1_stride_2,
+                input1_stride_3,
+                ];
+            
+            let mut meta = get_meta(&dev);
+            meta.add(input_shape.2);
+            meta.add(input_shape.1);
+            //meta.add(input1_stride_2);
+            //meta.add(input1_stride_3);
+    
+            //meta.add(dest_stride_2);
+            //meta.add(dest_stride_3);
+    
+        
+            let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
+       
+            let pipeline = dev.get_pipeline_const(super::Shader::Copy(dtype), Pipelines::Copy3d,const_vec);
+            //println!("copy3d d1: {}, d2: {}, d3: {}, dtype:{:?}, input1_stride: {:?}, dest_stride: {:?}",input_shape.2, input_shape.1, input_shape.0, dtype,input_layout.stride(), dest_layout.stride());
+            enqueue_workgroups(
+                meta,
+                pipeline,
+                bind_group,
+                (input_shape.2 + 15 ) / 16 as u32,
+                (input_shape.1 + 15)  / 16 as u32,
+                input_shape.0 as u32,
+                input_layout.shape().elem_count(),
+                #[cfg(feature = "wgpu_debug")]
+                crate::wgpu::device::QueueDebugInfo::new(&format!("copy3d d1: {}, d2: {}, d3: {}, dtype:{:?}",input_shape.2, input_shape.1, input_shape.0, dtype)),
+            );
+        //}
+       
+        
     }
     return Ok(());
 }
