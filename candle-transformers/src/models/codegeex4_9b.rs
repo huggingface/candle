@@ -2,7 +2,6 @@ use crate::models::with_tracing::{linear_b as linear, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
-
 #[derive(Debug, Clone)]
 pub struct Config {
     pub num_layers: usize,
@@ -110,7 +109,7 @@ struct CoreAttention {
     dtype: DType,
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32,dtype:DType) -> Result<Tensor> {
+fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32, dtype: DType) -> Result<Tensor> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true.to_dtype(dtype)?, on_false)?;
@@ -118,7 +117,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32,dtype:DType) -> Re
 }
 
 impl CoreAttention {
-    fn new(layer_number: usize, cfg: &Config,dtype: DType) -> Result<Self> {
+    fn new(layer_number: usize, cfg: &Config, dtype: DType) -> Result<Self> {
         let norm_factor = (cfg.kv_channels as f64).sqrt();
         let (norm_factor, coeff) = if cfg.apply_query_key_layer_scaling {
             let coeff = f64::max(1.0, layer_number as f64);
@@ -126,7 +125,11 @@ impl CoreAttention {
         } else {
             (norm_factor, None)
         };
-        Ok(Self { coeff, norm_factor, dtype})
+        Ok(Self {
+            coeff,
+            norm_factor,
+            dtype,
+        })
     }
 
     fn forward(
@@ -159,7 +162,7 @@ impl CoreAttention {
                 &matmul_result,
                 &mask.broadcast_left((matmul_result.dim(0)?, matmul_result.dim(1)?))?,
                 f32::NEG_INFINITY,
-		self.dtype,
+                self.dtype,
             )?,
             None => matmul_result,
         };
@@ -175,7 +178,10 @@ impl CoreAttention {
             value_layer.reshape((value_layer.dim(0)?, output_size.0 * output_size.1, ()))?;
         let attention_probs =
             attention_probs.reshape((output_size.0 * output_size.1, output_size.2, ()))?;
-        let context_layer = Tensor::matmul(&attention_probs.contiguous()?, &value_layer.transpose(0, 1)?.contiguous()?)?;
+        let context_layer = Tensor::matmul(
+            &attention_probs.contiguous()?,
+            &value_layer.transpose(0, 1)?.contiguous()?,
+        )?;
         let context_layer = context_layer.reshape(output_size)?;
         let context_layer = context_layer.permute((2, 0, 1, 3))?.contiguous()?;
         context_layer.flatten_from(D::Minus2)
@@ -209,7 +215,7 @@ impl SelfAttention {
             cfg.add_bias_linear || cfg.add_qkv_bias,
             vb.pp("query_key_value"),
         )?;
-        let core_attention = CoreAttention::new(layer_number, cfg,vb.dtype())?;
+        let core_attention = CoreAttention::new(layer_number, cfg, vb.dtype())?;
         let dense = linear(
             cfg.hidden_size,
             cfg.hidden_size,
