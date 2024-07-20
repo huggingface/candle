@@ -67,17 +67,10 @@ struct LayerWeights {
     head_dim: usize,
     cos: Tensor,
     sin: Tensor,
-    neg_inf: Tensor,
     kv_cache: KvCache,
     use_flash_attn: bool,
     span_attn: tracing::Span,
     span_rot: tracing::Span,
-}
-
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
-    let shape = mask.shape();
-    let m = mask.where_cond(&on_true.broadcast_as(shape.dims())?, on_false)?;
-    Ok(m)
 }
 
 impl LayerWeights {
@@ -141,7 +134,7 @@ impl LayerWeights {
                 None => att,
                 Some(mask) => {
                     let mask = mask.broadcast_as(att.shape())?;
-                    masked_fill(&att, &mask, &self.neg_inf)?
+                    att.masked_fill(&mask, f32::NEG_INFINITY)?
                 }
             };
             let att = candle_nn::ops::softmax_last_dim(&att)?;
@@ -224,7 +217,6 @@ impl ModelWeights {
         let rope_dim = md_get("phi3.rope.dimension_count")?.to_u32()? as usize;
         let rms_eps = md_get("phi3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
         let (cos, sin) = precomput_freqs_cis(rope_dim, max_seq_len, 10_000., device)?;
-        let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
@@ -263,7 +255,6 @@ impl ModelWeights {
                 head_dim,
                 cos: cos.clone(),
                 sin: sin.clone(),
-                neg_inf: neg_inf.clone(),
                 kv_cache,
                 use_flash_attn,
                 span_attn,

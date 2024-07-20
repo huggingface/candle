@@ -107,13 +107,6 @@ struct CoreAttention {
     norm_factor: f64,
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
-    let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
-    let m = mask.where_cond(&on_true, on_false)?;
-    Ok(m)
-}
-
 impl CoreAttention {
     fn new(layer_number: usize, cfg: &Config) -> Result<Self> {
         let norm_factor = (cfg.kv_channels as f64).sqrt();
@@ -152,8 +145,7 @@ impl CoreAttention {
             Some(coeff) => (matmul_result * coeff)?,
         };
         let attention_scores = match attention_mask {
-            Some(mask) => masked_fill(
-                &matmul_result,
+            Some(mask) => matmul_result.masked_fill(
                 &mask.broadcast_left((matmul_result.dim(0)?, matmul_result.dim(1)?))?,
                 f32::NEG_INFINITY,
             )?,

@@ -118,11 +118,8 @@ impl GroupedQueryAttention {
         let attn_weights = attn_weights.broadcast_add(&attn_bias)?;
         let attn_weights = match mask {
             None => attn_weights,
-            Some(mask) => masked_fill(
-                &attn_weights,
-                &mask.broadcast_as(attn_weights.shape())?,
-                f32::NEG_INFINITY,
-            )?,
+            Some(mask) => attn_weights
+                .masked_fill(&mask.broadcast_as(attn_weights.shape())?, f32::NEG_INFINITY)?,
         };
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
         let attn_output = attn_weights
@@ -280,11 +277,4 @@ pub(crate) fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
         .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
         .collect();
     Tensor::from_slice(&mask, (size, size), device)
-}
-
-pub(crate) fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
-    let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
-    let m = mask.where_cond(&on_true, on_false)?;
-    Ok(m)
 }

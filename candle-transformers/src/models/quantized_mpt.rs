@@ -85,11 +85,8 @@ impl GroupedQueryAttention {
         let attn_weights = attn_weights.broadcast_add(&attn_bias)?;
         let attn_weights = match mask {
             None => attn_weights,
-            Some(mask) => super::mpt::masked_fill(
-                &attn_weights,
-                &mask.broadcast_as(attn_weights.shape())?,
-                f32::NEG_INFINITY,
-            )?,
+            Some(mask) => attn_weights
+                .masked_fill(&mask.broadcast_as(attn_weights.shape())?, f32::NEG_INFINITY)?,
         };
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
         let attn_output = attn_weights
