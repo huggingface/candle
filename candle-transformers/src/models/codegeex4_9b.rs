@@ -464,11 +464,7 @@ impl Transformer {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb_l = vb.pp("layers");
         let mut layers = Vec::with_capacity(cfg.num_layers);
-        println!("transofrmer layers create");
-        let mut count = 0;
         for layer_index in 0..cfg.num_layers {
-            count += 1;
-            println!("for layer index in {} total is {} ", count, cfg.num_layers);
             let block = Block::new(layer_index + 1, cfg, vb_l.pp(layer_index))?;
             layers.push(block)
         }
