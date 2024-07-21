@@ -45,7 +45,7 @@ impl TextGeneration {
         }
     }
 
-    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<(), ()> {
+    fn run(&mut self, prompt: &str, sample_len: usize) -> anyhow::Result<()> {
         use std::io::Write;
         println!("starting the inference loop");
         let tokens = self.tokenizer.encode(prompt, true).expect("tokens error");
@@ -78,12 +78,9 @@ impl TextGeneration {
             println!("sample count {}", count);
             let context_size = if index > 0 { 1 } else { tokens.len() };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-            let input = Tensor::new(ctxt, &self.device)
-                .unwrap()
-                .unsqueeze(0)
-                .expect("create tensor input error");
-            let logits = self.model.forward(&input).unwrap();
-            let logits = logits.squeeze(0).unwrap().to_dtype(self.dtype).unwrap();
+            let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
+            let logits = self.model.forward(&input)?;
+            let logits = logits.squeeze(0)?.to_dtype(self.dtype)?;
             let logits = if self.repeat_penalty == 1. {
                 logits
             } else {
@@ -92,11 +89,10 @@ impl TextGeneration {
                     &logits,
                     self.repeat_penalty,
                     &tokens[start_at..],
-                )
-                .unwrap()
+                )?
             };
 
-            let next_token = self.logits_processor.sample(&logits).unwrap();
+            let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             generated_tokens += 1;
             if next_token == eos_token {
@@ -109,7 +105,7 @@ impl TextGeneration {
                 .expect("Token error");
             println!("[token:{token}]");
             result.push(token);
-            std::io::stdout().flush().unwrap();
+            std::io::stdout().flush()?;
         }
         let dt = start_gen.elapsed();
         println!(
@@ -178,7 +174,7 @@ struct Args {
     repeat_last_n: usize,
 }
 
-fn main() -> Result<(), ()> {
+fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     println!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
@@ -198,7 +194,7 @@ fn main() -> Result<(), ()> {
     println!("cache path {}", args.cache_path);
     let api = hf_hub::api::sync::ApiBuilder::from_cache(hf_hub::Cache::new(args.cache_path.into()))
         .build()
-        .unwrap();
+        .map_err(anyhow::Error::msg)?;
 
     let model_id = match args.model_id {
         Some(model_id) => model_id.to_string(),
@@ -214,27 +210,25 @@ fn main() -> Result<(), ()> {
         None => api
             .model("THUDM/codegeex4-all-9b".to_string())
             .get("tokenizer.json")
-            .unwrap(),
+            .map_err(anyhow::Error::msg)?,
     };
     let filenames = match args.weight_file {
         Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
-        None => {
-            candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json").unwrap()
-        }
+        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).expect("Tokenizer Error");
 
     let start = std::time::Instant::now();
     let config = Config::codegeex4();
-    let device = candle_examples::device(args.cpu).unwrap();
+    let device = candle_examples::device(args.cpu)?;
     let dtype = if device.is_cuda() {
         DType::BF16
     } else {
         DType::F32
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device).unwrap() };
-    let model = Model::new(&config, vb).unwrap();
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+    let model = Model::new(&config, vb)?;
 
     println!("loaded the model in {:?}", start.elapsed());
 
