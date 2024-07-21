@@ -75,7 +75,6 @@ impl TextGeneration {
         let mut result = vec![];
         for index in 0..sample_len {
             count += 1;
-            println!("sample count {}", count);
             let context_size = if index > 0 { 1 } else { tokens.len() };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
@@ -98,12 +97,16 @@ impl TextGeneration {
             if next_token == eos_token {
                 break;
             }
-            println!("raw generate token {}", next_token);
             let token = self
                 .tokenizer
                 .decode(&[next_token], true)
                 .expect("Token error");
-            println!("[token:{token}]");
+            if self.verbose_prompt == true {
+                println!(
+                    "[Count: {}] [Raw Token: {}] [Decode Token: {}]",
+                    count, next_token, token
+                );
+            }
             result.push(token);
             std::io::stdout().flush()?;
         }
