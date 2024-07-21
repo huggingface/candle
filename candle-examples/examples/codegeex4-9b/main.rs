@@ -101,7 +101,7 @@ impl TextGeneration {
                 .tokenizer
                 .decode(&[next_token], true)
                 .expect("Token error");
-            if self.verbose_prompt == true {
+            if self.verbose_prompt {
                 println!(
                     "[Count: {}] [Raw Token: {}] [Decode Token: {}]",
                     count, next_token, token
