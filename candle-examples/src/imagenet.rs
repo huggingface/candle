@@ -3,7 +3,7 @@ use candle::{Device, Result, Tensor};
 /// Loads an image from disk using the image crate, this returns a tensor with shape
 /// (3, 224, 224). imagenet normalization is applied.
 pub fn load_image224<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
-    let img = image::io::Reader::open(p)?
+    let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
         .resize_to_fill(224, 224, image::imageops::FilterType::Triangle);
@@ -21,7 +21,7 @@ pub fn load_image224<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
 /// (3, 518, 518). imagenet normalization is applied.
 /// The model dinov2 reg4 analyzes images with dimensions 3x518x518 (resulting in 37x37 transformer tokens).
 pub fn load_image518<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
-    let img = image::io::Reader::open(p)?
+    let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
         .resize_to_fill(518, 518, image::imageops::FilterType::Triangle);

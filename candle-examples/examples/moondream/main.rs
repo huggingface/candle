@@ -208,7 +208,7 @@ struct Args {
 /// Loads an image from disk using the image crate, this returns a tensor with shape
 /// (3, 378, 378).
 pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> candle::Result<Tensor> {
-    let img = image::io::Reader::open(p)?
+    let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
         .resize_to_fill(378, 378, image::imageops::FilterType::Triangle); // Adjusted to 378x378
