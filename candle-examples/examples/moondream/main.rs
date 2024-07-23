@@ -188,8 +188,8 @@ struct Args {
     #[arg(long)]
     model_id: Option<String>,
 
-    #[arg(long, default_value = "main")]
-    revision: String,
+    #[arg(long)]
+    revision: Option<String>,
 
     #[arg(long)]
     quantized: bool,
@@ -252,20 +252,28 @@ async fn main() -> anyhow::Result<()> {
 
     let start = std::time::Instant::now();
     let api = hf_hub::api::tokio::Api::new()?;
-    let model_id = match args.model_id {
-        Some(model_id) => model_id.to_string(),
+    let (model_id, revision) = match args.model_id {
+        Some(model_id) => (model_id.to_string(), None),
         None => {
             if args.quantized {
-                "santiagomed/candle-moondream".to_string()
+                ("santiagomed/candle-moondream".to_string(), None)
             } else {
-                "vikhyatk/moondream2".to_string()
+                (
+                    "vikhyatk/moondream2".to_string(),
+                    Some("30c7cdf3fa6914f50bee3956694374143f5cc884"),
+                )
             }
         }
+    };
+    let revision = match (args.revision, revision) {
+        (Some(r), _) => r,
+        (None, Some(r)) => r.to_string(),
+        (None, None) => "main".to_string(),
     };
     let repo = api.repo(hf_hub::Repo::with_revision(
         model_id,
         hf_hub::RepoType::Model,
-        args.revision,
+        revision,
     ));
     let model_file = match args.model_file {
         Some(m) => m.into(),
