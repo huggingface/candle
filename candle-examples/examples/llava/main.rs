@@ -57,7 +57,7 @@ fn load_image<T: AsRef<std::path::Path>>(
     llava_config: &LLaVAConfig,
     dtype: DType,
 ) -> Result<((u32, u32), Tensor)> {
-    let img = image::io::Reader::open(path)?.decode()?;
+    let img = image::ImageReader::open(path)?.decode()?;
     let img_tensor = process_image(&img, processor, llava_config)?;
     Ok(((img.width(), img.height()), img_tensor.to_dtype(dtype)?))
 }
