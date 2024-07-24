@@ -162,24 +162,40 @@ macro_rules! set_params {
 }
 
 pub trait EncoderProvider {
-    fn encoder(&self) -> &ComputeCommandEncoderRef;
-    fn maybe_end_encoding(&self, enc: &ComputeCommandEncoderRef);
+    type Encoder<'a>: AsRef<metal::ComputeCommandEncoderRef>
+    where
+        Self: 'a;
+    fn encoder<'a>(&'a self) -> Self::Encoder<'a>;
+}
+
+pub struct WrappedEncoder<'a>(&'a ComputeCommandEncoderRef);
+
+impl<'a> Drop for WrappedEncoder<'a> {
+    fn drop(&mut self) {
+        self.0.end_encoding()
+    }
+}
+
+impl<'a> AsRef<metal::ComputeCommandEncoderRef> for WrappedEncoder<'a> {
+    fn as_ref(&self) -> &metal::ComputeCommandEncoderRef {
+        &self.0
+    }
 }
 
 impl EncoderProvider for &metal::CommandBuffer {
-    fn encoder(&self) -> &ComputeCommandEncoderRef {
-        self.new_compute_command_encoder()
-    }
-    fn maybe_end_encoding(&self, enc: &ComputeCommandEncoderRef) {
-        enc.end_encoding()
+    type Encoder<'a> = WrappedEncoder<'a>
+    where
+        Self: 'a;
+    fn encoder<'a>(&'a self) -> Self::Encoder<'a> {
+        WrappedEncoder(self.new_compute_command_encoder())
     }
 }
 
 impl EncoderProvider for &metal::CommandBufferRef {
-    fn encoder(&self) -> &ComputeCommandEncoderRef {
-        self.new_compute_command_encoder()
-    }
-    fn maybe_end_encoding(&self, enc: &ComputeCommandEncoderRef) {
-        enc.end_encoding()
+    type Encoder<'a> = WrappedEncoder<'a>
+    where
+        Self: 'a;
+    fn encoder<'a>(&'a self) -> Self::Encoder<'a> {
+        WrappedEncoder(self.new_compute_command_encoder())
     }
 }
