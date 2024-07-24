@@ -7,6 +7,7 @@ use std::{
         Arc, Mutex, Weak,
     },
 };
+use tracing::instrument;
 use wgpu::BindGroupLayoutDescriptor;
 
 use crate::WgpuDevice;
@@ -156,6 +157,7 @@ pub struct BufferReference {
 }
 
 impl Drop for BufferReference {
+    #[instrument]
     fn drop(&mut self) {
         let mut storage = self.storage.lock().unwrap();
         if let Some(s) = storage.as_ref() {
@@ -171,6 +173,7 @@ impl Drop for BufferReference {
 }
 
 impl BufferReference {
+    
     pub fn new<T: ToU64>(dev: &WgpuDevice, size: T) -> Arc<Self> {
         Arc::new(Self {
             size: size.to_u64(),
@@ -180,6 +183,7 @@ impl BufferReference {
         })
     }
 
+    #[instrument]
     pub(crate) fn new_init(dev: &WgpuDevice, data: &[u8]) -> Arc<Self> {
         
         let mut queue = dev.command_queue.lock().unwrap();
@@ -220,6 +224,7 @@ impl BufferCache {
         };
     }
 
+    #[instrument]
     pub(crate) fn remove_unused(&mut self) {
         self.buffers.map.retain(|_, buffers| {
             buffers.retain(|b| {
@@ -235,6 +240,7 @@ impl BufferCache {
         });
     }
 
+    #[instrument]
     fn check_buffer(&mut self, buffer: &Arc<CachedBuffer>) {
         let ref_count = Arc::strong_count(buffer);
         if ref_count == 2 {
@@ -254,6 +260,7 @@ impl BufferCache {
         }
     }
 
+    #[instrument]
     fn get_buffer(&mut self, dev: &WgpuDevice, size: u64, exact_size: bool) -> BufferId {
         let max_size = (size as f64 + self.max_memory_allowed as f64 * 0.05) as u64;
 
@@ -298,12 +305,14 @@ impl BufferCache {
         ))
     }
 
+    #[instrument]
     fn add_buffer(&mut self, buffer: BufferId) {
         let size = buffer.buffer.size();
         if self.buffers.add_mapping(size, buffer) {
             self.buffer_memory_free += size;
         }
     }
+
 
     fn is_buffer_free(&self, buffer: &BufferId) -> bool {
         self.buffers
@@ -312,6 +321,7 @@ impl BufferCache {
             .any(|f| Arc::ptr_eq(buffer, f))
     }
 
+    #[instrument]
     fn match_buffer_locked(
         &mut self,
         cached: BufferId,
@@ -389,6 +399,7 @@ pub(crate) struct BindGroupCache {
 struct BindgroupCacheEntry(BindgroupId);
 
 impl PartialEq for BindgroupCacheEntry {
+    #[instrument]
     fn eq(&self, other: &Self) -> bool {
         self.0.last_used.load(std::sync::atomic::Ordering::Relaxed)
             == other.0.last_used.load(std::sync::atomic::Ordering::Relaxed)
@@ -423,6 +434,7 @@ impl BindGroupCache {
         };
     }
 
+    #[instrument]
     fn update_last_used(&mut self, value: &BindgroupId) {
         self.order.remove(&BindgroupCacheEntry(value.clone()));
         self.cached_bindgroup_use_counter += 1;
@@ -433,6 +445,7 @@ impl BindGroupCache {
         self.order.insert(BindgroupCacheEntry(value.clone()));
     }
 
+    #[instrument]
     pub(crate) fn add(&mut self, key: BindGroupReferenceBase<BufferId>, value: BindgroupId) {
         if !self.bindgroups_full.contains_key(&key) {
             self.bindgroups_full.insert(key.clone(), value.clone());
@@ -626,6 +639,7 @@ impl ModelCache {
     }
 
 
+    #[instrument]
     pub fn remove_unused(&mut self) -> bool {
         let mut counter = 0;
 
@@ -666,6 +680,7 @@ impl ModelCache {
         return counter > 1;
     }
 
+    #[instrument]
     pub(crate) fn get_bind_group(
         &mut self,
         dev: &WgpuDevice,

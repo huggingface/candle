@@ -20,6 +20,7 @@ use std::{
     num::NonZeroU64,
 };
 
+use tracing::{instrument, span, Level};
 use super::{
     cache::{BindGroupReferenceBase, BufferReference, CachedBindGroupReference},
     device::{
@@ -42,7 +43,7 @@ pub use convert::{
     queue_convert_f32_to_u32, queue_convert_f32_to_u8, queue_convert_u32_to_f32,
     queue_convert_u32_to_u8, queue_convert_u8_to_f32,
 };
-pub use copy::{queue_copy, queue_copy2d, queue_copy3d, queue_copy_strided};
+pub use copy::{queue_copy, queue_copy2d, queue_copy3d,queue_copy3d_padded, queue_copy_strided};
 pub use gather::{queue_gather, queue_index_add_inplace, queue_scatter_add_inplace};
 pub use index_select::queue_index_select;
 pub use matmul::queue_matmul_buffer;
@@ -111,6 +112,7 @@ pub enum Shader {
     Gather(DType),
 }
 
+#[instrument]
 pub fn load_shader(shader: Shader) -> crate::Result<&'static str> {
     match shader {
         Shader::Binary(DType::F32) => Ok(include_str!(
@@ -216,6 +218,7 @@ pub fn load_shader(shader: Shader) -> crate::Result<&'static str> {
 
 const WORKGROUP_SIZE: u32 = 64;
 
+#[instrument]
 pub fn get_shader(device: &wgpu::Device, shader: &'static str) -> ShaderModule {
     let cs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
@@ -227,6 +230,7 @@ pub fn get_shader(device: &wgpu::Device, shader: &'static str) -> ShaderModule {
 pub fn create_buffer_init<T: bytemuck::Pod>(dev: &WgpuDevice, data: &[T]) -> Arc<BufferReference> {
     return BufferReference::new_init(dev, bytemuck::cast_slice(data));
 }
+
 
 fn enqueue_workgroups(
     mut command_queue: MutexGuard<QueueBuffer>,
@@ -326,6 +330,7 @@ fn end_debug_queue(
         .store(global_index, std::sync::atomic::Ordering::Relaxed);
 }
 
+#[instrument]
 fn get_command_buffer(
     dev: &WgpuDevice,
     meta_array: &[u32],
@@ -339,6 +344,9 @@ fn get_command_buffer(
     #[cfg(feature = "wgpu_debug")]
     let mut debug_index = 0;
 
+    let span1 = span!(Level::INFO, "Write Metabuffer");
+    let _enter1 = span1.enter();
+
     let data = bytemuck::cast_slice(&meta_array);
     if data.len() as u32 + 256 > META_BUFFER_SIZE {
         panic!("Meta Buffer was to big, length was: {}", data.len());
@@ -346,60 +354,85 @@ fn get_command_buffer(
 
     //write Meta Buffer
     dev.queue.write_buffer(&dev.meta_buffer, 0, data);
+    drop(_enter1);
+
+    let span1 = span!(Level::INFO, "Create Encoder");
+    let _enter1 = span1.enter();
+
     let mut encoder = dev
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    {
-        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: None,
-            timestamp_writes: None,
-        });
+    //{   
+    let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        label: None,
+        timestamp_writes: None,
+    });
 
-        for (q, pipeline) in command_queue.iter().zip(pipelines) {
-            match q {
-                MlQueue::Dispatch(q) => {
-                    if let DispatchedBindgroup::CachedBindgroup(bindgroup) = &q.bindgroup {
-                        let qx = q.x;
-                        let qy = q.y;
-                        let qz = q.z;
-                        let meta = q.meta - current_meta as u32;
+    for (q, pipeline) in command_queue.iter().zip(pipelines) {
+        match q {
+            MlQueue::Dispatch(q) => {
+                if let DispatchedBindgroup::CachedBindgroup(bindgroup) = &q.bindgroup {
+                    let qx = q.x;
+                    let qy = q.y;
+                    let qz = q.z;
+                    let meta = q.meta - current_meta as u32;
 
-                        //let (pipline, bindgroup, qx, qy, qz, qindirect_buffer, meta) = data;
-                        #[cfg(feature = "wgpu_debug")]
-                        cpass.write_timestamp(&query_set, debug_index);
+                    //let (pipline, bindgroup, qx, qy, qz, qindirect_buffer, meta) = data;
+                    #[cfg(feature = "wgpu_debug")]
+                    cpass.write_timestamp(&query_set, debug_index);
+                    let span1 = span!(Level::INFO, "Set Pipeline");
+                    let _enter1 = span1.enter();
+                    cpass.set_pipeline(&pipeline);
+                    drop(_enter1);
 
-                        cpass.set_pipeline(&pipeline);
+                    if meta * 4 >= META_BUFFER_SIZE - 256 {
+                        panic!(
+                            "meta is to big!: meta was {meta}, q.meta: {}/{current_meta}",
+                            q.meta
+                        );
+                    }
 
-                        if meta * 4 >= META_BUFFER_SIZE - 256 {
-                            panic!(
-                                "meta is to big!: meta was {meta}, q.meta: {}/{current_meta}",
-                                q.meta
-                            );
-                        }
-
-                        cpass.set_bind_group(0, &bindgroup.bindgroup, &[meta * 4]);
-                        cpass.dispatch_workgroups(qx, qy, qz);
-                        
-                        #[cfg(feature = "wgpu_debug")]
-                        {
-                            cpass.write_timestamp(&query_set, debug_index + 1);
-                            dev.debug.insert_info(
-                                global_index + debug_index * 8,
-                                (
-                                    q.debug.name.to_owned(),
-                                    q.workload_size as u64,
-                                    q.x,
-                                    q.y,
-                                    q.z,
-                                ),
-                            );
-                            debug_index += 2;
-                        }
+                    let span1 = span!(Level::INFO, "Set Bindgroup");
+                    let _enter1 = span1.enter();
+                    cpass.set_bind_group(0, &bindgroup.bindgroup, &[meta * 4]);
+                    drop(_enter1);
+                    
+                    let span1 = span!(Level::INFO, "Dispatch Workgroups");
+                    let _enter1 = span1.enter();
+                    cpass.dispatch_workgroups(qx, qy, qz);
+                    drop(_enter1);
+                    
+                    
+                    #[cfg(feature = "wgpu_debug")]
+                    {
+                        cpass.write_timestamp(&query_set, debug_index + 1);
+                        dev.debug.insert_info(
+                            global_index + debug_index * 8,
+                            (
+                                q.debug.name.to_owned(),
+                                q.workload_size as u64,
+                                q.x,
+                                q.y,
+                                q.z,
+                            ),
+                        );
+                        debug_index += 2;
                     }
                 }
             }
         }
     }
+//}
+
+    let span2 = span!(Level::INFO, "Drop Cpass");
+    let _enter2 = span2.enter();
+    drop(cpass);
+    drop(_enter2);
+
+
+    drop(_enter1);
+
+
 
     #[cfg(feature = "wgpu_debug")]
     end_debug_queue(
@@ -411,10 +444,14 @@ fn get_command_buffer(
     );
 
     //dev.device.poll(wgpu::Maintain::wait()).panic_on_timeout(); //wait for last submission
-    
-    return encoder.finish();
+    let span1 = span!(Level::INFO, "Encoder Finish");
+    let _enter1 = span1.enter();
+    let result = encoder.finish();
+    drop(_enter1);
+    return result;
 }
 
+#[instrument]
 fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer){
     let mut most_needed_storage;
     let mut total_used_storage;
@@ -536,6 +573,7 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer){
     }
 }
 
+#[instrument]
 fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, current_meta: usize, last_meta : &mut usize, wgpu_data : &mut Vec<Arc<wgpu::ComputePipeline>>){
     let mut cache_limit = false;
     let mut total_workload = 0u64; //we only allow a certain amount of workload per commandBuffer 
@@ -568,7 +606,8 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                     log::info!("OP: {} workload_size: {}", q.debug.name, q.workload_size);
                 }
 
-
+                let span1 = span!(Level::INFO, "SetBuffers_Analyse UnaryBuffer ");
+                let _enter1 = span1.enter();
                 let mut optimize_unary_inplace = false;
                 let mut v1_ref = None;
                 let mut v2_ref = None;
@@ -602,6 +641,7 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                         }
                     }
                 }
+                drop(_enter1);
 
                 let pl: &wgpu::PipelineLayout = match &q.bindgroup {
                     DispatchedBindgroup::BindgroupReference(bindgroup_reference) => {
@@ -681,6 +721,7 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
     log::info!("queue {ele_size}, Meta: {meta_size}, workload: {total_workload}, cache_limit: {cache_limit}");
 }
 
+#[instrument]
 pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer) {
     if queue_buffer.command_queue.len() > 0 {
         prepare(dev, queue_buffer);
@@ -709,14 +750,18 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                 
                 #[cfg(not(target_arch = "wasm32"))]
                 {
+                    let span1 = span!(Level::INFO, "Device Poll");
+                    let _enter1 = span1.enter();
                     dev.device.poll(wgpu::Maintain::wait()).panic_on_timeout();
                     //if !dev.device.poll(wgpu::Maintain::Poll).is_queue_empty(){
                     //pollster::block_on(synchronize_device(&dev.device, &dev.queue)).unwrap();
                     //}
                 }
 
+                let span1 = span!(Level::INFO, "Submit");
+                let _enter1 = span1.enter();
                 dev.queue.submit(Some(cb));
-                
+                drop(_enter1); 
                
                 start_index = index;
                 current_meta = last_meta;
@@ -829,6 +874,7 @@ fn enqueue_big(
     );
 }
 
+#[instrument]
 pub fn create_buffer(dev: &WgpuDevice, size: u64) -> wgpu::Buffer {
     dev.device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
@@ -840,6 +886,7 @@ pub fn create_buffer(dev: &WgpuDevice, size: u64) -> wgpu::Buffer {
     })
 }
 
+#[instrument]
 pub fn create_bindgroup(dev: &WgpuDevice, bindgroup: CachedBindGroupReference) -> wgpu::BindGroup {
     dev.cached_bindgroup_counter
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -982,6 +1029,7 @@ fn create_bind_group_input3(
     BindGroupReference::Bindgroup3(buffer_dest, buffer_input1, buffer_input2, buffer_input3)
 }
 
+#[instrument]
 pub fn synchronize(dev: &WgpuDevice) -> crate::Result<()> {
     let mut command_queue = dev.command_queue.lock().unwrap();
     if command_queue.command_queue.len() > 0{
@@ -1000,6 +1048,7 @@ pub fn synchronize(dev: &WgpuDevice) -> crate::Result<()> {
 //     Ok(())
 // }
 
+#[instrument]
 async fn synchronize_device(dev: &Device, queue: &Queue) -> crate::Result<()> {
     let (sender, receiver) = flume::bounded(1);
     queue.on_submitted_work_done(move || sender.send(()).unwrap());
@@ -1011,6 +1060,7 @@ async fn synchronize_device(dev: &Device, queue: &Queue) -> crate::Result<()> {
     Ok(())
 }
 
+#[instrument]
 pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: Arc<BufferReference>,
@@ -1075,7 +1125,7 @@ pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
 }
 
 
-
+#[instrument]
 pub async fn read_data_from_gpu_async_buffer<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: &wgpu::Buffer,

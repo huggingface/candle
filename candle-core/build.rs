@@ -129,7 +129,9 @@ fn preprocess_shader(
 }
 
 
+
 mod shader_loader{
+    use fancy_regex::Regex;
     use std::collections::HashMap;
 
     pub fn load_shader<T : AsRef<str>>(virtual_id: u32, shader_map: &std::collections::HashMap<u32, T>, defines: &Vec<&str>) -> String {
@@ -143,7 +145,17 @@ mod shader_loader{
             let include_content = (*shader_map.get(&include_id).expect("Included shader ID not found")).as_ref();
             shader_code.replace_range(include_pos..end_pos, include_content);
         }
-        apply_defines(&shader_code, defines)
+        
+        let result = apply_defines(&shader_code, defines);
+        
+        let result = Regex::new(r"//.*\n", ).unwrap().replace_all(&result, "");
+        let result = Regex::new(r"((\s+)(?![\w\s])|(?<!\w)(\s+))", ).unwrap().replace_all(&result, "");
+        
+        let result = shader_shortener::shorten_variable_names(&result);
+        
+        //let result = result.replace("\n", "");
+
+        result
     }
     
     fn apply_defines(shader_code: &str, global_defines: &Vec<&str>) -> String {
@@ -209,11 +221,150 @@ mod shader_loader{
         }
     }
 
-    //Here
+    mod shader_shortener{
+        use std::collections::HashMap;
+        use std::str::Chars;
 
-    // mod shader_map {
-    //     include!(concat!(env!("OUT_DIR"), "/shader_map.rs"));
-    // }
+        #[derive(Debug, PartialEq, Eq)]
+        enum Token<'a> {
+            Word(&'a str),
+            Symbol(char)
+        }
+
+        struct Tokenizer<'a> {
+            chars: Chars<'a>,
+            input: &'a str,
+            pos: usize,
+        }
+
+        impl<'a> Tokenizer<'a> {
+            fn new(input: &'a str) -> Self {
+                Tokenizer {
+                    chars: input.chars(),
+                    input,
+                    pos: 0,
+                }
+            }
+        }
+
+        impl<'a> Iterator for Tokenizer<'a> {
+            type Item = Token<'a>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                while let Some(c) = self.chars.next() {
+                    self.pos += c.len_utf8();
+                    if c.is_alphabetic() || c == '_' {
+                        let start = self.pos - c.len_utf8();
+                        while let Some(&next_c) = self.chars.clone().peekable().peek() {
+                            if next_c.is_alphanumeric() || next_c == '_' {
+                                self.chars.next();
+                                self.pos += next_c.len_utf8();
+                            } else {
+                                break;
+                            }
+                        }
+                        return Some(Token::Word(&self.input[start..self.pos]));
+                    } else {
+                        return Some(Token::Symbol(c));
+                    }
+                }
+                None
+            }
+        }
+
+        fn generate_short_name(counter: usize) -> (String,usize) {
+            let alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            let mut name = String::new();
+            let mut count = counter;
+            let reserved_words = ["as", "if", "do", "fn", "of"];
+
+            while count > 0 {
+                name.push(alphabet.chars().nth((count - 1) % alphabet.len()).unwrap());
+                count = (count - 1) / alphabet.len();
+            }
+            
+            let name = name.chars().rev().collect::<String>();
+
+            if reserved_words.contains(&name.as_str()) {
+                generate_short_name(counter + 1)
+            } else {
+                (name, counter + 1)
+            }
+
+        }
+
+        pub fn shorten_variable_names(shader_code: &str) -> String {
+            let tokenizer = Tokenizer::new(shader_code);
+            let mut result = String::new();
+            let mut variables = HashMap::new();
+            let mut var_counter = 1;
+
+            let mut tokens = tokenizer.peekable();
+            let mut prev_token = None;
+            while let Some(token) = tokens.next() {
+                match token {
+                    Token::Word(word) if word == "let" || word=="var" || word=="const" => {
+                        result.push_str(word);
+                        let mut generic_counter = 0;
+                        while let Some(token) = tokens.next() {
+                            match token{
+                                Token::Word(var_name) => {
+                                    if(generic_counter == 0){
+                                        let short_name = variables.entry(var_name).or_insert_with(||
+                                             {
+                                            let (name, new_counter ) = generate_short_name(var_counter);
+                                            var_counter = new_counter;
+                                            name
+                                        });
+                                       
+                                        result.push_str(short_name);
+                                        break;
+                                    }
+                                    else{
+                                        result.push_str(var_name);
+                                    }
+                                },
+                                Token::Symbol(c) => {
+                                    if c=='<'{
+                                        generic_counter+=1;
+                                    }
+                                    else if c=='>'{
+                                        generic_counter-=1;
+                                    }
+                                    result.push(c);
+                                }
+                                
+                                
+                            }
+                        }
+                    }
+                    Token::Word(word) => {
+                        let mut valid = true;
+                        if let Some(p_token) = prev_token{
+                            if let Token::Symbol(c) = p_token{
+                                if c == '.'{
+                                    result.push_str(word);
+                                    valid = false;
+                                }
+                            }
+                        }
+                        if valid{
+                            if let Some(short_name) = variables.get(word) {
+                                result.push_str(short_name); 
+                            } else {
+                                result.push_str(word);
+                            } 
+                        }
+                    }
+                    Token::Symbol(c) => result.push(c)
+                }
+                prev_token = Some(token);
+            }
+
+            result
+        }
+
+    }
 }
 
 

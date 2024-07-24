@@ -1,21 +1,28 @@
 #include "../util.pwgsl"
 
-#define op_binary.operation         op_meta[0]
-#define op_binary.input1_layout     1u
+override CONSTV_0 : u32 = 1u;
+override CONSTV_1 : u32 = 1u;
+override CONSTV_2 : u32 = 1u;
+
+#define op_binary.operation         CONSTV_0
+
+//#define op_binary.operation         op_meta[0]
+#define op_binary.input1_layout     0u
 
 
-#define op_binary_contiguous_both.operation                 op_meta[0]
-#define op_binary_contiguous_both.input1_length             op_meta[1]
-#define op_binary_contiguous_both.input1_offset             op_meta[2]
-#define op_binary_contiguous_both.input2_length             op_meta[3]
-#define op_binary_contiguous_both.input2_offset             op_meta[4]
+//#define op_binary_contiguous_both.operation                 op_meta[0]
+#define op_binary_contiguous_both.operation                 CONSTV_0
+#define op_binary_contiguous_both.input1_length             op_meta[0]
+#define op_binary_contiguous_both.input1_offset             CONSTV_1   // op_meta[1]
+//#define op_binary_contiguous_both.input2_length             op_meta[1]
+#define op_binary_contiguous_both.input2_offset             CONSTV_2  // op_meta[3]
 
 @compute
 @workgroup_size(64,1,1)
 fn binary_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x + global_id.y * 65535 * 64;
 
-    let input2_layout = op_binary.input1_layout +  get_size(op_binary.input1_layout);
+    let input2_layout = op_binary.input1_layout + get_size(op_binary.input1_layout);
 
     let pos1 = get_index(op_binary.input1_layout, id);
     let pos2 = get_index(input2_layout, id);
@@ -28,12 +35,13 @@ fn binary_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>
 @compute
 @workgroup_size(64,1,1)
 fn binary_buffer_from_buffer_contiguous_both(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x + global_id.y * 65535 * 64;
+    let id = (global_id.x + global_id.y * 65535 * 64);
     if (id >= op_binary_contiguous_both.input1_length){
         return;
     }
     set_binary(op_binary_contiguous_both.operation, id, v_input1[id + op_binary_contiguous_both.input1_offset], v_input2[id + op_binary_contiguous_both.input2_offset]);
 }
+
 
 
 fn set_binary(operation : u32, id : u32, x : DTYPE, y : DTYPE){

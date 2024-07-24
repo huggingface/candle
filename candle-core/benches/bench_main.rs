@@ -7,7 +7,9 @@ criterion_main!(
     benchmarks::random::benches,
     benchmarks::where_cond::benches,
     benchmarks::conv_transpose2d::benches,
+    benchmarks::conv2d::benches,
     //benchmarks::qmatmul::benches,
     benchmarks::unary::benches,
+    benchmarks::binary::benches,
     benchmarks::copy::benches
 );

@@ -325,40 +325,10 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
                     Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
                 }
             }
-            case 7u{
-                for(var w = 0u; w < 7u; w++){       
-                    Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
-                }
-            }
-            case 6u{
-                for(var w = 0u; w < 6u; w++){       
-                    Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
-                }
-            }
-            case 5u{
-                for(var w = 0u; w < 5u; w++){       
-                    Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
-                }
-            }
-            case 4u{
-                for(var w = 0u; w < 4u; w++){       
-                    Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
-                }
-            }
-            case 3u{
-                for(var w = 0u; w < 3u; w++){       
-                    Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
-                }
-            }
-            case 2u{
-                for(var w = 0u; w < 2u; w++){       
-                    Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
-                }
-            }
-            case 1u{
-                Bsub2[ly][lx] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k];
-            }
             default{
+                for(var w = 0u; w < wcount; w++){       
+                    Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
+                }
             }
         }
         
@@ -373,54 +343,12 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
                         }
                     }
                 }
-                case 7u{
-                    for(var k = 0u; k < count; k++){
-                        for(var w = 0u; w < 7u; w++){
-                            acc[w] += Asub2[k][ly]*Bsub2[k][lx + w];
-                        }
-                    }
-                }
-                case 6u{
-                    for(var k = 0u; k < count; k++){
-                        for(var w = 0u; w < 6u; w++){
-                            acc[w] +=Asub2[k][ly]*Bsub2[k][lx + w];
-                        }
-                    }
-                }
-                case 5u{
-                    for(var k = 0u; k < count; k++){
-                        for(var w = 0u; w < 5u; w++){
-                            acc[w] += Asub2[k][ly]*Bsub2[k][lx + w];
-                        }
-                    }
-                }
-                case 4u{
-                    for(var k = 0u; k < count; k++){
-                        for(var w = 0u; w < 4u; w++){
-                            acc[w] += Asub2[k][ly]*Bsub2[k][lx + w];
-                        }
-                    }
-                }
-                case 3u{
-                    for(var k = 0u; k < count; k++){
-                        for(var w = 0u; w < 3u; w++){
-                            acc[w] += Asub2[k][ly]*Bsub2[k][lx + w];
-                        }
-                    }
-                }
-                case 2u{
-                    for(var k = 0u; k < count; k++){
-                        for(var w = 0u; w < 2u; w++){
-                            acc[w] += Asub2[k][ly]*Bsub2[k][lx + w];
-                        }
-                    }
-                }
-                case 1u{
-                    for(var k = 0u; k < count; k++){
-                        acc[0] += Asub2[k][ly]*Bsub2[k][lx];
-                    }
-                }
                 default{
+                    for(var k = 0u; k < count; k++){
+                        for(var w = 0u; w < wcount; w++){
+                            acc[w] += Asub2[k][ly]*Bsub2[k][lx + w];
+                        }
+                    }
                 }
             }
         }
@@ -432,50 +360,19 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
     if(t < op_matmul.k){
         let count = min(op_matmul.k - t, TS1);
 
-        
-
         if (is_in_gy && t + lx < op_matmul.k){
+        //if (t + lx < op_matmul.k){
             let asub_count = min(op_matmul.k - (t + lx), WPT1);
             switch(asub_count){
                 case 8u{
                     for(var w = 0u; w < 8u; w++){       
-                        Asub2[lx + w][ly]= v_input1[m_input1_offset + (t + lx + w) *  op_matmul.input1_stride_k];
-                    }
-                }
-                case 7u{
-                    for(var w = 0u; w < 7u; w++){       
                         Asub2[lx + w][ly] = v_input1[m_input1_offset + (t + lx + w) *  op_matmul.input1_stride_k];
                     }
-                }
-                case 6u{
-                    for(var w = 0u; w < 6u; w++){       
-                        Asub2[lx + w][ly] = v_input1[m_input1_offset + (t + lx + w) *  op_matmul.input1_stride_k];
-                    }
-                }
-                case 5u{
-                    for(var w = 0u; w < 5u; w++){       
-                        Asub2[lx + w][ly] = v_input1[m_input1_offset + (t + lx + w) *  op_matmul.input1_stride_k];
-                    }
-                }
-                case 4u{
-                    for(var w = 0u; w < 4u; w++){       
-                        Asub2[lx + w][ly] = v_input1[m_input1_offset + (t + lx + w) *  op_matmul.input1_stride_k];
-                    }
-                }
-                case 3u{
-                    for(var w = 0u; w < 3u; w++){       
-                        Asub2[lx + w][ly] = v_input1[m_input1_offset + (t + lx + w) *  op_matmul.input1_stride_k];
-                    }
-                }
-                case 2u{
-                    for(var w = 0u; w < 2u; w++){       
-                        Asub2[lx + w][ly] = v_input1[m_input1_offset + (t + lx + w) *  op_matmul.input1_stride_k];
-                    }
-                }
-                case 1u{
-                    Asub2[lx][ly] = v_input1[m_input1_offset + (t + lx) *  op_matmul.input1_stride_k];
                 }
                 default{
+                    for(var w = 0u; w < asub_count; w++){       
+                        Asub2[lx + w][ly] = v_input1[m_input1_offset + (t + lx + w) *  op_matmul.input1_stride_k];
+                    }
                 }
             }
         }
@@ -486,40 +383,10 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
                         Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
                     }
                 }
-                case 7u{
-                    for(var w = 0u; w < 7u; w++){       
-                        Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
-                    }
-                }
-                case 6u{
-                    for(var w = 0u; w < 6u; w++){       
-                        Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
-                    }
-                }
-                case 5u{
-                    for(var w = 0u; w < 5u; w++){       
-                        Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
-                    }
-                }
-                case 4u{
-                    for(var w = 0u; w < 4u; w++){       
-                        Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
-                    }
-                }
-                case 3u{
-                    for(var w = 0u; w < 3u; w++){       
-                        Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
-                    }
-                }
-                case 2u{
-                    for(var w = 0u; w < 2u; w++){       
-                        Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
-                    }
-                }
-                case 1u{
-                    Bsub2[ly][lx] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k];
-                }
                 default{
+                    for(var w = 0u; w < wcount; w++){       
+                        Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
+                    }
                 }
             }
         }
@@ -534,54 +401,12 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
                         }
                     }
                 }
-                case 7u{
-                    for(var k = 0u; k < count; k++){
-                        for(var w = 0u; w < 7u; w++){
-                            acc[w] += Asub2[k][ly]*Bsub2[k][lx + w];
-                        }
-                    }
-                }
-                case 6u{
-                    for(var k = 0u; k < count; k++){
-                        for(var w = 0u; w < 6u; w++){
-                            acc[w] += Asub2[k][ly]*Bsub2[k][lx + w];
-                        }
-                    }
-                }
-                case 5u{
-                    for(var k = 0u; k < count; k++){
-                        for(var w = 0u; w < 5u; w++){
-                            acc[w] += Asub2[k][ly]*Bsub2[k][lx + w];
-                        }
-                    }
-                }
-                case 4u{
-                    for(var k = 0u; k < count; k++){
-                        for(var w = 0u; w < 4u; w++){
-                            acc[w] += Asub2[k][ly]*Bsub2[k][lx + w];
-                        }
-                    }
-                }
-                case 3u{
-                    for(var k = 0u; k < count; k++){ 
-                        for(var w = 0u; w < 3u; w++){
-                            acc[w] += Asub2[k][ly]*Bsub2[k][lx + w];
-                        }
-                    }
-                }
-                case 2u{
-                    for(var k = 0u; k < count; k++){ 
-                        for(var w = 0u; w < 2u; w++){
-                            acc[w] += Asub2[k][ly]*Bsub2[k][lx + w];
-                        }
-                    }
-                }
-                case 1u{
-                    for(var k = 0u; k < count; k++){
-                        acc[0] += Asub2[k][ly]*Bsub2[k][lx];
-                    }
-                }
                 default{
+                    for(var k = 0u; k < count; k++){
+                        for(var w = 0u; w < wcount; w++){
+                            acc[w] += Asub2[k][ly]*Bsub2[k][lx + w];
+                        }
+                    }
                 }
             }
         }
@@ -596,41 +421,10 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
                     v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx + w] = acc[w];
                 }
             }
-            case 7u{
-                for(var w = 0u; w < 7; w++){
-                    v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx + w] = acc[w];
-                }
-            }
-            case 6u{
-                for(var w = 0u; w < 6; w++){
-                    v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx + w] = acc[w];
-                }
-            }
-            case 5u{
-                for(var w = 0u; w < 5; w++){
-                    v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx + w] = acc[w];
-                }
-            }
-            case 4u{
-                for(var w = 0u; w < 4; w++){
-                    v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx + w] = acc[w];
-                }
-            }
-            case 3u{
-                for(var w = 0u; w < 3; w++){
-                    v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx + w] = acc[w];
-                }
-            }
-            case 2u{
-                for(var w = 0u; w < 2; w++){
-                    v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx + w] = acc[w];
-                }
-            }
-            case 1u{
-                v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx] = acc[0];
-            }
             default{
-
+                for(var w = 0u; w < wcount; w++){
+                    v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx + w] = acc[w];
+                }
             }
         }
     }

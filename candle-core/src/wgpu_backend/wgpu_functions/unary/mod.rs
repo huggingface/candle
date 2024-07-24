@@ -76,7 +76,7 @@ pub fn queue_unary_inplace_op(
     scalar1: f32,
     scalar2: f32,
     dtype: crate::DType,
-    layout: crate::Layout,
+    layout: &crate::Layout,
 ) -> crate::Result<()> {
 
     if layout.is_contiguous() {

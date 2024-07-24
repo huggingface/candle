@@ -1,9 +1,11 @@
 pub(crate) mod affine;
 pub(crate) mod conv_transpose2d;
+pub(crate) mod conv2d;
 pub(crate) mod matmul;
 pub(crate) mod qmatmul;
 pub(crate) mod random;
 pub(crate) mod unary;
+pub(crate) mod binary;
 pub(crate) mod where_cond;
 pub(crate) mod copy;
 

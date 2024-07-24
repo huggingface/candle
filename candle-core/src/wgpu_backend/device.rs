@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::hash::Hash;
 
 use rand::SeedableRng;
+use tracing::instrument;
 
 use crate::backend::BackendStorage;
 use crate::{notImplemented, wrongType, Layout};
@@ -183,13 +184,8 @@ pub (crate) enum Pipelines{
     BinaryBufferFromBufferContiguousBoth,
     MatmulBuffer,
     MatmulBuffer1b,
-    Matmul3Buffer,
-    Matmul4Buffer,
-    Matmul4endBuffer,
     Matmul5Buffer, 
     Matmul7Buffer, 
-    Matmul6Buffer,
-    Matmul1endBuffer,
     Reduce,
     ReduceIndex,
     RmsNorm,
@@ -202,6 +198,8 @@ pub (crate) enum Pipelines{
     IndexSelect,
     Copy2d,
     Copy3d,
+    Copy3dPadded,
+    Copy3dPaddedNoBatch,
     Copy2dTranspose,
     CopyStrided,
     Copy,
@@ -382,6 +380,7 @@ impl WgpuDevice{
         ).collect());
     }
 
+    #[instrument]
     fn load_pipeline(device : &wgpu::Device, shader : Arc<wgpu::ShaderModule>, pipeline : &PipelineType, pipeline_layout : &wgpu::PipelineLayout) -> wgpu::ComputePipeline{
         let entry_point = match pipeline.1{
             Pipelines::UnaryInplaceContiguous => "unary_inplace_contiguous",
@@ -392,13 +391,8 @@ impl WgpuDevice{
             Pipelines::BinaryBufferFromBufferContiguousBoth => "binary_buffer_from_buffer_contiguous_both",
             Pipelines::MatmulBuffer => "matmul1",
             Pipelines::MatmulBuffer1b => "matmul1b",
-            Pipelines::Matmul3Buffer => "matmul3",
-            Pipelines::Matmul4Buffer => "matmul4",
-            Pipelines::Matmul4endBuffer => "matmul4_end",
-            Pipelines::Matmul1endBuffer => "matmul1_end",
             Pipelines::Matmul5Buffer => "matmul5",
             Pipelines::Matmul7Buffer => "matmul7",
-            Pipelines::Matmul6Buffer => "matmul6",
             Pipelines::Reduce => "reduce",
             Pipelines::ReduceIndex => "reduce_index",
             Pipelines::RmsNorm => "rms_norm",
@@ -416,6 +410,8 @@ impl WgpuDevice{
             Pipelines::IndexSelect => "index_select",
             Pipelines::Copy2d => "copy2d",
             Pipelines::Copy3d => "copy3d",
+            Pipelines::Copy3dPadded => "copy3d_padded",
+            Pipelines::Copy3dPaddedNoBatch => "copy3d_padded_nobatch",
             Pipelines::Copy2dTranspose => "copy2d_transpose",
             Pipelines::CopyStrided => "copy_strided",
             Pipelines::Copy => "copy",
@@ -465,6 +461,7 @@ impl WgpuDevice{
         return PipelineType(shader, pipeline, consts.into_iter().map(|f| OrderedFloat(f.to_f64())).collect());
     }
 
+    #[instrument]
     pub (crate) fn get_pipeline2(&self, pipeline: &PipelineType, pipeline_layout : &wgpu::PipelineLayout) -> crate::Result<Arc<wgpu::ComputePipeline>> {
         let mut shaders = self.shader.lock().unwrap();
         if !shaders.contains_key(&pipeline.0){
@@ -516,7 +513,7 @@ impl crate::backend::BackendDevice for WgpuDevice{
     fn zeros_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
         let buffer = BufferReference::new(self, shape.elem_count() * 4);
         if shape.elem_count() > 0{
-            wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::SetZero, 0.0, 0.0,dtype, Layout::contiguous(shape))?;
+            wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::SetZero, 0.0, 0.0,dtype, &Layout::contiguous(shape))?;
         }
         
         return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
@@ -525,7 +522,7 @@ impl crate::backend::BackendDevice for WgpuDevice{
     fn ones_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
         let buffer = BufferReference::new(self, shape.elem_count() * 4);
         if shape.elem_count() > 0{
-            wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::SetOne, 0.0, 0.0,dtype,Layout::contiguous(shape))?;
+            wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::SetOne, 0.0, 0.0,dtype,&Layout::contiguous(shape))?;
         }
         return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
     }
@@ -587,13 +584,13 @@ impl crate::backend::BackendDevice for WgpuDevice{
 
     fn rand_uniform(&self, shape: &crate::Shape, dtype: crate::DType, lo: f64, up: f64) -> crate::Result<Self::Storage> {
         let buffer = BufferReference::new(self, shape.elem_count() * 4);
-        wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::RandUniform, lo as f32, up as f32,dtype,Layout::contiguous(shape))?;
+        wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::RandUniform, lo as f32, up as f32,dtype,&Layout::contiguous(shape))?;
         return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
     }
 
     fn rand_normal(&self, shape: &crate::Shape, dtype: crate::DType, mean: f64, std: f64) -> crate::Result<Self::Storage> {
         let buffer = BufferReference::new(self, shape.elem_count() * 4);
-        wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::RandNormal, mean as  f32, std as f32, dtype,Layout::contiguous(shape))?;
+        wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::RandNormal, mean as  f32, std as f32, dtype,&Layout::contiguous(shape))?;
         return Ok(WgpuStorage::new(buffer, self.clone(),dtype));
     }
 

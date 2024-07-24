@@ -28,7 +28,11 @@ pub fn queue_conv2d(
         params.padding,
         params.stride,
         params.dilation,
-        input_layout.start_offset()];
+        input_layout.start_offset(),
+        params.k_w, 
+        params.k_h,
+        params.b_size,
+        params.c_in];
 
 
     meta.add(params.b_size);
@@ -56,6 +60,7 @@ pub fn queue_conv2d(
     //meta.add(params.dilation);
     //meta.add(input_layout.start_offset());
 
+    println!("Const2d: params: {:?}, vec: {:?}", params, const_vec);
     let pipeline = dev.get_pipeline_const(super::Shader::Conv2D(dtype), Pipelines::Conv2D, const_vec);
 
     let bind_group = create_bind_group_input2(
@@ -100,7 +105,12 @@ pub fn queue_conv2d_transpose(
         params.padding,
         params.stride,
         params.dilation,
-        input_layout.start_offset()];
+        input_layout.start_offset(),
+        params.k_w,
+        params.k_h,
+        params.b_size,
+        params.c_in
+        ];
     
     meta.add(params.b_size);
     meta.add(params.c_in);
@@ -162,7 +172,7 @@ pub fn queue_conv1d(
 ) -> crate::Result<()> {
     let input_stride = input_layout.stride();
     let kernel_stride = kernel_layout.stride();
-    
+
     let mut meta = get_meta(&dev);
 
     meta.add(params.b_size);

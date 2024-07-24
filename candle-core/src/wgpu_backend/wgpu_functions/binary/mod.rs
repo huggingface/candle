@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{wgpu::{cache::BufferReference, device::{PipelineType, Pipelines}}, WgpuDevice};
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
 use super::{create_bind_group_input2, enqueue_big, get_meta};
 
@@ -27,20 +27,24 @@ pub fn queue_binary_buffer_from_buffer(
     lay2: &crate::Layout,
 ) -> crate::Result<()> {
     if lay1.is_contiguous() && lay2.is_contiguous() {
+        let const_vec = vec![
+            op as usize,
+            lay1.start_offset(),
+            lay2.start_offset()];
 
         let mut meta = get_meta(&dev);
-        meta.add(op as u32);
+        //meta.add(op as u32);
         meta.add(lay1.shape().elem_count()); //input1_length
-        meta.add(lay1.start_offset()); //input1_offset
-        meta.add(lay2.shape().elem_count()); //input2_length
-        meta.add(lay2.start_offset()); //input2_offset
+        //meta.add(lay1.start_offset()); //input1_offset
+        //meta.add(lay2.shape().elem_count()); //input2_length
+        //meta.add(lay2.start_offset()); //input2_offset
 
         let bind_group = create_bind_group_input2(
             buffer_dest,
             buffer_input1,
             buffer_input2,
         );
-        let pipeline = dev.get_pipeline(super::Shader::Binary(dtype), Pipelines::BinaryBufferFromBufferContiguousBoth)?;
+        let pipeline = dev.get_pipeline_const(super::Shader::Binary(dtype), Pipelines::BinaryBufferFromBufferContiguousBoth, const_vec);
         enqueue_big(
             meta,
             pipeline,
@@ -51,13 +55,15 @@ pub fn queue_binary_buffer_from_buffer(
         );
         return Ok(());
     } else {
+        let const_vec = vec![
+            op as usize];
+
         let mut meta = get_meta(&dev);
-        meta.add(op as u32);
         meta.add_layout(&lay1);
         meta.add_layout(&lay2);
 
         let pipeline_type = Pipelines::BinaryBufferFromBuffer;
-        let pipeline = dev.get_pipeline(super::Shader::Binary(dtype), pipeline_type.clone())?;
+        let pipeline = dev.get_pipeline_const(super::Shader::Binary(dtype), pipeline_type.clone(), const_vec);
         
         let bind_group = create_bind_group_input2(
             buffer_dest,

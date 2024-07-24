@@ -149,3 +149,32 @@ fn copy3d(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     v_dest[d1 * op_copy3d.dest_stride1 + d2 * op_copy3d.dest_stride2 + d3 * op_copy3d.dest_stride3] = v_input1[op_copy3d.input1_offset + d1 * op_copy3d.input1_stride1 + d2 * op_copy3d.input1_stride2 + d3 * op_copy3d.input1_stride3];   
 }
+
+@compute
+@workgroup_size(16,16,1)
+fn copy3d_padded(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let d1 = global_id.x; 
+    let d2 = global_id.y;
+    let d3 = global_id.z; //batch
+    if(d1 >= op_copy3d.d1 || d2 >= op_copy3d.d2){
+        v_dest[d1 * op_copy3d.dest_stride1 + d2 * op_copy3d.dest_stride2 + d3 * op_copy3d.dest_stride3] = ZERO;
+    }
+    else{
+        v_dest[d1 * op_copy3d.dest_stride1 + d2 * op_copy3d.dest_stride2 + d3 * op_copy3d.dest_stride3] = v_input1[op_copy3d.input1_offset + d1 * op_copy3d.input1_stride1 + d2 * op_copy3d.input1_stride2 + d3 * op_copy3d.input1_stride3]; 
+    } 
+}
+
+
+
+@compute
+@workgroup_size(16,16,1)
+fn copy3d_padded_nobatch(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let d1 = global_id.x; 
+    let d2 = global_id.y;
+    if(d1 >= op_copy3d.d1 || d2 >= op_copy3d.d2){
+        v_dest[d1 * op_copy3d.dest_stride1 + d2 * op_copy3d.dest_stride2] = ZERO;
+    }
+    else{
+        v_dest[d1 * op_copy3d.dest_stride1 + d2 * op_copy3d.dest_stride2] = v_input1[op_copy3d.input1_offset + d1 * op_copy3d.input1_stride1 + d2 * op_copy3d.input1_stride2]; 
+    } 
+}
