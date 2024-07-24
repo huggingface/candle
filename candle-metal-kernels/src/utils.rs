@@ -160,3 +160,26 @@ macro_rules! set_params {
         )*
     );
 }
+
+pub trait EncoderProvider {
+    fn encoder(&self) -> &ComputeCommandEncoderRef;
+    fn maybe_end_encoding(&self, enc: &ComputeCommandEncoderRef);
+}
+
+impl EncoderProvider for &metal::CommandBuffer {
+    fn encoder(&self) -> &ComputeCommandEncoderRef {
+        self.new_compute_command_encoder()
+    }
+    fn maybe_end_encoding(&self, enc: &ComputeCommandEncoderRef) {
+        enc.end_encoding()
+    }
+}
+
+impl EncoderProvider for &metal::CommandBufferRef {
+    fn encoder(&self) -> &ComputeCommandEncoderRef {
+        self.new_compute_command_encoder()
+    }
+    fn maybe_end_encoding(&self, enc: &ComputeCommandEncoderRef) {
+        enc.end_encoding()
+    }
+}
