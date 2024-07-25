@@ -3,7 +3,7 @@ use candle::{Device, Result, Tensor};
 /// Loads an image from disk using the image crate at the requested resolution.
 //  This returns a tensor with shape (3, res, res). imagenet normalization is applied.
 pub fn load_image<P: AsRef<std::path::Path>>(p: P, res: u32) -> Result<Tensor> {
-    let img = image::io::Reader::open(p)?
+    let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
         .resize_to_fill(res, res, image::imageops::FilterType::Triangle);

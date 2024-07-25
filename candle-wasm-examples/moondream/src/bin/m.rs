@@ -195,7 +195,7 @@ impl Model {
 }
 impl Model {
     fn load_image(&self, image: Vec<u8>) -> Result<Tensor, JsError> {
-        let img = image::io::Reader::new(std::io::Cursor::new(image))
+        let img = image::ImageReader::new(std::io::Cursor::new(image))
             .with_guessed_format()?
             .decode()
             .map_err(|e| JsError::new(&e.to_string()))?

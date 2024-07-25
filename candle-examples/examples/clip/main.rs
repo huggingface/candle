@@ -50,7 +50,7 @@ struct Args {
 }
 
 fn load_image<T: AsRef<std::path::Path>>(path: T, image_size: usize) -> anyhow::Result<Tensor> {
-    let img = image::io::Reader::open(path)?.decode()?;
+    let img = image::ImageReader::open(path)?.decode()?;
     let (height, width) = (image_size, image_size);
     let img = img.resize_to_fill(
         width as u32,

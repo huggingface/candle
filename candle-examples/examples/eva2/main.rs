@@ -16,7 +16,7 @@ use candle_transformers::models::eva2;
 /// Loads an image from disk using the image crate, this returns a tensor with shape
 /// (3, 448, 448). OpenAI normalization is applied.
 pub fn load_image448_openai_norm<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
-    let img = image::io::Reader::open(p)?
+    let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
         .resize_to_fill(448, 448, image::imageops::FilterType::Triangle);
