@@ -1,9 +1,27 @@
 use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
-use std::collections::HashMap;
+use std::{collections::HashMap, f32::consts::PI};
 
 pub const MAX_SEQ_LEN: usize = 4096;
+
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+pub enum Llama3RopeType {
+    #[serde(rename = "llama3")]
+    Llama3,
+    #[default]
+    #[serde(rename = "default")]
+    Default,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+pub struct Llama3RopeConfig {
+    pub factor: f32,
+    pub low_freq_factor: f32,
+    pub high_freq_factor: f32,
+    pub original_max_position_embeddings: usize,
+    pub rope_type: Llama3RopeType,
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct LlamaConfig {
@@ -18,6 +36,7 @@ pub struct LlamaConfig {
     pub rope_theta: f32,
     pub bos_token_id: Option<u32>,
     pub eos_token_id: Option<u32>,
+    pub rope_scaling: Option<Llama3RopeConfig>,
 }
 
 impl LlamaConfig {
@@ -44,6 +63,7 @@ impl LlamaConfig {
             use_flash_attn,
             bos_token_id: self.bos_token_id,
             eos_token_id: self.eos_token_id,
+            rope_scaling: self.rope_scaling,
         }
     }
 }
@@ -61,6 +81,7 @@ pub struct Config {
     pub rope_theta: f32,
     pub bos_token_id: Option<u32>,
     pub eos_token_id: Option<u32>,
+    pub rope_scaling: Option<Llama3RopeConfig>,
 }
 
 impl Config {
@@ -77,6 +98,7 @@ impl Config {
             rope_theta: 10_000.0,
             bos_token_id: None,
             eos_token_id: None,
+            rope_scaling: None,
         }
     }
 
@@ -93,6 +115,7 @@ impl Config {
             rope_theta: 10_000.0,
             bos_token_id: None,
             eos_token_id: None,
+            rope_scaling: None,
         }
     }
 }
@@ -107,15 +130,51 @@ pub struct Cache {
     device: Device,
 }
 
+fn calculate_default_inv_freq(cfg: &Config) -> Vec<f32> {
+    let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+    (0..head_dim)
+        .step_by(2)
+        .map(|i| 1f32 / cfg.rope_theta.powf(i as f32 / head_dim as f32))
+        .collect()
+}
+
 impl Cache {
     pub fn new(use_kv_cache: bool, dtype: DType, config: &Config, device: &Device) -> Result<Self> {
         // precompute freqs_cis
-        let n_elem = config.hidden_size / config.num_attention_heads;
-        let theta: Vec<_> = (0..n_elem)
-            .step_by(2)
-            .map(|i| 1f32 / config.rope_theta.powf(i as f32 / n_elem as f32))
-            .collect();
-        let theta = Tensor::new(theta.as_slice(), device)?;
+        let theta = match &config.rope_scaling {
+            None
+            | Some(Llama3RopeConfig {
+                rope_type: Llama3RopeType::Default,
+                ..
+            }) => calculate_default_inv_freq(config),
+            Some(rope_scaling) => {
+                let low_freq_wavelen = rope_scaling.original_max_position_embeddings as f32
+                    / rope_scaling.low_freq_factor;
+                let high_freq_wavelen = rope_scaling.original_max_position_embeddings as f32
+                    / rope_scaling.high_freq_factor;
+
+                calculate_default_inv_freq(config)
+                    .into_iter()
+                    .map(|freq| {
+                        let wavelen = 2. * PI / freq;
+                        if wavelen < high_freq_wavelen {
+                            freq
+                        } else if wavelen > low_freq_wavelen {
+                            freq / rope_scaling.factor
+                        } else {
+                            let smooth = (rope_scaling.original_max_position_embeddings as f32
+                                / wavelen
+                                - rope_scaling.low_freq_factor)
+                                / (rope_scaling.high_freq_factor - rope_scaling.low_freq_factor);
+                            (1. - smooth) * freq / rope_scaling.factor + smooth * freq
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }
+        };
+
+        let theta = Tensor::new(theta, device)?;
+
         let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
             .to_dtype(DType::F32)?
             .reshape((MAX_SEQ_LEN, 1))?
