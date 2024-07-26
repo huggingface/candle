@@ -1,6 +1,7 @@
 use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
+use either::Either;
 use std::{collections::HashMap, f32::consts::PI};
 
 pub const MAX_SEQ_LEN: usize = 4096;
@@ -35,7 +36,7 @@ pub struct LlamaConfig {
     #[serde(default = "default_rope")]
     pub rope_theta: f32,
     pub bos_token_id: Option<u32>,
-    pub eos_token_id: Option<u32>,
+    pub eos_token_id: Option<Either<u32, Vec<u32>>>,
     pub rope_scaling: Option<Llama3RopeConfig>,
 }
 
@@ -80,7 +81,7 @@ pub struct Config {
     pub rms_norm_eps: f64,
     pub rope_theta: f32,
     pub bos_token_id: Option<u32>,
-    pub eos_token_id: Option<u32>,
+    pub eos_token_id: Option<Either<u32, Vec<u32>>>,
     pub rope_scaling: Option<Llama3RopeConfig>,
 }
 

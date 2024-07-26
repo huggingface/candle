@@ -4,6 +4,7 @@ use crate::models::{
     clip::{text_model::Activation, vision_model::ClipVisionConfig},
     llama::Config,
 };
+use either::Either;
 use serde::{Deserialize, Serialize};
 
 // original config from liuhaotian/llava
@@ -73,7 +74,7 @@ impl LLaVAConfig {
             rms_norm_eps: self.rms_norm_eps as f64,
             rope_theta: self.rope_theta,
             bos_token_id: Some(self.bos_token_id as u32),
-            eos_token_id: Some(self.eos_token_id as u32),
+            eos_token_id: Some(Either::Left(self.eos_token_id as u32)),
             use_flash_attn: false,
             rope_scaling: None, // Assume we don't have LLaVA for Llama 3.1
         }

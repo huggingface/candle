@@ -73,6 +73,7 @@ tracing-subscriber = "0.3.7"
 yoke = { version = "0.7.2", features = ["derive"] }
 zip = { version = "1.1.1", default-features = false }
 metal = { version = "0.27.0", features = ["mps"]}
+either = { version = "1.13.0", features = ["serde"] }
 
 [profile.release-with-debug]
 inherits = "release"
