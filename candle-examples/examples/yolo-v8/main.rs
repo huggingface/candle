@@ -390,7 +390,7 @@ pub fn run<T: Task>(args: Args) -> anyhow::Result<()> {
     for image_name in args.images.iter() {
         println!("processing {image_name}");
         let mut image_name = std::path::PathBuf::from(image_name);
-        let original_image = image::io::Reader::open(&image_name)?
+        let original_image = image::ImageReader::open(&image_name)?
             .decode()
             .map_err(candle::Error::wrap)?;
         let (width, height) = {

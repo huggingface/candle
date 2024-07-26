@@ -5,6 +5,7 @@ pub mod blip;
 pub mod blip_text;
 pub mod chatglm;
 pub mod clip;
+pub mod codegeex4_9b;
 pub mod convmixer;
 pub mod convnext;
 pub mod depth_anything_v2;
