@@ -170,7 +170,7 @@ fn main() -> Result<()> {
     let eos_token_id = config.eos_token_id.or_else(|| {
         tokenizer
             .token_to_id(EOS_TOKEN)
-            .map(|x| model::LlamaEosToks::Single(x))
+            .map(model::LlamaEosToks::Single)
     });
     let prompt = args.prompt.as_ref().map_or(DEFAULT_PROMPT, |p| p.as_str());
     let mut tokens = tokenizer
