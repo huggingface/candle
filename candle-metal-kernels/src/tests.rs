@@ -1100,6 +1100,11 @@ fn gemm() {
     let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
     let rhs_stride = vec![n * k, n, 1];
     let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
+    println!("lhs: {lhs:?}");
+    println!("lhs_stride: {lhs_stride:?}");
+    println!("rhs: {rhs:?}");
+    println!("rhs_stride: {rhs_stride:?}");
+
     let results = run_gemm((b, m, n, k), &lhs, lhs_stride, 0, &rhs, rhs_stride, 0);
     assert_eq!(
         approx(results, 4),
@@ -1111,6 +1116,11 @@ fn gemm() {
     let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
     let rhs_stride = vec![n * k, n, 1];
     let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
+    println!("lhs: {lhs:?}");
+    println!("lhs_stride: {lhs_stride:?}");
+    println!("rhs: {rhs:?}");
+    println!("rhs_stride: {rhs_stride:?}");
+
     let results = run_gemm((b, m, n, k), &lhs, lhs_stride, 0, &rhs, rhs_stride, 0);
     assert_eq!(
         approx(results, 4),

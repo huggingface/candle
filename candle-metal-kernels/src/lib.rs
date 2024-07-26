@@ -1476,19 +1476,27 @@ pub fn call_gemm(
 ) -> Result<(), MetalKernelError> {
     let prefer_async_copy = !device.supports_family(MTLGPUFamily::Apple9);
 
-    let mut ideal_grouping = false;
     let mut actual_groups: usize = 1;
     actual_groups *= divide(m, 48) as usize;
     actual_groups *= divide(n, 48) as usize;
     actual_groups *= b;
 
     let core_count = get_device_core_count(device);
-    println!("Core count: {}", core_count);
     let ideal_grouping = if name == "sgemm" {
         actual_groups <= core_count * 6
     } else {
         actual_groups <= core_count * 9
     };
+
+    let mut blockdim = (32, 32, 32);
+    if !ideal_grouping {
+        if name == "sgemm" {
+            blockdim = (48, 48, 24);
+        } else {
+            blockdim = (48, 48, 32);
+        }
+    }
+
     assert!(rhs_stride.len() >= 2);
     assert!(lhs_stride.len() >= 2);
     let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
@@ -1525,52 +1533,45 @@ pub fn call_gemm(
     let alpha = 1.0f32;
     let beta = 0.0f32;
     let batched = b > 1;
+    println!("batched: {batched}");
     let fused_activation = false;
     let fused_bias = false;
-    let (m_simd, n_simd, k_simd, m_splits, n_splits) = if m == 1 {
-        let m_simd = 8;
-        let n_simd = 8;
-        let k_simd = 64;
-        let m_splits = 1;
-        let n_splits = 1;
-        (m_simd, n_simd, k_simd, m_splits, n_splits)
-    } else {
-        let m_simd = 40;
-        let n_simd = 40;
-        let k_simd = 32;
-        let m_splits = 1;
-        let n_splits = 1;
-        (m_simd, n_simd, k_simd, m_splits, n_splits)
-    };
+
     let constants = Some(ConstantValues::new(vec![
         (0, Value::USize(m)),
         (1, Value::USize(n)),
         (2, Value::USize(k)),
         (10, Value::Bool(a_trans)),
         (11, Value::Bool(b_trans)),
-        (13, Value::Bool(d_trans)),
-        (20, Value::F32(alpha)),
-        (21, Value::F32(beta)),
+        //(13, Value::Bool(d_trans)),
+        //(20, Value::F32(alpha)),
+        //(21, Value::F32(beta)),
         (100, Value::Bool(batched)),
-        (101, Value::Bool(fused_activation)),
+        //(101, Value::Bool(fused_activation)),
         // Garbage
         (102, Value::Bool(false)),
         (103, Value::Bool(false)),
         (113, Value::Bool(false)),
         (50_000, Value::Bool(false)),
         // End garbage
-        (200, Value::U16(32)),
-        (201, Value::U16(32)),
-        (202, Value::U16(32)),
+        //(200, Value::U16(blockdim.0)),
+        //(201, Value::U16(blockdim.1)),
+        //(202, Value::U16(blockdim.2)),
         (206, Value::Bool(prefer_async_copy)),
         (207, Value::Bool(ideal_grouping)),
-        (210, Value::U16(m_splits)),
-        (211, Value::U16(n_splits)),
-        (50_001, Value::Bool(fused_bias)),
+        //(210, Value::U16(m_splits)),
+        //(211, Value::U16(n_splits)),
+        //(50_001, Value::Bool(fused_bias)),
     ]));
     let pipeline = kernels.load_pipeline_with_constants(device, Source::Candle, name, constants)?;
-    let m_group = m_simd * m_splits;
-    let n_group = n_simd * n_splits;
+
+    let m_group: u16 = 32;
+    let n_group: u16 = 32;
+    let m_splits: u16 = 2;
+    let n_splits: u16 = 2;
+    let k_simd: u16 = 32;
+    let m_simd = m_group / m_splits;
+    let n_simd = n_group / n_splits;
 
     let a_block_length = m_group * k_simd;
     let b_block_length = k_simd * n_group;
@@ -1580,6 +1581,7 @@ pub fn call_gemm(
         let c_block_length = m_group * n_group;
         block_elements = std::cmp::max(c_block_length, block_elements)
     }
+    /*
     if fused_bias {
         if d_trans {
             block_elements = std::cmp::max(block_elements, m_group);
@@ -1587,6 +1589,7 @@ pub fn call_gemm(
             block_elements = std::cmp::max(block_elements, n_group);
         }
     }
+    */
     let bytes = match name {
         "sgemm" => 4,
         "hgemm" => 2,
@@ -1600,7 +1603,7 @@ pub fn call_gemm(
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
-    encoder.set_threadgroup_memory_length(0, block_bytes.into());
+    encoder.set_threadgroup_memory_length(0, block_bytes as NSUInteger);
     encoder.set_buffer(0, Some(lhs_buffer), lhs_offset as NSUInteger);
     encoder.set_buffer(1, Some(rhs_buffer), rhs_offset as NSUInteger);
     encoder.set_buffer(2, Some(output), 0);
@@ -1614,7 +1617,7 @@ pub fn call_gemm(
         // TODO byte_stride_d
         let byte_stride_d = 0;
 
-        let buffer: Vec<u64> = vec![
+        let buffer: [u64; 4] = [
             byte_stride_a as _,
             byte_stride_b as _,
             byte_stride_c as _,
