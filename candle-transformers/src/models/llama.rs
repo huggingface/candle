@@ -23,6 +23,8 @@ pub struct Llama3RopeConfig {
     pub original_max_position_embeddings: usize,
     pub rope_type: Llama3RopeType,
 }
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct LlamaEosToks(#[serde(with = "either::serde_untagged")] pub Either<u32, Vec<u32>>);
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct LlamaConfig {
@@ -36,7 +38,7 @@ pub struct LlamaConfig {
     #[serde(default = "default_rope")]
     pub rope_theta: f32,
     pub bos_token_id: Option<u32>,
-    pub eos_token_id: Option<Either<u32, Vec<u32>>>,
+    pub eos_token_id: Option<LlamaEosToks>,
     pub rope_scaling: Option<Llama3RopeConfig>,
 }
 
@@ -81,7 +83,7 @@ pub struct Config {
     pub rms_norm_eps: f64,
     pub rope_theta: f32,
     pub bos_token_id: Option<u32>,
-    pub eos_token_id: Option<Either<u32, Vec<u32>>>,
+    pub eos_token_id: Option<LlamaEosToks>,
     pub rope_scaling: Option<Llama3RopeConfig>,
 }
 
