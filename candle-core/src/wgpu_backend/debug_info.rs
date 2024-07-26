@@ -1,14 +1,15 @@
-use std::{collections::HashMap, fs::File, sync::{atomic::AtomicU32, Arc, Mutex}};
+use std::{collections::HashMap, fs::File, sync::{atomic::AtomicU32, Mutex}};
 use wgpu::Device;
 
 use serde::{Deserialize, Serialize};
 use serde_json::to_writer;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DebugInfo{
-    pub (crate) query_set_buffer : Arc<wgpu::Buffer>,
-    pub (crate) counter :  Arc<AtomicU32>,
-    pub (crate) shader_pipeline : Arc<Mutex<HashMap<u32, (String, u64, u32, u32, u32)>>>,
+    pub (crate) query_set_buffer : wgpu::Buffer,
+    pub (crate) query_set : wgpu::QuerySet,
+    pub (crate) counter :  AtomicU32,
+    pub (crate) shader_pipeline : Mutex<HashMap<u32, (String, u64, u32, u32, u32)>>,
 }
 
 impl DebugInfo {
@@ -16,14 +17,22 @@ impl DebugInfo {
         // Create a buffer to store the query results
         let query_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 256 * 10000000 as u64,
+            size: 256 * 100000 as u64,
             usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::QUERY_RESOLVE,
             mapped_at_creation: false,
         });
+
+        let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
+            count: 4096 * 2, // We need 2 queries: one for start and one for end
+            ty: wgpu::QueryType::Timestamp,
+            label: None,
+        });
+
         return DebugInfo{
-            counter : Arc::new(AtomicU32::new(0)), 
-            shader_pipeline : Arc::new(Mutex::new(HashMap::new())), 
-            query_set_buffer : Arc::new(query_buffer)};
+            counter : AtomicU32::new(0), 
+            query_set : query_set, 
+            shader_pipeline : Mutex::new(HashMap::new()), 
+            query_set_buffer : query_buffer};
     }
 
     pub (crate) fn insert_info(&self, index : u32, info : (String, u64, u32, u32, u32)){

@@ -386,15 +386,20 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
         "\n{} tokens generated ({:.2} token/s)\n",
         tokens.len(),
         tokens.len() as f64 / dt.as_secs_f64(),
-    );
-   
+    );   
+
     match &device {
         candle::Device::WebGpu(gpu) => {
+            const TEST_NAME: &str = "1";
             gpu.print_bindgroup_reuseinfo2();
             #[cfg(feature = "wgpu_debug")]{
                 let info = pollster::block_on(gpu.get_debug_info()).unwrap();
                 let map2 = candle::wgpu::debug_info::calulate_measurment(&info);
-                candle::wgpu::debug_info::save_list(&map2, "wgpu_infollama4-c_small.json").unwrap();
+                candle::wgpu::debug_info::save_list(&map2,& format!("wgpu_llama2c_test_{TEST_NAME}_a.json")).unwrap();
+            
+            
+                let info: Vec<candle::wgpu::debug_info::ShaderInfo> = gpu.get_pipeline_info().unwrap();
+                candle::wgpu::debug_info::save_list(&info,& format!("wgpu_llama2c_test_{TEST_NAME}_b.json")).unwrap();
             }
         },
         _ => {},

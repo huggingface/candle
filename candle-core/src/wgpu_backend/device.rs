@@ -3,6 +3,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 use std::hash::Hash;
 
+use candle_wgpu_kernels::EntryPoint;
 use rand::SeedableRng;
 use tracing::instrument;
 
@@ -13,11 +14,9 @@ use crate::{notImplemented, wrongType, Layout};
 use super::debug_info::{DebugInfo, Measurements,MInfo, ShaderInfo};
 
 use super::cache::{BindGroupReferenceBase, BindgroupId, BindgroupLayouts, BufferReference, ModelCache};
-use super::util::{ToF64, ToU32};
-use super::wgpu_functions::{MetaArray, Shader};
-use super::wgpu_functions::{self, create_buffer_init, unary::UnaryOperation};
+use super::util::ToU32;
+use super::wgpu_functions::{self, create_buffer_init, unary::UnaryOperation, MetaArray};
 use super::WgpuStorage;
-
 
 #[derive(Debug)]
 pub (crate) enum MlQueue{
@@ -28,6 +27,7 @@ pub (crate) enum MlQueue{
 pub trait ToU64 {
     fn to_u64(self) -> u64;
 }
+
 #[cfg(feature = "wgpu_debug")]
 macro_rules! impl_to_u64 {
     ($($ty:ty)*) => {
@@ -44,25 +44,8 @@ macro_rules! impl_to_u64 {
 #[cfg(feature = "wgpu_debug")]
 impl_to_u64!(u8 u16 u32 u64 usize);
 
-#[cfg(feature = "wgpu_debug")]
-#[derive(Debug)]
-pub struct QueueDebugInfo{
-    pub (crate) name : String
-}
-
-#[cfg(feature = "wgpu_debug")]
-impl QueueDebugInfo {
-    pub fn new<T : Into<String>>(name: T) -> Self {
-        Self { name : name.into()}
-    }
-    // pub fn new_noname<O : ToU64>(output_size: O) -> Self {
-    //     Self { name : None, output_size: output_size.to_u64() }
-    // }
-}
-
-
 #[derive(Debug, Copy, Clone)]
-struct OrderedFloat(f64);
+pub struct OrderedFloat(pub f64);
 
 impl PartialEq for OrderedFloat {
     fn eq(&self, other: &OrderedFloat) -> bool {
@@ -79,15 +62,22 @@ impl Hash for OrderedFloat {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub (crate) struct PipelineType(pub Shader, pub Pipelines, Vec<OrderedFloat>);
+pub struct OpIsInplaceable{
+    pub input1_inplaceable : bool,
+    pub input2_inplaceable : bool,
+}
 
+impl OpIsInplaceable {
+    pub fn new() -> Self {
+        Self { input1_inplaceable : false, input2_inplaceable : false }
+    }
+}
 
-
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub (crate) struct PipelineType(pub candle_wgpu_kernels::Pipelines, pub Vec<OrderedFloat>, pub OpIsInplaceable);
 pub (crate) type BindGroupReference = BindGroupReferenceBase<Arc<BufferReference>>;
 
-
 #[derive(Debug)]
-
 pub (crate) enum DispatchedBindgroup {
     BindgroupReference(BindGroupReference),
     CachedBindgroup(BindgroupId),
@@ -103,7 +93,7 @@ pub (crate) struct MlQueueDispatch{
     pub (crate) meta : u32,
     pub (crate) workload_size : usize, //the total size needed to calculate. Needed so we do not queue to many operations at once.
     #[cfg(feature = "wgpu_debug")]
-    pub (crate) debug : QueueDebugInfo,
+    pub (crate) debug : Option<String>,
 }
 
 #[derive(Debug)]
@@ -141,7 +131,7 @@ pub struct WgpuDeviceInner{
     pub device_limits : wgpu::Limits, //we cache the limits here, because device.limit() was relatively slow on the browser
 
     pub queue : wgpu::Queue,
-    pub (crate) shader : Mutex<HashMap<wgpu_functions::Shader, ShaderModuleComputePipelines>>,
+    pub (crate) shader : Mutex<HashMap<candle_wgpu_kernels::Shaders, ShaderModuleComputePipelines>>,
     pub (crate) rand_state : Mutex<rand::rngs::StdRng>,   
 
     pub (crate) command_queue : Mutex<QueueBuffer>,
@@ -174,52 +164,6 @@ impl std::ops::Deref for WgpuDevice{
     }
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub (crate) enum Pipelines{
-    UnaryFromBuffer,
-    UnaryFromBufferContiguous,
-    UnaryFromBufferContiguousNoStartOffset,
-    UnaryInplaceContiguous,
-    BinaryBufferFromBuffer,
-    BinaryBufferFromBufferContiguousBoth,
-    MatmulBuffer,
-    MatmulBuffer1b,
-    Matmul5Buffer, 
-    Matmul7Buffer, 
-    Reduce,
-    ReduceIndex,
-    RmsNorm,
-    Softmax,
-    CmpFromBuffer ,
-    Conv2D,
-    Conv2DTranspose,
-    Conv1D,
-    Conv1DTranspose,
-    IndexSelect,
-    Copy2d,
-    Copy3d,
-    Copy3dPadded,
-    Copy3dPaddedNoBatch,
-    Copy2dTranspose,
-    CopyStrided,
-    Copy,
-    ConvertF32ToU32,
-    ConvertU32ToF32,
-    ConvertU8ToF32,
-    ConvertU32ToU8,
-    ConvertF32ToU8,
-    WhereCondU32,
-    MaxPool2d,
-    AvgPool2d,
-    Upsample1d,
-    Upsample2d,
-    Gather,
-    ScatterAddInplace,
-    IndexAddInplace
-}
-
-
-
 //pub (crate) const META_BUFFER_SIZE : u32 = 65536;
 //pub (crate) const META_BUFFER_SIZE : u32 = 2048;
 pub (crate) const META_BUFFER_SIZE : u32 = 10*1024*1024; //10mb
@@ -237,7 +181,7 @@ impl WgpuDevice{
         let mut limits = wgpu::Limits::downlevel_defaults();
 
         #[cfg(feature = "wgpu_debug")]
-        let features = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES;
+        let features = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
         #[cfg(not(feature = "wgpu_debug"))]
         let features = wgpu::Features::empty();
 
@@ -319,6 +263,7 @@ impl WgpuDevice{
     #[cfg(feature = "wgpu_debug")]
     pub async fn get_debug_info_full(&self) -> crate::Result<Measurements>{
         let data = wgpu_functions::read_data_from_gpu_async_buffer::<u64>(self, &self.debug.query_set_buffer).await;
+           
         let period = self.queue.get_timestamp_period();
         let mut result = Measurements::new(period);
         let mut last_end_time = 0u64;
@@ -327,13 +272,21 @@ impl WgpuDevice{
         let shader_pipeline = shader_pipeline2.clone();
         let mut indexes : Vec<_> = shader_pipeline.into_iter().collect();
         indexes.sort_by_key(|f| f.0);
-        for p in indexes{
-            let start_time =data[(p.0 / 8) as usize];
+        for p in indexes {
+            let start_time = data[(p.0 / 8) as usize];
             let end_time = data[(p.0 / 8) as usize + 1];
             if end_time < start_time {
                 panic!("Start Time was after End Time! startTime: {start_time}, endTime:{end_time}, i:{i}");
             }
-
+            if end_time == 0 {
+                panic!("End time was 0")
+            }
+            if start_time == 0 {
+                panic!("End time was 0")
+            }
+            if end_time == start_time {
+                panic!("End time == start_time == {}", end_time)
+            }
             if start_time < last_end_time {
                 panic!("Start Time was before last End Time! startTime: {start_time}, last endTime:{last_end_time}, i:{i}");
             }
@@ -359,7 +312,7 @@ impl WgpuDevice{
 
     #[cfg(feature = "wgpu_debug")]
     pub fn get_pipeline_info(&self) -> crate::Result<Vec<ShaderInfo>>{
-        use super::debug_info::{self, ShaderInfo};
+        use super::debug_info;
 
         let shaders = self.shader.lock().unwrap();
 
@@ -367,10 +320,10 @@ impl WgpuDevice{
             let pipelines = v.pipelines.lock().unwrap();
             let s = debug_info::ShaderInfo{    
                 name: format!("{:?}", k).to_owned(), 
-                pipelines: pipelines.iter().map(|(pk, pv)|{
+                pipelines: pipelines.iter().map(|(pk, _)|{
                     return debug_info::PipelineInfo { 
-                        name: format!("{:?}", pk.1).to_owned(), 
-                        consts : pk.2.iter().map(|f| f.0).collect()
+                        name: format!("{:?}", pk.0).to_owned(), 
+                        consts : pk.1.iter().map(|f| f.0).collect()
                      }
                 }).collect()
 
@@ -382,50 +335,8 @@ impl WgpuDevice{
 
     #[instrument]
     fn load_pipeline(device : &wgpu::Device, shader : Arc<wgpu::ShaderModule>, pipeline : &PipelineType, pipeline_layout : &wgpu::PipelineLayout) -> wgpu::ComputePipeline{
-        let entry_point = match pipeline.1{
-            Pipelines::UnaryInplaceContiguous => "unary_inplace_contiguous",
-            Pipelines::UnaryFromBuffer => "unary_from_buffer",
-            Pipelines::UnaryFromBufferContiguous => "unary_from_buffer_contiguous",
-            Pipelines::UnaryFromBufferContiguousNoStartOffset => "unary_from_buffer_contiguous",
-            Pipelines::BinaryBufferFromBuffer => "binary_buffer_from_buffer",
-            Pipelines::BinaryBufferFromBufferContiguousBoth => "binary_buffer_from_buffer_contiguous_both",
-            Pipelines::MatmulBuffer => "matmul1",
-            Pipelines::MatmulBuffer1b => "matmul1b",
-            Pipelines::Matmul5Buffer => "matmul5",
-            Pipelines::Matmul7Buffer => "matmul7",
-            Pipelines::Reduce => "reduce",
-            Pipelines::ReduceIndex => "reduce_index",
-            Pipelines::RmsNorm => "rms_norm",
-            Pipelines::Softmax => "softmax",
-            Pipelines::CmpFromBuffer => "cmp_buffer_from_buffer",
-            Pipelines::Conv2D => "conv2d",
-            Pipelines::Conv2DTranspose => "conv2d_transpose",
-            Pipelines::Conv1D => "conv1d",
-            Pipelines::Conv1DTranspose => "conv1d_transpose",
-            Pipelines::ConvertF32ToU32 => "convert_to_u32",
-            Pipelines::ConvertU32ToF32 => "convert_to_f32",
-            Pipelines::ConvertU8ToF32 => "convert_u8_to_f32",
-            Pipelines::ConvertU32ToU8 => "convert_u32_to_u8",
-            Pipelines::ConvertF32ToU8 => "convert_f32_to_u8",
-            Pipelines::IndexSelect => "index_select",
-            Pipelines::Copy2d => "copy2d",
-            Pipelines::Copy3d => "copy3d",
-            Pipelines::Copy3dPadded => "copy3d_padded",
-            Pipelines::Copy3dPaddedNoBatch => "copy3d_padded_nobatch",
-            Pipelines::Copy2dTranspose => "copy2d_transpose",
-            Pipelines::CopyStrided => "copy_strided",
-            Pipelines::Copy => "copy",
-            Pipelines::WhereCondU32 => "where_cond_index_u32",
-            Pipelines::MaxPool2d => "max_pool2d",
-            Pipelines::AvgPool2d => "avg_pool2d",
-            Pipelines::Upsample1d => "upsample1d",
-            Pipelines::Upsample2d => "upsample2d",
-            Pipelines::Gather => "gather",
-            Pipelines::ScatterAddInplace => "scatter_add_inplace",
-            Pipelines::IndexAddInplace => "index_add_inplace",
-        };
-        
-       if pipeline.2.is_empty(){
+        let entry_point = pipeline.0.get_entry_point();
+        if pipeline.1.is_empty(){
             return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: None,
                 layout: Some(pipeline_layout),
@@ -436,7 +347,7 @@ impl WgpuDevice{
             });
         }
         else{
-            let hmap : HashMap<_, _> = pipeline.2.iter().enumerate().map(|(index, value)| (format!("CONSTV_{index}"), value.0)).collect();
+            let hmap : HashMap<_, _> = pipeline.1.iter().enumerate().map(|(index, value)| (format!("CONSTV_{index}"), value.0)).collect();
 
             return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: None,
@@ -453,23 +364,16 @@ impl WgpuDevice{
         }
     }
 
-    pub (crate) fn get_pipeline(&self, shader : wgpu_functions::Shader, pipeline: Pipelines) -> crate::Result<PipelineType> {
-        return Ok(PipelineType(shader, pipeline, vec![]));
-    }
-
-    pub (crate) fn get_pipeline_const<T : ToF64>(&self, shader : wgpu_functions::Shader, pipeline: Pipelines, consts : Vec<T>) -> PipelineType {
-        return PipelineType(shader, pipeline, consts.into_iter().map(|f| OrderedFloat(f.to_f64())).collect());
-    }
-
     #[instrument]
     pub (crate) fn get_pipeline2(&self, pipeline: &PipelineType, pipeline_layout : &wgpu::PipelineLayout) -> crate::Result<Arc<wgpu::ComputePipeline>> {
+        let shader = pipeline.0.get_shader();
         let mut shaders = self.shader.lock().unwrap();
-        if !shaders.contains_key(&pipeline.0){
-            let s = wgpu_functions::get_shader(&self.device, wgpu_functions::load_shader(pipeline.0.clone())?);
-            shaders.insert(pipeline.0.clone(), ShaderModuleComputePipelines{ shader: Arc::new(s), pipelines: Mutex::new(HashMap::new())});
+        if !shaders.contains_key(&shader){
+            let s = wgpu_functions::get_shader(&self.device, shader.load_shader());
+            shaders.insert(shader.clone(), ShaderModuleComputePipelines{ shader: Arc::new(s), pipelines: Mutex::new(HashMap::new())});
         }
      
-        if let Some(s) = shaders.get(&pipeline.0){
+        if let Some(s) = shaders.get(&shader){
             let mut pipelines = s.pipelines.lock().unwrap();
             if !pipelines.contains_key(&pipeline){
                 let p = crate::WgpuDevice::load_pipeline(&self.device, s.shader.clone(), pipeline ,pipeline_layout);
@@ -487,13 +391,7 @@ impl WgpuDevice{
             panic!("Not expected")
         }
     }
-
-    // pub async fn synchronize_async(&self) -> crate::Result<()> {
-    //     wgpu_functions::synchronize_async(self).await
-    // }
 }
-
-
 
 impl crate::backend::BackendDevice for WgpuDevice{
     type Storage = WgpuStorage;

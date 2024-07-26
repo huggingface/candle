@@ -1,0 +1,15 @@
+[package]
+name = "candle-wgpu-kernels"
+version = "0.5.1"
+edition = "2021"
+
+description = "Wgpu kernels for Candle"
+repository = "https://github.com/huggingface/candle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+
+[build-dependencies]
+fancy-regex = "0.13.0"

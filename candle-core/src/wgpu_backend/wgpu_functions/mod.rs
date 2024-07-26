@@ -24,12 +24,17 @@ use tracing::{instrument, span, Level};
 use super::{
     cache::{BindGroupReferenceBase, BufferReference, CachedBindGroupReference},
     device::{
-        BindGroupReference, DispatchedBindgroup, MlQueue, PipelineType, Pipelines, QueueBuffer, META_BUFFER_SIZE,
+        BindGroupReference, DispatchedBindgroup, MlQueue, OpIsInplaceable, OrderedFloat, PipelineType, QueueBuffer, META_BUFFER_SIZE
     },
-    util::ToU32,
+    util::{ToF64, ToU32},
 };
-use crate::DType;
-use crate::{wgpu_backend::device::WgpuDevice, Layout, WebGpuError};
+
+pub use candle_wgpu_kernels::Pipelines as Pipelines;
+pub use candle_wgpu_kernels::DType as DType;
+pub use crate::wgpu::WgpuDevice as WgpuDevice;
+pub use crate::wgpu::cache::BufferReferenceId as BufferReferenceId;
+
+use crate::{Layout, WebGpuError};
 use std::{
     borrow::Cow,
     sync::{Arc, MutexGuard},
@@ -58,7 +63,6 @@ pub use where_cond::queue_where_cond_u32;
 pub const MAX_DISPATCH_SIZE: u32 = 65535;
 
 ///Helper Type MetaArray, for constructing the MetaBuffer
-
 #[derive(Debug)]
 pub(crate) struct MetaArray(Vec<u32>);
 
@@ -88,135 +92,31 @@ impl MetaArray {
     }
 }
 
-// fn get_size(layout: &Layout) -> u32 {
-//     return 3 + layout.dims().len() as u32 * 2;
-// }
+const WORKGROUP_SIZE: u32 = 64;
 
-///All known Shader Files
-#[derive(Debug, Hash, std::cmp::Eq, std::cmp::PartialEq, Clone)]
-pub enum Shader {
-    Binary(DType),
-    Cmp(DType),
-    Conv2D(DType),
-    Convert(DType),
-    Copy(DType),
-    IndexSelect(DType),
-    Matmul(DType),
-    Reduce(DType),
-    RmsNorm(DType),
-    Softmax(DType),
-    Unary(DType),
-    WhereCond(DType),
-    Pool2d(DType),
-    Upsample(DType),
-    Gather(DType),
-}
-
-#[instrument]
-pub fn load_shader(shader: Shader) -> crate::Result<&'static str> {
-    match shader {
-        Shader::Binary(DType::F32) => Ok(include_str!(
-            "binary/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::Binary(DType::U32) => Ok(include_str!(
-            "binary/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-        Shader::Cmp(DType::F32) => Ok(include_str!(
-            "cmp/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::Cmp(DType::U32) => Ok(include_str!(
-            "cmp/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-        Shader::Conv2D(DType::F32) => Ok(include_str!(
-            "conv2d/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::Conv2D(DType::U32) => Ok(include_str!(
-            "conv2d/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-        Shader::Convert(DType::F32) => Ok(include_str!(
-            "convert/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::Convert(DType::U32) => Ok(include_str!(
-            "convert/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-        Shader::Convert(DType::U8) => Ok(include_str!(
-            "convert/generated/shader.pwgsl_generated_u8.wgsl"
-        )),
-        Shader::Copy(DType::F32) => Ok(include_str!(
-            "copy/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::Copy(DType::U32) => Ok(include_str!(
-            "copy/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-        Shader::IndexSelect(DType::F32) => Ok(include_str!(
-            "index_select/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::IndexSelect(DType::U32) => Ok(include_str!(
-            "index_select/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-        Shader::Matmul(DType::F32) => Ok(include_str!(
-            "matmul/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::Matmul(DType::U32) => Ok(include_str!(
-            "matmul/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-        Shader::Reduce(DType::F32) => Ok(include_str!(
-            "reduce/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::Reduce(DType::U32) => Ok(include_str!(
-            "reduce/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-        Shader::RmsNorm(DType::F32) => Ok(include_str!(
-            "rms_norm/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::RmsNorm(DType::U32) => Ok(include_str!(
-            "rms_norm/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-        Shader::Softmax(DType::F32) => Ok(include_str!(
-            "softmax/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::Softmax(DType::U32) => Ok(include_str!(
-            "softmax/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-        Shader::Unary(DType::F32) => Ok(include_str!(
-            "unary/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::Unary(DType::U32) => Ok(include_str!(
-            "unary/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-        Shader::WhereCond(DType::F32) => Ok(include_str!(
-            "where_cond/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::WhereCond(DType::U32) => Ok(include_str!(
-            "where_cond/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-        Shader::Pool2d(DType::F32) => Ok(include_str!(
-            "pool2d/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::Pool2d(DType::U32) => Ok(include_str!(
-            "pool2d/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-        Shader::Upsample(DType::F32) => Ok(include_str!(
-            "upsample/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::Upsample(DType::U32) => Ok(include_str!(
-            "upsample/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-        Shader::Gather(DType::F32) => Ok(include_str!(
-            "gather/generated/shader.pwgsl_generated_f32.wgsl"
-        )),
-        Shader::Gather(DType::U32) => Ok(include_str!(
-            "gather/generated/shader.pwgsl_generated_u32.wgsl"
-        )),
-
-        _ => Err(crate::Error::WebGpu(WebGpuError::Message(format!(
-            "Could not find Pipeline: {:?}",
-            shader
-        )))),
+pub fn get_dtype(dtype : crate::DType) -> crate::Result<DType>{
+    match dtype{
+        crate::DType::U8 =>  Ok(DType::U8),
+        crate::DType::U32 => Ok(DType::U32),
+        crate::DType::F32 =>  Ok(DType::F32),
+        _ => Err(crate::Error::WebGpu(WebGpuError::from(format!("Dtype {:?} not supported on wgpu", dtype)))),
     }
 }
 
-const WORKGROUP_SIZE: u32 = 64;
+pub (crate) fn get_pipeline(pipeline: Pipelines) -> PipelineType {
+    return PipelineType(pipeline, vec![], OpIsInplaceable::new());
+}
+
+pub (crate) fn get_pipeline_inplaceable(pipeline: Pipelines, inplaceable : OpIsInplaceable) -> PipelineType {
+    return PipelineType(pipeline, vec![], inplaceable);
+}
+
+pub (crate) fn get_pipeline_const<T : ToF64>(pipeline: Pipelines, consts : Vec<T>) -> PipelineType {
+    return PipelineType(pipeline, consts.into_iter().map(|f| OrderedFloat(f.to_f64())).collect(), OpIsInplaceable::new());
+}
+pub (crate) fn get_pipeline_const_inplace<T : ToF64>(pipeline: Pipelines, consts : Vec<T>, inplaceable : OpIsInplaceable) -> PipelineType {
+    return PipelineType(pipeline, consts.into_iter().map(|f| OrderedFloat(f.to_f64())).collect(), inplaceable);
+}
 
 #[instrument]
 pub fn get_shader(device: &wgpu::Device, shader: &'static str) -> ShaderModule {
@@ -233,6 +133,18 @@ pub fn create_buffer_init<T: bytemuck::Pod>(dev: &WgpuDevice, data: &[T]) -> Arc
 
 
 fn enqueue_workgroups(
+    command_queue: MutexGuard<QueueBuffer>,
+    pipeline: PipelineType,
+    bind_group: BindGroupReference,
+    x: u32,
+    y: u32,
+    z: u32,
+    workload_size : usize
+) {
+    enqueue_workgroups_extra(command_queue, pipeline, bind_group, x, y, z, workload_size, #[cfg(feature = "wgpu_debug")]None)
+}
+
+fn enqueue_workgroups_extra(
     mut command_queue: MutexGuard<QueueBuffer>,
     pipeline: PipelineType,
     bind_group: BindGroupReference,
@@ -240,7 +152,7 @@ fn enqueue_workgroups(
     y: u32,
     z: u32,
     workload_size : usize,
-    #[cfg(feature = "wgpu_debug")] _debug: super::device::QueueDebugInfo,
+    #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
 ) {
     if y > MAX_DISPATCH_SIZE || z > MAX_DISPATCH_SIZE  || x > MAX_DISPATCH_SIZE {
         panic!("can not queue y or z higher than 65535 x:{x}, y:{y}, z:{z}, pipeline: {:?}", pipeline);
@@ -249,12 +161,12 @@ fn enqueue_workgroups(
         x,
         y,
         z,
-        pipeline: pipeline,
+        pipeline: pipeline.clone(),
         bindgroup: DispatchedBindgroup::BindgroupReference(bind_group),
         meta: command_queue.current_meta,
         workload_size,
         #[cfg(feature = "wgpu_debug")]
-        debug: _debug,
+        debug : _debug
     });
     command_queue.command_queue.push(q);
 }
@@ -288,18 +200,6 @@ fn get_meta(dev: &WgpuDevice) -> MutexGuard<QueueBuffer> {
     return command_queue;
 }
 
-
-#[cfg(feature = "wgpu_debug")]
-fn init_debug_queue(dev: &WgpuDevice, length: u32) -> (u32, wgpu::QuerySet) {
-    let global_index = dev.debug.counter.load(std::sync::atomic::Ordering::Relaxed);
-    let query_set = dev.device.create_query_set(&wgpu::QuerySetDescriptor {
-        count: length as u32 * 2, // We need 2 queries: one for start and one for end
-        ty: wgpu::QueryType::Timestamp,
-        label: None,
-    });
-    return (global_index, query_set);
-}
-
 #[cfg(feature = "wgpu_debug")]
 fn end_debug_queue(
     dev: &WgpuDevice,
@@ -311,6 +211,7 @@ fn end_debug_queue(
     if global_index % 256 != 0 {
         panic!("global_index was:{global_index}")
     }
+
     encoder.resolve_query_set(
         &query_set,
         0..length,
@@ -339,8 +240,11 @@ fn get_command_buffer(
     current_meta: usize,
 ) -> wgpu::CommandBuffer {
     #[cfg(feature = "wgpu_debug")]
-    let (global_index, query_set) = init_debug_queue(dev, command_queue.len() as u32);
+    let query_set = &dev.debug.query_set;
 
+    #[cfg(feature = "wgpu_debug")]
+    let global_index = dev.debug.counter.load(std::sync::atomic::Ordering::Relaxed);
+    
     #[cfg(feature = "wgpu_debug")]
     let mut debug_index = 0;
 
@@ -362,7 +266,6 @@ fn get_command_buffer(
     let mut encoder = dev
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    //{   
     let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
         label: None,
         timestamp_writes: None,
@@ -377,7 +280,6 @@ fn get_command_buffer(
                     let qz = q.z;
                     let meta = q.meta - current_meta as u32;
 
-                    //let (pipline, bindgroup, qx, qy, qz, qindirect_buffer, meta) = data;
                     #[cfg(feature = "wgpu_debug")]
                     cpass.write_timestamp(&query_set, debug_index);
                     let span1 = span!(Level::INFO, "Set Pipeline");
@@ -406,10 +308,8 @@ fn get_command_buffer(
                     #[cfg(feature = "wgpu_debug")]
                     {
                         cpass.write_timestamp(&query_set, debug_index + 1);
-                        dev.debug.insert_info(
-                            global_index + debug_index * 8,
-                            (
-                                q.debug.name.to_owned(),
+                        dev.debug.insert_info(global_index + debug_index * 8,(
+                                format!("Pipeline: {:?}, {}", q.pipeline.0, q.debug.to_owned().map_or("".to_string(), |s| s)),
                                 q.workload_size as u64,
                                 q.x,
                                 q.y,
@@ -422,7 +322,6 @@ fn get_command_buffer(
             }
         }
     }
-//}
 
     let span2 = span!(Level::INFO, "Drop Cpass");
     let _enter2 = span2.enter();
@@ -443,7 +342,6 @@ fn get_command_buffer(
         &query_set,
     );
 
-    //dev.device.poll(wgpu::Maintain::wait()).panic_on_timeout(); //wait for last submission
     let span1 = span!(Level::INFO, "Encoder Finish");
     let _enter1 = span1.enter();
     let result = encoder.finish();
@@ -601,46 +499,106 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                 else{
                     total_workload += q.workload_size as u64;
                 }
-                #[cfg(feature="wgpu_debug")]
-                if q.workload_size as u64 > super::device::MAX_WORKLOAD_SIZE{
-                    log::info!("OP: {} workload_size: {}", q.debug.name, q.workload_size);
-                }
-
+                
                 let span1 = span!(Level::INFO, "SetBuffers_Analyse UnaryBuffer ");
                 let _enter1 = span1.enter();
                 let mut optimize_unary_inplace = false;
+                let mut optimize_binary_inplace = false;
+                let mut vdest_ref = None;
                 let mut v1_ref = None;
-                let mut v2_ref = None;
-                if q.pipeline.1 == Pipelines::UnaryFromBufferContiguousNoStartOffset {
-                    if let DispatchedBindgroup::BindgroupReference(
-                        bindgroup_reference,
-                    ) = &q.bindgroup
-                    {
-                        if let BindGroupReferenceBase::Bindgroup1(v1, v2) =
-                            bindgroup_reference
+                if let Pipelines::Unary(dtype, candle_wgpu_kernels::unary::Functions::UnaryFromBufferContiguous) = &q.pipeline.0{
+                    if q.pipeline.2.input1_inplaceable{
+                        if let DispatchedBindgroup::BindgroupReference(
+                            bindgroup_reference,
+                        ) = &q.bindgroup
                         {
-                            if Arc::strong_count(&v2) == 1 {
-                                //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
-                                if v1.size <= v2.size {
-                                    if v1.storage.lock().unwrap().is_none() {
-                                        //startoffset = 0?
-                                        q.pipeline.1 =
-                                            Pipelines::UnaryInplaceContiguous;
-                                        v1_ref = Some(v1.clone());
-                                        v2_ref = Some(v2.clone());
-                                        q.bindgroup =
-                                            DispatchedBindgroup::BindgroupReference(
-                                                BindGroupReferenceBase::Bindgroup0(
-                                                    v2.clone(),
-                                                ),
-                                            );
-                                        optimize_unary_inplace = true;
+                            if let BindGroupReferenceBase::Bindgroup1(vdest, v1) =
+                                bindgroup_reference
+                            {
+                                if Arc::strong_count(&v1) == 1 {
+                                    //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
+                                    if vdest.size <= v1.size {
+                                        if vdest.storage.lock().unwrap().is_none() {
+                                            //startoffset = 0?
+                                            q.pipeline.0 = Pipelines::Unary(dtype.clone(), candle_wgpu_kernels::unary::Functions::UnaryInplaceContiguous);
+                                            vdest_ref = Some(vdest.clone());
+                                            v1_ref = Some(v1.clone());
+                                            q.bindgroup =
+                                                DispatchedBindgroup::BindgroupReference(
+                                                    BindGroupReferenceBase::Bindgroup0(
+                                                        v1.clone(),
+                                                    ),
+                                                );
+                                            optimize_unary_inplace = true;
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+                else if let Pipelines::Binary(dtype, candle_wgpu_kernels::binary::Functions::BinaryBufferFromBufferContiguousBoth) = &q.pipeline.0{
+                    if q.pipeline.2.input1_inplaceable{
+                        if let DispatchedBindgroup::BindgroupReference(
+                            bindgroup_reference,
+                        ) = &q.bindgroup
+                        {
+                            if let BindGroupReferenceBase::Bindgroup2(vdest, v1, v2) =
+                                bindgroup_reference
+                            {
+                                if Arc::strong_count(&v1) == 1 {
+                                    //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
+                                    if vdest.size <= v1.size {
+                                        if vdest.storage.lock().unwrap().is_none() {
+                                            q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace1ContiguousBoth);
+                                            vdest_ref = Some(vdest.clone());
+                                            v1_ref = Some(v1.clone());
+                                            q.bindgroup =
+                                                DispatchedBindgroup::BindgroupReference(
+                                                    BindGroupReferenceBase::Bindgroup1(
+                                                        v1.clone(),
+                                                        v2.clone(),
+                                                    ),
+                                                );
+                                            optimize_binary_inplace = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else if q.pipeline.2.input2_inplaceable{
+                        if let DispatchedBindgroup::BindgroupReference(
+                            bindgroup_reference,
+                        ) = &q.bindgroup
+                        {
+                            if let BindGroupReferenceBase::Bindgroup2(vdest, v1, v2) =
+                                bindgroup_reference
+                            {
+                                if Arc::strong_count(&v2) == 1 {
+                                    //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
+                                    if vdest.size <= v2.size {
+                                        if vdest.storage.lock().unwrap().is_none() {
+                                            q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace2ContiguousBoth);
+                                            vdest_ref = Some(vdest.clone());
+                                            v1_ref = Some(v2.clone());
+                                            q.bindgroup =
+                                                DispatchedBindgroup::BindgroupReference(
+                                                    BindGroupReferenceBase::Bindgroup1(
+                                                        v1.clone(),
+                                                        v2.clone(),
+                                                    ),
+                                                );
+                                            optimize_binary_inplace = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                
                 drop(_enter1);
 
                 let pl: &wgpu::PipelineLayout = match &q.bindgroup {
@@ -685,15 +643,15 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                     q.bindgroup = DispatchedBindgroup::CachedBindgroup(bindgroup); //this may drop a bufferReference. The BufferReference needs to access cache, therefore cache was droped
                     wgpu_data.push(pipeline);
 
-                    if optimize_unary_inplace {
+                    if optimize_unary_inplace || optimize_binary_inplace{
                         dev.cached_buffer_inplace_counter
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if let Some(v1_ref) = v1_ref {
-                            if let Some(v2_ref) = v2_ref {
+                        if let Some(vdest_ref) = vdest_ref {
+                            if let Some(v1_ref) = v1_ref {
+                                let mut vdest_storage = vdest_ref.storage.lock().unwrap();
                                 let mut v1_storage = v1_ref.storage.lock().unwrap();
-                                let mut v2_storage = v2_ref.storage.lock().unwrap();
-                                *v1_storage = v2_storage.as_ref().cloned();
-                                *v2_storage = None;
+                                *vdest_storage = v1_storage.as_ref().cloned();
+                                *v1_storage = None;
                             }
                         }
                     }
@@ -833,10 +791,28 @@ fn enqueue(
     pipeline: PipelineType,
     bind_group: BindGroupReference,
     length: u32,
-    workload_size : usize,
-    #[cfg(feature = "wgpu_debug")] _debug: super::device::QueueDebugInfo,
+    workload_size : usize
 ) {
-    return enqueue_workgroups(
+    return enqueue_extra(
+        command_queue,
+        pipeline,
+        bind_group,
+        length,
+        workload_size,
+        #[cfg(feature = "wgpu_debug")]
+        None,
+    );
+}
+
+fn enqueue_extra(
+    command_queue: MutexGuard<QueueBuffer>,
+    pipeline: PipelineType,
+    bind_group: BindGroupReference,
+    length: u32,
+    workload_size : usize,
+    #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
+) {
+    return enqueue_workgroups_extra(
         command_queue,
         pipeline,
         bind_group,
@@ -853,15 +829,31 @@ fn enqueue_big(
     command_queue: MutexGuard<QueueBuffer>,
     pipeline: PipelineType,
     bind_group: BindGroupReference,
+    length: u32
+) {
+    return enqueue_big_extra(
+        command_queue,
+        pipeline,
+        bind_group,
+        length,
+        #[cfg(feature = "wgpu_debug")]
+        None,
+    );
+}
+
+fn enqueue_big_extra(
+    command_queue: MutexGuard<QueueBuffer>,
+    pipeline: PipelineType,
+    bind_group: BindGroupReference,
     length: u32,
-    #[cfg(feature = "wgpu_debug")] _debug: super::device::QueueDebugInfo,
+    #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
 ) {
 
     let id = (length + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
     let x = id.min(65535);
     let y = (id + 65534) / 65535;
 
-    return enqueue_workgroups(
+    return enqueue_workgroups_extra(
         command_queue,
         pipeline,
         bind_group,

@@ -12,11 +12,13 @@ members = [
     "tensor-tools",
     "candle-wasm-examples/llama2-c/xtask",
     "candle-wasm-examples/t5/xtask5",
-    "candle-wasm-examples/wuerstchen/xtask6"
+    "candle-wasm-examples/wuerstchen/xtask6",
+    "candle-wgpu-kernels",
 ]
 exclude = [
    "candle-flash-attn",
    "candle-kernels",
+   
    "candle-metal-kernels",
    "candle-onnx",
 ]
@@ -41,6 +43,7 @@ candle-datasets = { path = "./candle-datasets", version = "0.5.1" }
 candle-flash-attn = { path = "./candle-flash-attn", version = "0.5.1" }
 candle-kernels = { path = "./candle-kernels", version = "0.5.1" }
 candle-metal-kernels = { path = "./candle-metal-kernels", version = "0.5.1" }
+candle-wgpu-kernels = { path = "./candle-wgpu-kernels", version = "0.5.1" }
 candle-nn = { path = "./candle-nn", version = "0.5.1" }
 candle-onnx = { path = "./candle-onnx", version = "0.5.1" }
 candle-transformers = { path = "./candle-transformers", version = "0.5.1" }
