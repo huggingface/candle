@@ -257,7 +257,7 @@ impl EVA2VisionTransformer {
         let blocks = (0..depth)
             .map(|i| {
                 Block::new(
-                    vb_b.pp(&i.to_string()),
+                    vb_b.pp(i.to_string()),
                     embed_dim,
                     num_heads,
                     &rot_pos_embed,
