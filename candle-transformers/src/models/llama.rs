@@ -1,7 +1,6 @@
 use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
-use either::Either;
 use std::{collections::HashMap, f32::consts::PI};
 
 pub const MAX_SEQ_LEN: usize = 4096;
@@ -24,7 +23,11 @@ pub struct Llama3RopeConfig {
     pub rope_type: Llama3RopeType,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct LlamaEosToks(#[serde(with = "either::serde_untagged")] pub Either<u32, Vec<u32>>);
+#[serde(untagged)]
+pub enum LlamaEosToks {
+    Single(u32),
+    Multiple(Vec<u32>),
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct LlamaConfig {

@@ -18,7 +18,6 @@ use clap::{Parser, ValueEnum};
 use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use either::Either;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use std::io::Write;
 
@@ -171,7 +170,7 @@ fn main() -> Result<()> {
     let eos_token_id = config.eos_token_id.or_else(|| {
         tokenizer
             .token_to_id(EOS_TOKEN)
-            .map(|x| model::LlamaEosToks(Either::Left(x)))
+            .map(|x| model::LlamaEosToks::Single(x))
     });
     let prompt = args.prompt.as_ref().map_or(DEFAULT_PROMPT, |p| p.as_str());
     let mut tokens = tokenizer
@@ -231,17 +230,13 @@ fn main() -> Result<()> {
         tokens.push(next_token);
 
         match eos_token_id {
-            Some(model::LlamaEosToks(Either::Left(eos_tok_id))) => {
-                if next_token == eos_tok_id {
-                    break;
-                }
+            Some(model::LlamaEosToks::Single(eos_tok_id)) if next_token == eos_tok_id => {
+                break;
             }
-            Some(model::LlamaEosToks(Either::Right(ref eos_ids))) => {
-                if eos_ids.contains(&next_token) {
-                    break;
-                }
+            Some(model::LlamaEosToks::Multiple(ref eos_ids)) if eos_ids.contains(&next_token) => {
+                break;
             }
-            None => (),
+            _ => (),
         }
         if let Some(t) = tokenizer.next_token(next_token)? {
             print!("{t}");

@@ -36,7 +36,6 @@ serde_json = { workspace = true }
 symphonia = { version = "0.5.3", features = ["all"], optional = true }
 tokenizers = { workspace = true, features = ["onig"] }
 cpal = { version = "0.15.2", optional = true }
-either = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

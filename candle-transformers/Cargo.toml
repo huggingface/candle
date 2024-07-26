@@ -15,7 +15,6 @@ byteorder = { workspace = true }
 candle = { workspace = true }
 candle-flash-attn = { workspace = true, optional = true }
 candle-nn = { workspace = true }
-either = { workspace = true }
 fancy-regex = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
 num-traits = { workspace = true }
