@@ -590,9 +590,9 @@ impl Tensor {
     ///
     /// * `args` - A slice of 1D tensors.
     /// * `xy_indexing` - Whether to use xy indexing or ij indexing. If xy is selected, the
-    /// first dimension corresponds to the cardinality of the second input and the second
-    /// dimension corresponds to the cardinality of the first input. If ij is selected, the
-    /// dimensions are in the same order as the cardinality of the inputs.
+    ///   first dimension corresponds to the cardinality of the second input and the second
+    ///   dimension corresponds to the cardinality of the first input. If ij is selected, the
+    ///   dimensions are in the same order as the cardinality of the inputs.
     ///
     /// # Examples
     ///
