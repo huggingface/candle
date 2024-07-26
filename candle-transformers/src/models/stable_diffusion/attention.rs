@@ -358,7 +358,7 @@ impl SpatialTransformer {
         let vs_tb = vs.pp("transformer_blocks");
         for index in 0..config.depth {
             let tb = BasicTransformerBlock::new(
-                vs_tb.pp(&index.to_string()),
+                vs_tb.pp(index.to_string()),
                 inner_dim,
                 n_heads,
                 d_head,
