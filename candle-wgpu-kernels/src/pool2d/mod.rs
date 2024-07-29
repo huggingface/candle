@@ -1,10 +1,10 @@
 /// *********** This File Is Genereted! **********///
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Functions{MaxPool2d,AvgPool2d}
+pub enum Functions{AvgPool2d,MaxPool2d}
 impl crate::EntryPoint for Functions{
     fn get_entry_point(&self) -> &'static str{
         match self{
-            Functions::MaxPool2d => "gx",Functions::AvgPool2d => "gab"
+            Functions::AvgPool2d => "gb",Functions::MaxPool2d => "ga"
         }
     } 
 }

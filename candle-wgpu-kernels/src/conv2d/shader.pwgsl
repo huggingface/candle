@@ -26,171 +26,28 @@ var<storage> v_input2: array<DTYPE>;
 const ZERO : DTYPE = 0;
 const ONE : DTYPE = 1;
 
-
-
-
-#define op_conv1d.b                 op_meta[0]
-#define op_conv1d.c_in              op_meta[1]
-#define op_conv1d.kernel_size          op_meta[2]
-#define op_conv1d.kernel_stride   op_meta[3]
-#define op_conv1d.kernel_c_stride   op_meta[4]
-#define op_conv1d.kernel_b_stride   op_meta[5]
-#define op_conv1d.kernel_offset     op_meta[6]
-#define op_conv1d.size_in         op_meta[7]
-#define op_conv1d.stride_batch_out  op_meta[8]
-#define op_conv1d.stride_c_out      op_meta[9]
-#define op_conv1d.size_out        op_meta[10]
-
-#define op_conv1d.stride_batch_input op_meta[11]
-#define op_conv1d.stride_c_in       op_meta[12]
-#define op_conv1d.stride_in       op_meta[13]
-#define op_conv1d.padding           op_meta[14]
-#define op_conv1d.stride_conv       op_meta[15]
-#define op_conv1d.dialation_conv    op_meta[16]
-#define op_conv1d.offset_input      op_meta[17]
-
-
-//(N, C_IN, L) CONV (C_IN, K_size) = (N,C_OUT, L_OUT)
-@compute
-@workgroup_size(64,1,1)
-fn conv1d(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let i_out = global_id.x;
-    let i_c_out = global_id.y;
-
-    let size_out = op_conv1d.size_out;
-
-    if i_out >= size_out {
-        return;
-    }
-
-    let kernel_size = op_conv1d.kernel_size;
-    let kernel_c_stride = op_conv1d.kernel_c_stride;
-    let kernel_b_stride = op_conv1d.kernel_b_stride;
-    let kernel_stride = op_conv1d.kernel_stride;
-
-    let kernel_offset = op_conv1d.kernel_offset;
-
-    let size_in = i32(op_conv1d.size_in);
-    let stride_batch_out =  op_conv1d.stride_batch_out;
-    let stride_c_out =  op_conv1d.stride_c_out;
-    
-    let stride_batch_input = op_conv1d.stride_batch_input;
-    let stride_c_in =  op_conv1d.stride_c_in;
-    let stride_in  = op_conv1d.stride_in;
-
-    let padding =  op_conv1d.padding;
-    let stride_conv = op_conv1d.stride_conv;
-    let dialation_conv = op_conv1d.dialation_conv;
-
-    let coord_offset = i32(i_out * stride_conv) - i32(padding);
-  
-
-    for (var i_b = 0u; i_b < op_conv1d.b; i_b = i_b + 1u) { //For each Batch:
-        var sum = ZERO;
-        for (var i_c_in = 0u; i_c_in < op_conv1d.c_in; i_c_in = i_c_in + 1u) { //For each Input Channel:
-            let image_offset = i_b * stride_batch_input + i_c_in * stride_c_in ;
-            for (var k_i = 0u; k_i < kernel_size; k_i = k_i + 1u) { //For each Kernel X
-                let coord = coord_offset + i32(dialation_conv * k_i);
-                if !(coord < 0  || coord >= size_in){
-                    let input_pixel = v_input1[image_offset  + u32(coord) * stride_in + op_conv1d.offset_input];
-                    sum += v_input2[i_c_out * kernel_b_stride + i_c_in * kernel_c_stride + k_i * kernel_stride + kernel_offset] * input_pixel;
-                }
-            }
-        }
-        v_dest[i_b * stride_batch_out + i_c_out * stride_c_out + i_out] = sum;
-    }
-}
-
-
-
-//(N, C_IN, H, W) CONV (C_IN, K_H, K_W) = (N,C_OUT, H_OUT, W_OUT)
-//CONV: Padding x, Padding y, Stride x, stride y, dilation
-@compute
-@workgroup_size(64,1,1)
-fn conv1d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let i_out = global_id.x;
-    let i_c_out = global_id.y;
-
-    let size_out = op_conv1d.size_out;
-
-    if i_out >= size_out {
-        return;
-    }
-
-
-
-    let kernel_size = op_conv1d.kernel_size;
-    let kernel_c_stride = op_conv1d.kernel_c_stride;
-    let kernel_b_stride = op_conv1d.kernel_b_stride;
-    let kernel_stride = op_conv1d.kernel_stride;
-    let kernel_offset = op_conv1d.kernel_offset;
-    let stride_batch_out =  op_conv1d.stride_batch_out;
-    let stride_c_out =  op_conv1d.stride_c_out;
-
-    let stride_batch_input = op_conv1d.stride_batch_input;
-    let stride_c_in =  op_conv1d.stride_c_in;
-    let stride_in =  op_conv1d.stride_in;
-
-    let stride_conv = op_conv1d.stride_conv;
-    let dialation_conv = op_conv1d.dialation_conv;
-
-    let padding = (kernel_size - 1) * (dialation_conv)  - op_conv1d.padding;
-
-    let input_dialation = stride_conv;
-    let size_in = op_conv1d.size_in;
-
-    //Calculate the top Left Index of the x coord  
-    let coord_offset = i32(i_out) - i32(padding);
-  
-    for (var i_b = 0u; i_b < op_conv1d.b; i_b = i_b + 1u) { //For each Batch:
-        var sum = ZERO;
-        for (var i_c_in = 0u; i_c_in < op_conv1d.c_in; i_c_in = i_c_in + 1u) { //For each Input Channel:
-            let image_offset = i_b * stride_batch_input + i_c_in * stride_c_in ;
-            for (var k_i = 0u; k_i < kernel_size; k_i = k_i + 1u) { //For each Kernel X
-                let coord2 = coord_offset + i32(dialation_conv * k_i);
-                if (coord2 < 0){
-                    continue;
-                }
-
-                if (u32(coord2) % input_dialation) != 0{
-                    continue;
-                }
-
-                let coord = u32(coord2) / input_dialation;
-
-                if !(coord >= size_in){
-                    
-                    let input_pixel = v_input1[image_offset + coord * stride_in + op_conv1d.offset_input];
-                    sum += v_input2[i_c_out * kernel_b_stride + i_c_in * kernel_c_stride + (kernel_size - k_i - 1) * kernel_stride + kernel_offset] * input_pixel;
-                }
-            }
-        }
-        v_dest[i_b * stride_batch_out + i_c_out * stride_c_out +  global_id.x] = sum;
-    }
-}
-
-
-override CONSTV_0 : u32 = 1u;
-//override CONSTV_1 : u32 = 1u;
-//override CONSTV_2 : u32 = 1u;
-//override CONSTV_3 : u32 = 1u;
-//override CONSTV_4 : u32 = 1u;
-//override CONSTV_5 : u32 = 1u;
-//override CONSTV_6 : u32 = 1u;
-//override CONSTV_7 : u32 = 1u;
-//override CONSTV_8 : u32 = 1u;
-//override CONSTV_9 : u32 = 1u;
+override CONSTV_0:u32 = 1u;
+override CONSTV_1:u32 = 1u;
+override CONSTV_2:i32 = 1; //padding
+override CONSTV_3:u32 = 1u;
+override CONSTV_4:u32 = 1u;
+override CONSTV_5:u32 = 1u;
+override CONSTV_6:u32 = 1u;
+override CONSTV_7:u32 = 1u;
+override CONSTV_8:u32 = 1u;
+override CONSTV_9:u32 = 1u;
 
 //#define CONSTV_0 1u
-#define CONSTV_1 1u
-#define CONSTV_2 1u
-#define CONSTV_3 1u
-#define CONSTV_4 1u
-#define CONSTV_5 1u
-#define CONSTV_6 1u
-#define CONSTV_7 1u
-#define CONSTV_8 1u
-#define CONSTV_9 1u
+//#define CONSTV_1 1u
+//#define CONSTV_2 1u
+// #define CONSTV_3 1u
+// #define CONSTV_4 1u
+// #define CONSTV_5 0u
+// #define CONSTV_6 3u
+//#define CONSTV_7 1u
+//#define CONSTV_8 1u
+//#define CONSTV_9 1u
+
 
 #define op_conv2d.kernel_x_stride   CONSTV_0
 //#define op_conv2d.kernel_y_stride   CONSTV_1
@@ -284,6 +141,21 @@ fn conv2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let image_offset_c = image_offset_batch + i_c_in * stride_c_in;
             let kernel_offset_c = kernel_offset_batch + i_c_in * kernel_c_stride;
             
+            // for (var x_k = 0u; x_k < kernel_size_x; x_k = x_k + 1u) { //For each Kernel X
+            //     let x_coord = x_coord_offset + i32(dialation_conv * x_k);
+            //     if(x_coord >= 0 && x_coord < size_in_x){
+            //         let image_offset_x = image_offset_c + u32(x_coord) * stride_x_in;
+            //         let kernel_offset_x = kernel_offset_c + x_k * kernel_x_stride;
+            //         for (var y_k = 0u; y_k < kernel_size_y; y_k = y_k + 1u) { //For each Kernel X
+            //             let y_coord = y_coord_offset + i32(dialation_conv * y_k);
+            //             if (y_coord >= 0 && y_coord < size_in_y){
+            //                 let input_pixel = v_input1[image_offset_x + u32(y_coord) * stride_y_in];
+            //                 sum += v_input2[kernel_offset_x + y_k * kernel_y_stride] * input_pixel;
+            //             }
+            //         } 
+            //     }
+            // }
+
             for (var y_k = 0u; y_k < kernel_size_y; y_k = y_k + 1u) { //For each Kernel Y
                 let y_coord = y_coord_offset + i32(dialation_conv * y_k);
                 if (y_coord >= 0 && y_coord < size_in_y){
@@ -430,15 +302,15 @@ fn conv2d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let stride_conv = op_conv2d.stride_conv;
     let dialation_conv = op_conv2d.dialation_conv;
 
-    let padding_x = (kernel_size_x - 1) * (dialation_conv)  - op_conv2d.padding;
-    let padding_y = (kernel_size_y - 1) * (dialation_conv)  - op_conv2d.padding;
+    let padding_x = i32((kernel_size_x - 1) * (dialation_conv))  - op_conv2d.padding;
+    let padding_y = i32((kernel_size_y - 1) * (dialation_conv))  - op_conv2d.padding;
     let input_dialation = stride_conv;
     let size_in_x = op_conv2d.size_in_x;
     let size_in_y =  op_conv2d.size_in_y;
 
     //Calculate the top Left Index of the x/y coord  
-    let x_coord_offset = i32(i_out_x) - i32(padding_x);
-    let y_coord_offset = i32(i_out_y) - i32(padding_y);
+    let x_coord_offset = i32(i_out_x) - padding_x;
+    let y_coord_offset = i32(i_out_y) - padding_y;
   
     for (var i_b = 0u; i_b < op_conv2d.b; i_b = i_b + 1u) { //For each Batch:
         var sum = ZERO;

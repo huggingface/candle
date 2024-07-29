@@ -305,7 +305,7 @@ switch operation {
 @workgroup_size(64,1,1)
 fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x + global_id.y * 65535 * 64;
-    let pos1 = get_index(op_unary.input1_layout, id);
+    let pos1 = get_index1(op_unary.input1_layout, id);
     if(pos1.is_valid){
         let x = v_input1[pos1.id];
         set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2, op_unary.seed);

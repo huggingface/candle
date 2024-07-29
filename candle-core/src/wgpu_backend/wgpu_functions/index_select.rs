@@ -34,10 +34,10 @@ pub fn queue_index_select(
     meta.add(output_stride_x);
     meta.add(output_stride_y);
     meta.add(length);
-    meta.add_layout(&lay_input);
-    meta.add_layout(&lay_index);
+    meta.add_layout1(&lay_input);
+    meta.add_layout2(&lay_index);
 
-    let pipeline = get_pipeline(Pipelines::IndexSelect(get_dtype(dtype)?, Functions::IndexSelect));
+    let pipeline = meta.get_pipeline(Pipelines::IndexSelect(get_dtype(dtype)?, Functions::IndexSelect));
 
     let bind_group = create_bind_group_input2( buffer_dest, buffer_input, buffer_index);
     enqueue_workgroups(

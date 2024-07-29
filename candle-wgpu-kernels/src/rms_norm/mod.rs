@@ -4,7 +4,7 @@ pub enum Functions{RmsNorm}
 impl crate::EntryPoint for Functions{
     fn get_entry_point(&self) -> &'static str{
         match self{
-            Functions::RmsNorm => "gz"
+            Functions::RmsNorm => "ga"
         }
     } 
 }

@@ -26,10 +26,10 @@ pub fn queue_cmp_buffer_from_buffer(
 ) -> crate::Result<()> {
     let mut meta = get_meta(&dev);
     meta.add(op as u32);
-    meta.add_layout(&layout_input1);
-    meta.add_layout(&layout_input2);
+    meta.add_layout1(&layout_input1);
+    meta.add_layout2(&layout_input2);
 
-    let pipeline = get_pipeline(Pipelines::Cmp(get_dtype(dtype)?, Functions::CmpBufferFromBuffer));
+    let pipeline = meta.get_pipeline(Pipelines::Cmp(get_dtype(dtype)?, Functions::CmpBufferFromBuffer));
 
     let bind_group = create_bind_group_input2(
         buffer_dest,

@@ -14,10 +14,10 @@ pub fn queue_gather(
     let mut meta = get_meta(&dev);
 
     meta.add(dim);
-    meta.add_layout(&lay_input);
-    meta.add_layout(&lay_index);
+    meta.add_layout1_non_contiguous(&lay_input);
+    meta.add_layout2_non_contiguous(&lay_index);
 
-    let pipeline = get_pipeline(Pipelines::Gather(get_dtype(dtype)?, Functions::Gather));
+    let pipeline = meta.get_pipeline(Pipelines::Gather(get_dtype(dtype)?, Functions::Gather));
 
     let bind_group =
         create_bind_group_input2( buffer_dest, buffer_input, buffer_index);
@@ -51,11 +51,11 @@ pub fn queue_scatter_add_inplace(
     let selected_index_length = lay_index.shape().dims()[dim];
 
     meta.add(dim);
-    meta.add_layout(&lay_input);
-    meta.add_layout(&lay_index);
-    meta.add_layout(&lay_src);
+    meta.add_layout1_non_contiguous(&lay_input);
+    meta.add_layout2_non_contiguous(&lay_index);
+    meta.add_layout3_non_contiguous(&lay_src);
 
-    let pipeline = get_pipeline(Pipelines::Gather(get_dtype(dtype)?, Functions::ScatterAddInplace));
+    let pipeline = meta.get_pipeline(Pipelines::Gather(get_dtype(dtype)?, Functions::ScatterAddInplace));
 
     let bind_group =
         create_bind_group_input2( buffer_dest, buffer_index, buffer_src);
@@ -87,11 +87,11 @@ pub fn queue_index_add_inplace(
     let selected_index_length = lay_index.shape().elem_count();
 
     meta.add(dim);
-    meta.add_layout(&lay_input);
-    meta.add_layout(&lay_index);
-    meta.add_layout(&lay_src);
+    meta.add_layout1_non_contiguous(&lay_input);
+    meta.add_layout2_non_contiguous(&lay_index);
+    meta.add_layout3_non_contiguous(&lay_src);
 
-    let pipeline = get_pipeline(Pipelines::Gather(get_dtype(dtype)?, Functions::IndexAddInplace));
+    let pipeline = meta.get_pipeline(Pipelines::Gather(get_dtype(dtype)?, Functions::IndexAddInplace));
 
     let bind_group =
         create_bind_group_input2( buffer_dest, buffer_index, buffer_src);

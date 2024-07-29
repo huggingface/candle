@@ -41,7 +41,7 @@ pub fn queue_reduce_from_buffer_op(
     meta.add(output_to_start_stride2);
     meta.add(stride_reduction);
     meta.add(dest_size);
-    meta.add_layout(layout_input1);
+    meta.add_layout1(layout_input1);
 
     let pipeline_type = match op {
         ReduceOperations::Sum => Functions::Reduce,
@@ -50,7 +50,7 @@ pub fn queue_reduce_from_buffer_op(
         ReduceOperations::ArgMin => Functions::ReduceIndex,
         ReduceOperations::ArgMax => Functions::ReduceIndex
     };
-    let pipeline = get_pipeline(Pipelines::Reduce(get_dtype(dtype)?, pipeline_type));
+    let pipeline = meta.get_pipeline(Pipelines::Reduce(get_dtype(dtype)?, pipeline_type));
 
     let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
     

@@ -83,7 +83,7 @@ pub fn queue_unary_inplace_op(
         meta.add(layout.start_offset());       //offset, do not change, will be checked at flush_gpu_command
         meta.add(layout.shape().elem_count()); //length 
 
-        let pipeline = get_pipeline(Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryInplaceContiguous));
+        let pipeline = meta.get_pipeline(Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryInplaceContiguous));
 
         let bind_group = create_bind_group_input0( buffer);
         enqueue_big_extra(
@@ -121,15 +121,15 @@ pub fn queue_unary_from_buffer_op(
         meta.add(input_layout.shape().elem_count()); //length 
 
         let inplaceable = OpIsInplaceable{ input1_inplaceable : input_layout.start_offset() == 0, input2_inplaceable : false};
-        get_pipeline_inplaceable(Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryFromBufferContiguous), inplaceable)
+        meta.get_pipeline_inplaceable(Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryFromBufferContiguous), inplaceable)
     } else {
         meta.add(op as u32);
         meta.add(scalar1);
         meta.add(scalar2);
         meta.add(dev.rand_state.lock().unwrap().next_u32());
-        meta.add_layout(&input_layout);
+        meta.add_layout1(&input_layout);
 
-        get_pipeline(Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryFromBuffer))
+        meta.get_pipeline(Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryFromBuffer))
     };
 
     let bind_group = create_bind_group_input1( buffer_dest, buffer_input);

@@ -49,40 +49,160 @@ struct MatrixIndex{
     is_valid : bool
 }
 
-fn get_index(input_offset : u32, index : u32) -> MatrixIndex{
-    let dims = op_meta[input_offset];
-    let start_offset = op_meta[input_offset + 1];
-    let length = op_meta[input_offset + 2]; 
+// fn get_index(input_offset : u32, index : u32) -> MatrixIndex{
+//     let dims = op_meta[input_offset];
+//     let start_offset = op_meta[input_offset + 1];
+//     let length = op_meta[input_offset + 2]; 
+//     if(length > 0){
+//         if index < length{
+//             return MatrixIndex((start_offset + index), true);
+//         }
+//         return MatrixIndex(0, false);
+//     }
 
-    //contigues:
-    if(length > 0){
+//     let start_shape_offset = input_offset + 3;
+
+//     var shapes_i = 1u;
+//     var new_index = start_offset;    
+//     for (var i2 : i32 = i32(dims) - 1; i2 >= 0; i2--){
+//         let i = u32(i2);
+//         let prev_shapes_i = shapes_i;
+//         shapes_i *= op_meta[start_shape_offset + i]; 
+
+//         let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);  
+//         new_index += si * op_meta[start_shape_offset + dims + i]; //s_i * stride_i
+//     }
+
+//     if index >= shapes_i{ //in shapes_i is the length after the for loop
+//         return MatrixIndex(0, false);
+//     }
+
+//     return MatrixIndex(new_index, true);
+// }
+
+// fn get_index2(input_offset : u32, index : u32, dims : u32) -> MatrixIndex{
+//     let start_offset = op_meta[input_offset + 0];
+//     let length = op_meta[input_offset + 1]; 
+//     if(length > 0){
+//         if index < length{
+//             return MatrixIndex((start_offset + index), true);
+//         }
+//         return MatrixIndex(0, false);
+//     }
+
+//     let start_shape_offset = input_offset + 2;
+
+//     var shapes_i = 1u;
+//     var new_index = start_offset;    
+//     for (var i2 : i32 = i32(dims) - 1; i2 >= 0; i2--){
+//         let i = u32(i2);
+//         let prev_shapes_i = shapes_i;
+//         shapes_i *= op_meta[start_shape_offset + i]; 
+
+//         let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);  
+//         new_index += si * op_meta[start_shape_offset + dims + i]; //s_i * stride_i
+//     }
+
+//     if index >= shapes_i{ //in shapes_i is the length after the for loop
+//         return MatrixIndex(0, false);
+//     }
+
+//     return MatrixIndex(new_index, true);
+// }
+
+fn select(d : bool, value : u32, other : u32) -> u32{
+    if d{
+        return value;
+    }
+    else{
+        return other;
+    }
+}
+
+override CONST_DIMS1 : u32 = 1u;
+override CONST_IS_CONTIGUOUS1 : bool = true;
+override CONST_IS_STARTOFFSET_ZERO1 : bool = true;
+
+override CONST_DIMS2 : u32 = 1u;
+override CONST_IS_CONTIGUOUS2 : bool = true;
+override CONST_IS_STARTOFFSET_ZERO2 : bool = true;
+
+override CONST_DIMS3 : u32 = 1u;
+override CONST_IS_CONTIGUOUS3 : bool = true;
+override CONST_IS_STARTOFFSET_ZERO3 : bool = true;
+
+fn get_index(input_offset : u32, index : u32, dims : u32, is_contiguous : bool, is_const_start_offset_zero : bool) -> MatrixIndex{
+    let start_offset = select(is_const_start_offset_zero, 0u, op_meta[input_offset]);
+    let start_shape_offset = input_offset + select(is_const_start_offset_zero, 0u, 1u);
+
+    if is_contiguous {
+        let length = op_meta[start_shape_offset];
+       
         if index < length{
             return MatrixIndex((start_offset + index), true);
         }
         return MatrixIndex(0, false);
     }
+    else{
+        var shapes_i = 1u;
+        var new_index = start_offset;    
+        for (var i2 : i32 = i32(dims) - 1; i2 >= 0; i2--){
+            let i = u32(i2);
+            let prev_shapes_i = shapes_i;
+            shapes_i *= op_meta[start_shape_offset + i]; 
 
-    let start_shape_offset = input_offset + 3;
+            let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);  
+            new_index += si * op_meta[start_shape_offset + dims + i]; //s_i * stride_i
+        }
 
-    var shapes_i = 1u;
-    var new_index = start_offset;    
-    for (var i2 : i32 = i32(dims) - 1; i2 >= 0; i2--){
-        let i = u32(i2);
-        let prev_shapes_i = shapes_i;
-        shapes_i *= op_meta[start_shape_offset + i]; 
+        if index >= shapes_i{ //in shapes_i is the length after the for loop
+            return MatrixIndex(0, false);
+        }
 
-        let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);  
-        new_index += si * op_meta[start_shape_offset + dims + i]; //s_i * stride_i
+        return MatrixIndex(new_index, true);
     }
-
-    if index >= shapes_i{ //in shapes_i is the length after the for loop
-        return MatrixIndex(0, false);
-    }
-
-    return MatrixIndex(new_index, true);
 }
 
-fn get_size(input_offset : u32) -> u32{
-    let dims = op_meta[input_offset];
-    return dims * 2 + 3;
+fn get_index1(input_offset : u32, index : u32) -> MatrixIndex{
+    return get_index(input_offset, index, CONST_DIMS1, CONST_IS_CONTIGUOUS1, CONST_IS_STARTOFFSET_ZERO1);
 }
+
+fn get_index2(input_offset : u32, index : u32) -> MatrixIndex{
+    return get_index(input_offset, index, CONST_DIMS2, CONST_IS_CONTIGUOUS2, CONST_IS_STARTOFFSET_ZERO2);
+}
+
+fn get_index3(input_offset : u32, index : u32) -> MatrixIndex{
+    return get_index(input_offset, index, CONST_DIMS3, CONST_IS_CONTIGUOUS3, CONST_IS_STARTOFFSET_ZERO3);
+}
+
+fn get_size(dims : u32, is_contiguous : bool, is_const_start_offset_zero : bool) -> u32{
+    let start_shape_size = select(is_const_start_offset_zero, 0u, 1u);
+    if is_contiguous{ 
+        return start_shape_size + 1u;
+    }
+    else {
+        return start_shape_size + dims * 2;
+    }
+}
+
+fn get_size1() -> u32{
+    return get_size(CONST_DIMS1, CONST_IS_CONTIGUOUS1, CONST_IS_STARTOFFSET_ZERO1);
+}
+
+fn get_size2() -> u32{
+    return get_size(CONST_DIMS2, CONST_IS_CONTIGUOUS2, CONST_IS_STARTOFFSET_ZERO2);
+}
+
+fn get_size3() -> u32{
+    return get_size(CONST_DIMS3, CONST_IS_CONTIGUOUS3, CONST_IS_STARTOFFSET_ZERO3);
+}
+
+
+// fn get_size(input_offset : u32) -> u32{
+//     let dims = op_meta[input_offset];
+//     return dims * 2 + 3;
+// }
+
+// fn get_size2(dims : u32) -> u32{
+//     return dims * 2 + 2;
+// }

@@ -4,7 +4,7 @@ pub enum Functions{IndexSelect}
 impl crate::EntryPoint for Functions{
     fn get_entry_point(&self) -> &'static str{
         match self{
-            Functions::IndexSelect => "gy"
+            Functions::IndexSelect => "ga"
         }
     } 
 }

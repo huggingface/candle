@@ -14,11 +14,11 @@ pub fn queue_where_cond_u32(
     dtype: crate::DType,
 ) -> crate::Result<()> {
     let mut meta = get_meta(&dev);
-    meta.add_layout(&layout_input);
-    meta.add_layout(&layout_true);
-    meta.add_layout(&layout_false);
+    meta.add_layout1(&layout_input);
+    meta.add_layout2(&layout_true);
+    meta.add_layout3(&layout_false);
 
-    let pipeline = get_pipeline(Pipelines::WhereCond(get_dtype(dtype)?, Functions::WhereCondIndexU32));
+    let pipeline = meta.get_pipeline(Pipelines::WhereCond(get_dtype(dtype)?, Functions::WhereCondIndexU32));
 
     let bind_group = create_bind_group_input3(dest_buffer, input_buffer, true_buffer, false_buffer);
     enqueue(

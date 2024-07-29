@@ -56,15 +56,31 @@ override CONSTV_2 : u32 = 1u;
 fn binary_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x + global_id.y * 65535 * 64;
 
-    let input2_layout = op_binary.input1_layout + get_size(op_binary.input1_layout);
+    let input2_layout = op_binary.input1_layout + get_size1();
 
-    let pos1 = get_index(op_binary.input1_layout, id);
-    let pos2 = get_index(input2_layout, id);
+    let pos1 = get_index1(op_binary.input1_layout, id);
+    let pos2 = get_index2(input2_layout, id);
     
     if(pos1.is_valid){
         set_binary(op_binary.operation, id, v_input1[pos1.id], v_input2[pos2.id]);
     }
 }
+
+@compute
+@workgroup_size(16,16,1)
+fn binary_buffer_from_buffer3d(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x + global_id.y * 65535 * 64;
+
+    let input2_layout = op_binary.input1_layout + get_size1();
+
+    let pos1 = get_index1(op_binary.input1_layout, id);
+    let pos2 = get_index2(input2_layout, id);
+    
+    if(pos1.is_valid){
+        set_binary(op_binary.operation, id, v_input1[pos1.id], v_input2[pos2.id]);
+    }
+}
+
 
 @compute
 @workgroup_size(64,1,1)

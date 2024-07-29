@@ -20,21 +20,11 @@ override CONSTV_3 : bool = true;
 #define op_copy.dest_offset op_meta[1]
 #define op_copy.src_offset op_meta[2]
 
-fn select(d : bool, value : u32) -> u32{
-    if d{
-        return value;
-    }
-    else{
-        return 1u;
-    }
-}
-
-
 @compute
 @workgroup_size(64,1,1)
 fn copy_strided(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x + global_id.y * 65535 * 64;
-    let pos1 = get_index(op_copy_strided.input1_layout, id);
+    let pos1 = get_index1(op_copy_strided.input1_layout, id);
     if(pos1.is_valid){
         let x = v_input1[pos1.id];
         v_dest[op_copy_strided.dest_offset + id] = x;
@@ -198,13 +188,13 @@ fn copy3d(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let dest_stride1 = select(op_copy3d.is_dest_stride1==1, op_copy3d.dest_stride1);
-    let dest_stride2 = select(op_copy3d.is_dest_stride2, op_copy3d.dest_stride2);
-    let dest_stride3 = select(op_copy3d.is_dest_stride3, op_copy3d.dest_stride3);
+    let dest_stride1 = select(op_copy3d.is_dest_stride1==1, op_copy3d.dest_stride1, 1u);
+    let dest_stride2 = select(op_copy3d.is_dest_stride2, op_copy3d.dest_stride2, 1u);
+    let dest_stride3 = select(op_copy3d.is_dest_stride3, op_copy3d.dest_stride3, 1u);
 
-    let input_stride1 = select(op_copy3d.is_input_stride1, op_copy3d.input_stride1);
-    let input_stride2 = select(op_copy3d.is_input_stride2, op_copy3d.input_stride2);
-    let input_stride3 = select(op_copy3d.is_input_stride3, op_copy3d.input_stride3);
+    let input_stride1 = select(op_copy3d.is_input_stride1, op_copy3d.input_stride1, 1u);
+    let input_stride2 = select(op_copy3d.is_input_stride2, op_copy3d.input_stride2, 1u);
+    let input_stride3 = select(op_copy3d.is_input_stride3, op_copy3d.input_stride3, 1u);
 
 
     v_dest[d1 * dest_stride1 + d2 * dest_stride2 + d3 * dest_stride3] = v_input1[op_copy3d.input1_offset + d1 * input_stride1 + d2 * input_stride2 + d3 * input_stride3];
@@ -217,13 +207,13 @@ fn copy3d_padded(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let d2 = global_id.y;
     let d3 = global_id.z; //batch
 
-    let dest_stride1 = select(op_copy3d.is_dest_stride1==1, op_copy3d.dest_stride1);
-    let dest_stride2 = select(op_copy3d.is_dest_stride2, op_copy3d.dest_stride2);
-    let dest_stride3 = select(op_copy3d.is_dest_stride3, op_copy3d.dest_stride3);
+    let dest_stride1 = select(op_copy3d.is_dest_stride1==1, op_copy3d.dest_stride1, 1u);
+    let dest_stride2 = select(op_copy3d.is_dest_stride2, op_copy3d.dest_stride2, 1u);
+    let dest_stride3 = select(op_copy3d.is_dest_stride3, op_copy3d.dest_stride3, 1u);
 
-    let input_stride1 = select(op_copy3d.is_input_stride1, op_copy3d.input_stride1);
-    let input_stride2 = select(op_copy3d.is_input_stride2, op_copy3d.input_stride2);
-    let input_stride3 = select(op_copy3d.is_input_stride3, op_copy3d.input_stride3);
+    let input_stride1 = select(op_copy3d.is_input_stride1, op_copy3d.input_stride1, 1u);
+    let input_stride2 = select(op_copy3d.is_input_stride2, op_copy3d.input_stride2, 1u);
+    let input_stride3 = select(op_copy3d.is_input_stride3, op_copy3d.input_stride3, 1u);
 
     if(d1 >= op_copy3d.d1 || d2 >= op_copy3d.d2){
         v_dest[d1 * dest_stride1 + d2 * dest_stride2 + d3 * dest_stride3] = ZERO;
@@ -241,11 +231,11 @@ fn copy3d_padded_nobatch(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let d1 = global_id.x; 
     let d2 = global_id.y;
 
-    let dest_stride1 = select(op_copy3d.is_dest_stride1==1, op_copy3d.dest_stride1);
-    let dest_stride2 = select(op_copy3d.is_dest_stride2, op_copy3d.dest_stride2);
+    let dest_stride1 = select(op_copy3d.is_dest_stride1==1, op_copy3d.dest_stride1, 1u);
+    let dest_stride2 = select(op_copy3d.is_dest_stride2, op_copy3d.dest_stride2, 1u);
 
-    let input_stride1 = select(op_copy3d.is_input_stride1, op_copy3d.input_stride1);
-    let input_stride2 = select(op_copy3d.is_input_stride2, op_copy3d.input_stride2);
+    let input_stride1 = select(op_copy3d.is_input_stride1, op_copy3d.input_stride1, 1u);
+    let input_stride2 = select(op_copy3d.is_input_stride2, op_copy3d.input_stride2, 1u);
 
     if(d1 >= op_copy3d.d1 || d2 >= op_copy3d.d2){
         v_dest[d1 * dest_stride1 + d2 * dest_stride2] = ZERO;

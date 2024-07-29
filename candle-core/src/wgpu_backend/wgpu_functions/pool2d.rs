@@ -43,7 +43,7 @@ pub fn queue_max_pool2d(
     meta.add(stride.0);
     meta.add(layout.start_offset());
 
-    let pipeline = get_pipeline(Pipelines::Pool2d(get_dtype(dtype)?, Functions::MaxPool2d));
+    let pipeline = meta.get_pipeline(Pipelines::Pool2d(get_dtype(dtype)?, Functions::MaxPool2d));
 
     let bind_group = create_bind_group_input1(
         buffer_dest,
@@ -101,7 +101,7 @@ pub fn queue_avg_pool2d(
     meta.add(stride.0);
     meta.add(layout.start_offset());
 
-    let pipeline = get_pipeline(Pipelines::Pool2d(get_dtype(dtype)?, Functions::AvgPool2d));
+    let pipeline = meta.get_pipeline(Pipelines::Pool2d(get_dtype(dtype)?, Functions::AvgPool2d));
 
     let bind_group = create_bind_group_input1(
         buffer_dest,

@@ -6,26 +6,23 @@
 @group(0) @binding(3)
 var<storage> v_input2_u32: array<u32>;
 
-
 @compute
 @workgroup_size(64,1,1)
 fn gather(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
 
     let input_offset1 = op_index.input_layout1;
-    let input_offset2 = op_index.input_layout1 + get_size(op_index.input_layout1);
+    let input_offset2 = op_index.input_layout1 + get_size1();
     let dim = op_gather.dim;
 
-    let dims1 = op_meta[input_offset1];
-    let start_offset1 = op_meta[input_offset1 + 1];
-    let length1 = op_meta[input_offset1 + 2]; 
+    let dims1 = CONST_DIMS1;
+    let start_offset1 = select(CONST_IS_STARTOFFSET_ZERO1, 0u, op_meta[input_offset1]);
 
-    let dims2 = op_meta[input_offset2];
-    let start_offset2 = op_meta[input_offset2 + 1];
-    let length2 = op_meta[input_offset2 + 2]; 
+    let dims2 = CONST_DIMS2;
+    let start_offset2 = select(CONST_IS_STARTOFFSET_ZERO2, 0u, op_meta[input_offset2]);
 
-    let start_shape_offset1 = input_offset1 + 3;
-    let start_shape_offset2 = input_offset2 + 3;
+    let start_shape_offset1 = input_offset1 + select(CONST_IS_STARTOFFSET_ZERO1, 0u, 1u);
+    let start_shape_offset2 = input_offset2 + select(CONST_IS_STARTOFFSET_ZERO2, 0u, 1u);
 
     var shapes_i = 1u;
     var new_index1 = start_offset1;   
@@ -61,25 +58,23 @@ fn scatter_add_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
 
     let input_offset1 = op_index.input_layout1;                                    //self
-    let input_offset2 = op_index.input_layout1 + get_size(op_index.input_layout1); //index
-    let input_offset3 = input_offset2 + get_size(input_offset2); //src
+    let input_offset2 = op_index.input_layout1 + get_size1(); //index
+    let input_offset3 = input_offset2 + get_size2(); //src
     let dim = op_gather.dim;
 
-    let dims1 = op_meta[input_offset1];
-    let start_offset1 = op_meta[input_offset1 + 1];
-    let length1 = op_meta[input_offset1 + 2]; 
 
-    let dims2 = op_meta[input_offset2];
-    let start_offset2 = op_meta[input_offset2 + 1];
-    let length2 = op_meta[input_offset2 + 2]; 
+    let dims1 = CONST_DIMS1;
+    let start_offset1 = select(CONST_IS_STARTOFFSET_ZERO1, 0u, op_meta[input_offset1]);
 
-    let dims3 = op_meta[input_offset3];
-    let start_offset3 = op_meta[input_offset3 + 1];
-    let length3 = op_meta[input_offset3 + 2]; 
+    let dims2 = CONST_DIMS2;
+    let start_offset2 = select(CONST_IS_STARTOFFSET_ZERO2, 0u, op_meta[input_offset2]);
 
-    let start_shape_offset1 = input_offset1 + 3;
-    let start_shape_offset2 = input_offset2 + 3;
-    let start_shape_offset3 = input_offset3 + 3;
+    let dims3 = CONST_DIMS3;
+    let start_offset3 = select(CONST_IS_STARTOFFSET_ZERO3, 0u, op_meta[input_offset3]);
+
+    let start_shape_offset1 = input_offset1 + select(CONST_IS_STARTOFFSET_ZERO1, 0u, 1u);
+    let start_shape_offset2 = input_offset2 + select(CONST_IS_STARTOFFSET_ZERO2, 0u, 1u);
+    let start_shape_offset3 = input_offset3 + select(CONST_IS_STARTOFFSET_ZERO3, 0u, 1u);
 
    
     //var new_index_out = 0u; 
@@ -128,29 +123,24 @@ fn index_add_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
 
     let input_offset1 = op_index.input_layout1;                                    //self
-    let input_offset2 = op_index.input_layout1 + get_size(op_index.input_layout1); //index
-    let input_offset3 = input_offset2 + get_size(input_offset2); //src
+    let input_offset2 = op_index.input_layout1 + get_size1(); //index
+    let input_offset3 = input_offset2 + get_size2(); //src
     let dim = op_gather.dim;
 
-    let dims1 = op_meta[input_offset1];
-    let start_offset1 = op_meta[input_offset1 + 1];
-    let length1 = op_meta[input_offset1 + 2]; 
+    
+    let dims1 = CONST_DIMS1;
+    let start_offset1 = select(CONST_IS_STARTOFFSET_ZERO1, 0u, op_meta[input_offset1]);
 
-    let dims2 = op_meta[input_offset2];
-    let start_offset2 = op_meta[input_offset2 + 1];
-    let length2 = op_meta[input_offset2 + 2]; 
+    let dims2 = CONST_DIMS2;
+    let start_offset2 = select(CONST_IS_STARTOFFSET_ZERO2, 0u, op_meta[input_offset2]);
 
-    let dims3 = op_meta[input_offset3];
-    let start_offset3 = op_meta[input_offset3 + 1];
-    let length3 = op_meta[input_offset3 + 2]; 
+    let dims3 = CONST_DIMS3;
+    let start_offset3 = select(CONST_IS_STARTOFFSET_ZERO3, 0u, op_meta[input_offset3]);
 
-    let start_shape_offset1 = input_offset1 + 3;
-    let start_shape_offset2 = input_offset2 + 3;
-    let start_shape_offset3 = input_offset3 + 3;
-
+    let start_shape_offset1 = input_offset1 + select(CONST_IS_STARTOFFSET_ZERO1, 0u, 1u);
+    let start_shape_offset2 = input_offset2 + select(CONST_IS_STARTOFFSET_ZERO2, 0u, 1u);
+    let start_shape_offset3 = input_offset3 + select(CONST_IS_STARTOFFSET_ZERO3, 0u, 1u);
    
-    //var new_index_out = 0u; 
-
     let selected_index_length = op_meta[start_shape_offset2];
 
     for (var dim_index = 0u; dim_index < selected_index_length; dim_index++){

@@ -11,11 +11,23 @@ pub fn queue_copy_strided(
     dst_offset: u32,
 ) -> crate::Result<()> {
     if input_layout.shape().elem_count() > 0{
+        let result = input_layout.shape().dims().iter().zip(input_layout.stride()).filter(|(dim, _)| **dim > 1).map(|(dim, stride)| (*dim, *stride)).collect::<Vec<(usize,usize)>>();
+        //result.sort_by_key(|f| std::cmp::Reverse(f.0));
+        //TODO: optimize for 16x16x1 shader, 
+        //TODO: is it faster, if stride_input == stride_output?, as the index calculation in the shader has to be calculated only once.
+        let (shape, stride) : (Vec<usize>, Vec<usize>) = result.into_iter().unzip();
+        if shape.len() == 3{ //try copy 3d
+            if dst_offset == 0{
+                let layout: Layout = Layout::new(crate::Shape::from_dims(&shape), stride, input_layout.start_offset());
+                return queue_copy3d(dev, buffer_dest, buffer_input, dtype, &layout, (shape[0] as u32, shape[1] as u32, shape[2] as u32), &Layout::contiguous(shape));
+            }
+        }
+
         let mut meta = get_meta(&dev);
         meta.add(dst_offset);
-        meta.add_layout(&input_layout);
+        meta.add_layout1(&input_layout);
     
-        let pipeline = get_pipeline(Pipelines::Copy(get_dtype(dtype)?, Functions::CopyStrided));
+        let pipeline = meta.get_pipeline(Pipelines::Copy(get_dtype(dtype)?, Functions::CopyStrided));
     
         let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
         enqueue_big_extra(
@@ -88,8 +100,8 @@ pub fn queue_copy(
         meta.add(destination_offset);
         meta.add(source_offset);
         
-        //let inplaceble = OpIsInplaceable{ input1_inplaceable: , input2_inplaceable: false };
-        let pipeline = get_pipeline(Pipelines::Copy(get_dtype(dtype)?, Functions::Copy));
+        let inplaceble = OpIsInplaceable{ input1_inplaceable:  destination_offset == source_offset, input2_inplaceable: false };
+        let pipeline = meta.get_pipeline_inplaceable(Pipelines::Copy(get_dtype(dtype)?, Functions::Copy), inplaceble);
     
         let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
         enqueue_big(
@@ -118,8 +130,8 @@ pub fn queue_copy2d(
     dest_offset: u32,
 ) -> crate::Result<()> {
     if buffer_dest.size > 0 && buffer_input.size > 0{
-        if d1 == 1{
-            return queue_copy(dev, buffer_dest, buffer_input, dest_offset as usize, input_offset as usize, d2 as usize, dtype);
+        if d1 == 1 || (input_stride1 == d2 && input_stride1 == dest_stride1){
+            return queue_copy(dev, buffer_dest, buffer_input, dest_offset as usize, input_offset as usize, (d2 * d1) as usize, dtype);
         }
         let const_vec = vec![
             input_offset,
@@ -140,7 +152,7 @@ pub fn queue_copy2d(
 
 
         if y > MAX_DISPATCH_SIZE{
-            let pipeline = get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, Functions::Copy2dTranspose), const_vec);
+            let pipeline = meta.get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, Functions::Copy2dTranspose), const_vec);
             enqueue_workgroups(
                 meta,
                 pipeline,
@@ -152,7 +164,7 @@ pub fn queue_copy2d(
             );
         }
         else{
-            let pipeline = get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, Functions::Copy2d), const_vec);
+            let pipeline = meta.get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, Functions::Copy2d), const_vec);
             enqueue_workgroups(
                 meta,
                 pipeline,
@@ -211,7 +223,7 @@ pub fn queue_copy3d(
         
         let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
 
-        let pipeline = get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, Functions::Copy3d), const_vec);
+        let pipeline = meta.get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, Functions::Copy3d), const_vec);
         enqueue_workgroups(
             meta,
             pipeline,
@@ -279,7 +291,7 @@ pub fn queue_copy3d_padded(
         else{
             Functions::Copy3dPadded
         };
-        let pipeline = get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, pipeline), const_vec);
+        let pipeline = meta.get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, pipeline), const_vec);
         enqueue_workgroups(
             meta,
             pipeline,

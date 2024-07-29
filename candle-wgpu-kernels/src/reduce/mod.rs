@@ -4,7 +4,7 @@ pub enum Functions{Reduce,ReduceIndex}
 impl crate::EntryPoint for Functions{
     fn get_entry_point(&self) -> &'static str{
         match self{
-            Functions::Reduce => "gz",Functions::ReduceIndex => "gJ"
+            Functions::Reduce => "ga",Functions::ReduceIndex => "gb"
         }
     } 
 }

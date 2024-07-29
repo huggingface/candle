@@ -1,10 +1,10 @@
 /// *********** This File Is Genereted! **********///
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Functions{BinaryBufferFromBuffer,BinaryBufferInplace2ContiguousBoth,BinaryBufferFromBufferContiguousBoth,BinaryBufferInplace1ContiguousBoth}
+pub enum Functions{BinaryBufferInplace1ContiguousBoth,BinaryBufferInplace2ContiguousBoth,BinaryBufferFromBuffer3d,BinaryBufferFromBuffer,BinaryBufferFromBufferContiguousBoth}
 impl crate::EntryPoint for Functions{
     fn get_entry_point(&self) -> &'static str{
         match self{
-            Functions::BinaryBufferFromBuffer => "gy",Functions::BinaryBufferInplace2ContiguousBoth => "gG",Functions::BinaryBufferFromBufferContiguousBoth => "gE",Functions::BinaryBufferInplace1ContiguousBoth => "gF"
+            Functions::BinaryBufferInplace1ContiguousBoth => "gd",Functions::BinaryBufferInplace2ContiguousBoth => "ge",Functions::BinaryBufferFromBuffer3d => "gb",Functions::BinaryBufferFromBuffer => "ga",Functions::BinaryBufferFromBufferContiguousBoth => "gc"
         }
     } 
 }

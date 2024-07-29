@@ -87,7 +87,7 @@ impl WPrior {
     pub fn forward(&self, xs: &Tensor, r: &Tensor, c: &Tensor) -> Result<Tensor> {
         let x_in = xs;
         let mut xs = xs.apply(&self.projection)?;
-        let mut xs = compare_read("vector/vector_a2.npy", &xs)?;
+        //let mut xs = compare_read("vector/vector_a2.npy", &xs)?;
         let c_embed = c
             .apply(&self.cond_mapper_lin1)?
             .apply(&|xs: &_| candle_nn::ops::leaky_relu(xs, 0.2))?

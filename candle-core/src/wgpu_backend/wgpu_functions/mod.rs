@@ -20,11 +20,12 @@ use std::{
     num::NonZeroU64,
 };
 
+use candle_wgpu_kernels::EntryPoint;
 use tracing::{instrument, span, Level};
 use super::{
     cache::{BindGroupReferenceBase, BufferReference, CachedBindGroupReference},
     device::{
-        BindGroupReference, DispatchedBindgroup, MlQueue, OpIsInplaceable, OrderedFloat, PipelineType, QueueBuffer, META_BUFFER_SIZE
+        BindGroupReference, DispatchedBindgroup, MlQueue, OpIsInplaceable, PipelineType, QueueBuffer, META_BUFFER_SIZE
     },
     util::{ToF64, ToU32},
 };
@@ -64,33 +65,83 @@ pub const MAX_DISPATCH_SIZE: u32 = 65535;
 
 ///Helper Type MetaArray, for constructing the MetaBuffer
 #[derive(Debug)]
-pub(crate) struct MetaArray(Vec<u32>);
+pub struct MetaArray(pub Vec<u32>);
+
+#[derive(Debug, Clone)]
+pub struct ConstArray(pub HashMap<String, f64>);
+
+impl Hash for ConstArray {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Convert the map to a sorted vector of tuples to ensure consistent ordering
+        //let mut sorted_kv_pairs: Vec<_> = self.0.iter().collect();
+        //sorted_kv_pairs.sort_by(|a, b| a.0.cmp(b.0));
+        
+        for (key, value) in self.0.iter() {
+            key.hash(state);
+            value.to_bits().hash(state); // Convert f64 to u64 bits for hashing
+        }
+    }
+}
+
+impl PartialEq for ConstArray {
+    fn eq(&self, other: &Self) -> bool {
+        if self.0.len() != other.0.len() {
+            return false;
+        }
+
+        self.0.iter().all(|(key, value)| {
+            match other.0.get(key) {
+                Some(other_value) => value == other_value,
+                None => false,
+            }
+        })
+    }
+}
+
+impl Eq for ConstArray {}
+
+pub trait KernelParameterMeta{
+    fn write_meta(&self, meta : &mut MetaArray);
+}
+
+pub trait KernelParameterConsts{
+    fn write_consts(&self, _consts : &mut ConstArray){}
+}
+pub trait KernelParameter : KernelParameterMeta + KernelParameterConsts{
+   
+}
+
 
 impl MetaArray {
-    pub(crate) fn new(capacity: u32) -> Self {
+    pub fn new(capacity: u32) -> Self {
         MetaArray(Vec::with_capacity(capacity as usize))
     }
 
-    pub(crate) fn add_layout(&mut self, layout: &Layout) {
-        let shape = layout.shape().dims();
-        let stride = layout.stride();
-        self.0.push(shape.len() as u32);
-        self.0.push(layout.start_offset() as u32);
-
-        if layout.is_contiguous() {
-            self.0.push(layout.shape().elem_count() as u32);
-        } else {
-            self.0.push(0);
-        }
-
-        self.0.extend(shape.iter().map(|&x| x as u32));
-        self.0.extend(stride.iter().map(|&x| x as u32));
-    }
-
-    pub(crate) fn add<T: ToU32>(&mut self, value: T) {
-        self.0.push(value.to_u32());
+    pub fn add<T : KernelParameterMeta>(&mut self, value : T){
+        value.write_meta(self);
     }
 }
+
+impl<T : ToU32 + Copy> KernelParameterMeta for T{
+    fn write_meta(&self, meta : &mut MetaArray) {
+        meta.0.push((*self).to_u32());
+    }
+}
+
+impl ConstArray {
+    pub fn new() -> Self {
+        ConstArray(HashMap::new())
+    }
+
+    pub fn add<T : KernelParameterConsts>(&mut self, value : T){
+        value.write_consts(self);
+    }
+
+    pub fn insert<T : ToF64>(&mut self, key : candle_wgpu_kernels::Constants, value : T){
+        self.0.insert(key.get_entry_point().to_string(), value.to_f64());
+    }
+}
+
 
 const WORKGROUP_SIZE: u32 = 64;
 
@@ -101,21 +152,6 @@ pub fn get_dtype(dtype : crate::DType) -> crate::Result<DType>{
         crate::DType::F32 =>  Ok(DType::F32),
         _ => Err(crate::Error::WebGpu(WebGpuError::from(format!("Dtype {:?} not supported on wgpu", dtype)))),
     }
-}
-
-pub (crate) fn get_pipeline(pipeline: Pipelines) -> PipelineType {
-    return PipelineType(pipeline, vec![], OpIsInplaceable::new());
-}
-
-pub (crate) fn get_pipeline_inplaceable(pipeline: Pipelines, inplaceable : OpIsInplaceable) -> PipelineType {
-    return PipelineType(pipeline, vec![], inplaceable);
-}
-
-pub (crate) fn get_pipeline_const<T : ToF64>(pipeline: Pipelines, consts : Vec<T>) -> PipelineType {
-    return PipelineType(pipeline, consts.into_iter().map(|f| OrderedFloat(f.to_f64())).collect(), OpIsInplaceable::new());
-}
-pub (crate) fn get_pipeline_const_inplace<T : ToF64>(pipeline: Pipelines, consts : Vec<T>, inplaceable : OpIsInplaceable) -> PipelineType {
-    return PipelineType(pipeline, consts.into_iter().map(|f| OrderedFloat(f.to_f64())).collect(), inplaceable);
 }
 
 #[instrument]
@@ -162,6 +198,7 @@ fn enqueue_workgroups_extra(
         y,
         z,
         pipeline: pipeline.clone(),
+        pipeline_cached : None,
         bindgroup: DispatchedBindgroup::BindgroupReference(bind_group),
         meta: command_queue.current_meta,
         workload_size,
@@ -186,15 +223,14 @@ fn next_divisible_by_n(value: i32, n: i32) -> i32 {
 //size: size you want to add
 fn get_meta(dev: &WgpuDevice) -> MutexGuard<QueueBuffer> {
     let mut command_queue = dev.command_queue.lock().unwrap();
-    let meta_array_length = command_queue.meta_array.0.len() as i32;
+    let meta_array_length = command_queue.get_meta().len() as i32;
     let meta_offset = next_divisible_by_n(
         meta_array_length,
         dev.device_limits.min_storage_buffer_offset_alignment as i32 / 4,
     );
     command_queue.current_meta = meta_offset as u32;
     command_queue
-        .meta_array
-        .0
+        .get_meta_mut()
         .extend(std::iter::repeat(0).take((meta_offset - meta_array_length) as usize));
 
     return command_queue;
@@ -236,7 +272,6 @@ fn get_command_buffer(
     dev: &WgpuDevice,
     meta_array: &[u32],
     command_queue: &[MlQueue],
-    pipelines: &[Arc<wgpu::ComputePipeline>],
     current_meta: usize,
 ) -> wgpu::CommandBuffer {
     #[cfg(feature = "wgpu_debug")]
@@ -271,52 +306,54 @@ fn get_command_buffer(
         timestamp_writes: None,
     });
 
-    for (q, pipeline) in command_queue.iter().zip(pipelines) {
+    for q in command_queue.iter(){
         match q {
             MlQueue::Dispatch(q) => {
                 if let DispatchedBindgroup::CachedBindgroup(bindgroup) = &q.bindgroup {
-                    let qx = q.x;
-                    let qy = q.y;
-                    let qz = q.z;
-                    let meta = q.meta - current_meta as u32;
+                    if let Some(pipeline) = &q.pipeline_cached{
+                        let qx = q.x;
+                        let qy = q.y;
+                        let qz = q.z;
+                        let meta = q.meta - current_meta as u32;
 
-                    #[cfg(feature = "wgpu_debug")]
-                    cpass.write_timestamp(&query_set, debug_index);
-                    let span1 = span!(Level::INFO, "Set Pipeline");
-                    let _enter1 = span1.enter();
-                    cpass.set_pipeline(&pipeline);
-                    drop(_enter1);
+                        #[cfg(feature = "wgpu_debug")]
+                        cpass.write_timestamp(&query_set, debug_index);
+                        let span1 = span!(Level::INFO, "Set Pipeline");
+                        let _enter1 = span1.enter();
+                        cpass.set_pipeline(&pipeline);
+                        drop(_enter1);
 
-                    if meta * 4 >= META_BUFFER_SIZE - 256 {
-                        panic!(
-                            "meta is to big!: meta was {meta}, q.meta: {}/{current_meta}",
-                            q.meta
-                        );
-                    }
+                        if meta * 4 >= META_BUFFER_SIZE - 256 {
+                            panic!(
+                                "meta is to big!: meta was {meta}, q.meta: {}/{current_meta}",
+                                q.meta
+                            );
+                        }
 
-                    let span1 = span!(Level::INFO, "Set Bindgroup");
-                    let _enter1 = span1.enter();
-                    cpass.set_bind_group(0, &bindgroup.bindgroup, &[meta * 4]);
-                    drop(_enter1);
-                    
-                    let span1 = span!(Level::INFO, "Dispatch Workgroups");
-                    let _enter1 = span1.enter();
-                    cpass.dispatch_workgroups(qx, qy, qz);
-                    drop(_enter1);
-                    
-                    
-                    #[cfg(feature = "wgpu_debug")]
-                    {
-                        cpass.write_timestamp(&query_set, debug_index + 1);
-                        dev.debug.insert_info(global_index + debug_index * 8,(
-                                format!("Pipeline: {:?}, {}", q.pipeline.0, q.debug.to_owned().map_or("".to_string(), |s| s)),
-                                q.workload_size as u64,
-                                q.x,
-                                q.y,
-                                q.z,
-                            ),
-                        );
-                        debug_index += 2;
+                        let span1 = span!(Level::INFO, "Set Bindgroup");
+                        let _enter1 = span1.enter();
+                        cpass.set_bind_group(0, &bindgroup.bindgroup, &[meta * 4]);
+                        drop(_enter1);
+                        
+                        let span1 = span!(Level::INFO, "Dispatch Workgroups");
+                        let _enter1 = span1.enter();
+                        cpass.dispatch_workgroups(qx, qy, qz);
+                        drop(_enter1);
+                        
+                        
+                        #[cfg(feature = "wgpu_debug")]
+                        {
+                            cpass.write_timestamp(&query_set, debug_index + 1);
+                            dev.debug.insert_info(global_index + debug_index * 8,(
+                                    format!("Pipeline: {:?}, {}", q.pipeline.0, q.debug.to_owned().map_or("".to_string(), |s| s)),
+                                    q.workload_size as u64,
+                                    q.x,
+                                    q.y,
+                                    q.z,
+                                ),
+                            );
+                            debug_index += 2;
+                        }
                     }
                 }
             }
@@ -401,6 +438,7 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer){
                             }
                         }
                     }
+                    DispatchedBindgroup::None => {continue;},
                     DispatchedBindgroup::CachedBindgroup(_) => todo!(),
                 },
             }
@@ -453,6 +491,7 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer){
                             }
                         }
                     }
+                    DispatchedBindgroup::None => {continue;},
                     DispatchedBindgroup::CachedBindgroup(_) => todo!(),
                 },
             }
@@ -472,7 +511,7 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer){
 }
 
 #[instrument]
-fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, current_meta: usize, last_meta : &mut usize, wgpu_data : &mut Vec<Arc<wgpu::ComputePipeline>>){
+fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, current_meta: usize, last_meta : &mut usize){
     let mut cache_limit = false;
     let mut total_workload = 0u64; //we only allow a certain amount of workload per commandBuffer 
     let start_index = *index; 
@@ -504,6 +543,7 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                 let _enter1 = span1.enter();
                 let mut optimize_unary_inplace = false;
                 let mut optimize_binary_inplace = false;
+                let mut optimize_copy_inplace = false;
                 let mut vdest_ref = None;
                 let mut v1_ref = None;
                 if let Pipelines::Unary(dtype, candle_wgpu_kernels::unary::Functions::UnaryFromBufferContiguous) = &q.pipeline.0{
@@ -519,7 +559,8 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                                     //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
                                     if vdest.size <= v1.size {
                                         if vdest.storage.lock().unwrap().is_none() {
-                                            //startoffset = 0?
+                                            println!("Optimize Unary");
+                                            dev.unary_inplace_counter.inc();
                                             q.pipeline.0 = Pipelines::Unary(dtype.clone(), candle_wgpu_kernels::unary::Functions::UnaryInplaceContiguous);
                                             vdest_ref = Some(vdest.clone());
                                             v1_ref = Some(v1.clone());
@@ -550,6 +591,8 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                                     //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
                                     if vdest.size <= v1.size {
                                         if vdest.storage.lock().unwrap().is_none() {
+                                            println!("Optimize Binary v1");
+                                            dev.binary_inplace_counter.inc();
                                             q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace1ContiguousBoth);
                                             vdest_ref = Some(vdest.clone());
                                             v1_ref = Some(v1.clone());
@@ -578,7 +621,9 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                                 if Arc::strong_count(&v2) == 1 {
                                     //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
                                     if vdest.size <= v2.size {
+                                        println!("Optimize Binary v2");
                                         if vdest.storage.lock().unwrap().is_none() {
+                                            dev.binary_inplace_counter.inc();
                                             q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace2ContiguousBoth);
                                             vdest_ref = Some(vdest.clone());
                                             v1_ref = Some(v2.clone());
@@ -597,66 +642,96 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                         }
                     }
                 }
-                
-                
-                drop(_enter1);
-
-                let pl: &wgpu::PipelineLayout = match &q.bindgroup {
-                    DispatchedBindgroup::BindgroupReference(bindgroup_reference) => {
-                        match bindgroup_reference {
-                            BindGroupReferenceBase::Bindgroup0(_) => {
-                                &dev.bindgroup_layouts.pipeline_layout0
-                            }
-                            BindGroupReferenceBase::Bindgroup1(_, _) => {
-                                &dev.bindgroup_layouts.pipeline_layout1
-                            }
-                            BindGroupReferenceBase::Bindgroup2(_, _, _) => {
-                                &dev.bindgroup_layouts.pipeline_layout2
-                            }
-                            BindGroupReferenceBase::Bindgroup3(_, _, _, _) => {
-                                &dev.bindgroup_layouts.pipeline_layout3
-                            }
-                        }
-                    }
-                    _ => panic!("not expected"),
-                };
-
-                let pipeline = dev
-                    .get_pipeline2( &q.pipeline, pl)
-                    .unwrap();
-
-                if let DispatchedBindgroup::BindgroupReference(bindgroup_reference) =
-                    &q.bindgroup
-                {
-                    let bindgroup = cache.get_bind_group(
-                        dev,
-                        bindgroup_reference,
-                        q.pipeline.clone(),
-                    );
-
-                    if cache.remove_unused(){ //we hit the max cache size
-                        cache_limit = true;
-                    }
-        
-                    drop(cache);
-                    
-                    q.bindgroup = DispatchedBindgroup::CachedBindgroup(bindgroup); //this may drop a bufferReference. The BufferReference needs to access cache, therefore cache was droped
-                    wgpu_data.push(pipeline);
-
-                    if optimize_unary_inplace || optimize_binary_inplace{
-                        dev.cached_buffer_inplace_counter
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if let Some(vdest_ref) = vdest_ref {
-                            if let Some(v1_ref) = v1_ref {
-                                let mut vdest_storage = vdest_ref.storage.lock().unwrap();
-                                let mut v1_storage = v1_ref.storage.lock().unwrap();
-                                *vdest_storage = v1_storage.as_ref().cloned();
-                                *v1_storage = None;
+                else if let Pipelines::Copy(_, candle_wgpu_kernels::copy::Functions::Copy) = &q.pipeline.0{
+                    if q.pipeline.2.input1_inplaceable{
+                        if let DispatchedBindgroup::BindgroupReference(
+                            bindgroup_reference,
+                        ) = &q.bindgroup
+                        {
+                            if let BindGroupReferenceBase::Bindgroup1(vdest, v1) =
+                                bindgroup_reference
+                            {
+                                if Arc::strong_count(&v1) == 1 {
+                                    //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
+                                    if vdest.size <= v1.size {
+                                        println!("Optimize Copy");
+                                        if vdest.storage.lock().unwrap().is_none() {
+                                            //startoffset = 0?
+                                            dev.copy_inplace_counter.inc();
+                                            let mut vdest_storage = vdest.storage.lock().unwrap();
+                                            let mut v1_storage = v1.storage.lock().unwrap();
+                                            *vdest_storage = v1_storage.as_ref().cloned();
+                                            *v1_storage = None;
+                                            optimize_copy_inplace = true;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
+                drop(_enter1);
 
+                if !optimize_copy_inplace {
+                    let pl: &wgpu::PipelineLayout = match &q.bindgroup {
+                        DispatchedBindgroup::BindgroupReference(bindgroup_reference) => {
+                            match bindgroup_reference {
+                                BindGroupReferenceBase::Bindgroup0(_) => {
+                                    &dev.bindgroup_layouts.pipeline_layout0
+                                }
+                                BindGroupReferenceBase::Bindgroup1(_, _) => {
+                                    &dev.bindgroup_layouts.pipeline_layout1
+                                }
+                                BindGroupReferenceBase::Bindgroup2(_, _, _) => {
+                                    &dev.bindgroup_layouts.pipeline_layout2
+                                }
+                                BindGroupReferenceBase::Bindgroup3(_, _, _, _) => {
+                                    &dev.bindgroup_layouts.pipeline_layout3
+                                }
+                            }
+                        }
+                        _ => panic!("not expected"),
+                    };
+    
+                    let pipeline = dev
+                        .get_pipeline( &q.pipeline, pl)
+                        .unwrap();
+    
+                    if let DispatchedBindgroup::BindgroupReference(bindgroup_reference) =
+                        &q.bindgroup
+                    {
+                        let bindgroup = cache.get_bind_group(
+                            dev,
+                            bindgroup_reference,
+                            q.pipeline.clone(),
+                        );
+    
+                        if cache.remove_unused(){ //we hit the max cache size
+                            cache_limit = true;
+                        }
+            
+                        drop(cache);
+                        
+                        q.bindgroup = DispatchedBindgroup::CachedBindgroup(bindgroup); //this may drop a bufferReference. The BufferReference needs to access cache, therefore cache was droped
+                        
+                        q.pipeline_cached = Some(pipeline);
+                        
+                        //needs to be deleayed, we want to set v1_storage to None, but to create a BindGroup, we need to have v1_storage set
+                        if optimize_unary_inplace || optimize_binary_inplace{
+                            if let Some(vdest_ref) = vdest_ref {
+                                if let Some(v1_ref) = v1_ref {
+                                    let mut vdest_storage = vdest_ref.storage.lock().unwrap();
+                                    let mut v1_storage = v1_ref.storage.lock().unwrap();
+                                    *vdest_storage = v1_storage.as_ref().cloned();
+                                    *v1_storage = None;
+                                }
+                            }
+                        }
+                    }  
+                }
+                else{
+                    q.bindgroup = DispatchedBindgroup::None;
+                }
                 *last_meta = q.meta as usize;
 
                
@@ -683,26 +758,20 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
 pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer) {
     if queue_buffer.command_queue.len() > 0 {
         prepare(dev, queue_buffer);
-        let queue = &mut queue_buffer.command_queue;
         {
-            
-
-            let mut wgpu_data = Vec::with_capacity(queue.len());
-
             let mut start_index = 0;
             let mut index = 0;
             let mut current_meta: usize = 0;
             let mut last_meta: usize = 0;
-            while index < queue.len() {
-                set_buffers(dev, queue, &mut index, current_meta, &mut last_meta, &mut wgpu_data);
+            while index < queue_buffer.command_queue.len() {
+                set_buffers(dev, &mut queue_buffer.command_queue, &mut index, current_meta, &mut last_meta);
 
-                let last_meta_index = (last_meta + 256 / 4).min(queue_buffer.meta_array.0.len());
+                let last_meta_index = (last_meta + 256 / 4).min(queue_buffer.get_meta().len());
               
                 let cb = get_command_buffer(
                     dev,
-                    &queue_buffer.meta_array.0[current_meta..last_meta_index],
-                    &queue[start_index..index],
-                    &wgpu_data,
+                    &queue_buffer.get_meta()[current_meta..last_meta_index],
+                    &queue_buffer.command_queue[start_index..index],
                     current_meta,
                 );
                 
@@ -723,12 +792,9 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                
                 start_index = index;
                 current_meta = last_meta;
-                wgpu_data.clear();
             }
         }
-        queue_buffer.command_queue.clear();
-        queue_buffer.meta_array.0.clear();
-        queue_buffer.current_meta = 0;
+        queue_buffer.clear();
         {
             let mut cache = dev.cache.lock().unwrap();
             cache.mappings.finish();
@@ -880,8 +946,7 @@ pub fn create_buffer(dev: &WgpuDevice, size: u64) -> wgpu::Buffer {
 
 #[instrument]
 pub fn create_bindgroup(dev: &WgpuDevice, bindgroup: CachedBindGroupReference) -> wgpu::BindGroup {
-    dev.cached_bindgroup_counter
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    dev.cached_bindgroup_counter.inc();
 
     let buffer_meta = &dev.meta_buffer;
 

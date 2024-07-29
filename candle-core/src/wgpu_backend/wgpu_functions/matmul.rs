@@ -35,7 +35,7 @@ pub fn queue_matmul_buffer1(
     meta.add(*input2_stride.next().unwrap_or(&1)); //input2_stride_b
     meta.add(layout_input2.start_offset()); //input2_offset
 
-    let pipeline = get_pipeline(Pipelines::Matmul(get_dtype(dtype)?, Functions::Matmul1));
+    let pipeline = meta.get_pipeline(Pipelines::Matmul(get_dtype(dtype)?, Functions::Matmul1));
   
     let bind_group = create_bind_group_input2(
         buffer_dest,
@@ -88,7 +88,7 @@ pub fn queue_matmul_buffer1b(
     meta.add(*input2_stride.next().unwrap_or(&1)); //input2_stride_b
     meta.add(layout_input2.start_offset()); //input2_offset
 
-    let pipeline = get_pipeline(Pipelines::Matmul(get_dtype(dtype)?, Functions::Matmul1End));
+    let pipeline = meta.get_pipeline(Pipelines::Matmul(get_dtype(dtype)?, Functions::Matmul1End));
   
     let bind_group = create_bind_group_input2(
         buffer_dest,
@@ -150,7 +150,7 @@ pub fn queue_matmul_buffer7(
     meta.add(input2_stride_b); //input2_stride_b
     meta.add(layout_input2.start_offset()); //input2_offset
 
-    let pipeline = get_pipeline_const(Pipelines::Matmul(get_dtype(dtype)?, Functions::Matmul7), const_vec.clone());
+    let pipeline = meta.get_pipeline_const(Pipelines::Matmul(get_dtype(dtype)?, Functions::Matmul7), const_vec.clone());
 
     let bind_group = create_bind_group_input2(
         buffer_dest.clone(),
@@ -198,12 +198,8 @@ pub fn queue_matmul_buffer(
             (buffer_input1, layout_input1.clone())
         }
         else{
-            //println!("pad input buffer 1:");
             let buffer_input1_padded = BufferReference::new(&dev, b * (new_m * new_k) * 4);   
-            
             let dest_layout = crate::Layout::contiguous(&Shape::from((b as usize, new_m as usize, new_k as usize)));
-            //super::queue_unary_inplace_op(dev, buffer_input1_padded.clone(), super::unary::UnaryOperation::SetZero, 0.0, 0.0,dtype, &dest_layout)?;
-
             super::queue_copy3d_padded(dev, buffer_input1_padded.clone(), buffer_input1, dtype, layout_input1, (b, m, k), &dest_layout)?;
             (buffer_input1_padded, dest_layout)
         };
@@ -214,7 +210,6 @@ pub fn queue_matmul_buffer(
         }
         else{
             let buffer_input2_padded = BufferReference::new(&dev, b * (new_k * new_n) * 4);   
-            
             let dest_layout = crate::Layout::contiguous(&Shape::from((b as usize, new_k as usize, new_n as usize)));
             super::queue_copy3d_padded(dev, buffer_input2_padded.clone(), buffer_input2, dtype, layout_input2, (b, k, n),&dest_layout)?;
             (buffer_input2_padded, dest_layout)
@@ -256,7 +251,7 @@ pub fn queue_matmul_buffer(
     meta.add(input2_stride_b); //input2_stride_b
     meta.add(layout_input2_padded.start_offset()); //input2_offset
 
-    let pipeline = get_pipeline_const(Pipelines::Matmul(get_dtype(dtype)?, Functions::Matmul5), const_vec.clone());
+    let pipeline = meta.get_pipeline_const(Pipelines::Matmul(get_dtype(dtype)?, Functions::Matmul5), const_vec.clone());
    
     let bind_group = create_bind_group_input2(
         buffer_dest_padded.clone(),

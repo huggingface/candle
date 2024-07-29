@@ -1,10 +1,10 @@
 /// *********** This File Is Genereted! **********///
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Functions{ConvertU8ToF32,ConvertF32ToU8,ConvertU32ToU8,ConvertToF32,ConvertToU32}
+pub enum Functions{ConvertF32ToU8,ConvertU32ToU8,ConvertToF32,ConvertToU32,ConvertU8ToF32}
 impl crate::EntryPoint for Functions{
     fn get_entry_point(&self) -> &'static str{
         match self{
-            Functions::ConvertU8ToF32 => "gA",Functions::ConvertF32ToU8 => "gB",Functions::ConvertU32ToU8 => "gC",Functions::ConvertToF32 => "gy",Functions::ConvertToU32 => "gx"
+            Functions::ConvertF32ToU8 => "gb",Functions::ConvertU32ToU8 => "gd",Functions::ConvertToF32 => "gc",Functions::ConvertToU32 => "ga",Functions::ConvertU8ToF32 => "ge"
         }
     } 
 }

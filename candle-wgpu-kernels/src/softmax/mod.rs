@@ -4,7 +4,7 @@ pub enum Functions{Softmax}
 impl crate::EntryPoint for Functions{
     fn get_entry_point(&self) -> &'static str{
         match self{
-            Functions::Softmax => "gj"
+            Functions::Softmax => "ga"
         }
     } 
 }

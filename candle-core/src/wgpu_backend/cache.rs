@@ -282,8 +282,7 @@ impl BufferCache {
                 }
 
                 if let Some(buffer) = buffers.pop() {
-                    dev.cached_buffer_reuse_counter
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    dev.cached_buffer_reuse_counter.inc();
                     self.buffer_memory_free -= buffer.buffer.size();
                     return buffer;
                 }
@@ -295,9 +294,7 @@ impl BufferCache {
         if self.buffer_memory > self.max_memory_allowed { //we need to delete some free buffers
         }
 
-        let id = dev
-            .cached_buffer_counter
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = dev.cached_buffer_counter.inc();
 
         Arc::new(CachedBuffer::new(
             wgpu_functions::create_buffer(dev, size),
@@ -879,8 +876,7 @@ impl ModelCache {
                         &mut reference_storage,
                     );
 
-                    dev.cached_bindgroup_reuse_counter
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    dev.cached_bindgroup_reuse_counter.inc();
 
                     self.bindgroups.update_last_used(&cached_bindgroup);
 

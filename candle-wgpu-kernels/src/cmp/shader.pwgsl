@@ -17,12 +17,12 @@ fn cmp_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var output_value = 0u;
 
     let input1_layout = op_binary.input1_layout;
-    let input2_layout = input1_layout + get_size(input1_layout);
+    let input2_layout = input1_layout + get_size1();
 
  
     for (var i = 0u; i < 4; i++){
-        let pos1 = get_index(input1_layout, id * 4 + i);
-        let pos2 = get_index(input2_layout, id * 4 + i);
+        let pos1 = get_index1(input1_layout, id * 4 + i);
+        let pos2 = get_index2(input2_layout, id * 4 + i);
         
         if(!pos1.is_valid){
             continue;

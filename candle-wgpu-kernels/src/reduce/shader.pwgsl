@@ -45,23 +45,23 @@ fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>) {
             case 0u{ //sum
                 var sum = ZERO;
                 for (var i = start; i < end; i++){
-                    let index = get_index(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                    let index = get_index1(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
                     sum += v_input1[index];
                 }
                 sharedSums[workgroup_id] = sum;
             }
             case 1u{ //min
-                var sum = v_input1[get_index(op_reduce.input_layout, start_index).id];
+                var sum = v_input1[get_index1(op_reduce.input_layout, start_index).id];
                 for (var i = start + 1; i < end; i++){
-                    let index = get_index(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                    let index = get_index1(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
                     sum = min(sum, v_input1[index]);
                 }
                 sharedSums[workgroup_id] = sum;
             }
             case 2u{ //max
-                var sum = v_input1[get_index(op_reduce.input_layout, start_index).id];
+                var sum = v_input1[get_index1(op_reduce.input_layout, start_index).id];
                 for (var i = start + 1; i < end; i++){
-                    let index = get_index(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                    let index = get_index1(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
                     sum = max(sum, v_input1[index]);
                 }
                 sharedSums[workgroup_id] = sum;
@@ -133,10 +133,10 @@ fn reduce_index(@builtin(global_invocation_id) global_id: vec3<u32>) {
         //Now Reduce from start to end
         switch(op_reduce.operation){
             case 3u{//ArgMin
-                var sum = v_input1[get_index(op_reduce.input_layout, start_index).id];
+                var sum = v_input1[get_index1(op_reduce.input_layout, start_index).id];
                 var arg_index = 0u;
                 for (var i = start + 1; i < end; i++){
-                    let index = get_index(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                    let index = get_index1(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
                     if v_input1[index] < sum{
                         sum = v_input1[index];
                         arg_index = i;
@@ -146,10 +146,10 @@ fn reduce_index(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 sharedIndex[workgroup_id] = arg_index;
             }
             case 4u{//ArgMax
-                var sum = v_input1[get_index(op_reduce.input_layout, start_index).id];
+                var sum = v_input1[get_index1(op_reduce.input_layout, start_index).id];
                 var arg_index = 0u;
                 for (var i = start + 1; i < end; i++){
-                    let index = get_index(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                    let index = get_index1(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
                     if v_input1[index] > sum{
                         sum = v_input1[index];
                         arg_index = i;

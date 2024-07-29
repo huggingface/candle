@@ -18,8 +18,8 @@ fn index_select(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let output_index = global_id.y;
 
     
-    let input_layout2 = op_index.input_layout1 + get_size(op_index.input_layout1);
-    let pos2 = get_index(input_layout2, output_index);
+    let input_layout2 = op_index.input_layout1 + get_size1();
+    let pos2 = get_index2(input_layout2, output_index);
     if(pos2.is_valid){
         let dim_index = v_input2_u32[pos2.id];
         
@@ -32,7 +32,7 @@ fn index_select(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if workgroup_id < length{
             let input_id  =    dim_index * input_stride_y  + workgroup_id * input_stride_x;
             let output_id = output_index * output_stride_y + workgroup_id * output_stride_x;
-            let pos1 = get_index(op_index.input_layout1, input_id);
+            let pos1 = get_index1(op_index.input_layout1, input_id);
             if(pos1.is_valid){
                 v_dest[output_id]  = v_input1[pos1.id];
             }

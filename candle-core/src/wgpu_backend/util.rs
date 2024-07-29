@@ -1,8 +1,15 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::{collections::{BTreeMap, HashMap, VecDeque}, sync::atomic::AtomicU32};
 
 pub(crate) trait ToU32 {
     fn to_u32(self) -> u32;
 }
+
+impl ToU32 for i32 {
+    fn to_u32(self) -> u32 {
+        return self as u32;
+    }
+}
+
 
 impl ToU32 for u32 {
     fn to_u32(self) -> u32 {
@@ -44,6 +51,7 @@ impl ToU64 for usize {
     }
 }
 
+
 pub trait ToF64 {
     fn to_f64(self) -> f64;
 }
@@ -59,6 +67,13 @@ impl ToF64 for u32 {
         return self as f64;
     }
 }
+
+impl ToF64 for bool {
+    fn to_f64(self) -> f64 {
+        return if self {1.0} else{0.0};
+    }
+}
+
 
 
 #[derive(Debug)]
@@ -168,5 +183,22 @@ impl<T> FixedSizeQueue<T> {
     // Iterate over the elements in the queue
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.deque.iter()
+    }
+}
+
+#[derive(Debug)]
+pub struct Counter(AtomicU32);
+
+impl Counter{
+    pub fn new(default : u32)->Self{
+        return Counter(AtomicU32::new(default));
+    }
+
+    pub fn inc(&self) -> u32{
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn get(&self) -> u32{
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
     }
 }

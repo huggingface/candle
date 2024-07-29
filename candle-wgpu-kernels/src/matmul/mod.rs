@@ -1,10 +1,10 @@
 /// *********** This File Is Genereted! **********///
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Functions{Matmul1,Matmul1End,Matmul7,Matmul5}
+pub enum Functions{Matmul7,Matmul1End,Matmul5,Matmul1}
 impl crate::EntryPoint for Functions{
     fn get_entry_point(&self) -> &'static str{
         match self{
-            Functions::Matmul1 => "gh",Functions::Matmul1End => "gv",Functions::Matmul7 => "gR",Functions::Matmul5 => "gy"
+            Functions::Matmul7 => "gd",Functions::Matmul1End => "gb",Functions::Matmul5 => "gc",Functions::Matmul1 => "ga"
         }
     } 
 }

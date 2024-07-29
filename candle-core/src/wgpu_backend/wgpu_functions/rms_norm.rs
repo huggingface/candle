@@ -26,7 +26,7 @@ pub fn queue_rms_norm(
     meta.add(alpha_offset);
     meta.add(eps);
 
-    let pipeline = get_pipeline(Pipelines::RmsNorm(get_dtype(dtype)?, Functions::RmsNorm));
+    let pipeline = meta.get_pipeline(Pipelines::RmsNorm(get_dtype(dtype)?, Functions::RmsNorm));
 
     let bind_group = create_bind_group_input2( buffer_dest, buffer_input1, buffer_alpha);
     enqueue_workgroups(

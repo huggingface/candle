@@ -4,7 +4,7 @@ pub enum Functions{WhereCondIndexU32}
 impl crate::EntryPoint for Functions{
     fn get_entry_point(&self) -> &'static str{
         match self{
-            Functions::WhereCondIndexU32 => "gx"
+            Functions::WhereCondIndexU32 => "ga"
         }
     } 
 }

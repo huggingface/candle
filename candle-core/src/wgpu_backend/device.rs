@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 use std::hash::Hash;
 
-use candle_wgpu_kernels::EntryPoint;
+use candle_wgpu_kernels::{Constants, EntryPoint, Pipelines};
 use rand::SeedableRng;
 use tracing::instrument;
 
@@ -14,7 +13,8 @@ use crate::{notImplemented, wrongType, Layout};
 use super::debug_info::{DebugInfo, Measurements,MInfo, ShaderInfo};
 
 use super::cache::{BindGroupReferenceBase, BindgroupId, BindgroupLayouts, BufferReference, ModelCache};
-use super::util::ToU32;
+use super::util::{Counter, ToF64};
+use super::wgpu_functions::{ConstArray, KernelParameterMeta};
 use super::wgpu_functions::{self, create_buffer_init, unary::UnaryOperation, MetaArray};
 use super::WgpuStorage;
 
@@ -22,27 +22,6 @@ use super::WgpuStorage;
 pub (crate) enum MlQueue{
     Dispatch(MlQueueDispatch),
 }
-
-#[cfg(feature = "wgpu_debug")]
-pub trait ToU64 {
-    fn to_u64(self) -> u64;
-}
-
-#[cfg(feature = "wgpu_debug")]
-macro_rules! impl_to_u64 {
-    ($($ty:ty)*) => {
-        $(
-            impl ToU64 for $ty {
-                #[inline]
-                fn to_u64(self) -> u64 {
-                    self as u64
-                }
-            }
-        )*
-    }
-}
-#[cfg(feature = "wgpu_debug")]
-impl_to_u64!(u8 u16 u32 u64 usize);
 
 #[derive(Debug, Copy, Clone)]
 pub struct OrderedFloat(pub f64);
@@ -74,13 +53,14 @@ impl OpIsInplaceable {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub (crate) struct PipelineType(pub candle_wgpu_kernels::Pipelines, pub Vec<OrderedFloat>, pub OpIsInplaceable);
+pub (crate) struct PipelineType(pub candle_wgpu_kernels::Pipelines, pub ConstArray, pub OpIsInplaceable);
 pub (crate) type BindGroupReference = BindGroupReferenceBase<Arc<BufferReference>>;
 
 #[derive(Debug)]
 pub (crate) enum DispatchedBindgroup {
     BindgroupReference(BindGroupReference),
     CachedBindgroup(BindgroupId),
+    None //optimized away
   }
 
 #[derive(Debug)]
@@ -90,6 +70,7 @@ pub (crate) struct MlQueueDispatch{
     pub (crate) z : u32,
     pub (crate) pipeline : PipelineType,
     pub (crate) bindgroup : DispatchedBindgroup,
+    pub (crate) pipeline_cached : Option<Arc<wgpu::ComputePipeline>>,
     pub (crate) meta : u32,
     pub (crate) workload_size : usize, //the total size needed to calculate. Needed so we do not queue to many operations at once.
     #[cfg(feature = "wgpu_debug")]
@@ -106,21 +87,112 @@ pub struct ShaderModuleComputePipelines{
 #[derive(Debug)]
 pub struct QueueBuffer{
     pub (crate) command_queue : Vec<MlQueue>,
-    pub (crate) meta_array : MetaArray,
+    meta_array : MetaArray,
+    const_array : ConstArray,
     pub (crate) current_meta : u32
 }
 
 impl QueueBuffer {
     pub fn new() -> Self {
-        Self {  command_queue: vec![], meta_array :MetaArray::new(META_BUFFER_SIZE), current_meta : 0 }
+        Self {  command_queue: vec![], meta_array :MetaArray::new(META_BUFFER_SIZE), current_meta : 0 , const_array: ConstArray::new()}
     }
 
-    pub (crate) fn add_layout(&mut self, layout : &Layout){
-        self.meta_array.add_layout(layout);
-    } 
+    pub fn init(&mut self) -> ConstArray{
+        let prev = std::mem::replace(&mut self.const_array, ConstArray::new());
+        prev
+    }
 
-    pub (crate) fn add<T : ToU32>(&mut self, value : T){
+    pub fn clear(&mut self){
+        self.command_queue.clear();
+        self.meta_array.0.clear();
+        self.init();
+        self.current_meta = 0;
+    }
+
+    pub fn get_meta(&self) -> &Vec<u32>{
+        return &self.meta_array.0;
+    }
+
+    pub fn get_meta_mut(&mut self) -> &mut Vec<u32>{
+        return &mut self.meta_array.0;
+    }
+
+    fn add_layout(&mut self, layout: &Layout, is_contiguous : bool, constant_dims : Constants, constant_is_startofsset_zero : Constants, constant_is_contiguous : Constants){
+        let shape = layout.shape().dims();
+        let stride = layout.stride();
+
+        self.add_const(constant_dims, shape.len());
+        if layout.start_offset() != 0{
+            self.add_const(constant_is_startofsset_zero, false);
+            self.add(layout.start_offset());
+        }
+
+        if is_contiguous {
+            self.add(layout.shape().elem_count());
+        } else {
+            self.add_const(constant_is_contiguous, false);
+           
+            self.get_meta_mut().extend(shape.iter().map(|&x| x as u32));
+            self.get_meta_mut().extend(stride.iter().map(|&x| x as u32));
+        }   
+    }
+
+    pub(crate) fn add_layout1(&mut self, layout: &Layout) { 
+        self.add_layout(layout, layout.is_contiguous(), Constants::ConstDims1, Constants::ConstIsStartoffsetZero1, Constants::ConstIsContiguous1); 
+    }
+
+    pub(crate) fn add_layout2(&mut self, layout: &Layout) { 
+        self.add_layout(layout, layout.is_contiguous(), Constants::ConstDims2, Constants::ConstIsStartoffsetZero2, Constants::ConstIsContiguous2); 
+    }
+
+    pub(crate) fn add_layout3(&mut self, layout: &Layout) { 
+        self.add_layout(layout, layout.is_contiguous(), Constants::ConstDims3, Constants::ConstIsStartoffsetZero3, Constants::ConstIsContiguous3); 
+    }
+
+    //forces to write the shapes and strides
+    pub(crate) fn add_layout1_non_contiguous(&mut self, layout: &Layout) { 
+        self.add_layout(layout, false, Constants::ConstDims1, Constants::ConstIsStartoffsetZero1, Constants::ConstIsContiguous1); 
+    }
+
+    pub(crate) fn add_layout2_non_contiguous(&mut self, layout: &Layout) { 
+        self.add_layout(layout, false, Constants::ConstDims2, Constants::ConstIsStartoffsetZero2, Constants::ConstIsContiguous2); 
+    }
+
+    pub(crate) fn add_layout3_non_contiguous(&mut self, layout: &Layout) { 
+        self.add_layout(layout, false, Constants::ConstDims3, Constants::ConstIsStartoffsetZero3, Constants::ConstIsContiguous3); 
+    }
+
+    pub (crate) fn get_pipeline(&mut self, pipeline: Pipelines) -> PipelineType {
+        let consts = self.init();
+        return PipelineType(pipeline, consts, OpIsInplaceable::new());
+    }
+
+    pub (crate) fn get_pipeline_inplaceable(&mut self, pipeline: Pipelines, inplaceable : OpIsInplaceable) -> PipelineType {
+        let consts = self.init();
+        return PipelineType(pipeline, consts, inplaceable);
+    }
+
+    pub (crate) fn get_pipeline_const<T : ToF64>(&mut self, pipeline: Pipelines, const_vec : Vec<T>) -> PipelineType {
+        let mut consts = self.init();
+        for (index, v) in const_vec.into_iter().enumerate(){
+            consts.0.insert(format!("CONSTV_{index}"), v.to_f64());
+        }
+        return PipelineType(pipeline, consts, OpIsInplaceable::new());
+    }
+    pub (crate) fn get_pipeline_const_inplace<T : ToF64>(&mut self, pipeline: Pipelines, const_vec : Vec<T>, inplaceable : OpIsInplaceable) -> PipelineType {
+        let mut consts = self.init();
+        for (index, v) in const_vec.into_iter().enumerate(){
+            consts.0.insert(format!("CONSTV_{index}"), v.to_f64());
+        }
+        return PipelineType(pipeline, consts, inplaceable);
+    }                                                                   
+
+    pub (crate) fn add<T : KernelParameterMeta>(&mut self, value : T){
         self.meta_array.add(value);
+    }
+
+    pub (crate) fn add_const<T : ToF64>(&mut self, key : candle_wgpu_kernels::Constants, value : T){
+        self.const_array.insert(key, value);
     }
 
 }
@@ -140,12 +212,16 @@ pub struct WgpuDeviceInner{
     pub (crate) bindgroup_layouts : BindgroupLayouts,
 
     pub (crate) cache : Mutex<ModelCache>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
-    pub (crate) cached_buffer_counter : AtomicU32,
-    pub (crate) cached_bindgroup_counter : AtomicU32,
+    
+    //debug counter
+    pub (crate) cached_buffer_counter : Counter,
+    pub (crate) cached_bindgroup_counter : Counter,
 
-    pub (crate) cached_bindgroup_reuse_counter : AtomicU32,
-    pub (crate) cached_buffer_reuse_counter : AtomicU32,
-    pub (crate) cached_buffer_inplace_counter : AtomicU32,
+    pub (crate) cached_bindgroup_reuse_counter : Counter,
+    pub (crate) cached_buffer_reuse_counter : Counter,
+    pub (crate) unary_inplace_counter : Counter,
+    pub (crate) binary_inplace_counter : Counter,
+    pub (crate) copy_inplace_counter : Counter,
     pub (crate) use_cache : bool,
     #[cfg(feature = "wgpu_debug")]
     pub debug : DebugInfo,
@@ -232,26 +308,28 @@ impl WgpuDevice{
                 meta_buffer : meta_buffer,
                 cache : Mutex::new(ModelCache::new()),
                 bindgroup_layouts,
-                cached_buffer_counter : AtomicU32::new(0),
-                cached_bindgroup_counter  : AtomicU32::new(0),
-                cached_bindgroup_reuse_counter: AtomicU32::new(0),
+                cached_buffer_counter : Counter::new(0),
+                cached_bindgroup_counter  : Counter::new(0),
+                cached_bindgroup_reuse_counter: Counter::new(0),
     
-                cached_buffer_reuse_counter: AtomicU32::new(0),
-                cached_buffer_inplace_counter : AtomicU32::new(0),
+                cached_buffer_reuse_counter: Counter::new(0),
+                unary_inplace_counter : Counter::new(0),
+                binary_inplace_counter : Counter::new(0),
+                copy_inplace_counter : Counter::new(0),
                 use_cache : true
             })
         })
     }
 
     pub fn print_bindgroup_reuseinfo(&self){
-        log::info!("Buffer: created: {}, resued : {}", self.cached_buffer_counter.load(std::sync::atomic::Ordering::Relaxed), self.cached_buffer_reuse_counter.load(std::sync::atomic::Ordering::Relaxed));
-        log::info!("Bindgroup: created: {}, resued : {}", self.cached_bindgroup_counter.load(std::sync::atomic::Ordering::Relaxed), self.cached_bindgroup_reuse_counter.load(std::sync::atomic::Ordering::Relaxed));
-        log::info!("Bindgroup Inplace used: {}", self.cached_buffer_inplace_counter.load(std::sync::atomic::Ordering::Relaxed));
+        log::info!("Buffer: created: {}, resued : {}", self.cached_buffer_counter.get(), self.cached_buffer_reuse_counter.get());
+        log::info!("Bindgroup: created: {}, resued : {}", self.cached_bindgroup_counter.get(), self.cached_bindgroup_reuse_counter.get());
+        log::info!("Inplace used: unary: {}, binary {}, copy: {}", self.unary_inplace_counter.get(), self.binary_inplace_counter.get(), self.copy_inplace_counter.get());
     }
     pub fn print_bindgroup_reuseinfo2(&self){
-        println!("Buffer: created: {}, resued : {}", self.cached_buffer_counter.load(std::sync::atomic::Ordering::Relaxed), self.cached_buffer_reuse_counter.load(std::sync::atomic::Ordering::Relaxed));
-        println!("Bindgroup: created: {}, resued : {}", self.cached_bindgroup_counter.load(std::sync::atomic::Ordering::Relaxed), self.cached_bindgroup_reuse_counter.load(std::sync::atomic::Ordering::Relaxed));
-        println!("Bindgroup Inplace used: {}", self.cached_buffer_inplace_counter.load(std::sync::atomic::Ordering::Relaxed));
+        println!("Buffer: created: {}, resued : {}", self.cached_buffer_counter.get(), self.cached_buffer_reuse_counter.get());
+        println!("Bindgroup: created: {}, resued : {}", self.cached_bindgroup_counter.get(), self.cached_bindgroup_reuse_counter.get());
+        println!("Inplace used: unary: {}, binary {}, copy: {}", self.unary_inplace_counter.get(), self.binary_inplace_counter.get(), self.copy_inplace_counter.get());
     }
     
     pub fn clear_cache(&self){
@@ -323,7 +401,7 @@ impl WgpuDevice{
                 pipelines: pipelines.iter().map(|(pk, _)|{
                     return debug_info::PipelineInfo { 
                         name: format!("{:?}", pk.0).to_owned(), 
-                        consts : pk.1.iter().map(|f| f.0).collect()
+                        consts : pk.1.0.iter().map(|f| *f.1).collect()
                      }
                 }).collect()
 
@@ -336,7 +414,7 @@ impl WgpuDevice{
     #[instrument]
     fn load_pipeline(device : &wgpu::Device, shader : Arc<wgpu::ShaderModule>, pipeline : &PipelineType, pipeline_layout : &wgpu::PipelineLayout) -> wgpu::ComputePipeline{
         let entry_point = pipeline.0.get_entry_point();
-        if pipeline.1.is_empty(){
+        if pipeline.1.0.is_empty(){
             return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: None,
                 layout: Some(pipeline_layout),
@@ -347,15 +425,13 @@ impl WgpuDevice{
             });
         }
         else{
-            let hmap : HashMap<_, _> = pipeline.1.iter().enumerate().map(|(index, value)| (format!("CONSTV_{index}"), value.0)).collect();
-
             return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: None,
                 layout: Some(pipeline_layout),
                 module: &shader,
                 entry_point: entry_point,
                 compilation_options :  wgpu::PipelineCompilationOptions{
-                    constants: &hmap,
+                    constants: &pipeline.1.0,
                     zero_initialize_workgroup_memory: true,
                     vertex_pulling_transform: false,
                 },
@@ -365,7 +441,7 @@ impl WgpuDevice{
     }
 
     #[instrument]
-    pub (crate) fn get_pipeline2(&self, pipeline: &PipelineType, pipeline_layout : &wgpu::PipelineLayout) -> crate::Result<Arc<wgpu::ComputePipeline>> {
+    pub (crate) fn get_pipeline(&self, pipeline: &PipelineType, pipeline_layout : &wgpu::PipelineLayout) -> crate::Result<Arc<wgpu::ComputePipeline>> {
         let shader = pipeline.0.get_shader();
         let mut shaders = self.shader.lock().unwrap();
         if !shaders.contains_key(&shader){

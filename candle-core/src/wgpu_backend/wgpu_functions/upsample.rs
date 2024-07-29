@@ -28,7 +28,7 @@ pub fn queue_upsample1d(
     meta.add(c * target_size);
     meta.add(target_size);
 
-    let pipeline = get_pipeline(Pipelines::Upsample(get_dtype(dtype)?, Functions::Upsample1d));
+    let pipeline = meta.get_pipeline(Pipelines::Upsample(get_dtype(dtype)?, Functions::Upsample1d));
 
     let bind_group = create_bind_group_input1(
         buffer_dest,
@@ -78,7 +78,7 @@ pub fn queue_upsample2d(
     meta.add(target_size.0 * target_size.1);
     meta.add(target_size.1);
 
-    let pipeline = get_pipeline(Pipelines::Upsample(get_dtype(dtype)?, Functions::Upsample2d));
+    let pipeline = meta.get_pipeline(Pipelines::Upsample(get_dtype(dtype)?, Functions::Upsample2d));
 
     let bind_group = create_bind_group_input1(
         buffer_dest,

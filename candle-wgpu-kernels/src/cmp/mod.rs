@@ -4,7 +4,7 @@ pub enum Functions{CmpBufferFromBuffer}
 impl crate::EntryPoint for Functions{
     fn get_entry_point(&self) -> &'static str{
         match self{
-            Functions::CmpBufferFromBuffer => "gy"
+            Functions::CmpBufferFromBuffer => "ga"
         }
     } 
 }
