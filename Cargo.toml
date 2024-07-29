@@ -49,7 +49,7 @@ gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
 hf-hub = "0.3.0"
 half = { version = "2.3.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }
 hound = "3.5.1"
-image = { version = "0.25.0", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25.2", default-features = false, features = ["jpeg", "png"] }
 imageproc = { version = "0.24.0", default-features = false }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
 libc = { version = "0.2.147" }
