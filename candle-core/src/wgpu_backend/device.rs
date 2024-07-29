@@ -98,7 +98,8 @@ impl QueueBuffer {
     }
 
     pub fn init(&mut self) -> ConstArray{
-        let prev = std::mem::replace(&mut self.const_array, ConstArray::new());
+        let mut prev = std::mem::replace(&mut self.const_array, ConstArray::new());
+        prev.finish();
         prev
     }
 

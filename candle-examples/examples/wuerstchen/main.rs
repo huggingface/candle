@@ -429,11 +429,7 @@ fn run(args: Args) -> Result<()> {
             },
             _ => {},
         };
-
-
     }
-
-
     Ok(())
 }
 
@@ -442,7 +438,6 @@ fn main() -> Result<()> {
     let args = Args::parse();
     run(args)
 }
-
 
 
 fn compare_tensor(cpu : &Tensor, noncpu : &Tensor, name : &str) -> Result<()>{
@@ -464,7 +459,7 @@ fn compare_tensor(cpu : &Tensor, noncpu : &Tensor, name : &str) -> Result<()>{
 
     let diff : f32 = diff.to_scalar()?;
     let mean : f32 = mean.to_scalar()?;
-    log::warn!("Diff was: {diff}, mean: {mean}, name: {name}");
+    println!("Diff was: {diff}, mean: {mean}, name: {name}");
     Ok(())
 }   
 

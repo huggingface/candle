@@ -68,24 +68,29 @@ pub const MAX_DISPATCH_SIZE: u32 = 65535;
 pub struct MetaArray(pub Vec<u32>);
 
 #[derive(Debug, Clone)]
-pub struct ConstArray(pub HashMap<String, f64>);
+pub struct ConstArray(pub HashMap<String, f64>, pub u64);
 
 impl Hash for ConstArray {
     fn hash<H: Hasher>(&self, state: &mut H) {
+        self.1.hash(state);
         // Convert the map to a sorted vector of tuples to ensure consistent ordering
         //let mut sorted_kv_pairs: Vec<_> = self.0.iter().collect();
         //sorted_kv_pairs.sort_by(|a, b| a.0.cmp(b.0));
         
-        for (key, value) in self.0.iter() {
-            key.hash(state);
-            value.to_bits().hash(state); // Convert f64 to u64 bits for hashing
-        }
+        // for (key, value) in self.0.iter() {
+        //     key.hash(state);
+        //     value.to_bits().hash(state); // Convert f64 to u64 bits for hashing
+        // }
     }
 }
 
 impl PartialEq for ConstArray {
     fn eq(&self, other: &Self) -> bool {
         if self.0.len() != other.0.len() {
+            return false;
+        }
+
+        if self.1 != other.1{
             return false;
         }
 
@@ -130,7 +135,7 @@ impl<T : ToU32 + Copy> KernelParameterMeta for T{
 
 impl ConstArray {
     pub fn new() -> Self {
-        ConstArray(HashMap::new())
+        ConstArray(HashMap::new(), 0)
     }
 
     pub fn add<T : KernelParameterConsts>(&mut self, value : T){
@@ -139,6 +144,15 @@ impl ConstArray {
 
     pub fn insert<T : ToF64>(&mut self, key : candle_wgpu_kernels::Constants, value : T){
         self.0.insert(key.get_entry_point().to_string(), value.to_f64());
+    }
+
+    pub fn finish(&mut self){
+        let mut state = std::hash::DefaultHasher::new();
+        for (key, value) in self.0.iter() {
+            key.hash(&mut state);
+            value.to_bits().hash(&mut state); // Convert f64 to u64 bits for hashing
+        }
+        self.1 = state.finish();
     }
 }
 
@@ -559,7 +573,6 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                                     //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
                                     if vdest.size <= v1.size {
                                         if vdest.storage.lock().unwrap().is_none() {
-                                            println!("Optimize Unary");
                                             dev.unary_inplace_counter.inc();
                                             q.pipeline.0 = Pipelines::Unary(dtype.clone(), candle_wgpu_kernels::unary::Functions::UnaryInplaceContiguous);
                                             vdest_ref = Some(vdest.clone());
@@ -591,7 +604,6 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                                     //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
                                     if vdest.size <= v1.size {
                                         if vdest.storage.lock().unwrap().is_none() {
-                                            println!("Optimize Binary v1");
                                             dev.binary_inplace_counter.inc();
                                             q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace1ContiguousBoth);
                                             vdest_ref = Some(vdest.clone());
@@ -621,7 +633,6 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                                 if Arc::strong_count(&v2) == 1 {
                                     //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
                                     if vdest.size <= v2.size {
-                                        println!("Optimize Binary v2");
                                         if vdest.storage.lock().unwrap().is_none() {
                                             dev.binary_inplace_counter.inc();
                                             q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace2ContiguousBoth);
@@ -630,8 +641,8 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                                             q.bindgroup =
                                                 DispatchedBindgroup::BindgroupReference(
                                                     BindGroupReferenceBase::Bindgroup1(
-                                                        v1.clone(),
                                                         v2.clone(),
+                                                        v1.clone(),
                                                     ),
                                                 );
                                             optimize_binary_inplace = true;
@@ -715,7 +726,7 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                         q.bindgroup = DispatchedBindgroup::CachedBindgroup(bindgroup); //this may drop a bufferReference. The BufferReference needs to access cache, therefore cache was droped
                         
                         q.pipeline_cached = Some(pipeline);
-                        
+
                         //needs to be deleayed, we want to set v1_storage to None, but to create a BindGroup, we need to have v1_storage set
                         if optimize_unary_inplace || optimize_binary_inplace{
                             if let Some(vdest_ref) = vdest_ref {

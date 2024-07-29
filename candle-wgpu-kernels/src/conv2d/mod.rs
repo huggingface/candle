@@ -1,10 +1,10 @@
 /// *********** This File Is Genereted! **********///
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Functions{Conv2d,Conv2d2,Conv2dTranspose}
+pub enum Functions{Conv2d2,Conv2dTranspose,Conv2d}
 impl crate::EntryPoint for Functions{
     fn get_entry_point(&self) -> &'static str{
         match self{
-            Functions::Conv2d => "ga",Functions::Conv2d2 => "gb",Functions::Conv2dTranspose => "gc"
+            Functions::Conv2d2 => "gb",Functions::Conv2dTranspose => "gc",Functions::Conv2d => "ga"
         }
     } 
 }

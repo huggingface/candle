@@ -1,10 +1,10 @@
 /// *********** This File Is Genereted! **********///
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Functions{Copy3d,Copy3dPaddedNobatch,Copy2dTranspose2,Copy2d,Copy3dPadded,CopyStrided,Copy2dTranspose,Copy2d2,Copy}
+pub enum Functions{Copy2dTranspose,CopyStrided,Copy3dPaddedNobatch,Copy3d,Copy2d,Copy,Copy2dTranspose2,Copy3dPadded,Copy2d2}
 impl crate::EntryPoint for Functions{
     fn get_entry_point(&self) -> &'static str{
         match self{
-            Functions::Copy3d => "gg",Functions::Copy3dPaddedNobatch => "gi",Functions::Copy2dTranspose2 => "gf",Functions::Copy2d => "gc",Functions::Copy3dPadded => "gh",Functions::CopyStrided => "ga",Functions::Copy2dTranspose => "ge",Functions::Copy2d2 => "gd",Functions::Copy => "gb"
+            Functions::Copy2dTranspose => "ge",Functions::CopyStrided => "ga",Functions::Copy3dPaddedNobatch => "gi",Functions::Copy3d => "gg",Functions::Copy2d => "gc",Functions::Copy => "gb",Functions::Copy2dTranspose2 => "gf",Functions::Copy3dPadded => "gh",Functions::Copy2d2 => "gd"
         }
     } 
 }

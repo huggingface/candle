@@ -356,7 +356,6 @@ mod shader_loader{
 
     pub mod shader_shortener{
         use std::collections::HashMap;
-        use std::hash::Hash;
         use std::str::Chars;
 
 
