@@ -199,6 +199,13 @@ impl RNN for LSTM {
         let states = states.iter().map(|s| s.h.clone()).collect::<Vec<_>>();
         Tensor::stack(&states, 1)
     }
+
+    fn states_from_tensor(&self, h0: &Tensor, c0: &Tensor) -> Result<Self::State> {
+        Ok(LSTMState {
+            h: h0.clone(),
+            c: c0.clone(),
+        })
+    }
 }
 
 /// The state for a GRU network, this contains a single tensor.
