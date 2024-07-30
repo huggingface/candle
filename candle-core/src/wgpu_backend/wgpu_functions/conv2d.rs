@@ -57,8 +57,6 @@ pub fn queue_conv2d(
     //meta.add(params.stride);
     //meta.add(params.dilation);
     //meta.add(input_layout.start_offset());
-
-    //println!("Const2d: params: {:?}, vec: {:?}", params, const_vec);
     let pipeline = meta.get_pipeline_const(Pipelines::Conv2d(get_dtype(dtype)?, Functions::Conv2d), const_vec);
 
     let bind_group = create_bind_group_input2(
@@ -132,7 +130,6 @@ pub fn queue_conv2d_transpose(
     //meta.add(params.stride);
     //meta.add(params.dilation);
     //meta.add(input_layout.start_offset());
-    //println!("Const2d Transpose: params: {:?}, vec: {:?}", params, const_vec);
     let pipeline = meta.get_pipeline_const(Pipelines::Conv2d(get_dtype(dtype)?, Functions::Conv2dTranspose), const_vec);
     let bind_group = create_bind_group_input2(
         buffer_dest,
@@ -199,7 +196,6 @@ pub fn queue_conv1d(
     meta.add(params.dilation);
     meta.add(input_layout.start_offset());
 
-    //println!("Const1d: params: {:?}, const_vec: {:?}", params, const_vec);
     let pipeline = meta.get_pipeline_const(Pipelines::Conv1d(get_dtype(dtype)?, Functions1d::Conv1d), const_vec);
 
     let bind_group = create_bind_group_input2(
@@ -264,7 +260,6 @@ pub fn queue_conv1d_transpose(
     meta.add(params.dilation);
     meta.add(input_layout.start_offset());
 
-    //println!("Const1d Transpose: params: {:?}, const_vec: {:?}", params, const_vec);
     let pipeline = meta.get_pipeline_const(Pipelines::Conv1d(get_dtype(dtype)?, Functions1d::Conv1dTranspose), const_vec);
     let bind_group = create_bind_group_input2(
         buffer_dest,

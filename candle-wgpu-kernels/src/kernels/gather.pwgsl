@@ -1,4 +1,4 @@
-#include "../util.pwgsl"
+#include "util.pwgsl"
 
 #define op_gather.dim    op_meta[0]
 #define op_index.input_layout1     1u

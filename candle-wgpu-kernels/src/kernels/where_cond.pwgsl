@@ -1,4 +1,4 @@
-#include "../util.pwgsl"
+#include "util.pwgsl"
 
 @compute
 @workgroup_size(64,1,1)

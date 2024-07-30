@@ -1,30 +1,32 @@
-#ifdef f32
-#define DTYPE f32 
-#endif
+#include "util.pwgsl"
 
-#ifdef u32
-#define DTYPE u32 
-#endif
+// #ifdef f32
+// #define DTYPE f32 
+// #endif
 
-#ifdef u8
-#define DTYPE u32 
-#endif
+// #ifdef u32
+// #define DTYPE u32 
+// #endif
 
-@group(0) @binding(0)
-var<storage, read_write> v_dest: array<DTYPE>;
+// #ifdef u8
+// #define DTYPE u32 
+// #endif
 
-@group(0) @binding(1)
-var<storage> op_meta : array<u32>;
+// @group(0) @binding(0)
+// var<storage, read_write> v_dest: array<DTYPE>;
 
-@group(0) @binding(2)
-var<storage> v_input1: array<DTYPE>;
+// @group(0) @binding(1)
+// var<storage> op_meta : array<u32>;
 
-@group(0) @binding(3)
-var<storage> v_input2: array<DTYPE>;
+// @group(0) @binding(2)
+// var<storage> v_input1: array<DTYPE>;
+
+// @group(0) @binding(3)
+// var<storage> v_input2: array<DTYPE>;
 
 
-const ZERO : DTYPE = 0;
-const ONE : DTYPE = 1;
+// const ZERO : DTYPE = 0;
+// const ONE : DTYPE = 1;
 
 override CONSTV_0:u32 = 1u;
 override CONSTV_1:u32 = 1u;
@@ -35,16 +37,6 @@ override CONSTV_5:u32 = 1u;
 override CONSTV_6:u32 = 1u;
 override CONSTV_7:u32 = 1u;
 override CONSTV_8:u32 = 1u;
-
-//#define CONSTV_0 1u
-//#define CONSTV_1 1u
-//#define CONSTV_2 1u
-//#define CONSTV_3 1u
-//#define CONSTV_4 1u
-//#define CONSTV_5 0u
-//#define CONSTV_6 3u
-//#define CONSTV_7 1u
-//#define CONSTV_8 1u
 
 #define op_conv1d.kernel_stride   CONSTV_0
 //#define op_conv2d.kernel_y_stride   CONSTV_1
@@ -146,8 +138,6 @@ fn conv1d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if i_out >= size_out {
         return;
     }
-
-
 
     let kernel_size = op_conv1d.kernel_size;
     let kernel_c_stride = op_conv1d.kernel_c_stride;

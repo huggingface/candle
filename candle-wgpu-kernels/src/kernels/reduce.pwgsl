@@ -1,4 +1,4 @@
-#include "../util.pwgsl"
+#include "util.pwgsl"
 
 #define op_reduce.operation                     op_meta[0]
 #define op_reduce.workgroup_count               op_meta[1]

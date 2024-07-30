@@ -13,7 +13,7 @@ use crate::{notImplemented, wrongType, Layout};
 use super::debug_info::{DebugInfo, Measurements,MInfo, ShaderInfo};
 
 use super::cache::{BindGroupReferenceBase, BindgroupId, BindgroupLayouts, BufferReference, ModelCache};
-use super::util::{Counter, ToF64};
+use super::util::{Counter, ObjectToIdMapper, ToF64, ToU32};
 use super::wgpu_functions::{ConstArray, KernelParameterMeta};
 use super::wgpu_functions::{self, create_buffer_init, unary::UnaryOperation, MetaArray};
 use super::WgpuStorage;
@@ -53,7 +53,7 @@ impl OpIsInplaceable {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub (crate) struct PipelineType(pub candle_wgpu_kernels::Pipelines, pub ConstArray, pub OpIsInplaceable);
+pub (crate) struct PipelineType(pub candle_wgpu_kernels::Pipelines, pub usize, pub OpIsInplaceable);
 pub (crate) type BindGroupReference = BindGroupReferenceBase<Arc<BufferReference>>;
 
 #[derive(Debug)]
@@ -89,18 +89,18 @@ pub struct QueueBuffer{
     pub (crate) command_queue : Vec<MlQueue>,
     meta_array : MetaArray,
     const_array : ConstArray,
+    const_id_map : ObjectToIdMapper<ConstArray>,
+    pub (crate) id_to_const_array : Vec<HashMap<String, f64>>,
     pub (crate) current_meta : u32
 }
 
 impl QueueBuffer {
     pub fn new() -> Self {
-        Self {  command_queue: vec![], meta_array :MetaArray::new(META_BUFFER_SIZE), current_meta : 0 , const_array: ConstArray::new()}
+        Self {  command_queue: vec![], meta_array :MetaArray::new(META_BUFFER_SIZE), current_meta : 0 , const_array: ConstArray::new(), const_id_map : ObjectToIdMapper::new() , id_to_const_array : Vec::new()}
     }
 
-    pub fn init(&mut self) -> ConstArray{
-        let mut prev = std::mem::replace(&mut self.const_array, ConstArray::new());
-        prev.finish();
-        prev
+    pub fn init(&mut self){
+        self.const_array.0.clear();
     }
 
     pub fn clear(&mut self){
@@ -164,35 +164,57 @@ impl QueueBuffer {
     }
 
     pub (crate) fn get_pipeline(&mut self, pipeline: Pipelines) -> PipelineType {
-        let consts = self.init();
-        return PipelineType(pipeline, consts, OpIsInplaceable::new());
+        let (index, is_new) = self.const_id_map.get_or_insert( &self.const_array);
+        if is_new {
+            let hmap = HashMap::from_iter(self.const_array.0.iter().map(|(k,v)| (k.get_entry_point().to_owned(), v.to_f64())));
+            self.id_to_const_array.push(hmap)
+        }
+        self.init();
+        return PipelineType(pipeline, index, OpIsInplaceable::new());
     }
 
     pub (crate) fn get_pipeline_inplaceable(&mut self, pipeline: Pipelines, inplaceable : OpIsInplaceable) -> PipelineType {
-        let consts = self.init();
-        return PipelineType(pipeline, consts, inplaceable);
+        let (index, is_new) = self.const_id_map.get_or_insert( &self.const_array);
+        if is_new {
+            let hmap = HashMap::from_iter(self.const_array.0.iter().map(|(k,v)| (k.get_entry_point().to_owned(), v.to_f64())));
+            self.id_to_const_array.push(hmap)
+        }
+        self.init();
+        return PipelineType(pipeline, index, inplaceable);
     }
 
-    pub (crate) fn get_pipeline_const<T : ToF64>(&mut self, pipeline: Pipelines, const_vec : Vec<T>) -> PipelineType {
-        let mut consts = self.init();
+    pub (crate) fn get_pipeline_const<T : ToU32>(&mut self, pipeline: Pipelines, const_vec : Vec<T>) -> PipelineType {
         for (index, v) in const_vec.into_iter().enumerate(){
-            consts.0.insert(format!("CONSTV_{index}"), v.to_f64());
+            self.const_array.0.push(( candle_wgpu_kernels::Constants::get_const(index), v.to_u32()));
         }
-        return PipelineType(pipeline, consts, OpIsInplaceable::new());
+
+        let (index, is_new) = self.const_id_map.get_or_insert( &self.const_array);
+        if is_new {
+            let hmap = HashMap::from_iter(self.const_array.0.iter().map(|(k,v)| (k.get_entry_point().to_owned(), v.to_f64())));
+            self.id_to_const_array.push(hmap)
+        }
+        self.init();
+        return PipelineType(pipeline, index, OpIsInplaceable::new());
     }
-    pub (crate) fn get_pipeline_const_inplace<T : ToF64>(&mut self, pipeline: Pipelines, const_vec : Vec<T>, inplaceable : OpIsInplaceable) -> PipelineType {
-        let mut consts = self.init();
+    pub (crate) fn get_pipeline_const_inplace<T : ToU32>(&mut self, pipeline: Pipelines, const_vec : Vec<T>, inplaceable : OpIsInplaceable) -> PipelineType {
         for (index, v) in const_vec.into_iter().enumerate(){
-            consts.0.insert(format!("CONSTV_{index}"), v.to_f64());
+            self.const_array.0.push(( candle_wgpu_kernels::Constants::get_const(index), v.to_u32()));
         }
-        return PipelineType(pipeline, consts, inplaceable);
+
+        let (index, is_new) = self.const_id_map.get_or_insert( &self.const_array);
+        if is_new {
+            let hmap = HashMap::from_iter(self.const_array.0.iter().map(|(k,v)| (k.get_entry_point().to_owned(), v.to_f64())));
+            self.id_to_const_array.push(hmap)
+        }
+        self.init();
+        return PipelineType(pipeline, index, inplaceable);
     }                                                                   
 
     pub (crate) fn add<T : KernelParameterMeta>(&mut self, value : T){
         self.meta_array.add(value);
     }
 
-    pub (crate) fn add_const<T : ToF64>(&mut self, key : candle_wgpu_kernels::Constants, value : T){
+    pub (crate) fn add_const<T : ToU32>(&mut self, key : candle_wgpu_kernels::Constants, value : T){
         self.const_array.insert(key, value);
     }
 
@@ -402,7 +424,7 @@ impl WgpuDevice{
                 pipelines: pipelines.iter().map(|(pk, _)|{
                     return debug_info::PipelineInfo { 
                         name: format!("{:?}", pk.0).to_owned(), 
-                        consts : pk.1.0.iter().map(|f| *f.1).collect()
+                        consts : Vec::new(), // pk.1.0.iter().map(|f| f.1 as f64).collect()
                      }
                 }).collect()
 
@@ -413,9 +435,9 @@ impl WgpuDevice{
     }
 
     #[instrument]
-    fn load_pipeline(device : &wgpu::Device, shader : Arc<wgpu::ShaderModule>, pipeline : &PipelineType, pipeline_layout : &wgpu::PipelineLayout) -> wgpu::ComputePipeline{
+    fn load_pipeline(device : &wgpu::Device, shader : Arc<wgpu::ShaderModule>, pipeline : &PipelineType, pipeline_layout : &wgpu::PipelineLayout, consts : &HashMap<String, f64>) -> wgpu::ComputePipeline{
         let entry_point = pipeline.0.get_entry_point();
-        if pipeline.1.0.is_empty(){
+        if consts.is_empty(){
             return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: None,
                 layout: Some(pipeline_layout),
@@ -432,7 +454,7 @@ impl WgpuDevice{
                 module: &shader,
                 entry_point: entry_point,
                 compilation_options :  wgpu::PipelineCompilationOptions{
-                    constants: &pipeline.1.0,
+                    constants: &consts,
                     zero_initialize_workgroup_memory: true,
                     vertex_pulling_transform: false,
                 },
@@ -442,7 +464,7 @@ impl WgpuDevice{
     }
 
     #[instrument]
-    pub (crate) fn get_pipeline(&self, pipeline: &PipelineType, pipeline_layout : &wgpu::PipelineLayout) -> crate::Result<Arc<wgpu::ComputePipeline>> {
+    pub (crate) fn get_pipeline(&self, pipeline: &PipelineType, pipeline_layout : &wgpu::PipelineLayout, consts : &HashMap<String, f64>) -> crate::Result<Arc<wgpu::ComputePipeline>> {
         let shader = pipeline.0.get_shader();
         let mut shaders = self.shader.lock().unwrap();
         if !shaders.contains_key(&shader){
@@ -453,7 +475,7 @@ impl WgpuDevice{
         if let Some(s) = shaders.get(&shader){
             let mut pipelines = s.pipelines.lock().unwrap();
             if !pipelines.contains_key(&pipeline){
-                let p = crate::WgpuDevice::load_pipeline(&self.device, s.shader.clone(), pipeline ,pipeline_layout);
+                let p = crate::WgpuDevice::load_pipeline(&self.device, s.shader.clone(), pipeline ,pipeline_layout, consts);
                 pipelines.insert(pipeline.clone(), Arc::new(p));
             }
             

@@ -1,4 +1,4 @@
-#include "../util.pwgsl"
+#include "util.pwgsl"
 
 #define op_binary.operation         op_meta[0]
 #define op_binary.input1_layout     1u

@@ -1,4 +1,4 @@
-#include "../util.pwgsl"
+#include "util.pwgsl"
 
 #define op_upsample1d.target_length                 op_meta[0]
 #define op_upsample1d.input_size_batch              op_meta[1]

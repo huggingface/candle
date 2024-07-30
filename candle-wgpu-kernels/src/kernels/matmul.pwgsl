@@ -1,31 +1,33 @@
-#ifdef f32
-#define DTYPE f32 
-#endif
+#include "util.pwgsl"
 
-#ifdef u32
-#define DTYPE u32 
-#endif
+// #ifdef f32
+// #define DTYPE f32 
+// #endif
 
-#ifdef u8
-#define DTYPE u32 
-#endif
+// #ifdef u32
+// #define DTYPE u32 
+// #endif
 
-@group(0) @binding(0)
-var<storage, read_write> v_dest: array<DTYPE>;
+// #ifdef u8
+// #define DTYPE u32 
+// #endif
 
-@group(0) @binding(2)
-var<storage> v_input1: array<DTYPE>;
+// @group(0) @binding(0)
+// var<storage, read_write> v_dest: array<DTYPE>;
 
-@group(0) @binding(3)
-var<storage> v_input2: array<DTYPE>;
+// @group(0) @binding(2)
+// var<storage> v_input1: array<DTYPE>;
 
-
-const ZERO : DTYPE = 0;
-const ONE : DTYPE = 1;
+// @group(0) @binding(3)
+// var<storage> v_input2: array<DTYPE>;
 
 
-@group(0) @binding(1)
-var<storage> op_meta : array<u32>;
+// const ZERO : DTYPE = 0;
+// const ONE : DTYPE = 1;
+
+
+// @group(0) @binding(1)
+// var<storage> op_meta : array<u32>;
 
 
 override CONSTV_0 : u32 = 1u;
@@ -59,14 +61,14 @@ override CONSTV_4 : bool = true;
 #define op_matmul.gy_offset     op_meta[9]
 
 
-fn select(d : bool, value : u32) -> u32{
-    if d{
-        return value;
-    }
-    else{
-        return 0u;
-    }
-}
+// fn select(d : bool, value : u32) -> u32{
+//     if d{
+//         return value;
+//     }
+//     else{
+//         return 0u;
+//     }
+// }
 
 @compute
 @workgroup_size(16,16,1)
@@ -82,13 +84,13 @@ fn matmul1(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let output_size_of_one_batch = select(op_matmul.use_batch, op_matmul.m * op_matmul.n); 
+    let output_size_of_one_batch = select(op_matmul.use_batch, op_matmul.m * op_matmul.n, 0u); 
 
     let input1_offset = op_matmul.input1_offset;
     let input2_offset = op_matmul.input2_offset;
 
-    let input1_stride_b = select(op_matmul.use_batch, op_matmul.input1_stride_b);
-    let input2_stride_b = select(op_matmul.use_batch, op_matmul.input2_stride_b);
+    let input1_stride_b = select(op_matmul.use_batch, op_matmul.input1_stride_b, 0u); 
+    let input2_stride_b = select(op_matmul.use_batch, op_matmul.input2_stride_b, 0u); 
     
     let m_input1_offset = input1_offset + op_matmul.input1_stride_m * y + b * input1_stride_b;
     let m_input2_offset = input2_offset + op_matmul.input2_stride_n * x + b * input2_stride_b;
@@ -113,13 +115,13 @@ fn matmul1_end(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let output_size_of_one_batch = select(op_matmul.use_batch, op_matmul.m * op_matmul.n); 
+    let output_size_of_one_batch = select(op_matmul.use_batch, op_matmul.m * op_matmul.n, 0u);  
 
     let input1_offset = op_matmul.input1_offset;
     let input2_offset = op_matmul.input2_offset;
 
-    let input1_stride_b = select(op_matmul.use_batch, op_matmul.input1_stride_b);
-    let input2_stride_b = select(op_matmul.use_batch, op_matmul.input2_stride_b);
+    let input1_stride_b = select(op_matmul.use_batch, op_matmul.input1_stride_b, 0u); 
+    let input2_stride_b = select(op_matmul.use_batch, op_matmul.input2_stride_b, 0u); 
     
     let m_input1_offset = input1_offset + op_matmul.input1_stride_m * y + b * input1_stride_b;
     let m_input2_offset = input2_offset + op_matmul.input2_stride_n * x + b * input2_stride_b;
@@ -150,13 +152,13 @@ fn matmul5(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
    
     let batch = group_id.z;
 
-    let output_size_of_one_batch = select(op_matmul.use_batch, op_matmul.m * op_matmul.n); 
+    let output_size_of_one_batch = select(op_matmul.use_batch, op_matmul.m * op_matmul.n, 0u); 
 
     let input1_offset = op_matmul.input1_offset;
     let input2_offset = op_matmul.input2_offset;
 
-    let input1_stride_b = select(op_matmul.use_batch, op_matmul.input1_stride_b);
-    let input2_stride_b = select(op_matmul.use_batch, op_matmul.input2_stride_b);
+    let input1_stride_b = select(op_matmul.use_batch, op_matmul.input1_stride_b, 0u); 
+    let input2_stride_b = select(op_matmul.use_batch, op_matmul.input2_stride_b, 0u); 
 
     let m_input1_offset = input1_offset + op_matmul.input1_stride_m * gy + batch * input1_stride_b + lx * op_matmul.input1_stride_k;
     let m_input2_offset = input2_offset + op_matmul.input2_stride_n * gx + batch * input2_stride_b + ly * op_matmul.input2_stride_k;
@@ -292,13 +294,13 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
 
     let batch = group_id.z;
 
-    let output_size_of_one_batch = select(op_matmul.use_batch, op_matmul.m * op_matmul.n); 
+    let output_size_of_one_batch = select(op_matmul.use_batch, op_matmul.m * op_matmul.n, 0u); 
 
     let input1_offset = op_matmul.input1_offset;
     let input2_offset = op_matmul.input2_offset;
     
-    let input1_stride_b = select(op_matmul.use_batch, op_matmul.input1_stride_b);
-    let input2_stride_b = select(op_matmul.use_batch, op_matmul.input2_stride_b);
+    let input1_stride_b = select(op_matmul.use_batch, op_matmul.input1_stride_b, 0u); 
+    let input2_stride_b = select(op_matmul.use_batch, op_matmul.input2_stride_b, 0u); 
 
     let m_input1_offset = input1_offset + op_matmul.input1_stride_m * gy + batch * input1_stride_b;
     let m_input2_offset = input2_offset + op_matmul.input2_stride_n * gx + batch * input2_stride_b;

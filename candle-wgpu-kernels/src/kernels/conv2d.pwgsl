@@ -1,30 +1,32 @@
-#ifdef f32
-#define DTYPE f32 
-#endif
+#include "util.pwgsl"
 
-#ifdef u32
-#define DTYPE u32 
-#endif
+// #ifdef f32
+// #define DTYPE f32 
+// #endif
 
-#ifdef u8
-#define DTYPE u32 
-#endif
+// #ifdef u32
+// #define DTYPE u32 
+// #endif
 
-@group(0) @binding(0)
-var<storage, read_write> v_dest: array<DTYPE>;
+// #ifdef u8
+// #define DTYPE u32 
+// #endif
 
-@group(0) @binding(1)
-var<storage> op_meta : array<u32>;
+// @group(0) @binding(0)
+// var<storage, read_write> v_dest: array<DTYPE>;
 
-@group(0) @binding(2)
-var<storage> v_input1: array<DTYPE>;
+// @group(0) @binding(1)
+// var<storage> op_meta : array<u32>;
 
-@group(0) @binding(3)
-var<storage> v_input2: array<DTYPE>;
+// @group(0) @binding(2)
+// var<storage> v_input1: array<DTYPE>;
+
+// @group(0) @binding(3)
+// var<storage> v_input2: array<DTYPE>;
 
 
-const ZERO : DTYPE = 0;
-const ONE : DTYPE = 1;
+// const ZERO : DTYPE = 0;
+// const ONE : DTYPE = 1;
 
 override CONSTV_0:u32 = 1u;
 override CONSTV_1:u32 = 1u;

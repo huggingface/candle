@@ -1,4 +1,4 @@
-#include "../util.pwgsl"
+#include "util.pwgsl"
 
 fn hash(i : u32) -> u32{
     var x = i ^ (i >> 16);

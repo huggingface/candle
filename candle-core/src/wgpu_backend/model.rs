@@ -113,7 +113,6 @@ impl ModelCache {
         let mut device_cache = device.cache.lock().unwrap();
 
         if device_cache.is_none(){
-            println!("Start Cache_Create New");
             let cache =  Self { 
                 counter_buffer:0, 
                 cached_buffer: vec![], 
@@ -130,7 +129,6 @@ impl ModelCache {
     }
 
     pub fn finish(device : &WgpuDevice){
-        println!("End Cache");
         let mut device_cache = device.cache.lock().unwrap();
         *device_cache = None;
     }

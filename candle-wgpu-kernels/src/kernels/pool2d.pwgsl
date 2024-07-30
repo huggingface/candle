@@ -1,4 +1,4 @@
-#include "../util.pwgsl"
+#include "util.pwgsl"
 
 #define op_pool2d.b                 op_meta[0]
 #define op_pool2d.c_in              op_meta[1]

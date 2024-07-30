@@ -1,4 +1,4 @@
-#include "../util.pwgsl"
+#include "util.pwgsl"
 
 #define op_index.input_stride_x    op_meta[0]
 #define op_index.input_stride_y    op_meta[1]

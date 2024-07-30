@@ -1,25 +1,23 @@
-pub mod binary;
-pub mod cmp;
-pub mod conv1d;
-pub mod conv2d;
-pub mod convert;
-pub mod copy;
-pub mod gather;
-pub mod index_select;
-pub mod matmul;
-pub mod pool2d;
-pub mod reduce;
-pub mod rms_norm;
-pub mod softmax;
-pub mod unary;
-pub mod upsample;
-pub mod where_cond;
-pub mod testshader;
 mod generated;
+pub use generated::*;
 
-pub use generated::Pipelines as Pipelines;
-pub use generated::Shaders as Shaders;
-pub use generated::Constants as Constants;
+impl Constants{
+    pub fn get_const(i : usize)->Constants{
+        match i{
+            0 => Constants::Constv0,
+            1 => Constants::Constv1,
+            2 => Constants::Constv2,
+            3 => Constants::Constv3,
+            4 => Constants::Constv4,
+            5 => Constants::Constv5,
+            6 => Constants::Constv6,
+            7 => Constants::Constv7,
+            8 => Constants::Constv8,
+            9 => Constants::Constv9,
+            _ => todo!()
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DType{

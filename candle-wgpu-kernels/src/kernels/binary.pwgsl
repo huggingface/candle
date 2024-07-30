@@ -1,4 +1,4 @@
-#include "../util.pwgsl"
+#include "util.pwgsl"
 
 fn set_binary(operation : u32, id : u32, x : DTYPE, y : DTYPE){
     switch(operation){

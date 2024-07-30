@@ -1,6 +1,6 @@
-use std::{collections::{BTreeMap, HashMap, VecDeque}, sync::atomic::AtomicU32};
+use std::{collections::{BTreeMap, HashMap, VecDeque}, hash::{Hash, Hasher}, sync::atomic::AtomicU32};
 
-pub(crate) trait ToU32 {
+pub trait ToU32 {
     fn to_u32(self) -> u32;
 }
 
@@ -26,6 +26,12 @@ impl ToU32 for f32 {
 impl ToU32 for usize {
     fn to_u32(self) -> u32 {
         return self as u32;
+    }
+}
+
+impl ToU32 for bool {
+    fn to_u32(self) -> u32 {
+        return if self {1} else{0};
     }
 }
 
@@ -200,5 +206,92 @@ impl Counter{
 
     pub fn get(&self) -> u32{
         self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+
+#[derive(Debug, Clone, Copy)]
+pub struct FixedArray<T, const TSIZE : usize> {
+    data: [T; TSIZE],
+    len: usize,
+}
+
+impl<const TSIZE : usize, T : std::marker::Copy + std::default::Default> FixedArray<T, TSIZE> {
+    
+    pub fn new() -> Self{
+        FixedArray { data : [Default::default(); TSIZE], len : 0 }
+    }
+    
+    pub fn get(&self) -> &[T]{
+        return &self.data[0..self.len];
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T>{
+        return self.data[0..self.len].iter();
+    }
+
+    pub fn from_vec(vec: &Vec<T>) -> Self {
+        let mut data = [Default::default(); TSIZE];
+        let len = vec.len();
+        assert!(len <= TSIZE);
+        data[..len].copy_from_slice(&vec[..len]);
+        FixedArray { data, len }
+    }
+
+    pub fn push(&mut self, data : T){
+        self.data[self.len] = data;
+        self.len += 1;
+    }
+
+    pub fn clear(&mut self){
+        self.len = 0;
+    }
+
+    pub fn is_empty(&self) -> bool{
+        self.len == 0
+    }
+}
+
+impl<const TSIZE : usize, T : Hash> Hash for FixedArray<T, TSIZE> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.len.hash(state);
+        for x in self.data[0..self.len].iter() {
+            x.hash(state);
+        }
+    }
+}
+
+impl<const TSIZE : usize, T : Hash + std::cmp::PartialEq>  PartialEq for FixedArray<T, TSIZE> {
+    fn eq(&self, other: &Self) -> bool {
+        self.len == other.len && self.data[..self.len] == other.data[..other.len]
+    }
+}
+
+impl<const TSIZE : usize, T : Hash + std::cmp::PartialEq>  Eq for FixedArray<T, TSIZE> {}
+
+
+#[derive(Debug)]
+pub struct ObjectToIdMapper<K> {
+    map: HashMap<K, usize>,
+    next_id: usize,
+}
+
+impl<K : std::cmp::Eq + Hash + Clone> ObjectToIdMapper<K> {
+    pub fn new() -> Self {
+        ObjectToIdMapper {
+            map: HashMap::new(),
+            next_id: 0,
+        }
+    }
+
+    pub fn get_or_insert(&mut self, key: &K) -> (usize, bool) {
+        if let Some(id) = self.map.get(&key) {
+            (*id, false)
+        } else {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.map.insert(key.clone(), id);
+            (id, true)
+        }
     }
 }

@@ -20,14 +20,13 @@ use std::{
     num::NonZeroU64,
 };
 
-use candle_wgpu_kernels::EntryPoint;
 use tracing::{instrument, span, Level};
 use super::{
     cache::{BindGroupReferenceBase, BufferReference, CachedBindGroupReference},
     device::{
         BindGroupReference, DispatchedBindgroup, MlQueue, OpIsInplaceable, PipelineType, QueueBuffer, META_BUFFER_SIZE
     },
-    util::{ToF64, ToU32},
+    util::{FixedArray, ToU32},
 };
 
 pub use candle_wgpu_kernels::Pipelines as Pipelines;
@@ -67,43 +66,9 @@ pub const MAX_DISPATCH_SIZE: u32 = 65535;
 #[derive(Debug)]
 pub struct MetaArray(pub Vec<u32>);
 
-#[derive(Debug, Clone)]
-pub struct ConstArray(pub HashMap<String, f64>, pub u64);
-
-impl Hash for ConstArray {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.1.hash(state);
-        // Convert the map to a sorted vector of tuples to ensure consistent ordering
-        //let mut sorted_kv_pairs: Vec<_> = self.0.iter().collect();
-        //sorted_kv_pairs.sort_by(|a, b| a.0.cmp(b.0));
-        
-        // for (key, value) in self.0.iter() {
-        //     key.hash(state);
-        //     value.to_bits().hash(state); // Convert f64 to u64 bits for hashing
-        // }
-    }
-}
-
-impl PartialEq for ConstArray {
-    fn eq(&self, other: &Self) -> bool {
-        if self.0.len() != other.0.len() {
-            return false;
-        }
-
-        if self.1 != other.1{
-            return false;
-        }
-
-        self.0.iter().all(|(key, value)| {
-            match other.0.get(key) {
-                Some(other_value) => value == other_value,
-                None => false,
-            }
-        })
-    }
-}
-
-impl Eq for ConstArray {}
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+//pub struct ConstArray(pub HashMap<String, f64>, pub u64);
+pub struct ConstArray(pub FixedArray<(candle_wgpu_kernels::Constants, u32), 32>);
 
 pub trait KernelParameterMeta{
     fn write_meta(&self, meta : &mut MetaArray);
@@ -135,25 +100,29 @@ impl<T : ToU32 + Copy> KernelParameterMeta for T{
 
 impl ConstArray {
     pub fn new() -> Self {
-        ConstArray(HashMap::new(), 0)
+        ConstArray(FixedArray::new())
     }
 
     pub fn add<T : KernelParameterConsts>(&mut self, value : T){
         value.write_consts(self);
     }
 
-    pub fn insert<T : ToF64>(&mut self, key : candle_wgpu_kernels::Constants, value : T){
-        self.0.insert(key.get_entry_point().to_string(), value.to_f64());
+    // pub fn insert<T : ToF64>(&mut self, key : candle_wgpu_kernels::Constants, value : T){
+    //     self.0.insert(key.get_entry_point().to_string(), value.to_f64());
+    // }
+
+    pub fn insert<T : ToU32>(&mut self, key : candle_wgpu_kernels::Constants, value : T){
+        self.0.push((key, value.to_u32()));
     }
 
-    pub fn finish(&mut self){
-        let mut state = std::hash::DefaultHasher::new();
-        for (key, value) in self.0.iter() {
-            key.hash(&mut state);
-            value.to_bits().hash(&mut state); // Convert f64 to u64 bits for hashing
-        }
-        self.1 = state.finish();
-    }
+    // pub fn finish(&mut self){
+    //     let mut state = std::hash::DefaultHasher::new();
+    //     for (key, value) in self.0.iter() {
+    //         key.hash(&mut state);
+    //         value.to_bits().hash(&mut state); // Convert f64 to u64 bits for hashing
+    //     }
+    //     self.1 = state.finish();
+    // }
 }
 
 
@@ -511,8 +480,6 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer){
             }
         }
         //allow 20% margin more:
-        //println!("flush: {}({})/{most_needed_storage}", cache.buffers.buffer_memory, cache.buffers.buffer_memory_free);
-
         let most_needed_storage = (most_needed_storage as f64 * 1.20)  as u64;
         
         if most_needed_storage >  cache.buffers.max_memory_allowed{
@@ -525,7 +492,8 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer){
 }
 
 #[instrument]
-fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, current_meta: usize, last_meta : &mut usize){
+fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut usize, current_meta: usize, last_meta : &mut usize){
+    let queue = &mut command_buffer.command_queue; 
     let mut cache_limit = false;
     let mut total_workload = 0u64; //we only allow a certain amount of workload per commandBuffer 
     let start_index = *index; 
@@ -665,7 +633,6 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                                 if Arc::strong_count(&v1) == 1 {
                                     //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
                                     if vdest.size <= v1.size {
-                                        println!("Optimize Copy");
                                         if vdest.storage.lock().unwrap().is_none() {
                                             //startoffset = 0?
                                             dev.copy_inplace_counter.inc();
@@ -704,8 +671,10 @@ fn set_buffers(dev: &WgpuDevice, queue: &mut Vec<MlQueue>, index : &mut usize, c
                         _ => panic!("not expected"),
                     };
     
+                    
+                    let consts = &command_buffer.id_to_const_array[q.pipeline.1];
                     let pipeline = dev
-                        .get_pipeline( &q.pipeline, pl)
+                        .get_pipeline( &q.pipeline, pl, consts)
                         .unwrap();
     
                     if let DispatchedBindgroup::BindgroupReference(bindgroup_reference) =
@@ -775,7 +744,7 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
             let mut current_meta: usize = 0;
             let mut last_meta: usize = 0;
             while index < queue_buffer.command_queue.len() {
-                set_buffers(dev, &mut queue_buffer.command_queue, &mut index, current_meta, &mut last_meta);
+                set_buffers(dev, queue_buffer, &mut index, current_meta, &mut last_meta);
 
                 let last_meta_index = (last_meta + 256 / 4).min(queue_buffer.get_meta().len());
               
