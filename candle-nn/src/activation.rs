@@ -93,9 +93,9 @@ impl candle::Module for PReLU {
 /// # Arguments
 ///
 /// * `num_channels` - The number of channels. Use `None` to have as single trainable value and
-/// `Some` for a 1D vector with the appropriate number of channels. When applying the `forward`
-/// function, the input tensor shape `s` should either be one dimension with this number of
-/// channels or if `s.len() >= 2` it should have `s[1]` equal to this number.
+///   `Some` for a 1D vector with the appropriate number of channels. When applying the `forward`
+///   function, the input tensor shape `s` should either be one dimension with this number of
+///   channels or if `s.len() >= 2` it should have `s[1]` equal to this number.
 pub fn prelu(num_channels: Option<usize>, vs: crate::VarBuilder) -> Result<PReLU> {
     let init_ws = crate::init::Init::Const(0.25);
     // When using a scalar weight, the PyTorch encoding is to use a 1d vector of length 1.

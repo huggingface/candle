@@ -322,7 +322,7 @@ impl ClipEncoder {
         let vs = vs.pp("layers");
         let mut layers: Vec<ClipEncoderLayer> = Vec::new();
         for index in 0..c.num_hidden_layers {
-            let layer = ClipEncoderLayer::new(vs.pp(&index.to_string()), c)?;
+            let layer = ClipEncoderLayer::new(vs.pp(index.to_string()), c)?;
             layers.push(layer)
         }
         Ok(ClipEncoder { layers })
