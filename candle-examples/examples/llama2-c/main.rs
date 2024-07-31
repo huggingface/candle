@@ -135,12 +135,12 @@ impl Args {
 
 fn main() -> anyhow::Result<()> {
     env_logger::builder().filter_level(log::LevelFilter::Info).init();
-    
-    use tracing_chrome::ChromeLayerBuilder;
-    use tracing_subscriber::prelude::*;
 
-    let (chrome_layer, _guard) = ChromeLayerBuilder::new().build();
-    tracing_subscriber::registry().with(chrome_layer).init();
+    //use tracing_chrome::ChromeLayerBuilder;
+    //use tracing_subscriber::prelude::*;
+
+    //let (chrome_layer, _guard) = ChromeLayerBuilder::new().build();
+    //tracing_subscriber::registry().with(chrome_layer).init();
     
     let args = Args::parse();
     match &args.task {
