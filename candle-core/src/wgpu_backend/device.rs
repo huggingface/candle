@@ -296,7 +296,7 @@ impl WgpuDevice{
         // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
         //  `features` being the available features.
         log::info!("Request Device");
-        log::info!("Features: {:?}", required_features);
+        log::info!("Features: {:?}", features);
         log::info!("Limits: {:?}", limits);
         let (device, queue) = adapter
             .request_device(
