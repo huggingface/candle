@@ -275,6 +275,13 @@ impl WgpuDevice{
         log::info!("Request Instance:");
         //let instance = wgpu::Instance::default();
         let instance = wgpu::Instance::new(InstanceDescriptor{ backends: Backends::PRIMARY, flags:InstanceFlags::default() , dx12_shader_compiler: wgpu::Dx12Compiler::Fxc, gles_minor_version: wgpu::Gles3MinorVersion::Automatic });
+        
+        log::info!("Enumerate Adapters:");
+        
+        for adapter in  instance.enumerate_adapters(Backends::PRIMARY).iter(){
+            log::info!("Adapter: {:?}", adapter.get_info());
+        }
+
         log::info!("Request Adapter:");
         // `request_adapter` instantiates the general connection to the GPU
         let adapter = instance
