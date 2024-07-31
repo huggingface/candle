@@ -271,12 +271,14 @@ pub (crate) const MAX_WORKLOAD_SIZE : u64 = 1024u64*1024*1024*10; //10gb
 
 impl WgpuDevice{
     pub (crate) async fn create(_: usize) -> crate::Result<Self>{
+        log::info!("Request Instance:");
         let instance = wgpu::Instance::default();
-
+        log::info!("Request Adapter:");
         // `request_adapter` instantiates the general connection to the GPU
         let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions::default()).await.unwrap();
+            .request_adapter(&wgpu::RequestAdapterOptions{ power_preference: wgpu::PowerPreference::HighPerformance, force_fallback_adapter: false, compatible_surface: None }).await.unwrap();
 
+        log::info!("Adapter Requested:");
         let mut limits = wgpu::Limits::downlevel_defaults();
 
         #[cfg(feature = "wgpu_debug")]
@@ -293,6 +295,9 @@ impl WgpuDevice{
      
         // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
         //  `features` being the available features.
+        log::info!("Request Device");
+        log::info!("Features: {:?}", required_features);
+        log::info!("Limits: {:?}", limits);
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
@@ -303,7 +308,7 @@ impl WgpuDevice{
                 },
                 None,
             ).await.map_err(|err| crate::Error::WebGpu(err.to_string().into()))?;
-    
+            log::info!("Device Requested");
         
         #[cfg(feature = "wgpu_debug")]
         let debug_info = super::debug_info::DebugInfo::new(&device);
