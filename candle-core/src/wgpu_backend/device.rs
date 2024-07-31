@@ -5,6 +5,7 @@ use std::hash::Hash;
 use candle_wgpu_kernels::{Constants, EntryPoint, Pipelines};
 use rand::SeedableRng;
 use tracing::instrument;
+use wgpu::{Backends, InstanceDescriptor, InstanceFlags};
 
 use crate::backend::BackendStorage;
 use crate::{notImplemented, wrongType, Layout};
@@ -272,7 +273,8 @@ pub (crate) const MAX_WORKLOAD_SIZE : u64 = 1024u64*1024*1024*10; //10gb
 impl WgpuDevice{
     pub (crate) async fn create(_: usize) -> crate::Result<Self>{
         log::info!("Request Instance:");
-        let instance = wgpu::Instance::default();
+        //let instance = wgpu::Instance::default();
+        let instance = wgpu::Instance::new(InstanceDescriptor{ backends: Backends::PRIMARY, flags:InstanceFlags::default() , dx12_shader_compiler: wgpu::Dx12Compiler::Fxc, gles_minor_version: wgpu::Gles3MinorVersion::Automatic });
         log::info!("Request Adapter:");
         // `request_adapter` instantiates the general connection to the GPU
         let adapter = instance
