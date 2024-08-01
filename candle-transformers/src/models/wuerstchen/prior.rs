@@ -158,9 +158,10 @@ fn compare_read(name : &str, current : &Tensor) -> Result<Tensor>{
         return Ok(current.clone());
     }
     else{
-        let cmp = Tensor::read_npy(name)?;
-        compare_tensor(&cmp, current, name)?;
+        return Ok(current.clone());
+        //let cmp = Tensor::read_npy(name)?;
+        //compare_tensor(&cmp, current, name)?;
         //return Ok(current.copy()?);
-        return Ok(cmp.to_device(&current.device())?);
+        //return Ok(cmp.to_device(&current.device())?);
     }
 }
