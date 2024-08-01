@@ -7,8 +7,6 @@ use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{Repo, RepoType};
 use tokenizers::Tokenizer;
 
-
-
 struct TextGeneration {
     model: Model,
     device: Device,
@@ -48,29 +46,29 @@ impl TextGeneration {
     }
 
     fn run(&mut self, sample_len: usize) -> anyhow::Result<()> {
+        use std::io::BufRead;
+        use std::io::BufReader;
         use std::io::Write;
-	use std::io::BufReader;
-	use std::io::BufRead;
         println!("starting the inference loop");
-	println!("[欢迎使用GLM-4,请输入prompt]");
-	let stdin = std::io::stdin();
-	let reader = BufReader::new(stdin);
-	for line in reader.lines() {
+        println!("[欢迎使用GLM-4,请输入prompt]");
+        let stdin = std::io::stdin();
+        let reader = BufReader::new(stdin);
+        for line in reader.lines() {
             let line = line.expect("Failed to read line");
-            
+
             let tokens = self.tokenizer.encode(line, true).expect("tokens error");
             if tokens.is_empty() {
-		panic!("Empty prompts are not supported in the chatglm model.")
+                panic!("Empty prompts are not supported in the chatglm model.")
             }
             if self.verbose_prompt {
-		for (token, id) in tokens.get_tokens().iter().zip(tokens.get_ids().iter()) {
+                for (token, id) in tokens.get_tokens().iter().zip(tokens.get_ids().iter()) {
                     let token = token.replace('▁', " ").replace("<0x0A>", "\n");
                     println!("{id:7} -> '{token}'");
-		}
+                }
             }
             let eos_token = match self.tokenizer.get_vocab(true).get("<|endoftext|>") {
-		Some(token) => *token,
-		None => panic!("cannot find the endoftext token"),
+                Some(token) => *token,
+                None => panic!("cannot find the endoftext token"),
             };
             let mut tokens = tokens.get_ids().to_vec();
             let mut generated_tokens = 0usize;
@@ -82,60 +80,55 @@ impl TextGeneration {
             let mut count = 0;
             let mut result = vec![];
             for index in 0..sample_len {
-		count += 1;
-		let context_size = if index > 0 { 1 } else { tokens.len() };
-		let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-		let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-		let logits = self.model.forward(&input)?;
-		let logits = logits.squeeze(0)?.to_dtype(self.dtype)?;
-		let logits = if self.repeat_penalty == 1. {
+                count += 1;
+                let context_size = if index > 0 { 1 } else { tokens.len() };
+                let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
+                let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
+                let logits = self.model.forward(&input)?;
+                let logits = logits.squeeze(0)?.to_dtype(self.dtype)?;
+                let logits = if self.repeat_penalty == 1. {
                     logits
-		} else {
+                } else {
                     let start_at = tokens.len().saturating_sub(self.repeat_last_n);
                     candle_transformers::utils::apply_repeat_penalty(
-			&logits,
-			self.repeat_penalty,
-			&tokens[start_at..],
+                        &logits,
+                        self.repeat_penalty,
+                        &tokens[start_at..],
                     )?
-		};
+                };
 
-		let next_token = self.logits_processor.sample(&logits)?;
-		tokens.push(next_token);
-		generated_tokens += 1;
-		if next_token == eos_token {
+                let next_token = self.logits_processor.sample(&logits)?;
+                tokens.push(next_token);
+                generated_tokens += 1;
+                if next_token == eos_token {
                     break;
-		}
-		let token = self
+                }
+                let token = self
                     .tokenizer
                     .decode(&[next_token], true)
                     .expect("Token error");
-		if self.verbose_prompt {
+                if self.verbose_prompt {
                     println!(
-			"[Count: {}] [Raw Token: {}] [Decode Token: {}]",
-			count, next_token, token
+                        "[Count: {}] [Raw Token: {}] [Decode Token: {}]",
+                        count, next_token, token
                     );
-		}
-		result.push(token);
-		std::io::stdout().flush()?;
+                }
+                result.push(token);
+                std::io::stdout().flush()?;
             }
             let dt = start_gen.elapsed();
             println!(
-		"\n{generated_tokens} tokens generated ({:.2} token/s)",
-		generated_tokens as f64 / dt.as_secs_f64(),
+                "\n{generated_tokens} tokens generated ({:.2} token/s)",
+                generated_tokens as f64 / dt.as_secs_f64(),
             );
             println!("Result:");
             for tokens in result {
-		print!("{tokens}");
+                print!("{tokens}");
             }
-	    self.model.reset_kv_cache(); // clean the cache
-	}
+            self.model.reset_kv_cache(); // clean the cache
+        }
         Ok(())
     }
-
-
-
-    
-    
 }
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -222,9 +215,9 @@ fn main() -> anyhow::Result<()> {
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-	    .model("THUDM/codegeex4-all-9b".to_string())
-	    .get("tokenizer.json")
-	    .map_err(anyhow::Error::msg)?,
+            .model("THUDM/codegeex4-all-9b".to_string())
+            .get("tokenizer.json")
+            .map_err(anyhow::Error::msg)?,
     };
     let filenames = match args.weight_file {
         Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
