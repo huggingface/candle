@@ -210,7 +210,7 @@ fn sigmoid(device: &Device) -> Result<()> {
 fn topk(device: &Device) -> Result<()> {
     //  [[1, 3, 5],
     //   [2, 4, 6]]
-    let x = Tensor::arange(1f32, 7f32, &device)?
+    let x = Tensor::arange(1f32, 7f32, device)?
         .reshape((3, 2))?
         .t()?
         .contiguous()?;
