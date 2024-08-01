@@ -486,8 +486,9 @@ fn store_read(name : &str, current : &Tensor) -> Result<Tensor>{
         return Ok(current.clone());
     }
     else{
-        let cmp = Tensor::read_npy(name)?;
-        return Ok(cmp.to_device(&current.device())?);
+        return Ok(current.clone());
+        //let cmp = Tensor::read_npy(name)?;
+        //return Ok(cmp.to_device(&current.device())?);
     }
 }
 
