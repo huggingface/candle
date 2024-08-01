@@ -484,7 +484,7 @@ impl BertModel {
         let embedding_output = self.embeddings.forward(input_ids, token_type_ids)?;
         let attention_mask = match attention_mask {
             Some(attention_mask) => attention_mask.clone(),
-            None => Tensor::ones(input_ids.shape(), input_ids.dtype(), input_ids.device())?,
+            None => input_ids.ones_like()?,
         };
         // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L995
         let attention_mask = get_extended_attention_mask(&attention_mask, DType::F32)?;
