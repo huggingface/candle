@@ -497,9 +497,7 @@ fn get_extended_attention_mask(attention_mask: &Tensor, dtype: DType) -> Result<
     let attention_mask = match attention_mask.rank() {
         3 => attention_mask.unsqueeze(1)?,
         2 => attention_mask.unsqueeze(1)?.unsqueeze(1)?,
-        _ => {
-            candle::bail!("Wrong shape for input_ids or attention_mask",)
-        }
+        _ => candle::bail!("Wrong shape for input_ids or attention_mask"),
     };
     let attention_mask = attention_mask.to_dtype(dtype)?;
     // torch.finfo(dtype).min
