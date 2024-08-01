@@ -73,7 +73,6 @@ impl TextGeneration {
             let mut tokens = tokens.get_ids().to_vec();
             let mut generated_tokens = 0usize;
 
-            print!("{prompt}");
             std::io::stdout().flush().expect("output flush error");
             let start_gen = std::time::Instant::now();
 
@@ -227,7 +226,7 @@ fn main() -> anyhow::Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).expect("Tokenizer Error");
 
     let start = std::time::Instant::now();
-    let config = Config::codegeex4();
+    let config = Config::glm4();
     let device = candle_examples::device(args.cpu)?;
     let dtype = if device.is_cuda() {
         DType::BF16
