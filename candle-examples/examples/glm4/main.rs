@@ -47,8 +47,10 @@ impl TextGeneration {
         }
     }
 
-    fn run(&mut self, prompt: &str, sample_len: usize) -> anyhow::Result<()> {
+    fn run(&mut self, sample_len: usize) -> anyhow::Result<()> {
         use std::io::Write;
+	use std::io::BufReader;
+	use std::io::BufRead;
         println!("starting the inference loop");
 	println!("[欢迎使用GLM-4,请输入prompt]");
 	let stdin = std::io::stdin();
@@ -131,128 +133,131 @@ impl TextGeneration {
     }
 
 
-    #[derive(Parser, Debug)]
-    #[command(author, version, about, long_about = None)]
-    struct Args {
-	/// Run on CPU rather than on GPU.
-	#[arg(name = "cache", short, long, default_value = ".")]
-	cache_path: String,
 
-	#[arg(long)]
-	cpu: bool,
+    
+    
+}
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Run on CPU rather than on GPU.
+    #[arg(name = "cache", short, long, default_value = ".")]
+    cache_path: String,
 
-	/// Display the token for the specified prompt.
-	#[arg(long)]
-	verbose_prompt: bool,
+    #[arg(long)]
+    cpu: bool,
 
-	/// The temperature used to generate samples.
-	#[arg(long)]
-	temperature: Option<f64>,
+    /// Display the token for the specified prompt.
+    #[arg(long)]
+    verbose_prompt: bool,
 
-	/// Nucleus sampling probability cutoff.
-	#[arg(long)]
-	top_p: Option<f64>,
+    /// The temperature used to generate samples.
+    #[arg(long)]
+    temperature: Option<f64>,
 
-	/// The seed to use when generating random samples.
-	#[arg(long, default_value_t = 299792458)]
-	seed: u64,
+    /// Nucleus sampling probability cutoff.
+    #[arg(long)]
+    top_p: Option<f64>,
 
-	/// The length of the sample to generate (in tokens).
-	#[arg(long, short = 'n', default_value_t = 8192)]
-	sample_len: usize,
+    /// The seed to use when generating random samples.
+    #[arg(long, default_value_t = 299792458)]
+    seed: u64,
 
-	#[arg(long)]
-	model_id: Option<String>,
+    /// The length of the sample to generate (in tokens).
+    #[arg(long, short = 'n', default_value_t = 8192)]
+    sample_len: usize,
 
-	#[arg(long)]
-	revision: Option<String>,
+    #[arg(long)]
+    model_id: Option<String>,
 
-	#[arg(long)]
-	weight_file: Option<String>,
+    #[arg(long)]
+    revision: Option<String>,
 
-	#[arg(long)]
-	tokenizer: Option<String>,
+    #[arg(long)]
+    weight_file: Option<String>,
 
-	/// Penalty to be applied for repeating tokens, 1. means no penalty.
-	#[arg(long, default_value_t = 1.2)]
-	repeat_penalty: f32,
+    #[arg(long)]
+    tokenizer: Option<String>,
 
-	/// The context size to consider for the repeat penalty.
-	#[arg(long, default_value_t = 64)]
-	repeat_last_n: usize,
-    }
+    /// Penalty to be applied for repeating tokens, 1. means no penalty.
+    #[arg(long, default_value_t = 1.2)]
+    repeat_penalty: f32,
 
-    fn main() -> anyhow::Result<()> {
-	let args = Args::parse();
-	println!(
-            "avx: {}, neon: {}, simd128: {}, f16c: {}",
-            candle::utils::with_avx(),
-            candle::utils::with_neon(),
-            candle::utils::with_simd128(),
-            candle::utils::with_f16c()
-	);
-	println!(
-            "temp: {:.2} repeat-penalty: {:.2} repeat-last-n: {}",
-            args.temperature.unwrap_or(0.6),
-            args.repeat_penalty,
-            args.repeat_last_n
-	);
+    /// The context size to consider for the repeat penalty.
+    #[arg(long, default_value_t = 64)]
+    repeat_last_n: usize,
+}
 
-	let start = std::time::Instant::now();
-	println!("cache path {}", args.cache_path);
-	let api = hf_hub::api::sync::ApiBuilder::from_cache(hf_hub::Cache::new(args.cache_path.into()))
-            .build()
-            .map_err(anyhow::Error::msg)?;
+fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    println!(
+        "avx: {}, neon: {}, simd128: {}, f16c: {}",
+        candle::utils::with_avx(),
+        candle::utils::with_neon(),
+        candle::utils::with_simd128(),
+        candle::utils::with_f16c()
+    );
+    println!(
+        "temp: {:.2} repeat-penalty: {:.2} repeat-last-n: {}",
+        args.temperature.unwrap_or(0.6),
+        args.repeat_penalty,
+        args.repeat_last_n
+    );
 
-	let model_id = match args.model_id {
-            Some(model_id) => model_id.to_string(),
-            None => "THUDM/glm-4-9b".to_string(),
-	};
-	let revision = match args.revision {
-            Some(rev) => rev.to_string(),
-            None => "main".to_string(),
-	};
-	let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
-	let tokenizer_filename = match args.tokenizer {
-            Some(file) => std::path::PathBuf::from(file),
-            None => api
-		.model("THUDM/codegeex4-all-9b".to_string())
-		.get("tokenizer.json")
-		.map_err(anyhow::Error::msg)?,
-	};
-	let filenames = match args.weight_file {
-            Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
-            None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
-	};
-	println!("retrieved the files in {:?}", start.elapsed());
-	let tokenizer = Tokenizer::from_file(tokenizer_filename).expect("Tokenizer Error");
+    let start = std::time::Instant::now();
+    println!("cache path {}", args.cache_path);
+    let api = hf_hub::api::sync::ApiBuilder::from_cache(hf_hub::Cache::new(args.cache_path.into()))
+        .build()
+        .map_err(anyhow::Error::msg)?;
 
-	let start = std::time::Instant::now();
-	let config = Config::codegeex4();
-	let device = candle_examples::device(args.cpu)?;
-	let dtype = if device.is_cuda() {
-            DType::BF16
-	} else {
-            DType::F32
-	};
-	let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-	let model = Model::new(&config, vb)?;
+    let model_id = match args.model_id {
+        Some(model_id) => model_id.to_string(),
+        None => "THUDM/glm-4-9b".to_string(),
+    };
+    let revision = match args.revision {
+        Some(rev) => rev.to_string(),
+        None => "main".to_string(),
+    };
+    let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
+    let tokenizer_filename = match args.tokenizer {
+        Some(file) => std::path::PathBuf::from(file),
+        None => api
+	    .model("THUDM/codegeex4-all-9b".to_string())
+	    .get("tokenizer.json")
+	    .map_err(anyhow::Error::msg)?,
+    };
+    let filenames = match args.weight_file {
+        Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
+        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+    };
+    println!("retrieved the files in {:?}", start.elapsed());
+    let tokenizer = Tokenizer::from_file(tokenizer_filename).expect("Tokenizer Error");
 
-	println!("loaded the model in {:?}", start.elapsed());
+    let start = std::time::Instant::now();
+    let config = Config::codegeex4();
+    let device = candle_examples::device(args.cpu)?;
+    let dtype = if device.is_cuda() {
+        DType::BF16
+    } else {
+        DType::F32
+    };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+    let model = Model::new(&config, vb)?;
 
-	let mut pipeline = TextGeneration::new(
-            model,
-            tokenizer,
-            args.seed,
-            args.temperature,
-            args.top_p,
-            args.repeat_penalty,
-            args.repeat_last_n,
-            args.verbose_prompt,
-            &device,
-            dtype,
-	);
-	pipeline.run(&args.prompt, args.sample_len)?;
-	Ok(())
-    }
+    println!("loaded the model in {:?}", start.elapsed());
+
+    let mut pipeline = TextGeneration::new(
+        model,
+        tokenizer,
+        args.seed,
+        args.temperature,
+        args.top_p,
+        args.repeat_penalty,
+        args.repeat_last_n,
+        args.verbose_prompt,
+        &device,
+        dtype,
+    );
+    pipeline.run(args.sample_len)?;
+    Ok(())
 }
