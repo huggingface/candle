@@ -119,6 +119,8 @@ impl BackendStorage for MetalStorage {
                 DType::F32 => "affine_f32",
                 DType::F16 => "affine_f16",
                 DType::BF16 => "affine_bf16",
+                DType::U8 => "affine_u8",
+                DType::U32 => "affine_u32",
                 dtype => crate::bail!("Metal contiguous affine {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_affine(
