@@ -756,4 +756,9 @@ impl GradStore {
         };
         Ok(grad)
     }
+
+    /// Get the tensor ids of the stored gradient tensors
+    pub fn get_ids(&self) -> impl Iterator<Item = &TensorId> {
+        self.0.keys()
+    }
 }
