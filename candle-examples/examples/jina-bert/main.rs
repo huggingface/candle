@@ -47,33 +47,39 @@ struct Args {
 impl Args {
     fn build_model_and_tokenizer(&self) -> anyhow::Result<(BertModel, tokenizers::Tokenizer)> {
         use hf_hub::{api::sync::Api, Repo, RepoType};
-        let default = "jinaai/jina-embeddings-v2-base-en".to_string();
-        let model_name = match &self.model {
-            Some(model) => model,
-            None => &default,
+        let model_name = match self.model.as_ref() {
+            Some(model) => model.to_string(),
+            None => "jinaai/jina-embeddings-v2-base-en".to_string(),
         };
 
         let model = match &self.model_file {
             Some(model_file) => std::path::PathBuf::from(model_file),
             None => Api::new()?
-                .repo(Repo::new(
-                    model_name.to_string(),
-                    RepoType::Model,
-                ))
+                .repo(Repo::new(model_name.to_string(), RepoType::Model))
                 .get("model.safetensors")?,
         };
         let tokenizer = match &self.tokenizer {
             Some(file) => std::path::PathBuf::from(file),
             None => Api::new()?
-                .repo(Repo::new(
-                    model_name.to_string(),
-                    RepoType::Model,
-                ))
+                .repo(Repo::new(model_name.to_string(), RepoType::Model))
                 .get("tokenizer.json")?,
         };
         let device = candle_examples::device(self.cpu)?;
         let tokenizer = tokenizers::Tokenizer::from_file(tokenizer).map_err(E::msg)?;
-        let config = Config::new(tokenizer.get_vocab_size(true), 768, 12, 12, 3072, candle_nn::Activation::Gelu, 8192, 2, 0.02, 1e-12, 0, PositionEmbeddingType::Alibi);
+        let config = Config::new(
+            tokenizer.get_vocab_size(true),
+            768,
+            12,
+            12,
+            3072,
+            candle_nn::Activation::Gelu,
+            8192,
+            2,
+            0.02,
+            1e-12,
+            0,
+            PositionEmbeddingType::Alibi,
+        );
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
         let model = BertModel::new(vb, &config)?;
         Ok((model, tokenizer))
@@ -124,7 +130,6 @@ fn main() -> anyhow::Result<()> {
             println!("normalized_embeddings: {embeddings}");
         }
         println!("Took {:?}", start.elapsed());
-        
     } else {
         let sentences = [
             "The cat sits outside",

@@ -48,6 +48,7 @@ impl Config {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         vocab_size: usize,
         hidden_size: usize,
