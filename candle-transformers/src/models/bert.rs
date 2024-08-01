@@ -231,7 +231,7 @@ impl BertSelfAttention {
         xs.contiguous()
     }
 
-    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let _enter = self.span.enter();
         let query_layer = self.query.forward(hidden_states)?;
         let key_layer = self.key.forward(hidden_states)?;
@@ -243,7 +243,10 @@ impl BertSelfAttention {
 
         let attention_scores = query_layer.matmul(&key_layer.t()?)?;
         let attention_scores = (attention_scores / (self.attention_head_size as f64).sqrt())?;
-        let attention_scores = attention_scores.broadcast_add(attention_mask)?;
+        let attention_scores = match attention_mask {
+            Some(attention_mask) => attention_scores.broadcast_add(attention_mask)?,
+            None => attention_scores,
+        };
         let attention_probs = {
             let _enter_sm = self.span_softmax.enter();
             candle_nn::ops::softmax(&attention_scores, candle::D::Minus1)?
@@ -307,7 +310,7 @@ impl BertAttention {
         })
     }
 
-    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let _enter = self.span.enter();
         let self_outputs = self.self_attention.forward(hidden_states, attention_mask)?;
         let attention_output = self.self_output.forward(&self_outputs, hidden_states)?;
@@ -396,7 +399,7 @@ impl BertLayer {
         })
     }
 
-    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let _enter = self.span.enter();
         let attention_output = self.attention.forward(hidden_states, attention_mask)?;
         // TODO: Support cross-attention?
@@ -425,7 +428,7 @@ impl BertEncoder {
         Ok(BertEncoder { layers, span })
     }
 
-    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let _enter = self.span.enter();
         let mut hidden_states = hidden_states.clone();
         // Use a loop rather than a fold as it's easier to modify when adding debug/...
@@ -482,32 +485,27 @@ impl BertModel {
     ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let embedding_output = self.embeddings.forward(input_ids, token_type_ids)?;
-        let attention_mask = match attention_mask {
-            Some(attention_mask) => attention_mask.clone(),
-            None => Tensor::ones(input_ids.shape(), input_ids.dtype(), input_ids.device())?,
-        };
         // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L995
-        let attention_mask = get_extended_attention_mask(attention_mask, DType::F32)?;
-        let sequence_output = self.encoder.forward(&embedding_output, &attention_mask)?;
+        let attention_mask = match attention_mask {
+            Some(attention_mask) => Some(get_extended_attention_mask(attention_mask, DType::F32)?),
+            None => None,
+        };
+        let sequence_output = self
+            .encoder
+            .forward(&embedding_output, attention_mask.as_ref())?;
         Ok(sequence_output)
     }
 }
 
-fn get_extended_attention_mask(attention_mask: Tensor, dtype: DType) -> Result<Tensor> {
+fn get_extended_attention_mask(attention_mask: &Tensor, dtype: DType) -> Result<Tensor> {
     let attention_mask = match attention_mask.dims().len() {
         3 => attention_mask.unsqueeze(1)?,
         2 => attention_mask.unsqueeze(1)?.unsqueeze(1)?,
         _ => {
-            return Err(candle::Error::Msg(String::from(
-                "Wrong shape for input_ids or attention_mask",
-            )))
+            candle::bail!("Wrong shape for input_ids or attention_mask",)
         }
     };
     let attention_mask = attention_mask.to_dtype(dtype)?;
-    (Tensor::ones(
-        attention_mask.shape(),
-        attention_mask.dtype(),
-        attention_mask.device(),
-    )? - attention_mask)?
-        .broadcast_mul(&Tensor::try_from(f32::MIN)?) // torch.finfo(dtype).min
+    // torch.finfo(dtype).min
+    (attention_mask.ones_like()? - attention_mask)?.broadcast_mul(&Tensor::try_from(f32::MIN)?)
 }
