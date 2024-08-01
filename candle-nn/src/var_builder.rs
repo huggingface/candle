@@ -288,6 +288,7 @@ impl SimpleBackend for VarMap {
     }
 }
 
+#[allow(dead_code)]
 pub struct SafeTensorWithRouting<'a> {
     routing: HashMap<String, usize>,
     safetensors: Vec<SafeTensors<'a>>,

@@ -570,6 +570,11 @@ fn simple_eval_(
                     .map(|&i| {
                         if i == xs.rank() as i64 {
                             Ok(xs.rank())
+                        } else if i < 0 {
+                            // normalize_axis doesn't work correctly here
+                            // because we actually want normalized with respect
+                            // to the final size, not the current (off by one)
+                            Ok(xs.rank() - (-i as usize) + 1)
                         } else {
                             xs.normalize_axis(i)
                         }
@@ -642,6 +647,13 @@ fn simple_eval_(
                 }
                 let dims = Tensor::from_vec(dims, xs.rank(), xs.device())?;
                 values.insert(node.output[0].clone(), dims);
+            }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Size
+            "Size" => {
+                let data = get(&node.input[0])?;
+                let size: usize = data.dims().iter().product();
+                let output = Tensor::from_slice(&[size as i64], (), data.device())?;
+                values.insert(node.output[0].clone(), output);
             }
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Sqrt
             "Sqrt" => {
@@ -1033,8 +1045,8 @@ fn simple_eval_(
                                 std::iter::repeat((min..max).chain((min + 1..=max).rev())).flatten()
                             }
                             let idx = if dim > 1 {
-                                let cycle_len = dim * 2 - 1;
-                                let skip = (pads_pre[i] as usize) % cycle_len;
+                                let cycle_len = dim * 2 - 2;
+                                let skip = cycle_len - ((pads_pre[i] as usize) % cycle_len);
                                 let idx = zigzag(0, (dim - 1) as i64)
                                     .skip(skip)
                                     .take((pads_pre[i] as usize) + dim + (pads_post[i] as usize));

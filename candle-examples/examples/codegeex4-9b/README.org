@@ -1,0 +1,96 @@
+* candle-codegeex4_9b
+THUDM/CodeGeeX4 is a versatile model for all AI software development scenarios, including code completion, code interpreter, web search, function calling, repository-level Q&A and much more.
+
+- [[https://github.com/THUDM/CodeGeeX4][Github]]
+- [[https://codegeex.cn/][HomePage]]
+- [[https://huggingface.co/THUDM/codegeex4-all-9b][huggingface]]  
+
+** Running with ~cuda~
+
+#+begin_src shell
+  cargo run --example codegeex4-9b --release --features cuda   -- --prompt "please write a insertion sort in rust" --sample-len 300
+#+end_src
+
+** Running with ~cpu~
+#+begin_src shell
+  cargo run --example codegeex4-9b --release --cpu   -- --prompt "please write a insertion sort in rust" --sample-len 300
+#+end_src
+
+** Output_Example
+*** Input
+#+begin_src shell
+  cargo run  --release --features cuda -- --prompt 'please write a FFT in rust' --sample-len 500 --cache /root/autodl-tmp 
+#+end_src
+
+*** Output
+#+begin_src shell
+  avx: false, neon: false, simd128: false, f16c: false
+  temp: 0.95 repeat-penalty: 1.10 repeat-last-n: 64
+  cache path /root/autodl-tmp
+  Prompt: [please write a FFT in rust]
+  Using Seed 11511762269791786684
+  DType is BF16
+  transofrmer layers create
+  模型加载完毕 4
+  starting the inference loop
+
+   开始生成
+  samplelen 500
+
+  500 tokens generated (34.60 token/s)
+  Result:
+
+  Sure, I can help you with that. Here's an example of a Fast Fourier Transform (FFT) implementation in Rust:
+
+  ```rust
+  use num_complex::Complex;
+
+  fn fft(input: &[Complex<f64> > ] ) -> Vec<Complex<f64> > > {
+      let n = input.len();
+    
+      if n == 1 {
+	  return vec![input[0]]];
+      }
+    
+      let mut even = vec![];
+      let mut odd = vec![];
+    
+      for i in 0..n {
+
+	      if i % 2 == 0 {
+	      even.push(input[i]);
+	  } else {
+	      odd.push(input[i]);
+	  }
+      }
+    
+      let even_fft = fft(&even);
+      let odd_fft = fft(&odd);
+    
+      let mut output = vec![];
+    
+      for k in 0..n/2 {
+	  let t = Complex::new(0.0, -2.0 * std::f64::consts::PI * (k as f64) / (n as f64))) ).exp();
+        
+	  output.push(even_fft[k] + odd_fft[k] * t]);
+	  output.push(even_fft[k] - odd_fft[k] * t]);
+      }
+    
+      return output;
+  }
+  ```
+
+  This implementation uses the Cooley-Tukey algorithm to perform the FFT. The function takes an array of complex numbers and returns an array of complex numbers which is the result of the FFT.
+#+end_src
+
+
+*  Citation
+#+begin_src
+  @inproceedings{zheng2023codegeex,
+  title={CodeGeeX: A Pre-Trained Model for Code Generation with Multilingual Benchmarking on HumanEval-X},
+  author={Qinkai Zheng and Xiao Xia and Xu Zou and Yuxiao Dong and Shan Wang and Yufei Xue and Zihan Wang and Lei Shen and Andi Wang and Yang Li and Teng Su and Zhilin Yang and Jie Tang},
+  booktitle={Proceedings of the 29th ACM SIGKDD Conference on Knowledge Discovery and Data Mining},
+  pages={5673--5684},
+  year={2023}
+}
+#+end_src

@@ -977,7 +977,59 @@ fn test_constant_of_shape() -> Result<()> {
 }
 
 // "Unsqueeze"
-// #[test]
+#[test]
+fn test_unsqueeze() -> Result<()> {
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "Unsqueeze".to_string(),
+            domain: "".to_string(),
+            attribute: vec![],
+            input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            name: "".to_string(),
+            doc_string: "".to_string(),
+        }],
+        name: "".to_string(),
+        initializer: vec![],
+        input: vec![],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            doc_string: "".to_string(),
+            r#type: None,
+        }],
+        value_info: vec![ValueInfoProto {
+            name: INPUT_X.to_string(),
+            doc_string: "".to_string(),
+            r#type: None,
+        }],
+        doc_string: "".to_string(),
+        sparse_initializer: vec![],
+        quantization_annotation: vec![],
+    }));
+    let x = Tensor::from_vec(
+        vec![
+            1.0f32, 2.0f32, //
+            3.0f32, 4.0f32, //
+        ],
+        &[2, 2],
+        &Device::Cpu,
+    )?;
+    let y = Tensor::from_vec(vec![-1i64], &[1], &Device::Cpu)?;
+
+    let inputs = HashMap::from_iter([(INPUT_X.to_string(), x.clone()), (INPUT_Y.to_string(), y)]);
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    assert_eq!(eval.len(), 1);
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert_eq!(z.dims(), &[2, 2, 1]);
+    assert_eq!(
+        z.flatten_all()?.to_vec1::<f32>()?,
+        x.flatten_all()?.to_vec1::<f32>()?
+    );
+
+    Ok(())
+}
 
 // "Clip"
 // #[test]
@@ -1109,6 +1161,51 @@ fn test_gather_operation() -> Result<()> {
 
         Ok(())
     }
+    Ok(())
+}
+
+// "Size"
+#[test]
+fn test_size_operation() -> Result<()> {
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "Size".to_string(),
+            domain: "".to_string(),
+            attribute: vec![],
+            input: vec![INPUT_X.to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            name: "".to_string(),
+            doc_string: "".to_string(),
+        }],
+        name: "".to_string(),
+        initializer: vec![],
+        input: vec![],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            doc_string: "".to_string(),
+            r#type: None,
+        }],
+        value_info: vec![ValueInfoProto {
+            name: INPUT_X.to_string(),
+            doc_string: "".to_string(),
+            r#type: None,
+        }],
+        doc_string: "".to_string(),
+        sparse_initializer: vec![],
+        quantization_annotation: vec![],
+    }));
+    let x = Tensor::from_vec(vec![1.0f32, 2.0f32, 3.0f32, 4.0f32], &[2, 2], &Device::Cpu)?;
+
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), x);
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    assert_eq!(eval.len(), 1);
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    let results = z.to_scalar::<i64>()?;
+    assert_eq!(results, 4);
+
     Ok(())
 }
 
@@ -3223,13 +3320,23 @@ fn test_if() -> Result<()> {
 
 #[test]
 fn test_pad() -> Result<()> {
-    let data = Tensor::from_vec(vec![1.0, 1.2, 2.3, 3.4, 4.5, 5.7], (3, 2), &Device::Cpu)?;
-    let pads = Tensor::from_vec(vec![0i64, 2, 0, 0], (4,), &Device::Cpu)?;
+    let data = Tensor::from_vec(
+        vec![
+            1.0, 2.0, 3.0, //
+            4.0, 5.0, 6.0, //
+        ],
+        (2, 3),
+        &Device::Cpu,
+    )?;
+    let pads = Tensor::from_vec(vec![0i64, 1, 0, 0], (4,), &Device::Cpu)?;
     let mode = "reflect";
 
     let expected = Tensor::from_vec(
-        vec![1.0, 1.2, 1.0, 1.2, 2.3, 3.4, 2.3, 3.4, 4.5, 5.7, 4.5, 5.7],
-        (3, 4),
+        vec![
+            2.0, 1.0, 2.0, 3.0, //
+            5.0, 4.0, 5.0, 6.0, //
+        ],
+        (2, 4),
         &Device::Cpu,
     )?;
 

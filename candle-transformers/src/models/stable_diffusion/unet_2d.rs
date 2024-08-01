@@ -161,7 +161,7 @@ impl UNet2DConditionModel {
                         transformer_layers_per_block,
                     };
                     let block = CrossAttnDownBlock2D::new(
-                        vs_db.pp(&i.to_string()),
+                        vs_db.pp(i.to_string()),
                         in_channels,
                         out_channels,
                         Some(time_embed_dim),
@@ -171,7 +171,7 @@ impl UNet2DConditionModel {
                     Ok(UNetDownBlock::CrossAttn(block))
                 } else {
                     let block = DownBlock2D::new(
-                        vs_db.pp(&i.to_string()),
+                        vs_db.pp(i.to_string()),
                         in_channels,
                         out_channels,
                         Some(time_embed_dim),
@@ -251,7 +251,7 @@ impl UNet2DConditionModel {
                         transformer_layers_per_block,
                     };
                     let block = CrossAttnUpBlock2D::new(
-                        vs_ub.pp(&i.to_string()),
+                        vs_ub.pp(i.to_string()),
                         in_channels,
                         prev_out_channels,
                         out_channels,
@@ -262,7 +262,7 @@ impl UNet2DConditionModel {
                     Ok(UNetUpBlock::CrossAttn(block))
                 } else {
                     let block = UpBlock2D::new(
-                        vs_ub.pp(&i.to_string()),
+                        vs_ub.pp(i.to_string()),
                         in_channels,
                         prev_out_channels,
                         out_channels,
