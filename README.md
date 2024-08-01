@@ -236,7 +236,7 @@ If you have an addition to this list, please submit a pull request.
         - MetaVoice-1B, text-to-speech model.
     - Computer Vision Models.
         - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT,
-          ConvNeXTv2, MobileOne, EfficientVit (MSRA), MobileNetv4.
+          ConvNeXTv2, MobileOne, EfficientVit (MSRA), MobileNetv4, Hiera.
         - yolo-v3, yolo-v8.
         - Segment-Anything Model (SAM).
         - SegFormer.
