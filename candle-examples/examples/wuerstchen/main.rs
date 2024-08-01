@@ -298,7 +298,7 @@ fn run(args: Args) -> Result<()> {
                 vb,
             )?
         };
-        let prior_scheduler = wuerstchen::ddpm::DDPMWScheduler::new(2, Default::default())?;
+        let prior_scheduler = wuerstchen::ddpm::DDPMWScheduler::new(12, Default::default())?;
         let timesteps = prior_scheduler.timesteps();
         let timesteps = &timesteps[..timesteps.len() - 1];
         println!("prior denoising");
@@ -375,7 +375,7 @@ fn run(args: Args) -> Result<()> {
         latents = store_read("vector/vector5.npy",&latents)?;
 
         println!("diffusion process with prior {image_embeddings:?}");
-        let scheduler = wuerstchen::ddpm::DDPMWScheduler::new(2, Default::default())?;
+        let scheduler = wuerstchen::ddpm::DDPMWScheduler::new(12, Default::default())?;
         let timesteps = scheduler.timesteps();
         let timesteps = &timesteps[..timesteps.len() - 1];
         for (index, &t) in timesteps.iter().enumerate() {
