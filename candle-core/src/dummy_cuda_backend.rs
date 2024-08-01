@@ -214,6 +214,10 @@ impl crate::backend::BackendDevice for CudaDevice {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
@@ -229,4 +233,38 @@ impl crate::backend::BackendDevice for CudaDevice {
     fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+
+    fn synchronize(&self) -> Result<()> {
+        Ok(())
+    }
 }
+
+/// This bool controls whether reduced precision reductions (e.g., with fp16 accumulation type) are
+/// allowed with f16 GEMMs.
+pub fn gemm_reduced_precision_f16() -> bool {
+    true
+}
+
+/// This bool controls whether reduced precision reductions (e.g., with fp16 accumulation type) are
+/// allowed with f16 GEMMs.
+pub fn set_gemm_reduced_precision_f16(_: bool) {}
+
+/// This bool controls whether reduced precision reductions (e.g., with fp16 accumulation type) are
+/// allowed with bf16 GEMMs.
+pub fn gemm_reduced_precision_bf16() -> bool {
+    true
+}
+
+/// This bool controls whether reduced precision reductions (e.g., with fp16 accumulation type) are
+/// allowed with bf16 GEMMs.
+pub fn set_gemm_reduced_precision_bf16(_: bool) {}
+
+/// This bool controls whether reduced precision reductions (e.g., with tf32 accumulation type) are
+/// allowed with f32 GEMMs.
+pub fn gemm_reduced_precision_f32() -> bool {
+    true
+}
+
+/// This bool controls whether reduced precision reductions (e.g., with tf32 accumulation type) are
+/// allowed with f32 GEMMs.
+pub fn set_gemm_reduced_precision_f32(_b: bool) {}

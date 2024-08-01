@@ -1,20 +1,34 @@
 use candle::{Device, Result, Tensor};
 
-/// Loads an image from disk using the image crate, this returns a tensor with shape
-/// (3, 224, 224). imagenet normalization is applied.
-pub fn load_image224<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
-    let img = image::io::Reader::open(p)?
+/// Loads an image from disk using the image crate at the requested resolution.
+//  This returns a tensor with shape (3, res, res). imagenet normalization is applied.
+pub fn load_image<P: AsRef<std::path::Path>>(p: P, res: u32) -> Result<Tensor> {
+    let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
-        .resize_to_fill(224, 224, image::imageops::FilterType::Triangle);
+        .resize_to_fill(res, res, image::imageops::FilterType::Triangle);
     let img = img.to_rgb8();
     let data = img.into_raw();
-    let data = Tensor::from_vec(data, (224, 224, 3), &Device::Cpu)?.permute((2, 0, 1))?;
+    let data = Tensor::from_vec(data, (res as usize, res as usize, 3), &Device::Cpu)?
+        .permute((2, 0, 1))?;
     let mean = Tensor::new(&[0.485f32, 0.456, 0.406], &Device::Cpu)?.reshape((3, 1, 1))?;
     let std = Tensor::new(&[0.229f32, 0.224, 0.225], &Device::Cpu)?.reshape((3, 1, 1))?;
     (data.to_dtype(candle::DType::F32)? / 255.)?
         .broadcast_sub(&mean)?
         .broadcast_div(&std)
+}
+
+/// Loads an image from disk using the image crate, this returns a tensor with shape
+/// (3, 224, 224). imagenet normalization is applied.
+pub fn load_image224<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
+    load_image(p, 224)
+}
+
+/// Loads an image from disk using the image crate, this returns a tensor with shape
+/// (3, 518, 518). imagenet normalization is applied.
+/// The model dinov2 reg4 analyzes images with dimensions 3x518x518 (resulting in 37x37 transformer tokens).
+pub fn load_image518<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
+    load_image(p, 518)
 }
 
 pub const CLASS_COUNT: i64 = 1000;

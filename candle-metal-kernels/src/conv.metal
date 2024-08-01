@@ -69,6 +69,50 @@ METAL_FUNC void im2col(
 }
 
 template <typename T>
+METAL_FUNC void col2im1d(
+    constant size_t &dst_el,
+    constant size_t &l_out,
+    constant size_t &l_in,
+    constant size_t &c_out,
+    constant size_t &k_size,
+    constant size_t &stride,
+    device const T *src,
+    device T *dst,
+    uint dst_i [[ thread_position_in_grid ]]
+) {
+  // src: (b_size, l_in, c_out, l_k)
+  // dst: (b_size, c_out, l_out)
+  if (dst_i >= dst_el) {
+    return;
+  }
+
+  const size_t dst_s0 = c_out * l_out;
+  const size_t dst_s1 = l_out;
+  const size_t src_s0 = c_out * k_size * l_in;
+  const size_t src_s1 = c_out * k_size;
+  const size_t src_s2 = k_size;
+
+  size_t tmp_dst_i = dst_i;
+  const size_t b_idx = tmp_dst_i / dst_s0;
+  tmp_dst_i -= b_idx * dst_s0;
+  const size_t c_idx = tmp_dst_i / dst_s1;
+  tmp_dst_i -= c_idx * dst_s1;
+  const int l_out_idx = tmp_dst_i;
+
+  dst[dst_i] = static_cast<T>(0);
+
+  int l_in_idx = l_out_idx / stride;
+  int k0 = l_out_idx - l_in_idx * stride;
+  // l_out_idx = l_in_idx * stride + k0
+  for (; k0 < k_size && l_in_idx >= 0; k0 += stride, --l_in_idx) {
+    if (l_in_idx < l_in) {
+      const size_t src_i = b_idx * src_s0 + l_in_idx * src_s1 + c_idx * src_s2 + k0;
+      dst[dst_i] += src[src_i];
+    }
+  }
+}
+
+template <typename T>
 METAL_FUNC void im2col1d(
     constant size_t &dst_numel,
     constant size_t &l_out,
@@ -189,6 +233,21 @@ kernel void FN_NAME(  \
     uint tid [[ thread_position_in_grid ]] \
 ) {  \
   im2col1d<T>(dst_numel, l_out, l_k, stride, padding, dilation, src_dims, src_strides, src, dst, tid); \
+} \
+
+#define COL2IM1D_OP(T, FN_NAME) \
+kernel void FN_NAME(  \
+    constant size_t &dst_el, \
+    constant size_t &l_out, \
+    constant size_t &l_in, \
+    constant size_t &c_out, \
+    constant size_t &k_size, \
+    constant size_t &stride, \
+    device const T *src, \
+    device T *dst, \
+    uint tid [[ thread_position_in_grid ]] \
+) {  \
+  col2im1d<T>(dst_el, l_out, l_in, c_out, k_size, stride, src, dst, tid); \
 } \
  
 #define UPSAMPLE_NEAREST2D_OP(TYPENAME, FN_NAME) \
@@ -486,16 +545,28 @@ kernel void FN_NAME(  \
 } \
 
 IM2COL_OP(float, im2col_f32)
+IM2COL_OP(half, im2col_f16)
 IM2COL_OP(uint8_t, im2col_u8)
 IM2COL_OP(uint32_t, im2col_u32)
+#if defined(__HAVE_BFLOAT__)
+IM2COL_OP(bfloat, im2col_bf16)
+#endif
+
+COL2IM1D_OP(float, col2im1d_f32)
+COL2IM1D_OP(uint8_t, col2im1d_u8)
+COL2IM1D_OP(uint32_t, col2im1d_u32)
 
 IM2COL1D_OP(float, im2col1d_f32)
 IM2COL1D_OP(uint8_t, im2col1d_u8)
 IM2COL1D_OP(uint32_t, im2col1d_u32)
 
 UPSAMPLE_NEAREST2D_OP(float, upsample_nearest2d_f32)
+UPSAMPLE_NEAREST2D_OP(half, upsample_nearest2d_f16)
 UPSAMPLE_NEAREST2D_OP(uint8_t, upsample_nearest2d_u8)
 UPSAMPLE_NEAREST2D_OP(uint32_t, upsample_nearest2d_u32)
+#if defined(__HAVE_BFLOAT__)
+UPSAMPLE_NEAREST2D_OP(bfloat, upsample_nearest2d_bf16)
+#endif
 
 MAXPOOL2D_OP(float, max_pool2d_f32)
 MAXPOOL2D_OP(half, max_pool2d_f16)

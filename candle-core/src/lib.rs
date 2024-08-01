@@ -14,7 +14,7 @@
 //!
 //! ## Features
 //!
-//! - Simple syntax (looks and like PyTorch)
+//! - Simple syntax (looks and feels like PyTorch)
 //! - CPU and Cuda backends (and M1 support)
 //! - Enable serverless (CPU) small and fast deployments
 //! - Model training
@@ -37,19 +37,17 @@
 mod accelerate;
 pub mod backend;
 pub mod backprop;
-mod conv;
+pub mod conv;
 mod convert;
 pub mod cpu;
 pub mod cpu_backend;
 #[cfg(feature = "cuda")]
 pub mod cuda_backend;
-#[cfg(feature = "cudnn")]
-pub mod cudnn;
 mod custom_op;
 mod device;
 pub mod display;
 mod dtype;
-mod dummy_cuda_backend;
+pub mod dummy_cuda_backend;
 mod dummy_metal_backend;
 pub mod error;
 mod indexer;
@@ -59,12 +57,13 @@ pub mod metal_backend;
 #[cfg(feature = "mkl")]
 mod mkl;
 pub mod npy;
-mod op;
+pub mod op;
 pub mod pickle;
 pub mod quantized;
 pub mod safetensors;
 pub mod scalar;
 pub mod shape;
+mod sort;
 mod storage;
 mod strided_index;
 mod tensor;
@@ -73,10 +72,13 @@ pub mod test_utils;
 pub mod utils;
 mod variable;
 
-pub use cpu_backend::CpuStorage;
+#[cfg(feature = "cudnn")]
+pub use cuda_backend::cudnn;
+
+pub use cpu_backend::{CpuStorage, CpuStorageRef};
 pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 pub use device::{Device, DeviceLocation, NdArray};
-pub use dtype::{DType, FloatDType, IntDType, WithDType};
+pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
 pub use error::{Error, Result};
 pub use indexer::IndexOp;
 pub use layout::Layout;
@@ -87,10 +89,12 @@ pub use tensor::{Tensor, TensorId};
 pub use variable::Var;
 
 #[cfg(feature = "cuda")]
-pub use cuda_backend::{CudaDevice, CudaStorage};
+pub use cuda_backend as cuda;
 
 #[cfg(not(feature = "cuda"))]
-pub use dummy_cuda_backend::{CudaDevice, CudaStorage};
+pub use dummy_cuda_backend as cuda;
+
+pub use cuda::{CudaDevice, CudaStorage};
 
 #[cfg(feature = "metal")]
 pub use metal_backend::{MetalDevice, MetalError, MetalStorage};

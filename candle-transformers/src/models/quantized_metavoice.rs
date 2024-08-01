@@ -235,6 +235,7 @@ pub mod transformer {
                 xs = layer.forward(&xs, pos, &mask)?
             }
             xs.narrow(1, seqlen - 1, 1)?
+                .contiguous()?
                 .apply(&self.norm)?
                 .apply(&self.output)
         }

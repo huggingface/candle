@@ -25,7 +25,9 @@ hf-hub = { workspace = true, features = ["tokio"] }
 image = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
 num-traits = { workspace = true }
-pyo3 = { version = "0.20.0", features = ["auto-initialize"], optional = true }
+palette = { version = "0.7.6", optional = true }
+enterpolation = { version = "0.2.1", optional = true}
+pyo3 = { version = "0.21.0", features = ["auto-initialize"], optional = true }
 rayon = { workspace = true }
 rubato = { version = "0.15.0", optional = true }
 safetensors = { workspace = true }
@@ -65,6 +67,7 @@ onnx = ["candle-onnx"]
 metal = ["candle/metal", "candle-nn/metal"]
 microphone = ["cpal"]
 encodec = ["cpal", "symphonia", "rubato"]
+depth_anything_v2 = ["palette", "enterpolation"]
 
 [[example]]
 name = "llama_multiprocess"
@@ -101,3 +104,7 @@ required-features = ["candle-datasets"]
 [[example]]
 name = "encodec"
 required-features = ["encodec"]
+
+[[example]]
+name = "depth_anything_v2"
+required-features = ["depth_anything_v2"]

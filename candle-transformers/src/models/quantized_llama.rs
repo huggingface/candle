@@ -157,6 +157,8 @@ impl LayerWeights {
         let (_b_sz, _n_head, seq_len, _n_embd) = x.dims4()?;
         let cos = self.cos.narrow(0, index_pos, seq_len)?;
         let sin = self.sin.narrow(0, index_pos, seq_len)?;
+        // The call to contiguous below is only necessary when processing the prompt.
+        // When the seq_len is 1 in the inference loop, this is a no-op.
         candle_nn::rotary_emb::rope_i(&x.contiguous()?, &cos, &sin)
     }
 
@@ -180,7 +182,11 @@ impl LayerWeights {
             .transpose(1, 2)?;
         let v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            // This call to contiguous ensures that the fast kernel can be called below. It's
+            // actually a no-op except when processing the initial prompt so has no significant
+            // impact on performance.
+            .contiguous()?;
 
         let q = self.apply_rotary_emb(&q, index_pos)?;
         let k = self.apply_rotary_emb(&k, index_pos)?;
@@ -191,17 +197,17 @@ impl LayerWeights {
                 if index_pos == 0 {
                     (k, v)
                 } else {
-                    let k = Tensor::cat(&[k_cache, &k], 2)?.contiguous()?;
-                    let v = Tensor::cat(&[v_cache, &v], 2)?.contiguous()?;
+                    let k = Tensor::cat(&[k_cache, &k], 2)?;
+                    let v = Tensor::cat(&[v_cache, &v], 2)?;
                     (k, v)
                 }
             }
         };
         self.kv_cache = Some((k.clone(), v.clone()));
 
-        // Support for MQA, useful for 70B models.
-        let k = self.repeat_kv(k)?;
-        let v = self.repeat_kv(v)?;
+        // Support for MQA, useful for 70B models and mistral.
+        let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
+        let v = crate::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
 
         let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
         let att = match mask {
@@ -217,20 +223,6 @@ impl LayerWeights {
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.forward(&y)?;
         Ok(y)
-    }
-
-    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
-        let n_rep = self.n_head / self.n_kv_head;
-        if n_rep == 1 {
-            Ok(x)
-        } else {
-            let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
-            let x = x
-                .unsqueeze(2)?
-                .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
-            Ok(x)
-        }
     }
 }
 
@@ -486,7 +478,7 @@ impl ModelWeights {
             layer_in = x
         }
         let x = self.norm.forward(&layer_in)?;
-        let x = x.i((.., seq_len - 1, ..))?.contiguous()?;
+        let x = x.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
         self.output.forward(&x)
     }

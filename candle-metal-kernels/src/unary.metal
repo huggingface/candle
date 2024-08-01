@@ -67,6 +67,11 @@ template <typename T> METAL_FUNC T relu(T in){
 template <typename T> METAL_FUNC T silu(T in){
     return in / (static_cast<T>(1) + exp(-in));
 }
+template <typename T> METAL_FUNC T sigmoid(T in) {
+    return recip(static_cast<T>(1) + exp(-in));
+}
+
+#define TILE_SIZE 2
 
 #define UNARY(FN, TYPENAME, FN_NAME, FN_NAME_STRIDED) \
 kernel void FN_NAME( \
@@ -79,8 +84,8 @@ kernel void FN_NAME( \
         return; \
     } \
     output[tid] = TYPENAME(FN(float(input[tid]))); \
-}\
-kernel void FN_NAME_STRIDED( \
+} \
+kernel void FN_NAME##_##strided( \
     constant size_t &dim, \
     constant size_t &num_dims, \
     constant size_t *dims, \
@@ -93,6 +98,17 @@ kernel void FN_NAME_STRIDED( \
         return; \
     } \
     output[tid] = TYPENAME(FN(float(input[get_strided_index(tid, num_dims, dims, strides)]))); \
+} \
+kernel void FN_NAME##_##tiled( \
+    constant size_t &dim, \
+    device const TYPENAME *input,  \
+    device TYPENAME *output, \
+    uint tid [[ thread_position_in_grid ]] \
+) { \
+    for (uint i = 0; i < TILE_SIZE; i++) { \
+        const uint idx = tid * TILE_SIZE + i; \
+        output[idx] = TYPENAME(FN(float(input[idx]))); \
+    } \
 }
 
 #define UNARY_OP(NAME) \
@@ -104,21 +120,17 @@ UNARY(NAME, bfloat, NAME##_bf16, NAME##_bf16_strided);
 
 #define COPY2D(FN_NAME, TYPENAME) \
 kernel void FN_NAME( \
-    constant size_t &d1, \
-    constant size_t &d2, \
-    constant size_t &src_s, \
-    constant size_t &dst_s, \
+    constant int64_t &d1, \
+    constant int64_t &d2, \
+    constant int64_t &src_s, \
+    constant int64_t &dst_s, \
     device const TYPENAME *input,  \
     device TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
+    uint2 idx [[thread_position_in_grid]] \
 ) { \
-    if (tid >= d1 * d2) { \
-        return; \
-    } \
-    size_t idx1 = tid / d2; \
-    size_t idx2 = tid - idx1 * d2; \
-    size_t src_idx = idx1 * src_s + idx2; \
-    size_t dst_idx = idx1 * dst_s + idx2; \
+    if (idx.x >= d1 || idx.y >= d2) return; \
+    int64_t src_idx = idx.x * src_s + idx.y; \
+    int64_t dst_idx = idx.x * dst_s + idx.y; \
     output[dst_idx] = input[src_idx]; \
 }
 
@@ -145,6 +157,8 @@ UNARY_OP(erf)
 UNARY_OP(tanh)
 UNARY_OP(recip)
 UNARY_OP(relu)
+UNARY_OP(sign)
+UNARY_OP(sigmoid)
 UNARY(id, float, copy_f32, copy_f32_strided)
 UNARY(id, half, copy_f16, copy_f16_strided)
 UNARY(id, uint8_t, copy_u8, copy_u8_strided)
@@ -174,8 +188,10 @@ BFLOAT_UNARY_OP(erf)
 BFLOAT_UNARY_OP(tanh)
 BFLOAT_UNARY_OP(recip)
 BFLOAT_UNARY_OP(relu)
+BFLOAT_UNARY_OP(sign)
+BFLOAT_UNARY_OP(sigmoid)
 
 UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
 
-COPY2D(copy2d_bf64, bfloat)
+COPY2D(copy2d_bf16, bfloat)
 #endif

@@ -112,7 +112,8 @@ impl Tensor {
                     }
                     Op::Unary(_node, UnaryOp::Ceil)
                     | Op::Unary(_node, UnaryOp::Floor)
-                    | Op::Unary(_node, UnaryOp::Round) => nodes,
+                    | Op::Unary(_node, UnaryOp::Round)
+                    | Op::Unary(_node, UnaryOp::Sign) => nodes,
                     Op::Reshape(node)
                     | Op::UpsampleNearest1D { arg: node, .. }
                     | Op::UpsampleNearest2D { arg: node, .. }
@@ -319,13 +320,13 @@ impl Tensor {
                         dilation,
                         output_padding: _output_padding,
                     } => {
-                        let grad_arg = grad.conv2d(kernel, *padding, *dilation, *stride, 1)?;
+                        let grad_arg = grad.conv2d(kernel, *padding, *stride, *dilation, 1)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
 
                         let grad_kernel = grad
                             .transpose(0, 1)?
-                            .conv2d(&arg.transpose(0, 1)?, *padding, *stride, *dilation, 1)?
+                            .conv2d(&arg.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
                             .transpose(0, 1)?;
                         let sum_grad = grads.or_insert(kernel)?;
                         let (_, _, k0, k1) = kernel.dims4()?;
@@ -488,7 +489,6 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad)?;
                     }
-                    Op::Cmp(_args, _) => {}
                     Op::Reduce(arg, ReduceOp::Max, reduced_dims) => {
                         let node = broadcast_back(arg, node, reduced_dims)?;
                         let grad = broadcast_back(arg, &grad, reduced_dims)?;
@@ -578,20 +578,18 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
-                    Op::Reduce(_, ReduceOp::ArgMin, _) => {}
-                    Op::Reduce(_, ReduceOp::ArgMax, _) => {}
+                    Op::Unary(_, UnaryOp::Floor)
+                    | Op::Unary(_, UnaryOp::Round)
+                    | Op::Reduce(_, ReduceOp::ArgMin, _)
+                    | Op::Reduce(_, ReduceOp::ArgMax, _)
+                    | Op::Unary(_, UnaryOp::Sign)
+                    | Op::Cmp(_, _) => {}
                     Op::Reshape(arg) => {
                         let arg_grad = grad.reshape(arg.dims())?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
                     Op::Unary(_, UnaryOp::Ceil) => Err(Error::BackwardNotSupported { op: "ceil" })?,
-                    Op::Unary(_, UnaryOp::Floor) => {
-                        Err(Error::BackwardNotSupported { op: "floor" })?
-                    }
-                    Op::Unary(_, UnaryOp::Round) => {
-                        Err(Error::BackwardNotSupported { op: "round" })?
-                    }
                     Op::Unary(arg, UnaryOp::Gelu) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let cube = arg.powf(3.)?;
@@ -626,7 +624,7 @@ impl Tensor {
                     Op::Unary(arg, UnaryOp::Silu) => {
                         let sum_grad = grads.or_insert(arg)?;
                         // d/dx silu = sigmoid(x) * (1 + x * (1 - sigmoid(x)))
-                        let sigmoid_arg = (*node / arg)?;
+                        let sigmoid_arg = (arg.neg()?.exp()? + 1.)?.recip()?;
                         let silu_grad = (&sigmoid_arg * (1. + (arg * (1. - &sigmoid_arg)?)?)?)?;
                         *sum_grad = sum_grad.add(&(&grad * silu_grad)?)?
                     }
@@ -636,7 +634,8 @@ impl Tensor {
                         let zeros = arg.zeros_like()?;
                         let positive_mask = arg.gt(&zeros)?.to_dtype(arg.dtype())?;
                         let negative_mask = arg.le(&zeros)?.to_dtype(arg.dtype())?;
-                        let negative_exp_mask = ((negative_mask * arg.exp())? * *alpha)?;
+                        // node == alpha * (e^x - 1) for x <= 0, reuse it
+                        let negative_exp_mask = (negative_mask * (*node + *alpha))?;
                         let combined_mask = (positive_mask + negative_exp_mask)?;
                         *sum_grad = sum_grad.add(&(grad * combined_mask)?)?
                     }
