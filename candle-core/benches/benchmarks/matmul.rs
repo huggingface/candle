@@ -1,7 +1,8 @@
 use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
-use candle_core::{DType, Device, Tensor};
+use candle_core::{wgpu::MatmulAlgorithm, DType, Device, Tensor};
 use criterion::{black_box, criterion_group, Criterion, Throughput};
 use std::time::Instant;
+//use tracing_subscriber::{self, fmt::format};
 
 // fn run(a: &Tensor, b: &Tensor) {
 //     a.matmul(&b.t().unwrap()).unwrap();
@@ -14,6 +15,7 @@ fn run(a: &Tensor, b: &Tensor) {
 const ID : &'static str = "matmul7_16x16";
 
 fn run_bench(c: &mut Criterion, device: &Device) {
+
     let b = 1;
     let m = 1;
     let n = 2049;
@@ -27,16 +29,39 @@ fn run_bench(c: &mut Criterion, device: &Device) {
 
     let mut group = c.benchmark_group(device.bench_name("matmul"));
     group.throughput(Throughput::Bytes(flops as u64));
-    group.bench_function(ID, move |b| {
-        b.iter_custom(|iters| {
-            let start = Instant::now();
-            for _i in 0..iters {
-                run(black_box(&lhs), black_box(&rhs));
-            }
-            device.sync().unwrap();
-            start.elapsed()
-        })
-    });
+    
+   
+    if device.is_webgpu(){
+        if let Device::WebGpu(wgpu) = device{
+            for alg in vec![MatmulAlgorithm::Matmul1, MatmulAlgorithm::Matmul5_16_64]{
+                *(wgpu.matmul_alg.lock().unwrap()) = alg.clone(); 
+                group.bench_function(format!("{:?}", alg), |b| {
+                    b.iter_custom(|iters| {
+                        let start = Instant::now();
+                        for _i in 0..iters {
+                            run(black_box(&lhs), black_box(&rhs));
+                        }
+                        device.sync().unwrap();
+                        start.elapsed()
+                    })
+                });
+            }           
+        }
+    }
+    else{
+        group.bench_function(ID, |b| {
+            b.iter_custom(|iters| {
+                let start = Instant::now();
+                for _i in 0..iters {
+                    run(black_box(&lhs), black_box(&rhs));
+                }
+                device.sync().unwrap();
+                start.elapsed()
+            })
+        });
+    }
+
+    
     group.finish();
     #[cfg(feature = "wgpu_debug")]
     match device {
@@ -61,16 +86,35 @@ fn run_bench(c: &mut Criterion, device: &Device) {
 
     let mut group = c.benchmark_group(device.bench_name("matmul2048"));
     group.throughput(Throughput::Bytes(flops as u64));
-    group.bench_function(ID, move |b| {
-        b.iter_custom(|iters| {
-            let start = Instant::now();
-            for _i in 0..iters {
-                run(black_box(&lhs), black_box(&rhs));
-            }
-            device.sync().unwrap();
-            start.elapsed()
-        })
-    });
+    if device.is_webgpu(){
+        if let Device::WebGpu(wgpu) = device{
+            for alg in vec![MatmulAlgorithm::Matmul1, MatmulAlgorithm::Matmul5, MatmulAlgorithm::Matmul5_32_32, MatmulAlgorithm::Matuml5_64_64, MatmulAlgorithm::Matmul5_64_64_8_8, MatmulAlgorithm::Matmul5_16_64]{
+                *(wgpu.matmul_alg.lock().unwrap()) = alg.clone(); 
+                group.bench_function(format!("{:?}", alg), |b| {
+                    b.iter_custom(|iters| {
+                        let start = Instant::now();
+                        for _i in 0..iters {
+                            run(black_box(&lhs), black_box(&rhs));
+                        }
+                        device.sync().unwrap();
+                        start.elapsed()
+                    })
+                });
+            }           
+        }
+    }
+    else{
+        group.bench_function(ID, |b| {
+            b.iter_custom(|iters| {
+                let start = Instant::now();
+                for _i in 0..iters {
+                    run(black_box(&lhs), black_box(&rhs));
+                }
+                device.sync().unwrap();
+                start.elapsed()
+            })
+        });
+    }
     group.finish();
 
     #[cfg(feature = "wgpu_debug")]
@@ -87,7 +131,9 @@ fn run_bench(c: &mut Criterion, device: &Device) {
 fn criterion_benchmark(c: &mut Criterion) {
     let handler = BenchDeviceHandler::new().unwrap();
     for device in handler.devices {
-        run_bench(c, &device);
+        //if(device.is_webgpu()){
+            run_bench(c, &device);
+        //}
     }
 }
 

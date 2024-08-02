@@ -11,6 +11,7 @@ pub mod debug_info;
 
 pub use device::WgpuDevice;
 pub use storage::WgpuStorage;
+pub use device::MatmulAlgorithm;
 
 #[cfg(feature = "wgpu_debug")]
 pub use debug_info::Measurements;

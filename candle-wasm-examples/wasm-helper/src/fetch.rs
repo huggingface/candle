@@ -3,15 +3,11 @@ use web_sys::{Request, RequestInit, RequestMode, Response};
 
 use wasm_bindgen::JsCast;
 use crate::generic_error::GenericResult;
-use urlencoding::encode;
-
 
 pub async fn download_file(url : &str) -> GenericResult<web_sys::Blob> {
-    let encoded = encode(url);
-
-    let new_url = format!("http://localhost:3000/fetch-resource/?url={}", encoded);
-
-    log::info!("download file: {new_url}");
+    //let encoded = encode(url);
+    //let new_url = format!("http://localhost:3000/fetch-resource/?url={}", encoded);
+    log::info!("download file: {url}");
     
     let mut opts = RequestInit::new();
     opts.method("GET");
@@ -19,7 +15,7 @@ pub async fn download_file(url : &str) -> GenericResult<web_sys::Blob> {
 
     log::info!("Method: {opts:?}");
 
-    let request = Request::new_with_str_and_init(&new_url, &opts)?;
+    let request = Request::new_with_str_and_init(&url, &opts)?;
 
     log::info!("request: {request:?}");
 

@@ -111,10 +111,10 @@ test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal, mm_layout
 
 #[test]
 fn big_matmul_webgpu()-> Result<()> {
-    let b = 10;
-    let m = 33;
-    let n = 33;
-    let k = 33;
+    let b = 1;
+    let m = 32;
+    let n = 32;
+    let k = 16;
 
     let lhs = Tensor::arange(0.0f32, (b*m*k) as f32,&Device::Cpu)?.reshape((b, m, k))?;
     let rhs = Tensor::arange(0.0f32, (b*k*n) as f32,&Device::Cpu)?.reshape((b, k, n))?;
@@ -124,7 +124,7 @@ fn big_matmul_webgpu()-> Result<()> {
     let t1 = lhs.matmul(&rhs)?.reshape((b,m,n))?;
     let device = Device::new_webgpu_sync(0)?;
     let lhs = lhs.to_device(&device)?;
-    let rhs = lhs.to_device(&device)?;
+    let rhs = rhs.to_device(&device)?;
 
     let t2 = lhs.matmul(&rhs)?.reshape((b,m,n))?;
 
@@ -135,3 +135,19 @@ fn big_matmul_webgpu()-> Result<()> {
 
     Ok(())
 }
+
+// #[test]
+// fn test_matmul2(){
+//     tracing_subscriber::fmt::init();
+//     let b = 1;
+//     let m = 1;
+//     let n = 2049;
+//     let k = 2049;
+//     let device = Device::new_webgpu_sync(0).unwrap();
+//     let dtype = DType::F32;
+//     let lhs = Tensor::zeros((b, m, k), dtype, &device).unwrap();
+//     let rhs = Tensor::zeros((b, k, n), dtype, &device).unwrap();
+//     let result = lhs.matmul(&rhs).unwrap();
+//     panic!();
+
+// }

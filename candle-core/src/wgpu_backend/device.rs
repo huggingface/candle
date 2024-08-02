@@ -19,6 +19,16 @@ use super::wgpu_functions::{ConstArray, KernelParameterMeta};
 use super::wgpu_functions::{self, create_buffer_init, unary::UnaryOperation, MetaArray};
 use super::WgpuStorage;
 
+
+
+//pub (crate) const META_BUFFER_SIZE : u32 = 65536;
+//pub (crate) const META_BUFFER_SIZE : u32 = 2048;
+pub (crate) const META_BUFFER_SIZE : u32 = 10*1024*1024; //10mb
+
+pub (crate) const MAX_WORKLOAD_SIZE : u64 = 1024u64*1024*1024*10; //10gb
+
+
+
 #[derive(Debug)]
 pub (crate) enum MlQueue{
     Dispatch(MlQueueDispatch),
@@ -221,6 +231,18 @@ impl QueueBuffer {
 
 }
 
+#[derive(Debug, Clone)]
+pub enum MatmulAlgorithm{
+    Matmul7,
+    Matmul1,
+    Matmul5,
+    Matmul5_32_32,
+    Matuml5_64_64,
+    Matmul5_64_64_8_8,
+    Matmul5_128_128,
+    Matmul5_16_64,
+}
+
 #[derive(Debug)]
 pub struct WgpuDeviceInner{
     pub device : wgpu::Device, 
@@ -249,6 +271,8 @@ pub struct WgpuDeviceInner{
     pub (crate) use_cache : bool,
     #[cfg(feature = "wgpu_debug")]
     pub debug : DebugInfo,
+
+    pub matmul_alg : Mutex<MatmulAlgorithm>
 }
 
 #[derive(Debug, Clone)]
@@ -263,12 +287,6 @@ impl std::ops::Deref for WgpuDevice{
         return &self.inner;
     }
 }
-
-//pub (crate) const META_BUFFER_SIZE : u32 = 65536;
-//pub (crate) const META_BUFFER_SIZE : u32 = 2048;
-pub (crate) const META_BUFFER_SIZE : u32 = 10*1024*1024; //10mb
-
-pub (crate) const MAX_WORKLOAD_SIZE : u64 = 1024u64*1024*1024*10; //10gb
 
 impl WgpuDevice{
     pub (crate) async fn create(_: usize) -> crate::Result<Self>{
@@ -300,7 +318,6 @@ impl WgpuDevice{
         limits.max_storage_buffers_per_shader_stage = 5;
         limits.max_storage_buffer_binding_size = adatper_limits.max_storage_buffer_binding_size; //use as much as possible
         limits.max_buffer_size = adatper_limits.max_buffer_size; //use as much as possible
-
      
         // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
         //  `features` being the available features.
@@ -353,7 +370,8 @@ impl WgpuDevice{
                 unary_inplace_counter : Counter::new(0),
                 binary_inplace_counter : Counter::new(0),
                 copy_inplace_counter : Counter::new(0),
-                use_cache : true
+                use_cache : true,
+                matmul_alg : Mutex::new(MatmulAlgorithm::Matmul5)
             })
         })
     }
