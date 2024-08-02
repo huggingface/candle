@@ -27,7 +27,7 @@ pub mod neon;
 #[cfg(target_feature = "simd128")]
 pub mod simd128;
 pub mod utils;
-use half::f16;
+use half::{bf16, f16};
 
 pub use k_quants::GgmlType;
 
@@ -133,6 +133,7 @@ impl QStorage {
 pub enum GgmlDType {
     F32,
     F16,
+    BF16,
     Q4_0,
     Q4_1,
     Q5_0,
@@ -185,6 +186,8 @@ impl GgmlDType {
             Self::Q5K => 13,
             Self::Q6K => 14,
             Self::Q8K => 15,
+            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
+            Self::BF16 => 30,
         }
     }
 
@@ -205,6 +208,7 @@ impl GgmlDType {
             Self::Q5K => Box::new(vec![BlockQ5K::zeros(); elem_count / BlockQ5K::BLCK_SIZE]),
             Self::Q6K => Box::new(vec![BlockQ6K::zeros(); elem_count / BlockQ6K::BLCK_SIZE]),
             Self::Q8K => Box::new(vec![BlockQ8K::zeros(); elem_count / BlockQ8K::BLCK_SIZE]),
+            Self::BF16 => Box::new(vec![bf16::zeros(); elem_count]),
         }
     }
     /// The type size for blocks in bytes.
@@ -212,7 +216,7 @@ impl GgmlDType {
         use k_quants::*;
         match self {
             Self::F32 => 4,
-            Self::F16 => 2,
+            Self::F16 | Self::BF16 => 2,
             Self::Q4_0 => std::mem::size_of::<BlockQ4_0>(),
             Self::Q4_1 => std::mem::size_of::<BlockQ4_1>(),
             Self::Q5_0 => std::mem::size_of::<BlockQ5_0>(),
@@ -233,7 +237,7 @@ impl GgmlDType {
     pub fn block_size(&self) -> usize {
         match self {
             Self::F32 => 1,
-            Self::F16 => 1,
+            Self::F16 | Self::BF16 => 1,
             Self::Q4_0 => k_quants::QK4_0,
             Self::Q4_1 => k_quants::QK4_1,
             Self::Q5_0 => k_quants::QK5_0,
