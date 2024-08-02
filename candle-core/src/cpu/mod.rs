@@ -227,3 +227,14 @@ pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f
     }
     *c = sum;
 }
+
+#[cfg(not(target_feature = "avx"))]
+#[inline(always)]
+pub(crate) unsafe fn vec_dot_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut f32, k: usize) {
+    // leftovers
+    let mut sum = 0.0;
+    for i in 0..k {
+        sum += (*a_row.add(i)).to_f32() * (*b_row.add(i)).to_f32();
+    }
+    *c = sum;
+}
