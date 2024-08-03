@@ -1,4 +1,3 @@
-#![allow(unused)]
 use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{LayerNorm, Linear, VarBuilder};
 
@@ -127,6 +126,7 @@ fn timestep_embedding(t: &Tensor, dim: usize) -> Result<Tensor> {
 
 #[derive(Debug, Clone)]
 pub struct EmbedNd {
+    #[allow(unused)]
     dim: usize,
     theta: usize,
     axes_dim: Vec<usize>,
