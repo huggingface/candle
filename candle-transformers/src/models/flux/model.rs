@@ -74,15 +74,38 @@ fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Te
 }
 
 fn rope(pos: &Tensor, dim: usize, theta: usize) -> Result<Tensor> {
-    todo!()
+    if dim % 2 == 1 {
+        candle::bail!("dim {dim} is odd")
+    }
+    let dev = pos.device();
+    let theta = theta as f64;
+    let inv_freq: Vec<_> = (0..dim)
+        .step_by(2)
+        .map(|i| 1f32 / theta.powf(i as f64 / dim as f64) as f32)
+        .collect();
+    let inv_freq_len = inv_freq.len();
+    let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
+    let freqs = pos.matmul(&inv_freq)?;
+    let cos = freqs.cos()?;
+    let sin = freqs.sin()?;
+    let out = Tensor::cat(&[&cos, &sin.neg()?, &sin, &cos], D::Minus1)?;
+    let (b, n, d, _ij) = out.dims4()?;
+    out.reshape((b, n, d, 2, 2))
 }
 
-fn apply_rope(xq: &Tensor, xk: &Tensor, freq_cis: &Tensor) -> Result<(Tensor, Tensor)> {
-    todo!()
+fn apply_rope(x: &Tensor, freq_cis: &Tensor) -> Result<Tensor> {
+    let (b_sz, n_head, seq_len, n_embd) = x.dims4()?;
+    let x = x.reshape((b_sz, n_head, seq_len, n_embd / 2, 2))?;
+    let x0 = x.narrow(D::Minus1, 0, 1)?;
+    let x1 = x.narrow(D::Minus1, 1, 1)?;
+    let fr0 = freq_cis.narrow(D::Minus1, 0, 1)?;
+    let fr1 = freq_cis.narrow(D::Minus1, 1, 1)?;
+    (fr0 * x0)? + (fr1 * x1)?
 }
 
 fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> {
-    let (q, k) = apply_rope(q, k, pe)?;
+    let q = apply_rope(q, pe)?;
+    let k = apply_rope(k, pe)?;
     let x = scaled_dot_product_attention(&q, &k, v)?;
     x.transpose(1, 2)?.flatten_from(2)
 }
