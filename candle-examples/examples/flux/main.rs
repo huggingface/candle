@@ -76,7 +76,9 @@ fn run(args: Args) -> Result<()> {
         let config = std::fs::read_to_string(config_filename)?;
         let config: t5::Config = serde_json::from_str(&config)?;
         let mut model = t5::T5EncoderModel::load(vb, &config)?;
-        let tokenizer_filename = repo.get("tokenizer.json")?;
+        let tokenizer_filename = api
+            .model("lmz/mt5-tokenizers".to_string())
+            .get("t5-v1_1-xxl.tokenizer.json")?;
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
         let tokens = tokenizer
             .encode(prompt.as_str(), true)
