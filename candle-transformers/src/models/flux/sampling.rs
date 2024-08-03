@@ -106,7 +106,7 @@ pub fn denoise(
     let guidance = Tensor::full(guidance as f32, b_sz, dev)?;
     let mut img = img.clone();
     for window in timesteps.windows(2) {
-        let (t_prev, t_curr) = match window {
+        let (t_curr, t_prev) = match window {
             [a, b] => (a, b),
             _ => continue,
         };
