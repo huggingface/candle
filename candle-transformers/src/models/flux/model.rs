@@ -57,12 +57,8 @@ impl Config {
 }
 
 fn layer_norm(dim: usize, vb: VarBuilder) -> Result<LayerNorm> {
-    let config = candle_nn::LayerNormConfig {
-        eps: 1e-6,
-        affine: false,
-        ..Default::default()
-    };
-    candle_nn::layer_norm(dim, config, vb)
+    let ws = Tensor::ones(dim, vb.dtype(), vb.device())?;
+    Ok(LayerNorm::new_no_bias(ws, 1e-6))
 }
 
 fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
