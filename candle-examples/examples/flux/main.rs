@@ -157,7 +157,7 @@ fn run(args: Args) -> Result<()> {
         }
         Some(file) => {
             let mut st = candle::safetensors::load(file, &device)?;
-            st.remove("img").unwrap()
+            st.remove("img").unwrap().to_dtype(dtype)?
         }
     };
     println!("latent img\n{img}");
