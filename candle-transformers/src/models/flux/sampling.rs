@@ -34,7 +34,7 @@ impl State {
                     .reshape((1, ()))?
                     .broadcast_as((h / 2, w / 2))?,
             ],
-            3,
+            2,
         )?;
         let img_ids = img_ids.reshape((1, h / 2 * w / 2, 3))?;
         let img_ids = img_ids.repeat((bs, 1, 1))?;
