@@ -256,7 +256,7 @@ impl Encoder {
         let mid_block_1 = ResnetBlock::new(block_in, block_in, vb.pp("mid.block_1"))?;
         let mid_attn_1 = AttnBlock::new(block_in, vb.pp("mid.attn_1"))?;
         let mid_block_2 = ResnetBlock::new(block_in, block_in, vb.pp("mid.block_2"))?;
-        let conv_out = conv2d(cfg.in_channels, block_in, 3, conv_cfg, vb.pp("conv_out"))?;
+        let conv_out = conv2d(block_in, 2 * cfg.z_channels, 3, conv_cfg, vb.pp("conv_out"))?;
         let norm_out = group_norm(32, block_in, 1e-6, vb.pp("norm_out"))?;
         Ok(Self {
             conv_in,
@@ -323,7 +323,7 @@ impl Decoder {
         let vb_u = vb.pp("up");
         for (i_level, ch_mult) in cfg.ch_mult.iter().enumerate().rev() {
             let block_out = cfg.ch * ch_mult;
-            let vb_u = vb_u.pp(up.len());
+            let vb_u = vb_u.pp(i_level);
             let vb_b = vb_u.pp("block");
             let mut block = Vec::with_capacity(cfg.num_res_blocks + 1);
             for i_block in 0..=cfg.num_res_blocks {
@@ -331,7 +331,7 @@ impl Decoder {
                 block.push(b);
                 block_in = block_out;
             }
-            let upsample = if i_level == 0 {
+            let upsample = if i_level != 0 {
                 Some(Upsample::new(block_in, vb_u.pp("upsample"))?)
             } else {
                 None
@@ -339,6 +339,7 @@ impl Decoder {
             let block = UpBlock { block, upsample };
             up.push(block)
         }
+        up.reverse();
 
         let norm_out = group_norm(32, block_in, 1e-6, vb.pp("norm_out"))?;
         let conv_out = conv2d(block_in, cfg.out_ch, 3, conv_cfg, vb.pp("conv_out"))?;

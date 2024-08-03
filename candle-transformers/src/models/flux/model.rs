@@ -571,10 +571,11 @@ impl Flux {
             (img, txt) = block.forward(&img, &txt, &vec_, &pe)?
         }
         // Single blocks
-        let mut img = Tensor::cat(&[txt, img], 1)?;
+        let mut img = Tensor::cat(&[&txt, &img], 1)?;
         for block in self.single_blocks.iter() {
             img = block.forward(&img, &vec_, &pe)?;
         }
+        let img = img.i((.., txt.dim(1)?..))?;
         self.final_layer.forward(&img, &vec_)
     }
 }
