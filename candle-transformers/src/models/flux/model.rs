@@ -432,7 +432,7 @@ impl SingleStreamBlock {
         let x_mod = xs
             .apply(&self.pre_norm)?
             .broadcast_mul(&(scale + 1.0)?)?
-            .broadcast_mul(&shift)?;
+            .broadcast_mul(shift)?;
         let x_mod = x_mod.apply(&self.linear1)?;
         let qkv = x_mod.narrow(D::Minus1, 0, 3 * self.h_sz)?;
         let (b, l, _khd) = qkv.dims3()?;
