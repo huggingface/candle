@@ -79,11 +79,11 @@ fn rope(pos: &Tensor, dim: usize, theta: usize) -> Result<Tensor> {
         .map(|i| 1f32 / theta.powf(i as f64 / dim as f64) as f32)
         .collect();
     let inv_freq_len = inv_freq.len();
-    let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
-    let freqs = pos.matmul(&inv_freq)?;
+    let inv_freq = Tensor::from_vec(inv_freq, (1, 1, inv_freq_len), dev)?;
+    let freqs = pos.unsqueeze(2)?.broadcast_mul(&inv_freq)?;
     let cos = freqs.cos()?;
     let sin = freqs.sin()?;
-    let out = Tensor::cat(&[&cos, &sin.neg()?, &sin, &cos], D::Minus1)?;
+    let out = Tensor::stack(&[&cos, &sin.neg()?, &sin, &cos], 3)?;
     let (b, n, d, _ij) = out.dims4()?;
     out.reshape((b, n, d, 2, 2))
 }
@@ -93,14 +93,14 @@ fn apply_rope(x: &Tensor, freq_cis: &Tensor) -> Result<Tensor> {
     let x = x.reshape((b_sz, n_head, seq_len, n_embd / 2, 2))?;
     let x0 = x.narrow(D::Minus1, 0, 1)?;
     let x1 = x.narrow(D::Minus1, 1, 1)?;
-    let fr0 = freq_cis.narrow(D::Minus1, 0, 1)?;
-    let fr1 = freq_cis.narrow(D::Minus1, 1, 1)?;
-    (fr0 * x0)? + (fr1 * x1)?
+    let fr0 = freq_cis.get_on_dim(D::Minus1, 0)?;
+    let fr1 = freq_cis.get_on_dim(D::Minus1, 1)?;
+    fr0.broadcast_mul(&x0)? + fr1.broadcast_mul(&x1)?
 }
 
 fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> {
-    let q = apply_rope(q, pe)?;
-    let k = apply_rope(k, pe)?;
+    let q = apply_rope(q, pe)?.contiguous()?;
+    let k = apply_rope(k, pe)?.contiguous()?;
     let x = scaled_dot_product_attention(&q, &k, v)?;
     x.transpose(1, 2)?.flatten_from(2)
 }
@@ -116,7 +116,10 @@ fn timestep_embedding(t: &Tensor, dim: usize) -> Result<Tensor> {
     let t = (t * TIME_FACTOR)?;
     let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(candle::DType::F32)?;
     let freqs = ((arange / half as f64)? - MAX_PERIOD.ln())?.exp()?;
-    let args = (t.unsqueeze(1)?.to_dtype(candle::DType::F32)? * freqs.unsqueeze(0))?;
+    let args = t
+        .unsqueeze(1)?
+        .to_dtype(candle::DType::F32)?
+        .broadcast_mul(&freqs.unsqueeze(0)?)?;
     Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)
 }
 
@@ -331,11 +334,15 @@ impl DoubleStreamBlock {
         let img_mod = self.img_mod.forward(vec_)?; // shift, scale, gate
         let txt_mod = self.txt_mod.forward(vec_)?; // shift, scale, gate
         let img_modulated = img.apply(&self.img_norm1)?;
-        let img_modulated = ((img_modulated * (&img_mod[1] + 1.)?)? + &img_mod[0])?;
+        let img_modulated = img_modulated
+            .broadcast_mul(&(&img_mod[1] + 1.)?)?
+            .broadcast_add(&img_mod[0])?;
         let (img_q, img_k, img_v) = self.img_attn.qkv(&img_modulated)?;
 
         let txt_modulated = txt.apply(&self.txt_norm1)?;
-        let txt_modulated = ((txt_modulated * (&txt_mod[1] + 1.)?)? + &txt_mod[0])?;
+        let txt_modulated = txt_modulated
+            .broadcast_mul(&(&txt_mod[1] + 1.)?)?
+            .broadcast_add(&txt_mod[0])?;
         let (txt_q, txt_k, txt_v) = self.txt_attn.qkv(&txt_modulated)?;
 
         let q = Tensor::cat(&[txt_q, img_q], 2)?;
