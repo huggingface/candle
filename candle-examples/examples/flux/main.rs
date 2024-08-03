@@ -77,12 +77,14 @@ fn run(args: Args) -> Result<()> {
             .model("lmz/mt5-tokenizers".to_string())
             .get("t5-v1_1-xxl.tokenizer.json")?;
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
-        let tokens = tokenizer
+        let mut tokens = tokenizer
             .encode(prompt.as_str(), true)
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
+        tokens.resize(256, 0);
         let input_token_ids = Tensor::new(&tokens[..], &device)?.unsqueeze(0)?;
+        println!("{input_token_ids}");
         model.forward(&input_token_ids)?
     };
     println!("T5\n{t5_emb}");
@@ -113,6 +115,7 @@ fn run(args: Args) -> Result<()> {
             .get_ids()
             .to_vec();
         let input_token_ids = Tensor::new(&tokens[..], &device)?.unsqueeze(0)?;
+        println!("{input_token_ids}");
         model.forward(&input_token_ids)?
     };
     println!("CLIP\n{clip_emb}");
