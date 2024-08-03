@@ -1,5 +1,5 @@
 use candle::{IndexOp, Result, Tensor, D};
-use candle_nn::{LayerNorm, Linear, VarBuilder};
+use candle_nn::{LayerNorm, Linear, RmsNorm, VarBuilder};
 
 // https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/model.py#L12
 #[derive(Debug, Clone)]
@@ -180,14 +180,16 @@ impl candle::Module for MlpEmbedder {
 
 #[derive(Debug, Clone)]
 pub struct QkNorm {
-    query_norm: candle_nn::RmsNorm,
-    key_norm: candle_nn::RmsNorm,
+    query_norm: RmsNorm,
+    key_norm: RmsNorm,
 }
 
 impl QkNorm {
     fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
-        let query_norm = candle_nn::rms_norm(dim, 1e-6, vb.pp("query_norm"))?;
-        let key_norm = candle_nn::rms_norm(dim, 1e-6, vb.pp("key_norm"))?;
+        let query_norm = vb.get(dim, "query_norm.scale")?;
+        let query_norm = RmsNorm::new(query_norm, 1e-6);
+        let key_norm = vb.get(dim, "key_norm.scale")?;
+        let key_norm = RmsNorm::new(key_norm, 1e-6);
         Ok(Self {
             query_norm,
             key_norm,
@@ -425,7 +427,7 @@ impl LastLayer {
     fn new(h_sz: usize, p_sz: usize, out_c: usize, vb: VarBuilder) -> Result<Self> {
         let norm_final = layer_norm(h_sz, vb.pp("norm_final"))?;
         let linear = candle_nn::linear(h_sz, p_sz * p_sz * out_c, vb.pp("linear"))?;
-        let ada_ln_modulation = candle_nn::linear(h_sz, 2 * h_sz, vb.pp("ada_ln_modulation.1"))?;
+        let ada_ln_modulation = candle_nn::linear(h_sz, 2 * h_sz, vb.pp("adaLN_modulation.1"))?;
         Ok(Self {
             norm_final,
             linear,
