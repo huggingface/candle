@@ -107,8 +107,7 @@ fn run(args: Args) -> Result<()> {
             num_hidden_layers: 12,
             num_attention_heads: 12,
         };
-        let config = clip::EncoderConfig::Text(config);
-        let model = clip::text_model::ClipEncoder::new(vb.pp("text_model.encoder"), &config)?;
+        let model = clip::text_model::ClipTextTransformer::new(vb.pp("text_model"), &config)?;
         let tokenizer_filename = repo.get("tokenizer.json")?;
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
         let tokens = tokenizer
@@ -117,7 +116,7 @@ fn run(args: Args) -> Result<()> {
             .get_ids()
             .to_vec();
         let input_token_ids = Tensor::new(&tokens[..], &device)?.unsqueeze(0)?;
-        model.forward(&input_token_ids, None)?
+        model.forward(&input_token_ids)?
     };
     println!("CLIP\n{clip_emb}");
     let repo = api.repo(hf_hub::Repo::model(
