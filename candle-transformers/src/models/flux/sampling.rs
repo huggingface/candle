@@ -6,9 +6,12 @@ pub fn get_noise(
     width: usize,
     device: &Device,
 ) -> Result<Tensor> {
+    let height = (height + 15) / 16 * 2;
+    let width = (width + 15) / 16 * 2;
     Tensor::randn(0f32, 1., (num_samples, 16, height, width), device)
 }
 
+#[derive(Debug, Clone)]
 pub struct State {
     pub img: Tensor,
     pub img_ids: Tensor,
