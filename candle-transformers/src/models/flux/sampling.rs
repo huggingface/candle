@@ -19,6 +19,7 @@ pub struct State {
 
 impl State {
     pub fn new(t5_emb: &Tensor, clip_emb: &Tensor, img: &Tensor) -> Result<Self> {
+        let dtype = img.dtype();
         let (bs, c, h, w) = img.dims4()?;
         let dev = img.device();
         let img = img.reshape((bs, c, h / 2, 2, w / 2, 2))?; // (b, c, h, ph, w, pw)
@@ -35,11 +36,12 @@ impl State {
                     .broadcast_as((h / 2, w / 2))?,
             ],
             2,
-        )?;
+        )?
+        .to_dtype(dtype)?;
         let img_ids = img_ids.reshape((1, h / 2 * w / 2, 3))?;
         let img_ids = img_ids.repeat((bs, 1, 1))?;
         let txt = t5_emb.repeat(bs)?;
-        let txt_ids = Tensor::zeros((bs, txt.dim(1)?, 3), candle::DType::F32, dev)?;
+        let txt_ids = Tensor::zeros((bs, txt.dim(1)?, 3), dtype, dev)?;
         let vec = clip_emb.repeat(bs)?;
         Ok(Self {
             img,
