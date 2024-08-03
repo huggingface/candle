@@ -81,6 +81,15 @@ pub fn get_schedule(num_steps: usize, shift: Option<(usize, f64, f64)>) -> Vec<f
     }
 }
 
+pub fn unpack(xs: &Tensor, height: usize, width: usize) -> Result<Tensor> {
+    let (b, _h_w, c_ph_pw) = xs.dims3()?;
+    let height = (height + 15) / 16;
+    let width = (width + 15) / 16;
+    xs.reshape((b, height, width, c_ph_pw / 4, 2, 2))? // (b, h, w, c, ph, pw)
+        .permute((0, 3, 1, 4, 2, 5))? // (b, c, h, ph, w, pw)
+        .reshape((b, c_ph_pw / 4, height * 2, width * 2))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn denoise(
     model: &super::model::Flux,

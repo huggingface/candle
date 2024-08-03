@@ -7,7 +7,7 @@ extern crate intel_mkl_src;
 use candle_transformers::models::{clip, flux, t5};
 
 use anyhow::{Error as E, Result};
-use candle::{Module, Tensor};
+use candle::{IndexOp, Module, Tensor};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use tokenizers::Tokenizer;
@@ -141,15 +141,18 @@ fn run(args: Args) -> Result<()> {
         )?
     };
     println!("latent img\n{img}");
+    let img = flux::sampling::unpack(&img, height, width)?;
+
     let img = {
         let model_file = repo.get("ae.sft")?;
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)? };
         let cfg = flux::autoencoder::Config::schnell();
         let model = flux::autoencoder::AutoEncoder::new(&cfg, vb)?;
-        model.forward(&img)?
+        model.decode(&img)?
     };
     println!("img\n{img}");
-    candle_examples::save_image(&img, "out.jpg")?;
+    let img = ((img.clamp(-1f32, 1f32)? + 1.0)? * 127.5)?.to_dtype(candle::DType::U8)?;
+    candle_examples::save_image(&img.i(0)?, "out.jpg")?;
     Ok(())
 }
 
