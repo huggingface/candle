@@ -128,7 +128,7 @@ fn run(args: Args) -> Result<()> {
         let cfg = flux::model::Config::schnell();
         let model = flux::model::Flux::new(&cfg, vb)?;
 
-        let img = flux::sampling::get_noise(1, height, width, &device)?;
+        let img = flux::sampling::get_noise(1, height, width, &device)?.to_dtype(dtype)?;
         let state = flux::sampling::State::new(&t5_emb, &clip_emb, &img)?;
         let timesteps = flux::sampling::get_schedule(4, None); // no shift for flux-schnell
         flux::sampling::denoise(

@@ -1,4 +1,4 @@
-use candle::{IndexOp, Result, Tensor, D};
+use candle::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{LayerNorm, Linear, RmsNorm, VarBuilder};
 
 // https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/model.py#L12
@@ -80,6 +80,7 @@ fn rope(pos: &Tensor, dim: usize, theta: usize) -> Result<Tensor> {
         .collect();
     let inv_freq_len = inv_freq.len();
     let inv_freq = Tensor::from_vec(inv_freq, (1, 1, inv_freq_len), dev)?;
+    let inv_freq = inv_freq.to_dtype(pos.dtype())?;
     let freqs = pos.unsqueeze(2)?.broadcast_mul(&inv_freq)?;
     let cos = freqs.cos()?;
     let sin = freqs.sin()?;
@@ -105,7 +106,7 @@ fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> 
     x.transpose(1, 2)?.flatten_from(2)
 }
 
-fn timestep_embedding(t: &Tensor, dim: usize) -> Result<Tensor> {
+fn timestep_embedding(t: &Tensor, dim: usize, dtype: DType) -> Result<Tensor> {
     const TIME_FACTOR: f64 = 1000.;
     const MAX_PERIOD: f64 = 10000.;
     if dim % 2 == 1 {
@@ -120,7 +121,7 @@ fn timestep_embedding(t: &Tensor, dim: usize) -> Result<Tensor> {
         .unsqueeze(1)?
         .to_dtype(candle::DType::F32)?
         .broadcast_mul(&freqs.unsqueeze(0)?)?;
-    Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)
+    Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)?.to_dtype(dtype)
 }
 
 #[derive(Debug, Clone)]
@@ -522,16 +523,17 @@ impl Flux {
         if img.rank() != 3 {
             candle::bail!("unexpected shape for img {:?}", img.shape())
         }
+        let dtype = img.dtype();
         let pe = {
             let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
             ids.apply(&self.pe_embedder)?
         };
         let mut txt = txt.apply(&self.txt_in)?;
         let mut img = img.apply(&self.img_in)?;
-        let vec_ = timestep_embedding(timesteps, 256)?.apply(&self.time_in)?;
+        let vec_ = timestep_embedding(timesteps, 256, dtype)?.apply(&self.time_in)?;
         let vec_ = match (self.guidance_in.as_ref(), guidance) {
             (Some(g_in), Some(guidance)) => {
-                (vec_ + timestep_embedding(guidance, 256)?.apply(g_in))?
+                (vec_ + timestep_embedding(guidance, 256, dtype)?.apply(g_in))?
             }
             _ => vec_,
         };
