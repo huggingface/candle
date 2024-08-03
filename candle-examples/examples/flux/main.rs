@@ -108,7 +108,7 @@ fn run(args: Args) -> Result<()> {
             num_attention_heads: 12,
         };
         let config = clip::EncoderConfig::Text(config);
-        let model = clip::text_model::ClipEncoder::new(vb, &config)?;
+        let model = clip::text_model::ClipEncoder::new(vb.pp("text_model.encoder"), &config)?;
         let tokenizer_filename = repo.get("tokenizer.json")?;
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
         let tokens = tokenizer
