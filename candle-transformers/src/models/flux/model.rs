@@ -58,16 +58,48 @@ impl Config {
 }
 
 fn layer_norm(dim: usize, vb: VarBuilder) -> Result<LayerNorm> {
-    // TODO: elementwise affine is false.
-    candle_nn::layer_norm(dim, 1e-6, vb)
+    let config = candle_nn::LayerNormConfig {
+        eps: 1e-6,
+        affine: false,
+        ..Default::default()
+    };
+    candle_nn::layer_norm(dim, config, vb)
+}
+
+fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+    let dim = q.dim(D::Minus1)?;
+    let scale_factor = 1.0 / (dim as f64).sqrt();
+    let attn_weights = (q.matmul(&k.t()?)? * scale_factor)?;
+    candle_nn::ops::softmax_last_dim(&attn_weights)?.matmul(v)
+}
+
+fn rope(pos: &Tensor, dim: usize, theta: usize) -> Result<Tensor> {
+    todo!()
+}
+
+fn apply_rope(xq: &Tensor, xk: &Tensor, freq_cis: &Tensor) -> Result<(Tensor, Tensor)> {
+    todo!()
 }
 
 fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> {
-    todo!()
+    let (q, k) = apply_rope(q, k, pe)?;
+    let x = scaled_dot_product_attention(&q, &k, v)?;
+    x.transpose(1, 2)?.flatten_from(2)
 }
 
 fn timestep_embedding(t: &Tensor, dim: usize) -> Result<Tensor> {
-    todo!()
+    const TIME_FACTOR: f64 = 1000.;
+    const MAX_PERIOD: f64 = 10000.;
+    if dim % 2 == 1 {
+        candle::bail!("{dim} is odd")
+    }
+    let dev = t.device();
+    let half = dim / 2;
+    let t = (t * TIME_FACTOR)?;
+    let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(candle::DType::F32)?;
+    let freqs = ((arange / half as f64)? - MAX_PERIOD.ln())?.exp()?;
+    let args = (t.unsqueeze(1)?.to_dtype(candle::DType::F32)? * freqs.unsqueeze(0))?;
+    Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)
 }
 
 #[derive(Debug, Clone)]
@@ -88,8 +120,19 @@ impl EmbedNd {
 }
 
 impl candle::Module for EmbedNd {
-    fn forward(&self, _ids: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, ids: &Tensor) -> Result<Tensor> {
+        let n_axes = ids.dim(D::Minus1)?;
+        let mut emb = Vec::with_capacity(n_axes);
+        for idx in 0..n_axes {
+            let r = rope(
+                &ids.get_on_dim(D::Minus1, idx)?,
+                self.axes_dim[idx],
+                self.theta,
+            )?;
+            emb.push(r)
+        }
+        let emb = Tensor::cat(&emb, 2)?;
+        emb.unsqueeze(1)
     }
 }
 
@@ -188,6 +231,7 @@ impl SelfAttention {
         Ok((q, k, v))
     }
 
+    #[allow(unused)]
     fn forward(&self, xs: &Tensor, pe: &Tensor) -> Result<Tensor> {
         let (q, k, v) = self.qkv(xs)?;
         attention(&q, &k, &v, pe)?.apply(&self.proj)
