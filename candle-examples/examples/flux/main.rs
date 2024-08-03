@@ -16,10 +16,7 @@ use tokenizers::Tokenizer;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// The prompt to be used for image generation.
-    #[arg(
-        long,
-        default_value = "A very realistic photo of a rusty robot walking on a sandy beach"
-    )]
+    #[arg(long, default_value = "A rusty robot walking on a beach")]
     prompt: String,
 
     /// Run on CPU rather than on GPU.
@@ -130,6 +127,7 @@ fn run(args: Args) -> Result<()> {
 
         let img = flux::sampling::get_noise(1, height, width, &device)?.to_dtype(dtype)?;
         let state = flux::sampling::State::new(&t5_emb, &clip_emb, &img)?;
+        println!("{state:?}");
         let timesteps = flux::sampling::get_schedule(4, None); // no shift for flux-schnell
         flux::sampling::denoise(
             &model,

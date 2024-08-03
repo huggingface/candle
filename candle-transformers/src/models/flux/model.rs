@@ -67,9 +67,9 @@ fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Te
     let mut batch_dims = q.dims().to_vec();
     batch_dims.pop();
     batch_dims.pop();
-    let q = q.flatten_to(batch_dims.len())?;
-    let k = k.flatten_to(batch_dims.len())?;
-    let v = v.flatten_to(batch_dims.len())?;
+    let q = q.flatten_to(batch_dims.len() - 1)?;
+    let k = k.flatten_to(batch_dims.len() - 1)?;
+    let v = v.flatten_to(batch_dims.len() - 1)?;
     let attn_weights = (q.matmul(&k.t()?)? * scale_factor)?;
     let attn_scores = candle_nn::ops::softmax_last_dim(&attn_weights)?.matmul(&v)?;
     batch_dims.push(attn_scores.dim(D::Minus2)?);
@@ -99,13 +99,14 @@ fn rope(pos: &Tensor, dim: usize, theta: usize) -> Result<Tensor> {
 }
 
 fn apply_rope(x: &Tensor, freq_cis: &Tensor) -> Result<Tensor> {
+    let dims = x.dims();
     let (b_sz, n_head, seq_len, n_embd) = x.dims4()?;
     let x = x.reshape((b_sz, n_head, seq_len, n_embd / 2, 2))?;
     let x0 = x.narrow(D::Minus1, 0, 1)?;
     let x1 = x.narrow(D::Minus1, 1, 1)?;
     let fr0 = freq_cis.get_on_dim(D::Minus1, 0)?;
     let fr1 = freq_cis.get_on_dim(D::Minus1, 1)?;
-    fr0.broadcast_mul(&x0)? + fr1.broadcast_mul(&x1)?
+    (fr0.broadcast_mul(&x0)? + fr1.broadcast_mul(&x1)?)?.reshape(dims.to_vec())
 }
 
 fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> {
@@ -363,17 +364,29 @@ impl DoubleStreamBlock {
         let txt_attn = attn.narrow(1, 0, txt.dim(1)?)?;
         let img_attn = attn.narrow(1, txt.dim(1)?, attn.dim(1)? - txt.dim(1)?)?;
 
-        let img = (img + img_attn.apply(&self.img_attn.proj)? * &img_mod[2])?;
+        let img = (img
+            + img_attn
+                .apply(&self.img_attn.proj)?
+                .broadcast_mul(&img_mod[2]))?;
         let img = (&img
-            + &img_mod[5]
-                * ((img.apply(&self.img_norm2)? * (&img_mod[4] + 1.0))? + &img_mod[3])?
-                    .apply(&self.img_mlp))?;
+            + &img_mod[5].broadcast_mul(
+                &img.apply(&self.img_norm2)?
+                    .broadcast_mul(&(&img_mod[4] + 1.0)?)?
+                    .broadcast_add(&img_mod[3])?
+                    .apply(&self.img_mlp)?,
+            )?)?;
 
-        let txt = (txt + txt_attn.apply(&self.txt_attn.proj)? * &txt_mod[2])?;
+        let txt = (txt
+            + txt_attn
+                .apply(&self.txt_attn.proj)?
+                .broadcast_mul(&txt_mod[2]))?;
         let txt = (&txt
-            + &txt_mod[5]
-                * ((txt.apply(&self.txt_norm2)? * (&txt_mod[4] + 1.0))? + &txt_mod[3])?
-                    .apply(&self.txt_mlp))?;
+            + &txt_mod[5].broadcast_mul(
+                &txt.apply(&self.txt_norm2)?
+                    .broadcast_mul(&(&txt_mod[4] + 1.0)?)?
+                    .broadcast_add(&txt_mod[3])?
+                    .apply(&self.txt_mlp)?,
+            )?)?;
 
         Ok((img, txt))
     }
@@ -416,7 +429,10 @@ impl SingleStreamBlock {
     fn forward(&self, xs: &Tensor, vec_: &Tensor, pe: &Tensor) -> Result<Tensor> {
         let mod_ = self.modulation.forward(vec_)?;
         let (shift, scale, gate) = (&mod_[0], &mod_[1], &mod_[2]);
-        let x_mod = ((xs.apply(&self.pre_norm)? * (scale + 1.0))? + shift)?;
+        let x_mod = xs
+            .apply(&self.pre_norm)?
+            .broadcast_mul(&(scale + 1.0)?)?
+            .broadcast_mul(&shift)?;
         let x_mod = x_mod.apply(&self.linear1)?;
         let qkv = x_mod.narrow(D::Minus1, 0, 3 * self.h_sz)?;
         let (b, l, _khd) = qkv.dims3()?;
@@ -429,7 +445,7 @@ impl SingleStreamBlock {
         let k = k.apply(&self.norm.key_norm)?;
         let attn = attention(&q, &k, &v, pe)?;
         let output = Tensor::cat(&[attn, mlp.gelu()?], 2)?.apply(&self.linear2)?;
-        xs + gate * output
+        xs + gate.broadcast_mul(&output)
     }
 }
 
@@ -455,8 +471,10 @@ impl LastLayer {
     fn forward(&self, xs: &Tensor, vec: &Tensor) -> Result<Tensor> {
         let chunks = vec.silu()?.apply(&self.ada_ln_modulation)?.chunk(2, 1)?;
         let (shift, scale) = (&chunks[0], &chunks[1]);
-        let xs =
-            ((xs.apply(&self.norm_final)? * (scale.unsqueeze(1)? + 1.0))? + shift.unsqueeze(1))?;
+        let xs = xs
+            .apply(&self.norm_final)?
+            .broadcast_mul(&(scale.unsqueeze(1)? + 1.0)?)?
+            .broadcast_add(&shift.unsqueeze(1)?)?;
         xs.apply(&self.linear)
     }
 }
