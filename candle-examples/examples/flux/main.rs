@@ -142,6 +142,7 @@ fn run(args: Args) -> Result<()> {
                 let state = flux::sampling::State::new(&t5_emb, &clip_emb, &img)?;
                 println!("{state:?}");
                 let timesteps = flux::sampling::get_schedule(4, None); // no shift for flux-schnell
+                println!("{timesteps:?}");
                 flux::sampling::denoise(
                     &model,
                     &state.img,
