@@ -146,6 +146,29 @@ impl candle::Module for Downsample {
 }
 
 #[derive(Debug, Clone)]
+struct Upsample {
+    conv: Conv2d,
+}
+
+impl Upsample {
+    fn new(in_c: usize, vb: VarBuilder) -> Result<Self> {
+        let conv_cfg = candle_nn::Conv2dConfig {
+            padding: 1,
+            ..Default::default()
+        };
+        let conv = conv2d(in_c, in_c, 3, conv_cfg, vb.pp("conv"))?;
+        Ok(Self { conv })
+    }
+}
+
+impl candle::Module for Upsample {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (_, _, h, w) = xs.dims4()?;
+        xs.upsample_nearest2d(h * 2, w * 2)?.apply(&self.conv)
+    }
+}
+
+#[derive(Debug, Clone)]
 struct DownBlock {
     block: Vec<ResnetBlock>,
     downsample: Option<Downsample>,
@@ -169,6 +192,7 @@ impl Encoder {
             ..Default::default()
         };
         let mut block_in = cfg.ch;
+        let conv_in = conv2d(cfg.in_channels, block_in, 3, conv_cfg, vb.pp("conv_in"))?;
 
         let mut down = Vec::with_capacity(cfg.ch_mult.len());
         let vb_d = vb.pp("down");
@@ -200,7 +224,6 @@ impl Encoder {
         let mid_block_1 = ResnetBlock::new(block_in, block_in, vb.pp("mid.block_1"))?;
         let mid_attn_1 = AttnBlock::new(block_in, vb.pp("mid.attn_1"))?;
         let mid_block_2 = ResnetBlock::new(block_in, block_in, vb.pp("mid.block_2"))?;
-        let conv_in = conv2d(cfg.in_channels, block_in, 3, conv_cfg, vb.pp("conv_in"))?;
         let conv_out = conv2d(cfg.in_channels, block_in, 3, conv_cfg, vb.pp("conv_out"))?;
         let norm_out = group_norm(32, block_in, 1e-6, vb.pp("norm_out"))?;
         Ok(Self {
@@ -236,6 +259,12 @@ impl candle_nn::Module for Encoder {
 }
 
 #[derive(Debug, Clone)]
+struct UpBlock {
+    block: Vec<ResnetBlock>,
+    upsample: Option<Upsample>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Decoder {
     conv_in: Conv2d,
     mid_block_1: ResnetBlock,
@@ -243,6 +272,7 @@ pub struct Decoder {
     mid_block_2: ResnetBlock,
     norm_out: GroupNorm,
     conv_out: Conv2d,
+    up: Vec<UpBlock>,
 }
 
 impl Decoder {
@@ -251,11 +281,33 @@ impl Decoder {
             padding: 1,
             ..Default::default()
         };
-        let block_in = cfg.ch * cfg.ch_mult.last().unwrap_or(&1);
+        let mut block_in = cfg.ch * cfg.ch_mult.last().unwrap_or(&1);
+        let conv_in = conv2d(cfg.z_channels, block_in, 3, conv_cfg, vb.pp("conv_in"))?;
         let mid_block_1 = ResnetBlock::new(block_in, block_in, vb.pp("mid.block_1"))?;
         let mid_attn_1 = AttnBlock::new(block_in, vb.pp("mid.attn_1"))?;
         let mid_block_2 = ResnetBlock::new(block_in, block_in, vb.pp("mid.block_2"))?;
-        let conv_in = conv2d(cfg.z_channels, block_in, 3, conv_cfg, vb.pp("conv_in"))?;
+
+        let mut up = Vec::with_capacity(cfg.ch_mult.len());
+        let vb_u = vb.pp("up");
+        for (i_level, ch_mult) in cfg.ch_mult.iter().enumerate().rev() {
+            let block_out = cfg.ch * ch_mult;
+            let vb_u = vb_u.pp(up.len());
+            let vb_b = vb_u.pp("block");
+            let mut block = Vec::with_capacity(cfg.num_res_blocks + 1);
+            for i_block in 0..=cfg.num_res_blocks {
+                let b = ResnetBlock::new(block_in, block_out, vb_b.pp(i_block))?;
+                block.push(b);
+                block_in = block_out;
+            }
+            let upsample = if i_level == 0 {
+                Some(Upsample::new(block_in, vb_u.pp("upsample"))?)
+            } else {
+                None
+            };
+            let block = UpBlock { block, upsample };
+            up.push(block)
+        }
+
         let norm_out = group_norm(32, block_in, 1e-6, vb.pp("norm_out"))?;
         let conv_out = conv2d(block_in, cfg.out_ch, 3, conv_cfg, vb.pp("conv_out"))?;
         Ok(Self {
@@ -265,6 +317,7 @@ impl Decoder {
             mid_block_2,
             norm_out,
             conv_out,
+            up,
         })
     }
 }
@@ -272,11 +325,18 @@ impl Decoder {
 impl candle_nn::Module for Decoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let h = xs.apply(&self.conv_in)?;
-        let h = h
+        let mut h = h
             .apply(&self.mid_block_1)?
             .apply(&self.mid_attn_1)?
             .apply(&self.mid_block_2)?;
-        // TODO: blocks for upsampling.
+        for block in self.up.iter().rev() {
+            for b in block.block.iter() {
+                h = h.apply(b)?
+            }
+            if let Some(us) = block.upsample.as_ref() {
+                h = h.apply(us)?
+            }
+        }
         h.apply(&self.norm_out)?
             .apply(&candle_nn::Activation::Swish)?
             .apply(&self.conv_out)
