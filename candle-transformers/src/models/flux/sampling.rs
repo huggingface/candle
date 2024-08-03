@@ -65,6 +65,7 @@ fn time_shift(mu: f64, sigma: f64, t: f64) -> f64 {
 pub fn get_schedule(num_steps: usize, shift: Option<(usize, f64, f64)>) -> Vec<f64> {
     let timesteps: Vec<f64> = (0..=num_steps)
         .map(|v| v as f64 / num_steps as f64)
+        .rev()
         .collect();
     match shift {
         None => timesteps,

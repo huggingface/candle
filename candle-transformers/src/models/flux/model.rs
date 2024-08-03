@@ -126,12 +126,13 @@ fn timestep_embedding(t: &Tensor, dim: usize, dtype: DType) -> Result<Tensor> {
     let half = dim / 2;
     let t = (t * TIME_FACTOR)?;
     let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(candle::DType::F32)?;
-    let freqs = ((arange / half as f64)? - MAX_PERIOD.ln())?.exp()?;
+    let freqs = (arange * (-MAX_PERIOD.ln() / half as f64))?.exp()?;
     let args = t
         .unsqueeze(1)?
         .to_dtype(candle::DType::F32)?
         .broadcast_mul(&freqs.unsqueeze(0)?)?;
-    Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)?.to_dtype(dtype)
+    let emb = Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)?.to_dtype(dtype)?;
+    Ok(emb)
 }
 
 #[derive(Debug, Clone)]
