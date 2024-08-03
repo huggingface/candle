@@ -65,10 +65,13 @@ fn run(args: Args) -> Result<()> {
     let device = candle_examples::device(cpu)?;
     let dtype = device.bf16_default_to_f32();
     let t5_emb = {
-        let repo = api.repo(hf_hub::Repo::model("google/t5-v1_1-xxl".to_string()));
-        let model_files =
-            candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?;
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, dtype, &device)? };
+        let repo = api.repo(hf_hub::Repo::with_revision(
+            "google/t5-v1_1-xxl".to_string(),
+            hf_hub::RepoType::Model,
+            "refs/pr/2".to_string(),
+        ));
+        let model_file = repo.get("model.safetensors")?;
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)? };
         let config_filename = repo.get("config.json")?;
         let config = std::fs::read_to_string(config_filename)?;
         let config: t5::Config = serde_json::from_str(&config)?;
