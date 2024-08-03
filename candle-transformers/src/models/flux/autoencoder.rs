@@ -15,6 +15,38 @@ pub struct Config {
     pub shift_factor: f64,
 }
 
+impl Config {
+    // https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/util.py#L47
+    pub fn dev() -> Self {
+        Self {
+            resolution: 256,
+            in_channels: 3,
+            ch: 128,
+            out_ch: 3,
+            ch_mult: vec![1, 2, 4, 4],
+            num_res_blocks: 2,
+            z_channels: 16,
+            scale_factor: 0.3611,
+            shift_factor: 0.1159,
+        }
+    }
+
+    // https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/util.py#L79
+    pub fn schnell() -> Self {
+        Self {
+            resolution: 256,
+            in_channels: 3,
+            ch: 128,
+            out_ch: 3,
+            ch_mult: vec![1, 2, 4, 4],
+            num_res_blocks: 2,
+            z_channels: 16,
+            scale_factor: 0.3611,
+            shift_factor: 0.1159,
+        }
+    }
+}
+
 fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
     let dim = q.dim(D::Minus1)?;
     let scale_factor = 1.0 / (dim as f64).sqrt();
