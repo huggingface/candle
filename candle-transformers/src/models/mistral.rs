@@ -15,6 +15,7 @@ pub struct Config {
     pub intermediate_size: usize,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
+    pub head_dim: Option<usize>,
     pub num_key_value_heads: usize,
     pub hidden_act: Activation,
     pub max_position_embeddings: usize,
@@ -34,6 +35,7 @@ impl Config {
             intermediate_size: 14336,
             num_hidden_layers: 32,
             num_attention_heads: 32,
+            head_dim: None,
             num_key_value_heads: 8,
             hidden_act: Activation::Silu,
             max_position_embeddings: 32768,
@@ -53,6 +55,7 @@ impl Config {
             intermediate_size: 14336,
             num_hidden_layers: 32,
             num_attention_heads: 32,
+            head_dim: None,
             num_key_value_heads: 8,
             hidden_act: Activation::Silu,
             max_position_embeddings: 32768,
@@ -71,6 +74,7 @@ impl Config {
             intermediate_size: 14336,
             num_hidden_layers: 32,
             num_attention_heads: 32,
+            head_dim: None,
             num_key_value_heads: 8,
             hidden_act: Activation::Silu,
             max_position_embeddings: 32768,
@@ -79,6 +83,11 @@ impl Config {
             sliding_window: Some(4096),
             use_flash_attn,
         }
+    }
+
+    fn head_dim(&self) -> usize {
+        self.head_dim
+            .unwrap_or(self.hidden_size / self.num_attention_heads)
     }
 }
 
@@ -91,7 +100,7 @@ struct RotaryEmbedding {
 impl RotaryEmbedding {
     fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
         let rope_theta = cfg.rope_theta as f32;
-        let dim = cfg.hidden_size / cfg.num_attention_heads;
+        let dim = cfg.head_dim();
         let max_seq_len = cfg.max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
@@ -167,7 +176,6 @@ struct Attention {
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
     kv_cache: Option<(Tensor, Tensor)>,
     use_flash_attn: bool,
@@ -179,7 +187,7 @@ impl Attention {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let num_kv_groups = num_heads / num_kv_heads;
-        let head_dim = hidden_sz / num_heads;
+        let head_dim = cfg.head_dim();
         let q_proj = linear_no_bias(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
         let k_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
         let v_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
@@ -193,7 +201,6 @@ impl Attention {
             num_kv_heads,
             num_kv_groups,
             head_dim,
-            hidden_size: hidden_sz,
             rotary_emb,
             kv_cache: None,
             use_flash_attn: cfg.use_flash_attn,
@@ -254,7 +261,7 @@ impl Attention {
 
         attn_output
             .transpose(1, 2)?
-            .reshape((b_sz, q_len, self.hidden_size))?
+            .reshape((b_sz, q_len, self.num_heads * self.head_dim))?
             .apply(&self.o_proj)
     }
 
