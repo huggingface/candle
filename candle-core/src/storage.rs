@@ -736,6 +736,40 @@ impl Storage {
         }
     }
 
+    pub(crate) fn matmul_bias_and_scale(
+        &self,
+        rhs: &Self,
+        c: &mut Self,
+        s: Option<f64>,
+        bmnk: (usize, usize, usize, usize),
+        lhs_layout: &Layout,
+        rhs_layout: &Layout,
+        c_layout: &Layout,
+    ) -> Result<()> {
+        self.same_device(rhs, "matmul_bias_and_scale")?;
+        self.same_dtype(rhs, "matmul_bias_and_scale")?;
+        self.same_device(c, "matmul_bias_and_scale")?;
+        self.same_dtype(c, "matmul_bias_and_scale")?;
+        match (self, rhs, c) {
+            (Self::Cpu(lhs), Self::Cpu(rhs), Self::Cpu(c)) => {
+                lhs.matmul_bias_and_scale(rhs, c, s, bmnk, lhs_layout, rhs_layout, c_layout)
+            }
+            (Self::Cuda(lhs), Self::Cuda(rhs), Self::Cuda(c)) => {
+                lhs.matmul_bias_and_scale(rhs, c, s, bmnk, lhs_layout, rhs_layout, c_layout)
+            }
+            (Self::Metal(lhs), Self::Metal(rhs), Self::Metal(c)) => {
+                lhs.matmul_bias_and_scale(rhs, c, s, bmnk, lhs_layout, rhs_layout, c_layout)
+            }
+            (lhs, rhs, c) => Err(Error::DeviceMismatchBinaryOp3 {
+                lhs: lhs.device().location(),
+                rhs: rhs.device().location(),
+                c: c.device().location(),
+                op: "matmul_bias_and_scale",
+            }
+            .bt()),
+        }
+    }
+
     // self, the source can be strided whereas dst is contiguous.
     pub(crate) fn copy_strided_src(
         &self,

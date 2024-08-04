@@ -100,6 +100,14 @@ pub enum Error {
         op: &'static str,
     },
 
+    #[error("device mismatch in {op}, lhs: {lhs:?}, rhs: {rhs:?}, c: {c:?}")]
+    DeviceMismatchBinaryOp3 {
+        lhs: DeviceLocation,
+        rhs: DeviceLocation,
+        c: DeviceLocation,
+        op: &'static str,
+    },
+
     // === Op Specific Errors ===
     #[error("narrow invalid args {msg}: {shape:?}, dim: {dim}, start: {start}, len:{len}")]
     NarrowInvalidArgs {

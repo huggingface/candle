@@ -58,6 +58,47 @@ pub trait Map2 {
     }
 }
 
+pub trait Map3 {
+    const OP: &'static str;
+    fn f<T: WithDType>(
+        &self,
+        v1: &[T],
+        l1: &Layout,
+        v2: &[T],
+        l2: &Layout,
+        v3: &mut [T],
+        l3: &Layout,
+        s: Option<f64>,
+    ) -> Result<()>;
+
+    fn map(
+        &self,
+        v1: &C,
+        l1: &Layout,
+        v2: &C,
+        l2: &Layout,
+        v3: &mut C,
+        l3: &Layout,
+        s: Option<f64>,
+    ) -> Result<()> {
+        match (v1, v2, v3) {
+            (C::U8(v1), C::U8(v2), C::U8(v3)) => Ok(self.f(v1, l1, v2, l2, v3, l3, s)?),
+            (C::U32(v1), C::U32(v2), C::U32(v3)) => Ok(self.f(v1, l1, v2, l2, v3, l3, s)?),
+            (C::I64(v1), C::I64(v2), C::I64(v3)) => Ok(self.f(v1, l1, v2, l2, v3, l3, s)?),
+            (C::BF16(v1), C::BF16(v2), C::BF16(v3)) => Ok(self.f(v1, l1, v2, l2, v3, l3, s)?),
+            (C::F16(v1), C::F16(v2), C::F16(v3)) => Ok(self.f(v1, l1, v2, l2, v3, l3, s)?),
+            (C::F32(v1), C::F32(v2), C::F32(v3)) => Ok(self.f(v1, l1, v2, l2, v3, l3, s)?),
+            (C::F64(v1), C::F64(v2), C::F64(v3)) => Ok(self.f(v1, l1, v2, l2, v3, l3, s)?),
+            _ => Err(Error::DTypeMismatchBinaryOp {
+                lhs: v1.dtype(),
+                rhs: v2.dtype(),
+                op: Self::OP,
+            }
+            .bt()),
+        }
+    }
+}
+
 pub trait Map2U8 {
     const OP: &'static str;
     fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, v2: &[T], l2: &Layout) -> Result<Vec<u8>>;

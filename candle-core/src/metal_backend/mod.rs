@@ -1430,6 +1430,8 @@ impl BackendStorage for MetalStorage {
             rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
             &rhs.buffer,
             &buffer,
+            1.,
+            0.,
         )
         .map_err(MetalError::from)?;
         Ok(Self::new(
@@ -1438,6 +1440,61 @@ impl BackendStorage for MetalStorage {
             b * m * n,
             self.dtype(),
         ))
+    }
+
+    fn matmul_bias_and_scale(
+        &self,
+        rhs: &Self,
+        c: &mut Self,
+        s: Option<f64>,
+        (b, m, n, k): (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        c_l: &Layout,
+    ) -> Result<()> {
+        let name = match self.dtype {
+            DType::F32 => "sgemm",
+            DType::F16 => "hgemm",
+            DType::BF16 => "bgemm",
+            dtype => {
+                return Err(MetalError::Message(format!("matmul doesn't support {dtype:?}")).into())
+            }
+        };
+
+        let elem_count = b * m * n;
+
+        match c_l.contiguous_offsets() {
+            Some((o1, o2)) => {
+                if o1 != 0 {
+                    crate::bail!("`c` start offset must be 0");
+                }
+                if o2 != elem_count {
+                    crate::bail!("`c` end offset must be {}", elem_count)
+                }
+            }
+            None => crate::bail!("`c` has to be contiguous"),
+        };
+
+        let command_buffer = self.device.command_buffer()?;
+        command_buffer.set_label("matmul");
+        candle_metal_kernels::call_gemm(
+            &self.device.device,
+            &command_buffer,
+            &self.device.kernels,
+            name,
+            (b, m, n, k),
+            lhs_l.stride(),
+            lhs_l.start_offset() * self.dtype.size_in_bytes(),
+            &self.buffer,
+            rhs_l.stride(),
+            rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
+            &rhs.buffer,
+            &c.buffer,
+            s.unwrap_or(1.) as f32,
+            1.,
+        )
+        .map_err(MetalError::from)?;
+        Ok(())
     }
 
     fn copy2d(

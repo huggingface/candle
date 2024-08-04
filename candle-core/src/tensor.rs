@@ -1226,6 +1226,76 @@ impl Tensor {
         }
     }
 
+    /// Returns the matrix-multiplication of the input tensor with the other provided tensor. The result is scaled
+    /// and then added to the output tensor, the bias tensor `c`.
+    ///
+    /// This is incompatible with gradient tracking. No gradients will be tracked on this operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `self` - A tensor with dimensions `b1, b2, ..., bi, m, k`.
+    /// * `rhs` - A tensor with dimensions `b1, b2, ..., bi, k, n`.
+    /// * `c` - A tensor with dimensions `b1, b2, ..., bi, m, n`, into which the result is accumulated and added to.
+    /// * `scale` - Factor to multiply `self` x `rhs` by
+    pub fn matmul_bias_and_scale(
+        &self,
+        rhs: &Self,
+        c: &mut Self,
+        scale: Option<f64>,
+    ) -> Result<()> {
+        let a_dims = self.shape().dims();
+        let b_dims = rhs.shape().dims();
+
+        let dim = a_dims.len();
+
+        if dim < 2 || b_dims.len() != dim {
+            Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "matmul",
+            }
+            .bt())?
+        }
+
+        let m = a_dims[dim - 2];
+        let k = a_dims[dim - 1];
+        let k2 = b_dims[dim - 2];
+        let n = b_dims[dim - 1];
+
+        let exp_c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
+        if exp_c_shape.elem_count() == 0 || k == 0 {
+            bail!("Expected `c` to have more than one element, got 0.");
+        }
+        if exp_c_shape != c.shape().clone() {
+            Err(Error::UnexpectedShape {
+                msg: "`c` has an unexpected shape.".to_string(),
+                expected: exp_c_shape,
+                got: c.shape().clone(),
+            })?
+        }
+
+        let batching: usize = a_dims[..dim - 2].iter().product();
+        let batching_b: usize = b_dims[..dim - 2].iter().product();
+        if k != k2 || batching != batching_b {
+            Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "matmul",
+            }
+            .bt())?
+        }
+
+        self.storage().matmul_bias_and_scale(
+            &rhs.storage(),
+            &mut c.storage_mut(),
+            scale,
+            (batching, m, n, k),
+            self.layout(),
+            rhs.layout(),
+            c.layout(),
+        )
+    }
+
     /// Returns a tensor with the same shape as the input tensor, the values are taken from
     /// `on_true` if the input tensor value is not zero, and `on_false` at the positions where the
     /// input tensor is equal to zero.

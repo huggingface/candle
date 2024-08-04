@@ -162,6 +162,19 @@ impl crate::backend::BackendStorage for MetalStorage {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
+    fn matmul_bias_and_scale(
+        &self,
+        _: &Self,
+        _: &mut Self,
+        _: Option<f64>,
+        _: (usize, usize, usize, usize),
+        _: &Layout,
+        _: &Layout,
+        _: &Layout,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
     fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()> {
         Err(Error::NotCompiledWithMetalSupport)
     }

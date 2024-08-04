@@ -1709,6 +1709,76 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
+    fn matmul_bias_and_scale(
+        &self,
+        rhs: &Self,
+        c: &mut Self,
+        s: Option<f64>,
+        (b, m, n, k): (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        c_l: &Layout,
+    ) -> Result<()> {
+        let elem_count = b * m * n;
+
+        match c_l.contiguous_offsets() {
+            Some((o1, o2)) => {
+                if o1 != 0 {
+                    crate::bail!("`c` start offset must be 0");
+                }
+                if o2 != elem_count {
+                    crate::bail!("`c` end offset must be {}", elem_count)
+                }
+            }
+            None => crate::bail!("`c` has to be contiguous"),
+        };
+
+        match (&self.slice, &rhs.slice, &mut c.slice) {
+            (
+                CudaStorageSlice::BF16(lhs),
+                CudaStorageSlice::BF16(rhs),
+                CudaStorageSlice::BF16(c),
+            ) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(
+                    bf16::from_f64(s.unwrap_or(1.0)),
+                    bf16::ZERO,
+                    (b, m, n, k),
+                    lhs_l,
+                    rhs_l,
+                )?;
+                unsafe { gemm_strided_batched_bf16(&self.device.blas, cfg, rhs, lhs, c) }.w()?;
+            }
+            (CudaStorageSlice::F16(lhs), CudaStorageSlice::F16(rhs), CudaStorageSlice::F16(c)) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(
+                    f16::from_f64(s.unwrap_or(1.0)),
+                    f16::ZERO,
+                    (b, m, n, k),
+                    lhs_l,
+                    rhs_l,
+                )?;
+                unsafe { gemm_strided_batched_f16(&self.device.blas, cfg, rhs, lhs, c) }.w()?;
+            }
+            (CudaStorageSlice::F32(lhs), CudaStorageSlice::F32(rhs), CudaStorageSlice::F32(c)) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(s.unwrap_or(1.0) as f32, 0., (b, m, n, k), lhs_l, rhs_l)?;
+                unsafe { gemm_strided_batched_f32(&self.device.blas, cfg, rhs, lhs, c) }.w()?;
+            }
+            (CudaStorageSlice::F64(lhs), CudaStorageSlice::F64(rhs), CudaStorageSlice::F64(c)) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(s.unwrap_or(1.0), 0., (b, m, n, k), lhs_l, rhs_l)?;
+                unsafe { self.device.blas.gemm_strided_batched(cfg, rhs, lhs, c) }.w()?;
+            }
+            _ => Err(CudaError::InternalError("dtype mismatch in matmul op"))?,
+        };
+        Ok(())
+    }
+
     fn copy2d(
         &self,
         dst: &mut Self,

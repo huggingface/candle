@@ -97,6 +97,17 @@ pub trait BackendStorage: Sized {
         _: &Layout,
     ) -> Result<Self>;
 
+    fn matmul_bias_and_scale(
+        &self,
+        _: &Self,
+        _: &mut Self,
+        _: Option<f64>,
+        _: (usize, usize, usize, usize),
+        _: &Layout,
+        _: &Layout,
+        _: &Layout,
+    ) -> Result<()>;
+
     fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()>;
 
     #[allow(clippy::too_many_arguments)]
