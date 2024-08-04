@@ -50,8 +50,8 @@ pub trait RNN {
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone)]
 pub struct LSTMState {
-    h: Tensor,
-    c: Tensor,
+    pub h: Tensor,
+    pub c: Tensor,
 }
 
 impl LSTMState {
@@ -205,7 +205,7 @@ impl RNN for LSTM {
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone)]
 pub struct GRUState {
-    h: Tensor,
+    pub h: Tensor,
 }
 
 impl GRUState {
