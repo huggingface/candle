@@ -26,6 +26,14 @@ pub enum Error {
         op: &'static str,
     },
 
+    #[error("dtype mismatch in {op}, lhs: {lhs:?}, rhs: {rhs:?}, c: {rhs:?}")]
+    DTypeMismatchBinaryOp3 {
+        lhs: DType,
+        rhs: DType,
+        c: DType,
+        op: &'static str,
+    },
+
     #[error("unsupported dtype {0:?} for op {1}")]
     UnsupportedDTypeForOp(DType, &'static str),
 

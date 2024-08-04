@@ -1779,6 +1779,75 @@ impl BackendStorage for CudaStorage {
         Ok(())
     }
 
+    fn matmul_with_alpha(
+        &self,
+        rhs: &Self,
+        scale: Option<f64>,
+        (b, m, n, k): (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+    ) -> Result<Self> {
+        let elem_count = b * m * n;
+        let dev = &self.device;
+        let slice = match (&self.slice, &rhs.slice) {
+            (CudaStorageSlice::BF16(lhs), CudaStorageSlice::BF16(rhs)) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(
+                    bf16::from_f64(scale.unwrap_or(1.)),
+                    bf16::ZERO,
+                    (b, m, n, k),
+                    lhs_l,
+                    rhs_l,
+                )?;
+                let mut out = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
+                unsafe { gemm_strided_batched_bf16(&self.device.blas, cfg, rhs, lhs, &mut out) }
+                    .w()?;
+                CudaStorageSlice::BF16(out)
+            }
+            (CudaStorageSlice::F16(lhs), CudaStorageSlice::F16(rhs)) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(
+                    f16::from_f64(scale.unwrap_or(1.)),
+                    f16::ZERO,
+                    (b, m, n, k),
+                    lhs_l,
+                    rhs_l,
+                )?;
+                let mut out = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
+                unsafe { gemm_strided_batched_f16(&self.device.blas, cfg, rhs, lhs, &mut out) }
+                    .w()?;
+                CudaStorageSlice::F16(out)
+            }
+            (CudaStorageSlice::F32(lhs), CudaStorageSlice::F32(rhs)) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(scale.unwrap_or(1.) as f32, 0., (b, m, n, k), lhs_l, rhs_l)?;
+                let mut out = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
+                unsafe { gemm_strided_batched_f32(&self.device.blas, cfg, rhs, lhs, &mut out) }
+                    .w()?;
+                CudaStorageSlice::F32(out)
+            }
+            (CudaStorageSlice::F64(lhs), CudaStorageSlice::F64(rhs)) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(scale.unwrap_or(1.), 0., (b, m, n, k), lhs_l, rhs_l)?;
+                let mut out = unsafe { dev.alloc::<f64>(elem_count) }.w()?;
+                unsafe {
+                    self.device
+                        .blas
+                        .gemm_strided_batched(cfg, rhs, lhs, &mut out)
+                }
+                .w()?;
+                CudaStorageSlice::F64(out)
+            }
+            _ => Err(CudaError::InternalError("dtype mismatch in matmul op"))?,
+        };
+        let device = dev.clone();
+        Ok(Self { slice, device })
+    }
+
     fn copy2d(
         &self,
         dst: &mut Self,

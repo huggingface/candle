@@ -1398,6 +1398,7 @@ impl BackendStorage for MetalStorage {
         .map_err(MetalError::from)?;
         Ok(acc)
     }
+
     fn matmul(
         &self,
         rhs: &Self,
@@ -1495,6 +1496,51 @@ impl BackendStorage for MetalStorage {
         )
         .map_err(MetalError::from)?;
         Ok(())
+    }
+
+    fn matmul_with_alpha(
+        &self,
+        rhs: &Self,
+        s: Option<f64>,
+        (b, m, n, k): (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+    ) -> Result<Self> {
+        let buffer = self.device.new_buffer(b * m * n, self.dtype, "matmul")?;
+        let name = match self.dtype {
+            DType::F32 => "sgemm",
+            DType::F16 => "hgemm",
+            DType::BF16 => "bgemm",
+            dtype => {
+                return Err(MetalError::Message(format!("matmul doesn't support {dtype:?}")).into())
+            }
+        };
+
+        let command_buffer = self.device.command_buffer()?;
+        command_buffer.set_label("matmul");
+        candle_metal_kernels::call_gemm(
+            &self.device.device,
+            &command_buffer,
+            &self.device.kernels,
+            name,
+            (b, m, n, k),
+            lhs_l.stride(),
+            lhs_l.start_offset() * self.dtype.size_in_bytes(),
+            &self.buffer,
+            rhs_l.stride(),
+            rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
+            &rhs.buffer,
+            &buffer,
+            s.unwrap_or(1.) as f32,
+            0.,
+        )
+        .map_err(MetalError::from)?;
+        Ok(Self::new(
+            buffer,
+            self.device.clone(),
+            b * m * n,
+            self.dtype(),
+        ))
     }
 
     fn copy2d(
