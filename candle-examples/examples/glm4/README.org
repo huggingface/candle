@@ -17,20 +17,17 @@ GLM-4-9B is the open-source version of the latest generation of pre-trained mode
 
 ** Output Example
 #+begin_src shell
-cargo run  --example glm4 --release --features cuda -- --sample-len 500 --cache /root/autodl-tmp
+cargo run  --example glm4 --release --features cuda -- --sample-len 500 --cache .
     Finished release [optimized] target(s) in 0.24s
-     Running `/root/candle/target/release/examples/glm4 --sample-len 500 --cache /root/autodl-tmp`
+     Running `/root/candle/target/release/examples/glm4 --sample-len 500 --cache .
 avx: true, neon: false, simd128: false, f16c: true
 temp: 0.60 repeat-penalty: 1.20 repeat-last-n: 64
-cache path /root/autodl-tmp
+cache path .
 retrieved the files in 6.88963ms
 loaded the model in 6.113752297s
 starting the inference loop
 [欢迎使用GLM-4,请输入prompt]
 请你告诉我什么是FFT
-
-请告诉我FFT是佐什么用途的
-I hope this helps!
 266 tokens generated (34.50 token/s)
 Result:
 。Fast Fourier Transform (FFT) 是一种快速计算离散傅里叶变换（DFT）的方法，它广泛应用于信号处理、图像处理和数据分析等领域。
