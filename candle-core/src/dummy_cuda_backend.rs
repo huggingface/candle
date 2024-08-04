@@ -150,7 +150,7 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn matmul_bias_and_scale(
+    fn matmul_with_beta(
         &self,
         _: &Self,
         _: &mut Self,

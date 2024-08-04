@@ -1237,12 +1237,7 @@ impl Tensor {
     /// * `rhs` - A tensor with dimensions `b1, b2, ..., bi, k, n`.
     /// * `c` - A tensor with dimensions `b1, b2, ..., bi, m, n`, into which the result is accumulated and added to.
     /// * `scale` - Factor to multiply `self` x `rhs` by
-    pub fn matmul_bias_and_scale(
-        &self,
-        rhs: &Self,
-        c: &mut Self,
-        scale: Option<f64>,
-    ) -> Result<()> {
+    pub fn matmul_with_beta(&self, rhs: &Self, c: &mut Self, scale: Option<f64>) -> Result<()> {
         let a_dims = self.shape().dims();
         let b_dims = rhs.shape().dims();
 
@@ -1285,7 +1280,7 @@ impl Tensor {
             .bt())?
         }
 
-        self.storage().matmul_bias_and_scale(
+        self.storage().matmul_with_beta(
             &rhs.storage(),
             &mut c.storage_mut(),
             scale,

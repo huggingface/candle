@@ -97,7 +97,7 @@ pub trait BackendStorage: Sized {
         _: &Layout,
     ) -> Result<Self>;
 
-    fn matmul_bias_and_scale(
+    fn matmul_with_beta(
         &self,
         _: &Self,
         _: &mut Self,

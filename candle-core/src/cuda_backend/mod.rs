@@ -1709,7 +1709,7 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
-    fn matmul_bias_and_scale(
+    fn matmul_with_beta(
         &self,
         rhs: &Self,
         c: &mut Self,

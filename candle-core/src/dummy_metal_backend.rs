@@ -162,7 +162,7 @@ impl crate::backend::BackendStorage for MetalStorage {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn matmul_bias_and_scale(
+    fn matmul_with_beta(
         &self,
         _: &Self,
         _: &mut Self,
