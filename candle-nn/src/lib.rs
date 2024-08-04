@@ -1,6 +1,8 @@
 pub mod activation;
+pub mod attention;
 pub mod batch_norm;
 pub mod conv;
+pub mod cublaslt;
 pub mod embedding;
 pub mod encoding;
 pub mod func;
@@ -19,6 +21,7 @@ pub mod var_builder;
 pub mod var_map;
 
 pub use activation::{prelu, Activation, PReLU};
+pub use attention::scaled_dot_product_attention;
 pub use batch_norm::{batch_norm, BatchNorm, BatchNormConfig};
 pub use conv::{
     conv1d, conv1d_no_bias, conv2d, conv2d_no_bias, conv_transpose1d, conv_transpose1d_no_bias,
