@@ -60,6 +60,7 @@ pub trait Map2 {
 
 pub trait Map3 {
     const OP: &'static str;
+    #[allow(clippy::too_many_arguments)]
     fn f<T: WithDType>(
         &self,
         v1: &[T],
@@ -71,6 +72,7 @@ pub trait Map3 {
         s: Option<f64>,
     ) -> Result<()>;
 
+    #[allow(clippy::too_many_arguments)]
     fn map(
         &self,
         v1: &C,

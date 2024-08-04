@@ -109,7 +109,26 @@ fn mm_layout(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn matmul_beta(device: &Device) -> Result<()> {
+    let data = vec![1.0f32, 2.0, 3.0, 4.0];
+    let a = Tensor::from_slice(&data, (2, 2), device)?;
+    let data = vec![1.0f32, 2.0, 3.0, 4.0];
+    let b = Tensor::from_slice(&data, (2, 2), device)?;
+    let data = vec![1.0f32, 1.0, 1.0, 1.0];
+    let mut c = Tensor::from_slice(&data, (2, 2), device)?;
+
+    a.matmul_with_beta(&b, &mut c, None)?;
+    assert_eq!(c.to_vec2::<f32>()?, &[[8.0f32, 11.0], [16.0, 23.0]]);
+    Ok(())
+}
+
 test_device!(matmul, matmul_cpu, matmul_gpu, matmul_metal);
+test_device!(
+    matmul_beta,
+    matmul_beta_cpu,
+    matmul_beta_gpu,
+    matmul_beta_metal
+);
 test_device!(
     matmul_bf16,
     matmul_bf16_cpu,

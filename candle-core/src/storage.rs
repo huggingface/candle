@@ -736,6 +736,7 @@ impl Storage {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn matmul_with_beta(
         &self,
         rhs: &Self,

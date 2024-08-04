@@ -1743,7 +1743,7 @@ impl BackendStorage for CudaStorage {
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
                 let cfg = gemm_config(
                     bf16::from_f64(s.unwrap_or(1.0)),
-                    bf16::ZERO,
+                    bf16::ONE,
                     (b, m, n, k),
                     lhs_l,
                     rhs_l,
@@ -1755,7 +1755,7 @@ impl BackendStorage for CudaStorage {
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
                 let cfg = gemm_config(
                     f16::from_f64(s.unwrap_or(1.0)),
-                    f16::ZERO,
+                    f16::ONE,
                     (b, m, n, k),
                     lhs_l,
                     rhs_l,
@@ -1765,13 +1765,13 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F32(lhs), CudaStorageSlice::F32(rhs), CudaStorageSlice::F32(c)) => {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
-                let cfg = gemm_config(s.unwrap_or(1.0) as f32, 0., (b, m, n, k), lhs_l, rhs_l)?;
+                let cfg = gemm_config(s.unwrap_or(1.0) as f32, 1., (b, m, n, k), lhs_l, rhs_l)?;
                 unsafe { gemm_strided_batched_f32(&self.device.blas, cfg, rhs, lhs, c) }.w()?;
             }
             (CudaStorageSlice::F64(lhs), CudaStorageSlice::F64(rhs), CudaStorageSlice::F64(c)) => {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
-                let cfg = gemm_config(s.unwrap_or(1.0), 0., (b, m, n, k), lhs_l, rhs_l)?;
+                let cfg = gemm_config(s.unwrap_or(1.0), 1., (b, m, n, k), lhs_l, rhs_l)?;
                 unsafe { self.device.blas.gemm_strided_batched(cfg, rhs, lhs, c) }.w()?;
             }
             _ => Err(CudaError::InternalError("dtype mismatch in matmul op"))?,
