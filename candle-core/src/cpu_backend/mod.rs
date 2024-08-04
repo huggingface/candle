@@ -2812,7 +2812,7 @@ impl BackendStorage for CpuStorage {
         MatMul(bmnk).map(self, lhs_l, rhs, rhs_l)
     }
 
-    fn matmul_with_beta(
+    fn matmul_with_alpha_beta(
         &self,
         rhs: &Self,
         c: &mut Self,

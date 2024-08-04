@@ -2,7 +2,6 @@ pub mod activation;
 pub mod attention;
 pub mod batch_norm;
 pub mod conv;
-pub mod cublaslt;
 pub mod embedding;
 pub mod encoding;
 pub mod func;

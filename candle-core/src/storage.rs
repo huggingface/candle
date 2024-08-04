@@ -737,7 +737,7 @@ impl Storage {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn matmul_with_beta(
+    pub(crate) fn matmul_with_alpha_beta(
         &self,
         rhs: &Self,
         c: &mut Self,
@@ -747,25 +747,25 @@ impl Storage {
         rhs_layout: &Layout,
         c_layout: &Layout,
     ) -> Result<()> {
-        self.same_device(rhs, "matmul_with_beta")?;
-        self.same_dtype(rhs, "matmul_with_beta")?;
-        self.same_device(c, "matmul_with_beta")?;
-        self.same_dtype(c, "matmul_with_beta")?;
+        self.same_device(rhs, "matmul_with_alpha_beta")?;
+        self.same_dtype(rhs, "matmul_with_alpha_beta")?;
+        self.same_device(c, "matmul_with_alpha_beta")?;
+        self.same_dtype(c, "matmul_with_alpha_beta")?;
         match (self, rhs, c) {
             (Self::Cpu(lhs), Self::Cpu(rhs), Self::Cpu(c)) => {
-                lhs.matmul_with_beta(rhs, c, s, bmnk, lhs_layout, rhs_layout, c_layout)
+                lhs.matmul_with_alpha_beta(rhs, c, s, bmnk, lhs_layout, rhs_layout, c_layout)
             }
             (Self::Cuda(lhs), Self::Cuda(rhs), Self::Cuda(c)) => {
-                lhs.matmul_with_beta(rhs, c, s, bmnk, lhs_layout, rhs_layout, c_layout)
+                lhs.matmul_with_alpha_beta(rhs, c, s, bmnk, lhs_layout, rhs_layout, c_layout)
             }
             (Self::Metal(lhs), Self::Metal(rhs), Self::Metal(c)) => {
-                lhs.matmul_with_beta(rhs, c, s, bmnk, lhs_layout, rhs_layout, c_layout)
+                lhs.matmul_with_alpha_beta(rhs, c, s, bmnk, lhs_layout, rhs_layout, c_layout)
             }
             (lhs, rhs, c) => Err(Error::DeviceMismatchBinaryOp3 {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
                 c: c.device().location(),
-                op: "matmul_with_beta",
+                op: "matmul_with_alpha_beta",
             }
             .bt()),
         }

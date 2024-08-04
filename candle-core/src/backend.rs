@@ -98,7 +98,7 @@ pub trait BackendStorage: Sized {
     ) -> Result<Self>;
 
     #[allow(clippy::too_many_arguments)]
-    fn matmul_with_beta(
+    fn matmul_with_alpha_beta(
         &self,
         _: &Self,
         _: &mut Self,
