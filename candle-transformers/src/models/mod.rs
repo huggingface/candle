@@ -17,6 +17,7 @@ pub mod efficientvit;
 pub mod encodec;
 pub mod eva2;
 pub mod falcon;
+pub mod flux;
 pub mod gemma;
 pub mod hiera;
 pub mod jina_bert;
