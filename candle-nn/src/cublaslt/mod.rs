@@ -1,5 +1,5 @@
 //! This module inspired from:
-//! 
+//!
 //! https://github.com/huggingface/text-embeddings-inference/blob/cc1c510e8d8af8447c01e6b14c417473cf2dfda9/backends/candle/src/layers/cublaslt.rs
 
 #![allow(unused_variables, unused_imports, dead_code)]

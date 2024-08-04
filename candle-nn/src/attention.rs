@@ -37,13 +37,13 @@ fn naive_sdpa(
     att.matmul(&v.contiguous()?)
 }
 
-/// Computes softmax(QK^T*sqrt(d_k))V
+/// Computes (softmax(QK^T*sqrt(d_k)) + M)V. `M` is the attention mask, and is a bias (0 for unmasked, -inf for masked).
 ///
 /// The attention implementation is automatically accelerated and dispatched as follows:
 /// 1) If `use_flash_attn == true`, use a Flash Attention V2 kernel
 /// 2) If using CUDA, it will attempt to use cuBLASlt an optimized version
 /// 3) Otherwise, use the "naive" SDPA implementation - just matmuls and elementwise operations.
-/// 
+///
 /// Note that there may be minute differences in output because floating point operations are not associative.
 #[allow(unused_variables, clippy::too_many_arguments)]
 pub fn scaled_dot_product_attention(
