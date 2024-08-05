@@ -247,7 +247,7 @@ impl Attention {
             &key_states,
             &value_states,
             scale,
-            attention_mask.cloned(),
+            attention_mask,
             self.use_flash_attn,
             q_len,
         )?;

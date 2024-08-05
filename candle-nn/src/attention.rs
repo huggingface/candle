@@ -29,7 +29,7 @@ pub fn scaled_dot_product_attention(
     k: &Tensor,
     v: &Tensor,
     scale: f64,
-    mask: Option<Tensor>,
+    mask: Option<&Tensor>,
     use_flash_attn: bool,
     seq_len: usize,
 ) -> Result<Tensor> {
