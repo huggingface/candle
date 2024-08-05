@@ -50,3 +50,33 @@ pub fn non_maximum_suppression<D>(bboxes: &mut [Vec<Bbox<D>>], threshold: f32) {
         bboxes_for_class.truncate(current_index);
     }
 }
+
+pub fn soft_non_maximum_suppression<D>(bboxes: &mut [Vec<Bbox<D>>], iou_threshold: Option<f32>, score_threshold: Option<f32>, sigma: Option<f32>) {
+    // Perform soft non-maximum suppression based upon https://arxiv.org/pdf/1704.04503
+    let iou_threshold = iou_threshold.unwrap_or(0.5);
+    let score_threshold = score_threshold.unwrap_or(0.1);
+    let sigma = sigma.unwrap_or(0.5);
+    for bboxes_for_class in bboxes.iter_mut() {
+        bboxes_for_class.sort_by(|b1, b2| b2.confidence.partial_cmp(&b1.confidence).unwrap());
+        let mut current_index = 0;
+        while current_index < bboxes_for_class.len() {
+            let current_bbox = &bboxes_for_class[current_index];
+            let mut index = current_index + 1;
+            while index < bboxes_for_class.len() {
+                let iou = iou(current_bbox, &bboxes_for_class[index]);
+                if iou > iou_threshold {
+                    let decay = (-iou * iou / sigma).exp();
+                    bboxes_for_class[index].confidence *= decay;
+                    if bboxes_for_class[index].confidence < score_threshold {
+                        bboxes_for_class.remove(index);
+                    } else {
+                        index += 1;
+                    }
+                } else {
+                    index += 1;
+                }
+            }
+            current_index += 1;
+        }
+    }
+}
