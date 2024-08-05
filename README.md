@@ -64,6 +64,7 @@ We also provide a some command line based examples using state of the art models
   the SOLAR-10.7B variant.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
 - [Codegeex4](./candle-examples/examples/codegeex4-9b/): Code completion,code interpreter,web search,fuction calling,repository-level
+- [GLM4](./candle-examples/examples/glm4/): Open Multilingual Multimodal Chat LMs by THUDM
 - [Gemma](./candle-examples/examples/gemma/): 2b and 7b general LLMs from Google Deepmind.
 - [RecurrentGemma](./candle-examples/examples/recurrent-gemma/): 2b and 7b
   Griffin based models from Google that mix attention with a RNN like state.
