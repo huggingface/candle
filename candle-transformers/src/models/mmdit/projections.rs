@@ -85,11 +85,10 @@ impl AttnProjections {
 fn split_qkv(qkv: &Tensor, head_dim: usize) -> Result<Qkv> {
     let (batch_size, seq_len, _) = qkv.dims3()?;
     let qkv = qkv.reshape((batch_size, seq_len, 3, (), head_dim))?;
-    let qkv = qkv.permute((2, 0, 1, 3, 4))?;
-    let q = qkv.get(0)?;
-    let q = q.reshape((q.dim(0)?, q.dim(1)?, ()))?;
-    let k = qkv.get(1)?;
-    let k = k.reshape((k.dim(0)?, k.dim(1)?, ()))?;
-    let v = qkv.get(2)?;
+    let q = qkv.get_on_dim(2, 0)?;
+    let q = q.reshape((batch_size, seq_len, ()))?;
+    let k = qkv.get_on_dim(2, 1)?;
+    let k = k.reshape((batch_size, seq_len, ()))?;
+    let v = qkv.get_on_dim(2, 2)?;
     Ok(Qkv { q, k, v })
 }
