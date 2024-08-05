@@ -1646,7 +1646,7 @@ impl Map3 for MatMulWithBias {
         c_l: &Layout,
         s: Option<f64>,
     ) -> Result<()> {
-        let (b, m, n, k) = self.0;
+        let (b, m, n, k) = self.0 .0;
         let lhs = &lhs[lhs_l.start_offset()..];
         let rhs = &rhs[rhs_l.start_offset()..];
 
@@ -1769,7 +1769,7 @@ impl Map3 for MatMulWithBias {
         c_l: &Layout,
         s: Option<f64>,
     ) -> Result<()> {
-        let (b, m, n, k) = self.0;
+        let (b, m, n, k) = self.0 .0;
         let lhs = &lhs[lhs_l.start_offset()..];
         let rhs = &rhs[rhs_l.start_offset()..];
 
@@ -1877,7 +1877,7 @@ impl Map3 for MatMulWithBias {
                 for step in 0..b {
                     let lhs_p = &lhs[step * a_skip..];
                     let rhs_p = &rhs[step * b_skip..];
-                    let dst_p = &mut dst[step * c_skip..];
+                    let dst_p = &mut c[step * c_skip..];
                     unsafe {
                         let a = rhs_p.as_ptr() as *const f64;
                         let b = lhs_p.as_ptr() as *const f64;
@@ -2008,7 +2008,7 @@ impl Map2Alpha for MatMulWithAlpha {
         rhs_l: &Layout,
         s: Option<f64>,
     ) -> Result<Vec<T>> {
-        let (b, m, n, k) = self.0;
+        let (b, m, n, k) = self.0 .0;
         let lhs = &lhs[lhs_l.start_offset()..];
         let rhs = &rhs[rhs_l.start_offset()..];
 
@@ -2118,7 +2118,7 @@ impl Map2Alpha for MatMulWithAlpha {
         rhs_l: &Layout,
         s: Option<f64>,
     ) -> Result<Vec<T>> {
-        let (b, m, n, k) = self.0;
+        let (b, m, n, k) = self.0 .0;
         let lhs = &lhs[lhs_l.start_offset()..];
         let rhs = &rhs[rhs_l.start_offset()..];
 
