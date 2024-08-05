@@ -42,10 +42,15 @@ pub fn scaled_dot_product_attention(
     }
 
     let att = match mask {
-        Some(mut m) => {
-            q.contiguous()?
-                .matmul_with_alpha_beta(&k.t()?.contiguous()?, &mut m, Some(scale))?;
-            m
+        Some(mask) => {
+            let (b, n, s, _h) = q.dims4()?;
+            let mut mask_and_output = mask.broadcast_as((b, n, s, s))?.contiguous()?;
+            q.contiguous()?.matmul_with_alpha_beta(
+                &k.t()?.contiguous()?,
+                &mut mask_and_output,
+                Some(scale),
+            )?;
+            mask_and_output
         }
         None => q
             .contiguous()?
