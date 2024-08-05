@@ -19,6 +19,7 @@ const CAST: &str = include_str!("cast.metal");
 const CONV: &str = include_str!("conv.metal");
 const REDUCE: &str = include_str!("reduce.metal");
 const RANDOM: &str = include_str!("random.metal");
+// Current source: https://github.com/ivarflakstad/metal-flash-attention/tree/candle
 const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
 const QUANTIZED: &str = include_str!("quantized.metal");
 const SORT: &str = include_str!("sort.metal");
@@ -1464,6 +1465,8 @@ pub fn call_gemm(
     rhs_offset: usize,
     rhs_buffer: &Buffer,
     output: &Buffer,
+    alpha: f32,
+    beta: f32,
 ) -> Result<(), MetalKernelError> {
     assert!(rhs_stride.len() >= 2);
     assert!(lhs_stride.len() >= 2);
@@ -1498,8 +1501,6 @@ pub fn call_gemm(
         })?;
     };
     let d_trans = false;
-    let alpha = 1.0f32;
-    let beta = 0.0f32;
     let batched = b > 1;
     let fused_activation = false;
     let fused_bias = false;
@@ -1564,6 +1565,7 @@ pub fn call_gemm(
     let bytes = match name {
         "sgemm" => 4,
         "hgemm" => 2,
+        "bgemm" => 2,
         other => {
             return Err(MetalKernelError::LoadLibraryError(format!(
                 "{other} is not a valid kernel for gemm"
