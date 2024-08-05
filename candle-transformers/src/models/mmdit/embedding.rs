@@ -29,7 +29,7 @@ impl PatchEmbedder {
 
 impl Module for PatchEmbedder {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = self.proj.forward(&x)?;
+        let x = self.proj.forward(x)?;
 
         // flatten spatial dim and transpose to channels last
         let (b, c, h, w) = x.dims4()?;
