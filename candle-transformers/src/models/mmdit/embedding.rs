@@ -1,4 +1,4 @@
-use candle::{DType, Module, Result, Tensor};
+use candle::{bail, DType, Module, Result, Tensor};
 use candle_nn as nn;
 
 pub struct PatchEmbedder {
@@ -99,8 +99,9 @@ impl PositionEmbedder {
         let h = (h + 1) / self.patch_size;
         let w = (w + 1) / self.patch_size;
 
-        assert!(h <= self.pos_embed_max_size);
-        assert!(w <= self.pos_embed_max_size);
+        if h > self.pos_embed_max_size || w > self.pos_embed_max_size {
+            bail!("Input size is too large for the position embedding")
+        }
 
         let top = (self.pos_embed_max_size - h) / 2;
         let left = (self.pos_embed_max_size - w) / 2;
@@ -140,6 +141,14 @@ impl TimestepEmbedder {
     }
 
     fn timestep_embedding(t: &Tensor, dim: usize, max_period: f64) -> Result<Tensor> {
+        if dim % 2 != 0 {
+            bail!("Embedding dimension must be even")
+        }
+
+        if t.dtype() != DType::F32 && t.dtype() != DType::F64 {
+            bail!("Input tensor must be floating point")
+        }
+
         let half = dim / 2;
         let freqs = Tensor::arange(0f32, half as f32, t.device())?
             .to_dtype(candle::DType::F32)?
@@ -155,13 +164,6 @@ impl TimestepEmbedder {
             .to_dtype(candle::DType::F32)?
             .matmul(&freqs.unsqueeze(0)?)?;
         let embedding = Tensor::cat(&[args.cos()?, args.sin()?], 1)?;
-
-        assert!(dim % 2 == 0, "Embedding dimension must be even");
-        assert!(
-            t.dtype() == DType::F32 || t.dtype() == DType::F64,
-            "Input tensor must be floating point"
-        );
-
         embedding.to_dtype(candle::DType::F16)
     }
 }
