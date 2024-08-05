@@ -19,6 +19,7 @@ pub mod eva2;
 pub mod falcon;
 pub mod flux;
 pub mod gemma;
+pub mod glm4;
 pub mod hiera;
 pub mod jina_bert;
 pub mod llama;
