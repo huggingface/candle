@@ -97,6 +97,13 @@ impl MMDiT {
     }
 
     pub fn forward(&self, x: &Tensor, t: &Tensor, y: &Tensor, context: &Tensor) -> Result<Tensor> {
+        // Following the convention of the ComfyUI implementation.
+        // https://github.com/comfyanonymous/ComfyUI/blob/78e133d0415784924cd2674e2ee48f3eeca8a2aa/comfy/ldm/modules/diffusionmodules/mmdit.py#L919
+        //
+        // Forward pass of DiT.
+        // x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
+        // t: (N,) tensor of diffusion timesteps
+        // y: (N,) tensor of class labels
         let h = x.dim(D::Minus2)?;
         let w = x.dim(D::Minus1)?;
         let cropped_pos_embed = self.pos_embedder.get_cropped_pos_embed(h, w)?;
@@ -156,13 +163,6 @@ impl MMDiTCore {
     }
 
     pub fn forward(&self, context: &Tensor, x: &Tensor, c: &Tensor) -> Result<Tensor> {
-        // Following the convention of the ComfyUI implementation.
-        // https://github.com/comfyanonymous/ComfyUI/blob/78e133d0415784924cd2674e2ee48f3eeca8a2aa/comfy/ldm/modules/diffusionmodules/mmdit.py#L919
-        //
-        // Forward pass of DiT.
-        // x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
-        // t: (N,) tensor of diffusion timesteps
-        // y: (N,) tensor of class labels
         let (mut context, mut x) = (context.clone(), x.clone());
         for joint_block in &self.joint_blocks {
             (context, x) = joint_block.forward(&context, &x, c)?;
