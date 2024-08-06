@@ -1162,27 +1162,25 @@ fn gemm() {
     );
 
     // bgemm sanity test
-    if false {
-        let (b, m, n, k) = (1, 2, 4, 3);
-        let lhs_stride = vec![m * k, k, 1];
-        let lhs: Vec<bf16> = (0..b * m * k).map(|f| bf16::from_f32(f as f32)).collect();
-        let rhs_stride = vec![n * k, n, 1];
-        let rhs: Vec<bf16> = (0..b * n * k).map(|f| bf16::from_f32(f as f32)).collect();
-        let results = run_gemm(
-            "bgemm",
-            (b, m, n, k),
-            &lhs,
-            lhs_stride,
-            0,
-            &rhs,
-            rhs_stride,
-            0,
-        );
-        assert_eq!(
-            approx_bf16(results, 4),
-            vec![20.0, 23.0, 26.0, 29.0, 56.0, 68.0, 80.0, 92.0]
-        );
-    }
+    let (b, m, n, k) = (1, 2, 4, 3);
+    let lhs_stride = vec![m * k, k, 1];
+    let lhs: Vec<bf16> = (0..b * m * k).map(|f| bf16::from_f32(f as f32)).collect();
+    let rhs_stride = vec![n * k, n, 1];
+    let rhs: Vec<bf16> = (0..b * n * k).map(|f| bf16::from_f32(f as f32)).collect();
+    let results = run_gemm(
+        "bgemm",
+        (b, m, n, k),
+        &lhs,
+        lhs_stride,
+        0,
+        &rhs,
+        rhs_stride,
+        0,
+    );
+    assert_eq!(
+        approx_bf16(results, 4),
+        vec![20.0, 23.0, 26.0, 29.0, 56.0, 68.0, 80.0, 92.0]
+    );
 
     // hgemm sanity test
     let (b, m, n, k) = (1, 2, 4, 3);
