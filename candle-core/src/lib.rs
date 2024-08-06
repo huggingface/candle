@@ -68,6 +68,7 @@ mod storage;
 mod strided_index;
 mod tensor;
 mod tensor_cat;
+mod tensor_indexing;
 pub mod test_utils;
 pub mod utils;
 mod variable;
