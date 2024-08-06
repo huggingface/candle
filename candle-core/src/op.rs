@@ -41,6 +41,7 @@ pub enum BinaryOp {
     Mul,
     Sub,
     Div,
+    Pow,
     Maximum,
     Minimum,
 }
@@ -235,6 +236,7 @@ pub(crate) struct Add;
 pub(crate) struct Div;
 pub(crate) struct Mul;
 pub(crate) struct Sub;
+pub(crate) struct Pow;
 pub(crate) struct Maximum;
 pub(crate) struct Minimum;
 pub(crate) struct Exp;
@@ -343,6 +345,70 @@ bin_op!(
     vs_max,
     vd_max
 );
+
+impl BinaryOpT for Pow {
+    const NAME: &'static str = "pow";
+    const KERNEL: &'static str = concat!("b", "pow");
+    const V: Self = Pow;
+    #[inline(always)]
+    fn bf16(v1: bf16, v2: bf16) -> bf16 {
+        v1.powf(v2.into())
+    }
+    #[inline(always)]
+    fn f16(v1: f16, v2: f16) -> f16 {
+        v1.powf(v2.into())
+    }
+    #[inline(always)]
+    fn f32(v1: f32, v2: f32) -> f32 {
+        v1.powf(v2)
+    }
+    #[inline(always)]
+    fn f64(v1: f64, v2: f64) -> f64 {
+        v1.powf(v2)
+    }
+    #[inline(always)]
+    fn u8(v1: u8, v2: u8) -> u8 {
+        v1.pow(v2 as u32)
+    }
+    #[inline(always)]
+    fn u32(v1: u32, v2: u32) -> u32 {
+        v1.pow(v2 as u32)
+    }
+    #[inline(always)]
+    fn i64(v1: i64, v2: i64) -> i64 {
+        v1.pow(v2 as u32)
+    }
+
+    #[cfg(feature = "mkl")]
+    const F32_VEC: bool = true;
+    #[cfg(feature = "mkl")]
+    const F64_VEC: bool = true;
+    #[cfg(feature = "mkl")]
+    #[inline(always)]
+    fn f32_vec(xs1: &[f32], xs2: &[f32], ys: &mut [f32]) {
+        crate::mkl::vs_pow(xs1, xs2, ys)
+    }
+    #[cfg(feature = "mkl")]
+    #[inline(always)]
+    fn f64_vec(xs1: &[f64], xs2: &[f64], ys: &mut [f64]) {
+        crate::mkl::vd_pow(xs1, xs2, ys)
+    }
+
+    #[cfg(feature = "accelerate")]
+    const F32_VEC: bool = true;
+    #[cfg(feature = "accelerate")]
+    const F64_VEC: bool = true;
+    #[cfg(feature = "accelerate")]
+    #[inline(always)]
+    fn f32_vec(xs1: &[f32], xs2: &[f32], ys: &mut [f32]) {
+        crate::accelerate::vs_pow(xs1, xs2, ys)
+    }
+    #[cfg(feature = "accelerate")]
+    #[inline(always)]
+    fn f64_vec(xs1: &[f64], xs2: &[f64], ys: &mut [f64]) {
+        crate::accelerate::vd_pow(xs1, xs2, ys)
+    }
+}
 
 #[allow(clippy::redundant_closure_call)]
 macro_rules! unary_op {

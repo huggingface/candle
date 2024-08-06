@@ -208,6 +208,19 @@ impl Tensor {
                         let rhs_sum_grad = grads.or_insert(rhs)?;
                         *rhs_sum_grad = rhs_sum_grad.sub(&rhs_grad)?;
                     }
+                    Op::Binary(lhs, rhs, BinaryOp::Pow) => {
+                        // x^y = z
+                        // \/x = \/z dz/dx = \/z * y * x^(y-1)
+                        let rhs_minus_one =
+                            rhs.sub(&Tensor::ones(rhs.shape(), rhs.dtype(), rhs.device())?)?;
+                        let lhs_grad = grad.mul(rhs)?.mul(&lhs.pow(&rhs_minus_one)?)?;
+                        let lhs_sum_grad = grads.or_insert(lhs)?;
+                        *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?;
+                        // \/y = \/z dz/dy = \/z x^y * ln(x)
+                        let rhs_grad = grad.mul(&lhs.pow(rhs)?)?.mul(&lhs.log()?)?;
+                        let rhs_sum_grad = grads.or_insert(rhs)?;
+                        *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
+                    }
                     Op::Binary(lhs, rhs, BinaryOp::Minimum)
                     | Op::Binary(lhs, rhs, BinaryOp::Maximum) => {
                         let mask_lhs = node.eq(lhs)?.to_dtype(grad.dtype())?;
