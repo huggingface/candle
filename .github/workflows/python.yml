@@ -18,7 +18,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest] # For now, only test on Linux
-    steps: 
+    steps:
       - name: Checkout repository
         uses: actions/checkout@v2
 
