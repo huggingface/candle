@@ -47,6 +47,7 @@ impl SlicePtrOrNull<usize> {
 pub enum CudaStorageSlice {
     U8(CudaSlice<u8>),
     U32(CudaSlice<u32>),
+    I32(CudaSlice<i32>),
     I64(CudaSlice<i64>),
     BF16(CudaSlice<bf16>),
     F16(CudaSlice<f16>),
@@ -1146,6 +1147,7 @@ impl BackendStorage for CudaStorage {
         match self.slice {
             CudaStorageSlice::U8(_) => DType::U8,
             CudaStorageSlice::U32(_) => DType::U32,
+            CudaStorageSlice::I32(_) => DType::I32,
             CudaStorageSlice::I64(_) => DType::I64,
             CudaStorageSlice::BF16(_) => DType::BF16,
             CudaStorageSlice::F16(_) => DType::F16,
@@ -1172,6 +1174,7 @@ impl BackendStorage for CudaStorage {
         let inp = match &self.slice {
             CudaStorageSlice::U8(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::U32(inp) => *inp.slice(start_o..).device_ptr(),
+            CudaStorageSlice::I32(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::I64(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::BF16(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::F16(inp) => *inp.slice(start_o..).device_ptr(),
@@ -1194,6 +1197,12 @@ impl BackendStorage for CudaStorage {
                 let params = (el, dims.len(), &ds, *inp, &out);
                 unsafe { func.launch(cfg, params) }.w()?;
                 CudaStorageSlice::U32(out)
+            }
+            DType::I32 => {
+                let out = unsafe { dev.alloc::<i32>(el) }.w()?;
+                let params = (el, dims.len(), &ds, *inp, &out);
+                unsafe { func.launch(cfg, params) }.w()?;
+                CudaStorageSlice::I32(out)
             }
             DType::I64 => {
                 let out = unsafe { dev.alloc::<i64>(el) }.w()?;
@@ -1290,6 +1299,11 @@ impl BackendStorage for CudaStorage {
                 let dev = slice.device();
                 let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
                 Ok(CpuStorage::U32(cpu_storage))
+            }
+            CudaStorageSlice::I32(slice) => {
+                let dev = slice.device();
+                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                Ok(CpuStorage::I32(cpu_storage))
             }
             CudaStorageSlice::I64(slice) => {
                 let dev = slice.device();

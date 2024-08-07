@@ -153,6 +153,7 @@ UNARY_OP(__half, usigmoid_f16, sigmoid_fwd(x))
 
 UNARY_OP(uint8_t, ucopy_u8, x)
 UNARY_OP(uint32_t, ucopy_u32, x)
+UNARY_OP(int32_t, ucopy_i32, x)
 UNARY_OP(int64_t, ucopy_i64, x)
 UNARY_OP(float, ucopy_f32, x)
 UNARY_OP(double, ucopy_f64, x)

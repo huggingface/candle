@@ -189,6 +189,7 @@ pub trait UnaryOpT {
     fn f64(v1: f64) -> f64;
     fn u8(v1: u8) -> u8;
     fn u32(v1: u32) -> u32;
+    fn i32(v1: i32) -> i32;
     fn i64(v1: i64) -> i64;
 
     // There is no very good way to represent optional function in traits so we go for an explicit
@@ -379,6 +380,10 @@ macro_rules! unary_op {
             fn i64(_: i64) -> i64 {
                 todo!("no unary function for i64")
             }
+            #[inline(always)]
+            fn i32(_: i32) -> i32 {
+                todo!("no unary function for i32")
+            }
         }
     };
 
@@ -414,6 +419,10 @@ macro_rules! unary_op {
             #[inline(always)]
             fn i64(_: i64) -> i64 {
                 todo!("no unary function for i64")
+            }
+            #[inline(always)]
+            fn i32(_: i32) -> i32 {
+                todo!("no unary function for i32")
             }
 
             #[cfg(feature = "mkl")]
@@ -514,6 +523,10 @@ impl UnaryOpT for Gelu {
     fn i64(_: i64) -> i64 {
         0
     }
+    #[inline(always)]
+    fn i32(_: i32) -> i32 {
+        0
+    }
     const KERNEL: &'static str = "ugelu";
 
     #[cfg(feature = "mkl")]
@@ -587,6 +600,10 @@ impl UnaryOpT for Erf {
     fn i64(_: i64) -> i64 {
         0
     }
+    #[inline(always)]
+    fn i32(_: i32) -> i32 {
+        0
+    }
 }
 
 /// Silu operation
@@ -619,6 +636,10 @@ impl UnaryOpT for Silu {
     }
     #[inline(always)]
     fn i64(_: i64) -> i64 {
+        0
+    }
+    #[inline(always)]
+    fn i32(_: i32) -> i32 {
         0
     }
     const KERNEL: &'static str = "usilu";
@@ -692,6 +713,10 @@ impl UnaryOpT for Abs {
     fn i64(v: i64) -> i64 {
         v.abs()
     }
+    #[inline(always)]
+    fn i32(v: i32) -> i32 {
+        v.abs()
+    }
 }
 
 impl UnaryOpT for Ceil {
@@ -724,6 +749,10 @@ impl UnaryOpT for Ceil {
     }
     #[inline(always)]
     fn i64(v: i64) -> i64 {
+        v
+    }
+    #[inline(always)]
+    fn i32(v: i32) -> i32 {
         v
     }
 }
@@ -760,6 +789,10 @@ impl UnaryOpT for Floor {
     fn i64(v: i64) -> i64 {
         v
     }
+    #[inline(always)]
+    fn i32(v: i32) -> i32 {
+        v
+    }
 }
 
 impl UnaryOpT for Round {
@@ -792,6 +825,10 @@ impl UnaryOpT for Round {
     }
     #[inline(always)]
     fn i64(v: i64) -> i64 {
+        v
+    }
+    #[inline(always)]
+    fn i32(v: i32) -> i32 {
         v
     }
 }
@@ -828,6 +865,10 @@ impl UnaryOpT for GeluErf {
     fn i64(_: i64) -> i64 {
         0
     }
+    #[inline(always)]
+    fn i32(_: i32) -> i32 {
+        0
+    }
 }
 
 impl UnaryOpT for Relu {
@@ -860,6 +901,10 @@ impl UnaryOpT for Relu {
     }
     #[inline(always)]
     fn i64(v: i64) -> i64 {
+        v
+    }
+    #[inline(always)]
+    fn i32(v: i32) -> i32 {
         v
     }
 }
@@ -959,5 +1004,9 @@ impl UnaryOpT for Sign {
     #[inline(always)]
     fn i64(v: i64) -> i64 {
         (v > 0) as i64 - (v < 0) as i64
+    }
+    #[inline(always)]
+    fn i32(v: i32) -> i32 {
+        (v > 0) as i32 - (v < 0) as i32
     }
 }

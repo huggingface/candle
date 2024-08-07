@@ -151,6 +151,7 @@ macro_rules! pydtype {
     };
 }
 
+pydtype!(i32, |v| v);
 pydtype!(i64, |v| v);
 pydtype!(u8, |v| v);
 pydtype!(u32, |v| v);
@@ -200,6 +201,7 @@ trait MapDType {
         match t.dtype() {
             DType::U8 => self.f::<u8>(t),
             DType::U32 => self.f::<u32>(t),
+            DType::I32 => self.f::<i32>(t),
             DType::I64 => self.f::<i64>(t),
             DType::BF16 => self.f::<bf16>(t),
             DType::F16 => self.f::<f16>(t),
