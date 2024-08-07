@@ -2938,7 +2938,7 @@ impl BackendStorage for CpuStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
             let mut kernel_c = unsafe {
@@ -2949,7 +2949,7 @@ impl BackendStorage for CpuStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, l_out, params.c_out)).transpose(1, 2)?;
         let mut res_t = unsafe { self.device().alloc_uninit(res_l.shape(), res.dtype())? };
@@ -2990,8 +2990,9 @@ impl BackendStorage for CpuStorage {
                     vec![0, k_size * c_out, 1],
                     kernel_l.start_offset(),
                 );
-                self.matmul(
+                self.matmul_with_alpha(
                     kernel,
+                    None,
                     (
                         b_size,
                         /* m */ l_in,
@@ -3040,7 +3041,7 @@ impl BackendStorage for CpuStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
             let mut kernel_c = unsafe {
@@ -3051,7 +3052,7 @@ impl BackendStorage for CpuStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, h_out, w_out, params.c_out))
             .transpose(1, 2)?
@@ -3139,16 +3140,6 @@ impl BackendStorage for CpuStorage {
             }
             _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "index-add").bt()),
         }
-    }
-
-    fn matmul(
-        &self,
-        rhs: &Self,
-        bmnk: (usize, usize, usize, usize),
-        lhs_l: &Layout,
-        rhs_l: &Layout,
-    ) -> Result<Self> {
-        MatMul(bmnk).map(self, lhs_l, rhs, rhs_l)
     }
 
     fn matmul_with_alpha_beta(

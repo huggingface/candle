@@ -152,16 +152,6 @@ impl crate::backend::BackendStorage for MetalStorage {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn matmul(
-        &self,
-        _: &Self,
-        _: (usize, usize, usize, usize),
-        _: &Layout,
-        _: &Layout,
-    ) -> Result<Self> {
-        Err(Error::NotCompiledWithMetalSupport)
-    }
-
     fn matmul_with_alpha_beta(
         &self,
         _: &Self,
