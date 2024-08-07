@@ -186,6 +186,15 @@ pub trait IntDType: WithDType {
     fn as_usize(&self) -> usize;
 }
 
+impl IntDType for i32 {
+    fn is_true(&self) -> bool {
+        *self != 0
+    }
+    fn as_usize(&self) -> usize {
+        *self as usize
+    }
+}
+
 impl IntDType for i64 {
     fn is_true(&self) -> bool {
         *self != 0

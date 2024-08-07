@@ -214,6 +214,7 @@ pub trait BinaryOpT {
     fn f64(v1: f64, v2: f64) -> f64;
     fn u8(v1: u8, v2: u8) -> u8;
     fn u32(v1: u32, v2: u32) -> u32;
+    fn i32(v1: i32, v2: i32) -> i32;
     fn i64(v1: i64, v2: i64) -> i64;
 
     const BF16_VEC: bool = false;
@@ -230,6 +231,8 @@ pub trait BinaryOpT {
     fn u32_vec(_xs1: &[u32], _xs2: &[u32], _ys: &mut [u32]) {}
     const I64_VEC: bool = false;
     fn i64_vec(_xs1: &[i64], _xs2: &[i64], _ys: &mut [i64]) {}
+    const I32_VEC: bool = false;
+    fn i32_vec(_xs1: &[i32], _xs2: &[i32], _ys: &mut [i32]) {}
 }
 
 pub(crate) struct Add;
@@ -286,6 +289,10 @@ macro_rules! bin_op {
             }
             #[inline(always)]
             fn u32(v1: u32, v2: u32) -> u32 {
+                $e(v1, v2)
+            }
+            #[inline(always)]
+            fn i32(v1: i32, v2: i32) -> i32 {
                 $e(v1, v2)
             }
             #[inline(always)]
