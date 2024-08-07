@@ -59,13 +59,13 @@ BINARY_OP(float, bminimum_f32, ming(x, y));
 BINARY_OP(double, bminimum_f64, ming(x, y));
 BINARY_OP(uint8_t, bminimum_u8, ming(x, y));
 BINARY_OP(uint32_t, bminimum_u32, ming(x, y));
-BINARY_OP(int32_t, bminimum_i32, (int32_t)ming((int64_t)x, (int64_t)y));
+BINARY_OP(int32_t, bminimum_i32, ming(x, y));
 BINARY_OP(int64_t, bminimum_i64, ming(x, y));
 BINARY_OP(float, bmaximum_f32, maxg(x, y));
 BINARY_OP(double, bmaximum_f64, maxg(x, y));
 BINARY_OP(uint8_t, bmaximum_u8, maxg(x, y));
 BINARY_OP(uint32_t, bmaximum_u32, maxg(x, y));
-BINARY_OP(int32_t, bmaximum_i32, (int32_t)maxg((int64_t)x, (int64_t)y));
+BINARY_OP(int32_t, bmaximum_i32, maxg(x, y));
 BINARY_OP(int64_t, bmaximum_i64, maxg(x, y));
 
 BINARY_OP_OUT(float, uint8_t, eq_f32, x == y)
