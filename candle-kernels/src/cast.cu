@@ -126,13 +126,15 @@ CAST_OP(uint8_t, double,   cast_u8_f64)
 
 CAST_OP(int64_t, uint32_t, cast_i64_u32)
 CAST_OP(int64_t, uint8_t,  cast_i64_u8 )
+CAST_OP(int64_t, int32_t,  cast_i64_i32 )
 CAST_OP(int64_t, int64_t,  cast_i64_i64 )
 CAST_OP(int64_t, float,    cast_i64_f32)
 CAST_OP(int64_t, double,   cast_i64_f64)
 
 CAST_OP(int32_t, uint32_t, cast_i32_u32)
 CAST_OP(int32_t, uint8_t,  cast_i32_u8 )
-CAST_OP(int32_t, int32_t,  cast_i32_i64 )
+CAST_OP(int32_t, int64_t,  cast_i32_i64 )
+CAST_OP(int32_t, int32_t,  cast_i32_i32 )
 CAST_OP(int32_t, float,    cast_i32_f32)
 CAST_OP(int32_t, double,   cast_i32_f64)
 
