@@ -83,7 +83,7 @@ pub fn soft_non_maximum_suppression<D>(
     sigma: Option<f32>,
 ) {
     let iou_threshold = iou_threshold.unwrap_or(0.5);
-    let confidence_threshold = score_threshold.unwrap_or(0.1);
+    let confidence_threshold = confidence_threshold.unwrap_or(0.1);
     let sigma = sigma.unwrap_or(0.5);
 
     for bboxes_for_class in bboxes.iter_mut() {
@@ -95,7 +95,7 @@ pub fn soft_non_maximum_suppression<D>(
         // Update confidences based on score threshold
         for (i, &confidence) in updated_confidences.iter().enumerate() {
             if confidence < confidence_threshold {
-                bboxes_for_class[i].confidence = 0.0;
+                bboxes_for_class.remove(i);
             } else {
                 bboxes_for_class[i].confidence = confidence;
             }
