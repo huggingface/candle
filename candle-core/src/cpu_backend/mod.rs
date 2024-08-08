@@ -500,13 +500,32 @@ impl<'a, I: IntDType> Map1 for Gather<'a, I> {
     }
 }
 
-struct IndexSelect<'a, T: IntDType> {
+trait IndexDType: IntDType {
+    #[allow(unused_variables)]
+    fn abs_index(self, src_dim: usize) -> usize {
+        self.as_usize()
+    }
+}
+
+impl IndexDType for u8 {}
+impl IndexDType for u32 {}
+impl IndexDType for i64 {
+    fn abs_index(self, src_dim: usize) -> usize {
+        if self < 0 {
+            src_dim - (-self).as_usize()
+        } else {
+            self.as_usize()
+        }
+    }
+}
+
+struct IndexSelect<'a, T: IndexDType> {
     ids: &'a [T],
     ids_l: &'a Layout,
     dim: usize,
 }
 
-impl<'a, I: IntDType> Map1 for IndexSelect<'a, I> {
+impl<'a, I: IndexDType> Map1 for IndexSelect<'a, I> {
     fn f<T: WithDType>(&self, src: &[T], layout: &Layout) -> Result<Vec<T>> {
         let src = match layout.contiguous_offsets() {
             Some((a, b)) => &src[a..b],
@@ -534,7 +553,7 @@ impl<'a, I: IntDType> Map1 for IndexSelect<'a, I> {
             let start_src_idx = left_i * right_len * src_dim;
             let start_dst_idx = left_i * right_len * n_ids;
             for i in 0..n_ids {
-                let index = self.ids[self.ids_l.start_offset() + stride_ids * i].as_usize();
+                let index = self.ids[self.ids_l.start_offset() + stride_ids * i].abs_index(src_dim);
                 if index >= src_dim {
                     Err(Error::InvalidIndex {
                         index,
