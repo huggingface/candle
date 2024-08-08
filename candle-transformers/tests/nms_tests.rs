@@ -79,4 +79,6 @@ fn softnms_no_overlap() {
 
     // Both boxes should remain as they do not significantly overlap
     assert_eq!(bboxes[0].len(), 2);
+    assert_eq!(bboxes[0][0].confidence, 0.9);
+    assert_eq!(bboxes[0][1].confidence, 0.8);
 }
