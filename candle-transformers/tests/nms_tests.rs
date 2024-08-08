@@ -22,7 +22,7 @@ fn nms_basic() -> Result<()> {
 }
 
 #[test]
-fn softnms_basic_functionality() {
+fn softnms_basic_functionality() -> Result<()> {
     let mut bboxes = vec![
         vec![
             Bbox { xmin: 0.0, ymin: 0.0, xmax: 1.0, ymax: 1.0, confidence: 0.9, data: () },
@@ -38,7 +38,7 @@ fn softnms_basic_functionality() {
 }
 
 #[test]
-fn softnms_confidence_decay() {
+fn softnms_confidence_decay() -> Result<()> {
     let mut bboxes = vec![
         vec![
             Bbox { xmin: 0.0, ymin: 0.0, xmax: 1.0, ymax: 1.0, confidence: 0.9, data: () }, // Reference box
@@ -54,7 +54,7 @@ fn softnms_confidence_decay() {
 }
 
 #[test]
-fn softnms_confidence_threshold() {
+fn softnms_confidence_threshold() -> Result<()> {
     let mut bboxes = vec![
         vec![
             Bbox { xmin: 0.0, ymin: 0.0, xmax: 1.0, ymax: 1.0, confidence: 0.9, data: () },
@@ -70,7 +70,7 @@ fn softnms_confidence_threshold() {
 }
 
 #[test]
-fn softnms_no_overlap() {
+fn softnms_no_overlap() -> Result<()> {
     let mut bboxes = vec![
         vec![
             Bbox { xmin: 0.0, ymin: 0.0, xmax: 1.0, ymax: 1.0, confidence: 0.9, data: () },
@@ -87,7 +87,7 @@ fn softnms_no_overlap() {
     Ok(())
 }
 #[test]
-fn softnms_no_bbox() {
+fn softnms_no_bbox() -> Result<()> {
     let mut bboxes: Vec<Vec<Bbox<()>>> = vec![];
     soft_non_maximum_suppression(&mut bboxes, Some(0.5), Some(0.1), Some(0.5));
     assert!(bboxes.is_empty());
@@ -95,10 +95,9 @@ fn softnms_no_bbox() {
 }
 
 #[test]
-fn softnms_single_bbox() {
+fn softnms_single_bbox() -> Result<()> {
     let mut bboxes = vec![vec![Bbox { xmin: 0.0, ymin: 0.0, xmax: 1.0, ymax: 1.0, confidence: 0.9, data: () }]];
     soft_non_maximum_suppression(&mut bboxes, Some(0.5), Some(0.1), Some(0.5));
     assert_eq!(bboxes[0].len(), 1);
     Ok(())
 }
-
