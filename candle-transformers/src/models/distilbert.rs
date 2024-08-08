@@ -5,13 +5,6 @@ use serde::Deserialize;
 
 pub const DTYPE: DType = DType::F32;
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
-    let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
-    let m = mask.where_cond(&on_true, on_false)?;
-    Ok(m)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum HiddenAct {
@@ -180,7 +173,9 @@ impl MultiHeadSelfAttention {
         let scores = q.matmul(&k.transpose(2, 3)?.contiguous()?)?;
         let mask = attention_mask.broadcast_as(scores.shape())?;
 
-        let scores = masked_fill(&scores.to_dtype(DType::F32)?, &mask, f32::NEG_INFINITY)?;
+        let scores = scores
+            .to_dtype(DType::F32)?
+            .masked_fill(&mask, f32::NEG_INFINITY)?;
         let weights = candle_nn::ops::softmax(&scores, candle::D::Minus1)?;
 
         let context = weights.matmul(&v.contiguous()?)?;

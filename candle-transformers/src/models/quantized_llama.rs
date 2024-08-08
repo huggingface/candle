@@ -138,17 +138,10 @@ struct LayerWeights {
     head_dim: usize,
     cos: Tensor,
     sin: Tensor,
-    neg_inf: Tensor,
     kv_cache: Option<(Tensor, Tensor)>,
     span_attn: tracing::Span,
     span_rot: tracing::Span,
     span_mlp: tracing::Span,
-}
-
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
-    let shape = mask.shape();
-    let m = mask.where_cond(&on_true.broadcast_as(shape.dims())?, on_false)?;
-    Ok(m)
 }
 
 impl LayerWeights {
@@ -214,7 +207,7 @@ impl LayerWeights {
             None => att,
             Some(mask) => {
                 let mask = mask.broadcast_as(att.shape())?;
-                masked_fill(&att, &mask, &self.neg_inf)?
+                att.masked_fill(&mask, f32::NEG_INFINITY)?
             }
         };
         let att = candle_nn::ops::softmax_last_dim(&att)?;
@@ -260,7 +253,6 @@ impl ModelWeights {
     pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let (cos, sin) = precomput_freqs_cis(head_dim, 10000., &ct.device)?;
-        let neg_inf = Tensor::new(f32::NEG_INFINITY, &ct.device)?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
         let norm = RmsNorm::from_qtensor(ct.remove("norm.weight")?, 1e-5)?;
@@ -300,7 +292,6 @@ impl ModelWeights {
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
                 cos: cos.clone(),
                 sin: sin.clone(),
-                neg_inf: neg_inf.clone(),
                 kv_cache: None,
                 span_attn,
                 span_rot,
@@ -349,7 +340,6 @@ impl ModelWeights {
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
         let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device)?;
-        let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
@@ -420,7 +410,6 @@ impl ModelWeights {
                 head_dim: embedding_length / head_count,
                 cos: cos.clone(),
                 sin: sin.clone(),
-                neg_inf: neg_inf.clone(),
                 kv_cache: None,
                 span_attn,
                 span_rot,

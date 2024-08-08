@@ -177,15 +177,6 @@ impl FalconRotaryEmbedding {
     }
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
-    let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?
-        .to_dtype(on_false.dtype())?
-        .broadcast_as(shape.dims())?;
-    let m = mask.where_cond(&on_true, on_false)?;
-    Ok(m)
-}
-
 #[derive(Debug, Clone)]
 struct FalconAttention {
     query_key_value: Linear,
@@ -298,7 +289,9 @@ impl FalconAttention {
         let attention_scores = match mask {
             None => attention_scores,
             Some(mask) => {
-                let mask = masked_fill(&mask.to_dtype(DType::F32)?, mask, -1e9)?
+                let mask = mask
+                    .to_dtype(DType::F32)?
+                    .masked_fill(mask, -1e9)?
                     .to_dtype(query.dtype())?;
                 attention_scores.broadcast_add(&mask.squeeze(1)?)?
             }
