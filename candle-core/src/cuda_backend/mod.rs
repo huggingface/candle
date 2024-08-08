@@ -1365,7 +1365,7 @@ impl BackendStorage for CudaStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
             let mut kernel_c = unsafe {
@@ -1376,7 +1376,7 @@ impl BackendStorage for CudaStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, l_out, n)).transpose(1, 2)?;
         let mut res_t = unsafe { self.device().alloc_uninit(res_l.shape(), res.dtype())? };
@@ -1420,8 +1420,9 @@ impl BackendStorage for CudaStorage {
                     vec![0, k_size * c_out, 1],
                     kernel_l.start_offset(),
                 );
-                self.matmul(
+                self.matmul_with_alpha(
                     kernel,
+                    None,
                     (
                         b_size,
                         /* m */ l_in,
@@ -1479,7 +1480,7 @@ impl BackendStorage for CudaStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
             let mut kernel_c = unsafe {
@@ -1490,7 +1491,7 @@ impl BackendStorage for CudaStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, h_out, w_out, n))
             .transpose(1, 2)?
@@ -1653,9 +1654,80 @@ impl BackendStorage for CudaStorage {
         Ok(acc)
     }
 
-    fn matmul(
+    fn matmul_with_alpha_beta(
         &self,
         rhs: &Self,
+        c: &mut Self,
+        s: Option<f64>,
+        (b, m, n, k): (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        c_l: &Layout,
+    ) -> Result<()> {
+        let elem_count = b * m * n;
+
+        match c_l.contiguous_offsets() {
+            Some((o1, o2)) => {
+                if o1 != 0 {
+                    crate::bail!("`c` start offset must be 0");
+                }
+                if o2 != elem_count {
+                    crate::bail!("`c` end offset must be {}", elem_count)
+                }
+            }
+            None => crate::bail!("`c` has to be contiguous"),
+        };
+
+        match (&self.slice, &rhs.slice, &mut c.slice) {
+            (
+                CudaStorageSlice::BF16(lhs),
+                CudaStorageSlice::BF16(rhs),
+                CudaStorageSlice::BF16(c),
+            ) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(
+                    bf16::from_f64(s.unwrap_or(1.0)),
+                    bf16::ONE,
+                    (b, m, n, k),
+                    lhs_l,
+                    rhs_l,
+                )?;
+                unsafe { gemm_strided_batched_bf16(&self.device.blas, cfg, rhs, lhs, c) }.w()?;
+            }
+            (CudaStorageSlice::F16(lhs), CudaStorageSlice::F16(rhs), CudaStorageSlice::F16(c)) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(
+                    f16::from_f64(s.unwrap_or(1.0)),
+                    f16::ONE,
+                    (b, m, n, k),
+                    lhs_l,
+                    rhs_l,
+                )?;
+                unsafe { gemm_strided_batched_f16(&self.device.blas, cfg, rhs, lhs, c) }.w()?;
+            }
+            (CudaStorageSlice::F32(lhs), CudaStorageSlice::F32(rhs), CudaStorageSlice::F32(c)) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(s.unwrap_or(1.0) as f32, 1., (b, m, n, k), lhs_l, rhs_l)?;
+                unsafe { gemm_strided_batched_f32(&self.device.blas, cfg, rhs, lhs, c) }.w()?;
+            }
+            (CudaStorageSlice::F64(lhs), CudaStorageSlice::F64(rhs), CudaStorageSlice::F64(c)) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(s.unwrap_or(1.0), 1., (b, m, n, k), lhs_l, rhs_l)?;
+                unsafe { self.device.blas.gemm_strided_batched(cfg, rhs, lhs, c) }.w()?;
+            }
+            _ => Err(CudaError::InternalError("dtype mismatch in matmul op"))?,
+        };
+        Ok(())
+    }
+
+    fn matmul_with_alpha(
+        &self,
+        rhs: &Self,
+        scale: Option<f64>,
         (b, m, n, k): (usize, usize, usize, usize),
         lhs_l: &Layout,
         rhs_l: &Layout,
@@ -1666,7 +1738,13 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::BF16(lhs), CudaStorageSlice::BF16(rhs)) => {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
-                let cfg = gemm_config(bf16::ONE, bf16::ZERO, (b, m, n, k), lhs_l, rhs_l)?;
+                let cfg = gemm_config(
+                    bf16::from_f64(scale.unwrap_or(1.)),
+                    bf16::ZERO,
+                    (b, m, n, k),
+                    lhs_l,
+                    rhs_l,
+                )?;
                 let mut out = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
                 unsafe { gemm_strided_batched_bf16(&self.device.blas, cfg, rhs, lhs, &mut out) }
                     .w()?;
@@ -1675,7 +1753,13 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F16(lhs), CudaStorageSlice::F16(rhs)) => {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
-                let cfg = gemm_config(f16::ONE, f16::ZERO, (b, m, n, k), lhs_l, rhs_l)?;
+                let cfg = gemm_config(
+                    f16::from_f64(scale.unwrap_or(1.)),
+                    f16::ZERO,
+                    (b, m, n, k),
+                    lhs_l,
+                    rhs_l,
+                )?;
                 let mut out = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
                 unsafe { gemm_strided_batched_f16(&self.device.blas, cfg, rhs, lhs, &mut out) }
                     .w()?;
@@ -1684,7 +1768,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F32(lhs), CudaStorageSlice::F32(rhs)) => {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
-                let cfg = gemm_config(1., 0., (b, m, n, k), lhs_l, rhs_l)?;
+                let cfg = gemm_config(scale.unwrap_or(1.) as f32, 0., (b, m, n, k), lhs_l, rhs_l)?;
                 let mut out = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
                 unsafe { gemm_strided_batched_f32(&self.device.blas, cfg, rhs, lhs, &mut out) }
                     .w()?;
@@ -1693,7 +1777,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F64(lhs), CudaStorageSlice::F64(rhs)) => {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
-                let cfg = gemm_config(1., 0., (b, m, n, k), lhs_l, rhs_l)?;
+                let cfg = gemm_config(scale.unwrap_or(1.), 0., (b, m, n, k), lhs_l, rhs_l)?;
                 let mut out = unsafe { dev.alloc::<f64>(elem_count) }.w()?;
                 unsafe {
                     self.device

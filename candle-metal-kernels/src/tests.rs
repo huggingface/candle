@@ -1086,6 +1086,8 @@ fn run_gemm<T: Clone>(
         rhs_offset,
         &rhs,
         &output,
+        1.,
+        0.,
     )
     .unwrap();
     command_buffer.commit();

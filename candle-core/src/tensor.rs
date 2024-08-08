@@ -1194,8 +1194,9 @@ impl Tensor {
             .bt())?
         }
 
-        let storage = self.storage().matmul(
+        let storage = self.storage().matmul_with_alpha(
             &rhs.storage(),
+            None,
             (batching, m, n, k),
             self.layout(),
             rhs.layout(),
@@ -1223,6 +1224,172 @@ impl Tensor {
             (false, true) => lhs.matmul(&rhs.broadcast_as(&r_shape)?.contiguous()?),
             (true, false) => lhs.broadcast_as(&l_shape)?.contiguous()?.matmul(rhs),
             (false, false) => lhs.matmul(rhs),
+        }
+    }
+
+    /// Returns the matrix-multiplication of the input tensor with the other provided tensor. The result is scaled
+    /// and then added to the output tensor, the bias tensor `c`.
+    ///
+    /// If `scale` is None, then the output is as follows:
+    /// `c := c + axb`
+    ///
+    /// Else:
+    /// `c := c + scale * (axb)`
+    ///
+    /// This function is faster than a matmul followed by some scaling multiply because the scaling is fused in the GEMM kernel.
+    /// This is incompatible with gradient tracking. No gradients will be tracked on this operation. However, this also means
+    /// there is an allocation saved as the output is in `c`.
+    ///
+    /// # Arguments
+    ///
+    /// * `self` - A tensor with dimensions `b1, b2, ..., bi, m, k`.
+    /// * `rhs` - A tensor with dimensions `b1, b2, ..., bi, k, n`.
+    /// * `c` - A tensor with dimensions `b1, b2, ..., bi, m, n`, into which the result is accumulated and added to.
+    /// * `scale` - Factor to multiply `self` x `rhs` by
+    pub fn matmul_with_alpha_beta(
+        &self,
+        rhs: &Self,
+        c: &mut Self,
+        scale: Option<f64>,
+    ) -> Result<()> {
+        let a_dims = self.shape().dims();
+        let b_dims = rhs.shape().dims();
+
+        let dim = a_dims.len();
+
+        if dim < 2 || b_dims.len() != dim {
+            Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "matmul",
+            }
+            .bt())?
+        }
+
+        let m = a_dims[dim - 2];
+        let k = a_dims[dim - 1];
+        let k2 = b_dims[dim - 2];
+        let n = b_dims[dim - 1];
+
+        let exp_c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
+        if exp_c_shape.elem_count() == 0 || k == 0 {
+            bail!("Expected `c` to have more than one element, got 0.");
+        }
+        if exp_c_shape != c.shape().clone() {
+            Err(Error::UnexpectedShape {
+                msg: "`c` has an unexpected shape.".to_string(),
+                expected: exp_c_shape,
+                got: c.shape().clone(),
+            })?
+        }
+
+        let batching: usize = a_dims[..dim - 2].iter().product();
+        let batching_b: usize = b_dims[..dim - 2].iter().product();
+        if k != k2 || batching != batching_b {
+            Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "matmul_with_alpha_beta",
+            }
+            .bt())?
+        }
+
+        self.storage().matmul_with_alpha_beta(
+            &rhs.storage(),
+            &mut c.storage_mut(),
+            scale,
+            (batching, m, n, k),
+            self.layout(),
+            rhs.layout(),
+            c.layout(),
+        )
+    }
+
+    /// Returns the matrix-multiplication of the input tensor with the other provided tensor. The result is scaled.
+    ///
+    /// This function is faster than a matmul followed by some scaling multiply because the scaling is fused in the GEMM kernel.
+    ///
+    /// The output is as follows:
+    /// `scale * (axb)`
+    ///
+    ///
+    /// This is incompatible with gradient tracking. No gradients will be tracked on this operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `self` - A tensor with dimensions `b1, b2, ..., bi, m, k`.
+    /// * `rhs` - A tensor with dimensions `b1, b2, ..., bi, k, n`.
+    /// * `scale` - Factor to multiply `self` x `rhs` by.
+    pub fn matmul_with_alpha(&self, rhs: &Self, scale: Option<f64>) -> Result<Self> {
+        let a_dims = self.shape().dims();
+        let b_dims = rhs.shape().dims();
+
+        let dim = a_dims.len();
+
+        if dim < 2 || b_dims.len() != dim {
+            Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "matmul",
+            }
+            .bt())?
+        }
+
+        let m = a_dims[dim - 2];
+        let k = a_dims[dim - 1];
+        let k2 = b_dims[dim - 2];
+        let n = b_dims[dim - 1];
+
+        let c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
+        if c_shape.elem_count() == 0 || k == 0 {
+            return Tensor::zeros(c_shape, self.dtype(), self.device());
+        }
+        let batching: usize = a_dims[..dim - 2].iter().product();
+        let batching_b: usize = b_dims[..dim - 2].iter().product();
+        if k != k2 || batching != batching_b {
+            Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "matmul_with_alpha",
+            }
+            .bt())?
+        }
+
+        let storage = self.storage().matmul_with_alpha(
+            &rhs.storage(),
+            scale,
+            (batching, m, n, k),
+            self.layout(),
+            rhs.layout(),
+        )?;
+        let op = BackpropOp::new2(self, rhs, Op::Matmul);
+        Ok(from_storage(storage, c_shape, op, false))
+    }
+
+    /// Matrix-multiplication with broadcasting support and fused scaling.
+    ///
+    /// Compared to `matmul` the two matrixes are allowed to have different dimensions as long as
+    /// they are compatible for broadcast. E.g. if `self` has shape `(j, 1, n, k)` and `rhs` has
+    /// shape `(l, k, m)`, the output will have shape `(j, l, n, m)`.
+    pub fn broadcast_matmul_with_alpha(&self, rhs: &Self, scale: Option<f64>) -> Result<Self> {
+        let lhs = self;
+        let (l_shape, r_shape) = lhs.shape().broadcast_shape_matmul(rhs.shape())?;
+        let l_broadcast = l_shape != *lhs.shape();
+        let r_broadcast = r_shape != *rhs.shape();
+        // TODO: Avoid concretising the broadcasted matrixes via contiguous.
+        match (l_broadcast, r_broadcast) {
+            (true, true) => lhs
+                .broadcast_as(&l_shape)?
+                .contiguous()?
+                .matmul_with_alpha(&rhs.broadcast_as(&r_shape)?.contiguous()?, scale),
+            (false, true) => {
+                lhs.matmul_with_alpha(&rhs.broadcast_as(&r_shape)?.contiguous()?, scale)
+            }
+            (true, false) => lhs
+                .broadcast_as(&l_shape)?
+                .contiguous()?
+                .matmul_with_alpha(rhs, scale),
+            (false, false) => lhs.matmul_with_alpha(rhs, scale),
         }
     }
 

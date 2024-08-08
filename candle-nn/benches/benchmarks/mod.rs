@@ -1,3 +1,4 @@
+pub(crate) mod attention;
 pub(crate) mod conv;
 pub(crate) mod layer_norm;
 
@@ -15,7 +16,10 @@ impl BenchDevice for Device {
             Device::Cpu => Ok(()),
             Device::Cuda(device) => {
                 #[cfg(feature = "cuda")]
-                return Ok(device.synchronize()?);
+                {
+                    use candle::cuda::WrapErr;
+                    return Ok(device.synchronize().w()?);
+                }
                 #[cfg(not(feature = "cuda"))]
                 panic!("Cuda device without cuda feature enabled: {:?}", device)
             }
