@@ -52,13 +52,16 @@ pub fn non_maximum_suppression<D>(bboxes: &mut [Vec<Bbox<D>>], threshold: f32) {
 }
 
 
+
+// Function based on https://arxiv.org/pdf/1704.04503
+// Applies Soft-NMS to each bounding box, decaying those with high overlap.
+// Throws away bounding boxes with confidence below the score threshold.
 pub fn soft_non_maximum_suppression<D>(
     bboxes: &mut [Vec<Bbox<D>>],
     iou_threshold: Option<f32>,
     score_threshold: Option<f32>,
     sigma: Option<f32>,
 ) {
-    // Function based on https://arxiv.org/pdf/1704.04503
     let iou_threshold = iou_threshold.unwrap_or(0.5);
     let score_threshold = score_threshold.unwrap_or(0.1);
     let sigma = sigma.unwrap_or(0.5);
@@ -68,6 +71,7 @@ pub fn soft_non_maximum_suppression<D>(
         let mut updated_confidences = bboxes_for_class.iter()
             .map(|bbox| bbox.confidence)
             .collect::<Vec<_>>();
+        update_confidences(bboxes_for_class, &mut updated_confidences, iou_threshold, sigma);
         let mut current_index = 0;
         while current_index < bboxes_for_class.len() {
             let current_bbox = &bboxes_for_class[current_index];
@@ -84,7 +88,7 @@ pub fn soft_non_maximum_suppression<D>(
             }
             current_index += 1;
         }
-        // Update confidences
+        // Update confidences based on score threshold
         for (i, &confidence) in updated_confidences.iter().enumerate() {
             if confidence < score_threshold {
                 bboxes_for_class[i].confidence = 0.0;
