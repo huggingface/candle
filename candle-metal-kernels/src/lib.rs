@@ -20,7 +20,8 @@ const CONV: &str = include_str!("conv.metal");
 const REDUCE: &str = include_str!("reduce.metal");
 const RANDOM: &str = include_str!("random.metal");
 // Current source: https://github.com/ivarflakstad/metal-flash-attention/tree/candle
-const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
+// const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
+const GEMM: &str = include_str!("gemm.metal");
 const QUANTIZED: &str = include_str!("quantized.metal");
 const SORT: &str = include_str!("sort.metal");
 
@@ -201,7 +202,7 @@ impl Kernels {
             Source::Random => RANDOM,
             Source::Quantized => QUANTIZED,
             Source::Sort => SORT,
-            Source::Mfa => panic!("Invalid lib"),
+            Source::Mfa => GEMM,
         }
     }
 
@@ -216,22 +217,14 @@ impl Kernels {
         if let Some(lib) = libraries.get(&source) {
             Ok(lib.clone())
         } else {
-            let lib = match source {
-                Source::Mfa => {
-                    let source_data = MFA;
-                    device.new_library_with_data(source_data).map_err(|e| {
-                        MetalKernelError::LoadLibraryError(format!(
-                            "Candle metal requires macosx > 13.0 or higher, cannot load mfa: {e}"
-                        ))
-                    })?
-                }
-                source => {
-                    let source_content = self.get_library_source(source);
-                    device
-                        .new_library_with_source(source_content, &CompileOptions::new())
-                        .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
-                }
-            };
+            let compile_options = CompileOptions::new();
+            compile_options.set_fast_math_enabled(true);
+
+            let source_content = self.get_library_source(source);
+            let lib = device
+                .new_library_with_source(source_content, &CompileOptions::new())
+                .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?;
+
             libraries.insert(source, lib.clone());
             Ok(lib)
         }
