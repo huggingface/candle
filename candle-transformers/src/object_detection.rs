@@ -61,13 +61,15 @@ fn update_confidences<D>(
     let len = bboxes_for_class.len();
     for current_index in 0..len {
         let current_bbox = &bboxes_for_class[current_index];
-        for index in (current_index + 1)..len {
-            let iou_val = iou(current_bbox, &bboxes_for_class[index]);
-            if iou_val > iou_threshold {
-                // Decay calculation from page 4 of: https://arxiv.org/pdf/1704.04503
-                let decay = (-iou_val * iou_val / sigma).exp();
-                let updated_confidence = bboxes_for_class[index].confidence * decay;
-                updated_confidences[index] = updated_confidence;
+        for index in 0..len {
+            if current_index != index {
+                let iou_val = iou(current_bbox, &bboxes_for_class[index]);
+                if iou_val > iou_threshold {
+                    // Decay calculation from page 4 of: https://arxiv.org/pdf/1704.04503
+                    let decay = (-iou_val * iou_val / sigma).exp();
+                    let updated_confidence = bboxes_for_class[index].confidence * decay;
+                    updated_confidences[index] = updated_confidence;
+                }
             }
         }
     }
@@ -92,7 +94,7 @@ pub fn soft_non_maximum_suppression<D>(
             .map(|bbox| bbox.confidence)
             .collect::<Vec<_>>();
         update_confidences(bboxes_for_class, &mut updated_confidences, iou_threshold, sigma);
-        // Update confidences based on score threshold
+        // Update confidences based on score threshold, TODO: Refactor to be idiomatic
         for (i, &confidence) in updated_confidences.iter().enumerate() {
             if confidence < confidence_threshold {
                 bboxes_for_class.remove(i);
@@ -102,4 +104,3 @@ pub fn soft_non_maximum_suppression<D>(
         }
     }
 }
-
