@@ -189,7 +189,7 @@ IS_OP(double, int32_t, is_i32_f64)
 IS_OP(uint8_t, int32_t, is_i32_u8)
 IS_OP(uint32_t, int32_t, is_i32_u32)
 IS_OP(int32_t, int32_t, is_i32_i32)
-IS_OP(int64_t, int32_t, is_i64_i32)
+IS_OP(int64_t, int32_t, is_i32_i64)
 
 IS_OP(float, int64_t, is_i64_f32)
 IS_OP(double, int64_t, is_i64_f64)
