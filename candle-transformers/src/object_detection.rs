@@ -51,7 +51,27 @@ pub fn non_maximum_suppression<D>(bboxes: &mut [Vec<Bbox<D>>], threshold: f32) {
     }
 }
 
-
+// Applies Soft-NMS to decay confidence of bounding boxes based on their overlap (IOU).
+fn update_confidences<D>(
+    bboxes_for_class: &[Bbox<D>],
+    updated_confidences: &mut [f32],
+    iou_threshold: f32,
+    sigma: f32,
+) {
+    let len = bboxes_for_class.len();
+    for current_index in 0..len {
+        let current_bbox = &bboxes_for_class[current_index];
+        for index in (current_index + 1)..len {
+            let iou_val = iou(current_bbox, &bboxes_for_class[index]);
+            if iou_val > iou_threshold {
+                // Decay calculation from page 4 of: https://arxiv.org/pdf/1704.04503
+                let decay = (-iou_val * iou_val / sigma).exp();
+                let updated_confidence = bboxes_for_class[index].confidence * decay;
+                updated_confidences[index] = updated_confidence;
+            }
+        }
+    }
+}
 
 // Function based on https://arxiv.org/pdf/1704.04503
 // Applies Soft-NMS to each bounding box, decaying those with high overlap.
@@ -72,22 +92,6 @@ pub fn soft_non_maximum_suppression<D>(
             .map(|bbox| bbox.confidence)
             .collect::<Vec<_>>();
         update_confidences(bboxes_for_class, &mut updated_confidences, iou_threshold, sigma);
-        let mut current_index = 0;
-        while current_index < bboxes_for_class.len() {
-            let current_bbox = &bboxes_for_class[current_index];
-            let mut index = current_index + 1;
-            while index < bboxes_for_class.len() {
-                let iou_val = iou(current_bbox, &bboxes_for_class[index]);
-                if iou_val > iou_threshold {
-                    // Decay calculation from page 4 of: https://arxiv.org/pdf/1704.04503
-                    let decay = (-iou_val * iou_val / sigma).exp();
-                    let updated_confidence = bboxes_for_class[index].confidence * decay;
-                    updated_confidences[index] = updated_confidence;
-                }
-                index += 1;
-            }
-            current_index += 1;
-        }
         // Update confidences based on score threshold
         for (i, &confidence) in updated_confidences.iter().enumerate() {
             if confidence < score_threshold {
