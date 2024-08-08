@@ -65,48 +65,29 @@ pub fn soft_non_maximum_suppression<D>(
 
     for bboxes_for_class in bboxes.iter_mut() {
         bboxes_for_class.sort_by(|b1, b2| b2.confidence.partial_cmp(&b1.confidence).unwrap());
-
-        let mut to_remove = vec![];
         let mut updated_confidences = vec![0.0; bboxes_for_class.len()]; // Mutable confidence
-        // storage 
-
         let mut current_index = 0;
-
         while current_index < bboxes_for_class.len() {
             let current_bbox = &bboxes_for_class[current_index];
             let mut index = current_index + 1;
-
             while index < bboxes_for_class.len() {
                 let iou_val = iou(current_bbox, &bboxes_for_class[index]);
                 if iou_val > iou_threshold {
                     // Decay calculation from page 4 of: https://arxiv.org/pdf/1704.04503
                     let decay = (-iou_val * iou_val / sigma).exp();
                     let updated_confidence = bboxes_for_class[index].confidence * decay;
-
-                    if updated_confidence < score_threshold {
-                        to_remove.push(index);
-                    } else {
-                        updated_confidences[index] = updated_confidence;
-                    }
+                    updated_confidences[index] = updated_confidence;
                 }
                 index += 1;
             }
-
             current_index += 1;
         }
-
         // Update confidences
         for (i, &confidence) in updated_confidences.iter().enumerate() {
-            if confidence > 0.0 {
+            if confidence < score_threshold {
+                bboxes_for_class[i].confidence = 0.0;
+            } else
                 bboxes_for_class[i].confidence = confidence;
-            }
-        }
-
-        // Remove boxes with low confidence in reverse order
-        to_remove.sort_by(|a, b| b.cmp(a)); // Reverse sort 
-        for &index in to_remove.iter() {
-            if index < bboxes_for_class.len() {
-                bboxes_for_class.remove(index);
             }
         }
     }
