@@ -9,72 +9,34 @@
 #ifndef __METAL_SIMDGROUP_EVENT
 #define __METAL_SIMDGROUP_EVENT
 
-// Invoking the generation of LLVM bitcode for async copies.
-//
-//   %struct._simdgroup_event_t = type opaque
-//
-struct _simdgroup_event_t;
+struct _simdgroup_event_t {};
 
-// Invoking the generation of LLVM bitcode for async copies.
-thread _simdgroup_event_t*
-__metal_simdgroup_async_copy_1d(
-  ulong, ulong, threadgroup void *, const device void *, ulong)
-  __asm("air.simdgroup_async_copy_1d.p3i8.p1i8");
+thread _simdgroup_event_t* __metal_simdgroup_async_copy_1d(
+    ulong, ulong,
+    threadgroup void*, const device void*, ulong)
+    __asm("air.simdgroup_async_copy_1d.p3i8.p1i8");
 
-// Invoking the generation of LLVM bitcode for async copies.
-thread _simdgroup_event_t*
-__metal_simdgroup_async_copy_1d(
-  ulong, ulong, device void *, const threadgroup void *, ulong)
-  __asm("air.simdgroup_async_copy_1d.p1i8.p3i8");
+thread _simdgroup_event_t* __metal_simdgroup_async_copy_1d(
+    ulong, ulong,
+    device void*, const threadgroup void*, ulong)
+    __asm("air.simdgroup_async_copy_1d.p1i8.p3i8");
 
-// Invoking the generation of LLVM bitcode for async copies.
-//
-//   ; Function Attrs: argmemonly convergent nounwind
-//   declare %struct._simdgroup_event_t*
-//     @air.simdgroup_async_copy_2d.p3i8.p1i8(
-//       i64, i64,
-//       i8 addrspace(3)* nocapture writeonly, i64, i64, <2 x i64>,
-//       i8 addrspace(1)* nocapture readonly,  i64, i64, <2 x i64>,
-//       <2 x i64>, i32)
-//     local_unnamed_addr #4
-//
-thread _simdgroup_event_t*
-__metal_simdgroup_async_copy_2d(
-  ulong, ulong,
-  threadgroup void *, ulong, ulong, ulong2,
-  const device void *, ulong, ulong, ulong2,
-  long2, int)
-  __asm("air.simdgroup_async_copy_2d.p3i8.p1i8");
+thread _simdgroup_event_t* __metal_simdgroup_async_copy_2d(
+    ulong, ulong,
+    threadgroup void*, ulong, ulong, ulong2,
+    const device void*, ulong, ulong, ulong2,
+    long2, int)
+    __asm("air.simdgroup_async_copy_2d.p3i8.p1i8");
 
-// Invoking the generation of LLVM bitcode for async copies.
-//
-//   ; Function Attrs: argmemonly convergent nounwind
-//   declare %struct._simdgroup_event_t*
-//     @air.simdgroup_async_copy_2d.p1i8.p3i8(
-//       i64, i64,
-//       i8 addrspace(1)* nocapture writeonly, i64, i64, <2 x i64>,
-//       i8 addrspace(3)* nocapture readonly,  i64, i64, <2 x i64>,
-//       <2 x i64>, i32)
-//     local_unnamed_addr #4
-//
-thread _simdgroup_event_t*
-__metal_simdgroup_async_copy_2d(
-  ulong, ulong,
-  device void *, ulong, ulong, ulong2,
-  const threadgroup void *, ulong, ulong, ulong2,
-  long2, int)
-  __asm("air.simdgroup_async_copy_2d.p1i8.p3i8");
+thread _simdgroup_event_t* __metal_simdgroup_async_copy_2d(
+    ulong, ulong,
+    device void*, ulong, ulong, ulong2,
+    const threadgroup void*, ulong, ulong, ulong2,
+    long2, int)
+    __asm("air.simdgroup_async_copy_2d.p1i8.p3i8");
 
-// Invoking the generation of LLVM bitcode for async copies.
-//
-//   ; Function Attrs: convergent nounwind
-//   declare void
-//     @air.wait_simdgroup_events(i32, %struct._simdgroup_event_t** nocapture)
-//     local_unnamed_addr #3
-//
-void __metal_wait_simdgroup_events(
-  int, thread _simdgroup_event_t**)
-  __asm("air.wait_simdgroup_events");
+void __metal_wait_simdgroup_events(int, const thread _simdgroup_event_t**)
+    __asm("air.wait_simdgroup_events");
 
 #pragma METAL internals : enable
 namespace metal
@@ -93,14 +55,14 @@ namespace metal
       const device T *src,
       ulong n_elements
     ) thread {
-      event = __metal_simdgroup_async_copy_1d(
+      event = *__metal_simdgroup_async_copy_1d(
         // Description of the data type.
         sizeof(T),
         alignof(T),
 
         // Description of the arguments.
-        reinterpret_cast<threadgroup void *>(dst),
-        reinterpret_cast<const device void *>(src),
+        reinterpret_cast<threadgroup void*>(dst),
+        reinterpret_cast<const device void*>(src),
         n_elements);
     }
 
@@ -110,7 +72,7 @@ namespace metal
       const threadgroup T *src,
       ulong n_elements
     ) thread {
-      event = __metal_simdgroup_async_copy_1d(
+      event = *__metal_simdgroup_async_copy_1d(
         // Description of the data type.
         sizeof(T),
         alignof(T),
@@ -142,7 +104,7 @@ namespace metal
         src_tile_dimensions = src_tile_dimensions.yx;
         dst_tile_dimensions = dst_tile_dimensions.yx;
       }
-      event = __metal_simdgroup_async_copy_2d(
+      event = *__metal_simdgroup_async_copy_2d(
         // Description of the data type.
         sizeof(T),
         alignof(T),
@@ -183,7 +145,7 @@ namespace metal
         src_tile_dimensions = src_tile_dimensions.yx;
         dst_tile_dimensions = dst_tile_dimensions.yx;
       }
-      event = __metal_simdgroup_async_copy_2d(
+      event = *__metal_simdgroup_async_copy_2d(
         // Description of the data type.
         sizeof(T),
         alignof(T),
@@ -206,16 +168,11 @@ namespace metal
     }
 
     METAL_FUNC static void wait(int count, thread simdgroup_event *events) {
-      __metal_wait_simdgroup_events(
-        count, reinterpret_cast<thread _simdgroup_event_t**>(events));
+        __metal_wait_simdgroup_events(count, reinterpret_cast<const thread _simdgroup_event_t**>(events));
     }
 
   private:
-    // Invoking the generation of LLVM bitcode for async copies.
-    //
-    //   %"struct.metal::simdgroup_event" = type { %struct._simdgroup_event_t* }
-    //
-    thread _simdgroup_event_t* event;
+    thread _simdgroup_event_t event;
   };
 } // namespace metal
 #pragma METAL internals : disable
