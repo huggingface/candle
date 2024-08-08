@@ -195,6 +195,25 @@ impl Device {
         }
     }
 
+    pub fn metal_if_available(ordinal: usize) -> Result<Self> {
+        if crate::utils::metal_is_available() {
+            Self::new_metal(ordinal)
+        } else {
+            Ok(Self::Cpu)
+        }
+    }
+
+    /// Get the best (fastest) device, with the given accelerator ordinal.
+    pub fn best_device(ordinal: usize) -> Result<Self> {
+        if crate::utils::cuda_is_available() {
+            Self::new_cuda(ordinal)
+        } else if crate::utils::metal_is_available() {
+            Self::new_metal(ordinal)
+        } else {
+            Ok(Self::Cpu)
+        }
+    }
+
     pub(crate) fn rand_uniform_f64(
         &self,
         lo: f64,
