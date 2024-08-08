@@ -65,7 +65,9 @@ pub fn soft_non_maximum_suppression<D>(
 
     for bboxes_for_class in bboxes.iter_mut() {
         bboxes_for_class.sort_by(|b1, b2| b2.confidence.partial_cmp(&b1.confidence).unwrap());
-        let mut updated_confidences = vec![0.0; bboxes_for_class.len()]; // Mutable confidence
+        let mut updated_confidences = bboxes_for_class.iter()
+            .map(|bbox| bbox.confidence)
+            .collect::<Vec<_>>();
         let mut current_index = 0;
         while current_index < bboxes_for_class.len() {
             let current_bbox = &bboxes_for_class[current_index];
@@ -86,7 +88,7 @@ pub fn soft_non_maximum_suppression<D>(
         for (i, &confidence) in updated_confidences.iter().enumerate() {
             if confidence < score_threshold {
                 bboxes_for_class[i].confidence = 0.0;
-            } else
+            } else {
                 bboxes_for_class[i].confidence = confidence;
             }
         }
