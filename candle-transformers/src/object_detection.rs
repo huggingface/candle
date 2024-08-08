@@ -79,11 +79,11 @@ fn update_confidences<D>(
 pub fn soft_non_maximum_suppression<D>(
     bboxes: &mut [Vec<Bbox<D>>],
     iou_threshold: Option<f32>,
-    score_threshold: Option<f32>,
+    confidence_threshold: Option<f32>,
     sigma: Option<f32>,
 ) {
     let iou_threshold = iou_threshold.unwrap_or(0.5);
-    let score_threshold = score_threshold.unwrap_or(0.1);
+    let confidence_threshold = score_threshold.unwrap_or(0.1);
     let sigma = sigma.unwrap_or(0.5);
 
     for bboxes_for_class in bboxes.iter_mut() {
@@ -94,7 +94,7 @@ pub fn soft_non_maximum_suppression<D>(
         update_confidences(bboxes_for_class, &mut updated_confidences, iou_threshold, sigma);
         // Update confidences based on score threshold
         for (i, &confidence) in updated_confidences.iter().enumerate() {
-            if confidence < score_threshold {
+            if confidence < confidence_threshold {
                 bboxes_for_class[i].confidence = 0.0;
             } else {
                 bboxes_for_class[i].confidence = confidence;
