@@ -65,3 +65,18 @@ fn softnms_confidence_threshold() {
     // Box with confidence below the threshold should be removed
     assert_eq!(bboxes[0].len(), 1);
 }
+
+#[test]
+fn softnms_no_overlap() {
+    let mut bboxes = vec![
+        vec![
+            Bbox { xmin: 0.0, ymin: 0.0, xmax: 1.0, ymax: 1.0, confidence: 0.9, data: () },
+            Bbox { xmin: 2.0, ymin: 2.0, xmax: 3.0, ymax: 3.0, confidence: 0.8, data: () },
+        ],
+    ];
+
+    soft_non_maximum_suppression(&mut bboxes, Some(0.5), Some(0.1), Some(0.5));
+
+    // Both boxes should remain as they do not significantly overlap
+    assert_eq!(bboxes[0].len(), 2);
+}
