@@ -35,3 +35,19 @@ fn softnms_basic_functionality() {
 
     assert_eq!(bboxes[0].len(), 3);
 }
+
+#[test]
+fn softnms_confidence_decay() {
+    let mut bboxes = vec![
+        vec![
+            Bbox { xmin: 0.0, ymin: 0.0, xmax: 1.0, ymax: 1.0, confidence: 0.9, data: () }, // Reference box
+            Bbox { xmin: 0.1, ymin: 0.1, xmax: 1.1, ymax: 1.1, confidence: 0.8, data: () }, // Overlapping box
+        ],
+    ];
+
+    soft_non_maximum_suppression(&mut bboxes, Some(0.5), Some(0.1), Some(0.5));
+
+    // Check that confidence of the overlapping box is decayed
+    assert!(bboxes[0][1].confidence < 0.8);
+}
+
