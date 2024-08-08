@@ -82,3 +82,17 @@ fn softnms_no_overlap() {
     assert_eq!(bboxes[0][0].confidence, 0.9);
     assert_eq!(bboxes[0][1].confidence, 0.8);
 }
+#[test]
+fn softnms_no_bbox() {
+    let mut bboxes: Vec<Vec<Bbox<()>>> = vec![];
+    soft_non_maximum_suppression(&mut bboxes, Some(0.5), Some(0.1), Some(0.5));
+    assert!(bboxes.is_empty());
+}
+
+#[test]
+fn softnms_single_bbox() {
+    let mut bboxes = vec![vec![Bbox { xmin: 0.0, ymin: 0.0, xmax: 1.0, ymax: 1.0, confidence: 0.9, data: () }]];
+    soft_non_maximum_suppression(&mut bboxes, Some(0.5), Some(0.1), Some(0.5));
+    assert_eq!(bboxes[0].len(), 1);
+}
+
