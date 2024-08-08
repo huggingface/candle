@@ -101,3 +101,21 @@ fn softnms_single_bbox() -> Result<()> {
     assert_eq!(bboxes[0].len(), 1);
     Ok(())
 }
+
+#[test]
+fn softnms_equal_confidence_overlap() -> Result<()> {
+    let mut bboxes = vec![
+        vec![
+            Bbox { xmin: 0.0, ymin: 0.0, xmax: 1.0, ymax: 1.0, confidence: 0.5, data: () },
+            Bbox { xmin: 0.1, ymin: 0.1, xmax: 1.1, ymax: 1.1, confidence: 0.5, data: () },
+        ],
+    ];
+
+    soft_non_maximum_suppression(&mut bboxes, Some(0.5), Some(0.1), Some(0.5));
+
+    // Both boxes should remain as they have equal confidence
+    assert_eq!(bboxes[0].len(), 2);
+    assert_eq!(bboxes[0][0].confidence, 0.5);
+    assert_eq!(bboxes[0][1].confidence, 0.5);
+    Ok(())
+}
