@@ -206,10 +206,7 @@ fn convert(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
             convert_with_cast_::<u16, u32, _>(view, device, conv)
         }
         st::Dtype::U32 => convert_::<u32>(view, device),
-        st::Dtype::I32 => {
-            let conv = |x| Ok(i64::from(x));
-            convert_with_cast_::<i32, i64, _>(view, device, conv)
-        }
+        st::Dtype::I32 => onvert_::<i32>(view, device),
         st::Dtype::I64 => convert_::<i64>(view, device),
         st::Dtype::BF16 => convert_::<half::bf16>(view, device),
         st::Dtype::F16 => convert_::<half::f16>(view, device),
