@@ -88,6 +88,7 @@ ARGSORT(float, f32)
 ARGSORT(half, f16)
 ARGSORT(uint8_t, u8)
 ARGSORT(uint32_t, u32)
+ARGSORT(int32_t, i32)
 
 #if __METAL_VERSION__ >= 220
 ARGSORT(int64_t, i64)

@@ -602,6 +602,12 @@ ARGMIN(fast_argmin_i64_strided, int64_t, INT_MAX)
 ARGMAX(fast_argmax_i64_strided, int64_t, INT_MIN)
 #endif
 
+REDUCE(x + y, fast_sum_i32_strided, int32_t, 0)
+REDUCE(MIN(x, y), fast_min_i32_strided, int32_t, INT_MAX)
+REDUCE(MAX(x, y), fast_max_i32_strided, int32_t, INT_MIN)
+ARGMIN(fast_argmin_i32_strided, int32_t, INT_MAX)
+ARGMAX(fast_argmax_i32_strided, int32_t, INT_MIN)
+
 #if defined(__HAVE_BFLOAT__)
 REDUCE(x + y, fast_sum_bf16, bfloat, 0)
 REDUCE(x + y, fast_sum_bf16_strided, half, 0)

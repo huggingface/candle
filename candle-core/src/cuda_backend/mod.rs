@@ -47,6 +47,7 @@ impl SlicePtrOrNull<usize> {
 pub enum CudaStorageSlice {
     U8(CudaSlice<u8>),
     U32(CudaSlice<u32>),
+    I32(CudaSlice<i32>),
     I64(CudaSlice<i64>),
     BF16(CudaSlice<bf16>),
     F16(CudaSlice<f16>),
@@ -361,11 +362,14 @@ impl<'a> Map1 for IndexSelect<'a> {
             CudaStorageSlice::U8(slice) => {
                 ("is_u8", *slice.slice(ids_l.start_offset()..).device_ptr())
             }
+            CudaStorageSlice::I32(slice) => {
+                ("is_i32", *slice.slice(ids_l.start_offset()..).device_ptr())
+            }
             CudaStorageSlice::I64(slice) => {
                 ("is_i64", *slice.slice(ids_l.start_offset()..).device_ptr())
             }
             _ => Err(CudaError::UnexpectedDType {
-                msg: "index_select ids should be u8 or u32",
+                msg: "index_select ids should be u8/u32/i32/i64",
                 expected: DType::U32,
                 got: self.0.dtype(),
             })
@@ -425,11 +429,14 @@ impl<'a> Map1 for Gather<'a> {
                 ("gather_u32", *slice.slice(ids_o1..ids_o2).device_ptr())
             }
             CudaStorageSlice::U8(slice) => ("gather_u8", *slice.slice(ids_o1..ids_o2).device_ptr()),
+            CudaStorageSlice::I32(slice) => {
+                ("gather_i32", *slice.slice(ids_o1..ids_o2).device_ptr())
+            }
             CudaStorageSlice::I64(slice) => {
                 ("gather_i64", *slice.slice(ids_o1..ids_o2).device_ptr())
             }
             _ => Err(CudaError::UnexpectedDType {
-                msg: "gather ids should be u8/u32/i64",
+                msg: "gather ids should be u8/u32/i32/i64",
                 expected: DType::U32,
                 got: ids.dtype(),
             })?,
@@ -475,10 +482,11 @@ impl<'a> Map2InPlace for IndexAdd<'a> {
         };
         let (name, ids) = match &ids.slice {
             CudaStorageSlice::U32(slice) => ("ia_u32", *slice.slice(ids_o1..ids_o2).device_ptr()),
+            CudaStorageSlice::I32(slice) => ("ia_i32", *slice.slice(ids_o1..ids_o2).device_ptr()),
             CudaStorageSlice::I64(slice) => ("ia_i64", *slice.slice(ids_o1..ids_o2).device_ptr()),
             CudaStorageSlice::U8(slice) => ("ia_u8", *slice.slice(ids_o1..ids_o2).device_ptr()),
             _ => Err(CudaError::UnexpectedDType {
-                msg: "index-add ids should be u8/u32/i64",
+                msg: "index-add ids should be u8/u32/i32/i64",
                 expected: DType::U32,
                 got: ids.dtype(),
             })?,
@@ -523,10 +531,11 @@ impl<'a> Map2InPlace for ScatterAdd<'a> {
         };
         let (name, ids) = match &ids.slice {
             CudaStorageSlice::U32(slice) => ("sa_u32", *slice.slice(ids_o1..ids_o2).device_ptr()),
+            CudaStorageSlice::I32(slice) => ("sa_i32", *slice.slice(ids_o1..ids_o2).device_ptr()),
             CudaStorageSlice::I64(slice) => ("sa_i64", *slice.slice(ids_o1..ids_o2).device_ptr()),
             CudaStorageSlice::U8(slice) => ("sa_u8", *slice.slice(ids_o1..ids_o2).device_ptr()),
             _ => Err(CudaError::UnexpectedDType {
-                msg: "scatter-add ids should be u8/u32/i64",
+                msg: "scatter-add ids should be u8/u32/i32/i64",
                 expected: DType::U32,
                 got: ids.dtype(),
             })?,
@@ -865,6 +874,10 @@ impl<'a> Map2 for WhereCond<'a> {
                 let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
                 (ptr, "where_u32")
             }
+            CudaStorageSlice::I32(slice) => {
+                let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
+                (ptr, "where_i32")
+            }
             CudaStorageSlice::I64(slice) => {
                 let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
                 (ptr, "where_i64")
@@ -1024,6 +1037,7 @@ macro_rules! cuda_dtype {
 }
 cuda_dtype!(u8, U8);
 cuda_dtype!(u32, U32);
+cuda_dtype!(i32, I32);
 cuda_dtype!(i64, I64);
 cuda_dtype!(f16, F16);
 cuda_dtype!(bf16, BF16);
@@ -1146,6 +1160,7 @@ impl BackendStorage for CudaStorage {
         match self.slice {
             CudaStorageSlice::U8(_) => DType::U8,
             CudaStorageSlice::U32(_) => DType::U32,
+            CudaStorageSlice::I32(_) => DType::I32,
             CudaStorageSlice::I64(_) => DType::I64,
             CudaStorageSlice::BF16(_) => DType::BF16,
             CudaStorageSlice::F16(_) => DType::F16,
@@ -1172,6 +1187,7 @@ impl BackendStorage for CudaStorage {
         let inp = match &self.slice {
             CudaStorageSlice::U8(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::U32(inp) => *inp.slice(start_o..).device_ptr(),
+            CudaStorageSlice::I32(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::I64(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::BF16(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::F16(inp) => *inp.slice(start_o..).device_ptr(),
@@ -1194,6 +1210,12 @@ impl BackendStorage for CudaStorage {
                 let params = (el, dims.len(), &ds, *inp, &out);
                 unsafe { func.launch(cfg, params) }.w()?;
                 CudaStorageSlice::U32(out)
+            }
+            DType::I32 => {
+                let out = unsafe { dev.alloc::<i32>(el) }.w()?;
+                let params = (el, dims.len(), &ds, *inp, &out);
+                unsafe { func.launch(cfg, params) }.w()?;
+                CudaStorageSlice::I32(out)
             }
             DType::I64 => {
                 let out = unsafe { dev.alloc::<i64>(el) }.w()?;
@@ -1290,6 +1312,11 @@ impl BackendStorage for CudaStorage {
                 let dev = slice.device();
                 let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
                 Ok(CpuStorage::U32(cpu_storage))
+            }
+            CudaStorageSlice::I32(slice) => {
+                let dev = slice.device();
+                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                Ok(CpuStorage::I32(cpu_storage))
             }
             CudaStorageSlice::I64(slice) => {
                 let dev = slice.device();
@@ -1557,6 +1584,7 @@ impl BackendStorage for CudaStorage {
                 S::F64(out)
             }
             (S::U32(_), S::U32(_)) => Err(CudaError::InternalError("conv2d does not support u32"))?,
+            (S::I32(_), S::I32(_)) => Err(CudaError::InternalError("conv2d does not support i32"))?,
             (S::I64(_), S::I64(_)) => Err(CudaError::InternalError("conv2d does not support i64"))?,
             _ => Err(CudaError::InternalError("dtype mismatch in conv2d"))?,
         };
@@ -1879,6 +1907,11 @@ impl BackendStorage for CudaStorage {
                 *d.slice(dst_o..).device_ptr(),
                 "copy2d_u32",
             ),
+            (S::I32(s), S::I32(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_i32",
+            ),
             (S::I64(s), S::I64(d)) => (
                 *s.slice(src_o..).device_ptr(),
                 *d.slice(dst_o..).device_ptr(),
@@ -1979,6 +2012,18 @@ impl BackendStorage for CudaStorage {
                     dev.dtod_copy(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_u32", kernels::UNARY)?;
+                    // SAFETY: Set later by running the kernel.
+                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    // SAFETY: ffi.
+                    unsafe { func.launch(cfg, params) }.w()?
+                }
+            }
+            (CudaStorageSlice::I32(src), CudaStorageSlice::I32(dst)) => {
+                let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
+                if src_l.is_contiguous() {
+                    dev.dtod_copy(&src, &mut dst).w()?
+                } else {
+                    let func = dev.get_or_load_func("ucopy_i32", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
