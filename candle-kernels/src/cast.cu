@@ -83,6 +83,8 @@ CAST_OP(double,   __nv_bfloat16, cast_f64_bf16)
 CAST_THROUGH_OP(__nv_bfloat16, uint8_t, float, cast_bf16_u8)
 CAST_THROUGH_OP(__nv_bfloat16, __half,   float, cast_bf16_f16)
 CAST_THROUGH_OP(__half,   __nv_bfloat16, float, cast_f16_bf16)
+CAST_THROUGH_OP(int32_t,   __nv_bfloat16, float, cast_i32_bf16)
+CAST_THROUGH_OP(__nv_bfloat16, int32_t, float, cast_bf16_i32)
 #else
 #include <cuda.h>
 #if CUDA_VERSION >= 11000
@@ -94,6 +96,8 @@ CAST_THROUGH_OP(__nv_bfloat16, double,  float, cast_bf16_f64)
 CAST_THROUGH_OP(__half,   __nv_bfloat16, float, cast_f16_bf16)
 CAST_THROUGH_OP(double,   __nv_bfloat16, float, cast_f64_bf16)
 CAST_THROUGH_OP(uint8_t,   __nv_bfloat16, float, cast_u8_bf16)
+CAST_THROUGH_OP(int32_t,   __nv_bfloat16, float, cast_i32_bf16)
+CAST_THROUGH_OP(__nv_bfloat16, int32_t, float, cast_bf16_i32)
 #endif
 #endif
 
@@ -108,6 +112,8 @@ CAST_OP(uint8_t,  __half, cast_u8_f16 )
 CAST_OP(uint32_t, __half, cast_u32_f16)
 CAST_OP(float,    __half, cast_f32_f16)
 CAST_OP(double,   __half, cast_f64_f16)
+CAST_OP(int32_t,  __half, cast_i32_f16 )
+CAST_THROUGH_OP(__half, int32_t,  float, cast_f16_i32)
 #endif
 
 CAST_OP(uint32_t, uint32_t, cast_u32_u32)

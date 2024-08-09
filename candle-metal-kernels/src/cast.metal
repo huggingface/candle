@@ -123,7 +123,7 @@ CAST(cast_i32_u32, cast_i32_u32_strided, int32_t, uint32_t)
 CAST(cast_i32_i64, cast_i32_i64_strided, int32_t, int64_t)
 CAST(cast_i32_f16, cast_i32_f16_strided, int32_t, half)
 #if defined(__HAVE_BFLOAT__)
-CAST_THROUGH(cast_i64_bf16, cast_i64_bf16_strided, int64_t, bfloat, float)
+CAST_THROUGH(cast_i32_bf16, cast_i32_bf16_strided, int64_t, bfloat, float)
 #endif
 
 // f32
