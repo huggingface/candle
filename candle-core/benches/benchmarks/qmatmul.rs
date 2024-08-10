@@ -7,7 +7,7 @@ use criterion::{black_box, criterion_group, Criterion, Throughput};
 use std::time::Instant;
 
 fn run(matmul: &QMatMul, x: &Tensor) {
-    matmul.forward(&x).unwrap();
+    matmul.forward(x).unwrap();
 }
 
 fn run_bench(c: &mut Criterion, device: &Device, dtype: GgmlDType) {
@@ -50,7 +50,7 @@ fn run_bench(c: &mut Criterion, device: &Device, dtype: GgmlDType) {
 fn criterion_benchmark(c: &mut Criterion) {
     let handler = BenchDeviceHandler::new().unwrap();
     for device in handler.devices {
-        for dtype in vec![
+        for dtype in [
             GgmlDType::F32,
             GgmlDType::F16,
             GgmlDType::Q4_0,

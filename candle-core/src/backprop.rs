@@ -320,13 +320,13 @@ impl Tensor {
                         dilation,
                         output_padding: _output_padding,
                     } => {
-                        let grad_arg = grad.conv2d(kernel, *padding, *dilation, *stride, 1)?;
+                        let grad_arg = grad.conv2d(kernel, *padding, *stride, *dilation, 1)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
 
                         let grad_kernel = grad
                             .transpose(0, 1)?
-                            .conv2d(&arg.transpose(0, 1)?, *padding, *stride, *dilation, 1)?
+                            .conv2d(&arg.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
                             .transpose(0, 1)?;
                         let sum_grad = grads.or_insert(kernel)?;
                         let (_, _, k0, k1) = kernel.dims4()?;
@@ -623,9 +623,9 @@ impl Tensor {
                     }
                     Op::Unary(arg, UnaryOp::Silu) => {
                         let sum_grad = grads.or_insert(arg)?;
-                        // d/dx silu = sigmoid(x) * (1 + x * (1 - sigmoid(x)))
+                        // d/dx silu = sigmoid(x) * (1 + x * (1 - sigmoid(x))) = sigmoid(x) * (1 - node) + node
                         let sigmoid_arg = (arg.neg()?.exp()? + 1.)?.recip()?;
-                        let silu_grad = (&sigmoid_arg * (1. + (arg * (1. - &sigmoid_arg)?)?)?)?;
+                        let silu_grad = &sigmoid_arg * (1. - *node) + *node;
                         *sum_grad = sum_grad.add(&(&grad * silu_grad)?)?
                     }
                     Op::Elu(arg, alpha) => {
@@ -634,7 +634,8 @@ impl Tensor {
                         let zeros = arg.zeros_like()?;
                         let positive_mask = arg.gt(&zeros)?.to_dtype(arg.dtype())?;
                         let negative_mask = arg.le(&zeros)?.to_dtype(arg.dtype())?;
-                        let negative_exp_mask = ((negative_mask * arg.exp())? * *alpha)?;
+                        // node == alpha * (e^x - 1) for x <= 0, reuse it
+                        let negative_exp_mask = (negative_mask * (*node + *alpha))?;
                         let combined_mask = (positive_mask + negative_exp_mask)?;
                         *sum_grad = sum_grad.add(&(grad * combined_mask)?)?
                     }
@@ -754,5 +755,10 @@ impl GradStore {
             }
         };
         Ok(grad)
+    }
+
+    /// Get the tensor ids of the stored gradient tensors
+    pub fn get_ids(&self) -> impl Iterator<Item = &TensorId> {
+        self.0.keys()
     }
 }

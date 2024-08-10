@@ -16,7 +16,7 @@ use candle_transformers::models::beit;
 /// Loads an image from disk using the image crate, this returns a tensor with shape
 /// (3, 384, 384). Beit special normalization is applied.
 pub fn load_image384_beit_norm<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
-    let img = image::io::Reader::open(p)?
+    let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
         .resize_to_fill(384, 384, image::imageops::FilterType::Triangle);
@@ -55,7 +55,7 @@ pub fn main() -> anyhow::Result<()> {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
             let api = api.model("vincent-espitalier/candle-beit".into());
-            api.get("beit_base_patch16_384.in22k_ft_in22k_in1k_adapted.safetensors")?
+            api.get("beit_base_patch16_384.in22k_ft_in22k_in1k.safetensors")?
         }
         Some(model) => model.into(),
     };

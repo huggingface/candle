@@ -641,9 +641,9 @@ impl Tensor {
     ///
     /// * `args` - A slice of 1D tensors.
     /// * `xy_indexing` - Whether to use xy indexing or ij indexing. If xy is selected, the
-    /// first dimension corresponds to the cardinality of the second input and the second
-    /// dimension corresponds to the cardinality of the first input. If ij is selected, the
-    /// dimensions are in the same order as the cardinality of the inputs.
+    ///   first dimension corresponds to the cardinality of the second input and the second
+    ///   dimension corresponds to the cardinality of the first input. If ij is selected, the
+    ///   dimensions are in the same order as the cardinality of the inputs.
     ///
     /// # Examples
     ///
@@ -2515,9 +2515,19 @@ impl Tensor {
 
     /// Returns log(sum(exp(tensor), dim)).
     pub fn log_sum_exp<D: Dims>(&self, sum_dims: D) -> Result<Self> {
-        let exp = self.exp()?;
-        let sum = exp.sum(sum_dims)?;
-        sum.log()
+        let sum_dims = sum_dims.to_indexes(self.shape(), "log-sum-exp")?;
+        if sum_dims.is_empty() {
+            return Ok(self.clone());
+        }
+        let max = sum_dims[1..]
+            .iter()
+            .try_fold(self.max_keepdim(sum_dims[0])?, |max, &dim| {
+                max.max_keepdim(dim)
+            })?;
+        let exp = self.broadcast_sub(&max)?.exp()?;
+        let sum = exp.sum(sum_dims.clone())?;
+
+        sum.log()? + max.squeeze_dims(&sum_dims)
     }
 
     /// Pointwise pow operation.
