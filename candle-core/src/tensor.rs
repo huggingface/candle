@@ -476,7 +476,7 @@ impl Tensor {
     /// let a = Tensor::from_vec(vec!{1., 2., 3., 4., 5., 6.}, (2, 3), &Device::Cpu)?;
     ///
     /// assert_eq!(a.to_vec2::<f64>()?, &[
-    ///     [1., 2., 3.,],
+    ///     [1., 2., 3.],
     ///     [4., 5., 6.]
     /// ]);
     /// # Ok::<(), candle_core::Error>(())

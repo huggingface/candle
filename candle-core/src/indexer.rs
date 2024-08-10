@@ -216,14 +216,14 @@ where
     /// use candle_core::{Tensor, DType, Device, IndexOp};
     /// let a = Tensor::new(&[[0f32, 1., 2.], [3., 4., 5.], [6., 7., 8.]], &Device::Cpu)?;
     ///
-    /// let b = a.i((1,0))?;
+    /// let b = a.i((1, 0))?;
     /// assert_eq!(b.to_vec0::<f32>()?, 3.);
     ///
-    /// let c = a.i((..2,1))?;
+    /// let c = a.i((..2, 1))?;
     /// assert_eq!(c.shape().dims(), &[2]);
     /// assert_eq!(c.to_vec1::<f32>()?, &[1., 4.]);
     ///
-    /// let d = a.i((2..,..))?;
+    /// let d = a.i((2.., ..))?;
     /// assert_eq!(c.shape().dims(), &[2]);
     /// assert_eq!(c.to_vec1::<f32>()?, &[1., 4.]);
     /// # Ok::<(), candle_core::Error>(())
