@@ -419,7 +419,7 @@ impl Tensor {
 
     /// Creates a new 1D tensor with values from the interval `[start, end)` taken with a common
     /// difference `step` from `start`.
-       ///```rust
+    ///```rust
     /// use candle_core::{Tensor, Device};
     /// let a = Tensor::arange_step(2.0, 4.0, 0.5, &Device::Cpu)?;
     ///
