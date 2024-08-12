@@ -1,5 +1,6 @@
 mod generated;
 pub use generated::*;
+pub use generated::kernels::*;
 
 impl Constants{
     pub fn get_const(i : usize)->Constants{

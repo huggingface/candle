@@ -17,7 +17,7 @@ impl DebugInfo {
         // Create a buffer to store the query results
         let query_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 256 * 100000 as u64,
+            size: 256 * 10000000 as u64,
             usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::QUERY_RESOLVE,
             mapped_at_creation: false,
         });
@@ -36,14 +36,7 @@ impl DebugInfo {
     }
 
     pub (crate) fn insert_info(&self, index : u32, info : (String, u64, u32, u32, u32)){
-        //let backtrace = std::backtrace::Backtrace::force_capture().to_string();
-        //let filtered_lines: Vec<&str> = backtrace
-        //.lines()
-        //.filter(|line| line.contains("candle")).collect();
-
-        //let lines = filtered_lines.join("\n");
         self.shader_pipeline.lock().expect("could not lock debug info").insert(index, info);     
-        //self.shader_pipeline.lock().expect("could not lock debug info").insert(index,format!("{info}\nTrace{}", lines));     
     }
 
 }
@@ -118,7 +111,7 @@ pub struct Measurement {
 #[derive(Serialize, Deserialize)]
 pub struct PipelineInfo{
     pub name : String,
-    pub consts : Vec<f64>
+    pub consts : HashMap<String, f64>
 }
 
 #[derive(Serialize, Deserialize)]

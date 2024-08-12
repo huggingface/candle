@@ -1,70 +1,79 @@
 #include "util.pwgsl"
 
-#define op_reduce.operation                     op_meta[0]
-#define op_reduce.workgroup_count               op_meta[1]
-#define op_reduce.workgroup_size                op_meta[2]
-#define op_reduce.length                        op_meta[3]
-#define op_reduce.output_to_start_stride1       op_meta[4]
-#define op_reduce.output_to_start_shape_stride2 op_meta[5]
-#define op_reduce.output_to_start_stride2       op_meta[6]
-#define op_reduce.stride_reduction              op_meta[7]
-#define op_reduce.dest_size                     op_meta[8]
-#define op_reduce.input_layout                  9u
+override CONSTV_0 : u32 = 0u;
+override CONSTV_1 : u32 = 0u;
+override CONSTV_2 : u32 = 1u;
+
+#define op_reduce_operation                     CONSTV_0
+#define op_reduce_workgroup_count               CONSTV_1
+#define op_reduce_length                        op_meta[0]
+#define op_reduce_output_to_start_stride1       op_meta[1]
+#define op_reduce_output_to_start_shape_stride2 op_meta[2]
+#define op_reduce_output_to_start_stride2       op_meta[3]
+#define op_reduce_stride_reduction              CONSTV_2
+#define op_reduce_dest_size                     op_meta[4]
+#define op_reduce_input_layout                  5u
 
 var<workgroup> sharedSums: array<DTYPE, 64>; 
 var<workgroup> sharedIndex: array<u32, 64>; 
 
+override USE_Z : bool = false;
+
 @compute
 @workgroup_size(64,1,1)
 fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let workgroup_id = global_id.x;
-    let output_index = global_id.y + global_id.z * 65535;
+    let tid = global_id.x;
+    let output_index = global_id.y + select(USE_Z, global_id.z * 65535, 0u);
     
     //Start Index of the Elements to Reduce
 
-    var start_index = 0u;// = output_index * op_reduce.output_to_start_stride1 + (output_index / op_reduce.output_to_start_shape_stride2) * op_reduce.output_to_start_stride2;
-    if op_reduce.output_to_start_shape_stride2 <= 1
+    var start_index = 0u;// = output_index * op_reduce_output_to_start_stride1 + (output_index / op_reduce_output_to_start_shape_stride2) * op_reduce_output_to_start_stride2;
+    if op_reduce_output_to_start_shape_stride2 <= 1
     {
-        start_index = output_index * op_reduce.output_to_start_stride1;
+        start_index = output_index * op_reduce_output_to_start_stride1;
     }
     else{
-        start_index = output_index * op_reduce.output_to_start_stride1 + (output_index / op_reduce.output_to_start_shape_stride2) * op_reduce.output_to_start_stride2;
+        start_index = output_index * op_reduce_output_to_start_stride1 + (output_index / op_reduce_output_to_start_shape_stride2) * op_reduce_output_to_start_stride2;
     }
     
-    let length = op_reduce.length; //length of the elements to reduce
+    let length = op_reduce_length; //length of the elements to reduce
 
     //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
-    let start = workgroup_id * op_reduce.workgroup_size;
-    let end = min(length, (workgroup_id + 1) * op_reduce.workgroup_size);
+    //let start = tid * op_reduce_workgroup_size;
+    //let end = min(length, (tid + 1) * op_reduce_workgroup_size);
 
 
-    if(output_index < op_reduce.dest_size)
+    if(output_index < op_reduce_dest_size || !USE_Z)
     {
         //Now Reduce from start to end
-        switch(op_reduce.operation){
+        switch(op_reduce_operation){
             case 0u{ //sum
                 var sum = ZERO;
-                for (var i = start; i < end; i++){
-                    let index = get_index1(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                for (var i = tid; i < length; i += 64u) {
+                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
                     sum += v_input1[index];
                 }
-                sharedSums[workgroup_id] = sum;
+                sharedSums[tid] = sum;
             }
             case 1u{ //min
-                var sum = v_input1[get_index1(op_reduce.input_layout, start_index).id];
-                for (var i = start + 1; i < end; i++){
-                    let index = get_index1(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                var sum = MAXVALUE;
+                //var sum = v_input1[get_index1(op_reduce_input_layout, start_index).id];
+                for (var i = tid; i < length; i += 64u) {
+                //for (var i = start + 1; i < end; i++){
+                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
                     sum = min(sum, v_input1[index]);
                 }
-                sharedSums[workgroup_id] = sum;
+                sharedSums[tid] = sum;
             }
             case 2u{ //max
-                var sum = v_input1[get_index1(op_reduce.input_layout, start_index).id];
-                for (var i = start + 1; i < end; i++){
-                    let index = get_index1(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                var sum = MINVALUE;
+                //var sum = v_input1[get_index1(op_reduce_input_layout, start_index).id];
+                for (var i = tid; i < length; i += 64u) {
+                //for (var i = start + 1; i < end; i++){
+                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
                     sum = max(sum, v_input1[index]);
                 }
-                sharedSums[workgroup_id] = sum;
+                sharedSums[tid] = sum;
             }
             default{
 
@@ -73,11 +82,11 @@ fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     workgroupBarrier();
-    if (workgroup_id == 0 && output_index < op_reduce.dest_size){
-        let cnt = op_reduce.workgroup_count;
+    if (tid == 0 && (output_index < op_reduce_dest_size || !USE_Z)){
+        let cnt = op_reduce_workgroup_count;
         //Finnaly Sum of all worker threads:
 
-        switch(op_reduce.operation){
+        switch(op_reduce_operation){
             case 0u{ //sum
                 var sum = ZERO;
                 for (var i = 0u; i < cnt; i++){
@@ -110,53 +119,58 @@ fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute
 @workgroup_size(64,1,1)
 fn reduce_index(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let workgroup_id = global_id.x;
-    let output_index = global_id.y + global_id.z * 65535;
+    let tid = global_id.x;
+    let output_index = global_id.y + select(USE_Z, global_id.z * 65535, 0u);
 
     //Start Index of the Elements to Reduce
-    var start_index = 0u;// = output_index * op_reduce.output_to_start_stride1 + (output_index / op_reduce.output_to_start_shape_stride2) * op_reduce.output_to_start_stride2;
-    if op_reduce.output_to_start_shape_stride2 <= 1
+    var start_index = 0u;// = output_index * op_reduce_output_to_start_stride1 + (output_index / op_reduce_output_to_start_shape_stride2) * op_reduce_output_to_start_stride2;
+    if op_reduce_output_to_start_shape_stride2 <= 1
     {
-        start_index = output_index * op_reduce.output_to_start_stride1;
+        start_index = output_index * op_reduce_output_to_start_stride1;
     }
     else{
-        start_index = output_index * op_reduce.output_to_start_stride1 + (output_index / op_reduce.output_to_start_shape_stride2) * op_reduce.output_to_start_stride2;
+        start_index = output_index * op_reduce_output_to_start_stride1 + (output_index / op_reduce_output_to_start_shape_stride2) * op_reduce_output_to_start_stride2;
     }
     
-    let length = op_reduce.length; //length of the elements to reduce
+    let length = op_reduce_length; //length of the elements to reduce
 
     //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
-    let start = workgroup_id * op_reduce.workgroup_size;
-    let end = min(length, (workgroup_id + 1) * op_reduce.workgroup_size);
-    if(output_index < op_reduce.dest_size)
+    //let start = tid * op_reduce_workgroup_size;
+    //let end = min(length, (tid + 1) * op_reduce_workgroup_size);
+    if(output_index < op_reduce_dest_size || !USE_Z)
     {
         //Now Reduce from start to end
-        switch(op_reduce.operation){
+        switch(op_reduce_operation){
             case 3u{//ArgMin
-                var sum = v_input1[get_index1(op_reduce.input_layout, start_index).id];
+                //var sum = v_input1[get_index1(op_reduce_input_layout, start_index).id];
+                var sum = MAXVALUE;
                 var arg_index = 0u;
-                for (var i = start + 1; i < end; i++){
-                    let index = get_index1(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                
+                for (var i = tid; i < length; i += 64u) {
+                //for (var i = start + 1; i < end; i++){
+                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
                     if v_input1[index] < sum{
                         sum = v_input1[index];
                         arg_index = i;
                     }
                 }
-                sharedSums[workgroup_id] = sum;    
-                sharedIndex[workgroup_id] = arg_index;
+                sharedSums[tid] = sum;    
+                sharedIndex[tid] = arg_index;
             }
             case 4u{//ArgMax
-                var sum = v_input1[get_index1(op_reduce.input_layout, start_index).id];
+                //var sum = v_input1[get_index1(op_reduce_input_layout, start_index).id];
+                var sum = MINVALUE;
                 var arg_index = 0u;
-                for (var i = start + 1; i < end; i++){
-                    let index = get_index1(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                for (var i = tid; i < length; i += 64u) {
+                //for (var i = start + 1; i < end; i++){
+                    let index = get_index1(op_reduce_input_layout, start_index + i * op_reduce_stride_reduction).id;
                     if v_input1[index] > sum{
                         sum = v_input1[index];
                         arg_index = i;
                     }
                 }
-                sharedSums[workgroup_id] = sum;    
-                sharedIndex[workgroup_id] = arg_index;
+                sharedSums[tid] = sum;    
+                sharedIndex[tid] = arg_index;
             }
             default{
 
@@ -166,12 +180,12 @@ fn reduce_index(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     workgroupBarrier();
     
-    if (workgroup_id == 0 && output_index < op_reduce.dest_size){
-        let cnt = op_reduce.workgroup_count;
+    if (tid == 0 && (output_index < op_reduce_dest_size || !USE_Z)){
+        let cnt = op_reduce_workgroup_count;
         //Finnaly Sum of all worker threads:
         
 
-        switch(op_reduce.operation){
+        switch(op_reduce_operation){
             case 3u{//ArgMin
                 var sum = sharedSums[0];
                 var index = 0u;

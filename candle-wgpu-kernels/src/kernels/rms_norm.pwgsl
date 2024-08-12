@@ -11,12 +11,12 @@
 //     eps : f32
 // }
 
-#define op_rms_norm_contiguous.workgroup_count              op_meta[0]
-#define op_rms_norm_contiguous.workgroup_size               op_meta[1]
-#define op_rms_norm_contiguous.length                       op_meta[2]
-#define op_rms_norm_contiguous.input1_offset                op_meta[3]
-#define op_rms_norm_contiguous.input2_offset                op_meta[4]
-#define op_rms_norm_contiguous.eps                          bitcast<f32>(op_meta[5])
+#define oop_rms_norm_contiguous_workgroup_count              op_meta[0]
+#define oop_rms_norm_contiguous_workgroup_size               op_meta[1]
+#define oop_rms_norm_contiguous_length                       op_meta[2]
+#define oop_rms_norm_contiguous_input1_offset                op_meta[3]
+#define oop_rms_norm_contiguous_input2_offset                op_meta[4]
+#define oop_rms_norm_contiguous_eps                          bitcast<f32>(op_meta[5])
 
 // @group(0) @binding(1)
 // var<uniform> op_rms_norm_contiguous : MetaInfoRmsNormContiguous;
@@ -32,14 +32,14 @@ fn rms_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgro
     let output_index = output_id3.y;
     
     //Start Index of the Elements to Reduce
-    let length = op_rms_norm_contiguous.length; //length of the elements to reduce
+    let length = oop_rms_norm_contiguous_length; //length of the elements to reduce
     let start_index = output_index * length;
-    let start_index1 = start_index + op_rms_norm_contiguous.input1_offset;
-    let start_index2 = op_rms_norm_contiguous.input2_offset;
+    let start_index1 = start_index + oop_rms_norm_contiguous_input1_offset;
+    let start_index2 = oop_rms_norm_contiguous_input2_offset;
 
     //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
-    let start = workgroup_id * op_rms_norm_contiguous.workgroup_size;
-    let end = min(length, (workgroup_id + 1) * op_rms_norm_contiguous.workgroup_size);
+    let start = workgroup_id * oop_rms_norm_contiguous_workgroup_size;
+    let end = min(length, (workgroup_id + 1) * oop_rms_norm_contiguous_workgroup_size);
 
     //Now Reduce from start to end
     var sum = ZERO;
@@ -52,14 +52,14 @@ fn rms_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgro
     workgroupBarrier();
 
     if (workgroup_id == 0){
-        let cnt = op_rms_norm_contiguous.workgroup_count;
+        let cnt = oop_rms_norm_contiguous_workgroup_count;
         //Finnaly Sum of all worker threads:
         var sum = ZERO;
         for (var i = 0u; i < cnt; i++){
             sum +=  sharedSums[i];
         }
         let mean = f32(sum) / f32(length);    
-        let m = sqrt(mean + op_rms_norm_contiguous.eps);
+        let m = sqrt(mean + oop_rms_norm_contiguous_eps);
         sharedM = m;
     }
 

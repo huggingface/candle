@@ -49,8 +49,8 @@ fn convert_u8_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
 #endif
 
 
-#define convert.start_offset                 op_meta[0]
-#define convert.size                         op_meta[1]
+#define convert_start_offset                 op_meta[0]
+#define convert_size                         op_meta[1]
 
 #ifdef u32
 
@@ -59,31 +59,31 @@ fn convert_u8_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
 fn convert_u32_to_u8(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id_dest = global_id.x;
     let id_source = global_id.x * 4;
-    if (id_source >= convert.size ){
+    if (id_source >= convert_size ){
         return;
     }
 
-    // let x1 = select(0, v_input1[convert.start_offset + id_source + 0], id_source + 0 < convert.size);
-    // let x2 = select(0, v_input1[convert.start_offset + id_source + 1], id_source + 1 < convert.size);
-    // let x3 = select(0, v_input1[convert.start_offset + id_source + 2], id_source + 2 < convert.size);
-    // let x4 = select(0, v_input1[convert.start_offset + id_source + 3], id_source + 3 < convert.size);
+    // let x1 = select(0, v_input1[convert_start_offset + id_source + 0], id_source + 0 < convert_size);
+    // let x2 = select(0, v_input1[convert_start_offset + id_source + 1], id_source + 1 < convert_size);
+    // let x3 = select(0, v_input1[convert_start_offset + id_source + 2], id_source + 2 < convert_size);
+    // let x4 = select(0, v_input1[convert_start_offset + id_source + 3], id_source + 3 < convert_size);
 
     var x1 : u32 = 0;
     var x2 : u32 = 0;
     var x3 : u32 = 0;
     var x4 : u32 = 0;
     
-    if (id_source + 0 < convert.size) {
-        x1 = v_input1[convert.start_offset + id_source + 0];
+    if (id_source + 0 < convert_size) {
+        x1 = v_input1[convert_start_offset + id_source + 0];
     }
-    if (id_source + 1 < convert.size) {
-        x2 = v_input1[convert.start_offset + id_source + 1];
+    if (id_source + 1 < convert_size) {
+        x2 = v_input1[convert_start_offset + id_source + 1];
     }
-    if (id_source + 2 < convert.size) {
-        x3 = v_input1[convert.start_offset + id_source +2];
+    if (id_source + 2 < convert_size) {
+        x3 = v_input1[convert_start_offset + id_source +2];
     }
-    if (id_source + 3 < convert.size) {
-        x4 = v_input1[convert.start_offset + id_source + 3];
+    if (id_source + 3 < convert_size) {
+        x4 = v_input1[convert_start_offset + id_source + 3];
     }
    
     v_dest_u32[id_dest] = (x4 << 24) | (x3 << 16) | (x2 << 8) | x1;
@@ -98,7 +98,7 @@ fn convert_u32_to_u8(@builtin(global_invocation_id) global_id: vec3<u32>) {
 fn convert_f32_to_u8(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id_dest = global_id.x;
     let id_source = global_id.x * 4;
-    if (id_source >= convert.size ){
+    if (id_source >= convert_size ){
         return;
     }
 
@@ -108,17 +108,17 @@ fn convert_f32_to_u8(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var x4 : u32 = 0;
     
 
-    if (id_source + 0 < convert.size) {
-        x1 = u32(v_input1[convert.start_offset + id_source + 0]);
+    if (id_source + 0 < convert_size) {
+        x1 = u32(v_input1[convert_start_offset + id_source + 0]);
     }
-    if (id_source + 1 < convert.size) {
-        x2 = u32(v_input1[convert.start_offset + id_source + 1]);
+    if (id_source + 1 < convert_size) {
+        x2 = u32(v_input1[convert_start_offset + id_source + 1]);
     }
-    if (id_source + 2 < convert.size) {
-        x3 = u32(v_input1[convert.start_offset + id_source + 2]);
+    if (id_source + 2 < convert_size) {
+        x3 = u32(v_input1[convert_start_offset + id_source + 2]);
     }
-    if (id_source + 3 < convert.size) {
-        x4 = u32(v_input1[convert.start_offset + id_source + 3]);
+    if (id_source + 3 < convert_size) {
+        x4 = u32(v_input1[convert_start_offset + id_source + 3]);
     }
 
     v_dest_u32[id_dest] = (x4 << 24) | (x3 << 16) | (x2 << 8) | x1;

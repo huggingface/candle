@@ -253,7 +253,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
                 .iter()
                 .fold(1, |prev, c| prev * *c)
                 as u32;
-            //let output_to_start_shape_stride2 = reduce_dims[end_reduce_dim..reduce_dims.len()].iter().fold(1, |prev, c| prev * current_shape[*c]) as u32;
+
             let output_to_start_stride1;
             if let Some(index) = current_shape.iter().rposition(|c| *c != 1) {
                 output_to_start_stride1 = input_stride[index] as u32;

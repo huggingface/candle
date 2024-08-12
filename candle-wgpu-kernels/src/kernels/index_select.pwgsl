@@ -1,11 +1,11 @@
 #include "util.pwgsl"
 
-#define op_index.input_stride_x    op_meta[0]
-#define op_index.input_stride_y    op_meta[1]
-#define op_index.output_stride_x   op_meta[2]
-#define op_index.output_stride_y   op_meta[3]
-#define op_index.length            op_meta[4]
-#define op_index.input_layout1     5u
+#define op_index_input_stride_x    op_meta[0]
+#define op_index_input_stride_y    op_meta[1]
+#define op_index_output_stride_x   op_meta[2]
+#define op_index_output_stride_y   op_meta[3]
+#define op_index_length            op_meta[4]
+#define op_index_input_layout1     5u
 
 @group(0) @binding(3)
 var<storage> v_input2_u32: array<u32>;
@@ -18,21 +18,21 @@ fn index_select(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let output_index = global_id.y;
 
     
-    let input_layout2 = op_index.input_layout1 + get_size1();
+    let input_layout2 = op_index_input_layout1 + get_size1();
     let pos2 = get_index2(input_layout2, output_index);
     if(pos2.is_valid){
         let dim_index = v_input2_u32[pos2.id];
         
-        let input_stride_x = op_index.input_stride_x;
-        let input_stride_y = op_index.input_stride_y;
-        let output_stride_x = op_index.output_stride_x;
-        let output_stride_y = op_index.output_stride_y;
-        let length = op_index.length;
+        let input_stride_x = op_index_input_stride_x;
+        let input_stride_y = op_index_input_stride_y;
+        let output_stride_x = op_index_output_stride_x;
+        let output_stride_y = op_index_output_stride_y;
+        let length = op_index_length;
 
         if workgroup_id < length{
             let input_id  =    dim_index * input_stride_y  + workgroup_id * input_stride_x;
             let output_id = output_index * output_stride_y + workgroup_id * output_stride_x;
-            let pos1 = get_index1(op_index.input_layout1, input_id);
+            let pos1 = get_index1(op_index_input_layout1, input_id);
             if(pos1.is_valid){
                 v_dest[output_id]  = v_input1[pos1.id];
             }

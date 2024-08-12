@@ -26,11 +26,15 @@ pub type BufferReferenceId = Arc<BufferReference>;
 pub(crate) struct BindgroupLayouts {
     pub bind_group_layout0: wgpu::BindGroupLayout,
     pub bind_group_layout1: wgpu::BindGroupLayout,
+    pub bind_group_layout1_16: wgpu::BindGroupLayout,
     pub bind_group_layout2: wgpu::BindGroupLayout,
+    pub bind_group_layout2_16: wgpu::BindGroupLayout, //for matmul, input buffer may be vec4
     pub bind_group_layout3: wgpu::BindGroupLayout,
     pub pipeline_layout0: wgpu::PipelineLayout,
     pub pipeline_layout1: wgpu::PipelineLayout,
+    pub pipeline_layout1_16: wgpu::PipelineLayout,
     pub pipeline_layout2: wgpu::PipelineLayout,
+    pub pipeline_layout2_16: wgpu::PipelineLayout, //for matmul, input buffer may be vec4
     pub pipeline_layout3: wgpu::PipelineLayout,
 }
 
@@ -43,6 +47,17 @@ impl BindgroupLayouts {
                 ty: wgpu::BufferBindingType::Storage { read_only: false },
                 has_dynamic_offset: false,
                 min_binding_size: Some(NonZeroU64::new(4).unwrap()),
+            },
+            count: None,
+        };
+
+        let dest_entry_16 = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: Some(NonZeroU64::new(16).unwrap()),
             },
             count: None,
         };
@@ -68,6 +83,17 @@ impl BindgroupLayouts {
             },
             count: None,
         };
+        
+        let input1_entry_16 = wgpu::BindGroupLayoutEntry {
+            binding: 2,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: Some(NonZeroU64::new(16).unwrap()),
+            },
+            count: None,
+        };
 
         let input2_entry = wgpu::BindGroupLayoutEntry {
             binding: 3,
@@ -80,6 +106,19 @@ impl BindgroupLayouts {
             count: None,
         };
 
+        let input2_entry_16 = wgpu::BindGroupLayoutEntry {
+            binding: 3,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: Some(NonZeroU64::new(16).unwrap()),
+            },
+            count: None,
+        };
+
+
+
         let input3_entry = wgpu::BindGroupLayoutEntry {
             binding: 4,
             visibility: wgpu::ShaderStages::COMPUTE,
@@ -90,6 +129,10 @@ impl BindgroupLayouts {
             },
             count: None,
         };
+
+    
+
+
         let bind_group_layout0 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: None,
             entries: &[dest_entry, meta_entry],
@@ -98,9 +141,17 @@ impl BindgroupLayouts {
             label: None,
             entries: &[dest_entry, meta_entry, input1_entry],
         });
+        let bind_group_layout1_16 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[dest_entry_16, meta_entry, input1_entry_16],
+        });
         let bind_group_layout2 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: None,
             entries: &[dest_entry, meta_entry, input1_entry, input2_entry],
+        });
+        let bind_group_layout2_16 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[dest_entry, meta_entry, input1_entry_16, input2_entry_16],
         });
         let bind_group_layout3 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: None,
@@ -123,9 +174,19 @@ impl BindgroupLayouts {
             bind_group_layouts: &[&bind_group_layout1],
             push_constant_ranges: &[],
         });
+        let pipeline_layout1_16 = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&bind_group_layout1_16],
+            push_constant_ranges: &[],
+        });
         let pipeline_layout2 = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
             bind_group_layouts: &[&bind_group_layout2],
+            push_constant_ranges: &[],
+        });
+        let pipeline_layout2_16 = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&bind_group_layout2_16],
             push_constant_ranges: &[],
         });
         let pipeline_layout3 = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -137,11 +198,15 @@ impl BindgroupLayouts {
         Self {
             bind_group_layout0,
             bind_group_layout1,
+            bind_group_layout1_16,
             bind_group_layout2,
+            bind_group_layout2_16,
             bind_group_layout3,
             pipeline_layout0,
             pipeline_layout1,
+            pipeline_layout1_16,
             pipeline_layout2,
+            pipeline_layout2_16,
             pipeline_layout3,
         }
     }
@@ -209,7 +274,7 @@ pub(crate) struct BufferCache {
     buffers: BTreeMulti<u64, BufferId>,
     pub(crate) buffer_counter: u32, //total number of buffers created
     pub(crate) buffer_memory: u64,  //total memory allocated
-    pub(crate) buffer_memory_free: u64, //total memory in buffers array
+    pub(crate) buffer_memory_free: u64, //total memory in buffers btree map
     pub(crate) max_memory_allowed: u64,
 }
 
@@ -243,19 +308,25 @@ impl BufferCache {
     #[instrument]
     fn check_buffer(&mut self, buffer: &Arc<CachedBuffer>) {
         let ref_count = Arc::strong_count(buffer);
-        if ref_count == 2 {
+        if ref_count <= 2 {
             //remove buffer
+            let mut removed = false;
             if let Some(buffers) = self.buffers.map.get_mut(&buffer.buffer.size()) {
                 buffers.retain(|f| 
                     {
-                        let keep = !Arc::ptr_eq(f, buffer);
+                        let keep = !Arc::ptr_eq(f, buffer) && ref_count == 2;
                         if !keep{
                             self.buffer_memory_free -= buffer.buffer.size();    
+                            removed = true;
                         }
                         return keep;
                         
                     });
-                self.buffer_memory -= buffer.buffer.size();    
+                //ether the passed buffer is currently in the cache, than the buffer can be removed
+                //if the buffer was not in the cache, the buffer was not removed, as there is another reference to the buffer(e.g. from a candle.storage)
+                if removed || (!removed && ref_count == 1){
+                    self.buffer_memory -= buffer.buffer.size();    
+                }
             }
         }
     }
@@ -339,8 +410,8 @@ impl BufferCache {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BindGroupInput {
     Bindgroup0,                               //
-    Bindgroup1(BufferId),                     //input1
-    Bindgroup2(BufferId, BufferId),           //input1, input2
+    Bindgroup1(BufferId, bool),                     //input1
+    Bindgroup2(BufferId, BufferId, bool),           //input1, input2, is_16
     Bindgroup3(BufferId, BufferId, BufferId), //input1, input2, input3
 }
 
@@ -348,8 +419,8 @@ impl From<BindGroupReferenceBase<BufferId>> for BindGroupInput {
     fn from(value: BindGroupReferenceBase<BufferId>) -> Self {
         match value {
             BindGroupReferenceBase::Bindgroup0(_) => BindGroupInput::Bindgroup0,
-            BindGroupReferenceBase::Bindgroup1(_, v1) => BindGroupInput::Bindgroup1(v1),
-            BindGroupReferenceBase::Bindgroup2(_, v1, v2) => BindGroupInput::Bindgroup2(v1, v2),
+            BindGroupReferenceBase::Bindgroup1(_, v1, is_16) => BindGroupInput::Bindgroup1(v1, is_16),
+            BindGroupReferenceBase::Bindgroup2(_, v1, v2, is_16) => BindGroupInput::Bindgroup2(v1, v2, is_16),
             BindGroupReferenceBase::Bindgroup3(_, v1, v2, v3) => {
                 BindGroupInput::Bindgroup3(v1, v2, v3)
             }
@@ -363,11 +434,11 @@ impl std::hash::Hash for BindGroupInput {
             BindGroupInput::Bindgroup0 => {
                 state.write_u8(0);
             }
-            BindGroupInput::Bindgroup1(id1) => {
+            BindGroupInput::Bindgroup1(id1, _) => {
                 state.write_u8(1);
                 Arc::as_ptr(id1).hash(state);
             }
-            BindGroupInput::Bindgroup2(id1, id2) => {
+            BindGroupInput::Bindgroup2(id1, id2, _) => {
                 state.write_u8(2);
                 Arc::as_ptr(id1).hash(state);
                 Arc::as_ptr(id2).hash(state);
@@ -504,8 +575,8 @@ impl CachedBuffer {
 #[derive(Debug, Clone)]
 pub enum BindGroupReferenceBase<T> {
     Bindgroup0(T),          //dest,
-    Bindgroup1(T, T),       //dest, input1
-    Bindgroup2(T, T, T),    //dest, input1, input2
+    Bindgroup1(T, T, bool),       //dest, input1, (is input bindgroup_16)
+    Bindgroup2(T, T, T, bool),  //dest, input1, input2 (is bindgroup_16)
     Bindgroup3(T, T, T, T), //dest, input1, input2, input3
 }
 
@@ -513,8 +584,8 @@ impl<T> BindGroupReferenceBase<T> {
     pub(crate) fn get_dest(&self) -> &T {
         match self {
             BindGroupReferenceBase::Bindgroup0(dest) => dest,
-            BindGroupReferenceBase::Bindgroup1(dest, _) => dest,
-            BindGroupReferenceBase::Bindgroup2(dest, _, _) => dest,
+            BindGroupReferenceBase::Bindgroup1(dest, _, _) => dest,
+            BindGroupReferenceBase::Bindgroup2(dest, _, _, _) => dest,
             BindGroupReferenceBase::Bindgroup3(dest, _, _, _) => dest,
         }
     }
@@ -527,19 +598,21 @@ impl std::hash::Hash for BindGroupReferenceBase<BufferId> {
                 state.write_u8(0);
                 Arc::as_ptr(id0).hash(state);
             }
-            BindGroupReferenceBase::Bindgroup1(id0, id1) => {
+            BindGroupReferenceBase::Bindgroup1(id0, id1, is_16) => {
                 state.write_u8(1);
+                state.write_u8(*is_16 as u8);
                 Arc::as_ptr(id0).hash(state);
                 Arc::as_ptr(id1).hash(state);
             }
-            BindGroupReferenceBase::Bindgroup2(id0, id1, id2) => {
+            BindGroupReferenceBase::Bindgroup2(id0, id1, id2, is_16) => {
                 state.write_u8(2);
+                state.write_u8(*is_16 as u8);
                 Arc::as_ptr(id0).hash(state);
                 Arc::as_ptr(id1).hash(state);
                 Arc::as_ptr(id2).hash(state);
             }
             BindGroupReferenceBase::Bindgroup3(id0, id1, id2, id3) => {
-                state.write_u8(3);
+                state.write_u8(4);
                 Arc::as_ptr(id0).hash(state);
                 Arc::as_ptr(id1).hash(state);
                 Arc::as_ptr(id2).hash(state);
@@ -559,13 +632,13 @@ impl PartialEq for CachedBindGroupReference {
                 CachedBindGroupReference::Bindgroup0(b2),
             ) => Arc::ptr_eq(b1, b2),
             (
-                CachedBindGroupReference::Bindgroup1(b1, c1),
-                CachedBindGroupReference::Bindgroup1(b2, c2),
-            ) => Arc::ptr_eq(b1, b2) && Arc::ptr_eq(c1, c2),
+                CachedBindGroupReference::Bindgroup1(b1, c1, is_16_1),
+                CachedBindGroupReference::Bindgroup1(b2, c2, is_16_2),
+            ) => Arc::ptr_eq(b1, b2) && Arc::ptr_eq(c1, c2) && is_16_1 == is_16_2,
             (
-                CachedBindGroupReference::Bindgroup2(b1, c1, d1),
-                CachedBindGroupReference::Bindgroup2(b2, c2, d2),
-            ) => Arc::ptr_eq(b1, b2) && Arc::ptr_eq(c1, c2) && Arc::ptr_eq(d1, d2),
+                CachedBindGroupReference::Bindgroup2(b1, c1, d1, is_16_1),
+                CachedBindGroupReference::Bindgroup2(b2, c2, d2, is_16_2),
+            ) => Arc::ptr_eq(b1, b2) && Arc::ptr_eq(c1, c2) && Arc::ptr_eq(d1, d2) && is_16_1 == is_16_2,
             (
                 CachedBindGroupReference::Bindgroup3(b1, c1, d1, e1),
                 CachedBindGroupReference::Bindgroup3(b2, c2, d2, e2),
@@ -646,11 +719,11 @@ impl ModelCache {
                     counter += 1;
                     match &first.0.buffers {
                         BindGroupReferenceBase::Bindgroup0(v0) => self.buffers.check_buffer(v0),
-                        BindGroupReferenceBase::Bindgroup1(v0, v1) => {
+                        BindGroupReferenceBase::Bindgroup1(v0, v1, _) => {
                             self.buffers.check_buffer(v0);
                             self.buffers.check_buffer(v1);
                         }
-                        BindGroupReferenceBase::Bindgroup2(v0, v1, v2) => {
+                        BindGroupReferenceBase::Bindgroup2(v0, v1, v2, _) => {
                             self.buffers.check_buffer(v0);
                             self.buffers.check_buffer(v1);
                             self.buffers.check_buffer(v2);
@@ -700,14 +773,15 @@ impl ModelCache {
                 BindGroupReferenceBase::Bindgroup0(_) => {
                     BindGroupReferenceBase::Bindgroup0(dest_buffer)
                 }
-                BindGroupReferenceBase::Bindgroup1(_, v1) => {
-                    BindGroupReferenceBase::Bindgroup1(dest_buffer, get_storage(v1))
+                BindGroupReferenceBase::Bindgroup1(_, v1, is_16) => {
+                    BindGroupReferenceBase::Bindgroup1(dest_buffer, get_storage(v1), *is_16)
                 }
-                BindGroupReferenceBase::Bindgroup2(_, v1, v2) => {
+                BindGroupReferenceBase::Bindgroup2(_, v1, v2, is_16) => {
                     BindGroupReferenceBase::Bindgroup2(
                         dest_buffer,
                         get_storage(v1),
                         get_storage(v2),
+                        *is_16
                     )
                 }
                 BindGroupReferenceBase::Bindgroup3(_, v1, v2, v3) => {
@@ -795,7 +869,6 @@ impl ModelCache {
                                 );
                                 return bg.clone();
                             } else {
-                                //TODO
                                 return get_bind_group_inner(
                                     self,
                                     dev,
@@ -815,11 +888,11 @@ impl ModelCache {
 
                 let bindgroup_inputs = match bindgroup_reference {
                     BindGroupReferenceBase::Bindgroup0(_) => BindGroupInput::Bindgroup0,
-                    BindGroupReferenceBase::Bindgroup1(_, v1) => {
-                        BindGroupInput::Bindgroup1(get_storage(v1))
+                    BindGroupReferenceBase::Bindgroup1(_, v1, is_16) => {
+                        BindGroupInput::Bindgroup1(get_storage(v1), *is_16)
                     }
-                    BindGroupReferenceBase::Bindgroup2(_, v1, v2) => {
-                        BindGroupInput::Bindgroup2(get_storage(v1), get_storage(v2))
+                    BindGroupReferenceBase::Bindgroup2(_, v1, v2, is_16) => {
+                        BindGroupInput::Bindgroup2(get_storage(v1), get_storage(v2), *is_16)
                     }
                     BindGroupReferenceBase::Bindgroup3(_, v1, v2, v3) => {
                         BindGroupInput::Bindgroup3(

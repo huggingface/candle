@@ -1,7 +1,7 @@
 #include "util.pwgsl"
 
-#define op_gather.dim    op_meta[0]
-#define op_index.input_layout1     1u
+#define op_gather_dim    op_meta[0]
+#define op_index_input_layout1     1u
 
 @group(0) @binding(3)
 var<storage> v_input2_u32: array<u32>;
@@ -11,9 +11,9 @@ var<storage> v_input2_u32: array<u32>;
 fn gather(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
 
-    let input_offset1 = op_index.input_layout1;
-    let input_offset2 = op_index.input_layout1 + get_size1();
-    let dim = op_gather.dim;
+    let input_offset1 = op_index_input_layout1;
+    let input_offset2 = op_index_input_layout1 + get_size1();
+    let dim = op_gather_dim;
 
     let dims1 = CONST_DIMS1;
     let start_offset1 = select(CONST_IS_STARTOFFSET_ZERO1, 0u, op_meta[input_offset1]);
@@ -57,10 +57,10 @@ fn gather(@builtin(global_invocation_id) global_id: vec3<u32>) {
 fn scatter_add_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
 
-    let input_offset1 = op_index.input_layout1;                                    //self
-    let input_offset2 = op_index.input_layout1 + get_size1(); //index
+    let input_offset1 = op_index_input_layout1;                                    //self
+    let input_offset2 = op_index_input_layout1 + get_size1(); //index
     let input_offset3 = input_offset2 + get_size2(); //src
-    let dim = op_gather.dim;
+    let dim = op_gather_dim;
 
 
     let dims1 = CONST_DIMS1;
@@ -122,10 +122,10 @@ fn scatter_add_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
 fn index_add_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
 
-    let input_offset1 = op_index.input_layout1;                                    //self
-    let input_offset2 = op_index.input_layout1 + get_size1(); //index
+    let input_offset1 = op_index_input_layout1;                                    //self
+    let input_offset2 = op_index_input_layout1 + get_size1(); //index
     let input_offset3 = input_offset2 + get_size2(); //src
-    let dim = op_gather.dim;
+    let dim = op_gather_dim;
 
     
     let dims1 = CONST_DIMS1;

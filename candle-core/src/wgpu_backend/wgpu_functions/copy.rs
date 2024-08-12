@@ -12,9 +12,6 @@ pub fn queue_copy_strided(
 ) -> crate::Result<()> {
     if input_layout.shape().elem_count() > 0{
         let result = input_layout.shape().dims().iter().zip(input_layout.stride()).filter(|(dim, _)| **dim > 1).map(|(dim, stride)| (*dim, *stride)).collect::<Vec<(usize,usize)>>();
-        //result.sort_by_key(|f| std::cmp::Reverse(f.0));
-        //TODO: optimize for 16x16x1 shader, 
-        //TODO: is it faster, if stride_input == stride_output?, as the index calculation in the shader has to be calculated only once.
         let (shape, stride) : (Vec<usize>, Vec<usize>) = result.into_iter().unzip();
         if shape.len() == 3{ //try copy 3d
             if dst_offset == 0{
@@ -95,21 +92,44 @@ pub fn queue_copy(
     dtype : crate::DType
 ) -> crate::Result<()> {
     if copy_size > 0{
-        let mut meta = get_meta(&dev);
-        meta.add(copy_size);
-        meta.add(destination_offset);
-        meta.add(source_offset);
+        let const_vec = vec![
+            (source_offset == 0) as u32, 
+            (destination_offset == 0) as u32];
         
-        let inplaceble = OpIsInplaceable{ input1_inplaceable:  destination_offset == source_offset, input2_inplaceable: false };
-        let pipeline = meta.get_pipeline_inplaceable(Pipelines::Copy(get_dtype(dtype)?, Functions::Copy), inplaceble);
-    
-        let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
-        enqueue_big(
-            meta,
-            pipeline,
-            bind_group,
-            copy_size as u32
-        );
+        let mut meta = get_meta(&dev);
+        // if copy_size % 4 == 0 && source_offset % 4 == 0 && destination_offset % 4 == 0{
+        //     meta.add(copy_size/4);
+        //     meta.add(destination_offset/4);
+        //     meta.add(source_offset/4);
+            
+        //     let inplaceble = OpIsInplaceable{ input1_inplaceable:  destination_offset == source_offset, input2_inplaceable: false };
+        //     let pipeline = meta.get_pipeline_const_inplace(Pipelines::Copy(get_dtype(dtype)?, Functions::Copy4), const_vec, inplaceble);
+        
+        //     let bind_group = create_bind_group_input1_16( buffer_dest, buffer_input);
+        //     enqueue_big(
+        //         meta,
+        //         pipeline,
+        //         bind_group,
+        //         (copy_size/4) as u32
+        //     );
+        // }
+        // else{
+            meta.add(copy_size);
+            meta.add(destination_offset);
+            meta.add(source_offset);
+            
+            let inplaceble = OpIsInplaceable{ input1_inplaceable:  destination_offset == source_offset, input2_inplaceable: false };
+            let pipeline = meta.get_pipeline_const_inplace(Pipelines::Copy(get_dtype(dtype)?, Functions::Copy),const_vec, inplaceble);
+        
+            let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
+            enqueue_big(
+                meta,
+                pipeline,
+                bind_group,
+                copy_size as u32
+            );
+        //}
+
     }
     return Ok(());
 }
@@ -134,20 +154,21 @@ pub fn queue_copy2d(
             return queue_copy(dev, buffer_dest, buffer_input, dest_offset as usize, input_offset as usize, (d2 * d1) as usize, dtype);
         }
         let const_vec = vec![
-            input_offset,
-            dest_offset];
+            input_offset, 
+            (dest_offset == 0) as u32];
        
         let mut meta = get_meta(&dev);
         meta.add(d1);
         meta.add(d2);
         meta.add(input_stride1);
         meta.add(dest_stride1);
-
-    
+        if dest_offset != 0 {
+            meta.add(dest_offset);
+        }
+     
         let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
         
         let x = (d1 + 15) / 16;
-        //let y = (((d2 + 7) / 8) + 15) / 16;
         let y = (d2 + 15) / 16;
 
 
@@ -260,9 +281,7 @@ pub fn queue_copy3d_padded(
         let dest_stride_3 = *dest_stride.next().unwrap_or(&1);
 
         let dest_shape = dest_layout.shape().dims3()?;
-        assert!(dest_shape.1 % 16 == 0, "expected copy3d padded dest to be alligned to 16 elements");
-        assert!(dest_shape.2 % 16 == 0, "expected copy3d padded dest to be alligned to 16 elements");
-
+        
         let const_vec = vec![
             input_layout.start_offset(),
             (dest_stride_1 != 1) as usize,
@@ -283,6 +302,9 @@ pub fn queue_copy3d_padded(
         meta.add(input1_stride_1);
         meta.add(input1_stride_2);
         meta.add(input1_stride_3);
+        meta.add(dest_shape.2);
+        meta.add(dest_shape.1);
+
 
         let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
         let pipeline = if input_shape.0 == 1{

@@ -13,17 +13,8 @@
 @group(0) @binding(0)
 var<storage, read_write> v_dest: array<DTYPE>;
 
-@group(0) @binding(1)
-var<storage> op_meta : array<u32>;
-
-@group(0) @binding(2)
-var<storage> v_input1: array<DTYPE>;
-
-@group(0) @binding(3)
-var<storage> v_input2: array<DTYPE>;
-
-@group(0) @binding(4)
-var<storage> v_input3: array<DTYPE>;
+@group(0) @binding(0)
+var<storage, read_write> v_dest_4: array<vec4<DTYPE>>;
 
 @group(0) @binding(0)
 var<storage, read_write> v_dest_u32: array<u32>;
@@ -31,17 +22,62 @@ var<storage, read_write> v_dest_u32: array<u32>;
 @group(0) @binding(0)
 var<storage, read_write> v_dest_f32: array<f32>;
 
+
+
+@group(0) @binding(1)
+var<storage> op_meta : array<u32>;
+
+
+
+@group(0) @binding(2)
+var<storage> v_input1: array<DTYPE>;
+
+@group(0) @binding(2)
+var<storage> v_input1_4: array<vec4<DTYPE>>;
+
 @group(0) @binding(2)
 var<storage> v_input1_u32: array<u32>;
+
+
+
+@group(0) @binding(3)
+var<storage> v_input2: array<DTYPE>;
+
+@group(0) @binding(3)
+var<storage> v_input2_4: array<vec4<DTYPE>>;
+
+
+@group(0) @binding(4)
+var<storage> v_input3: array<DTYPE>;
+
+
+
+
 
 
 const ZERO : DTYPE = 0;
 const ONE : DTYPE = 1;
 
 #ifdef f32
-const MINVALUE : f32 = -3.40282e+38;
-#else
-const MINVALUE : DTYPE = 0;
+
+const MINVALUE : f32 = -3.40282347e+38;
+const MAXVALUE : f32 =  3.40282347e+38;
+
+#elifdef u32
+
+const MINVALUE : u32 = 0;
+const MAXVALUE : u32 = 4294967295;
+
+#elifdef i32
+
+const MINVALUE : i32 = -2147483648;
+const MAXVALUE : i32 =  2147483647;
+
+#elifdef u8
+
+const MINVALUE : u32 = 0;
+const MAXVALUE : u32 = 255;
+
 #endif
 
 struct MatrixIndex{
@@ -111,6 +147,15 @@ struct MatrixIndex{
 // }
 
 fn select(d : bool, value : u32, other : u32) -> u32{
+    if d{
+        return value;
+    }
+    else{
+        return other;
+    }
+}
+
+fn selectf32(d : bool, value : f32, other : f32) -> f32{
     if d{
         return value;
     }

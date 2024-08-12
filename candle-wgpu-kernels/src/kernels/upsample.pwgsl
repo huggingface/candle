@@ -1,18 +1,18 @@
 #include "util.pwgsl"
 
-#define op_upsample1d.target_length                 op_meta[0]
-#define op_upsample1d.input_size_batch              op_meta[1]
-#define op_upsample1d.input_size_channel            op_meta[2]
-#define op_upsample1d.input_size_x                  op_meta[3]
-#define op_upsample1d.input_offset                  op_meta[4]
+#define op_upsample1d_target_length                 op_meta[0]
+#define op_upsample1d_input_size_batch              op_meta[1]
+#define op_upsample1d_input_size_channel            op_meta[2]
+#define op_upsample1d_input_size_x                  op_meta[3]
+#define op_upsample1d_input_offset                  op_meta[4]
 
-#define op_upsample1d.input_stride_batch            op_meta[5]
-#define op_upsample1d.input_stride_channel          op_meta[6]
-#define op_upsample1d.input_stride_x                op_meta[7]
+#define op_upsample1d_input_stride_batch            op_meta[5]
+#define op_upsample1d_input_stride_channel          op_meta[6]
+#define op_upsample1d_input_stride_x                op_meta[7]
 
 
-#define op_upsample1d.output_stride_batch            op_meta[8]
-#define op_upsample1d.ouput_stride_channel          op_meta[9]
+#define op_upsample1d_output_stride_batch            op_meta[8]
+#define op_upsample1d_ouput_stride_channel          op_meta[9]
 
 
 
@@ -24,34 +24,34 @@ fn upsample1d(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index_channel = global_id.y;
     let index_batch = global_id.z;
 
-    if index_input >= op_upsample1d.target_length{
+    if index_input >= op_upsample1d_target_length{
         return;
     }
 
-    let factor = f32(op_upsample1d.input_size_x) / f32(op_upsample1d.target_length);
+    let factor = f32(op_upsample1d_input_size_x) / f32(op_upsample1d_target_length);
 
-    let index = min(u32(f32(index_input) * factor), op_upsample1d.input_size_x - 1);
+    let index = min(u32(f32(index_input) * factor), op_upsample1d_input_size_x - 1);
 
-    v_dest[index_input + op_upsample1d.output_stride_batch * index_batch + op_upsample1d.ouput_stride_channel * index_channel] = v_input1[index * op_upsample1d.input_stride_x + op_upsample1d.input_stride_channel * index_channel + op_upsample1d.input_stride_batch * index_batch + op_upsample1d.input_offset];
+    v_dest[index_input + op_upsample1d_output_stride_batch * index_batch + op_upsample1d_ouput_stride_channel * index_channel] = v_input1[index * op_upsample1d_input_stride_x + op_upsample1d_input_stride_channel * index_channel + op_upsample1d_input_stride_batch * index_batch + op_upsample1d_input_offset];
 }
 
-#define op_upsample2d.target_length_y               op_meta[0]
-#define op_upsample2d.target_length_x               op_meta[1]
-#define op_upsample2d.input_size_batch              op_meta[2]
-#define op_upsample2d.input_size_channel            op_meta[3]
-#define op_upsample2d.input_size_y                  op_meta[4]
-#define op_upsample2d.input_size_x                  op_meta[5]
-#define op_upsample2d.input_offset                  op_meta[6]
+#define op_upsample2d_target_length_y               op_meta[0]
+#define op_upsample2d_target_length_x               op_meta[1]
+#define op_upsample2d_input_size_batch              op_meta[2]
+#define op_upsample2d_input_size_channel            op_meta[3]
+#define op_upsample2d_input_size_y                  op_meta[4]
+#define op_upsample2d_input_size_x                  op_meta[5]
+#define op_upsample2d_input_offset                  op_meta[6]
 
-#define op_upsample2d.input_stride_batch            op_meta[7]
-#define op_upsample2d.input_stride_channel          op_meta[8]
-#define op_upsample2d.input_stride_y                op_meta[9]
-#define op_upsample2d.input_stride_x                op_meta[10]
+#define op_upsample2d_input_stride_batch            op_meta[7]
+#define op_upsample2d_input_stride_channel          op_meta[8]
+#define op_upsample2d_input_stride_y                op_meta[9]
+#define op_upsample2d_input_stride_x                op_meta[10]
 
 
-#define op_upsample2d.output_stride_batch           op_meta[11]
-#define op_upsample2d.output_stride_channel          op_meta[12]
-#define op_upsample2d.output_stride_y                op_meta[13]
+#define op_upsample2d_output_stride_batch           op_meta[11]
+#define op_upsample2d_output_stride_channel          op_meta[12]
+#define op_upsample2d_output_stride_y                op_meta[13]
 
 
 //(N, C, H, W) -> (N,C, H_out, W_out)
@@ -62,28 +62,28 @@ fn upsample2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index_input_y = global_id.y;
     let index_channel = global_id.z;
 
-    if index_input_x >= op_upsample2d.target_length_x || index_input_y >= op_upsample2d.target_length_y{
+    if index_input_x >= op_upsample2d_target_length_x || index_input_y >= op_upsample2d_target_length_y{
         return;
     }
     
-    let factor_x = f32(op_upsample2d.input_size_x) / f32(op_upsample2d.target_length_x);
-    let index_x = min(u32(f32(index_input_x) * factor_x), op_upsample2d.input_size_x - 1);
+    let factor_x = f32(op_upsample2d_input_size_x) / f32(op_upsample2d_target_length_x);
+    let index_x = min(u32(f32(index_input_x) * factor_x), op_upsample2d_input_size_x - 1);
 
-    let factor_y = f32(op_upsample2d.input_size_y) / f32(op_upsample2d.target_length_y);
-    let index_y = min(u32(f32(index_input_y) * factor_y), op_upsample2d.input_size_y - 1);
+    let factor_y = f32(op_upsample2d_input_size_y) / f32(op_upsample2d_target_length_y);
+    let index_y = min(u32(f32(index_input_y) * factor_y), op_upsample2d_input_size_y - 1);
 
-    for(var index_batch = 0u; index_batch < op_upsample2d.input_size_batch; index_batch++){
+    for(var index_batch = 0u; index_batch < op_upsample2d_input_size_batch; index_batch++){
         v_dest[
-            op_upsample2d.output_stride_batch * index_batch + 
-            op_upsample2d.output_stride_channel * index_channel +
-            op_upsample2d.output_stride_y  * index_input_y + 
+            op_upsample2d_output_stride_batch * index_batch + 
+            op_upsample2d_output_stride_channel * index_channel +
+            op_upsample2d_output_stride_y  * index_input_y + 
             index_input_x] = 
         v_input1[
-            op_upsample2d.input_stride_batch * index_batch +
-            op_upsample2d.input_stride_channel * index_channel +
-            op_upsample2d.input_stride_y * index_y + 
-            op_upsample2d.input_stride_x * index_x +
-            op_upsample2d.input_offset];
+            op_upsample2d_input_stride_batch * index_batch +
+            op_upsample2d_input_stride_channel * index_channel +
+            op_upsample2d_input_stride_y * index_y + 
+            op_upsample2d_input_stride_x * index_x +
+            op_upsample2d_input_offset];
     }
 
 }

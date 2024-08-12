@@ -67,7 +67,6 @@ pub const MAX_DISPATCH_SIZE: u32 = 65535;
 pub struct MetaArray(pub Vec<u32>);
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-//pub struct ConstArray(pub HashMap<String, f64>, pub u64);
 pub struct ConstArray(pub FixedArray<(candle_wgpu_kernels::Constants, u32), 32>);
 
 pub trait KernelParameterMeta{
@@ -107,22 +106,9 @@ impl ConstArray {
         value.write_consts(self);
     }
 
-    // pub fn insert<T : ToF64>(&mut self, key : candle_wgpu_kernels::Constants, value : T){
-    //     self.0.insert(key.get_entry_point().to_string(), value.to_f64());
-    // }
-
     pub fn insert<T : ToU32>(&mut self, key : candle_wgpu_kernels::Constants, value : T){
         self.0.push((key, value.to_u32()));
     }
-
-    // pub fn finish(&mut self){
-    //     let mut state = std::hash::DefaultHasher::new();
-    //     for (key, value) in self.0.iter() {
-    //         key.hash(&mut state);
-    //         value.to_bits().hash(&mut state); // Convert f64 to u64 bits for hashing
-    //     }
-    //     self.1 = state.finish();
-    // }
 }
 
 
@@ -191,19 +177,18 @@ fn enqueue_workgroups_extra(
     command_queue.command_queue.push(q);
 }
 
-fn next_divisible_by_n(value: i32, n: i32) -> i32 {
-    if n == 0 {
+fn next_divisible_by_n<T : num_traits::Num + Clone>(value: T, n: T) -> T {
+    if n.is_zero(){
         panic!("n must be a non-zero integer");
     }
 
-    if value % n == 0 {
+    if (value.clone() % n.clone()).is_zero() {
         value
     } else {
-        value + (n - value % n)
+        value.clone() + (n.clone() - value % n)
     }
 }
 
-//size: size you want to add
 fn get_meta(dev: &WgpuDevice) -> MutexGuard<QueueBuffer> {
     let mut command_queue = dev.command_queue.lock().unwrap();
     let meta_array_length = command_queue.get_meta().len() as i32;
@@ -347,8 +332,6 @@ fn get_command_buffer(
     let _enter2 = span2.enter();
     drop(cpass);
     drop(_enter2);
-
-
     drop(_enter1);
 
 
@@ -404,11 +387,11 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer){
                             BindGroupReferenceBase::Bindgroup0(v0) => {
                                 check_buffer(v0);
                             }
-                            BindGroupReferenceBase::Bindgroup1(v0, v1) => {
+                            BindGroupReferenceBase::Bindgroup1(v0, v1, _) => {
                                 check_buffer(v0);
                                 check_buffer(v1);
                             }
-                            BindGroupReferenceBase::Bindgroup2(v0, v1, v2) => {
+                            BindGroupReferenceBase::Bindgroup2(v0, v1, v2, _) => {
                                 check_buffer(v0);
                                 check_buffer(v1);
                                 check_buffer(v2);
@@ -457,11 +440,11 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer){
                             BindGroupReferenceBase::Bindgroup0(v0) => {
                                 check_buffer(v0);
                             }
-                            BindGroupReferenceBase::Bindgroup1(v0, v1) => {
+                            BindGroupReferenceBase::Bindgroup1(v0, v1, _) => {
                                 check_buffer(v0);
                                 check_buffer(v1);
                             }
-                            BindGroupReferenceBase::Bindgroup2(v0, v1, v2) => {
+                            BindGroupReferenceBase::Bindgroup2(v0, v1, v2, _) => {
                                 check_buffer(v0);
                                 check_buffer(v1);
                                 check_buffer(v2);
@@ -534,7 +517,7 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                             bindgroup_reference,
                         ) = &q.bindgroup
                         {
-                            if let BindGroupReferenceBase::Bindgroup1(vdest, v1) =
+                            if let BindGroupReferenceBase::Bindgroup1(vdest, v1, _) =
                                 bindgroup_reference
                             {
                                 if Arc::strong_count(&v1) == 1 {
@@ -565,7 +548,7 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                             bindgroup_reference,
                         ) = &q.bindgroup
                         {
-                            if let BindGroupReferenceBase::Bindgroup2(vdest, v1, v2) =
+                            if let BindGroupReferenceBase::Bindgroup2(vdest, v1, v2,_) =
                                 bindgroup_reference
                             {
                                 if Arc::strong_count(&v1) == 1 {
@@ -581,6 +564,7 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                                                     BindGroupReferenceBase::Bindgroup1(
                                                         v1.clone(),
                                                         v2.clone(),
+                                                        false
                                                     ),
                                                 );
                                             optimize_binary_inplace = true;
@@ -595,7 +579,7 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                             bindgroup_reference,
                         ) = &q.bindgroup
                         {
-                            if let BindGroupReferenceBase::Bindgroup2(vdest, v1, v2) =
+                            if let BindGroupReferenceBase::Bindgroup2(vdest, v1, v2, _) =
                                 bindgroup_reference
                             {
                                 if Arc::strong_count(&v2) == 1 {
@@ -611,6 +595,7 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                                                     BindGroupReferenceBase::Bindgroup1(
                                                         v2.clone(),
                                                         v1.clone(),
+                                                        false
                                                     ),
                                                 );
                                             optimize_binary_inplace = true;
@@ -627,7 +612,7 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                             bindgroup_reference,
                         ) = &q.bindgroup
                         {
-                            if let BindGroupReferenceBase::Bindgroup1(vdest, v1) =
+                            if let BindGroupReferenceBase::Bindgroup1(vdest, v1, _) =
                                 bindgroup_reference
                             {
                                 if Arc::strong_count(&v1) == 1 {
@@ -657,11 +642,17 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                                 BindGroupReferenceBase::Bindgroup0(_) => {
                                     &dev.bindgroup_layouts.pipeline_layout0
                                 }
-                                BindGroupReferenceBase::Bindgroup1(_, _) => {
+                                BindGroupReferenceBase::Bindgroup1(_, _,false) => {
                                     &dev.bindgroup_layouts.pipeline_layout1
                                 }
-                                BindGroupReferenceBase::Bindgroup2(_, _, _) => {
+                                BindGroupReferenceBase::Bindgroup1(_, _, true) => {
+                                    &dev.bindgroup_layouts.pipeline_layout1_16
+                                }
+                                BindGroupReferenceBase::Bindgroup2(_, _, _, false) => {
                                     &dev.bindgroup_layouts.pipeline_layout2
+                                }
+                                BindGroupReferenceBase::Bindgroup2(_, _, _, true) => {
+                                    &dev.bindgroup_layouts.pipeline_layout2_16
                                 }
                                 BindGroupReferenceBase::Bindgroup3(_, _, _, _) => {
                                     &dev.bindgroup_layouts.pipeline_layout3
@@ -690,10 +681,11 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                             cache_limit = true;
                         }
             
-                        drop(cache);
+                        //this may drop a bufferReference. The BufferReference needs to access cache, therefore cache was droped
+                        drop(cache); 
+                        q.bindgroup = DispatchedBindgroup::CachedBindgroup(bindgroup);
                         
-                        q.bindgroup = DispatchedBindgroup::CachedBindgroup(bindgroup); //this may drop a bufferReference. The BufferReference needs to access cache, therefore cache was droped
-                        
+
                         q.pipeline_cached = Some(pipeline);
 
                         //needs to be deleayed, we want to set v1_storage to None, but to create a BindGroup, we need to have v1_storage set
@@ -783,54 +775,6 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
         }
     }
 }
-
-///Flush commands, and wait until last command has been executed
-// pub(crate) async fn flush_gpu_command_async(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer) {
-//     if queue_buffer.command_queue.len() > 0 {
-//         prepare(dev, queue_buffer);
-//         let queue = &mut queue_buffer.command_queue;
-//         {
-            
-
-//             let mut wgpu_data = Vec::with_capacity(queue.len());
-
-//             let mut start_index = 0;
-//             let mut index = 0;
-//             let mut current_meta: usize = 0;
-//             let mut last_meta: usize = 0;
-//             while index < queue.len() {
-//                 set_buffers(dev, queue, &mut index, current_meta, &mut last_meta, &mut wgpu_data);
-
-//                 let last_meta_index = (last_meta + 256 / 4).min(queue_buffer.meta_array.0.len());
-              
-//                 let cb = get_command_buffer(
-//                     dev,
-//                     &queue_buffer.meta_array.0[current_meta..last_meta_index],
-//                     &queue[start_index..index],
-//                     &wgpu_data,
-//                     current_meta,
-//                 );
-                
-//                 dev.queue.submit(Some(cb));
-//                 synchronize_device(&dev.device, &dev.queue).await.unwrap();
-
-//                 start_index = index;
-//                 current_meta = last_meta;
-//                 wgpu_data.clear();
-//             }
-//         }
-//         queue_buffer.command_queue.clear();
-//         queue_buffer.meta_array.0.clear();
-//         queue_buffer.current_meta = 0;
-//         {
-//             let mut cache = dev.cache.lock().unwrap();
-//             cache.mappings.finish();
-//             cache.buffers.remove_unused();
-//             cache.remove_unused();
-//         }
-//     }
-// }
-
 
 fn enqueue(
     command_queue: MutexGuard<QueueBuffer>,
@@ -939,13 +883,15 @@ pub fn create_bindgroup(dev: &WgpuDevice, bindgroup: CachedBindGroupReference) -
 
     let meta_entry = wgpu::BindGroupEntry {
         binding: 1,
-        resource: meta_binding, //buffer_meta.as_entire_binding(),
+        resource: meta_binding,
     };
 
     let bind_group_layout = match bindgroup {
         BindGroupReferenceBase::Bindgroup0(_) => &dev.bindgroup_layouts.bind_group_layout0,
-        BindGroupReferenceBase::Bindgroup1(_, _) => &dev.bindgroup_layouts.bind_group_layout1,
-        BindGroupReferenceBase::Bindgroup2(_, _, _) => &dev.bindgroup_layouts.bind_group_layout2,
+        BindGroupReferenceBase::Bindgroup1(_, _, false) => &dev.bindgroup_layouts.bind_group_layout1,
+        BindGroupReferenceBase::Bindgroup1(_, _, true) => &dev.bindgroup_layouts.bind_group_layout1_16,
+        BindGroupReferenceBase::Bindgroup2(_, _, _, false) => &dev.bindgroup_layouts.bind_group_layout2,
+        BindGroupReferenceBase::Bindgroup2(_, _, _, true) => &dev.bindgroup_layouts.bind_group_layout2_16,
         BindGroupReferenceBase::Bindgroup3(_, _, _, _) => &dev.bindgroup_layouts.bind_group_layout3,
     };
 
@@ -964,7 +910,7 @@ pub fn create_bindgroup(dev: &WgpuDevice, bindgroup: CachedBindGroupReference) -
                 entries: entries,
             })
         }
-        CachedBindGroupReference::Bindgroup1(buffer_dest, buffer_input1) => {
+        CachedBindGroupReference::Bindgroup1(buffer_dest, buffer_input1, _) => {
             let entries = &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -982,7 +928,7 @@ pub fn create_bindgroup(dev: &WgpuDevice, bindgroup: CachedBindGroupReference) -
                 entries: entries,
             })
         }
-        CachedBindGroupReference::Bindgroup2(buffer_dest, buffer_input1, buffer_input2) => {
+        CachedBindGroupReference::Bindgroup2(buffer_dest, buffer_input1, buffer_input2, _) => {
             let entries = &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -1046,7 +992,14 @@ fn create_bind_group_input1(
     buffer_dest: Arc<BufferReference>,
     buffer_input1: Arc<BufferReference>,
 ) -> BindGroupReference {
-    BindGroupReference::Bindgroup1(buffer_dest, buffer_input1)
+    BindGroupReference::Bindgroup1(buffer_dest, buffer_input1, false)
+}
+
+fn create_bind_group_input1_16(
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
+) -> BindGroupReference {
+    BindGroupReference::Bindgroup1(buffer_dest, buffer_input1, true)
 }
 
 fn create_bind_group_input2(
@@ -1054,7 +1007,15 @@ fn create_bind_group_input2(
     buffer_input1: Arc<BufferReference>,
     buffer_input2: Arc<BufferReference>,
 ) -> BindGroupReference {
-    BindGroupReference::Bindgroup2(buffer_dest, buffer_input1, buffer_input2)
+    BindGroupReference::Bindgroup2(buffer_dest, buffer_input1, buffer_input2, false)
+}
+
+fn create_bind_group_input2_16(
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
+    buffer_input2: Arc<BufferReference>,
+) -> BindGroupReference {
+    BindGroupReference::Bindgroup2(buffer_dest, buffer_input1, buffer_input2, true)
 }
 
 fn create_bind_group_input3(
@@ -1075,15 +1036,6 @@ pub fn synchronize(dev: &WgpuDevice) -> crate::Result<()> {
     }
     Ok(())
 }
-
-// pub async fn synchronize_async(dev: &WgpuDevice) -> crate::Result<()> {
-//     let mut command_queue = dev.command_queue.lock().unwrap();
-//     if command_queue.command_queue.len() > 0{
-//         flush_gpu_command_async(dev, &mut command_queue).await;
-//         synchronize_device(&dev.device, &dev.queue).await?;
-//     }
-//     Ok(())
-// }
 
 #[instrument]
 async fn synchronize_device(dev: &Device, queue: &Queue) -> crate::Result<()> {

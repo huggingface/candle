@@ -36,39 +36,29 @@ override CONSTV_2 : u32 = 1u;
 override CONSTV_3 : u32 = 1u;
 override CONSTV_4 : bool = true;
 
-#define op_matmul.input1_stride_k   CONSTV_0
-#define op_matmul.input1_stride_m   CONSTV_1
+#define op_matmul_input1_stride_k   CONSTV_0
+#define op_matmul_input1_stride_m   CONSTV_1
 
-#define op_matmul.input2_stride_n   CONSTV_2
-#define op_matmul.input2_stride_k   CONSTV_3
+#define op_matmul_input2_stride_n   CONSTV_2
+#define op_matmul_input2_stride_k   CONSTV_3
 
-#define op_matmul.use_batch   CONSTV_4
+#define op_matmul_use_batch   CONSTV_4
 
 #define TS1 16u
 
-#define op_matmul.b                 op_meta[0]
-#define op_matmul.m                 op_meta[1]
-#define op_matmul.k                 op_meta[2]
-#define op_matmul.n                 op_meta[3]
+#define op_matmul_b                 op_meta[0]
+#define op_matmul_m                 op_meta[1]
+#define op_matmul_k                 op_meta[2]
+#define op_matmul_n                 op_meta[3]
 
-#define op_matmul.input1_stride_b   op_meta[4]
-#define op_matmul.input1_offset     op_meta[5]
+#define op_matmul_input1_stride_b   op_meta[4]
+#define op_matmul_input1_offset     op_meta[5]
 
-#define op_matmul.input2_stride_b   op_meta[6]
-#define op_matmul.input2_offset     op_meta[7]
+#define op_matmul_input2_stride_b   op_meta[6]
+#define op_matmul_input2_offset     op_meta[7]
 
-#define op_matmul.gx_offset     op_meta[8]
-#define op_matmul.gy_offset     op_meta[9]
-
-
-// fn select(d : bool, value : u32) -> u32{
-//     if d{
-//         return value;
-//     }
-//     else{
-//         return 0u;
-//     }
-// }
+#define op_matmul_gx_offset     op_meta[8]
+#define op_matmul_gy_offset     op_meta[9]
 
 @compute
 @workgroup_size(16,16,1)
@@ -77,32 +67,75 @@ fn matmul1(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let y = global_id.y;
     let b = global_id.z;
 
-    if(x >= op_matmul.n){
+    if(x >= op_matmul_n){
         return;
     }
-    if(y >= op_matmul.m){
+    if(y >= op_matmul_m){
         return;
     }
 
-    let output_size_of_one_batch = select(op_matmul.use_batch, op_matmul.m * op_matmul.n, 0u); 
+    let output_size_of_one_batch = select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u); 
 
-    let input1_offset = op_matmul.input1_offset;
-    let input2_offset = op_matmul.input2_offset;
+    let input1_offset = op_matmul_input1_offset;
+    let input2_offset = op_matmul_input2_offset;
 
-    let input1_stride_b = select(op_matmul.use_batch, op_matmul.input1_stride_b, 0u); 
-    let input2_stride_b = select(op_matmul.use_batch, op_matmul.input2_stride_b, 0u); 
+    let input1_stride_b = select(op_matmul_use_batch, op_matmul_input1_stride_b, 0u); 
+    let input2_stride_b = select(op_matmul_use_batch, op_matmul_input2_stride_b, 0u); 
     
-    let m_input1_offset = input1_offset + op_matmul.input1_stride_m * y + b * input1_stride_b;
-    let m_input2_offset = input2_offset + op_matmul.input2_stride_n * x + b * input2_stride_b;
+    let m_input1_offset = input1_offset + op_matmul_input1_stride_m * y + b * input1_stride_b;
+    let m_input2_offset = input2_offset + op_matmul_input2_stride_n * x + b * input2_stride_b;
 
     var sum = ZERO;
-    for (var i = 0u; i < op_matmul.k; i++){
-        sum +=  v_input1[op_matmul.input1_stride_k * i + m_input1_offset] 
-                * v_input2[op_matmul.input2_stride_k * i + m_input2_offset];
+    for (var i = 0u; i < op_matmul_k; i++){
+        sum +=  v_input1[op_matmul_input1_stride_k * i + m_input1_offset] 
+                * v_input2[op_matmul_input2_stride_k * i + m_input2_offset];
     }
     
-    v_dest[b * output_size_of_one_batch + y * op_matmul.n + x] = sum;
+    v_dest[b * output_size_of_one_batch + y * op_matmul_n + x] = sum;
 }
+
+
+@group(0) @binding(2)
+var<storage> v_input_a: array<vec4<DTYPE>>;
+
+@group(0) @binding(3)
+var<storage> v_input_b: array<vec4<DTYPE>>;
+
+
+//input_stride_k needs to be 1!
+@compute
+@workgroup_size(16,16,1)
+fn matmul1_16(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let x = global_id.x;
+    let y = global_id.y;
+    let b = global_id.z;
+
+    if(x >= op_matmul_n){
+        return;
+    }
+    if(y >= op_matmul_m){
+        return;
+    }
+
+    let output_size_of_one_batch = select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u); 
+
+    let input1_offset = op_matmul_input1_offset;
+    let input2_offset = op_matmul_input2_offset;
+
+    let input1_stride_b = select(op_matmul_use_batch, op_matmul_input1_stride_b, 0u); 
+    let input2_stride_b = select(op_matmul_use_batch, op_matmul_input2_stride_b, 0u); 
+    
+    let m_input1_offset = (input1_offset + op_matmul_input1_stride_m * y + b * input1_stride_b)/4;
+    let m_input2_offset = (input2_offset + op_matmul_input2_stride_n * x + b * input2_stride_b)/4;
+
+    var sum = ZERO;
+    for (var i = 0u; i < op_matmul_k/4; i++){
+        sum += dot(v_input_a[i + m_input1_offset],v_input_b[i + m_input2_offset]);
+    }
+    
+    v_dest[b * output_size_of_one_batch + y * op_matmul_n + x] = sum;
+}
+
 
 @compute
 @workgroup_size(16,16,1)
@@ -111,28 +144,28 @@ fn matmul1_end(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let y = global_id.y;
     let b = global_id.z;
 
-    if(x >= op_matmul.n || y >= op_matmul.m || (global_id.x < op_matmul.gx_offset && global_id.y < op_matmul.gy_offset)){
+    if(x >= op_matmul_n || y >= op_matmul_m || (global_id.x < op_matmul_gx_offset && global_id.y < op_matmul_gy_offset)){
         return;
     }
 
-    let output_size_of_one_batch = select(op_matmul.use_batch, op_matmul.m * op_matmul.n, 0u);  
+    let output_size_of_one_batch = select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u);  
 
-    let input1_offset = op_matmul.input1_offset;
-    let input2_offset = op_matmul.input2_offset;
+    let input1_offset = op_matmul_input1_offset;
+    let input2_offset = op_matmul_input2_offset;
 
-    let input1_stride_b = select(op_matmul.use_batch, op_matmul.input1_stride_b, 0u); 
-    let input2_stride_b = select(op_matmul.use_batch, op_matmul.input2_stride_b, 0u); 
+    let input1_stride_b = select(op_matmul_use_batch, op_matmul_input1_stride_b, 0u); 
+    let input2_stride_b = select(op_matmul_use_batch, op_matmul_input2_stride_b, 0u); 
     
-    let m_input1_offset = input1_offset + op_matmul.input1_stride_m * y + b * input1_stride_b;
-    let m_input2_offset = input2_offset + op_matmul.input2_stride_n * x + b * input2_stride_b;
+    let m_input1_offset = input1_offset + op_matmul_input1_stride_m * y + b * input1_stride_b;
+    let m_input2_offset = input2_offset + op_matmul_input2_stride_n * x + b * input2_stride_b;
 
     var sum = ZERO;
-    for (var i = 0u; i < op_matmul.k; i++){
-        sum +=  v_input1[op_matmul.input1_stride_k * i + m_input1_offset] 
-                * v_input2[op_matmul.input2_stride_k * i + m_input2_offset];
+    for (var i = 0u; i < op_matmul_k; i++){
+        sum +=  v_input1[op_matmul_input1_stride_k * i + m_input1_offset] 
+                * v_input2[op_matmul_input2_stride_k * i + m_input2_offset];
     }
     
-    v_dest[b * output_size_of_one_batch + y * op_matmul.n + x] = sum;
+    v_dest[b * output_size_of_one_batch + y * op_matmul_n + x] = sum;
 }
 
 
@@ -152,20 +185,20 @@ fn matmul5(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
    
     let batch = group_id.z;
 
-    let output_size_of_one_batch = select(op_matmul.use_batch, op_matmul.m * op_matmul.n, 0u); 
+    let output_size_of_one_batch = select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u); 
 
-    let input1_offset = op_matmul.input1_offset;
-    let input2_offset = op_matmul.input2_offset;
+    let input1_offset = op_matmul_input1_offset;
+    let input2_offset = op_matmul_input2_offset;
 
-    let input1_stride_b = select(op_matmul.use_batch, op_matmul.input1_stride_b, 0u); 
-    let input2_stride_b = select(op_matmul.use_batch, op_matmul.input2_stride_b, 0u); 
+    let input1_stride_b = select(op_matmul_use_batch, op_matmul_input1_stride_b, 0u); 
+    let input2_stride_b = select(op_matmul_use_batch, op_matmul_input2_stride_b, 0u); 
 
-    let m_input1_offset = input1_offset + op_matmul.input1_stride_m * gy + batch * input1_stride_b + lx * op_matmul.input1_stride_k;
-    let m_input2_offset = input2_offset + op_matmul.input2_stride_n * gx + batch * input2_stride_b + ly * op_matmul.input2_stride_k;
+    let m_input1_offset = input1_offset + op_matmul_input1_stride_m * gy + batch * input1_stride_b + lx * op_matmul_input1_stride_k;
+    let m_input2_offset = input2_offset + op_matmul_input2_stride_n * gx + batch * input2_stride_b + ly * op_matmul_input2_stride_k;
 
-    let max_k = op_matmul.k;
-    //var max_k = op_matmul.k;
-    //if (op_matmul.k < TS1){
+    let max_k = op_matmul_k;
+    //var max_k = op_matmul_k;
+    //if (op_matmul_k < TS1){
     //    max_k = 0u;
     // }
     //else{
@@ -175,11 +208,11 @@ fn matmul5(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
     var acc = array<DTYPE, WPT1>();
     var t = 0u;
     for(; t < max_k; t+=TS1){
-        let t_offset1 = m_input1_offset +  t * op_matmul.input1_stride_k;
-        let t_offset2 = m_input2_offset +  t * op_matmul.input2_stride_k;
+        let t_offset1 = m_input1_offset +  t * op_matmul_input1_stride_k;
+        let t_offset2 = m_input2_offset +  t * op_matmul_input2_stride_k;
         for(var w = 0u; w < WPT1; w++){
-            Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul.input1_stride_k];
-            Bsub[ly][lx + w] = v_input2[t_offset2 + w * op_matmul.input2_stride_n];
+            Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
+            Bsub[ly][lx + w] = v_input2[t_offset2 + w * op_matmul_input2_stride_n];
         }
         workgroupBarrier();
         
@@ -193,52 +226,52 @@ fn matmul5(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
     }
 
     //last loop
-    // if(t < op_matmul.k){
-    //     let max_index = op_matmul.k - t;
-    //     let t_offset1 = m_input1_offset +  t * op_matmul.input1_stride_k;
-    //     let t_offset2 = m_input2_offset +  t * op_matmul.input2_stride_k;
+    // if(t < op_matmul_k){
+    //     let max_index = op_matmul_k - t;
+    //     let t_offset1 = m_input1_offset +  t * op_matmul_input1_stride_k;
+    //     let t_offset2 = m_input2_offset +  t * op_matmul_input2_stride_k;
 
     //     if (lx < max_index){
     //         let asub_count = min(max_index - lx, WPT1);
     //         switch(asub_count){
     //             case WPT1{
     //                 for(var w = 0u; w < WPT1; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul.input1_stride_k];
+    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
     //                 }
     //             }
     //             case 7u{
     //                 for(var w = 0u; w < 7u; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul.input1_stride_k];
+    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
     //                 }
     //             }
     //             case 6u{
     //                 for(var w = 0u; w < 6u; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul.input1_stride_k];
+    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
     //                 }
     //             }
     //             case 5u{
     //                 for(var w = 0u; w < 5u; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul.input1_stride_k];
+    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
     //                 }
     //             }
     //             case 4u{
     //                 for(var w = 0u; w < 4u; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul.input1_stride_k];
+    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
     //                 }
     //             }
     //             case 3u{
     //                 for(var w = 0u; w < 3u; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul.input1_stride_k];
+    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
     //                 }
     //             }
     //             case 2u{
     //                 for(var w = 0u; w < 2u; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul.input1_stride_k];
+    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
     //                 }
     //             }
     //             case 1u{
     //                 for(var w = 0u; w < 1; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul.input1_stride_k];
+    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
     //                 }
     //             }
     //             default{
@@ -248,34 +281,55 @@ fn matmul5(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
 
     //     if (ly < max_index){
     //         for(var w = 0u; w < WPT1; w++){ 
-    //             Bsub[ly][lx + w] = v_input2[t_offset2 + w * op_matmul.input2_stride_n];
+    //             Bsub[ly][lx + w] = v_input2[t_offset2 + w * op_matmul_input2_stride_n];
     //         }
     //     }
 
 
 
     //     // for(var w = 0u; w < WPT1; w++){
-    //     //     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul.input1_stride_k];
-    //     //     Bsub[ly][lx + w] = v_input2[t_offset2 + w * op_matmul.input2_stride_n];
+    //     //     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
+    //     //     Bsub[ly][lx + w] = v_input2[t_offset2 + w * op_matmul_input2_stride_n];
     //     // }
 
     //     workgroupBarrier();
 
     //     let count = min(max_index, TS1);
     //     for(var k = 0u; k < count; k++){
-    //         //let a =  v_input1[t_offset1 + k * op_matmul.input1_stride_k];
+    //         //let a =  v_input1[t_offset1 + k * op_matmul_input1_stride_k];
     //         for(var w = 0u; w < WPT1; w++){
-    //             //acc[w] += a * v_input2[t_offset2  + k * op_matmul.input2_stride_k + w * op_matmul.input2_stride_n];  
+    //             //acc[w] += a * v_input2[t_offset2  + k * op_matmul_input2_stride_k + w * op_matmul_input2_stride_n];  
     //             acc[w] += Asub[k][ly]*Bsub[k][lx + w];
             
     //         }
     //     }
     // }
 
-    let dest_index = batch * output_size_of_one_batch + gy * op_matmul.n + gx;
+    let dest_index = batch * output_size_of_one_batch + gy * op_matmul_n + gx;
     for(var w = 0u; w < WPT1; w++){
         v_dest[dest_index + w] = acc[w];
     }
+
+    let is_in_gy = gy < op_matmul_m;
+    let is_in_gx = gx < op_matmul_n;
+    var wcount = select(is_in_gx, min(op_matmul_n - gx, WPT1), 0u);
+    let is_output_pixel = is_in_gy && is_in_gx;
+
+    if(is_output_pixel){
+        switch(wcount){
+            case WPT1{
+                for(var w = 0u; w < WPT1; w++){
+                    v_dest[dest_index + w] = acc[w];
+                }
+            }
+            default{
+                for(var w = 0u; w < wcount; w++){
+                    v_dest[dest_index + w] = acc[w];
+                }
+            }
+        }
+    }
+
 }
 
 
@@ -289,34 +343,34 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
     let lx = local_id.x * WPT1;
     let ly = local_id.y;
 
-    let gx = TS1*group_id.x + lx;// + op_matmul.gx_offset;
-    let gy = TS1*group_id.y + ly;// + op_matmul.gy_offset;;
+    let gx = TS1*group_id.x + lx;// + op_matmul_gx_offset;
+    let gy = TS1*group_id.y + ly;// + op_matmul_gy_offset;;
 
     let batch = group_id.z;
 
-    let output_size_of_one_batch = select(op_matmul.use_batch, op_matmul.m * op_matmul.n, 0u); 
+    let output_size_of_one_batch = select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u); 
 
-    let input1_offset = op_matmul.input1_offset;
-    let input2_offset = op_matmul.input2_offset;
+    let input1_offset = op_matmul_input1_offset;
+    let input2_offset = op_matmul_input2_offset;
     
-    let input1_stride_b = select(op_matmul.use_batch, op_matmul.input1_stride_b, 0u); 
-    let input2_stride_b = select(op_matmul.use_batch, op_matmul.input2_stride_b, 0u); 
+    let input1_stride_b = select(op_matmul_use_batch, op_matmul_input1_stride_b, 0u); 
+    let input2_stride_b = select(op_matmul_use_batch, op_matmul_input2_stride_b, 0u); 
 
-    let m_input1_offset = input1_offset + op_matmul.input1_stride_m * gy + batch * input1_stride_b;
-    let m_input2_offset = input2_offset + op_matmul.input2_stride_n * gx + batch * input2_stride_b;
+    let m_input1_offset = input1_offset + op_matmul_input1_stride_m * gy + batch * input1_stride_b;
+    let m_input2_offset = input2_offset + op_matmul_input2_stride_n * gx + batch * input2_stride_b;
 
     var acc = array<DTYPE, WPT1>();
 
-    var wcount = min(op_matmul.n - gx, WPT1);
-    let is_in_gy = gy < op_matmul.m;
-    let is_in_gx = gx < op_matmul.n;
+    var wcount = min(op_matmul_n - gx, WPT1);
+    let is_in_gy = gy < op_matmul_m;
+    let is_in_gx = gx < op_matmul_n;
     let is_output_pixel = is_in_gy && is_in_gx;
     if(!is_in_gx){
        wcount = 0u; 
     }
 
-    var max_k = op_matmul.k;
-    if (op_matmul.k < TS1){
+    var max_k = op_matmul_k;
+    if (op_matmul_k < TS1){
         max_k = 0u;
     }
     else{
@@ -325,23 +379,23 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
 
     var t = 0u;
     for(; t < max_k; t+=TS1){
-        let count = min(op_matmul.k - t, TS1);
+        let count = min(op_matmul_k - t, TS1);
 
         if (is_in_gy){
             for(var w = 0u; w < WPT1; w++){       
-                Asub2[lx + w][ly]= v_input1[m_input1_offset + (t + lx + w) *  op_matmul.input1_stride_k];
+                Asub2[lx + w][ly]= v_input1[m_input1_offset + (t + lx + w) *  op_matmul_input1_stride_k];
             }
         }
         
         switch(wcount){
             case 8u{
                 for(var w = 0u; w < 8u; w++){       
-                    Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
+                    Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul_input2_stride_k + w*op_matmul_input2_stride_n];
                 }
             }
             default{
                 for(var w = 0u; w < wcount; w++){       
-                    Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
+                    Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul_input2_stride_k + w*op_matmul_input2_stride_n];
                 }
             }
         }
@@ -371,35 +425,35 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
 
 
     //last loop:
-    if(t < op_matmul.k){
-        let count = min(op_matmul.k - t, TS1);
+    if(t < op_matmul_k){
+        let count = min(op_matmul_k - t, TS1);
 
-        if (is_in_gy && t + lx < op_matmul.k){
-        //if (t + lx < op_matmul.k){
-            let asub_count = min(op_matmul.k - (t + lx), WPT1);
+        if (is_in_gy && t + lx < op_matmul_k){
+        //if (t + lx < op_matmul_k){
+            let asub_count = min(op_matmul_k - (t + lx), WPT1);
             switch(asub_count){
                 case 8u{
                     for(var w = 0u; w < 8u; w++){       
-                        Asub2[lx + w][ly] = v_input1[m_input1_offset + (t + lx + w) *  op_matmul.input1_stride_k];
+                        Asub2[lx + w][ly] = v_input1[m_input1_offset + (t + lx + w) *  op_matmul_input1_stride_k];
                     }
                 }
                 default{
                     for(var w = 0u; w < asub_count; w++){       
-                        Asub2[lx + w][ly] = v_input1[m_input1_offset + (t + lx + w) *  op_matmul.input1_stride_k];
+                        Asub2[lx + w][ly] = v_input1[m_input1_offset + (t + lx + w) *  op_matmul_input1_stride_k];
                     }
                 }
             }
         }
-        if (t + ly < op_matmul.k){
+        if (t + ly < op_matmul_k){
             switch(wcount){
                 case 8u{
                     for(var w = 0u; w < 8u; w++){       
-                        Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
+                        Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul_input2_stride_k + w*op_matmul_input2_stride_n];
                     }
                 }
                 default{
                     for(var w = 0u; w < wcount; w++){       
-                        Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul.input2_stride_k + w*op_matmul.input2_stride_n];
+                        Bsub2[ly][lx + w] = v_input2[m_input2_offset + (t + ly) * op_matmul_input2_stride_k + w*op_matmul_input2_stride_n];
                     }
                 }
             }
@@ -432,12 +486,12 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
         switch(wcount){
             case 8u{
                 for(var w = 0u; w < 8; w++){
-                    v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx + w] = acc[w];
+                    v_dest[batch * output_size_of_one_batch + gy * op_matmul_n + gx + w] = acc[w];
                 }
             }
             default{
                 for(var w = 0u; w < wcount; w++){
-                    v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx + w] = acc[w];
+                    v_dest[batch * output_size_of_one_batch + gy * op_matmul_n + gx + w] = acc[w];
                 }
             }
         }

@@ -1,48 +1,10 @@
 #include "util.pwgsl"
 
-// #ifdef f32
-// #define DTYPE f32 
-// #endif
-
-// #ifdef u32
-// #define DTYPE u32 
-// #endif
-
-// #ifdef u8
-// #define DTYPE u32 
-// #endif
-
-// @group(0) @binding(0)
-// var<storage, read_write> v_dest: array<DTYPE>;
-
-// @group(0) @binding(1)
-// var<storage> op_meta : array<u32>;
-
-// @group(0) @binding(2)
-// var<storage> v_input1: array<DTYPE>;
-
-// @group(0) @binding(3)
-// var<storage> v_input2: array<DTYPE>;
-
-// const ZERO : DTYPE = 0;
-// const ONE : DTYPE = 1;
-
-// #ifdef f32
-// const MINVALUE : f32 = -3.40282e+38;
-// #endif
-
-
 override CONSTV_0 : u32 = 1u;
 override CONSTV_1 : u32 = 1u;
 
-#define op_softmax.workgroup_count             CONSTV_0
-#define op_softmax.input1_offset               CONSTV_1
-
-//#define op_softmax.workgroup_count              op_meta[0]
-#define op_softmax.workgroup_size               op_meta[0]
-#define op_softmax.length                       op_meta[1]
-//#define op_softmax.input1_offset                op_meta[3]
-#define op_softmax.dest_size                    op_meta[2]
+#define op_softmax_workgroup_count             CONSTV_0
+#define op_softmax_input1_offset               CONSTV_1
 
 var<workgroup> sharedSums: array<DTYPE, 64>; 
 
@@ -50,78 +12,94 @@ var<workgroup> sharedM: f32;
 
 #ifdef f32
 
+override USE_Z : bool = false;
 
+#define op_softmax_length                       op_meta[0]
+#define op_softmax_dest_size                    op_meta[1]
 
 @compute
 @workgroup_size(64,1,1)
 fn softmax(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let workgroup_id = global_id.x;
-    let output_index = global_id.y + global_id.z * 65535;
+    let tid = global_id.x;
+    let output_index = global_id.y + select(USE_Z, global_id.z * 65535, 0u);
     
     //Start Index of the Elements to Reduce
-    let length = op_softmax.length; //length of the elements to reduce
-    let start_index = output_index * length;
-    let start_index1 = start_index + op_softmax.input1_offset;
+    let start_index = output_index * op_softmax_length;
+    let start_index1 = start_index + op_softmax_input1_offset;
 
     //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
-    let start = workgroup_id * op_softmax.workgroup_size;
-    let end = min(length, (workgroup_id + 1) * op_softmax.workgroup_size);
-
-    if(output_index < op_softmax.dest_size)
+    //let start = workgroup_id * op_softmax_workgroup_size;
+    
+    if(output_index < op_softmax_dest_size || !USE_Z)
     {
         //Now Reduce from start to end
-        var sum = MINVALUE;
-        for (var i = start; i < end; i++){
-            let v = v_input1[start_index1 + i];
-            sum = max(sum,v);
+        var maxVal = MINVALUE;
+
+        for (var i = tid; i < op_softmax_length; i += 64u) {
+            maxVal = max(maxVal, v_input1[start_index1 + i]);
         }
-        sharedSums[workgroup_id] = sum; 
+
+        sharedSums[tid] = maxVal; 
     }
     workgroupBarrier();
+    
+    // // Reduce max across workgroup
+    // for (var offset = 32u; offset > 0u; offset /= 2u) {
+    //     if (tid < offset) {
+    //         sharedSums[tid] = max(sharedSums[tid], sharedSums[tid + offset]);
+    //     }
+    //     workgroupBarrier();
+    // }
+
+    
     //calculate max
-    if (workgroup_id == 0 && output_index < op_softmax.dest_size){
-        let cnt = op_softmax.workgroup_count;
+    if (tid == 0 && (output_index < op_softmax_dest_size || !USE_Z)){
+        let cnt = op_softmax_workgroup_count;
         //Finnaly Sum of all worker threads:
         var sum = MINVALUE;
         for (var i = 0u; i < cnt; i++){
             sum = max(sum,sharedSums[i]) ;
         }
-
-        sharedM = sum;
+        sharedSums[0] = sum;
     }
 
     workgroupBarrier();
-    if (output_index < op_softmax.dest_size) {
-         for (var i = start; i < end; i++){
-            v_dest[start_index + i] = exp(v_input1[start_index1 + i] - sharedM);
+
+    let maxElement = sharedSums[0];
+
+    if (output_index < op_softmax_dest_size || !USE_Z) {
+        var sum = ZERO;
+        
+        for (var i = tid; i < op_softmax_length; i += 64u) {
+        //for (var i = start; i < end; i++){
+            let val = exp(v_input1[start_index1 + i] - maxElement);
+            v_dest[start_index + i] = val;
+            sum += val;
         }
 
-        //Now Calculate Sum:
-        var sum = ZERO;
-        for (var i = start; i < end; i++){
-            let v = v_dest[start_index + i];
-            sum += v;
-        }
-        sharedSums[workgroup_id] = sum;
+        sharedSums[tid] = sum;
     }
    
     workgroupBarrier();
 
-    if (workgroup_id == 0 && output_index < op_softmax.dest_size){
-        let cnt = op_softmax.workgroup_count;
+    if (tid == 0 && (output_index < op_softmax_dest_size || !USE_Z)){
+        let cnt = op_softmax_workgroup_count;
         //Finnaly Sum of all worker threads:
         var sum = ZERO;
         for (var i = 0u; i < cnt; i++){
-            sum +=  sharedSums[i];
+            sum += sharedSums[i];
         }
 
-        sharedM = sum;
+        sharedSums[0] = sum;
     }
 
+
     workgroupBarrier();
-    if (output_index < op_softmax.dest_size) {
-        for (var i = start; i < end; i++){
-            v_dest[start_index + i] = v_dest[start_index + i] / sharedM;
+
+    let totalSum = sharedSums[0];
+    if (output_index < op_softmax_dest_size || !USE_Z) {
+        for (var i = tid; i < op_softmax_length; i += 64u) {
+            v_dest[start_index + i] /= totalSum;
         }
     }
 }

@@ -27,21 +27,24 @@ pub fn queue_reduce_from_buffer_op(
     reduction_length: u32,
     stride_reduction: u32,
 ) -> crate::Result<()> {
-    let workgroup_count = u32::min(64, (reduction_length / 10 + 1) as u32);
-    let workgroup_size = reduction_length as u32 / workgroup_count + 1;
-    
+    let workgroup_count = u32::min(64, reduction_length as u32);
     let mut meta = get_meta(&dev);
 
-    meta.add(op as u32);
-    meta.add(workgroup_count);
-    meta.add(workgroup_size);
+    let const_vec = vec![
+        op as u32,
+        workgroup_count,
+        stride_reduction];
+
     meta.add(reduction_length);
     meta.add(output_to_start_stride1);
     meta.add(output_to_start_shape_stride2);
     meta.add(output_to_start_stride2);
-    meta.add(stride_reduction);
     meta.add(dest_size);
     meta.add_layout1(layout_input1);
+
+    if dest_size > 65535{
+        meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+    }
 
     let pipeline_type = match op {
         ReduceOperations::Sum => Functions::Reduce,
@@ -50,7 +53,7 @@ pub fn queue_reduce_from_buffer_op(
         ReduceOperations::ArgMin => Functions::ReduceIndex,
         ReduceOperations::ArgMax => Functions::ReduceIndex
     };
-    let pipeline = meta.get_pipeline(Pipelines::Reduce(get_dtype(dtype)?, pipeline_type));
+    let pipeline = meta.get_pipeline_const(Pipelines::Reduce(get_dtype(dtype)?, pipeline_type),const_vec);
 
     let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
     

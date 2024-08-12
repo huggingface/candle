@@ -3,7 +3,6 @@ use rand::RngCore;
 use super::*;
 
 #[derive(Copy, Clone, Debug)]
-//#[allow(dead_code)]
 pub enum UnaryOperation {
     SetZero = 0,
     SetOne = 1,
@@ -80,7 +79,7 @@ pub fn queue_unary_inplace_op(
         meta.add(scalar1);
         meta.add(scalar2);
         meta.add(dev.rand_state.lock().unwrap().next_u32());
-        meta.add(layout.start_offset());       //offset, do not change, will be checked at flush_gpu_command
+        meta.add(layout.start_offset()); 
         meta.add(layout.shape().elem_count()); //length 
 
         let pipeline = meta.get_pipeline(Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryInplaceContiguous));
@@ -117,7 +116,7 @@ pub fn queue_unary_from_buffer_op(
         meta.add(scalar1);
         meta.add(scalar2);
         meta.add(dev.rand_state.lock().unwrap().next_u32());
-        meta.add(input_layout.start_offset());       //
+        meta.add(input_layout.start_offset());
         meta.add(input_layout.shape().elem_count()); //length 
 
         let inplaceable = OpIsInplaceable{ input1_inplaceable : input_layout.start_offset() == 0, input2_inplaceable : false};

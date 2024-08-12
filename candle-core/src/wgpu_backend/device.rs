@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::hash::Hash;
 
@@ -25,7 +26,7 @@ use super::WgpuStorage;
 //pub (crate) const META_BUFFER_SIZE : u32 = 2048;
 pub (crate) const META_BUFFER_SIZE : u32 = 10*1024*1024; //10mb
 
-pub (crate) const MAX_WORKLOAD_SIZE : u64 = 1024u64*1024*1024*10; //10gb
+pub (crate) const MAX_WORKLOAD_SIZE : u64 = 1024u64*1024*1024*1; //1gb
 
 
 
@@ -231,16 +232,48 @@ impl QueueBuffer {
 
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum MatmulAlgorithm{
+    MatmulX,
     Matmul7,
     Matmul1,
-    Matmul5,
-    Matmul5_32_32,
-    Matuml5_64_64,
-    Matmul5_64_64_8_8,
-    Matmul5_128_128,
-    Matmul5_16_64,
+    Matmul1_4,
+    Matmul16_16,
+    Matmul32_32(bool, bool, bool, bool), //Prefetch, NoPadded, LoadA, LoadB
+    Matmul64_64(bool, bool),
+    Matmul64_64_8_8(bool, bool),
+    Matmul64_128(bool, bool),
+    Matmul64_128_8_8(bool, bool),
+    Matmul128_128(bool, bool),
+    Matmul16_64(bool, bool, bool, bool),
+    Matmul1_128(bool, bool, bool),
+    Matmul1_256(bool, bool, bool),
+    Matmul24_24(bool, bool, bool, bool),
+    Matmul24_48(bool, bool, bool, bool)
+}
+
+impl fmt::Debug for MatmulAlgorithm{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MatmulX => write!(f, "MatmulX"),
+            Self::Matmul7 => write!(f, "Matmul7"),
+            Self::Matmul1 => write!(f, "Matmul1"),
+            Self::Matmul1_4 => write!(f, "Matmul1_4"),
+            Self::Matmul16_16 => write!(f, "Matmul5_16_16"),
+            Self::Matmul32_32(prefatch, no_padded, loada, loadb) => write!(f, "Matmul5_32_32({}{}{}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}, if !*loada {"_LoadA"} else {""}, if !*loadb {"_LoadB"} else {""}),
+            Self::Matmul64_64(prefatch, no_padded) => write!(f, "Matuml5_64_64({}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}),
+            Self::Matmul64_64_8_8(prefatch, no_padded) => write!(f, "Matmul5_64_64_8_8({}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}),
+            Self::Matmul64_128(prefatch, no_padded) => write!(f, "Matuml5_64_128({}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}),
+            Self::Matmul64_128_8_8(prefatch, no_padded) => write!(f, "Matmul5_64_128_8_8({}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}),
+            Self::Matmul128_128(prefatch, no_padded) => write!(f, "Matmul5_128_128({}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}),
+            Self::Matmul16_64(prefatch, no_padded, loada, loadb) => write!(f, "Matmul5_16_64({}{}{}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}, if !*loada {"_LoadA"} else {""}, if !*loadb {"_LoadB"} else {""}),
+            Self::Matmul1_128(prefatch, no_padded, loada) => write!(f, "Matmul5_1_128({}{}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}, if !*loada {"_LoadA"} else {""}),
+            Self::Matmul1_256(prefatch, no_padded, loada) => write!(f, "Matmul5_1_256({}{}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}, if !*loada {"_LoadA"} else {""}),
+           
+            Self::Matmul24_24(prefatch, no_padded, loada, loadb) => write!(f, "Matmul5_24_24({}{}{}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}, if !*loada {"_LoadA"} else {""}, if !*loadb {"_LoadB"} else {""}),
+            Self::Matmul24_48(prefatch, no_padded, loada, loadb) => write!(f, "Matmul5_24_48({}{}{}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}, if !*loada {"_LoadA"} else {""}, if !*loadb {"_LoadB"} else {""}),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -291,7 +324,6 @@ impl std::ops::Deref for WgpuDevice{
 impl WgpuDevice{
     pub (crate) async fn create(_: usize) -> crate::Result<Self>{
         log::info!("Request Instance:");
-        //let instance = wgpu::Instance::default();
         let instance = wgpu::Instance::new(InstanceDescriptor{ backends: Backends::PRIMARY, flags:InstanceFlags::default() , dx12_shader_compiler: wgpu::Dx12Compiler::Fxc, gles_minor_version: wgpu::Gles3MinorVersion::Automatic });
         
         log::info!("Enumerate Adapters:");
@@ -371,7 +403,7 @@ impl WgpuDevice{
                 binary_inplace_counter : Counter::new(0),
                 copy_inplace_counter : Counter::new(0),
                 use_cache : true,
-                matmul_alg : Mutex::new(MatmulAlgorithm::Matmul5)
+                matmul_alg : Mutex::new(MatmulAlgorithm::MatmulX)
             })
         })
     }
@@ -449,6 +481,8 @@ impl WgpuDevice{
 
         let shaders = self.shader.lock().unwrap();
 
+        let queue = self.command_queue.lock().unwrap();
+       
         return Ok(shaders.iter().map(|(k, v)|{
             let pipelines = v.pipelines.lock().unwrap();
             let s = debug_info::ShaderInfo{    
@@ -456,7 +490,7 @@ impl WgpuDevice{
                 pipelines: pipelines.iter().map(|(pk, _)|{
                     return debug_info::PipelineInfo { 
                         name: format!("{:?}", pk.0).to_owned(), 
-                        consts : Vec::new(), // pk.1.0.iter().map(|f| f.1 as f64).collect()
+                        consts :  queue.id_to_const_array[pk.1].clone()
                      }
                 }).collect()
 
@@ -532,7 +566,7 @@ impl crate::backend::BackendDevice for WgpuDevice{
     }
 
     fn location(&self) -> crate::DeviceLocation {
-        return crate::DeviceLocation::Wgpu { gpu_id: 0 }; //TODO: WGPU
+        return crate::DeviceLocation::Wgpu { gpu_id: 0 }; 
     }
 
     fn same_device(&self, other: &Self) -> bool {

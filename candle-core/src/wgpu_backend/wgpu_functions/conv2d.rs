@@ -13,31 +13,36 @@ pub fn queue_conv2d(
     input_layout: &crate::Layout,
     kernel_layout: &crate::Layout,
 ) -> crate::Result<()> {
+
+
+    //if input stride_x is not 1, performance can be extremly bad! -> copy strided
+    let input_stride = input_layout.stride();
+
+    let (input_buffer, input_layout) = 
+    if input_stride[3] != 1 && (params.c_out > 32) && (params.i_h >= 64 && params.i_w >= 64) {
+        let tmp_buffer = BufferReference::new(dev, input_layout.shape().elem_count()*4);
+        queue_copy_strided(dev, tmp_buffer.clone(), buffer_input1.clone(), dtype, input_layout, 0)?;
+        (tmp_buffer, Layout::contiguous(input_layout.shape()))
+    }
+    else{
+        (buffer_input1.clone(),input_layout.clone())
+    };
+
     let input_stride = input_layout.stride();
     let kernel_stride = kernel_layout.stride();
     
     let mut meta = get_meta(&dev);
-
+ 
     let const_vec = vec![
         kernel_stride[3],//kernel_x_stride
-        //kernel_stride[2],//kernel_y_stride
-        //input_stride[2], //stride_y_in
         input_stride[3], //stride_x_in
-        params.padding,
-        params.stride,
         params.dilation,
-        input_layout.start_offset(),
         params.k_w, 
         params.k_h,
         params.b_size,
         params.c_in];
 
-
-    meta.add(params.b_size);
-    meta.add(params.c_in);
-    meta.add(params.k_w);
-    meta.add(params.k_h);
-    //meta.add(kernel_stride[3]); //kernel_x_stride
+    meta.add(input_layout.start_offset());
     meta.add(kernel_stride[2]); //kernel_y_stride
     meta.add(kernel_stride[1]); //kernel_c_stride
     meta.add(kernel_stride[0]); //kernel_b_stride
@@ -52,19 +57,16 @@ pub fn queue_conv2d(
     meta.add(input_stride[0]); //stride_batch_input
     meta.add(input_stride[1]); //stride_c_in
     meta.add(input_stride[2]); //stride_y_in
-    //meta.add(input_stride[3]); //stride_x_in
-    //meta.add(params.padding);
-    //meta.add(params.stride);
-    //meta.add(params.dilation);
-    //meta.add(input_layout.start_offset());
+    meta.add(params.padding);
+    meta.add(params.stride);
     let pipeline = meta.get_pipeline_const(Pipelines::Conv2d(get_dtype(dtype)?, Functions::Conv2d), const_vec);
 
     let bind_group = create_bind_group_input2(
         buffer_dest,
-        buffer_input1,
+        input_buffer,
         buffer_input2,
     );
-    enqueue_workgroups(
+    enqueue_workgroups_extra(
         meta,
         pipeline,
         bind_group,
@@ -72,6 +74,8 @@ pub fn queue_conv2d(
         (params.out_h() as u32 + 15) / 16,
         params.c_out as u32,
         params.out_w() * params.out_h() * params.c_out * params.b_size * kernel_layout.shape().elem_count(),
+        #[cfg(feature="wgpu_debug")]
+        Some(format!("{:?}, input1: ({:?}, {:?}), kernel: ({:?}, {:?})", params, input_layout.shape(), input_layout.stride(), kernel_layout.shape(), kernel_layout.stride()))
     );
     return Ok(());
 }
@@ -93,24 +97,15 @@ pub fn queue_conv2d_transpose(
     
     let const_vec = vec![
         kernel_stride[3],//kernel_x_stride
-        //kernel_stride[2],//kernel_y_stride
-        //input_stride[2], //stride_y_in
         input_stride[3], //stride_x_in
-        params.padding,
-        params.stride,
         params.dilation,
-        input_layout.start_offset(),
         params.k_w,
         params.k_h,
         params.b_size,
         params.c_in
         ];
     
-    meta.add(params.b_size);
-    meta.add(params.c_in);
-    meta.add(params.k_w);
-    meta.add(params.k_h);
-    //meta.add(kernel_stride[3]); //kernel_x_stride
+    meta.add(input_layout.start_offset());
     meta.add(kernel_stride[2]); //kernel_y_stride
     meta.add(kernel_stride[0]); //kernel_c_stride
     meta.add(kernel_stride[1]); //kernel_b_stride
@@ -125,11 +120,10 @@ pub fn queue_conv2d_transpose(
     meta.add(input_stride[0]); //stride_batch_input
     meta.add(input_stride[1]); //stride_c_in
     meta.add(input_stride[2]); //stride_y_in
-    //meta.add(input_stride[3]); //stride_x_in
-    //meta.add(params.padding);
-    //meta.add(params.stride);
-    //meta.add(params.dilation);
-    //meta.add(input_layout.start_offset());
+
+    meta.add(params.padding);
+    meta.add(params.stride);
+
     let pipeline = meta.get_pipeline_const(Pipelines::Conv2d(get_dtype(dtype)?, Functions::Conv2dTranspose), const_vec);
     let bind_group = create_bind_group_input2(
         buffer_dest,
