@@ -1,3 +1,4 @@
+pub mod based;
 pub mod beit;
 pub mod bert;
 pub mod bigcode;
