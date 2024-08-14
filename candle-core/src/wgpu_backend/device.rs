@@ -14,7 +14,7 @@ use crate::{notImplemented, wrongType, Layout};
 #[cfg(feature = "wgpu_debug")]
 use super::debug_info::{DebugInfo, Measurements,MInfo, ShaderInfo};
 
-use super::cache::{BindGroupReferenceBase, BindgroupId, BindgroupLayouts, BufferReference, ModelCache};
+use super::cache::{BindGroupReferenceBase, BindgroupId, BindgroupLayouts, BufferReference, CachedBuffer, ModelCache};
 use super::util::{Counter, ObjectToIdMapper, ToF64, ToU32};
 use super::wgpu_functions::{ConstArray, KernelParameterMeta};
 use super::wgpu_functions::{self, create_buffer_init, unary::UnaryOperation, MetaArray};
@@ -26,7 +26,7 @@ use super::WgpuStorage;
 //pub (crate) const META_BUFFER_SIZE : u32 = 2048;
 pub (crate) const META_BUFFER_SIZE : u32 = 10*1024*1024; //10mb
 
-pub (crate) const MAX_WORKLOAD_SIZE : u64 = 1024u64*1024*1024*1; //1gb
+pub (crate) const MAX_WORKLOAD_SIZE : u64 = 1024u64*1024*1024*2; //8gb
 
 
 
@@ -66,6 +66,7 @@ impl OpIsInplaceable {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub (crate) struct PipelineType(pub candle_wgpu_kernels::Pipelines, pub usize, pub OpIsInplaceable);
+
 pub (crate) type BindGroupReference = BindGroupReferenceBase<Arc<BufferReference>>;
 
 #[derive(Debug)]
@@ -103,12 +104,13 @@ pub struct QueueBuffer{
     const_array : ConstArray,
     const_id_map : ObjectToIdMapper<ConstArray>,
     pub (crate) id_to_const_array : Vec<HashMap<String, f64>>,
-    pub (crate) current_meta : u32
+    pub (crate) current_meta : u32,
+    pub (crate) last_buffer : Option<Arc<CachedBuffer>> //will be used to wait for the last command queue
 }
 
 impl QueueBuffer {
     pub fn new() -> Self {
-        Self {  command_queue: vec![], meta_array :MetaArray::new(META_BUFFER_SIZE), current_meta : 0 , const_array: ConstArray::new(), const_id_map : ObjectToIdMapper::new() , id_to_const_array : Vec::new()}
+        Self {  command_queue: vec![], meta_array :MetaArray::new(META_BUFFER_SIZE), current_meta : 0 , const_array: ConstArray::new(), const_id_map : ObjectToIdMapper::new() , id_to_const_array : Vec::new(), last_buffer : None}
     }
 
     pub fn init(&mut self){
@@ -290,8 +292,10 @@ pub struct WgpuDeviceInner{
 
     pub (crate) bindgroup_layouts : BindgroupLayouts,
 
+    pub (crate) staging_probe_buffer : wgpu::Buffer, //wait for submission is not supported on wgpu, we use a mapping to a staging buffer as a work around.
+
     pub (crate) cache : Mutex<ModelCache>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
-    
+
     //debug counter
     pub (crate) cached_buffer_counter : Counter,
     pub (crate) cached_bindgroup_counter : Counter,
@@ -323,21 +327,12 @@ impl std::ops::Deref for WgpuDevice{
 
 impl WgpuDevice{
     pub (crate) async fn create(_: usize) -> crate::Result<Self>{
-        log::info!("Request Instance:");
         let instance = wgpu::Instance::new(InstanceDescriptor{ backends: Backends::PRIMARY, flags:InstanceFlags::default() , dx12_shader_compiler: wgpu::Dx12Compiler::Fxc, gles_minor_version: wgpu::Gles3MinorVersion::Automatic });
         
-        log::info!("Enumerate Adapters:");
-        
-        for adapter in  instance.enumerate_adapters(Backends::PRIMARY).iter(){
-            log::info!("Adapter: {:?}", adapter.get_info());
-        }
-
-        log::info!("Request Adapter:");
         // `request_adapter` instantiates the general connection to the GPU
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions{ power_preference: wgpu::PowerPreference::HighPerformance, force_fallback_adapter: false, compatible_surface: None }).await.unwrap();
 
-        log::info!("Adapter Requested:");
         let mut limits = wgpu::Limits::downlevel_defaults();
 
         #[cfg(feature = "wgpu_debug")]
@@ -353,9 +348,9 @@ impl WgpuDevice{
      
         // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
         //  `features` being the available features.
-        log::info!("Request Device");
-        log::info!("Features: {:?}", features);
-        log::info!("Limits: {:?}", limits);
+        log::debug !("Request Device");
+        log::debug!("Features: {:?}", features);
+        log::debug!("Limits: {:?}", limits);
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
@@ -381,6 +376,13 @@ impl WgpuDevice{
         let device_limits = device.limits();
         let bindgroup_layouts = BindgroupLayouts::new(&device);
         
+        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 16,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Ok(WgpuDevice {
             inner : Arc::new(WgpuDeviceInner{
                 device: device,
@@ -394,10 +396,12 @@ impl WgpuDevice{
                 meta_buffer : meta_buffer,
                 cache : Mutex::new(ModelCache::new()),
                 bindgroup_layouts,
+                staging_probe_buffer : staging_buffer,
+
                 cached_buffer_counter : Counter::new(0),
                 cached_bindgroup_counter  : Counter::new(0),
                 cached_bindgroup_reuse_counter: Counter::new(0),
-    
+                
                 cached_buffer_reuse_counter: Counter::new(0),
                 unary_inplace_counter : Counter::new(0),
                 binary_inplace_counter : Counter::new(0),
@@ -409,9 +413,9 @@ impl WgpuDevice{
     }
 
     pub fn print_bindgroup_reuseinfo(&self){
-        log::info!("Buffer: created: {}, resued : {}", self.cached_buffer_counter.get(), self.cached_buffer_reuse_counter.get());
-        log::info!("Bindgroup: created: {}, resued : {}", self.cached_bindgroup_counter.get(), self.cached_bindgroup_reuse_counter.get());
-        log::info!("Inplace used: unary: {}, binary {}, copy: {}", self.unary_inplace_counter.get(), self.binary_inplace_counter.get(), self.copy_inplace_counter.get());
+        log::warn!("Buffer: created: {}, resued : {}", self.cached_buffer_counter.get(), self.cached_buffer_reuse_counter.get());
+        log::warn!("Bindgroup: created: {}, resued : {}", self.cached_bindgroup_counter.get(), self.cached_bindgroup_reuse_counter.get());
+        log::warn!("Inplace used: unary: {}, binary {}, copy: {}", self.unary_inplace_counter.get(), self.binary_inplace_counter.get(), self.copy_inplace_counter.get());
     }
     pub fn print_bindgroup_reuseinfo2(&self){
         println!("Buffer: created: {}, resued : {}", self.cached_buffer_counter.get(), self.cached_buffer_reuse_counter.get());
@@ -427,6 +431,8 @@ impl WgpuDevice{
 
     #[cfg(feature = "wgpu_debug")]
     pub async fn get_debug_info_full(&self) -> crate::Result<Measurements>{
+        use super::wgpu_functions::{synchronize, synchronize_async};
+        synchronize_async(dev).await;
         let data = wgpu_functions::read_data_from_gpu_async_buffer::<u64>(self, &self.debug.query_set_buffer).await;
            
         let period = self.queue.get_timestamp_period();
@@ -556,6 +562,10 @@ impl WgpuDevice{
             panic!("Not expected")
         }
     }
+
+    pub (crate) async fn synchronize_async(&self) -> crate::Result<()> {
+        wgpu_functions::synchronize_async(self).await
+    }
 }
 
 impl crate::backend::BackendDevice for WgpuDevice{
@@ -664,7 +674,7 @@ impl crate::backend::BackendDevice for WgpuDevice{
     
     #[cfg(target_arch = "wasm32")]
     fn synchronize(&self) -> crate::Result<()> {
-        panic!("Synchronize is not possible on wasm. (on_submitted_work_done is currently not implemented in wgpu)");
+        panic!("Synchronize is not possible on wasm. (on_submitted_work_done is currently not implemented in wgpu). In addition synchronize can only be handled async");
     }
     #[cfg(not(target_arch = "wasm32"))]
     fn synchronize(&self) -> crate::Result<()> {

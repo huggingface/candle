@@ -268,9 +268,11 @@ fn copy3d_padded_nobatch(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let dest_stride1 = select(op_copy_3d_is_dest_stride1, op_copy_3d_dest_stride1, 1u);
     let dest_stride2 = select(op_copy_3d_is_dest_stride2, op_copy_3d_dest_stride2, 1u);
+    let dest_stride3 = select(op_copy_3d_is_dest_stride3, op_copy_3d_dest_stride3, 1u); //is only used so that the shader compiles if op_copy_3d_is_dest_stride3 is set
 
     let input_stride1 = select(op_copy_3d_is_input_stride1, op_copy_3d_input_stride1, 1u);
     let input_stride2 = select(op_copy_3d_is_input_stride2, op_copy_3d_input_stride2, 1u);
+    let input_stride3 = select(op_copy_3d_is_input_stride3, op_copy_3d_input_stride3, 1u);//is only used so that the shader compiles if op_copy_3d_is_dest_stride3 is set
 
     if(d1 >= op_copy_3d_size_d1){
         return;

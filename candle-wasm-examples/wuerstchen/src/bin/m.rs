@@ -146,7 +146,10 @@ async fn encode_prompt(
 
 
 #[wasm_bindgen]
-pub struct Model {}
+pub struct Model {
+    device : Device
+
+}
 
 
 
@@ -238,10 +241,16 @@ fn default_vgan_steps() -> u64 {
 impl Model {
 
     #[wasm_bindgen(constructor)]
-    pub fn load() -> Result<Model, JsError> {
+    pub async fn load(cpu : bool) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
-        wasm_logger::init(wasm_logger::Config::new(log::Level::Trace).message_on_new_line());
-        return Ok(Model{});
+        wasm_logger::init(wasm_logger::Config::new(log::Level::Info).message_on_new_line());
+        
+        let device = match cpu{
+            true => Device::Cpu,
+            false =>  Device::new_webgpu(0).await?,
+        };
+        
+        return Ok(Model{device});
     }
 
     pub async fn run(&self, config: String) -> Result<JsValue, JsError> {
@@ -256,7 +265,6 @@ impl Model {
         let Args {
             prompt,
             uncond_prompt,
-            cpu,
             height,
             width,
             tokenizer,
@@ -278,10 +286,7 @@ impl Model {
         //     None
         // };
     
-        let device = match cpu{
-            true => Device::Cpu,
-            false =>  Device::new_webgpu(0).await?,
-        };
+        let device = &self.device;
         log::info!("loaded device");
 
         let height = height.unwrap_or(1024);
@@ -303,13 +308,13 @@ impl Model {
                 tokenizer.clone(),
                 weights,
                 stable_diffusion::clip::Config::wuerstchen_prior(),
-                &device,
+                device,
             ).await.map_err(|f| JsError::new(&f.to_string()))?
         };
 
         log::info!("loaded Models:");
 
-         log::info!("generated prior text embeddings {prior_text_embeddings:?}");
+        log::info!("generated prior text embeddings {prior_text_embeddings:?}");
     
         let text_embeddings = {
             let tokenizer = ModelFile::Tokenizer.get(tokenizer).await?;
@@ -320,7 +325,7 @@ impl Model {
                 tokenizer.clone(),
                 weights,
                 stable_diffusion::clip::Config::wuerstchen(),
-                &device,
+                device,
             ).await.map_err(|f| JsError::new(&f.to_string()))?
         };
          log::info!("generated text embeddings {text_embeddings:?}");
@@ -335,12 +340,12 @@ impl Model {
                 0f32,
                 1f32,
                 (b_size, PRIOR_CIN, latent_height, latent_width),
-                &device,
+                device,
             )?;
     
             let prior = {
                 let file = ModelFile::Prior.get(prior_weights).await?;
-                let vb = var_builder_from_opfs_safetensors(file, DType::F32, &device).await?;
+                let vb = var_builder_from_opfs_safetensors(file, DType::F32, device).await?;
                 wuerstchen::prior::WPrior::new(
                     /* c_in */ PRIOR_CIN,
                     /* c */ 1536,
@@ -359,7 +364,7 @@ impl Model {
             for (index, &t) in timesteps.iter().enumerate() {
                 //let start_time = std::time::Instant::now();
                 let latent_model_input = Tensor::cat(&[&latents, &latents], 0)?;
-                let ratio = (Tensor::ones(2, DType::F32, &device)? * t)?;
+                let ratio = (Tensor::ones(2, DType::F32, device)? * t)?;
                 let noise_pred = prior.forward(&latent_model_input, &ratio, &prior_text_embeddings)?;
                 let noise_pred = noise_pred.chunk(2, 0)?;
                 let (noise_pred_text, noise_pred_uncond) = (&noise_pred[0], &noise_pred[1]);
@@ -370,24 +375,25 @@ impl Model {
                 //let dt = start_time.elapsed().as_secs_f32();
                 
                 //log::info!("step {}/{} done, {:.2}s", index + 1, timesteps.len(), dt);
+                device.synchronize_async().await?;
                 log::info!("step {}/{} done", index + 1, timesteps.len());
             }
             ((latents * 42.)? - 1.)?
         };
     
-         log::info!("Building the vqgan.");
+        log::info!("Building the vqgan.");
         let vqgan = {
             let file = ModelFile::VqGan.get(vqgan_weights).await?;
-            let vb = var_builder_from_opfs_safetensors(file, DType::F32, &device).await?;
+            let vb = var_builder_from_opfs_safetensors(file, DType::F32, device).await?;
             wuerstchen::paella_vq::PaellaVQ::new(vb)?
         };
     
-         log::info!("Building the decoder.");
+        log::info!("Building the decoder.");
     
         // https://huggingface.co/warp-ai/wuerstchen/blob/main/decoder/config.json
         let decoder = {
             let file = ModelFile::Decoder.get(decoder_weights).await?;
-            let vb = var_builder_from_opfs_safetensors(file, DType::F32, &device).await?;
+            let vb = var_builder_from_opfs_safetensors(file, DType::F32, device).await?;
             wuerstchen::diffnext::WDiffNeXt::new(
                 /* c_in */ DECODER_CIN,
                 /* c_out */ DECODER_CIN,
@@ -409,7 +415,7 @@ impl Model {
                 0f32,
                 1f32,
                 (b_size, DECODER_CIN, latent_height, latent_width),
-                &device,
+                device,
             )?;
     
              log::info!("diffusion process with prior {image_embeddings:?}");
@@ -418,12 +424,13 @@ impl Model {
             let timesteps = &timesteps[..timesteps.len() - 1];
             for (index, &t) in timesteps.iter().enumerate() {
                 //let start_time = std::time::Instant::now();
-                let ratio = (Tensor::ones(1, DType::F32, &device)? * t)?;
+                let ratio = (Tensor::ones(1, DType::F32, device)? * t)?;
                 let noise_pred =
                     decoder.forward(&latents, &ratio, &image_embeddings, Some(&text_embeddings))?;
                 latents = scheduler.step(&noise_pred, t, &latents)?;
                 //let dt = start_time.elapsed().as_secs_f32();
                 //log::info!("step {}/{} done, {:.2}s", index + 1, timesteps.len(), dt);
+                device.synchronize_async().await?;
                 log::info!("step {}/{} done", index + 1, timesteps.len());
             }
              log::info!(

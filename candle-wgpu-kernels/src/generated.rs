@@ -305,56 +305,56 @@ impl Shaders {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, std::marker::Copy)]
 pub enum Constants {
     None,
-	Constv7,
-	Constv3,
-	Isoutputpadded,
-	Constv0,
-	ConstDims2,
-	Constv2,
-	Constv6,
-	Preloada,
-	ConstIsContiguous2,
-	ConstIsStartoffsetZero3,
-	Constv4,
-	ConstIsStartoffsetZero1,
-	Constv9,
-	Constv5,
-	UseZ,
-	Constv1,
-	ConstDims1,
-	ConstIsStartoffsetZero2,
 	Constv8,
+	Constv7,
+	Preloada,
+	ConstIsStartoffsetZero1,
 	Preloadb,
+	ConstIsStartoffsetZero3,
 	ConstIsContiguous1,
+	Constv2,
+	ConstDims2,
+	ConstIsStartoffsetZero2,
+	Constv0,
+	UseZ,
+	Isoutputpadded,
 	ConstIsContiguous3,
+	Constv3,
+	Constv6,
+	Constv9,
+	Constv1,
+	Constv4,
+	ConstDims1,
+	ConstIsContiguous2,
+	Constv5,
 	ConstDims3
 }
 
 impl crate::EntryPoint for Constants{
     fn get_entry_point(&self) -> &'static str{
         match self{
-			Constants::Constv7 => "CONSTV_7",
-			Constants::Constv3 => "CONSTV_3",
-			Constants::Isoutputpadded => "IsOutputPadded",
-			Constants::Constv0 => "CONSTV_0",
-			Constants::ConstDims2 => "CONST_DIMS2",
-			Constants::Constv2 => "CONSTV_2",
-			Constants::Constv6 => "CONSTV_6",
-			Constants::Preloada => "PreLoadA",
-			Constants::ConstIsContiguous2 => "CONST_IS_CONTIGUOUS2",
-			Constants::ConstIsStartoffsetZero3 => "CONST_IS_STARTOFFSET_ZERO3",
-			Constants::Constv4 => "CONSTV_4",
-			Constants::ConstIsStartoffsetZero1 => "CONST_IS_STARTOFFSET_ZERO1",
-			Constants::Constv9 => "CONSTV_9",
-			Constants::Constv5 => "CONSTV_5",
-			Constants::UseZ => "USE_Z",
-			Constants::Constv1 => "CONSTV_1",
-			Constants::ConstDims1 => "CONST_DIMS1",
-			Constants::ConstIsStartoffsetZero2 => "CONST_IS_STARTOFFSET_ZERO2",
 			Constants::Constv8 => "CONSTV_8",
+			Constants::Constv7 => "CONSTV_7",
+			Constants::Preloada => "PreLoadA",
+			Constants::ConstIsStartoffsetZero1 => "CONST_IS_STARTOFFSET_ZERO1",
 			Constants::Preloadb => "PreLoadB",
+			Constants::ConstIsStartoffsetZero3 => "CONST_IS_STARTOFFSET_ZERO3",
 			Constants::ConstIsContiguous1 => "CONST_IS_CONTIGUOUS1",
+			Constants::Constv2 => "CONSTV_2",
+			Constants::ConstDims2 => "CONST_DIMS2",
+			Constants::ConstIsStartoffsetZero2 => "CONST_IS_STARTOFFSET_ZERO2",
+			Constants::Constv0 => "CONSTV_0",
+			Constants::UseZ => "USE_Z",
+			Constants::Isoutputpadded => "IsOutputPadded",
 			Constants::ConstIsContiguous3 => "CONST_IS_CONTIGUOUS3",
+			Constants::Constv3 => "CONSTV_3",
+			Constants::Constv6 => "CONSTV_6",
+			Constants::Constv9 => "CONSTV_9",
+			Constants::Constv1 => "CONSTV_1",
+			Constants::Constv4 => "CONSTV_4",
+			Constants::ConstDims1 => "CONST_DIMS1",
+			Constants::ConstIsContiguous2 => "CONST_IS_CONTIGUOUS2",
+			Constants::Constv5 => "CONSTV_5",
 			Constants::ConstDims3 => "CONST_DIMS3",
             Constants::None => panic!("not expected")
         }
@@ -369,11 +369,11 @@ impl Default for Constants {
 pub mod kernels {
     pub mod binary {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{BinaryBufferInplace2ContiguousBoth,BinaryBufferInplace1ContiguousBoth,BinaryBufferFromBufferContiguousBoth,BinaryBufferFromBuffer}
+        pub enum Functions{BinaryBufferFromBuffer,BinaryBufferInplace2ContiguousBoth,BinaryBufferFromBufferContiguousBoth,BinaryBufferInplace1ContiguousBoth}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::BinaryBufferInplace2ContiguousBoth => "gd",Functions::BinaryBufferInplace1ContiguousBoth => "gc",Functions::BinaryBufferFromBufferContiguousBoth => "gb",Functions::BinaryBufferFromBuffer => "ga"
+                    Functions::BinaryBufferFromBuffer => "binary_buffer_from_buffer",Functions::BinaryBufferInplace2ContiguousBoth => "binary_buffer_inplace2_contiguous_both",Functions::BinaryBufferFromBufferContiguousBoth => "binary_buffer_from_buffer_contiguous_both",Functions::BinaryBufferInplace1ContiguousBoth => "binary_buffer_inplace1_contiguous_both"
                 }
             } 
         }
@@ -392,7 +392,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::CmpBufferFromBuffer => "ga"
+                    Functions::CmpBufferFromBuffer => "cmp_buffer_from_buffer"
                 }
             } 
         }
@@ -407,11 +407,11 @@ pub mod kernels {
         
     pub mod conv1d {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{Conv1dTranspose,Conv1d}
+        pub enum Functions{Conv1d,Conv1dTranspose}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Conv1dTranspose => "gb",Functions::Conv1d => "ga"
+                    Functions::Conv1d => "conv1d",Functions::Conv1dTranspose => "conv1d_transpose"
                 }
             } 
         }
@@ -426,11 +426,11 @@ pub mod kernels {
         
     pub mod conv2d {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{Conv2d,Conv2d2,Conv2dTranspose}
+        pub enum Functions{Conv2dTranspose,Conv2d,Conv2d2}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Conv2d => "ga",Functions::Conv2d2 => "gb",Functions::Conv2dTranspose => "gc"
+                    Functions::Conv2dTranspose => "conv2d_transpose",Functions::Conv2d => "conv2d",Functions::Conv2d2 => "conv2d_2"
                 }
             } 
         }
@@ -445,11 +445,11 @@ pub mod kernels {
         
     pub mod convert {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{ConvertU32ToU8,ConvertU8ToF32,ConvertF32ToU8,ConvertToF32,ConvertToU32}
+        pub enum Functions{ConvertToF32,ConvertToU32,ConvertU8ToF32,ConvertF32ToU8,ConvertU32ToU8}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::ConvertU32ToU8 => "gd",Functions::ConvertU8ToF32 => "ge",Functions::ConvertF32ToU8 => "gb",Functions::ConvertToF32 => "gc",Functions::ConvertToU32 => "ga"
+                    Functions::ConvertToF32 => "convert_to_f32",Functions::ConvertToU32 => "convert_to_u32",Functions::ConvertU8ToF32 => "convert_u8_to_f32",Functions::ConvertF32ToU8 => "convert_f32_to_u8",Functions::ConvertU32ToU8 => "convert_u32_to_u8"
                 }
             } 
         }
@@ -464,11 +464,11 @@ pub mod kernels {
         
     pub mod copy {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{Copy3dPaddedNobatch,Copy2d2,Copy3dPadded,CopyStrided,Copy,Copy2dTranspose2,Copy2d,Copy3d,Copy4,Copy2dTranspose}
+        pub enum Functions{Copy3dPadded,CopyStrided,Copy,Copy2dTranspose,Copy4,Copy3dPaddedNobatch,Copy2d,Copy2d2,Copy3d,Copy2dTranspose2}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Copy3dPaddedNobatch => "gj",Functions::Copy2d2 => "ge",Functions::Copy3dPadded => "gi",Functions::CopyStrided => "ga",Functions::Copy => "gb",Functions::Copy2dTranspose2 => "gg",Functions::Copy2d => "gd",Functions::Copy3d => "gh",Functions::Copy4 => "gc",Functions::Copy2dTranspose => "gf"
+                    Functions::Copy3dPadded => "copy3d_padded",Functions::CopyStrided => "copy_strided",Functions::Copy => "copy",Functions::Copy2dTranspose => "copy2d_transpose",Functions::Copy4 => "copy_4",Functions::Copy3dPaddedNobatch => "copy3d_padded_nobatch",Functions::Copy2d => "copy2d",Functions::Copy2d2 => "copy2d2",Functions::Copy3d => "copy3d",Functions::Copy2dTranspose2 => "copy2d_transpose2"
                 }
             } 
         }
@@ -483,11 +483,11 @@ pub mod kernels {
         
     pub mod gather {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{IndexAddInplace,ScatterAddInplace,Gather}
+        pub enum Functions{Gather,ScatterAddInplace,IndexAddInplace}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::IndexAddInplace => "gc",Functions::ScatterAddInplace => "gb",Functions::Gather => "ga"
+                    Functions::Gather => "gather",Functions::ScatterAddInplace => "scatter_add_inplace",Functions::IndexAddInplace => "index_add_inplace"
                 }
             } 
         }
@@ -506,7 +506,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::IndexSelect => "ga"
+                    Functions::IndexSelect => "index_select"
                 }
             } 
         }
@@ -521,11 +521,11 @@ pub mod kernels {
         
     pub mod matmul {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{Matmul116,Matmul1End,Matmul1,Matmul5,Matmul7}
+        pub enum Functions{Matmul1End,Matmul116,Matmul1,Matmul5,Matmul7}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul116 => "gb",Functions::Matmul1End => "gc",Functions::Matmul1 => "ga",Functions::Matmul5 => "gd",Functions::Matmul7 => "ge"
+                    Functions::Matmul1End => "matmul1_end",Functions::Matmul116 => "matmul1_16",Functions::Matmul1 => "matmul1",Functions::Matmul5 => "matmul5",Functions::Matmul7 => "matmul7"
                 }
             } 
         }
@@ -544,7 +544,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::MaxPool2d => "ga",Functions::AvgPool2d => "gb"
+                    Functions::MaxPool2d => "max_pool2d",Functions::AvgPool2d => "avg_pool2d"
                 }
             } 
         }
@@ -559,11 +559,11 @@ pub mod kernels {
         
     pub mod reduce {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{ReduceIndex,Reduce}
+        pub enum Functions{Reduce,ReduceIndex}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::ReduceIndex => "gb",Functions::Reduce => "ga"
+                    Functions::Reduce => "reduce",Functions::ReduceIndex => "reduce_index"
                 }
             } 
         }
@@ -582,7 +582,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::RmsNorm => "ga"
+                    Functions::RmsNorm => "rms_norm"
                 }
             } 
         }
@@ -601,7 +601,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Softmax => "ga"
+                    Functions::Softmax => "softmax"
                 }
             } 
         }
@@ -616,11 +616,11 @@ pub mod kernels {
         
     pub mod unary {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{UnaryFromBufferContiguous,UnaryFromBuffer,UnaryInplaceContiguous}
+        pub enum Functions{UnaryInplaceContiguous,UnaryFromBufferContiguous,UnaryFromBuffer}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::UnaryFromBufferContiguous => "gb",Functions::UnaryFromBuffer => "ga",Functions::UnaryInplaceContiguous => "gc"
+                    Functions::UnaryInplaceContiguous => "unary_inplace_contiguous",Functions::UnaryFromBufferContiguous => "unary_from_buffer_contiguous",Functions::UnaryFromBuffer => "unary_from_buffer"
                 }
             } 
         }
@@ -635,11 +635,11 @@ pub mod kernels {
         
     pub mod upsample {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{Upsample1d,Upsample2d}
+        pub enum Functions{Upsample2d,Upsample1d}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Upsample1d => "ga",Functions::Upsample2d => "gb"
+                    Functions::Upsample2d => "upsample2d",Functions::Upsample1d => "upsample1d"
                 }
             } 
         }
@@ -658,7 +658,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::WhereCondIndexU32 => "ga"
+                    Functions::WhereCondIndexU32 => "where_cond_index_u32"
                 }
             } 
         }
@@ -678,7 +678,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::Matmul => "matmul",Functions::MatmulNoPadded => "matmul_no_padded"
                 }
             } 
         }
@@ -697,7 +697,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::Matmul => "matmul",Functions::MatmulNoPadded => "matmul_no_padded"
                 }
             } 
         }
@@ -716,7 +716,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::MatmulNoPadded => "gb",Functions::Matmul => "ga"
+                    Functions::MatmulNoPadded => "matmul_no_padded",Functions::Matmul => "matmul"
                 }
             } 
         }
@@ -735,7 +735,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::Matmul => "matmul",Functions::MatmulNoPadded => "matmul_no_padded"
                 }
             } 
         }
@@ -754,7 +754,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::MatmulNoPadded => "gb",Functions::Matmul => "ga"
+                    Functions::MatmulNoPadded => "matmul_no_padded",Functions::Matmul => "matmul"
                 }
             } 
         }
@@ -773,7 +773,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::Matmul => "matmul",Functions::MatmulNoPadded => "matmul_no_padded"
                 }
             } 
         }
@@ -788,11 +788,11 @@ pub mod kernels {
         
     pub mod matmul1x256 {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{Matmul,MatmulNoPadded}
+        pub enum Functions{MatmulNoPadded,Matmul}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::MatmulNoPadded => "matmul_no_padded",Functions::Matmul => "matmul"
                 }
             } 
         }
@@ -811,7 +811,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::MatmulNoPadded => "gb",Functions::Matmul => "ga"
+                    Functions::MatmulNoPadded => "matmul_no_padded",Functions::Matmul => "matmul"
                 }
             } 
         }
@@ -826,11 +826,11 @@ pub mod kernels {
         
     pub mod matmul24x24 {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{Matmul,MatmulNoPadded}
+        pub enum Functions{MatmulNoPadded,Matmul}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::MatmulNoPadded => "matmul_no_padded",Functions::Matmul => "matmul"
                 }
             } 
         }
@@ -849,7 +849,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::Matmul => "matmul",Functions::MatmulNoPadded => "matmul_no_padded"
                 }
             } 
         }
@@ -868,7 +868,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::Matmul => "matmul",Functions::MatmulNoPadded => "matmul_no_padded"
                 }
             } 
         }
@@ -883,11 +883,11 @@ pub mod kernels {
         
     pub mod matmul24x48_prefetch {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{Matmul,MatmulNoPadded}
+        pub enum Functions{MatmulNoPadded,Matmul}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::MatmulNoPadded => "matmul_no_padded",Functions::Matmul => "matmul"
                 }
             } 
         }
@@ -906,7 +906,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::Matmul => "matmul",Functions::MatmulNoPadded => "matmul_no_padded"
                 }
             } 
         }
@@ -925,7 +925,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::Matmul => "matmul",Functions::MatmulNoPadded => "matmul_no_padded"
                 }
             } 
         }
@@ -944,7 +944,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::Matmul => "matmul",Functions::MatmulNoPadded => "matmul_no_padded"
                 }
             } 
         }
@@ -959,11 +959,11 @@ pub mod kernels {
         
     pub mod matmul64x128_4x8_prefetch {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{MatmulNoPadded,Matmul}
+        pub enum Functions{Matmul,MatmulNoPadded}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::MatmulNoPadded => "gb",Functions::Matmul => "ga"
+                    Functions::Matmul => "matmul",Functions::MatmulNoPadded => "matmul_no_padded"
                 }
             } 
         }
@@ -982,7 +982,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::Matmul => "matmul",Functions::MatmulNoPadded => "matmul_no_padded"
                 }
             } 
         }
@@ -1001,7 +1001,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::Matmul => "matmul",Functions::MatmulNoPadded => "matmul_no_padded"
                 }
             } 
         }
@@ -1020,7 +1020,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::Matmul => "matmul",Functions::MatmulNoPadded => "matmul_no_padded"
                 }
             } 
         }
@@ -1035,11 +1035,11 @@ pub mod kernels {
         
     pub mod matmul64x64_8x8 {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{Matmul,MatmulNoPadded}
+        pub enum Functions{MatmulNoPadded,Matmul}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::MatmulNoPadded => "matmul_no_padded",Functions::Matmul => "matmul"
                 }
             } 
         }
@@ -1058,7 +1058,7 @@ pub mod kernels {
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::Matmul => "matmul",Functions::MatmulNoPadded => "matmul_no_padded"
                 }
             } 
         }
@@ -1073,11 +1073,11 @@ pub mod kernels {
         
     pub mod matmul64x64_prefetch {
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        pub enum Functions{Matmul,MatmulNoPadded}
+        pub enum Functions{MatmulNoPadded,Matmul}
         impl crate::EntryPoint for Functions{
             fn get_entry_point(&self) -> &'static str{
                 match self{
-                    Functions::Matmul => "ga",Functions::MatmulNoPadded => "gb"
+                    Functions::MatmulNoPadded => "matmul_no_padded",Functions::Matmul => "matmul"
                 }
             } 
         }

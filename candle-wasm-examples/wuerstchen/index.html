@@ -50,6 +50,8 @@
 
       import init, {Model} from "./build/m.js";
 
+      let model = null;
+
       async function generateSequence(controller) {
         const getValue = (id) => document.querySelector(`#${id}`).value;
         const useWgpu = getValue("useWgpu");
@@ -99,9 +101,12 @@
        
         console.log("before init");
         await init();
-        let m = new Model();
+
+        if(model == null){
+          model = await new Model(false);
+        } 
       
-        let result = await m.run(JSON.stringify({prompt : prompt, prior_steps: 2, vgan_steps : 2}));
+        let result = await model.run(JSON.stringify({prompt : prompt, prior_steps: 12, vgan_steps : 12}));
         console.log("Got Result");
         var blob = new Blob([result], {'type': 'image/png'});
         console.log("Loaded Blob");

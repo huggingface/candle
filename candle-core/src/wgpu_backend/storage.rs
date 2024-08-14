@@ -27,17 +27,17 @@ impl WgpuStorage {
         match self.dtype {
             crate::DType::U32 => {
                 return Ok(crate::CpuStorage::U32(
-                    read_data_from_gpu_async(&self.wgpu_device, self.buffer.clone()).await,
+                    read_data_from_gpu_async(&self.wgpu_device, self.buffer.clone()).await?,
                 ))
             }
             crate::DType::F32 => {
                 return Ok(crate::CpuStorage::F32(
-                    read_data_from_gpu_async(&self.wgpu_device, self.buffer.clone()).await,
+                    read_data_from_gpu_async(&self.wgpu_device, self.buffer.clone()).await?,
                 ))
             }
             crate::DType::U8 => {
                 return Ok(
-                    crate::CpuStorage::U8(read_data_from_gpu_async(&self.wgpu_device, self.buffer.clone()).await)
+                    crate::CpuStorage::U8(read_data_from_gpu_async(&self.wgpu_device, self.buffer.clone()).await?)
                 )
             }
             _ => todo!(),

@@ -77,7 +77,7 @@ impl DDPMWScheduler {
         sample
     }
 
-    pub fn step(&self, model_output: &Tensor, ts: f64, sample: &Tensor, i : usize) -> Result<Tensor> {
+    pub fn step(&self, model_output: &Tensor, ts: f64, sample: &Tensor) -> Result<Tensor> {
         let prev_t = self.previous_timestep(ts);
 
         let alpha_cumprod = self.alpha_cumprod(ts);
@@ -90,8 +90,6 @@ impl DDPMWScheduler {
         let std_noise = mu.randn_like(0., 1.)?;
         let std =
             (std_noise * ((1. - alpha) * (1. - alpha_cumprod_prev) / (1. - alpha_cumprod)).sqrt())?;
-        
-        let std = store_read(&format!("vector/vector_l_3_{i}.npy"),&std);
 
         if prev_t == 0. {
             Ok(mu)
@@ -102,17 +100,5 @@ impl DDPMWScheduler {
 
     pub fn init_noise_sigma(&self) -> f64 {
         self.init_noise_sigma
-    }
-}
-
-fn store_read(name : &str, current : &Tensor) -> Result<Tensor>{
-    if current.device().is_cpu(){
-        current.write_npy(name)?;
-        return Ok(current.clone());
-    }
-    else{
-        return Ok(current.clone());
-        //let cmp = Tensor::read_npy(name)?;
-        //return Ok(cmp.to_device(&current.device())?);
     }
 }

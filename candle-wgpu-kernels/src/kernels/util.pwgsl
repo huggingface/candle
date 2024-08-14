@@ -60,8 +60,8 @@ const ONE : DTYPE = 1;
 
 #ifdef f32
 
-const MINVALUE : f32 = -3.40282347e+38;
-const MAXVALUE : f32 =  3.40282347e+38;
+const MINVALUE : f32 = -3.40282e+38;
+const MAXVALUE : f32 =  3.40282e+38;
 
 #elifdef u32
 
@@ -84,67 +84,6 @@ struct MatrixIndex{
     id : u32,
     is_valid : bool
 }
-
-// fn get_index(input_offset : u32, index : u32) -> MatrixIndex{
-//     let dims = op_meta[input_offset];
-//     let start_offset = op_meta[input_offset + 1];
-//     let length = op_meta[input_offset + 2]; 
-//     if(length > 0){
-//         if index < length{
-//             return MatrixIndex((start_offset + index), true);
-//         }
-//         return MatrixIndex(0, false);
-//     }
-
-//     let start_shape_offset = input_offset + 3;
-
-//     var shapes_i = 1u;
-//     var new_index = start_offset;    
-//     for (var i2 : i32 = i32(dims) - 1; i2 >= 0; i2--){
-//         let i = u32(i2);
-//         let prev_shapes_i = shapes_i;
-//         shapes_i *= op_meta[start_shape_offset + i]; 
-
-//         let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);  
-//         new_index += si * op_meta[start_shape_offset + dims + i]; //s_i * stride_i
-//     }
-
-//     if index >= shapes_i{ //in shapes_i is the length after the for loop
-//         return MatrixIndex(0, false);
-//     }
-
-//     return MatrixIndex(new_index, true);
-// }
-
-// fn get_index2(input_offset : u32, index : u32, dims : u32) -> MatrixIndex{
-//     let start_offset = op_meta[input_offset + 0];
-//     let length = op_meta[input_offset + 1]; 
-//     if(length > 0){
-//         if index < length{
-//             return MatrixIndex((start_offset + index), true);
-//         }
-//         return MatrixIndex(0, false);
-//     }
-
-//     let start_shape_offset = input_offset + 2;
-
-//     var shapes_i = 1u;
-//     var new_index = start_offset;    
-//     for (var i2 : i32 = i32(dims) - 1; i2 >= 0; i2--){
-//         let i = u32(i2);
-//         let prev_shapes_i = shapes_i;
-//         shapes_i *= op_meta[start_shape_offset + i]; 
-
-//         let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);  
-//         new_index += si * op_meta[start_shape_offset + dims + i]; //s_i * stride_i
-//     }
-
-//     if index >= shapes_i{ //in shapes_i is the length after the for loop
-//         return MatrixIndex(0, false);
-//     }
-
-//     return MatrixIndex(new_index, true);
-// }
 
 fn select(d : bool, value : u32, other : u32) -> u32{
     if d{

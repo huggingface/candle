@@ -427,4 +427,13 @@ impl Device {
             Self::WebGpu(d) => d.synchronize(),
         }
     }
+
+    pub async fn synchronize_async(&self) -> Result<()> {
+        match self {
+            Self::Cpu => Ok(()),
+            Self::Cuda(d) => d.synchronize(),
+            Self::Metal(d) => d.synchronize(),
+            Self::WebGpu(d) => d.synchronize_async().await,
+        }
+    }
 }

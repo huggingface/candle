@@ -38,7 +38,7 @@ pub fn queue_binary_buffer_from_buffer(
         meta.get_pipeline_const_inplace(Pipelines::Binary(get_dtype(dtype)?, Functions::BinaryBufferFromBufferContiguousBoth) , const_vec, inplaceable)
     } else {
         let const_vec = vec![
-            op as usize, lay1.shape().dims().len() as usize];
+            op as usize];
         meta.add_layout1(&lay1);
         meta.add_layout2(&lay2);
 

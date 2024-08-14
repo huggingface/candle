@@ -130,7 +130,8 @@ fn matmul1_16(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var sum = ZERO;
     for (var i = 0u; i < op_matmul_k/4; i++){
-        sum += dot(v_input_a[i + m_input1_offset],v_input_b[i + m_input2_offset]);
+        //stride k will always be 1. it is only used, so the shader compiles, if it is also set.
+        sum += dot(v_input_a[i*op_matmul_input1_stride_k  + m_input1_offset],v_input_b[i*op_matmul_input2_stride_k + m_input2_offset]);
     }
     
     v_dest[b * output_size_of_one_batch + y * op_matmul_n + x] = sum;

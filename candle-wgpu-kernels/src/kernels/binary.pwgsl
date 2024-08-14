@@ -82,6 +82,7 @@ fn binary_buffer_inplace1_contiguous_both(@builtin(global_invocation_id) global_
     if (id >= op_binary_contiguous_both_input1_length){
         return;
     }
+    let offset1 = op_binary_contiguous_both_input1_offset; //is only used so that the shader compiles if op_binary_contiguous_both_input1_offset is set
     set_binary(op_binary_contiguous_both_operation, id, v_dest[id], v_input1[id + op_binary_contiguous_both_input2_offset]);
 }
 
@@ -92,5 +93,6 @@ fn binary_buffer_inplace2_contiguous_both(@builtin(global_invocation_id) global_
     if (id >= op_binary_contiguous_both_input1_length){
         return;
     }
+    let offset2 = op_binary_contiguous_both_input2_offset; //is only used so that the shader compiles if op_binary_contiguous_both_input2_offset is set
     set_binary(op_binary_contiguous_both_operation, id, v_input1[id + op_binary_contiguous_both_input1_offset], v_dest[id]);
 }

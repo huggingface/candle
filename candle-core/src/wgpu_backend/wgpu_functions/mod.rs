@@ -22,7 +22,7 @@ use std::{
 
 use tracing::{instrument, span, Level};
 use super::{
-    cache::{BindGroupReferenceBase, BufferReference, CachedBindGroupReference},
+    cache::{BindGroupReferenceBase, BufferReference, CachedBindGroupReference, CachedBuffer},
     device::{
         BindGroupReference, DispatchedBindgroup, MlQueue, OpIsInplaceable, PipelineType, QueueBuffer, META_BUFFER_SIZE
     },
@@ -241,6 +241,7 @@ fn get_command_buffer(
     meta_array: &[u32],
     command_queue: &[MlQueue],
     current_meta: usize,
+    waiting_buffer : &Option<Arc<CachedBuffer>> //a buffer, we want to wait for, after all commands have been queued
 ) -> wgpu::CommandBuffer {
     #[cfg(feature = "wgpu_debug")]
     let query_set = &dev.debug.query_set;
@@ -334,6 +335,11 @@ fn get_command_buffer(
     drop(_enter2);
     drop(_enter1);
 
+
+    if let Some(waiting_buffer) = waiting_buffer  {
+        let staging_buffer = &dev.staging_probe_buffer;
+        encoder.copy_buffer_to_buffer(&waiting_buffer.buffer, 0, &staging_buffer, 0, 4);
+    }
 
 
     #[cfg(feature = "wgpu_debug")]
@@ -462,14 +468,14 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer){
                 },
             }
         }
-        //allow 20% margin more:
-        let most_needed_storage = (most_needed_storage as f64 * 1.20)  as u64;
+        //allow 25% margin more:
+        let most_needed_storage = (most_needed_storage  * 5) / 4;
         
         if most_needed_storage >  cache.buffers.max_memory_allowed{
             cache.buffers.max_memory_allowed = most_needed_storage;
         }
         else{
-            cache.buffers.max_memory_allowed = ((0.9 *  cache.buffers.max_memory_allowed as f64) + (0.1 * most_needed_storage as f64)) as u64;
+            cache.buffers.max_memory_allowed = ((7 *  cache.buffers.max_memory_allowed) / 8) + (most_needed_storage/8);
         }
     }
 }
@@ -723,18 +729,21 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
     }
     let meta_size = (*last_meta - current_meta) * 4 + 256 * 3;
     let ele_size =  *index-start_index;
-    log::info!("queue {ele_size}, Meta: {meta_size}, workload: {total_workload}, cache_limit: {cache_limit}");
+    log::trace!("queue {ele_size}, Meta: {meta_size}, workload: {total_workload}, cache_limit: {cache_limit}");
+
 }
 
 #[instrument]
 pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer) {
     if queue_buffer.command_queue.len() > 0 {
+        log::warn!("flush_gpu_command");
         prepare(dev, queue_buffer);
         {
             let mut start_index = 0;
             let mut index = 0;
             let mut current_meta: usize = 0;
             let mut last_meta: usize = 0;
+
             while index < queue_buffer.command_queue.len() {
                 set_buffers(dev, queue_buffer, &mut index, current_meta, &mut last_meta);
 
@@ -745,6 +754,7 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                     &queue_buffer.get_meta()[current_meta..last_meta_index],
                     &queue_buffer.command_queue[start_index..index],
                     current_meta,
+                    &None
                 );
                 
                 #[cfg(not(target_arch = "wasm32"))]
@@ -752,10 +762,24 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                     let span1 = span!(Level::INFO, "Device Poll");
                     let _enter1 = span1.enter();
                     dev.device.poll(wgpu::Maintain::wait()).panic_on_timeout();
-                    //if !dev.device.poll(wgpu::Maintain::Poll).is_queue_empty(){
-                    //pollster::block_on(synchronize_device(&dev.device, &dev.queue)).unwrap();
-                    //}
+                    // if !dev.device.poll(wgpu::Maintain::Poll).is_queue_empty(){
+                    //     pollster::block_on(synchronize_device(&dev, &dev.queue)).unwrap();
+                    // }
                 }
+
+                //set last buffer, so we can wait for it to finish in the future
+                match &queue_buffer.command_queue[index - 1]{
+                    MlQueue::Dispatch(d) => {
+                        match &d.bindgroup{
+                            DispatchedBindgroup::CachedBindgroup(c) => {
+                                //queue_buffer.last_buffer = Some(c.buffers.get_dest().clone())
+                            },
+                            _ => {},
+                        }
+
+                    }
+                }
+                
 
                 let span1 = span!(Level::INFO, "Submit");
                 let _enter1 = span1.enter();
@@ -769,12 +793,90 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
         queue_buffer.clear();
         {
             let mut cache = dev.cache.lock().unwrap();
+
+            log::warn!("current memory {} / {}", cache.buffers.buffer_memory, cache.buffers.max_memory_allowed);
             cache.mappings.finish();
             cache.buffers.remove_unused();
             cache.remove_unused();
         }
     }
 }
+
+#[instrument]
+pub(crate) async fn flush_gpu_command_async(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer) -> crate::Result<()> {
+    if queue_buffer.command_queue.len() > 0 {
+        log::warn!("flush_gpu_command_async");
+        prepare(dev, queue_buffer);
+        {
+            let mut start_index = 0;
+            let mut index = 0;
+            let mut current_meta: usize = 0;
+            let mut last_meta: usize = 0;
+
+            while index < queue_buffer.command_queue.len() {
+                set_buffers(dev, queue_buffer, &mut index, current_meta, &mut last_meta);
+
+                let last_meta_index = (last_meta + 256 / 4).min(queue_buffer.get_meta().len());
+              
+                let cb = get_command_buffer(
+                    dev,
+                    &queue_buffer.get_meta()[current_meta..last_meta_index],
+                    &queue_buffer.command_queue[start_index..index],
+                    current_meta,
+                    &queue_buffer.last_buffer
+                );
+              
+                // let span1 = span!(Level::INFO, "Device Poll");
+                // let _enter1 = span1.enter();
+                //dev.device.poll(wgpu::Maintain::wait()).panic_on_timeout();
+                if !dev.device.poll(wgpu::Maintain::Poll).is_queue_empty(){
+                    synchronize_device(&dev, &dev.queue).await?;
+                }
+                
+                // if start_index > 0{
+                //     //get buffer of prev group
+                //     match(queue_buffer.command_queue[start_index-1]){
+                //         MlQueue::Dispatch(d) => {
+                //             match(d.bindgroup){
+                //                 DispatchedBindgroup::CachedBindgroup(c) => {
+                                    
+                //                     read_data_from_gpu_async_buffer(dev, &c.buffers.get_dest().buffer);
+
+                //                 },
+                //                 _ => {},
+                //             }
+    
+                //         }
+                //     }
+                // }
+
+                let span1 = span!(Level::INFO, "Submit");
+                let _enter1 = span1.enter();
+                dev.queue.submit(Some(cb));
+                drop(_enter1); 
+               
+                start_index = index;
+                current_meta = last_meta;
+            }
+        }
+
+      
+       
+       
+        queue_buffer.clear();
+        {
+            let mut cache = dev.cache.lock().unwrap();
+            log::warn!("current memory {} / {}", cache.buffers.buffer_memory, cache.buffers.max_memory_allowed);
+        
+            cache.mappings.finish();
+            cache.buffers.remove_unused();
+            cache.remove_unused();
+        }
+    }
+    Ok(())
+}
+
+
 
 fn enqueue(
     command_queue: MutexGuard<QueueBuffer>,
@@ -1032,52 +1134,85 @@ pub fn synchronize(dev: &WgpuDevice) -> crate::Result<()> {
     let mut command_queue = dev.command_queue.lock().unwrap();
     if command_queue.command_queue.len() > 0{
         flush_gpu_command(dev, &mut command_queue);
-        return pollster::block_on(synchronize_device(&dev.device, &dev.queue));
+        if let Some(buffer) = &command_queue.last_buffer{
+            copy_to_staging_prope(dev, &buffer.buffer);
+        }
+       
+        return pollster::block_on(synchronize_device(&dev, &dev.queue));
     }
     Ok(())
 }
 
 #[instrument]
-async fn synchronize_device(dev: &Device, queue: &Queue) -> crate::Result<()> {
-    let (sender, receiver) = flume::bounded(1);
-    queue.on_submitted_work_done(move || sender.send(()).unwrap());
-
-    dev.poll(wgpu::Maintain::wait()).panic_on_timeout();
-    if let Ok(()) = receiver.recv_async().await {
-        return Ok(());
+pub async fn synchronize_async(dev: &WgpuDevice) -> crate::Result<()> {
+    let mut command_queue = dev.command_queue.lock().unwrap();
+    if command_queue.command_queue.len() > 0{
+        flush_gpu_command_async(dev, &mut command_queue).await?;
+        if let Some(buffer) = &command_queue.last_buffer{
+            copy_to_staging_prope(dev, &buffer.buffer);
+        }
+        return synchronize_device(&dev, &dev.queue).await;
     }
     Ok(())
 }
+
+
+// #[instrument]
+// async fn synchronize_device(dev: &Device, queue: &Queue) -> crate::Result<()> {
+//     let (sender, receiver) = flume::bounded(1);
+//     queue.on_submitted_work_done(move || sender.send(()).unwrap());
+
+//     dev.poll(wgpu::Maintain::wait()).panic_on_timeout();
+//     if let Ok(()) = receiver.recv_async().await {
+//         return Ok(());
+//     }
+//     Ok(())
+// }
+
+
+#[instrument]
+async fn synchronize_device(dev: &WgpuDevice, queue: &Queue) -> crate::Result<()> {
+    wait_for_gpu_buffer_async(dev).await
+}
+
 
 #[instrument]
 pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: Arc<BufferReference>,
-) -> Vec<T> {
+) -> crate::Result<Vec<T>> {
     let mut command_queue = dev.command_queue.lock().unwrap();
-    flush_gpu_command(dev, &mut command_queue); //send all previous commands to the gpu
-    let dest_size = buffer.size;
-
-    //TODO: use cached staging buffer!
-    let staging_buffer = dev.device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: dest_size,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut encoder = dev
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-
+    flush_gpu_command_async(dev, &mut command_queue).await?; //send all previous commands to the gpu
+  
     let buffer_storage = buffer.storage.lock().unwrap();
     if let Some(buffer) = buffer_storage.as_ref() {
-        encoder.copy_buffer_to_buffer(&buffer.buffer, 0, &staging_buffer, 0, dest_size);
+        Ok(read_data_from_gpu_async_buffer(dev, &buffer.buffer).await)
     } else {
         panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
     }
+}
+
+
+pub fn copy_to_staging_prope(dev: &WgpuDevice, buffer: &wgpu::Buffer){
+    let mut encoder = dev
+    .device
+    .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+    let staging_buffer = &dev.staging_probe_buffer;
+
+    encoder.copy_buffer_to_buffer(&buffer, 0, &staging_buffer, 0, 4);
 
     // Submits command encoder for processing
     dev.queue.submit(Some(encoder.finish()));
+}
+
+#[instrument]
+//wait for the current staging buffer, 
+//the buffer one wants to 
+pub async fn wait_for_gpu_buffer_async(
+    dev: &WgpuDevice,
+) -> crate::Result<()> {
+    let staging_buffer = &dev.staging_probe_buffer;
 
     // Note that we're not calling `.await` here.
     let buffer_slice = staging_buffer.slice(..);
@@ -1092,26 +1227,18 @@ pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
 
     // Awaits until `buffer_future` can be read from
     if let Ok(Ok(())) = receiver.recv_async().await {
-        // Gets contents of buffer
-        let data = buffer_slice.get_mapped_range();
-        // Since contents are got in bytes, this converts these bytes back to u32
-        let result: Vec<T> = bytemuck::cast_slice(&data).to_vec();
-
-        // With the current interface, we have to make sure all mapped views are
-        // dropped before we unmap the buffer.
-        drop(data);
         staging_buffer.unmap(); // Unmaps buffer from memory
                                 // If you are familiar with C++ these 2 lines can be thought of similarly to:
                                 //   delete myPointer;
                                 //   myPointer = NULL;
                                 // It effectively frees the memory
-
         // Returns data from buffer
-        result
+        Ok(())
     } else {
         panic!("failed to run compute on gpu!")
     }
 }
+
 
 
 #[instrument]
@@ -1119,9 +1246,6 @@ pub async fn read_data_from_gpu_async_buffer<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: &wgpu::Buffer,
 ) -> Vec<T> {
-    let mut command_queue = dev.command_queue.lock().unwrap();
-    flush_gpu_command(dev, &mut command_queue); //send all previous commands to the gpu
-
     let dest_size = buffer.size();
 
     //TODO: use cached staging buffer!

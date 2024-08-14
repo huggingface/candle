@@ -1,5 +1,5 @@
 use super::common::{AttnBlock, ResBlock, TimestepBlock};
-use candle::{DType, Device, Result, Tensor, D};
+use candle::{DType, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 #[derive(Debug)]
@@ -87,81 +87,20 @@ impl WPrior {
     pub fn forward(&self, xs: &Tensor, r: &Tensor, c: &Tensor) -> Result<Tensor> {
         let x_in = xs;
         let mut xs = xs.apply(&self.projection)?;
-        //let mut xs = compare_read("vector/vector_a2.npy", &xs)?;
         let c_embed = c
             .apply(&self.cond_mapper_lin1)?
             .apply(&|xs: &_| candle_nn::ops::leaky_relu(xs, 0.2))?
             .apply(&self.cond_mapper_lin2)?;
 
-        let c_embed = compare_read("vector/vector_a3.npy", &c_embed)?;
-
         let r_embed = self.gen_r_embedding(r)?;
-        let r_embed = compare_read("vector/vector_a4.npy", &r_embed)?;
 
-        for (index, block) in self.blocks.iter().enumerate() {
+        for block in self.blocks.iter(){
             xs = block.res_block.forward(&xs, None)?;
-            //xs = compare_read(&format!("vector/vector_z1_{index}.npy"), &xs)?;
             xs = block.ts_block.forward(&xs, &r_embed)?;
-            //xs  = compare_read(&format!("vector/vector_z2_{index}.npy"), &xs)?;
             xs = block.attn_block.forward(&xs, &c_embed)?;
         }
-
-        let xs = compare_read("vector/vector_a5.npy", &xs)?;
-
-        //let ab = xs.apply(&self.out_ln)?.apply(&self.out_conv)?.chunk(2, 1)?;
-        //(x_in - &ab[0])? / ((&ab[1] - 1.)?.abs()? + 1e-5)
-
-
-        let ab: Vec<Tensor> = xs.apply(&self.out_ln)?.apply(&self.out_conv)?.chunk(2, 1)?;
-
-        let ab0 = compare_read("vector/vector_a6.npy", &ab[0])?;
-        let ab1 = compare_read("vector/vector_a7.npy", &ab[1])?;
-
         
-        (x_in - &ab0)? / ((&ab1 - 1.)?.abs()? + 1e-5)
-    }
-}
-
-
-fn compare_tensor(cpu : &Tensor, noncpu : &Tensor, name : &str) -> Result<()>{
-    let cpu2 = noncpu.to_device(&Device::Cpu)?;
-    let diff = (&cpu2 - cpu)?.abs()?;
-
-    let mean = diff.mean_all()?;
-
-    let mut dims: Vec<_> = (0..diff.rank()).collect();
-
-
-
-    let mut diff = diff.max(D::Minus1)?;
-
-    while dims.len() > 1 {
-        dims = (0..diff.rank()).collect();
-        diff = diff.max(D::Minus1)?;
-    }
-
-    let diff : f32 = diff.to_scalar()?;
-    let mean : f32 = mean.to_scalar()?;
-    log::warn!("Diff was: {diff}, mean: {mean}, name: {name}");
-    // if diff > 0.01{
-    //     panic!("Diff was: {diff}, name: {name}");
-    // }
-    
-    Ok(())
-}   
-
-
-fn compare_read(name : &str, current : &Tensor) -> Result<Tensor>{
-    println!("compare read {name}");
-    if current.device().is_cpu(){
-        current.write_npy(name)?;
-        return Ok(current.clone());
-    }
-    else{
-        return Ok(current.clone());
-        //let cmp = Tensor::read_npy(name)?;
-        //compare_tensor(&cmp, current, name)?;
-        //return Ok(current.copy()?);
-        //return Ok(cmp.to_device(&current.device())?);
+        let ab = xs.apply(&self.out_ln)?.apply(&self.out_conv)?.chunk(2, 1)?;
+        (x_in - &ab[0])? / ((&ab[1] - 1.)?.abs()? + 1e-5)
     }
 }

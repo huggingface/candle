@@ -994,6 +994,8 @@ mod shader_loader{
                 let mut tokens = tokenizer.peekable();
                 let mut prev_token = None;
 
+                const SHORTEN_GLOBAL_VARIABLES : bool = false;
+
                 while let Some(token) = tokens.next() {
                     match token {
                         Token::Word(word) if word == "let" || word=="var" || word=="const" => {
@@ -1021,10 +1023,15 @@ mod shader_loader{
                                         short_name = self.global_functions.get(&var_name).unwrap().to_string();
                                     }
                                     else{
-                                        let (n, new_counter ) = generate_short_name(self.global_function_counter);
-                                        self.global_function_counter = new_counter;
-                                        
-                                        short_name = format!("g{n}");
+                                        if SHORTEN_GLOBAL_VARIABLES{
+                                            let (n, new_counter ) = generate_short_name(self.global_function_counter);
+                                            self.global_function_counter = new_counter;
+                                            short_name = format!("g{n}");
+                                          
+                                        }
+                                        else{
+                                            short_name = var_name.clone();
+                                        }
                                         self.global_functions.insert(var_name.to_string(), short_name.to_string());          
                                     }
                                     result.push_str(&short_name);

@@ -331,9 +331,16 @@ impl BufferCache {
         }
     }
 
+    fn max_cached_size(size : u64) -> u64{
+        const TRANSITION_POINT : u64 = 1000*1024;
+        return size +  (3 * size * TRANSITION_POINT / (TRANSITION_POINT + size));
+    }
+
     #[instrument]
     fn get_buffer(&mut self, dev: &WgpuDevice, size: u64, exact_size: bool) -> BufferId {
-        let max_size = (size as f64 + self.max_memory_allowed as f64 * 0.05) as u64;
+        //let max_size = (size as f64 + self.max_memory_allowed as f64 * 0.05) as u64 + 1000;
+
+        let max_size = BufferCache::max_cached_size(size);
 
         if dev.use_cache {
             for (buffer_size, buffers) in self.buffers.map.range_mut(size..) {
@@ -347,7 +354,6 @@ impl BufferCache {
                     }
                 } else {
                     if *buffer_size > max_size {
-                        //allow max. 2 times the size
                         break;
                     }
                 }
@@ -660,7 +666,7 @@ impl Eq for CachedBindGroupReference {}
 pub struct CachedBindGroup {
     pub(crate) bindgroup: wgpu::BindGroup,
     last_used: AtomicU32, //An Index referencing, when this cached item was used the last time,
-    buffers: CachedBindGroupReference,
+    pub (crate) buffers: CachedBindGroupReference,
     //id : u32
 }
 
@@ -713,7 +719,7 @@ impl ModelCache {
     pub fn remove_unused(&mut self) -> bool {
         let mut counter = 0;
 
-        if self.buffers.buffer_memory > (self.buffers.max_memory_allowed as f64 * 1.1) as u64{
+        if self.buffers.buffer_memory > ((self.buffers.max_memory_allowed * 5) / 4) as u64{
             while self.buffers.buffer_memory > self.buffers.max_memory_allowed {
                 if let Some(first) = self.bindgroups.order.first() {
                     counter += 1;
@@ -744,7 +750,7 @@ impl ModelCache {
         }
 
         if counter > 1{
-            log::info!("removed {counter} bindgroups, current memory {} / {}", self.buffers.buffer_memory, self.buffers.max_memory_allowed);
+            log::warn!("removed {counter} bindgroups, current memory {} / {}", self.buffers.buffer_memory, self.buffers.max_memory_allowed);
         }
 
         return counter > 1;
@@ -903,6 +909,8 @@ impl ModelCache {
                     }
                 };
 
+                let max_size = BufferCache::max_cached_size(required_size);
+
                 let candidates_to_process = self
                     .bindgroups
                     .get_inputs(&bindgroup_inputs)
@@ -918,8 +926,8 @@ impl ModelCache {
                                 //the data reference points to is alredy stored inside another cached
                                 return false;
                             }
-                        } else if cbuf_dest.buffer.size() >= required_size
-                            && self.buffers.is_buffer_free(cbuf_dest)
+                        } else if cbuf_dest.buffer.size() >= required_size 
+                            && self.buffers.is_buffer_free(cbuf_dest) && cbuf_dest.buffer.size() <= max_size
                         {
                             //is the cached buffer free, and is is bit enaugh?
                             return true;
@@ -983,7 +991,7 @@ pub(crate) struct BufferMappingCache {
 impl BufferMappingCache {
     fn new() -> Self {
         Self {
-            last_buffer_mappings: FixedSizeQueue::new(10),
+            last_buffer_mappings: FixedSizeQueue::new(2),
             current_buffer_mapping: None,
             current_index: 0,
         }
@@ -995,8 +1003,10 @@ impl BufferMappingCache {
             .iter()
             .position(|b| b.hash == hash);
         if let Some(index) = index {
+            log::warn!("reuse mapping: {index}, hash: {hash}, mappings: {}", self.last_buffer_mappings.deque.len());
             self.current_buffer_mapping = self.last_buffer_mappings.deque.remove(index);
         } else {
+            log::warn!("create new mapping: hash: {hash}, mappings: {}", self.last_buffer_mappings.deque.len());
             self.current_buffer_mapping = Some(CachedBufferMappings::new(hash));
         }
     }
@@ -1024,7 +1034,7 @@ impl BufferMappingCache {
         size: u64,
     ) {
         if let Some(mapping) = &mut self.current_buffer_mapping {
-            let data = CachedBufferMapping::new(pipeline, size, buffer);
+            let data = CachedBufferMapping::new(pipeline, buffer);
             if (self.current_index as usize) < mapping.data.len() {
                 mapping.data[self.current_index as usize] = data;
             } else {
@@ -1048,15 +1058,13 @@ impl BufferMappingCache {
 #[derive(Debug)]
 pub(crate) struct CachedBufferMapping {
     pub(crate) pipeline: PipelineType,
-    pub(crate) requested_size: u64,
     pub(crate) used_buffer: Weak<CachedBuffer>,
 }
 
 impl CachedBufferMapping {
-    fn new(pipeline: PipelineType, requested_size: u64, used_buffer: Weak<CachedBuffer>) -> Self {
+    fn new(pipeline: PipelineType, used_buffer: Weak<CachedBuffer>) -> Self {
         Self {
             pipeline,
-            requested_size,
             used_buffer,
         }
     }
