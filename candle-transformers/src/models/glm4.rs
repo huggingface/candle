@@ -383,7 +383,7 @@ struct Block {
 impl Block {
     fn new(layer_number: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let input_layernorm = if cfg.rmsnorm {
-            candle_nn::rms_norm(
+            candle_nn::rms_norm_non_quant(
                 cfg.hidden_size,
                 cfg.layernorm_epsilon,
                 vb.pp("input_layernorm"),
@@ -397,7 +397,7 @@ impl Block {
             )?
         };
         let post_attention_layernorm = if cfg.rmsnorm {
-            candle_nn::rms_norm(
+            candle_nn::rms_norm_non_quant(
                 cfg.hidden_size,
                 cfg.layernorm_epsilon,
                 vb.pp("post_attention_layernorm"),
@@ -469,7 +469,7 @@ impl Transformer {
         }
         let final_layernorm = if cfg.post_layer_norm {
             let ln = if cfg.rmsnorm {
-                candle_nn::rms_norm(
+                candle_nn::rms_norm_non_quant(
                     cfg.hidden_size,
                     cfg.layernorm_epsilon,
                     vb.pp("final_layernorm"),
