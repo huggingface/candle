@@ -555,7 +555,7 @@ impl QCudaStorage {
         let out = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
             let data_f32 = self.dequantize(n * k)?;
             let rhs_l = crate::Layout::new((k, n).into(), vec![1, k], 0).broadcast_as((b, k, n))?;
-            storage.matmul(&data_f32, (b, m, n, k), layout, &rhs_l)?
+            storage.matmul_with_alpha(&data_f32, None, (b, m, n, k), layout, &rhs_l)?
         } else {
             let storage = storage.as_cuda_slice::<f32>()?;
             let storage = match layout.contiguous_offsets() {

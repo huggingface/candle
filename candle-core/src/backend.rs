@@ -89,14 +89,6 @@ pub trait BackendStorage: Sized {
         _: usize,
     ) -> Result<Self>;
 
-    fn matmul(
-        &self,
-        _: &Self,
-        _: (usize, usize, usize, usize),
-        _: &Layout,
-        _: &Layout,
-    ) -> Result<Self>;
-
     #[allow(clippy::too_many_arguments)]
     fn matmul_with_alpha_beta(
         &self,

@@ -827,7 +827,7 @@ impl BackendStorage for MetalStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
             let mut kernel_c = self.device().zeros_impl(kernel_l.shape(), kernel.dtype())?;
@@ -835,7 +835,7 @@ impl BackendStorage for MetalStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, l_out, n)).transpose(1, 2)?;
         let mut res_t = self.device().zeros_impl(res_l.shape(), res.dtype())?;
@@ -886,8 +886,9 @@ impl BackendStorage for MetalStorage {
                     vec![0, k_size * c_out, 1],
                     k_layout.start_offset(),
                 );
-                self.matmul(
+                self.matmul_with_alpha(
                     k,
+                    None,
                     (b_size, l_in, c_out * k_size, c_in),
                     &layout.transpose(1, 2)?,
                     &kernel_l_mm,
@@ -1018,7 +1019,7 @@ impl BackendStorage for MetalStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
             let mut kernel_c = self.device().zeros_impl(kernel_l.shape(), kernel.dtype())?;
@@ -1026,7 +1027,7 @@ impl BackendStorage for MetalStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, h_out, w_out, n))
             .transpose(1, 2)?
@@ -1438,50 +1439,6 @@ impl BackendStorage for MetalStorage {
         )
         .map_err(MetalError::from)?;
         Ok(acc)
-    }
-
-    fn matmul(
-        &self,
-        rhs: &Self,
-        (b, m, n, k): (usize, usize, usize, usize),
-        lhs_l: &Layout,
-        rhs_l: &Layout,
-    ) -> Result<Self> {
-        let buffer = self.device.new_buffer(b * m * n, self.dtype, "matmul")?;
-        let name = match self.dtype {
-            DType::F32 => "sgemm",
-            DType::F16 => "hgemm",
-            DType::BF16 => "bgemm",
-            dtype => {
-                return Err(MetalError::Message(format!("matmul doesn't support {dtype:?}")).into())
-            }
-        };
-
-        let command_buffer = self.device.command_buffer()?;
-        command_buffer.set_label("matmul");
-        candle_metal_kernels::call_gemm(
-            &self.device.device,
-            &command_buffer,
-            &self.device.kernels,
-            name,
-            (b, m, n, k),
-            lhs_l.stride(),
-            lhs_l.start_offset() * self.dtype.size_in_bytes(),
-            &self.buffer,
-            rhs_l.stride(),
-            rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
-            &rhs.buffer,
-            &buffer,
-            1.,
-            0.,
-        )
-        .map_err(MetalError::from)?;
-        Ok(Self::new(
-            buffer,
-            self.device.clone(),
-            b * m * n,
-            self.dtype(),
-        ))
     }
 
     fn matmul_with_alpha_beta(

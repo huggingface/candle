@@ -140,16 +140,6 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn matmul(
-        &self,
-        _: &Self,
-        _: (usize, usize, usize, usize),
-        _: &Layout,
-        _: &Layout,
-    ) -> Result<Self> {
-        Err(Error::NotCompiledWithCudaSupport)
-    }
-
     fn matmul_with_alpha_beta(
         &self,
         _: &Self,
