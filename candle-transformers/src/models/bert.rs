@@ -501,5 +501,6 @@ fn get_extended_attention_mask(attention_mask: &Tensor, dtype: DType) -> Result<
     };
     let attention_mask = attention_mask.to_dtype(dtype)?;
     // torch.finfo(dtype).min
-    (attention_mask.ones_like()? - attention_mask)?.broadcast_mul(&Tensor::try_from(f32::MIN)?)
+    (attention_mask.ones_like()? - &attention_mask)?
+        .broadcast_mul(&Tensor::try_from(f32::MIN)?.to_device(attention_mask.device())?)
 }
