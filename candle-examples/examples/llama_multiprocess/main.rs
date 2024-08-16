@@ -21,7 +21,6 @@ use hf_hub::{api::sync::Api, Repo, RepoType};
 use std::io::Write;
 use std::rc::Rc;
 
-
 mod model;
 use model::{Config, Llama};
 
