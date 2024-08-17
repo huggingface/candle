@@ -232,7 +232,7 @@ struct Args {
     repeat_last_n: usize,
 
     /// The model to use.
-    #[arg(long, default_value = "2b")]
+    #[arg(long, default_value = "2-2b")]
     which: Which,
 
     #[arg(long)]
