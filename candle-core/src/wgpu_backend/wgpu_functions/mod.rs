@@ -877,7 +877,6 @@ fn finish_commands(command_buffer: &mut QueueBuffer, index : usize){
 #[instrument]
 pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer) -> crate::Result<()> {
     if queue_buffer.command_queue.len() > 0 {
-        log::warn!("flush_gpu_command");
         let mut cache = dev.cache.lock().expect("flush gpu_commadn could not lock cache");
         prepare(dev, queue_buffer, &mut cache);
         {

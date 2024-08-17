@@ -18,6 +18,9 @@ const LATENT_DIM_SCALE: f64 = 10.67;
 const PRIOR_CIN: usize = 16;
 const DECODER_CIN: usize = 4;
 
+#[cfg(feature = "wgpu_debug")]
+const TEST_NAME : &str = "3";
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -371,6 +374,8 @@ fn run(args: Args) -> Result<()> {
             idx + 1,
             num_samples
         );
+
+       
 
         match &device {
             candle::Device::WebGpu(gpu) => {

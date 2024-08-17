@@ -2,7 +2,7 @@ use std::{collections::HashMap, fs::File, sync::{atomic::AtomicU32, Mutex}};
 use wgpu::Device;
 
 use serde::{Deserialize, Serialize};
-use serde_json::to_writer;
+use serde_json::{to_string, to_writer};
 
 #[derive(Debug)]
 pub struct DebugInfo{
@@ -17,7 +17,7 @@ impl DebugInfo {
         // Create a buffer to store the query results
         let query_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 256 * 10000000 as u64,
+            size: 256 * 1_000_000 as u64,
             usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::QUERY_RESOLVE,
             mapped_at_creation: false,
         });
@@ -184,4 +184,9 @@ pub fn save_list<T: Serialize>(measurements : &T, file_name : &str) -> Result<()
     let file = File::create(file_name)?;
     to_writer(file, measurements)?;
     Ok(())
+}
+
+
+pub fn get_list<T: Serialize>(measurements : &T) -> Result<String,Box<dyn std::error::Error>>{
+    Ok(to_string(measurements)?)
 }

@@ -453,8 +453,8 @@ impl WgpuDevice{
 
     #[cfg(feature = "wgpu_debug")]
     pub async fn get_debug_info_full(&self) -> crate::Result<Measurements>{
-        use super::wgpu_functions::{synchronize, synchronize_async};
-        synchronize_async(dev).await;
+        use super::wgpu_functions::synchronize_async;
+        synchronize_async(self).await?;
         let data = wgpu_functions::read_data_from_gpu_async_buffer::<u64>(self, &self.debug.query_set_buffer).await;
            
         let period = self.queue.get_timestamp_period();

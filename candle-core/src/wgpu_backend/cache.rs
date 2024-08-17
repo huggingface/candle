@@ -459,7 +459,7 @@ impl ModelCache {
     pub fn create_buffer_reference_init<T: bytemuck::Pod>(&mut self,dev: &WgpuDevice, data: &[T], referenced_by_candle_storage : bool) -> BufferReferenceId{    
         let data = bytemuck::cast_slice(data);
 
-        let buffer = self.buffers.search_buffer(dev, data.len() as u64, 0); //TODO use exact size?
+        let buffer = self.buffers.search_buffer(dev, data.len() as u64, 0,u32::MAX - 1); //TODO use exact size?
         dev.queue.write_buffer(&self.buffers.get_buffer(&buffer).unwrap().buffer, 0, data);
 
         let buffer_reference = BufferReference::new_with_storage(data.len() as u64, buffer, referenced_by_candle_storage);
@@ -486,7 +486,7 @@ impl ModelCache {
         // 2. have a big memory diff (the actual buffer size vs the average size the buffer is used with)
         let mut check_bindgroups = false;
         if current_memory > memory_margin{
-            println!("deleting buffers: ({}) current {current_memory}/{memory_margin}",self.buffers.storage.len());
+            log::warn!("deleting buffers: ({}) current {current_memory}/{memory_margin}",self.buffers.storage.len());
             
             //every entry in self.buffers.order will be free and can be potentially deleted
             //this is ordered from small to big. 
@@ -504,7 +504,7 @@ impl ModelCache {
                 }
             }
             let current_memory = self.buffers.buffer_memory;
-            println!("after deleting: ({}) current {current_memory}/{}",self.buffers.storage.len(),self.buffers.max_memory_allowed);
+            log::warn!("after deleting: ({}) current {current_memory}/{}",self.buffers.storage.len(),self.buffers.max_memory_allowed);
         }
 
         //remove bindgroups:
@@ -615,13 +615,17 @@ impl ModelCache {
         }
 
         let buf_dest_id = bindgroup_reference.get_dest();
-
+        let buf_dest_length;
         let mut buf_dest_cached_id;
         let mut required_size;
         {
             let buf_dest_reference = self.buffer_reference.get(buf_dest_id).unwrap();
             buf_dest_cached_id = buf_dest_reference.cached_buffer_id.clone();
             required_size = buf_dest_reference.size;
+            buf_dest_length = buf_dest_reference.last_used - buf_dest_reference.first_used;
+            if buf_dest_reference.last_used < buf_dest_reference.first_used{
+                panic!("buffer {:?}({:?})", buf_dest_reference, buf_dest_id);
+            }
         }
 
         if dev.configuration.use_cache {
@@ -664,7 +668,7 @@ impl ModelCache {
 
                 let bindgroup_inputs = get_buffer_referece_key(self, CachedBufferId::new(0, 0), &bindgroup_reference);
                 // let bindgroup_inputs = &bindgroup_reference.1;
-                let max_size : u64 = BufferCacheStorage::max_cached_size(required_size as u64);
+                let max_size : u64 = BufferCacheStorage::max_cached_size(required_size as u64, buf_dest_length);
 
                 let candidates_to_process = self
                     .bindgroups
@@ -724,7 +728,7 @@ impl ModelCache {
             dest_buffer_id = buf_dest_reference.cached_buffer_id;
         }
         else{//create a new buffer
-            dest_buffer_id = self.buffers.search_buffer(dev, required_size, command_id);
+            dest_buffer_id = self.buffers.search_buffer(dev, required_size, command_id, buf_dest_length);
             //use this buffer for the buffer reference:
             buf_dest_reference.cached_buffer_id = dest_buffer_id;
         }
@@ -936,15 +940,19 @@ impl BufferCacheStorage{
         }
     }
 
-    fn max_cached_size(size : u64) -> u64{
+    //the length, this buffer should be used for(if a buffer is only used temporary we may use a way bigger buffer for just one command)
+    fn max_cached_size(size : u64, length : u32) -> u64{
+        let length = length + 1;
+        let i = (300 / (length * length*length)).min(64).max(1) as u64;
+
         const TRANSITION_POINT : u64 = 1000*1024;
-        return size +  (3 * size * TRANSITION_POINT / (TRANSITION_POINT + size));
+        return size +  (i * size * TRANSITION_POINT / (TRANSITION_POINT + size));
     }
 
     //will try to find a free buffer in the cache, or create a new one
-    pub fn search_buffer(&mut self, dev : &WgpuDevice, size : u64, command_id : u32) -> CachedBufferId {
+    pub fn search_buffer(&mut self, dev : &WgpuDevice, size : u64, command_id : u32, length : u32) -> CachedBufferId {
         //println!("search buffer: size: {size}");
-        let max_size = BufferCacheStorage::max_cached_size(size);
+        let max_size = BufferCacheStorage::max_cached_size(size, length);
 
         if dev.configuration.use_cache{
             let mut buffer_found = None;
