@@ -91,6 +91,8 @@ fn dequantize_f32(
         GgmlDType::Q5K => ("dequantize_block_q5_K_f32", true, 64, nb),
         GgmlDType::Q6K => ("dequantize_block_q6_K_f32", true, 64, nb),
         GgmlDType::Q8K => ("dequantize_block_q8_K_f32", true, 32, nb),
+        GgmlDType::F32 => ("dequantize_block_f32_f32", false, 256, nb),
+        GgmlDType::F16 => ("dequantize_block_f16_f32", false, 256, nb),
         _ => crate::bail!("unsupported dtype for dequantize {dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, candle_kernels::QUANTIZED)?;
@@ -148,6 +150,8 @@ fn dequantize_f16(
         GgmlDType::Q5K => ("dequantize_block_q5_K_f16", true, 64, nb),
         GgmlDType::Q6K => ("dequantize_block_q6_K_f16", true, 64, nb),
         GgmlDType::Q8K => ("dequantize_block_q8_K_f16", true, 32, nb),
+        GgmlDType::F32 => ("dequantize_block_f32_f16", false, 256, nb),
+        GgmlDType::F16 => ("dequantize_block_f16_f16", false, 256, nb),
         _ => crate::bail!("unsupported dtype for dequantize {dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, candle_kernels::QUANTIZED)?;

@@ -5,6 +5,7 @@ use candle_core::{
     test_utils::to_vec2_round,
     DType, Device, IndexOp, Module, Result, Tensor,
 };
+use half::f16;
 use quantized::{k_quants, GgmlType};
 use rand::prelude::*;
 
@@ -716,6 +717,36 @@ fn quantize_q8k(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn dequantize_f16(device: &Device) -> Result<()> {
+    let src = get_test_vector2(0.5, 1024, device)?;
+    let quant = quantized::QTensor::quantize(&src, GgmlDType::F16)?;
+    let dst = quant.dequantize(device)?;
+    assert_eq!(dst.to_vec1::<f32>()?, src.to_vec1::<f32>()?);
+
+    let dst_f16 = quant.dequantize_f16(device)?;
+    assert_eq!(
+        dst_f16.to_vec1::<f16>()?,
+        src.to_dtype(DType::F16)?.to_vec1::<f16>()?
+    );
+
+    Ok(())
+}
+
+fn dequantize_f32(device: &Device) -> Result<()> {
+    let src = get_test_vector2(0.5, 1024, device)?;
+    let quant = quantized::QTensor::quantize(&src, GgmlDType::F32)?;
+    let dst = quant.dequantize(device)?;
+    assert_eq!(dst.to_vec1::<f32>()?, src.to_vec1::<f32>()?);
+
+    let dst_f16 = quant.dequantize_f16(device)?;
+    assert_eq!(
+        dst_f16.to_vec1::<f16>()?,
+        src.to_dtype(DType::F16)?.to_vec1::<f16>()?
+    );
+
+    Ok(())
+}
+
 test_device!(
     quantize_q4_0,
     quantize_q4_0_cpu,
@@ -775,6 +806,18 @@ test_device!(
     quantize_q8k_cpu,
     quantize_q8k_cuda,
     quantize_q8k_metal
+);
+test_device!(
+    dequantize_f16,
+    dequantize_f16_cpu,
+    dequantize_f16_cuda,
+    dequantize_f16_metal
+);
+test_device!(
+    dequantize_f32,
+    dequantize_f32_cpu,
+    dequantize_f32_cuda,
+    dequantize_f32_metal
 );
 
 /// Very simple dot product implementation

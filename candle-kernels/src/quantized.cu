@@ -1117,6 +1117,29 @@ static __device__ void dequantize_block_q5_1(const void * __restrict__ vx, dst_t
   return dequantize_block<QK5_1, QR5_1, dequantize_q5_1>(vx, yy, nb32);
 }
 
+template <typename src_t, typename dst_t>
+static __device__ void convert_unary(const void * __restrict__ vx, dst_t * __restrict__ y, const int k) {
+    const int i = (int)blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+
+    const src_t * x = (src_t *) vx;
+
+    y[i] = x[i];
+}
+
+template<typename dst_t>
+static __device__ void dequantize_block_f32(const void * __restrict__ vx, dst_t * __restrict__ y, const int nb32) {
+  return convert_unary<float, dst_t>(vx, y, nb32*32);
+}
+
+template<typename dst_t>
+static __device__ void dequantize_block_f16(const void * __restrict__ vx, dst_t * __restrict__ y, const int nb32) {
+  return convert_unary<__half, dst_t>(vx, y, nb32*32);
+}
+
 #define DEQUANTIZE_K(QNAME) \
 extern "C" __global__ void dequantize_block_##QNAME##_f32(const void * __restrict__ vx, float * __restrict__ y) { \
   dequantize_block_##QNAME(vx, y); \
@@ -1144,6 +1167,8 @@ DEQUANTIZE(q4_1)
 DEQUANTIZE(q5_0)
 DEQUANTIZE(q5_1)
 DEQUANTIZE(q8_0)
+DEQUANTIZE(f16)
+DEQUANTIZE(f32)
 
 template <int qk, int qr, dequantize_kernel_t dequantize_kernel>
 static __device__ void dequantize_mul_mat_vec(const void * __restrict__ vx, const dfloat * __restrict__ y, float * __restrict__ dst, const int ncols, const int nrows) {
