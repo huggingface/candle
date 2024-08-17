@@ -803,6 +803,7 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                             dev,
                             bindgroup_reference,
                             q.pipeline.clone(),
+                            command_index
                         );
     
                         
@@ -1261,13 +1262,6 @@ fn create_bind_group_input1(
     buffer_input1: BufferReferenceId,
 ) -> BindGroupReference {
     BindGroupReference::new(buffer_dest, BindgroupInputBase::Bindgroup1(buffer_input1, false))
-}
-
-fn create_bind_group_input1_16(
-    buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-) -> BindGroupReference {
-    BindGroupReference::new(buffer_dest, BindgroupInputBase::Bindgroup1(buffer_input1, true))
 }
 
 fn create_bind_group_input2(

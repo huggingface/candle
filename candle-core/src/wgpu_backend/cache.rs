@@ -387,7 +387,7 @@ pub struct CachedBuffer{
     buffer : wgpu::Buffer,
     stored_free : bool,    //wheter this buffer was free at the beginning to the queue
     is_free : bool, //wheter this buffer is currently free
-    usage_counter : u32,
+    last_used_counter : u32,
     used_memory : u64, //the total memory this buffer was unsed for. Together with usage_counter we get the average buffer size, this buffer is used for
 }
 
@@ -395,7 +395,7 @@ pub struct CachedBuffer{
 
 impl CachedBuffer {
     pub fn new(buffer: wgpu::Buffer) -> Self {
-        Self { buffer, is_free : false, stored_free : false,usage_counter: 0, used_memory : 0  }
+        Self { buffer, is_free : false, stored_free : false,last_used_counter: 0, used_memory : 0  }
     }
     
     pub fn buffer(&self) -> &wgpu::Buffer {
@@ -459,7 +459,7 @@ impl ModelCache {
     pub fn create_buffer_reference_init<T: bytemuck::Pod>(&mut self,dev: &WgpuDevice, data: &[T], referenced_by_candle_storage : bool) -> BufferReferenceId{    
         let data = bytemuck::cast_slice(data);
 
-        let buffer = self.buffers.search_buffer(dev, data.len() as u64); //TODO use exact size?
+        let buffer = self.buffers.search_buffer(dev, data.len() as u64, 0); //TODO use exact size?
         dev.queue.write_buffer(&self.buffers.get_buffer(&buffer).unwrap().buffer, 0, data);
 
         let buffer_reference = BufferReference::new_with_storage(data.len() as u64, buffer, referenced_by_candle_storage);
@@ -468,54 +468,43 @@ impl ModelCache {
 
     /// returns, wheter we should stop the command_queue and delete not used buffers 
     pub fn should_delete_unused(&mut self) -> bool {
-        let memory_margin = self.buffers.buffer_memory * 5 / 4;
-
-        let mut check_bindgroups = false;
-        if memory_margin > self.buffers.max_memory_allowed{
-
-            return self.buffers.storage.iter().any(|buffer|{
-                if !buffer.is_free{
-                    return false; //keep used buffers
-                }
-                if (buffer.usage_counter + 1) < self.buffers.buffer_reuse_counter / 128 {
-                    check_bindgroups = true;
-                    return true;
-                }
-                return false;
-            });
+        let current_memory = self.buffers.buffer_memory;
+        let memory_margin = self.buffers.max_memory_allowed;
+        if current_memory > memory_margin{
+            return !self.buffers.order.is_empty();
         }
         return false;
     }
 
     pub fn remove_unused(&mut self) -> bool {
-        let memory_margin = self.buffers.buffer_memory * 5 / 4;
+        let current_memory = self.buffers.buffer_memory;
+        let memory_margin = self.buffers.max_memory_allowed;
+        let delete_until_margin = (self.buffers.max_memory_allowed * 4) / 5;
 
         //remove buffers, that 
         // 1. were not used for a long time
         // 2. have a big memory diff (the actual buffer size vs the average size the buffer is used with)
         let mut check_bindgroups = false;
-        if memory_margin > self.buffers.max_memory_allowed{
-            println!("deleting buffers: ({}) current {memory_margin}/{}",self.buffers.storage.len(), self.buffers.max_memory_allowed);
+        if current_memory > memory_margin{
+            println!("deleting buffers: ({}) current {current_memory}/{memory_margin}",self.buffers.storage.len());
             
-            let buffer_reuse_counter = self.buffers.buffer_reuse_counter;
-            let closure = |buffer : &CachedBuffer| {
-                if !buffer.is_free{
-                    return true; //keep used buffers
-                }
+            //every entry in self.buffers.order will be free and can be potentially deleted
+            //this is ordered from small to big. 
+            let buffers : Vec<_> = self.buffers.order.iter().map(|entry|{
+                let (id, val) = self.buffers.storage.get_reference(entry.index).expect("item in order, that could ne be found in storage");
+                return (id, val.last_used_counter);
+            }).collect();
 
-                if (buffer.usage_counter + 1) < buffer_reuse_counter / 128 {
-                    check_bindgroups = true;
-                    return false;
+            for (id, _) in buffers{
+                check_bindgroups = true;
+                self.buffers.delete_buffer(&id);
+
+                if self.buffers.buffer_memory <= delete_until_margin{
+                    break; //deleted enaugh
                 }
-                // if buffer.usage_counter > 0{
-                //     let average_buffer_size = buffer.used_memory / buffer.usage_counter as u64;
-                //     let average_buffer_miss = buffer_
-                // }
-                
-                return true;
-            };
-            self.buffers.retain_buffers(closure);
-            println!("after deleting: ({}) current {memory_margin}/{}",self.buffers.storage.len(),self.buffers.max_memory_allowed);
+            }
+            let current_memory = self.buffers.buffer_memory;
+            println!("after deleting: ({}) current {current_memory}/{}",self.buffers.storage.len(),self.buffers.max_memory_allowed);
         }
 
         //remove bindgroups:
@@ -537,7 +526,7 @@ impl ModelCache {
         //     };
         // }
     
-        if check_bindgroups || self.bindgroups.storage.len() > 10 * self.buffers.storage.len() {
+        if check_bindgroups{
             self.bindgroups.retain_bindgroups(|bindgroup |
             {
                 let check_buffer = |buffer_reference| {
@@ -568,6 +557,7 @@ impl ModelCache {
         dev: &WgpuDevice,
         bindgroup_reference: &BindgroupReferenceFull,
         pipeline: PipelineType,
+        command_id : u32
     ) -> CachedBindgroupId {
 
         fn check_buffer_reference(cache : &mut ModelCache, bindgroup_reference: &BindgroupReferenceFull, pipeline: PipelineType,){
@@ -655,7 +645,7 @@ impl ModelCache {
                                 //use this buffer for the buffer reference:
                                 buf_dest_reference.cached_buffer_id = buffer_id;
                                 buf_dest_cached_id = buffer_id;
-                                self.buffers.use_buffer(&buffer_id);
+                                self.buffers.use_buffer(&buffer_id, command_id);
                         
                                 //reuse a bindgroup, if we could find one:
                                 let bindgroup_inputs = get_buffer_referece_key(self, buffer_id, &bindgroup_reference);
@@ -718,7 +708,7 @@ impl ModelCache {
                     //use this buffer for the buffer reference:
                     let buf_dest_reference = self.buffer_reference.get_mut(buf_dest_id).unwrap();
                     buf_dest_reference.cached_buffer_id = *cached_dest_buffer_id;
-                    self.buffers.use_buffer(&cached_dest_buffer_id);
+                    self.buffers.use_buffer(&cached_dest_buffer_id, command_id);
                     self.mappings.add_buffer(*cached_dest_buffer_id,pipeline);
                     self.bindgroups.cached_bindgroup_use_counter += 1;
                     return cached_bindgroup_id;
@@ -734,7 +724,7 @@ impl ModelCache {
             dest_buffer_id = buf_dest_reference.cached_buffer_id;
         }
         else{//create a new buffer
-            dest_buffer_id = self.buffers.search_buffer(dev, required_size);
+            dest_buffer_id = self.buffers.search_buffer(dev, required_size, command_id);
             //use this buffer for the buffer reference:
             buf_dest_reference.cached_buffer_id = dest_buffer_id;
         }
@@ -870,10 +860,10 @@ impl BufferCacheStorage{
     }
 
     //creats a Buffer, expect that it will be used and not be part of free memory
-    pub fn create_buffer(&mut self, dev : &WgpuDevice, size : u64) -> CachedBufferId {
+    fn create_buffer(&mut self, dev : &WgpuDevice, size : u64, command_id : u32) -> CachedBufferId {
         let buffer = wgpu_functions::create_buffer(dev, size);
-        let buffer = CachedBuffer::new(buffer);
-
+        let mut buffer = CachedBuffer::new(buffer);
+        buffer.last_used_counter = command_id;
         let id = self.storage.insert(buffer);
         self.buffer_memory += size;
         self.buffer_counter += 1;
@@ -904,19 +894,19 @@ impl BufferCacheStorage{
             if buffer.is_free == false{ //the buffer is currently not free -> add it into the free order list
                 self.order.insert(OrderedIndex::new(id.id(), buffer.buffer.size()));
                 buffer.is_free = true;
-                buffer.usage_counter += 1;
                 self.buffer_memory_free += buffer.buffer.size()
             }
         }
     }
 
     //will not create a buffer, but mark the buffer as used
-    pub fn use_buffer(&mut self, id : &CachedBufferId){ 
+    pub fn use_buffer(&mut self, id : &CachedBufferId, command_id : u32){ 
         let buffer : Option<&mut CachedBuffer> = self.storage.get_mut(id);
         if let Some(buffer) = buffer{
             if buffer.is_free == true{ //the buffer is currently free -> remove it from the free order list
                 self.order.remove(&OrderedIndex::new(id.id(), buffer.buffer.size()));
                 buffer.is_free = false;
+                buffer.last_used_counter = command_id;
                 self.buffer_reuse_counter += 1;
                 //println!("use_buffer, remove buffer from free buffers");
                 self.buffer_memory_free -= buffer.buffer.size()
@@ -953,7 +943,7 @@ impl BufferCacheStorage{
     }
 
     //will try to find a free buffer in the cache, or create a new one
-    pub fn search_buffer(&mut self, dev : &WgpuDevice, size : u64) -> CachedBufferId {
+    pub fn search_buffer(&mut self, dev : &WgpuDevice, size : u64, command_id : u32) -> CachedBufferId {
         //println!("search buffer: size: {size}");
         let max_size = BufferCacheStorage::max_cached_size(size);
 
@@ -974,13 +964,13 @@ impl BufferCacheStorage{
             if let Some(buffer_found) = buffer_found{
                 if let Some((reference, _)) = self.storage.get_reference(buffer_found.index){
                     //println!("search buffer: found free buffer, using: {:?}, size: {:?}", reference, buffer.buffer.size());
-                    self.use_buffer(&reference);
+                    self.use_buffer(&reference, command_id);
                     return reference;
                 }
               
             }
         }
-        return self.create_buffer(dev, size);
+        return self.create_buffer(dev, size, command_id);
     }
     
     fn retain_buffers(&mut self, mut keep : impl FnMut(&CachedBuffer) -> bool){
