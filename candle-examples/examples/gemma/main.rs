@@ -40,7 +40,13 @@ enum Which {
     #[value(name = "code-7b-it")]
     CodeInstruct7B,
     #[value(name = "2-2b")]
-    Gemma2_2B,
+    BaseV2_2B,
+    #[value(name = "2-2b-it")]
+    InstructV2_2B,
+    #[value(name = "2-9b")]
+    BaseV2_9B,
+    #[value(name = "2-9b-it")]
+    InstructV2_9B,
 }
 
 impl Which {
@@ -56,7 +62,7 @@ impl Which {
             | Self::CodeBase7B
             | Self::CodeInstruct2B
             | Self::CodeInstruct7B => true,
-            Self::Gemma2_2B => false,
+            Self::BaseV2_2B | Self::InstructV2_2B | Self::BaseV2_9B | Self::InstructV2_9B => false,
         }
     }
 }
@@ -274,7 +280,10 @@ fn main() -> Result<()> {
             Which::CodeBase7B => "google/codegemma-7b".to_string(),
             Which::CodeInstruct2B => "google/codegemma-2b-it".to_string(),
             Which::CodeInstruct7B => "google/codegemma-7b-it".to_string(),
-            Which::Gemma2_2B => "google/gemma-2-2b".to_string(),
+            Which::BaseV2_2B => "google/gemma-2-2b".to_string(),
+            Which::InstructV2_2B => "google/gemma-2-2b-it".to_string(),
+            Which::BaseV2_9B => "google/gemma-2-9b".to_string(),
+            Which::InstructV2_9B => "google/gemma-2-9b-it".to_string(),
         },
     };
     let repo = api.repo(Repo::with_revision(
