@@ -37,9 +37,6 @@ pub use crate::wgpu::cache::BufferReferenceId as BufferReferenceId;
 use crate::{wgpu_backend::cache::BindgroupReferenceInput, Layout, WebGpuError};
 use std::borrow::Cow;
 
-
-//use tracing_mutex::stdsync::MutexGuard;
-
 use wgpu::{Queue, ShaderModule};
 
 pub use binary::queue_binary_buffer_from_buffer;
@@ -156,10 +153,6 @@ fn enqueue_workgroups_extra(
     workload_size : usize,
     #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
 ) {
-
-    //println!("queueing {:?}, bindgroup: {:?}", pipeline, bind_group);
-
-
     if y > MAX_DISPATCH_SIZE || z > MAX_DISPATCH_SIZE  || x > MAX_DISPATCH_SIZE {
         panic!("can not queue y or z higher than 65535 x:{x}, y:{y}, z:{z}, pipeline: {:?}", pipeline);
     }
@@ -325,28 +318,16 @@ fn get_command_buffer(
                                 if v2 == vd{
                                     panic!("B2: output and input2 are equal");
                                 }
-                                // if v1 == v2{
-                                //     panic!("B2: input1 and input2 are equal");
-                                // }
                             },
                             BindgroupInputBase::Bindgroup3(v1, v2, v3) => {
 
                                 if v1 == vd{
                                     panic!("B3: output and input1 are equal");
                                 }
-                                // if v1 == v2{
-                                //     panic!("B3: input1 and input2 are equal");
-                                // }
-                                // if v1 == v3{
-                                //     panic!("B3: input1 and input3 are equal");
-                                // }
 
                                 if v2 == vd{
                                     panic!("B3: output and input2 are equal");
                                 }
-                                // if v2 == v3{
-                                //     panic!("B3: input3 and input2 are equal");
-                                // }
 
                                 if v3 == vd{
                                     panic!("B3: input3 and output are equal");
@@ -391,7 +372,6 @@ fn get_command_buffer(
 
     if let Some(waiting_buffer) = waiting_buffer  {
         let staging_buffer = &dev.staging_probe_buffer;
-
         if let Some(buffer) = cache.buffers.get_buffer(waiting_buffer){
             encoder.copy_buffer_to_buffer(&buffer.buffer(), 0, &staging_buffer, 0, 4);
         }
@@ -416,9 +396,6 @@ fn get_command_buffer(
 
 #[instrument]
 fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer, cache : &mut ModelCache){
-//   //let mut most_needed_storage;
-//    //let mut total_used_storage;
-    
     let global_index = queue_buffer.global_command_index();
 
     let queue = &mut queue_buffer.command_queue;
@@ -433,12 +410,7 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer, cache : &mut ModelC
         }
 
         let current_hash = hasher.finish();
-        //let mut cache = dev.cache.lock().expect("flush gpu_commadn could not lock cache");
         cache.mappings.set_current_buffer_mapping(current_hash);
-
-//        //total_used_storage = cache.buffers.total_used(); //the total amount of memory acutally used
-//        //most_needed_storage = total_used_storage;
-
         let deleted_entries = cache.buffer_reference.get_deletion_entries();
 
         for entry in deleted_entries.iter(){
@@ -495,7 +467,6 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer, cache : &mut ModelC
         for entry in deleted_entries.iter(){
             if let Some(buffer_reference) = cache.buffer_reference.get_mut(&entry){
                 if buffer_reference.last_used() == 0{ //This buffer was not used in the queue -> we can remove it!
-                    //println!("buffer reference {:?} has last used == 0", entry);
                     let buffer_cached_id = buffer_reference.cached_buffer_id().clone();
                     if buffer_reference.cached_buffer_id().is_valid(){
                         cache.buffers.free_buffer(&buffer_cached_id);
@@ -504,64 +475,7 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer, cache : &mut ModelC
                 }
             }
         }
-
-        // for (index, q) in queue.iter().enumerate() {
-        //     let command_index = global_index + index as u32;
-
-        //     let mut check_buffer = |buffer_id: &BufferReferenceId| {
-        //         let buffer = cache.buffer_reference.get(buffer_id).unwrap();
-                
-        //         if buffer.first_used() == command_index{
-        //             total_used_storage += buffer.size();
-        //         }
-
-        //         if total_used_storage > most_needed_storage {
-        //             most_needed_storage = total_used_storage;
-        //         }
-
-        //         if buffer.last_used() == command_index{
-        //             total_used_storage -= buffer.size();
-        //         }
-        //     };
-        //     match q {
-        //         MlQueue::Dispatch(q) => match &q.bindgroup {
-        //             DispatchedBindgroup::BindgroupReference(br) => {
-        //                 check_buffer(br.get_dest());
-        //                 match br.get_input() {
-        //                     BindgroupInputBase::Bindgroup0 => {}
-        //                     BindgroupInputBase::Bindgroup1(v1, _) => {
-        //                         check_buffer(v1);
-        //                     }
-        //                     BindgroupInputBase::Bindgroup2(v1, v2, _) => {
-        //                         check_buffer(v1);
-        //                         check_buffer(v2);
-        //                     }
-        //                     BindgroupInputBase::Bindgroup3(v1, v2, v3) => {
-        //                         check_buffer(v1);
-        //                         check_buffer(v2);
-        //                         check_buffer(v3);
-        //                     }
-        //                 }
-        //             }
-        //             DispatchedBindgroup::None => {continue;},
-        //             DispatchedBindgroup::CachedBindgroup(_) => todo!(),
-        //         },
-        //     }
-        // }
-
-        //allow 25% margin more:
-        // let most_needed_storage = (most_needed_storage  * 5) / 4;
-        
-      
-        // if most_needed_storage >  cache.buffers.max_memory_allowed(){
-        //     cache.buffers.set_max_memory_allowed(most_needed_storage);
-        // }
-        // else{
-        //     let new_size = ((7 *  cache.buffers.max_memory_allowed()) / 8) + (most_needed_storage/8);
-        //     cache.buffers.set_max_memory_allowed(new_size);
-        // }
         cache.buffers.set_max_memory_allowed(dev.configuration.buffer_cached_max_allowed_size); //8gb TODO: change back
-
     }
 }
 
@@ -572,8 +486,7 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
     let mut cache_limit = false;
     let mut total_workload = 0u64; //we only allow a certain amount of workload per commandBuffer 
     let start_index = *index; 
-    //let mut cache = dev.cache.lock().expect("flush gpu_commadn could not lock cache");
-
+   
     for q in queue[*index..].iter_mut() {
         #[cfg(feature="wgpu_debug")]{
             let ele_size =  *index-start_index;
@@ -639,7 +552,6 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                             {
                                 if optmize_inplace(bindgroup_reference.get_dest(), v1_id)
                                 {
-                                    //println!("optime unary inplace: reuse {:?} instead of copy to {:?}", v1_id, bindgroup_reference.get_dest());
                                     dev.unary_inplace_counter.inc();            
                                     q.pipeline.0 = Pipelines::Unary(dtype.clone(), candle_wgpu_kernels::unary::Functions::UnaryInplaceContiguous);
                                     q.bindgroup = DispatchedBindgroup::BindgroupReference(
@@ -661,9 +573,6 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
 
                             if q.pipeline.2.input1_inplaceable{ 
                                 if optmize_inplace(bindgroup_reference.get_dest(), v1_id) {
-                                    
-                                    //println!("optime binary inplace: reuse {:?} instead of copy to {:?}, additional: {:?}", v1_id, bindgroup_reference.get_dest(), v2_id);
-                                    
                                     dev.binary_inplace_counter.inc();
 
                                     q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace1ContiguousBoth);
@@ -674,8 +583,6 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                             }
                             else if q.pipeline.2.input2_inplaceable{
                                 if optmize_inplace(bindgroup_reference.get_dest(), v2_id) {
-                                    //println!("optime binary inplace2: reuse {:?} instead of copy to {:?}, additional: {:?}", v2_id, bindgroup_reference.get_dest(), v1_id);
-                                    
                                     dev.binary_inplace_counter.inc();
                                     q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace1ContiguousBoth);
                                     q.bindgroup =
@@ -730,9 +637,6 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                     let chec_buffer = |buffer_reference : &BufferReferenceId,cache : &mut ModelCache,command_index: u32|
                         if let Some(buffer) = cache.buffer_reference.get_mut(&buffer_reference){
                             if buffer.last_used() <= command_index{ //this buffer reference is not used after this:
-                               
-                                //println!("bindgroup {:?} used buffer {:?} at {command_index}(buffer last used = {})", bindgroup_reference,buffer_reference, buffer.last_used());
-
                                 let cached_buffer_id = buffer.cached_buffer_id().clone();
                                 cache.buffer_reference.delete(buffer_reference);
                                 if cached_buffer_id.is_valid(){
@@ -817,9 +721,7 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                             else{
                                 panic!("buffer reference not found: {:?}, cd={command_index}", v1_ref_id);
                             }
-                            if let Some(vdest_ref) = cache.buffer_reference.get_mut(&vdest_ref_id) {
-                                //println!("Optimize: set cache {:?} of {:?} to {:?}({:?}), cd={command_index}", v1_cached_buffer_id, v1_ref_id, vdest_ref, vdest_ref_id);
-                                    
+                            if let Some(vdest_ref) = cache.buffer_reference.get_mut(&vdest_ref_id) {  
                                 vdest_ref.set_cached_buffer_id(v1_cached_buffer_id);
                             }
                             else{
@@ -889,9 +791,6 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                 let should_reuse_unused = set_buffers(dev, queue_buffer, &mut index, current_meta, &mut last_meta, &mut cache)?;
 
                 let last_meta_index = (last_meta + 256 / 4).min(queue_buffer.get_meta().len());
-                
-                //let mut cache = dev.cache.lock().expect("flush gpu_commadn could not lock cache");
-
                 let cb = get_command_buffer(
                     dev,
                     &queue_buffer.get_meta()[current_meta..last_meta_index],
@@ -912,19 +811,21 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                     dev.device.poll(wgpu::Maintain::wait()).panic_on_timeout();
                 }
 
-                //set last buffer, so we can wait for it to finish in the future
-                match &queue_buffer.command_queue[index - 1]{
-                    MlQueue::Dispatch(d) => {
-                        match &d.bindgroup{
-                            DispatchedBindgroup::CachedBindgroup(c) => {
-                                if let Some(c) = cache.bindgroups.get_bindgroup(c){
-                                    queue_buffer.last_buffer = Some(c.buffer().get_dest().clone())
-                                }
-                               
-                            },
-                            _ => {},
-                        }
+                if index > 0{
+                    //set last buffer, so we can wait for it to finish in the future
+                    match &queue_buffer.command_queue[index - 1]{
+                        MlQueue::Dispatch(d) => {
+                            match &d.bindgroup{
+                                DispatchedBindgroup::CachedBindgroup(c) => {
+                                    if let Some(c) = cache.bindgroups.get_bindgroup(c){
+                                        queue_buffer.last_buffer = Some(c.buffer().get_dest().clone())
+                                    }
+                                
+                                },
+                                _ => {},
+                            }
 
+                        }
                     }
                 }
 
@@ -940,11 +841,8 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
         }
         queue_buffer.clear();
         {
-            //let mut cache = dev.cache.lock().expect("flush gpu_commadn could not lock cache");
-
             log::warn!("current memory {} / {}", cache.buffers.buffer_memory(), cache.buffers.max_memory_allowed());
             cache.mappings.finish();
-            //cache.buffers.remove_unused();
             cache.remove_unused();
         }
     }
@@ -965,10 +863,7 @@ pub(crate) async fn flush_gpu_command_async(dev: &WgpuDevice, queue_buffer: &mut
 
             while index < queue_buffer.command_queue.len() {
                 let should_reuse_unused = set_buffers(dev, queue_buffer, &mut index, current_meta, &mut last_meta, &mut cache)?;
-
                 let last_meta_index = (last_meta + 256 / 4).min(queue_buffer.get_meta().len());
-              
-                //let mut cache = dev.cache.lock().expect("flush gpu_commadn could not lock cache");
                 let cb = get_command_buffer(
                     dev,
                     &queue_buffer.get_meta()[current_meta..last_meta_index],
@@ -982,29 +877,25 @@ pub(crate) async fn flush_gpu_command_async(dev: &WgpuDevice, queue_buffer: &mut
                     cache.remove_unused();
                 }
 
-                // let span1 = span!(Level::INFO, "Device Poll");
-                // let _enter1 = span1.enter();
-                //dev.device.poll(wgpu::Maintain::wait()).panic_on_timeout();
-                if !dev.device.poll(wgpu::Maintain::Poll).is_queue_empty(){
-                    synchronize_device(&dev, &dev.queue).await?;
-                }
+                synchronize_device(&dev, &dev.queue).await?;
                 
-                // if start_index > 0{
-                //     //get buffer of prev group
-                //     match(queue_buffer.command_queue[start_index-1]){
-                //         MlQueue::Dispatch(d) => {
-                //             match(d.bindgroup){
-                //                 DispatchedBindgroup::CachedBindgroup(c) => {
-                                    
-                //                     read_data_from_gpu_async_buffer(dev, &c.buffers.get_dest().buffer);
+                if index > 0{
+                    //set last buffer, so we can wait for it to finish in the future
+                    match &queue_buffer.command_queue[index - 1]{
+                        MlQueue::Dispatch(d) => {
+                            match &d.bindgroup{
+                                DispatchedBindgroup::CachedBindgroup(c) => {
+                                    if let Some(c) = cache.bindgroups.get_bindgroup(c){
+                                        queue_buffer.last_buffer = Some(c.buffer().get_dest().clone())
+                                    }
+                                
+                                },
+                                _ => {},
+                            }
 
-                //                 },
-                //                 _ => {},
-                //             }
-    
-                //         }
-                //     }
-                // }
+                        }
+                    }
+                }
 
                 let span1 = span!(Level::INFO, "Submit");
                 let _enter1 = span1.enter();
@@ -1017,16 +908,10 @@ pub(crate) async fn flush_gpu_command_async(dev: &WgpuDevice, queue_buffer: &mut
             finish_commands(queue_buffer, index);
         }
 
-      
-       
-       
         queue_buffer.clear();
         {
-            //let mut cache = dev.cache.lock().expect("flush gpu_commadn could not lock cache");
             log::warn!("current memory {} / {}", cache.buffers.buffer_memory(), cache.buffers.max_memory_allowed());
-        
             cache.mappings.finish();
-            //cache.buffers.remove_unused();
             cache.remove_unused();
         }
     }
@@ -1318,20 +1203,6 @@ pub async fn synchronize_async(dev: &WgpuDevice) -> crate::Result<()> {
     }
     Ok(())
 }
-
-
-// #[instrument]
-// async fn synchronize_device(dev: &Device, queue: &Queue) -> crate::Result<()> {
-//     let (sender, receiver) = flume::bounded(1);
-//     queue.on_submitted_work_done(move || sender.send(()).unwrap());
-
-//     dev.poll(wgpu::Maintain::wait()).panic_on_timeout();
-//     if let Ok(()) = receiver.recv_async().await {
-//         return Ok(());
-//     }
-//     Ok(())
-// }
-
 
 #[instrument]
 async fn synchronize_device(dev: &WgpuDevice, queue: &Queue) -> crate::Result<()> {

@@ -385,17 +385,17 @@ pub type BindgroupReferenceFull = BindgroupFullBase<BufferReferenceId>;
 #[derive(Debug)]
 pub struct CachedBuffer{
     buffer : wgpu::Buffer,
-    stored_free : bool,    //wheter this buffer was free at the beginning to the queue
+    //stored_free : bool,    //wheter this buffer was free at the beginning to the queue
     is_free : bool, //wheter this buffer is currently free
     last_used_counter : u32,
-    used_memory : u64, //the total memory this buffer was unsed for. Together with usage_counter we get the average buffer size, this buffer is used for
+    //used_memory : u64, //the total memory this buffer was unsed for. Together with usage_counter we get the average buffer size, this buffer is used for
 }
 
 
 
 impl CachedBuffer {
     pub fn new(buffer: wgpu::Buffer) -> Self {
-        Self { buffer, is_free : false, stored_free : false,last_used_counter: 0, used_memory : 0  }
+        Self { buffer, is_free : false, last_used_counter: 0}//stored_free : false, used_memory : 0  }
     }
     
     pub fn buffer(&self) -> &wgpu::Buffer {
@@ -436,8 +436,6 @@ pub struct ModelCache {
     pub(crate) buffers: BufferCacheStorage,
     pub(crate) bindgroups: BindgroupCacheStorage,
     pub(crate) mappings: BufferMappingCache,
-
-    buffers_deletion_queue : Vec<CachedBufferId>  
 }
 
 impl ModelCache {
@@ -447,7 +445,6 @@ impl ModelCache {
             buffers: BufferCacheStorage::new(),
             bindgroups: BindgroupCacheStorage::new(),
             mappings: BufferMappingCache::new(),
-            buffers_deletion_queue : vec![]
         }
     }
 
@@ -511,21 +508,6 @@ impl ModelCache {
         //1. if we removed a buffer, we should also remove the bindgroup
         //2. bindgroups that werent used for a long time may be deleted
 
-        
-        // fn check_bindgroup_valid(cache : &ModelCache, bindgroup_reference: &CachedBindgroupFull) -> bool{
-        //     let check_buffer = |buffer_reference| {
-        //         return cache.buffers.get_buffer(buffer_reference).is_some();
-        //     };
-
-        //     return check_buffer(bindgroup_reference.get_dest()) &&
-        //     match &bindgroup_reference.1 {
-        //         BindgroupInputBase::Bindgroup0 => return true,
-        //         BindgroupInputBase::Bindgroup1(v1, _) => return check_buffer(v1),
-        //         BindgroupInputBase::Bindgroup2(v1, v2, _) => return check_buffer(v1) && check_buffer(v2),
-        //         BindgroupInputBase::Bindgroup3(v1, v2, v3) => return check_buffer(v1) && check_buffer(v2) && check_buffer(v3),
-        //     };
-        // }
-    
         if check_bindgroups{
             self.bindgroups.retain_bindgroups(|bindgroup |
             {
@@ -846,10 +828,6 @@ pub(crate) struct BufferCacheStorage {
 }
 
 impl BufferCacheStorage{
-    pub fn total_used(&self) -> u64{
-        return self.buffer_memory - self.buffer_memory_free;
-    }
-
     pub fn new() -> Self {
         return Self {
             storage : StorageOptional::new(),
@@ -917,28 +895,28 @@ impl BufferCacheStorage{
         }
     }
 
-    //will save the currentl free buffers and not free buffers
-    pub fn store_usage(&mut self){
-        for b in self.storage.iter_mut_option(){
-            b.stored_free  = b.is_free;
-        }
-    }
+    // //will save the currentl free buffers and not free buffers
+    // pub fn store_usage(&mut self){
+    //     for b in self.storage.iter_mut_option(){
+    //         b.stored_free  = b.is_free;
+    //     }
+    // }
 
-    //will reset all buffers usage to last storage usage
-    pub fn reset_usage(&mut self){
-        for (id, b) in self.storage.enumerate_mut_option(){
-            if b.stored_free && !b.is_free{
-                self.order.insert(OrderedIndex::new(id.id(), b.buffer.size()));
-                b.is_free = true;
-                self.buffer_memory_free += b.buffer.size()
-            }
-            else if !b.stored_free  && b.is_free{
-                self.order.remove(&OrderedIndex::new(id.id(), b.buffer.size()));
-                b.is_free = false;
-                self.buffer_memory_free -= b.buffer.size()
-            }
-        }
-    }
+    // //will reset all buffers usage to last storage usage
+    // pub fn reset_usage(&mut self){
+    //     for (id, b) in self.storage.enumerate_mut_option(){
+    //         if b.stored_free && !b.is_free{
+    //             self.order.insert(OrderedIndex::new(id.id(), b.buffer.size()));
+    //             b.is_free = true;
+    //             self.buffer_memory_free += b.buffer.size()
+    //         }
+    //         else if !b.stored_free  && b.is_free{
+    //             self.order.remove(&OrderedIndex::new(id.id(), b.buffer.size()));
+    //             b.is_free = false;
+    //             self.buffer_memory_free -= b.buffer.size()
+    //         }
+    //     }
+    // }
 
     //the length, this buffer should be used for(if a buffer is only used temporary we may use a way bigger buffer for just one command)
     fn max_cached_size(size : u64, length : u32) -> u64{
@@ -979,21 +957,6 @@ impl BufferCacheStorage{
         }
         return self.create_buffer(dev, size, command_id);
     }
-    
-    fn retain_buffers(&mut self, mut keep : impl FnMut(&CachedBuffer) -> bool){
-        self.storage.retain_mut(|(id, bg)| {
-            let keep = keep(bg);
-
-            if !keep{
-                if self.order.remove(&OrderedIndex::new(id.id(), bg.buffer.size())){
-                    self.buffer_memory_free -= bg.buffer.size();
-                }
-                self.buffer_memory -= bg.buffer.size();
-            }
-            return keep;
-        });
-    }   
-
 
     pub fn max_memory_allowed(&self) -> u64 {
         self.max_memory_allowed
@@ -1022,9 +985,6 @@ impl BufferCacheStorage{
 
 
 
-
-
-
 /// Cache of all available CachedBindGroups
 #[derive(Debug)]
 pub(crate) struct BindgroupCacheStorage {
@@ -1044,15 +1004,6 @@ impl BindgroupCacheStorage {
             bindgroup_counter: 0,
             cached_bindgroup_use_counter: 0,
         };
-    }
-
-    //deletes a bindgroup
-    fn delete_bindgroup(&mut self, id : &CachedBindgroupId){
-        let value = self.storage.delete_move(id);
-        if let Some(value) = value {  
-            self.bindgroups.remove_mapping(value.buffer.1.clone(), id);
-            self.bindgroups_full.remove(&value.buffer);
-        }
     }
 
     fn retain_bindgroups(&mut self, mut keep : impl FnMut(&CachedBindgroup) -> bool){
@@ -1077,19 +1028,11 @@ impl BindgroupCacheStorage {
         self.bindgroups_full.get(bindgroup_d)
     }
 
-    fn get_bindgroup_by_description(&self, bindgroup_d : &CachedBindgroupFull) -> Option<&CachedBindgroup>{
-        self.get_bindgroup(self.get_bindgroup_reference_by_description(bindgroup_d)?)
-    }
 
     fn get_bindgroup_reference_by_description_input(&self, bindgroup_d : &CachedBindgroupInput) -> &Vec<CachedBindgroupId>{
         self.bindgroups.get(bindgroup_d)
     }
 
-    fn get_bindgroup_by_description_input(&self, bindgroup_d : &CachedBindgroupInput) -> impl Iterator<Item=&CachedBindgroup>{
-        self.get_bindgroup_reference_by_description_input(bindgroup_d).iter().filter_map(|c| 
-            self.get_bindgroup(c)
-        )
-    }
 
 
     fn enumerate_bindgroup_by_description_input(&self, bindgroup_d : &CachedBindgroupInput) -> impl Iterator<Item=(CachedBindgroupId, &CachedBindgroup)>{

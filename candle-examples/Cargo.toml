@@ -69,7 +69,6 @@ microphone = ["cpal"]
 encodec = ["cpal", "symphonia", "rubato"]
 wgpu = ["candle/wgpu"]
 wgpu_debug = ["candle/wgpu_debug"]
-#default = ["wgpu_debug"]
 default = []
 
 [[example]]
