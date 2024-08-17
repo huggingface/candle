@@ -5,22 +5,16 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
-use candle_transformers::models::mistral::{Config, Model as Mistral};
-use candle_transformers::models::quantized_mistral::Model as QMistral;
+use candle_transformers::models::based::Model;
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
-use candle_transformers::generation::{LogitsProcessor, Sampling};
+use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
-
-enum Model {
-    Mistral(Mistral),
-    Quantized(QMistral),
-}
 
 struct TextGeneration {
     model: Model,
@@ -39,26 +33,11 @@ impl TextGeneration {
         seed: u64,
         temp: Option<f64>,
         top_p: Option<f64>,
-        top_k: Option<usize>,
         repeat_penalty: f32,
         repeat_last_n: usize,
         device: &Device,
     ) -> Self {
-        let logits_processor = {
-            let temperature = temp.unwrap_or(0.);
-            let sampling = if temperature <= 0. {
-                Sampling::ArgMax
-            } else {
-                match (top_k, top_p) {
-                    (None, None) => Sampling::All { temperature },
-                    (Some(k), None) => Sampling::TopK { k, temperature },
-                    (None, Some(p)) => Sampling::TopP { p, temperature },
-                    (Some(k), Some(p)) => Sampling::TopKThenTopP { k, p, temperature },
-                }
-            };
-            LogitsProcessor::from_sampling(seed, sampling)
-        };
-
+        let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
             model,
             tokenizer: TokenOutputStream::new(tokenizer),
@@ -87,9 +66,9 @@ impl TextGeneration {
         std::io::stdout().flush()?;
 
         let mut generated_tokens = 0usize;
-        let eos_token = match self.tokenizer.get_token("</s>") {
+        let eos_token = match self.tokenizer.get_token("<|endoftext|>") {
             Some(token) => token,
-            None => anyhow::bail!("cannot find the </s> token"),
+            None => anyhow::bail!("cannot find the <|endoftext|> token"),
         };
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
@@ -97,10 +76,7 @@ impl TextGeneration {
             let start_pos = tokens.len().saturating_sub(context_size);
             let ctxt = &tokens[start_pos..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = match &mut self.model {
-                Model::Mistral(m) => m.forward(&input, start_pos)?,
-                Model::Quantized(m) => m.forward(&input, start_pos)?,
-            };
+            let logits = self.model.forward(&input, start_pos)?;
             let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
                 logits
@@ -137,22 +113,14 @@ impl TextGeneration {
     }
 }
 
-#[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
 enum Which {
-    #[value(name = "7b-v0.1")]
-    Mistral7bV01,
-    #[value(name = "7b-v0.2")]
-    Mistral7bV02,
-    #[value(name = "7b-instruct-v0.1")]
-    Mistral7bInstructV01,
-    #[value(name = "7b-instruct-v0.2")]
-    Mistral7bInstructV02,
-    #[value(name = "7b-maths-v0.1")]
-    Mathstral7bV01,
-    #[value(name = "nemo-2407")]
-    MistralNemo2407,
-    #[value(name = "nemo-instruct-2407")]
-    MistralNemoInstruct2407,
+    #[value(name = "360m")]
+    W360m,
+    #[value(name = "1b")]
+    W1b,
+    #[value(name = "1b-50b")]
+    W1b50b,
 }
 
 #[derive(Parser, Debug)]
@@ -167,9 +135,6 @@ struct Args {
     tracing: bool,
 
     #[arg(long)]
-    use_flash_attn: bool,
-
-    #[arg(long)]
     prompt: String,
 
     /// The temperature used to generate samples.
@@ -180,10 +145,6 @@ struct Args {
     #[arg(long)]
     top_p: Option<f64>,
 
-    /// Only sample among the top K samples.
-    #[arg(long)]
-    top_k: Option<usize>,
-
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
     seed: u64,
@@ -192,27 +153,20 @@ struct Args {
     #[arg(long, short = 'n', default_value_t = 10000)]
     sample_len: usize,
 
-    /// The model size to use.
-    #[arg(long, default_value = "7b-v0.1")]
-    which: Which,
-
     #[arg(long)]
     model_id: Option<String>,
 
-    #[arg(long, default_value = "main")]
+    #[arg(long, default_value = "refs/pr/1")]
     revision: String,
-
-    #[arg(long)]
-    tokenizer_file: Option<String>,
 
     #[arg(long)]
     config_file: Option<String>,
 
     #[arg(long)]
-    weight_files: Option<String>,
+    tokenizer_file: Option<String>,
 
     #[arg(long)]
-    quantized: bool,
+    weight_files: Option<String>,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
     #[arg(long, default_value_t = 1.1)]
@@ -222,9 +176,8 @@ struct Args {
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
 
-    /// Use the slower dmmv cuda kernel.
-    #[arg(long)]
-    force_dmmv: bool,
+    #[arg(long, default_value = "360m")]
+    which: Which,
 }
 
 fn main() -> Result<()> {
@@ -232,9 +185,6 @@ fn main() -> Result<()> {
     use tracing_subscriber::prelude::*;
 
     let args = Args::parse();
-    #[cfg(feature = "cuda")]
-    candle::quantized::cuda::set_force_dmmv(args.force_dmmv);
-
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -260,80 +210,53 @@ fn main() -> Result<()> {
     let api = Api::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id,
-        None => {
-            if args.quantized {
-                if args.which != Which::Mistral7bV01 {
-                    anyhow::bail!("only 7b-v0.1 is available as a quantized model for now")
-                }
-                "lmz/candle-mistral".to_string()
-            } else {
-                let name = match args.which {
-                    Which::Mistral7bV01 => "mistralai/Mistral-7B-v0.1",
-                    Which::Mistral7bV02 => "mistralai/Mistral-7B-v0.2",
-                    Which::Mistral7bInstructV01 => "mistralai/Mistral-7B-Instruct-v0.1",
-                    Which::Mistral7bInstructV02 => "mistralai/Mistral-7B-Instruct-v0.2",
-                    Which::Mathstral7bV01 => "mistralai/mathstral-7B-v0.1",
-                    Which::MistralNemo2407 => "mistralai/Mistral-Nemo-Base-2407",
-                    Which::MistralNemoInstruct2407 => "mistralai/Mistral-Nemo-Instruct-2407",
-                };
-                name.to_string()
-            }
-        }
+        None => match args.which {
+            Which::W360m => "hazyresearch/based-360m".to_string(),
+            Which::W1b => "hazyresearch/based-1b".to_string(),
+            Which::W1b50b => "hazyresearch/based-1b-50b".to_string(),
+        },
     };
     let repo = api.repo(Repo::with_revision(
         model_id,
         RepoType::Model,
         args.revision,
     ));
-    let tokenizer_filename = match args.tokenizer_file {
+    let config_file = match args.config_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => repo.get("config.json")?,
     };
     let filenames = match args.weight_files {
         Some(files) => files
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => {
-            if args.quantized {
-                vec![repo.get("model-q4k.gguf")?]
-            } else {
-                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
-            }
-        }
+        None => vec![repo.get("model.safetensors")?],
     };
+
+    let repo = api.model("openai-community/gpt2".to_string());
+    let tokenizer_file = match args.tokenizer_file {
+        Some(file) => std::path::PathBuf::from(file),
+        None => repo.get("tokenizer.json")?,
+    };
+
     println!("retrieved the files in {:?}", start.elapsed());
-    let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
+    let tokenizer = Tokenizer::from_file(tokenizer_file).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config = match args.config_file {
-        Some(config_file) => serde_json::from_slice(&std::fs::read(config_file)?)?,
-        None => {
-            if args.quantized {
-                Config::config_7b_v0_1(args.use_flash_attn)
-            } else {
-                let config_file = repo.get("config.json")?;
-                serde_json::from_slice(&std::fs::read(config_file)?)?
-            }
-        }
-    };
+    let config = serde_json::from_reader(std::fs::File::open(config_file)?)?;
     let device = candle_examples::device(args.cpu)?;
-    let (model, device) = if args.quantized {
-        let filename = &filenames[0];
-        let vb =
-            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, &device)?;
-        let model = QMistral::new(&config, vb)?;
-        (Model::Quantized(model), device)
+    let dtype = if device.is_cuda() {
+        DType::BF16
     } else {
-        let dtype = if device.is_cuda() {
-            DType::BF16
-        } else {
-            DType::F32
-        };
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-        let model = Mistral::new(&config, vb)?;
-        (Model::Mistral(model), device)
+        DType::F32
     };
+
+    let mut vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+    if args.which == Which::W1b50b {
+        vb = vb.pp("model");
+    };
+
+    let model = Model::new(&config, vb)?;
 
     println!("loaded the model in {:?}", start.elapsed());
 
@@ -343,7 +266,6 @@ fn main() -> Result<()> {
         args.seed,
         args.temperature,
         args.top_p,
-        args.top_k,
         args.repeat_penalty,
         args.repeat_last_n,
         &device,
