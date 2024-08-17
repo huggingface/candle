@@ -130,6 +130,23 @@ fn asort(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn asort_very_big(device: &Device) -> Result<()> {
+    // This would require a lot of shared memory, as we're testing the other kernel
+    // smem is calculated as (ncols * sizeof(u32)), so in this case, 393216 bytes.
+    let ncols = 32;//96u32 * 1024;
+    // Descending data.
+    let data_des = vec![(0..ncols).into_iter().rev().collect::<Vec<_>>(); 2];
+
+    let tensor = Tensor::new(data_des, device)?;
+    assert_eq!(tensor.dims2()?, (2, ncols as usize));
+    let indexes = tensor.arg_sort_last_dim(true)?;
+    assert_eq!(
+        indexes.to_vec2::<u32>()?,
+        vec![(0..ncols).into_iter().rev().collect::<Vec<_>>(); 2]
+    );
+    Ok(())
+}
+
 fn unary_op(device: &Device) -> Result<()> {
     let data = &[[-3f32, 1., 4., -0.1, 0.5], [2.7, -1.8, -0.28, 1.8, 2.8]];
     let tensor = Tensor::new(data, device)?;
@@ -1211,6 +1228,12 @@ test_device!(
 test_device!(randn, randn_cpu, randn_gpu, randn_metal);
 test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal);
 test_device!(asort, asort_cpu, asort_gpu, asort_metal);
+test_device!(
+    asort_very_big,
+    asort_very_big_cpu,
+    asort_very_big_gpu,
+    asort_very_big_metal
+);
 test_device!(var, var_cpu, var_gpu, var_metal);
 test_device!(zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal);
 

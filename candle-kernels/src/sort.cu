@@ -86,3 +86,61 @@ ASORT_OP(double, f64)
 ASORT_OP(uint8_t, u8)
 ASORT_OP(uint32_t, u32)
 ASORT_OP(int64_t, i64)
+
+template <bool Ascending, typename T>
+__device__ bool compare(const T& a, const T& b) {
+    return Ascending ? (a > b) : (a < b);
+}
+
+template <bool Ascending, typename T>
+__device__ void argsort_no_smem(const T* data, uint32_t * indices, const int n, const int m) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < n) {
+        // Each thread sorts one row
+        for (int i = 0; i < m; i++) {
+            indices[row * m + i] = i;
+        }
+
+        // Simple bubble sort
+        for (int i = 0; i < m - 1; i++) {
+            for (int j = 0; j < m - 1 - i; j++) {
+                int idx1 = row * m + j;
+                int idx2 = row * m + j + 1;
+                
+                if (compare<Ascending>(data[row * m + indices[idx1]], data[row * m + indices[idx2]])) {
+                    // Swap indices
+                    int temp = indices[idx1];
+                    indices[idx1] = indices[idx2];
+                    indices[idx2] = temp;
+                }
+            }
+        }
+    }
+}
+
+#define ASORT_NOSMEM_OP(TYPENAME, RUST_NAME) \
+extern "C" __global__ void asort_asc_no_smem_##RUST_NAME(  \
+    const TYPENAME* data, uint32_t * indices, const int n, const int m \
+) { \
+    argsort_no_smem<true>(data, indices, n, m); \
+} \
+extern "C" __global__ void asort_desc_no_smem_##RUST_NAME(  \
+    const TYPENAME* data, uint32_t * indices, const int n, const int m \
+) { \
+    argsort_no_smem<false>(data, indices, n, m); \
+} \
+ 
+#if __CUDA_ARCH__ >= 800
+ASORT_NOSMEM_OP(__nv_bfloat16, bf16)
+#endif
+
+#if __CUDA_ARCH__ >= 530
+ASORT_NOSMEM_OP(__half, f16)
+#endif
+
+ASORT_NOSMEM_OP(float, f32)
+ASORT_NOSMEM_OP(double, f64)
+ASORT_NOSMEM_OP(uint8_t, u8)
+ASORT_NOSMEM_OP(uint32_t, u32)
+ASORT_NOSMEM_OP(int64_t, i64)
