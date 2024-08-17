@@ -24,7 +24,7 @@ pub struct Config {
     pub attn_logit_softcapping: Option<f64>,
     pub query_pre_attn_scalar: usize,
     // TODO: Handle the sliding window in the attention mask.
-    pub sliding_window: usize,
+    pub sliding_window: Option<usize>,
 
     #[serde(default = "default_max_position_embeddings")]
     pub max_position_embeddings: usize,
@@ -352,6 +352,7 @@ pub struct Model {
     device: Device,
     dtype: DType,
     hidden_size: usize,
+    sliding_window: Option<usize>,
 }
 
 impl Model {
@@ -378,6 +379,7 @@ impl Model {
             device: vb.device().clone(),
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
+            sliding_window: cfg.sliding_window,
         })
     }
 
@@ -387,9 +389,22 @@ impl Model {
         tgt_len: usize,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
-        let mask: Vec<_> = (0..tgt_len)
-            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
-            .collect();
+        let mask: Vec<_> = match self.sliding_window {
+            None => (0..tgt_len)
+                .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
+                .collect(),
+            Some(sliding_window) => (0..tgt_len)
+                .flat_map(|i| {
+                    (0..tgt_len).map(move |j| {
+                        if i < j || j + sliding_window < i {
+                            f32::NEG_INFINITY
+                        } else {
+                            0.
+                        }
+                    })
+                })
+                .collect(),
+        };
         let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
         let mask = if seqlen_offset > 0 {
             let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
