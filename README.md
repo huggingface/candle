@@ -110,7 +110,9 @@ We also provide a some command line based examples using state of the art models
 - [LLaMA v1, v2, and v3](./candle-examples/examples/llama/): general LLM, includes
   the SOLAR-10.7B variant.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
-- [Gemma](./candle-examples/examples/gemma/): 2b and 7b general LLMs from Google Deepmind.
+- [Codegeex4](./candle-examples/examples/codegeex4-9b/): Code completion,code interpreter,web search,fuction calling,repository-level
+- [GLM4](./candle-examples/examples/glm4/): Open Multilingual Multimodal Chat LMs by THUDM
+- [Gemma v1 and v2](./candle-examples/examples/gemma/): 2b and 7b+/9b general LLMs from Google Deepmind.
 - [RecurrentGemma](./candle-examples/examples/recurrent-gemma/): 2b and 7b
   Griffin based models from Google that mix attention with a RNN like state.
 - [Phi-1, Phi-1.5, Phi-2, and Phi-3](./candle-examples/examples/phi/): 1.3b,
@@ -253,7 +255,7 @@ If you have an addition to this list, please submit a pull request.
         - StarCoder, StarCoder2.
         - Phi 1, 1.5, 2, and 3.
         - Mamba, Minimal Mamba
-        - Gemma 2b and 7b.
+        - Gemma v1 2b and 7b+, v2 2b and 9b.
         - Mistral 7b v0.1.
         - Mixtral 8x7b v0.1.
         - StableLM-3B-4E1T, StableLM-2-1.6B, Stable-Code-3B.
@@ -283,7 +285,7 @@ If you have an addition to this list, please submit a pull request.
         - MetaVoice-1B, text-to-speech model.
     - Computer Vision Models.
         - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT,
-          ConvNeXTv2, MobileOne, EfficientVit (MSRA).
+          ConvNeXTv2, MobileOne, EfficientVit (MSRA), MobileNetv4, Hiera.
         - yolo-v3, yolo-v8.
         - Segment-Anything Model (SAM).
         - SegFormer.
@@ -455,3 +457,10 @@ This may be caused by the models being loaded from `/mnt/c`, more details on
 
 You can set `RUST_BACKTRACE=1` to be provided with backtraces when a candle
 error is generated.
+
+#### CudaRC error
+
+If you encounter an error like this one `called `Result::unwrap()` on an `Err` value: LoadLibraryExW { source: Os { code: 126, kind: Uncategorized, message: "The specified module could not be found." } }` on windows. To fix copy and rename these 3 files (make sure they are in path). The paths depend on your cuda version.
+`c:\Windows\System32\nvcuda.dll` -> `cuda.dll`
+`c:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin\cublas64_12.dll` -> `cublas.dll`
+`c:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin\curand64_10.dll` -> `curand.dll`

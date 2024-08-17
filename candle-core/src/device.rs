@@ -212,6 +212,22 @@ impl Device {
         }
     }
 
+    pub fn supports_bf16(&self) -> bool {
+        match self {
+            Self::Cuda(_) => true,
+            Self::Metal(_) | Self::Cpu | Self::WebGpu(_)=> false,
+        }
+    }
+
+    /// Return `BF16` for devices that support it, otherwise default to `F32`.
+    pub fn bf16_default_to_f32(&self) -> DType {
+        if self.supports_bf16() {
+            DType::BF16
+        } else {
+            DType::F32
+        }
+    }
+
     pub fn cuda_if_available(ordinal: usize) -> Result<Self> {
         if crate::utils::cuda_is_available() {
             Self::new_cuda(ordinal)

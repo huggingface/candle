@@ -258,3 +258,13 @@ pub fn gemm_reduced_precision_bf16() -> bool {
 /// This bool controls whether reduced precision reductions (e.g., with fp16 accumulation type) are
 /// allowed with bf16 GEMMs.
 pub fn set_gemm_reduced_precision_bf16(_: bool) {}
+
+/// This bool controls whether reduced precision reductions (e.g., with tf32 accumulation type) are
+/// allowed with f32 GEMMs.
+pub fn gemm_reduced_precision_f32() -> bool {
+    true
+}
+
+/// This bool controls whether reduced precision reductions (e.g., with tf32 accumulation type) are
+/// allowed with f32 GEMMs.
+pub fn set_gemm_reduced_precision_f32(_b: bool) {}

@@ -23,7 +23,7 @@ impl Model {
             false => Device::Cpu,
         };
 
-        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F64, &device)?;
+        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, &device)?;
         let config: Config = serde_json::from_slice(&config)?;
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
@@ -60,11 +60,28 @@ impl Model {
                 Tensor::new(tokens.as_slice(), &self.device)
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let attention_mask: Vec<Tensor> = tokens
+            .iter()
+            .map(|tokens| {
+                let tokens = tokens.get_attention_mask().to_vec();
+                Tensor::new(tokens.as_slice(), device)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let attention_mask: Vec<Tensor> = tokens
+            .iter()
+            .map(|tokens| {
+                let tokens = tokens.get_attention_mask().to_vec();
+                Tensor::new(tokens.as_slice(), device)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         let token_ids = Tensor::stack(&token_ids, 0)?;
+        let attention_mask = Tensor::stack(&attention_mask, 0)?;
         let token_type_ids = token_ids.zeros_like()?;
         console_log!("running inference on batch {:?}", token_ids.shape());
-        let embeddings = self.bert.forward(&token_ids, &token_type_ids)?;
+        let embeddings = self
+            .bert
+            .forward(&token_ids, &token_type_ids, Some(&attention_mask))?;
         console_log!("generated embeddings {:?}", embeddings.shape());
         // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
         let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
@@ -83,7 +100,7 @@ impl Model {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Embeddings {
-    data: Vec<Vec<f64>>,
+    data: Vec<Vec<f32>>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

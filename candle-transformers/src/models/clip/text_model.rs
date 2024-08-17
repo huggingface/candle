@@ -249,7 +249,7 @@ impl ClipEncoder {
         let vs = vs.pp("layers");
         let mut layers: Vec<ClipEncoderLayer> = Vec::new();
         for index in 0..c.num_hidden_layers() {
-            let layer = ClipEncoderLayer::new(vs.pp(&index.to_string()), c)?;
+            let layer = ClipEncoderLayer::new(vs.pp(index.to_string()), c)?;
             layers.push(layer)
         }
         Ok(ClipEncoder { layers })
@@ -261,6 +261,20 @@ impl ClipEncoder {
             xs = layer.forward(&xs, causal_attention_mask)?;
         }
         Ok(xs)
+    }
+    // required by LLaVA
+    pub fn output_hidden_states(
+        &self,
+        xs: &Tensor,
+        causal_attention_mask: Option<&Tensor>,
+    ) -> Result<Vec<Tensor>> {
+        let mut xs = xs.clone();
+        let mut hidden_states = Vec::new();
+        for layer in self.layers.iter() {
+            xs = layer.forward(&xs, causal_attention_mask)?;
+            hidden_states.push(xs.clone());
+        }
+        Ok(hidden_states)
     }
 }
 

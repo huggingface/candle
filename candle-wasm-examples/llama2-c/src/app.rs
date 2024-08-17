@@ -8,13 +8,11 @@ use yew_agent::{Bridge, Bridged};
 async fn fetch_url(url: &str) -> Result<Vec<u8>, JsValue> {
     use web_sys::{Request, RequestCache, RequestInit, RequestMode, Response};
     let window = web_sys::window().ok_or("window")?;
-    let mut opts = RequestInit::new();
-    let opts = opts
-        .method("GET")
-        .mode(RequestMode::Cors)
-        .cache(RequestCache::NoCache);
-
-    let request = Request::new_with_str_and_init(url, opts)?;
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+    opts.set_mode(RequestMode::Cors);
+    opts.set_cache(RequestCache::NoCache);
+    let request = Request::new_with_str_and_init(url, &opts)?;
 
     let resp_value = JsFuture::from(window.fetch_with_request(&request)).await?;
 

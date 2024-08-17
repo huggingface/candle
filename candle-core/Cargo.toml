@@ -68,9 +68,12 @@ accelerate = ["dep:libc", "dep:accelerate-src"]
 metal = ["dep:metal", "dep:candle-metal-kernels"]
 wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume", "dep:candle-wgpu-kernels"]
 wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json"]
-#default = ["wgpu_debug"]
-default = ["wgpu"]
+default=[]
 
 [[bench]]
 name = "bench_main"
 harness = false
+
+[[example]]
+name = "metal_basics"
+required-features = ["metal"]

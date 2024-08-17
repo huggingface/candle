@@ -160,3 +160,42 @@ macro_rules! set_params {
         )*
     );
 }
+
+pub trait EncoderProvider {
+    type Encoder<'a>: AsRef<metal::ComputeCommandEncoderRef>
+    where
+        Self: 'a;
+    fn encoder<'a>(&'a self) -> Self::Encoder<'a>;
+}
+
+pub struct WrappedEncoder<'a>(&'a ComputeCommandEncoderRef);
+
+impl<'a> Drop for WrappedEncoder<'a> {
+    fn drop(&mut self) {
+        self.0.end_encoding()
+    }
+}
+
+impl<'a> AsRef<metal::ComputeCommandEncoderRef> for WrappedEncoder<'a> {
+    fn as_ref(&self) -> &metal::ComputeCommandEncoderRef {
+        &self.0
+    }
+}
+
+impl EncoderProvider for &metal::CommandBuffer {
+    type Encoder<'a> = WrappedEncoder<'a>
+    where
+        Self: 'a;
+    fn encoder<'a>(&'a self) -> Self::Encoder<'a> {
+        WrappedEncoder(self.new_compute_command_encoder())
+    }
+}
+
+impl EncoderProvider for &metal::CommandBufferRef {
+    type Encoder<'a> = WrappedEncoder<'a>
+    where
+        Self: 'a;
+    fn encoder<'a>(&'a self) -> Self::Encoder<'a> {
+        WrappedEncoder(self.new_compute_command_encoder())
+    }
+}

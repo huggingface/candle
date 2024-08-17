@@ -273,7 +273,13 @@ impl MetalDevice {
         let descriptor = metal::CaptureDescriptor::new();
         descriptor.set_destination(metal::MTLCaptureDestination::GpuTraceDocument);
         descriptor.set_capture_device(self);
-        descriptor.set_output_url(path);
+        // The [set_output_url] call requires an absolute path so we convert it if needed.
+        if path.as_ref().is_absolute() {
+            descriptor.set_output_url(path);
+        } else {
+            let path = std::env::current_dir()?.join(path);
+            descriptor.set_output_url(path);
+        }
 
         capture
             .start_capture(&descriptor)

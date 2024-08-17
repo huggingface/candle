@@ -236,4 +236,66 @@ impl Tensor {
         }
         Ok(crate::tensor::from_storage(storage, shape, op, false))
     }
+
+    /// Set the values on `self` using values from `src`. The copy starts at the specified
+    /// `offset` for the target dimension `dim` on `self`.
+    /// `self` and `src` must have the same shape except on dimension `dim` where the `self` size
+    /// has to be greater than or equal to `offset` plus the `src` size.
+    ///
+    /// Note that this modifies `self` in place and as such is not compatibel with
+    /// back-propagation.  
+    pub fn slice_set<D: Dim>(&self, src: &Self, dim: D, offset: usize) -> Result<()> {
+        let dim = dim.to_index(self.shape(), "slice-set")?;
+        if !self.is_contiguous() || !src.is_contiguous() {
+            Err(Error::RequiresContiguous { op: "slice-set" }.bt())?
+        }
+        if self.dtype() != src.dtype() {
+            Err(Error::DTypeMismatchBinaryOp {
+                lhs: self.dtype(),
+                rhs: src.dtype(),
+                op: "slice-set",
+            }
+            .bt())?
+        }
+        if self.device().location() != src.device().location() {
+            Err(Error::DeviceMismatchBinaryOp {
+                lhs: self.device().location(),
+                rhs: src.device().location(),
+                op: "slice-set",
+            }
+            .bt())?
+        }
+        if self.rank() != src.rank() {
+            Err(Error::UnexpectedNumberOfDims {
+                expected: self.rank(),
+                got: src.rank(),
+                shape: self.shape().clone(),
+            }
+            .bt())?
+        }
+        for (dim_idx, (v1, v2)) in self.dims().iter().zip(src.dims().iter()).enumerate() {
+            if dim_idx == dim && *v2 + offset > *v1 {
+                crate::bail!("shape mismatch on target dim, dst: {v1}, src: {v2} + {offset}")
+            }
+            if dim_idx != dim && v1 != v2 {
+                crate::bail!("shape mismatch on dim {dim_idx}, {v1} <> {v2}")
+            }
+        }
+        let block_size: usize = src.dims().iter().skip(1 + dim).product();
+        let d1: usize = src.dims().iter().take(dim).product();
+        let d2 = block_size * src.dims()[dim];
+        let dst_o = self.layout().start_offset() + offset * block_size;
+        let src_o = src.layout().start_offset();
+        src.storage().copy2d(
+            &mut self.storage_mut(),
+            d1,
+            d2,
+            /* src_s */ d2,
+            /* dst_s */ block_size * self.dims()[dim],
+            src_o,
+            dst_o,
+        )?;
+
+        Ok(())
+    }
 }

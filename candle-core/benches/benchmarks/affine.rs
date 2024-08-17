@@ -12,7 +12,7 @@ fn run_affine_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: 
     let m = 1024;
     let k = 1024;
 
-    let tensor = Tensor::zeros((b, m, k), dtype, &device).unwrap();
+    let tensor = Tensor::zeros((b, m, k), dtype, device).unwrap();
 
     let flops = b * m * k * dtype.size_in_bytes();
 

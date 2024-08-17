@@ -145,7 +145,7 @@ impl ViTImageProcessor {
     pub fn load_images(&self, image_path: Vec<&str>) -> Result<Vec<image::DynamicImage>> {
         let mut images: Vec<image::DynamicImage> = Vec::new();
         for path in image_path {
-            let img = image::io::Reader::open(path)?.decode().unwrap();
+            let img = image::ImageReader::open(path)?.decode().unwrap();
             images.push(img);
         }
 

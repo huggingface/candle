@@ -5,7 +5,7 @@ use criterion::{black_box, criterion_group, Criterion};
 use std::time::Instant;
 
 fn run(input: &Tensor, weight: &Tensor, bias: &Tensor) {
-    let _ = LayerNorm::new(weight.clone(), bias.clone(), 1e-5).forward(&input);
+    let _ = LayerNorm::new(weight.clone(), bias.clone(), 1e-5).forward(input);
 }
 
 const B: usize = 1;

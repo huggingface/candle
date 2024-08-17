@@ -217,10 +217,16 @@ impl Value {
         }
     }
 
+    /// This will also automatically upcast any integral types which will not truncate.
     pub fn to_u64(&self) -> Result<u64> {
         match self {
             Self::U64(v) => Ok(*v),
-            v => crate::bail!("not a u64 {v:?}"),
+            // Autoupcast cases here
+            Self::U8(v) => Ok(*v as u64),
+            Self::U16(v) => Ok(*v as u64),
+            Self::U32(v) => Ok(*v as u64),
+            Self::Bool(v) => Ok(*v as u64),
+            v => crate::bail!("not a u64 or upcastable to u64 {v:?}"),
         }
     }
 

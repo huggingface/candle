@@ -351,16 +351,19 @@ impl Decoder {
 
     pub fn convert_and_run(&mut self, wav_input: &[u8]) -> anyhow::Result<Vec<Segment>> {
         let mut wav_input = std::io::Cursor::new(wav_input);
-        let (header, data) = wav::read(&mut wav_input)?;
-        console_log!("loaded wav data: {header:?}");
-        if header.sampling_rate != m::SAMPLE_RATE as u32 {
+        let wav_reader = hound::WavReader::new(&mut wav_input)?;
+        let spec = wav_reader.spec();
+        console_log!("loaded wav data: {spec:?}");
+        if spec.sample_rate != m::SAMPLE_RATE as u32 {
             anyhow::bail!("wav file must have a {} sampling rate", m::SAMPLE_RATE);
         }
-        let data = data.as_sixteen().expect("expected 16 bit wav file");
-        let pcm_data: Vec<_> = data[..data.len() / header.channel_count as usize]
-            .iter()
-            .map(|v| *v as f32 / 32768.)
-            .collect();
+        let mut data = wav_reader.into_samples::<i16>().collect::<Vec<_>>();
+        data.truncate(data.len() / spec.channels as usize);
+        let mut pcm_data = Vec::with_capacity(data.len());
+        for d in data.into_iter() {
+            let d = d?;
+            pcm_data.push(d as f32 / 32768.)
+        }
         console_log!("pcm data loaded {}", pcm_data.len());
         let mel = crate::audio::pcm_to_mel(self.model.config(), &pcm_data, &self.mel_filters)?;
         let mel_len = mel.len();

@@ -77,6 +77,32 @@ fn rms_norm(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn layer_norm(device: &Device) -> Result<()> {
+    let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
+    let tensor = Tensor::new(data, device)?;
+    let alpha = Tensor::new(&[1f32, 2f32, 3f32], device)?;
+    let beta = Tensor::new(&[0.5f32, 0f32, -0.2f32], device)?;
+    let t = candle_nn::ops::layer_norm(&tensor, &alpha, &beta, 1e-5)?;
+    assert_eq!(
+        to_vec3_round(&t, 4)?,
+        &[
+            [[0.7673, -2.6726, 3.0071], [-0.7247, 0.0, 3.4742]],
+            [[-0.008, -1.778, 3.991], [1.2071, -2.8284, 1.9213]]
+        ]
+    );
+    let t2 = candle_nn::ops::layer_norm_slow(&tensor, &alpha, &beta, 1e-5)?;
+    assert_eq!(
+        to_vec3_round(&t2, 4)?,
+        &[
+            [[0.7673, -2.6726, 3.0071], [-0.7247, 0.0, 3.4742]],
+            [[-0.008, -1.778, 3.991], [1.2071, -2.8284, 1.9213]]
+        ]
+    );
+    let diff = (t - t2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    assert!(diff < 1e-5);
+    Ok(())
+}
+
 #[test]
 fn softmax_numerical_stability() -> Result<()> {
     let dev = &Device::Cpu;
@@ -185,4 +211,5 @@ test_device!(rope, rope_cpu, rope_gpu, rope_metal,rope_webgpu);
 test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal,rope_thd_webgpu);
 test_device!(softmax, softmax_cpu, softmax_gpu, softmax_metal,softmax_webgpu);
 test_device!(rms_norm, rms_norm_cpu, rms_norm_gpu, rms_norm_metal,rms_norm_webgpu);
+test_device!(layer_norm, ln_cpu, ln_gpu, ln_meta, ln_webgpu);
 test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal,sigmoid_webgpu);
