@@ -4,8 +4,8 @@ use super::*;
 
 pub fn queue_convert_u32_to_f32(
     dev: &WgpuDevice,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input: Arc<BufferReference>,
+    buffer_dest: BufferReferenceId,
+    buffer_input: BufferReferenceId,
     input_layout: &crate::Layout,
 ) -> crate::Result<()> {
     let mut meta = get_meta(&dev);
@@ -27,8 +27,8 @@ pub fn queue_convert_u32_to_f32(
 
 pub fn queue_convert_u8_to_f32(
     dev: &WgpuDevice,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input: Arc<BufferReference>,
+    buffer_dest: BufferReferenceId,
+    buffer_input: BufferReferenceId,
     input_layout: &crate::Layout,
 ) -> crate::Result<()> {
     let mut meta = get_meta(&dev);
@@ -48,8 +48,8 @@ pub fn queue_convert_u8_to_f32(
 
 pub fn queue_convert_f32_to_u32(
     dev: &WgpuDevice,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input: Arc<BufferReference>,
+    buffer_dest: BufferReferenceId,
+    buffer_input: BufferReferenceId,
     input_layout: &crate::Layout,
 ) -> crate::Result<()> {
     let mut meta = get_meta(&dev);
@@ -71,8 +71,8 @@ pub fn queue_convert_f32_to_u32(
 
 pub fn queue_convert_u32_to_u8(
     dev: &WgpuDevice,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input: Arc<BufferReference>,
+    buffer_dest: BufferReferenceId,
+    buffer_input: BufferReferenceId,
     start_offset: u32,
     size : u32
 ) -> crate::Result<()> {
@@ -95,8 +95,8 @@ pub fn queue_convert_u32_to_u8(
 
 pub fn queue_convert_f32_to_u8(
     dev: &WgpuDevice,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input: Arc<BufferReference>,
+    buffer_dest: BufferReferenceId,
+    buffer_input: BufferReferenceId,
     start_offset: u32,
     size : u32
 ) -> crate::Result<()> {

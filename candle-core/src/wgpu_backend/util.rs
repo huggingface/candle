@@ -1,4 +1,4 @@
-use std::{collections::{BTreeMap, HashMap, VecDeque}, hash::{Hash, Hasher}, sync::atomic::AtomicU32};
+use std::{collections::{HashMap, VecDeque}, hash::{Hash, Hasher}, marker::PhantomData, sync::atomic::AtomicU32};
 
 pub trait ToU32 {
     fn to_u32(self) -> u32;
@@ -88,11 +88,11 @@ pub(crate) struct HashMapMulti<K, V> {
     pub(crate) empty: Vec<V>,
 }
 
-#[derive(Debug)]
-pub(crate) struct BTreeMulti<K, V> {
-    pub(crate) map: BTreeMap<K, Vec<V>>,
-    pub(crate) empty: Vec<V>,
-}
+// #[derive(Debug)]
+// pub(crate) struct BTreeMulti<K, V> {
+//     pub(crate) map: BTreeMap<K, Vec<V>>,
+//     pub(crate) empty: Vec<V>,
+// }
 
 impl<K: std::cmp::Eq + PartialEq + std::hash::Hash, V> HashMapMulti<K, V> {
     pub fn new() -> Self {
@@ -107,61 +107,63 @@ impl<K: std::cmp::Eq + PartialEq + std::hash::Hash, V> HashMapMulti<K, V> {
     }
 
 
-
-    // pub fn remove_mapping(&mut self, key : K, value: &V) {
-    //      if let Some(vec) = self.map.get_mut(&key) {
-    //         if let Some(pos) = vec.iter().position(|x| x == value) {
-    //             vec.remove(pos);
-    //         }
-
-    //         if vec.is_empty() {
-    //             self.map.remove(&key);
-    //         }
-    //     }
-    // }
-
     pub fn get(&self, key: &K) -> &Vec<V> {
         self.map.get(key).unwrap_or(&self.empty)
     }
 }
 
-impl<K: std::cmp::Eq + PartialEq + std::hash::Hash + Ord, V: std::cmp::PartialEq> BTreeMulti<K, V> {
-    pub fn new() -> Self {
-        Self {
-            map: BTreeMap::new(),
-            empty: vec![],
+impl<K: std::cmp::Eq + PartialEq + std::hash::Hash, V : PartialEq> HashMapMulti<K, V> {
+    pub fn remove_mapping(&mut self, key : K, value: &V) {
+         if let Some(vec) = self.map.get_mut(&key) {
+            if let Some(pos) = vec.iter().position(|x| x == value) {
+                vec.remove(pos);
+            }
+
+            if vec.is_empty() {
+                self.map.remove(&key);
+            }
         }
-    }
-
-    pub fn add_mapping(&mut self, key: K, value: V) -> bool {
-        let values = self.map.entry(key).or_insert_with(Vec::new);
-        if !values.contains(&value) {
-            values.push(value);
-            return true;
-        }
-        return false;
-    }
-
-    // pub fn remove_mapping(&mut self, key : K, value: &V) {
-    //      if let Some(vec) = self.map.get_mut(&key) {
-    //         if let Some(pos) = vec.iter().position(|x| x == value) {
-    //             vec.remove(pos);
-    //         }
-
-    //         if vec.is_empty() {
-    //             self.map.remove(&key);
-    //         }
-    //     }
-    // }
-
-    pub fn get(&self, key: &K) -> &Vec<V> {
-        self.map.get(key).unwrap_or(&self.empty)
-    }
-
-    pub fn get_mut(&mut self, key: &K) -> &mut Vec<V> {
-        self.map.get_mut(key).unwrap_or(&mut self.empty)
     }
 }
+
+
+// impl<K: std::cmp::Eq + PartialEq + std::hash::Hash + Ord, V: std::cmp::PartialEq> BTreeMulti<K, V> {
+//     pub fn new() -> Self {
+//         Self {
+//             map: BTreeMap::new(),
+//             empty: vec![],
+//         }
+//     }
+
+//     pub fn add_mapping(&mut self, key: K, value: V) -> bool {
+//         let values = self.map.entry(key).or_insert_with(Vec::new);
+//         if !values.contains(&value) {
+//             values.push(value);
+//             return true;
+//         }
+//         return false;
+//     }
+
+//     // pub fn remove_mapping(&mut self, key : K, value: &V) {
+//     //      if let Some(vec) = self.map.get_mut(&key) {
+//     //         if let Some(pos) = vec.iter().position(|x| x == value) {
+//     //             vec.remove(pos);
+//     //         }
+
+//     //         if vec.is_empty() {
+//     //             self.map.remove(&key);
+//     //         }
+//     //     }
+//     // }
+
+//     pub fn get(&self, key: &K) -> &Vec<V> {
+//         self.map.get(key).unwrap_or(&self.empty)
+//     }
+
+//     pub fn get_mut(&mut self, key: &K) -> &mut Vec<V> {
+//         self.map.get_mut(key).unwrap_or(&mut self.empty)
+//     }
+// }
 
 #[derive(Debug)]
 pub struct FixedSizeQueue<T> {
@@ -294,4 +296,314 @@ impl<K : std::cmp::Eq + Hash + Clone> ObjectToIdMapper<K> {
             (id, true)
         }
     }
+}
+
+
+
+
+///////////// STORAGE Field Helper Struct:
+/// 
+
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, std::marker::Copy)]
+pub struct Reference {
+    id : u32,
+    time : ReferenceTime
+}
+
+pub trait ReferenceTrait{
+    fn new(id : u32, time : ReferenceTime) -> Self;
+    fn id(&self) -> u32;
+    fn time(&self) -> ReferenceTime; 
+    fn is_valid(&self) -> bool{
+        return self.time() != 0;
+    }
+}
+
+
+impl Reference {
+    pub fn new<T : ToU32>(id: T, time: u32) -> Self {
+        Self { id : id.to_u32(), time }
+    }
+    
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+    
+    pub fn time(&self) -> ReferenceTime {
+        self.time
+    }
+
+    pub fn is_valid(&self) -> bool{
+        return self.time != 0;
+    }
+}
+
+
+type ReferenceTime  = u32;
+
+#[derive(Debug)]
+struct StorageField<T>{
+    time_stamp : ReferenceTime,
+    is_used : bool,
+    value : T,
+
+}
+
+#[derive(Debug)]
+pub struct Storage<T, TREF>{
+    data : Vec<StorageField<T>>,
+    free : Vec<usize>, //free references
+    phantom : PhantomData<TREF>
+}
+
+#[derive(Debug)]
+pub struct StorageOptional<T, TREF>{
+    data : Vec<StorageField<Option<T>>>,
+    free : Vec<usize>, //free references
+    phantom : PhantomData<TREF>
+}
+
+
+pub trait StorageTrait<T, TREF>{
+    fn new() -> Self;
+    fn insert(&mut self, value : T) -> TREF;
+    fn get(&self, id :&TREF) -> Option<&T>;
+    fn get_mut(&mut self, id : &TREF) -> Option<&mut T>;
+    fn delete(&mut self, id : &TREF) -> bool;
+
+    //returns the Reference at the i-th index in this storage
+    fn get_reference(&self, i : u32) -> Option<(TREF, &T)>;
+    fn iter<'a>(&'a self) -> impl Iterator<Item=&T> where T : 'a;
+    fn retain(&mut self, keep : impl Fn((&TREF, &T)) -> bool);
+    fn retain_mut(&mut self, keep : impl FnMut((&TREF, &T)) -> bool);
+    fn len(&self) -> usize;
+}
+
+
+impl<T, TREF> StorageTrait<T, TREF> for StorageOptional<T, TREF>
+where TREF : ReferenceTrait
+{
+    fn new() -> Self {
+        Self { data : vec![], free : vec![], phantom : PhantomData::default() }
+    }
+
+    fn insert(&mut self, value : T) -> TREF
+    {
+        if let Some(id) = self.free.pop(){
+            self.data[id].value = Some(value);
+            self.data[id].is_used = true;
+            return TREF::new(id as u32, self.data[id].time_stamp);
+        }         
+        else{
+            let field = StorageField{time_stamp : 1, value : Some(value), is_used : true};
+            self.data.push(field);
+            return TREF::new((self.data.len() - 1) as u32, 1);
+        }
+    }
+
+    fn get(&self, id : &TREF) -> Option<&T>{
+        if let Some(val) = self.data.get(id.id() as usize){
+            if val.time_stamp == id.time(){
+                return val.value.as_ref();
+            }
+        }
+        return None;
+    }
+
+    fn get_mut(&mut self, id : &TREF) -> Option<&mut T>{
+        if let Some(val) = self.data.get_mut(id.id() as usize){
+            if val.time_stamp == id.time(){
+                return val.value.as_mut();
+            }
+        }
+        return None;
+    }
+
+    fn delete(&mut self, id : &TREF) -> bool{
+        if let Some(val) = self.data.get_mut(id.id() as usize){
+            if val.time_stamp == id.time(){
+                val.is_used = false;
+                val.time_stamp += 1;
+                val.value = None;
+                self.free.push(id.id() as usize);
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    fn get_reference(&self, pos : u32) -> Option<(TREF, &T)> {
+        if let Some(val) = self.data.get(pos as usize){
+            if val.is_used{
+                let value = val.value.as_ref()?;
+                return Some((TREF::new(pos, val.time_stamp), value));
+            }
+        }
+        return None;
+    }
+    
+    fn iter<'a>(&'a self) -> impl Iterator<Item=&T> where T : 'a {
+        self.data.iter().filter_map(|c| if !c.is_used {None} else{c.value.as_ref()})
+    }
+    
+    fn retain(&mut self, keep : impl Fn((&TREF, &T)) -> bool) {
+        for (index, sf) in self.data.iter_mut().enumerate(){
+            if let Some(val) = &sf.value{
+                if !keep((&TREF::new(index as u32, sf.time_stamp), val)){
+                    sf.is_used = false;
+                    sf.time_stamp += 1;
+                    sf.value = None;
+                    self.free.push(index);
+                }
+            }
+        }
+    }
+
+    fn retain_mut(&mut self, mut keep : impl FnMut((&TREF, &T)) -> bool) {
+        for (index, sf) in self.data.iter_mut().enumerate(){
+            if let Some(val) = &sf.value{
+                if !keep((&TREF::new(index as u32, sf.time_stamp), val)){
+                    sf.is_used = false;
+                    sf.time_stamp += 1;
+                    sf.value = None;
+                    self.free.push(index);
+                }
+            }
+        }
+    }
+    
+    fn len(&self) -> usize {
+        return self.data.len() - self.free.len();
+    }
+    
+}
+
+impl<T, TREF> StorageOptional<T, TREF>
+where TREF : ReferenceTrait
+{
+
+    pub fn delete_move(&mut self, id : &TREF) -> Option<T>{
+        if let Some(val) = self.data.get_mut(id.id() as usize){
+            if val.time_stamp == id.time(){
+                val.time_stamp += 1;
+                val.is_used = false;
+                self.free.push(id.id() as usize);
+                return val.value.take();
+            }
+        }
+        return None;
+    }
+
+    pub fn iter_option(&self) -> impl Iterator<Item=&T> {
+        self.data.iter().filter_map(|c| if !c.is_used {None} else{c.value.as_ref()})
+    }
+
+    pub fn iter_mut_option(&mut self) -> impl Iterator<Item=&mut T> {
+        self.data.iter_mut().filter_map(|c| if !c.is_used {None} else{c.value.as_mut()})
+    }
+
+    pub fn enumerate_option(&self) -> impl Iterator<Item=(TREF, &T)> {
+        self.data.iter().enumerate().filter_map(|(i, c)| 
+            if !c.is_used {None} 
+            else {Some((TREF::new(i as u32, c.time_stamp), c.value.as_ref()?))}
+            )
+    }
+
+    pub fn enumerate_mut_option(&mut self) -> impl Iterator<Item=(TREF, &mut T)> {
+        self.data.iter_mut().enumerate().filter_map(|(i, c)| if !c.is_used {None} else{  Some((TREF::new(i as u32, c.time_stamp), c.value.as_mut()?))})
+    }
+}
+
+
+impl<T, TREF> StorageTrait<T, TREF> for Storage<T, TREF>
+where TREF : ReferenceTrait
+{
+    fn new() -> Self {
+        Self { data : vec![], free : vec![], phantom : PhantomData::default() }
+    }
+
+    fn insert(&mut self, referece : T) -> TREF
+    {
+        if let Some(id) = self.free.pop(){
+            self.data[id].value = referece;
+            self.data[id].is_used = true;
+            return TREF::new(id as u32, self.data[id].time_stamp);
+        }         
+        else{
+            let field = StorageField{time_stamp : 1, value : referece, is_used : true};
+            self.data.push(field);
+            return TREF::new((self.data.len() - 1) as u32, 1);
+        }
+    }
+
+    fn get(&self, id : &TREF) -> Option<&T>{
+        if let Some(val) = self.data.get(id.id() as usize){
+            if val.time_stamp == id.time(){
+                return Some(&val.value);
+            }
+        }
+        return None;
+    }
+
+    fn get_mut(&mut self, id : &TREF) -> Option<&mut T>{
+        if let Some(val) = self.data.get_mut(id.id() as usize){
+            if val.time_stamp == id.time(){
+                return Some(&mut val.value);
+            }
+        }
+        return None;
+    }
+
+    fn delete(&mut self, id : &TREF) -> bool{
+        if let Some(val) = self.data.get_mut(id.id() as usize){
+            if val.time_stamp == id.time(){
+                val.time_stamp += 1;
+                val.is_used = false;
+                self.free.push(id.id() as usize);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn get_reference(&self, pos : u32) -> Option<(TREF, &T)> {
+        if let Some(val) = self.data.get(pos as usize){
+            if val.is_used {
+                let value = &val.value;
+                return Some((TREF::new(pos, val.time_stamp), value));
+            }
+        }
+        return None;
+    }
+
+    fn iter<'a>(&'a self) -> impl Iterator<Item=&T> where T : 'a {
+        self.data.iter().filter(|c| !c.is_used).map(|c| &c.value)
+    }
+
+    fn retain(&mut self, keep : impl Fn((&TREF, &T)) -> bool) {
+        for (index, sf) in self.data.iter_mut().enumerate(){
+            if !keep((&TREF::new(index as u32, sf.time_stamp), &sf.value)){
+                sf.is_used = false;
+                sf.time_stamp += 1;
+                self.free.push(index);
+            }
+        }
+    }
+
+    
+    fn retain_mut(&mut self, mut keep : impl FnMut((&TREF, &T)) -> bool) {
+        for (index, sf) in self.data.iter_mut().enumerate(){
+            if !keep((&TREF::new(index as u32, sf.time_stamp), &sf.value)){
+                sf.is_used = false;
+                sf.time_stamp += 1;
+                self.free.push(index);
+            }
+        }
+    }
+    
+    fn len(&self) -> usize {
+        return self.data.len() - self.free.len();
+    }
+    
 }

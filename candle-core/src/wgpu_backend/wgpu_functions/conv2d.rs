@@ -20,7 +20,9 @@ pub fn queue_conv2d(
 
     let (input_buffer, input_layout) = 
     if input_stride[3] != 1 && (params.c_out > 32) && (params.i_h >= 64 && params.i_w >= 64) {
-        let tmp_buffer = BufferReference::new(dev, input_layout.shape().elem_count()*4);
+        let mut cache = dev.cache.lock().unwrap();
+        let tmp_buffer = cache.create_buffer_reference(input_layout.shape().elem_count()*4, false);
+       
         queue_copy_strided(dev, tmp_buffer.clone(), buffer_input1.clone(), dtype, input_layout, 0)?;
         (tmp_buffer, Layout::contiguous(input_layout.shape()))
     }

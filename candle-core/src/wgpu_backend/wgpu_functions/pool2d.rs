@@ -1,14 +1,12 @@
-use std::sync::Arc;
-
 use candle_wgpu_kernels::pool2d::Functions;
 
-use crate::{wgpu::cache::BufferReference, WgpuDevice};
+use crate::WgpuDevice;
 use super::*;
 
 pub fn queue_max_pool2d(
     dev: &WgpuDevice,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input1: Arc<BufferReference>,
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
     layout: &crate::Layout,
     dtype: crate::DType,
     kernel_size: (usize, usize),
@@ -65,8 +63,8 @@ pub fn queue_max_pool2d(
 
 pub fn queue_avg_pool2d(
     dev: &WgpuDevice,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input1: Arc<BufferReference>,
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
     layout: &crate::Layout,
     dtype: crate::DType,
     kernel_size: (usize, usize),

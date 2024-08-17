@@ -27,7 +27,7 @@ pub fn queue_softmax(
 
     let pipeline = meta.get_pipeline_const(Pipelines::Softmax(get_dtype(dtype)?, Functions::Softmax), const_vec);
 
-    let bind_group: crate::wgpu_backend::cache::BindGroupReferenceBase<BufferReferenceId> = create_bind_group_input1( buffer_dest, buffer_input1);
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1);
     
     enqueue_workgroups_extra(
         meta,

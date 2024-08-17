@@ -474,7 +474,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             storage: &WgpuStorage,
             layout: &Layout,
         ) -> Result<(WgpuStorage, Shape)> {
-            use candle::wgpu::cache::BufferReference;
+            use candle::wgpu::create_wgpu_storage;
 
         
             if !(layout.is_contiguous()){
@@ -487,22 +487,18 @@ impl candle::CustomOp1 for SoftmaxLastDim {
 
             let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
 
-            let output_buffer = BufferReference::new(storage.device(), el_count * 4);
-    
+            let output_buffer = create_wgpu_storage(storage.device(), storage.dtype,  el_count * 4);
+
             wgpu_functions::queue_softmax(
                 storage.device(),
-                output_buffer.clone(),
+                output_buffer.buffer.clone(),
                 storage.buffer.clone(),
                 storage.dtype,
                 layout.start_offset() as u32,
                 dim_m1 as u32,
                 dest_size as u32,
             )?;
-            return Ok((WgpuStorage::new(
-                output_buffer,
-                storage.device().clone(),
-                storage.dtype,
-            ), Shape::from_dims(dims)));
+            return Ok((output_buffer, Shape::from_dims(dims)));
     }
 
 }
@@ -701,7 +697,7 @@ impl candle::CustomOp2 for RmsNorm {
     ) -> Result<(WgpuStorage, Shape)> {
         //start offset and length:
 
-        use candle::wgpu::cache::BufferReference;
+        use candle::wgpu::create_wgpu_storage;
 
         if !(layout.is_contiguous()){
             candle::bail!("input has to be contiguous")
@@ -716,11 +712,11 @@ impl candle::CustomOp2 for RmsNorm {
 
         let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
 
-        let output_buffer = BufferReference::new(src.device(), el_count * 4);
+        let output_buffer = create_wgpu_storage(src.device(), src.dtype,  el_count * 4);
 
         wgpu_functions::queue_rms_norm(
             src.device(),
-            output_buffer.clone(),
+            output_buffer.buffer.clone(),
             src.buffer.clone(),
             alpha.buffer.clone(),
             src.dtype,
@@ -730,11 +726,7 @@ impl candle::CustomOp2 for RmsNorm {
             dest_size as u32,
             self.eps,
         )?;
-        return Ok((WgpuStorage::new(
-            output_buffer,
-            src.device().clone(),
-            src.dtype,
-        ), Shape::from_dims(dims)));
+        return Ok((output_buffer, Shape::from_dims(dims)));
     }
 }
 

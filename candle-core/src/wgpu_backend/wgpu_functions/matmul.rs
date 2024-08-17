@@ -159,7 +159,9 @@ mod sgemm{
                 (buffer_input1, layout_input1.clone())
             }
             else{
-                let buffer_input1_padded = BufferReference::new(&dev, b * (new_m * new_k) * 4);   
+                let mut cache = dev.cache.lock().unwrap();
+                let buffer_input1_padded = cache.create_buffer_reference(b * (new_m * new_k) * 4, false);
+
                 let dest_layout = crate::Layout::contiguous(&Shape::from((b as usize, new_m as usize, new_k as usize)));
                 super::queue_copy3d_padded(dev, buffer_input1_padded.clone(), buffer_input1, dtype, layout_input1, (b, m, k), &dest_layout)?;
                 //let res : Vec<f32> = block_on(read_data_from_gpu_async(dev, buffer_input1_padded.clone()));
@@ -172,7 +174,9 @@ mod sgemm{
                 (buffer_input2, layout_input2.clone())
             }
             else{
-                let buffer_input2_padded = BufferReference::new(&dev, b * (new_k * new_n) * 4);  
+                let mut cache = dev.cache.lock().unwrap();
+                let buffer_input2_padded = cache.create_buffer_reference(b * (new_k * new_n) * 4, false);
+
                 //let dest_layout = crate::Layout::contiguous(&Shape::from((b as usize, new_k as usize, new_n as usize))); 
                 let dest_layout = crate::Layout::new(Shape::from((b as usize, new_k as usize, new_n as usize)), vec![(new_n * new_k) as usize, 1, new_k as usize], 0);
                 super::queue_copy3d_padded(dev, buffer_input2_padded.clone(), buffer_input2, dtype, layout_input2, (b, k, n),&dest_layout)?;
@@ -184,7 +188,8 @@ mod sgemm{
 
 
         let buffer_dest_padded = if need_different_output_buffer && USE_DIFFERENT_PADDED_OUTPUT{
-            BufferReference::new(&dev, b * (new_m * new_n) * 4)
+            let mut cache = dev.cache.lock().unwrap();
+            cache.create_buffer_reference(b * (new_m * new_n) * 4, false)
         }
         else{
             buffer_dest.clone()

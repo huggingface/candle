@@ -149,7 +149,7 @@ pub fn queue_copy2d(
     input_offset: u32,
     dest_offset: u32,
 ) -> crate::Result<()> {
-    if buffer_dest.size > 0 && buffer_input.size > 0{
+    //if buffer_dest.size > 0 && buffer_input.size > 0{
         if d1 == 1 || (input_stride1 == d2 && input_stride1 == dest_stride1){
             return queue_copy(dev, buffer_dest, buffer_input, dest_offset as usize, input_offset as usize, (d2 * d1) as usize, dtype);
         }
@@ -196,7 +196,7 @@ pub fn queue_copy2d(
                 (d1 * d2) as usize
             );
         }
-    }
+    //}
     return Ok(());
 }
 
@@ -209,7 +209,7 @@ pub fn queue_copy3d(
     input_shape : (u32, u32, u32), //b, m, k
     dest_layout : &crate::Layout,
 ) -> crate::Result<()> {
-    if buffer_dest.size > 0 && buffer_input.size > 0{
+    //if buffer_dest.size > 0 && buffer_input.size > 0{
         let mut input1_stride = input_layout.stride().iter().rev();
 
         let input1_stride_1 = *input1_stride.next().unwrap_or(&1); //k
@@ -254,7 +254,7 @@ pub fn queue_copy3d(
             input_shape.0 as u32,
             input_layout.shape().elem_count()
         );
-    }
+    //}
     return Ok(());
 }
 
@@ -268,7 +268,7 @@ pub fn queue_copy3d_padded(
     input_shape : (u32, u32, u32), //b, m, k
     dest_layout : &crate::Layout,
 ) -> crate::Result<()> {
-    if buffer_dest.size > 0 && buffer_input.size > 0{
+    //if buffer_dest.size > 0 && buffer_input.size > 0{
         let mut input1_stride = input_layout.stride().iter().rev();
 
         let input1_stride_1 = *input1_stride.next().unwrap_or(&1); //k
@@ -323,6 +323,6 @@ pub fn queue_copy3d_padded(
             input_shape.0 as u32,
             input_layout.shape().elem_count(),
         );
-    }
+    //}
     return Ok(());
 }
