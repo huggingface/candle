@@ -1,15 +1,7 @@
 # Candle WebGpu Fork
 
-current Problems:
-- not all dtypes are supported: f32, u32 is implemented for most. u8 may be possible. As WebGpu has no standard for f64 or i64 or u8 support for other dtypes is not trivial. <br>
-  (There is a f16 extension in the webGpu Spec, but this is currently not supported by wgpu(https://github.com/gfx-rs/wgpu/issues/4384))
-- Reduce Implementation error: When using ArgMin, ArgMax with non continues reduction dimensions will probably not work. e.g if dim 0 and 2 are reduced. The current implementation will first reduce dim 2, and afterwards dim 0. This approach will not work for ArgMin/ArgMax as after the first reduction the type and source values changed.
-- The current Impl will block with pollster when copying data from webgpu to cpu space(e.g. call to ".to_vecX()"). THIS IS NOT POSSIBLE IN THE BROWSER. When compiling to wasm, one need to copy the data to cpu manuelly using the async method to_device_async().     
-- for all shapes max 5 dimensions are supported
-- Not Implemented: Pool2dMax, Pool2dAvg, Conv1d, Conv1dTransposed, Upsample, Gather, Scatter_add, index_select, index_add, most Custom_nn functions
-- Error in Conv2dTransposed when transformed and diluted?
-- erf not implemented for unary_impl
-- argsort not implemented 
+This is a fork of Candle that adds wgpu as a backend. This means that the gpu can be used via Vulkan, Metal, DirectX native or WebGpu in the browser.  
+
 
 # Feature Support Table
 
@@ -44,6 +36,73 @@ current Problems:
 | ArgSort                     | ❌ Not Implemented                               |                                                                    |
 | Quantized Matrices          | ❌ Not Supported?                                 |                                                                    |
 
+## async methods
+
+It is not possible to synchronously request a device, read a gpu memory or synchronise the device in the browser. 
+There are synchronous methods for these operations, but as these methods will just block the current thread, they will not work in the browser and will fail. 
+If you want to target the browser, you need to use the async methods.
+
+The following code demonstrates how to use wgpu in the browser:
+```rust
+use candle_core::{Device, Tensor};
+  let device = Device::new_webgpu(0, config).await? //use the await method to create a device, this must be asynchronous
+
+  let a = Tensor::randn(0f32, 1., (2, 3), &device)?;
+  let b = Tensor::randn(0f32, 1., (3, 4), &device)?;
+
+  let c = a.matmul(&b)?;
+
+  //device.synchonize_async(); //If we want to synchronise with the device, we must use the async function.
+  
+  let c = c.to_cpu_device().await?; //We need to asynchronously copy the gpu buffer back to the cpu, to_device() will not work, 
+  //let c = c.to_device_async(&Device:Cpu).await?; //would also be possible
+  console_log!("{c}");
+  Ok(())
+```
+** Note that the above limitation only applies if the browser is targeted; a native program can still use the same sync functions.
+
+## Testprojects
+
+The implementation has been tested with the following examples:
+Examples:
+- llama2c
+- wuerstchen
+
+wasm-examples: 
+- llama2c
+- t5
+- wuerstchen (This branch adds a new wuerstchen wasm example. It is possible to generate images (but it is about 4 times slower than native). The example should work, but the advanced options are not linked to any properties. In addition a wasm-heper crate was added to downloading and store files from huggingface to opfs.)
+
+
+## known problems
+- not all dtypes are supported: f32, u32 is implemented for most and u8 for a cmp. WebGpu has no support for f64 or i64 or u8 dtypes<br>
+  (There is a f16 extension in the webGpu Spec, but this is currently not supported by wgpu(https://github.com/gfx-rs/wgpu/issues/4384))
+- Reduce Implementation error: When using ArgMin, ArgMax with non continues reduction dimensions will probably not work. e.g if dim 0 and 2 are reduced. The current implementation will first reduce dim 2, and afterwards dim 0. This approach will not work for ArgMin/ArgMax as after the first reduction the type and source values changed.
+- The current Impl will block with pollster when copying data from webgpu to cpu space(e.g. call to ".to_vecX()"). THIS IS NOT POSSIBLE IN THE BROWSER. When compiling to wasm, one need to copy the data to cpu manuelly using the async method to_device_async().     
+## Implementation details:
+
+### Kernels:
+This implementation uses a custom wgsl kernel system in candle-wgpu-kernels.
+At compile time, files ending in .pwgsl are included in the crate with f32, u32 and u8 versions. preprocessor statements like #define, #ifdef, #include, etc. are parsed by the build.rs and converted into proper wgsl files.
+
+In addition, a rust module is defined for each .pwgsl shader file, which contains information about the compute shader functions contained in that file. When called from the candle_backend, these automatically generated mappings are used to call queue the kernel.
+
+In addition, the build.rs further truncates the wgsl files (removes all spaces, truncates variable names, constant override names or function names and removes unused global variables and functions).
+
+### Cache system:
+All called wgpu functions are not executed directly, but first queued in an internal queue inside the WgpuDevice object. 
+All previously queued functions are only flushed to the GPU when a buffer is requested to be read, the device is synchronised, or data is copied from the CPU to the wgpu device. 
+
+When flushed, previously created buffers and bindgroups are reused using a custom implemented cache system. (For example, to generate an image using Wuerstchen, more than 2_000_000 commands will be queued, the current cache system will only create about 8000 buffers and 100_000 bindgroups for these commands (instead of creating 2_000_000 bindgroups and output buffers for each command)).
+
+Objects: 
+BufferReference(an object representing a virtual cache. It may or may not be currently associated with an actual CachedBuffer)
+CachedBuffer(an object representing a Wgpu::Buffer)
+CachedBindgroup(An object representing a wgpu::bindgroup)
+
+All these 3 objects are held in a separate vec storage. 
+Objects can be read or written using a reference (an index into the vec and a timestamp value).
+When an entry is deleted, the timestamp value at that index is incremented to ensure that no further entries are made.
 
 # candle
 [![discord server](https://dcbadge.vercel.app/api/server/hugging-face-879548962464493619)](https://discord.gg/hugging-face-879548962464493619)

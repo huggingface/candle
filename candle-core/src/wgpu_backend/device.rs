@@ -32,16 +32,16 @@ use super::WgpuStorage;
 //pub (crate) const META_BUFFER_DEFAULT_SIZE : u32 = 10*1024*1024; //10mb
 //pub (crate) const MAX_WORKLOAD_DEFAULT_SIZE : u64 = 1024u64*1024*1024*2; //8gb
 #[derive(Debug)]
-pub struct DeviceConfig{
+pub struct WgpuDeviceConfig{
     pub meta_buffer_size : u32, 
     pub max_workload_size : u64, 
     pub buffer_cached_max_allowed_size : u64,
     pub use_cache : bool,
 }
 
-impl Default for DeviceConfig {
-    fn default() -> DeviceConfig {
-        DeviceConfig {
+impl Default for WgpuDeviceConfig {
+    fn default() -> WgpuDeviceConfig {
+        WgpuDeviceConfig {
             meta_buffer_size : 10*1024*1024,//10mb
             max_workload_size :  1024u64*1024*1024*2, //2gb,
             buffer_cached_max_allowed_size : 1024*1024*1024*8, //8gb
@@ -332,7 +332,7 @@ pub struct WgpuDeviceInner{
     #[cfg(feature = "wgpu_debug")]
     pub debug : DebugInfo,
 
-    pub configuration : DeviceConfig,
+    pub configuration : WgpuDeviceConfig,
 
     pub matmul_alg : Mutex<MatmulAlgorithm>
 }
@@ -351,7 +351,7 @@ impl std::ops::Deref for WgpuDevice{
 }
 
 impl WgpuDevice{
-    pub (crate) async fn create(_: usize, configuration : DeviceConfig) -> crate::Result<Self>{
+    pub (crate) async fn create(_: usize, configuration : WgpuDeviceConfig) -> crate::Result<Self>{
         let instance = wgpu::Instance::new(InstanceDescriptor{ backends: Backends::PRIMARY, flags:InstanceFlags::default() , dx12_shader_compiler: wgpu::Dx12Compiler::Fxc, gles_minor_version: wgpu::Gles3MinorVersion::Automatic });
         
         // `request_adapter` instantiates the general connection to the GPU

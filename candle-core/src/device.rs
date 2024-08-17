@@ -137,19 +137,31 @@ impl Device {
     }
 
     pub async fn new_webgpu(ordinal: usize) -> Result<Self> {
-        Ok(Self::WebGpu(crate::WgpuDevice::create(ordinal, crate::wgpu_backend::DeviceConfig::default()).await?))
+        Ok(Self::WebGpu(crate::WgpuDevice::create(ordinal, crate::WgpuDeviceConfig::default()).await?))
     }
 
-    pub async fn new_webgpu_config(ordinal: usize, configuration : crate::wgpu_backend::DeviceConfig) -> Result<Self> {
+    pub async fn new_webgpu_config(ordinal: usize, configuration : crate::WgpuDeviceConfig) -> Result<Self> {
         Ok(Self::WebGpu(crate::WgpuDevice::create(ordinal, configuration).await?))
     }
 
+    #[cfg(feature="wgpu")]
     pub fn new_webgpu_sync(ordinal: usize) -> Result<Self> {
         return pollster::block_on(Device::new_webgpu(ordinal));
     }
 
-    pub fn new_webgpu_sync_config(ordinal: usize, configuration : crate::wgpu_backend::DeviceConfig) -> Result<Self> {
+    #[cfg(feature="wgpu")]
+    pub fn new_webgpu_sync_config(ordinal: usize, configuration : crate::WgpuDeviceConfig) -> Result<Self> {
         return pollster::block_on(Device::new_webgpu_config(ordinal, configuration));
+    }
+
+    #[cfg(not(feature="wgpu"))]
+    pub fn new_webgpu_sync(_: usize) -> Result<Self> {
+        Err(crate::Error::NotCompiledWithWgpuSupport)
+    }
+
+    #[cfg(not(feature="wgpu"))]
+    pub fn new_webgpu_sync_config(_: usize, _ : crate::WgpuDeviceConfig) -> Result<Self> {
+        Err(crate::Error::NotCompiledWithWgpuSupport)
     }
 
     pub fn set_seed(&self, seed: u64) -> Result<()> {

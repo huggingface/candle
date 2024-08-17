@@ -303,161 +303,23 @@ fn organize_modules(snippets: impl Iterator<Item=(String, String)>) -> String {
 }
 
 
-// fn preprocess_shader(
-//     path: &PathBuf,
-//     shader_map: &mut HashMap<u32, String>,
-//     virtual_id_counter: &mut u32,
-// ) -> String {
-//     println!("Process File: {:?}", path);
-//     let contents = fs::read_to_string(path).expect("Failed to read WGSL file");
-//     let mut result = String::new();
-//     let mut lines = contents.lines();
-
-//     while let Some(line) = lines.next() {
-//         if line.starts_with("#include") {
-          
-//             let included_file = line.split_whitespace().nth(1).expect("No file specified in #include");
-//             let included_file = included_file.trim_matches('"');
-//             let included_path = path.parent().unwrap().join(included_file);
-//             println!("Found Include: {:?}", included_path);
-//             let included_shader_content = preprocess_shader(&included_path, shader_map, virtual_id_counter);
-//             result.push_str(&format!("#include_virtual {}\n", virtual_id_counter));
-//             shader_map.insert(*virtual_id_counter, included_shader_content);
-
-
-
-//             *virtual_id_counter += 1;
-//         } else {
-//             result.push_str(line);
-//             result.push('\n');
-//         }
-//     }
-
-//     result
-// }
-
-
-
 mod shader_loader{
     use std::{collections::HashMap, path::PathBuf};
+
+    use fancy_regex::Regex;
 
     pub fn load_shader(path: &PathBuf, global_defines : &Vec<&'static str>, global_functions : &mut shader_shortener::ShaderInfo) -> String {
         let result = shader_defines::load_shader(path, &mut HashMap::new(), global_defines); 
       
-        //let result = Regex::new(r"\n\s*(?=\n)", ).unwrap().replace_all(&result, "");
-        //let result = Regex::new(r"((\s+)(?![\w\s])|(?<!\w)(\s+))", ).unwrap().replace_all(&result, "");
+        let result = Regex::new(r"\n\s*(?=\n)", ).unwrap().replace_all(&result, ""); //remove comments
+        let result = Regex::new(r"((\s+)(?![\w\s])|(?<!\w)(\s+))", ).unwrap().replace_all(&result, ""); //replaces newline and not used spaces
         
-        // global_functions.global_functions.insert("test_func".to_string(), "test_func".to_string());
-        // global_functions.global_overrides.insert("Constv0".to_string(), "Constv0".to_string());
-        // global_functions.global_overrides.insert("Constv1".to_string(), "Constv1".to_string());
-        // global_functions.global_overrides.insert("Constv2".to_string(), "Constv2".to_string());
-        // global_functions.global_overrides.insert("Constv3".to_string(), "Constv3".to_string());
-        // global_functions.global_overrides.insert("Constv4".to_string(), "Constv4".to_string());
-        // global_functions.global_overrides.insert("Constv5".to_string(), "Constv5".to_string());
-        // global_functions.global_overrides.insert("Constv6".to_string(), "Constv6".to_string());
-        // global_functions.global_overrides.insert("Constv7".to_string(), "Constv7".to_string());
-        // global_functions.global_overrides.insert("Constv8".to_string(), "Constv8".to_string());
-        // global_functions.global_overrides.insert("Constv9".to_string(), "Constv9".to_string());
-        // global_functions.global_overrides.insert("Constv10".to_string(), "Constv10".to_string());
         let result = global_functions.shorten_variable_names(&result);
         let result = global_functions.remove_unused(&result);
         let result = global_functions.remove_unused(&result);
-        //let result = result.replace("\n", "");
-
+        let result = result.replace("\n", "");
         result
     }
-
-    // pub fn load_shader<T : AsRef<str>>(virtual_id: u32, shader_map: &std::collections::HashMap<u32, T>, defines: &Vec<&str>, global_functions : &mut shader_shortener::ShaderInfo) -> String {
-    //     println!("Load Shader {virtual_id}");
-    //     let mut shader_code : String= (*shader_map.get(&virtual_id).expect("Shader ID not found")).as_ref().to_string();
-    //     while let Some(include_pos) = shader_code.find("#include_virtual") {
-    //         let start_pos = include_pos + "#include_virtual".len();
-    //         let end_pos = shader_code[start_pos..].find('\n').unwrap() + start_pos;
-    //         let virtual_id_str = &shader_code[start_pos..end_pos].trim();
-    //         let include_id: u32 = virtual_id_str.parse().expect("Invalid virtual ID");
-    //         let include_content = (*shader_map.get(&include_id).expect("Included shader ID not found")).as_ref();
-    //         shader_code.replace_range(include_pos..end_pos, include_content);
-    //     }
-        
-    //     let result = Regex::new(r"//.*\n", ).unwrap().replace_all(&shader_code, ""); //remove coments
-
-    //     let result = apply_defines(&result, defines);
-        
-        
-    //     let result = Regex::new(r"\n\s*(?=\n)", ).unwrap().replace_all(&result, "");
-    //     //let result = Regex::new(r"((\s+)(?![\w\s])|(?<!\w)(\s+))", ).unwrap().replace_all(&result, "");
-        
-    //     let result = global_functions.shorten_variable_names(&result);
-    //     let result = global_functions.remove_unused(&result);
-    //     let result = global_functions.remove_unused(&result);
-    //     //let result = result.replace("\n", "");
-
-    //     result
-    // }
-    
-    // fn apply_defines(shader_code: &str, global_defines: &Vec<&str>) -> String {
-    //     let mut result = String::new();
-    //     let mut lines = shader_code.lines().peekable();
-    //     let mut inside_ifdef = false;
-    //     let mut defines : HashMap<String, String> = HashMap::new();
-    //     while let Some(line) = lines.next() {
-    //         if line.starts_with("#ifdef") {
-    //             let key = line.split_whitespace().nth(1).expect("No key specified in #ifdef");
-    //             if defines.contains_key(key) || global_defines.contains(&key) {
-    //                 inside_ifdef = true;
-    //             } else {
-    //                 skip_until_else_or_endif(&mut lines);
-    //             }
-    //         } else if line.starts_with("#else") {
-    //             if inside_ifdef {
-    //                 inside_ifdef = false;
-    //                 skip_until_endif(&mut lines);
-    //             }
-    //         } else if line.starts_with("#endif") {
-    //             inside_ifdef = false;
-    //         } else if line.starts_with("#define") {
-    //             let mut parts = line.split_whitespace();
-    //             parts.next(); // Skip the directive
-    //             let key = parts.next().expect("No key specified in #define").to_string();
-    //             let value = parts.next().unwrap_or("").to_string();
-    //             defines.insert(key, value);
-    //         } else {
-    //             let processed_line = replace_defines(line, &defines);
-    //             result.push_str(&processed_line);
-    //             result.push('\n');
-    //         }
-    //     }
-    
-    //     result
-    // }
-    
-    // fn replace_defines(line: &str, defines: &HashMap<String, String>) -> String {
-    //     let mut processed_line = String::from(line);
-    //     for (key, value) in defines {
-    //         processed_line = processed_line.replace(key, value);
-    //     }
-    //     for (key, value) in defines {
-    //         processed_line = processed_line.replace(key, value);
-    //     }
-    //     processed_line
-    // }
-    
-    // fn skip_until_else_or_endif<'a, I: Iterator<Item = &'a str>>(lines: &mut Peekable<I>) {
-    //     while let Some(line) = lines.next() {
-    //         if line.starts_with("#else") || line.starts_with("#endif") {
-    //             break;
-    //         }
-    //     }
-    // }
-
-    
-    // fn skip_until_endif<'a, I: Iterator<Item = &'a str>>(lines: &mut Peekable<I>) {
-    //     while let Some(line) = lines.next() {
-    //         if line.starts_with("#endif") {
-    //             break;
-    //         }
-    //     }
-    // }
 
     pub mod shader_tokeniser{
         use std::{iter::Peekable, str::Chars};
@@ -994,7 +856,8 @@ mod shader_loader{
                 let mut tokens = tokenizer.peekable();
                 let mut prev_token = None;
 
-                const SHORTEN_GLOBAL_VARIABLES : bool = false;
+                const SHORTEN_GLOBAL_FUNCTIONS : bool = true;
+                const SHORTEN_OVERRIDES : bool = true;
 
                 while let Some(token) = tokens.next() {
                     match token {
@@ -1023,10 +886,10 @@ mod shader_loader{
                                         short_name = self.global_functions.get(&var_name).unwrap().to_string();
                                     }
                                     else{
-                                        if SHORTEN_GLOBAL_VARIABLES{
+                                        if SHORTEN_GLOBAL_FUNCTIONS{
                                             let (n, new_counter ) = generate_short_name(self.global_function_counter);
                                             self.global_function_counter = new_counter;
-                                            short_name = format!("g{n}");
+                                            short_name = format!("z{n}");
                                           
                                         }
                                         else{
@@ -1062,13 +925,26 @@ mod shader_loader{
                             result.push_str(word);
                             let var_name = match_variable(&mut tokens, &mut result);
                             if var_name != ""{
-                                let (new_name, new_counter ) = generate_short_name(self.global_overrides_counter);
-                                self.global_overrides_counter = new_counter;
-                                //self.global_overrides.insert(var_name.to_string(), new_name);
-                                //result.push_str(&new_name);
                                 
-                                self.global_overrides.insert(var_name.to_string(), var_name.to_string());
-                                result.push_str(&var_name);
+
+                                let short_name: String;
+                                if self.global_overrides.contains_key(&var_name){
+                                    short_name = self.global_overrides.get(&var_name).unwrap().to_string();
+                                }
+                                else{
+                                    if SHORTEN_OVERRIDES{
+                                        let (n, new_counter ) = generate_short_name(self.global_overrides_counter);
+                                        self.global_overrides_counter = new_counter;
+                                        short_name = format!("y{n}");
+                                      
+                                    }
+                                    else{
+                                        short_name = var_name.clone();
+                                    }
+                                    self.global_overrides.insert(var_name.to_string(), short_name.clone());
+                                }
+                                result.push_str(&short_name);
+                               
                             }
                         }
                         Token::Word(word) => {

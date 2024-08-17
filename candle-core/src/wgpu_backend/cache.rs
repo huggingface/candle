@@ -483,7 +483,7 @@ impl ModelCache {
         // 2. have a big memory diff (the actual buffer size vs the average size the buffer is used with)
         let mut check_bindgroups = false;
         if current_memory > memory_margin{
-            log::warn!("deleting buffers: ({}) current {current_memory}/{memory_margin}",self.buffers.storage.len());
+            log::debug!("deleting buffers: ({}) current {current_memory}/{memory_margin}",self.buffers.storage.len());
             
             //every entry in self.buffers.order will be free and can be potentially deleted
             //this is ordered from small to big. 
@@ -501,7 +501,7 @@ impl ModelCache {
                 }
             }
             let current_memory = self.buffers.buffer_memory;
-            log::warn!("after deleting: ({}) current {current_memory}/{}",self.buffers.storage.len(),self.buffers.max_memory_allowed);
+            log::debug!("after deleting: ({}) current {current_memory}/{}",self.buffers.storage.len(),self.buffers.max_memory_allowed);
         }
 
         //remove bindgroups:
@@ -920,8 +920,8 @@ impl BufferCacheStorage{
 
     //the length, this buffer should be used for(if a buffer is only used temporary we may use a way bigger buffer for just one command)
     fn max_cached_size(size : u64, length : u32) -> u64{
-        let length = length + 1;
-        let i = (300 / (length * length*length)).min(64).max(1) as u64;
+        let length = (length + 1).min(100);
+        let i = (300 / (length * length * length)).min(64).max(1) as u64;
 
         const TRANSITION_POINT : u64 = 1000*1024;
         return size +  (i * size * TRANSITION_POINT / (TRANSITION_POINT + size));
@@ -1100,10 +1100,10 @@ impl BufferMappingCache {
             .iter()
             .position(|b| b.hash == hash);
         if let Some(index) = index {
-            log::warn!("reuse mapping: {index}, hash: {hash}, mappings: {}", self.last_buffer_mappings.deque.len());
+            log::debug!("reuse mapping: {index}, hash: {hash}, mappings: {}", self.last_buffer_mappings.deque.len());
             self.current_buffer_mapping = self.last_buffer_mappings.deque.remove(index);
         } else {
-            log::warn!("create new mapping: hash: {hash}, mappings: {}", self.last_buffer_mappings.deque.len());
+            log::debug!("create new mapping: hash: {hash}, mappings: {}", self.last_buffer_mappings.deque.len());
             self.current_buffer_mapping = Some(CachedBufferMappings::new(hash));
         }
     }

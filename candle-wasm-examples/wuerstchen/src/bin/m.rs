@@ -294,7 +294,7 @@ impl Model {
             true => Device::Cpu,
             false =>  
             {
-                let config = candle::wgpu_backend::DeviceConfig{buffer_cached_max_allowed_size, max_workload_size, meta_buffer_size, use_cache };
+                let config = candle::wgpu_backend::WgpuDeviceConfig{buffer_cached_max_allowed_size, max_workload_size, meta_buffer_size, use_cache };
                 Device::new_webgpu_config(0, config).await?
             }
         };

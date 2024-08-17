@@ -33,6 +33,20 @@ impl WgpuStorage{
     }
 }
 
+#[derive(Debug)]
+pub struct WgpuDeviceConfig{
+    pub meta_buffer_size : u32, 
+    pub max_workload_size : u64, 
+    pub buffer_cached_max_allowed_size : u64,
+    pub use_cache : bool,
+}
+
+impl Default for WgpuDeviceConfig {
+    fn default() -> WgpuDeviceConfig {
+        panic!("NotCompiledWithWgpuSupport")
+    }
+}
+
 impl crate::backend::BackendStorage for WgpuStorage {
     type Device = WgpuDevice;
 
@@ -204,7 +218,11 @@ impl crate::backend::BackendStorage for WgpuStorage {
 }
 
 impl WgpuDevice{
-    pub (crate) async fn create(_: usize) -> crate::Result<Self>{
+    pub (crate) async fn create(_: usize, _ : WgpuDeviceConfig) -> crate::Result<Self>{
+        Err(Error::NotCompiledWithWgpuSupport)
+    }
+
+    pub (crate) async fn synchronize_async(&self) -> crate::Result<()> {
         Err(Error::NotCompiledWithWgpuSupport)
     }
 }

@@ -841,7 +841,7 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
         }
         queue_buffer.clear();
         {
-            log::warn!("current memory {} / {}", cache.buffers.buffer_memory(), cache.buffers.max_memory_allowed());
+            log::debug!("current memory {} / {}", cache.buffers.buffer_memory(), cache.buffers.max_memory_allowed());
             cache.mappings.finish();
             cache.remove_unused();
         }
@@ -910,7 +910,7 @@ pub(crate) async fn flush_gpu_command_async(dev: &WgpuDevice, queue_buffer: &mut
 
         queue_buffer.clear();
         {
-            log::warn!("current memory {} / {}", cache.buffers.buffer_memory(), cache.buffers.max_memory_allowed());
+            log::debug!("current memory {} / {}", cache.buffers.buffer_memory(), cache.buffers.max_memory_allowed());
             cache.mappings.finish();
             cache.remove_unused();
         }
