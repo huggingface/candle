@@ -7,7 +7,8 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::Parser;
 
-use candle_transformers::models::gemma::{Config, Model};
+use candle_transformers::models::gemma::{Config as Config1, Model as Model1};
+use candle_transformers::models::gemma2::{Config as Config2, Model as Model2};
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -38,6 +39,40 @@ enum Which {
     CodeInstruct2B,
     #[value(name = "code-7b-it")]
     CodeInstruct7B,
+    #[value(name = "2-2b")]
+    Gemma2_2B,
+}
+
+impl Which {
+    fn is_v1(&self) -> bool {
+        match self {
+            Self::Base2B
+            | Self::Base7B
+            | Self::Instruct2B
+            | Self::Instruct7B
+            | Self::InstructV1_1_2B
+            | Self::InstructV1_1_7B
+            | Self::CodeBase2B
+            | Self::CodeBase7B
+            | Self::CodeInstruct2B
+            | Self::CodeInstruct7B => true,
+            Self::Gemma2_2B => false,
+        }
+    }
+}
+
+enum Model {
+    V1(Model1),
+    V2(Model2),
+}
+
+impl Model {
+    fn forward(&mut self, input_ids: &Tensor, pos: usize) -> candle::Result<Tensor> {
+        match self {
+            Self::V1(m) => m.forward(input_ids, pos),
+            Self::V2(m) => m.forward(input_ids, pos),
+        }
+    }
 }
 
 struct TextGeneration {
@@ -239,6 +274,7 @@ fn main() -> Result<()> {
             Which::CodeBase7B => "google/codegemma-7b".to_string(),
             Which::CodeInstruct2B => "google/codegemma-2b-it".to_string(),
             Which::CodeInstruct7B => "google/codegemma-7b-it".to_string(),
+            Which::Gemma2_2B => "google/gemma-2-2b".to_string(),
         },
     };
     let repo = api.repo(Repo::with_revision(
@@ -263,7 +299,6 @@ fn main() -> Result<()> {
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
-    let config: Config = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
 
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
@@ -273,7 +308,15 @@ fn main() -> Result<()> {
         DType::F32
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-    let model = Model::new(args.use_flash_attn, &config, vb)?;
+    let model = if args.which.is_v1() {
+        let config: Config1 = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
+        let model = Model1::new(args.use_flash_attn, &config, vb)?;
+        Model::V1(model)
+    } else {
+        let config: Config2 = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
+        let model = Model2::new(args.use_flash_attn, &config, vb)?;
+        Model::V2(model)
+    };
 
     println!("loaded the model in {:?}", start.elapsed());
 
