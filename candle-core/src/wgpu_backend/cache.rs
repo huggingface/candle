@@ -624,7 +624,7 @@ impl ModelCache {
             required_size = buf_dest_reference.size;
         }
 
-        if dev.use_cache {
+        if dev.configuration.use_cache {
             //the destination buffer of this bindgroup already has a buffer set
             if buf_dest_cached_id.is_valid(){
                 let bindgroup_inputs = get_buffer_referece_key(self, buf_dest_cached_id, &bindgroup_reference);
@@ -733,7 +733,7 @@ impl ModelCache {
         let bindgroup_reference = get_buffer_referece_key(self, dest_buffer_id, bindgroup_reference);
         let bindgroup_id = self.create_bindgroup(dev, bindgroup_reference);
 
-        if dev.use_cache {
+        if dev.configuration.use_cache {
             self.mappings.add_buffer(dest_buffer_id, pipeline);
         }
         return bindgroup_id;
@@ -842,7 +842,6 @@ pub(crate) struct BufferCacheStorage {
 }
 
 impl BufferCacheStorage{
-
     pub fn total_used(&self) -> u64{
         return self.buffer_memory - self.buffer_memory_free;
     }
@@ -947,7 +946,7 @@ impl BufferCacheStorage{
         //println!("search buffer: size: {size}");
         let max_size = BufferCacheStorage::max_cached_size(size);
 
-        if dev.use_cache{
+        if dev.configuration.use_cache{
             let mut buffer_found = None;
             for id in self.order.range(OrderedIndex::new(0, size)..){
                 if id.value < size{

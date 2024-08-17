@@ -22,7 +22,7 @@ use tracing::{instrument, span, Level};
 use super::{
     cache::{BindgroupInputBase, BindgroupReferenceFull, CachedBindgroupFull, CachedBindgroupInput, CachedBufferId, ModelCache},
     device::{
-        BindGroupReference, DispatchedBindgroup, MlQueue, OpIsInplaceable, PipelineType, QueueBuffer, META_BUFFER_SIZE
+        BindGroupReference, DispatchedBindgroup, MlQueue, OpIsInplaceable, PipelineType, QueueBuffer
     },
     util::{FixedArray, ToU32},
 };
@@ -258,7 +258,7 @@ fn get_command_buffer(
     let _enter1 = span1.enter();
 
     let data = bytemuck::cast_slice(&meta_array);
-    if data.len() as u32 + 256 > META_BUFFER_SIZE {
+    if data.len() as u32 + 256 > dev.configuration.meta_buffer_size{
         panic!("Meta Buffer was to big, length was: {}", data.len());
     }
 
@@ -294,7 +294,7 @@ fn get_command_buffer(
                         cpass.set_pipeline(&pipeline);
                         drop(_enter1);
 
-                        if meta * 4 >= META_BUFFER_SIZE - 256 {
+                        if meta * 4 >= dev.configuration.meta_buffer_size - 256 {
                             panic!(
                                 "meta is to big!: meta was {meta}, q.meta: {}/{current_meta}",
                                 q.meta
@@ -560,7 +560,7 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer, cache : &mut ModelC
         //     let new_size = ((7 *  cache.buffers.max_memory_allowed()) / 8) + (most_needed_storage/8);
         //     cache.buffers.set_max_memory_allowed(new_size);
         // }
-        cache.buffers.set_max_memory_allowed(1024*1024*1024*8); //8gb TODO: change back
+        cache.buffers.set_max_memory_allowed(dev.configuration.buffer_cached_max_allowed_size); //8gb TODO: change back
 
     }
 }
@@ -589,7 +589,7 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                 let command_index = (*index - 1) as u32 + global_index;
               
                 let ele_size =  *index-start_index;
-                if (total_workload + q.workload_size as u64)  > super::device::MAX_WORKLOAD_SIZE && ele_size > 1 {
+                if (total_workload + q.workload_size as u64)  > dev.configuration.max_workload_size && ele_size > 1 {
                     *index -= 1;
                     break;
                 }
@@ -849,14 +849,14 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
 
                
                 let meta_size = (*last_meta - current_meta) * 4 + 256 * 3;
-                if meta_size > META_BUFFER_SIZE as usize
+                if meta_size > dev.configuration.meta_buffer_size as usize
                 {
                     break;
                 }
                 if cache_limit{
                     break;
                 }
-                if total_workload > super::device::MAX_WORKLOAD_SIZE{
+                if total_workload > dev.configuration.max_workload_size{
                     break;
                 }
             }
@@ -1130,8 +1130,6 @@ pub fn create_buffer(dev: &WgpuDevice, size: u64) -> wgpu::Buffer {
 
 #[instrument]
 pub fn create_bindgroup(dev: &WgpuDevice, bindgroup: CachedBindgroupFull, cache : &ModelCache) -> wgpu::BindGroup {
-    dev.cached_bindgroup_counter.inc();
-
     let buffer_meta = &dev.meta_buffer;
 
     let meta_binding = wgpu::BufferBinding {

@@ -103,7 +103,7 @@
         await init();
 
         if(model == null){
-          model = await new Model(false);
+          model = await new Model(JSON.stringify({use_gpu : true, buffer_cached_max_allowed_size : 1024*1024*1024*8, max_workload_size: 1024*1024*1024*2, use_cache : true}));
         } 
       
         let result = await model.run(JSON.stringify({prompt : prompt, prior_steps: 12, vgan_steps : 12}));

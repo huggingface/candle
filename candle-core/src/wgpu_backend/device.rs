@@ -29,11 +29,26 @@ use super::WgpuStorage;
 
 //pub (crate) const META_BUFFER_SIZE : u32 = 65536;
 //pub (crate) const META_BUFFER_SIZE : u32 = 2048;
-pub (crate) const META_BUFFER_SIZE : u32 = 10*1024*1024; //10mb
+//pub (crate) const META_BUFFER_DEFAULT_SIZE : u32 = 10*1024*1024; //10mb
+//pub (crate) const MAX_WORKLOAD_DEFAULT_SIZE : u64 = 1024u64*1024*1024*2; //8gb
+#[derive(Debug)]
+pub struct DeviceConfig{
+    pub meta_buffer_size : u32, 
+    pub max_workload_size : u64, 
+    pub buffer_cached_max_allowed_size : u64,
+    pub use_cache : bool,
+}
 
-pub (crate) const MAX_WORKLOAD_SIZE : u64 = 1024u64*1024*1024*2; //8gb
-
-
+impl Default for DeviceConfig {
+    fn default() -> DeviceConfig {
+        DeviceConfig {
+            meta_buffer_size : 10*1024*1024,//10mb
+            max_workload_size :  1024u64*1024*1024*2, //2gb,
+            buffer_cached_max_allowed_size : 1024*1024*1024*8, //8gb
+            use_cache : true
+        }
+    }
+}
 
 #[derive(Debug)]
 pub (crate) enum MlQueue{
@@ -116,8 +131,8 @@ pub struct QueueBuffer{
 }
 
 impl QueueBuffer {
-    pub fn new() -> Self {
-        Self {  command_queue: vec![], meta_array :MetaArray::new(META_BUFFER_SIZE), current_meta : 0 , const_array: ConstArray::new(), const_id_map : ObjectToIdMapper::new() , id_to_const_array : Vec::new(), last_buffer : None, global_command_index : 1}
+    pub fn new(size : u32) -> Self {
+        Self {  command_queue: vec![], meta_array :MetaArray::new(size), current_meta : 0 , const_array: ConstArray::new(), const_id_map : ObjectToIdMapper::new() , id_to_const_array : Vec::new(), last_buffer : None, global_command_index : 1}
     }
 
     pub fn init(&mut self){
@@ -310,19 +325,14 @@ pub struct WgpuDeviceInner{
     pub (crate) staging_probe_buffer : wgpu::Buffer, //wait for submission is not supported on wgpu, we use a mapping to a staging buffer as a work around.
 
     pub (crate) cache : Mutex<ModelCache>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
-
     //debug counter
-    pub (crate) cached_buffer_counter : Counter,
-    pub (crate) cached_bindgroup_counter : Counter,
-
-    pub (crate) cached_bindgroup_reuse_counter : Counter,
-    pub (crate) cached_buffer_reuse_counter : Counter,
     pub (crate) unary_inplace_counter : Counter,
     pub (crate) binary_inplace_counter : Counter,
     pub (crate) copy_inplace_counter : Counter,
-    pub (crate) use_cache : bool,
     #[cfg(feature = "wgpu_debug")]
     pub debug : DebugInfo,
+
+    pub configuration : DeviceConfig,
 
     pub matmul_alg : Mutex<MatmulAlgorithm>
 }
@@ -341,7 +351,7 @@ impl std::ops::Deref for WgpuDevice{
 }
 
 impl WgpuDevice{
-    pub (crate) async fn create(_: usize) -> crate::Result<Self>{
+    pub (crate) async fn create(_: usize, configuration : DeviceConfig) -> crate::Result<Self>{
         let instance = wgpu::Instance::new(InstanceDescriptor{ backends: Backends::PRIMARY, flags:InstanceFlags::default() , dx12_shader_compiler: wgpu::Dx12Compiler::Fxc, gles_minor_version: wgpu::Gles3MinorVersion::Automatic });
         
         // `request_adapter` instantiates the general connection to the GPU
@@ -383,7 +393,7 @@ impl WgpuDevice{
         
         let meta_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: META_BUFFER_SIZE as u64,
+            size: configuration.meta_buffer_size as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -407,29 +417,23 @@ impl WgpuDevice{
                 rand_state: Mutex::new(rand::rngs::StdRng::from_entropy()),
                 #[cfg(feature = "wgpu_debug")]
                 debug : debug_info,
-                command_queue: Mutex::new(QueueBuffer::new()),
+                command_queue: Mutex::new(QueueBuffer::new(configuration.meta_buffer_size)),
                 meta_buffer : meta_buffer,
                 cache : Mutex::new(ModelCache::new()),
                 bindgroup_layouts,
                 staging_probe_buffer : staging_buffer,
-
-                cached_buffer_counter : Counter::new(0),
-                cached_bindgroup_counter  : Counter::new(0),
-                cached_bindgroup_reuse_counter: Counter::new(0),
-                
-                cached_buffer_reuse_counter: Counter::new(0),
                 unary_inplace_counter : Counter::new(0),
                 binary_inplace_counter : Counter::new(0),
                 copy_inplace_counter : Counter::new(0),
-                use_cache : true,
-                matmul_alg : Mutex::new(MatmulAlgorithm::MatmulX)
+                matmul_alg : Mutex::new(MatmulAlgorithm::MatmulX),
+                configuration : configuration
             })
         })
     }
 
-    pub fn flush_gpu_command(&self){
+    pub fn flush_gpu_command(&self) -> crate::Result<()>{
         let mut queue = self.command_queue.lock().unwrap();
-        wgpu_functions::flush_gpu_command(self, &mut queue);
+        wgpu_functions::flush_gpu_command(self, &mut queue)
     }
 
     pub fn print_bindgroup_reuseinfo(&self){
@@ -633,11 +637,11 @@ impl crate::backend::BackendDevice for WgpuDevice{
         let buffer;
         if T::DTYPE == crate::DType::F32{
             let data = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, data.len()) };
-            buffer = create_wgpu_storage_init(self,T::DTYPE, &data);
+            buffer = create_wgpu_storage_init(self,T::DTYPE, &data)?;
         }
         else if T::DTYPE == crate::DType::U32{
             let data = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u32, data.len()) };
-            buffer = create_wgpu_storage_init(self,T::DTYPE, &data);
+            buffer = create_wgpu_storage_init(self,T::DTYPE, &data)?;
         }
         else{
             // Panic if T is not f32 or u32
@@ -649,10 +653,10 @@ impl crate::backend::BackendDevice for WgpuDevice{
     fn storage_from_cpu_storage(&self, storage: &crate::CpuStorage) -> crate::Result<Self::Storage> {
         match storage{
             crate::CpuStorage::F32(data) => {
-                return Ok(create_wgpu_storage_init(self, crate::DType::F32, data));
+                return create_wgpu_storage_init(self, crate::DType::F32, data);
             },
             crate::CpuStorage::U32(data) => {
-                return  Ok(create_wgpu_storage_init(self, crate::DType::U32, data));
+                return  create_wgpu_storage_init(self, crate::DType::U32, data);
             },
             _ =>  wrongType!(storage_from_cpu_storage, storage.dtype()),
         }
@@ -661,10 +665,10 @@ impl crate::backend::BackendDevice for WgpuDevice{
     fn storage_from_cpu_storage_owned(&self, storage: crate::CpuStorage) -> crate::Result<Self::Storage> {
         match storage{
             crate::CpuStorage::F32(data) => {
-                return Ok(create_wgpu_storage_init(self,crate::DType::F32, &data));
+                return create_wgpu_storage_init(self,crate::DType::F32, &data);
             },
             crate::CpuStorage::U32(data) => {
-                return Ok(create_wgpu_storage_init(self,crate::DType::U32, &data));
+                return create_wgpu_storage_init(self,crate::DType::U32, &data);
             },
             _ =>  wrongType!(storage_from_cpu_storage_owned, storage.dtype()),
         }

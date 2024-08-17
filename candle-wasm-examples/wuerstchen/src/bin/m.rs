@@ -151,6 +151,42 @@ pub struct Model {
 
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct DeviceConfig{
+    #[serde(default = "default_use_gpu")]
+    use_gpu : bool,
+    #[serde(default = "default_meta_buffer_size")]
+    meta_buffer_size : u32, 
+    #[serde(default = "default_max_workload_size")]
+    max_workload_size : u64, 
+    #[serde(default = "default_buffer_cached_max_allowed_size")]
+    buffer_cached_max_allowed_size : u64,
+    #[serde(default = "default_use_cache")]
+    use_cache : bool,
+}
+
+
+fn default_max_workload_size() -> u64 {
+    1024u64*1024*1024*2 //2gb,
+}
+
+
+fn default_meta_buffer_size() -> u32 {
+    10*1024*1024//10mb
+}
+
+
+fn default_buffer_cached_max_allowed_size() -> u64 {
+    1024*1024*1024*8 //8gb
+}
+
+fn default_use_cache() -> bool {
+    true //8gb
+}
+
+fn default_use_gpu() -> bool {
+    true //8gb
+}
 
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -241,15 +277,30 @@ fn default_vgan_steps() -> u64 {
 impl Model {
 
     #[wasm_bindgen(constructor)]
-    pub async fn load(cpu : bool) -> Result<Model, JsError> {
+    pub async fn load(config: String) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         wasm_logger::init(wasm_logger::Config::new(log::Level::Info).message_on_new_line());
         
-        let device = match cpu{
+        let args : DeviceConfig = serde_json::from_str(&config)?;
+        let DeviceConfig {
+            use_gpu,
+            buffer_cached_max_allowed_size,
+            max_workload_size,
+            use_cache,
+            meta_buffer_size
+        } = args;
+
+        let device = match !use_gpu{
             true => Device::Cpu,
-            false =>  Device::new_webgpu(0).await?,
+            false =>  
+            {
+                let config = candle::wgpu_backend::DeviceConfig{buffer_cached_max_allowed_size, max_workload_size, meta_buffer_size, use_cache };
+                Device::new_webgpu_config(0, config).await?
+            }
         };
         
+        
+
         return Ok(Model{device});
     }
 
@@ -458,17 +509,17 @@ impl Model {
             let image_png = save_image(&image)?;
 
             log::info!( "Image saved");
-            match device{
-                Device::WebGpu(wgpu_device) => {wgpu_device.clear_cache()},
-                _ => {}
-            }
+            // match device{
+            //     Device::WebGpu(wgpu_device) => {wgpu_device.clear_cache()},
+            //     _ => {}
+            // }
             return  Ok(js_sys::Uint8Array::from(&image_png[..]).into());
            
         }
-        match device{
-            Device::WebGpu(wgpu_device) => {wgpu_device.clear_cache()},
-            _ => {}
-        }
+        // match device{
+        //     Device::WebGpu(wgpu_device) => {wgpu_device.clear_cache()},
+        //     _ => {}
+        // }
         Ok(JsValue::null())
         //Ok("Test Result".to_owned())
     }

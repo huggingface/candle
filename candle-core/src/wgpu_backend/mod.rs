@@ -15,6 +15,7 @@ pub use device::MatmulAlgorithm;
 
 pub use storage::create_wgpu_storage;
 pub use storage::create_wgpu_storage_init;
+pub use device::DeviceConfig;
 
 #[cfg(feature = "wgpu_debug")]
 pub use debug_info::Measurements;

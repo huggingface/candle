@@ -137,11 +137,19 @@ impl Device {
     }
 
     pub async fn new_webgpu(ordinal: usize) -> Result<Self> {
-        Ok(Self::WebGpu(crate::WgpuDevice::create(ordinal).await?))
+        Ok(Self::WebGpu(crate::WgpuDevice::create(ordinal, crate::wgpu_backend::DeviceConfig::default()).await?))
+    }
+
+    pub async fn new_webgpu_config(ordinal: usize, configuration : crate::wgpu_backend::DeviceConfig) -> Result<Self> {
+        Ok(Self::WebGpu(crate::WgpuDevice::create(ordinal, configuration).await?))
     }
 
     pub fn new_webgpu_sync(ordinal: usize) -> Result<Self> {
         return pollster::block_on(Device::new_webgpu(ordinal));
+    }
+
+    pub fn new_webgpu_sync_config(ordinal: usize, configuration : crate::wgpu_backend::DeviceConfig) -> Result<Self> {
+        return pollster::block_on(Device::new_webgpu_config(ordinal, configuration));
     }
 
     pub fn set_seed(&self, seed: u64) -> Result<()> {

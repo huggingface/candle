@@ -22,16 +22,16 @@ pub fn create_wgpu_storage<T: ToU64>(dev : &WgpuDevice, dtype : crate::DType, si
     return WgpuStorage::new(buffer,dev.clone(), dtype, size);
 }
 
-pub fn create_wgpu_storage_init<T: bytemuck::Pod>(dev : &WgpuDevice, dtype : crate::DType, data : &[T]) -> WgpuStorage{
+pub fn create_wgpu_storage_init<T: bytemuck::Pod>(dev : &WgpuDevice, dtype : crate::DType, data : &[T]) -> crate::Result<WgpuStorage>{
     let data : &[u8] = bytemuck::cast_slice(data);
     let size = data.len();
     let buffer;
     {
-        dev.flush_gpu_command();
+        dev.flush_gpu_command()?;
         let mut cache = dev.cache.lock().unwrap();
         buffer = cache.create_buffer_reference_init(dev, data,true);
     } 
-    return WgpuStorage::new(buffer,dev.clone(), dtype, size as u64);
+    return Ok(WgpuStorage::new(buffer,dev.clone(), dtype, size as u64));
 }
 
 
