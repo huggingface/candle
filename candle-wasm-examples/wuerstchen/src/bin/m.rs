@@ -497,31 +497,20 @@ impl Model {
 
             log::info!("Image decoded");
 
-
             let image = (image.clamp(0f32, 1f32)? * 255.)?.to_cpu_device().await?
                 .to_dtype(DType::U8)?
                 .i(0)?;
 
-            //let image_filename = output_filename(&final_image, idx + 1, num_samples, None);
-
+          
             log::info!( "Image created");
 
             let image_png = save_image(&image)?;
 
             log::info!( "Image saved");
-            // match device{
-            //     Device::WebGpu(wgpu_device) => {wgpu_device.clear_cache()},
-            //     _ => {}
-            // }
             return  Ok(js_sys::Uint8Array::from(&image_png[..]).into());
            
         }
-        // match device{
-        //     Device::WebGpu(wgpu_device) => {wgpu_device.clear_cache()},
-        //     _ => {}
-        // }
         Ok(JsValue::null())
-        //Ok("Test Result".to_owned())
     }
 }
 

@@ -1,4 +1,4 @@
-use candle_core::{test_device, test_utils, wgpu::MatmulAlgorithm, DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{test_device, test_utils, DType, Device, IndexOp, Result, Tensor, D};
 
 fn matmul(device: &Device) -> Result<()> {
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
@@ -115,7 +115,8 @@ test_device!(
     matmul_bf16,
     matmul_bf16_cpu,
     matmul_bf16_gpu,
-    matmul_bf16_metal
+    matmul_bf16_metal,
+    matmul_bf16_webgpu
 );
 test_device!(
     broadcast_matmul,
@@ -149,15 +150,13 @@ fn test_matmul(device: &Device, b : usize, m : usize, n : usize, k : usize){
 
 }
 
+#[cfg(feature="wgpu")]
 #[test]
 fn test_matmul_kernels_webgpu2()-> Result<()> {
     let device = &Device::new_webgpu_sync(0)?;
 
-
     println!("matmul_m_1");
     test_functions(device, |_| 1);
-
-
 
     println!("matmul_full");
     test_functions(device, |size| size);
@@ -177,16 +176,15 @@ fn test_matmul_kernels_webgpu2()-> Result<()> {
     println!("matmul_32*(32x2304 * 2304x5120)");
     test_matmul(device, 32, 32, 5120, 2304);
 
-    
-
     Ok(())
 }
 
 
-
+#[cfg(feature="wgpu")]
 #[test]
 //test different wgpu matmul shaders
 fn test_matmul_kernels_webgpu()-> Result<()> {
+    use candle_core::wgpu::MatmulAlgorithm;
     let mut combinations = Vec::new();
     
     for a in &[false, true] { //prefatch
@@ -199,7 +197,6 @@ fn test_matmul_kernels_webgpu()-> Result<()> {
         }
     }
     
-
     let algs = vec![
         MatmulAlgorithm::Matmul7,
         MatmulAlgorithm::Matmul1,
@@ -281,12 +278,13 @@ fn big_matmul_webgpu(device: &Device, tpa : bool, tpb : bool)-> Result<()> {
     Ok(())
 }
 
+#[cfg(feature="wgpu")]
 #[test]
 fn big_matmul_webgpu_tests()-> Result<()> {
     let device = Device::new_webgpu_sync(0)?;
    
     if let Device::WebGpu(wgpu) = &device{
-        (*wgpu.matmul_alg.lock().unwrap()) = MatmulAlgorithm::Matmul32_32(false, false, true, true);
+        (*wgpu.matmul_alg.lock().unwrap()) = candle_core::wgpu::MatmulAlgorithm::Matmul32_32(false, false, true, true);
     }
    
     big_matmul_webgpu(&device, false, false)?;

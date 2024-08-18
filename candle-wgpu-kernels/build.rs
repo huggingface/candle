@@ -308,16 +308,29 @@ mod shader_loader{
 
     use fancy_regex::Regex;
 
+    const SHORTEN_GLOBAL_FUNCTIONS : bool = true;
+    const SHORTEN_OVERRIDES : bool = true;
+    const REMOVE_UNUSED : bool = true;
+    const REMOVE_SPACES : bool = true;
+    const REMOVE_NEW_LINES : bool = true;
+
     pub fn load_shader(path: &PathBuf, global_defines : &Vec<&'static str>, global_functions : &mut shader_shortener::ShaderInfo) -> String {
-        let result = shader_defines::load_shader(path, &mut HashMap::new(), global_defines); 
-      
-        let result = Regex::new(r"\n\s*(?=\n)", ).unwrap().replace_all(&result, ""); //remove comments
-        let result = Regex::new(r"((\s+)(?![\w\s])|(?<!\w)(\s+))", ).unwrap().replace_all(&result, ""); //replaces newline and not used spaces
+        let mut result = shader_defines::load_shader(path, &mut HashMap::new(), global_defines); 
+        //let result = Regex::new(r"\n\s*(?=\n)", ).unwrap().replace_all(&result, ""); //remove comments
         
-        let result = global_functions.shorten_variable_names(&result);
-        let result = global_functions.remove_unused(&result);
-        let result = global_functions.remove_unused(&result);
-        let result = result.replace("\n", "");
+        if REMOVE_SPACES{
+            result = Regex::new(r"((\s+)(?![\w\s])|(?<!\w)(\s+))", ).unwrap().replace_all(&result, "").to_string(); //replaces newline and not used spaces
+        }
+       
+        result = global_functions.shorten_variable_names(&result);
+        if REMOVE_UNUSED{
+            result = global_functions.remove_unused(&result);
+            result = global_functions.remove_unused(&result);
+        }
+        if REMOVE_NEW_LINES{
+            result = result.replace("\n", "");
+        }
+        
         result
     }
 
@@ -833,7 +846,7 @@ mod shader_loader{
     pub mod shader_shortener{
         use std::collections::{HashMap, HashSet};
 
-        use super::shader_tokeniser::{match_function_block, match_until_char, match_variable, match_whitespace, Token, Tokenizer};
+        use super::{shader_tokeniser::{match_function_block, match_until_char, match_variable, match_whitespace, Token, Tokenizer}, SHORTEN_GLOBAL_FUNCTIONS, SHORTEN_OVERRIDES};
         pub struct ShaderInfo{
             pub global_functions : HashMap<String, String>,
             pub global_overrides : HashMap<String, String>,
@@ -855,9 +868,6 @@ mod shader_loader{
                 let mut is_compute_fn = false;
                 let mut tokens = tokenizer.peekable();
                 let mut prev_token = None;
-
-                const SHORTEN_GLOBAL_FUNCTIONS : bool = true;
-                const SHORTEN_OVERRIDES : bool = true;
 
                 while let Some(token) = tokens.next() {
                     match token {

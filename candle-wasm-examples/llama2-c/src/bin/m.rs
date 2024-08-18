@@ -1,4 +1,4 @@
-use candle::{DType, Device, Tensor};
+use candle::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use candle_wasm_example_llama2::worker::{Model as M, ModelData};
 use wasm_bindgen::prelude::*;
@@ -133,7 +133,7 @@ impl Model {
 
     #[wasm_bindgen]
     pub async fn next_token(&mut self) -> Result<String, JsError> {
-        let last_token = *self.tokens.last().unwrap();;
+        let last_token = *self.tokens.last().unwrap();
         let text = self
             .process(&[last_token]).await
             .map_err(|m| JsError::new(&m.to_string()))?;
