@@ -1,4 +1,3 @@
-#![allow(unused)]
 use candle::{IndexOp, Result, Tensor};
 use candle_nn::{layer_norm, linear_b as linear, Activation, LayerNorm, Linear, VarBuilder};
 
@@ -30,6 +29,12 @@ pub struct Attention {
     q_proj: Linear,
     out_proj: Linear,
     is_causal: bool,
+    kv_cache: Option<(Tensor, Tensor)>,
+    scaling: f64,
+    num_heads: usize,
+    num_kv_heads: usize,
+    num_kv_groups: usize,
+    head_dim: usize,
 }
 
 impl Attention {
@@ -50,6 +55,12 @@ impl Attention {
             q_proj,
             out_proj,
             is_causal,
+            kv_cache: None,
+            scaling: (head_dim as f64).powf(-0.5),
+            num_heads: cfg.num_attention_heads,
+            num_kv_heads,
+            num_kv_groups: cfg.num_attention_heads / num_kv_heads,
+            head_dim,
         })
     }
 
@@ -59,7 +70,59 @@ impl Attention {
         key_value_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
-        todo!()
+        let (b_sz, tgt_len, _) = xs.dims3()?;
+        let query_states = (xs.apply(&self.q_proj)? * self.scaling)?
+            .reshape((b_sz, tgt_len, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let key_states = match key_value_states {
+            Some(states) => states.apply(&self.k_proj)?,
+            None => xs.apply(&self.k_proj)?,
+        };
+        let key_states = key_states
+            .reshape((b_sz, tgt_len, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let value_states = match key_value_states {
+            Some(states) => states.apply(&self.v_proj)?,
+            None => xs.apply(&self.v_proj)?,
+        };
+        let value_states = value_states
+            .reshape((b_sz, tgt_len, self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+
+        let (key_states, value_states) = match &self.kv_cache {
+            None => (key_states, value_states),
+            Some((prev_k, prev_v)) => {
+                let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
+                let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
+                (key_states, value_states)
+            }
+        };
+        if self.is_causal {
+            self.kv_cache = Some((key_states.clone(), value_states.clone()));
+        }
+
+        let key_states = crate::utils::repeat_kv(key_states, self.num_kv_groups)?.contiguous()?;
+        let value_states =
+            crate::utils::repeat_kv(value_states, self.num_kv_groups)?.contiguous()?;
+
+        let attn_weights = query_states.matmul(&key_states.transpose(2, 3)?)?;
+        let attn_weights = match attention_mask {
+            None => attn_weights,
+            Some(mask) => attn_weights.broadcast_add(mask)?,
+        };
+        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        let attn_output = attn_weights.matmul(&value_states)?;
+        attn_output
+            .transpose(1, 2)?
+            .reshape((b_sz, tgt_len, ()))?
+            .apply(&self.out_proj)
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.kv_cache = None
     }
 }
 
@@ -131,6 +194,11 @@ impl DecoderLayer {
             .apply(&self.fc2)?;
         residual + xs
     }
+
+    fn clear_kv_cache(&mut self) {
+        self.self_attn.clear_kv_cache();
+        self.encoder_attn.clear_kv_cache();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -145,12 +213,12 @@ pub struct Model {
 }
 
 impl Model {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb_d = vb.pp("decoder");
         let mut embed_tokens = Vec::with_capacity(cfg.num_codebooks);
         let vb_e = vb_d.pp("embed_tokens");
         for embed_idx in 0..cfg.num_codebooks {
-            let e = candle_nn::embedding(cfg.vocab_size + 1, cfg.hidden_size, vb_d.pp(embed_idx))?;
+            let e = candle_nn::embedding(cfg.vocab_size + 1, cfg.hidden_size, vb_e.pp(embed_idx))?;
             embed_tokens.push(e)
         }
         let embed_positions = vb_d.get(
@@ -168,7 +236,7 @@ impl Model {
         let mut lm_heads = Vec::with_capacity(cfg.num_codebooks);
         let vb_l = vb.pp("lm_heads");
         for lm_idx in 0..cfg.num_codebooks {
-            let lm_head = linear(cfg.hidden_size, cfg.vocab_size, false, vb.pp(lm_idx))?;
+            let lm_head = linear(cfg.hidden_size, cfg.vocab_size, false, vb_l.pp(lm_idx))?;
             lm_heads.push(lm_head)
         }
         Ok(Self {
@@ -189,7 +257,10 @@ impl Model {
         encoder_xs: &Tensor,
         encoder_attention_mask: &Tensor,
     ) -> Result<Vec<Tensor>> {
-        let (b_sz, num_codebooks, seq_len) = input_ids.dims3()?;
+        let (_b_sz, num_codebooks, seq_len) = input_ids.dims3()?;
+        if num_codebooks != self.num_codebooks {
+            candle::bail!("unexpected num codebooks in input {:?}", input_ids.shape())
+        }
         let mut inputs_embeds = Tensor::zeros((0, seq_len), self.dtype, input_ids.device())?;
         for (idx, embs) in self.embed_tokens.iter().enumerate() {
             let e = input_ids.i((.., idx))?.apply(embs)?;
@@ -207,5 +278,11 @@ impl Model {
             lm_logits.push(logits)
         }
         Ok(lm_logits)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.clear_kv_cache()
+        }
     }
 }
