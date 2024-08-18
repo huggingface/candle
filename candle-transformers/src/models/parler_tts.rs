@@ -1,3 +1,4 @@
+use crate::models::t5;
 use candle::{IndexOp, Result, Tensor};
 use candle_nn::{layer_norm, linear_b as linear, Activation, LayerNorm, Linear, VarBuilder};
 
@@ -20,6 +21,7 @@ pub struct Config {
     pub tie_word_embeddings: bool,
     pub rope_embeddings: bool,
     pub rope_theta: f64,
+    pub text_encoder: t5::Config,
 }
 
 #[derive(Debug, Clone)]
@@ -202,7 +204,7 @@ impl DecoderLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
+pub struct Decoder {
     embed_tokens: Vec<candle_nn::Embedding>,
     embed_positions: Tensor,
     layers: Vec<DecoderLayer>,
@@ -212,7 +214,7 @@ pub struct Model {
     dtype: candle::DType,
 }
 
-impl Model {
+impl Decoder {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb_d = vb.pp("decoder");
         let mut embed_tokens = Vec::with_capacity(cfg.num_codebooks);
@@ -256,6 +258,7 @@ impl Model {
         attention_mask: &Tensor,
         encoder_xs: &Tensor,
         encoder_attention_mask: &Tensor,
+        seqlen_offset: usize,
     ) -> Result<Vec<Tensor>> {
         let (_b_sz, num_codebooks, seq_len) = input_ids.dims3()?;
         if num_codebooks != self.num_codebooks {
@@ -266,8 +269,10 @@ impl Model {
             let e = input_ids.i((.., idx))?.apply(embs)?;
             inputs_embeds = (inputs_embeds + e)?
         }
-        // TODO: embed_positions
-        let mut xs = inputs_embeds;
+        let embed_positions = self
+            .embed_positions
+            .i(seqlen_offset..seqlen_offset + seq_len)?;
+        let mut xs = (inputs_embeds + embed_positions)?;
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask, encoder_xs, encoder_attention_mask)?;
         }
@@ -284,5 +289,23 @@ impl Model {
         for layer in self.layers.iter_mut() {
             layer.clear_kv_cache()
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Model {
+    pub decoder: Decoder,
+    pub text_encoder: t5::T5EncoderModel,
+}
+
+impl Model {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let text_encoder =
+            t5::T5EncoderModel::load(vb.pp("text_encoder.model"), &cfg.text_encoder)?;
+        let decoder = Decoder::new(cfg, vb.pp("decoder.model"))?;
+        Ok(Self {
+            decoder,
+            text_encoder,
+        })
     }
 }
