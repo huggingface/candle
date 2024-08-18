@@ -93,7 +93,7 @@ impl Attention {
             None => xs.apply(&self.k_proj)?,
         };
         let key_states = key_states
-            .reshape((b_sz, tgt_len, self.num_kv_heads, self.head_dim))?
+            .reshape((b_sz, (), self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
         let value_states = match key_value_states {
@@ -101,7 +101,7 @@ impl Attention {
             None => xs.apply(&self.v_proj)?,
         };
         let value_states = value_states
-            .reshape((b_sz, tgt_len, self.num_kv_heads, self.head_dim))?
+            .reshape((b_sz, (), self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
 
@@ -180,14 +180,14 @@ impl DecoderLayer {
     fn forward(
         &mut self,
         xs: &Tensor,
-        attention_mask: &Tensor,
+        attention_mask: Option<&Tensor>,
         encoder_xs: &Tensor,
-        encoder_attention_mask: &Tensor,
+        encoder_attention_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         // Self attention
         let residual = xs;
         let xs = xs.apply(&self.self_attn_layer_norm)?;
-        let xs = self.self_attn.forward(&xs, None, Some(attention_mask))?;
+        let xs = self.self_attn.forward(&xs, None, attention_mask)?;
         let xs = (residual + xs)?;
 
         // Cross attention
@@ -195,7 +195,7 @@ impl DecoderLayer {
         let xs = xs.apply(&self.encoder_attn_layer_norm)?;
         let xs = self
             .encoder_attn
-            .forward(&xs, Some(encoder_xs), Some(encoder_attention_mask))?;
+            .forward(&xs, Some(encoder_xs), encoder_attention_mask)?;
         let xs = (residual + xs)?;
 
         // Fully connected
@@ -221,6 +221,7 @@ pub struct Decoder {
     layers: Vec<DecoderLayer>,
     layer_norm: LayerNorm,
     num_codebooks: usize,
+    hidden_size: usize,
     lm_heads: Vec<Linear>,
     dtype: candle::DType,
 }
@@ -259,6 +260,7 @@ impl Decoder {
             layer_norm,
             num_codebooks: cfg.num_codebooks,
             lm_heads,
+            hidden_size: cfg.hidden_size,
             dtype: vb.dtype(),
         })
     }
@@ -266,24 +268,33 @@ impl Decoder {
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
-        attention_mask: &Tensor,
+        prompt_hidden_states: Option<&Tensor>,
+        attention_mask: Option<&Tensor>,
         encoder_xs: &Tensor,
-        encoder_attention_mask: &Tensor,
+        encoder_attention_mask: Option<&Tensor>,
         seqlen_offset: usize,
     ) -> Result<Vec<Tensor>> {
-        let (_b_sz, num_codebooks, seq_len) = input_ids.dims3()?;
+        let (b_sz, num_codebooks, seq_len) = input_ids.dims3()?;
         if num_codebooks != self.num_codebooks {
             candle::bail!("unexpected num codebooks in input {:?}", input_ids.shape())
         }
-        let mut inputs_embeds = Tensor::zeros((0, seq_len), self.dtype, input_ids.device())?;
+        let mut inputs_embeds = Tensor::zeros(
+            (b_sz, seq_len, self.hidden_size),
+            self.dtype,
+            input_ids.device(),
+        )?;
         for (idx, embs) in self.embed_tokens.iter().enumerate() {
             let e = input_ids.i((.., idx))?.apply(embs)?;
             inputs_embeds = (inputs_embeds + e)?
         }
+        let inputs_embeds = match prompt_hidden_states {
+            None => inputs_embeds,
+            Some(pis) => Tensor::cat(&[pis, &inputs_embeds], 1)?,
+        };
         let embed_positions = self
             .embed_positions
             .i(seqlen_offset..seqlen_offset + seq_len)?;
-        let mut xs = (inputs_embeds + embed_positions)?;
+        let mut xs = inputs_embeds.broadcast_add(&embed_positions.unsqueeze(1)?)?;
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask, encoder_xs, encoder_attention_mask)?;
         }
@@ -306,6 +317,7 @@ impl Decoder {
 #[derive(Debug, Clone)]
 pub struct Model {
     pub embed_prompts: candle_nn::Embedding,
+    pub enc_to_dec_proj: Option<Linear>,
     pub decoder: Decoder,
     pub text_encoder: t5::T5EncoderModel,
 }
@@ -319,15 +331,49 @@ impl Model {
             cfg.decoder.hidden_size,
             vb.pp("embed_prompts"),
         )?;
+        let enc_to_dec_proj = if cfg.text_encoder.d_model != cfg.decoder.hidden_size {
+            let proj = linear(
+                cfg.text_encoder.d_model,
+                cfg.decoder.hidden_size,
+                true,
+                vb.pp("enc_to_dec_proj"),
+            )?;
+            Some(proj)
+        } else {
+            None
+        };
         Ok(Self {
             decoder,
             text_encoder,
             embed_prompts,
+            enc_to_dec_proj,
         })
     }
 
-    pub fn forward(&mut self, prompt_input_ids: &Tensor) -> Result<Tensor> {
-        let prompt_hidden_states = prompt_input_ids.apply(&self.embed_prompts)?;
-        Ok(prompt_hidden_states)
+    pub fn generate(&mut self, prompt_tokens: &Tensor, description_tokens: &Tensor) -> Result<()> {
+        self.decoder.clear_kv_cache();
+        self.text_encoder.clear_kv_cache();
+        let encoded = self.text_encoder.forward(&description_tokens)?;
+        println!("{encoded}");
+        let encoded = match self.enc_to_dec_proj.as_ref() {
+            None => encoded,
+            Some(proj) => encoded.apply(proj)?,
+        };
+        println!("{encoded}");
+        let prompt_hidden_states = prompt_tokens.apply(&self.embed_prompts)?;
+        let audio_tokens =
+            Tensor::new(vec![1025u32; 9], prompt_tokens.device())?.reshape((1, 9, 1))?;
+        let logits = self.decoder.forward(
+            &audio_tokens,
+            Some(&prompt_hidden_states),
+            None,
+            &encoded,
+            None,
+            0,
+        )?;
+        for logit in logits.iter() {
+            println!("{logit}");
+        }
+        Ok(())
     }
 }

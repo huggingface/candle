@@ -161,11 +161,6 @@ fn main() -> anyhow::Result<()> {
     let prompt_tokens = Tensor::new(prompt_tokens, &device)?.unsqueeze(0)?;
     println!("{prompt_tokens}");
 
-    let encoded = model.text_encoder.forward(&description_tokens)?;
-    println!("{encoded}");
-
-    let res = model.forward(&prompt_tokens)?;
-    println!("{res}");
-
+    model.generate(&prompt_tokens, &description_tokens)?;
     Ok(())
 }
