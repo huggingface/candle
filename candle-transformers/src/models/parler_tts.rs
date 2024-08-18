@@ -324,6 +324,7 @@ pub struct Model {
     pub decoder: Decoder,
     pub text_encoder: t5::T5EncoderModel,
     pub decoder_start_token_id: u32,
+    pub pad_token_id: u32,
 }
 
 impl Model {
@@ -352,6 +353,7 @@ impl Model {
             embed_prompts,
             enc_to_dec_proj,
             decoder_start_token_id: cfg.decoder_start_token_id,
+            pad_token_id: cfg.pad_token_id,
         })
     }
 
@@ -360,20 +362,20 @@ impl Model {
         prompt_tokens: &Tensor,
         description_tokens: &Tensor,
         mut lp: LogitsProcessor,
+        max_steps: usize,
     ) -> Result<()> {
         self.decoder.clear_kv_cache();
         self.text_encoder.clear_kv_cache();
-        let encoded = self.text_encoder.forward(&description_tokens)?;
+        let encoded = self.text_encoder.forward(description_tokens)?;
         println!("{encoded}");
         let encoded = match self.enc_to_dec_proj.as_ref() {
             None => encoded,
             Some(proj) => encoded.apply(proj)?,
         };
-        println!("{encoded}");
         let prompt_hidden_states = prompt_tokens.apply(&self.embed_prompts)?;
         let num_codebooks = self.decoder.num_codebooks;
         let mut audio_tokens = vec![self.decoder_start_token_id; num_codebooks];
-        for step in 0..100 {
+        for step in 0..max_steps {
             println!("{step} {audio_tokens:?}");
             let input_ids = Tensor::from_slice(
                 audio_tokens.as_slice(),
@@ -397,9 +399,14 @@ impl Model {
                 if logit_idx > step {
                     break;
                 }
-                let logit = logit.i((0, logit.dim(1)? - 1))?;
-                let token = lp.sample(&logit)?;
-                audio_tokens[logit_idx] = token
+                if audio_tokens[logit_idx] != self.pad_token_id {
+                    let logit = logit.i((0, logit.dim(1)? - 1))?;
+                    let token = lp.sample(&logit)?;
+                    audio_tokens[logit_idx] = token
+                }
+            }
+            if audio_tokens.iter().all(|v| v == &self.pad_token_id) {
+                break;
             }
         }
 

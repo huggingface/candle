@@ -36,8 +36,8 @@ struct Args {
     description: String,
 
     /// The temperature used to generate samples.
-    #[arg(long)]
-    temperature: Option<f64>,
+    #[arg(long, default_value_t = 1.0)]
+    temperature: f64,
 
     /// Nucleus sampling probability cutoff.
     #[arg(long)]
@@ -79,6 +79,9 @@ struct Args {
 
     #[arg(long)]
     config_file: Option<String>,
+
+    #[arg(long, default_value_t = 512)]
+    max_steps: usize,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -103,9 +106,7 @@ fn main() -> anyhow::Result<()> {
     );
     println!(
         "temp: {:.2} repeat-penalty: {:.2} repeat-last-n: {}",
-        args.temperature.unwrap_or(0.),
-        args.repeat_penalty,
-        args.repeat_last_n
+        args.temperature, args.repeat_penalty, args.repeat_last_n
     );
 
     let start = std::time::Instant::now();
@@ -163,9 +164,9 @@ fn main() -> anyhow::Result<()> {
 
     let lp = candle_transformers::generation::LogitsProcessor::new(
         args.seed,
-        args.temperature,
+        Some(args.temperature),
         args.top_p,
     );
-    model.generate(&prompt_tokens, &description_tokens, lp)?;
+    model.generate(&prompt_tokens, &description_tokens, lp, args.max_steps)?;
     Ok(())
 }
