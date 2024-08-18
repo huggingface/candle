@@ -27,6 +27,7 @@ pub struct DecoderConfig {
 pub struct Config {
     pub decoder: DecoderConfig,
     pub text_encoder: t5::Config,
+    pub vocab_size: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -304,6 +305,7 @@ impl Decoder {
 
 #[derive(Debug, Clone)]
 pub struct Model {
+    pub embed_prompts: candle_nn::Embedding,
     pub decoder: Decoder,
     pub text_encoder: t5::T5EncoderModel,
 }
@@ -312,9 +314,20 @@ impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let text_encoder = t5::T5EncoderModel::load(vb.pp("text_encoder"), &cfg.text_encoder)?;
         let decoder = Decoder::new(&cfg.decoder, vb.pp("decoder"))?;
+        let embed_prompts = candle_nn::embedding(
+            cfg.vocab_size,
+            cfg.decoder.hidden_size,
+            vb.pp("embed_prompts"),
+        )?;
         Ok(Self {
             decoder,
             text_encoder,
+            embed_prompts,
         })
+    }
+
+    pub fn forward(&mut self, prompt_input_ids: &Tensor) -> Result<Tensor> {
+        let prompt_hidden_states = prompt_input_ids.apply(&self.embed_prompts)?;
+        Ok(prompt_hidden_states)
     }
 }

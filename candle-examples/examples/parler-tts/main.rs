@@ -26,8 +26,14 @@ struct Args {
     #[arg(long)]
     verbose_prompt: bool,
 
-    #[arg(long)]
+    #[arg(long, default_value = "Hey, how are you doing today?")]
     prompt: String,
+
+    #[arg(
+        long,
+        default_value = "A female speaker delivers a slightly expressive and animated speech with a moderate speed and pitch. The recording is of very high quality, with the speaker's voice sounding clear and very close up."
+    )]
+    description: String,
 
     /// The temperature used to generate samples.
     #[arg(long)]
@@ -134,26 +140,32 @@ fn main() -> anyhow::Result<()> {
 
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() || args.f16 {
-        DType::F16
-    } else {
-        DType::F32
-    };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, dtype, &device)? };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, DType::F32, &device)? };
     let config: Config = serde_json::from_reader(std::fs::File::open(config)?)?;
     let mut model = Model::new(&config, vb)?;
     println!("loaded the model in {:?}", start.elapsed());
 
-    let tokens = tokenizer
+    let description_tokens = tokenizer
+        .encode(args.description, true)
+        .map_err(E::msg)?
+        .get_ids()
+        .to_vec();
+    let description_tokens = Tensor::new(description_tokens, &device)?.unsqueeze(0)?;
+    println!("{description_tokens}");
+
+    let prompt_tokens = tokenizer
         .encode(args.prompt, true)
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
-    let tokens = Tensor::new(tokens, &device)?.unsqueeze(0)?;
-    println!("{tokens}");
+    let prompt_tokens = Tensor::new(prompt_tokens, &device)?.unsqueeze(0)?;
+    println!("{prompt_tokens}");
 
-    let encoded = model.text_encoder.forward(&tokens)?;
+    let encoded = model.text_encoder.forward(&description_tokens)?;
     println!("{encoded}");
+
+    let res = model.forward(&prompt_tokens)?;
+    println!("{res}");
 
     Ok(())
 }
