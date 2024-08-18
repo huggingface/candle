@@ -376,6 +376,7 @@ impl Model {
         let num_codebooks = self.decoder.num_codebooks;
         let mut audio_tokens = vec![self.decoder_start_token_id; num_codebooks];
         let mut all_audio_tokens = vec![vec![]; num_codebooks];
+        let prompt_len = prompt_hidden_states.dim(1)?;
         for step in 0..max_steps {
             let input_ids = Tensor::from_slice(
                 audio_tokens.as_slice(),
@@ -385,12 +386,17 @@ impl Model {
             let (prompt_hidden_states, pos) = if step == 0 {
                 (Some(&prompt_hidden_states), 0)
             } else {
-                (None, step + prompt_hidden_states.dim(1)?)
+                (None, step + prompt_len)
+            };
+            let causal_mask = if pos == 0 {
+                self.prepare_causal_mask(prompt_len + 1, prompt_len + 1, input_ids.device())?
+            } else {
+                self.prepare_causal_mask(1, pos + 1, input_ids.device())?
             };
             let logits = self.decoder.forward(
                 &input_ids,
                 prompt_hidden_states,
-                None,
+                Some(&causal_mask),
                 &encoded,
                 None,
                 pos,
@@ -422,5 +428,25 @@ impl Model {
         });
         let all_audio_tokens = Tensor::new(all_audio_tokens, &candle::Device::Cpu)?;
         Ok(all_audio_tokens)
+    }
+
+    fn prepare_causal_mask(
+        &self,
+        q_len: usize,
+        kv_len: usize,
+        device: &candle::Device,
+    ) -> Result<Tensor> {
+        let mask: Vec<_> = (0..q_len)
+            .flat_map(|i| {
+                (0..kv_len).map(move |j| {
+                    if i + kv_len < j + q_len {
+                        f32::NEG_INFINITY
+                    } else {
+                        0.
+                    }
+                })
+            })
+            .collect();
+        Tensor::from_slice(&mask, (q_len, kv_len), device)
     }
 }
