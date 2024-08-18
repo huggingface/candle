@@ -293,8 +293,8 @@ impl Decoder {
         };
         let embed_positions = self
             .embed_positions
-            .i(seqlen_offset..seqlen_offset + seq_len)?;
-        let mut xs = inputs_embeds.broadcast_add(&embed_positions.unsqueeze(1)?)?;
+            .i(seqlen_offset..seqlen_offset + inputs_embeds.dim(1)?)?;
+        let mut xs = (inputs_embeds + embed_positions.unsqueeze(0))?;
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask, encoder_xs, encoder_attention_mask)?;
         }
@@ -371,7 +371,8 @@ impl Model {
             None,
             0,
         )?;
-        for logit in logits.iter() {
+        for (logit_idx, logit) in logits.iter().enumerate() {
+            println!("{logit_idx}");
             println!("{logit}");
         }
         Ok(())
