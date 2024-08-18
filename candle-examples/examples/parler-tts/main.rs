@@ -161,6 +161,11 @@ fn main() -> anyhow::Result<()> {
     let prompt_tokens = Tensor::new(prompt_tokens, &device)?.unsqueeze(0)?;
     println!("{prompt_tokens}");
 
-    model.generate(&prompt_tokens, &description_tokens)?;
+    let lp = candle_transformers::generation::LogitsProcessor::new(
+        args.seed,
+        args.temperature,
+        args.top_p,
+    );
+    model.generate(&prompt_tokens, &description_tokens, lp)?;
     Ok(())
 }

@@ -1,3 +1,4 @@
+use crate::generation::LogitsProcessor;
 use crate::models::t5;
 use candle::{IndexOp, Result, Tensor};
 use candle_nn::{layer_norm, linear_b as linear, Activation, LayerNorm, Linear, VarBuilder};
@@ -25,6 +26,8 @@ pub struct DecoderConfig {
 
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct Config {
+    pub decoder_start_token_id: u32,
+    pub pad_token_id: u32,
     pub decoder: DecoderConfig,
     pub text_encoder: t5::Config,
     pub vocab_size: usize,
@@ -320,6 +323,7 @@ pub struct Model {
     pub enc_to_dec_proj: Option<Linear>,
     pub decoder: Decoder,
     pub text_encoder: t5::T5EncoderModel,
+    pub decoder_start_token_id: u32,
 }
 
 impl Model {
@@ -347,10 +351,16 @@ impl Model {
             text_encoder,
             embed_prompts,
             enc_to_dec_proj,
+            decoder_start_token_id: cfg.decoder_start_token_id,
         })
     }
 
-    pub fn generate(&mut self, prompt_tokens: &Tensor, description_tokens: &Tensor) -> Result<()> {
+    pub fn generate(
+        &mut self,
+        prompt_tokens: &Tensor,
+        description_tokens: &Tensor,
+        mut lp: LogitsProcessor,
+    ) -> Result<()> {
         self.decoder.clear_kv_cache();
         self.text_encoder.clear_kv_cache();
         let encoded = self.text_encoder.forward(&description_tokens)?;
@@ -361,20 +371,38 @@ impl Model {
         };
         println!("{encoded}");
         let prompt_hidden_states = prompt_tokens.apply(&self.embed_prompts)?;
-        let audio_tokens =
-            Tensor::new(vec![1025u32; 9], prompt_tokens.device())?.reshape((1, 9, 1))?;
-        let logits = self.decoder.forward(
-            &audio_tokens,
-            Some(&prompt_hidden_states),
-            None,
-            &encoded,
-            None,
-            0,
-        )?;
-        for (logit_idx, logit) in logits.iter().enumerate() {
-            println!("{logit_idx}");
-            println!("{logit}");
+        let num_codebooks = self.decoder.num_codebooks;
+        let mut audio_tokens = vec![self.decoder_start_token_id; num_codebooks];
+        for step in 0..100 {
+            println!("{step} {audio_tokens:?}");
+            let input_ids = Tensor::from_slice(
+                audio_tokens.as_slice(),
+                (1, num_codebooks, 1),
+                prompt_tokens.device(),
+            )?;
+            let (prompt_hidden_states, pos) = if step == 0 {
+                (Some(&prompt_hidden_states), 0)
+            } else {
+                (None, step + prompt_hidden_states.dim(1)?)
+            };
+            let logits = self.decoder.forward(
+                &input_ids,
+                prompt_hidden_states,
+                None,
+                &encoded,
+                None,
+                pos,
+            )?;
+            for (logit_idx, logit) in logits.iter().enumerate() {
+                if logit_idx > step {
+                    break;
+                }
+                let logit = logit.i((0, logit.dim(1)? - 1))?;
+                let token = lp.sample(&logit)?;
+                audio_tokens[logit_idx] = token
+            }
         }
+
         Ok(())
     }
 }
