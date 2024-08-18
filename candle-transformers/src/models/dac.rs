@@ -270,26 +270,66 @@ impl candle::Module for Decoder {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ResidualVectorQuantize {}
+#[derive(Clone, Debug)]
+pub struct VectorQuantizer {
+    in_proj: Conv1d,
+    out_proj: Conv1d,
+    codebook: candle_nn::Embedding,
+}
 
-impl ResidualVectorQuantize {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        Ok(Self {})
+impl VectorQuantizer {
+    pub fn new(in_dim: usize, cb_size: usize, cb_dim: usize, vb: VarBuilder) -> Result<Self> {
+        let in_proj =
+            encodec::conv1d_weight_norm(in_dim, cb_dim, 1, Default::default(), vb.pp("in_proj"))?;
+        let out_proj =
+            encodec::conv1d_weight_norm(cb_dim, in_dim, 1, Default::default(), vb.pp("out_proj"))?;
+        let codebook = candle_nn::embedding(cb_size, cb_dim, vb.pp("codebook"))?;
+        Ok(Self {
+            in_proj,
+            out_proj,
+            codebook,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ResidualVectorQuantizer {
+    quantizers: Vec<VectorQuantizer>,
+}
+
+impl ResidualVectorQuantizer {
+    pub fn new(
+        input_dim: usize,
+        n_codebooks: usize,
+        cb_size: usize,
+        cb_dim: usize,
+        vb: VarBuilder,
+    ) -> Result<Self> {
+        let vb = &vb.pp("quantizers");
+        let quantizers = (0..n_codebooks)
+            .map(|i| VectorQuantizer::new(input_dim, cb_size, cb_dim, vb.pp(i)))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { quantizers })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Model {
     encoder: Encoder,
-    quantizer: ResidualVectorQuantize,
+    quantizer: ResidualVectorQuantizer,
     decoder: Decoder,
 }
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let encoder = Encoder::new(64, &[2, 4, 8, 8], cfg.latent_dim, vb.pp("encoder"))?;
-        let quantizer = ResidualVectorQuantize {};
+        let quantizer = ResidualVectorQuantizer::new(
+            cfg.latent_dim,
+            cfg.num_codebooks,
+            cfg.codebook_size,
+            8,
+            vb.pp("quantizer"),
+        )?;
         let decoder = Decoder::new(cfg.latent_dim, 1536, &[8, 8, 4, 2], 1, vb.pp("decoder"))?;
         Ok(Self {
             encoder,
