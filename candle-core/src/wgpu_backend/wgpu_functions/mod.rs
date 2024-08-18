@@ -584,7 +584,7 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
                             else if q.pipeline.2.input2_inplaceable{
                                 if optmize_inplace(bindgroup_reference.get_dest(), v2_id) {
                                     dev.binary_inplace_counter.inc();
-                                    q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace1ContiguousBoth);
+                                    q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace2ContiguousBoth);
                                     q.bindgroup =
                                         DispatchedBindgroup::BindgroupReference(
                                             BindGroupReference::new(v2_id.clone(), BindgroupInputBase::Bindgroup1(v1_id.clone(), false)));
