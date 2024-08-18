@@ -357,17 +357,17 @@ impl Model {
         })
     }
 
+    /// Note that the returned tensor uses the CPU device.
     pub fn generate(
         &mut self,
         prompt_tokens: &Tensor,
         description_tokens: &Tensor,
         mut lp: LogitsProcessor,
         max_steps: usize,
-    ) -> Result<()> {
+    ) -> Result<Tensor> {
         self.decoder.clear_kv_cache();
         self.text_encoder.clear_kv_cache();
         let encoded = self.text_encoder.forward(description_tokens)?;
-        println!("{encoded}");
         let encoded = match self.enc_to_dec_proj.as_ref() {
             None => encoded,
             Some(proj) => encoded.apply(proj)?,
@@ -375,8 +375,8 @@ impl Model {
         let prompt_hidden_states = prompt_tokens.apply(&self.embed_prompts)?;
         let num_codebooks = self.decoder.num_codebooks;
         let mut audio_tokens = vec![self.decoder_start_token_id; num_codebooks];
+        let mut all_audio_tokens = vec![vec![]; num_codebooks];
         for step in 0..max_steps {
-            println!("{step} {audio_tokens:?}");
             let input_ids = Tensor::from_slice(
                 audio_tokens.as_slice(),
                 (1, num_codebooks, 1),
@@ -408,8 +408,19 @@ impl Model {
             if audio_tokens.iter().all(|v| v == &self.pad_token_id) {
                 break;
             }
+            for (cb_idx, &token) in audio_tokens.iter().enumerate() {
+                if token != self.decoder_start_token_id && token != self.pad_token_id {
+                    all_audio_tokens[cb_idx].push(token)
+                }
+            }
         }
 
-        Ok(())
+        let min_len = all_audio_tokens.iter().map(|v| v.len()).min().unwrap_or(0);
+        all_audio_tokens.iter_mut().for_each(|v| {
+            v.resize(min_len, 0);
+            v.push(self.pad_token_id)
+        });
+        let all_audio_tokens = Tensor::new(all_audio_tokens, &candle::Device::Cpu)?;
+        Ok(all_audio_tokens)
     }
 }

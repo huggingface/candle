@@ -167,6 +167,9 @@ fn main() -> anyhow::Result<()> {
         Some(args.temperature),
         args.top_p,
     );
-    model.generate(&prompt_tokens, &description_tokens, lp, args.max_steps)?;
+    let codes = model.generate(&prompt_tokens, &description_tokens, lp, args.max_steps)?;
+    println!("{codes}");
+    let codes = codes.to_dtype(DType::I64)?;
+    codes.save_safetensors("codes", "out.safetensors")?;
     Ok(())
 }
