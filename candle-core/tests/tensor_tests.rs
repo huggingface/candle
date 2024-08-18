@@ -133,16 +133,16 @@ fn asort(device: &Device) -> Result<()> {
 fn asort_very_big(device: &Device) -> Result<()> {
     // This would require a lot of shared memory, as we're testing the other kernel
     // smem is calculated as (ncols * sizeof(u32)), so in this case, 393216 bytes.
-    let ncols = 32;//96u32 * 1024;
+    let ncols = 32; //96u32 * 1024;
     // Descending data.
-    let data_des = vec![(0..ncols).into_iter().rev().collect::<Vec<_>>(); 2];
+    let data_des = vec![(0..ncols).into_iter().rev().collect::<Vec<_>>(); 256];
 
     let tensor = Tensor::new(data_des, device)?;
-    assert_eq!(tensor.dims2()?, (2, ncols as usize));
+    assert_eq!(tensor.dims2()?, (256, ncols as usize));
     let indexes = tensor.arg_sort_last_dim(true)?;
     assert_eq!(
         indexes.to_vec2::<u32>()?,
-        vec![(0..ncols).into_iter().rev().collect::<Vec<_>>(); 2]
+        vec![(0..ncols).into_iter().rev().collect::<Vec<_>>(); 256]
     );
     Ok(())
 }

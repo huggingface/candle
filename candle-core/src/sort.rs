@@ -109,26 +109,23 @@ impl crate::CustomOp1 for ArgSort {
                 const MAX_SMEM_BYTES: u32 = 48 * 1024; // 48 KB threshold
 
                 //if shared_mem_bytes >= MAX_SMEM_BYTES {
-                    let func = if self.asc {
-                        dev.get_or_load_func(&kernel_name::<T>("asort_asc_no_smem"), kernels::SORT)?
-                    } else {
-                        dev.get_or_load_func(
-                            &kernel_name::<T>("asort_desc_no_smem"),
-                            kernels::SORT,
-                        )?
-                    };
+                let func = if self.asc {
+                    dev.get_or_load_func(&kernel_name::<T>("asort_asc_no_smem"), kernels::SORT)?
+                } else {
+                    dev.get_or_load_func(&kernel_name::<T>("asort_desc_no_smem"), kernels::SORT)?
+                };
 
-                    let params = (&slice, &dst, nrows as i32, ncols as i32);
+                let params = (&slice, &dst, nrows as i32, ncols as i32);
 
-                    const BLOCK_SIZE: u32 = 256;
+                const BLOCK_SIZE: u32 = 256;
 
-                    let cfg = LaunchConfig {
-                        grid_dim: ((nrows as u32 + BLOCK_SIZE - 1) / BLOCK_SIZE, 1, 1),
-                        block_dim: (BLOCK_SIZE, 1, 1),
-                        shared_mem_bytes: 0,
-                    };
-                    unsafe { func.launch(cfg, params) }.w()?;
-                    Ok(S::U32(dst))
+                let cfg = LaunchConfig {
+                    grid_dim: ((nrows as u32 + BLOCK_SIZE - 1) / BLOCK_SIZE, 1, 1),
+                    block_dim: (BLOCK_SIZE, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { func.launch(cfg, params) }.w()?;
+                Ok(S::U32(dst))
                 // } else {
                 //     let func = if self.asc {
                 //         dev.get_or_load_func(&kernel_name::<T>("asort_asc"), kernels::SORT)?
