@@ -163,6 +163,19 @@ struct DeviceConfig{
     buffer_cached_max_allowed_size : u64,
     #[serde(default = "default_use_cache")]
     use_cache : bool,
+    #[serde(default = "default_queue_delay_miliseconds")]
+    queue_delay_miliseconds : u32, 
+    #[serde(default = "default_flush_gpu_before_buffer_init")]
+    flush_gpu_before_buffer_init : bool
+
+}
+
+fn default_queue_delay_miliseconds() -> u32 {
+    0
+}
+
+fn default_flush_gpu_before_buffer_init() -> bool {
+    false
 }
 
 
@@ -287,14 +300,16 @@ impl Model {
             buffer_cached_max_allowed_size,
             max_workload_size,
             use_cache,
-            meta_buffer_size
+            meta_buffer_size,
+            queue_delay_miliseconds,
+            flush_gpu_before_buffer_init
         } = args;
 
         let device = match !use_gpu{
             true => Device::Cpu,
             false =>  
             {
-                let config = candle::wgpu_backend::WgpuDeviceConfig{buffer_cached_max_allowed_size, max_workload_size, meta_buffer_size, use_cache };
+                let config = candle::wgpu_backend::WgpuDeviceConfig{buffer_cached_max_allowed_size,max_workload_size,meta_buffer_size,use_cache, queue_delay_miliseconds, flush_gpu_before_buffer_init };
                 Device::new_webgpu_config(0, config).await?
             }
         };

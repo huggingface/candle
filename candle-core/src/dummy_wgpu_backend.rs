@@ -39,6 +39,8 @@ pub struct WgpuDeviceConfig{
     pub max_workload_size : u64, 
     pub buffer_cached_max_allowed_size : u64,
     pub use_cache : bool,
+    pub queue_delay_miliseconds : u32,
+    pub flush_gpu_before_buffer_init : bool
 }
 
 impl Default for WgpuDeviceConfig {

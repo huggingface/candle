@@ -9,9 +9,9 @@ pub async fn download_file(url : &str) -> GenericResult<web_sys::Blob> {
     //let new_url = format!("http://localhost:3000/fetch-resource/?url={}", encoded);
     log::info!("download file: {url}");
     
-    let mut opts = RequestInit::new();
-    opts.method("GET");
-    opts.mode(RequestMode::Cors);
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+    opts.set_mode(RequestMode::Cors);
 
     log::info!("Method: {opts:?}");
 

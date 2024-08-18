@@ -824,7 +824,6 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                                 },
                                 _ => {},
                             }
-
                         }
                     }
                 }
@@ -901,6 +900,10 @@ pub(crate) async fn flush_gpu_command_async(dev: &WgpuDevice, queue_buffer: &mut
                 let _enter1 = span1.enter();
                 dev.queue.submit(Some(cb));
                 drop(_enter1); 
+
+                if dev.configuration.queue_delay_miliseconds > 0 {
+                    super::util::sleep(dev.configuration.queue_delay_miliseconds).await;
+                }
                
                 start_index = index;
                 current_meta = last_meta;

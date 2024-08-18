@@ -43,8 +43,14 @@ bytemuck = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-tracing-mutex = {workspace = true} #only for debug purposes
-log = {workspace = true}
+tracing-mutex = {workspace = true, optional = true} #only for debug purposes
+log = {workspace = true, optional = true}
+
+
+#for wasm:
+[target.'cfg(all(target_arch = "wasm32"))'.dependencies]
+#wasm-timer = {version = "0.2.5", optional = true}
+fluvio-wasm-timer = {version="0.2.5", optional = true}
 
 #only for debugging on wasm
 #wasm-bindgen = "0.2.87"
@@ -66,9 +72,9 @@ cudnn = ["cuda", "cudarc/cudnn"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
 metal = ["dep:metal", "dep:candle-metal-kernels"]
-wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume", "dep:candle-wgpu-kernels"]
+wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume", "dep:candle-wgpu-kernels", "dep:log", "dep:tracing-mutex", "dep:fluvio-wasm-timer"]
 wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json"]
-default=[]
+default=["wgpu"]
 
 [[bench]]
 name = "bench_main"

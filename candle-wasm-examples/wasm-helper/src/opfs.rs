@@ -91,7 +91,9 @@ pub async fn clear_directory(directory : web_sys::FileSystemDirectoryHandle, rec
     let entries = get_dir_entries(dir.into()).await?;
     for (name, _) in entries{
         log::info!("remove entry: {name}");
-        JsFuture::from(directory.remove_entry_with_options(&name, FileSystemRemoveOptions::new().recursive(recursive))).await?;
+        let fsro = FileSystemRemoveOptions::new();
+        fsro.set_recursive(recursive);
+        JsFuture::from(directory.remove_entry_with_options(&name, &fsro)).await?;
     }
     Ok(())
 }
@@ -125,10 +127,14 @@ where
                 let name = p.to_str().unwrap();
                 let is_file = index == components.len() - 1;
                 if !is_file{
-                    root = JsFuture::from(root.get_directory_handle_with_options(name, FileSystemGetDirectoryOptions::new().create(true))).await?.into();
+                    let fsgdo = FileSystemGetDirectoryOptions::new();
+                    fsgdo.set_create(true);
+                    root = JsFuture::from(root.get_directory_handle_with_options(name, &fsgdo)).await?.into();
                 }
                 else{
-                    let file_handle : web_sys::FileSystemFileHandle = JsFuture::from(root.get_file_handle_with_options(name, FileSystemGetFileOptions::new().create(true))).await?.into();
+                    let fsgfo = FileSystemGetFileOptions::new();
+                    fsgfo.set_create(true);
+                    let file_handle : web_sys::FileSystemFileHandle = JsFuture::from(root.get_file_handle_with_options(name, &fsgfo)).await?.into();
                     return Ok(file_handle);
                 }
             },

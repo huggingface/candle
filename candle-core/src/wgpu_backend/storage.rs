@@ -27,7 +27,9 @@ pub fn create_wgpu_storage_init<T: bytemuck::Pod>(dev : &WgpuDevice, dtype : cra
     let size = data.len();
     let buffer;
     {
-        dev.flush_gpu_command()?;
+        if dev.configuration.flush_gpu_before_buffer_init{
+            dev.flush_gpu_command()?;
+        }
         let mut cache = dev.cache.lock().unwrap();
         buffer = cache.create_buffer_reference_init(dev, data,true);
     } 

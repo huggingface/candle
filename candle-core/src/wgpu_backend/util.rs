@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, VecDeque}, hash::{Hash, Hasher}, marker::PhantomData, sync::atomic::AtomicU32};
+use std::{collections::{HashMap, VecDeque}, hash::{Hash, Hasher}, marker::PhantomData, sync::atomic::AtomicU32, time::Duration};
 
 pub trait ToU32 {
     fn to_u32(self) -> u32;
@@ -606,4 +606,19 @@ where TREF : ReferenceTrait
         return self.data.len() - self.free.len();
     }
     
+}
+
+
+
+//async sleep:
+#[cfg(all(target_arch = "wasm32", feature="wgpu"))]
+pub async fn sleep(delay: u32) {
+    log::info!("waiting {delay} miliseconds");
+    fluvio_wasm_timer::Delay::new(Duration::from_millis(delay as u64)).await.unwrap();
+}
+
+#[cfg(not(all(target_arch = "wasm32", feature="wgpu")))]
+pub async fn sleep(delay: u32) {
+    log::info!("waiting {delay} miliseconds");
+    std::thread::sleep( std::time::Duration::from_millis( delay as u64 ) );
 }
