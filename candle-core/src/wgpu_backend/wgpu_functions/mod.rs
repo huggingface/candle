@@ -480,7 +480,7 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer, cache : &mut ModelC
 }
 
 #[instrument]
-fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut usize, current_meta: usize, last_meta : &mut usize, mut cache : &mut ModelCache) -> crate::Result<bool>{
+fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut usize, current_meta: usize, last_meta : &mut usize, mut cache : &mut ModelCache) -> crate::Result<(bool, u64)>{
     let global_index = command_buffer.global_command_index();
     let queue = &mut command_buffer.command_queue; 
     let mut cache_limit = false;
@@ -768,7 +768,7 @@ fn set_buffers(dev: &WgpuDevice, command_buffer: &mut QueueBuffer, index : &mut 
     let ele_size =  *index-start_index;
     log::trace!("queue {ele_size}, Meta: {meta_size}, workload: {total_workload}, cache_limit: {cache_limit}");
 
-    return Ok(cache_limit);
+    return Ok((cache_limit, total_workload));
 }
 
 fn finish_commands(command_buffer: &mut QueueBuffer, index : usize){
@@ -788,7 +788,7 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
             let mut last_meta: usize = 0;
 
             while index < queue_buffer.command_queue.len() {
-                let should_reuse_unused = set_buffers(dev, queue_buffer, &mut index, current_meta, &mut last_meta, &mut cache)?;
+                let (should_reuse_unused, _) = set_buffers(dev, queue_buffer, &mut index, current_meta, &mut last_meta, &mut cache)?;
 
                 let last_meta_index = (last_meta + 256 / 4).min(queue_buffer.get_meta().len());
                 let cb = get_command_buffer(
@@ -851,7 +851,7 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
 #[instrument]
 pub(crate) async fn flush_gpu_command_async(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer) -> crate::Result<()> {
     if queue_buffer.command_queue.len() > 0 {
-        log::warn!("flush_gpu_command_async");
+        log::info!("flush_gpu_command_async");
         let mut cache = dev.cache.lock().expect("flush gpu_commadn could not lock cache");
         prepare(dev, queue_buffer, &mut cache);
         {
@@ -861,7 +861,7 @@ pub(crate) async fn flush_gpu_command_async(dev: &WgpuDevice, queue_buffer: &mut
             let mut last_meta: usize = 0;
 
             while index < queue_buffer.command_queue.len() {
-                let should_reuse_unused = set_buffers(dev, queue_buffer, &mut index, current_meta, &mut last_meta, &mut cache)?;
+                let (should_reuse_unused, total_workload) = set_buffers(dev, queue_buffer, &mut index, current_meta, &mut last_meta, &mut cache)?;
                 let last_meta_index = (last_meta + 256 / 4).min(queue_buffer.get_meta().len());
                 let cb = get_command_buffer(
                     dev,
@@ -901,14 +901,13 @@ pub(crate) async fn flush_gpu_command_async(dev: &WgpuDevice, queue_buffer: &mut
                 dev.queue.submit(Some(cb));
                 drop(_enter1); 
 
-                if dev.configuration.queue_delay_miliseconds > 0 {
-                    super::util::sleep(dev.configuration.queue_delay_miliseconds).await;
-                }
-               
                 start_index = index;
                 current_meta = last_meta;
             }
             finish_commands(queue_buffer, index);
+            if dev.configuration.queue_delay_miliseconds > 0{
+                super::util::sleep(dev.configuration.queue_delay_miliseconds).await;
+            }
         }
 
         queue_buffer.clear();

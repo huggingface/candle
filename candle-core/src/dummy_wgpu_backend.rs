@@ -40,7 +40,8 @@ pub struct WgpuDeviceConfig{
     pub buffer_cached_max_allowed_size : u64,
     pub use_cache : bool,
     pub queue_delay_miliseconds : u32,
-    pub flush_gpu_before_buffer_init : bool
+    pub flush_gpu_before_buffer_init : bool,
+    buffer_mapping_size : u32
 }
 
 impl Default for WgpuDeviceConfig {

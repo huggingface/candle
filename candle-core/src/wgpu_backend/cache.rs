@@ -439,12 +439,12 @@ pub struct ModelCache {
 }
 
 impl ModelCache {
-    pub fn new() -> Self {
+    pub fn new(mapping_size : u32) -> Self {
         Self {
             buffer_reference : BufferReferenceStorage::new(),
             buffers: BufferCacheStorage::new(),
             bindgroups: BindgroupCacheStorage::new(),
-            mappings: BufferMappingCache::new(),
+            mappings: BufferMappingCache::new(mapping_size),
         }
     }
 
@@ -1086,9 +1086,9 @@ pub(crate) struct BufferMappingCache {
 }
 
 impl BufferMappingCache {
-    fn new() -> Self {
+    fn new(size : u32) -> Self {
         Self {
-            last_buffer_mappings: FixedSizeQueue::new(2),
+            last_buffer_mappings: FixedSizeQueue::new(size as usize),
             current_buffer_mapping: None,
             current_index: 0,
         }

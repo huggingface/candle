@@ -39,8 +39,9 @@ pub struct WgpuDeviceConfig{
                                              //if this value is to low for the desired model, the performance may drop significatly(e.g. model needs at least 2gb of data, if this value would be e.g. only 100mb all free buffers would be deleted after each command)
     pub use_cache : bool, 
     pub queue_delay_miliseconds : u32, //specifys the amout of time to wait after each command (may be usefull for debuging purposes if one expect, that the impl causes to much stress on the gpu)
-    pub flush_gpu_before_buffer_init : bool //when data is copied from cpu to the wgpu device, all previous commands may be flushed, to allow other buffers to be freed and reused. 
+    pub flush_gpu_before_buffer_init : bool, //when data is copied from cpu to the wgpu device, all previous commands may be flushed, to allow other buffers to be freed and reused. 
                                             //But on webGpu this may not be optimal, as we can not wait for commands to finish (as this functin is not asyny) 
+    pub buffer_mapping_size : u32,
 }
 
 impl Default for WgpuDeviceConfig {
@@ -51,7 +52,8 @@ impl Default for WgpuDeviceConfig {
             buffer_cached_max_allowed_size : 1024*1024*1024*8,                                        
             use_cache : true,
             queue_delay_miliseconds : 0,
-            flush_gpu_before_buffer_init : true
+            flush_gpu_before_buffer_init : true,
+            buffer_mapping_size : 3,
         }
     }
 }
@@ -425,7 +427,7 @@ impl WgpuDevice{
                 debug : debug_info,
                 command_queue: Mutex::new(QueueBuffer::new(configuration.meta_buffer_size)),
                 meta_buffer : meta_buffer,
-                cache : Mutex::new(ModelCache::new()),
+                cache : Mutex::new(ModelCache::new(configuration.buffer_mapping_size)),
                 bindgroup_layouts,
                 staging_probe_buffer : staging_buffer,
                 unary_inplace_counter : Counter::new(0),

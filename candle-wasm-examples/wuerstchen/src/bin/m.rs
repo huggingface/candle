@@ -166,8 +166,20 @@ struct DeviceConfig{
     #[serde(default = "default_queue_delay_miliseconds")]
     queue_delay_miliseconds : u32, 
     #[serde(default = "default_flush_gpu_before_buffer_init")]
-    flush_gpu_before_buffer_init : bool
+    flush_gpu_before_buffer_init : bool,
+    #[serde(default = "default_queue_delay_factor")]
+    queue_delay_factor : f32,
+    #[serde(default = "default_buffer_mapping_size")]
+    buffer_mapping_size : u32
+}
 
+fn default_buffer_mapping_size() -> u32 {
+    1
+}
+
+
+fn default_queue_delay_factor() -> f32 {
+    0.0
 }
 
 fn default_queue_delay_miliseconds() -> u32 {
@@ -302,14 +314,16 @@ impl Model {
             use_cache,
             meta_buffer_size,
             queue_delay_miliseconds,
-            flush_gpu_before_buffer_init
+            flush_gpu_before_buffer_init,
+            buffer_mapping_size,
+            ..
         } = args;
 
         let device = match !use_gpu{
             true => Device::Cpu,
             false =>  
             {
-                let config = candle::wgpu_backend::WgpuDeviceConfig{buffer_cached_max_allowed_size,max_workload_size,meta_buffer_size,use_cache, queue_delay_miliseconds, flush_gpu_before_buffer_init };
+                let config = candle::wgpu_backend::WgpuDeviceConfig{buffer_cached_max_allowed_size,max_workload_size,meta_buffer_size,use_cache,queue_delay_miliseconds,flush_gpu_before_buffer_init, buffer_mapping_size};
                 Device::new_webgpu_config(0, config).await?
             }
         };
@@ -453,7 +467,7 @@ impl Model {
             let vb = var_builder_from_opfs_safetensors(file, DType::F32, device).await?;
             wuerstchen::paella_vq::PaellaVQ::new(vb)?
         };
-    
+        device.synchronize_async().await?;
         log::info!("Building the decoder.");
     
         // https://huggingface.co/warp-ai/wuerstchen/blob/main/decoder/config.json
@@ -471,7 +485,7 @@ impl Model {
                 vb,
             )?
         };
-    
+        device.synchronize_async().await?;
         for idx in 0..num_samples {
             // https://huggingface.co/warp-ai/wuerstchen/blob/main/model_index.json
             let latent_height = (image_embeddings.dim(2)? as f64 * LATENT_DIM_SCALE) as usize;
@@ -484,7 +498,7 @@ impl Model {
                 device,
             )?;
     
-             log::info!("diffusion process with prior {image_embeddings:?}");
+            log::info!("diffusion process with prior {image_embeddings:?}");
             let scheduler = wuerstchen::ddpm::DDPMWScheduler::new(vgan_steps as usize, Default::default())?;
             let timesteps = scheduler.timesteps();
             let timesteps = &timesteps[..timesteps.len() - 1];
