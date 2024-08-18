@@ -3,7 +3,7 @@ use candle::{IndexOp, Result, Tensor};
 use candle_nn::{layer_norm, linear_b as linear, Activation, LayerNorm, Linear, VarBuilder};
 
 #[derive(serde::Deserialize, Debug, Clone)]
-pub struct Config {
+pub struct DecoderConfig {
     pub vocab_size: usize,
     pub max_position_embeddings: usize,
     pub num_hidden_layers: usize,
@@ -21,6 +21,11 @@ pub struct Config {
     pub tie_word_embeddings: bool,
     pub rope_embeddings: bool,
     pub rope_theta: f64,
+}
+
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct Config {
+    pub decoder: DecoderConfig,
     pub text_encoder: t5::Config,
 }
 
@@ -40,7 +45,12 @@ pub struct Attention {
 }
 
 impl Attention {
-    fn new(num_kv_heads: usize, is_causal: bool, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        num_kv_heads: usize,
+        is_causal: bool,
+        cfg: &DecoderConfig,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         if cfg.rope_embeddings {
             candle::bail!("rope embeddings are not supported");
         }
@@ -141,7 +151,7 @@ pub struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &DecoderConfig, vb: VarBuilder) -> Result<Self> {
         let kv_heads = cfg.num_key_value_heads.unwrap_or(cfg.num_attention_heads);
         let kv_heads_cross = cfg.num_cross_attention_key_value_heads.unwrap_or(kv_heads);
 
@@ -215,8 +225,8 @@ pub struct Decoder {
 }
 
 impl Decoder {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let vb_d = vb.pp("decoder");
+    pub fn new(cfg: &DecoderConfig, vb: VarBuilder) -> Result<Self> {
+        let vb_d = vb.pp("model.decoder");
         let mut embed_tokens = Vec::with_capacity(cfg.num_codebooks);
         let vb_e = vb_d.pp("embed_tokens");
         for embed_idx in 0..cfg.num_codebooks {
@@ -300,9 +310,8 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let text_encoder =
-            t5::T5EncoderModel::load(vb.pp("text_encoder.model"), &cfg.text_encoder)?;
-        let decoder = Decoder::new(cfg, vb.pp("decoder.model"))?;
+        let text_encoder = t5::T5EncoderModel::load(vb.pp("text_encoder"), &cfg.text_encoder)?;
+        let decoder = Decoder::new(&cfg.decoder, vb.pp("decoder"))?;
         Ok(Self {
             decoder,
             text_encoder,

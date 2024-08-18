@@ -150,10 +150,10 @@ fn main() -> anyhow::Result<()> {
         .get_ids()
         .to_vec();
     let tokens = Tensor::new(tokens, &device)?.unsqueeze(0)?;
-    println!("{tokens:?}");
+    println!("{tokens}");
 
-    let encoded = model.text_encoder.forward(&tokens);
-    println!("{encoded:?}");
+    let encoded = model.text_encoder.forward(&tokens)?;
+    println!("{encoded}");
 
     Ok(())
 }
