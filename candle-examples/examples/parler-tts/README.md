@@ -18,4 +18,4 @@ cargo run --example parler-tts -r -- \
   --description "A female speaker delivers a slightly expressive and animated speech with a moderate speed and pitch. The recording is of very high quality, with the speaker's voice sounding clear and very close up."
 ```
 
-![](hello.mp4)
+![](./hello.mp4)
