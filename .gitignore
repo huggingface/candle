@@ -42,3 +42,4 @@ candle-wasm-examples/**/config*.json
 .idea/*
 __pycache__
 out.safetensors
+out.wav

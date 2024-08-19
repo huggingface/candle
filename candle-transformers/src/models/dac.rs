@@ -6,11 +6,11 @@ use candle_nn::{Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, Va
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct Config {
     pub num_codebooks: usize,
-    pub model_bitrate: usize,
+    pub model_bitrate: u32,
     pub codebook_size: usize,
     pub latent_dim: usize,
-    pub frame_rate: usize,
-    pub sampling_rate: usize,
+    pub frame_rate: u32,
+    pub sampling_rate: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -29,9 +29,9 @@ impl candle::Module for Snake1d {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs_shape = xs.shape();
         let xs = xs.flatten_from(2)?;
-        let sin = (&self.alpha * &xs)?.sin()?;
+        let sin = self.alpha.broadcast_mul(&xs)?.sin()?;
         let sin = (&sin * &sin)?;
-        (xs + (&self.alpha + 1e-9)?.recip()? * sin)?.reshape(xs_shape)
+        (xs + (&self.alpha + 1e-9)?.recip()?.broadcast_mul(&sin)?)?.reshape(xs_shape)
     }
 }
 
@@ -46,7 +46,7 @@ pub struct ResidualUnit {
 impl ResidualUnit {
     pub fn new(dim: usize, dilation: usize, vb: VarBuilder) -> Result<Self> {
         let pad = ((7 - 1) * dilation) / 2;
-        let vb = vb.pp("blocks");
+        let vb = vb.pp("block");
         let snake1 = Snake1d::new(dim, vb.pp(0))?;
         let cfg1 = Conv1dConfig {
             dilation,
@@ -142,7 +142,12 @@ impl candle::Module for Encoder {
 }
 
 impl Encoder {
-    pub fn new(d_model: usize, strides: &[usize], d_latent: usize, vb: VarBuilder) -> Result<Self> {
+    pub fn new(
+        mut d_model: usize,
+        strides: &[usize],
+        d_latent: usize,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let vb = vb.pp("block");
         let cfg1 = Conv1dConfig {
             padding: 3,
@@ -151,6 +156,7 @@ impl Encoder {
         let conv1 = encodec::conv1d_weight_norm(1, d_model, 7, cfg1, vb.pp(0))?;
         let mut blocks = Vec::with_capacity(strides.len());
         for (block_idx, stride) in strides.iter().enumerate() {
+            d_model *= 2;
             let block = EncoderBlock::new(d_model, *stride, vb.pp(block_idx + 1))?;
             blocks.push(block)
         }
@@ -181,6 +187,7 @@ pub struct DecoderBlock {
 
 impl DecoderBlock {
     pub fn new(in_dim: usize, out_dim: usize, stride: usize, vb: VarBuilder) -> Result<Self> {
+        let vb = vb.pp("block");
         let snake1 = Snake1d::new(in_dim, vb.pp(0))?;
         let cfg = ConvTranspose1dConfig {
             stride,
@@ -234,7 +241,7 @@ impl Decoder {
         d_out: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let vb = vb.pp("layer");
+        let vb = vb.pp("model");
         let cfg1 = Conv1dConfig {
             padding: 3,
             ..Default::default()
@@ -363,7 +370,7 @@ impl Model {
     }
 
     pub fn decode_codes(&self, audio_codes: &Tensor) -> Result<Tensor> {
-        let audio_values = self.quantizer.from_codes(&audio_codes.squeeze(0)?)?;
+        let audio_values = self.quantizer.from_codes(audio_codes)?;
         audio_values.apply(&self.decoder)
     }
 }
