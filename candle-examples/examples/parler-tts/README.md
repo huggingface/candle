@@ -18,4 +18,6 @@ cargo run --example parler-tts -r -- \
   --description "A female speaker delivers a slightly expressive and animated speech with a moderate speed and pitch. The recording is of very high quality, with the speaker's voice sounding clear and very close up."
 ```
 
-https://github.com/huggingface/candle/raw/main/candle-examples/examples/parler-tts/hello.mp4
+
+https://github.com/user-attachments/assets/1b16aeac-70a3-4803-8589-4563279bba33
+
