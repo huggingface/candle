@@ -5,6 +5,7 @@ from parler_tts import DACModel
 
 tensors = load_file("out.safetensors")
 dac_model = DACModel.from_pretrained("parler-tts/dac_44khZ_8kbps")
+print(dac_model.model)
 output_ids = tensors["codes"][None, None]
 print(output_ids, "\n", output_ids.shape)
 batch_size = 1

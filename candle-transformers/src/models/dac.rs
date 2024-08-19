@@ -1,10 +1,7 @@
-#![allow(unused)]
+/// Adapted from https://github.com/descriptinc/descript-audio-codec
 use crate::models::encodec;
 use candle::{IndexOp, Result, Tensor, D};
-use candle_nn::{
-    layer_norm, linear_b as linear, Activation, Conv1d, Conv1dConfig, ConvTranspose1d,
-    ConvTranspose1dConfig, LayerNorm, Linear, VarBuilder,
-};
+use candle_nn::{Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, VarBuilder};
 
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct Config {
@@ -34,7 +31,7 @@ impl candle::Module for Snake1d {
         let xs = xs.flatten_from(2)?;
         let sin = (&self.alpha * &xs)?.sin()?;
         let sin = (&sin * &sin)?;
-        (xs + (&self.alpha + 1e-9)?.recip()? * sin)
+        (xs + (&self.alpha + 1e-9)?.recip()? * sin)?.reshape(xs_shape)
     }
 }
 
@@ -270,6 +267,7 @@ impl candle::Module for Decoder {
     }
 }
 
+#[allow(unused)]
 #[derive(Clone, Debug)]
 pub struct VectorQuantizer {
     in_proj: Conv1d,
@@ -289,6 +287,14 @@ impl VectorQuantizer {
             out_proj,
             codebook,
         })
+    }
+
+    pub fn embed_code(&self, embed_id: &Tensor) -> Result<Tensor> {
+        embed_id.apply(&self.codebook)
+    }
+
+    pub fn decode_code(&self, embed_id: &Tensor) -> Result<Tensor> {
+        self.embed_code(embed_id)?.transpose(1, 2)
     }
 }
 
@@ -311,17 +317,35 @@ impl ResidualVectorQuantizer {
             .collect::<Result<Vec<_>>>()?;
         Ok(Self { quantizers })
     }
+
+    pub fn from_codes(&self, codes: &Tensor) -> Result<Tensor> {
+        let mut sum = None;
+        for (idx, quantizer) in self.quantizers.iter().enumerate() {
+            let z_p_i = quantizer.decode_code(&codes.i((.., idx))?)?;
+            let z_q_i = z_p_i.apply(&quantizer.out_proj)?;
+            let s = match sum {
+                None => z_q_i,
+                Some(s) => (s + z_q_i)?,
+            };
+            sum = Some(s)
+        }
+        match sum {
+            Some(s) => Ok(s),
+            None => candle::bail!("empty codebooks"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Model {
-    encoder: Encoder,
-    quantizer: ResidualVectorQuantizer,
-    decoder: Decoder,
+    pub encoder: Encoder,
+    pub quantizer: ResidualVectorQuantizer,
+    pub decoder: Decoder,
 }
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let vb = vb.pp("model");
         let encoder = Encoder::new(64, &[2, 4, 8, 8], cfg.latent_dim, vb.pp("encoder"))?;
         let quantizer = ResidualVectorQuantizer::new(
             cfg.latent_dim,
@@ -336,5 +360,10 @@ impl Model {
             decoder,
             quantizer,
         })
+    }
+
+    pub fn decode_codes(&self, audio_codes: &Tensor) -> Result<Tensor> {
+        let audio_values = self.quantizer.from_codes(&audio_codes.squeeze(0)?)?;
+        audio_values.apply(&self.decoder)
     }
 }
