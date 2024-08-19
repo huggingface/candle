@@ -31,6 +31,7 @@ pub struct Config {
     pub decoder: DecoderConfig,
     pub text_encoder: t5::Config,
     pub vocab_size: usize,
+    pub audio_encoder: crate::models::dac::Config,
 }
 
 #[derive(Debug, Clone)]
@@ -325,6 +326,7 @@ pub struct Model {
     pub text_encoder: t5::T5EncoderModel,
     pub decoder_start_token_id: u32,
     pub pad_token_id: u32,
+    pub audio_encoder: crate::models::dac::Model,
 }
 
 impl Model {
@@ -347,6 +349,8 @@ impl Model {
         } else {
             None
         };
+        let audio_encoder =
+            crate::models::dac::Model::new(&cfg.audio_encoder, vb.pp("audio_encoder"))?;
         Ok(Self {
             decoder,
             text_encoder,
@@ -354,6 +358,7 @@ impl Model {
             enc_to_dec_proj,
             decoder_start_token_id: cfg.decoder_start_token_id,
             pad_token_id: cfg.pad_token_id,
+            audio_encoder,
         })
     }
 
