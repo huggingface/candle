@@ -427,7 +427,7 @@ thread_local! {
 impl QMatMul {
     pub fn from_arc(qtensor: std::sync::Arc<QTensor>) -> Result<Self> {
         let dequantize = match qtensor.dtype() {
-            GgmlDType::F32 | GgmlDType::F16 => true,
+            GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16 => true,
             _ => DEQUANTIZE_ALL.with(|b| *b),
         };
         let t = if dequantize {
