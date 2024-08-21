@@ -155,6 +155,27 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
     })
 }
 
+/// Adds 1.0 to the weights, as required by the Gemma models. This should only be used for inference.
+pub fn gemma_layer_norm<C: Into<LayerNormConfig>>(
+    size: usize,
+    config: C,
+    vb: crate::VarBuilder,
+) -> Result<LayerNorm> {
+    let config = config.into();
+    let weight = vb.get_with_hints(size, "weight", crate::Init::Const(1.))?;
+    let bias = if config.affine {
+        Some(vb.get_with_hints(size, "bias", crate::Init::Const(0.))?)
+    } else {
+        None
+    };
+    Ok(LayerNorm {
+        weight: (weight + 1.0)?,
+        bias,
+        remove_mean: config.remove_mean,
+        eps: config.eps,
+    })
+}
+
 /// RmsNorm is a specialized version of the LayerNorm module.
 #[derive(Clone, Debug)]
 pub struct RmsNorm(LayerNorm);
@@ -191,4 +212,14 @@ pub fn rms_norm(size: usize, eps: f64, vb: crate::VarBuilder) -> Result<RmsNorm>
         affine: false,
     };
     Ok(RmsNorm(layer_norm(size, config, vb)?))
+}
+
+/// Adds 1.0 to the weights, as required by the Gemma models. This should only be used for inference.
+pub fn gemma_rms_norm(size: usize, eps: f64, vb: crate::VarBuilder) -> Result<RmsNorm> {
+    let config = LayerNormConfig {
+        eps,
+        remove_mean: false,
+        affine: false,
+    };
+    Ok(RmsNorm(gemma_layer_norm(size, config, vb)?))
 }

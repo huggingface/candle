@@ -181,6 +181,13 @@ impl RmsNorm {
         Ok(Self { inner, span })
     }
 
+    /// Adds 1.0 to the weights, as required by the Gemma models. This should only be used for inference.
+    pub fn new_gemma(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
+        let inner = candle_nn::gemma_rms_norm(size, eps, vb)?;
+        Ok(Self { inner, span })
+    }
+
     pub fn forward_diff(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         self.inner.forward_diff(x)
