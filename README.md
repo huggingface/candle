@@ -67,7 +67,7 @@ We also provide a some command line based examples using state of the art models
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
 - [Codegeex4](./candle-examples/examples/codegeex4-9b/): Code completion,code interpreter,web search,fuction calling,repository-level
 - [GLM4](./candle-examples/examples/glm4/): Open Multilingual Multimodal Chat LMs by THUDM
-- [Gemma](./candle-examples/examples/gemma/): 2b and 7b general LLMs from Google Deepmind.
+- [Gemma v1 and v2](./candle-examples/examples/gemma/): 2b and 7b+/9b general LLMs from Google Deepmind.
 - [RecurrentGemma](./candle-examples/examples/recurrent-gemma/): 2b and 7b
   Griffin based models from Google that mix attention with a RNN like state.
 - [Phi-1, Phi-1.5, Phi-2, and Phi-3](./candle-examples/examples/phi/): 1.3b,
@@ -122,6 +122,8 @@ We also provide a some command line based examples using state of the art models
   model using residual vector quantization.
 - [MetaVoice](./candle-examples/examples/metavoice/): foundational model for
   text-to-speech.
+- [Parler-TTS](./candle-examples/examples/parler-tts/): large text-to-speech
+  model.
 - [T5](./candle-examples/examples/t5), [Bert](./candle-examples/examples/bert/),
   [JinaBert](./candle-examples/examples/jina-bert/) : useful for sentence embeddings.
 - [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
@@ -210,7 +212,7 @@ If you have an addition to this list, please submit a pull request.
         - StarCoder, StarCoder2.
         - Phi 1, 1.5, 2, and 3.
         - Mamba, Minimal Mamba
-        - Gemma 2b and 7b.
+        - Gemma v1 2b and 7b+, v2 2b and 9b.
         - Mistral 7b v0.1.
         - Mixtral 8x7b v0.1.
         - StableLM-3B-4E1T, StableLM-2-1.6B, Stable-Code-3B.
@@ -238,6 +240,7 @@ If you have an addition to this list, please submit a pull request.
         - Whisper, multi-lingual speech-to-text.
         - EnCodec, audio compression model.
         - MetaVoice-1B, text-to-speech model.
+        - Parler-TTS, text-to-speech model.
     - Computer Vision Models.
         - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT,
           ConvNeXTv2, MobileOne, EfficientVit (MSRA), MobileNetv4, Hiera.

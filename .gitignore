@@ -40,3 +40,6 @@ candle-wasm-examples/*/package-lock.json
 candle-wasm-examples/**/config*.json
 .DS_Store
 .idea/*
+__pycache__
+out.safetensors
+out.wav
