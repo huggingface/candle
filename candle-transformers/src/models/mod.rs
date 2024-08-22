@@ -1,5 +1,4 @@
 pub mod based;
-pub mod based;
 pub mod beit;
 pub mod bert;
 pub mod bigcode;
@@ -21,8 +20,8 @@ pub mod encodec;
 pub mod eva2;
 pub mod falcon;
 pub mod flux;
-pub mod flux;
 pub mod gemma;
+pub mod gemma2;
 pub mod glm4;
 pub mod hiera;
 pub mod jina_bert;
