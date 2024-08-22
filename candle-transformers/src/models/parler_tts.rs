@@ -429,7 +429,6 @@ impl Model {
         let min_len = all_audio_tokens.iter().map(|v| v.len()).min().unwrap_or(0);
         all_audio_tokens.iter_mut().for_each(|v| {
             v.resize(min_len, 0);
-            v.push(self.pad_token_id)
         });
         let all_audio_tokens = Tensor::new(all_audio_tokens, &candle::Device::Cpu)?;
         Ok(all_audio_tokens)
