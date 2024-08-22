@@ -8,6 +8,7 @@ use half::{bf16, f16};
 
 pub struct FlashAttn {
     pub softmax_scale: f32,
+    pub softcap: Option<f32>,
     pub alibi_slopes: Option<Tensor>,
     pub window_size_left: Option<usize>,
     pub window_size_right: Option<usize>,
@@ -193,6 +194,7 @@ impl FlashAttn {
                 /* d */ head_size as u32,
                 /* d_rounded */ head_size_rounded as u32,
                 /* softmax_scale*/ self.softmax_scale,
+                /* softcap */ self.softcap.unwrap_or(0.0),
                 /* seqlen_q */ seqlen_q as u32,
                 /* seqlen_k */ seqlen_k as u32,
                 /* seqlen_q_rounded */ seqlen_q_rounded as u32,
@@ -263,11 +265,24 @@ pub fn flash_attn(
     softmax_scale: f32,
     causal: bool,
 ) -> Result<Tensor> {
+    flash_attn_softcap(q, k, v, softmax_scale, None, causal)
+}
+
+/// Equivalent to [`flash_attn`], but with softcap support
+pub fn flash_attn_softcap(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+    softcap: Option<f32>,
+    causal: bool,
+) -> Result<Tensor> {
     let window_size_left = None;
     let window_size_right = if causal { Some(0) } else { None };
 
     let op = FlashAttn {
         softmax_scale,
+        softcap,
         alibi_slopes: None,
         window_size_left,
         window_size_right,
@@ -303,8 +318,30 @@ pub fn flash_attn_windowed(
     window_size_left: Option<usize>,
     window_size_right: Option<usize>,
 ) -> Result<Tensor> {
+    flash_attn_windowed_softcap(
+        q,
+        k,
+        v,
+        softmax_scale,
+        None,
+        window_size_left,
+        window_size_right,
+    )
+}
+
+/// Equivalent to [`flash_attn_windowed`], but with softcap support.
+pub fn flash_attn_windowed_softcap(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+    softcap: Option<f32>,
+    window_size_left: Option<usize>,
+    window_size_right: Option<usize>,
+) -> Result<Tensor> {
     let op = FlashAttn {
         softmax_scale,
+        softcap,
         alibi_slopes: None,
         window_size_left,
         window_size_right,
@@ -334,11 +371,25 @@ pub fn flash_attn_alibi(
     softmax_scale: f32,
     causal: bool,
 ) -> Result<Tensor> {
+    flash_attn_alibi_softcap(q, k, v, alibi_slopes, softmax_scale, None, causal)
+}
+
+/// Equivalent to [`flash_attn_alibi`], but with softcap support.
+pub fn flash_attn_alibi_softcap(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    alibi_slopes: &Tensor,
+    softmax_scale: f32,
+    softcap: Option<f32>,
+    causal: bool,
+) -> Result<Tensor> {
     let window_size_left = None;
     let window_size_right = if causal { Some(0) } else { None };
 
     let op = FlashAttn {
         softmax_scale,
+        softcap,
         alibi_slopes: Some(alibi_slopes.clone()),
         window_size_left,
         window_size_right,
@@ -378,6 +429,7 @@ pub fn flash_attn_alibi_windowed(
 ) -> Result<Tensor> {
     let op = FlashAttn {
         softmax_scale,
+        softcap: None,
         alibi_slopes: Some(alibi_slopes.clone()),
         window_size_left,
         window_size_right,
@@ -387,6 +439,7 @@ pub fn flash_attn_alibi_windowed(
 
 struct FlashAttnVarLen {
     pub softmax_scale: f32,
+    pub softcap: Option<f32>,
     pub max_seqlen_q: usize,
     pub max_seqlen_k: usize,
     pub seqlens_q: Tensor,
@@ -605,6 +658,7 @@ impl FlashAttnVarLen {
                 /* d */ head_size as u32,
                 /* d_rounded */ head_size_rounded as u32,
                 /* softmax_scale*/ self.softmax_scale,
+                /* softcap */ self.softcap.unwrap_or(0.0),
                 /* seqlen_q */ self.max_seqlen_q as u32,
                 /* seqlen_k */ self.max_seqlen_k as u32,
                 /* seqlen_q_rounded */ seqlen_q_rounded as u32,
@@ -687,11 +741,39 @@ pub fn flash_attn_varlen(
     softmax_scale: f32,
     causal: bool,
 ) -> Result<Tensor> {
+    flash_attn_varlen_softcap(
+        q,
+        k,
+        v,
+        seqlens_q,
+        seqlens_k,
+        max_seqlen_q,
+        max_seqlen_k,
+        softmax_scale,
+        None,
+        causal,
+    )
+}
+
+/// Equivalent to [`flash_attn_varlen`], but with softcap support.
+pub fn flash_attn_varlen_softcap(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    seqlens_q: &Tensor,
+    seqlens_k: &Tensor,
+    max_seqlen_q: usize,
+    max_seqlen_k: usize,
+    softmax_scale: f32,
+    softcap: Option<f32>,
+    causal: bool,
+) -> Result<Tensor> {
     let window_size_left = None;
     let window_size_right = if causal { Some(0) } else { None };
 
     let op = FlashAttnVarLen {
         softmax_scale,
+        softcap,
         max_seqlen_q,
         max_seqlen_k,
         seqlens_q: seqlens_q.clone(),
@@ -743,8 +825,38 @@ pub fn flash_attn_varlen_windowed(
     window_size_left: Option<usize>,
     window_size_right: Option<usize>,
 ) -> Result<Tensor> {
+    flash_attn_varlen_windowed_softcap(
+        q,
+        k,
+        v,
+        seqlens_q,
+        seqlens_k,
+        max_seqlen_q,
+        max_seqlen_k,
+        softmax_scale,
+        None,
+        window_size_left,
+        window_size_right,
+    )
+}
+
+/// Equivalent to [`flash_attn_varlen_windowed`], but with softcap support.
+pub fn flash_attn_varlen_windowed_softcap(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    seqlens_q: &Tensor,
+    seqlens_k: &Tensor,
+    max_seqlen_q: usize,
+    max_seqlen_k: usize,
+    softmax_scale: f32,
+    softcap: Option<f32>,
+    window_size_left: Option<usize>,
+    window_size_right: Option<usize>,
+) -> Result<Tensor> {
     let op = FlashAttnVarLen {
         softmax_scale,
+        softcap,
         max_seqlen_q,
         max_seqlen_k,
         seqlens_q: seqlens_q.clone(),
@@ -790,11 +902,41 @@ pub fn flash_attn_varlen_alibi(
     softmax_scale: f32,
     causal: bool,
 ) -> Result<Tensor> {
+    flash_attn_varlen_alibi_softcap(
+        q,
+        k,
+        v,
+        alibi_slopes,
+        seqlens_q,
+        seqlens_k,
+        max_seqlen_q,
+        max_seqlen_k,
+        softmax_scale,
+        None,
+        causal,
+    )
+}
+
+/// Equivalent to [`flash_attn_varlen_alibi`], but with softcap support
+pub fn flash_attn_varlen_alibi_softcap(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    alibi_slopes: &Tensor,
+    seqlens_q: &Tensor,
+    seqlens_k: &Tensor,
+    max_seqlen_q: usize,
+    max_seqlen_k: usize,
+    softmax_scale: f32,
+    softcap: Option<f32>,
+    causal: bool,
+) -> Result<Tensor> {
     let window_size_left = None;
     let window_size_right = if causal { Some(0) } else { None };
 
     let op = FlashAttnVarLen {
         softmax_scale,
+        softcap,
         max_seqlen_q,
         max_seqlen_k,
         seqlens_q: seqlens_q.clone(),
@@ -848,8 +990,40 @@ pub fn flash_attn_varlen_alibi_windowed(
     window_size_left: Option<usize>,
     window_size_right: Option<usize>,
 ) -> Result<Tensor> {
+    flash_attn_varlen_alibi_windowed_softcap(
+        q,
+        k,
+        v,
+        alibi_slopes,
+        seqlens_q,
+        seqlens_k,
+        max_seqlen_q,
+        max_seqlen_k,
+        softmax_scale,
+        None,
+        window_size_left,
+        window_size_right,
+    )
+}
+
+/// Equivalent to [`flash_attn_varlen_alibi_windowed`], but with softcap support.
+pub fn flash_attn_varlen_alibi_windowed_softcap(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    alibi_slopes: &Tensor,
+    seqlens_q: &Tensor,
+    seqlens_k: &Tensor,
+    max_seqlen_q: usize,
+    max_seqlen_k: usize,
+    softmax_scale: f32,
+    softcap: Option<f32>,
+    window_size_left: Option<usize>,
+    window_size_right: Option<usize>,
+) -> Result<Tensor> {
     let op = FlashAttnVarLen {
         softmax_scale,
+        softcap,
         max_seqlen_q,
         max_seqlen_k,
         seqlens_q: seqlens_q.clone(),
