@@ -352,8 +352,16 @@ fn simple_eval_(
             "Pow" => {
                 let input0 = get(&node.input[0])?;
                 let input1 = get(&node.input[1])?;
-                let output = input0.broadcast_pow(input1)?;
-                values.insert(node.output[0].clone(), output);
+                // HACK: current implementation of (broadcast_)pow cannot handle negative base;
+                // this is rarely an issue, but blocked support of silero-vad which uses x^2.
+                // Rather than fix pow for all negative base, we choose to handle just x^2.
+                if let Ok(2.0) = (|| input1.flatten_all()?.to_scalar::<f32>())() {
+                    let output = input0.mul(input0)?;
+                    values.insert(node.output[0].clone(), output);
+                } else {
+                    let output = input0.broadcast_pow(input1)?;
+                    values.insert(node.output[0].clone(), output);
+                }
             }
             "Exp" => {
                 let xs = get(&node.input[0])?;
