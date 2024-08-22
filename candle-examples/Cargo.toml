@@ -110,5 +110,5 @@ name = "depth_anything_v2"
 required-features = ["depth_anything_v2"]
 
 [[example]]
-name = "vad"
+name = "silero-vad"
 required-features = ["onnx"]
