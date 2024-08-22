@@ -86,6 +86,17 @@ struct Args {
     /// The output wav file.
     #[arg(long, default_value = "out.wav")]
     out_file: String,
+
+    #[arg(long, default_value = "large-v1")]
+    which: Which,
+}
+
+#[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Which {
+    #[value(name = "large-v1")]
+    LargeV1,
+    #[value(name = "mini-v1")]
+    MiniV1,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -117,7 +128,10 @@ fn main() -> anyhow::Result<()> {
     let api = hf_hub::api::sync::Api::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id.to_string(),
-        None => "parler-tts/parler-tts-large-v1".to_string(),
+        None => match args.which {
+            Which::LargeV1 => "parler-tts/parler-tts-large-v1".to_string(),
+            Which::MiniV1 => "parler-tts/parler-tts-mini-v1".to_string(),
+        },
     };
     let revision = match args.revision {
         Some(r) => r,
@@ -130,7 +144,12 @@ fn main() -> anyhow::Result<()> {
     ));
     let model_files = match args.model_file {
         Some(m) => vec![m.into()],
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+        None => match args.which {
+            Which::MiniV1 => vec![repo.get("model.safetensors")?],
+            Which::LargeV1 => {
+                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
+            }
+        },
     };
     let config = match args.config_file {
         Some(m) => m.into(),
