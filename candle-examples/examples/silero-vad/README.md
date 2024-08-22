@@ -7,6 +7,6 @@ This example uses the models available in the hugging face [onnx-community/siler
 ## Running the example
 
 ```bash
-$ arecord -t raw -f S16_LE -r 16000 -c 1 -d 5 - | cargo run --example vad --release --features onnx -- --sample-rate 16000
+$ arecord -t raw -f S16_LE -r 16000 -c 1 -d 5 - | cargo run --example silero-vad --release --features onnx -- --sample-rate 16000
 ```
 
