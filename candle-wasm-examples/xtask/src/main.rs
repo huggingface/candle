@@ -57,7 +57,7 @@ fn main() -> anyhow::Result<ExitCode> {
     // -- Shell Creation --
 
     let shell = xshell::Shell::new().context("Couldn't create xshell shell")?;
-    shell.change_dir(String::from(env!("CARGO_MANIFEST_DIR")) + "/..");
+    //shell.change_dir(String::from(env!("CARGO_MANIFEST_DIR")) + "/..");
 
     match subcommand.as_deref() {
         Some("run-wasm") => run_wasm::run_wasm(shell, args)?,

@@ -1,7 +1,7 @@
 use crate::{backend::BackendStorage, DType, Layout, Shape};
 
 use super::{
-    cache::BufferReferenceId, device::WgpuDevice, util::ToU64, wgpu_functions::{self, binary::BinaryOperation, cmp::CmpOperation, read_data_from_gpu_async, reduce::ReduceOperations, unary::UnaryOperation}
+    cache::BufferReferenceId, device::WgpuDevice, util::ToU64, wgpu_functions::{self, binary::BinaryOperation, cmp::CmpOperation, matmul::SGEMMParams, read_data_from_gpu_async, reduce::ReduceOperations, unary::UnaryOperation}
 };
 
 #[derive(Debug)]
@@ -779,10 +779,8 @@ impl crate::backend::BackendStorage for WgpuStorage {
             buffer_dest.buffer.clone(),
             self.buffer.clone(),
             rhs.buffer.clone(),
-            batching as u32,
-            m as u32,
-            n as u32,
-            k as u32,
+            SGEMMParams::new(batching, m, k, n),
+            0,
             layout1,
             layout2,
             self.dtype,

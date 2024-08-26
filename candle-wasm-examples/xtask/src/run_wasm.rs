@@ -133,7 +133,6 @@ pub(crate) fn run_wasm(shell: Shell, mut args: Arguments) -> Result<(), anyhow::
                     let now = time::Instant::now();
                     if now.duration_since(last_compile).as_secs_f32() > 0.5 && compiling == false {
                         let shell = xshell::Shell::new().context("Couldn't create xshell shell").expect("Couldn't create xshell shell");
-                        shell.change_dir(String::from(env!("CARGO_MANIFEST_DIR")) + "/..");
                         _ = compile(&shell, args.clone(), &name, is_bench).inspect_err(|err|  error!("couldnt compile changes: {}", err));
                         last_compile = time::Instant::now();
                         compiling = false;
@@ -151,11 +150,11 @@ pub(crate) fn run_wasm(shell: Shell, mut args: Arguments) -> Result<(), anyhow::
     watcher.watch(Path::new(&("./")), RecursiveMode::Recursive)?;
 
     if !no_serve {
-        log::info!("serving on port 8000");
+        log::info!("serving on port 80");
 
         xshell::cmd!(
             shell,
-            "simple-http-server -c wasm,html,js -i"
+            "simple-http-server -c wasm,html,js -i -p 80"
         )
         .quiet()
         .run()

@@ -16,7 +16,7 @@
 // const LPTA : u32 = ((TSK*TSM)/(RTSM*RTSN)); //8 Loads-per-thread for A
 // const LPTB : u32 = ((TSK*TSN)/(RTSM*RTSN)); //8 Loads-per-thread for B
 
-const PREFETCH : u32 = 2u; //no prefetch
+//const PREFETCH : u32 = 2u; //no prefetch
 
 #include "matmulHelper.pwgsl"
 

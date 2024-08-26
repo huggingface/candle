@@ -10,9 +10,6 @@ members = [
     "candle-wasm-examples/*",
     "candle-wasm-tests",
     "tensor-tools",
-    "candle-wasm-examples/llama2-c/xtask",
-    "candle-wasm-examples/t5/xtask5",
-    "candle-wasm-examples/wuerstchen/xtask6",
     "candle-wgpu-kernels",
 ]
 exclude = [
@@ -86,6 +83,8 @@ bytemuck = { version = "1.15", features = [ "derive" ] }
 pollster = "0.3.0"
 flume = "0.11.0"
 tracing-mutex = "0.3.0"
+web-time = "=1.1.0"
+
 
 [profile.release-with-debug]
 inherits = "release"

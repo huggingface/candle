@@ -24,8 +24,8 @@ pub struct StableDiffusionConfig {
     pub height: usize,
     pub clip: clip::Config,
     pub clip2: Option<clip::Config>,
-    autoencoder: vae::AutoEncoderKLConfig,
-    unet: unet_2d::UNet2DConditionModelConfig,
+    pub autoencoder: vae::AutoEncoderKLConfig,
+    pub unet: unet_2d::UNet2DConditionModelConfig,
     scheduler: Arc<dyn SchedulerConfig>,
 }
 

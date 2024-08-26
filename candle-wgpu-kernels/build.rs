@@ -308,11 +308,12 @@ mod shader_loader{
 
     use fancy_regex::Regex;
 
-    const SHORTEN_GLOBAL_FUNCTIONS : bool = true;
-    const SHORTEN_OVERRIDES : bool = true;
+    const SHORTEN_NORMAL_VARIABLES : bool = false;
+    const SHORTEN_GLOBAL_FUNCTIONS : bool = false;
+    const SHORTEN_OVERRIDES : bool = false;
     const REMOVE_UNUSED : bool = true;
-    const REMOVE_SPACES : bool = true;
-    const REMOVE_NEW_LINES : bool = true;
+    const REMOVE_SPACES : bool = false;
+    const REMOVE_NEW_LINES : bool = false;
 
     pub fn load_shader(path: &PathBuf, global_defines : &Vec<&'static str>, global_functions : &mut shader_shortener::ShaderInfo) -> String {
         let mut result = shader_defines::load_shader(path, &mut HashMap::new(), global_defines); 
@@ -846,7 +847,7 @@ mod shader_loader{
     pub mod shader_shortener{
         use std::collections::{HashMap, HashSet};
 
-        use super::{shader_tokeniser::{match_function_block, match_until_char, match_variable, match_whitespace, Token, Tokenizer}, SHORTEN_GLOBAL_FUNCTIONS, SHORTEN_OVERRIDES};
+        use super::{shader_tokeniser::{match_function_block, match_until_char, match_variable, match_whitespace, Token, Tokenizer}, SHORTEN_GLOBAL_FUNCTIONS, SHORTEN_NORMAL_VARIABLES, SHORTEN_OVERRIDES};
         pub struct ShaderInfo{
             pub global_functions : HashMap<String, String>,
             pub global_overrides : HashMap<String, String>,
@@ -875,11 +876,16 @@ mod shader_loader{
                             result.push_str(word);
                             let var_name = match_variable(&mut tokens, &mut result);
                             if var_name != "" {
-                                let short_name = variables.entry(var_name).or_insert_with(||
+                                let short_name = variables.entry(var_name.clone()).or_insert_with(||
                                     {
-                                    let (name, new_counter ) = generate_short_name(var_counter);
-                                    var_counter = new_counter;
-                                    name
+                                        if SHORTEN_NORMAL_VARIABLES{
+                                            let (name, new_counter ) = generate_short_name(var_counter);
+                                            var_counter = new_counter;
+                                            name
+                                        }
+                                        else{
+                                            var_name.to_string()
+                                        }
                                 });
                                 result.push_str(short_name);
                             }
@@ -989,9 +995,14 @@ mod shader_loader{
                                             let short_name = 
                                                 variables.entry(word.to_string()).or_insert_with(||
                                                     {
-                                                        let (name, new_counter ) = generate_short_name(var_counter);
-                                                        var_counter = new_counter;
-                                                        name
+                                                        if SHORTEN_NORMAL_VARIABLES{
+                                                            let (name, new_counter ) = generate_short_name(var_counter);
+                                                            var_counter = new_counter;
+                                                            name
+                                                        }
+                                                        else{
+                                                            word.to_string()
+                                                        }
                                                     });
 
                                             result.push_str(short_name);

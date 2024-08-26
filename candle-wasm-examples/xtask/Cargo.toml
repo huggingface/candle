@@ -1,8 +1,12 @@
 [package]
-name = "xtask5"
+name = "xtask"
 version = "0.1.0"
 edition = "2021"
 publish = false
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
 
 [dependencies]
 # The dependencies in this config have no transitive dependencies.

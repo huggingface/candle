@@ -8,6 +8,4 @@ rustflags = ["-C", "target-feature=+simd128"]
 rustflags = ["-C", "target-feature=-avx,-avx2"]
 
 [alias]
-xtask = "run --manifest-path xtask/Cargo.toml --"
-xtask5 = "run --manifest-path xtask5/Cargo.toml --"
-xtask6 = "run --manifest-path xtask6/Cargo.toml --"
+xtask = "run --manifest-path ../xtask/Cargo.toml --"

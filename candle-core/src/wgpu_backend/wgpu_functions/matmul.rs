@@ -1,13 +1,31 @@
 use crate::wgpu_backend::MatmulAlgorithm;
 
 use super::*;
-mod sgemm{
+pub struct SGEMMParams{
+    b : u32, 
+    m : u32, 
+    k : u32, 
+    n : u32
+}
+
+impl SGEMMParams {
+    pub fn new<T : ToU32>(b: T, m: T, k: T, n: T) -> Self {
+        Self { b : b.to_u32(), m : m.to_u32(), k : k.to_u32(), n : n.to_u32()}
+    }
+}
+
+mod sgemm{   
+
     use crate::{Layout, Shape};
     use super::*;
 
     #[cfg(feature="wgpu_debug")]
-    fn get_debug_string(b: u32, m : u32 , k : u32, n : u32) -> String
+    fn get_debug_string(params : &SGEMMParams) -> String
     {
+        let b = params.b;
+        let m = params.m;
+        let n = params.n;
+        let k = params.k;
         let use_batch = b != 1;
         if use_batch{
             format!("Batched: {b}*({m}x{k} * {k}x{n})")
@@ -22,10 +40,8 @@ mod sgemm{
         buffer_dest: BufferReferenceId,
         buffer_input1: BufferReferenceId,
         buffer_input2: BufferReferenceId,
-        b: u32,
-        m: u32,
-        n: u32,
-        k: u32,
+        params : SGEMMParams,
+        dest_offset : u32,
         layout_input1: &Layout,
         layout_input2: &Layout,
         _dtype: crate::DType,
@@ -43,13 +59,13 @@ mod sgemm{
         let input2_stride_k = *input2_stride.next().unwrap_or(&1);
         let input2_stride_b = *input2_stride.next().unwrap_or(&1);
     
-        let const_vec = vec![input1_stride_k, input1_stride_m, input2_stride_n, input2_stride_k];
+        let const_vec = vec![input1_stride_k, input1_stride_m, input2_stride_n, input2_stride_k, (params.b != 1) as usize,  dest_offset as usize];
     
         let mut meta = get_meta(&dev);
-        meta.add(b);
-        meta.add(m);
-        meta.add(k);
-        meta.add(n);
+        meta.add(params.b);
+        meta.add(params.m);
+        meta.add(params.k);
+        meta.add(params.n);
     
         meta.add(input1_stride_b); //input1_stride_b
         meta.add(layout_input1.start_offset()); //input1_offset
@@ -78,12 +94,12 @@ mod sgemm{
             meta,
             pipeline,
             bind_group,
-            (n  + 15) / 16,
-            (m  + 15) / 16,
-            b,
-            k as usize * m as usize* n as usize ,
+            (params.n  + 15) / 16,
+            (params.m  + 15) / 16,
+            params.b,
+            params.k as usize * params.m as usize* params.n as usize ,
             #[cfg(feature="wgpu_debug")]
-            Some(get_debug_string(b, m, k, n))
+            Some(get_debug_string(&params))
         );
         return Ok(());
     }
@@ -100,10 +116,8 @@ mod sgemm{
         buffer_dest: BufferReferenceId,
         buffer_input1: BufferReferenceId,
         buffer_input2: BufferReferenceId,
-        b: u32,
-        m: u32,
-        n: u32,
-        k: u32,
+        params : SGEMMParams,
+        dest_offset : u32,
         layout_input1: &Layout,
         layout_input2: &Layout,
         dtype: crate::DType,
@@ -123,19 +137,19 @@ mod sgemm{
         let new_k;
 
         if non_padded{
-            new_m = m;
-            new_n = n;
-            new_k = k;
+            new_m = params.m;
+            new_n = params.n;
+            new_k = params.k;
         }
         else{
-            new_m = round_to_next_divisible(m, m_tile);
-            new_n = round_to_next_divisible(n, n_tile);
-            new_k = round_to_next_divisible(k, k_tile);
+            new_m = round_to_next_divisible(params.m, m_tile);
+            new_n = round_to_next_divisible(params.n, n_tile);
+            new_k = round_to_next_divisible(params.k, k_tile);
         }
      
         const USE_DIFFERENT_PADDED_OUTPUT : bool = true;
 
-        let need_different_output_buffer = m != new_m || n != new_n;
+        let need_different_output_buffer = params.m != new_m || params.n != new_n;
     
         let mut input1_stride = layout_input1.stride().iter().rev();
         let mut input2_stride = layout_input2.stride().iter().rev();
@@ -145,11 +159,11 @@ mod sgemm{
         let input2_stride_n = *input2_stride.next().unwrap_or(&1);
 
 
-        let no_padding_needed_input1 = ((m % m_tile == 0 && k % k_tile == 0) || non_padded)
+        let no_padding_needed_input1 = ((params.m % m_tile == 0 && params.k % k_tile == 0) || non_padded)
             && layout_input1.start_offset() % 4 == 0 //input will be loaded 16 bytes aligned
             && (input1_stride_k == 1 || m_tile % 4 == 0); //if input1_stride_k is not 1, input will be loaded with 16byte allignmen in tile m, but then m_tile must be divisible by 4
 
-        let no_padding_needed_input2 = ((n % n_tile == 0 && k % k_tile == 0) || non_padded) 
+        let no_padding_needed_input2 = ((params.n % n_tile == 0 && params.k % k_tile == 0) || non_padded) 
             && layout_input2.start_offset() % 4 == 0 //input will be loaded 16 bytes aligned
             && (input2_stride_n == 1 || k_tile % 4 == 0); //if input1_stride_n is not 1, input will be loaded with 16byte allignmen in tile k, but then k_tile must be divisible by 4
 
@@ -160,10 +174,10 @@ mod sgemm{
             }
             else{
                 let mut cache = dev.cache.lock().unwrap();
-                let buffer_input1_padded = cache.create_buffer_reference(b * (new_m * new_k) * 4, false);
+                let buffer_input1_padded = cache.create_buffer_reference(params.b * (new_m * new_k) * 4, false);
 
-                let dest_layout = crate::Layout::contiguous(&Shape::from((b as usize, new_m as usize, new_k as usize)));
-                super::queue_copy3d_padded(dev, buffer_input1_padded.clone(), buffer_input1, dtype, layout_input1, (b, m, k), &dest_layout)?;
+                let dest_layout = crate::Layout::contiguous(&Shape::from((params.b as usize, new_m as usize, new_k as usize)));
+                super::queue_copy3d_padded(dev, buffer_input1_padded.clone(), buffer_input1, dtype, layout_input1, (params.b, params.m, params.k), &dest_layout)?;
                 //let res : Vec<f32> = block_on(read_data_from_gpu_async(dev, buffer_input1_padded.clone()));
                 //println!("pad1: {:?}", res);
                 (buffer_input1_padded, dest_layout)
@@ -175,11 +189,11 @@ mod sgemm{
             }
             else{
                 let mut cache = dev.cache.lock().unwrap();
-                let buffer_input2_padded = cache.create_buffer_reference(b * (new_k * new_n) * 4, false);
+                let buffer_input2_padded = cache.create_buffer_reference(params.b * (new_k * new_n) * 4, false);
 
                 //let dest_layout = crate::Layout::contiguous(&Shape::from((b as usize, new_k as usize, new_n as usize))); 
-                let dest_layout = crate::Layout::new(Shape::from((b as usize, new_k as usize, new_n as usize)), vec![(new_n * new_k) as usize, 1, new_k as usize], 0);
-                super::queue_copy3d_padded(dev, buffer_input2_padded.clone(), buffer_input2, dtype, layout_input2, (b, k, n),&dest_layout)?;
+                let dest_layout = crate::Layout::new(Shape::from((params.b as usize, new_k as usize, new_n as usize)), vec![(new_n * new_k) as usize, 1, new_k as usize], 0);
+                super::queue_copy3d_padded(dev, buffer_input2_padded.clone(), buffer_input2, dtype, layout_input2, (params.b, params.k, params.n),&dest_layout)?;
                 //let res : Vec<f32> = block_on(read_data_from_gpu_async(dev, buffer_input2_padded.clone()));
                 //println!("pad2: {:?}", res);
                 (buffer_input2_padded, dest_layout)
@@ -189,7 +203,7 @@ mod sgemm{
 
         let buffer_dest_padded = if need_different_output_buffer && USE_DIFFERENT_PADDED_OUTPUT{
             let mut cache = dev.cache.lock().unwrap();
-            cache.create_buffer_reference(b * (new_m * new_n) * 4, false)
+            cache.create_buffer_reference(params.b * (new_m * new_n) * 4, false)
         }
         else{
             buffer_dest.clone()
@@ -206,14 +220,21 @@ mod sgemm{
         let input2_stride_k = *input2_stride.next().unwrap_or(&1);
         let input2_stride_b = *input2_stride.next().unwrap_or(&1);
     
-        let use_batch = b != 1;
-        let const_vec = vec![input1_stride_k, input1_stride_m, input2_stride_n, input2_stride_k, use_batch as usize];
+        let use_batch = params.b != 1;
+
+        let padded_dest_offset = if need_different_output_buffer && USE_DIFFERENT_PADDED_OUTPUT{
+            0
+        }else{
+            dest_offset
+        };
+
+        let const_vec = vec![input1_stride_k, input1_stride_m, input2_stride_n, input2_stride_k, use_batch as usize, padded_dest_offset as usize];
     
         let mut meta = get_meta(&dev);
-        meta.add(b);
-        meta.add(if USE_DIFFERENT_PADDED_OUTPUT {new_m} else {m});
-        meta.add(if USE_DIFFERENT_PADDED_OUTPUT {new_k} else {k});
-        meta.add(if USE_DIFFERENT_PADDED_OUTPUT {new_n} else {n});
+        meta.add(params.b);
+        meta.add(if USE_DIFFERENT_PADDED_OUTPUT {new_m} else {params.m});
+        meta.add(if USE_DIFFERENT_PADDED_OUTPUT {new_k} else {params.k});
+        meta.add(if USE_DIFFERENT_PADDED_OUTPUT {new_n} else {params.n});
     
         meta.add(input1_stride_b); //input1_stride_b
         meta.add(layout_input1_padded.start_offset()); //input1_offset
@@ -258,19 +279,19 @@ mod sgemm{
             bind_group,
             lx,
             ly,
-            b,
-            k as usize * m as usize * n as usize,
+            params.b,
+            params.k as usize * params.m as usize * params.n as usize,
             #[cfg(feature="wgpu_debug")]
-            Some(get_debug_string(b, m, k, n))
+            Some(get_debug_string(&params))
         );
     
         if need_different_output_buffer && USE_DIFFERENT_PADDED_OUTPUT{
             //let res : Vec<f32> = pollster::block_on(read_data_from_gpu_async(dev, buffer_dest_padded.clone()));
             //println!("res: {:?}", res);
-            let dest_padding_layout = crate::Layout::contiguous(&Shape::from((b as usize, new_m as usize, new_n as usize)));
-            let dest_layout = crate::Layout::contiguous(&Shape::from((b as usize, m as usize, n as usize)));
+            let dest_padding_layout = crate::Layout::contiguous(&Shape::from((params.b as usize, new_m as usize, new_n as usize)));
+            let dest_layout = crate::Layout::contiguous_with_offset(&Shape::from((params.b as usize, params.m as usize, params.n as usize)), dest_offset as usize);
 
-            super::queue_copy3d(dev, buffer_dest, buffer_dest_padded, dtype, &dest_padding_layout, (b, m, n), &dest_layout)?;
+            super::queue_copy3d(dev, buffer_dest, buffer_dest_padded, dtype, &dest_padding_layout, (params.b, params.m, params.n), &dest_layout)?;
         }
     
         return Ok(());
@@ -284,16 +305,14 @@ pub fn queue_matmul_buffer(
     buffer_dest: BufferReferenceId,
     buffer_input1: BufferReferenceId,
     buffer_input2: BufferReferenceId,
-    b: u32,
-    m: u32,
-    n: u32,
-    k: u32,
+    params : SGEMMParams,
+    dest_offset : u32,
     layout_input1: &Layout,
     layout_input2: &Layout,
     dtype: crate::DType
 ) -> crate::Result<()> {
     let alg = dev.matmul_alg.lock().unwrap();
-    queue_matmul_buffer_alg(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, alg.clone())
+    queue_matmul_buffer_alg(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, alg.clone())
 }
 
 pub fn queue_matmul_buffer_alg(
@@ -301,47 +320,45 @@ pub fn queue_matmul_buffer_alg(
     buffer_dest: BufferReferenceId,
     buffer_input1: BufferReferenceId,
     buffer_input2: BufferReferenceId,
-    b: u32,
-    m: u32,
-    n: u32,
-    k: u32,
+    params : SGEMMParams,
+    dest_offset : u32,
     layout_input1: &Layout,
     layout_input2: &Layout,
     dtype: crate::DType,
     alg : MatmulAlgorithm
 ) -> crate::Result<()> {
     match alg{
-        crate::wgpu_backend::MatmulAlgorithm::MatmulX => queue_matmul_buffer_best(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype),
+        crate::wgpu_backend::MatmulAlgorithm::MatmulX => queue_matmul_buffer_best(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype),
        
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1_4 => sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, Pipelines::Matmul(get_dtype(dtype)?, candle_wgpu_kernels::matmul::Functions::Matmul116), true),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul7 => sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, Pipelines::Matmul(get_dtype(dtype)?, candle_wgpu_kernels::matmul::Functions::Matmul7), false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1 => sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, Pipelines::Matmul(get_dtype(dtype)?, candle_wgpu_kernels::matmul::Functions::Matmul1), false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul16_16 => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 16, 16,16, |dtype| Pipelines::Matmul(dtype, candle_wgpu_kernels::matmul::Functions::Matmul5),  true, true, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul1_4 => sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, Pipelines::Matmul(get_dtype(dtype)?, candle_wgpu_kernels::matmul::Functions::Matmul116), true),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul7 => sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, Pipelines::Matmul(get_dtype(dtype)?, candle_wgpu_kernels::matmul::Functions::Matmul7), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul1 => sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, Pipelines::Matmul(get_dtype(dtype)?, candle_wgpu_kernels::matmul::Functions::Matmul1), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul16_16 => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 16, 16,16, |dtype| Pipelines::Matmul(dtype, candle_wgpu_kernels::matmul::Functions::Matmul5),  true, true, false),
         
-        crate::wgpu_backend::MatmulAlgorithm::Matmul32_32(false, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 32, 32,32, |dtype| Pipelines::Matmul32x32(dtype, candle_wgpu_kernels::sgemm::matmul32x32::Functions::Matmul), load_a, load_b, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x64(dtype, candle_wgpu_kernels::sgemm::matmul64x64::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul128_128(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 128, 128,16, |dtype| Pipelines::Matmul128x128(dtype, candle_wgpu_kernels::sgemm::matmul128x128::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64_8_8(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x648x8(dtype, candle_wgpu_kernels::sgemm::matmul64x64_8x8::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1284x8(dtype, candle_wgpu_kernels::sgemm::matmul64x128_4x8::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128_8_8(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1288x8(dtype, candle_wgpu_kernels::sgemm::matmul64x128_8x8::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul16_64(false, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 16, 64,16, |dtype| Pipelines::Matmul16x64(dtype, candle_wgpu_kernels::sgemm::matmul16x64::Functions::Matmul), load_a, load_b, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1_128 (false, false, load_a)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 1, 128,128, |dtype| Pipelines::Matmul1x128(dtype, candle_wgpu_kernels::sgemm::matmul1x128::Functions::Matmul), load_a, false, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1_256 (false, false, load_a)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 1, 256,256, |dtype| Pipelines::Matmul1x256(dtype, candle_wgpu_kernels::sgemm::matmul1x256::Functions::Matmul), load_a, false, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul24_24(false, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 24, 24,24, |dtype| Pipelines::Matmul24x24(dtype, candle_wgpu_kernels::sgemm::matmul24x24::Functions::Matmul), load_a, load_b, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul24_48(false, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 24, 48,24, |dtype| Pipelines::Matmul24x48(dtype, candle_wgpu_kernels::sgemm::matmul24x48::Functions::Matmul), load_a, load_b, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul32_32(false, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 32, 32,32, |dtype| Pipelines::Matmul32x32(dtype, candle_wgpu_kernels::sgemm::matmul32x32::Functions::Matmul), load_a, load_b, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x64(dtype, candle_wgpu_kernels::sgemm::matmul64x64::Functions::Matmul), true, true, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul128_128(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 128, 128,16, |dtype| Pipelines::Matmul128x128(dtype, candle_wgpu_kernels::sgemm::matmul128x128::Functions::Matmul), true, true, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64_8_8(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x648x8(dtype, candle_wgpu_kernels::sgemm::matmul64x64_8x8::Functions::Matmul), true, true, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1284x8(dtype, candle_wgpu_kernels::sgemm::matmul64x128_4x8::Functions::Matmul), true, true, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128_8_8(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1288x8(dtype, candle_wgpu_kernels::sgemm::matmul64x128_8x8::Functions::Matmul), true, true, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul16_64(false, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 16, 64,16, |dtype| Pipelines::Matmul16x64(dtype, candle_wgpu_kernels::sgemm::matmul16x64::Functions::Matmul), load_a, load_b, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul1_128 (false, false, load_a)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 128,128, |dtype| Pipelines::Matmul1x128(dtype, candle_wgpu_kernels::sgemm::matmul1x128::Functions::Matmul), load_a, false, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul1_256 (false, false, load_a)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 256,256, |dtype| Pipelines::Matmul1x256(dtype, candle_wgpu_kernels::sgemm::matmul1x256::Functions::Matmul), load_a, false, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul24_24(false, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 24, 24,24, |dtype| Pipelines::Matmul24x24(dtype, candle_wgpu_kernels::sgemm::matmul24x24::Functions::Matmul), load_a, load_b, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul24_48(false, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 24, 48,24, |dtype| Pipelines::Matmul24x48(dtype, candle_wgpu_kernels::sgemm::matmul24x48::Functions::Matmul), load_a, load_b, false),
         
 
-        crate::wgpu_backend::MatmulAlgorithm::Matmul32_32(true, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 32, 32,32, |dtype| Pipelines::Matmul32x32Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul32x32_prefetch::Functions::Matmul),load_a, load_b, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x64Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x64_prefetch::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1284x8Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x128_4x8_prefetch::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul128_128(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 128, 128,16, |dtype| Pipelines::Matmul128x128Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul128x128_prefetch::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64_8_8(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x648x8Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x64_8x8_prefetch::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128_8_8(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1288x8Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x128_8x8_prefetch::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul16_64(true, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 16, 64,16, |dtype| Pipelines::Matmul16x64Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul16x64_prefetch::Functions::Matmul), load_a, load_b, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1_128(true, false, load_a) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 1, 128,128, |dtype| Pipelines::Matmul1x128Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul1x128_prefetch::Functions::Matmul), load_a, false, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1_256(true, false, load_a) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 1, 256,256, |dtype| Pipelines::Matmul1x256Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul1x256_prefetch::Functions::Matmul), load_a, false, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul24_24(true, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 24, 24,24, |dtype| Pipelines::Matmul24x24Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul24x24_prefetch::Functions::Matmul), load_a, load_b, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul24_48(true, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, b, m, n, k, layout_input1, layout_input2, dtype, 24, 48,24, |dtype| Pipelines::Matmul24x48Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul24x48_prefetch::Functions::Matmul), load_a, load_b, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul32_32(true, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 32, 32,32, |dtype| Pipelines::Matmul32x32Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul32x32_prefetch::Functions::Matmul),load_a, load_b, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x64Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x64_prefetch::Functions::Matmul), true, true, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1284x8Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x128_4x8_prefetch::Functions::Matmul), true, true, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul128_128(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 128, 128,16, |dtype| Pipelines::Matmul128x128Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul128x128_prefetch::Functions::Matmul), true, true, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64_8_8(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x648x8Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x64_8x8_prefetch::Functions::Matmul), true, true, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128_8_8(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1288x8Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x128_8x8_prefetch::Functions::Matmul), true, true, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul16_64(true, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 16, 64,16, |dtype| Pipelines::Matmul16x64Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul16x64_prefetch::Functions::Matmul), load_a, load_b, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul1_128(true, false, load_a) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 128,128, |dtype| Pipelines::Matmul1x128Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul1x128_prefetch::Functions::Matmul), load_a, false, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul1_256(true, false, load_a) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 256,256, |dtype| Pipelines::Matmul1x256Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul1x256_prefetch::Functions::Matmul), load_a, false, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul24_24(true, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 24, 24,24, |dtype| Pipelines::Matmul24x24Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul24x24_prefetch::Functions::Matmul), load_a, load_b, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul24_48(true, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 24, 48,24, |dtype| Pipelines::Matmul24x48Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul24x48_prefetch::Functions::Matmul), load_a, load_b, false),
          _ => {panic!()}
     }
 }
@@ -375,18 +392,15 @@ pub fn queue_matmul_buffer_best(
     buffer_dest: BufferReferenceId,
     buffer_input1: BufferReferenceId,
     buffer_input2: BufferReferenceId,
-    b: u32,
-    m: u32,
-    n: u32,
-    k: u32,
+    params : SGEMMParams, 
+    dest_offset : u32,
     layout_input1: &Layout,
     layout_input2: &Layout,
     dtype: crate::DType,
 ) -> crate::Result<()> {
-    let b = b as usize;
-    let m = m as usize;
-    let k = k as usize;
-    let n = n as usize;
+    let m = params.m as usize;
+    let k = params.k as usize;
+    let n = params.n as usize;
 
     let get_matmul_alg = |size1 : usize, size2 : usize, size3 : usize|{
         //we might use kernel 64x64 if the dimensions are big enaugh:
@@ -517,5 +531,5 @@ pub fn queue_matmul_buffer_best(
             // } 
         }
     }
-    queue_matmul_buffer_alg(dev, buffer_dest, buffer_input1, buffer_input2, b as u32, m as u32, n as u32, k as u32, layout_input1, layout_input2, dtype, alg)
+    queue_matmul_buffer_alg(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, alg)
 }

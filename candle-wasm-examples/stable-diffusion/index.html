@@ -1,7 +1,7 @@
 <html>
   <head>
     <meta content="text/html;charset=utf-8" http-equiv="Content-Type" />
-    <title>Candle WUERSTCHEN Rust/WASM</title>
+    <title>Candle Stable diffusion Rust/WASM</title>
   </head>
   <body></body>
 </html>
@@ -35,10 +35,6 @@
           console.log(name);
       }
       
-      const wuerstchenWorker = new Worker("./wuerstchenWorker.js", {
-        type: "module",
-      });
-
 
       import init, {Model} from "./build/m.js";
 
@@ -106,7 +102,7 @@
             }));
         } 
       
-        let result = await model.run(JSON.stringify({prompt : prompt, prior_steps: 12, vgan_steps : 12}));
+        let result = await model.run(JSON.stringify({prompt : prompt}));
         console.log("Got Result");
         var blob = new Blob([result], {'type': 'image/png'});
         console.log("Loaded Blob");
@@ -167,17 +163,17 @@
     <main class="grid grid-cols-1 gap-8 relative">
       <span class="absolute text-5xl -ml-[1em]"> 🕯️ </span>
       <div>
-        <h1 class="text-5xl font-bold">Candle wuerstchen</h1>
+        <h1 class="text-5xl font-bold">Candle  Stable diffusion</h1>
         <h2 class="text-2xl font-bold">Rust/WASM Demo</h2>
         <p class="max-w-lg">
-         wuerstchen
+         Stable diffusion
           <a
             href="https://github.com/huggingface/candle/"
             target="_blank"
             class="underline hover:text-blue-500 hover:no-underline"
             >Candle
           </a>
-          to run wuerstchen in the browser using rust/wasm.
+          to run  Stable diffusion in the browser using rust/wasm.
         </p>
       </div>
 

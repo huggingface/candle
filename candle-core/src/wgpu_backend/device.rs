@@ -26,11 +26,6 @@ use super::wgpu_functions::{self, unary::UnaryOperation, MetaArray};
 use super::WgpuStorage;
 
 
-
-//pub (crate) const META_BUFFER_SIZE : u32 = 65536;
-//pub (crate) const META_BUFFER_SIZE : u32 = 2048;
-//pub (crate) const META_BUFFER_DEFAULT_SIZE : u32 = 10*1024*1024; //10mb
-//pub (crate) const MAX_WORKLOAD_DEFAULT_SIZE : u64 = 1024u64*1024*1024*2; //8gb
 #[derive(Debug)]
 pub struct WgpuDeviceConfig{
     pub meta_buffer_size : u32, //the size of the buffer used for storing meta information (e.g. input layouts)

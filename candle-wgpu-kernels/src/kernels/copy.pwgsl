@@ -288,3 +288,71 @@ fn copy3d_padded_nobatch(@builtin(global_invocation_id) global_id: vec3<u32>) {
         v_dest[d1 * dest_stride1 + d2 * dest_stride2] = v_input1[op_copy_3d_input1_offset + d1 * input_stride1 + d2 * input_stride2]; 
     } 
 }
+
+override CONSTV_7 : bool = true;
+override CONSTV_8 : bool = true;
+override CONSTV_9 : u32 = 1u;
+
+#define op_copy_4d_input1_offset             CONSTV_0
+#define op_copy_4d_is_dest_stride1              CONSTV_1
+#define op_copy_4d_is_dest_stride2              CONSTV_2
+#define op_copy_4d_is_dest_stride3              CONSTV_3
+#define op_copy_4d_is_dest_stride4              CONSTV_4
+#define op_copy_4d_is_input_stride1            CONSTV_5
+#define op_copy_4d_is_input_stride2            CONSTV_6
+#define op_copy_4d_is_input_stride3            CONSTV_7
+#define op_copy_4d_is_input_stride4            CONSTV_8
+
+#define op_copy_4d_channels            CONSTV_9
+
+#define op_copy_4d_d1_max                op_meta[0]
+#define op_copy_4d_d2_max                op_meta[1]
+
+#define op_copy_4d_d1_min                op_meta[2]
+#define op_copy_4d_d2_min                op_meta[3]
+
+#define op_copy_4d_dest_stride1      op_meta[4]
+#define op_copy_4d_dest_stride2      op_meta[5]
+#define op_copy_4d_dest_stride3      op_meta[6]
+#define op_copy_4d_dest_stride4      op_meta[7]
+#define op_copy_4d_input_stride1    op_meta[8]
+#define op_copy_4d_input_stride2    op_meta[9]
+#define op_copy_4d_input_stride3    op_meta[10]
+#define op_copy_4d_input_stride4    op_meta[11]
+#define op_copy_4d_size_d1          op_meta[12]
+#define op_copy_4d_size_d2          op_meta[13]
+
+
+
+@compute
+@workgroup_size(16,16,1)
+fn copy4d_padded(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let d1 = global_id.x; 
+    let d2 = global_id.y;
+    let d3 = global_id.z % op_copy_4d_channels; //channels
+    let d4 = global_id.z / op_copy_4d_channels; //batch
+
+    let dest_stride1 = select(op_copy_4d_is_dest_stride1, op_copy_4d_dest_stride1, 1u);
+    let dest_stride2 = select(op_copy_4d_is_dest_stride2, op_copy_4d_dest_stride2, 1u);
+    let dest_stride3 = select(op_copy_4d_is_dest_stride3, op_copy_4d_dest_stride3, 1u);
+    let dest_stride4 = select(op_copy_4d_is_dest_stride4, op_copy_4d_dest_stride4, 1u);
+
+    let input_stride1 = select(op_copy_4d_is_input_stride1, op_copy_4d_input_stride1, 1u);
+    let input_stride2 = select(op_copy_4d_is_input_stride2, op_copy_4d_input_stride2, 1u);
+    let input_stride3 = select(op_copy_4d_is_input_stride3, op_copy_4d_input_stride3, 1u);
+    let input_stride4 = select(op_copy_4d_is_input_stride4, op_copy_4d_input_stride4, 1u);
+
+    if(d1 >= op_copy_4d_size_d1){
+        return;
+    }
+    if(d2 >= op_copy_4d_size_d2){
+        return;
+    }
+
+    if(d1 >= op_copy_4d_d1_max || d2 >= op_copy_4d_d2_max || d1 < op_copy_4d_d1_min || d2 < op_copy_4d_d2_min){
+        v_dest[d1 * dest_stride1 + d2 * dest_stride2 + d3 * dest_stride3 + d4 * dest_stride4] = ZERO;
+    }
+    else{
+        v_dest[d1 * dest_stride1 + d2 * dest_stride2 + d3 * dest_stride3 + d4 * dest_stride4] = v_input1[op_copy_3d_input1_offset + (d1 - op_copy_4d_d1_min) * input_stride1 + (d2 - op_copy_4d_d2_min) * input_stride2 + d3 * input_stride3 + d4 * input_stride4];
+    } 
+}

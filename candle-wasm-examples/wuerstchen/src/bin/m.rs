@@ -10,7 +10,7 @@ use anyhow::Error as E;
 
 use tokenizers::Tokenizer;
 use serde::{Serialize, Deserialize};
-
+use web_time::Instant;
 
 
 use wasm_bindgen::prelude::*;
@@ -56,33 +56,6 @@ impl ModelFile {
         }
     }
 }
-
-// fn output_filename(
-//     basename: &str,
-//     sample_idx: i64,
-//     num_samples: i64,
-//     timestep_idx: Option<usize>,
-// ) -> String {
-//     let filename = if num_samples > 1 {
-//         match basename.rsplit_once('.') {
-//             None => format!("{basename}.{sample_idx}.png"),
-//             Some((filename_no_extension, extension)) => {
-//                 format!("{filename_no_extension}.{sample_idx}.{extension}")
-//             }
-//         }
-//     } else {
-//         basename.to_string()
-//     };
-//     match timestep_idx {
-//         None => filename,
-//         Some(timestep_idx) => match filename.rsplit_once('.') {
-//             None => format!("{filename}-{timestep_idx}.png"),
-//             Some((filename_no_extension, extension)) => {
-//                 format!("{filename_no_extension}-{timestep_idx}.{extension}")
-//             }
-//         },
-//     }
-// }
 
 async fn encode_prompt(
     prompt: &str,
@@ -442,7 +415,7 @@ impl Model {
             let timesteps = &timesteps[..timesteps.len() - 1];
             log::info!("prior denoising");
             for (index, &t) in timesteps.iter().enumerate() {
-                //let start_time = std::time::Instant::now();
+                let start_time = Instant::now();
                 let latent_model_input = Tensor::cat(&[&latents, &latents], 0)?;
                 let ratio = (Tensor::ones(2, DType::F32, device)? * t)?;
                 let noise_pred = prior.forward(&latent_model_input, &ratio, &prior_text_embeddings)?;
@@ -452,11 +425,9 @@ impl Model {
                     + ((noise_pred_text - noise_pred_uncond)? * PRIOR_GUIDANCE_SCALE)?)?;
                 latents = prior_scheduler.step(&noise_pred, t, &latents)?;
                 
-                //let dt = start_time.elapsed().as_secs_f32();
-                
-                //log::info!("step {}/{} done, {:.2}s", index + 1, timesteps.len(), dt);
                 device.synchronize_async().await?;
-                log::info!("step {}/{} done", index + 1, timesteps.len());
+                let dt = start_time.elapsed().as_secs_f32();
+                log::info!("step {}/{} done, {:.2}s", index + 1, timesteps.len(), dt);
             }
             ((latents * 42.)? - 1.)?
         };
@@ -503,15 +474,15 @@ impl Model {
             let timesteps = scheduler.timesteps();
             let timesteps = &timesteps[..timesteps.len() - 1];
             for (index, &t) in timesteps.iter().enumerate() {
-                //let start_time = std::time::Instant::now();
+                let start_time = Instant::now();
                 let ratio = (Tensor::ones(1, DType::F32, device)? * t)?;
                 let noise_pred =
                     decoder.forward(&latents, &ratio, &image_embeddings, Some(&text_embeddings))?;
                 latents = scheduler.step(&noise_pred, t, &latents)?;
-                //let dt = start_time.elapsed().as_secs_f32();
-                //log::info!("step {}/{} done, {:.2}s", index + 1, timesteps.len(), dt);
+                
                 device.synchronize_async().await?;
-                log::info!("step {}/{} done", index + 1, timesteps.len());
+                let dt = start_time.elapsed().as_secs_f32();
+                log::info!("step {}/{} done, {:.2}s", index + 1, timesteps.len(), dt);
             }
              log::info!(
                 "Generating the final image for sample {}/{}.",

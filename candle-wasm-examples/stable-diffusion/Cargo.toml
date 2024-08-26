@@ -1,5 +1,5 @@
 [package]
-name = "candle-wasm-example-wuerstchen"
+name = "candle-wasm-example-stable-diffusion"
 version.workspace = true
 edition.workspace = true
 description.workspace = true

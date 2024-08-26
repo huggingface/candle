@@ -1,4 +1,4 @@
-## Running [wuersthcnen] Examples
+## Running [Stable diffusion] Examples
 
 ### Xtask
 one can compile this example for wasm and start a web server with the following command:
@@ -10,13 +10,14 @@ Then open `http://localhost:80` in your browser.
 
 ### Vanilla JS
 
-To build and test the UI made in Vanilla JS and WebWorkers, first we need to build the WASM library:
+To build and test the UI made in Vanilla JS, first we need to build the WASM library:
 
 ```bash
 sh build-lib.sh
 ```
 
-This will bundle the library under `./build` and we can import it inside our WebWorker like a normal JS module:
+
+This will bundle the library under `./build` and we can import it like a normal JS module:
 
 ```js
 import init, { Model } from "./build/m.js";

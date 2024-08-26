@@ -326,3 +326,77 @@ pub fn queue_copy3d_padded(
     //}
     return Ok(());
 }
+
+
+
+pub fn queue_copy4d_padded(
+    dev: &WgpuDevice,
+    buffer_dest: BufferReferenceId,
+    buffer_input: BufferReferenceId,
+    dtype: crate::DType,
+    input_layout: &crate::Layout,
+    //input_shape : (usize, usize, usize, usize), //b, cin, i_h, i_w
+    padding : usize,
+    dest_layout : &crate::Layout,
+) -> crate::Result<()> {
+    //if buffer_dest.size > 0 && buffer_input.size > 0{
+        let input1_stride = input_layout.stride();
+        let dest_stride = dest_layout.stride();
+        let input_shape = input_layout.shape().dims4()?;
+        let dest_shape = dest_layout.shape().dims4()?;
+        
+        let const_vec = vec![
+            input_layout.start_offset(),
+            (dest_stride[3] != 1) as usize, //x (d1)
+            (dest_stride[2] != 1) as usize, //y (d2)
+            (dest_stride[1] != 1) as usize, //cin
+            (dest_stride[0] != 1) as usize, //b
+            
+            (input1_stride[3] != 1) as usize,
+            (input1_stride[2] != 1) as usize,
+            (input1_stride[1] != 1) as usize,      
+            (input1_stride[0] != 1) as usize,      
+            input_shape.1 as usize, //channels      
+            ];
+        
+        let mut meta = get_meta(&dev);
+        meta.add(input_shape.3 + padding);
+        meta.add(input_shape.2 + padding);
+        meta.add(padding);
+        meta.add(padding);
+
+        meta.add(dest_stride[3]);
+        meta.add(dest_stride[2]);
+        meta.add(dest_stride[1]);
+        meta.add(dest_stride[0]);
+        meta.add(input1_stride[3]);
+        meta.add(input1_stride[2]);
+        meta.add(input1_stride[1]);
+        meta.add(input1_stride[0]);
+        meta.add(dest_shape.3);
+        meta.add(dest_shape.2);
+
+
+        let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
+        
+        let pipeline = Functions::Copy4dPadded;
+
+        // let pipeline = if input_shape.0 == 1{
+        //     Functions::Copy4dPaddedNobatch
+        // } 
+        // else{
+        //     Functions::Copy4dPadded
+        // };
+        let pipeline = meta.get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, pipeline), const_vec);
+        enqueue_workgroups(
+            meta,
+            pipeline,
+            bind_group,
+            ((dest_shape.3 + 15) / 16) as u32,
+            ((dest_shape.2 + 15) / 16) as u32,
+            (input_shape.0 * input_shape.1) as u32,
+            input_layout.shape().elem_count(),
+        );
+    //}
+    return Ok(());
+}

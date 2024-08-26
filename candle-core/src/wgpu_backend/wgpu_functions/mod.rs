@@ -861,7 +861,7 @@ pub(crate) async fn flush_gpu_command_async(dev: &WgpuDevice, queue_buffer: &mut
             let mut last_meta: usize = 0;
 
             while index < queue_buffer.command_queue.len() {
-                let (should_reuse_unused, total_workload) = set_buffers(dev, queue_buffer, &mut index, current_meta, &mut last_meta, &mut cache)?;
+                let (should_reuse_unused, _) = set_buffers(dev, queue_buffer, &mut index, current_meta, &mut last_meta, &mut cache)?;
                 let last_meta_index = (last_meta + 256 / 4).min(queue_buffer.get_meta().len());
                 let cb = get_command_buffer(
                     dev,

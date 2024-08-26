@@ -1,6 +1,5 @@
 use std::num::ParseIntError;
 
-use safetensors::SafeTensorError;
 use thiserror::Error;
 use wasm_bindgen::{JsError, JsValue};
 
@@ -34,10 +33,7 @@ pub enum GenericError {
     Anyhow(#[from] anyhow::Error),
 
     #[error("Candle Error: {0}")]
-    CandleError(#[from] candle::Error),
-
-    #[error("Safetensor Error: {0}")]
-    SafetensorError(#[from] SafeTensorError),
+    CandleError(#[from] candle::Error)
 }
 
 impl From<JsError> for GenericError{
@@ -45,13 +41,6 @@ impl From<JsError> for GenericError{
         return GenericError::JsError(value.into())
     }
 }
-
-impl From<String> for GenericError{
-    fn from(value: String) -> Self {
-        return GenericError::JsError(value.into())
-    }
-}
-
 impl From<JsValue> for GenericError{
     fn from(value: JsValue) -> Self {
         return GenericError::JsValue(value)

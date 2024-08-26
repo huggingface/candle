@@ -6,6 +6,7 @@ override CONSTV_1 : u32 = 1u;
 override CONSTV_2 : u32 = 1u;
 override CONSTV_3 : u32 = 1u;
 override CONSTV_4 : bool = true;
+override CONSTV_5 : u32 = 0u;
 
 #define op_matmul_input1_stride_k   CONSTV_0
 #define op_matmul_input1_stride_m   CONSTV_1
@@ -14,6 +15,7 @@ override CONSTV_4 : bool = true;
 #define op_matmul_input2_stride_k   CONSTV_3
 
 #define op_matmul_use_batch   CONSTV_4
+#define op_matmul_dest_offset CONSTV_5
 
 #define op_matmul_b                 op_meta[0]
 #define op_matmul_m                 op_meta[1]
@@ -434,7 +436,7 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
     //         v_dest[globalCol] = acc[wm][wn];
     //     }
     // }
-    let dest_index = batch * output_size_of_one_batch + gy * op_matmul_n + gx;
+    let dest_index = batch * output_size_of_one_batch + gy * op_matmul_n + gx + op_matmul_dest_offset;
     if IsOutputPadded{
         let is_in_gy = gy < op_matmul_m;
         let is_in_gx = gx < op_matmul_n;
