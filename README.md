@@ -36,6 +36,28 @@ This is a fork of Candle that adds wgpu as a backend. This means that the gpu ca
 | ArgSort                     | ❌ Not Implemented                               |                                                                    |
 | Quantized Matrices          | ❌ Not Supported?                                 |                                                                    |
 
+
+## Example projects
+
+In order to use **WGPU** add `--features wgpu` to the example command line.
+e.g:
+```bash
+cargo run --example stable-diffusion --release --features="wgpu" -- --prompt "Anthropomorphic cat dressed as a fire fighter" --sd-version v1-5
+```
+
+
+The implementation has been tested with the following examples:
+- llama2c
+- wuerstchen
+- stable diffusion
+
+wasm-examples: 
+- llama2c
+- t5
+- wuerstchen (This branch adds a new wuerstchen wasm example. It is possible to generate images (but it is about 4 times slower than native). The example should work, but the advanced options are not linked to any properties. In addition a wasm-heper crate was added to downloading and store files from huggingface to opfs.)
+- stable diffusion (also new)
+
+
 ## async methods
 
 It is not possible to synchronously request a device, read a gpu memory or synchronise the device in the browser. 
@@ -61,24 +83,20 @@ use candle_core::{Device, Tensor};
 ```
 ** Note that the above limitation only applies if the browser is targeted; a native program can still use the same sync functions.
 
-## Testprojects
-
-The implementation has been tested with the following examples:
-Examples:
-- llama2c
-- wuerstchen
-
-wasm-examples: 
-- llama2c
-- t5
-- wuerstchen (This branch adds a new wuerstchen wasm example. It is possible to generate images (but it is about 4 times slower than native). The example should work, but the advanced options are not linked to any properties. In addition a wasm-heper crate was added to downloading and store files from huggingface to opfs.)
-
-
 ## known problems
 - not all dtypes are supported: f32, u32 is implemented for most and u8 for a cmp. WebGpu has no support for f64 or i64 or u8 dtypes<br>
   (There is a f16 extension in the webGpu Spec, but this is currently not supported by wgpu(https://github.com/gfx-rs/wgpu/issues/4384))
 - Reduce Implementation error: When using ArgMin, ArgMax with non continues reduction dimensions will probably not work. e.g if dim 0 and 2 are reduced. The current implementation will first reduce dim 2, and afterwards dim 0. This approach will not work for ArgMin/ArgMax as after the first reduction the type and source values changed.
-- The current Impl will block with pollster when copying data from webgpu to cpu space(e.g. call to ".to_vecX()"). THIS IS NOT POSSIBLE IN THE BROWSER. When compiling to wasm, one need to copy the data to cpu manuelly using the async method to_device_async().     
+- The current Impl will block with pollster when copying data from webgpu to cpu space(e.g. call to ".to_vecX()"). THIS IS NOT POSSIBLE IN THE BROWSER. When compiling to wasm, one need to copy the data to cpu manuelly using the async method to_device_async().  
+
+- Buffer size limitation: 
+  Depending on the driver used, it may not be possible to create a large enough buffer. 
+  Also, you may be able to create a large buffer, but not be able to bind to the entire buffer in a single operation.
+- Browser performance worse than native:
+  The shaders have been optimized for an NVIDIA GPU using a native Vulkan driver. 
+  Performance may not be optimal on other platforms or GPUs. Browser performance has been shown to be much slower than native. (e.g. stable diffusion takes 0.7 sec per step native and 5.7 sec in browser) TODO: Debug performance in browser. (Since there are no timestamp queries in the browser, you could query a single commandBuffer for each command and measure the performance of each command that way).
+- on an apple laptop, the current wuestchen example produced black artifacts. the reason is unclear.
+
 ## Implementation details:
 
 ### Kernels:
@@ -306,6 +324,7 @@ If you have an addition to this list, please submit a pull request.
 - Backends.
     - Optimized CPU backend with optional MKL support for x86 and Accelerate for macs.
     - CUDA backend for efficiently running on GPUs, multiple GPU distribution via NCCL.
+    - Wgpu backend for execution on the GPU (e.g. if Cuda is not available or in the browser).
     - WASM support, run your models in a browser.
 - Included models.
     - Language Models.
@@ -372,6 +391,7 @@ Cheatsheet:
 | Saving     | `torch.save({"A": A}, "model.bin")`      | `candle::safetensors::save(&HashMap::from([("A", A)]), "model.safetensors")?` |
 | Loading    | `weights = torch.load("model.bin")`      | `candle::safetensors::load("model.safetensors", &device)`        |
 
+
 <!--- ANCHOR_END: cheatsheet --->
 
 
@@ -381,6 +401,7 @@ Cheatsheet:
 - [candle-nn](./candle-nn/): Tools to build real models
 - [candle-examples](./candle-examples/): Examples of using the library in realistic settings
 - [candle-kernels](./candle-kernels/): CUDA custom kernels
+- [candle-wgpu-kernels](./candle-wgpu-kernels/): wgpu custom kernels
 - [candle-datasets](./candle-datasets/): Datasets and data loaders.
 - [candle-transformers](./candle-transformers): transformers-related utilities.
 - [candle-flash-attn](./candle-flash-attn): Flash attention v2 layer.
