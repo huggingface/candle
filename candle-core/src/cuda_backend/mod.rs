@@ -174,6 +174,7 @@ impl Map1 for Im2Col1D {
     }
 }
 
+#[allow(unused)]
 struct Im2Col {
     h_k: usize,
     w_k: usize,
@@ -183,6 +184,7 @@ struct Im2Col {
 }
 
 impl Im2Col {
+    #[allow(unused)]
     fn hw_out(&self, h: usize, w: usize) -> (usize, usize) {
         let h_out = (h + 2 * self.padding - self.dilation * (self.h_k - 1) - 1) / self.stride + 1;
         let w_out = (w + 2 * self.padding - self.dilation * (self.w_k - 1) - 1) / self.stride + 1;
