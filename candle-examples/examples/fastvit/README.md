@@ -12,9 +12,9 @@ $ cargo run --example fastvit --release -- --image candle-examples/examples/yolo
 
 loaded image Tensor[dims 3, 256, 256; f32]
 model built
-mountain bike, all-terrain bike, off-roader: 43.45%
-bicycle-built-for-two, tandem bicycle, tandem: 14.16%
-unicycle, monocycle     : 4.12%
-crash helmet            : 2.26%
-alp                     : 1.40%
+mountain bike, all-terrain bike, off-roader: 52.67%
+bicycle-built-for-two, tandem bicycle, tandem: 7.93%
+unicycle, monocycle     : 3.46%
+maillot                 : 1.32%
+crash helmet            : 1.28%
 ```
