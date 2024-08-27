@@ -1,6 +1,6 @@
 use crate::WithDType;
 use cudarc;
-use cudarc::cudnn::safe::{Conv2dForward, Cudnn};
+use cudarc::cudnn::safe::{ConvForward, Cudnn};
 use cudarc::driver::{CudaSlice, CudaView, DeviceRepr, ValidAsZeroBits};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -87,7 +87,7 @@ pub(crate) fn launch_conv2d<
         cudarc::cudnn::sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
         [params.b_size as i32, params.c_out as i32, h_out, w_out],
     )?;
-    let conv2d = Conv2dForward {
+    let conv2d = ConvForward {
         conv: &conv,
         x: &x,
         w: &w,
