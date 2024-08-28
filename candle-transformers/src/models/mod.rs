@@ -42,6 +42,7 @@ pub mod mobileone;
 pub mod moondream;
 pub mod mpt;
 pub mod olmo;
+pub mod openclip;
 pub mod parler_tts;
 pub mod persimmon;
 pub mod phi;
