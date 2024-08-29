@@ -1,5 +1,5 @@
 //! Recurrent Neural Networks
-use candle::{DType, Device, IndexOp, Result, Tensor, Error};
+use candle::{DType, Device, IndexOp, Result, Tensor};
 
 /// Trait for Recurrent Neural Networks.
 #[allow(clippy::upper_case_acronyms)]
