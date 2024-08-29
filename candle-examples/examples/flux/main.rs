@@ -147,7 +147,8 @@ fn run(args: Args) -> Result<()> {
             println!("CLIP\n{clip_emb}");
             let img = {
                 let model_file = match model {
-                    Model::Schnell => bf_repo.get("flux1-schnell.sft")?,
+                    // Model::Schnell => bf_repo.get("flux1-schnell.sft")?,
+                    Model::Schnell => bf_repo.get("flux1-schnell.safetensors")?,
                     Model::Dev => bf_repo.get("flux1-dev.sft")?,
                 };
                 let vb =
@@ -189,7 +190,8 @@ fn run(args: Args) -> Result<()> {
     println!("latent img\n{img}");
 
     let img = {
-        let model_file = bf_repo.get("ae.sft")?;
+        // let model_file = bf_repo.get("ae.sft")?;
+        let model_file = bf_repo.get("ae.safetensors")?;
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)? };
         let cfg = match model {
             Model::Dev => flux::autoencoder::Config::dev(),
