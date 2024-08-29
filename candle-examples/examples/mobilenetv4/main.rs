@@ -72,8 +72,9 @@ pub fn main() -> anyhow::Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
 
-    let image = candle_examples::imagenet::load_image(args.image, args.which.resolution())?
-        .to_device(&device)?;
+    let image =
+        candle_examples::imagenet::load_image(args.image, args.which.resolution() as usize)?
+            .to_device(&device)?;
     println!("loaded image {image:?}");
 
     let model_file = match args.model {
