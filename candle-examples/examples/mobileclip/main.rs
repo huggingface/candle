@@ -114,7 +114,7 @@ pub fn main() -> anyhow::Result<()> {
         unsafe { VarBuilder::from_mmaped_safetensors(&[model_file.clone()], DType::F32, &device)? }
     };
 
-    let model = mobileclip::MobileClipModel::new(vb, &config)?;
+    let model = mobileclip::MobileClipModel::new(vb, config)?;
 
     let (input_ids, vec_seq) = tokenize_sequences(args.sequences, &tokenizer, &device)?;
 
