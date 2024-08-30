@@ -50,11 +50,15 @@ pub trait RNN {
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone)]
 pub struct LSTMState {
-    h: Tensor,
-    c: Tensor,
+    pub h: Tensor,
+    pub c: Tensor,
 }
 
 impl LSTMState {
+    pub fn new(h: Tensor, c: Tensor) -> Self {
+        LSTMState { h, c }
+    }
+
     /// The hidden state vector, which is also the output of the LSTM.
     pub fn h(&self) -> &Tensor {
         &self.h
@@ -205,7 +209,7 @@ impl RNN for LSTM {
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone)]
 pub struct GRUState {
-    h: Tensor,
+    pub h: Tensor,
 }
 
 impl GRUState {

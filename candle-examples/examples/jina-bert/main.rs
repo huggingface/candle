@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle_transformers::models::jina_bert::{BertModel, Config};
+use candle_transformers::models::jina_bert::{BertModel, Config, PositionEmbeddingType};
 
 use anyhow::Error as E;
 use candle::{DType, Module, Tensor};
@@ -39,32 +39,47 @@ struct Args {
 
     #[arg(long)]
     model: Option<String>,
+
+    #[arg(long)]
+    model_file: Option<String>,
 }
 
 impl Args {
     fn build_model_and_tokenizer(&self) -> anyhow::Result<(BertModel, tokenizers::Tokenizer)> {
         use hf_hub::{api::sync::Api, Repo, RepoType};
-        let model = match &self.model {
+        let model_name = match self.model.as_ref() {
+            Some(model) => model.to_string(),
+            None => "jinaai/jina-embeddings-v2-base-en".to_string(),
+        };
+
+        let model = match &self.model_file {
             Some(model_file) => std::path::PathBuf::from(model_file),
             None => Api::new()?
-                .repo(Repo::new(
-                    "jinaai/jina-embeddings-v2-base-en".to_string(),
-                    RepoType::Model,
-                ))
+                .repo(Repo::new(model_name.to_string(), RepoType::Model))
                 .get("model.safetensors")?,
         };
         let tokenizer = match &self.tokenizer {
             Some(file) => std::path::PathBuf::from(file),
             None => Api::new()?
-                .repo(Repo::new(
-                    "sentence-transformers/all-MiniLM-L6-v2".to_string(),
-                    RepoType::Model,
-                ))
+                .repo(Repo::new(model_name.to_string(), RepoType::Model))
                 .get("tokenizer.json")?,
         };
         let device = candle_examples::device(self.cpu)?;
-        let config = Config::v2_base();
         let tokenizer = tokenizers::Tokenizer::from_file(tokenizer).map_err(E::msg)?;
+        let config = Config::new(
+            tokenizer.get_vocab_size(true),
+            768,
+            12,
+            12,
+            3072,
+            candle_nn::Activation::Gelu,
+            8192,
+            2,
+            0.02,
+            1e-12,
+            0,
+            PositionEmbeddingType::Alibi,
+        );
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
         let model = BertModel::new(vb, &config)?;
         Ok((model, tokenizer))
@@ -101,14 +116,20 @@ fn main() -> anyhow::Result<()> {
             .to_vec();
         let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
         println!("Loaded and encoded {:?}", start.elapsed());
-        for idx in 0..args.n {
-            let start = std::time::Instant::now();
-            let ys = model.forward(&token_ids)?;
-            if idx == 0 {
-                println!("{ys}");
-            }
-            println!("Took {:?}", start.elapsed());
+        let start = std::time::Instant::now();
+        let embeddings = model.forward(&token_ids)?;
+        let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
+        let embeddings = (embeddings.sum(1)? / (n_tokens as f64))?;
+        println!("pooled_embeddigns: {embeddings}");
+        let embeddings = if args.normalize_embeddings {
+            normalize_l2(&embeddings)?
+        } else {
+            embeddings
+        };
+        if args.normalize_embeddings {
+            println!("normalized_embeddings: {embeddings}");
         }
+        println!("Took {:?}", start.elapsed());
     } else {
         let sentences = [
             "The cat sits outside",

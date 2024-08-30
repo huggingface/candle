@@ -136,7 +136,7 @@ pub fn conv1d_weight_norm(
     Ok(Conv1d::new(weight, Some(bias), config))
 }
 
-fn conv_transpose1d_weight_norm(
+pub fn conv_transpose1d_weight_norm(
     in_c: usize,
     out_c: usize,
     kernel_size: usize,
@@ -571,7 +571,7 @@ impl<'a> Layer<'a> {
     }
 
     fn next(&mut self) -> VarBuilder {
-        let vb = self.vb.pp(&self.cnt.to_string());
+        let vb = self.vb.pp(self.cnt.to_string());
         self.cnt += 1;
         vb
     }

@@ -272,7 +272,7 @@ impl Darknet {
         let mut prev_channels: usize = 3;
         for (index, block) in self.blocks.iter().enumerate() {
             let channels_and_bl = match block.block_type.as_str() {
-                "convolutional" => conv(vb.pp(&index.to_string()), index, prev_channels, block)?,
+                "convolutional" => conv(vb.pp(index.to_string()), index, prev_channels, block)?,
                 "upsample" => upsample(prev_channels)?,
                 "shortcut" => shortcut(index, prev_channels, block)?,
                 "route" => route(index, &blocks, block)?,

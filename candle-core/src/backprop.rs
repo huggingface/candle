@@ -623,9 +623,9 @@ impl Tensor {
                     }
                     Op::Unary(arg, UnaryOp::Silu) => {
                         let sum_grad = grads.or_insert(arg)?;
-                        // d/dx silu = sigmoid(x) * (1 + x * (1 - sigmoid(x)))
+                        // d/dx silu = sigmoid(x) * (1 + x * (1 - sigmoid(x))) = sigmoid(x) * (1 - node) + node
                         let sigmoid_arg = (arg.neg()?.exp()? + 1.)?.recip()?;
-                        let silu_grad = (&sigmoid_arg * (1. + (arg * (1. - &sigmoid_arg)?)?)?)?;
+                        let silu_grad = &sigmoid_arg * (1. - *node) + *node;
                         *sum_grad = sum_grad.add(&(&grad * silu_grad)?)?
                     }
                     Op::Elu(arg, alpha) => {
@@ -755,5 +755,10 @@ impl GradStore {
             }
         };
         Ok(grad)
+    }
+
+    /// Get the tensor ids of the stored gradient tensors
+    pub fn get_ids(&self) -> impl Iterator<Item = &TensorId> {
+        self.0.keys()
     }
 }

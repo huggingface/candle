@@ -212,7 +212,7 @@ impl DinoVisionTransformer {
         let norm = layer_norm(embed_dim, 1e-6, vb.pp("norm"))?;
         let vb_b = vb.pp("blocks");
         let blocks = (0..depth)
-            .map(|i| Block::new(vb_b.pp(&i.to_string()), embed_dim, num_heads))
+            .map(|i| Block::new(vb_b.pp(i.to_string()), embed_dim, num_heads))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             patch_embed,

@@ -361,10 +361,8 @@ fn main() -> Result<()> {
         let dtype = match args.dtype {
             Some(dtype) => std::str::FromStr::from_str(&dtype)?,
             None => {
-                if (args.model == WhichModel::V3 || args.model == WhichModel::V3Medium)
-                    && device.is_cuda()
-                {
-                    DType::BF16
+                if args.model == WhichModel::V3 || args.model == WhichModel::V3Medium {
+                    device.bf16_default_to_f32()
                 } else {
                     DType::F32
                 }

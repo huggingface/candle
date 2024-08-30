@@ -370,6 +370,15 @@ impl Tensor {
 
     /// Returns a new tensor with all the elements having the same specified value. Note that
     /// the tensor is not contiguous so you would have to call `.contiguous()` on it if needed.
+    ///```rust
+    /// use candle_core::{Tensor, Device};
+    /// let a = Tensor::full(3.5, (2, 4), &Device::Cpu)?;
+    ///
+    /// assert_eq!(a.to_vec2::<f64>()?, &[
+    ///     [3.5, 3.5, 3.5, 3.5],
+    ///     [3.5, 3.5, 3.5, 3.5],
+    /// ]);
+    /// # Ok::<(), candle_core::Error>(())
     pub fn full<D: crate::WithDType, S: Into<Shape>>(
         value: D,
         shape: S,
@@ -379,6 +388,13 @@ impl Tensor {
     }
 
     /// Creates a new 1D tensor from an iterator.
+    ///```rust
+    /// use candle_core::{Tensor, Device};
+    /// let a = Tensor::from_iter( [1.0, 2.0, 3.0, 4.0].into_iter(), &Device::Cpu)?;
+    ///
+    /// assert_eq!(a.to_vec1::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn from_iter<D: crate::WithDType>(
         iter: impl IntoIterator<Item = D>,
         device: &Device,
@@ -390,12 +406,26 @@ impl Tensor {
 
     /// Creates a new 1D tensor with values from the interval `[start, end)` taken with a common
     /// difference `1` from `start`.
+    ///```rust
+    /// use candle_core::{Tensor, Device};
+    /// let a = Tensor::arange(2., 5., &Device::Cpu)?;
+    ///
+    /// assert_eq!(a.to_vec1::<f64>()?, &[2., 3., 4.]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn arange<D: crate::WithDType>(start: D, end: D, device: &Device) -> Result<Self> {
         Self::arange_step(start, end, D::one(), device)
     }
 
     /// Creates a new 1D tensor with values from the interval `[start, end)` taken with a common
     /// difference `step` from `start`.
+    ///```rust
+    /// use candle_core::{Tensor, Device};
+    /// let a = Tensor::arange_step(2.0, 4.0, 0.5, &Device::Cpu)?;
+    ///
+    /// assert_eq!(a.to_vec1::<f64>()?, &[2.0, 2.5, 3.0, 3.5]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn arange_step<D: crate::WithDType>(
         start: D,
         end: D,
@@ -441,6 +471,16 @@ impl Tensor {
     /// Creates a new tensor initialized with values from the input vector. The number of elements
     /// in this vector must be the same as the number of elements defined by the shape.
     /// If the device is cpu, no data copy is made.
+    ///```rust
+    /// use candle_core::{Tensor, Device};
+    /// let a = Tensor::from_vec(vec!{1., 2., 3., 4., 5., 6.}, (2, 3), &Device::Cpu)?;
+    ///
+    /// assert_eq!(a.to_vec2::<f64>()?, &[
+    ///     [1., 2., 3.],
+    ///     [4., 5., 6.]
+    /// ]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn from_vec<S: Into<Shape>, D: crate::WithDType>(
         data: Vec<D>,
         shape: S,
@@ -451,6 +491,17 @@ impl Tensor {
 
     /// Creates a new tensor initialized with values from the input slice. The number of elements
     /// in this vector must be the same as the number of elements defined by the shape.
+    ///```rust
+    /// use candle_core::{Tensor, Device};
+    /// let values = vec![1., 2., 3., 4., 5., 6., 7., 8.];
+    /// let a = Tensor::from_slice(&values[1..7], (2, 3), &Device::Cpu)?;
+    ///
+    /// assert_eq!(a.to_vec2::<f64>()?, &[
+    ///     [2., 3., 4.],
+    ///     [5., 6., 7.]
+    /// ]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn from_slice<S: Into<Shape>, D: crate::WithDType>(
         array: &[D],
         shape: S,
@@ -590,9 +641,9 @@ impl Tensor {
     ///
     /// * `args` - A slice of 1D tensors.
     /// * `xy_indexing` - Whether to use xy indexing or ij indexing. If xy is selected, the
-    /// first dimension corresponds to the cardinality of the second input and the second
-    /// dimension corresponds to the cardinality of the first input. If ij is selected, the
-    /// dimensions are in the same order as the cardinality of the inputs.
+    ///   first dimension corresponds to the cardinality of the second input and the second
+    ///   dimension corresponds to the cardinality of the first input. If ij is selected, the
+    ///   dimensions are in the same order as the cardinality of the inputs.
     ///
     /// # Examples
     ///
@@ -732,6 +783,30 @@ impl Tensor {
 
     /// Returns a new tensor that is a narrowed version of the input, the dimension `dim`
     /// ranges from `start` to `start + len`.
+    /// ```
+    /// use candle_core::{Tensor, Device};
+    /// let a = Tensor::new(&[
+    ///     [0f32, 1., 2.],
+    ///     [3.  , 4., 5.],
+    ///     [6.  , 7., 8.]
+    /// ], &Device::Cpu)?;
+    ///
+    /// let b = a.narrow(0, 1, 2)?;
+    /// assert_eq!(b.shape().dims(), &[2, 3]);
+    /// assert_eq!(b.to_vec2::<f32>()?, &[
+    ///     [3., 4., 5.],
+    ///     [6., 7., 8.]
+    /// ]);
+    ///
+    /// let c = a.narrow(1, 1, 1)?;
+    /// assert_eq!(c.shape().dims(), &[3, 1]);
+    /// assert_eq!(c.to_vec2::<f32>()?, &[
+    ///     [1.],
+    ///     [4.],
+    ///     [7.]
+    /// ]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn narrow<D: Dim>(&self, dim: D, start: usize, len: usize) -> Result<Self> {
         let dims = self.dims();
         let dim = dim.to_index(self.shape(), "narrow")?;
@@ -2440,9 +2515,19 @@ impl Tensor {
 
     /// Returns log(sum(exp(tensor), dim)).
     pub fn log_sum_exp<D: Dims>(&self, sum_dims: D) -> Result<Self> {
-        let exp = self.exp()?;
-        let sum = exp.sum(sum_dims)?;
-        sum.log()
+        let sum_dims = sum_dims.to_indexes(self.shape(), "log-sum-exp")?;
+        if sum_dims.is_empty() {
+            return Ok(self.clone());
+        }
+        let max = sum_dims[1..]
+            .iter()
+            .try_fold(self.max_keepdim(sum_dims[0])?, |max, &dim| {
+                max.max_keepdim(dim)
+            })?;
+        let exp = self.broadcast_sub(&max)?.exp()?;
+        let sum = exp.sum(sum_dims.clone())?;
+
+        sum.log()? + max.squeeze_dims(&sum_dims)
     }
 
     /// Pointwise pow operation.
