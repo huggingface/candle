@@ -468,6 +468,10 @@ struct Args {
     /// Print the full DecodingResult structure rather than just the text.
     #[arg(long)]
     verbose: bool,
+
+    /// Use flash attention.
+    #[arg(long)]
+    use_flash_attn: bool,
 }
 
 fn main() -> Result<()> {
@@ -530,7 +534,8 @@ fn main() -> Result<()> {
         };
         (config, tokenizer, model, sample)
     };
-    let config: Config = serde_json::from_str(&std::fs::read_to_string(config_filename)?)?;
+    let mut config: Config = serde_json::from_str(&std::fs::read_to_string(config_filename)?)?;
+    config.use_flash_attn = args.use_flash_attn;
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let mel_bytes = match config.num_mel_bins {
@@ -588,6 +593,8 @@ fn main() -> Result<()> {
         args.timestamps,
         args.verbose,
     )?;
+    let start = std::time::Instant::now();
     dc.run(&mel)?;
+    println!("decoded in {:?}", start.elapsed());
     Ok(())
 }
