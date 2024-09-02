@@ -31,6 +31,8 @@ pub enum DType {
     F32,
     U32,
     U8,
+    I64,
+    F64
 }
 pub trait EntryPoint {
     fn get_entry_point(&self) -> &'static str;

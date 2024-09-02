@@ -33,7 +33,7 @@ pub fn queue_cmp_buffer_from_buffer(
         Functions::CmpBufferFromBuffer,
     ));
 
-    let bind_group = create_bind_group_input2(buffer_dest, buffer_input1, buffer_input2);
+    let bind_group = create_bind_group_input2(buffer_dest, buffer_input1, buffer_input2, dtype.into());
     enqueue(
         meta,
         pipeline,

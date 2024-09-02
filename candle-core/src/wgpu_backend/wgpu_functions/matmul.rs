@@ -75,11 +75,13 @@ mod sgemm{
     
         let pipeline = meta.get_pipeline_const(pipeline, const_vec.clone());
 
-        let bind_group = if is_16bytes_aligned{
-            create_bind_group_input2_16(
+        let input_alignment : BindgroupAlignment = _dtype.into();
+        let bind_group = if input_alignment == BindgroupAlignment::Aligned4 && is_16bytes_aligned{
+            create_bind_group_input2(
                 buffer_dest,
                 buffer_input1,
-                buffer_input2,
+                buffer_input2, 
+                BindgroupAlignment::Aligned16
             )
         }
         else{
@@ -87,6 +89,7 @@ mod sgemm{
                 buffer_dest,
                 buffer_input1,
                 buffer_input2,
+                BindgroupAlignment::Aligned4
             )
         };
 
@@ -171,7 +174,7 @@ mod sgemm{
             }
             else{
                 let mut cache = dev.cache.lock().unwrap();
-                let buffer_input1_padded = cache.create_buffer_reference(params.b * (new_m * new_k) * 4, false);
+                let buffer_input1_padded = cache.create_buffer_reference(params.b * (new_m * new_k) * dtype.size_in_bytes() as u32, false);
 
                 let dest_layout = crate::Layout::contiguous(&Shape::from((params.b as usize, new_m as usize, new_k as usize)));
                 super::queue_copy3d_padded(dev, buffer_input1_padded.clone(), buffer_input1, dtype, layout_input1, (params.b, params.m, params.k), &dest_layout)?;
@@ -186,7 +189,7 @@ mod sgemm{
             }
             else{
                 let mut cache = dev.cache.lock().unwrap();
-                let buffer_input2_padded = cache.create_buffer_reference(params.b * (new_k * new_n) * 4, false);
+                let buffer_input2_padded = cache.create_buffer_reference(params.b * (new_k * new_n) * dtype.size_in_bytes() as u32, false);
 
                 let dest_layout = crate::Layout::new(Shape::from((params.b as usize, new_k as usize, new_n as usize)), vec![(new_n * new_k) as usize, 1, new_k as usize], 0);
                 super::queue_copy3d_padded(dev, buffer_input2_padded.clone(), buffer_input2, dtype, layout_input2, (params.b, params.k, params.n),&dest_layout)?;
@@ -199,7 +202,7 @@ mod sgemm{
 
         let buffer_dest_padded = if need_different_output_buffer && USE_DIFFERENT_PADDED_OUTPUT{
             let mut cache = dev.cache.lock().unwrap();
-            cache.create_buffer_reference(params.b * (new_m * new_n) * 4, false)
+            cache.create_buffer_reference(params.b * (new_m * new_n) * dtype.size_in_bytes() as u32, false)
         }
         else{
             buffer_dest.clone()
@@ -243,11 +246,16 @@ mod sgemm{
         }
 
         let pipeline = meta.get_pipeline_const(get_pipeline(get_dtype(dtype)?), const_vec.clone());
-       
-        let bind_group = create_bind_group_input2_16(
+        let input_alignment : BindgroupAlignment = dtype.into();
+        if input_alignment != BindgroupAlignment::Aligned4{
+            panic!("matmul can only be performed with f32 and i32");
+        }
+
+        let bind_group = create_bind_group_input2(
             buffer_dest_padded.clone(),
             buffer_input1_padded.clone(),
             buffer_input2_padded.clone(),
+           BindgroupAlignment::Aligned16, //we load 4 values at once 
         );
 
         let lx;

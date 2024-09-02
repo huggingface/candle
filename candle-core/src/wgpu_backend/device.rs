@@ -11,7 +11,7 @@ use tracing::instrument;
 use wgpu::{Backends, InstanceDescriptor, InstanceFlags};
 
 use crate::backend::BackendStorage;
-use crate::{notImplemented, wrongType, Layout};
+use crate::{notImplemented, wrongType, DType, Layout};
 
 #[cfg(feature = "wgpu_debug")]
 use super::debug_info::{DebugInfo, MInfo, Measurements, ShaderInfo};
@@ -470,6 +470,7 @@ pub struct WgpuDeviceInner {
     pub device: wgpu::Device,
     pub backend: wgpu::Backend,
     pub device_limits: wgpu::Limits, //we cache the limits here, because device.limit() was relatively slow on the browser
+    pub device_features:wgpu::Features,
 
     pub queue: wgpu::Queue,
     pub(crate) shader: Mutex<HashMap<candle_wgpu_kernels::Shaders, ShaderModuleComputePipelines>>,
@@ -550,18 +551,34 @@ impl WgpuDevice {
         let mut limits = wgpu::Limits::downlevel_defaults();
 
         #[cfg(feature = "wgpu_debug")]
-        let features = wgpu::Features::TIMESTAMP_QUERY
+        let mut features = wgpu::Features::TIMESTAMP_QUERY
             | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES
             | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
         #[cfg(not(feature = "wgpu_debug"))]
-        let features = wgpu::Features::empty();
+        let mut features = wgpu::Features::empty();
 
+        let adapter_features = adapter.features();
         let adatper_limits = adapter.limits();
+
         limits.min_storage_buffer_offset_alignment =
             adatper_limits.min_storage_buffer_offset_alignment;
         limits.max_storage_buffers_per_shader_stage = 5;
         limits.max_storage_buffer_binding_size = adatper_limits.max_storage_buffer_binding_size; //use as much as possible
         limits.max_buffer_size = adatper_limits.max_buffer_size; //use as much as possible
+
+        if adapter_features.contains(wgpu::Features::SHADER_INT64){
+            features.insert(wgpu::Features::SHADER_INT64);
+        }
+        if adapter_features.contains(wgpu::Features::SHADER_F64){
+            features.insert(wgpu::Features::SHADER_F64);
+        }
+        if adapter_features.contains(wgpu::Features::SHADER_F16){
+            features.insert(wgpu::Features::SHADER_F16);
+        }
+        if adapter_features.contains(wgpu::Features::SHADER_I16){
+            features.insert(wgpu::Features::SHADER_I16);
+        }
+        
 
         // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
         //  `features` being the available features.
@@ -572,7 +589,7 @@ impl WgpuDevice {
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
-                    required_features: features,
+                    required_features: features.clone(),
                     required_limits: limits,
                     memory_hints: wgpu::MemoryHints::Performance,
                 },
@@ -606,6 +623,7 @@ impl WgpuDevice {
             inner: Arc::new(WgpuDeviceInner {
                 device: device,
                 device_limits: device_limits,
+                device_features: features,
                 backend: adapter.get_info().backend,
                 queue: queue,
                 shader: Mutex::new(HashMap::new()),
@@ -708,24 +726,25 @@ impl WgpuDevice {
             .append(&mut command.meta.clone());
 
         let new_input = match command.bindgroup.get_input() {
-            super::cache::BindgroupInputBase::Bindgroup0 => {
-                super::cache::BindgroupInputBase::Bindgroup0
+            super::cache::BindgroupInputBase::Bindgroup0(alignment) => {
+                super::cache::BindgroupInputBase::Bindgroup0(*alignment)
             }
-            super::cache::BindgroupInputBase::Bindgroup1(_, is_16) => {
-                super::cache::BindgroupInputBase::Bindgroup1(input1_buffer.buffer, *is_16)
+            super::cache::BindgroupInputBase::Bindgroup1(_, dest_alignment, input_alignment) => {
+                super::cache::BindgroupInputBase::Bindgroup1(input1_buffer.buffer, *dest_alignment, *input_alignment)
             }
-            super::cache::BindgroupInputBase::Bindgroup2(_, _, is_16) => {
+            super::cache::BindgroupInputBase::Bindgroup2(_, _, alignment) => {
                 super::cache::BindgroupInputBase::Bindgroup2(
                     input1_buffer.buffer,
                     input2_buffer.buffer,
-                    *is_16,
+                    *alignment,
                 )
             }
-            super::cache::BindgroupInputBase::Bindgroup3(_, _, _) => {
+            super::cache::BindgroupInputBase::Bindgroup3(_, _, _,alignment) => {
                 super::cache::BindgroupInputBase::Bindgroup3(
                     input1_buffer.buffer,
                     input2_buffer.buffer,
                     input3_buffer.buffer,
+                    *alignment
                 )
             }
         };
@@ -862,6 +881,7 @@ impl WgpuDevice {
     ) -> wgpu::ComputePipeline {
         let entry_point = pipeline.0.get_entry_point();
         if consts.is_empty() {
+          
             return device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: None,
                 layout: Some(pipeline_layout),
@@ -932,6 +952,27 @@ impl WgpuDevice {
     pub(crate) async fn synchronize_async(&self) -> crate::Result<()> {
         wgpu_functions::synchronize_async(self).await
     }
+
+    pub (crate) fn is_dtype_available(&self, dtype: DType) -> bool{
+        match dtype {
+            DType::U32 => true,
+            DType::F32 => true,
+            DType::U8 => false,
+            DType::I64 => 
+            {
+                return self.device_features.contains(wgpu::Features::SHADER_I16);
+            }
+            DType::F64 =>  
+            {
+                return self.device_features.contains(wgpu::Features::SHADER_F16);
+            },
+
+            DType::BF16 => false,
+            DType::F16 => false,
+           
+        }
+    }
+
 }
 
 impl crate::backend::BackendDevice for WgpuDevice {
@@ -958,7 +999,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
         shape: &crate::Shape,
         dtype: crate::DType,
     ) -> crate::Result<Self::Storage> {
-        let buffer = create_wgpu_storage(self, dtype, shape.elem_count() * 4);
+        let buffer = create_wgpu_storage(self, dtype, shape.elem_count() * dtype.size_in_bytes());
         if shape.elem_count() > 0 {
             wgpu_functions::queue_unary_inplace_op(
                 self,
@@ -975,7 +1016,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
     }
 
     fn ones_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
-        let buffer = create_wgpu_storage(self, dtype, shape.elem_count() * 4);
+        let buffer = create_wgpu_storage(self, dtype, shape.elem_count() * dtype.size_in_bytes());
 
         if shape.elem_count() > 0 {
             wgpu_functions::queue_unary_inplace_op(
@@ -996,8 +1037,8 @@ impl crate::backend::BackendDevice for WgpuDevice {
         shape: &crate::Shape,
         dtype: crate::DType,
     ) -> crate::Result<Self::Storage> {
-        if dtype == crate::DType::F32 || dtype == crate::DType::U32 {
-            return Ok(create_wgpu_storage(self, dtype, shape.elem_count() * 4));
+        if self.is_dtype_available(dtype){
+            return Ok(create_wgpu_storage(self, dtype, shape.elem_count() * dtype.size_in_bytes()));
         } else {
             wrongType!(alloc_uninit, dtype);
         }
@@ -1046,6 +1087,12 @@ impl crate::backend::BackendDevice for WgpuDevice {
             crate::CpuStorage::U32(data) => {
                 return create_wgpu_storage_init(self, crate::DType::U32, &data);
             }
+            crate::CpuStorage::I64(data) => {
+                return create_wgpu_storage_init(self, crate::DType::I64, &data);
+            }
+            crate::CpuStorage::F64(data) => {
+                return create_wgpu_storage_init(self, crate::DType::F64, &data);
+            }
             _ => wrongType!(storage_from_cpu_storage_owned, storage.dtype()),
         }
     }
@@ -1057,7 +1104,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
         lo: f64,
         up: f64,
     ) -> crate::Result<Self::Storage> {
-        let buffer = create_wgpu_storage(self, dtype, shape.elem_count() * 4);
+        let buffer = create_wgpu_storage(self, dtype, shape.elem_count() * dtype.size_in_bytes());
         wgpu_functions::queue_unary_inplace_op(
             self,
             buffer.buffer.clone(),
@@ -1077,7 +1124,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
         mean: f64,
         std: f64,
     ) -> crate::Result<Self::Storage> {
-        let buffer = create_wgpu_storage(self, dtype, shape.elem_count() * 4);
+        let buffer = create_wgpu_storage(self, dtype, shape.elem_count() * dtype.size_in_bytes());
         wgpu_functions::queue_unary_inplace_op(
             self,
             buffer.buffer.clone(),

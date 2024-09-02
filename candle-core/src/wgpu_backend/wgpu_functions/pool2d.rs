@@ -41,7 +41,7 @@ pub fn queue_max_pool2d(
 
     let pipeline = meta.get_pipeline(Pipelines::Pool2d(get_dtype(dtype)?, Functions::MaxPool2d));
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1);
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,
@@ -92,7 +92,7 @@ pub fn queue_avg_pool2d(
 
     let pipeline = meta.get_pipeline(Pipelines::Pool2d(get_dtype(dtype)?, Functions::AvgPool2d));
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1);
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,

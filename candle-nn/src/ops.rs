@@ -487,7 +487,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
 
             let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
 
-            let output_buffer = create_wgpu_storage(storage.device(), storage.dtype,  el_count * 4);
+            let output_buffer = create_wgpu_storage(storage.device(), storage.dtype,  el_count * storage.dtype.size_in_bytes());
 
             wgpu_functions::queue_softmax(
                 storage.device(),
@@ -712,7 +712,7 @@ impl candle::CustomOp2 for RmsNorm {
 
         let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
 
-        let output_buffer = create_wgpu_storage(src.device(), src.dtype,  el_count * 4);
+        let output_buffer = create_wgpu_storage(src.device(), src.dtype,  el_count * src.dtype.size_in_bytes());
 
         wgpu_functions::queue_rms_norm(
             src.device(),

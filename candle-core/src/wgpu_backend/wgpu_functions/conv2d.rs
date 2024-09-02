@@ -108,7 +108,7 @@ pub fn queue_conv2d(
         let new_layout = Layout::contiguous_with_offset(Shape::from(padded_shape), 0);
 
         let mut cache = dev.cache.lock().unwrap();
-        let tmp_buffer = cache.create_buffer_reference(new_layout.shape().elem_count() * 4, false);
+        let tmp_buffer = cache.create_buffer_reference(new_layout.shape().elem_count() * dtype.size_in_bytes(), false);
         drop(cache);
         queue_copy4d_padded(
             dev,
@@ -126,7 +126,7 @@ pub fn queue_conv2d(
         if input_stride[3] != 1 && (params.c_out > 32) && (params.i_h >= 64 && params.i_w >= 64) {
             let mut cache = dev.cache.lock().unwrap();
             let tmp_buffer =
-                cache.create_buffer_reference(input_layout.shape().elem_count() * 4, false);
+                cache.create_buffer_reference(input_layout.shape().elem_count() * dtype.size_in_bytes(), false);
 
             queue_copy_strided(
                 dev,
@@ -204,7 +204,7 @@ pub fn queue_conv2d(
         const_vec,
     );
 
-    let bind_group = create_bind_group_input2(buffer_dest, input_buffer, buffer_input2);
+    let bind_group = create_bind_group_input2(buffer_dest, input_buffer, buffer_input2, dtype.into());
 
     // if use_channels2
     // {
@@ -315,9 +315,9 @@ pub fn queue_conv2d_matmul(
     {
         let mut cache = dev.cache.lock().unwrap();
 
-        im2col_buffer = cache.create_buffer_reference(4 * n * k * b, false);
+        im2col_buffer = cache.create_buffer_reference(n * k * b * dtype.size_in_bytes() , false);
 
-        let bind_group = create_bind_group_input1(im2col_buffer, buffer_input1);
+        let bind_group = create_bind_group_input1(im2col_buffer, buffer_input1, dtype.into());
 
         let x = num_workgroups.min(65535);
         let y = (num_workgroups + 65534) / 65535;
@@ -414,7 +414,7 @@ pub fn queue_conv2d_transpose(
         Pipelines::Conv2d(get_dtype(dtype)?, Functions::Conv2dTranspose),
         const_vec,
     );
-    let bind_group = create_bind_group_input2(buffer_dest, buffer_input1, buffer_input2);
+    let bind_group = create_bind_group_input2(buffer_dest, buffer_input1, buffer_input2, dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,
@@ -482,7 +482,7 @@ pub fn queue_conv1d(
         const_vec,
     );
 
-    let bind_group = create_bind_group_input2(buffer_dest, buffer_input1, buffer_input2);
+    let bind_group = create_bind_group_input2(buffer_dest, buffer_input1, buffer_input2, dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,
@@ -544,7 +544,7 @@ pub fn queue_conv1d_transpose(
         Pipelines::Conv1d(get_dtype(dtype)?, Functions1d::Conv1dTranspose),
         const_vec,
     );
-    let bind_group = create_bind_group_input2(buffer_dest, buffer_input1, buffer_input2);
+    let bind_group = create_bind_group_input2(buffer_dest, buffer_input1, buffer_input2, dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,

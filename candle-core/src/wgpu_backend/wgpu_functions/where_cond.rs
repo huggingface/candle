@@ -1,7 +1,7 @@
 use super::*;
 use candle_wgpu_kernels::where_cond::Functions;
 
-pub fn queue_where_cond_u32(
+pub fn queue_where_cond(
     dev: &WgpuDevice,
     dest_buffer: BufferReferenceId,
     input_buffer: BufferReferenceId,
@@ -10,6 +10,7 @@ pub fn queue_where_cond_u32(
     layout_input: &crate::Layout,
     layout_true: &crate::Layout,
     layout_false: &crate::Layout,
+    cond_type : crate::DType,
     dtype: crate::DType,
 ) -> crate::Result<()> {
     let mut meta = get_meta(&dev);
@@ -19,10 +20,15 @@ pub fn queue_where_cond_u32(
 
     let pipeline = meta.get_pipeline(Pipelines::WhereCond(
         get_dtype(dtype)?,
-        Functions::WhereCondIndexU32,
+        match cond_type{
+            crate::DType::U32 => Functions::WhereCondIndexU32,
+            crate::DType::I64 => Functions::WhereCondIndexI64,
+            _ => todo!(),
+          
+        },
     ));
 
-    let bind_group = create_bind_group_input3(dest_buffer, input_buffer, true_buffer, false_buffer);
+    let bind_group = create_bind_group_input3(dest_buffer, input_buffer, true_buffer, false_buffer, dtype.into());
     enqueue(
         meta,
         pipeline,

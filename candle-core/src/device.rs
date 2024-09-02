@@ -217,10 +217,25 @@ impl Device {
             (Device::WebGpu(_), DType::F32) => true,
 
             (Device::WebGpu(_), DType::U8) => false,
-            (Device::WebGpu(_), DType::I64) => false,
+           
+            (Device::WebGpu(dev), DType::I64) => 
+            {
+                #[cfg(feature="wgpu")]
+                return dev.device_features.contains(wgpu::Features::SHADER_I16);
+                #[cfg(not(feature="wgpu"))]
+                return false;
+            }
+            (Device::WebGpu(dev), DType::F64) =>  
+            {
+                #[cfg(feature="wgpu")]
+                return dev.device_features.contains(wgpu::Features::SHADER_F16);
+                #[cfg(not(feature="wgpu"))]
+                return false;
+            },
+
             (Device::WebGpu(_), DType::BF16) => false,
             (Device::WebGpu(_), DType::F16) => false,
-            (Device::WebGpu(_), DType::F64) => false,
+           
         }
     }
 

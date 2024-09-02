@@ -66,12 +66,6 @@ fn main() {
         }
         
         println!("Found File: {:?}", file);
-
-
-
-       
-        //let shader_content = preprocess_shader(&file, &mut shader_map, &mut virtual_id_counter);
-        
         let parent_name = file.file_stem().unwrap().to_str().unwrap().to_string();
         let parent_dir = file.parent().unwrap();
         let relativ_path = parent_dir.strip_prefix(&shader_dir).unwrap();
@@ -82,6 +76,7 @@ fn main() {
         fs::create_dir_all(&generated_dir).unwrap();
    
        
+
         //create the File:
         let shader_content = shader_loader::load_shader(&file,&vec!["f32"], &mut shader_info);
         if !shader_info.global_functions.is_empty(){
@@ -103,6 +98,23 @@ fn main() {
             let new_file_path = generated_dir.join(new_file_name);
             fs::write(new_file_path, shader_content).expect("Failed to write shader file");
         }
+
+        let shader_content = shader_loader::load_shader(&file,&vec!["i64"], &mut shader_info);
+        if !shader_info.global_functions.is_empty(){
+            let new_file_name = format!("{}_generated_i64.wgsl", original_file_name);
+            let new_file_path = generated_dir.join(new_file_name);
+            fs::write(new_file_path, shader_content).expect("Failed to write shader file");
+        }
+
+        let shader_content = shader_loader::load_shader(&file,&vec!["f64"], &mut shader_info);
+        if !shader_info.global_functions.is_empty(){
+            let new_file_name = format!("{}_generated_f64.wgsl", original_file_name);
+            let new_file_path = generated_dir.join(new_file_name);
+            fs::write(new_file_path, shader_content).expect("Failed to write shader file");
+        }
+
+
+
         let global_functions = shader_info.global_functions;
         shader_info.global_functions = HashMap::new();
         shader_info.global_function_counter = 1;
@@ -129,6 +141,8 @@ fn main() {
                 crate::DType::F32 => include_str!(\"{relativ_path}/generated/{parent_name}.pwgsl_generated_f32.wgsl\"),
                 crate::DType::U32 => include_str!(\"{relativ_path}/generated/{parent_name}.pwgsl_generated_u32.wgsl\"),
                 crate::DType::U8 => include_str!(\"{relativ_path}/generated/{parent_name}.pwgsl_generated_u8.wgsl\"),
+                crate::DType::I64 => include_str!(\"{relativ_path}/generated/{parent_name}.pwgsl_generated_i64.wgsl\"),
+                crate::DType::F64 => include_str!(\"{relativ_path}/generated/{parent_name}.pwgsl_generated_f64.wgsl\"),
             }}
         }}
     }}
@@ -310,12 +324,12 @@ mod shader_loader{
 
     use fancy_regex::Regex;
 
-    const SHORTEN_NORMAL_VARIABLES : bool = true;
-    const SHORTEN_GLOBAL_FUNCTIONS : bool = true;
-    const SHORTEN_OVERRIDES : bool = true;
+    const SHORTEN_NORMAL_VARIABLES : bool = false;
+    const SHORTEN_GLOBAL_FUNCTIONS : bool = false;
+    const SHORTEN_OVERRIDES : bool = false;
     const REMOVE_UNUSED : bool = true;
-    const REMOVE_SPACES : bool = true;
-    const REMOVE_NEW_LINES : bool = true;
+    const REMOVE_SPACES : bool = false;
+    const REMOVE_NEW_LINES : bool = false;
 
     pub fn load_shader(path: &PathBuf, global_defines : &Vec<&'static str>, global_functions : &mut shader_shortener::ShaderInfo) -> String {
         let mut result = shader_defines::load_shader(path, &mut HashMap::new(), global_defines); 

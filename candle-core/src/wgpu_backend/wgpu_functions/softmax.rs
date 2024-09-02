@@ -28,7 +28,7 @@ pub fn queue_softmax(
         const_vec,
     );
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1);
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
 
     enqueue_workgroups_extra(
         meta,

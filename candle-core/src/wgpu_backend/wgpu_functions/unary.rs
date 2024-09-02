@@ -86,7 +86,7 @@ pub fn queue_unary_inplace_op(
             Functions::UnaryInplaceContiguous,
         ));
 
-        let bind_group = create_bind_group_input0(buffer);
+        let bind_group = create_bind_group_input0(buffer, dtype.into());
         enqueue_big_extra(
             meta,
             pipeline,
@@ -141,7 +141,7 @@ pub fn queue_unary_from_buffer_op(
         ))
     };
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input);
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
     enqueue_big_extra(
         meta,
         pipeline,

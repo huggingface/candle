@@ -79,45 +79,55 @@ impl ReferenceTrait for CachedBindgroupId {
 }
 
 #[derive(Debug)]
+pub(crate) struct BindgroupLayoutAndPipeline(pub wgpu::BindGroupLayout,pub wgpu::PipelineLayout);
+
+pub(crate) type BindgroupKindLayouts = [BindgroupLayoutAndPipeline;4]; //2byte alinged, 4byte, 8byte, 16byte aligned
+
+#[derive(Debug)]
 pub(crate) struct BindgroupLayouts {
-    pub bind_group_layout0: wgpu::BindGroupLayout,
-    pub bind_group_layout1: wgpu::BindGroupLayout,
-    pub bind_group_layout1_16: wgpu::BindGroupLayout,
-    pub bind_group_layout2: wgpu::BindGroupLayout,
-    pub bind_group_layout2_16: wgpu::BindGroupLayout, //for matmul, input buffer may be vec4
-    pub bind_group_layout3: wgpu::BindGroupLayout,
-    pub pipeline_layout0: wgpu::PipelineLayout,
-    pub pipeline_layout1: wgpu::PipelineLayout,
-    pub pipeline_layout1_16: wgpu::PipelineLayout,
-    pub pipeline_layout2: wgpu::PipelineLayout,
-    pub pipeline_layout2_16: wgpu::PipelineLayout, //for matmul, input buffer may be vec4
-    pub pipeline_layout3: wgpu::PipelineLayout,
+    pub bindgroup0 : BindgroupKindLayouts, 
+    pub bindgroup1 : BindgroupKindLayouts, 
+    pub bindgroup2 : BindgroupKindLayouts, 
+    pub bindgroup3 : BindgroupKindLayouts, 
+
+    pub bindgroup1_8_to_4 : BindgroupLayoutAndPipeline,
+    pub bindgroup1_4_to_8 : BindgroupLayoutAndPipeline,
 }
 
 impl BindgroupLayouts {
+
     pub(crate) fn new(dev: &wgpu::Device) -> Self {
-        let dest_entry = wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: false },
-                has_dynamic_offset: false,
-                min_binding_size: Some(NonZeroU64::new(4).unwrap()),
-            },
-            count: None,
-        };
 
-        let dest_entry_16 = wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: false },
-                has_dynamic_offset: false,
-                min_binding_size: Some(NonZeroU64::new(16).unwrap()),
-            },
-            count: None,
-        };
+        fn create_bingroup_entry(binding : u32, alignment : u32, read_only : bool) -> wgpu::BindGroupLayoutEntry{
+            return wgpu::BindGroupLayoutEntry {
+                binding: binding,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: read_only },
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(NonZeroU64::new(alignment.into()).unwrap()),
+                },
+                count: None,
+            };
+        }
 
+        fn create_bind_group_layout(dev: &wgpu::Device, entries : &[wgpu::BindGroupLayoutEntry]) -> wgpu::BindGroupLayout{
+            return dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: None,
+                entries: entries,
+            });
+        }
+
+        fn create_pipeline_layout(dev: &wgpu::Device, bindgroup_layouts : &[&wgpu::BindGroupLayout]) -> wgpu::PipelineLayout{
+            return dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: bindgroup_layouts,
+                push_constant_ranges: &[],
+            });
+        }
+
+        let dest_entries = [2,4,8,16].map(|a| create_bingroup_entry(0, a, false));
+    
         let meta_entry = wgpu::BindGroupLayoutEntry {
             binding: 1,
             visibility: wgpu::ShaderStages::COMPUTE,
@@ -129,136 +139,51 @@ impl BindgroupLayouts {
             count: None,
         };
 
-        let input1_entry = wgpu::BindGroupLayoutEntry {
-            binding: 2,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: Some(NonZeroU64::new(4).unwrap()),
-            },
-            count: None,
-        };
+        let input1_entries = [2,4,8,16].map(|a| create_bingroup_entry(2, a, true));
+        let input2_entries = [2,4,8,16].map(|a| create_bingroup_entry(3, a, true));
+        let input3_entries = [2,4,8,16].map(|a| create_bingroup_entry(4, a, true));
+        
+        let bindgroup0 = [0 as usize, 1, 2, 3].map(|i|{
+            let bindgroup_layout = create_bind_group_layout(dev, &[dest_entries[i], meta_entry]);
+            let pipeline_layout = create_pipeline_layout(dev, &[&bindgroup_layout]);
 
-        let input1_entry_16 = wgpu::BindGroupLayoutEntry {
-            binding: 2,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: Some(NonZeroU64::new(16).unwrap()),
-            },
-            count: None,
-        };
-
-        let input2_entry = wgpu::BindGroupLayoutEntry {
-            binding: 3,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: Some(NonZeroU64::new(4).unwrap()),
-            },
-            count: None,
-        };
-
-        let input2_entry_16 = wgpu::BindGroupLayoutEntry {
-            binding: 3,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: Some(NonZeroU64::new(16).unwrap()),
-            },
-            count: None,
-        };
-
-        let input3_entry = wgpu::BindGroupLayoutEntry {
-            binding: 4,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: Some(NonZeroU64::new(4).unwrap()),
-            },
-            count: None,
-        };
-
-        let bind_group_layout0 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[dest_entry, meta_entry],
-        });
-        let bind_group_layout1 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[dest_entry, meta_entry, input1_entry],
-        });
-        let bind_group_layout1_16 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[dest_entry_16, meta_entry, input1_entry_16],
-        });
-        let bind_group_layout2 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[dest_entry, meta_entry, input1_entry, input2_entry],
-        });
-        let bind_group_layout2_16 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[dest_entry, meta_entry, input1_entry_16, input2_entry_16],
-        });
-        let bind_group_layout3 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[
-                dest_entry,
-                meta_entry,
-                input1_entry,
-                input2_entry,
-                input3_entry,
-            ],
+            return BindgroupLayoutAndPipeline(bindgroup_layout, pipeline_layout);
         });
 
-        let pipeline_layout0 = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[&bind_group_layout0],
-            push_constant_ranges: &[],
-        });
-        let pipeline_layout1 = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[&bind_group_layout1],
-            push_constant_ranges: &[],
-        });
-        let pipeline_layout1_16 = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[&bind_group_layout1_16],
-            push_constant_ranges: &[],
-        });
-        let pipeline_layout2 = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[&bind_group_layout2],
-            push_constant_ranges: &[],
-        });
-        let pipeline_layout2_16 = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[&bind_group_layout2_16],
-            push_constant_ranges: &[],
-        });
-        let pipeline_layout3 = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[&bind_group_layout3],
-            push_constant_ranges: &[],
+        let bindgroup1 = [0 as usize, 1, 2, 3].map(|i|{
+            let bindgroup_layout = create_bind_group_layout(dev, &[dest_entries[i], meta_entry, input1_entries[i]]);
+            let pipeline_layout = create_pipeline_layout(dev, &[&bindgroup_layout]);
+
+            return BindgroupLayoutAndPipeline(bindgroup_layout, pipeline_layout);
         });
 
+        let bindgroup2 = [0 as usize, 1, 2, 3].map(|i|{
+            let bindgroup_layout = create_bind_group_layout(dev, &[dest_entries[i], meta_entry, input1_entries[i], input2_entries[i]]);
+            let pipeline_layout = create_pipeline_layout(dev, &[&bindgroup_layout]);
+
+            return BindgroupLayoutAndPipeline(bindgroup_layout, pipeline_layout);
+        });
+
+        let bindgroup3 = [0 as usize, 1, 2, 3].map(|i|{
+            let bindgroup_layout = create_bind_group_layout(dev, &[dest_entries[i], meta_entry, input1_entries[i], input2_entries[i], input3_entries[i]]);
+            let pipeline_layout = create_pipeline_layout(dev, &[&bindgroup_layout]);
+
+            return BindgroupLayoutAndPipeline(bindgroup_layout, pipeline_layout);
+        });
+
+        let bindgroup_layout_4_to_8 = create_bind_group_layout(dev, &[dest_entries[2], meta_entry, input1_entries[1]]);
+        let pipeline_layout_4_to_8 = create_pipeline_layout(dev, &[&bindgroup_layout_4_to_8]);
+
+        let bindgroup_layout_8_to_4 = create_bind_group_layout(dev, &[dest_entries[1], meta_entry, input1_entries[2]]);
+        let pipeline_layout_8_to_4 = create_pipeline_layout(dev, &[&bindgroup_layout_8_to_4]);
+     
         Self {
-            bind_group_layout0,
-            bind_group_layout1,
-            bind_group_layout1_16,
-            bind_group_layout2,
-            bind_group_layout2_16,
-            bind_group_layout3,
-            pipeline_layout0,
-            pipeline_layout1,
-            pipeline_layout1_16,
-            pipeline_layout2,
-            pipeline_layout2_16,
-            pipeline_layout3,
+            bindgroup0,
+            bindgroup1,
+            bindgroup2,
+            bindgroup3,
+            bindgroup1_4_to_8 : BindgroupLayoutAndPipeline(bindgroup_layout_4_to_8, pipeline_layout_4_to_8),
+            bindgroup1_8_to_4 : BindgroupLayoutAndPipeline(bindgroup_layout_8_to_4, pipeline_layout_8_to_4)
         }
     }
 }
@@ -345,21 +270,61 @@ impl BufferReference {
     }
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, std::marker::Copy)]
+#[cfg_attr(
+    any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub enum BindgroupAlignment{
+    Aligned2,
+    Aligned4,
+    Aligned8,
+    Aligned16
+}
+
+impl BindgroupAlignment{
+    pub fn get_index(&self) -> usize{
+        match self{
+            BindgroupAlignment::Aligned2 => return 0,
+            BindgroupAlignment::Aligned4 => return 1,
+            BindgroupAlignment::Aligned8 => return 2,
+            BindgroupAlignment::Aligned16 => return 3,
+        }
+    }
+}
+
+impl From<crate::DType> for BindgroupAlignment{
+    fn from(value: crate::DType) -> Self {
+        match value{
+            crate::DType::U8 => panic!("alignment not supported"),
+            crate::DType::U32 => BindgroupAlignment::Aligned4,
+            crate::DType::I64 => BindgroupAlignment::Aligned8,
+            crate::DType::BF16 => BindgroupAlignment::Aligned2,
+            crate::DType::F16 => BindgroupAlignment::Aligned2,
+            crate::DType::F32 => BindgroupAlignment::Aligned4,
+            crate::DType::F64 => BindgroupAlignment::Aligned8,
+        }
+    }
+}
+
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(
     any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
     derive(serde::Serialize, serde::Deserialize)
 )]
 pub enum BindgroupInputBase<T> {
-    Bindgroup0, //
+    Bindgroup0(BindgroupAlignment), //
     Bindgroup1(
         #[cfg_attr(
             any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
             serde(skip)
         )]
         T,
-        bool,
-    ), //input1
+        BindgroupAlignment,
+        BindgroupAlignment
+    ), //input1, dest_alignment, input1_alignment
     Bindgroup2(
         #[cfg_attr(
             any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
@@ -371,8 +336,8 @@ pub enum BindgroupInputBase<T> {
             serde(skip)
         )]
         T,
-        bool,
-    ), //input1, input2, is_16
+        BindgroupAlignment,
+    ), //input1, input2, alignment dest
     Bindgroup3(
         #[cfg_attr(
             any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
@@ -389,7 +354,40 @@ pub enum BindgroupInputBase<T> {
             serde(skip)
         )]
         T,
+        BindgroupAlignment,
     ), //input1, input2, input3
+}
+
+impl<T : Clone> BindgroupInputBase<T>{
+    pub fn fold<TOut>(&self, mut f : impl FnMut(&T) -> TOut) -> BindgroupInputBase<TOut>{
+        match self {
+            super::cache::BindgroupInputBase::Bindgroup0(alignment) => {
+                super::cache::BindgroupInputBase::Bindgroup0(*alignment)
+            }
+            super::cache::BindgroupInputBase::Bindgroup1(buf1, dest_alignment, input_alignment) => {
+                super::cache::BindgroupInputBase::Bindgroup1(f(buf1), *dest_alignment, *input_alignment)
+            }
+            super::cache::BindgroupInputBase::Bindgroup2(buf1, buf2, alignment) => {
+                super::cache::BindgroupInputBase::Bindgroup2(
+                    f(buf1),
+                    f(buf2),
+                    *alignment,
+                )
+            }
+            super::cache::BindgroupInputBase::Bindgroup3(buf1, buf2, buf3,alignment) => {
+                super::cache::BindgroupInputBase::Bindgroup3(
+                    f(buf1),
+                    f(buf2),
+                    f(buf3),
+                    *alignment
+                )
+            }
+        }
+    }
+
+    pub fn fold_owned<TOut>(&self, mut f : impl FnMut(T) -> TOut) -> BindgroupInputBase<TOut>{
+        return self.fold(|k| f(k.clone()));
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -603,12 +601,12 @@ impl ModelCache {
 
                 let is_valid = check_buffer(bindgroup.buffer.get_dest())
                     && match &bindgroup.buffer.get_input() {
-                        BindgroupInputBase::Bindgroup0 => true,
-                        BindgroupInputBase::Bindgroup1(v1, _) => check_buffer(v1),
+                        BindgroupInputBase::Bindgroup0(_) => true,
+                        BindgroupInputBase::Bindgroup1(v1, _, _) => check_buffer(v1),
                         BindgroupInputBase::Bindgroup2(v1, v2, _) => {
                             check_buffer(v1) && check_buffer(v2)
                         }
-                        BindgroupInputBase::Bindgroup3(v1, v2, v3) => {
+                        BindgroupInputBase::Bindgroup3(v1, v2, v3, _) => {
                             check_buffer(v1) && check_buffer(v2) && check_buffer(v3)
                         }
                     };
@@ -638,7 +636,7 @@ impl ModelCache {
             pipeline: PipelineType,
         ) {
             let check_buffer = |buffer_reference_id| {
-                if let Some(buffer_reference) = cache.buffer_reference.get(buffer_reference_id) {
+                if let Some(buffer_reference) = cache.buffer_reference.get(&buffer_reference_id) {
                     if !buffer_reference.cached_buffer_id.is_valid() {
                         panic!("input buffer {:?}({:?}) in {:?} had no cached_storage set for pipeline {:?}", buffer_reference,buffer_reference_id, bindgroup_reference, pipeline);
                     } else {
@@ -648,7 +646,7 @@ impl ModelCache {
                             .is_none()
                         {
                             if let Some(buffer_reference) =
-                                cache.buffer_reference.get(buffer_reference_id)
+                                cache.buffer_reference.get(&buffer_reference_id)
                             {
                                 panic!("input buffer {:?}({:?}) in {:?} had no cached_storage set to {:?} widch could not be found for pipeline {:?}", buffer_reference,buffer_reference_id, bindgroup_reference,buffer_reference.cached_buffer_id, pipeline);
                             }
@@ -666,20 +664,16 @@ impl ModelCache {
                 }
             };
 
-            match &bindgroup_reference.1 {
-                BindgroupInputBase::Bindgroup0 => BindgroupInputBase::Bindgroup0,
-                BindgroupInputBase::Bindgroup1(v1, is_16) => {
-                    BindgroupInputBase::Bindgroup1(check_buffer(v1), *is_16)
-                }
-                BindgroupInputBase::Bindgroup2(v1, v2, is_16) => {
-                    BindgroupInputBase::Bindgroup2(check_buffer(v1), check_buffer(v2), *is_16)
-                }
-                BindgroupInputBase::Bindgroup3(v1, v2, v3) => BindgroupInputBase::Bindgroup3(
-                    check_buffer(v1),
-                    check_buffer(v2),
-                    check_buffer(v3),
-                ),
-            };
+            // match(bindgroup_reference.1){
+            //     BindgroupInputBase::Bindgroup0(_) => todo!(),
+            //     BindgroupInputBase::Bindgroup1(v1, _, _) => {check_buffer(v)},
+            //     BindgroupInputBase::Bindgroup2(v1, v2, _) => todo!(),
+            //     BindgroupInputBase::Bindgroup3(v1, v2, v3, _) => todo!(),
+            // }
+
+            //}
+
+            bindgroup_reference.1.fold_owned(|v| {check_buffer(v); return ();});
         }
 
         check_buffer_reference(self, bindgroup_reference, pipeline.clone());
@@ -700,24 +694,7 @@ impl ModelCache {
         ) -> CachedBindgroupFull {
             return BindgroupFullBase(
                 dest_buffer,
-                match &bindgroup_reference.1 {
-                    BindgroupInputBase::Bindgroup0 => BindgroupInputBase::Bindgroup0,
-                    BindgroupInputBase::Bindgroup1(v1, is_16) => {
-                        BindgroupInputBase::Bindgroup1(get_storage(cache, v1), *is_16)
-                    }
-                    BindgroupInputBase::Bindgroup2(v1, v2, is_16) => {
-                        BindgroupInputBase::Bindgroup2(
-                            get_storage(cache, v1),
-                            get_storage(cache, v2),
-                            *is_16,
-                        )
-                    }
-                    BindgroupInputBase::Bindgroup3(v1, v2, v3) => BindgroupInputBase::Bindgroup3(
-                        get_storage(cache, v1),
-                        get_storage(cache, v2),
-                        get_storage(cache, v3),
-                    ),
-                },
+                bindgroup_reference.1.fold(|v| {return get_storage(cache, v)})
             );
         }
 

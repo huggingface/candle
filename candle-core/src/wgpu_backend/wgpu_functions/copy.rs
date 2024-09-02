@@ -47,7 +47,7 @@ pub fn queue_copy_strided(
         let pipeline =
             meta.get_pipeline(Pipelines::Copy(get_dtype(dtype)?, Functions::CopyStrided));
 
-        let bind_group = create_bind_group_input1(buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
         enqueue_big_extra(
             meta,
             pipeline,
@@ -149,7 +149,7 @@ pub fn queue_copy(
             inplaceble,
         );
 
-        let bind_group = create_bind_group_input1(buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
         enqueue_big(meta, pipeline, bind_group, copy_size as u32);
         //}
     }
@@ -191,7 +191,7 @@ pub fn queue_copy2d(
         meta.add(dest_offset);
     }
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input);
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
 
     let x = (d1 + 15) / 16;
     let y = (d2 + 15) / 16;
@@ -270,7 +270,7 @@ pub fn queue_copy3d(
     meta.add(input1_stride_2);
     meta.add(input1_stride_3);
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input);
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
 
     let pipeline = meta.get_pipeline_const(
         Pipelines::Copy(get_dtype(dtype)?, Functions::Copy3d),
@@ -334,7 +334,7 @@ pub fn queue_copy3d_padded(
     meta.add(dest_shape.2);
     meta.add(dest_shape.1);
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input);
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
     let pipeline = if input_shape.0 == 1 {
         Functions::Copy3dPaddedNobatch
     } else {
@@ -400,7 +400,7 @@ pub fn queue_copy4d_padded(
     meta.add(dest_shape.3);
     meta.add(dest_shape.2);
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input);
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
 
     let pipeline = Functions::Copy4dPadded;
 

@@ -19,7 +19,7 @@ pub fn queue_gather(
 
     let pipeline = meta.get_pipeline(Pipelines::Gather(get_dtype(dtype)?, Functions::Gather));
 
-    let bind_group = create_bind_group_input2(buffer_dest, buffer_input, buffer_index);
+    let bind_group = create_bind_group_input2(buffer_dest, buffer_input, buffer_index, dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,
@@ -57,7 +57,7 @@ pub fn queue_scatter_add_inplace(
         Functions::ScatterAddInplace,
     ));
 
-    let bind_group = create_bind_group_input2(buffer_dest, buffer_index, buffer_src);
+    let bind_group = create_bind_group_input2(buffer_dest, buffer_index, buffer_src, dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,
@@ -95,7 +95,7 @@ pub fn queue_index_add_inplace(
         Functions::IndexAddInplace,
     ));
 
-    let bind_group = create_bind_group_input2(buffer_dest, buffer_index, buffer_src);
+    let bind_group = create_bind_group_input2(buffer_dest, buffer_index, buffer_src, dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,

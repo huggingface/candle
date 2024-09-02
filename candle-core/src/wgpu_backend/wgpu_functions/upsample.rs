@@ -33,7 +33,7 @@ pub fn queue_upsample1d(
         Functions::Upsample1d,
     ));
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1);
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,
@@ -82,7 +82,7 @@ pub fn queue_upsample2d(
         Functions::Upsample2d,
     ));
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1);
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,

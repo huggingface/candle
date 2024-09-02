@@ -54,7 +54,7 @@ pub fn queue_reduce_from_buffer_op(
         const_vec,
     );
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input);
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
 
     let y = dest_size.min(65535);
     let z = (dest_size + 65534) / 65535;
