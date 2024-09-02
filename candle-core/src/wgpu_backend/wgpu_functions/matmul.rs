@@ -2,10 +2,10 @@ use crate::wgpu_backend::MatmulAlgorithm;
 
 use super::*;
 pub struct SGEMMParams{
-    b : u32, 
-    m : u32, 
-    k : u32, 
-    n : u32
+    pub b : u32, 
+    pub m : u32, 
+    pub k : u32, 
+    pub n : u32
 }
 
 impl SGEMMParams {
@@ -126,9 +126,6 @@ mod sgemm{
         n_tile : u32,
         k_tile : u32,
         get_pipeline : impl Fn(candle_wgpu_kernels::DType) -> Pipelines,
-        
-        load_a : bool,
-        load_b : bool,
         non_padded : bool    
     ) -> crate::Result<()> {
 
@@ -191,7 +188,6 @@ mod sgemm{
                 let mut cache = dev.cache.lock().unwrap();
                 let buffer_input2_padded = cache.create_buffer_reference(params.b * (new_k * new_n) * 4, false);
 
-                //let dest_layout = crate::Layout::contiguous(&Shape::from((b as usize, new_k as usize, new_n as usize))); 
                 let dest_layout = crate::Layout::new(Shape::from((params.b as usize, new_k as usize, new_n as usize)), vec![(new_n * new_k) as usize, 1, new_k as usize], 0);
                 super::queue_copy3d_padded(dev, buffer_input2_padded.clone(), buffer_input2, dtype, layout_input2, (params.b, params.k, params.n),&dest_layout)?;
                 //let res : Vec<f32> = block_on(read_data_from_gpu_async(dev, buffer_input2_padded.clone()));
@@ -241,13 +237,7 @@ mod sgemm{
     
         meta.add(input2_stride_b); //input2_stride_b
         meta.add(layout_input2_padded.start_offset()); //input2_offset
-        
-        if !load_a{
-            meta.add_const(candle_wgpu_kernels::Constants::Preloada, false);
-        }
-        if !load_b{
-            meta.add_const(candle_wgpu_kernels::Constants::Preloadb, false);
-        }
+
         if need_different_output_buffer && !USE_DIFFERENT_PADDED_OUTPUT{
             meta.add_const(candle_wgpu_kernels::Constants::Isoutputpadded, true);
         }
@@ -333,32 +323,34 @@ pub fn queue_matmul_buffer_alg(
         crate::wgpu_backend::MatmulAlgorithm::Matmul1_4 => sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, Pipelines::Matmul(get_dtype(dtype)?, candle_wgpu_kernels::matmul::Functions::Matmul116), true),
         crate::wgpu_backend::MatmulAlgorithm::Matmul7 => sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, Pipelines::Matmul(get_dtype(dtype)?, candle_wgpu_kernels::matmul::Functions::Matmul7), false),
         crate::wgpu_backend::MatmulAlgorithm::Matmul1 => sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, Pipelines::Matmul(get_dtype(dtype)?, candle_wgpu_kernels::matmul::Functions::Matmul1), false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul16_16 => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 16, 16,16, |dtype| Pipelines::Matmul(dtype, candle_wgpu_kernels::matmul::Functions::Matmul5),  true, true, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul16_16 => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 16, 16,16, |dtype| Pipelines::Matmul(dtype, candle_wgpu_kernels::matmul::Functions::Matmul5), false),
         
-        crate::wgpu_backend::MatmulAlgorithm::Matmul32_32(false, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 32, 32,32, |dtype| Pipelines::Matmul32x32(dtype, candle_wgpu_kernels::sgemm::matmul32x32::Functions::Matmul), load_a, load_b, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x64(dtype, candle_wgpu_kernels::sgemm::matmul64x64::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul128_128(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 128, 128,16, |dtype| Pipelines::Matmul128x128(dtype, candle_wgpu_kernels::sgemm::matmul128x128::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64_8_8(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x648x8(dtype, candle_wgpu_kernels::sgemm::matmul64x64_8x8::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1284x8(dtype, candle_wgpu_kernels::sgemm::matmul64x128_4x8::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128_8_8(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1288x8(dtype, candle_wgpu_kernels::sgemm::matmul64x128_8x8::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul16_64(false, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 16, 64,16, |dtype| Pipelines::Matmul16x64(dtype, candle_wgpu_kernels::sgemm::matmul16x64::Functions::Matmul), load_a, load_b, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1_128 (false, false, load_a)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 128,128, |dtype| Pipelines::Matmul1x128(dtype, candle_wgpu_kernels::sgemm::matmul1x128::Functions::Matmul), load_a, false, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1_256 (false, false, load_a)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 256,256, |dtype| Pipelines::Matmul1x256(dtype, candle_wgpu_kernels::sgemm::matmul1x256::Functions::Matmul), load_a, false, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul24_24(false, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 24, 24,24, |dtype| Pipelines::Matmul24x24(dtype, candle_wgpu_kernels::sgemm::matmul24x24::Functions::Matmul), load_a, load_b, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul24_48(false, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 24, 48,24, |dtype| Pipelines::Matmul24x48(dtype, candle_wgpu_kernels::sgemm::matmul24x48::Functions::Matmul), load_a, load_b, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul32_32(false, false, _load_a, _load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 32, 32,32, |dtype| Pipelines::Matmul32x32(dtype, candle_wgpu_kernels::sgemm::matmul32x32::Functions::Matmul), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x64(dtype, candle_wgpu_kernels::sgemm::matmul64x64::Functions::Matmul),false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul128_128(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 128, 128,16, |dtype| Pipelines::Matmul128x128(dtype, candle_wgpu_kernels::sgemm::matmul128x128::Functions::Matmul),  false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64_8_8(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x648x8(dtype, candle_wgpu_kernels::sgemm::matmul64x64_8x8::Functions::Matmul),  false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64_4_8(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x644x8(dtype, candle_wgpu_kernels::sgemm::matmul64x64_4x8::Functions::Matmul),  false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1284x8(dtype, candle_wgpu_kernels::sgemm::matmul64x128_4x8::Functions::Matmul), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128_8_8(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1288x8(dtype, candle_wgpu_kernels::sgemm::matmul64x128_8x8::Functions::Matmul),  false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul16_64(false, false, _load_a, _load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 16, 64,16, |dtype| Pipelines::Matmul16x64(dtype, candle_wgpu_kernels::sgemm::matmul16x64::Functions::Matmul), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul1_128 (false, false, _load_a)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 128,128, |dtype| Pipelines::Matmul1x128(dtype, candle_wgpu_kernels::sgemm::matmul1x128::Functions::Matmul), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul1_256 (false, false, _load_a)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 256,256, |dtype| Pipelines::Matmul1x256(dtype, candle_wgpu_kernels::sgemm::matmul1x256::Functions::Matmul), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul24_24(false, false, _load_a, _load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 24, 24,24, |dtype| Pipelines::Matmul24x24(dtype, candle_wgpu_kernels::sgemm::matmul24x24::Functions::Matmul), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul24_48(false, false, _load_a, _load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 24, 48,24, |dtype| Pipelines::Matmul24x48(dtype, candle_wgpu_kernels::sgemm::matmul24x48::Functions::Matmul), false),
         
 
-        crate::wgpu_backend::MatmulAlgorithm::Matmul32_32(true, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 32, 32,32, |dtype| Pipelines::Matmul32x32Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul32x32_prefetch::Functions::Matmul),load_a, load_b, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x64Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x64_prefetch::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1284x8Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x128_4x8_prefetch::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul128_128(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 128, 128,16, |dtype| Pipelines::Matmul128x128Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul128x128_prefetch::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64_8_8(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x648x8Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x64_8x8_prefetch::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128_8_8(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1288x8Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x128_8x8_prefetch::Functions::Matmul), true, true, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul16_64(true, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 16, 64,16, |dtype| Pipelines::Matmul16x64Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul16x64_prefetch::Functions::Matmul), load_a, load_b, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1_128(true, false, load_a) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 128,128, |dtype| Pipelines::Matmul1x128Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul1x128_prefetch::Functions::Matmul), load_a, false, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1_256(true, false, load_a) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 256,256, |dtype| Pipelines::Matmul1x256Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul1x256_prefetch::Functions::Matmul), load_a, false, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul24_24(true, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 24, 24,24, |dtype| Pipelines::Matmul24x24Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul24x24_prefetch::Functions::Matmul), load_a, load_b, false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul24_48(true, false, load_a, load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 24, 48,24, |dtype| Pipelines::Matmul24x48Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul24x48_prefetch::Functions::Matmul), load_a, load_b, false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul32_32(true, false, _load_a, _load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 32, 32,32, |dtype| Pipelines::Matmul32x32Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul32x32_prefetch::Functions::Matmul), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x64Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x64_prefetch::Functions::Matmul),  false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1284x8Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x128_4x8_prefetch::Functions::Matmul), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul128_128(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 128, 128,16, |dtype| Pipelines::Matmul128x128Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul128x128_prefetch::Functions::Matmul),  false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64_8_8(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x648x8Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x64_8x8_prefetch::Functions::Matmul), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64_4_8(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x644x8Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x64_4x8_prefetch::Functions::Matmul), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul64_128_8_8(true, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 64, 128,16, |dtype| Pipelines::Matmul64x1288x8Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul64x128_8x8_prefetch::Functions::Matmul),  false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul16_64(true, false, _load_a, _load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 16, 64,16, |dtype| Pipelines::Matmul16x64Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul16x64_prefetch::Functions::Matmul), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul1_128(true, false, _load_a) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 128,128, |dtype| Pipelines::Matmul1x128Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul1x128_prefetch::Functions::Matmul), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul1_256(true, false, _load_a) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 256,256, |dtype| Pipelines::Matmul1x256Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul1x256_prefetch::Functions::Matmul), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul24_24(true, false, _load_a, _load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 24, 24,24, |dtype| Pipelines::Matmul24x24Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul24x24_prefetch::Functions::Matmul), false),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul24_48(true, false, _load_a, _load_b) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 24, 48,24, |dtype| Pipelines::Matmul24x48Prefetch(dtype, candle_wgpu_kernels::sgemm::matmul24x48_prefetch::Functions::Matmul), false),
          _ => {panic!()}
     }
 }
@@ -405,7 +397,13 @@ pub fn queue_matmul_buffer_best(
     let get_matmul_alg = |size1 : usize, size2 : usize, size3 : usize|{
         //we might use kernel 64x64 if the dimensions are big enaugh:
         if m >= 64 * 11 && n >= 64 * 11 && k >= 16 && (m >= 64*size1 || n >= 64*size1) {
-            return crate::wgpu_backend::device::MatmulAlgorithm::Matmul64_64_8_8(false, false);
+            if dev.backend == wgpu::Backend::Vulkan{
+                //on native vulkan this was up two twice as fast, but in the browser this was 30 times slower
+                return crate::wgpu_backend::device::MatmulAlgorithm::Matmul64_64_8_8(false, false); 
+            }
+            else{
+                return crate::wgpu_backend::device::MatmulAlgorithm::Matmul64_64_4_8(false, false);
+            }
         }
         if m >= 48 && n >= 48 && k >= 16 && ( m >= 64*size2 || n >= 64*size2){
             return crate::wgpu_backend::device::MatmulAlgorithm::Matmul64_64(false, false);
@@ -497,7 +495,13 @@ pub fn queue_matmul_buffer_best(
                         if n >= 128 || m >= 128{
                             //padding needed for 32x32, will also make 64x64 usable:
                             if new_m % 64 == 0 && new_n % 64 == 0{
-                                alg = MatmulAlgorithm::Matmul64_64_8_8(false, false);
+                                if dev.backend == wgpu::Backend::Vulkan{
+                                    //on native vulkan this was up two twice as fast, but in the browser this was 30 times slower
+                                    alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul64_64_8_8(false, false); 
+                                }
+                                else{
+                                    alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul64_64_4_8(false, false);
+                                }
                             }
                             else{
                                 alg = MatmulAlgorithm::Matmul32_32(false, false, true, true);
@@ -506,29 +510,9 @@ pub fn queue_matmul_buffer_best(
                         else{
                             alg = MatmulAlgorithm::Matmul7;
                         }
-
-                    
-
-                        // //only one input needs to be padded for 32x32
-                        // if single_pad_32{
-                        //     if single_pad_64{
-                        //         alg = get_matmul_alg(64, 8, 4);
-                        //     }
-                        //     else{
-                        //         alg = get_matmul_alg(64, 16, 8);
-                        //     }
-                        // }
-                        // else{ //both inputs needs to be padded:
-                        //     alg = get_matmul_alg(64, 16, 8);
-                        // }
                     }
                 }
             }
-
-            // //we might use kernel 32x32
-            // else if ((m >= 32 && k >= 16 )|| need_pad_a) && ((n >= 32 && k >= 16 ) || need_pad_b) {
-                
-            // } 
         }
     }
     queue_matmul_buffer_alg(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, alg)

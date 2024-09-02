@@ -13,7 +13,7 @@ fn run(a: &Tensor, b: &Tensor) {
 }
 
 
-fn test_matmul(device: &Device, group : &mut criterion::BenchmarkGroup<criterion::measurement::WallTime>, b : usize, m : usize, n : usize, k : usize, is_small_line : bool,size : usize, multiple_sizes : bool, tpa : bool, tpb : bool){
+fn test_matmul(device: &Device, group : &mut criterion::BenchmarkGroup<criterion::measurement::WallTime>, b : usize, m : usize, n : usize, k : usize, _is_small_line : bool,size : usize, multiple_sizes : bool, tpa : bool, tpb : bool){
     let dtype = DType::F32;
    
 
@@ -44,72 +44,23 @@ fn test_matmul(device: &Device, group : &mut criterion::BenchmarkGroup<criterion
         if let Device::WebGpu(wgpu) = device{
 
             let algs;
-            if is_small_line{ // we test additional kernels: 
-                algs = vec![
-                    MatmulAlgorithm::Matmul7,
-                    MatmulAlgorithm::Matmul1,
 
-
-                    MatmulAlgorithm::Matmul16_16,
-                    MatmulAlgorithm::Matmul32_32(false, false, true, false),
-                    MatmulAlgorithm::Matmul64_64(false, false),
-                    MatmulAlgorithm::Matmul64_64_8_8(false, false),
-                    MatmulAlgorithm::Matmul128_128(false, false),
-
-                    MatmulAlgorithm::Matmul32_32(false, false, true, false),
-
-                    MatmulAlgorithm::Matmul1_128(false, false, true), 
-                    //MatmulAlgorithm::Matmul5_1_128(true, false, true, true),
-                    //MatmulAlgorithm::Matmul5_1_128(true, false, true, false),
-                    MatmulAlgorithm::Matmul16_64(false, false, true, false),
-                    //MatmulAlgorithm::Matmul5_16_64(true, false, true, false),
-
-                    // MatmulAlgorithm::Matmul5_1_128(false, true, true, true),
-                    // MatmulAlgorithm::Matmul5_1_128(false, true, true, false), 
-                    // MatmulAlgorithm::Matmul5_1_128(true, true, true, true),
-                    // MatmulAlgorithm::Matmul5_1_128(true, true, true, false),
-                    // MatmulAlgorithm::Matmul5_16_64(false, true, true, false),
-                    // MatmulAlgorithm::Matmul5_16_64(true, true, true, false),
+            algs = vec![
+                MatmulAlgorithm::Matmul64_64_8_8(false, false),
+                MatmulAlgorithm::Matmul64_64_4_8(false, false),
+                MatmulAlgorithm::MatmulX,
+                MatmulAlgorithm::Matmul7,
+                MatmulAlgorithm::Matmul1,
+                MatmulAlgorithm::Matmul16_16,
+                MatmulAlgorithm::Matmul32_32(false, false, true, true),
+                MatmulAlgorithm::Matmul24_24(false,false, true, true),
+                MatmulAlgorithm::Matmul24_48(false,false, true, true),
+                MatmulAlgorithm::Matmul64_64(false, false),
+                
+                MatmulAlgorithm::Matmul64_128(false, false),
+                MatmulAlgorithm::Matmul64_128_8_8(false, false),
+                MatmulAlgorithm::Matmul128_128(false, false),
                 ];
-            }
-            else{
-                algs = vec![
-                    MatmulAlgorithm::Matmul64_64_8_8(false, false),
-                    MatmulAlgorithm::MatmulX,
-                    MatmulAlgorithm::Matmul7,
-                    MatmulAlgorithm::Matmul1,
-                    MatmulAlgorithm::Matmul16_16,
-                    MatmulAlgorithm::Matmul32_32(false, false, true, true),
-                    MatmulAlgorithm::Matmul24_24(false,false, true, true),
-                    MatmulAlgorithm::Matmul24_48(false,false, true, true),
-                    MatmulAlgorithm::Matmul64_64(false, false),
-                   
-                    MatmulAlgorithm::Matmul64_128(false, false),
-                    MatmulAlgorithm::Matmul64_128_8_8(false, false),
-                    MatmulAlgorithm::Matmul128_128(false, false),
-
-                    // MatmulAlgorithm::Matmul5_32_32(true, false, true, true),
-                    // MatmulAlgorithm::Matmul5_64_64(true, false),
-                    // MatmulAlgorithm::Matmul5_64_64_8_8(true, false),
-                    // MatmulAlgorithm::Matmul5_128_128(true, false),
-                 
-                    //MatmulAlgorithm::Matmul5_32_32(true, false, true, true),
-                    //MatmulAlgorithm::Matmul5_64_64(true, false),
-                    //MatmulAlgorithm::Matmul5_64_64_8_8(true, false),
-                    //MatmulAlgorithm::Matmul5_128_128(true, false),  
-
-                    // MatmulAlgorithm::Matmul5_32_32(false, true, true, true),
-                    // MatmulAlgorithm::Matmul5_64_64(false, true),
-                    // MatmulAlgorithm::Matmul5_64_64_8_8(false, true),
-                    // MatmulAlgorithm::Matmul5_128_128(false, true),
-                 
-                    // MatmulAlgorithm::Matmul5_32_32(true, true, true, true),
-                    // MatmulAlgorithm::Matmul5_64_64(true, true),
-                    // MatmulAlgorithm::Matmul5_64_64_8_8(true, true),
-                    // MatmulAlgorithm::Matmul5_128_128(true, true),  
-                   ];
-            }
-            
            
             for alg in algs {
                 *(wgpu.matmul_alg.lock().unwrap()) = alg.clone(); 
@@ -210,24 +161,24 @@ fn criterion_benchmark(c: &mut Criterion) {
     // }
     // group.finish();
 
-    // let mut group = c.benchmark_group("matmul_(2048x2048 * 2048x2048)");
-    // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, false, false);
-    //     test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, true, false);
-    //     test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, false, true);
-    //     test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, true, true);
-    //  }
-    // group.finish();
+    let mut group = c.benchmark_group("matmul_(2048x2048 * 2048x2048)");
+    for device in handler.devices.iter() {
+        test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, false, false);
+        // test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, true, false);
+        // test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, false, true);
+        // test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, true, true);
+     }
+    group.finish();
 
     
-    // let mut group = c.benchmark_group("matmul_(32x2304 * 2304x5120)");
-    // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group, 1, 32, 5120, 2304, false, 1, false, false, false);
-    //     // test_matmul(device, &mut group, 1, 32, 5120, 2304, false, 1, false, true, false);
-    //     // test_matmul(device, &mut group, 1, 32, 5120, 2304, false, 1, false, false, true);
-    //     // test_matmul(device, &mut group, 1, 32, 5120, 2304, false, 1, false, true, true);
-    // }
-    // group.finish();
+    let mut group = c.benchmark_group("matmul_(32x2304 * 2304x5120)");
+    for device in handler.devices.iter() {
+        test_matmul(device, &mut group, 1, 32, 5120, 2304, false, 1, false, false, false);
+        // test_matmul(device, &mut group, 1, 32, 5120, 2304, false, 1, false, true, false);
+        // test_matmul(device, &mut group, 1, 32, 5120, 2304, false, 1, false, false, true);
+        // test_matmul(device, &mut group, 1, 32, 5120, 2304, false, 1, false, true, true);
+    }
+    group.finish();
 
     // let mut group = c.benchmark_group("matmul_(64x2304 * 2304x5120)");
     // for device in handler.devices.iter() {

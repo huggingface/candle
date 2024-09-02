@@ -10,6 +10,7 @@ use std::hash::Hash;
 use candle_wgpu_kernels::{Constants, EntryPoint, Pipelines};
 use rand::SeedableRng;
 use tracing::instrument;
+use wgpu::naga::back;
 use wgpu::{Backends, InstanceDescriptor, InstanceFlags};
 
 use crate::backend::BackendStorage;
@@ -25,33 +26,6 @@ use super::wgpu_functions::{ConstArray, KernelParameterMeta};
 use super::wgpu_functions::{self, unary::UnaryOperation, MetaArray};
 use super::WgpuStorage;
 
-
-#[derive(Debug)]
-pub struct WgpuDeviceConfig{
-    pub meta_buffer_size : u32, //the size of the buffer used for storing meta information (e.g. input layouts)
-    pub max_workload_size : u64, //specifys how much max floating point operations will be queued in one single command. (e.g. a matrix multiplication of 1000x1000 * 1000x1000 would be about 1gb operations, so only 2 of theses may be queued in one command buffer) 
-    pub buffer_cached_max_allowed_size : u64,//maximum size for cached wgpu::buffers. When this size is reached, free buffers will be deleted until only 75% of this max size is used. 
-                                             //if this value is to low for the desired model, the performance may drop significatly(e.g. model needs at least 2gb of data, if this value would be e.g. only 100mb all free buffers would be deleted after each command)
-    pub use_cache : bool, 
-    pub queue_delay_miliseconds : u32, //specifys the amout of time to wait after each command (may be usefull for debuging purposes if one expect, that the impl causes to much stress on the gpu)
-    pub flush_gpu_before_buffer_init : bool, //when data is copied from cpu to the wgpu device, all previous commands may be flushed, to allow other buffers to be freed and reused. 
-                                            //But on webGpu this may not be optimal, as we can not wait for commands to finish (as this functin is not asyny) 
-    pub buffer_mapping_size : u32,
-}
-
-impl Default for WgpuDeviceConfig {
-    fn default() -> WgpuDeviceConfig {
-        WgpuDeviceConfig {
-            meta_buffer_size : 10*1024*1024,
-            max_workload_size :  1024u64*1024*1024*2, 
-            buffer_cached_max_allowed_size : 1024*1024*1024*8,                                        
-            use_cache : true,
-            queue_delay_miliseconds : 0,
-            flush_gpu_before_buffer_init : true,
-            buffer_mapping_size : 3,
-        }
-    }
-}
 
 #[derive(Debug)]
 pub (crate) enum MlQueue{
@@ -75,7 +49,8 @@ impl Hash for OrderedFloat {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature="wgpu_debug", derive(serde::Serialize, serde::Deserialize))]
 pub struct OpIsInplaceable{
     pub input1_inplaceable : bool,
     pub input2_inplaceable : bool,
@@ -88,17 +63,11 @@ impl OpIsInplaceable {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub (crate) struct PipelineType(pub candle_wgpu_kernels::Pipelines, pub usize, pub OpIsInplaceable);
+#[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), derive(serde::Serialize, serde::Deserialize))]
+pub struct PipelineType(pub candle_wgpu_kernels::Pipelines, pub (crate) usize, #[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), serde(skip))] pub (crate) OpIsInplaceable);
 
-//TODO: use BindgroupReferenceFull instead of BindgroupReference
 pub (crate) type BindGroupReference = crate::wgpu_backend::cache::BindgroupReferenceFull;
 
-#[derive(Debug)]
-pub (crate) enum DispatchedBindgroup {
-    BindgroupReference(BindGroupReference),
-    CachedBindgroup(CachedBindgroupId),
-    None //optimized away
-  }
 
 #[derive(Debug)]
 pub (crate) struct MlQueueDispatch{
@@ -106,8 +75,9 @@ pub (crate) struct MlQueueDispatch{
     pub (crate) y : u32, 
     pub (crate) z : u32,
     pub (crate) pipeline : PipelineType,
-    pub (crate) bindgroup : DispatchedBindgroup,
     pub (crate) pipeline_cached : Option<Arc<wgpu::ComputePipeline>>,
+    pub (crate) bindgroup : BindGroupReference,
+    pub (crate) bindgroup_cached : Option<CachedBindgroupId>,
     pub (crate) meta : u32,
     pub (crate) workload_size : usize, //the total size needed to calculate. Needed so we do not queue to many operations at once.
     #[cfg(feature = "wgpu_debug")]
@@ -130,12 +100,13 @@ pub struct QueueBuffer{
     global_command_index : u32,
     pub (crate) id_to_const_array : Vec<HashMap<String, f64>>,
     pub (crate) current_meta : u32,
-    pub (crate) last_buffer : Option<CachedBufferId> //will be used to wait for the last command queue
+    pub (crate) last_buffer : Option<CachedBufferId>, //will be used to wait for the last command queue
 }
 
 impl QueueBuffer {
     pub fn new(size : u32) -> Self {
-        Self {  command_queue: vec![], meta_array :MetaArray::new(size), current_meta : 0 , const_array: ConstArray::new(), const_id_map : ObjectToIdMapper::new() , id_to_const_array : Vec::new(), last_buffer : None, global_command_index : 1}
+        Self {  command_queue: vec![], meta_array :MetaArray::new(size), current_meta : 0 , const_array: ConstArray::new(), const_id_map : ObjectToIdMapper::new() , id_to_const_array : Vec::new(), last_buffer : None, global_command_index : 1,
+        }
     }
 
     pub fn init(&mut self){
@@ -267,6 +238,20 @@ impl QueueBuffer {
 
 }
 
+
+#[derive(Debug, Hash,Eq, PartialEq, Clone)]
+#[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), derive(serde::Serialize, serde::Deserialize))]
+pub struct DebugPipelineRecording{
+    pub(crate)x : u32, 
+    pub(crate)y : u32, 
+    pub(crate)z : u32, 
+    pub pipeline : super::device::PipelineType, 
+    pub(crate) meta : Vec<u32>,
+    pub(crate) bindgroup: BindGroupReference,
+    pub count  : u32
+} 
+
+
 #[derive(Clone)]
 pub enum MatmulAlgorithm{
     MatmulX,
@@ -277,6 +262,7 @@ pub enum MatmulAlgorithm{
     Matmul32_32(bool, bool, bool, bool), //Prefetch, NoPadded, LoadA, LoadB
     Matmul64_64(bool, bool),
     Matmul64_64_8_8(bool, bool),
+    Matmul64_64_4_8(bool, bool),
     Matmul64_128(bool, bool),
     Matmul64_128_8_8(bool, bool),
     Matmul128_128(bool, bool),
@@ -298,6 +284,7 @@ impl fmt::Debug for MatmulAlgorithm{
             Self::Matmul32_32(prefatch, no_padded, loada, loadb) => write!(f, "Matmul5_32_32({}{}{}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}, if !*loada {"_LoadA"} else {""}, if !*loadb {"_LoadB"} else {""}),
             Self::Matmul64_64(prefatch, no_padded) => write!(f, "Matuml5_64_64({}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}),
             Self::Matmul64_64_8_8(prefatch, no_padded) => write!(f, "Matmul5_64_64_8_8({}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}),
+            Self::Matmul64_64_4_8(prefatch, no_padded) => write!(f, "Matmul5_64_64_4_8({}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}),
             Self::Matmul64_128(prefatch, no_padded) => write!(f, "Matuml5_64_128({}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}),
             Self::Matmul64_128_8_8(prefatch, no_padded) => write!(f, "Matmul5_64_128_8_8({}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}),
             Self::Matmul128_128(prefatch, no_padded) => write!(f, "Matmul5_128_128({}{})", if *prefatch {"_Prefetch"} else {""},  if *no_padded {"_NoPadded"} else {""}),
@@ -314,6 +301,7 @@ impl fmt::Debug for MatmulAlgorithm{
 #[derive(Debug)]
 pub struct WgpuDeviceInner{
     pub device : wgpu::Device, 
+    pub backend : wgpu::Backend,
     pub device_limits : wgpu::Limits, //we cache the limits here, because device.limit() was relatively slow on the browser
 
     pub queue : wgpu::Queue,
@@ -335,7 +323,7 @@ pub struct WgpuDeviceInner{
     #[cfg(feature = "wgpu_debug")]
     pub debug : DebugInfo,
 
-    pub configuration : WgpuDeviceConfig,
+    pub configuration : crate::WgpuDeviceConfig,
 
     pub matmul_alg : Mutex<MatmulAlgorithm>
 }
@@ -354,8 +342,25 @@ impl std::ops::Deref for WgpuDevice{
 }
 
 impl WgpuDevice{
-    pub (crate) async fn create(_: usize, configuration : WgpuDeviceConfig) -> crate::Result<Self>{
-        let instance = wgpu::Instance::new(InstanceDescriptor{ backends: Backends::PRIMARY, flags:InstanceFlags::default() , dx12_shader_compiler: wgpu::Dx12Compiler::Fxc, gles_minor_version: wgpu::Gles3MinorVersion::Automatic });
+    pub (crate) async fn create(_: usize, configuration : crate::WgpuDeviceConfig) -> crate::Result<Self>{
+        let mut backend = wgpu::Backends::empty();
+        if configuration.backend & crate::WgpuBackends::vulkan(){
+            backend.insert(Backends::VULKAN);
+        }
+        if configuration.backend & crate::WgpuBackends::dx12(){
+            backend.insert(Backends::DX12);
+        }
+        if configuration.backend & crate::WgpuBackends::gl(){
+            backend.insert(Backends::GL);
+        }
+        if configuration.backend & crate::WgpuBackends::metal(){
+            backend.insert(Backends::METAL);
+        }
+        if configuration.backend & crate::WgpuBackends::browser_webgpu(){
+            backend.insert(Backends::BROWSER_WEBGPU);
+        }
+        
+        let instance = wgpu::Instance::new(InstanceDescriptor{ backends: backend, flags:InstanceFlags::default() , dx12_shader_compiler: wgpu::Dx12Compiler::Fxc, gles_minor_version: wgpu::Gles3MinorVersion::Automatic });
         
         // `request_adapter` instantiates the general connection to the GPU
         let adapter = instance
@@ -391,6 +396,7 @@ impl WgpuDevice{
             ).await.map_err(|err| crate::Error::WebGpu(err.to_string().into()))?;
             log::info!("Device Requested");
         
+
         #[cfg(feature = "wgpu_debug")]
         let debug_info = super::debug_info::DebugInfo::new(&device);
         
@@ -415,6 +421,7 @@ impl WgpuDevice{
             inner : Arc::new(WgpuDeviceInner{
                 device: device,
                 device_limits: device_limits,
+                backend : adapter.get_info().backend,
                 queue: queue,
                 shader : Mutex::new(HashMap::new()),
                 rand_state: Mutex::new(rand::rngs::StdRng::from_entropy()),
@@ -452,6 +459,53 @@ impl WgpuDevice{
         println!("Buffer: created: {}, resued : {}", cache.buffers.buffer_counter(), cache.buffers.buffer_reuse_counter());
         println!("Bindgroup: created: {}, resued : {}", cache.bindgroups.bindgroup_counter(), cache.bindgroups.cached_bindgroup_use_counter());
         println!("Inplace used: unary: {}, binary {}, copy: {}", self.unary_inplace_counter.get(), self.binary_inplace_counter.get(), self.copy_inplace_counter.get());
+    }
+
+    #[cfg(feature = "wgpu_debug")]
+    pub fn get_used_pipelines(&self) -> (String, String){
+        let cache = self.cache.lock().unwrap();
+        let queue = self.command_queue.lock().unwrap();
+        let consts = &queue.id_to_const_array;
+       
+        let debug : Vec<_> = cache.debug.iter().map(|(_,v)| v).collect();
+
+        return (serde_json::to_string(&debug).unwrap(), serde_json::to_string(consts).unwrap()); 
+    }
+
+    //allows to load const debug info(for simulating calls)
+    pub fn load_debug_info(&self, consts : Vec<HashMap<String, f64>>) {
+        let mut queue = self.command_queue.lock().unwrap();
+        queue.id_to_const_array = consts;
+
+        queue.const_id_map.next_id = queue.id_to_const_array.len();
+    }
+
+    pub fn simulate_command(&self, command : &DebugPipelineRecording, dest_buffer : &WgpuStorage, input1_buffer : &WgpuStorage,input2_buffer : &WgpuStorage,input3_buffer : &WgpuStorage){
+        let mut command_queue = wgpu_functions::get_meta(&self);
+        command_queue.get_meta_mut().append(&mut command.meta.clone());
+
+        let new_input = match command.bindgroup.get_input(){
+            super::cache::BindgroupInputBase::Bindgroup0 => super::cache::BindgroupInputBase::Bindgroup0,
+            super::cache::BindgroupInputBase::Bindgroup1(_, is_16) => super::cache::BindgroupInputBase::Bindgroup1(input1_buffer.buffer, *is_16),
+            super::cache::BindgroupInputBase::Bindgroup2(_, _, is_16) => super::cache::BindgroupInputBase::Bindgroup2(input1_buffer.buffer,input2_buffer.buffer, *is_16),
+            super::cache::BindgroupInputBase::Bindgroup3(_, _, _)  => super::cache::BindgroupInputBase::Bindgroup3(input1_buffer.buffer, input2_buffer.buffer, input3_buffer.buffer),
+        };
+
+        let q = MlQueue::Dispatch(super::device::MlQueueDispatch {
+            x: command.x,
+            y: command.y,
+            z: command.z,
+            pipeline:  command.pipeline.clone(),
+            pipeline_cached : None,
+            bindgroup: BindGroupReference::new(dest_buffer.buffer, new_input),
+            bindgroup_cached : None,
+            meta: command_queue.current_meta,
+            workload_size:  0 as usize,
+            #[cfg(feature = "wgpu_debug")]
+            debug : None
+        });
+        command_queue.command_queue.push(q);
+
     }
 
     #[cfg(feature = "wgpu_debug")]
@@ -531,7 +585,7 @@ impl WgpuDevice{
         ).collect());
     }
 
-    #[instrument]
+    #[instrument(skip(device, shader, pipeline_layout))]
     fn load_pipeline(device : &wgpu::Device, shader : Arc<wgpu::ShaderModule>, pipeline : &PipelineType, pipeline_layout : &wgpu::PipelineLayout, consts : &HashMap<String, f64>) -> wgpu::ComputePipeline{
         let entry_point = pipeline.0.get_entry_point();
         if consts.is_empty(){
@@ -560,7 +614,7 @@ impl WgpuDevice{
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self, pipeline_layout))]
     pub (crate) fn get_pipeline(&self, pipeline: &PipelineType, pipeline_layout : &wgpu::PipelineLayout, consts : &HashMap<String, f64>) -> crate::Result<Arc<wgpu::ComputePipeline>> {
         let shader = pipeline.0.get_shader();
         let mut shaders = self.shader.lock().unwrap();

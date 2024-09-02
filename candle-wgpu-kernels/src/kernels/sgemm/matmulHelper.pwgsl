@@ -31,29 +31,35 @@ override CONSTV_5 : u32 = 0u;
 //#define op_matmul_output_stride_b     op_meta[8]
 //#define op_matmul_output_stride_n     op_meta[9]
 
-const RTSM : u32 = TSM/WPTM; //1       // The reduced tile-size in dimension M
-const RTSN : u32 = TSN/WPTN; //32       // The reduced tile-size in dimension N
-const THREADS : u32 = RTSM * RTSN;
-const LPTA : u32 = (TSK*TSM)/THREADS; //1 Loads-per-thread for A
-const LPTB : u32 = (TSK*TSN)/THREADS; //8 Loads-per-thread for B
+#ifndef RTSM
+#definec RTSM TSM/WPTM
+#endif
+#ifndef RTSN
+#definec RTSN TSN/WPTN
+#endif
+
+#definec NEEDEDRTSM TSM/WPTM
+#definec NEEDEDRTSN TSN/WPTN
+
+#definec THREADS RTSM * RTSN
+#definec LPTA (TSK*TSM)/THREADS
+#definec LPTB (TSK*TSN)/THREADS
 
 override IsOutputPadded : bool = false;
 
-#assert ((TSK*TSM)%((TSM/WPTM) * (TSN/WPTN))) == 0
-#assert ((TSK*TSN)%((TSM/WPTM) * (TSN/WPTN))) == 0
-#assert (TSM/WPTM) > 0
-#assert (TSN/WPTN) > 0
+#assert (TSK*TSM)%(THREADS) == 0
+#assert ((TSK*TSN)%(THREADS)) == 0
+#assert RTSM > 0
+#assert RTSN > 0
 #assert TSM % WPTM == 0
 #assert TSN % WPTN == 0
 
 
-#ifdef WIDTHA
-#else
+#ifndef WIDTHA
 #define WIDTHA 4
 #endif
 
-#ifdef WIDTHB
-#else
+#ifndef WIDTHB
 #define WIDTHB 4
 #endif
 
@@ -78,8 +84,8 @@ override IsOutputPadded : bool = false;
 
 
 
-#assert ((TSK*TSM)/((TSM/WPTM) * (TSN/WPTN))) % WIDTHA == 0
-#assert ((TSK*TSN)/((TSM/WPTM) * (TSN/WPTN))) % WIDTHB == 0
+#assert (LPTA) % WIDTHA == 0
+#assert (LPTB) % WIDTHB == 0
 
 
 @group(0) @binding(2)
@@ -109,16 +115,17 @@ var<workgroup> Bsub: array<array<array<DTYPE, TSN>, TSK>, PREFETCH>;
 
 #ifndef WONT_USE_LOADA
 fn loadA(tile : u32, tid : u32, t_offset1 : u32){
-    for(var la = 0u; la < LPTA / WIDTHA; la += 1u){
-        let id = la + tid * (LPTA / WIDTHA);
-        //let id = la*RTSN*RTSM + tid;
-        
-        // let id0_128 = id % (TSN / WIDTH);
-        // let id0_16 = id / (TSN / WIDTH);
+    #definec LPTAWITDH LPTA / WIDTHA
+    #definec TSKAWIDTH TSK / WIDTHA
+    #definec TSMAWIDTH TSM / WIDTHA
+    
+    for(var la = 0u; la < LPTAWITDH; la += 1u){
+        //let id = la + tid * (LPTA / WIDTHA);
+        let id = la*THREADS + tid;
 
         if op_matmul_input1_stride_k == 1{
-            let id_k = id % (TSK / WIDTHA);
-            let id_m = id / (TSK / WIDTHA);
+            let id_k = id % TSKAWIDTH;
+            let id_m = id / TSKAWIDTH;
 
             let vecA : ARRAY_TYPEA = v_input_a[t_offset1 + id_k * op_matmul_input1_stride_k + id_m * (op_matmul_input1_stride_m / WIDTHA)];
             #if WIDTHA == 1
@@ -135,8 +142,8 @@ fn loadA(tile : u32, tid : u32, t_offset1 : u32){
 
         }
         else{
-            let id_k = id / (TSM / WIDTHA);
-            let id_m = id % (TSM / WIDTHA);
+            let id_k = id / TSMAWIDTH;
+            let id_m = id % TSMAWIDTH;
 
             let vecA : ARRAY_TYPEA = v_input_a[t_offset1 + id_k * (op_matmul_input1_stride_k / WIDTHA) + id_m * op_matmul_input1_stride_m];
             #if WIDTHA == 1
@@ -151,25 +158,23 @@ fn loadA(tile : u32, tid : u32, t_offset1 : u32){
                 Asub[tile][id_k][WIDTHA* id_m + 3] = vecA.w;
             #endif
         }
-        //Asub[tile][id0_16][id0_128] = v_input_a[t_offset1 + id0_16 * op_matmul_input1_stride_k + id0_128 * op_matmul_input1_stride_m];
     }
 }
 #endif
 
 #ifndef WONT_USE_LOADB
 fn loadB(tile : u32, tid : u32, t_offset2 : u32){
-    for(var lb = 0u; lb < LPTB / WIDTHB; lb += 1u){
-        let id = lb + tid * (LPTB / WIDTHB);
-        //let id = lb*RTSN*RTSM + tid;
-        // let id0_128 = id % (TSN / WIDTH);
-        // let id0_16 = id / (TSN / WIDTH);
+    #definec LPTBWITDH LPTB / WIDTHB
+    #definec TSKBWIDTH TSK / WIDTHB
+    #definec TSNBWIDTH TSN / WIDTHB
 
-        // let id_n = select(op_matmul_input2_stride_n == 1, id % (TSN / WIDTH),  id / (TSK / WIDTH));
-        // let id_k = select(op_matmul_input2_stride_n == 1, id / (TSN / WIDTH),  id % (TSK / WIDTH));
+    for(var lb = 0u; lb < LPTBWITDH; lb += 1u){
+        //let id = lb + tid * ( LPTB / WIDTHB);
+        let id = lb*THREADS + tid;
 
         if (op_matmul_input2_stride_n == 1){
-            let id_n = id % (TSN / WIDTHB);
-            let id_k = id / (TSN / WIDTHB);
+            let id_n = id % TSNBWIDTH;
+            let id_k = id / TSNBWIDTH;
 
             let vecB : ARRAY_TYPEB = v_input_b[t_offset2 + id_k * (op_matmul_input2_stride_k/WIDTHB) + id_n * op_matmul_input2_stride_n];
             #if WIDTHB == 1
@@ -185,8 +190,8 @@ fn loadB(tile : u32, tid : u32, t_offset2 : u32){
             #endif
         }
         else{
-            let id_n = id / (TSK / WIDTHB);
-            let id_k = id % (TSK / WIDTHB);
+            let id_n = id / TSKBWIDTH;
+            let id_k = id % TSKBWIDTH;
 
             let vecB : ARRAY_TYPEB = v_input_b[t_offset2 + id_k * op_matmul_input2_stride_k + id_n * op_matmul_input2_stride_n / WIDTHB];
             #if WIDTHB == 1
@@ -196,7 +201,7 @@ fn loadB(tile : u32, tid : u32, t_offset2 : u32){
                 Bsub[tile][WIDTHB * id_k + 1][id_n] = vecB.y;
             #elif WIDTHB == 4
                 Bsub[tile][WIDTHB * id_k][id_n] = vecB.x;
-                Bsub[tile][WIDTHB * id_k + 1][id_n ] = vecB.y;
+                Bsub[tile][WIDTHB * id_k + 1][id_n] = vecB.y;
                 Bsub[tile][WIDTHB * id_k + 2][id_n] = vecB.z;
                 Bsub[tile][WIDTHB * id_k + 3][id_n] = vecB.w;
             #endif
@@ -258,26 +263,21 @@ fn loadB(tile : u32, tid : u32, t_offset2 : u32){
 
 
 #ifndef WONT_USE_LOADA
-override PreLoadA : bool = true;
+#define PreLoadA
 #endif
 
 #ifndef WONT_USE_LOADB
-override PreLoadB : bool = true;
+#define PreLoadB
 #endif
 
 
 
 fn load(tile : u32, tid : u32, t_offset1 : u32, t_offset2 : u32){
-    #ifndef WONT_USE_LOADA
-        if PreLoadA{
-            loadA(tile, tid, t_offset1);
-        }
+    #ifdef PreLoadA
+        loadA(tile, tid, t_offset1);
     #endif
-
-    #ifndef WONT_USE_LOADB
-        if PreLoadB{
-            loadB(tile, tid, t_offset2);
-        }
+    #ifdef PreLoadB
+        loadB(tile, tid, t_offset2);
     #endif
 }
 
@@ -288,19 +288,12 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
 
     let gx = TSN*group_id.x + lx;
     let gy = TSM*group_id.y + ly;
-   
-    let batch = group_id.z;
-
-    let output_size_of_one_batch = select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u); 
-
-    let input1_offset = op_matmul_input1_offset;
-    let input2_offset = op_matmul_input2_offset;
 
     let input1_stride_b = select(op_matmul_use_batch, op_matmul_input1_stride_b, 0u); 
     let input2_stride_b = select(op_matmul_use_batch, op_matmul_input2_stride_b, 0u); 
 
-    let m_input1_offset = (input1_offset + op_matmul_input1_stride_m * TSM * group_id.y + batch * input1_stride_b);
-    let m_input2_offset = (input2_offset + op_matmul_input2_stride_n * TSN * group_id.x + batch * input2_stride_b);
+    let m_input1_offset = (op_matmul_input1_offset + op_matmul_input1_stride_m * TSM * group_id.y + group_id.z * input1_stride_b);
+    let m_input2_offset = (op_matmul_input2_offset + op_matmul_input2_stride_n * TSN * group_id.x + group_id.z * input2_stride_b);
 
     let max_k = op_matmul_k;
 
@@ -310,41 +303,48 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
 
     let tid = local_id.y*RTSN + local_id.x;
 
-    var new_t = 0u;
     var tt = 0u;
-    if PREFETCH == 2{ //use prefetch:
+    //use prefetch:
+    #if PREFETCH == 2
         load(tt, tid, m_input1_offset/WIDTHA, m_input2_offset/WIDTHA);
         workgroupBarrier();
-    }
+    #endif
 
-    for(var t = 0u; t < max_k; t=new_t){
-        new_t += TSK;
-        if PREFETCH != 2{ //normal load
-            let t_offset1 = (m_input1_offset + t * op_matmul_input1_stride_k)/WIDTHA;
+    for(var t = 0u; t < max_k; ){
+        //normal load
+        #if PREFETCH != 2 
+        {
+            let t_offset1 = (m_input1_offset + t * op_matmul_input1_stride_k)/WIDTHA;   
             let t_offset2 = (m_input2_offset + t * op_matmul_input2_stride_k)/WIDTHB;
             load(0u, tid, t_offset1, t_offset2); //load the current Tile
             workgroupBarrier();
         }
+        #endif
 
+        #ifndef PreLoadA
         let t_offset1 = m_input1_offset + t * op_matmul_input1_stride_k;
+        #endif
+
+        #ifndef PreLoadB
         let t_offset2 = m_input2_offset + t * op_matmul_input2_stride_k;
-        
+        #endif
+
+        #if RTSM != TSM/WPTM || RTSN != TSM/WPTN 
+            if local_id.y < NEEDEDRTSM && local_id.x < NEEDEDRTSN{
+        #endif
         // Loop over the values of a single tile
         for (var k=0u; k<TSK; k++) {
 
             // Cache the values of Bsub in registers
-            #ifndef WONT_USE_LOADB
-                if PreLoadB{
-                    for (var wn=0u; wn<WPTN; wn++) {
-                        b_reg[wn] = Bsub[tt][k][lx + wn];
-                    }
+            #ifdef PreLoadB
+                for (var wn=0u; wn<WPTN; wn++) {
+                    b_reg[wn] = Bsub[tt][k][lx + wn];
                 }
-                else{
-            #endif
-                
+            #else    
                 #if WPTN % WIDTHB == 0
+                    #definec WPTNBWIDTH WPTN / WIDTHB
                     if op_matmul_input2_stride_n == 1{
-                        for (var wn=0u; wn<WPTN/WIDTHB; wn++) {
+                        for (var wn=0u; wn<WPTNBWIDTH; wn++) {
                             let id = t_offset2 + k * op_matmul_input2_stride_k + (lx + wn*WIDTHB) * op_matmul_input2_stride_n;
                             let vecB : ARRAY_TYPEB = v_input_b[id / WIDTHB];
                             #if WIDTHB == 1
@@ -378,23 +378,17 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
                 #if WPTN % WIDTHB == 0
                     }
                 #endif
-            
-            #ifndef WONT_USE_LOADB
-                }
             #endif
 
             // Perform the computation
-            #ifndef WONT_USE_LOADA
-                if PreLoadA {
-                    for (var wm=0u; wm<WPTM; wm++) {
-                        a_reg = Asub[tt][k][ly + wm];
-                        for (var wn=0u; wn<WPTN; wn++) {
-                            acc[wm][wn] += a_reg * b_reg[wn];
-                        }
+            #ifdef PreLoadA
+                for (var wm=0u; wm<WPTM; wm++) {
+                    a_reg = Asub[tt][k][ly + wm];
+                    for (var wn=0u; wn<WPTN; wn++) {
+                        acc[wm][wn] += a_reg * b_reg[wn];
                     }
                 }
-                else{
-            #endif
+            #else
                 for (var wm=0u; wm<WPTM; wm++) {
                     let id = t_offset1 + k * op_matmul_input1_stride_k + (ly + wm) * op_matmul_input1_stride_m;
                     let vecA : ARRAY_TYPEA = v_input_a[id / WIDTHA];
@@ -410,70 +404,71 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
                         acc[wm][wn] += a_reg * b_reg[wn];
                     }
                 }    
-            #ifndef WONT_USE_LOADA
-                }
             #endif
         }
 
-        if PREFETCH == 2{ //use prefetch:
+        #if RTSM != TSM/WPTM || RTSN != TSM/WPTN 
+            }
+        #endif
+
+        t +=TSK;
+
+        #if PREFETCH == 2 //use prefetch:
+        {
             tt = tt ^ 1;
-            if (new_t < max_k){
-                let t_offset1 = (m_input1_offset + new_t * op_matmul_input1_stride_k)/WIDTHA;
-                let t_offset2 = (m_input2_offset + new_t * op_matmul_input2_stride_k)/WIDTHB;
+            if (t < max_k){
+                let t_offset1 = (m_input1_offset + t * op_matmul_input1_stride_k)/WIDTHA;
+                let t_offset2 = (m_input2_offset + t * op_matmul_input2_stride_k)/WIDTHB;
                 load(tt, tid, t_offset1, t_offset2); //load the next Tile
             }
         }
+        #endif
         workgroupBarrier();
     }
-    
-    
-    // let dest_index = batch * output_size_of_one_batch + gy * op_matmul_n + gx;
-    // // Store the final results in C
-    // for (var wm=0u; wm<WPTM; wm++) {
-    //     let globalRow = dest_index + wm * op_matmul_n;
-    //     for (var wn=0u; wn<WPTN; wn++) {
-    //         var globalCol = globalRow + wn;
-    //         v_dest[globalCol] = acc[wm][wn];
-    //     }
-    // }
-    let dest_index = batch * output_size_of_one_batch + gy * op_matmul_n + gx + op_matmul_dest_offset;
-    if IsOutputPadded{
-        let is_in_gy = gy < op_matmul_m;
-        let is_in_gx = gx < op_matmul_n;
-        let is_output_pixel = is_in_gy && is_in_gx;
+    #if RTSM != TSM/WPTM || RTSN != TSM/WPTN 
+        if local_id.y < NEEDEDRTSM && local_id.x < NEEDEDRTSN{
+    #endif
+        let dest_index = group_id.z * select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u) + gy * op_matmul_n + gx + op_matmul_dest_offset;
+        if IsOutputPadded{
+            let is_in_gy = gy < op_matmul_m;
+            let is_in_gx = gx < op_matmul_n;
+            let is_output_pixel = is_in_gy && is_in_gx;
 
-        let wcount_x = select(is_in_gx, min(op_matmul_n - gx, WPTN), 0u);
-        let wcount_y = select(is_in_gy, min(op_matmul_m - gy, WPTM), 0u);
-        if(is_output_pixel){
-            if (wcount_y == WPTM && wcount_x == WPTN){
-                for (var wm=0u; wm<WPTM; wm++) {
-                    let globalRow = dest_index + wm * op_matmul_n;
-                    for (var wn=0u; wn<WPTN; wn++) {
-                        var globalCol = globalRow + wn;
-                        v_dest[globalCol] = acc[wm][wn];
+            let wcount_x = select(is_in_gx, min(op_matmul_n - gx, WPTN), 0u);
+            let wcount_y = select(is_in_gy, min(op_matmul_m - gy, WPTM), 0u);
+            if(is_output_pixel){
+                if (wcount_y == WPTM && wcount_x == WPTN){
+                    for (var wm=0u; wm<WPTM; wm++) {
+                        let globalRow = dest_index + wm * op_matmul_n;
+                        for (var wn=0u; wn<WPTN; wn++) {
+                            var globalCol = globalRow + wn;
+                            v_dest[globalCol] = acc[wm][wn];
+                        }
                     }
                 }
-            }
-            else{
-                for (var wm=0u; wm< wcount_y; wm++) {
-                    let globalRow = dest_index + wm * op_matmul_n;
-                    for (var wn=0u; wn< wcount_x; wn++) {
-                        var globalCol = globalRow + wn;
-                        v_dest[globalCol] = acc[wm][wn];
+                else{
+                    for (var wm=0u; wm< wcount_y; wm++) {
+                        let globalRow = dest_index + wm * op_matmul_n;
+                        for (var wn=0u; wn< wcount_x; wn++) {
+                            var globalCol = globalRow + wn;
+                            v_dest[globalCol] = acc[wm][wn];
+                        }
                     }
                 }
             }
         }
-    }
-    else{
-        for (var wm=0u; wm<WPTM; wm++) {
-            let globalRow = dest_index + wm * op_matmul_n;
-            for (var wn=0u; wn<WPTN; wn++) {
-                var globalCol = globalRow + wn;
-                v_dest[globalCol] = acc[wm][wn];
+        else{
+            for (var wm=0u; wm<WPTM; wm++) {
+                let globalRow = dest_index + wm * op_matmul_n;
+                for (var wn=0u; wn<WPTN; wn++) {
+                    var globalCol = globalRow + wn;
+                    v_dest[globalCol] = acc[wm][wn];
+                }
             }
         }
-    }
+    #if RTSM != TSM/WPTM || RTSN != TSM/WPTN 
+        }
+    #endif
 }
 
 // fn generic_sgemm_no_padded(group_id: vec3<u32>, local_id: vec3<u32>) {

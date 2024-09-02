@@ -61,7 +61,7 @@ fn main() {
             Err(_) => println!("File path is not inside the outer folder"),
         }
         
-        if original_file_name == "util.pwgsl" || original_file_name == "matmulHelper.pwgsl"{
+        if original_file_name == "util.pwgsl" || original_file_name.contains("Helper"){
             continue;
         }
         
@@ -115,6 +115,7 @@ fn main() {
             let content =  
             format!("pub mod {} {{
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        #[cfg_attr(feature=\"wgpu_debug_serialize\", derive(serde::Serialize, serde::Deserialize))]
         pub enum Functions{{{}}}
         impl crate::EntryPoint for Functions{{
             fn get_entry_point(&self) -> &'static str{{
@@ -145,6 +146,7 @@ fn main() {
     //create src/generated.rs
     let mut shader_content = "use crate::*; \n
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature=\"wgpu_debug_serialize\", derive(serde::Serialize, serde::Deserialize))]
 pub enum Pipelines{\n".to_string();
 
     for (m, path, _) in modules.iter(){
@@ -308,12 +310,12 @@ mod shader_loader{
 
     use fancy_regex::Regex;
 
-    const SHORTEN_NORMAL_VARIABLES : bool = false;
-    const SHORTEN_GLOBAL_FUNCTIONS : bool = false;
-    const SHORTEN_OVERRIDES : bool = false;
+    const SHORTEN_NORMAL_VARIABLES : bool = true;
+    const SHORTEN_GLOBAL_FUNCTIONS : bool = true;
+    const SHORTEN_OVERRIDES : bool = true;
     const REMOVE_UNUSED : bool = true;
-    const REMOVE_SPACES : bool = false;
-    const REMOVE_NEW_LINES : bool = false;
+    const REMOVE_SPACES : bool = true;
+    const REMOVE_NEW_LINES : bool = true;
 
     pub fn load_shader(path: &PathBuf, global_defines : &Vec<&'static str>, global_functions : &mut shader_shortener::ShaderInfo) -> String {
         let mut result = shader_defines::load_shader(path, &mut HashMap::new(), global_defines); 
@@ -662,6 +664,43 @@ mod shader_loader{
                                 }
                             }
                             defines.insert(key.to_string(), condition_parsed.trim().to_string());
+                        }
+                    }
+                    else if w == "definec"{
+                      
+                        match_whitespace(tokens);     
+                        if let Some(key) = expect_word(tokens){
+                            let mut value = String::new();
+                            match_until_char(tokens, '\n', &mut value);
+                           
+                            let tokenizer = Tokenizer::new(&value);
+                            let mut tokens_condition = tokenizer.peekable();
+                            let mut condition_parsed = String::new();
+
+                            while let Some(token) = tokens_condition.next() {
+                                match token {
+                                    Token::Word(word) => {
+                                        if let Some(value) = defines.get(word){
+                                            condition_parsed.push_str(value);
+                                        }    
+                                        else{
+                                            condition_parsed.push_str(word);
+                                        }
+                                    },
+                                    Token::Symbol(c) => condition_parsed.push(c),
+                                }
+                            }
+                            let condition_parsed = condition_parsed.trim().replace("u", "");
+
+                            let result_exp = eval(&condition_parsed).unwrap();
+
+                            let exp = match result_exp{
+                                Value::Int(val) => format!("{val}u"),
+                                Value::Boolean(bool) =>format!("{bool}"),
+                                _ => panic!("could not match expression")
+                            };
+                            defines.insert(key.to_string(), exp);
+                            //defines.insert(key.to_string(), condition_parsed.trim().to_string());
                         }
                     }
                     else if w == "ifdef" || w == "elifdef" || w == "ifndef" || w == "elifndef"{

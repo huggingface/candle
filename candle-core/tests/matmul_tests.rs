@@ -189,8 +189,8 @@ fn test_matmul_kernels_webgpu()-> Result<()> {
     
     for a in &[false, true] { //prefatch
         for b in &[false] { //nopadding
-            for c in &[true, false] { //LoadA
-                for d in &[true, false] { //LoadB
+            for c in &[true] { //LoadA
+                for d in &[true] { //LoadB
                     combinations.push((*a, *b, *c, *d));
                 }
             }

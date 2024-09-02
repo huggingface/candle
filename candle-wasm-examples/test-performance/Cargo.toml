@@ -1,0 +1,66 @@
+[package]
+name = "candle-performance-test"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+candle = { workspace = true, features = ["wgpu_debug_serialize"]}
+candle-nn = { workspace = true , features = ["wgpu"]}
+candle-transformers = { workspace = true , features = ["wgpu"]}
+num-traits = { workspace = true }
+tokenizers = { workspace = true, features = ["unstable_wasm"] }
+pollster = "0.3.0"
+env_logger = "0.11.3"
+
+# App crates.
+anyhow = { workspace = true }
+byteorder = { workspace = true }
+log = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+safetensors = { workspace = true }
+image = "0.25.1"
+
+# Wasm specific crates.
+console_error_panic_hook = "0.1.7"
+getrandom = { version = "0.2", features = ["js"] }
+gloo = "0.11"
+wasm-bindgen = "0.2.87"
+wasm-bindgen-futures = "0.4.37"
+serde-wasm-bindgen = "0.6.0"
+wasm-helper = {path = "../wasm-helper"}
+web-time = {workspace = true}
+
+js-sys = "0.3.69"
+wasm-logger = "0.2.0"
+thiserror = "1.0.61"
+
+[dependencies.web-sys]
+version = "0.3.4"
+features = [
+  'Headers',
+  'Request',
+  'RequestInit',
+  'RequestMode',
+  'Response',
+  'Window',
+  'FileSystem',
+  'FileSystemDirectoryEntry',
+  'FileSystemHandle',
+  'FileSystemDirectoryHandle',
+  'FileSystemFileHandle',
+  'FileSystemGetFileOptions',
+  'FileSystemWritableFileStream',
+  'FileSystemGetDirectoryOptions',
+  'FileSystemDirectoryReader',
+  'FileSystemDirectoryEntry',
+  'FileSystemRemoveOptions'
+]

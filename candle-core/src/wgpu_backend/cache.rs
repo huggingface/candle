@@ -1,5 +1,6 @@
 use std::{collections::{BTreeSet, HashMap}, num::NonZeroU64, u32};
 
+use tracing::instrument;
 use wgpu::BindGroupLayoutDescriptor;
 
 use crate::wgpu_backend::util::StorageTrait;
@@ -17,8 +18,10 @@ use super::{
 // pub type CachedBindgroupId = Reference;
 
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, std::marker::Copy)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, std::marker::Copy, Default)]
+#[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), derive(serde::Serialize, serde::Deserialize))]
 pub struct BufferReferenceId(Reference);
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone, std::marker::Copy)]
 pub struct CachedBufferId(Reference);
 #[derive(Debug, PartialEq, Eq, Hash, Clone, std::marker::Copy)]
@@ -343,16 +346,18 @@ impl BufferReference{
 
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), derive(serde::Serialize, serde::Deserialize))]
 pub enum BindgroupInputBase<T> {
     Bindgroup0,                               //
-    Bindgroup1(T, bool),                     //input1
-    Bindgroup2(T, T, bool),           //input1, input2, is_16
-    Bindgroup3(T, T, T), //input1, input2, input3
+    Bindgroup1(#[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), serde(skip))] T, bool),                     //input1
+    Bindgroup2(#[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), serde(skip))] T, #[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), serde(skip))] T, bool),           //input1, input2, is_16
+    Bindgroup3(#[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), serde(skip))] T, #[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), serde(skip))] T, #[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), serde(skip))] T), //input1, input2, input3
 }
 
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BindgroupFullBase<T>(T, BindgroupInputBase<T>);
+#[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), derive(serde::Serialize, serde::Deserialize))]
+pub struct BindgroupFullBase<T>(#[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), serde(skip))] T, BindgroupInputBase<T>);
 
 
 impl<T> BindgroupFullBase<T> {
@@ -428,14 +433,15 @@ impl CachedBindgroup {
 }
 
 
-
-
 #[derive(Debug)]
 pub struct ModelCache {
     pub(crate) buffer_reference : BufferReferenceStorage,
     pub(crate) buffers: BufferCacheStorage,
     pub(crate) bindgroups: BindgroupCacheStorage,
     pub(crate) mappings: BufferMappingCache,
+
+    #[cfg(feature="wgpu_debug")]
+    pub (crate) debug : HashMap<super::device::DebugPipelineRecording, super::device::DebugPipelineRecording> //stores all queed commands (e.g. used to test performance in the browser so we can measure the performance of each unnique operation alone)
 }
 
 impl ModelCache {
@@ -445,14 +451,19 @@ impl ModelCache {
             buffers: BufferCacheStorage::new(),
             bindgroups: BindgroupCacheStorage::new(),
             mappings: BufferMappingCache::new(mapping_size),
+
+            #[cfg(feature="wgpu_debug")]
+            debug : HashMap::new()
         }
     }
 
+    #[instrument(skip(self, size))]
     pub fn create_buffer_reference<T: ToU64>(&mut self, size: T, referenced_by_candle_storage : bool) -> BufferReferenceId{
         let buffer_reference = BufferReference::new(size.to_u64(),referenced_by_candle_storage);
         return self.buffer_reference.insert(buffer_reference);
     }
 
+    #[instrument(skip(self, data))]
     pub fn create_buffer_reference_init<T: bytemuck::Pod>(&mut self,dev: &WgpuDevice, data: &[T], referenced_by_candle_storage : bool) -> BufferReferenceId{    
         let data = bytemuck::cast_slice(data);
 
@@ -464,6 +475,7 @@ impl ModelCache {
     }
 
     /// returns, wheter we should stop the command_queue and delete not used buffers 
+    #[instrument(skip(self))]
     pub fn should_delete_unused(&mut self) -> bool {
         let current_memory = self.buffers.buffer_memory;
         let memory_margin = self.buffers.max_memory_allowed;
@@ -473,6 +485,7 @@ impl ModelCache {
         return false;
     }
 
+    #[instrument(skip(self))]
     pub fn remove_unused(&mut self) -> bool {
         let current_memory = self.buffers.buffer_memory;
         let memory_margin = self.buffers.max_memory_allowed;
@@ -534,6 +547,7 @@ impl ModelCache {
         return false;
     }
 
+    #[instrument(skip(self, dev))]
     pub(crate) fn get_bind_group(
         &mut self,
         dev: &WgpuDevice,
@@ -726,6 +740,7 @@ impl ModelCache {
     }
 
     //creats a Bindgroup
+    #[instrument(skip(self, dev))]
     fn create_bindgroup(&mut self, dev : &WgpuDevice, bindgroup_d : CachedBindgroupFull) -> CachedBindgroupId {
         let bindgroup = wgpu_functions::create_bindgroup(dev, bindgroup_d.clone(), self);
         let bindgroup = CachedBindgroup::new(bindgroup, bindgroup_d.clone());
@@ -752,6 +767,7 @@ impl BufferReferenceStorage{
         Self { storage : Storage::new(), deletion_queue : vec![] }
     }
 
+    #[instrument(skip(self))]
     fn insert(&mut self, referece : BufferReference) -> BufferReferenceId
     {
         let id = self.storage.insert(referece);
@@ -841,6 +857,7 @@ impl BufferCacheStorage{
     }
 
     //creats a Buffer, expect that it will be used and not be part of free memory
+    #[instrument(skip(self, dev))]
     fn create_buffer(&mut self, dev : &WgpuDevice, size : u64, command_id : u32) -> CachedBufferId {
         let buffer = wgpu_functions::create_buffer(dev, size);
         let mut buffer = CachedBuffer::new(buffer);
@@ -852,7 +869,7 @@ impl BufferCacheStorage{
         return id;
     }
 
-
+    #[instrument(skip(self))]
     pub fn delete_buffer(&mut self, id : &CachedBufferId){
         let value = self.storage.delete_move(id);
         if let Some(val) = value{
@@ -869,6 +886,7 @@ impl BufferCacheStorage{
     }
 
     //will not delete the buffer, but mark it free
+    #[instrument(skip(self))]
     pub fn free_buffer(&mut self, id : &CachedBufferId){ 
         let buffer : Option<&mut CachedBuffer> = self.storage.get_mut(id);
         if let Some(buffer) = buffer{
@@ -881,6 +899,7 @@ impl BufferCacheStorage{
     }
 
     //will not create a buffer, but mark the buffer as used
+    #[instrument(skip(self))]
     pub fn use_buffer(&mut self, id : &CachedBufferId, command_id : u32){ 
         let buffer : Option<&mut CachedBuffer> = self.storage.get_mut(id);
         if let Some(buffer) = buffer{
@@ -928,6 +947,7 @@ impl BufferCacheStorage{
     }
 
     //will try to find a free buffer in the cache, or create a new one
+    #[instrument(skip(self, dev))]
     pub fn search_buffer(&mut self, dev : &WgpuDevice, size : u64, command_id : u32, length : u32) -> CachedBufferId {
         //println!("search buffer: size: {size}");
         let max_size = BufferCacheStorage::max_cached_size(size, length);
@@ -1006,6 +1026,7 @@ impl BindgroupCacheStorage {
         };
     }
 
+    #[instrument(skip(self, keep))]
     fn retain_bindgroups(&mut self, mut keep : impl FnMut(&CachedBindgroup) -> bool){
         self.storage.retain_mut(|(id, bg)| {
             let keep = keep(bg);

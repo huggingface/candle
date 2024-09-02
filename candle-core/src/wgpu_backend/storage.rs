@@ -1,3 +1,5 @@
+use tracing::instrument;
+
 use crate::{backend::BackendStorage, DType, Layout, Shape};
 
 use super::{
@@ -12,6 +14,7 @@ pub struct WgpuStorage {
     pub dtype: crate::DType,
 }
 
+#[instrument(skip(dev, size))]
 pub fn create_wgpu_storage<T: ToU64>(dev : &WgpuDevice, dtype : crate::DType, size : T) -> WgpuStorage{
     let size = size.to_u64();
     let buffer;
@@ -22,6 +25,7 @@ pub fn create_wgpu_storage<T: ToU64>(dev : &WgpuDevice, dtype : crate::DType, si
     return WgpuStorage::new(buffer,dev.clone(), dtype, size);
 }
 
+#[instrument(skip(dev, data))]
 pub fn create_wgpu_storage_init<T: bytemuck::Pod>(dev : &WgpuDevice, dtype : crate::DType, data : &[T]) -> crate::Result<WgpuStorage>{
     let data : &[u8] = bytemuck::cast_slice(data);
     let size = data.len();

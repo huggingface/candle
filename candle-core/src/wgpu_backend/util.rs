@@ -275,7 +275,7 @@ impl<const TSIZE : usize, T : Hash + std::cmp::PartialEq>  Eq for FixedArray<T, 
 #[derive(Debug)]
 pub struct ObjectToIdMapper<K> {
     map: HashMap<K, usize>,
-    next_id: usize,
+    pub (crate) next_id: usize,
 }
 
 impl<K : std::cmp::Eq + Hash + Clone> ObjectToIdMapper<K> {
@@ -284,6 +284,11 @@ impl<K : std::cmp::Eq + Hash + Clone> ObjectToIdMapper<K> {
             map: HashMap::new(),
             next_id: 0,
         }
+    }
+
+    pub fn insert_force(&mut self, key: &K, value : usize) {
+        self.map.insert(key.clone(),value);
+        self.next_id = value;
     }
 
     pub fn get_or_insert(&mut self, key: &K) -> (usize, bool) {
@@ -305,9 +310,12 @@ impl<K : std::cmp::Eq + Hash + Clone> ObjectToIdMapper<K> {
 /// 
 
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, std::marker::Copy)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, std::marker::Copy, Default)]
+#[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), derive(serde::Serialize, serde::Deserialize))]
 pub struct Reference {
+    #[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), serde(skip))]
     id : u32,
+    #[cfg_attr(any(feature="wgpu_debug_serialize", feature="wgpu_debug"), serde(skip))]
     time : ReferenceTime
 }
 

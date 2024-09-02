@@ -10,7 +10,14 @@ categories = ["science"]
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [build-dependencies]
 fancy-regex = "0.13.0"
 evalexpr = "11.3.0"
+
+[features]
+wgpu_debug_serialize = ["dep:serde", "dep:serde_json"]
+default=[]
+

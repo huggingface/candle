@@ -615,6 +615,10 @@ fn run(args: Args) -> Result<()> {
                         
                             let info: Vec<candle::wgpu::debug_info::ShaderInfo> = gpu.get_pipeline_info().unwrap();
                             candle::wgpu::debug_info::save_list(&info,& format!("wgpu_stable_diffusion_test_1_c.json")).unwrap();
+
+                            let (pipelines, consts) = gpu.get_used_pipelines();
+                            std::fs::write(format!("wgpu_stable_diffusion_test_1_d.json"), pipelines);   
+                            std::fs::write(format!("wgpu_stable_diffusion_test_1_e.json"), consts);   
                         }
                     },
                     _ => {},

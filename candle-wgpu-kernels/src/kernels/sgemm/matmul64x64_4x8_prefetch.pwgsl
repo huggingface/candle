@@ -3,22 +3,17 @@
 // const TSK : u32 = 16u;                 // The tile-size in dimension K
 // const WPTM : u32 = 8u;                 // The work-per-thread in dimension M
 // const WPTN : u32 = 8u;                 // The work-per-thread in dimension N
-// const PREFETCH : u32 = 1u; //no prefetch
+// const PREFETCH : u32 = 2u; //no prefetch
+
 
 #define TSM 64u                     // The tile-size in dimension M
 #define TSN 64u                     // The tile-size in dimension N
 #define TSK 16u                     // The tile-size in dimension K
-
-//#define RTSM 16u                    //we use 16x16 threads for loading, but only a subpart of the threads will load 8x8 tiles
-//#define RTSN 16u                    
-
 #define WPTM 8u                     // The work-per-thread in dimension M
-#define WPTN 8u                     // The work-per-thread in dimension N
-#define PREFETCH 1u
-
+#define WPTN 4u                     // The work-per-thread in dimension N
+#define PREFETCH 2u
 
 #include "matmulHelper.pwgsl"
-
 
 @compute @workgroup_size(RTSN, RTSM, 1)
 //MxK * KxN = MxN
