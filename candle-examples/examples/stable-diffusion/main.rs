@@ -607,6 +607,7 @@ fn run(args: Args) -> Result<()> {
                 )?;
                 match &device {
                     candle::Device::WebGpu(gpu) => {
+                        #[cfg(feature="wgpu")]
                         gpu.print_bindgroup_reuseinfo2();
                         #[cfg(feature = "wgpu_debug")]{
                             let info = pollster::block_on(gpu.get_debug_info()).unwrap();
@@ -617,8 +618,8 @@ fn run(args: Args) -> Result<()> {
                             candle::wgpu::debug_info::save_list(&info,& format!("wgpu_stable_diffusion_test_1_c.json")).unwrap();
 
                             let (pipelines, consts) = gpu.get_used_pipelines();
-                            std::fs::write(format!("wgpu_stable_diffusion_test_1_d.json"), pipelines);   
-                            std::fs::write(format!("wgpu_stable_diffusion_test_1_e.json"), consts);   
+                            std::fs::write(format!("wgpu_stable_diffusion_test_1_d.json"), pipelines)?;   
+                            std::fs::write(format!("wgpu_stable_diffusion_test_1_e.json"), consts)?;   
                         }
                     },
                     _ => {},
@@ -645,6 +646,7 @@ fn run(args: Args) -> Result<()> {
         )?;
         match &device {
             candle::Device::WebGpu(gpu) => {
+                #[cfg(feature="wgpu")]
                 gpu.print_bindgroup_reuseinfo2();
                 #[cfg(feature = "wgpu_debug")]{
                     let info = pollster::block_on(gpu.get_debug_info()).unwrap();
@@ -654,6 +656,10 @@ fn run(args: Args) -> Result<()> {
                 
                     let info: Vec<candle::wgpu::debug_info::ShaderInfo> = gpu.get_pipeline_info().unwrap();
                     candle::wgpu::debug_info::save_list(&info,& format!("wgpu_stable_diffusion_test_1_c.json")).unwrap();
+
+                    let (pipelines, consts) = gpu.get_used_pipelines();
+                    std::fs::write(format!("wgpu_stable_diffusion_test_1_d.json"), pipelines)?;   
+                    std::fs::write(format!("wgpu_stable_diffusion_test_1_e.json"), consts)?;   
                 }
             },
             _ => {},

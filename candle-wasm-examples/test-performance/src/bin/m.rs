@@ -1,12 +1,9 @@
-use candle::{backend::BackendDevice, wgpu::{self, wgpu_functions::Pipelines, MatmulAlgorithm}, Device, Shape, Tensor, WgpuStorage};
+use candle::{backend::BackendDevice, wgpu::{wgpu_functions::Pipelines, MatmulAlgorithm}, Device, Shape, Tensor, WgpuStorage};
 
 mod utils;
 
-use safetensors::Dtype;
 use utils::{bench_function_max_time_async, MeasurementInfo};
 use web_time::Duration;
-
-
 
 fn main() -> Result<(), Box<dyn std::error::Error>>{
     #[cfg(not(target_arch = "wasm32"))]
@@ -32,7 +29,7 @@ async fn test_main(){
 }
 
 async fn test() -> Result<(), Box<dyn std::error::Error>>{
-    //performance_test2().await?;
+    //performance_test().await?;
     test_matmul().await?;
     Ok(())
 }
@@ -53,18 +50,10 @@ fn load_recording_consts(device : &Device) -> Result<(), Box<dyn std::error::Err
 async fn test_matmul() -> Result<(), Box<dyn std::error::Error>>{
     let device = candle::Device::new_webgpu(0).await?;
 
-    //load_recording_consts(&device)?;
-    //let buffers = create_buffers(&device)?;
-
-    //let command = r#"{"x":1,"y":64,"z":16,"pipeline":[{"Matmul64x648x8":["F32","Matmul"]},37],"meta":[16,4096,4096,64,16777216,0,262144,0],"bindgroup":[{"Bindgroup2":[true]}],"count":150}"#;
-    //let command: candle::wgpu_backend::DebugPipelineRecording = serde_json::from_str(command)?;
-
     let b = 16;
     let m = 4096;
     let k = 4096;
     let n = 64;
-
-
 
     let algs = vec![
        // MatmulAlgorithm::Matmul1,
@@ -79,38 +68,6 @@ async fn test_matmul() -> Result<(), Box<dyn std::error::Error>>{
         // MatmulAlgorithm::Matmul24_24(false,false, true, true),
         // MatmulAlgorithm::Matmul24_48(false,false, true, true),
         // MatmulAlgorithm::Matmul64_64(false, false),
-       
-        // MatmulAlgorithm::Matmul64_128(false, false),
-        // MatmulAlgorithm::Matmul64_128_8_8(false, false),
-        // MatmulAlgorithm::Matmul128_128(false, false),
-
-
-
-
-
-
-
-
-
-        // MatmulAlgorithm::Matmul5_32_32(true, false, true, true),
-        // MatmulAlgorithm::Matmul5_64_64(true, false),
-        // MatmulAlgorithm::Matmul5_64_64_8_8(true, false),
-        // MatmulAlgorithm::Matmul5_128_128(true, false),
-     
-        //MatmulAlgorithm::Matmul5_32_32(true, false, true, true),
-        //MatmulAlgorithm::Matmul5_64_64(true, false),
-        //MatmulAlgorithm::Matmul5_64_64_8_8(true, false),
-        //MatmulAlgorithm::Matmul5_128_128(true, false),  
-
-        // MatmulAlgorithm::Matmul5_32_32(false, true, true, true),
-        // MatmulAlgorithm::Matmul5_64_64(false, true),
-        // MatmulAlgorithm::Matmul5_64_64_8_8(false, true),
-        // MatmulAlgorithm::Matmul5_128_128(false, true),
-     
-        // MatmulAlgorithm::Matmul5_32_32(true, true, true, true),
-        // MatmulAlgorithm::Matmul5_64_64(true, true),
-        // MatmulAlgorithm::Matmul5_64_64_8_8(true, true),
-        // MatmulAlgorithm::Matmul5_128_128(true, true),  
        ];
 
    
@@ -153,7 +110,7 @@ fn create_buffers(device : &Device) -> Result<[WgpuStorage;4], Box<dyn std::erro
     }
 }
 
-async fn performance_test2() -> Result<(), Box<dyn std::error::Error>>{
+pub async fn performance_test() -> Result<(), Box<dyn std::error::Error>>{
     let device = candle::Device::new_webgpu(0).await?;
 
     load_recording_consts(&device)?;

@@ -35,8 +35,7 @@ cuda = ["candle/cuda"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
 metal = ["candle/metal", "dep:candle-metal-kernels", "dep:metal"]
 wgpu = ["candle/wgpu"]
-
-default=["wgpu"]
+default=[]
 
 [[bench]]
 name = "bench_main"

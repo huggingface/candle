@@ -37,7 +37,7 @@ pub use crate::wgpu::cache::BufferReferenceId as BufferReferenceId;
 use crate::{wgpu_backend::cache::BindgroupReferenceInput, Layout, WebGpuError};
 use std::borrow::Cow;
 
-use wgpu::{Queue, ShaderModule};
+use wgpu::ShaderModule;
 
 pub use binary::queue_binary_buffer_from_buffer;
 pub use cmp::queue_cmp_buffer_from_buffer;
@@ -913,7 +913,7 @@ pub(crate) async fn flush_gpu_command_async(dev: &WgpuDevice, queue_buffer: &mut
                     cache.remove_unused();
                 }
 
-                synchronize_device(&dev, &dev.queue).await?;
+                synchronize_device(&dev).await?;
                 
                 if index > 0{
                     //set last buffer, so we can wait for it to finish in the future
@@ -1222,7 +1222,7 @@ pub fn synchronize(dev: &WgpuDevice) -> crate::Result<()> {
             }
         }
        
-        return pollster::block_on(synchronize_device(&dev, &dev.queue));
+        return pollster::block_on(synchronize_device(&dev));
     }
     Ok(())
 }
@@ -1238,13 +1238,13 @@ pub async fn synchronize_async(dev: &WgpuDevice) -> crate::Result<()> {
                 copy_to_staging_probe(dev, &buffer.buffer());
             }
         }
-        return synchronize_device(&dev, &dev.queue).await;
+        return synchronize_device(&dev).await;
     }
     Ok(())
 }
 
-#[instrument(skip(dev, queue))]
-async fn synchronize_device(dev: &WgpuDevice, queue: &Queue) -> crate::Result<()> {
+#[instrument(skip(dev))]
+async fn synchronize_device(dev: &WgpuDevice) -> crate::Result<()> {
     wait_for_gpu_buffer_async(dev).await
 }
 
@@ -1324,7 +1324,7 @@ pub async fn wait_for_gpu_buffer_async(
 
 
 
-#[instrument]
+#[instrument(skip(dev))]
 pub async fn read_data_from_gpu_async_buffer<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: &wgpu::Buffer,

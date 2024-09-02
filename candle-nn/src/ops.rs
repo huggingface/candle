@@ -1,5 +1,5 @@
 use candle::{
-    backend::BackendStorage, wgpu::wgpu_functions, CpuStorage, DType, Layout, Module, Result, Shape,
+    backend::BackendStorage, CpuStorage, DType, Layout, Module, Result, Shape,
     Tensor, D, WgpuStorage,
 };
 use rayon::prelude::*;
@@ -475,7 +475,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             layout: &Layout,
         ) -> Result<(WgpuStorage, Shape)> {
             use candle::wgpu::create_wgpu_storage;
-
+            use candle::wgpu::wgpu_functions;
         
             if !(layout.is_contiguous()){
                 candle::bail!("input has to be contiguous")
@@ -696,8 +696,8 @@ impl candle::CustomOp2 for RmsNorm {
         alpha_layout: &Layout,
     ) -> Result<(WgpuStorage, Shape)> {
         //start offset and length:
-
         use candle::wgpu::create_wgpu_storage;
+        use candle::wgpu::wgpu_functions;
 
         if !(layout.is_contiguous()){
             candle::bail!("input has to be contiguous")

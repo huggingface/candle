@@ -522,13 +522,3 @@ impl std::fmt::Display for Tensor {
         )
     }
 }
-
-
-impl Tensor{
-
-    pub async fn debug_log(&self) -> Result<()>{
-        let data = self.to_cpu_device().await?;
-        log::info!("{data}");
-        Ok(())
-    }
-}

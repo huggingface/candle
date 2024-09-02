@@ -10,7 +10,6 @@ use std::hash::Hash;
 use candle_wgpu_kernels::{Constants, EntryPoint, Pipelines};
 use rand::SeedableRng;
 use tracing::instrument;
-use wgpu::naga::back;
 use wgpu::{Backends, InstanceDescriptor, InstanceFlags};
 
 use crate::backend::BackendStorage;
