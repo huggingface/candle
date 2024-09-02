@@ -1,5 +1,5 @@
-use candle_wgpu_kernels::gather::Functions;
 use super::*;
+use candle_wgpu_kernels::gather::Functions;
 
 pub fn queue_gather(
     dev: &WgpuDevice,
@@ -19,8 +19,7 @@ pub fn queue_gather(
 
     let pipeline = meta.get_pipeline(Pipelines::Gather(get_dtype(dtype)?, Functions::Gather));
 
-    let bind_group =
-        create_bind_group_input2( buffer_dest, buffer_input, buffer_index);
+    let bind_group = create_bind_group_input2(buffer_dest, buffer_input, buffer_index);
     enqueue_workgroups(
         meta,
         pipeline,
@@ -28,12 +27,10 @@ pub fn queue_gather(
         (lay_index.shape().elem_count() as u32 + 63) / 64,
         1,
         1,
-        lay_index.shape().elem_count()
+        lay_index.shape().elem_count(),
     );
     return Ok(());
 }
-
-
 
 pub fn queue_scatter_add_inplace(
     dev: &WgpuDevice,
@@ -55,10 +52,12 @@ pub fn queue_scatter_add_inplace(
     meta.add_layout2_non_contiguous(&lay_index);
     meta.add_layout3_non_contiguous(&lay_src);
 
-    let pipeline = meta.get_pipeline(Pipelines::Gather(get_dtype(dtype)?, Functions::ScatterAddInplace));
+    let pipeline = meta.get_pipeline(Pipelines::Gather(
+        get_dtype(dtype)?,
+        Functions::ScatterAddInplace,
+    ));
 
-    let bind_group =
-        create_bind_group_input2( buffer_dest, buffer_index, buffer_src);
+    let bind_group = create_bind_group_input2(buffer_dest, buffer_index, buffer_src);
     enqueue_workgroups(
         meta,
         pipeline,
@@ -91,10 +90,12 @@ pub fn queue_index_add_inplace(
     meta.add_layout2_non_contiguous(&lay_index);
     meta.add_layout3_non_contiguous(&lay_src);
 
-    let pipeline = meta.get_pipeline(Pipelines::Gather(get_dtype(dtype)?, Functions::IndexAddInplace));
+    let pipeline = meta.get_pipeline(Pipelines::Gather(
+        get_dtype(dtype)?,
+        Functions::IndexAddInplace,
+    ));
 
-    let bind_group =
-        create_bind_group_input2( buffer_dest, buffer_index, buffer_src);
+    let bind_group = create_bind_group_input2(buffer_dest, buffer_index, buffer_src);
     enqueue_workgroups(
         meta,
         pipeline,

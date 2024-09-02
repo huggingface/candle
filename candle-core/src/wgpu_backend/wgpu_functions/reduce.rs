@@ -12,7 +12,6 @@ pub enum ReduceOperations {
     ArgMax = 4,
 }
 
-
 pub fn queue_reduce_from_buffer_op(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
@@ -30,10 +29,7 @@ pub fn queue_reduce_from_buffer_op(
     let workgroup_count = u32::min(64, reduction_length as u32);
     let mut meta = get_meta(&dev);
 
-    let const_vec = vec![
-        op as u32,
-        workgroup_count,
-        stride_reduction];
+    let const_vec = vec![op as u32, workgroup_count, stride_reduction];
 
     meta.add(reduction_length);
     meta.add(output_to_start_stride1);
@@ -42,7 +38,7 @@ pub fn queue_reduce_from_buffer_op(
     meta.add(dest_size);
     meta.add_layout1(layout_input1);
 
-    if dest_size > 65535{
+    if dest_size > 65535 {
         meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
     }
 
@@ -51,24 +47,26 @@ pub fn queue_reduce_from_buffer_op(
         ReduceOperations::Min => Functions::Reduce,
         ReduceOperations::Max => Functions::Reduce,
         ReduceOperations::ArgMin => Functions::ReduceIndex,
-        ReduceOperations::ArgMax => Functions::ReduceIndex
+        ReduceOperations::ArgMax => Functions::ReduceIndex,
     };
-    let pipeline = meta.get_pipeline_const(Pipelines::Reduce(get_dtype(dtype)?, pipeline_type),const_vec);
+    let pipeline = meta.get_pipeline_const(
+        Pipelines::Reduce(get_dtype(dtype)?, pipeline_type),
+        const_vec,
+    );
 
-    let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
-    
-    
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input);
+
     let y = dest_size.min(65535);
-    let z= (dest_size + 65534) / 65535;
+    let z = (dest_size + 65534) / 65535;
 
     enqueue_workgroups(
         meta,
         pipeline,
         bind_group,
         1,
-        y,      
+        y,
         z,
-        (reduction_length * dest_size) as usize
+        (reduction_length * dest_size) as usize,
     );
     return Ok(());
 }

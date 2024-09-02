@@ -11,9 +11,9 @@ license.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-candle = { workspace = true, features = ["wgpu"]}
-candle-nn = { workspace = true , features = ["wgpu"]}
-candle-transformers = { workspace = true , features = ["wgpu"]}
+candle = { workspace = true, features = ["wgpu"] }
+candle-nn = { workspace = true, features = ["wgpu"] }
+candle-transformers = { workspace = true, features = ["wgpu"] }
 num-traits = { workspace = true }
 tokenizers = { workspace = true, features = ["unstable_wasm"] }
 
@@ -34,8 +34,8 @@ gloo = "0.11"
 wasm-bindgen = "0.2.87"
 wasm-bindgen-futures = "0.4.37"
 serde-wasm-bindgen = "0.6.0"
-wasm-helper = {path = "../wasm-helper"}
-web-time = {workspace = true}
+wasm-helper = { path = "../wasm-helper" }
+web-time = { workspace = true }
 
 js-sys = "0.3.69"
 wasm-logger = "0.2.0"
@@ -60,5 +60,5 @@ features = [
   'FileSystemGetDirectoryOptions',
   'FileSystemDirectoryReader',
   'FileSystemDirectoryEntry',
-  'FileSystemRemoveOptions'
+  'FileSystemRemoveOptions',
 ]

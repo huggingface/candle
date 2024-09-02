@@ -1,7 +1,7 @@
 use candle_wgpu_kernels::index_select::Functions;
 
-use crate::Shape;
 use super::*;
+use crate::Shape;
 
 pub fn queue_index_select(
     dev: &WgpuDevice,
@@ -37,9 +37,12 @@ pub fn queue_index_select(
     meta.add_layout1(&lay_input);
     meta.add_layout2(&lay_index);
 
-    let pipeline = meta.get_pipeline(Pipelines::IndexSelect(get_dtype(dtype)?, Functions::IndexSelect));
+    let pipeline = meta.get_pipeline(Pipelines::IndexSelect(
+        get_dtype(dtype)?,
+        Functions::IndexSelect,
+    ));
 
-    let bind_group = create_bind_group_input2( buffer_dest, buffer_input, buffer_index);
+    let bind_group = create_bind_group_input2(buffer_dest, buffer_input, buffer_index);
     enqueue_workgroups(
         meta,
         pipeline,
@@ -47,7 +50,7 @@ pub fn queue_index_select(
         (length + 7) / 8,
         ((index_length + 7) / 8) as u32,
         1,
-        length as usize * index_length
+        length as usize * index_length,
     );
     return Ok(());
 }

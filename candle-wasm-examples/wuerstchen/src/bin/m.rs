@@ -1,20 +1,23 @@
-
 use std::io::Cursor;
 
 use candle_transformers::models::stable_diffusion;
 use candle_transformers::models::stable_diffusion::clip;
 use candle_transformers::models::wuerstchen;
 
-use candle::{DType, Device, IndexOp, Tensor};
 use anyhow::Error as E;
+use candle::{DType, Device, IndexOp, Tensor};
 
+use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
-use serde::{Serialize, Deserialize};
 use web_time::Instant;
 
-
 use wasm_bindgen::prelude::*;
-use wasm_helper::{generic_error::{GenericError, GenericResult}, hfhub::api::Api, opfs::read_file, safetensor_var_builder::var_builder_from_opfs_safetensors};
+use wasm_helper::{
+    generic_error::{GenericError, GenericResult},
+    hfhub::api::Api,
+    opfs::read_file,
+    safetensor_var_builder::var_builder_from_opfs_safetensors,
+};
 
 const PRIOR_GUIDANCE_SCALE: f64 = 4.0;
 const RESOLUTION_MULTIPLE: f64 = 42.67;
@@ -87,7 +90,7 @@ async fn encode_prompt(
 
     log::info!("Building the clip transformer.");
     let vs = var_builder_from_opfs_safetensors(&clip_weights, DType::F32, device).await?;
-    let text_model =   clip::ClipTextTransformer::new(vs, &clip_config)?;
+    let text_model = clip::ClipTextTransformer::new(vs, &clip_config)?;
 
     let text_embeddings = text_model.forward_with_mask(&tokens, tokens_len - 1)?;
     match uncond_prompt {
@@ -112,44 +115,36 @@ async fn encode_prompt(
     }
 }
 
-
-
-
-
-
-
 #[wasm_bindgen]
 pub struct Model {
-    device : Device
-
+    device: Device,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct DeviceConfig{
+struct DeviceConfig {
     #[serde(default = "default_use_gpu")]
-    use_gpu : bool,
+    use_gpu: bool,
     #[serde(default = "default_meta_buffer_size")]
-    meta_buffer_size : u32, 
+    meta_buffer_size: u32,
     #[serde(default = "default_max_workload_size")]
-    max_workload_size : u64, 
+    max_workload_size: u64,
     #[serde(default = "default_buffer_cached_max_allowed_size")]
-    buffer_cached_max_allowed_size : u64,
+    buffer_cached_max_allowed_size: u64,
     #[serde(default = "default_use_cache")]
-    use_cache : bool,
+    use_cache: bool,
     #[serde(default = "default_queue_delay_miliseconds")]
-    queue_delay_miliseconds : u32, 
+    queue_delay_miliseconds: u32,
     #[serde(default = "default_flush_gpu_before_buffer_init")]
-    flush_gpu_before_buffer_init : bool,
+    flush_gpu_before_buffer_init: bool,
     #[serde(default = "default_queue_delay_factor")]
-    queue_delay_factor : f32,
+    queue_delay_factor: f32,
     #[serde(default = "default_buffer_mapping_size")]
-    buffer_mapping_size : u32
+    buffer_mapping_size: u32,
 }
 
 fn default_buffer_mapping_size() -> u32 {
     1
 }
-
 
 fn default_queue_delay_factor() -> f32 {
     0.0
@@ -163,19 +158,16 @@ fn default_flush_gpu_before_buffer_init() -> bool {
     false
 }
 
-
 fn default_max_workload_size() -> u64 {
-    1024u64*1024*1024*2 //2gb,
+    1024u64 * 1024 * 1024 * 2 //2gb,
 }
-
 
 fn default_meta_buffer_size() -> u32 {
-    10*1024*1024//10mb
+    10 * 1024 * 1024 //10mb
 }
 
-
 fn default_buffer_cached_max_allowed_size() -> u64 {
-    1024*1024*1024*8 //8gb
+    1024 * 1024 * 1024 * 8 //8gb
 }
 
 fn default_use_cache() -> bool {
@@ -185,7 +177,6 @@ fn default_use_cache() -> bool {
 fn default_use_gpu() -> bool {
     true //8gb
 }
-
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Args {
@@ -244,12 +235,11 @@ struct Args {
     final_image: String,
 
     #[serde(default = "default_prior_steps")]
-    prior_steps : u64,
+    prior_steps: u64,
 
     #[serde(default = "default_vgan_steps")]
-    vgan_steps : u64
+    vgan_steps: u64,
 }
-
 
 fn default_prompt() -> String {
     "A very realistic photo of a rusty robot walking on a sandy beach".to_string()
@@ -273,13 +263,12 @@ fn default_vgan_steps() -> u64 {
 
 #[wasm_bindgen]
 impl Model {
-
     #[wasm_bindgen(constructor)]
     pub async fn load(config: String) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         wasm_logger::init(wasm_logger::Config::new(log::Level::Info).message_on_new_line());
-        
-        let args : DeviceConfig = serde_json::from_str(&config)?;
+
+        let args: DeviceConfig = serde_json::from_str(&config)?;
         let DeviceConfig {
             use_gpu,
             buffer_cached_max_allowed_size,
@@ -292,18 +281,24 @@ impl Model {
             ..
         } = args;
 
-        let device = match !use_gpu{
+        let device = match !use_gpu {
             true => Device::Cpu,
-            false =>  
-            {
-                let config = candle::wgpu_backend::WgpuDeviceConfig{buffer_cached_max_allowed_size,max_workload_size,meta_buffer_size,use_cache,queue_delay_miliseconds,flush_gpu_before_buffer_init, buffer_mapping_size};
+            false => {
+                let config = candle::WgpuDeviceConfig {
+                    buffer_cached_max_allowed_size,
+                    max_workload_size,
+                    meta_buffer_size,
+                    use_cache,
+                    queue_delay_miliseconds,
+                    flush_gpu_before_buffer_init,
+                    buffer_mapping_size,
+                    ..Default::default()
+                };
                 Device::new_webgpu_config(0, config).await?
             }
         };
-        
-        
 
-        return Ok(Model{device});
+        return Ok(Model { device });
     }
 
     pub async fn run(&self, config: String) -> Result<JsValue, JsError> {
@@ -313,7 +308,7 @@ impl Model {
 
         //clear_directory(open_dir("/.cache/huggingface/models--warp-ai--wuerstchen").await?, true).await?;
 
-        let args : Args = serde_json::from_str(&config)?;
+        let args: Args = serde_json::from_str(&config)?;
         log::info!("loaded args");
         let Args {
             prompt,
@@ -330,7 +325,7 @@ impl Model {
             vgan_steps,
             ..
         } = args;
-        
+
         // let _guard = if tracing {
         //     let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         //     tracing_subscriber::registry().with(chrome_layer).init();
@@ -338,13 +333,13 @@ impl Model {
         // } else {
         //     None
         // };
-    
+
         let device = &self.device;
         log::info!("loaded device");
 
         let height = height.unwrap_or(1024);
         let width = width.unwrap_or(1024);
-    
+
         log::info!("loading Models:");
         let prior_text_embeddings = {
             let tokenizer = ModelFile::PriorTokenizer.get(args.prior_tokenizer).await?;
@@ -362,13 +357,15 @@ impl Model {
                 weights,
                 stable_diffusion::clip::Config::wuerstchen_prior(),
                 device,
-            ).await.map_err(|f| JsError::new(&f.to_string()))?
+            )
+            .await
+            .map_err(|f| JsError::new(&f.to_string()))?
         };
 
         log::info!("loaded Models:");
 
         log::info!("generated prior text embeddings {prior_text_embeddings:?}");
-    
+
         let text_embeddings = {
             let tokenizer = ModelFile::Tokenizer.get(tokenizer).await?;
             let weights = ModelFile::Clip.get(clip_weights).await?;
@@ -379,11 +376,13 @@ impl Model {
                 weights,
                 stable_diffusion::clip::Config::wuerstchen(),
                 device,
-            ).await.map_err(|f| JsError::new(&f.to_string()))?
+            )
+            .await
+            .map_err(|f| JsError::new(&f.to_string()))?
         };
-         log::info!("generated text embeddings {text_embeddings:?}");
-    
-         log::info!("Building the prior.");
+        log::info!("generated text embeddings {text_embeddings:?}");
+
+        log::info!("Building the prior.");
         let b_size = 1;
         let image_embeddings = {
             // https://huggingface.co/warp-ai/wuerstchen-prior/blob/main/prior/config.json
@@ -395,7 +394,7 @@ impl Model {
                 (b_size, PRIOR_CIN, latent_height, latent_width),
                 device,
             )?;
-    
+
             let prior = {
                 let file = ModelFile::Prior.get(prior_weights).await?;
                 let vb = var_builder_from_opfs_safetensors(file, DType::F32, device).await?;
@@ -410,7 +409,8 @@ impl Model {
                     vb,
                 )?
             };
-            let prior_scheduler = wuerstchen::ddpm::DDPMWScheduler::new(prior_steps as usize, Default::default())?;
+            let prior_scheduler =
+                wuerstchen::ddpm::DDPMWScheduler::new(prior_steps as usize, Default::default())?;
             let timesteps = prior_scheduler.timesteps();
             let timesteps = &timesteps[..timesteps.len() - 1];
             log::info!("prior denoising");
@@ -418,20 +418,21 @@ impl Model {
                 let start_time = Instant::now();
                 let latent_model_input = Tensor::cat(&[&latents, &latents], 0)?;
                 let ratio = (Tensor::ones(2, DType::F32, device)? * t)?;
-                let noise_pred = prior.forward(&latent_model_input, &ratio, &prior_text_embeddings)?;
+                let noise_pred =
+                    prior.forward(&latent_model_input, &ratio, &prior_text_embeddings)?;
                 let noise_pred = noise_pred.chunk(2, 0)?;
                 let (noise_pred_text, noise_pred_uncond) = (&noise_pred[0], &noise_pred[1]);
                 let noise_pred = (noise_pred_uncond
                     + ((noise_pred_text - noise_pred_uncond)? * PRIOR_GUIDANCE_SCALE)?)?;
                 latents = prior_scheduler.step(&noise_pred, t, &latents)?;
-                
+
                 device.synchronize_async().await?;
                 let dt = start_time.elapsed().as_secs_f32();
                 log::info!("step {}/{} done, {:.2}s", index + 1, timesteps.len(), dt);
             }
             ((latents * 42.)? - 1.)?
         };
-    
+
         log::info!("Building the vqgan.");
         let vqgan = {
             let file = ModelFile::VqGan.get(vqgan_weights).await?;
@@ -440,7 +441,7 @@ impl Model {
         };
         device.synchronize_async().await?;
         log::info!("Building the decoder.");
-    
+
         // https://huggingface.co/warp-ai/wuerstchen/blob/main/decoder/config.json
         let decoder = {
             let file = ModelFile::Decoder.get(decoder_weights).await?;
@@ -461,16 +462,17 @@ impl Model {
             // https://huggingface.co/warp-ai/wuerstchen/blob/main/model_index.json
             let latent_height = (image_embeddings.dim(2)? as f64 * LATENT_DIM_SCALE) as usize;
             let latent_width = (image_embeddings.dim(3)? as f64 * LATENT_DIM_SCALE) as usize;
-    
+
             let mut latents = Tensor::randn(
                 0f32,
                 1f32,
                 (b_size, DECODER_CIN, latent_height, latent_width),
                 device,
             )?;
-    
+
             log::info!("diffusion process with prior {image_embeddings:?}");
-            let scheduler = wuerstchen::ddpm::DDPMWScheduler::new(vgan_steps as usize, Default::default())?;
+            let scheduler =
+                wuerstchen::ddpm::DDPMWScheduler::new(vgan_steps as usize, Default::default())?;
             let timesteps = scheduler.timesteps();
             let timesteps = &timesteps[..timesteps.len() - 1];
             for (index, &t) in timesteps.iter().enumerate() {
@@ -479,12 +481,12 @@ impl Model {
                 let noise_pred =
                     decoder.forward(&latents, &ratio, &image_embeddings, Some(&text_embeddings))?;
                 latents = scheduler.step(&noise_pred, t, &latents)?;
-                
+
                 device.synchronize_async().await?;
                 let dt = start_time.elapsed().as_secs_f32();
                 log::info!("step {}/{} done, {:.2}s", index + 1, timesteps.len(), dt);
             }
-             log::info!(
+            log::info!(
                 "Generating the final image for sample {}/{}.",
                 idx + 1,
                 num_samples
@@ -492,36 +494,35 @@ impl Model {
 
             log::info!("decoding image:");
 
-
             let image = vqgan.decode(&(&latents * 0.3764)?)?;
 
             log::info!("Image decoded");
 
-            let image = (image.clamp(0f32, 1f32)? * 255.)?.to_cpu_device().await?
+            let image = (image.clamp(0f32, 1f32)? * 255.)?
+                .to_cpu_device()
+                .await?
                 .to_dtype(DType::U8)?
                 .i(0)?;
 
-          
-            log::info!( "Image created");
+            log::info!("Image created");
 
             let image_png = save_image(&image)?;
 
-            log::info!( "Image saved");
-            return  Ok(js_sys::Uint8Array::from(&image_png[..]).into());
-           
+            log::info!("Image saved");
+            return Ok(js_sys::Uint8Array::from(&image_png[..]).into());
         }
         Ok(JsValue::null())
     }
 }
-
-
 
 // Saves an image to disk using the image crate, this expects an input with shape
 // (c, height, width).
 pub fn save_image(img: &Tensor) -> GenericResult<Vec<u8>> {
     let (channel, height, width) = img.dims3()?;
     if channel != 3 {
-        return Err(GenericError::from("save_image expects an input of shape (3, height, width)"))
+        return Err(GenericError::from(
+            "save_image expects an input of shape (3, height, width)",
+        ));
     }
     let img = img.permute((1, 2, 0))?.flatten_all()?;
     let pixels = img.to_vec1::<u8>()?;
@@ -531,11 +532,11 @@ pub fn save_image(img: &Tensor) -> GenericResult<Vec<u8>> {
             None => return Err(GenericError::from("error saving image")),
         };
     let mut bytes: Vec<u8> = Vec::new();
-    image.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png).map_err(|e| GenericError::Anyhow(e.into()))?;
+    image
+        .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
+        .map_err(|e| GenericError::Anyhow(e.into()))?;
     //image.save(p).map_err(candle::Error::wrap)?;
     Ok(bytes)
 }
 
-
-fn main()  {
-}
+fn main() {}

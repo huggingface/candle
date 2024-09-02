@@ -64,14 +64,7 @@ impl Model {
             .iter()
             .map(|tokens| {
                 let tokens = tokens.get_attention_mask().to_vec();
-                Tensor::new(tokens.as_slice(), device)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let attention_mask: Vec<Tensor> = tokens
-            .iter()
-            .map(|tokens| {
-                let tokens = tokens.get_attention_mask().to_vec();
-                Tensor::new(tokens.as_slice(), device)
+                Tensor::new(tokens.as_slice(), &self.device)
             })
             .collect::<Result<Vec<_>, _>>()?;
 

@@ -1,5 +1,5 @@
-use candle_wgpu_kernels::upsample::Functions;
 use super::*;
+use candle_wgpu_kernels::upsample::Functions;
 
 pub fn queue_upsample1d(
     dev: &WgpuDevice,
@@ -24,16 +24,16 @@ pub fn queue_upsample1d(
     meta.add(strides[0]);
     meta.add(strides[1]);
     meta.add(strides[2]);
-    
+
     meta.add(c * target_size);
     meta.add(target_size);
 
-    let pipeline = meta.get_pipeline(Pipelines::Upsample(get_dtype(dtype)?, Functions::Upsample1d));
+    let pipeline = meta.get_pipeline(Pipelines::Upsample(
+        get_dtype(dtype)?,
+        Functions::Upsample1d,
+    ));
 
-    let bind_group = create_bind_group_input1(
-        buffer_dest,
-        buffer_input1,
-    );
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1);
     enqueue_workgroups(
         meta,
         pipeline,
@@ -41,11 +41,10 @@ pub fn queue_upsample1d(
         (target_size as u32 + 63) / 63,
         c as u32,
         b as u32,
-        (target_size * b * c) as usize
+        (target_size * b * c) as usize,
     );
     return Ok(());
 }
-
 
 pub fn queue_upsample2d(
     dev: &WgpuDevice,
@@ -73,17 +72,17 @@ pub fn queue_upsample2d(
     meta.add(strides[1]);
     meta.add(strides[2]);
     meta.add(strides[3]);
-    
+
     meta.add(c * target_size.0 * target_size.1);
     meta.add(target_size.0 * target_size.1);
     meta.add(target_size.1);
 
-    let pipeline = meta.get_pipeline(Pipelines::Upsample(get_dtype(dtype)?, Functions::Upsample2d));
+    let pipeline = meta.get_pipeline(Pipelines::Upsample(
+        get_dtype(dtype)?,
+        Functions::Upsample2d,
+    ));
 
-    let bind_group = create_bind_group_input1(
-        buffer_dest,
-        buffer_input1,
-    );
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1);
     enqueue_workgroups(
         meta,
         pipeline,
@@ -91,8 +90,7 @@ pub fn queue_upsample2d(
         (target_size.1 as u32 + 7) / 8,
         (target_size.0 as u32 + 7) / 8,
         c as u32,
-        (b * c * target_size.0 * target_size.1) as usize
+        (b * c * target_size.0 * target_size.1) as usize,
     );
     return Ok(());
 }
-

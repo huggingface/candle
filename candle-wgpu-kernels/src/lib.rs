@@ -1,10 +1,10 @@
 mod generated;
-pub use generated::*;
 pub use generated::kernels::*;
+pub use generated::*;
 
-impl Constants{
-    pub fn get_const(i : usize)->Constants{
-        match i{
+impl Constants {
+    pub fn get_const(i: usize) -> Constants {
+        match i {
             0 => Constants::Constv0,
             1 => Constants::Constv1,
             2 => Constants::Constv2,
@@ -17,18 +17,21 @@ impl Constants{
             9 => Constants::Constv9,
             //10 => Constants::Constv10,
             //11 => Constants::Constv11,
-            _ => todo!()
+            _ => todo!(),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature="wgpu_debug_serialize", derive(serde::Serialize, serde::Deserialize))]
-pub enum DType{
+#[cfg_attr(
+    feature = "wgpu_debug_serialize",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub enum DType {
     F32,
     U32,
-    U8
+    U8,
 }
-pub trait EntryPoint{
+pub trait EntryPoint {
     fn get_entry_point(&self) -> &'static str;
 }

@@ -1,43 +1,47 @@
-
 use std::io::Cursor;
 
 use candle_transformers::models::stable_diffusion::{self, clip, unet_2d, vae};
 
-use candle::{DType, Device, IndexOp, Tensor};
 use anyhow::Error as E;
+use candle::{DType, Device, IndexOp, Tensor};
 
+use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
-use serde::{Serialize, Deserialize};
 
 use wasm_bindgen::prelude::*;
-use wasm_helper::{generic_error::{GenericError, GenericResult}, hfhub::api::Api, opfs::read_file, safetensor_var_builder::var_builder_from_opfs_safetensors};
+use wasm_helper::{
+    generic_error::{GenericError, GenericResult},
+    hfhub::api::Api,
+    opfs::read_file,
+    safetensor_var_builder::var_builder_from_opfs_safetensors,
+};
 use web_time::Instant;
 
 #[wasm_bindgen]
 pub struct Model {
-    device : Device
+    device: Device,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct DeviceConfig{
+struct DeviceConfig {
     #[serde(default = "default_use_gpu")]
-    use_gpu : bool,
+    use_gpu: bool,
     #[serde(default = "default_meta_buffer_size")]
-    meta_buffer_size : u32, 
+    meta_buffer_size: u32,
     #[serde(default = "default_max_workload_size")]
-    max_workload_size : u64, 
+    max_workload_size: u64,
     #[serde(default = "default_buffer_cached_max_allowed_size")]
-    buffer_cached_max_allowed_size : u64,
+    buffer_cached_max_allowed_size: u64,
     #[serde(default = "default_use_cache")]
-    use_cache : bool,
+    use_cache: bool,
     #[serde(default = "default_queue_delay_miliseconds")]
-    queue_delay_miliseconds : u32, 
+    queue_delay_miliseconds: u32,
     #[serde(default = "default_flush_gpu_before_buffer_init")]
-    flush_gpu_before_buffer_init : bool,
+    flush_gpu_before_buffer_init: bool,
     #[serde(default = "default_queue_delay_factor")]
-    queue_delay_factor : f32,
+    queue_delay_factor: f32,
     #[serde(default = "default_buffer_mapping_size")]
-    buffer_mapping_size : u32
+    buffer_mapping_size: u32,
 }
 
 fn default_buffer_mapping_size() -> u32 {
@@ -57,16 +61,15 @@ fn default_flush_gpu_before_buffer_init() -> bool {
 }
 
 fn default_max_workload_size() -> u64 {
-    1024u64*1024*1024*2 //2gb,
+    1024u64 * 1024 * 1024 * 2 //2gb,
 }
 
-
 fn default_meta_buffer_size() -> u32 {
-    10*1024*1024//10mb
+    10 * 1024 * 1024 //10mb
 }
 
 fn default_buffer_cached_max_allowed_size() -> u64 {
-    1024*1024*1024*8 //8gb
+    1024 * 1024 * 1024 * 8 //8gb
 }
 
 fn default_use_cache() -> bool {
@@ -76,13 +79,6 @@ fn default_use_cache() -> bool {
 fn default_use_gpu() -> bool {
     true //8gb
 }
-
-
-
-
-
-
-
 
 use candle::{Module, D};
 use stable_diffusion::vae::AutoEncoderKL;
@@ -113,15 +109,15 @@ struct Args {
     n_steps: Option<usize>,
 
     /// The number of samples to generate iteratively.
-    #[serde(default="default_num_samples")]
+    #[serde(default = "default_num_samples")]
     num_samples: usize,
 
     /// The numbers of samples to generate simultaneously.
-    #[serde(default="default_num_batch")]
+    #[serde(default = "default_num_batch")]
     bsize: usize,
 
     /// The name of the final image to generate.
-    #[serde(default="default_sd_version")]
+    #[serde(default = "default_sd_version")]
     sd_version: StableDiffusionVersion,
 
     #[serde(default)]
@@ -139,14 +135,13 @@ struct Args {
     /// The strength, indicates how much to transform the initial image. The
     /// value must be between 0 and 1, a value of 1 discards the initial image
     /// information.
-    #[serde(default="default_im2im_strength")]
+    #[serde(default = "default_im2im_strength")]
     img2img_strength: f64,
 
     /// The seed to use when generating random samples.
     #[serde(default)]
     seed: Option<u64>,
 }
-
 
 fn default_prompt() -> String {
     "A very realistic photo of a rusty robot walking on a sandy beach".to_string()
@@ -163,7 +158,6 @@ fn default_num_batch() -> usize {
 fn default_sd_version() -> StableDiffusionVersion {
     StableDiffusionVersion::V1_5
 }
-
 
 fn default_im2im_strength() -> f64 {
     0.8
@@ -301,14 +295,14 @@ impl ModelFile {
     }
 }
 
-
-
 // Saves an image to disk using the image crate, this expects an input with shape
 // (c, height, width).
 pub fn save_image2(img: &Tensor) -> GenericResult<Vec<u8>> {
     let (channel, height, width) = img.dims3()?;
     if channel != 3 {
-        return Err(GenericError::from("save_image expects an input of shape (3, height, width)"))
+        return Err(GenericError::from(
+            "save_image expects an input of shape (3, height, width)",
+        ));
     }
     let img = img.permute((1, 2, 0))?.flatten_all()?;
     let pixels = img.to_vec1::<u8>()?;
@@ -318,7 +312,9 @@ pub fn save_image2(img: &Tensor) -> GenericResult<Vec<u8>> {
             None => return Err(GenericError::from("error saving image")),
         };
     let mut bytes: Vec<u8> = Vec::new();
-    image.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png).map_err(|e| GenericError::Anyhow(e.into()))?;
+    image
+        .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
+        .map_err(|e| GenericError::Anyhow(e.into()))?;
     //image.save(p).map_err(candle::Error::wrap)?;
     Ok(bytes)
 }
@@ -331,9 +327,11 @@ async fn save_image(
     bsize: usize,
 ) -> GenericResult<Vec<Vec<u8>>> {
     let images = vae.decode(&(latents / vae_scale)?)?;
-    let images = ((images / 2.)? + 0.5)?.to_device_async(&Device::Cpu).await?;
+    let images = ((images / 2.)? + 0.5)?
+        .to_device_async(&Device::Cpu)
+        .await?;
     let images = (images.clamp(0f32, 1.)? * 255.)?.to_dtype(DType::U8)?;
-    
+
     let mut result = vec![];
     for batch in 0..bsize {
         let image = images.i(batch)?;
@@ -361,7 +359,7 @@ async fn text_embeddings(
     } else {
         ModelFile::Tokenizer2
     };
-  
+
     let tokenizer = tokenizer_file.get(tokenizer, sd_version, use_f16).await?;
     let data = read_file(tokenizer).await?;
     let tokenizer = Tokenizer::from_bytes(data).map_err(E::msg)?;
@@ -376,9 +374,12 @@ async fn text_embeddings(
         .get_ids()
         .to_vec();
     if tokens.len() > sd_config.clip.max_position_embeddings {
-        return Err(GenericError::from(format!("the prompt is too long, {} > max-tokens ({})", 
-                tokens.len(),
-                sd_config.clip.max_position_embeddings)).into());
+        return Err(GenericError::from(format!(
+            "the prompt is too long, {} > max-tokens ({})",
+            tokens.len(),
+            sd_config.clip.max_position_embeddings
+        ))
+        .into());
     }
     while tokens.len() < sd_config.clip.max_position_embeddings {
         tokens.push(pad_id)
@@ -391,7 +392,9 @@ async fn text_embeddings(
     } else {
         ModelFile::Clip2
     };
-    let clip_weights = clip_weights_file.get(clip_weights, sd_version, false).await?;
+    let clip_weights = clip_weights_file
+        .get(clip_weights, sd_version, false)
+        .await?;
     let clip_config = if first {
         &sd_config.clip
     } else {
@@ -400,7 +403,7 @@ async fn text_embeddings(
 
     let vs = var_builder_from_opfs_safetensors(&clip_weights, DType::F32, device).await?;
 
-    let text_model =  clip::ClipTextTransformer::new(vs, &clip_config)?;
+    let text_model = clip::ClipTextTransformer::new(vs, &clip_config)?;
     let text_embeddings = text_model.forward(&tokens)?;
 
     let text_embeddings = if use_guide_scale {
@@ -410,9 +413,12 @@ async fn text_embeddings(
             .get_ids()
             .to_vec();
         if uncond_tokens.len() > sd_config.clip.max_position_embeddings {
-            return Err(GenericError::from(format!("the negative prompt is too long, {} > max-tokens ({})", 
+            return Err(GenericError::from(format!(
+                "the negative prompt is too long, {} > max-tokens ({})",
                 uncond_tokens.len(),
-                sd_config.clip.max_position_embeddings)).into());
+                sd_config.clip.max_position_embeddings
+            ))
+            .into());
         }
         while uncond_tokens.len() < sd_config.clip.max_position_embeddings {
             uncond_tokens.push(pad_id)
@@ -428,24 +434,14 @@ async fn text_embeddings(
     Ok(text_embeddings)
 }
 
-
-
-
-
-
-
-
-
-
 #[wasm_bindgen]
 impl Model {
-
     #[wasm_bindgen(constructor)]
     pub async fn load(config: String) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         wasm_logger::init(wasm_logger::Config::new(log::Level::Info).message_on_new_line());
-        
-        let args : DeviceConfig = serde_json::from_str(&config)?;
+
+        let args: DeviceConfig = serde_json::from_str(&config)?;
         let DeviceConfig {
             use_gpu,
             buffer_cached_max_allowed_size,
@@ -458,23 +454,28 @@ impl Model {
             ..
         } = args;
 
-        let device = match !use_gpu{
+        let device = match !use_gpu {
             true => Device::Cpu,
-            false =>  
-            {
-                let config = candle::wgpu_backend::WgpuDeviceConfig{buffer_cached_max_allowed_size,max_workload_size,meta_buffer_size,use_cache,queue_delay_miliseconds,flush_gpu_before_buffer_init, buffer_mapping_size};
+            false => {
+                let config = candle::WgpuDeviceConfig {
+                    buffer_cached_max_allowed_size,
+                    max_workload_size,
+                    meta_buffer_size,
+                    use_cache,
+                    queue_delay_miliseconds,
+                    flush_gpu_before_buffer_init,
+                    buffer_mapping_size,
+                    ..Default::default()
+                };
                 Device::new_webgpu_config(0, config).await?
             }
         };
-        
-        
 
-        return Ok(Model{device});
+        return Ok(Model { device });
     }
 
-        
     pub async fn run(&self, config: String) -> Result<JsValue, JsError> {
-        let args : Args = serde_json::from_str(&config)?;
+        let args: Args = serde_json::from_str(&config)?;
         let Args {
             prompt,
             uncond_prompt,
@@ -495,7 +496,10 @@ impl Model {
         } = args;
 
         if !(0. ..=1.).contains(&img2img_strength) {
-            return Err(GenericError::from(format!("img2img-strength should be between 0 and 1, got {img2img_strength}")).into());
+            return Err(GenericError::from(format!(
+                "img2img-strength should be between 0 and 1, got {img2img_strength}"
+            ))
+            .into());
         }
 
         // let _guard = if tracing {
@@ -544,7 +548,7 @@ impl Model {
 
         let scheduler = sd_config.build_scheduler(n_steps)?;
         let device = &self.device;
-        
+
         if let Some(seed) = seed {
             device.set_seed(seed)?;
         }
@@ -555,23 +559,25 @@ impl Model {
             _ => vec![true],
         };
         let mut text_embedding = vec![];
-        
-        for first in which{
-            text_embedding.push(text_embeddings(
-                &prompt,
-                &uncond_prompt,
-                None,
-                None,
-                sd_version,
-                &sd_config,
-                use_f16,
-                &device,
-                dtype,
-                use_guide_scale,
-                first,
-            ).await?);
-        }
 
+        for first in which {
+            text_embedding.push(
+                text_embeddings(
+                    &prompt,
+                    &uncond_prompt,
+                    None,
+                    None,
+                    sd_version,
+                    &sd_config,
+                    use_f16,
+                    &device,
+                    dtype,
+                    use_guide_scale,
+                    first,
+                )
+                .await?,
+            );
+        }
 
         let text_embeddings = Tensor::cat(&text_embedding, D::Minus1)?;
         let text_embeddings = text_embeddings.repeat((bsize, 1, 1))?;
@@ -583,12 +589,13 @@ impl Model {
         let vs_ae = var_builder_from_opfs_safetensors(&vae_weights, DType::F32, device).await?;
         let vae = vae::AutoEncoderKL::new(vs_ae, 3, 3, sd_config.autoencoder.clone())?;
 
-        let init_latent_dist : Option<stable_diffusion::vae::DiagonalGaussianDistribution> = match &img2img {
-            None => None,
-            Some(_) => {
-                todo!()
-            }
-        };
+        let init_latent_dist: Option<stable_diffusion::vae::DiagonalGaussianDistribution> =
+            match &img2img {
+                None => None,
+                Some(_) => {
+                    todo!()
+                }
+            };
         log::info!("Building the unet.");
         let unet_weights = ModelFile::Unet.get(None, sd_version, use_f16).await?;
 
@@ -600,7 +607,7 @@ impl Model {
             use_flash_attn,
             sd_config.unet.clone(),
         )?;
-    
+
         let t_start = if img2img.is_some() {
             n_steps - (n_steps as f64 * img2img_strength) as usize
         } else {
@@ -651,7 +658,8 @@ impl Model {
                     latents.clone()
                 };
 
-                let latent_model_input = scheduler.scale_model_input(latent_model_input, timestep)?;
+                let latent_model_input =
+                    scheduler.scale_model_input(latent_model_input, timestep)?;
                 let noise_pred =
                     unet.forward(&latent_model_input, timestep as f64, &text_embeddings)?;
 
@@ -659,7 +667,8 @@ impl Model {
                     let noise_pred = noise_pred.chunk(2, 0)?;
                     let (noise_pred_uncond, noise_pred_text) = (&noise_pred[0], &noise_pred[1]);
 
-                    (noise_pred_uncond + ((noise_pred_text - noise_pred_uncond)? * guidance_scale)?)?
+                    (noise_pred_uncond
+                        + ((noise_pred_text - noise_pred_uncond)? * guidance_scale)?)?
                 } else {
                     noise_pred
                 };
@@ -675,33 +684,24 @@ impl Model {
                 idx + 1,
                 num_samples
             );
-            
-            device.synchronize_async().await?;
-            let result = save_image(
-                &vae,
-                &latents,
-                vae_scale,
-                bsize,
-            ).await?;
 
+            device.synchronize_async().await?;
+            let result = save_image(&vae, &latents, vae_scale, bsize).await?;
 
             match &device {
                 candle::Device::WebGpu(gpu) => {
                     gpu.print_bindgroup_reuseinfo2();
-                },
-                _ => {},
+                }
+                _ => {}
             };
 
-            if let Some(val) = result.first(){
-                log::info!( "Image saved");
-                return  Ok(js_sys::Uint8Array::from(&val[..]).into());
+            if let Some(val) = result.first() {
+                log::info!("Image saved");
+                return Ok(js_sys::Uint8Array::from(&val[..]).into());
             }
-
         }
         Ok(JsValue::null())
     }
 }
 
-
-fn main()  {
-}
+fn main() {}

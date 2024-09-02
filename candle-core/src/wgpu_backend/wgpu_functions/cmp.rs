@@ -1,6 +1,6 @@
-use candle_wgpu_kernels::cmp::Functions;
-use crate::Layout;
 use super::*;
+use crate::Layout;
+use candle_wgpu_kernels::cmp::Functions;
 
 #[derive(Copy, Clone, Debug)]
 #[allow(dead_code)]
@@ -12,7 +12,6 @@ pub enum CmpOperation {
     Gt = 4,
     Ge = 5,
 }
-
 
 pub fn queue_cmp_buffer_from_buffer(
     dev: &WgpuDevice,
@@ -29,13 +28,12 @@ pub fn queue_cmp_buffer_from_buffer(
     meta.add_layout1(&layout_input1);
     meta.add_layout2(&layout_input2);
 
-    let pipeline = meta.get_pipeline(Pipelines::Cmp(get_dtype(dtype)?, Functions::CmpBufferFromBuffer));
+    let pipeline = meta.get_pipeline(Pipelines::Cmp(
+        get_dtype(dtype)?,
+        Functions::CmpBufferFromBuffer,
+    ));
 
-    let bind_group = create_bind_group_input2(
-        buffer_dest,
-        buffer_input1,
-        buffer_input2,
-    );
+    let bind_group = create_bind_group_input2(buffer_dest, buffer_input1, buffer_input2);
     enqueue(
         meta,
         pipeline,
