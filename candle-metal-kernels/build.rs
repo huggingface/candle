@@ -4,19 +4,23 @@ use std::{env, str};
 
 const METAL_SOURCES: [&str; 1] = ["reduce"];
 
-fn main() -> Result<(), String> {
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=reduce.metal");
-    println!("cargo:rerun-if-changed=utils.metal");
+enum Platform {
+    MacOS,
+    IOS,
+}
 
-    let xcrun_output = Command::new("xcrun")
-        .args(["--sdk", "macosx", "--show-sdk-path"])
-        .output()
-        .expect("xcrun command failed to start");
+impl Platform {
+    fn sdk(&self) -> &str {
+        match self {
+            Platform::MacOS => "macosx",
+            Platform::IOS => "iphoneos",
+        }
+    }
+}
 
-    let sdk_path = str::from_utf8(&xcrun_output.stdout)
-        .expect("Invalid UTF-8 from xcrun")
-        .replace('\n', "");
+fn compile(platform: Platform) -> Result<(), String> {
+    println!("cargo::rerun-if-changed=reduce.metal");
+    println!("cargo::rerun-if-changed=utils.metal");
 
     let current_dir = env::current_dir().expect("Failed to get current directory");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);
@@ -26,6 +30,8 @@ fn main() -> Result<(), String> {
     // Compile metal to air
     let mut compile_air_cmd = Command::new("xcrun");
     compile_air_cmd
+        .arg("--sdk")
+        .arg(platform.sdk())
         .arg("metal")
         .arg(format!("-working-directory={working_directory}"))
         .arg("-Wall")
@@ -65,7 +71,11 @@ fn main() -> Result<(), String> {
     }
 
     // Compile air to metallib
-    let metallib = out_dir.join("candle.metallib");
+    let lib_name = match platform {
+        Platform::MacOS => "candle.metallib",
+        Platform::IOS => "candle_ios.metallib",
+    };
+    let metallib = out_dir.join(lib_name);
     let mut compile_metallib_cmd = Command::new("xcrun");
     compile_metallib_cmd.arg("metal").arg("-o").arg(&metallib);
 
@@ -100,6 +110,13 @@ fn main() -> Result<(), String> {
         }
         Err(e) => panic!("Compiling air -> metallib failed: {:?}", e),
     }
+
+    Ok(())
+}
+
+fn main() -> Result<(), String> {
+    compile(Platform::MacOS)?;
+    compile(Platform::IOS)?;
 
     Ok(())
 }

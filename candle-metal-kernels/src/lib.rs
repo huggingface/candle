@@ -6,7 +6,11 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::RwLock;
 
+#[cfg(target_os = "macos")]
 const CANDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/candle.metallib"));
+#[cfg(target_os = "ios")]
+const CANDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/candle_ios.metallib"));
+
 const AFFINE: &str = include_str!("affine.metal");
 const INDEXING: &str = include_str!("indexing.metal");
 const UNARY: &str = include_str!("unary.metal");
