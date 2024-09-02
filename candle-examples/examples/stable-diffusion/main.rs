@@ -9,6 +9,7 @@ use candle_transformers::models::stable_diffusion;
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, IndexOp, Module, Tensor, D};
 use clap::Parser;
+use stable_diffusion::vae::AutoEncoderKL;
 use tokenizers::Tokenizer;
 
 #[derive(Parser)]
@@ -64,9 +65,13 @@ struct Args {
     #[arg(long)]
     n_steps: Option<usize>,
 
-    /// The number of samples to generate.
+    /// The number of samples to generate iteratively.
     #[arg(long, default_value_t = 1)]
-    num_samples: i64,
+    num_samples: usize,
+
+    /// The numbers of samples to generate simultaneously.
+    #[arg[long, default_value_t = 1]]
+    bsize: usize,
 
     /// The name of the final image to generate.
     #[arg(long, value_name = "FILE", default_value = "sd_final.png")]
@@ -96,6 +101,10 @@ struct Args {
     /// information.
     #[arg(long, default_value_t = 0.8)]
     img2img_strength: f64,
+
+    /// The seed to use when generating random samples.
+    #[arg(long)]
+    seed: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
@@ -232,8 +241,8 @@ impl ModelFile {
 
 fn output_filename(
     basename: &str,
-    sample_idx: i64,
-    num_samples: i64,
+    sample_idx: usize,
+    num_samples: usize,
     timestep_idx: Option<usize>,
 ) -> String {
     let filename = if num_samples > 1 {
@@ -255,6 +264,33 @@ fn output_filename(
             }
         },
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn save_image(
+    vae: &AutoEncoderKL,
+    latents: &Tensor,
+    vae_scale: f64,
+    bsize: usize,
+    idx: usize,
+    final_image: &str,
+    num_samples: usize,
+    timestep_ids: Option<usize>,
+) -> Result<()> {
+    let images = vae.decode(&(latents / vae_scale)?)?;
+    let images = ((images / 2.)? + 0.5)?.to_device(&Device::Cpu)?;
+    let images = (images.clamp(0f32, 1.)? * 255.)?.to_dtype(DType::U8)?;
+    for batch in 0..bsize {
+        let image = images.i(batch)?;
+        let image_filename = output_filename(
+            final_image,
+            (bsize * idx) + batch + 1,
+            batch + num_samples,
+            timestep_ids,
+        );
+        candle_examples::save_image(&image, image_filename)?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -288,6 +324,13 @@ fn text_embeddings(
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
+    if tokens.len() > sd_config.clip.max_position_embeddings {
+        anyhow::bail!(
+            "the prompt is too long, {} > max-tokens ({})",
+            tokens.len(),
+            sd_config.clip.max_position_embeddings
+        )
+    }
     while tokens.len() < sd_config.clip.max_position_embeddings {
         tokens.push(pad_id)
     }
@@ -315,6 +358,13 @@ fn text_embeddings(
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
+        if uncond_tokens.len() > sd_config.clip.max_position_embeddings {
+            anyhow::bail!(
+                "the negative prompt is too long, {} > max-tokens ({})",
+                uncond_tokens.len(),
+                sd_config.clip.max_position_embeddings
+            )
+        }
         while uncond_tokens.len() < sd_config.clip.max_position_embeddings {
             uncond_tokens.push(pad_id)
         }
@@ -330,7 +380,7 @@ fn text_embeddings(
 }
 
 fn image_preprocess<T: AsRef<std::path::Path>>(path: T) -> anyhow::Result<Tensor> {
-    let img = image::io::Reader::open(path)?.decode()?;
+    let img = image::ImageReader::open(path)?.decode()?;
     let (height, width) = (img.height() as usize, img.width() as usize);
     let height = height - height % 32;
     let width = width - width % 32;
@@ -364,6 +414,7 @@ fn run(args: Args) -> Result<()> {
         final_image,
         sliced_attention_size,
         num_samples,
+        bsize,
         sd_version,
         clip_weights,
         vae_weights,
@@ -374,6 +425,7 @@ fn run(args: Args) -> Result<()> {
         use_flash_attn,
         img2img,
         img2img_strength,
+        seed,
         ..
     } = args;
 
@@ -427,6 +479,9 @@ fn run(args: Args) -> Result<()> {
 
     let scheduler = sd_config.build_scheduler(n_steps)?;
     let device = candle_examples::device(cpu)?;
+    if let Some(seed) = seed {
+        device.set_seed(seed)?;
+    }
     let use_guide_scale = guidance_scale > 1.0;
 
     let which = match sd_version {
@@ -453,6 +508,7 @@ fn run(args: Args) -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
 
     let text_embeddings = Tensor::cat(&text_embeddings, D::Minus1)?;
+    let text_embeddings = text_embeddings.repeat((bsize, 1, 1))?;
     println!("{text_embeddings:?}");
 
     println!("Building the autoencoder.");
@@ -474,7 +530,6 @@ fn run(args: Args) -> Result<()> {
     } else {
         0
     };
-    let bsize = 1;
 
     let vae_scale = match sd_version {
         StableDiffusionVersion::V1_5
@@ -538,12 +593,16 @@ fn run(args: Args) -> Result<()> {
             println!("step {}/{n_steps} done, {:.2}s", timestep_index + 1, dt);
 
             if args.intermediary_images {
-                let image = vae.decode(&(&latents / vae_scale)?)?;
-                let image = ((image / 2.)? + 0.5)?.to_device(&Device::Cpu)?;
-                let image = (image * 255.)?.to_dtype(DType::U8)?.i(0)?;
-                let image_filename =
-                    output_filename(&final_image, idx + 1, num_samples, Some(timestep_index + 1));
-                candle_examples::save_image(&image, image_filename)?
+                save_image(
+                    &vae,
+                    &latents,
+                    vae_scale,
+                    bsize,
+                    idx,
+                    &final_image,
+                    num_samples,
+                    Some(timestep_index + 1),
+                )?;
             }
         }
 
@@ -552,11 +611,16 @@ fn run(args: Args) -> Result<()> {
             idx + 1,
             num_samples
         );
-        let image = vae.decode(&(&latents / vae_scale)?)?;
-        let image = ((image / 2.)? + 0.5)?.to_device(&Device::Cpu)?;
-        let image = (image.clamp(0f32, 1.)? * 255.)?.to_dtype(DType::U8)?.i(0)?;
-        let image_filename = output_filename(&final_image, idx + 1, num_samples, None);
-        candle_examples::save_image(&image, image_filename)?
+        save_image(
+            &vae,
+            &latents,
+            vae_scale,
+            bsize,
+            idx,
+            &final_image,
+            num_samples,
+            None,
+        )?;
     }
     Ok(())
 }

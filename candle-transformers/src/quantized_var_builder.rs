@@ -3,6 +3,7 @@ use candle::{Device, Result, Shape};
 use std::sync::Arc;
 
 // VarBuilder specialized for QTensors
+#[derive(Clone)]
 pub struct VarBuilder {
     data: Arc<std::collections::HashMap<String, Arc<QTensor>>>,
     path: Vec<String>,
@@ -62,7 +63,7 @@ impl VarBuilder {
         let path = self.path(name);
         match self.data.get(&path) {
             None => {
-                candle::bail!("cannot find tensor {name}")
+                candle::bail!("cannot find tensor {path}")
             }
             Some(qtensor) => {
                 let shape = s.into();

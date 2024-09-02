@@ -89,7 +89,7 @@ kernel void FN_NAME( \
         return; \
     } \
     const TYPENAME x = input[id]; \
-    output[id] = TYPENAME((x > 0)?x: mul * exp(x - 1)); \
+    output[id] = TYPENAME((x > 0)?x: mul * (exp(x) - 1)); \
 } \
 kernel void FN_NAME##_strided( \
     constant size_t &dim, \
@@ -109,6 +109,8 @@ kernel void FN_NAME##_strided( \
 } \
 
 
+AFFINE(affine_u8, uint8_t)
+AFFINE(affine_u32, uint32_t)
 AFFINE(affine_f32, float)
 AFFINE(affine_f16, half)
 POWF(powf_f32, float)

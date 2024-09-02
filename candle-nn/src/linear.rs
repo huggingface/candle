@@ -57,21 +57,34 @@ impl super::Module for Linear {
 /// Create or initialize a new linear layer.
 ///
 /// This uses some default names for weights and biases, namely `"weight"` and `"bias"`.
-pub fn linear(in_dim: usize, out_dim: usize, vs: crate::VarBuilder) -> Result<Linear> {
+pub fn linear(in_dim: usize, out_dim: usize, vb: crate::VarBuilder) -> Result<Linear> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vs.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
+    let ws = vb.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
     let bound = 1. / (in_dim as f64).sqrt();
     let init_bs = crate::Init::Uniform {
         lo: -bound,
         up: bound,
     };
-    let bs = vs.get_with_hints(out_dim, "bias", init_bs)?;
+    let bs = vb.get_with_hints(out_dim, "bias", init_bs)?;
     Ok(Linear::new(ws, Some(bs)))
 }
 
 /// Create or initialize a new linear layer without biases.
-pub fn linear_no_bias(in_dim: usize, out_dim: usize, vs: crate::VarBuilder) -> Result<Linear> {
+pub fn linear_no_bias(in_dim: usize, out_dim: usize, vb: crate::VarBuilder) -> Result<Linear> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vs.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
+    let ws = vb.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
     Ok(Linear::new(ws, None))
+}
+
+pub fn linear_b(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: crate::VarBuilder,
+) -> Result<Linear> {
+    if bias {
+        linear(in_dim, out_dim, vb)
+    } else {
+        linear_no_bias(in_dim, out_dim, vb)
+    }
 }

@@ -18,6 +18,8 @@ use rand::{distributions::Distribution, SeedableRng};
 use tokenizers::Tokenizer;
 
 mod multilingual;
+mod pcm_decode;
+
 use candle_transformers::models::whisper::{self as m, audio, Config};
 
 pub enum Model {
@@ -372,6 +374,8 @@ enum WhichModel {
     DistilMediumEn,
     #[value(name = "distil-large-v2")]
     DistilLargeV2,
+    #[value(name = "distil-large-v3")]
+    DistilLargeV3,
 }
 
 impl WhichModel {
@@ -384,7 +388,8 @@ impl WhichModel {
             | Self::Large
             | Self::LargeV2
             | Self::LargeV3
-            | Self::DistilLargeV2 => true,
+            | Self::DistilLargeV2
+            | Self::DistilLargeV3 => true,
             Self::TinyEn | Self::BaseEn | Self::SmallEn | Self::MediumEn | Self::DistilMediumEn => {
                 false
             }
@@ -406,6 +411,7 @@ impl WhichModel {
             Self::LargeV3 => ("openai/whisper-large-v3", "main"),
             Self::DistilMediumEn => ("distil-whisper/distil-medium.en", "main"),
             Self::DistilLargeV2 => ("distil-whisper/distil-large-v2", "main"),
+            Self::DistilLargeV3 => ("distil-whisper/distil-large-v3", "main"),
         }
     }
 }
@@ -535,17 +541,10 @@ fn main() -> Result<()> {
     let mut mel_filters = vec![0f32; mel_bytes.len() / 4];
     <byteorder::LittleEndian as byteorder::ByteOrder>::read_f32_into(mel_bytes, &mut mel_filters);
 
-    let mut input = std::fs::File::open(input)?;
-    let (header, data) = wav::read(&mut input)?;
-    println!("loaded wav data: {header:?}");
-    if header.sampling_rate != m::SAMPLE_RATE as u32 {
-        anyhow::bail!("wav file must have a {} sampling rate", m::SAMPLE_RATE)
+    let (pcm_data, sample_rate) = pcm_decode::pcm_decode(input)?;
+    if sample_rate != m::SAMPLE_RATE as u32 {
+        anyhow::bail!("input file must have a {} sampling rate", m::SAMPLE_RATE)
     }
-    let data = data.as_sixteen().expect("expected 16 bit wav file");
-    let pcm_data: Vec<_> = data[..data.len() / header.channel_count as usize]
-        .iter()
-        .map(|v| *v as f32 / 32768.)
-        .collect();
     println!("pcm data loaded {}", pcm_data.len());
     let mel = audio::pcm_to_mel(&config, &pcm_data, &mel_filters);
     let mel_len = mel.len();

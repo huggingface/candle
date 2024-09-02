@@ -64,6 +64,14 @@ template <typename T> METAL_FUNC T relu(T in){
     }
     return in;
 }
+template <typename T> METAL_FUNC T silu(T in){
+    return in / (static_cast<T>(1) + exp(-in));
+}
+template <typename T> METAL_FUNC T sigmoid(T in) {
+    return recip(static_cast<T>(1) + exp(-in));
+}
+
+#define TILE_SIZE 2
 
 #define UNARY(FN, TYPENAME, FN_NAME, FN_NAME_STRIDED) \
 kernel void FN_NAME( \
@@ -76,8 +84,8 @@ kernel void FN_NAME( \
         return; \
     } \
     output[tid] = TYPENAME(FN(float(input[tid]))); \
-}\
-kernel void FN_NAME_STRIDED( \
+} \
+kernel void FN_NAME##_##strided( \
     constant size_t &dim, \
     constant size_t &num_dims, \
     constant size_t *dims, \
@@ -90,6 +98,17 @@ kernel void FN_NAME_STRIDED( \
         return; \
     } \
     output[tid] = TYPENAME(FN(float(input[get_strided_index(tid, num_dims, dims, strides)]))); \
+} \
+kernel void FN_NAME##_##tiled( \
+    constant size_t &dim, \
+    device const TYPENAME *input,  \
+    device TYPENAME *output, \
+    uint tid [[ thread_position_in_grid ]] \
+) { \
+    for (uint i = 0; i < TILE_SIZE; i++) { \
+        const uint idx = tid * TILE_SIZE + i; \
+        output[idx] = TYPENAME(FN(float(input[idx]))); \
+    } \
 }
 
 #define UNARY_OP(NAME) \
@@ -99,6 +118,26 @@ UNARY(NAME, half, NAME##_f16, NAME##_f16_strided);
 #define BFLOAT_UNARY_OP(NAME) \
 UNARY(NAME, bfloat, NAME##_bf16, NAME##_bf16_strided);
 
+#define COPY2D(FN_NAME, TYPENAME) \
+kernel void FN_NAME( \
+    constant int64_t &d1, \
+    constant int64_t &d2, \
+    constant int64_t &src_s, \
+    constant int64_t &dst_s, \
+    device const TYPENAME *input,  \
+    device TYPENAME *output, \
+    uint2 idx [[thread_position_in_grid]] \
+) { \
+    if (idx.x >= d1 || idx.y >= d2) return; \
+    int64_t src_idx = idx.x * src_s + idx.y; \
+    int64_t dst_idx = idx.x * dst_s + idx.y; \
+    output[dst_idx] = input[src_idx]; \
+}
+
+COPY2D(copy2d_f32, float)
+COPY2D(copy2d_f16, half)
+COPY2D(copy2d_u8, uint8_t)
+COPY2D(copy2d_u32, uint32_t)
 
 UNARY_OP(cos)
 UNARY_OP(sin)
@@ -108,6 +147,7 @@ UNARY_OP(neg)
 UNARY_OP(exp)
 UNARY_OP(log)
 UNARY_OP(gelu)
+UNARY_OP(silu)
 UNARY_OP(abs)
 UNARY_OP(ceil)
 UNARY_OP(floor)
@@ -117,6 +157,8 @@ UNARY_OP(erf)
 UNARY_OP(tanh)
 UNARY_OP(recip)
 UNARY_OP(relu)
+UNARY_OP(sign)
+UNARY_OP(sigmoid)
 UNARY(id, float, copy_f32, copy_f32_strided)
 UNARY(id, half, copy_f16, copy_f16_strided)
 UNARY(id, uint8_t, copy_u8, copy_u8_strided)
@@ -124,6 +166,7 @@ UNARY(id, uint32_t, copy_u32, copy_u32_strided)
 
 #if __METAL_VERSION__ >= 220
 UNARY(id, int64_t, copy_i64, copy_i64_strided)
+COPY2D(copy2d_i64, int64_t)
 #endif
 
 #if defined(__HAVE_BFLOAT__)
@@ -135,6 +178,7 @@ BFLOAT_UNARY_OP(neg)
 BFLOAT_UNARY_OP(exp)
 BFLOAT_UNARY_OP(log)
 BFLOAT_UNARY_OP(gelu)
+BFLOAT_UNARY_OP(silu)
 BFLOAT_UNARY_OP(abs)
 BFLOAT_UNARY_OP(ceil)
 BFLOAT_UNARY_OP(floor)
@@ -144,6 +188,10 @@ BFLOAT_UNARY_OP(erf)
 BFLOAT_UNARY_OP(tanh)
 BFLOAT_UNARY_OP(recip)
 BFLOAT_UNARY_OP(relu)
+BFLOAT_UNARY_OP(sign)
+BFLOAT_UNARY_OP(sigmoid)
 
 UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
+
+COPY2D(copy2d_bf16, bfloat)
 #endif

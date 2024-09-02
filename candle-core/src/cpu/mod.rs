@@ -1,6 +1,7 @@
 pub mod erf;
 pub mod kernels;
 
+#[allow(unused)]
 trait Cpu<const ARR: usize> {
     type Unit;
     type Array;
@@ -18,6 +19,7 @@ trait Cpu<const ARR: usize> {
     unsafe fn vec_store(mem_addr: *mut f32, a: Self::Unit);
 }
 
+#[allow(unused)]
 trait CpuF16<const ARR: usize> {
     type Unit;
     type Array;

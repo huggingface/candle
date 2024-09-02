@@ -1,6 +1,7 @@
 ## Running Segment Anything Example
 
-Here, we provide two examples of how to run Whisper using a Candle-compiled WASM binary and runtimes.
+Here, we provide an example showing how to run the Segment Anything model in the
+browser.
 
 ### Vanilla JS and WebWorkers
 

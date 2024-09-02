@@ -71,8 +71,8 @@ impl GroupedQueryAttention {
         };
         self.kv_cache = Some((key.clone(), value.clone()));
         let query = query.contiguous()?;
-        let key = super::mpt::repeat_kv(key, self.n_heads / self.kv_n_heads)?.contiguous()?;
-        let value = super::mpt::repeat_kv(value, self.n_heads / self.kv_n_heads)?.contiguous()?;
+        let key = crate::utils::repeat_kv(key, self.n_heads / self.kv_n_heads)?.contiguous()?;
+        let value = crate::utils::repeat_kv(value, self.n_heads / self.kv_n_heads)?.contiguous()?;
         let attn_weights = (query.matmul(&key)? * self.softmax_scale)?;
         let attn_bias = {
             let s_q = query.dim(D::Minus2)?;

@@ -13,7 +13,7 @@ struct Block {
 
 impl Block {
     fn get(&self, key: &str) -> Result<&str> {
-        match self.parameters.get(&key.to_string()) {
+        match self.parameters.get(key) {
             None => candle::bail!("cannot find {} in {}", key, self.block_type),
             Some(value) => Ok(value),
         }
@@ -28,7 +28,7 @@ pub struct Darknet {
 
 impl Darknet {
     fn get(&self, key: &str) -> Result<&str> {
-        match self.parameters.get(&key.to_string()) {
+        match self.parameters.get(key) {
             None => candle::bail!("cannot find {} in net parameters", key),
             Some(value) => Ok(value),
         }
@@ -216,7 +216,7 @@ fn detect(
     xs: &Tensor,
     image_height: usize,
     classes: usize,
-    anchors: &Vec<(usize, usize)>,
+    anchors: &[(usize, usize)],
 ) -> Result<Tensor> {
     let (bsize, _channels, height, _width) = xs.dims4()?;
     let stride = image_height / height;
@@ -272,7 +272,7 @@ impl Darknet {
         let mut prev_channels: usize = 3;
         for (index, block) in self.blocks.iter().enumerate() {
             let channels_and_bl = match block.block_type.as_str() {
-                "convolutional" => conv(vb.pp(&index.to_string()), index, prev_channels, block)?,
+                "convolutional" => conv(vb.pp(index.to_string()), index, prev_channels, block)?,
                 "upsample" => upsample(prev_channels)?,
                 "shortcut" => shortcut(index, prev_channels, block)?,
                 "route" => route(index, &blocks, block)?,

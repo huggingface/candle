@@ -70,26 +70,26 @@ where
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
-    vocab_size: usize,
-    d_model: usize,
-    d_kv: usize,
-    d_ff: usize,
-    num_layers: usize,
-    num_decoder_layers: Option<usize>,
-    num_heads: usize,
-    relative_attention_num_buckets: usize,
+    pub vocab_size: usize,
+    pub d_model: usize,
+    pub d_kv: usize,
+    pub d_ff: usize,
+    pub num_layers: usize,
+    pub num_decoder_layers: Option<usize>,
+    pub num_heads: usize,
+    pub relative_attention_num_buckets: usize,
     #[serde(default = "default_relative_attention_max_distance")]
-    relative_attention_max_distance: usize,
-    dropout_rate: f64,
-    layer_norm_epsilon: f64,
-    initializer_factor: f64,
+    pub relative_attention_max_distance: usize,
+    pub dropout_rate: f64,
+    pub layer_norm_epsilon: f64,
+    pub initializer_factor: f64,
     #[serde(default, deserialize_with = "deserialize_feed_forward_proj_activation")]
-    feed_forward_proj: ActivationWithOptionalGating,
+    pub feed_forward_proj: ActivationWithOptionalGating,
     #[serde(default = "default_tie_word_embeddings")]
-    tie_word_embeddings: bool,
+    pub tie_word_embeddings: bool,
     #[serde(default = "default_is_decoder")]
-    is_decoder: bool,
-    is_encoder_decoder: bool,
+    pub is_decoder: bool,
+    pub is_encoder_decoder: bool,
     #[serde(default = "default_use_cache")]
     pub use_cache: bool,
     pub pad_token_id: usize,
@@ -183,7 +183,7 @@ impl Module for T5LayerNorm {
         let xs_f32 = xs.to_dtype(DType::F32)?;
         // variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
         let variance = xs_f32.sqr()?.mean_keepdim(D::Minus1)?;
-        let xs = xs.broadcast_div(&(variance + self.variance_epsilon)?.sqrt()?)?;
+        let xs = xs_f32.broadcast_div(&(variance + self.variance_epsilon)?.sqrt()?)?;
         let xs = xs.to_dtype(dtype)?;
         let xs = xs.broadcast_mul(&self.weight)?;
         Ok(xs)
@@ -601,7 +601,7 @@ impl T5Block {
             None
         };
         let ff_i = if cross_attn.is_some() { 2 } else { 1 };
-        let ff = T5LayerFF::load(vb.pp(&ff_i.to_string()), cfg)?;
+        let ff = T5LayerFF::load(vb.pp(ff_i.to_string()), cfg)?;
         Ok(Self {
             self_attn,
             cross_attn,
@@ -709,8 +709,10 @@ impl T5EncoderModel {
     pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let shared_vb = if vb.contains_tensor("shared.weight") {
             vb.pp("shared")
-        } else {
+        } else if vb.contains_tensor("decoder.embed_tokens") {
             vb.pp("decoder").pp("embed_tokens")
+        } else {
+            vb.pp("encoder").pp("embed_tokens")
         };
         let shared = Embedding::new(cfg.vocab_size, cfg.d_model, shared_vb)?;
         let shared = Arc::new(shared);

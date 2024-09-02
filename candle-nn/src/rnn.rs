@@ -31,7 +31,7 @@ pub trait RNN {
         let (_b_size, seq_len, _features) = input.dims3()?;
         let mut output = Vec::with_capacity(seq_len);
         for seq_index in 0..seq_len {
-            let input = input.i((.., seq_index, ..))?;
+            let input = input.i((.., seq_index, ..))?.contiguous()?;
             let state = if seq_index == 0 {
                 self.step(&input, init_state)?
             } else {
@@ -50,11 +50,15 @@ pub trait RNN {
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone)]
 pub struct LSTMState {
-    h: Tensor,
-    c: Tensor,
+    pub h: Tensor,
+    pub c: Tensor,
 }
 
 impl LSTMState {
+    pub fn new(h: Tensor, c: Tensor) -> Self {
+        LSTMState { h, c }
+    }
+
     /// The hidden state vector, which is also the output of the LSTM.
     pub fn h(&self) -> &Tensor {
         &self.h
@@ -197,7 +201,7 @@ impl RNN for LSTM {
 
     fn states_to_tensor(&self, states: &[Self::State]) -> Result<Tensor> {
         let states = states.iter().map(|s| s.h.clone()).collect::<Vec<_>>();
-        Tensor::cat(&states, 1)
+        Tensor::stack(&states, 1)
     }
 }
 
@@ -205,7 +209,7 @@ impl RNN for LSTM {
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone)]
 pub struct GRUState {
-    h: Tensor,
+    pub h: Tensor,
 }
 
 impl GRUState {

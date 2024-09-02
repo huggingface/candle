@@ -10,7 +10,7 @@ use tokenizers::Tokenizer;
 
 use candle::quantized::{ggml_file, gguf_file};
 use candle::Tensor;
-use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_transformers::models::quantized_llama as model;
@@ -67,6 +67,10 @@ enum Which {
     Mixtral,
     #[value(name = "mixtral-instruct")]
     MixtralInstruct,
+    #[value(name = "llama3-8b")]
+    L8b,
+    #[value(name = "phi3")]
+    Phi3,
 }
 
 impl Which {
@@ -82,7 +86,9 @@ impl Which {
             | Self::L13bCode
             | Self::L34bCode
             | Self::Leo7b
-            | Self::Leo13b => false,
+            | Self::Leo13b
+            | Self::L8b
+            | Self::Phi3 => false,
             // Zephyr and OpenChat are fine tuned versions of mistral and should be treated in the
             // same way. Starling is a fine tuned version of OpenChat.
             Self::OpenChat35
@@ -116,7 +122,9 @@ impl Which {
             | Self::Mistral7bInstruct
             | Self::Mistral7bInstructV02
             | Self::OpenChat35
-            | Self::Starling7bAlpha => false,
+            | Self::Starling7bAlpha
+            | Self::L8b
+            | Self::Phi3 => false,
             Self::Zephyr7bAlpha | Self::Zephyr7bBeta => true,
         }
     }
@@ -140,33 +148,37 @@ impl Which {
             | Self::Mistral7bInstruct
             | Self::Mistral7bInstructV02
             | Self::Zephyr7bAlpha
-            | Self::Zephyr7bBeta => false,
+            | Self::Zephyr7bBeta
+            | Self::L8b
+            | Self::Phi3 => false,
             Self::OpenChat35 | Self::Starling7bAlpha => true,
         }
     }
 
     fn tokenizer_repo(&self) -> &'static str {
         match self {
-            Which::L7b
-            | Which::L13b
-            | Which::L70b
-            | Which::L7bChat
-            | Which::L13bChat
-            | Which::L70bChat
-            | Which::L7bCode
-            | Which::L13bCode
-            | Which::L34bCode => "hf-internal-testing/llama-tokenizer",
-            Which::Leo7b => "LeoLM/leo-hessianai-7b",
-            Which::Leo13b => "LeoLM/leo-hessianai-13b",
-            Which::Mixtral => "mistralai/Mixtral-8x7B-v0.1",
-            Which::MixtralInstruct => "mistralai/Mixtral-8x7B-Instruct-v0.1",
-            Which::Mistral7b
-            | Which::Mistral7bInstruct
-            | Which::Mistral7bInstructV02
-            | Which::Zephyr7bAlpha
-            | Which::Zephyr7bBeta => "mistralai/Mistral-7B-v0.1",
-            Which::OpenChat35 => "openchat/openchat_3.5",
-            Which::Starling7bAlpha => "berkeley-nest/Starling-LM-7B-alpha",
+            Self::L7b
+            | Self::L13b
+            | Self::L70b
+            | Self::L7bChat
+            | Self::L13bChat
+            | Self::L70bChat
+            | Self::L7bCode
+            | Self::L13bCode
+            | Self::L34bCode => "hf-internal-testing/llama-tokenizer",
+            Self::Leo7b => "LeoLM/leo-hessianai-7b",
+            Self::Leo13b => "LeoLM/leo-hessianai-13b",
+            Self::Mixtral => "mistralai/Mixtral-8x7B-v0.1",
+            Self::MixtralInstruct => "mistralai/Mixtral-8x7B-Instruct-v0.1",
+            Self::Mistral7b
+            | Self::Mistral7bInstruct
+            | Self::Mistral7bInstructV02
+            | Self::Zephyr7bAlpha
+            | Self::Zephyr7bBeta => "mistralai/Mistral-7B-v0.1",
+            Self::OpenChat35 => "openchat/openchat_3.5",
+            Self::Starling7bAlpha => "berkeley-nest/Starling-LM-7B-alpha",
+            Self::L8b => "meta-llama/Meta-Llama-3-8B",
+            Self::Phi3 => "microsoft/Phi-3-mini-4k-instruct",
         }
     }
 }
@@ -200,6 +212,10 @@ struct Args {
     #[arg(long)]
     top_p: Option<f64>,
 
+    /// Only sample among the top K samples.
+    #[arg(long)]
+    top_k: Option<usize>,
+
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
     seed: u64,
@@ -211,6 +227,14 @@ struct Args {
     /// Display the token for the specified prompt.
     #[arg(long)]
     verbose_prompt: bool,
+
+    /// Process prompt elements separately.
+    #[arg(long)]
+    split_prompt: bool,
+
+    /// Run on CPU rather than GPU even if a GPU is available.
+    #[arg(long)]
+    cpu: bool,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
     #[arg(long, default_value_t = 1.1)]
@@ -227,6 +251,10 @@ struct Args {
     /// Group-Query Attention, use 8 for the 70B version of LLaMAv2.
     #[arg(long)]
     gqa: Option<usize>,
+
+    /// Use the slower dmmv cuda kernel.
+    #[arg(long)]
+    force_dmmv: bool,
 }
 
 impl Args {
@@ -306,10 +334,28 @@ impl Args {
                         "TheBloke/Starling-LM-7B-alpha-GGUF",
                         "starling-lm-7b-alpha.Q4_K_M.gguf",
                     ),
+                    // TODO: swap to TheBloke model when available
+                    Which::L8b => (
+                        "QuantFactory/Meta-Llama-3-8B-GGUF",
+                        "Meta-Llama-3-8B.Q4_K_S.gguf",
+                    ),
+                    Which::Phi3 => (
+                        "microsoft/Phi-3-mini-4k-instruct-gguf",
+                        "Phi-3-mini-4k-instruct-q4.gguf",
+                    ),
+                };
+                let revision = if self.which == Which::Phi3 {
+                    "5eef2ce24766d31909c0b269fe90c817a8f263fb"
+                } else {
+                    "main"
                 };
                 let api = hf_hub::api::sync::Api::new()?;
-                let api = api.model(repo.to_string());
-                api.get(filename)?
+                api.repo(hf_hub::Repo::with_revision(
+                    repo.to_string(),
+                    hf_hub::RepoType::Model,
+                    revision.to_string(),
+                ))
+                .get(filename)?
             }
         };
         Ok(model_path)
@@ -333,11 +379,13 @@ fn main() -> anyhow::Result<()> {
     use tracing_subscriber::prelude::*;
 
     let args = Args::parse();
-    let temperature = if args.temperature == 0. {
-        None
-    } else {
-        Some(args.temperature)
-    };
+
+    #[cfg(feature = "cuda")]
+    candle::quantized::cuda::set_force_dmmv(args.force_dmmv);
+
+    candle::cuda::set_gemm_reduced_precision_f16(true);
+    candle::cuda::set_gemm_reduced_precision_bf16(true);
+
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -361,7 +409,7 @@ fn main() -> anyhow::Result<()> {
     let model_path = args.model()?;
     let mut file = std::fs::File::open(&model_path)?;
     let start = std::time::Instant::now();
-    let device = candle_examples::device(false)?;
+    let device = candle_examples::device(args.cpu)?;
 
     let mut model = match model_path.extension().and_then(|v| v.to_str()) {
         Some("gguf") => {
@@ -405,7 +453,9 @@ fn main() -> anyhow::Result<()> {
                 | Which::L13bCode
                 | Which::L34bCode
                 | Which::Leo7b
-                | Which::Leo13b => 1,
+                | Which::Leo13b
+                | Which::L8b
+                | Which::Phi3 => 1,
                 Which::Mixtral
                 | Which::MixtralInstruct
                 | Which::Mistral7b
@@ -484,14 +534,36 @@ fn main() -> anyhow::Result<()> {
             prompt_tokens
         };
         let mut all_tokens = vec![];
-        let mut logits_processor = LogitsProcessor::new(args.seed, temperature, args.top_p);
+        let mut logits_processor = {
+            let temperature = args.temperature;
+            let sampling = if temperature <= 0. {
+                Sampling::ArgMax
+            } else {
+                match (args.top_k, args.top_p) {
+                    (None, None) => Sampling::All { temperature },
+                    (Some(k), None) => Sampling::TopK { k, temperature },
+                    (None, Some(p)) => Sampling::TopP { p, temperature },
+                    (Some(k), Some(p)) => Sampling::TopKThenTopP { k, p, temperature },
+                }
+            };
+            LogitsProcessor::from_sampling(args.seed, sampling)
+        };
 
         let start_prompt_processing = std::time::Instant::now();
-        let mut next_token = {
+        let mut next_token = if !args.split_prompt {
             let input = Tensor::new(prompt_tokens.as_slice(), &device)?.unsqueeze(0)?;
             let logits = model.forward(&input, 0)?;
             let logits = logits.squeeze(0)?;
             logits_processor.sample(&logits)?
+        } else {
+            let mut next_token = 0;
+            for (pos, token) in prompt_tokens.iter().enumerate() {
+                let input = Tensor::new(&[*token], &device)?.unsqueeze(0)?;
+                let logits = model.forward(&input, pos)?;
+                let logits = logits.squeeze(0)?;
+                next_token = logits_processor.sample(&logits)?
+            }
+            next_token
         };
         let prompt_dt = start_prompt_processing.elapsed();
         all_tokens.push(next_token);
@@ -500,11 +572,14 @@ fn main() -> anyhow::Result<()> {
             std::io::stdout().flush()?;
         }
 
-        let eos_token = if args.which.is_open_chat() {
-            "<|end_of_turn|>"
-        } else {
-            "</s>"
+        let eos_token = match args.which {
+            Which::L8b => "<|end_of_text|>",
+            _ => match args.which.is_open_chat() {
+                true => "<|end_of_turn|>",
+                false => "</s>",
+            },
         };
+
         let eos_token = *tos.tokenizer().get_vocab(true).get(eos_token).unwrap();
         let start_post_prompt = std::time::Instant::now();
         let mut sampled = 0;

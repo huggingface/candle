@@ -123,16 +123,20 @@ template<typename T> METAL_FUNC void rand_uniform(
         return;
     }
 
+    // Evenly sized vectors need an offset when writing the mirror element.
+    uint off = 1 - size % 2;
     float diff = abs(min - max);
-    HybridTaus rng = HybridTaus::init({ulong(seed), tid, 1, 1});
+    uint s = atomic_load_explicit(seed, memory_order_relaxed);
+    HybridTaus rng = HybridTaus::init({ulong(s), tid, 1, 1});
     out[tid] = static_cast<T>(rng.rand() * diff + min);
     if (tid == 0) {
         atomic_store_explicit(seed, uint(rng.rand() * UNIF01_NORM32), memory_order_relaxed);
-        // Return early if tid == 0, otherwise we will write to out[size].
-        return;
+        // Return early if tid == 0 && off == 0, otherwise we will write to out[size].
+        if (off == 0)
+            return;
     }
     // Use symmetry to fill the other half of the array.
-    out[size - tid] = static_cast<T>(rng.rand() * diff + min);
+    out[size - off - tid] = static_cast<T>(rng.rand() * diff + min);
 }
 
 // Create Gaussian normal distribution using Box-Muller transform:
@@ -148,7 +152,10 @@ template<typename T> METAL_FUNC void normal(
     if (tid >= size) {
         return;
     }
-    HybridTaus rng = HybridTaus::init({ulong(seed), tid, 1, 1});
+    // Evenly sized vectors need an offset when writing the mirror element.
+    uint off = 1 - size % 2;
+    uint s = atomic_load_explicit(seed, memory_order_relaxed);
+    HybridTaus rng = HybridTaus::init({ulong(s), tid, 1, 1});
     float u1 = rng.rand();
     float u2 = rng.rand();
 
@@ -162,11 +169,12 @@ template<typename T> METAL_FUNC void normal(
 
     if (tid == 0) {
         atomic_store_explicit(seed, uint(rng.rand() * UNIF01_NORM32), memory_order_relaxed);
-        // Return early if tid == 0, otherwise we will write to out[size].
-        return;
+        // Return early if tid == 0 && off == 0, otherwise we will write to out[size].
+        if (off == 0)
+            return;
     }
     // Use symmetry to fill the other half of the array.
-    out[size - tid] = static_cast<T>(z1);
+    out[size - off - tid] = static_cast<T>(z1);
 }
 
 #define UNIFORM_OP(NAME, T)                             \

@@ -11,8 +11,8 @@
 //! use candle_nn::{LayerNorm, Module};
 //! # fn main() -> candle::Result<()> {
 //!
-//! let w = Tensor::new(1f32, &Cpu)?;
-//! let b = Tensor::new(0f32, &Cpu)?;
+//! let w = Tensor::new(&[1f32, 1f32, 1f32], &Cpu)?;
+//! let b = Tensor::new(&[0f32, 0f32, 0f32], &Cpu)?;
 //! let layer = LayerNorm::new(w, b, 1e-5);
 //!
 //! let xs = Tensor::new(
@@ -28,7 +28,7 @@
 //! ```
 //!
 //! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
-use candle::{DType, Result, Tensor, D};
+use candle::{DType, Module, Result, Tensor, D};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerNormConfig {
@@ -105,8 +105,13 @@ impl LayerNorm {
     }
 }
 
-impl crate::Module for LayerNorm {
+impl Module for LayerNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        if x.is_contiguous() && self.remove_mean {
+            if let Some(bias) = self.bias.as_ref() {
+                return crate::ops::layer_norm(x, &self.weight, bias, self.eps as f32);
+            }
+        }
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
             DType::F16 | DType::BF16 => DType::F32,
@@ -162,11 +167,20 @@ impl RmsNorm {
     pub fn into_inner(self) -> LayerNorm {
         self.0
     }
+
+    /// Faster variant of the forward kernel, this can only be used on contiguous tensors though.
+    pub fn forward_diff(&self, xs: &Tensor) -> Result<Tensor> {
+        self.0.forward(xs)
+    }
 }
 
-impl crate::Module for RmsNorm {
+impl Module for RmsNorm {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.0.forward(xs)
+        if xs.is_contiguous() {
+            crate::ops::rms_norm(xs, &self.0.weight, self.0.eps as f32)
+        } else {
+            self.0.forward(xs)
+        }
     }
 }
 

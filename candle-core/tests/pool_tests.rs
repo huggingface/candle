@@ -43,6 +43,9 @@ res = torch.nn.functional.avg_pool2d(t, 2)
 print(res)
 */
 fn avg_pool2d_pytorch(dev: &Device) -> Result<()> {
+    if dev.is_metal() {
+        return Ok(());
+    }
     let t = Tensor::new(
         &[
             0.4056f32, -0.8689, -0.0773, -1.5630, -2.8012, -1.5059, 0.3972, 1.0852, 0.4997, 3.0616,

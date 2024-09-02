@@ -88,7 +88,7 @@ fn strided_blocks() -> Result<()> {
         }
     };
     let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;
-    let tensor = tensor.i((.., 1))?;
+    let tensor = tensor.i((.., 1))?.contiguous()?;
     match tensor.strided_blocks() {
         candle::StridedBlocks::SingleBlock { start_offset, len } => {
             assert_eq!(start_offset, 0);
@@ -97,6 +97,20 @@ fn strided_blocks() -> Result<()> {
         }
         candle::StridedBlocks::MultipleBlocks { .. } => {
             panic!("unexpected block structure")
+        }
+    };
+    let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;
+    let tensor = tensor.i((.., 1))?;
+    match tensor.strided_blocks() {
+        candle::StridedBlocks::SingleBlock { .. } => {
+            panic!("unexpected block structure")
+        }
+        candle::StridedBlocks::MultipleBlocks {
+            block_len,
+            block_start_index,
+        } => {
+            assert_eq!(block_len, 4);
+            assert_eq!(block_start_index.collect::<Vec<_>>(), &[4, 16])
         }
     };
     let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;

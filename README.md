@@ -60,20 +60,31 @@ These online demos run entirely in your browser:
 
 We also provide a some command line based examples using state of the art models:
 
-- [LLaMA and LLaMA-v2](./candle-examples/examples/llama/): general LLM, includes
+- [LLaMA v1, v2, and v3](./candle-examples/examples/llama/): general LLM, includes
   the SOLAR-10.7B variant.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
-- [Phi-1, Phi-1.5, and Phi-2](./candle-examples/examples/phi/): 1.3b and 2.7b general LLMs with performance on par with LLaMA-v2 7b.
+- [Codegeex4](./candle-examples/examples/codegeex4-9b/): Code completion,code interpreter,web search,fuction calling,repository-level
+- [GLM4](./candle-examples/examples/glm4/): Open Multilingual Multimodal Chat LMs by THUDM
+- [Gemma v1 and v2](./candle-examples/examples/gemma/): 2b and 7b+/9b general LLMs from Google Deepmind.
+- [RecurrentGemma](./candle-examples/examples/recurrent-gemma/): 2b and 7b
+  Griffin based models from Google that mix attention with a RNN like state.
+- [Phi-1, Phi-1.5, Phi-2, and Phi-3](./candle-examples/examples/phi/): 1.3b,
+  2.7b, and 3.8b general LLMs with performance on par with 7b models.
 - [StableLM-3B-4E1T](./candle-examples/examples/stable-lm/): a 3b general LLM
-  pre-trained on 1T tokens of English and code datasets.
-- [Minimal Mamba](./candle-examples/examples/mamba-minimal/): a minimal
+  pre-trained on 1T tokens of English and code datasets. Also supports
+  StableLM-2, a 1.6b LLM trained on 2T tokens, as well as the code variants.
+- [Mamba](./candle-examples/examples/mamba/): an inference only
   implementation of the Mamba state space model.
 - [Mistral7b-v0.1](./candle-examples/examples/mistral/): a 7b general LLM with
   better performance than all publicly available 13b models as of 2023-09-28.
 - [Mixtral8x7b-v0.1](./candle-examples/examples/mixtral/): a sparse mixture of
   experts 8x7b general LLM with better performance than a Llama 2 70B model with
   much faster inference.
-- [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code generation.
+- [StarCoder](./candle-examples/examples/bigcode/) and
+  [StarCoder2](./candle-examples/examples/starcoder2/): LLM specialized to code generation.
+- [Qwen1.5](./candle-examples/examples/qwen/): Bilingual (English/Chinese) LLMs.
+- [RWKV v5 and v6](./candle-examples/examples/rwkv/): An RNN with transformer level LLM
+  performance.
 - [Replit-code-v1.5](./candle-examples/examples/replit-code/): a 3.3b LLM specialized for code completion.
 - [Yi-6B / Yi-34B](./candle-examples/examples/yi/): two bilingual
   (English/Chinese) general LLMs with 6b and 34b parameters.
@@ -103,7 +114,14 @@ We also provide a some command line based examples using state of the art models
 
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/segment-anything/assets/sam_merged.jpg" width="200">
 
+- [SegFormer](./candle-examples/examples/segformer/): transformer based semantic segmentation model.
 - [Whisper](./candle-examples/examples/whisper/): speech recognition model.
+- [EnCodec](./candle-examples/examples/encodec/): high-quality audio compression
+  model using residual vector quantization.
+- [MetaVoice](./candle-examples/examples/metavoice/): foundational model for
+  text-to-speech.
+- [Parler-TTS](./candle-examples/examples/parler-tts/): large text-to-speech
+  model.
 - [T5](./candle-examples/examples/t5), [Bert](./candle-examples/examples/bert/),
   [JinaBert](./candle-examples/examples/jina-bert/) : useful for sentence embeddings.
 - [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
@@ -112,10 +130,15 @@ We also provide a some command line based examples using state of the art models
 - [VGG](./candle-examples/examples/vgg/),
   [RepVGG](./candle-examples/examples/repvgg): computer vision models.
 - [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
-- [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
   generate captions for an image.
+- [CLIP](./candle-examples/examples/clip/): multi-model vision and language
+  model.
+- [TrOCR](./candle-examples/examples/trocr/): a transformer OCR model, with
+  dedicated submodels for hand-writing and printed recognition.
 - [Marian-MT](./candle-examples/examples/marian-mt/): neural machine translation
   model, generates the translated text from the input text.
+- [Moondream](./candle-examples/examples/moondream/): tiny computer-vision model 
+  that can answer real-world questions about images.
 
 Run them using commands like:
 ```
@@ -159,9 +182,11 @@ And then head over to
 - [`candle-vllm`](https://github.com/EricLBuehler/candle-vllm): Efficient platform for inference and
   serving local LLMs including an OpenAI compatible API server.
 - [`candle-ext`](https://github.com/mokeyish/candle-ext): An extension library to Candle that provides PyTorch functions not currently available in Candle.
+- [`candle-coursera-ml`](https://github.com/vishpat/candle-coursera-ml): Implementation of ML algorithms from Coursera's [Machine Learning Specialization](https://www.coursera.org/specializations/machine-learning-introduction) course.
 - [`kalosm`](https://github.com/floneum/floneum/tree/master/interfaces/kalosm): A multi-modal meta-framework in Rust for interfacing with local pre-trained models with support for controlled generation, custom samplers, in-memory vector databases, audio transcription, and more.
 - [`candle-sampling`](https://github.com/EricLBuehler/candle-sampling): Sampling techniques for Candle.
 - [`gpt-from-scratch-rs`](https://github.com/jeroenvlek/gpt-from-scratch-rs): A port of Andrej Karpathy's _Let's build GPT_ tutorial on YouTube showcasing the Candle API on a toy problem.
+- [`candle-einops`](https://github.com/tomsanbear/candle-einops): A pure rust implementation of the python [einops](https://github.com/arogozhnikov/einops) library.
 
 If you have an addition to this list, please submit a pull request.
 
@@ -180,17 +205,20 @@ If you have an addition to this list, please submit a pull request.
     - WASM support, run your models in a browser.
 - Included models.
     - Language Models.
-        - LLaMA v1 and v2 with variants such as SOLAR-10.7B.
+        - LLaMA v1, v2, and v3 with variants such as SOLAR-10.7B.
         - Falcon.
-        - StarCoder.
-        - Phi 1, 1.5, and 2.
-        - Minimal Mamba
+        - StarCoder, StarCoder2.
+        - Phi 1, 1.5, 2, and 3.
+        - Mamba, Minimal Mamba
+        - Gemma v1 2b and 7b+, v2 2b and 9b.
         - Mistral 7b v0.1.
         - Mixtral 8x7b v0.1.
-        - StableLM-3B-4E1T.
+        - StableLM-3B-4E1T, StableLM-2-1.6B, Stable-Code-3B.
         - Replit-code-v1.5-3B.
         - Bert.
         - Yi-6B and Yi-34B.
+        - Qwen1.5, Qwen1.5 MoE.
+        - RWKV v5 and v6.
     - Quantized LLMs.
         - Llama 7b, 13b, 70b, as well as the chat and code variants.
         - Mistral 7b, and 7b instruct.
@@ -200,16 +228,23 @@ If you have an addition to this list, please submit a pull request.
     - Text to text.
         - T5 and its variants: FlanT5, UL2, MADLAD400 (translation), CoEdit (Grammar correction).
         - Marian MT (Machine Translation).
-    - Whisper (multi-lingual support).
     - Text to image.
         - Stable Diffusion v1.5, v2.1, XL v1.0.
         - Wurstchen v2.
     - Image to text.
         - BLIP.
+        - TrOCR.
+    - Audio.
+        - Whisper, multi-lingual speech-to-text.
+        - EnCodec, audio compression model.
+        - MetaVoice-1B, text-to-speech model.
+        - Parler-TTS, text-to-speech model.
     - Computer Vision Models.
-        - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG.
+        - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT,
+          ConvNeXTv2, MobileOne, EfficientVit (MSRA), MobileNetv4, Hiera, FastViT.
         - yolo-v3, yolo-v8.
         - Segment-Anything Model (SAM).
+        - SegFormer.
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.
 - Serverless (on CPU), small and fast deployments.
 - Quantization support using the llama.cpp quantized types.
@@ -346,9 +381,9 @@ git submodule update --init
 /usr/include/c++/11/bits/std_function.h:530:146: error: parameter packs not expanded with ‘...’:
 ```
 
-This is a bug in gcc-11 triggered by the Cuda compiler. To fix this, install a different, supported gcc version - for example gcc-10, and specify the path to the compiler in the CANDLE_NVCC_CCBIN environment variable.
+This is a bug in gcc-11 triggered by the Cuda compiler. To fix this, install a different, supported gcc version - for example gcc-10, and specify the path to the compiler in the NVCC_CCBIN environment variable.
 ```
-env CANDLE_NVCC_CCBIN=/usr/lib/gcc/x86_64-linux-gnu/10 cargo ...
+env NVCC_CCBIN=/usr/lib/gcc/x86_64-linux-gnu/10 cargo ...
 ```
 
 #### Linking error on windows when running rustdoc or mdbook tests
@@ -378,3 +413,10 @@ This may be caused by the models being loaded from `/mnt/c`, more details on
 
 You can set `RUST_BACKTRACE=1` to be provided with backtraces when a candle
 error is generated.
+
+#### CudaRC error
+
+If you encounter an error like this one `called `Result::unwrap()` on an `Err` value: LoadLibraryExW { source: Os { code: 126, kind: Uncategorized, message: "The specified module could not be found." } }` on windows. To fix copy and rename these 3 files (make sure they are in path). The paths depend on your cuda version.
+`c:\Windows\System32\nvcuda.dll` -> `cuda.dll`
+`c:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin\cublas64_12.dll` -> `cublas.dll`
+`c:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin\curand64_10.dll` -> `curand.dll`

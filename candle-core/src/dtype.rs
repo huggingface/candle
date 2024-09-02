@@ -1,7 +1,7 @@
 //! Types for elements that can be stored and manipulated using tensors.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::BackendStorage;
-use crate::{CpuStorage, Error, Result};
+use crate::{CpuStorage, CpuStorageRef, Error, Result};
 
 /// The different types of elements allowed in tensors.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -23,7 +23,15 @@ pub enum DType {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct DTypeParseError;
+pub struct DTypeParseError(String);
+
+impl std::fmt::Display for DTypeParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cannot parse '{}' as a dtype", self.0)
+    }
+}
+
+impl std::error::Error for DTypeParseError {}
 
 impl std::str::FromStr for DType {
     type Err = DTypeParseError;
@@ -36,7 +44,7 @@ impl std::str::FromStr for DType {
             "f16" => Ok(Self::F16),
             "f32" => Ok(Self::F32),
             "f64" => Ok(Self::F64),
-            _ => Err(DTypeParseError),
+            _ => Err(DTypeParseError(s.to_string())),
         }
     }
 }
@@ -92,12 +100,14 @@ pub trait WithDType:
     + 'static
     + Send
     + Sync
+    + std::any::Any
     + crate::cpu::kernels::VecOps
 {
     const DTYPE: DType;
 
     fn from_f64(v: f64) -> Self;
     fn to_f64(self) -> f64;
+    fn cpu_storage_ref(data: &[Self]) -> CpuStorageRef<'_>;
     fn to_cpu_storage_owned(data: Vec<Self>) -> CpuStorage;
 
     fn to_cpu_storage(data: &[Self]) -> CpuStorage {
@@ -119,6 +129,10 @@ macro_rules! with_dtype {
 
             fn to_f64(self) -> f64 {
                 $to_f64(self)
+            }
+
+            fn cpu_storage_ref(data: &[Self]) -> CpuStorageRef<'_> {
+                CpuStorageRef::$dtype(data)
             }
 
             fn to_cpu_storage_owned(data: Vec<Self>) -> CpuStorage {

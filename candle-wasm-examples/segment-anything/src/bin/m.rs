@@ -38,7 +38,7 @@ impl Model {
     pub fn set_image_embeddings(&mut self, image_data: Vec<u8>) -> Result<(), JsError> {
         sam::console_log!("image data: {}", image_data.len());
         let image_data = std::io::Cursor::new(image_data);
-        let image = image::io::Reader::new(image_data)
+        let image = image::ImageReader::new(image_data)
             .with_guessed_format()?
             .decode()
             .map_err(candle::Error::wrap)?;

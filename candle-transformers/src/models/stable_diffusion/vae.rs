@@ -80,7 +80,7 @@ impl Encoder {
                 ..Default::default()
             };
             let down_block = DownEncoderBlock2D::new(
-                vs_down_blocks.pp(&index.to_string()),
+                vs_down_blocks.pp(index.to_string()),
                 in_channels,
                 out_channels,
                 cfg,
@@ -222,7 +222,7 @@ impl Decoder {
                 ..Default::default()
             };
             let up_block = UpDecoderBlock2D::new(
-                vs_up_blocks.pp(&index.to_string()),
+                vs_up_blocks.pp(index.to_string()),
                 in_channels,
                 out_channels,
                 cfg,

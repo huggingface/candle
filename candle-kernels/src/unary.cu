@@ -13,7 +13,7 @@ extern "C" __global__ void FN_NAME( \
 ) { \
     const size_t *dims = info; \
     const size_t *strides = info + num_dims; \
-    if (is_contiguous(num_dims, dims, strides)) { \
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) { \
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
             TYPENAME x = inp ? inp[i] : out[i]; \
             out[i] = FUNC; \
@@ -55,6 +55,16 @@ __device__ __forceinline__ T relu_fwd(T x) {
     return maxg(x, zero);
 }
 
+template<typename T>
+__device__ __forceinline__ T silu_fwd(T x) {
+    return x / (static_cast<T>(1) + expg(-x));
+}
+
+template<typename T>
+__device__ __forceinline__ T sigmoid_fwd(T x) {
+    return recipg(static_cast<T>(1) + expg(-x));
+}
+
 #define UNARY_OP1(TYPENAME, FN_NAME, FUNC) \
 extern "C" __global__ void FN_NAME( \
     const size_t numel, \
@@ -66,7 +76,7 @@ extern "C" __global__ void FN_NAME( \
 ) { \
     const size_t *dims = info; \
     const size_t *strides = info + num_dims; \
-    if (is_contiguous(num_dims, dims, strides)) { \
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) { \
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
             TYPENAME x = inp ? inp[i] : out[i]; \
             out[i] = FUNC; \
@@ -80,6 +90,11 @@ extern "C" __global__ void FN_NAME( \
         } \
     } \
 } \
+
+template<typename T>
+__device__ T sign_(T t) {
+  return static_cast<T>(t > static_cast<T>(0)) - static_cast<T>(t < static_cast<T>(0));
+}
 
 
 #if __CUDA_ARCH__ >= 800
@@ -103,7 +118,10 @@ UNARY_OP(__nv_bfloat16, ugelu_bf16, gelu_fwd(x))
 UNARY_OP(__nv_bfloat16, ugelu_erf_bf16, gelu_erf_fwd(x))
 UNARY_OP(__nv_bfloat16, urelu_bf16, relu_fwd(x))
 UNARY_OP1(__nv_bfloat16, uelu_bf16, elu_fwd(x, param))
+UNARY_OP(__nv_bfloat16, usilu_bf16, silu_fwd(x))
 UNARY_OP1(__nv_bfloat16, upowf_bf16, powg(x, param))
+UNARY_OP(__nv_bfloat16, usign_bf16, sign_(x))
+UNARY_OP(__nv_bfloat16, usigmoid_bf16, sigmoid_fwd(x))
 #endif
 
 #if __CUDA_ARCH__ >= 530
@@ -127,7 +145,10 @@ UNARY_OP(__half, ugelu_f16, gelu_fwd(x))
 UNARY_OP(__half, ugelu_erf_f16, gelu_erf_fwd(x))
 UNARY_OP(__half, urelu_f16, relu_fwd(x))
 UNARY_OP1(__half, uelu_f16, elu_fwd(x, param))
+UNARY_OP(__half, usilu_f16, silu_fwd(x))
 UNARY_OP1(__half, upowf_f16, powg(x, param))
+UNARY_OP(__half, usign_f16, sign_(x))
+UNARY_OP(__half, usigmoid_f16, sigmoid_fwd(x))
 #endif
 
 UNARY_OP(uint8_t, ucopy_u8, x)
@@ -173,5 +194,11 @@ UNARY_OP(float, urelu_f32, relu_fwd(x))
 UNARY_OP(double, urelu_f64, relu_fwd(x))
 UNARY_OP1(float, uelu_f32, elu_fwd(x, param))
 UNARY_OP1(double, uelu_f64, elu_fwd(x, param))
+UNARY_OP(float, usilu_f32, silu_fwd(x))
+UNARY_OP(double, usilu_f64, silu_fwd(x))
 UNARY_OP1(float, upowf_f32, powg(x, param))
 UNARY_OP1(double, upowf_f64, powg(x, param))
+UNARY_OP(float, usign_f32, sign_(x))
+UNARY_OP(double, usign_f64, sign_(x))
+UNARY_OP(float, usigmoid_f32, sigmoid_fwd(x))
+UNARY_OP(double, usigmoid_f64, sigmoid_fwd(x))

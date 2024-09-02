@@ -358,7 +358,7 @@ impl SpatialTransformer {
         let vs_tb = vs.pp("transformer_blocks");
         for index in 0..config.depth {
             let tb = BasicTransformerBlock::new(
-                vs_tb.pp(&index.to_string()),
+                vs_tb.pp(index.to_string()),
                 inner_dim,
                 n_heads,
                 d_head,
@@ -533,7 +533,9 @@ impl Module for AttentionBlock {
         let attention_scores = (query_states * scale)?.matmul(&(key_states.t()? * scale)?)?;
         let attention_probs = nn::ops::softmax(&attention_scores, D::Minus1)?;
 
-        let xs = attention_probs.matmul(&value_states.contiguous()?)?;
+        // TODO: revert the call to force_contiguous once the three matmul kernels have been
+        // adapted to handle layout with some dims set to 1.
+        let xs = attention_probs.matmul(&value_states)?;
         let xs = xs.to_dtype(in_dtype)?;
         let xs = xs.transpose(1, 2)?.contiguous()?;
         let xs = xs.flatten_from(D::Minus2)?;

@@ -1,6 +1,9 @@
+pub mod audio;
+pub mod bs1770;
 pub mod coco_classes;
 pub mod imagenet;
 pub mod token_output_stream;
+pub mod wav;
 
 use candle::utils::{cuda_is_available, metal_is_available};
 use candle::{Device, Result, Tensor};
@@ -31,7 +34,7 @@ pub fn load_image<P: AsRef<std::path::Path>>(
     p: P,
     resize_longest: Option<usize>,
 ) -> Result<(Tensor, usize, usize)> {
-    let img = image::io::Reader::open(p)?
+    let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?;
     let (initial_h, initial_w) = (img.height() as usize, img.width() as usize);
@@ -62,7 +65,7 @@ pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
     width: usize,
     height: usize,
 ) -> Result<Tensor> {
-    let img = image::io::Reader::open(p)?
+    let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
         .resize_to_fill(

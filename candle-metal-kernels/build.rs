@@ -19,8 +19,9 @@ impl Platform {
 }
 
 fn compile(platform: Platform) -> Result<(), String> {
-    println!("cargo::rerun-if-changed=reduce.metal");
-    println!("cargo::rerun-if-changed=utils.metal");
+    println!("cargo::rerun-if-changed=src/reduce.metal");
+    println!("cargo::rerun-if-changed=src/utils.metal");
+    println!("cargo::rerun-if-changed=build.rs");
 
     let current_dir = env::current_dir().expect("Failed to get current directory");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|_| "OUT_DIR not set")?);

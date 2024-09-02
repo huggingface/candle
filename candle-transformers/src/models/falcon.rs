@@ -1,17 +1,8 @@
 use candle::{DType, Device, Result, Tensor, D};
-use candle_nn::{embedding, Embedding, LayerNorm, Linear, Module, VarBuilder};
+use candle_nn::{embedding, linear_b as linear, Embedding, LayerNorm, Linear, Module, VarBuilder};
+use serde::Deserialize;
 
 const MAX_SEQ_LEN: usize = 5000;
-
-fn linear(size1: usize, size2: usize, bias: bool, vb: VarBuilder) -> Result<Linear> {
-    let weight = vb.get((size2, size1), "weight")?;
-    let bias = if bias {
-        Some(vb.get(size2, "bias")?)
-    } else {
-        None
-    };
-    Ok(Linear::new(weight, bias))
-}
 
 fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
     let (weight, bias) = match (vb.get(size, "weight"), vb.get(size, "bias")) {
@@ -28,7 +19,7 @@ fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
 }
 
 // https://raw.githubusercontent.com/huggingface/transformers/030c863aaa0165e98352b61697430bf69bf33755/src/transformers/models/falcon/configuration_falcon.py
-#[derive(Debug)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub vocab_size: usize,
     pub hidden_size: usize,
@@ -129,7 +120,7 @@ fn rotate_half(x: &Tensor) -> Result<Tensor> {
     Ok(x21)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FalconRotaryEmbedding {
     inv_freq: Tensor,
     cache: Option<(usize, Tensor, Tensor)>,
@@ -188,12 +179,14 @@ impl FalconRotaryEmbedding {
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
     let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
+    let on_true = Tensor::new(on_true, on_false.device())?
+        .to_dtype(on_false.dtype())?
+        .broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true, on_false)?;
     Ok(m)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FalconAttention {
     query_key_value: Linear,
     dense: Linear,
@@ -257,7 +250,7 @@ impl FalconAttention {
         }
     }
 
-    fn forward(&mut self, x: &Tensor, mask: &Tensor, past_kv_len: usize) -> Result<Tensor> {
+    fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, past_kv_len: usize) -> Result<Tensor> {
         let fused_qkv = self.query_key_value.forward(x)?;
         let head_dim = self.head_dim;
         let (query, key, value) = self.split_heads(&fused_qkv)?;
@@ -277,7 +270,6 @@ impl FalconAttention {
             (query, key)
         };
         let (mut key, mut value) = (key, value);
-        let mask = masked_fill(&mask.to_dtype(DType::F32)?, mask, -1e9)?.to_dtype(query.dtype())?;
         if self.use_cache {
             if let Some((cache_k, cache_v)) = &self.kv_cache {
                 // TODO: we could trim the tensors to MAX_SEQ_LEN so that this would work for
@@ -303,13 +295,18 @@ impl FalconAttention {
 
         // Only handle the case where alibi is None here, and non-flash attention.
         let attention_scores = (query.matmul(&key.t()?)? * self.inv_norm_factor)?;
-        let attention_scores = candle_nn::ops::softmax(
-            &attention_scores
-                .broadcast_add(&mask.squeeze(1)?)?
-                .to_dtype(DType::F32)?,
-            D::Minus1,
-        )?
-        .to_dtype(x.dtype())?;
+        let attention_scores = match mask {
+            None => attention_scores,
+            Some(mask) => {
+                let mask = masked_fill(&mask.to_dtype(DType::F32)?, mask, -1e9)?
+                    .to_dtype(query.dtype())?;
+                attention_scores.broadcast_add(&mask.squeeze(1)?)?
+            }
+        };
+
+        let attention_scores =
+            candle_nn::ops::softmax(&attention_scores.to_dtype(DType::F32)?, D::Minus1)?
+                .to_dtype(x.dtype())?;
         let attn_output = attention_scores
             .matmul(&value)?
             .reshape((b_sz, self.num_heads, seq_len, head_dim))?
@@ -318,9 +315,13 @@ impl FalconAttention {
         let attn_output = self.dense.forward(&attn_output)?;
         Ok(attn_output)
     }
+
+    fn clear_kv_cache(&mut self) {
+        self.kv_cache = None
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FalconMlp {
     dense_h_to_4h: Linear,
     dense_4h_to_h: Linear,
@@ -345,7 +346,7 @@ impl FalconMlp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FalconDecoderLayer {
     inp_layernorm: LayerNorm,
     self_attention: FalconAttention,
@@ -382,7 +383,7 @@ impl FalconDecoderLayer {
         })
     }
 
-    fn forward(&mut self, x: &Tensor, mask: &Tensor, past_kv_len: usize) -> Result<Tensor> {
+    fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, past_kv_len: usize) -> Result<Tensor> {
         let residual = x.clone();
         let ln_attn = self.inp_layernorm.forward(x)?;
         let attn_output = self.self_attention.forward(&ln_attn, mask, past_kv_len)?;
@@ -405,9 +406,13 @@ impl FalconDecoderLayer {
         let output = (mlp_output + residual)?;
         Ok(output)
     }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.self_attention.clear_kv_cache()
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Falcon {
     word_embeddings: Embedding,
     blocks: Vec<FalconDecoderLayer>,
@@ -467,13 +472,23 @@ impl Falcon {
             Some((k, _)) => k.dim(1)?,
             None => 0,
         };
-        let causal_mask = prepare_attn_mask(b_sz, seq_len)?.to_device(input_ids.device())?;
+        let causal_mask = if seq_len <= 1 {
+            None
+        } else {
+            Some(prepare_attn_mask(b_sz, seq_len)?.to_device(input_ids.device())?)
+        };
         for block in self.blocks.iter_mut() {
-            hidden_state = block.forward(&hidden_state, &causal_mask, past_kv_len)?;
+            hidden_state = block.forward(&hidden_state, causal_mask.as_ref(), past_kv_len)?;
         }
         let hidden_state = self.ln_f.forward(&hidden_state)?;
         let hidden_state = hidden_state.narrow(1, seq_len - 1, 1)?;
         let logits = self.lm_head.forward(&hidden_state)?.squeeze(1)?;
         Ok(logits)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        for block in self.blocks.iter_mut() {
+            block.clear_kv_cache()
+        }
     }
 }

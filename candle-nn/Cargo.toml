@@ -25,6 +25,8 @@ candle-metal-kernels = { workspace = true, optional = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+rand = { workspace = true }
+criterion = { workspace = true }
 
 [features]
 default = []
@@ -32,3 +34,7 @@ accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
 metal = ["candle/metal", "dep:candle-metal-kernels", "dep:metal"]
+
+[[bench]]
+name = "bench_main"
+harness = false
