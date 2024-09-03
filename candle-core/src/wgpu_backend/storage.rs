@@ -92,7 +92,7 @@ impl WgpuStorage {
                 ))
             }
             crate::DType::F64 => {
-                return Ok(crate::CpuStorage::I64(
+                return Ok(crate::CpuStorage::F64(
                     read_data_from_gpu_async(&self.wgpu_device, self.buffer.clone()).await?,
                 ))
             }

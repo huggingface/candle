@@ -99,7 +99,7 @@ pub enum BindgroupAlignmentLayout {
 }
 
 impl BindgroupAlignmentLayout {
-    fn values() -> [BindgroupAlignmentLayout; 22] {
+    fn values() -> [BindgroupAlignmentLayout; 23] {
         use BindgroupAlignment::{Aligned16, Aligned4, Aligned8};
         use BindgroupAlignmentLayout::{Bindgroup0, Bindgroup1, Bindgroup2, Bindgroup3};
         return [
@@ -120,6 +120,7 @@ impl BindgroupAlignmentLayout {
             Bindgroup2(Aligned16, Aligned16, Aligned16),
             Bindgroup2(Aligned8, Aligned4, Aligned8),
             Bindgroup2(Aligned4, Aligned8, Aligned4),
+            Bindgroup2(Aligned4, Aligned16, Aligned16),
             Bindgroup3(Aligned4, Aligned4, Aligned4, Aligned4),
             Bindgroup3(Aligned8, Aligned8, Aligned8, Aligned8),
             Bindgroup3(Aligned16, Aligned16, Aligned16, Aligned16),
@@ -128,7 +129,11 @@ impl BindgroupAlignmentLayout {
         ];
     }
 
-    fn get_index(&self) -> usize {
+    pub fn validate(&self){
+        _= self.get_index();
+    }
+
+    pub fn get_index(&self) -> usize {
         use BindgroupAlignment::{Aligned16, Aligned4, Aligned8};
         use BindgroupAlignmentLayout::{Bindgroup0, Bindgroup1, Bindgroup2, Bindgroup3};
         match self {
@@ -151,12 +156,13 @@ impl BindgroupAlignmentLayout {
             Bindgroup2(Aligned16, Aligned16, Aligned16) => 14,
             Bindgroup2(Aligned8, Aligned4, Aligned8) => 15,
             Bindgroup2(Aligned4, Aligned8, Aligned4) => 16,
+            Bindgroup2(Aligned4, Aligned16, Aligned16) => 17,
 
-            Bindgroup3(Aligned4, Aligned4, Aligned4, Aligned4) => 17,
-            Bindgroup3(Aligned8, Aligned8, Aligned8, Aligned8) => 18,
-            Bindgroup3(Aligned16, Aligned16, Aligned16, Aligned16) => 19,
-            Bindgroup3(Aligned4, Aligned8, Aligned4, Aligned4) => 20,
-            Bindgroup3(Aligned8, Aligned4, Aligned8, Aligned8) => 21,
+            Bindgroup3(Aligned4, Aligned4, Aligned4, Aligned4) => 18,
+            Bindgroup3(Aligned8, Aligned8, Aligned8, Aligned8) => 19,
+            Bindgroup3(Aligned16, Aligned16, Aligned16, Aligned16) => 20,
+            Bindgroup3(Aligned4, Aligned8, Aligned4, Aligned4) => 21,
+            Bindgroup3(Aligned8, Aligned4, Aligned8, Aligned8) => 22,
             _ => todo!(),
         }
     }
@@ -164,7 +170,7 @@ impl BindgroupAlignmentLayout {
 
 #[derive(Debug)]
 pub(crate) struct BindgroupLayouts {
-    data: [BindgroupLayoutAndPipeline; 22],
+    data: [BindgroupLayoutAndPipeline; 23],
 }
 
 impl std::ops::Index<BindgroupAlignmentLayout> for BindgroupLayouts {

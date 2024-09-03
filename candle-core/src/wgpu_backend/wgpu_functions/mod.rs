@@ -569,7 +569,10 @@ fn set_buffers(
                 ) = &q.pipeline.0
                 {
                     if q.pipeline.2.input1_inplaceable {
-                        if let BindgroupReferenceInput::Bindgroup1(v1_id, BindgroupAlignmentLayout::Bindgroup1(dest_alignment, _ )) = bindgroup_reference.get_input()
+                        if let BindgroupReferenceInput::Bindgroup1(
+                            v1_id,
+                            BindgroupAlignmentLayout::Bindgroup1(dest_alignment, _),
+                        ) = bindgroup_reference.get_input()
                         {
                             if optmize_inplace(bindgroup_reference.get_dest(), v1_id) {
                                 dev.unary_inplace_counter.inc();
@@ -579,7 +582,9 @@ fn set_buffers(
                                 );
                                 q.bindgroup = BindGroupReference::new(
                                     v1_id.clone(),
-                                    BindgroupInputBase::Bindgroup0(BindgroupAlignmentLayout::Bindgroup0(*dest_alignment)),
+                                    BindgroupInputBase::Bindgroup0(
+                                        BindgroupAlignmentLayout::Bindgroup0(*dest_alignment),
+                                    ),
                                 );
                             }
                         }
@@ -589,8 +594,11 @@ fn set_buffers(
                     candle_wgpu_kernels::binary::Functions::BinaryBufferFromBufferContiguousBoth,
                 ) = &q.pipeline.0
                 {
-                    if let BindgroupReferenceInput::Bindgroup2(v1_id, v2_id, BindgroupAlignmentLayout::Bindgroup2(dest_alignment, _, _ )) =
-                        bindgroup_reference.get_input()
+                    if let BindgroupReferenceInput::Bindgroup2(
+                        v1_id,
+                        v2_id,
+                        BindgroupAlignmentLayout::Bindgroup2(dest_alignment, _, _),
+                    ) = bindgroup_reference.get_input()
                     {
                         if !cache
                             .buffer_reference
@@ -618,7 +626,13 @@ fn set_buffers(
                                 q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace1ContiguousBoth);
                                 q.bindgroup = BindGroupReference::new(
                                     v1_id.clone(),
-                                    BindgroupInputBase::Bindgroup1(v2_id.clone(), BindgroupAlignmentLayout::Bindgroup1(*dest_alignment, *dest_alignment)),
+                                    BindgroupInputBase::Bindgroup1(
+                                        v2_id.clone(),
+                                        BindgroupAlignmentLayout::Bindgroup1(
+                                            *dest_alignment,
+                                            *dest_alignment,
+                                        ),
+                                    ),
                                 );
                             }
                         } else if q.pipeline.2.input2_inplaceable {
@@ -627,7 +641,13 @@ fn set_buffers(
                                 q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace2ContiguousBoth);
                                 q.bindgroup = BindGroupReference::new(
                                     v2_id.clone(),
-                                    BindgroupInputBase::Bindgroup1(v1_id.clone(), BindgroupAlignmentLayout::Bindgroup1(*dest_alignment, *dest_alignment)),
+                                    BindgroupInputBase::Bindgroup1(
+                                        v1_id.clone(),
+                                        BindgroupAlignmentLayout::Bindgroup1(
+                                            *dest_alignment,
+                                            *dest_alignment,
+                                        ),
+                                    ),
                                 );
                             }
                         }
@@ -722,7 +742,6 @@ fn set_buffers(
                         }
                     };
 
-                    println!("create compute pipeline: {:?}", q.pipeline);
                     let consts = &command_buffer.id_to_const_array[q.pipeline.1];
                     let pipeline = dev.get_pipeline(&q.pipeline, pl, consts)?;
 
@@ -1285,10 +1304,9 @@ fn create_bind_group_input0(
     buffer_dest: BufferReferenceId,
     alignment: BindgroupAlignment,
 ) -> BindGroupReference {
-    BindGroupReference::new(
-        buffer_dest,
-        BindgroupInputBase::Bindgroup0(BindgroupAlignmentLayout::Bindgroup0(alignment)),
-    )
+    let alignment = BindgroupAlignmentLayout::Bindgroup0(alignment);
+    alignment.validate();
+    BindGroupReference::new(buffer_dest, BindgroupInputBase::Bindgroup0(alignment))
 }
 
 fn create_bind_group_input1(
@@ -1296,13 +1314,11 @@ fn create_bind_group_input1(
     buffer_input1: BufferReferenceId,
     alignment: BindgroupAlignment,
 ) -> BindGroupReference {
-    BindGroupReference::new(
+    return create_bind_group_input1_with_alignment(
         buffer_dest,
-        BindgroupInputBase::Bindgroup1(
-            buffer_input1,
-            BindgroupAlignmentLayout::Bindgroup1(alignment, alignment),
-        ),
-    )
+        buffer_input1,
+        BindgroupAlignmentLayout::Bindgroup1(alignment, alignment),
+    );
 }
 
 fn create_bind_group_input1_with_alignment(
@@ -1310,6 +1326,7 @@ fn create_bind_group_input1_with_alignment(
     buffer_input1: BufferReferenceId,
     alignment: BindgroupAlignmentLayout,
 ) -> BindGroupReference {
+    alignment.validate();
     BindGroupReference::new(
         buffer_dest,
         BindgroupInputBase::Bindgroup1(buffer_input1, alignment),
@@ -1336,6 +1353,7 @@ fn create_bind_group_input2_with_alignment(
     buffer_input2: BufferReferenceId,
     alignment: BindgroupAlignmentLayout,
 ) -> BindGroupReference {
+    alignment.validate();
     BindGroupReference::new(
         buffer_dest,
         BindgroupInputBase::Bindgroup2(buffer_input1, buffer_input2, alignment),
@@ -1349,6 +1367,7 @@ fn create_bind_group_input3_with_alignment(
     buffer_input3: BufferReferenceId,
     alignment: BindgroupAlignmentLayout,
 ) -> BindGroupReference {
+    alignment.validate();
     BindGroupReference::new(
         buffer_dest,
         BindgroupInputBase::Bindgroup3(buffer_input1, buffer_input2, buffer_input3, alignment),
