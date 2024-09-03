@@ -829,22 +829,23 @@ fn finish_commands(command_buffer: &mut QueueBuffer, index: usize, _cache: &mut 
                     let new_bindgroup = BindgroupReferenceFull::new(
                         Default::default(),
                         match q.bindgroup.get_input() {
-                            BindgroupInputBase::Bindgroup0 => BindgroupInputBase::Bindgroup0,
-                            BindgroupInputBase::Bindgroup1(_, is_16) => {
-                                BindgroupInputBase::Bindgroup1(Default::default(), *is_16)
+                            BindgroupInputBase::Bindgroup0(alginment) => BindgroupInputBase::Bindgroup0(*alginment),
+                            BindgroupInputBase::Bindgroup1(_, alginment) => {
+                                BindgroupInputBase::Bindgroup1(Default::default(), *alginment)
                             }
-                            BindgroupInputBase::Bindgroup2(_, _, is_16) => {
+                            BindgroupInputBase::Bindgroup2(_, _, alginment) => {
                                 BindgroupInputBase::Bindgroup2(
                                     Default::default(),
                                     Default::default(),
-                                    *is_16,
+                                    *alginment,
                                 )
                             }
-                            BindgroupInputBase::Bindgroup3(_, _, _) => {
+                            BindgroupInputBase::Bindgroup3(_, _, _, alginment) => {
                                 BindgroupInputBase::Bindgroup3(
                                     Default::default(),
                                     Default::default(),
                                     Default::default(),
+                                    *alginment
                                 )
                             }
                         },
