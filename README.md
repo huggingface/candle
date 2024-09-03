@@ -11,8 +11,8 @@ This is a fork of Candle that adds wgpu as a backend. This means that the gpu ca
 | f32                         | ✅ Supported                                     |                                                                    |
 | u32                         | ✅ Supported                                     |                                                                    |
 | u8                          | ⚠️ Only Output of Cmp                            | *Only f32, I32 and U32 are available in a webGpu shader            |
-| i64                         | ❌ Not Implemented                               |                                                                    |
-| f64                         | ❌ Not Supported                                 |                                                                    |
+| i64                         | ⚠️ Supported Native                              |                                                                    |
+| f64                         | ⚠️ Supported Native                              |                                                                    |
 | f16                         | ❌ Not Supported                                 |                                                                    |
 | bf16                        | ❌ Not Supported                                 |                                                                    |
 | **<span style="color:#1E90FF">Operations</span>**              |                                                 |   All operations support non-contiguous arrays                                                                   |
