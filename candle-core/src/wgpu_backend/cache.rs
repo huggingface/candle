@@ -79,31 +79,122 @@ impl ReferenceTrait for CachedBindgroupId {
 }
 
 #[derive(Debug)]
-pub(crate) struct BindgroupLayoutAndPipeline(pub wgpu::BindGroupLayout,pub wgpu::PipelineLayout);
+pub(crate) struct BindgroupLayoutAndPipeline(pub wgpu::BindGroupLayout, pub wgpu::PipelineLayout);
 
-pub(crate) type BindgroupKindLayouts = [BindgroupLayoutAndPipeline;4]; //2byte alinged, 4byte, 8byte, 16byte aligned
+#[derive(Debug, Clone, PartialEq, Eq, Hash, std::marker::Copy)]
+#[cfg_attr(
+    any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub enum BindgroupAlignmentLayout {
+    Bindgroup0(BindgroupAlignment),
+    Bindgroup1(BindgroupAlignment, BindgroupAlignment),
+    Bindgroup2(BindgroupAlignment, BindgroupAlignment, BindgroupAlignment),
+    Bindgroup3(
+        BindgroupAlignment,
+        BindgroupAlignment,
+        BindgroupAlignment,
+        BindgroupAlignment,
+    ),
+}
+
+impl BindgroupAlignmentLayout {
+    fn values() -> [BindgroupAlignmentLayout; 22] {
+        use BindgroupAlignment::{Aligned16, Aligned4, Aligned8};
+        use BindgroupAlignmentLayout::{Bindgroup0, Bindgroup1, Bindgroup2, Bindgroup3};
+        return [
+            Bindgroup0(Aligned4),
+            Bindgroup0(Aligned8),
+            Bindgroup0(Aligned16),
+            Bindgroup1(Aligned4, Aligned4),
+            Bindgroup1(Aligned8, Aligned8),
+            Bindgroup1(Aligned16, Aligned16),
+            Bindgroup1(Aligned4, Aligned8),
+            Bindgroup1(Aligned4, Aligned16),
+            Bindgroup1(Aligned8, Aligned4),
+            Bindgroup1(Aligned8, Aligned16),
+            Bindgroup1(Aligned16, Aligned4),
+            Bindgroup1(Aligned16, Aligned8),
+            Bindgroup2(Aligned4, Aligned4, Aligned4),
+            Bindgroup2(Aligned8, Aligned8, Aligned8),
+            Bindgroup2(Aligned16, Aligned16, Aligned16),
+            Bindgroup2(Aligned8, Aligned4, Aligned8),
+            Bindgroup2(Aligned4, Aligned8, Aligned4),
+            Bindgroup3(Aligned4, Aligned4, Aligned4, Aligned4),
+            Bindgroup3(Aligned8, Aligned8, Aligned8, Aligned8),
+            Bindgroup3(Aligned16, Aligned16, Aligned16, Aligned16),
+            Bindgroup3(Aligned4, Aligned8, Aligned4, Aligned4),
+            Bindgroup3(Aligned8, Aligned4, Aligned8, Aligned8),
+        ];
+    }
+
+    fn get_index(&self) -> usize {
+        use BindgroupAlignment::{Aligned16, Aligned4, Aligned8};
+        use BindgroupAlignmentLayout::{Bindgroup0, Bindgroup1, Bindgroup2, Bindgroup3};
+        match self {
+            Bindgroup0(Aligned4) => 0,
+            Bindgroup0(Aligned8) => 1,
+            Bindgroup0(Aligned16) => 2,
+
+            Bindgroup1(Aligned4, Aligned4) => 3,
+            Bindgroup1(Aligned8, Aligned8) => 4,
+            Bindgroup1(Aligned16, Aligned16) => 5,
+            Bindgroup1(Aligned4, Aligned8) => 6,
+            Bindgroup1(Aligned4, Aligned16) => 7,
+            Bindgroup1(Aligned8, Aligned4) => 8,
+            Bindgroup1(Aligned8, Aligned16) => 9,
+            Bindgroup1(Aligned16, Aligned4) => 10,
+            Bindgroup1(Aligned16, Aligned8) => 11,
+
+            Bindgroup2(Aligned4, Aligned4, Aligned4) => 12,
+            Bindgroup2(Aligned8, Aligned8, Aligned8) => 13,
+            Bindgroup2(Aligned16, Aligned16, Aligned16) => 14,
+            Bindgroup2(Aligned8, Aligned4, Aligned8) => 15,
+            Bindgroup2(Aligned4, Aligned8, Aligned4) => 16,
+
+            Bindgroup3(Aligned4, Aligned4, Aligned4, Aligned4) => 17,
+            Bindgroup3(Aligned8, Aligned8, Aligned8, Aligned8) => 18,
+            Bindgroup3(Aligned16, Aligned16, Aligned16, Aligned16) => 19,
+            Bindgroup3(Aligned4, Aligned8, Aligned4, Aligned4) => 20,
+            Bindgroup3(Aligned8, Aligned4, Aligned8, Aligned8) => 21,
+            _ => todo!(),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct BindgroupLayouts {
-    pub bindgroup0 : BindgroupKindLayouts, 
-    pub bindgroup1 : BindgroupKindLayouts, 
-    pub bindgroup2 : BindgroupKindLayouts, 
-    pub bindgroup3 : BindgroupKindLayouts, 
+    data: [BindgroupLayoutAndPipeline; 22],
+}
 
-    pub bindgroup1_8_to_4 : BindgroupLayoutAndPipeline,
-    pub bindgroup1_4_to_8 : BindgroupLayoutAndPipeline,
+impl std::ops::Index<BindgroupAlignmentLayout> for BindgroupLayouts {
+    type Output = BindgroupLayoutAndPipeline;
+
+    fn index(&self, index: BindgroupAlignmentLayout) -> &Self::Output {
+        return &self.data[index.get_index()];
+    }
+}
+
+impl std::ops::IndexMut<BindgroupAlignmentLayout> for BindgroupLayouts {
+    fn index_mut(&mut self, index: BindgroupAlignmentLayout) -> &mut Self::Output {
+        return &mut self.data[index.get_index()];
+    }
 }
 
 impl BindgroupLayouts {
-
     pub(crate) fn new(dev: &wgpu::Device) -> Self {
-
-        fn create_bingroup_entry(binding : u32, alignment : u32, read_only : bool) -> wgpu::BindGroupLayoutEntry{
+        fn create_bingroup_entry(
+            binding: u32,
+            alignment: u32,
+            read_only: bool,
+        ) -> wgpu::BindGroupLayoutEntry {
             return wgpu::BindGroupLayoutEntry {
                 binding: binding,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: read_only },
+                    ty: wgpu::BufferBindingType::Storage {
+                        read_only: read_only,
+                    },
                     has_dynamic_offset: false,
                     min_binding_size: Some(NonZeroU64::new(alignment.into()).unwrap()),
                 },
@@ -111,23 +202,24 @@ impl BindgroupLayouts {
             };
         }
 
-        fn create_bind_group_layout(dev: &wgpu::Device, entries : &[wgpu::BindGroupLayoutEntry]) -> wgpu::BindGroupLayout{
-            return dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        fn create_bindgroup_layout_and_pipeline(
+            dev: &wgpu::Device,
+            entries: &[wgpu::BindGroupLayoutEntry],
+        ) -> BindgroupLayoutAndPipeline {
+            let bindgroup_layout = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: None,
                 entries: entries,
             });
-        }
 
-        fn create_pipeline_layout(dev: &wgpu::Device, bindgroup_layouts : &[&wgpu::BindGroupLayout]) -> wgpu::PipelineLayout{
-            return dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            let pipeline_layout = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
-                bind_group_layouts: bindgroup_layouts,
+                bind_group_layouts: &[&bindgroup_layout],
                 push_constant_ranges: &[],
             });
+
+            return BindgroupLayoutAndPipeline(bindgroup_layout, pipeline_layout);
         }
 
-        let dest_entries = [2,4,8,16].map(|a| create_bingroup_entry(0, a, false));
-    
         let meta_entry = wgpu::BindGroupLayoutEntry {
             binding: 1,
             visibility: wgpu::ShaderStages::COMPUTE,
@@ -139,52 +231,50 @@ impl BindgroupLayouts {
             count: None,
         };
 
-        let input1_entries = [2,4,8,16].map(|a| create_bingroup_entry(2, a, true));
-        let input2_entries = [2,4,8,16].map(|a| create_bingroup_entry(3, a, true));
-        let input3_entries = [2,4,8,16].map(|a| create_bingroup_entry(4, a, true));
-        
-        let bindgroup0 = [0 as usize, 1, 2, 3].map(|i|{
-            let bindgroup_layout = create_bind_group_layout(dev, &[dest_entries[i], meta_entry]);
-            let pipeline_layout = create_pipeline_layout(dev, &[&bindgroup_layout]);
+        let dest_entries = [2, 4, 8, 16].map(|a| create_bingroup_entry(0, a, false));
+        let input1_entries = [2, 4, 8, 16].map(|a| create_bingroup_entry(2, a, true));
+        let input2_entries = [2, 4, 8, 16].map(|a| create_bingroup_entry(3, a, true));
+        let input3_entries = [2, 4, 8, 16].map(|a| create_bingroup_entry(4, a, true));
 
-            return BindgroupLayoutAndPipeline(bindgroup_layout, pipeline_layout);
+        let data = BindgroupAlignmentLayout::values().map(|v| match v {
+            BindgroupAlignmentLayout::Bindgroup0(a) => create_bindgroup_layout_and_pipeline(
+                dev,
+                &[dest_entries[a.get_index()], meta_entry],
+            ),
+            BindgroupAlignmentLayout::Bindgroup1(a1, a2) => create_bindgroup_layout_and_pipeline(
+                dev,
+                &[
+                    dest_entries[a1.get_index()],
+                    meta_entry,
+                    input1_entries[a2.get_index()],
+                ],
+            ),
+            BindgroupAlignmentLayout::Bindgroup2(a1, a2, a3) => {
+                create_bindgroup_layout_and_pipeline(
+                    dev,
+                    &[
+                        dest_entries[a1.get_index()],
+                        meta_entry,
+                        input1_entries[a2.get_index()],
+                        input2_entries[a3.get_index()],
+                    ],
+                )
+            }
+            BindgroupAlignmentLayout::Bindgroup3(a1, a2, a3, a4) => {
+                create_bindgroup_layout_and_pipeline(
+                    dev,
+                    &[
+                        dest_entries[a1.get_index()],
+                        meta_entry,
+                        input1_entries[a2.get_index()],
+                        input2_entries[a3.get_index()],
+                        input3_entries[a4.get_index()],
+                    ],
+                )
+            }
         });
 
-        let bindgroup1 = [0 as usize, 1, 2, 3].map(|i|{
-            let bindgroup_layout = create_bind_group_layout(dev, &[dest_entries[i], meta_entry, input1_entries[i]]);
-            let pipeline_layout = create_pipeline_layout(dev, &[&bindgroup_layout]);
-
-            return BindgroupLayoutAndPipeline(bindgroup_layout, pipeline_layout);
-        });
-
-        let bindgroup2 = [0 as usize, 1, 2, 3].map(|i|{
-            let bindgroup_layout = create_bind_group_layout(dev, &[dest_entries[i], meta_entry, input1_entries[i], input2_entries[i]]);
-            let pipeline_layout = create_pipeline_layout(dev, &[&bindgroup_layout]);
-
-            return BindgroupLayoutAndPipeline(bindgroup_layout, pipeline_layout);
-        });
-
-        let bindgroup3 = [0 as usize, 1, 2, 3].map(|i|{
-            let bindgroup_layout = create_bind_group_layout(dev, &[dest_entries[i], meta_entry, input1_entries[i], input2_entries[i], input3_entries[i]]);
-            let pipeline_layout = create_pipeline_layout(dev, &[&bindgroup_layout]);
-
-            return BindgroupLayoutAndPipeline(bindgroup_layout, pipeline_layout);
-        });
-
-        let bindgroup_layout_4_to_8 = create_bind_group_layout(dev, &[dest_entries[2], meta_entry, input1_entries[1]]);
-        let pipeline_layout_4_to_8 = create_pipeline_layout(dev, &[&bindgroup_layout_4_to_8]);
-
-        let bindgroup_layout_8_to_4 = create_bind_group_layout(dev, &[dest_entries[1], meta_entry, input1_entries[2]]);
-        let pipeline_layout_8_to_4 = create_pipeline_layout(dev, &[&bindgroup_layout_8_to_4]);
-     
-        Self {
-            bindgroup0,
-            bindgroup1,
-            bindgroup2,
-            bindgroup3,
-            bindgroup1_4_to_8 : BindgroupLayoutAndPipeline(bindgroup_layout_4_to_8, pipeline_layout_4_to_8),
-            bindgroup1_8_to_4 : BindgroupLayoutAndPipeline(bindgroup_layout_8_to_4, pipeline_layout_8_to_4)
-        }
+        return BindgroupLayouts { data: data };
     }
 }
 
@@ -270,22 +360,21 @@ impl BufferReference {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, std::marker::Copy)]
 #[cfg_attr(
     any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
     derive(serde::Serialize, serde::Deserialize)
 )]
-pub enum BindgroupAlignment{
+pub enum BindgroupAlignment {
     Aligned2,
     Aligned4,
     Aligned8,
-    Aligned16
+    Aligned16,
 }
 
-impl BindgroupAlignment{
-    pub fn get_index(&self) -> usize{
-        match self{
+impl BindgroupAlignment {
+    pub fn get_index(&self) -> usize {
+        match self {
             BindgroupAlignment::Aligned2 => return 0,
             BindgroupAlignment::Aligned4 => return 1,
             BindgroupAlignment::Aligned8 => return 2,
@@ -294,9 +383,9 @@ impl BindgroupAlignment{
     }
 }
 
-impl From<crate::DType> for BindgroupAlignment{
+impl From<crate::DType> for BindgroupAlignment {
     fn from(value: crate::DType) -> Self {
-        match value{
+        match value {
             crate::DType::U8 => panic!("alignment not supported"),
             crate::DType::U32 => BindgroupAlignment::Aligned4,
             crate::DType::I64 => BindgroupAlignment::Aligned8,
@@ -308,22 +397,20 @@ impl From<crate::DType> for BindgroupAlignment{
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(
     any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
     derive(serde::Serialize, serde::Deserialize)
 )]
 pub enum BindgroupInputBase<T> {
-    Bindgroup0(BindgroupAlignment), //
+    Bindgroup0(BindgroupAlignmentLayout), //
     Bindgroup1(
         #[cfg_attr(
             any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
             serde(skip)
         )]
         T,
-        BindgroupAlignment,
-        BindgroupAlignment
+        BindgroupAlignmentLayout,
     ), //input1, dest_alignment, input1_alignment
     Bindgroup2(
         #[cfg_attr(
@@ -336,7 +423,7 @@ pub enum BindgroupInputBase<T> {
             serde(skip)
         )]
         T,
-        BindgroupAlignment,
+        BindgroupAlignmentLayout,
     ), //input1, input2, alignment dest
     Bindgroup3(
         #[cfg_attr(
@@ -354,38 +441,29 @@ pub enum BindgroupInputBase<T> {
             serde(skip)
         )]
         T,
-        BindgroupAlignment,
+        BindgroupAlignmentLayout,
     ), //input1, input2, input3
 }
 
-impl<T : Clone> BindgroupInputBase<T>{
-    pub fn fold<TOut>(&self, mut f : impl FnMut(&T) -> TOut) -> BindgroupInputBase<TOut>{
+impl<T: Clone> BindgroupInputBase<T> {
+    pub fn fold<TOut>(&self, mut f: impl FnMut(&T) -> TOut) -> BindgroupInputBase<TOut> {
         match self {
             super::cache::BindgroupInputBase::Bindgroup0(alignment) => {
                 super::cache::BindgroupInputBase::Bindgroup0(*alignment)
             }
-            super::cache::BindgroupInputBase::Bindgroup1(buf1, dest_alignment, input_alignment) => {
-                super::cache::BindgroupInputBase::Bindgroup1(f(buf1), *dest_alignment, *input_alignment)
+            super::cache::BindgroupInputBase::Bindgroup1(buf1, alignment) => {
+                super::cache::BindgroupInputBase::Bindgroup1(f(buf1), *alignment)
             }
             super::cache::BindgroupInputBase::Bindgroup2(buf1, buf2, alignment) => {
-                super::cache::BindgroupInputBase::Bindgroup2(
-                    f(buf1),
-                    f(buf2),
-                    *alignment,
-                )
+                super::cache::BindgroupInputBase::Bindgroup2(f(buf1), f(buf2), *alignment)
             }
-            super::cache::BindgroupInputBase::Bindgroup3(buf1, buf2, buf3,alignment) => {
-                super::cache::BindgroupInputBase::Bindgroup3(
-                    f(buf1),
-                    f(buf2),
-                    f(buf3),
-                    *alignment
-                )
+            super::cache::BindgroupInputBase::Bindgroup3(buf1, buf2, buf3, alignment) => {
+                super::cache::BindgroupInputBase::Bindgroup3(f(buf1), f(buf2), f(buf3), *alignment)
             }
         }
     }
 
-    pub fn fold_owned<TOut>(&self, mut f : impl FnMut(T) -> TOut) -> BindgroupInputBase<TOut>{
+    pub fn fold_owned<TOut>(&self, mut f: impl FnMut(T) -> TOut) -> BindgroupInputBase<TOut> {
         return self.fold(|k| f(k.clone()));
     }
 }
@@ -602,7 +680,7 @@ impl ModelCache {
                 let is_valid = check_buffer(bindgroup.buffer.get_dest())
                     && match &bindgroup.buffer.get_input() {
                         BindgroupInputBase::Bindgroup0(_) => true,
-                        BindgroupInputBase::Bindgroup1(v1, _, _) => check_buffer(v1),
+                        BindgroupInputBase::Bindgroup1(v1, _) => check_buffer(v1),
                         BindgroupInputBase::Bindgroup2(v1, v2, _) => {
                             check_buffer(v1) && check_buffer(v2)
                         }
@@ -673,7 +751,10 @@ impl ModelCache {
 
             //}
 
-            bindgroup_reference.1.fold_owned(|v| {check_buffer(v); return ();});
+            bindgroup_reference.1.fold_owned(|v| {
+                check_buffer(v);
+                return ();
+            });
         }
 
         check_buffer_reference(self, bindgroup_reference, pipeline.clone());
@@ -694,7 +775,7 @@ impl ModelCache {
         ) -> CachedBindgroupFull {
             return BindgroupFullBase(
                 dest_buffer,
-                bindgroup_reference.1.fold(|v| {return get_storage(cache, v)})
+                bindgroup_reference.1.fold(|v| return get_storage(cache, v)),
             );
         }
 

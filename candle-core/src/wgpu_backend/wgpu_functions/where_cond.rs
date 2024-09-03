@@ -10,7 +10,7 @@ pub fn queue_where_cond(
     layout_input: &crate::Layout,
     layout_true: &crate::Layout,
     layout_false: &crate::Layout,
-    cond_type : crate::DType,
+    cond_type: crate::DType,
     dtype: crate::DType,
 ) -> crate::Result<()> {
     let mut meta = get_meta(&dev);
@@ -20,15 +20,25 @@ pub fn queue_where_cond(
 
     let pipeline = meta.get_pipeline(Pipelines::WhereCond(
         get_dtype(dtype)?,
-        match cond_type{
+        match cond_type {
             crate::DType::U32 => Functions::WhereCondIndexU32,
             crate::DType::I64 => Functions::WhereCondIndexI64,
             _ => todo!(),
-          
         },
     ));
 
-    let bind_group = create_bind_group_input3(dest_buffer, input_buffer, true_buffer, false_buffer, dtype.into());
+    let bind_group = create_bind_group_input3_with_alignment(
+        dest_buffer,
+        input_buffer,
+        true_buffer,
+        false_buffer,
+        BindgroupAlignmentLayout::Bindgroup3(
+            dtype.into(),
+            cond_type.into(),
+            dtype.into(),
+            dtype.into(),
+        ),
+    );
     enqueue(
         meta,
         pipeline,

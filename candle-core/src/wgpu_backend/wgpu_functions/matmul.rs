@@ -77,19 +77,19 @@ mod sgemm{
 
         let input_alignment : BindgroupAlignment = _dtype.into();
         let bind_group = if input_alignment == BindgroupAlignment::Aligned4 && is_16bytes_aligned{
-            create_bind_group_input2(
-                buffer_dest,
-                buffer_input1,
-                buffer_input2, 
-                BindgroupAlignment::Aligned16
-            )
-        }
-        else{
-            create_bind_group_input2(
+            create_bind_group_input2_with_alignment(
                 buffer_dest,
                 buffer_input1,
                 buffer_input2,
-                BindgroupAlignment::Aligned4
+                BindgroupAlignmentLayout::Bindgroup2(BindgroupAlignment::Aligned4, BindgroupAlignment::Aligned16, BindgroupAlignment::Aligned16)
+            )
+        }
+        else{
+            create_bind_group_input2_with_alignment(
+                buffer_dest,
+                buffer_input1,
+                buffer_input2,
+                BindgroupAlignmentLayout::Bindgroup2(BindgroupAlignment::Aligned4, BindgroupAlignment::Aligned4, BindgroupAlignment::Aligned4)
             )
         };
 
@@ -251,11 +251,11 @@ mod sgemm{
             panic!("matmul can only be performed with f32 and i32");
         }
 
-        let bind_group = create_bind_group_input2(
+        let bind_group = create_bind_group_input2_with_alignment(
             buffer_dest_padded.clone(),
             buffer_input1_padded.clone(),
             buffer_input2_padded.clone(),
-           BindgroupAlignment::Aligned16, //we load 4 values at once 
+            BindgroupAlignmentLayout::Bindgroup2(BindgroupAlignment::Aligned4, BindgroupAlignment::Aligned16, BindgroupAlignment::Aligned16)
         );
 
         let lx;

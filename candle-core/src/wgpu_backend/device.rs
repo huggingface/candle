@@ -470,7 +470,7 @@ pub struct WgpuDeviceInner {
     pub device: wgpu::Device,
     pub backend: wgpu::Backend,
     pub device_limits: wgpu::Limits, //we cache the limits here, because device.limit() was relatively slow on the browser
-    pub device_features:wgpu::Features,
+    pub device_features: wgpu::Features,
 
     pub queue: wgpu::Queue,
     pub(crate) shader: Mutex<HashMap<candle_wgpu_kernels::Shaders, ShaderModuleComputePipelines>>,
@@ -566,19 +566,18 @@ impl WgpuDevice {
         limits.max_storage_buffer_binding_size = adatper_limits.max_storage_buffer_binding_size; //use as much as possible
         limits.max_buffer_size = adatper_limits.max_buffer_size; //use as much as possible
 
-        if adapter_features.contains(wgpu::Features::SHADER_INT64){
+        if adapter_features.contains(wgpu::Features::SHADER_INT64) {
             features.insert(wgpu::Features::SHADER_INT64);
         }
-        if adapter_features.contains(wgpu::Features::SHADER_F64){
+        if adapter_features.contains(wgpu::Features::SHADER_F64) {
             features.insert(wgpu::Features::SHADER_F64);
         }
-        if adapter_features.contains(wgpu::Features::SHADER_F16){
+        if adapter_features.contains(wgpu::Features::SHADER_F16) {
             features.insert(wgpu::Features::SHADER_F16);
         }
-        if adapter_features.contains(wgpu::Features::SHADER_I16){
+        if adapter_features.contains(wgpu::Features::SHADER_I16) {
             features.insert(wgpu::Features::SHADER_I16);
         }
-        
 
         // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
         //  `features` being the available features.
@@ -729,8 +728,8 @@ impl WgpuDevice {
             super::cache::BindgroupInputBase::Bindgroup0(alignment) => {
                 super::cache::BindgroupInputBase::Bindgroup0(*alignment)
             }
-            super::cache::BindgroupInputBase::Bindgroup1(_, dest_alignment, input_alignment) => {
-                super::cache::BindgroupInputBase::Bindgroup1(input1_buffer.buffer, *dest_alignment, *input_alignment)
+            super::cache::BindgroupInputBase::Bindgroup1(_, alignment) => {
+                super::cache::BindgroupInputBase::Bindgroup1(input1_buffer.buffer, *alignment)
             }
             super::cache::BindgroupInputBase::Bindgroup2(_, _, alignment) => {
                 super::cache::BindgroupInputBase::Bindgroup2(
@@ -739,12 +738,12 @@ impl WgpuDevice {
                     *alignment,
                 )
             }
-            super::cache::BindgroupInputBase::Bindgroup3(_, _, _,alignment) => {
+            super::cache::BindgroupInputBase::Bindgroup3(_, _, _, alignment) => {
                 super::cache::BindgroupInputBase::Bindgroup3(
                     input1_buffer.buffer,
                     input2_buffer.buffer,
                     input3_buffer.buffer,
-                    *alignment
+                    *alignment,
                 )
             }
         };
@@ -881,7 +880,6 @@ impl WgpuDevice {
     ) -> wgpu::ComputePipeline {
         let entry_point = pipeline.0.get_entry_point();
         if consts.is_empty() {
-          
             return device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: None,
                 layout: Some(pipeline_layout),
@@ -953,26 +951,22 @@ impl WgpuDevice {
         wgpu_functions::synchronize_async(self).await
     }
 
-    pub (crate) fn is_dtype_available(&self, dtype: DType) -> bool{
+    pub(crate) fn is_dtype_available(&self, dtype: DType) -> bool {
         match dtype {
             DType::U32 => true,
             DType::F32 => true,
             DType::U8 => false,
-            DType::I64 => 
-            {
-                return self.device_features.contains(wgpu::Features::SHADER_I16);
+            DType::I64 => {
+                return self.device_features.contains(wgpu::Features::SHADER_INT64);
             }
-            DType::F64 =>  
-            {
-                return self.device_features.contains(wgpu::Features::SHADER_F16);
-            },
+            DType::F64 => {
+                return self.device_features.contains(wgpu::Features::SHADER_F64);
+            }
 
             DType::BF16 => false,
             DType::F16 => false,
-           
         }
     }
-
 }
 
 impl crate::backend::BackendDevice for WgpuDevice {
@@ -1037,8 +1031,12 @@ impl crate::backend::BackendDevice for WgpuDevice {
         shape: &crate::Shape,
         dtype: crate::DType,
     ) -> crate::Result<Self::Storage> {
-        if self.is_dtype_available(dtype){
-            return Ok(create_wgpu_storage(self, dtype, shape.elem_count() * dtype.size_in_bytes()));
+        if self.is_dtype_available(dtype) {
+            return Ok(create_wgpu_storage(
+                self,
+                dtype,
+                shape.elem_count() * dtype.size_in_bytes(),
+            ));
         } else {
             wrongType!(alloc_uninit, dtype);
         }

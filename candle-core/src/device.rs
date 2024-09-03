@@ -221,14 +221,14 @@ impl Device {
             (Device::WebGpu(dev), DType::I64) => 
             {
                 #[cfg(feature="wgpu")]
-                return dev.device_features.contains(wgpu::Features::SHADER_I16);
+                return dev.device_features.contains(wgpu::Features::SHADER_INT64);
                 #[cfg(not(feature="wgpu"))]
                 return false;
             }
             (Device::WebGpu(dev), DType::F64) =>  
             {
                 #[cfg(feature="wgpu")]
-                return dev.device_features.contains(wgpu::Features::SHADER_F16);
+                return dev.device_features.contains(wgpu::Features::SHADER_F64);
                 #[cfg(not(feature="wgpu"))]
                 return false;
             },

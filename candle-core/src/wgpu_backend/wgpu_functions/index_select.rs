@@ -9,7 +9,7 @@ pub fn queue_index_select(
     buffer_input: BufferReferenceId,
     buffer_index: BufferReferenceId,
     dtype: crate::DType,
-    index_dtype : crate::DType,
+    index_dtype: crate::DType,
     lay_input: &crate::Layout,
     lay_index: &crate::Layout,
     dim: usize,
@@ -40,14 +40,19 @@ pub fn queue_index_select(
 
     let pipeline = meta.get_pipeline(Pipelines::IndexSelect(
         get_dtype(dtype)?,
-        match index_dtype{
+        match index_dtype {
             crate::DType::U32 => Functions::IndexSelectU32,
             crate::DType::I64 => Functions::IndexSelectI64,
             _ => todo!(),
-        }
+        },
     ));
 
-    let bind_group = create_bind_group_input2(buffer_dest, buffer_index, buffer_input, dtype.into());
+    let bind_group = create_bind_group_input2_with_alignment(
+        buffer_dest,
+        buffer_index,
+        buffer_input,
+        BindgroupAlignmentLayout::Bindgroup2(dtype.into(), index_dtype.into(), dtype.into()),
+    );
     enqueue_workgroups(
         meta,
         pipeline,
