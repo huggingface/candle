@@ -205,6 +205,10 @@ impl Attention {
         };
         self.o_proj.forward(&attn_output)
     }
+
+    fn clear_kv_cache(&mut self) {
+        self.kv_cache = None
+    }
 }
 
 #[derive(Clone)]
@@ -500,6 +504,10 @@ impl DecoderLayer {
             .forward(&xs.apply(&self.post_attention_layernorm)?)?;
         residual + xs
     }
+
+    fn clear_kv_cache(&mut self) {
+        self.self_attn.clear_kv_cache()
+    }
 }
 
 pub struct Model {
@@ -603,5 +611,11 @@ impl Model {
         }
 
         self.lm_head.forward(&xs.apply(&self.norm)?)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.clear_kv_cache()
+        }
     }
 }
