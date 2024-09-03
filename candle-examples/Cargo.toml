@@ -113,3 +113,7 @@ required-features = ["encodec"]
 [[example]]
 name = "depth_anything_v2"
 required-features = ["depth_anything_v2"]
+
+[[example]]
+name = "silero-vad"
+required-features = ["onnx"]

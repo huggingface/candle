@@ -8,45 +8,42 @@ use clap::{Parser, ValueEnum};
 
 use candle::{DType, IndexOp, D};
 use candle_nn::{Module, VarBuilder};
-use candle_transformers::models::mobilenetv4;
+use candle_transformers::models::fastvit;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum Which {
-    Small,
-    Medium,
-    Large,
-    HybridMedium,
-    HybridLarge,
+    T8,
+    T12,
+    S12,
+    SA12,
+    SA24,
+    SA36,
+    MA36,
 }
 
 impl Which {
     fn model_filename(&self) -> String {
         let name = match self {
-            Self::Small => "conv_small.e2400_r224",
-            Self::Medium => "conv_medium.e500_r256",
-            Self::HybridMedium => "hybrid_medium.ix_e550_r256",
-            Self::Large => "conv_large.e600_r384",
-            Self::HybridLarge => "hybrid_large.ix_e600_r384",
+            Self::T8 => "t8",
+            Self::T12 => "t12",
+            Self::S12 => "s12",
+            Self::SA12 => "sa12",
+            Self::SA24 => "sa24",
+            Self::SA36 => "sa36",
+            Self::MA36 => "ma36",
         };
-        format!("timm/mobilenetv4_{}_in1k", name)
+        format!("timm/fastvit_{}.apple_in1k", name)
     }
 
-    fn resolution(&self) -> u32 {
+    fn config(&self) -> fastvit::Config {
         match self {
-            Self::Small => 224,
-            Self::Medium => 256,
-            Self::HybridMedium => 256,
-            Self::Large => 384,
-            Self::HybridLarge => 384,
-        }
-    }
-    fn config(&self) -> mobilenetv4::Config {
-        match self {
-            Self::Small => mobilenetv4::Config::small(),
-            Self::Medium => mobilenetv4::Config::medium(),
-            Self::HybridMedium => mobilenetv4::Config::hybrid_medium(),
-            Self::Large => mobilenetv4::Config::large(),
-            Self::HybridLarge => mobilenetv4::Config::hybrid_large(),
+            Self::T8 => fastvit::Config::t8(),
+            Self::T12 => fastvit::Config::t12(),
+            Self::S12 => fastvit::Config::s12(),
+            Self::SA12 => fastvit::Config::sa12(),
+            Self::SA24 => fastvit::Config::sa24(),
+            Self::SA36 => fastvit::Config::sa36(),
+            Self::MA36 => fastvit::Config::ma36(),
         }
     }
 }
@@ -63,7 +60,7 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
-    #[arg(value_enum, long, default_value_t=Which::Small)]
+    #[arg(value_enum, long, default_value_t=Which::S12)]
     which: Which,
 }
 
@@ -72,9 +69,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
 
-    let image =
-        candle_examples::imagenet::load_image(args.image, args.which.resolution() as usize)?
-            .to_device(&device)?;
+    let image = candle_examples::imagenet::load_image(args.image, 256)?.to_device(&device)?;
     println!("loaded image {image:?}");
 
     let model_file = match args.model {
@@ -88,7 +83,7 @@ pub fn main() -> anyhow::Result<()> {
     };
 
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
-    let model = mobilenetv4::mobilenetv4(&args.which.config(), 1000, vb)?;
+    let model = fastvit::fastvit(&args.which.config(), 1000, vb)?;
     println!("model built");
     let logits = model.forward(&image.unsqueeze(0)?)?;
     let prs = candle_nn::ops::softmax(&logits, D::Minus1)?

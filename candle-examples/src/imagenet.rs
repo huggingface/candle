@@ -1,21 +1,40 @@
 use candle::{Device, Result, Tensor};
 
-/// Loads an image from disk using the image crate at the requested resolution.
-//  This returns a tensor with shape (3, res, res). imagenet normalization is applied.
-pub fn load_image<P: AsRef<std::path::Path>>(p: P, res: u32) -> Result<Tensor> {
+pub const IMAGENET_MEAN: [f32; 3] = [0.485f32, 0.456, 0.406];
+pub const IMAGENET_STD: [f32; 3] = [0.229f32, 0.224, 0.225];
+
+/// Loads an image from disk using the image crate at the requested resolution,
+/// using the given std and mean parameters.
+/// This returns a tensor with shape (3, res, res). imagenet normalization is applied.
+
+pub fn load_image_with_std_mean<P: AsRef<std::path::Path>>(
+    p: P,
+    res: usize,
+    mean: &[f32; 3],
+    std: &[f32; 3],
+) -> Result<Tensor> {
     let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
-        .resize_to_fill(res, res, image::imageops::FilterType::Triangle);
+        .resize_to_fill(
+            res as u32,
+            res as u32,
+            image::imageops::FilterType::Triangle,
+        );
     let img = img.to_rgb8();
     let data = img.into_raw();
-    let data = Tensor::from_vec(data, (res as usize, res as usize, 3), &Device::Cpu)?
-        .permute((2, 0, 1))?;
-    let mean = Tensor::new(&[0.485f32, 0.456, 0.406], &Device::Cpu)?.reshape((3, 1, 1))?;
-    let std = Tensor::new(&[0.229f32, 0.224, 0.225], &Device::Cpu)?.reshape((3, 1, 1))?;
+    let data = Tensor::from_vec(data, (res, res, 3), &Device::Cpu)?.permute((2, 0, 1))?;
+    let mean = Tensor::new(mean, &Device::Cpu)?.reshape((3, 1, 1))?;
+    let std = Tensor::new(std, &Device::Cpu)?.reshape((3, 1, 1))?;
     (data.to_dtype(candle::DType::F32)? / 255.)?
         .broadcast_sub(&mean)?
         .broadcast_div(&std)
+}
+
+/// Loads an image from disk using the image crate at the requested resolution.
+/// This returns a tensor with shape (3, res, res). imagenet normalization is applied.
+pub fn load_image<P: AsRef<std::path::Path>>(p: P, res: usize) -> Result<Tensor> {
+    load_image_with_std_mean(p, res, &IMAGENET_MEAN, &IMAGENET_STD)
 }
 
 /// Loads an image from disk using the image crate, this returns a tensor with shape
