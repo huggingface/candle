@@ -187,17 +187,14 @@ fn test_matmul_kernels_webgpu()-> Result<()> {
     use candle_core::wgpu::MatmulAlgorithm;
     let mut combinations = Vec::new();
     
-    for a in &[false, true] { //prefatch
+    for a in &[false] { //prefatch
         for b in &[false] { //nopadding
-            for c in &[true] { //LoadA
-                for d in &[true] { //LoadB
-                    combinations.push((*a, *b, *c, *d));
-                }
-            }
+            combinations.push((*a, *b));
         }
     }
     
     let algs = vec![
+        MatmulAlgorithm::Matmul1_64B(false, false),
         MatmulAlgorithm::Matmul7,
         MatmulAlgorithm::Matmul1,
         MatmulAlgorithm::MatmulX,
@@ -205,17 +202,19 @@ fn test_matmul_kernels_webgpu()-> Result<()> {
     ];
 
     let algs = algs.into_iter()
-    .chain(combinations.iter().map(|(a, b, c, d)| MatmulAlgorithm::Matmul32_32(*a, *b, *c, *d)))
-    .chain(combinations.iter().map(|(a, b, _, _)| MatmulAlgorithm::Matmul128_128(*a, *b)))
-    .chain(combinations.iter().map(|(a, b, _, _)| MatmulAlgorithm::Matmul64_64(*a, *b)))
-    .chain(combinations.iter().map(|(a, b, _, _)| MatmulAlgorithm::Matmul64_64_8_8(*a, *b)))
-    .chain(combinations.iter().map(|(a, b, _, _)| MatmulAlgorithm::Matmul64_128(*a, *b)))
-    .chain(combinations.iter().map(|(a, b, _, _)| MatmulAlgorithm::Matmul64_128_8_8(*a, *b)))
-    .chain(combinations.iter().map(|(a, b, c, d)| MatmulAlgorithm::Matmul16_64(*a, *b, *c, *d)))
-    .chain(combinations.iter().map(|(a, b, c, _)| MatmulAlgorithm::Matmul1_128(*a, *b, *c)))
-    .chain(combinations.iter().map(|(a, b, c, _)| MatmulAlgorithm::Matmul1_256(*a, *b, *c)))
-    .chain(combinations.iter().map(|(a, b, c, d)| MatmulAlgorithm::Matmul24_24(*a, *b, *c, *d)))
-    .chain(combinations.iter().map(|(a, b, c, d)| MatmulAlgorithm::Matmul24_48(*a, *b, *c, *d)));
+    // .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul32_32(*a, *b)))
+    // .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul128_128(*a, *b)))
+    // .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul64_64(*a, *b)))
+    // .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul64_64_8_8(*a, *b)))
+    // .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul64_128(*a, *b)))
+    // .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul64_128_8_8(*a, *b)))
+    // .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul16_64(*a, *b)))
+    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul1_64B(*a, *b)))
+    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul1_64(*a, *b)))
+    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul1_128(*a, *b)))
+    //.chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul1_256(*a, *b)))
+    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul24_24(*a, *b)))
+    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul24_48(*a, *b)));
 
     let device = Device::new_webgpu_sync(0)?;
 
@@ -224,15 +223,17 @@ fn test_matmul_kernels_webgpu()-> Result<()> {
             println!("Testing: {:?}", alg);
             (*wgpu.matmul_alg.lock().unwrap()) = alg;
 
+            big_matmul_webgpu(&device, false, true)?; //transpose b
+            big_matmul_webgpu(&device, false, false)?; 
+           
+            big_matmul_webgpu(&device, true, false)?; //transpoe a
+            big_matmul_webgpu(&device, true, true)?; //transpose a and b
+
+
             matmul(&device)?;
             broadcast_matmul(&device)?;
             squeeze_mm(&device)?;
             mm_layout(&device)?;
-
-            big_matmul_webgpu(&device, false, false)?; 
-            big_matmul_webgpu(&device, false, true)?; //transpose b
-            big_matmul_webgpu(&device, true, false)?; //transpoe a
-            big_matmul_webgpu(&device, true, true)?; //transpose a and b
         }
     }
 
@@ -240,7 +241,8 @@ fn test_matmul_kernels_webgpu()-> Result<()> {
 }
 
 
-//compares matmul impl, with cpu impl
+//compares wgpu matmul impl, with cpu impl
+#[cfg(feature="wgpu")]
 fn big_matmul_webgpu(device: &Device, tpa : bool, tpb : bool)-> Result<()> {
     let b = 1;
     let m = 1;
@@ -265,10 +267,8 @@ fn big_matmul_webgpu(device: &Device, tpa : bool, tpb : bool)-> Result<()> {
 
     let t1 = lhs.matmul(&rhs)?.reshape((b,m,n))?;
 
-
     let lhs = lhs.to_device(&device)?;
     let rhs = rhs.to_device(&device)?;
-
     let t2 = lhs.matmul(&rhs)?.reshape((b,m,n))?;
 
     let m = test_utils::to_vec3_round(&t1, 3)?;
@@ -284,7 +284,7 @@ fn big_matmul_webgpu_tests()-> Result<()> {
     let device = Device::new_webgpu_sync(0)?;
    
     if let Device::WebGpu(wgpu) = &device{
-        (*wgpu.matmul_alg.lock().unwrap()) = candle_core::wgpu::MatmulAlgorithm::Matmul32_32(false, false, true, true);
+        (*wgpu.matmul_alg.lock().unwrap()) = candle_core::wgpu::MatmulAlgorithm::Matmul32_32(false, false);
     }
    
     big_matmul_webgpu(&device, false, false)?;

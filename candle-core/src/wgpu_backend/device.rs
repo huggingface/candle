@@ -356,18 +356,20 @@ pub enum MatmulAlgorithm {
     Matmul1,
     Matmul1_4,
     Matmul16_16,
-    Matmul32_32(bool, bool, bool, bool), //Prefetch, NoPadded, LoadA, LoadB
+    Matmul32_32(bool, bool), //Prefetch, NoPadded, LoadA, LoadB
     Matmul64_64(bool, bool),
     Matmul64_64_8_8(bool, bool),
     Matmul64_64_4_8(bool, bool),
     Matmul64_128(bool, bool),
     Matmul64_128_8_8(bool, bool),
     Matmul128_128(bool, bool),
-    Matmul16_64(bool, bool, bool, bool),
-    Matmul1_128(bool, bool, bool),
-    Matmul1_256(bool, bool, bool),
-    Matmul24_24(bool, bool, bool, bool),
-    Matmul24_48(bool, bool, bool, bool),
+    Matmul16_64(bool, bool),
+    Matmul1_64(bool, bool),
+    Matmul1_64B(bool, bool),
+    Matmul1_128(bool, bool),
+    Matmul1_256(bool, bool),
+    Matmul24_24(bool, bool),
+    Matmul24_48(bool, bool),
 }
 
 impl fmt::Debug for MatmulAlgorithm {
@@ -378,13 +380,11 @@ impl fmt::Debug for MatmulAlgorithm {
             Self::Matmul1 => write!(f, "Matmul1"),
             Self::Matmul1_4 => write!(f, "Matmul1_4"),
             Self::Matmul16_16 => write!(f, "Matmul5_16_16"),
-            Self::Matmul32_32(prefatch, no_padded, loada, loadb) => write!(
+            Self::Matmul32_32(prefatch, no_padded) => write!(
                 f,
-                "Matmul5_32_32({}{}{}{})",
+                "Matmul5_32_32({}{})",
                 if *prefatch { "_Prefetch" } else { "" },
                 if *no_padded { "_NoPadded" } else { "" },
-                if !*loada { "_LoadA" } else { "" },
-                if !*loadb { "_LoadB" } else { "" }
             ),
             Self::Matmul64_64(prefatch, no_padded) => write!(
                 f,
@@ -422,44 +422,48 @@ impl fmt::Debug for MatmulAlgorithm {
                 if *prefatch { "_Prefetch" } else { "" },
                 if *no_padded { "_NoPadded" } else { "" }
             ),
-            Self::Matmul16_64(prefatch, no_padded, loada, loadb) => write!(
+            Self::Matmul16_64(prefatch, no_padded) => write!(
                 f,
-                "Matmul5_16_64({}{}{}{})",
+                "Matmul5_16_64({}{})",
                 if *prefatch { "_Prefetch" } else { "" },
                 if *no_padded { "_NoPadded" } else { "" },
-                if !*loada { "_LoadA" } else { "" },
-                if !*loadb { "_LoadB" } else { "" }
             ),
-            Self::Matmul1_128(prefatch, no_padded, loada) => write!(
+            Self::Matmul1_64(prefatch, no_padded) => write!(
                 f,
-                "Matmul5_1_128({}{}{})",
+                "Matmul5_1_64({}{})",
                 if *prefatch { "_Prefetch" } else { "" },
                 if *no_padded { "_NoPadded" } else { "" },
-                if !*loada { "_LoadA" } else { "" }
             ),
-            Self::Matmul1_256(prefatch, no_padded, loada) => write!(
+            Self::Matmul1_64B(prefatch, no_padded) => write!(
                 f,
-                "Matmul5_1_256({}{}{})",
+                "Matmul5_1_64B({}{})",
                 if *prefatch { "_Prefetch" } else { "" },
                 if *no_padded { "_NoPadded" } else { "" },
-                if !*loada { "_LoadA" } else { "" }
+            ),
+            Self::Matmul1_128(prefatch, no_padded) => write!(
+                f,
+                "Matmul5_1_128({}{})",
+                if *prefatch { "_Prefetch" } else { "" },
+                if *no_padded { "_NoPadded" } else { "" },
+            ),
+            Self::Matmul1_256(prefatch, no_padded) => write!(
+                f,
+                "Matmul5_1_256({}{})",
+                if *prefatch { "_Prefetch" } else { "" },
+                if *no_padded { "_NoPadded" } else { "" },
             ),
 
-            Self::Matmul24_24(prefatch, no_padded, loada, loadb) => write!(
+            Self::Matmul24_24(prefatch, no_padded) => write!(
                 f,
-                "Matmul5_24_24({}{}{}{})",
+                "Matmul5_24_24({}{})",
                 if *prefatch { "_Prefetch" } else { "" },
                 if *no_padded { "_NoPadded" } else { "" },
-                if !*loada { "_LoadA" } else { "" },
-                if !*loadb { "_LoadB" } else { "" }
             ),
-            Self::Matmul24_48(prefatch, no_padded, loada, loadb) => write!(
+            Self::Matmul24_48(prefatch, no_padded) => write!(
                 f,
-                "Matmul5_24_48({}{}{}{})",
+                "Matmul5_24_48({}{})",
                 if *prefatch { "_Prefetch" } else { "" },
                 if *no_padded { "_NoPadded" } else { "" },
-                if !*loada { "_LoadA" } else { "" },
-                if !*loadb { "_LoadB" } else { "" }
             ),
         }
     }
@@ -510,6 +514,8 @@ impl std::ops::Deref for WgpuDevice {
 }
 
 impl WgpuDevice {
+
+    #[instrument]
     pub(crate) async fn create(
         _: usize,
         configuration: crate::WgpuDeviceConfig,

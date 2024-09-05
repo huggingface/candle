@@ -188,6 +188,7 @@ impl std::ops::IndexMut<BindgroupAlignmentLayout> for BindgroupLayouts {
 }
 
 impl BindgroupLayouts {
+    #[instrument(skip(dev))]
     pub(crate) fn new(dev: &wgpu::Device) -> Self {
         fn create_bingroup_entry(
             binding: u32,

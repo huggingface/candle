@@ -3,21 +3,20 @@
 // const TSK : u32 = 32u;                 // The tile-size in dimension K
 // const WPTM : u32 = 1u;                 // The work-per-thread in dimension M
 // const WPTN : u32 = 4u;                 // The work-per-thread in dimension N
-// const PREFETCH : u32 = 2u; //no prefetch
+// const PREFETCH : u32 = 1u; //no prefetch
 
 #define TSM 1u                     // The tile-size in dimension M
-#define TSN 256u                     // The tile-size in dimension N
-#define TSK 256u                     // The tile-size in dimension K
+#define TSN 64u                     // The tile-size in dimension N
+#define TSK 64u                     // The tile-size in dimension K
 #define WPTM 1u                     // The work-per-thread in dimension M
-#define WPTN 4u                     // The work-per-thread in dimension N
-#define PREFETCH 2u
+#define WPTN 1u                     // The work-per-thread in dimension N
+#define PREFETCH 1u
 
-
-#define WIDTHA 4
-#define WIDTHB 1
+#define WIDTHA 1u
+#define WIDTHB 1u
 
 //can not LoadB to Bsub, as TSNxTSK is to big,  each value will be only needed once nontheless
-#define WONT_USE_LOADB
+//#define WONT_USE_LOADB
 
 #include "matmulHelper.pwgsl"
 
@@ -39,12 +38,3 @@ fn matmul_no_padded(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_i
     generic_sgemm(group_id, local_id);
     //generic_sgemm_no_padded(group_id, local_id);
 }
-
-
-
-#define TSM 16u                     // The tile-size in dimension M
-#define TSN 64u                     // The tile-size in dimension N
-#define TSK 16u                     // The tile-size in dimension K
-#define WPTM 4u                     // The work-per-thread in dimension M
-#define WPTN 4u                     // The work-per-thread in dimension N
-#define PREFETCH 1u

@@ -66,7 +66,7 @@ override IsOutputPadded : bool = false;
 
 
 #if WIDTHA == 1
-#define ARRAY_TYPEA DTYPE
+#define ARRAY_TYPEA array<DTYPE, 1>
 #elif WIDTHA == 2
 #define ARRAY_TYPEA vec2<DTYPE>
 #elif WIDTHA == 4
@@ -75,7 +75,7 @@ override IsOutputPadded : bool = false;
 
 
 #if WIDTHB == 1
-#define ARRAY_TYPEB DTYPE
+#define ARRAY_TYPEB array<DTYPE, 1>
 #elif WIDTHB == 2
 #define ARRAY_TYPEB vec2<DTYPE>
 #elif WIDTHB == 4
@@ -95,16 +95,6 @@ var<storage> v_input_a: array<ARRAY_TYPEA>;
 var<storage> v_input_b: array<ARRAY_TYPEB>;
 
 
-
-
-// #else
-
-// #define v_input_a v_input1
-// #define v_input_b v_input2
-
-// #define ARRAY_TYPE DTYPE
-
-
 #ifndef WONT_USE_LOADA
 var<workgroup> Asub: array<array<array<DTYPE, TSM>, TSK>, PREFETCH>;
 #endif
@@ -113,12 +103,11 @@ var<workgroup> Asub: array<array<array<DTYPE, TSM>, TSK>, PREFETCH>;
 var<workgroup> Bsub: array<array<array<DTYPE, TSN>, TSK>, PREFETCH>;
 #endif
 
+#definec LPTAWITDH LPTA / WIDTHA
+#definec TSKAWIDTH TSK / WIDTHA
+#definec TSMAWIDTH TSM / WIDTHA
 #ifndef WONT_USE_LOADA
 fn loadA(tile : u32, tid : u32, t_offset1 : u32){
-    #definec LPTAWITDH LPTA / WIDTHA
-    #definec TSKAWIDTH TSK / WIDTHA
-    #definec TSMAWIDTH TSM / WIDTHA
-    
     for(var la = 0u; la < LPTAWITDH; la += 1u){
         //let id = la + tid * (LPTA / WIDTHA);
         let id = la*THREADS + tid;
@@ -127,47 +116,44 @@ fn loadA(tile : u32, tid : u32, t_offset1 : u32){
             let id_k = id % TSKAWIDTH;
             let id_m = id / TSKAWIDTH;
 
-            let vecA : ARRAY_TYPEA = v_input_a[t_offset1 + id_k * op_matmul_input1_stride_k + id_m * (op_matmul_input1_stride_m / WIDTHA)];
-            #if WIDTHA == 1
-                Asub[tile][WIDTHA * id_k][id_m] = vecA;
-            #elif WIDTHA == 2
-                Asub[tile][WIDTHA * id_k][id_m] = vecA.x;
-                Asub[tile][WIDTHA * id_k + 1][id_m] = vecA.y;
-            #elif WIDTHA == 4
-                Asub[tile][WIDTHA * id_k][id_m] = vecA.x;
-                Asub[tile][WIDTHA * id_k + 1][id_m] = vecA.y;
-                Asub[tile][WIDTHA * id_k + 2][id_m] = vecA.z;
-                Asub[tile][WIDTHA * id_k + 3][id_m] = vecA.w;
-            #endif
+            var vecA : ARRAY_TYPEA = v_input_a[t_offset1 + id_k * op_matmul_input1_stride_k + id_m * (op_matmul_input1_stride_m / WIDTHA)];
+            for(var j = 0u; j < WIDTHA; j++){
+                Asub[tile][WIDTHA * id_k + j][id_m] = vecA[j];
+            }
+            // #if WIDTHA == 1
+            //     Asub[tile][WIDTHA * id_k][id_m] = vecA;
+            // #elif WIDTHA == 2
+            //     Asub[tile][WIDTHA * id_k][id_m] = vecA.x;
+            //     Asub[tile][WIDTHA * id_k + 1][id_m] = vecA.y;
+            // #elif WIDTHA == 4
+            //     Asub[tile][WIDTHA * id_k][id_m] = vecA.x;
+            //     Asub[tile][WIDTHA * id_k + 1][id_m] = vecA.y;
+            //     Asub[tile][WIDTHA * id_k + 2][id_m] = vecA.z;
+            //     Asub[tile][WIDTHA * id_k + 3][id_m] = vecA.w;
+            // #endif
 
         }
         else{
             let id_k = id / TSMAWIDTH;
             let id_m = id % TSMAWIDTH;
 
-            let vecA : ARRAY_TYPEA = v_input_a[t_offset1 + id_k * (op_matmul_input1_stride_k / WIDTHA) + id_m * op_matmul_input1_stride_m];
-            #if WIDTHA == 1
-                Asub[tile][id_k][WIDTHA * id_m] = vecA;
-            #elif WIDTHA == 2
-                Asub[tile][id_k][WIDTHA * id_m + 0] = vecA.x;
-                Asub[tile][id_k][WIDTHA * id_m + 1] = vecA.y;
-            #elif WIDTHA == 4
-                Asub[tile][id_k][WIDTHA * id_m + 0] = vecA.x;
-                Asub[tile][id_k][WIDTHA * id_m + 1] = vecA.y;
-                Asub[tile][id_k][WIDTHA * id_m + 2] = vecA.z;
-                Asub[tile][id_k][WIDTHA* id_m + 3] = vecA.w;
-            #endif
+            var vecA : ARRAY_TYPEA = v_input_a[t_offset1 + id_k * (op_matmul_input1_stride_k / WIDTHA) + id_m * op_matmul_input1_stride_m];
+            
+            for(var j = 0u; j < WIDTHA; j++){
+                Asub[tile][id_k][WIDTHA * id_m + j] = vecA[j];
+            }
         }
     }
 }
 #endif
 
+
+
+#definec LPTBWITDH LPTB / WIDTHB
+#definec TSKBWIDTH TSK / WIDTHB
+#definec TSNBWIDTH TSN / WIDTHB
 #ifndef WONT_USE_LOADB
 fn loadB(tile : u32, tid : u32, t_offset2 : u32){
-    #definec LPTBWITDH LPTB / WIDTHB
-    #definec TSKBWIDTH TSK / WIDTHB
-    #definec TSNBWIDTH TSN / WIDTHB
-
     for(var lb = 0u; lb < LPTBWITDH; lb += 1u){
         //let id = lb + tid * ( LPTB / WIDTHB);
         let id = lb*THREADS + tid;
@@ -176,35 +162,32 @@ fn loadB(tile : u32, tid : u32, t_offset2 : u32){
             let id_n = id % TSNBWIDTH;
             let id_k = id / TSNBWIDTH;
 
-            let vecB : ARRAY_TYPEB = v_input_b[t_offset2 + id_k * (op_matmul_input2_stride_k/WIDTHB) + id_n * op_matmul_input2_stride_n];
-            #if WIDTHB == 1
-                Bsub[tile][id_k][WIDTHB * id_n] = vecB;
-            #elif WIDTHB == 2
-                Bsub[tile][id_k][WIDTHB * id_n + 0] = vecB.x;
-                Bsub[tile][id_k][WIDTHB * id_n + 1] = vecB.y;
-            #elif WIDTHB == 4
-                Bsub[tile][id_k][WIDTHB * id_n + 0] = vecB.x;
-                Bsub[tile][id_k][WIDTHB * id_n + 1] = vecB.y;
-                Bsub[tile][id_k][WIDTHB * id_n + 2] = vecB.z;
-                Bsub[tile][id_k][WIDTHB * id_n + 3] = vecB.w;
-            #endif
+            var vecB : ARRAY_TYPEB = v_input_b[t_offset2 + id_k * (op_matmul_input2_stride_k/WIDTHB) + id_n * op_matmul_input2_stride_n];
+            for(var j = 0u; j < WIDTHB; j++){
+                Bsub[tile][id_k][WIDTHB * id_n + j] = vecB[j];
+            }
         }
         else{
             let id_n = id / TSKBWIDTH;
             let id_k = id % TSKBWIDTH;
 
-            let vecB : ARRAY_TYPEB = v_input_b[t_offset2 + id_k * op_matmul_input2_stride_k + id_n * op_matmul_input2_stride_n / WIDTHB];
-            #if WIDTHB == 1
-                Bsub[tile][WIDTHB * id_k][id_n] = vecB;
-            #elif WIDTHB == 2
-                Bsub[tile][WIDTHB * id_k][id_n] = vecB.x;
-                Bsub[tile][WIDTHB * id_k + 1][id_n] = vecB.y;
-            #elif WIDTHB == 4
-                Bsub[tile][WIDTHB * id_k][id_n] = vecB.x;
-                Bsub[tile][WIDTHB * id_k + 1][id_n] = vecB.y;
-                Bsub[tile][WIDTHB * id_k + 2][id_n] = vecB.z;
-                Bsub[tile][WIDTHB * id_k + 3][id_n] = vecB.w;
-            #endif
+            var vecB : ARRAY_TYPEB = v_input_b[t_offset2 + id_k * op_matmul_input2_stride_k + id_n * op_matmul_input2_stride_n / WIDTHB];
+            
+            for(var j = 0u; j < WIDTHB; j++){
+                Bsub[tile][WIDTHB * id_k + j][id_n] = vecB[j];
+            }
+
+            // #if WIDTHB == 1
+            //     Bsub[tile][WIDTHB * id_k][id_n] = vecB;
+            // #elif WIDTHB == 2
+            //     Bsub[tile][WIDTHB * id_k][id_n] = vecB.x;
+            //     Bsub[tile][WIDTHB * id_k + 1][id_n] = vecB.y;
+            // #elif WIDTHB == 4
+            //     Bsub[tile][WIDTHB * id_k][id_n] = vecB.x;
+            //     Bsub[tile][WIDTHB * id_k + 1][id_n] = vecB.y;
+            //     Bsub[tile][WIDTHB * id_k + 2][id_n] = vecB.z;
+            //     Bsub[tile][WIDTHB * id_k + 3][id_n] = vecB.w;
+            // #endif
         }
     }
 }
@@ -329,9 +312,35 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
         let t_offset2 = m_input2_offset + t * op_matmul_input2_stride_k;
         #endif
 
-        #if RTSM != TSM/WPTM || RTSN != TSM/WPTN 
-            if local_id.y < NEEDEDRTSM && local_id.x < NEEDEDRTSN{
-        #endif
+
+        #ifndef PreLoadB //we may load multiple k values
+            if op_matmul_input2_stride_n != 1{
+                var a_reg = array<DTYPE,WIDTHB>();
+                for (var k=0u; k<TSK; k += WIDTHB) {
+
+                    #ifdef PreLoadA
+                        for (var wm=0u; wm<WPTM; wm++) {
+                            for(var ki=0u; ki < WIDTHB; ki++){
+                                a_reg[ki] = Asub[tt][k + ki][ly + wm];
+                            }
+                            for (var wn=0u; wn<WPTN; wn++) {
+                                let id = t_offset2 + k * op_matmul_input2_stride_k + (lx + wn) * op_matmul_input2_stride_n;
+                                let vecB : ARRAY_TYPEB = v_input_b[id / WIDTHB];
+        
+                                for(var ki=0u; ki < WIDTHB; ki++){
+                                    acc[wm][wn] += a_reg[ki] * vecB[ki];
+                                }
+                            }
+                        }
+                    #else
+                        #assert 0 == 1 //expect PreLoadA in this case
+                    #endif
+                }
+            } 
+            else{
+        #endif       
+        
+   
         // Loop over the values of a single tile
         for (var k=0u; k<TSK; k++) {
 
@@ -347,35 +356,11 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
                         for (var wn=0u; wn<WPTNBWIDTH; wn++) {
                             let id = t_offset2 + k * op_matmul_input2_stride_k + (lx + wn*WIDTHB) * op_matmul_input2_stride_n;
                             let vecB : ARRAY_TYPEB = v_input_b[id / WIDTHB];
-                            #if WIDTHB == 1
-                                b_reg[wn] = vecB;
-                            #elif WIDTHB == 2
-                                b_reg[WIDTHB*wn] = vecB[0];
-                                b_reg[WIDTHB*wn + 1] = vecB[1];
-                            #elif WIDTHB == 4
-                                b_reg[WIDTHB*wn + 0] = vecB[0];
-                                b_reg[WIDTHB*wn + 1] = vecB[1];
-                                b_reg[WIDTHB*wn + 2] = vecB[2];
-                                b_reg[WIDTHB*wn + 3] = vecB[3];
-                            #endif 
-                        }
-                    }
-                    else{
-                #endif
 
-                for (var wn=0u; wn<WPTN; wn++) {
-                    let id = t_offset2 + k * op_matmul_input2_stride_k + (lx + wn) * op_matmul_input2_stride_n;
-                    let vecB : ARRAY_TYPEB = v_input_b[id / WIDTHB];
-                    #if WIDTHB == 1
-                        b_reg[wn] = vecB;
-                    #elif WIDTHB == 2
-                        b_reg[wn] = vecB[id % WIDTHB];
-                    #elif WIDTHB == 4
-                        b_reg[wn] = vecB[id % WIDTHB];
-                    #endif 
-                }
-               
-                #if WPTN % WIDTHB == 0
+                            for(var j = 0u; j < WIDTHB; j++){
+                                b_reg[WIDTHB*wn + j] = vecB[j];
+                            }
+                        }
                     }
                 #endif
             #endif
@@ -392,6 +377,7 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
                 for (var wm=0u; wm<WPTM; wm++) {
                     let id = t_offset1 + k * op_matmul_input1_stride_k + (ly + wm) * op_matmul_input1_stride_m;
                     let vecA : ARRAY_TYPEA = v_input_a[id / WIDTHA];
+
                     #if WIDTHA == 1
                         a_reg = vecA;
                     #elif WIDTHA == 2
@@ -407,7 +393,7 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
             #endif
         }
 
-        #if RTSM != TSM/WPTM || RTSN != TSM/WPTN 
+        #ifndef PreLoadB //we may load multiple k values
             }
         #endif
 
@@ -425,50 +411,46 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
         #endif
         workgroupBarrier();
     }
-    #if RTSM != TSM/WPTM || RTSN != TSM/WPTN 
-        if local_id.y < NEEDEDRTSM && local_id.x < NEEDEDRTSN{
-    #endif
-        let dest_index = group_id.z * select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u) + gy * op_matmul_n + gx + op_matmul_dest_offset;
-        if IsOutputPadded{
-            let is_in_gy = gy < op_matmul_m;
-            let is_in_gx = gx < op_matmul_n;
-            let is_output_pixel = is_in_gy && is_in_gx;
+   
+    let dest_index = group_id.z * select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u) + gy * op_matmul_n + gx + op_matmul_dest_offset;
+    if IsOutputPadded{
+        let is_in_gy = gy < op_matmul_m;
+        let is_in_gx = gx < op_matmul_n;
+        let is_output_pixel = is_in_gy && is_in_gx;
 
-            let wcount_x = select(is_in_gx, min(op_matmul_n - gx, WPTN), 0u);
-            let wcount_y = select(is_in_gy, min(op_matmul_m - gy, WPTM), 0u);
-            if(is_output_pixel){
-                if (wcount_y == WPTM && wcount_x == WPTN){
-                    for (var wm=0u; wm<WPTM; wm++) {
-                        let globalRow = dest_index + wm * op_matmul_n;
-                        for (var wn=0u; wn<WPTN; wn++) {
-                            var globalCol = globalRow + wn;
-                            v_dest[globalCol] = acc[wm][wn];
-                        }
+        let wcount_x = select(is_in_gx, min(op_matmul_n - gx, WPTN), 0u);
+        let wcount_y = select(is_in_gy, min(op_matmul_m - gy, WPTM), 0u);
+        if(is_output_pixel){
+            if (wcount_y == WPTM && wcount_x == WPTN){
+                for (var wm=0u; wm<WPTM; wm++) {
+                    let globalRow = dest_index + wm * op_matmul_n;
+                    for (var wn=0u; wn<WPTN; wn++) {
+                        var globalCol = globalRow + wn;
+                        v_dest[globalCol] = acc[wm][wn];
                     }
                 }
-                else{
-                    for (var wm=0u; wm< wcount_y; wm++) {
-                        let globalRow = dest_index + wm * op_matmul_n;
-                        for (var wn=0u; wn< wcount_x; wn++) {
-                            var globalCol = globalRow + wn;
-                            v_dest[globalCol] = acc[wm][wn];
-                        }
+            }
+            else{
+                for (var wm=0u; wm< wcount_y; wm++) {
+                    let globalRow = dest_index + wm * op_matmul_n;
+                    for (var wn=0u; wn< wcount_x; wn++) {
+                        var globalCol = globalRow + wn;
+                        v_dest[globalCol] = acc[wm][wn];
                     }
                 }
             }
         }
-        else{
-            for (var wm=0u; wm<WPTM; wm++) {
-                let globalRow = dest_index + wm * op_matmul_n;
-                for (var wn=0u; wn<WPTN; wn++) {
-                    var globalCol = globalRow + wn;
-                    v_dest[globalCol] = acc[wm][wn];
-                }
+    }
+    else{
+        for (var wm=0u; wm<WPTM; wm++) {
+            let globalRow = dest_index + wm * op_matmul_n;
+            for (var wn=0u; wn<WPTN; wn++) {
+                var globalCol = globalRow + wn;
+                v_dest[globalCol] = acc[wm][wn];
             }
         }
-    #if RTSM != TSM/WPTM || RTSN != TSM/WPTN 
-        }
-    #endif
+    }
+   
 }
 
 // fn generic_sgemm_no_padded(group_id: vec3<u32>, local_id: vec3<u32>) {

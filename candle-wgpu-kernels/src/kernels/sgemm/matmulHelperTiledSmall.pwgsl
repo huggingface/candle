@@ -1,0 +1,141 @@
+#include "../util.pwgsl"
+
+
+override CONSTV_0 : u32 = 1u;
+override CONSTV_1 : u32 = 1u;
+override CONSTV_2 : u32 = 1u;
+override CONSTV_3 : u32 = 1u;
+override CONSTV_4 : bool = true;
+override CONSTV_5 : u32 = 0u;
+
+#define op_matmul_input1_stride_k   CONSTV_0
+#define op_matmul_input1_stride_m   CONSTV_1
+
+#define op_matmul_input2_stride_n   CONSTV_2
+#define op_matmul_input2_stride_k   CONSTV_3
+
+#define op_matmul_use_batch   CONSTV_4
+#define op_matmul_dest_offset CONSTV_5
+
+#define op_matmul_b                 op_meta[0]
+#define op_matmul_m                 op_meta[1]
+#define op_matmul_k                 op_meta[2]
+#define op_matmul_n                 op_meta[3]
+
+#define op_matmul_input1_stride_b   op_meta[4]
+#define op_matmul_input1_offset     op_meta[5]
+
+#define op_matmul_input2_stride_b   op_meta[6]
+#define op_matmul_input2_offset     op_meta[7]
+
+//#define op_matmul_output_stride_b     op_meta[8]
+//#define op_matmul_output_stride_n     op_meta[9]
+
+#ifndef RTSM
+#definec RTSM TSM/WPTM
+#endif
+#ifndef RTSN
+#definec RTSN TSN
+#endif
+
+#definec NEEDEDRTSM TSM/WPTM
+#definec NEEDEDRTSN TSN/WPTN
+
+#definec THREADS RTSM * RTSN
+
+override IsOutputPadded : bool = false;
+
+#assert (TSK*TSM)%(THREADS) == 0
+#assert ((TSK*TSN)%(THREADS)) == 0
+#assert RTSM > 0
+#assert RTSN > 0
+#assert TSM % WPTM == 0
+#assert TSN % WPTN == 0
+
+
+#ifndef WIDTHA
+#define WIDTHA 4
+#endif
+
+#ifndef WIDTHB
+#define WIDTHB 4
+#endif
+
+
+
+#if WIDTHA == 1
+#define ARRAY_TYPEA array<DTYPE, 1>
+#elif WIDTHA == 2
+#define ARRAY_TYPEA vec2<DTYPE>
+#elif WIDTHA == 4
+#define ARRAY_TYPEA vec4<DTYPE>
+#endif
+
+
+#if WIDTHB == 1
+#define ARRAY_TYPEB array<DTYPE, 1>
+#elif WIDTHB == 2
+#define ARRAY_TYPEB vec2<DTYPE>
+#elif WIDTHB == 4
+#define ARRAY_TYPEB vec4<DTYPE>
+#endif
+
+
+@group(0) @binding(2)
+var<storage> v_input_a: array<ARRAY_TYPEA>;
+
+@group(0) @binding(3)
+var<storage> v_input_b: array<ARRAY_TYPEB>;
+
+var<workgroup> SharedResult: array<array<DTYPE, THREADS_PER_K>, TSN>;
+
+fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
+    let lk = local_id.x % THREADS_PER_K;
+    let local_x = local_id.x / THREADS_PER_K;
+
+    let lx = local_x * WPTN;
+    let ly = local_id.y * WPTM;
+
+    let gx = TSN*group_id.x + local_id.x;
+    let gy = TSM*group_id.y + ly;
+
+    let input1_stride_b = select(op_matmul_use_batch, op_matmul_input1_stride_b, 0u); 
+    let input2_stride_b = select(op_matmul_use_batch, op_matmul_input2_stride_b, 0u); 
+
+    let m_input1_offset = (op_matmul_input1_offset + op_matmul_input1_stride_m * TSM * group_id.y + group_id.z * input1_stride_b);
+    let m_input2_offset = (op_matmul_input2_offset + op_matmul_input2_stride_n * TSN * group_id.x + group_id.z * input2_stride_b);
+
+    let max_k = op_matmul_k;
+    var acc = array<array<DTYPE, WPTN>, WPTM>();
+    for(var k = lk*WPTK; k < max_k; k += TSK){
+        let id_a = m_input1_offset + k * op_matmul_input1_stride_k;
+        let id_b = m_input2_offset + k * op_matmul_input2_stride_k + lx * op_matmul_input2_stride_n;
+
+        #definec WPTK_WIDTHA WPTK / WIDTHA
+        let a_reg : ARRAY_TYPEA = v_input_a[id_a / WIDTHA];
+
+        for (var wn=0u; wn<WPTN; wn++) {
+            let id_b2 = id_b + wn * op_matmul_input2_stride_n;
+            let b_reg = v_input_b[id_b2 / WIDTHB];
+            for(var ki=0u; ki < WPTK; ki++){
+                acc[0][wn] += a_reg[ki] * b_reg[ki];
+            }
+        }
+    }
+    for (var wn=0u; wn<WPTN; wn++) {
+        SharedResult[wn + lx][lk] = acc[0][wn];
+    }
+    
+    workgroupBarrier();
+
+    let dest_index = group_id.z * select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u) + gy * op_matmul_n + gx + op_matmul_dest_offset;
+    for (var wm=0u; wm<WPTM; wm++) {
+        let wn = local_id.x;
+        let globalRow = dest_index + wm * op_matmul_n;
+        var sum : DTYPE = ZERO;
+        for (var li =0u; li<THREADS_PER_K; li++) {
+            sum += SharedResult[wn][li];
+        }
+        v_dest[globalRow] = sum;
+    }
+}

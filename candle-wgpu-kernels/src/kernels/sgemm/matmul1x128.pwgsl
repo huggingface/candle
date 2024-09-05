@@ -12,8 +12,8 @@
 #define WPTN 4u                     // The work-per-thread in dimension N
 #define PREFETCH 1u
 
-#define WIDTHA 4
-#define WIDTHB 1
+#define WIDTHA 4u
+#define WIDTHB 4u
 
 //can not LoadB to Bsub, as TSNxTSK is to big,  each value will be only needed once nontheless
 #define WONT_USE_LOADB
