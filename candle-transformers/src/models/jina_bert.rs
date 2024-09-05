@@ -344,7 +344,7 @@ impl BertEncoder {
             candle::bail!("only alibi is supported as a position-embedding-type")
         }
         let layers = (0..cfg.num_hidden_layers)
-            .map(|index| BertLayer::new(vb.pp(&format!("layer.{index}")), cfg))
+            .map(|index| BertLayer::new(vb.pp(format!("layer.{index}")), cfg))
             .collect::<Result<Vec<_>>>()?;
         let span = tracing::span!(tracing::Level::TRACE, "encoder");
         let alibi = build_alibi_bias(cfg)?.to_device(vb.device())?;

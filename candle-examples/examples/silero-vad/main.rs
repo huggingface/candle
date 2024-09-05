@@ -8,7 +8,6 @@ use anyhow::Result;
 use clap::Parser;
 
 use candle::{DType, Tensor};
-use candle_onnx;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum Which {
