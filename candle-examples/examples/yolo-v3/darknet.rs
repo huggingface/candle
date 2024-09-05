@@ -123,7 +123,7 @@ fn conv(vb: VarBuilder, index: usize, p: usize, b: &Block) -> Result<(usize, Bl)
     let padding = if pad != 0 { (size - 1) / 2 } else { 0 };
     let (bn, bias) = match b.parameters.get("batch_normalize") {
         Some(p) if p.parse::<usize>()? != 0 => {
-            let bn = batch_norm(filters, 1e-5, vb.pp(&format!("batch_norm_{index}")))?;
+            let bn = batch_norm(filters, 1e-5, vb.pp(format!("batch_norm_{index}")))?;
             (Some(bn), false)
         }
         Some(_) | None => (None, true),
@@ -135,9 +135,9 @@ fn conv(vb: VarBuilder, index: usize, p: usize, b: &Block) -> Result<(usize, Bl)
         dilation: 1,
     };
     let conv = if bias {
-        conv2d(p, filters, size, conv_cfg, vb.pp(&format!("conv_{index}")))?
+        conv2d(p, filters, size, conv_cfg, vb.pp(format!("conv_{index}")))?
     } else {
-        conv2d_no_bias(p, filters, size, conv_cfg, vb.pp(&format!("conv_{index}")))?
+        conv2d_no_bias(p, filters, size, conv_cfg, vb.pp(format!("conv_{index}")))?
     };
     let leaky = match activation {
         "leaky" => true,
