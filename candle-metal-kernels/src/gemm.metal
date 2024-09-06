@@ -607,10 +607,12 @@ METAL_FUNC void async_access_accumulator(threadgroup T *C_block, device T *C,
                  min(uint(M_group), M - C_offset.y));
   auto C_src = simdgroup_matrix_storage<T>::apply_offset(C, N, C_offset);
 
-  simdgroup_event event;
   if (is_store) {
+    simdgroup_event event;
     event.async_copy(C_src, N, C_tile, C_block, N_group, C_tile);
+    simdgroup_event::wait(1, &event);
   } else {
+    simdgroup_event event;
     event.async_copy(C_block, N_group, C_tile, C_src, N, C_tile);
     simdgroup_event::wait(1, &event);
   }
