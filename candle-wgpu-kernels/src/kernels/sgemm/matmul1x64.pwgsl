@@ -1,10 +1,3 @@
-// const TSM : u32 = 1u;                // The tile-size in dimension M
-// const TSN : u32 = 128u;                // The tile-size in dimension N
-// const TSK : u32 = 32u;                 // The tile-size in dimension K
-// const WPTM : u32 = 1u;                 // The work-per-thread in dimension M
-// const WPTN : u32 = 4u;                 // The work-per-thread in dimension N
-// const PREFETCH : u32 = 1u; //no prefetch
-
 #define TSM 1u                     // The tile-size in dimension M
 #define TSN 64u                     // The tile-size in dimension N
 #define TSK 64u                     // The tile-size in dimension K
@@ -15,26 +8,13 @@
 #define WIDTHA 1u
 #define WIDTHB 1u
 
-//can not LoadB to Bsub, as TSNxTSK is to big,  each value will be only needed once nontheless
-//#define WONT_USE_LOADB
-
 #include "matmulHelper.pwgsl"
 
+//This is a shader designed for when k_stride (of matrix B) is one. 
+//Loading input B into shared memory is theoretically not necessary (since each value is still read at most once), 
+//but it is beneficial in this case, as adjacent threads on input B can read adjacent values from memory).
+//As 1x64b is faster this shader is not needed any more.
 @compute @workgroup_size(RTSN, RTSM, 1)
-//MxK * KxN = MxN
 fn matmul(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {
     generic_sgemm(group_id, local_id);
-}
-
-// @compute @workgroup_size(RTSN, RTSM, 1)
-// //MxK * KxN = MxN
-// fn matmul_only_a(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {
-//     generic_sgemm_onlya(group_id, local_id);
-// }
-
-@compute @workgroup_size(RTSN, RTSM, 1)
-//MxK * KxN = MxN
-fn matmul_no_padded(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {
-    generic_sgemm(group_id, local_id);
-    //generic_sgemm_no_padded(group_id, local_id);
 }

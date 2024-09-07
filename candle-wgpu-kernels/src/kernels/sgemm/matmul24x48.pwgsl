@@ -1,17 +1,9 @@
-// const TSM : u32 = 32u;                // The tile-size in dimension M
-// const TSN : u32 = 32u;                // The tile-size in dimension N
-// const TSK : u32 = 16u;                 // The tile-size in dimension K
-// const WPTM : u32 = 2u;                 // The work-per-thread in dimension M
-// const WPTN : u32 = 2u;                 // The work-per-thread in dimension N
-
 #define TSM 24u                     // The tile-size in dimension M
 #define TSN 48u                     // The tile-size in dimension N
 #define TSK 24u                     // The tile-size in dimension K
 #define WPTM 2u                     // The work-per-thread in dimension M
 #define WPTN 4u                     // The work-per-thread in dimension N
 #define PREFETCH 1u
-
-//const PREFETCH : u32 = 1u; //no prefetch
 
 #include "matmulHelper.pwgsl"
 

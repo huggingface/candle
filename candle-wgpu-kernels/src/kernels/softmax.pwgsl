@@ -28,13 +28,10 @@ fn softmax(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let start_index1 = start_index + op_softmax_input1_offset;
 
     //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
-    //let start = workgroup_id * op_softmax_workgroup_size;
-    
     if(output_index < op_softmax_dest_size || !USE_Z)
     {
         //Now Reduce from start to end
         var maxVal = MINVALUE;
-
         for (var i = tid; i < op_softmax_length; i += 64u) {
             maxVal = max(maxVal, v_input1[start_index1 + i]);
         }
@@ -42,16 +39,7 @@ fn softmax(@builtin(global_invocation_id) global_id: vec3<u32>) {
         sharedSums[tid] = maxVal; 
     }
     workgroupBarrier();
-    
-    // // Reduce max across workgroup
-    // for (var offset = 32u; offset > 0u; offset /= 2u) {
-    //     if (tid < offset) {
-    //         sharedSums[tid] = max(sharedSums[tid], sharedSums[tid + offset]);
-    //     }
-    //     workgroupBarrier();
-    // }
 
-    
     //calculate max
     if (tid == 0 && (output_index < op_softmax_dest_size || !USE_Z)){
         let cnt = op_softmax_workgroup_count;
@@ -71,7 +59,6 @@ fn softmax(@builtin(global_invocation_id) global_id: vec3<u32>) {
         var sum = ZERO;
         
         for (var i = tid; i < op_softmax_length; i += 64u) {
-        //for (var i = start; i < end; i++){
             let val = exp(v_input1[start_index1 + i] - maxElement);
             v_dest[start_index + i] = val;
             sum += val;
@@ -82,9 +69,11 @@ fn softmax(@builtin(global_invocation_id) global_id: vec3<u32>) {
    
     workgroupBarrier();
 
+    //This is not optimal (only 1 of 64 threads sums the partial result of each thread)
+    //TODO: Either use multiple threads for the sum(e.g. first 32 threads, then 16, then 8, ...)
+    //      or let one thread calculate multiple outputs in sharedSums, and then let multiple threads sum the partial results of one output(like in matmul1x64b) 
     if (tid == 0 && (output_index < op_softmax_dest_size || !USE_Z)){
         let cnt = op_softmax_workgroup_count;
-        //Finnaly Sum of all worker threads:
         var sum = ZERO;
         for (var i = 0u; i < cnt; i++){
             sum += sharedSums[i];
@@ -92,7 +81,6 @@ fn softmax(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         sharedSums[0] = sum;
     }
-
 
     workgroupBarrier();
 

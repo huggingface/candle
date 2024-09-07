@@ -1,33 +1,5 @@
 #include "util.pwgsl"
 
-// #ifdef f32
-// #define DTYPE f32 
-// #endif
-
-// #ifdef u32
-// #define DTYPE u32 
-// #endif
-
-// #ifdef u8
-// #define DTYPE u32 
-// #endif
-
-// @group(0) @binding(0)
-// var<storage, read_write> v_dest: array<DTYPE>;
-
-// @group(0) @binding(1)
-// var<storage> op_meta : array<u32>;
-
-// @group(0) @binding(2)
-// var<storage> v_input1: array<DTYPE>;
-
-// @group(0) @binding(3)
-// var<storage> v_input2: array<DTYPE>;
-
-
-// const ZERO : DTYPE = 0;
-// const ONE : DTYPE = 1;
-
 override CONSTV_0:u32 = 1u;
 override CONSTV_1:u32 = 1u;
 override CONSTV_2:u32 = 1u;
@@ -39,8 +11,6 @@ override CONSTV_7:u32 = 1u;
 override CONSTV_8:u32 = 1u;
 
 #define op_conv1d_kernel_stride   CONSTV_0
-//#define op_conv2d.kernel_y_stride   CONSTV_1
-//#define op_conv2d.stride_y_in   CONSTV_2
 #define op_conv1d_stride_in   CONSTV_1
 
 #define op_conv1d_padding   CONSTV_2
@@ -51,25 +21,16 @@ override CONSTV_8:u32 = 1u;
 #define op_conv1d_b              CONSTV_7
 #define op_conv1d_c_in           CONSTV_8
 
-//#define op_conv1d_b                 op_meta[0]
-//#define op_conv1d_c_in              op_meta[1]
-//#define op_conv1d_kernel_size          op_meta[2]
-//#define op_conv1d_kernel_stride   op_meta[3]
-#define op_conv1d_kernel_c_stride   op_meta[4]
-#define op_conv1d_kernel_b_stride   op_meta[5]
-#define op_conv1d_kernel_offset     op_meta[6]
-#define op_conv1d_size_in         op_meta[7]
-#define op_conv1d_stride_batch_out  op_meta[8]
-#define op_conv1d_stride_c_out      op_meta[9]
-#define op_conv1d_size_out        op_meta[10]
+#define op_conv1d_kernel_c_stride   op_meta[0]
+#define op_conv1d_kernel_b_stride   op_meta[1]
+#define op_conv1d_kernel_offset     op_meta[2]
+#define op_conv1d_size_in         op_meta[3]
+#define op_conv1d_stride_batch_out  op_meta[4]
+#define op_conv1d_stride_c_out      op_meta[5]
+#define op_conv1d_size_out        op_meta[6]
 
-#define op_conv1d_stride_batch_input op_meta[11]
-#define op_conv1d_stride_c_in       op_meta[12]
-//#define op_conv1d_stride_in       op_meta[13]
-//#define op_conv1d_padding           op_meta[14]
-//#define op_conv1d_stride_conv       op_meta[15]
-//#define op_conv1d_dialation_conv    op_meta[16]
-//#define op_conv1d_offset_input      op_meta[17]
+#define op_conv1d_stride_batch_input op_meta[7]
+#define op_conv1d_stride_c_in       op_meta[8]
 
 
 //(N, C_IN, L) CONV (C_IN, K_size) = (N,C_OUT, L_OUT)

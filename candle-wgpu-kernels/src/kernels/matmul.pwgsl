@@ -1,35 +1,5 @@
 #include "util.pwgsl"
 
-// #ifdef f32
-// #define DTYPE f32 
-// #endif
-
-// #ifdef u32
-// #define DTYPE u32 
-// #endif
-
-// #ifdef u8
-// #define DTYPE u32 
-// #endif
-
-// @group(0) @binding(0)
-// var<storage, read_write> v_dest: array<DTYPE>;
-
-// @group(0) @binding(2)
-// var<storage> v_input1: array<DTYPE>;
-
-// @group(0) @binding(3)
-// var<storage> v_input2: array<DTYPE>;
-
-
-// const ZERO : DTYPE = 0;
-// const ONE : DTYPE = 1;
-
-
-// @group(0) @binding(1)
-// var<storage> op_meta : array<u32>;
-
-
 override CONSTV_0 : bool = true;
 override CONSTV_1 : bool = true;
 override CONSTV_2 : bool = true;
@@ -198,13 +168,6 @@ fn matmul5(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
     let m_input2_offset = input2_offset + op_matmul_input2_stride_n * gx + batch * input2_stride_b + ly * op_matmul_input2_stride_k;
 
     let max_k = op_matmul_k;
-    //var max_k = op_matmul_k;
-    //if (op_matmul_k < TS1){
-    //    max_k = 0u;
-    // }
-    //else{
-    //    max_k -= TS1;
-    // }
 
     var acc = array<DTYPE, WPT1>();
     var t = 0u;
@@ -225,86 +188,6 @@ fn matmul5(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
         }
         workgroupBarrier();
     }
-
-    //last loop
-    // if(t < op_matmul_k){
-    //     let max_index = op_matmul_k - t;
-    //     let t_offset1 = m_input1_offset +  t * op_matmul_input1_stride_k;
-    //     let t_offset2 = m_input2_offset +  t * op_matmul_input2_stride_k;
-
-    //     if (lx < max_index){
-    //         let asub_count = min(max_index - lx, WPT1);
-    //         switch(asub_count){
-    //             case WPT1{
-    //                 for(var w = 0u; w < WPT1; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
-    //                 }
-    //             }
-    //             case 7u{
-    //                 for(var w = 0u; w < 7u; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
-    //                 }
-    //             }
-    //             case 6u{
-    //                 for(var w = 0u; w < 6u; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
-    //                 }
-    //             }
-    //             case 5u{
-    //                 for(var w = 0u; w < 5u; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
-    //                 }
-    //             }
-    //             case 4u{
-    //                 for(var w = 0u; w < 4u; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
-    //                 }
-    //             }
-    //             case 3u{
-    //                 for(var w = 0u; w < 3u; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
-    //                 }
-    //             }
-    //             case 2u{
-    //                 for(var w = 0u; w < 2u; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
-    //                 }
-    //             }
-    //             case 1u{
-    //                 for(var w = 0u; w < 1; w++){
-    //                     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
-    //                 }
-    //             }
-    //             default{
-    //             }
-    //         }
-    //     }
-
-    //     if (ly < max_index){
-    //         for(var w = 0u; w < WPT1; w++){ 
-    //             Bsub[ly][lx + w] = v_input2[t_offset2 + w * op_matmul_input2_stride_n];
-    //         }
-    //     }
-
-
-
-    //     // for(var w = 0u; w < WPT1; w++){
-    //     //     Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
-    //     //     Bsub[ly][lx + w] = v_input2[t_offset2 + w * op_matmul_input2_stride_n];
-    //     // }
-
-    //     workgroupBarrier();
-
-    //     let count = min(max_index, TS1);
-    //     for(var k = 0u; k < count; k++){
-    //         //let a =  v_input1[t_offset1 + k * op_matmul_input1_stride_k];
-    //         for(var w = 0u; w < WPT1; w++){
-    //             //acc[w] += a * v_input2[t_offset2  + k * op_matmul_input2_stride_k + w * op_matmul_input2_stride_n];  
-    //             acc[w] += Asub[k][ly]*Bsub[k][lx + w];
-            
-    //         }
-    //     }
-    // }
 
     let dest_index = batch * output_size_of_one_batch + gy * op_matmul_n + gx;
     for(var w = 0u; w < WPT1; w++){
@@ -344,8 +227,8 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
     let lx = local_id.x * WPT1;
     let ly = local_id.y;
 
-    let gx = TS1*group_id.x + lx;// + op_matmul_gx_offset;
-    let gy = TS1*group_id.y + ly;// + op_matmul_gy_offset;;
+    let gx = TS1*group_id.x + lx;
+    let gy = TS1*group_id.y + ly;
 
     let batch = group_id.z;
 
@@ -430,7 +313,6 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
         let count = min(op_matmul_k - t, TS1);
 
         if (is_in_gy && t + lx < op_matmul_k){
-        //if (t + lx < op_matmul_k){
             let asub_count = min(op_matmul_k - (t + lx), WPT1);
             switch(asub_count){
                 case 8u{

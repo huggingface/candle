@@ -457,10 +457,6 @@ pub fn queue_conv1d(
     ];
     let mut meta = get_meta(&dev);
 
-    meta.add(params.b_size);
-    meta.add(params.c_in);
-    meta.add(params.k_size);
-    meta.add(kernel_stride[2]); //kernel_x_stride
     meta.add(kernel_stride[1]); //kernel_c_stride
     meta.add(kernel_stride[0]); //kernel_b_stride
     meta.add(kernel_layout.start_offset());
@@ -471,11 +467,6 @@ pub fn queue_conv1d(
 
     meta.add(input_stride[0]); //stride_batch_input
     meta.add(input_stride[1]); //stride_c_in
-    meta.add(input_stride[2]); //stride_x_in
-    meta.add(params.padding);
-    meta.add(params.stride);
-    meta.add(params.dilation);
-    meta.add(input_layout.start_offset());
 
     let pipeline = meta.get_pipeline_const(
         Pipelines::Conv1d(get_dtype(dtype)?, Functions1d::Conv1d),
@@ -520,10 +511,6 @@ pub fn queue_conv1d_transpose(
         params.c_in,
     ];
     let mut meta = get_meta(&dev);
-    meta.add(params.b_size);
-    meta.add(params.c_in);
-    meta.add(params.k_size);
-    meta.add(kernel_stride[2]); //kernel_x_stride
     meta.add(kernel_stride[0]); //kernel_c_stride
     meta.add(kernel_stride[1]); //kernel_b_stride
     meta.add(kernel_layout.start_offset());
@@ -534,11 +521,6 @@ pub fn queue_conv1d_transpose(
 
     meta.add(input_stride[0]); //stride_batch_input
     meta.add(input_stride[1]); //stride_c_in
-    meta.add(input_stride[2]); //stride_x_in
-    meta.add(params.padding);
-    meta.add(params.stride);
-    meta.add(params.dilation);
-    meta.add(input_layout.start_offset());
 
     let pipeline = meta.get_pipeline_const(
         Pipelines::Conv1d(get_dtype(dtype)?, Functions1d::Conv1dTranspose),

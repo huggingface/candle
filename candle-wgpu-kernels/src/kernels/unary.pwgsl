@@ -93,12 +93,7 @@ switch operation {
             v_dest[id] = x * x;
         }
         case 6u{//Affine
-#ifdef u32
-                v_dest[id] = u32(f32(x) * scalar1 + scalar2);
-#endif
-#ifdef f32
-                v_dest[id] = x * scalar1 + scalar2;
-#endif
+            v_dest[id] = TODTYPE(f32(x) * scalar1 + scalar2);
         }
 
 #ifdef f32
@@ -234,46 +229,25 @@ switch operation {
              v_dest[id] = (erf(x / sqrt(2.0)) + 1.) * 0.5 * x;
         }
 #endif
-#ifdef u32
+
         case 101u{ //add
-            v_dest[id] = x + u32(scalar1);
+            v_dest[id] = x + TODTYPE(scalar1);
         }
         case 102u{ //mult
-            v_dest[id] = u32(f32(x) * scalar1);
+            v_dest[id] = TODTYPE(f32(x) * scalar1);
         }
         case 103u{ //minus
-            v_dest[id] = x - u32(scalar1);
+            v_dest[id] = x - TODTYPE(scalar1);
         }
         case 104u{ //div
-            v_dest[id] = u32(f32(x) / scalar1);
+            v_dest[id] = TODTYPE(f32(x) / scalar1);
         }
         case 105u{ //max
-            v_dest[id] = max(x, u32(scalar1));
+            v_dest[id] = max(x, TODTYPE(scalar1));
         }
         case 106u{ //min
-            v_dest[id] = min(x, u32(scalar1));
+            v_dest[id] = min(x, TODTYPE(scalar1));
         }
-#endif
-#ifdef f32
-        case 101u{ //add
-            v_dest[id] = x + scalar1;
-        }
-        case 102u{ //mult
-            v_dest[id] = x * scalar1;
-        }
-        case 103u{ //minus
-            v_dest[id] = x - scalar1;
-        }
-        case 104u{ //div
-            v_dest[id] = x / scalar1;
-        }
-        case 105u{ //max
-            v_dest[id] = max(x, scalar1);
-        }
-        case 106u{ //min
-            v_dest[id] = min(x,scalar1);
-        }
-#endif
 
 #ifdef f32
         case 107u{ //powf

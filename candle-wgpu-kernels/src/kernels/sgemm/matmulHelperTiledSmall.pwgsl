@@ -41,12 +41,7 @@ override CONSTV_5 : u32 = 0u;
 #definec RTSN TSN
 #endif
 
-#definec NEEDEDRTSM TSM/WPTM
-#definec NEEDEDRTSN TSN/WPTN
-
 #definec THREADS RTSM * RTSN
-
-override IsOutputPadded : bool = false;
 
 #assert (TSK*TSM)%(THREADS) == 0
 #assert ((TSK*TSN)%(THREADS)) == 0
@@ -54,7 +49,6 @@ override IsOutputPadded : bool = false;
 #assert RTSN > 0
 #assert TSM % WPTM == 0
 #assert TSN % WPTN == 0
-
 
 #ifndef WIDTHA
 #define WIDTHA 4
@@ -64,8 +58,6 @@ override IsOutputPadded : bool = false;
 #define WIDTHB 4
 #endif
 
-
-
 #if WIDTHA == 1
 #define ARRAY_TYPEA array<DTYPE, 1>
 #elif WIDTHA == 2
@@ -73,7 +65,6 @@ override IsOutputPadded : bool = false;
 #elif WIDTHA == 4
 #define ARRAY_TYPEA vec4<DTYPE>
 #endif
-
 
 #if WIDTHB == 1
 #define ARRAY_TYPEB array<DTYPE, 1>
@@ -92,6 +83,11 @@ var<storage> v_input_b: array<ARRAY_TYPEB>;
 
 var<workgroup> SharedResult: array<array<DTYPE, THREADS_PER_K>, TSN>;
 
+//This is an optimized shader for m = 1 and B k_stride = 1:
+//this shader will dispatch multiple threads (THREADS_PER_K) to a single matmul k sum (so that adjacent threads will load adjacent memory from A and B). 
+//Each thread will compute only a part of the total sum, but will compute many columns (wptn is higher (e.g. 32)).
+//all partial results are stored in sharedResults
+//At the end, each thread will sum one column of the partial results and write it to memory.
 fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
     let lk = local_id.x % THREADS_PER_K;
     let local_x = local_id.x / THREADS_PER_K;

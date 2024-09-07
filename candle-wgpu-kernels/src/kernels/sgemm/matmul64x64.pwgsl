@@ -1,10 +1,3 @@
-// const TSM : u32 = 64u;                // The tile-size in dimension M
-// const TSN : u32 = 64u;                // The tile-size in dimension N
-// const TSK : u32 = 16u;                 // The tile-size in dimension K
-// const WPTM : u32 = 4u;                 // The work-per-thread in dimension M
-// const WPTN : u32 = 4u;                 // The work-per-thread in dimension N
-// const PREFETCH : u32 = 1u; //no prefetch
-
 #define TSM 64u                     // The tile-size in dimension M
 #define TSN 64u                     // The tile-size in dimension N
 #define TSK 16u                     // The tile-size in dimension K

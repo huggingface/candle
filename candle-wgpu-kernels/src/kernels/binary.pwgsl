@@ -47,8 +47,8 @@ override CONSTV_2 : u32 = 1u;
 
 #define op_binary_contiguous_both_operation                 CONSTV_0
 #define op_binary_contiguous_both_input1_length             op_meta[0]
-#define op_binary_contiguous_both_input1_offset             CONSTV_1   // op_meta[1]
-#define op_binary_contiguous_both_input2_offset             CONSTV_2  // op_meta[3]
+#define op_binary_contiguous_both_input1_offset             CONSTV_1
+#define op_binary_contiguous_both_input2_offset             CONSTV_2
 
 @compute
 @workgroup_size(64,1,1)

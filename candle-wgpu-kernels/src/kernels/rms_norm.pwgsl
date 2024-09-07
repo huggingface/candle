@@ -1,16 +1,5 @@
 #include "util.pwgsl"
 
-// struct MetaInfoRmsNormContiguous{
-//     workgroup_count : u32,
-//     workgroup_size : u32,
-//     length : u32, //Length of Reduction(e.g count of elements to sum per output),
-
-//     input1_offset : u32,
-//     input2_offset : u32,
-
-//     eps : f32
-// }
-
 #define oop_rms_norm_contiguous_workgroup_count              op_meta[0]
 #define oop_rms_norm_contiguous_workgroup_size               op_meta[1]
 #define oop_rms_norm_contiguous_length                       op_meta[2]
@@ -18,11 +7,7 @@
 #define oop_rms_norm_contiguous_input2_offset                op_meta[4]
 #define oop_rms_norm_contiguous_eps                          bitcast<f32>(op_meta[5])
 
-// @group(0) @binding(1)
-// var<uniform> op_rms_norm_contiguous : MetaInfoRmsNormContiguous;
-
 var<workgroup> sharedSums: array<DTYPE, 64>; 
-
 var<workgroup> sharedM: f32; 
 
 @compute
@@ -51,6 +36,9 @@ fn rms_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgro
         
     workgroupBarrier();
 
+    //This is not optimal (only 1 of 64 threads sums the partial result of each thread)
+    //TODO: Either use multiple threads for the sum(e.g. first 32 threads, then 16, then 8, ...)
+    //      or let one thread calculate multiple outputs in sharedSums, and then let multiple threads sum the partial results of one output(like in matmul1x64b) 
     if (workgroup_id == 0){
         let cnt = oop_rms_norm_contiguous_workgroup_count;
         //Finnaly Sum of all worker threads:

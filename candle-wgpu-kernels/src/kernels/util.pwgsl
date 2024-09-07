@@ -79,33 +79,37 @@ const ONE : DTYPE = 1;
 
 const MINVALUE : f32 = -3.40282e+38;
 const MAXVALUE : f32 =  3.40282e+38;
+#define TODTYPE f32
 
 #elifdef u32
 
 const MINVALUE : u32 = 0;
 const MAXVALUE : u32 = 4294967295;
+#define TODTYPE u32
 
 #elifdef i32
 
 const MINVALUE : i32 = -2147483648;
 const MAXVALUE : i32 =  2147483647;
+#define TODTYPE i32
 
 #elifdef i64
 
 const MINVALUE : i64 = -9223372036854775807;
 const MAXVALUE : i64 =  9223372036854775807;
-
+#define TODTYPE i64
 
 #elifdef f64
 
 const MINVALUE : f64 = -1.7976931348623157E+308;
 const MAXVALUE : f64 = 1.7976931348623157E+308;
-
+#define TODTYPE f64
 
 #elifdef u8
 
 const MINVALUE : u32 = 0;
 const MAXVALUE : u32 = 255;
+#define TODTYPE u32
 
 #endif
 
