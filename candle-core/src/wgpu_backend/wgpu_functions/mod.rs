@@ -45,7 +45,7 @@ pub use binary::queue_binary_buffer_from_buffer;
 pub use cmp::queue_cmp_buffer_from_buffer;
 pub use conv2d::{queue_conv1d, queue_conv1d_transpose, queue_conv2d, queue_conv2d_transpose};
 pub use convert::{
-    queue_convert, queue_convert_f32_to_u32, queue_convert_f32_to_u8, queue_convert_u32_to_f32,
+    queue_convert, queue_convert_f32_to_u8,
     queue_convert_u32_to_u8, queue_convert_u8_to_f32,
 };
 pub use copy::{queue_copy, queue_copy2d, queue_copy3d, queue_copy3d_padded, queue_copy_strided};
@@ -978,7 +978,7 @@ pub(crate) async fn flush_gpu_command_async(
     queue_buffer: &mut QueueBuffer,
 ) -> crate::Result<()> {
     if queue_buffer.command_queue.len() > 0 {
-        log::info!("flush_gpu_command_async");
+        log::debug!("flush_gpu_command_async");
         let mut cache = dev
             .cache
             .lock()

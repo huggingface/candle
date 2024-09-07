@@ -14,3 +14,10 @@ macro_rules! wrongType {
         return Err(crate::Error::Wgpu(format!("Can not create wgpu Array of Type.{:?} (in {name})", ty).to_owned().into()));
     }};
 }
+
+#[macro_export]
+macro_rules! wgpuError {
+    ($x:expr) => {{
+        return Err(crate::Error::Wgpu($x.to_owned().into()));
+    }};
+}

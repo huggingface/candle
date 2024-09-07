@@ -937,7 +937,6 @@ impl crate::backend::BackendStorage for WgpuStorage {
             self.buffer.clone(),
             rhs.buffer.clone(),
             SGEMMParams::new(batching, m, k, n),
-            0,
             layout1,
             layout2,
             self.dtype,

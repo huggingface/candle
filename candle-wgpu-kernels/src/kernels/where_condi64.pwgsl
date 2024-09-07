@@ -1,8 +1,10 @@
 #include "util.pwgsl"
 
+//this shader should only be compiled if i64 is requested, therefor it is in its own file
+
 @compute
 @workgroup_size(64,1,1)
-fn where_cond_index_u32(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn where_cond_index_i64(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x;
 
     let input1_layout = 0u;
@@ -11,7 +13,7 @@ fn where_cond_index_u32(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let pos1 = get_index1(input1_layout, id);
     if(pos1.is_valid){
-        let x = v_input1_u32[pos1.id];
+        let x = v_input1_i64[pos1.id];
         if x == 0{
             let pos3 = get_index3(input3_layout, id);
             v_dest[id] = v_input3[pos3.id]; 

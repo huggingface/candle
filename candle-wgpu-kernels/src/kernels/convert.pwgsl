@@ -29,37 +29,6 @@ fn convert_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
 #endif
 
 
-#ifndef f64
-@compute
-@workgroup_size(64,1,1)
-fn convert_to_f64(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x;
-    let pos1 = get_index1(0u, id);
-    if(pos1.is_valid){
-        v_dest_f64[id] = f64(v_input1[pos1.id]);
-    }
-}
-#endif
-
-#ifndef i64
-@compute
-@workgroup_size(64,1,1)
-fn convert_to_i64(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x;
-    let pos1 = get_index1(0u, id);
-    if(pos1.is_valid){
-        v_dest_i64[id] = i64(v_input1[pos1.id]);
-    }
-}
-#endif
-
-
-
-
-
-
-
-
 
 
 

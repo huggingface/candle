@@ -1,7 +1,5 @@
-use candle_wgpu_kernels::index_select::Functions;
-
 use super::*;
-use crate::Shape;
+use crate::{wgpuError, Shape};
 
 pub fn queue_index_select(
     dev: &WgpuDevice,
@@ -38,14 +36,12 @@ pub fn queue_index_select(
     meta.add_layout1(&lay_input);
     meta.add_layout2(&lay_index);
 
-    let pipeline = meta.get_pipeline(Pipelines::IndexSelect(
-        get_dtype(dtype)?,
-        match index_dtype {
-            crate::DType::U32 => Functions::IndexSelectU32,
-            crate::DType::I64 => Functions::IndexSelectI64,
-            _ => todo!(),
-        },
-    ));
+    let pipeline = match index_dtype {
+        crate::DType::U32 => Pipelines::IndexSelect(get_dtype(dtype)?, candle_wgpu_kernels::index_select::Functions::IndexSelectU32),
+        crate::DType::I64 => Pipelines::IndexSelecti64(get_dtype(dtype)?, candle_wgpu_kernels::index_selecti64::Functions::IndexSelectI64),
+        _ => wgpuError!(format!("dtype: {:?} is not supported for indexing in index select", index_dtype)),
+    };
+    let pipeline = meta.get_pipeline(pipeline);
 
     let bind_group = create_bind_group_input2_with_alignment(
         buffer_dest,

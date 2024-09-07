@@ -50,18 +50,10 @@ pub fn queue_conv2d(
             buffer_input2,
             buffer_input1,
             SGEMMParams::new(params.b_size, m, k, n),
-            0 as u32,
             &new_kernel_layout,
             &new_input_layout,
             dtype,
         )?;
-
-        // for b_val in 0..params.b_size{
-        //     let new_kernel_layout: Layout = Layout::new(Shape::from_dims(&[1, m, k]), vec![kernel_stride[0], kernel_stride[0], kernel_stride[1]] , kernel_layout.start_offset());
-        //     let new_input_layout: Layout = Layout::new(Shape::from_dims(&[1, k, n]), vec![input_stride[1],input_stride[1], input_stride[3]] , input_layout.start_offset() + b_val * input_stride[0]);
-
-        //     queue_matmul_buffer(dev, buffer_dest, buffer_input2, buffer_input1, SGEMMParams::new(1, m, k, n), (b_val * params.i_h * params.i_w * params.c_out) as u32, &new_kernel_layout, &new_input_layout, dtype)?;
-        // }
 
         return Ok(());
     }
@@ -355,7 +347,6 @@ pub fn queue_conv2d_matmul(
         buffer_input2, // The kernel as input2
         im2col_buffer, // Result from im2col as input1
         SGEMMParams::new(params.b_size, m, k, n),
-        0,
         &flattened_kernel_layout, // Layout for kernel buffer
         &im2col_layout,           // Layout for im2col buffer
         dtype,

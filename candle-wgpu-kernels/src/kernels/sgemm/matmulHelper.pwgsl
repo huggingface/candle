@@ -10,7 +10,6 @@ override CONSTV_5 : u32 = 0u;
 
 
 #define op_matmul_use_batch   CONSTV_4
-#define op_matmul_dest_offset CONSTV_5
 
 #define op_matmul_b                 op_meta[0]
 #define op_matmul_m                 op_meta[1]
@@ -119,18 +118,6 @@ fn loadA(tile : u32, tid : u32, t_offset1 : u32){
             for(var j = 0u; j < WIDTHA; j++){
                 Asub[tile][WIDTHA * id_k + j][id_m] = vecA[j];
             }
-            // #if WIDTHA == 1
-            //     Asub[tile][WIDTHA * id_k][id_m] = vecA;
-            // #elif WIDTHA == 2
-            //     Asub[tile][WIDTHA * id_k][id_m] = vecA.x;
-            //     Asub[tile][WIDTHA * id_k + 1][id_m] = vecA.y;
-            // #elif WIDTHA == 4
-            //     Asub[tile][WIDTHA * id_k][id_m] = vecA.x;
-            //     Asub[tile][WIDTHA * id_k + 1][id_m] = vecA.y;
-            //     Asub[tile][WIDTHA * id_k + 2][id_m] = vecA.z;
-            //     Asub[tile][WIDTHA * id_k + 3][id_m] = vecA.w;
-            // #endif
-
         }
         else{
             let id_k = id / TSMAWIDTH;
@@ -175,18 +162,6 @@ fn loadB(tile : u32, tid : u32, t_offset2 : u32){
             for(var j = 0u; j < WIDTHB; j++){
                 Bsub[tile][WIDTHB * id_k + j][id_n] = vecB[j];
             }
-
-            // #if WIDTHB == 1
-            //     Bsub[tile][WIDTHB * id_k][id_n] = vecB;
-            // #elif WIDTHB == 2
-            //     Bsub[tile][WIDTHB * id_k][id_n] = vecB.x;
-            //     Bsub[tile][WIDTHB * id_k + 1][id_n] = vecB.y;
-            // #elif WIDTHB == 4
-            //     Bsub[tile][WIDTHB * id_k][id_n] = vecB.x;
-            //     Bsub[tile][WIDTHB * id_k + 1][id_n] = vecB.y;
-            //     Bsub[tile][WIDTHB * id_k + 2][id_n] = vecB.z;
-            //     Bsub[tile][WIDTHB * id_k + 3][id_n] = vecB.w;
-            // #endif
         }
     }
 }
@@ -411,7 +386,7 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
         workgroupBarrier();
     }
    
-    let dest_index = group_id.z * select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u) + gy * op_matmul_n + gx + op_matmul_dest_offset;
+    let dest_index = group_id.z * select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u) + gy * op_matmul_n + gx;
     if IsOutputPadded{
         let is_in_gy = gy < op_matmul_m;
         let is_in_gx = gx < op_matmul_n;
