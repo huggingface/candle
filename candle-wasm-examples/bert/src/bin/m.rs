@@ -19,7 +19,7 @@ impl Model {
         console_error_panic_hook::set_once();
         console_log!("loading model, gpu:{use_wgpu}");
         let device = match use_wgpu{
-            true => Device::new_webgpu(0).await?,
+            true => Device::new_wgpu(0).await?,
             false => Device::Cpu,
         };
 

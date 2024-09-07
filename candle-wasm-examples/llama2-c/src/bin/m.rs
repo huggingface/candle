@@ -51,11 +51,11 @@ impl Model {
     pub async fn new(weights: Vec<u8>, tokenizer: Vec<u8>, use_wgpu : bool) -> Result<Model, JsError> {
         log::info!("create Model, wgpu: {use_wgpu}");
         let device = match use_wgpu{
-            true => Device::new_webgpu(0).await?,
+            true => Device::new_wgpu(0).await?,
             false => Device::Cpu,
         };
 
-        log::info!("created webgpu device");
+        log::info!("created wgpu device");
 
         let model = M::load(ModelData {
             tokenizer,
@@ -137,10 +137,6 @@ impl Model {
         let text = self
             .process(&[last_token]).await
             .map_err(|m| JsError::new(&m.to_string()))?;
-        // match  &self.device{
-        //     Device::WebGpu(gpu) => gpu.print_bindgroup_reuseinfo(),
-        //     _ => {},
-        // }
         Ok(text)
     }
 }

@@ -280,7 +280,7 @@ impl Model {
                     buffer_mapping_size,
                     ..Default::default()
                 };
-                Device::new_webgpu_config(0, config).await?
+                Device::new_wgpu_config(0, config).await?
             }
         };
 

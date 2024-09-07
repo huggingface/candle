@@ -378,7 +378,7 @@ fn run(args: Args) -> Result<()> {
        
 
         match &device {
-            candle::Device::WebGpu(gpu) => {
+            candle::Device::Wgpu(gpu) => {
                 gpu.print_bindgroup_reuseinfo2();
                 #[cfg(feature = "wgpu_debug")]{
                     let info = pollster::block_on(gpu.get_debug_info()).unwrap();
@@ -397,7 +397,7 @@ fn run(args: Args) -> Result<()> {
         candle_examples::save_image(&image, image_filename)?;
 
         match &device {
-            candle::Device::WebGpu(gpu) => {
+            candle::Device::Wgpu(gpu) => {
                 gpu.print_bindgroup_reuseinfo2();
                 #[cfg(feature = "wgpu_debug")]{
                     let info = pollster::block_on(gpu.get_debug_info()).unwrap();

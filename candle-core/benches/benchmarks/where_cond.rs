@@ -38,7 +38,7 @@ const DATA_U32: [u32; SIZE] = create_cond_arr_u32::<SIZE>();
 fn run_where_cond_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
     let tensor : Tensor;
 
-    if device.is_webgpu(){
+    if device.is_wgpu(){
         tensor = Tensor::from_slice(DATA_U32.as_slice(), (B, M, K), &device).unwrap();
     }
     else{

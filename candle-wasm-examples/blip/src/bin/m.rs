@@ -60,7 +60,7 @@ impl Model {
 
         let config: blip::Config = serde_json::from_slice(&config)?;
         let device = match use_wgpu{
-            true => Device::new_webgpu(0).await?,
+            true => Device::new_wgpu(0).await?,
             false => Device::Cpu,
         };
 

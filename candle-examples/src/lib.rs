@@ -17,7 +17,7 @@ pub fn device(cpu: bool) -> Result<Device> {
         Ok(Device::new_metal(0)?)
     } else if wgpu_is_available(){
         let config = candle::WgpuDeviceConfig::default();
-        Ok(Device::new_webgpu_sync_config(0, config)?)
+        Ok(Device::new_wgpu_sync_config(0, config)?)
     } else {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         {

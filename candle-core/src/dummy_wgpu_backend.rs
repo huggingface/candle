@@ -111,14 +111,14 @@ impl Default for WgpuDeviceConfig {
 
 
 #[derive(thiserror::Error, Debug)]
-pub enum WebGpuError {
+pub enum WgpuError {
     #[error("{0}")]
     Message(String),
 }
 
-impl From<String> for WebGpuError {
+impl From<String> for WgpuError {
     fn from(e: String) -> Self {
-        WebGpuError::Message(e)
+        WgpuError::Message(e)
     }
 }
 

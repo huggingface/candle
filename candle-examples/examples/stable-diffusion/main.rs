@@ -606,7 +606,7 @@ fn run(args: Args) -> Result<()> {
                     Some(timestep_index + 1),
                 )?;
                 match &device {
-                    candle::Device::WebGpu(gpu) => {
+                    candle::Device::Wgpu(gpu) => {
                         #[cfg(feature="wgpu")]
                         gpu.print_bindgroup_reuseinfo2();
                         #[cfg(feature = "wgpu_debug")]{
@@ -645,7 +645,7 @@ fn run(args: Args) -> Result<()> {
             None,
         )?;
         match &device {
-            candle::Device::WebGpu(gpu) => {
+            candle::Device::Wgpu(gpu) => {
                 #[cfg(feature="wgpu")]
                 gpu.print_bindgroup_reuseinfo2();
                 #[cfg(feature = "wgpu_debug")]{

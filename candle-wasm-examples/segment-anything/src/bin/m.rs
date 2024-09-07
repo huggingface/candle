@@ -24,7 +24,7 @@ impl Model {
     pub async fn new(weights: Vec<u8>, use_tiny: bool, use_wgpu : bool) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         let device = match use_wgpu{
-            true => Device::new_webgpu(0).await?,
+            true => Device::new_wgpu(0).await?,
             false => Device::Cpu,
         };
         let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, &device)?;

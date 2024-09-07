@@ -16,7 +16,7 @@ async function fetchArrayBuffer(url) {
 class Encoder {
   static instance = {};
 
-  static async getInstance(weightsURL, tokenizerURL, configURL, modelID, webGpu) {
+  static async getInstance(weightsURL, tokenizerURL, configURL, modelID, wgpu) {
     if (modelID.includes("quantized")) {
       ({ default: init, ModelEncoder } = await import(
         "./build/m-quantized.js"
@@ -39,7 +39,7 @@ class Encoder {
         weightsArrayU8,
         tokenizerArrayU8,
         configArrayU8,
-        webGpu
+        wgpu
       );
     } else {
       self.postMessage({ status: "ready", message: "Model Already Loaded" });
@@ -56,7 +56,7 @@ self.addEventListener("message", async (event) => {
     modelID,
     sentences,
     normalize_embeddings,
-    webGpu
+    wgpu
   } = event.data;
   try {
     self.postMessage({ status: "ready", message: "Starting T5 Encoder" });
@@ -65,7 +65,7 @@ self.addEventListener("message", async (event) => {
       tokenizerURL,
       configURL,
       modelID,
-      webGpu
+      wgpu
     );
     self.postMessage({
       status: "encoding",

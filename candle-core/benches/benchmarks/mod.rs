@@ -33,7 +33,7 @@ impl BenchDevice for Device {
                 #[cfg(not(feature = "metal"))]
                 panic!("Metal device without metal feature enabled: {:?}", device)
             }
-            Device::WebGpu(device) => return Ok(device.synchronize()?)
+            Device::Wgpu(device) => return Ok(device.synchronize()?)
         }
     }
 
@@ -51,7 +51,7 @@ impl BenchDevice for Device {
             }
             Device::Cuda(_) => format!("cuda_{}", name.into()),
             Device::Metal(_) => format!("metal_{}", name.into()),
-            Device::WebGpu(_) => format!("wgpu_{}", name.into())
+            Device::Wgpu(_) => format!("wgpu_{}", name.into())
         }
     }
 }
@@ -68,7 +68,7 @@ impl BenchDeviceHandler {
         } else if cfg!(feature = "cuda") {
             devices.push(Device::new_cuda(0)?);
         }else if cfg!(feature = "wgpu") {
-            devices.push(Device::new_webgpu_sync(0)?);
+            devices.push(Device::new_wgpu_sync(0)?);
         }
         devices.push(Device::Cpu);
         Ok(Self { devices })

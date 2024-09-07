@@ -36,7 +36,7 @@ pub use crate::wgpu::WgpuDevice;
 pub use candle_wgpu_kernels::DType;
 pub use candle_wgpu_kernels::Pipelines;
 
-use crate::{wgpu_backend::cache::BindgroupReferenceInput, Layout, WebGpuError};
+use crate::{wgpu_backend::cache::BindgroupReferenceInput, Layout, WgpuError};
 use std::borrow::Cow;
 
 use wgpu::ShaderModule;
@@ -117,7 +117,7 @@ pub fn get_dtype(dtype: crate::DType) -> crate::Result<DType> {
         crate::DType::F32 => Ok(DType::F32),
         crate::DType::I64 => Ok(DType::I64),
         crate::DType::F64 => Ok(DType::F64),
-        _ => Err(crate::Error::WebGpu(WebGpuError::from(format!(
+        _ => Err(crate::Error::Wgpu(WgpuError::from(format!(
             "Dtype {:?} not supported on wgpu",
             dtype
         )))),

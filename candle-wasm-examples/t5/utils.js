@@ -7,7 +7,7 @@ export async function extractEmbeddings(
   sentences,
   updateStatus,
   normalize_embeddings = true,
-  webGpu
+  wgpu
 ) {
   return new Promise((resolve, reject) => {
     worker.postMessage({
@@ -17,7 +17,7 @@ export async function extractEmbeddings(
       modelID,
       sentences,
       normalize_embeddings,
-      webGpu
+      wgpu
     });
     function messageHandler(event) {
       if ("error" in event.data) {
@@ -43,7 +43,7 @@ export async function generateText(
   prompt,
   params,
   updateStatus,
-  webGpu
+  wgpu
 ) {
   return new Promise((resolve, reject) => {
     worker.postMessage({
@@ -53,7 +53,7 @@ export async function generateText(
       modelID,
       prompt,
       params,
-      webGpu
+      wgpu
     });
     function messageHandler(event) {
       if ("error" in event.data) {

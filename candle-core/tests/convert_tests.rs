@@ -186,9 +186,9 @@ fn layout(device: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(convert, convert_cpu, convert_gpu, convert_metal, convert_webgpu);
-test_device!(alloc, alloc_cpu, alloc_gpu, alloc_metal, alloc_webgpu);
-test_device!(sum2, sum2_cpu, sum2_gpu, sum2_metal, sum2_webgpu);
-test_device!(sum3, sum3_cpu, sum3_gpu, sum3_metal, sum3_webgpu);
+test_device!(convert, convert_cpu, convert_gpu, convert_metal, convert_wgpu);
+test_device!(alloc, alloc_cpu, alloc_gpu, alloc_metal, alloc_wgpu);
+test_device!(sum2, sum2_cpu, sum2_gpu, sum2_metal, sum2_wgpu);
+test_device!(sum3, sum3_cpu, sum3_gpu, sum3_metal, sum3_wgpu);
 
-test_device!(layout, layout_cpu, layout_gpu, layout_metal, layout_webgpu);
+test_device!(layout, layout_cpu, layout_gpu, layout_metal, layout_wgpu);

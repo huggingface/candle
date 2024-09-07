@@ -174,9 +174,9 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
     #[cfg(target_arch = "wasm32")]
     fn to_cpu_storage(&self) -> crate::Result<crate::CpuStorage> {
-        panic!("Sync copy to CpuStorage is not allowed for WebGpu device in WebAssembly. First copy the date asynchronously to a CpuStorage");
+        panic!("Sync copy to CpuStorage is not allowed for wgpu device in WebAssembly. First copy the date asynchronously to a CpuStorage");
         //panic, so we get a stacktrace and see where we wanted to copy
-        //return Err(crate::Error::WebGpu("Sync copy to CpuStorage is not allowed for WebGpu device in WebAssembly. First copy the date asynchronously to a CpuStorage".to_owned().into()));
+        //return Err(crate::Error::Wgpu("Sync copy to CpuStorage is not allowed for wgpu device in WebAssembly. First copy the date asynchronously to a CpuStorage".to_owned().into()));
     }
 
     #[cfg(not(target_arch = "wasm32"))]

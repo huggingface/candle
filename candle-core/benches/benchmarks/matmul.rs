@@ -40,8 +40,8 @@ fn test_matmul(device: &Device, group : &mut criterion::BenchmarkGroup<criterion
     group.measurement_time(Duration::from_secs(1));
     group.sample_size(32);
     group.warm_up_time(Duration::from_secs_f32(0.25));
-    if device.is_webgpu(){
-        if let Device::WebGpu(wgpu) = device{
+    if device.is_wgpu(){
+        if let Device::Wgpu(wgpu) = device{
 
             let algs;
 
@@ -143,7 +143,7 @@ fn test_functions(device: &Device, group : &mut criterion::BenchmarkGroup<criter
     }
     // #[cfg(feature = "wgpu_debug")]
     // match device {
-    //     candle_core::Device::WebGpu(gpu) => {
+    //     candle_core::Device::Wgpu(gpu) => {
     //         let info = pollster::block_on(gpu.get_debug_info()).unwrap();
     //         let map2 = candle_core::wgpu::debug_info::calulate_measurment(&info);
     //         candle_core::wgpu::debug_info::save_list(&map2, "wgpu_bench.json").unwrap();

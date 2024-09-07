@@ -102,7 +102,7 @@ fn conv1d_small(dev: &Device) -> Result<()> {
 #[cfg(feature = "wgpu")]
 #[test]
 fn conv2d_transpose() -> Result<()> {
-    let dev = &pollster::block_on(Device::new_webgpu(0))?; 
+    let dev = &pollster::block_on(Device::new_wgpu(0))?; 
     //let dev = &Device::Cpu;
     let t = Tensor::new(&[2.0f32,4.0,0.0,1.0], dev)?.reshape((1, 1, 2,2))?;
     let w = Tensor::new(&[3f32, 1.0, 1.0,5.0], dev)?.reshape((1, 1, 2,2))?;
@@ -851,40 +851,40 @@ fn conv2d_grad(dev: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal, conv1d_webgpu);
+test_device!(conv1d, conv1d_cpu, conv1d_gpu, conv1d_metal, conv1d_wgpu);
 test_device!(
     conv1d_small,
     conv1d_small_cpu,
     conv1d_small_gpu,
     conv1d_small_metal,
-    conv1d_small_webgpu
+    conv1d_small_wgpu
 );
-test_device!(conv2d, conv2d_cpu, conv2d_gpu, conv2d_metal,conv2d_webgpu);
+test_device!(conv2d, conv2d_cpu, conv2d_gpu, conv2d_metal,conv2d_wgpu);
 test_device!(
     conv2d_non_square,
     conv2d_non_square_cpu,
     conv2d_non_square_gpu,
     conv2d_non_square_metal,
-    conv2d_non_square_webgpu
+    conv2d_non_square_wgpu
 );
 test_device!(
     conv2d_small,
     conv2d_small_cpu,
     conv2d_small_gpu,
     conv2d_small_metal,
-    conv2d_small_webgpu
+    conv2d_small_wgpu
 );
 test_device!(
     conv2d_smaller,
     conv2d_smaller_cpu,
     conv2d_smaller_gpu,
     conv2d_smaller_metal,
-    conv2d_smaller_webgpu
+    conv2d_smaller_wgpu
 );
 test_device!(
     conv2d_grad,
     conv2d_grad_cpu,
     conv2d_grad_gpu,
     conv2_grad_metal,
-    conv2_grad_webgpu
+    conv2_grad_wgpu
 );

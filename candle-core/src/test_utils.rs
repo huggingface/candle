@@ -24,8 +24,8 @@ macro_rules! test_device {
 
         #[cfg(feature = "wgpu")]
         #[test]
-        fn $test_webgpu() -> Result<()> {
-            let device = pollster::block_on(Device::new_webgpu(0))?;
+        fn $test_wgpu() -> Result<()> {
+            let device = pollster::block_on(Device::new_wgpu(0))?;
             $fn_name(&device)
         }
     };

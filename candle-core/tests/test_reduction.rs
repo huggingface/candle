@@ -4,7 +4,7 @@ use candle_core::{Device, Tensor,Result};
 #[cfg(feature = "wgpu")]
 #[test]
 fn test_reduction() -> Result<()> {
-    let dev = &pollster::block_on(Device::new_webgpu(0))?; 
+    let dev = &pollster::block_on(Device::new_wgpu(0))?; 
 
     let inputa = Tensor::arange(0.0f32, 24.0, dev)?.reshape((2,3,4))?;
     let inputb = Tensor::arange(0.0f32, 24.0, &Device::Cpu)?.reshape((2,3,4))?;
@@ -52,7 +52,7 @@ fn test_reduction() -> Result<()> {
 #[cfg(feature = "wgpu")]
 #[test]
 fn test_conv() -> Result<()> {
-    let dev = &pollster::block_on(Device::new_webgpu(0))?; 
+    let dev = &pollster::block_on(Device::new_wgpu(0))?; 
     let t = Tensor::new(
         &[
             0.4056f32, -0.8689, -0.0773, -1.5630, -2.8012, -1.5059, 0.3972, 1.0852, 0.4997, 3.0616,

@@ -374,7 +374,7 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
             std::io::stdout().flush()?;
         }
         // match &device {
-        //     candle::Device::WebGpu(gpu) => {
+        //     candle::Device::Wgpu(gpu) => {
         //         gpu.print_bindgroup_reuseinfo2();
         //     },
         //     _ => {},
@@ -391,7 +391,7 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
     );   
 
     match &device {
-        candle::Device::WebGpu(gpu) => {
+        candle::Device::Wgpu(gpu) => {
             const TEST_NAME: &str = "1";
             gpu.print_bindgroup_reuseinfo2();
             #[cfg(feature = "wgpu_debug")]{

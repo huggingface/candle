@@ -121,7 +121,7 @@ pub use wgpu_backend as wgpu;
 pub use dummy_wgpu_backend as wgpu;
 
 pub use wgpu::{WgpuDevice, WgpuStorage};
-pub use crate::dummy_wgpu_backend::{WebGpuError, WgpuBackends, WgpuDeviceConfig};
+pub use crate::dummy_wgpu_backend::{WgpuError, WgpuBackends, WgpuDeviceConfig};
 
 pub trait ToUsize2 {
     fn to_usize2(self) -> (usize, usize);

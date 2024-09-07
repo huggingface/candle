@@ -38,7 +38,7 @@ fn load_recording_consts(device : &Device) -> Result<(), Box<dyn std::error::Err
     let debug_recordings_consts = include_str!("wgpu_stable_diffusion_test_1_e.json");
     let debug_recordings_consts :  Vec<std::collections::HashMap<String, f64>> = serde_json::from_str(debug_recordings_consts)?;
     match &device{
-        Device::WebGpu(wgpu) => {
+        Device::Wgpu(wgpu) => {
             wgpu.load_debug_info(debug_recordings_consts);
            
         },
@@ -48,7 +48,7 @@ fn load_recording_consts(device : &Device) -> Result<(), Box<dyn std::error::Err
 }
 
 async fn test_matmul() -> Result<(), Box<dyn std::error::Error>>{
-    let device = candle::Device::new_webgpu(0).await?;
+    let device = candle::Device::new_wgpu(0).await?;
 
     let b = 16;
     let m = 4096;
@@ -80,7 +80,7 @@ async fn test_matmul() -> Result<(), Box<dyn std::error::Error>>{
 
     let mut measurements : Vec<MeasurementInfo> = vec![];
     match &device{
-        Device::WebGpu(wgpu) => {
+        Device::Wgpu(wgpu) => {
             for alg in algs{
                 *wgpu.matmul_alg.lock().unwrap() = alg.clone();
 
@@ -99,7 +99,7 @@ fn create_buffers(device : &Device) -> Result<[WgpuStorage;4], Box<dyn std::erro
     let shape = Shape::from_dims(&[1000, 1000, 250]);
     let dtype = candle::DType::F32;
     match &device{
-        Device::WebGpu(wgpu) => {
+        Device::Wgpu(wgpu) => {
             let buf1 = wgpu.ones_impl(&shape, dtype)?;
             let buf2 = wgpu.ones_impl(&shape, dtype)?;
             let buf3 = wgpu.ones_impl(&shape, dtype)?;
@@ -111,7 +111,7 @@ fn create_buffers(device : &Device) -> Result<[WgpuStorage;4], Box<dyn std::erro
 }
 
 pub async fn performance_test() -> Result<(), Box<dyn std::error::Error>>{
-    let device = candle::Device::new_webgpu(0).await?;
+    let device = candle::Device::new_wgpu(0).await?;
 
     load_recording_consts(&device)?;
     let buffers = create_buffers(&device)?;
@@ -124,7 +124,7 @@ pub async fn performance_test() -> Result<(), Box<dyn std::error::Error>>{
     let mut measurements : Vec<MeasurementInfo> = vec![];
 
     match &device{
-        Device::WebGpu(wgpu) => {
+        Device::Wgpu(wgpu) => {
             let total = debug_recordings.len();
             for (index, command) in debug_recordings.iter().enumerate(){
                 
@@ -162,7 +162,7 @@ where   F: Fn() -> Result<(), candle::Error>,
 {
         let device_name = match device{
             Device::Cpu => "CPU:",
-            Device::WebGpu(_) => "GPU:",
+            Device::Wgpu(_) => "GPU:",
             _ => todo!(),
         };
 

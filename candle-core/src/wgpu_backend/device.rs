@@ -594,7 +594,7 @@ impl WgpuDevice {
                 None,
             )
             .await
-            .map_err(|err| crate::Error::WebGpu(err.to_string().into()))?;
+            .map_err(|err| crate::Error::Wgpu(err.to_string().into()))?;
         log::info!("Device Requested");
 
         #[cfg(feature = "wgpu_debug")]
@@ -894,7 +894,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
     type Storage = WgpuStorage;
 
     fn new(_: usize) -> crate::Result<Self> {
-        return Err(crate::Error::WebGpu(
+        return Err(crate::Error::Wgpu(
             "A WgpuDevice must be created using the asynchronous create method"
                 .to_owned()
                 .into(),

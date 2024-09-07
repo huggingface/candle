@@ -101,7 +101,7 @@ fn quantized_matmul(device: &Device) -> Result<()> {
                 [341876.0, 994283.0, 1655709.0, 2301518.0]
             ]
         ),
-        Device::WebGpu(_) => panic!("not supported for WebGpu")
+        Device::Wgpu(_) => panic!("not supported for wgpu")
     }
     test_matmul(device, (1, 3, 4, 256), GgmlDType::Q4_0)?;
     Ok(())
@@ -166,7 +166,7 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
                 [-196472.0, 63012.0, 324585.0, 587902.0]
             ]
         ),
-        Device::WebGpu(_) => panic!("not supported for WebGpu")
+        Device::Wgpu(_) => panic!("not supported for wgpu")
     }
     let lhs2 = Tensor::stack(&[&lhs, &lhs], 0)?;
     let res2 = matmul.forward(&lhs2)?;
@@ -217,9 +217,9 @@ fn qmm_batch(dev: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal, qmm_webgpu);
-test_device!(quantized_matmul_neg, qmm_n_cpu, qmm_n_cuda, qmm_n_metal,qmm_n_webgpu);
-test_device!(qmm_batch, qmm_b_cpu, qmm_b_cuda, qmm_b_metal, qmm_b_webgpu);
+test_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal, qmm_wgpu);
+test_device!(quantized_matmul_neg, qmm_n_cpu, qmm_n_cuda, qmm_n_metal,qmm_n_wgpu);
+test_device!(qmm_batch, qmm_b_cpu, qmm_b_cuda, qmm_b_metal, qmm_b_wgpu);
 
 fn quantize_q4_0(device: &Device) -> Result<()> {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
@@ -723,70 +723,70 @@ test_device!(
     quantize_q4_0_cpu,
     quantize_q4_0_cuda,
     quantize_q4_0_metal,
-    quantize_q4_0_webgpu
+    quantize_q4_0_wgpu
 );
 test_device!(
     quantize_q4_1,
     quantize_q4_1_cpu,
     quantize_q4_1_cuda,
     quantize_q4_1_metal,
-    quantize_q4_1_webgpu
+    quantize_q4_1_wgpu
 );
 test_device!(
     quantize_q5_0,
     quantize_q5_0_cpu,
     quantize_q5_0_cuda,
     quantize_q5_0_metal,
-    quantize_q5_0_webgpu
+    quantize_q5_0_wgpu
 );
 test_device!(
     quantize_q5_1,
     quantize_q5_1_cpu,
     quantize_q5_1_cuda,
     quantize_q5_1_metal,
-    quantize_q5_1_webgpu
+    quantize_q5_1_wgpu
 );
 test_device!(
     quantize_q2k,
     quantize_q2k_cpu,
     quantize_q2k_cuda,
     quantize_q2k_metal,
-    quantize_q2k_webgpu
+    quantize_q2k_wgpu
 );
 test_device!(
     quantize_q3k,
     quantize_q3k_cpu,
     quantize_q3k_cuda,
     quantize_q3k_metal,
-    quantize_q3k_webgpu
+    quantize_q3k_wgpu
 );
 test_device!(
     quantize_q4k,
     quantize_q4k_cpu,
     quantize_q4k_cuda,
     quantize_q4k_metal,
-    quantize_q4k_webgpu
+    quantize_q4k_wgpu
 );
 test_device!(
     quantize_q5k,
     quantize_q5k_cpu,
     quantize_q5k_cuda,
     quantize_q5k_metal,
-    quantize_q5k_webgpu
+    quantize_q5k_wgpu
 );
 test_device!(
     quantize_q6k,
     quantize_q6k_cpu,
     quantize_q6k_cuda,
     quantize_q6k_metal,
-    quantize_q6k_webgpu
+    quantize_q6k_wgpu
 );
 test_device!(
     quantize_q8k,
     quantize_q8k_cpu,
     quantize_q8k_cuda,
     quantize_q8k_metal,
-    quantize_q8k_webgpu
+    quantize_q8k_wgpu
 );
 
 /// Very simple dot product implementation
@@ -909,13 +909,13 @@ fn get_random_tensors(
 macro_rules! quantized_matmul {
     // TODO: Switch to generating the two last arguments automatically once concat_idents is
     // stable. https://github.com/rust-lang/rust/issues/29599
-    ($fn_name: ident, $fn_name_cpu: ident, $fn_name_cuda: ident, $fn_name_metal: ident,$fn_name_webgpu: ident, $dtype: expr) => {
+    ($fn_name: ident, $fn_name_cpu: ident, $fn_name_cuda: ident, $fn_name_metal: ident,$fn_name_wgpu: ident, $dtype: expr) => {
         fn $fn_name(device: &Device) -> Result<()> {
             test_matmul(device, (1, 3, 4, 256), $dtype)?;
             Ok(())
         }
 
-        test_device!($fn_name, $fn_name_cpu, $fn_name_cuda, $fn_name_metal, $fn_name_webgpu);
+        test_device!($fn_name, $fn_name_cpu, $fn_name_cuda, $fn_name_metal, $fn_name_wgpu);
     };
 }
 
@@ -924,7 +924,7 @@ quantized_matmul!(
     quantized_matmul_q4_0_cpu,
     quantized_matmul_q4_0_cuda,
     quantized_matmul_q4_0_metal,
-    quantized_matmul_q4_0_webgpu,
+    quantized_matmul_q4_0_wgpu,
     GgmlDType::Q4_0
 );
 quantized_matmul!(
@@ -932,7 +932,7 @@ quantized_matmul!(
     quantized_matmul_q4_1_cpu,
     quantized_matmul_q4_1_cuda,
     quantized_matmul_q4_1_metal,
-    quantized_matmul_q4_1_webgpu,
+    quantized_matmul_q4_1_wgpu,
     GgmlDType::Q4_1
 );
 quantized_matmul!(
@@ -940,7 +940,7 @@ quantized_matmul!(
     quantized_matmul_q5_0_cpu,
     quantized_matmul_q5_0_cuda,
     quantized_matmul_q5_0_metal,
-    quantized_matmul_q5_0_webgpu,
+    quantized_matmul_q5_0_wgpu,
     GgmlDType::Q5_0
 );
 quantized_matmul!(
@@ -948,7 +948,7 @@ quantized_matmul!(
     quantized_matmul_q5_1_cpu,
     quantized_matmul_q5_1_cuda,
     quantized_matmul_q5_1_metal,
-    quantized_matmul_q5_1_webgpu,
+    quantized_matmul_q5_1_wgpu,
     GgmlDType::Q5_1
 );
 quantized_matmul!(
@@ -956,7 +956,7 @@ quantized_matmul!(
     quantized_matmul_q8_0_cpu,
     quantized_matmul_q8_0_cuda,
     quantized_matmul_q8_0_metal,
-    quantized_matmul_q8_0_webgpu,
+    quantized_matmul_q8_0_wgpu,
     GgmlDType::Q8_0
 );
 // Not implemented in Ggml
@@ -973,7 +973,7 @@ quantized_matmul!(
     quantized_matmul_q2k_cpu,
     quantized_matmul_q2k_cuda,
     quantized_matmul_q2k_metal,
-    quantized_matmul_q2k_webgpu,
+    quantized_matmul_q2k_wgpu,
     GgmlDType::Q2K
 );
 quantized_matmul!(
@@ -981,7 +981,7 @@ quantized_matmul!(
     quantized_matmul_q3k_cpu,
     quantized_matmul_q3k_cuda,
     quantized_matmul_q3k_metal,
-    quantized_matmul_q3k_webgpu,
+    quantized_matmul_q3k_wgpu,
     GgmlDType::Q3K
 );
 quantized_matmul!(
@@ -989,7 +989,7 @@ quantized_matmul!(
     quantized_matmul_q4k_cpu,
     quantized_matmul_q4k_cuda,
     quantized_matmul_q4k_metal,
-    quantized_matmul_q4k_webgpu,
+    quantized_matmul_q4k_wgpu,
     GgmlDType::Q4K
 );
 quantized_matmul!(
@@ -997,7 +997,7 @@ quantized_matmul!(
     quantized_matmul_q5k_cpu,
     quantized_matmul_q5k_cuda,
     quantized_matmul_q5k_metal,
-    quantized_matmul_q5k_webgpu,
+    quantized_matmul_q5k_wgpu,
     GgmlDType::Q5K
 );
 quantized_matmul!(
@@ -1005,7 +1005,7 @@ quantized_matmul!(
     quantized_matmul_q6k_cpu,
     quantized_matmul_q6k_cuda,
     quantized_matmul_q6k_metal,
-    quantized_matmul_q6k_webgpu,
+    quantized_matmul_q6k_wgpu,
     GgmlDType::Q6K
 );
 // Not implemented on metal

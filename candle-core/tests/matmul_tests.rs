@@ -110,23 +110,23 @@ fn mm_layout(device: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(matmul, matmul_cpu, matmul_gpu, matmul_metal, matmul_webgpu);
+test_device!(matmul, matmul_cpu, matmul_gpu, matmul_metal, matmul_wgpu);
 test_device!(
     matmul_bf16,
     matmul_bf16_cpu,
     matmul_bf16_gpu,
     matmul_bf16_metal,
-    matmul_bf16_webgpu
+    matmul_bf16_wgpu
 );
 test_device!(
     broadcast_matmul,
     broadcast_matmul_cpu,
     broadcast_matmul_gpu,
     broadcast_matmul_metal,
-    broadcast_matmul_webgpu
+    broadcast_matmul_wgpu
 );
-test_device!(squeeze_mm, squeeze_mm_cpu, squeeze_mm_gpu, squeeze_mm_metal,squeeze_mm_webgpu);
-test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal, mm_layout_webgpu);
+test_device!(squeeze_mm, squeeze_mm_cpu, squeeze_mm_gpu, squeeze_mm_metal,squeeze_mm_wgpu);
+test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal, mm_layout_wgpu);
 
 
 
@@ -152,8 +152,8 @@ fn test_matmul(device: &Device, b : usize, m : usize, n : usize, k : usize){
 
 #[cfg(feature="wgpu")]
 #[test]
-fn test_matmul_kernels_webgpu2()-> Result<()> {
-    let device = &Device::new_webgpu_sync(0)?;
+fn test_matmul_kernels_wgpu2()-> Result<()> {
+    let device = &Device::new_wgpu_sync(0)?;
 
     println!("matmul_m_1");
     test_functions(device, |_| 1);
@@ -183,7 +183,7 @@ fn test_matmul_kernels_webgpu2()-> Result<()> {
 #[cfg(feature="wgpu")]
 #[test]
 //test different wgpu matmul shaders
-fn test_matmul_kernels_webgpu()-> Result<()> {
+fn test_matmul_kernels_wgpu()-> Result<()> {
     use candle_core::wgpu::MatmulAlgorithm;
     let mut combinations = Vec::new();
     
@@ -216,18 +216,18 @@ fn test_matmul_kernels_webgpu()-> Result<()> {
     .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul24_24(*a, *b)))
     .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul24_48(*a, *b)));
 
-    let device = Device::new_webgpu_sync(0)?;
+    let device = Device::new_wgpu_sync(0)?;
 
-    if let Device::WebGpu(wgpu) = &device{
+    if let Device::Wgpu(wgpu) = &device{
         for alg in algs{
             println!("Testing: {:?}", alg);
             (*wgpu.matmul_alg.lock().unwrap()) = alg;
 
-            big_matmul_webgpu(&device, false, true)?; //transpose b
-            big_matmul_webgpu(&device, false, false)?; 
+            big_matmul_wgpu(&device, false, true)?; //transpose b
+            big_matmul_wgpu(&device, false, false)?; 
            
-            big_matmul_webgpu(&device, true, false)?; //transpoe a
-            big_matmul_webgpu(&device, true, true)?; //transpose a and b
+            big_matmul_wgpu(&device, true, false)?; //transpoe a
+            big_matmul_wgpu(&device, true, true)?; //transpose a and b
 
 
             matmul(&device)?;
@@ -243,7 +243,7 @@ fn test_matmul_kernels_webgpu()-> Result<()> {
 
 //compares wgpu matmul impl, with cpu impl
 #[cfg(feature="wgpu")]
-fn big_matmul_webgpu(device: &Device, tpa : bool, tpb : bool)-> Result<()> {
+fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool)-> Result<()> {
     let b = 1;
     let m = 1;
     let n = 1;
@@ -280,13 +280,13 @@ fn big_matmul_webgpu(device: &Device, tpa : bool, tpb : bool)-> Result<()> {
 
 #[cfg(feature="wgpu")]
 #[test]
-fn big_matmul_webgpu_tests()-> Result<()> {
-    let device = Device::new_webgpu_sync(0)?;
+fn big_matmul_wgpu_tests()-> Result<()> {
+    let device = Device::new_wgpu_sync(0)?;
    
-    if let Device::WebGpu(wgpu) = &device{
+    if let Device::Wgpu(wgpu) = &device{
         (*wgpu.matmul_alg.lock().unwrap()) = candle_core::wgpu::MatmulAlgorithm::Matmul32_32(false, false);
     }
    
-    big_matmul_webgpu(&device, false, false)?;
+    big_matmul_wgpu(&device, false, false)?;
     Ok(())
 }

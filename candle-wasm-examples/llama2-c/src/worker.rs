@@ -289,7 +289,7 @@ impl yew_agent::Worker for Worker {
         let output = match msg {
             WorkerInput::ModelData(md) => 
             {
-                let dev = pollster::block_on(Device::new_webgpu(0)).unwrap();
+                let dev = pollster::block_on(Device::new_wgpu(0)).unwrap();
                 match pollster::block_on(Model::load(md,&dev)) {
                     Ok(model) => {
                         self.model = Some(model);

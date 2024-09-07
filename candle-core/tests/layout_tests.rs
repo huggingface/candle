@@ -49,7 +49,7 @@ fn contiguous(device: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(contiguous, contiguous_cpu, contiguous_gpu, contiguous_metal, contiguous_webgpu);
+test_device!(contiguous, contiguous_cpu, contiguous_gpu, contiguous_metal, contiguous_wgpu);
 
 #[test]
 fn strided_blocks() -> Result<()> {

@@ -608,7 +608,7 @@ impl Tensor {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::WebGpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -631,7 +631,7 @@ impl Tensor {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::WebGpu(storage) => from_cpu_storage(&storage.to_cpu_storage_async().await?),
+            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage_async().await?),
         }
     }
 
@@ -1654,7 +1654,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::WebGpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1680,7 +1680,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::WebGpu(storage) => from_cpu_storage(&storage.to_cpu_storage_async().await?),
+            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage_async().await?),
         }
     }
 
@@ -1713,7 +1713,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::WebGpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1745,7 +1745,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::WebGpu(storage) => from_cpu_storage(&storage.to_cpu_storage_async().await?),
+            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage_async().await?),
         }
     }
 
@@ -1787,7 +1787,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::WebGpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -2108,8 +2108,8 @@ impl Tensor {
                 (Storage::Cpu(storage), Device::Metal(metal)) => {
                     Storage::Metal(metal.storage_from_cpu_storage(storage)?)
                 }
-                (Storage::Cpu(storage), Device::WebGpu(wgpu)) => {
-                    Storage::WebGpu(wgpu.storage_from_cpu_storage(storage)?)
+                (Storage::Cpu(storage), Device::Wgpu(wgpu)) => {
+                    Storage::Wgpu(wgpu.storage_from_cpu_storage(storage)?)
                 }
                 (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
@@ -2120,7 +2120,7 @@ impl Tensor {
                     Storage::Cuda(cuda.storage_from_cpu_storage(&cpu_storage)?)
                 }
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
-                (Storage::WebGpu(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
+                (Storage::Wgpu(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 _ => {
                     bail!("not implemented yet")
                 } 
@@ -2140,7 +2140,7 @@ impl Tensor {
     }
 
      /// If the target device is the same as the tensor device, only a shallow copy is performed.
-     /// This Function is only needed for WebGpu -> Cpu, in all other cases one can use the sync version.
+     /// This Function is only needed for wgpu -> Cpu, in all other cases one can use the sync version.
      pub async fn to_device_async(&self, device: &Device) -> Result<Tensor> {
         if self.device().same_device(device) {
             Ok(self.clone())
@@ -2152,8 +2152,8 @@ impl Tensor {
                 (Storage::Cpu(storage), Device::Metal(metal)) => {
                     Storage::Metal(metal.storage_from_cpu_storage(storage)?)
                 }
-                (Storage::Cpu(storage), Device::WebGpu(wgpu)) => {
-                    Storage::WebGpu(wgpu.storage_from_cpu_storage(storage)?)
+                (Storage::Cpu(storage), Device::Wgpu(wgpu)) => {
+                    Storage::Wgpu(wgpu.storage_from_cpu_storage(storage)?)
                 }
                 (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
@@ -2164,7 +2164,7 @@ impl Tensor {
                     Storage::Cuda(cuda.storage_from_cpu_storage(&cpu_storage)?)
                 }
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
-                (Storage::WebGpu(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage_async().await?),
+                (Storage::Wgpu(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage_async().await?),
                 _ => {
                     bail!("not implemented yet")
                 }
@@ -2184,7 +2184,7 @@ impl Tensor {
     }
 
     /// If the target device is the same as the tensor device, only a shallow copy is performed.
-    /// This Function is only needed for WebGpu -> Cpu, in all other cases one can use the sync version.
+    /// This Function is only needed for wgpu -> Cpu, in all other cases one can use the sync version.
     pub async fn to_cpu_device(&self) -> Result<Tensor> {
         if self.device().same_device(&Device::Cpu) {
             Ok(self.clone())
@@ -2193,7 +2193,7 @@ impl Tensor {
                 Storage::Cuda(storage) => Storage::Cpu(storage.to_cpu_storage()?),
                 Storage::Metal(storage) => Storage::Cpu(storage.to_cpu_storage()?),
                 Storage::Cpu(storage) => Storage::Cpu(storage.clone()),
-                Storage::WebGpu(storage) => Storage::Cpu(storage.to_cpu_storage_async().await?),
+                Storage::Wgpu(storage) => Storage::Cpu(storage.to_cpu_storage_async().await?),
             };
             let op = BackpropOp::new1(self, Op::ToDevice);
             let tensor_ = Tensor_ {

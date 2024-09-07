@@ -228,7 +228,7 @@ impl candle::CustomOp1 for Sigmoid {
         Ok(Some(grad_res.mul(&d_dx_sigmoid)?))
     }
 
-    fn webgpu_fwd(&self, _storage: &WgpuStorage, _layout: &Layout) -> Result<(WgpuStorage, Shape)> {
+    fn wgpu_fwd(&self, _storage: &WgpuStorage, _layout: &Layout) -> Result<(WgpuStorage, Shape)> {
         let s = _storage.unary_impl::<Self>(_layout)?;
         return Ok((s, _layout.shape().clone()));
     }
@@ -469,7 +469,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
     }
 
     #[cfg(feature = "wgpu")]
-    fn webgpu_fwd(
+    fn wgpu_fwd(
             &self,
             storage: &WgpuStorage,
             layout: &Layout,
@@ -688,7 +688,7 @@ impl candle::CustomOp2 for RmsNorm {
     }
 
     #[cfg(feature = "wgpu")]
-    fn webgpu_fwd(
+    fn wgpu_fwd(
         &self,
         src: &WgpuStorage,
         layout: &Layout,

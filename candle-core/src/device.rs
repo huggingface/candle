@@ -17,7 +17,7 @@ pub enum Device {
     Cpu,
     Cuda(crate::CudaDevice),
     Metal(crate::MetalDevice),
-    WebGpu(crate::WgpuDevice)
+    Wgpu(crate::WgpuDevice)
 }
 
 pub trait NdArray {
@@ -136,31 +136,31 @@ impl Device {
         Ok(Self::Metal(crate::MetalDevice::new(ordinal)?))
     }
 
-    pub async fn new_webgpu(ordinal: usize) -> Result<Self> {
-        Ok(Self::WebGpu(crate::WgpuDevice::create(ordinal, crate::WgpuDeviceConfig::default()).await?))
+    pub async fn new_wgpu(ordinal: usize) -> Result<Self> {
+        Ok(Self::Wgpu(crate::WgpuDevice::create(ordinal, crate::WgpuDeviceConfig::default()).await?))
     }
 
-    pub async fn new_webgpu_config(ordinal: usize, configuration : crate::WgpuDeviceConfig) -> Result<Self> {
-        Ok(Self::WebGpu(crate::WgpuDevice::create(ordinal, configuration).await?))
-    }
-
-    #[cfg(feature="wgpu")]
-    pub fn new_webgpu_sync(ordinal: usize) -> Result<Self> {
-        return pollster::block_on(Device::new_webgpu(ordinal));
+    pub async fn new_wgpu_config(ordinal: usize, configuration : crate::WgpuDeviceConfig) -> Result<Self> {
+        Ok(Self::Wgpu(crate::WgpuDevice::create(ordinal, configuration).await?))
     }
 
     #[cfg(feature="wgpu")]
-    pub fn new_webgpu_sync_config(ordinal: usize, configuration : crate::WgpuDeviceConfig) -> Result<Self> {
-        return pollster::block_on(Device::new_webgpu_config(ordinal, configuration));
+    pub fn new_wgpu_sync(ordinal: usize) -> Result<Self> {
+        return pollster::block_on(Device::new_wgpu(ordinal));
+    }
+
+    #[cfg(feature="wgpu")]
+    pub fn new_wgpu_sync_config(ordinal: usize, configuration : crate::WgpuDeviceConfig) -> Result<Self> {
+        return pollster::block_on(Device::new_wgpu_config(ordinal, configuration));
     }
 
     #[cfg(not(feature="wgpu"))]
-    pub fn new_webgpu_sync(_: usize) -> Result<Self> {
+    pub fn new_wgpu_sync(_: usize) -> Result<Self> {
         Err(crate::Error::NotCompiledWithWgpuSupport)
     }
 
     #[cfg(not(feature="wgpu"))]
-    pub fn new_webgpu_sync_config(_: usize, _ : crate::WgpuDeviceConfig) -> Result<Self> {
+    pub fn new_wgpu_sync_config(_: usize, _ : crate::WgpuDeviceConfig) -> Result<Self> {
         Err(crate::Error::NotCompiledWithWgpuSupport)
     }
 
@@ -169,7 +169,7 @@ impl Device {
             Self::Cpu => CpuDevice.set_seed(seed),
             Self::Cuda(c) => c.set_seed(seed),
             Self::Metal(m) => m.set_seed(seed),
-            Self::WebGpu(m) => m.set_seed(seed),
+            Self::Wgpu(m) => m.set_seed(seed),
         }
     }
 
@@ -178,7 +178,7 @@ impl Device {
             (Self::Cpu, Self::Cpu) => true,
             (Self::Cuda(lhs), Self::Cuda(rhs)) => lhs.same_device(rhs),
             (Self::Metal(lhs), Self::Metal(rhs)) => lhs.same_device(rhs),
-            (Self::WebGpu(lhs), Self::WebGpu(rhs)) => lhs.same_device(rhs),
+            (Self::Wgpu(lhs), Self::Wgpu(rhs)) => lhs.same_device(rhs),
             _ => false,
         }
     }
@@ -188,7 +188,7 @@ impl Device {
             Self::Cpu => DeviceLocation::Cpu,
             Self::Cuda(device) => device.location(),
             Device::Metal(device) => device.location(),
-            Self::WebGpu(device) => device.location(),
+            Self::Wgpu(device) => device.location(),
         }
     }
 
@@ -204,8 +204,8 @@ impl Device {
         matches!(self, Self::Metal(_))
     }
 
-    pub fn is_webgpu(&self) -> bool {
-        matches!(self, Self::WebGpu(_))
+    pub fn is_wgpu(&self) -> bool {
+        matches!(self, Self::Wgpu(_))
     }
 
     pub fn is_dtype_available(&self, dtype: DType) -> bool{
@@ -213,19 +213,19 @@ impl Device {
             (Device::Cpu, _) => true,
             (Device::Cuda(_), _) => true,
             (Device::Metal(_), _) => true,
-            (Device::WebGpu(_), DType::U32) => true,
-            (Device::WebGpu(_), DType::F32) => true,
+            (Device::Wgpu(_), DType::U32) => true,
+            (Device::Wgpu(_), DType::F32) => true,
 
-            (Device::WebGpu(_), DType::U8) => false,
+            (Device::Wgpu(_), DType::U8) => false,
            
-            (Device::WebGpu(_dev), DType::I64) => 
+            (Device::Wgpu(_dev), DType::I64) => 
             {
                 #[cfg(feature="wgpu")]
                 return _dev.device_features.contains(wgpu::Features::SHADER_INT64);
                 #[cfg(not(feature="wgpu"))]
                 return false;
             }
-            (Device::WebGpu(_dev), DType::F64) =>  
+            (Device::Wgpu(_dev), DType::F64) =>  
             {
                 #[cfg(feature="wgpu")]
                 return _dev.device_features.contains(wgpu::Features::SHADER_F64);
@@ -233,8 +233,8 @@ impl Device {
                 return false;
             },
 
-            (Device::WebGpu(_), DType::BF16) => false,
-            (Device::WebGpu(_), DType::F16) => false,
+            (Device::Wgpu(_), DType::BF16) => false,
+            (Device::Wgpu(_), DType::F16) => false,
            
         }
     }
@@ -242,7 +242,7 @@ impl Device {
     pub fn supports_bf16(&self) -> bool {
         match self {
             Self::Cuda(_) => true,
-            Self::Metal(_) | Self::Cpu | Self::WebGpu(_)=> false,
+            Self::Metal(_) | Self::Cpu | Self::Wgpu(_)=> false,
         }
     }
 
@@ -289,9 +289,9 @@ impl Device {
                 let storage = device.rand_uniform(shape, dtype, lo, up)?;
                 Ok(Storage::Metal(storage))
             }
-            Device::WebGpu(device) => {
+            Device::Wgpu(device) => {
                 let storage = device.rand_uniform(shape, dtype, lo, up)?;
-                Ok(Storage::WebGpu(storage))
+                Ok(Storage::Wgpu(storage))
             }
         }
     }
@@ -331,9 +331,9 @@ impl Device {
                 let storage = device.rand_normal(shape, dtype, mean, std)?;
                 Ok(Storage::Metal(storage))
             }
-            Device::WebGpu(device) => {
+            Device::Wgpu(device) => {
                 let storage = device.rand_normal(shape, dtype, mean, std)?;
-                Ok(Storage::WebGpu(storage))
+                Ok(Storage::Wgpu(storage))
             }
         }
     }
@@ -361,9 +361,9 @@ impl Device {
                 let storage = device.ones_impl(shape, dtype)?;
                 Ok(Storage::Metal(storage))
             }
-            Device::WebGpu(device) => {
+            Device::Wgpu(device) => {
                 let storage = device.ones_impl(shape, dtype)?;
-                Ok(Storage::WebGpu(storage))
+                Ok(Storage::Wgpu(storage))
             }
         }
     }
@@ -382,9 +382,9 @@ impl Device {
                 let storage = device.zeros_impl(shape, dtype)?;
                 Ok(Storage::Metal(storage))
             }
-            Device::WebGpu(device) => {
+            Device::Wgpu(device) => {
                 let storage = device.zeros_impl(shape, dtype)?;
-                Ok(Storage::WebGpu(storage))
+                Ok(Storage::Wgpu(storage))
             }
         }
     }
@@ -403,9 +403,9 @@ impl Device {
                 let storage = device.alloc_uninit(shape, dtype)?;
                 Ok(Storage::Metal(storage))
             }
-            Device::WebGpu(device) => {
+            Device::Wgpu(device) => {
                 let storage = device.alloc_uninit(shape, dtype)?;
-                Ok(Storage::WebGpu(storage))
+                Ok(Storage::Wgpu(storage))
             }
         }
     }
@@ -421,9 +421,9 @@ impl Device {
                 let storage = device.storage_from_slice(data)?;
                 Ok(Storage::Metal(storage))
             }
-            Device::WebGpu(device) => {
+            Device::Wgpu(device) => {
                 let storage = device.storage_from_slice(data)?;
-                Ok(Storage::WebGpu(storage))
+                Ok(Storage::Wgpu(storage))
             }
         }
     }
@@ -441,10 +441,10 @@ impl Device {
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Metal(storage))
             }
-            Device::WebGpu(device) => {
+            Device::Wgpu(device) => {
                 let storage = array.to_cpu_storage();
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
-                Ok(Storage::WebGpu(storage))
+                Ok(Storage::Wgpu(storage))
             }
         }
     }
@@ -462,10 +462,10 @@ impl Device {
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Metal(storage))
             }
-            Device::WebGpu(device) => {
+            Device::Wgpu(device) => {
                 let storage = S::to_cpu_storage_owned(data);
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
-                Ok(Storage::WebGpu(storage))
+                Ok(Storage::Wgpu(storage))
             }
         }
     }
@@ -475,7 +475,7 @@ impl Device {
             Self::Cpu => Ok(()),
             Self::Cuda(d) => d.synchronize(),
             Self::Metal(d) => d.synchronize(),
-            Self::WebGpu(d) => d.synchronize(),
+            Self::Wgpu(d) => d.synchronize(),
         }
     }
 
@@ -484,7 +484,7 @@ impl Device {
             Self::Cpu => Ok(()),
             Self::Cuda(d) => d.synchronize(),
             Self::Metal(d) => d.synchronize(),
-            Self::WebGpu(d) => d.synchronize_async().await,
+            Self::Wgpu(d) => d.synchronize_async().await,
         }
     }
 }
