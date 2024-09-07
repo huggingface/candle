@@ -745,7 +745,7 @@ fn set_buffers(
                     };
 
                     let consts = &command_buffer.id_to_const_array[q.pipeline.1];
-                    let pipeline = dev.get_pipeline(&q.pipeline, pl, consts)?;
+                    let pipeline = cache.shader.get_pipeline(&dev.device,&q.pipeline, pl, consts)?;
 
                     let bindgroup =
                         cache.get_bind_group(dev, &q.bindgroup, q.pipeline.clone(), command_index);

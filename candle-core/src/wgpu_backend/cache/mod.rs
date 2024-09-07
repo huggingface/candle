@@ -1,0 +1,597 @@
+mod bindgroup_layout;
+mod shader;
+mod buffer_reference;
+mod cached_buffer;
+mod cached_bindgroup;
+mod buffer_mapping;
+
+pub use bindgroup_layout::*;
+pub use shader::*;
+pub use buffer_reference::*;
+pub use cached_buffer::*;
+pub use cached_bindgroup::*;
+use buffer_mapping::*;
+
+use std::u32;
+
+use tracing::instrument;
+
+use super::{
+    device::PipelineType,
+    wgpu_functions,
+};
+use super::{
+    util::{Reference, ReferenceTrait, ToU64},
+    WgpuDevice,
+};
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, std::marker::Copy, Default)]
+#[cfg_attr(
+    any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub struct BufferReferenceId(Reference);
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, std::marker::Copy)]
+pub struct CachedBufferId(Reference);
+#[derive(Debug, PartialEq, Eq, Hash, Clone, std::marker::Copy)]
+pub struct CachedBindgroupId(Reference);
+
+impl ReferenceTrait for BufferReferenceId {
+    fn new(id: u32, time: u32) -> Self {
+        Self(Reference::new(id, time))
+    }
+
+    fn id(&self) -> u32 {
+        self.0.id()
+    }
+
+    fn time(&self) -> u32 {
+        self.0.time()
+    }
+}
+
+impl ReferenceTrait for CachedBufferId {
+    fn new(id: u32, time: u32) -> Self {
+        Self(Reference::new(id, time))
+    }
+
+    fn id(&self) -> u32 {
+        self.0.id()
+    }
+
+    fn time(&self) -> u32 {
+        self.0.time()
+    }
+}
+
+impl ReferenceTrait for CachedBindgroupId {
+    fn new(id: u32, time: u32) -> Self {
+        Self(Reference::new(id, time))
+    }
+
+    fn id(&self) -> u32 {
+        self.0.id()
+    }
+
+    fn time(&self) -> u32 {
+        self.0.time()
+    }
+}
+
+
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, std::marker::Copy)]
+#[cfg_attr(
+    any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub enum BindgroupAlignment {
+    Aligned2,
+    Aligned4,
+    Aligned8,
+    Aligned16,
+}
+
+impl BindgroupAlignment {
+    pub fn get_index(&self) -> usize {
+        match self {
+            BindgroupAlignment::Aligned2 => return 0,
+            BindgroupAlignment::Aligned4 => return 1,
+            BindgroupAlignment::Aligned8 => return 2,
+            BindgroupAlignment::Aligned16 => return 3,
+        }
+    }
+}
+
+impl From<crate::DType> for BindgroupAlignment {
+    fn from(value: crate::DType) -> Self {
+        match value {
+            crate::DType::U8 => panic!("alignment not supported"),
+            crate::DType::U32 => BindgroupAlignment::Aligned4,
+            crate::DType::I64 => BindgroupAlignment::Aligned8,
+            crate::DType::BF16 => BindgroupAlignment::Aligned2,
+            crate::DType::F16 => BindgroupAlignment::Aligned2,
+            crate::DType::F32 => BindgroupAlignment::Aligned4,
+            crate::DType::F64 => BindgroupAlignment::Aligned8,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(
+    any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub enum BindgroupInputBase<T> {
+    Bindgroup0(BindgroupAlignmentLayout), //
+    Bindgroup1(
+        #[cfg_attr(
+            any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+            serde(skip)
+        )]
+        T,
+        BindgroupAlignmentLayout,
+    ), //input1, dest_alignment, input1_alignment
+    Bindgroup2(
+        #[cfg_attr(
+            any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+            serde(skip)
+        )]
+        T,
+        #[cfg_attr(
+            any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+            serde(skip)
+        )]
+        T,
+        BindgroupAlignmentLayout,
+    ), //input1, input2, alignment dest
+    Bindgroup3(
+        #[cfg_attr(
+            any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+            serde(skip)
+        )]
+        T,
+        #[cfg_attr(
+            any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+            serde(skip)
+        )]
+        T,
+        #[cfg_attr(
+            any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+            serde(skip)
+        )]
+        T,
+        BindgroupAlignmentLayout,
+    ), //input1, input2, input3
+}
+
+impl<T: Clone> BindgroupInputBase<T> {
+    pub fn fold<TOut>(&self, mut f: impl FnMut(&T) -> TOut) -> BindgroupInputBase<TOut> {
+        match self {
+            super::cache::BindgroupInputBase::Bindgroup0(alignment) => {
+                super::cache::BindgroupInputBase::Bindgroup0(*alignment)
+            }
+            super::cache::BindgroupInputBase::Bindgroup1(buf1, alignment) => {
+                super::cache::BindgroupInputBase::Bindgroup1(f(buf1), *alignment)
+            }
+            super::cache::BindgroupInputBase::Bindgroup2(buf1, buf2, alignment) => {
+                super::cache::BindgroupInputBase::Bindgroup2(f(buf1), f(buf2), *alignment)
+            }
+            super::cache::BindgroupInputBase::Bindgroup3(buf1, buf2, buf3, alignment) => {
+                super::cache::BindgroupInputBase::Bindgroup3(f(buf1), f(buf2), f(buf3), *alignment)
+            }
+        }
+    }
+
+    pub fn fold_owned<TOut>(&self, mut f: impl FnMut(T) -> TOut) -> BindgroupInputBase<TOut> {
+        return self.fold(|k| f(k.clone()));
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(
+    any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub struct BindgroupFullBase<T>(
+    #[cfg_attr(
+        any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
+        serde(skip)
+    )]
+    T,
+    BindgroupInputBase<T>,
+);
+
+impl<T> BindgroupFullBase<T> {
+    pub(crate) fn new(dest: T, input: BindgroupInputBase<T>) -> Self {
+        return BindgroupFullBase(dest, input);
+    }
+
+    pub(crate) fn get_dest(&self) -> &T {
+        return &self.0;
+    }
+
+    pub(crate) fn get_input(&self) -> &BindgroupInputBase<T> {
+        return &self.1;
+    }
+}
+
+pub type CachedBindgroupInput = BindgroupInputBase<CachedBufferId>;
+pub type CachedBindgroupFull = BindgroupFullBase<CachedBufferId>;
+pub type BindgroupReferenceInput = BindgroupInputBase<BufferReferenceId>;
+pub type BindgroupReferenceFull = BindgroupFullBase<BufferReferenceId>;
+
+
+#[derive(Debug)]
+pub struct ModelCache {
+    pub(crate) buffer_reference: BufferReferenceStorage,
+    pub(crate) buffers: BufferCacheStorage,
+    pub(crate) bindgroups: BindgroupCacheStorage,
+    pub(crate) mappings: BufferMappingCache,
+    pub(crate) shader : ShaderCache,
+
+    #[cfg(feature = "wgpu_debug")]
+    pub(crate) debug:
+        HashMap<super::device::DebugPipelineRecording, super::device::DebugPipelineRecording>, //stores all queed commands (e.g. used to test performance in the browser so we can measure the performance of each unnique operation alone)
+}
+
+impl ModelCache {
+    pub fn new(mapping_size: u32) -> Self {
+        Self {
+            buffer_reference: BufferReferenceStorage::new(),
+            buffers: BufferCacheStorage::new(),
+            bindgroups: BindgroupCacheStorage::new(),
+            mappings: BufferMappingCache::new(mapping_size),
+            shader : ShaderCache::new(),
+             
+            #[cfg(feature = "wgpu_debug")]
+            debug: HashMap::new(),
+        }
+    }
+
+    #[instrument(skip(self, size))]
+    pub fn create_buffer_reference<T: ToU64>(
+        &mut self,
+        size: T,
+        referenced_by_candle_storage: bool,
+    ) -> BufferReferenceId {
+        let buffer_reference = BufferReference::new(size.to_u64(), referenced_by_candle_storage);
+        return self.buffer_reference.insert(buffer_reference);
+    }
+
+    #[instrument(skip(self, dev, data))]
+    pub fn create_buffer_reference_init<T: bytemuck::Pod>(
+        &mut self,
+        dev: &WgpuDevice,
+        data: &[T],
+        referenced_by_candle_storage: bool,
+    ) -> BufferReferenceId {
+        let data = bytemuck::cast_slice(data);
+
+        let buffer = self
+            .buffers
+            .search_buffer(dev, data.len() as u64, 0, u32::MAX - 1); //TODO use exact size?
+        dev.queue
+            .write_buffer(self.buffers.get_buffer(&buffer).unwrap().buffer(), 0, data);
+
+        let buffer_reference = BufferReference::new_with_storage(
+            data.len() as u64,
+            buffer,
+            referenced_by_candle_storage,
+        );
+        return self.buffer_reference.insert(buffer_reference);
+    }
+
+    /// returns, wheter we should stop the command_queue and delete not used buffers
+    #[instrument(skip(self))]
+    pub fn should_delete_unused(&mut self) -> bool {
+        let current_memory = self.buffers.buffer_memory();
+        let memory_margin = self.buffers.max_memory_allowed();
+        if current_memory > memory_margin {
+            return self.buffers.has_free_buffers();
+        }
+        return false;
+    }
+
+    #[instrument(skip(self))]
+    pub fn remove_unused(&mut self) -> bool {
+        let current_memory = self.buffers.buffer_memory();
+        let memory_margin = self.buffers.max_memory_allowed();
+        let delete_until_margin = (memory_margin * 4) / 5;
+
+        //remove buffers, that
+        // 1. were not used for a long time
+        // 2. have a big memory diff (the actual buffer size vs the average size the buffer is used with)
+        let mut check_bindgroups = false;
+        if current_memory > memory_margin {
+            log::debug!(
+                "deleting buffers: ({}) current {current_memory}/{memory_margin}",
+                self.buffers.get_buffer_count()
+            );
+
+            //every entry in self.buffers.order will be free and can be potentially deleted
+            //this is ordered from small to big.
+
+            let buffers = self.buffers.get_free_buffers();
+            for (id, _) in buffers {
+                check_bindgroups = true;
+                self.buffers.delete_buffer(&id);
+
+                if self.buffers.buffer_memory() <= delete_until_margin {
+                    break; //deleted enaugh
+                }
+            }
+            let current_memory = self.buffers.buffer_memory();
+            log::debug!(
+                "after deleting: ({}) current {current_memory}/{}",
+                self.buffers.get_buffer_count(),
+                self.buffers.max_memory_allowed()
+            );
+        }
+
+        //remove bindgroups:
+        //1. if we removed a buffer, we should also remove the bindgroup
+        //2. bindgroups that werent used for a long time may be deleted
+
+        if check_bindgroups {
+            self.bindgroups.retain_bindgroups(|bindgroup| {
+                let check_buffer = |buffer_reference| {
+                    return self.buffers.get_buffer(buffer_reference).is_some();
+                };
+
+                let is_valid = check_buffer(bindgroup.buffer().get_dest())
+                    && match &bindgroup.buffer().get_input() {
+                        BindgroupInputBase::Bindgroup0(_) => true,
+                        BindgroupInputBase::Bindgroup1(v1, _) => check_buffer(v1),
+                        BindgroupInputBase::Bindgroup2(v1, v2, _) => {
+                            check_buffer(v1) && check_buffer(v2)
+                        }
+                        BindgroupInputBase::Bindgroup3(v1, v2, v3, _) => {
+                            check_buffer(v1) && check_buffer(v2) && check_buffer(v3)
+                        }
+                    };
+
+                //check if all buffers for this bindgroup still exist!
+                if !is_valid {
+                    return false;
+                }
+
+                return true;
+            });
+        }
+        return false;
+    }
+
+    #[instrument(skip(self, dev, bindgroup_reference, command_id,pipeline))]
+    pub(crate) fn get_bind_group(
+        &mut self,
+        dev: &WgpuDevice,
+        bindgroup_reference: &BindgroupReferenceFull,
+        pipeline: PipelineType,
+        command_id: u32,
+    ) -> CachedBindgroupId {
+        fn check_buffer_reference(
+            cache: &mut ModelCache,
+            bindgroup_reference: &BindgroupReferenceFull,
+            pipeline: PipelineType,
+        ) {
+            let check_buffer = |buffer_reference_id| {
+                if let Some(buffer_reference) = cache.buffer_reference.get(&buffer_reference_id) {
+                    if !buffer_reference.cached_buffer_id().is_valid() {
+                        panic!("input buffer {:?}({:?}) in {:?} had no cached_storage set for pipeline {:?}", buffer_reference,buffer_reference_id, bindgroup_reference, pipeline);
+                    } else {
+                        if cache
+                            .buffers
+                            .get_buffer(&buffer_reference.cached_buffer_id())
+                            .is_none()
+                        {
+                            if let Some(buffer_reference) =
+                                cache.buffer_reference.get(&buffer_reference_id)
+                            {
+                                panic!("input buffer {:?}({:?}) in {:?} had no cached_storage set to {:?} widch could not be found for pipeline {:?}", buffer_reference,buffer_reference_id, bindgroup_reference,buffer_reference.cached_buffer_id(), pipeline);
+                            }
+                        }
+                    }
+                } else {
+                    if let Some(val) = cache
+                        .buffer_reference
+                        .get_reference(buffer_reference_id.id())
+                    {
+                        panic!("Reference {:?} inside Bindgroup {:?} invalid for pipeline {:?}, Reference was replaced, current: {:?}", buffer_reference_id, bindgroup_reference, pipeline, val.0);
+                    } else {
+                        panic!("Reference {:?} inside Bindgroup {:?} invalid for pipeline {:?} (Reference was deleted)", buffer_reference_id, bindgroup_reference, pipeline);
+                    }
+                }
+            };
+
+            bindgroup_reference.1.fold_owned(|v| {
+                check_buffer(v);
+                return ();
+            });
+        }
+
+        check_buffer_reference(self, bindgroup_reference, pipeline.clone());
+
+        fn get_storage(cache: &ModelCache, id: &BufferReferenceId) -> CachedBufferId {
+            cache
+                .buffer_reference
+                .get(&id)
+                .unwrap()
+                .cached_buffer_id()
+                .clone()
+        }
+
+        fn get_buffer_referece_key(
+            cache: &ModelCache,
+            dest_buffer: CachedBufferId,
+            bindgroup_reference: &BindgroupReferenceFull,
+        ) -> CachedBindgroupFull {
+            return BindgroupFullBase(
+                dest_buffer,
+                bindgroup_reference.1.fold(|v| return get_storage(cache, v)),
+            );
+        }
+
+        let buf_dest_id = bindgroup_reference.get_dest();
+        let buf_dest_length;
+        let mut buf_dest_cached_id;
+        let mut required_size;
+        {
+            let buf_dest_reference = self.buffer_reference.get(buf_dest_id).unwrap();
+            buf_dest_cached_id = buf_dest_reference.cached_buffer_id().clone();
+            required_size = buf_dest_reference.size();
+            buf_dest_length = buf_dest_reference.last_used() - buf_dest_reference.first_used();
+            if buf_dest_reference.last_used() < buf_dest_reference.first_used() {
+                panic!("buffer {:?}({:?})", buf_dest_reference, buf_dest_id);
+            }
+        }
+
+        if dev.configuration.use_cache {
+            //the destination buffer of this bindgroup already has a buffer set
+            if buf_dest_cached_id.is_valid() {
+                let bindgroup_inputs =
+                    get_buffer_referece_key(self, buf_dest_cached_id, &bindgroup_reference);
+                if let Some(bg) = self
+                    .bindgroups
+                    .get_bindgroup_reference_by_description(&bindgroup_inputs)
+                    .cloned()
+                {
+                    self.bindgroups.cached_bindgroup_use_counter_inc();
+                    self.mappings.add_buffer(buf_dest_cached_id, pipeline);
+                    return bg;
+                }
+            }
+            //reference storage is not set -> search a free buffer or create new one
+            else {
+                if let Some(buffer_id) = self.mappings.get_buffer(pipeline.clone()) {
+                    let buffer: Option<&CachedBuffer> = self.buffers.get_buffer(&buffer_id);
+                    if let Some(buffer) = buffer {
+                        if buffer.is_free() {
+                            if buffer.buffer().size() >= required_size {
+                                let buf_dest_reference =
+                                    self.buffer_reference.get_mut(buf_dest_id).unwrap();
+                                //use this buffer for the buffer reference:
+                                buf_dest_reference.set_cached_buffer_id(buffer_id);
+                                buf_dest_cached_id = buffer_id;
+                                self.buffers.use_buffer(&buffer_id, command_id);
+
+                                //reuse a bindgroup, if we could find one:
+                                let bindgroup_inputs =
+                                    get_buffer_referece_key(self, buffer_id, &bindgroup_reference);
+                                if let Some(bg) = self
+                                    .bindgroups
+                                    .get_bindgroup_reference_by_description(&bindgroup_inputs)
+                                    .cloned()
+                                {
+                                    self.bindgroups.cached_bindgroup_use_counter_inc();
+                                    self.mappings.add_buffer(buffer_id, pipeline);
+                                    return bg.clone();
+                                }
+                            } else {
+                                //the required size increased -> also request a little bit more
+                                required_size *= 2;
+                            }
+                        }
+                    }
+                }
+
+                let bindgroup_inputs =
+                    get_buffer_referece_key(self, CachedBufferId::new(0, 0), &bindgroup_reference);
+                // let bindgroup_inputs = &bindgroup_reference.1;
+                let max_size: u64 =
+                    BufferCacheStorage::max_cached_size(required_size as u64, buf_dest_length);
+
+                let candidates_to_process = self
+                    .bindgroups
+                    .enumerate_bindgroup_by_description_input(&bindgroup_inputs.1)
+                    .filter_map(|(id, bindgroup)| {
+                        let cbuf_dest_id = bindgroup.buffer().get_dest();
+
+                        if buf_dest_cached_id.is_valid() {
+                            if let Some(bindgroup) = self.bindgroups.get_bindgroup(&id) {
+                                if buf_dest_cached_id == *bindgroup.buffer().get_dest() {
+                                    if let Some(c_buf_dest) = self.buffers.get_buffer(cbuf_dest_id)
+                                    {
+                                        return Some((id, bindgroup, c_buf_dest.buffer().size()));
+                                    }
+                                }
+                            }
+                        } else {
+                            if let Some(c_buf_dest) = self.buffers.get_buffer(cbuf_dest_id) {
+                                if c_buf_dest.buffer().size() >= required_size
+                                    && c_buf_dest.is_free()
+                                    && c_buf_dest.buffer().size() <= max_size
+                                {
+                                    return Some((id, bindgroup, c_buf_dest.buffer().size()));
+                                }
+                            }
+                        }
+                        return None;
+                    });
+
+                //cachedBindgroupId, CachedDest_BufferId
+                let mut candidate_to_process = None;
+                let mut best_size = u64::MAX;
+
+                for (ele_id, ele_bindgroup, dest_buffer_size) in candidates_to_process {
+                    let cbuf_dest_id = ele_bindgroup.buffer().get_dest();
+                    if dest_buffer_size < best_size {
+                        candidate_to_process = Some((ele_id, cbuf_dest_id));
+                        best_size = dest_buffer_size;
+                    }
+                }
+
+                //if we found a bindgroup we can reuse -> use this bindgroup
+                if let Some((cached_bindgroup_id, cached_dest_buffer_id)) = candidate_to_process {
+                    //use this buffer for the buffer reference:
+                    let buf_dest_reference = self.buffer_reference.get_mut(buf_dest_id).unwrap();
+                    buf_dest_reference.set_cached_buffer_id(*cached_dest_buffer_id);
+                    self.buffers.use_buffer(&cached_dest_buffer_id, command_id);
+                    self.mappings.add_buffer(*cached_dest_buffer_id, pipeline);
+                    self.bindgroups.cached_bindgroup_use_counter_inc();
+                    return cached_bindgroup_id;
+                }
+            }
+        }
+
+        let buf_dest_reference = self.buffer_reference.get_mut(buf_dest_id).unwrap();
+
+        //create new buffer, if buffer was not already set:
+        let dest_buffer_id;
+        if buf_dest_reference.cached_buffer_id().is_valid() {
+            //this buffer reference already has a buffer connected,use this buffer
+            dest_buffer_id = buf_dest_reference.cached_buffer_id().clone();
+        } else {
+            //create a new buffer
+            dest_buffer_id =
+                self.buffers
+                    .search_buffer(dev, required_size, command_id, buf_dest_length);
+            //use this buffer for the buffer reference:
+            buf_dest_reference.set_cached_buffer_id(dest_buffer_id);
+        }
+
+        //create new bindgroup:
+        let bindgroup_reference =
+            get_buffer_referece_key(self, dest_buffer_id, bindgroup_reference);
+        let bindgroup_id = self.create_bindgroup(dev, bindgroup_reference);
+
+        if dev.configuration.use_cache {
+            self.mappings.add_buffer(dest_buffer_id, pipeline);
+        }
+        return bindgroup_id;
+    }
+
+    //creats a Bindgroup
+    #[instrument(skip(self, dev, bindgroup_d))]
+    fn create_bindgroup(
+        &mut self,
+        dev: &WgpuDevice,
+        bindgroup_d: CachedBindgroupFull,
+    ) -> CachedBindgroupId {
+        let bindgroup = wgpu_functions::create_bindgroup(dev, bindgroup_d.clone(), self);
+        let bindgroup = CachedBindgroup::new(bindgroup, bindgroup_d.clone());
+
+        return self.bindgroups.insert_bindgroup(bindgroup);
+    }
+}

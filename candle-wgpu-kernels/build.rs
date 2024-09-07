@@ -324,12 +324,12 @@ mod shader_loader{
 
     use fancy_regex::Regex;
 
-    const SHORTEN_NORMAL_VARIABLES : bool = false;
-    const SHORTEN_GLOBAL_FUNCTIONS : bool = false;
-    const SHORTEN_OVERRIDES : bool = false;
+    const SHORTEN_NORMAL_VARIABLES : bool = true;
+    const SHORTEN_GLOBAL_FUNCTIONS : bool = true;
+    const SHORTEN_OVERRIDES : bool = true;
     const REMOVE_UNUSED : bool = true;
-    const REMOVE_SPACES : bool = false;
-    const REMOVE_NEW_LINES : bool = false;
+    const REMOVE_SPACES : bool = true;
+    const REMOVE_NEW_LINES : bool = true;
 
     pub fn load_shader(path: &PathBuf, global_defines : &Vec<&'static str>, global_functions : &mut shader_shortener::ShaderInfo) -> String {
         let mut result = shader_defines::load_shader(path, &mut HashMap::new(), global_defines); 

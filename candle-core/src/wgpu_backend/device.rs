@@ -93,12 +93,6 @@ pub(crate) struct MlQueueDispatch {
     pub(crate) debug: Option<String>,
 }
 
-#[derive(Debug)]
-pub struct ShaderModuleComputePipelines {
-    shader: Arc<wgpu::ShaderModule>,
-    pipelines: Mutex<HashMap<PipelineType, Arc<wgpu::ComputePipeline>>>,
-}
-
 //a struct, where all operations are chunked
 #[derive(Debug)]
 pub struct QueueBuffer {
@@ -477,7 +471,6 @@ pub struct WgpuDeviceInner {
     pub device_features: wgpu::Features,
 
     pub queue: wgpu::Queue,
-    pub(crate) shader: Mutex<HashMap<candle_wgpu_kernels::Shaders, ShaderModuleComputePipelines>>,
     pub(crate) rand_state: Mutex<rand::rngs::StdRng>,
 
     pub(crate) command_queue: Mutex<QueueBuffer>,
@@ -631,7 +624,6 @@ impl WgpuDevice {
                 device_features: features,
                 backend: adapter.get_info().backend,
                 queue: queue,
-                shader: Mutex::new(HashMap::new()),
                 rand_state: Mutex::new(rand::rngs::StdRng::from_entropy()),
                 #[cfg(feature = "wgpu_debug")]
                 debug: debug_info,
@@ -874,83 +866,6 @@ impl WgpuDevice {
                 return s;
             })
             .collect());
-    }
-
-    #[instrument(skip(device, shader, pipeline_layout))]
-    fn load_pipeline(
-        device: &wgpu::Device,
-        shader: Arc<wgpu::ShaderModule>,
-        pipeline: &PipelineType,
-        pipeline_layout: &wgpu::PipelineLayout,
-        consts: &HashMap<String, f64>,
-    ) -> wgpu::ComputePipeline {
-        let entry_point = pipeline.0.get_entry_point();
-        if consts.is_empty() {
-            return device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: None,
-                layout: Some(pipeline_layout),
-                module: &shader,
-                entry_point: entry_point,
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                cache: None,
-            });
-        } else {
-            return device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: None,
-                layout: Some(pipeline_layout),
-                module: &shader,
-                entry_point: entry_point,
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &consts,
-                    zero_initialize_workgroup_memory: true,
-                    vertex_pulling_transform: false,
-                },
-                cache: None,
-            });
-        }
-    }
-
-    #[instrument(skip(self, pipeline_layout, consts, pipeline))]
-    pub(crate) fn get_pipeline(
-        &self,
-        pipeline: &PipelineType,
-        pipeline_layout: &wgpu::PipelineLayout,
-        consts: &HashMap<String, f64>,
-    ) -> crate::Result<Arc<wgpu::ComputePipeline>> {
-        let shader = pipeline.0.get_shader();
-        let mut shaders = self.shader.lock().unwrap();
-        if !shaders.contains_key(&shader) {
-            let s = wgpu_functions::get_shader(&self.device, shader.load_shader());
-            shaders.insert(
-                shader.clone(),
-                ShaderModuleComputePipelines {
-                    shader: Arc::new(s),
-                    pipelines: Mutex::new(HashMap::new()),
-                },
-            );
-        }
-
-        if let Some(s) = shaders.get(&shader) {
-            let mut pipelines = s.pipelines.lock().unwrap();
-            if !pipelines.contains_key(&pipeline) {
-                let p = crate::WgpuDevice::load_pipeline(
-                    &self.device,
-                    s.shader.clone(),
-                    pipeline,
-                    pipeline_layout,
-                    consts,
-                );
-                pipelines.insert(pipeline.clone(), Arc::new(p));
-            }
-
-            if let Some(p) = pipelines.get(&pipeline) {
-                return Ok(p.clone());
-            } else {
-                panic!("Not expected")
-            }
-        } else {
-            panic!("Not expected")
-        }
     }
 
     pub(crate) async fn synchronize_async(&self) -> crate::Result<()> {
