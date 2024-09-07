@@ -59,7 +59,7 @@ mod sgemm{
         let input2_stride_k = *input2_stride.next().unwrap_or(&1);
         let input2_stride_b = *input2_stride.next().unwrap_or(&1);
     
-        let const_vec = vec![input1_stride_k, input1_stride_m, input2_stride_n, input2_stride_k, (params.b != 1) as usize,  dest_offset as usize];
+        let const_vec = vec![(input1_stride_k == 1) as usize, (input1_stride_m == 1 )as usize, (input2_stride_n == 1) as usize, (input2_stride_k == 1) as usize, (params.b != 1) as usize,  dest_offset as usize];
     
         let mut meta = get_meta(&dev);
         meta.add(params.b);
@@ -73,6 +73,11 @@ mod sgemm{
         meta.add(input2_stride_b); //input2_stride_b
         meta.add(layout_input2.start_offset()); //input2_offset
     
+        meta.add(input1_stride_k);
+        meta.add(input1_stride_m);
+        meta.add(input2_stride_n);
+        meta.add(input2_stride_k);
+
         let pipeline = meta.get_pipeline_const(pipeline, const_vec.clone());
 
         let input_alignment : BindgroupAlignment = _dtype.into();
@@ -239,7 +244,7 @@ mod sgemm{
             dest_offset
         };
 
-        let const_vec = vec![input1_stride_k, input1_stride_m, input2_stride_n, input2_stride_k, use_batch as usize, padded_dest_offset as usize];
+        let const_vec = vec![(input1_stride_k == 1) as usize, (input1_stride_m == 1 )as usize, (input2_stride_n == 1) as usize, (input2_stride_k == 1) as usize, use_batch as usize, padded_dest_offset as usize];
     
         let mut meta = get_meta(&dev);
         meta.add(params.b);
@@ -252,6 +257,11 @@ mod sgemm{
     
         meta.add(input2_stride_b); //input2_stride_b
         meta.add(layout_input2_padded.start_offset()); //input2_offset
+
+        meta.add(input1_stride_k);
+        meta.add(input1_stride_m);
+        meta.add(input2_stride_n);
+        meta.add(input2_stride_k);
 
         if need_different_output_buffer && !USE_DIFFERENT_PADDED_OUTPUT{
             meta.add_const(candle_wgpu_kernels::Constants::Isoutputpadded, true);
@@ -355,7 +365,7 @@ pub fn queue_matmul_buffer_alg(
         crate::wgpu_backend::MatmulAlgorithm::Matmul16_64(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 16, 64,16, |dtype| Pipelines::Matmul16x64(dtype, candle_wgpu_kernels::sgemm::matmul16x64::Functions::Matmul), false),
         crate::wgpu_backend::MatmulAlgorithm::Matmul1_128 (false, false)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 128,128, |dtype| Pipelines::Matmul1x128(dtype, candle_wgpu_kernels::sgemm::matmul1x128::Functions::Matmul),  false),
         crate::wgpu_backend::MatmulAlgorithm::Matmul1_64 (false, false)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 64,64, |dtype| Pipelines::Matmul1x64(dtype, candle_wgpu_kernels::sgemm::matmul1x64::Functions::Matmul), false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1_64B (false, false)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 64,4, |dtype| Pipelines::Matmul1x64c(dtype, candle_wgpu_kernels::sgemm::matmul1x64C::Functions::Matmul),  true),
+        crate::wgpu_backend::MatmulAlgorithm::Matmul1_64B (false, false)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 1, 64,4, |dtype| Pipelines::Matmul1x64b(dtype, candle_wgpu_kernels::sgemm::matmul1x64b::Functions::Matmul),  true),
         crate::wgpu_backend::MatmulAlgorithm::Matmul24_24(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 24, 24,24, |dtype| Pipelines::Matmul24x24(dtype, candle_wgpu_kernels::sgemm::matmul24x24::Functions::Matmul),  false),
         crate::wgpu_backend::MatmulAlgorithm::Matmul24_48(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, dest_offset, layout_input1, layout_input2, dtype, 24, 48,24, |dtype| Pipelines::Matmul24x48(dtype, candle_wgpu_kernels::sgemm::matmul24x48::Functions::Matmul), false),
         _ => {panic!()}

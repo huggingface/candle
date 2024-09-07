@@ -650,28 +650,3 @@ where
         return self.data.len() - self.free.len();
     }
 }
-
-//delay:
-// pub fn sleep(delay: u32) {
-//     log::info!("Delaying:... {delay}");
-//     let mut dummy : u32 = 0;
-//     for _ in 0..(delay * 1000) {
-//         dummy = dummy.wrapping_add(1);
-//         std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
-//     }
-// }
-
-//async sleep:
-#[cfg(all(target_arch = "wasm32", feature = "wgpu"))]
-pub async fn sleep(delay: u32) {
-    log::info!("waiting {delay} miliseconds");
-    fluvio_wasm_timer::Delay::new(std::time::Duration::from_millis(delay as u64))
-        .await
-        .unwrap();
-}
-
-#[cfg(not(all(target_arch = "wasm32", feature = "wgpu")))]
-pub async fn sleep(delay: u32) {
-    log::info!("waiting {delay} miliseconds");
-    std::thread::sleep(std::time::Duration::from_millis(delay as u64));
-}

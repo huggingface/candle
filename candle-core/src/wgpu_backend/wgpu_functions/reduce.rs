@@ -26,10 +26,9 @@ pub fn queue_reduce_from_buffer_op(
     reduction_length: u32,
     stride_reduction: u32,
 ) -> crate::Result<()> {
-    let workgroup_count = u32::min(64, reduction_length as u32);
     let mut meta = get_meta(&dev);
 
-    let const_vec = vec![op as u32, workgroup_count, stride_reduction];
+    let const_vec = vec![op as u32, stride_reduction];
 
     meta.add(reduction_length);
     meta.add(output_to_start_stride1);

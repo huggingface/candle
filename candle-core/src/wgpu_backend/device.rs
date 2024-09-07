@@ -910,7 +910,7 @@ impl WgpuDevice {
         }
     }
 
-    #[instrument(skip(self, pipeline_layout))]
+    #[instrument(skip(self, pipeline_layout, consts, pipeline))]
     pub(crate) fn get_pipeline(
         &self,
         pipeline: &PipelineType,

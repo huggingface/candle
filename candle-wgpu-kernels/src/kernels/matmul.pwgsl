@@ -30,21 +30,13 @@
 // var<storage> op_meta : array<u32>;
 
 
-override CONSTV_0 : u32 = 1u;
-override CONSTV_1 : u32 = 1u;
-override CONSTV_2 : u32 = 1u;
-override CONSTV_3 : u32 = 1u;
+override CONSTV_0 : bool = true;
+override CONSTV_1 : bool = true;
+override CONSTV_2 : bool = true;
+override CONSTV_3 : bool = true;
 override CONSTV_4 : bool = true;
-override CONSTV_5 : u32 = 1u;
-
-#define op_matmul_input1_stride_k   CONSTV_0
-#define op_matmul_input1_stride_m   CONSTV_1
-
-#define op_matmul_input2_stride_n   CONSTV_2
-#define op_matmul_input2_stride_k   CONSTV_3
 
 #define op_matmul_use_batch   CONSTV_4
-#define op_matmul_dest_offset CONSTV_5
 
 #define TS1 16u
 
@@ -59,8 +51,14 @@ override CONSTV_5 : u32 = 1u;
 #define op_matmul_input2_stride_b   op_meta[6]
 #define op_matmul_input2_offset     op_meta[7]
 
-#define op_matmul_gx_offset     op_meta[8]
-#define op_matmul_gy_offset     op_meta[9]
+#define op_matmul_input1_stride_k   select(CONSTV_0, 1u, op_meta[8])
+#define op_matmul_input1_stride_m   select(CONSTV_1, 1u, op_meta[9]) 
+
+#define op_matmul_input2_stride_n   select(CONSTV_2, 1u, op_meta[10])
+#define op_matmul_input2_stride_k   select(CONSTV_3, 1u, op_meta[11])
+
+#define op_matmul_gx_offset     op_meta[12]
+#define op_matmul_gy_offset     op_meta[13]
 
 @compute
 @workgroup_size(16,16,1)
@@ -93,7 +91,7 @@ fn matmul1(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 * v_input2[op_matmul_input2_stride_k * i + m_input2_offset];
     }
     
-    v_dest[b * output_size_of_one_batch + y * op_matmul_n + x + op_matmul_dest_offset] = sum;
+    v_dest[b * output_size_of_one_batch + y * op_matmul_n + x] = sum;
 }
 
 
@@ -136,7 +134,7 @@ fn matmul1_16(@builtin(global_invocation_id) global_id: vec3<u32>) {
         sum += dot(v_input_a[i*op_matmul_input1_stride_k  + m_input1_offset],v_input_b[i*op_matmul_input2_stride_k + m_input2_offset]);
     }
     
-    v_dest[b * output_size_of_one_batch + y * op_matmul_n + x + op_matmul_dest_offset] = sum;
+    v_dest[b * output_size_of_one_batch + y * op_matmul_n + x] = sum;
 }
 
 
@@ -168,7 +166,7 @@ fn matmul1_end(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 * v_input2[op_matmul_input2_stride_k * i + m_input2_offset];
     }
     
-    v_dest[b * output_size_of_one_batch + y * op_matmul_n + x + op_matmul_dest_offset] = sum;
+    v_dest[b * output_size_of_one_batch + y * op_matmul_n + x] = sum;
 }
 
 
@@ -322,12 +320,12 @@ fn matmul5(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
         switch(wcount){
             case WPT1{
                 for(var w = 0u; w < WPT1; w++){
-                    v_dest[dest_index + w + op_matmul_dest_offset] = acc[w];
+                    v_dest[dest_index + w] = acc[w];
                 }
             }
             default{
                 for(var w = 0u; w < wcount; w++){
-                    v_dest[dest_index + w + op_matmul_dest_offset] = acc[w];
+                    v_dest[dest_index + w] = acc[w];
                 }
             }
         }
@@ -489,12 +487,12 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
         switch(wcount){
             case 8u{
                 for(var w = 0u; w < 8; w++){
-                    v_dest[batch * output_size_of_one_batch + gy * op_matmul_n + gx + w + op_matmul_dest_offset] = acc[w];
+                    v_dest[batch * output_size_of_one_batch + gy * op_matmul_n + gx + w] = acc[w];
                 }
             }
             default{
                 for(var w = 0u; w < wcount; w++){
-                    v_dest[batch * output_size_of_one_batch + gy * op_matmul_n + gx + w + op_matmul_dest_offset] = acc[w];
+                    v_dest[batch * output_size_of_one_batch + gy * op_matmul_n + gx + w] = acc[w];
                 }
             }
         }

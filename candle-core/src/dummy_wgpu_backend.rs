@@ -87,7 +87,6 @@ pub struct WgpuDeviceConfig{
     pub buffer_cached_max_allowed_size : u64,//maximum size for cached wgpu::buffers. When this size is reached, free buffers will be deleted until only 75% of this max size is used. 
                                              //if this value is to low for the desired model, the performance may drop significatly(e.g. model needs at least 2gb of data, if this value would be e.g. only 100mb all free buffers would be deleted after each command)
     pub use_cache : bool, 
-    pub queue_delay_miliseconds : u32, //specifys the amout of time to wait after each command (may be usefull for debuging purposes if one expect, that the impl causes to much stress on the gpu)
     pub flush_gpu_before_buffer_init : bool, //when data is copied from cpu to the wgpu device, all previous commands may be flushed, to allow other buffers to be freed and reused. 
                                             //But on webGpu this may not be optimal, as we can not wait for commands to finish (as this functin is not asyny) 
     pub buffer_mapping_size : u32,
@@ -102,7 +101,6 @@ impl Default for WgpuDeviceConfig {
             max_workload_size :  1024u64*1024*1024*2, 
             buffer_cached_max_allowed_size : 1024*1024*1024*8,                                        
             use_cache : true,
-            queue_delay_miliseconds : 0,
             flush_gpu_before_buffer_init : true,
             buffer_mapping_size : 3,
             backend: WgpuBackends::metal() | WgpuBackends::vulkan(), //directx shader compilation is much slower than vulkan. (like 300secs vs 5s there is a faster copmiler, but this would need additional .dlls, and with this compilations needs 30s as well)

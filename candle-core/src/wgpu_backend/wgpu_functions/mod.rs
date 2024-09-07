@@ -248,7 +248,7 @@ fn end_debug_queue(
         .store(global_index, std::sync::atomic::Ordering::Relaxed);
 }
 
-#[instrument(skip(dev, cache))]
+#[instrument(skip(dev, cache, command_queue, waiting_buffer, current_meta, meta_array))]
 fn get_command_buffer(
     dev: &WgpuDevice,
     meta_array: &[u32],
@@ -488,7 +488,7 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer, cache: &mut ModelCa
     }
 }
 
-#[instrument(skip(dev, command_buffer, cache))]
+#[instrument(skip(dev, command_buffer, cache, index, last_meta, current_meta))]
 fn set_buffers(
     dev: &WgpuDevice,
     command_buffer: &mut QueueBuffer,
@@ -692,7 +692,9 @@ fn set_buffers(
                 }
 
                 drop(_enter1);
-
+                
+                
+                #[instrument(skip(cache, bindgroup_reference, command_index))]
                 fn check_for_removal(
                     bindgroup_reference: &BindgroupReferenceFull,
                     command_index: u32,
@@ -748,6 +750,8 @@ fn set_buffers(
                     let bindgroup =
                         cache.get_bind_group(dev, &q.bindgroup, q.pipeline.clone(), command_index);
 
+                    let span1 = span!(Level::INFO, "SetBuffers_Optimize implace: ");
+                    let _enter1 = span1.enter();   
                     //needs to be deleayed, we want to set v1_storage to None, but to create a BindGroup, we need to have v1_storage set
                     if optimize_inplace {
                         let v1_cached_buffer_id;
@@ -769,7 +773,7 @@ fn set_buffers(
                             );
                         }
                     }
-
+                    drop(_enter1);
                     check_for_removal(&q.bindgroup, command_index, &mut cache);
                     if cache.should_delete_unused() {
                         //we hit the max cache size
@@ -1034,9 +1038,6 @@ pub(crate) async fn flush_gpu_command_async(
                 current_meta = last_meta;
             }
             finish_commands(queue_buffer, index, &mut cache);
-            if dev.configuration.queue_delay_miliseconds > 0 {
-                super::util::sleep(dev.configuration.queue_delay_miliseconds).await;
-            }
         }
 
         queue_buffer.clear();
@@ -1144,7 +1145,7 @@ pub fn create_buffer(dev: &WgpuDevice, size: u64) -> wgpu::Buffer {
     })
 }
 
-#[instrument(skip(dev, cache))]
+#[instrument(skip(dev, cache, bindgroup))]
 pub fn create_bindgroup(
     dev: &WgpuDevice,
     bindgroup: CachedBindgroupFull,
@@ -1413,7 +1414,7 @@ async fn synchronize_device(dev: &WgpuDevice) -> crate::Result<()> {
     wait_for_gpu_buffer_async(dev).await
 }
 
-#[instrument(skip(dev))]
+#[instrument(skip(dev,buffer))]
 pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: BufferReferenceId,
@@ -1482,7 +1483,7 @@ pub async fn wait_for_gpu_buffer_async(dev: &WgpuDevice) -> crate::Result<()> {
     }
 }
 
-#[instrument(skip(dev))]
+#[instrument(skip(dev, buffer))]
 pub async fn read_data_from_gpu_async_buffer<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: &wgpu::Buffer,

@@ -592,7 +592,7 @@ impl ModelCache {
         return self.buffer_reference.insert(buffer_reference);
     }
 
-    #[instrument(skip(self, data))]
+    #[instrument(skip(self, dev, data))]
     pub fn create_buffer_reference_init<T: bytemuck::Pod>(
         &mut self,
         dev: &WgpuDevice,
@@ -707,7 +707,7 @@ impl ModelCache {
         return false;
     }
 
-    #[instrument(skip(self, dev))]
+    #[instrument(skip(self, dev, bindgroup_reference, command_id,pipeline))]
     pub(crate) fn get_bind_group(
         &mut self,
         dev: &WgpuDevice,
@@ -936,7 +936,7 @@ impl ModelCache {
     }
 
     //creats a Bindgroup
-    #[instrument(skip(self, dev))]
+    #[instrument(skip(self, dev, bindgroup_d))]
     fn create_bindgroup(
         &mut self,
         dev: &WgpuDevice,
@@ -971,7 +971,7 @@ impl BufferReferenceStorage {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self,referece))]
     fn insert(&mut self, referece: BufferReference) -> BufferReferenceId {
         let id = self.storage.insert(referece);
         //println!("create new buffer Reference: {:?}", id);
@@ -1059,7 +1059,7 @@ impl BufferCacheStorage {
     }
 
     //creats a Buffer, expect that it will be used and not be part of free memory
-    #[instrument(skip(self, dev))]
+    #[instrument(skip(self, dev, command_id))]
     fn create_buffer(&mut self, dev: &WgpuDevice, size: u64, command_id: u32) -> CachedBufferId {
         let buffer = wgpu_functions::create_buffer(dev, size);
         let mut buffer = CachedBuffer::new(buffer);
@@ -1071,7 +1071,7 @@ impl BufferCacheStorage {
         return id;
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self,id))]
     pub fn delete_buffer(&mut self, id: &CachedBufferId) {
         let value = self.storage.delete_move(id);
         if let Some(val) = value {
@@ -1090,7 +1090,7 @@ impl BufferCacheStorage {
     }
 
     //will not delete the buffer, but mark it free
-    #[instrument(skip(self))]
+    #[instrument(skip(self,id))]
     pub fn free_buffer(&mut self, id: &CachedBufferId) {
         let buffer: Option<&mut CachedBuffer> = self.storage.get_mut(id);
         if let Some(buffer) = buffer {
@@ -1105,7 +1105,7 @@ impl BufferCacheStorage {
     }
 
     //will not create a buffer, but mark the buffer as used
-    #[instrument(skip(self))]
+    #[instrument(skip(self,id,command_id))]
     pub fn use_buffer(&mut self, id: &CachedBufferId, command_id: u32) {
         let buffer: Option<&mut CachedBuffer> = self.storage.get_mut(id);
         if let Some(buffer) = buffer {
@@ -1155,7 +1155,7 @@ impl BufferCacheStorage {
     }
 
     //will try to find a free buffer in the cache, or create a new one
-    #[instrument(skip(self, dev))]
+    #[instrument(skip(self, dev, command_id))]
     pub fn search_buffer(
         &mut self,
         dev: &WgpuDevice,
