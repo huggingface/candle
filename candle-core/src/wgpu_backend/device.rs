@@ -18,7 +18,7 @@ use super::debug_info::{DebugInfo, MInfo, Measurements, ShaderInfo};
 
 use super::cache::{BindgroupLayouts, CachedBindgroupId, CachedBufferId, ModelCache};
 use super::storage::{create_wgpu_storage, create_wgpu_storage_init};
-use super::util::{Counter, ObjectToIdMapper, ToF64, ToU32};
+use super::util::{ObjectToIdMapper, ToF64, ToU32};
 use super::wgpu_functions::{self, unary::UnaryOperation, MetaArray};
 use super::wgpu_functions::{ConstArray, KernelParameterMeta};
 use super::WgpuStorage;
@@ -482,9 +482,6 @@ pub struct WgpuDeviceInner {
 
     pub(crate) cache: Mutex<ModelCache>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
     //debug counter
-    pub(crate) unary_inplace_counter: Counter,
-    pub(crate) binary_inplace_counter: Counter,
-    pub(crate) copy_inplace_counter: Counter,
     #[cfg(feature = "wgpu_debug")]
     pub debug: DebugInfo,
 
@@ -632,9 +629,6 @@ impl WgpuDevice {
                 cache: Mutex::new(ModelCache::new(configuration.buffer_mapping_size)),
                 bindgroup_layouts,
                 staging_probe_buffer: staging_buffer,
-                unary_inplace_counter: Counter::new(0),
-                binary_inplace_counter: Counter::new(0),
-                copy_inplace_counter: Counter::new(0),
                 matmul_alg: Mutex::new(MatmulAlgorithm::MatmulX),
                 configuration: configuration,
             }),
@@ -661,9 +655,9 @@ impl WgpuDevice {
         );
         log::warn!(
             "Inplace used: unary: {}, binary {}, copy: {}",
-            self.unary_inplace_counter.get(),
-            self.binary_inplace_counter.get(),
-            self.copy_inplace_counter.get()
+            cache.unary_inplace_counter,
+            cache.binary_inplace_counter,
+            cache.copy_inplace_counter
         );
     }
     pub fn print_bindgroup_reuseinfo2(&self) {
@@ -681,9 +675,9 @@ impl WgpuDevice {
         );
         println!(
             "Inplace used: unary: {}, binary {}, copy: {}",
-            self.unary_inplace_counter.get(),
-            self.binary_inplace_counter.get(),
-            self.copy_inplace_counter.get()
+            cache.unary_inplace_counter,
+            cache.binary_inplace_counter,
+            cache.copy_inplace_counter
         );
     }
 
@@ -842,15 +836,15 @@ impl WgpuDevice {
     #[cfg(feature = "wgpu_debug")]
     pub fn get_pipeline_info(&self) -> crate::Result<Vec<ShaderInfo>> {
         use super::debug_info;
-
-        let shaders = self.shader.lock().unwrap();
+        let mut cache = self.cache.lock().unwrap();
+        let shaders = &mut cache.shader;
 
         let queue = self.command_queue.lock().unwrap();
 
-        return Ok(shaders
+        return Ok(shaders.shaders
             .iter()
             .map(|(k, v)| {
-                let pipelines = v.pipelines.lock().unwrap();
+                let pipelines = &v.pipelines;
                 let s = debug_info::ShaderInfo {
                     name: format!("{:?}", k).to_owned(),
                     pipelines: pipelines

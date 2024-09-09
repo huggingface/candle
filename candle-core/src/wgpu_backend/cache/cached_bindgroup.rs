@@ -57,10 +57,9 @@ impl BindgroupCacheStorage {
 
             if !keep {
                 let id = id.clone();
-                let buf_reference_input_full = bg.buffer.clone();
-                self.bindgroups
-                    .remove_mapping(buf_reference_input_full.1.clone(), &id);
-                self.bindgroups_full.remove(&buf_reference_input_full);
+                let buf_reference_input_full = &bg.buffer;
+                self.bindgroups.remove_mapping(&buf_reference_input_full.1, &id);
+                self.bindgroups_full.remove(buf_reference_input_full);
             }
             return keep;
         });
@@ -75,22 +74,6 @@ impl BindgroupCacheStorage {
         bindgroup_d: &CachedBindgroupFull,
     ) -> Option<&CachedBindgroupId> {
         self.bindgroups_full.get(bindgroup_d)
-    }
-
-    fn get_bindgroup_reference_by_description_input(
-        &self,
-        bindgroup_d: &CachedBindgroupInput,
-    ) -> &Vec<CachedBindgroupId> {
-        self.bindgroups.get(bindgroup_d)
-    }
-
-    pub(crate) fn enumerate_bindgroup_by_description_input(
-        &self,
-        bindgroup_d: &CachedBindgroupInput,
-    ) -> impl Iterator<Item = (CachedBindgroupId, &CachedBindgroup)> {
-        self.get_bindgroup_reference_by_description_input(bindgroup_d)
-            .iter()
-            .filter_map(|c| Some((c.clone(), self.get_bindgroup(c)?)))
     }
 
     pub(crate) fn bindgroup_counter(&self) -> u32 {

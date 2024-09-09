@@ -7,13 +7,13 @@ use candle_wgpu_kernels::EntryPoint;
 
 #[derive(Debug)]
 pub struct ShaderModuleComputePipelines {
-    shader: Arc<wgpu::ShaderModule>,
-    pipelines: HashMap<PipelineType, Arc<wgpu::ComputePipeline>>,
+    pub(crate) shader: Arc<wgpu::ShaderModule>,
+    pub(crate) pipelines: HashMap<PipelineType, Arc<wgpu::ComputePipeline>>,
 }
 
 #[derive(Debug)]
 pub(crate) struct ShaderCache {
-    shaders: HashMap<candle_wgpu_kernels::Shaders, ShaderModuleComputePipelines>,
+    pub(crate) shaders: HashMap<candle_wgpu_kernels::Shaders, ShaderModuleComputePipelines>,
 }
 
 impl ShaderCache {

@@ -5,6 +5,8 @@ use std::{
     sync::atomic::AtomicU32,
 };
 
+use tracing::{instrument, span};
+
 pub trait ToU32 {
     fn to_u32(self) -> u32;
 }
@@ -86,83 +88,45 @@ impl ToF64 for bool {
 #[derive(Debug)]
 pub(crate) struct HashMapMulti<K, V> {
     pub(crate) map: HashMap<K, Vec<V>>,
-    pub(crate) empty: Vec<V>,
+    pub(crate) _empty: Vec<V>,
 }
 
-// #[derive(Debug)]
-// pub(crate) struct BTreeMulti<K, V> {
-//     pub(crate) map: BTreeMap<K, Vec<V>>,
-//     pub(crate) empty: Vec<V>,
-// }
 
 impl<K: std::cmp::Eq + PartialEq + std::hash::Hash, V> HashMapMulti<K, V> {
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),
-            empty: vec![],
+            _empty: vec![],
         }
     }
 
+    #[instrument(skip(self, key, value))]
     pub fn add_mapping(&mut self, key: K, value: V) {
         self.map.entry(key).or_insert_with(Vec::new).push(value);
     }
 
+    #[instrument(skip(self, key))]
     pub fn get(&self, key: &K) -> &Vec<V> {
-        self.map.get(key).unwrap_or(&self.empty)
+        self.map.get(key).unwrap_or(&self._empty)
     }
 }
 
 impl<K: std::cmp::Eq + PartialEq + std::hash::Hash, V: PartialEq> HashMapMulti<K, V> {
-    pub fn remove_mapping(&mut self, key: K, value: &V) {
-        if let Some(vec) = self.map.get_mut(&key) {
+    
+
+    #[instrument(skip(self, key, value))]
+    pub fn remove_mapping(&mut self, key: &K, value: &V) {
+        if let Some(vec) = self.map.get_mut(key) {
             if let Some(pos) = vec.iter().position(|x| x == value) {
                 vec.remove(pos);
             }
 
             if vec.is_empty() {
-                self.map.remove(&key);
+                self.map.remove(key);
             }
         }
     }
 }
-
-// impl<K: std::cmp::Eq + PartialEq + std::hash::Hash + Ord, V: std::cmp::PartialEq> BTreeMulti<K, V> {
-//     pub fn new() -> Self {
-//         Self {
-//             map: BTreeMap::new(),
-//             empty: vec![],
-//         }
-//     }
-
-//     pub fn add_mapping(&mut self, key: K, value: V) -> bool {
-//         let values = self.map.entry(key).or_insert_with(Vec::new);
-//         if !values.contains(&value) {
-//             values.push(value);
-//             return true;
-//         }
-//         return false;
-//     }
-
-//     // pub fn remove_mapping(&mut self, key : K, value: &V) {
-//     //      if let Some(vec) = self.map.get_mut(&key) {
-//     //         if let Some(pos) = vec.iter().position(|x| x == value) {
-//     //             vec.remove(pos);
-//     //         }
-
-//     //         if vec.is_empty() {
-//     //             self.map.remove(&key);
-//     //         }
-//     //     }
-//     // }
-
-//     pub fn get(&self, key: &K) -> &Vec<V> {
-//         self.map.get(key).unwrap_or(&self.empty)
-//     }
-
-//     pub fn get_mut(&mut self, key: &K) -> &mut Vec<V> {
-//         self.map.get_mut(key).unwrap_or(&mut self.empty)
-//     }
-// }
 
 #[derive(Debug)]
 pub struct FixedSizeQueue<T> {
@@ -471,6 +435,7 @@ where
             .filter_map(|c| if !c.is_used { None } else { c.value.as_ref() })
     }
 
+    #[instrument(skip(self, keep))]
     fn retain(&mut self, keep: impl Fn((&TREF, &T)) -> bool) {
         for (index, sf) in self.data.iter_mut().enumerate() {
             if let Some(val) = &sf.value {
@@ -484,13 +449,17 @@ where
         }
     }
 
+    #[instrument(skip(self, keep))]
     fn retain_mut(&mut self, mut keep: impl FnMut((&TREF, &T)) -> bool) {
         for (index, sf) in self.data.iter_mut().enumerate() {
             if let Some(val) = &sf.value {
                 if !keep((&TREF::new(index as u32, sf.time_stamp), val)) {
                     sf.is_used = false;
                     sf.time_stamp += 1;
+                    let span1 = span!(tracing::Level::INFO, "Storage Setting to None");
+                    let _enter1 = span1.enter();
                     sf.value = None;
+                    drop(_enter1);
                     self.free.push(index);
                 }
             }

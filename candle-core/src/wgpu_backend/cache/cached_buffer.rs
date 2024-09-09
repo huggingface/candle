@@ -111,20 +111,21 @@ impl BufferCacheStorage {
     }
 
     //creats a Buffer, expect that it will be used and not be part of free memory
-    #[instrument(skip(self, dev, command_id))]
-    fn create_buffer(&mut self, dev: &WgpuDevice, size: u64, command_id: u32) -> CachedBufferId {
+    #[instrument(skip(self, dev, command_id, size))]
+    pub(crate) fn create_buffer(&mut self, dev: &WgpuDevice, size: u64, command_id: u32) -> CachedBufferId {
         let buffer = wgpu_functions::create_buffer(dev, size);
         let mut buffer = CachedBuffer::new(buffer);
         buffer.last_used_counter = command_id;
         let id = self.storage.insert(buffer);
         self.buffer_memory += size;
         self.buffer_counter += 1;
-
+        tracing::info!("created buffer {:?}, size: {size}", id);
         return id;
     }
 
     #[instrument(skip(self, id))]
     pub fn delete_buffer(&mut self, id: &CachedBufferId) {
+        tracing::info!("delete buffer {:?}", id);
         let value = self.storage.delete_move(id);
         if let Some(val) = value {
             if self
@@ -137,6 +138,7 @@ impl BufferCacheStorage {
         }
     }
 
+    #[instrument(skip(self, id))]
     pub fn get_buffer(&self, id: &CachedBufferId) -> Option<&CachedBuffer> {
         self.storage.get(id)
     }
@@ -144,6 +146,7 @@ impl BufferCacheStorage {
     //will not delete the buffer, but mark it free
     #[instrument(skip(self, id))]
     pub fn free_buffer(&mut self, id: &CachedBufferId) {
+        tracing::info!("free buffer {:?}", id);
         let buffer: Option<&mut CachedBuffer> = self.storage.get_mut(id);
         if let Some(buffer) = buffer {
             if buffer.is_free == false {
@@ -157,8 +160,9 @@ impl BufferCacheStorage {
     }
 
     //will not create a buffer, but mark the buffer as used
-    #[instrument(skip(self, id, command_id))]
+    #[instrument(skip(self, command_id, id))]
     pub fn use_buffer(&mut self, id: &CachedBufferId, command_id: u32) {
+        tracing::info!("use buffer {:?}", id);
         let buffer: Option<&mut CachedBuffer> = self.storage.get_mut(id);
         if let Some(buffer) = buffer {
             if buffer.is_free == true {
@@ -207,21 +211,22 @@ impl BufferCacheStorage {
     }
 
     //will try to find a free buffer in the cache, or create a new one
-    #[instrument(skip(self, dev, command_id))]
+    #[instrument(skip(self, dev, command_id, minimum_size,optimal_size, duration))]
     pub fn search_buffer(
         &mut self,
         dev: &WgpuDevice,
-        size: u64,
+        minimum_size: u64,
+        optimal_size: u64,
         command_id: u32,
-        length: u32,
+        duration: u32,
     ) -> CachedBufferId {
         //println!("search buffer: size: {size}");
-        let max_size = BufferCacheStorage::max_cached_size(size, length);
+        let max_size = BufferCacheStorage::max_cached_size(minimum_size, duration).max(optimal_size);
 
         if dev.configuration.use_cache {
             let mut buffer_found = None;
-            for id in self.order.range(OrderedIndex::new(0, size)..) {
-                if id.value < size {
+            for id in self.order.range(OrderedIndex::new(0, minimum_size)..) {
+                if id.value < minimum_size {
                     panic!("Did not expect size to be smaller, than key");
                 }
 
@@ -240,7 +245,7 @@ impl BufferCacheStorage {
                 }
             }
         }
-        return self.create_buffer(dev, size, command_id);
+        return self.create_buffer(dev, optimal_size, command_id);
     }
 
     pub fn max_memory_allowed(&self) -> u64 {
@@ -271,6 +276,7 @@ impl BufferCacheStorage {
         !self.order.is_empty()
     }
 
+    #[instrument(skip(self))]
     pub fn get_free_buffers(&self) -> Vec<(CachedBufferId, u32)> {
         return self
             .order
@@ -281,7 +287,7 @@ impl BufferCacheStorage {
                     .get_reference(entry.index)
                     .expect("item in order, that could ne be found in storage");
                 return (id, val.last_used_counter);
-            })
+            }).rev()
             .collect();
     }
 }

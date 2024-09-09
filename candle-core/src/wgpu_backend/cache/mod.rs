@@ -14,7 +14,7 @@ use buffer_mapping::*;
 
 use std::u32;
 
-use tracing::instrument;
+use tracing::{instrument, span};
 
 use super::{
     device::PipelineType,
@@ -231,9 +231,13 @@ pub struct ModelCache {
     pub(crate) mappings: BufferMappingCache,
     pub(crate) shader : ShaderCache,
 
+    pub(crate) unary_inplace_counter: u32,
+    pub(crate) binary_inplace_counter: u32,
+    pub(crate) copy_inplace_counter: u32,
+
     #[cfg(feature = "wgpu_debug")]
     pub(crate) debug:
-        HashMap<super::device::DebugPipelineRecording, super::device::DebugPipelineRecording>, //stores all queed commands (e.g. used to test performance in the browser so we can measure the performance of each unnique operation alone)
+        std::collections::HashMap<super::device::DebugPipelineRecording, super::device::DebugPipelineRecording>, //stores all queed commands (e.g. used to test performance in the browser so we can measure the performance of each unnique operation alone)
 }
 
 impl ModelCache {
@@ -244,9 +248,12 @@ impl ModelCache {
             bindgroups: BindgroupCacheStorage::new(),
             mappings: BufferMappingCache::new(mapping_size),
             shader : ShaderCache::new(),
-             
+            
+            unary_inplace_counter : 0, 
+            binary_inplace_counter : 0,
+            copy_inplace_counter : 0,
             #[cfg(feature = "wgpu_debug")]
-            debug: HashMap::new(),
+            debug: std::collections::HashMap::new(),
         }
     }
 
@@ -271,7 +278,7 @@ impl ModelCache {
 
         let buffer = self
             .buffers
-            .search_buffer(dev, data.len() as u64, 0, u32::MAX - 1); //TODO use exact size?
+            .search_buffer(dev, data.len() as u64,data.len() as u64, 0, u32::MAX - 1); //TODO use exact size?
         dev.queue
             .write_buffer(self.buffers.get_buffer(&buffer).unwrap().buffer(), 0, data);
 
@@ -310,10 +317,18 @@ impl ModelCache {
                 self.buffers.get_buffer_count()
             );
 
+            tracing::info!(
+                "deleting buffers: ({}) current {current_memory}/{memory_margin}",
+                self.buffers.get_buffer_count()
+            );
+
             //every entry in self.buffers.order will be free and can be potentially deleted
             //this is ordered from small to big.
 
-            let buffers = self.buffers.get_free_buffers();
+            let mut buffers = self.buffers.get_free_buffers();
+
+            buffers.sort_by_key(|f| f.1);
+
             for (id, _) in buffers {
                 check_bindgroups = true;
                 self.buffers.delete_buffer(&id);
@@ -328,6 +343,12 @@ impl ModelCache {
                 self.buffers.get_buffer_count(),
                 self.buffers.max_memory_allowed()
             );
+
+            tracing::info!(
+                "after deleting: ({}) current {current_memory}/{}",
+                self.buffers.get_buffer_count(),
+                self.buffers.max_memory_allowed()
+            );
         }
 
         //remove bindgroups:
@@ -336,6 +357,9 @@ impl ModelCache {
 
         if check_bindgroups {
             self.bindgroups.retain_bindgroups(|bindgroup| {
+                let span1 = span!(tracing::Level::INFO, "Calc sould keep bindgroup");
+                let _enter1 = span1.enter();
+
                 let check_buffer = |buffer_reference| {
                     return self.buffers.get_buffer(buffer_reference).is_some();
                 };
@@ -351,7 +375,7 @@ impl ModelCache {
                             check_buffer(v1) && check_buffer(v2) && check_buffer(v3)
                         }
                     };
-
+                drop(_enter1);
                 //check if all buffers for this bindgroup still exist!
                 if !is_valid {
                     return false;
@@ -434,47 +458,66 @@ impl ModelCache {
         }
 
         let buf_dest_id = bindgroup_reference.get_dest();
-        let buf_dest_length;
-        let mut buf_dest_cached_id;
-        let mut required_size;
+        let buf_dest_dur;
+        let buf_dest_size;
+        let buf_dest_cached_id;
         {
             let buf_dest_reference = self.buffer_reference.get(buf_dest_id).unwrap();
             buf_dest_cached_id = buf_dest_reference.cached_buffer_id().clone();
-            required_size = buf_dest_reference.size();
-            buf_dest_length = buf_dest_reference.last_used() - buf_dest_reference.first_used();
+            buf_dest_size = buf_dest_reference.size();
+            buf_dest_dur = buf_dest_reference.last_used() - buf_dest_reference.first_used();
             if buf_dest_reference.last_used() < buf_dest_reference.first_used() {
                 panic!("buffer {:?}({:?})", buf_dest_reference, buf_dest_id);
             }
         }
+        let minimum_size = buf_dest_size; //minimum size needed
+        let mut optimal_size = buf_dest_size; //size we use if we need to create a new buffer (may be a little bit bigger for growing buffers)
 
         if dev.configuration.use_cache {
-            //the destination buffer of this bindgroup already has a buffer set
-            if buf_dest_cached_id.is_valid() {
-                let bindgroup_inputs =
+            let current_mapping_index = self.mappings.current_index;
+            let current_mapping = self.mappings.get_current_mapping();
+
+            let buffer_already_set = self.buffers.get_buffer(&buf_dest_cached_id).is_some();
+
+            //search in buffer mapping, and use the same buffer as last run:
+            if let Some(buffer_mapping) = current_mapping.get_buffer_mapping(&pipeline, current_mapping_index) {
+                if buffer_already_set{
+                    let bindgroup_inputs =
                     get_buffer_referece_key(self, buf_dest_cached_id, &bindgroup_reference);
-                if let Some(bg) = self
-                    .bindgroups
-                    .get_bindgroup_reference_by_description(&bindgroup_inputs)
-                    .cloned()
-                {
-                    self.bindgroups.cached_bindgroup_use_counter_inc();
-                    self.mappings.add_buffer(buf_dest_cached_id, pipeline);
-                    return bg;
+                   
+                    self.mappings.reuse_buffer(buf_dest_size);
+                    
+                    if let Some(bg) = self
+                        .bindgroups
+                        .get_bindgroup_reference_by_description(&bindgroup_inputs)
+                        .cloned()
+                    {
+                        self.bindgroups.cached_bindgroup_use_counter_inc();
+                        return bg;
+                    }
+                    else{
+                        //create new bindgroup:
+                        let bindgroup_reference = get_buffer_referece_key(self, buf_dest_cached_id, bindgroup_reference);
+                        let bindgroup_id = self.create_bindgroup(dev, bindgroup_reference);
+                        return bindgroup_id;
+                    }
                 }
-            }
-            //reference storage is not set -> search a free buffer or create new one
-            else {
-                if let Some(buffer_id) = self.mappings.get_buffer(pipeline.clone()) {
+                else{
+                    let buffer_id =  buffer_mapping.used_buffer;
                     let buffer: Option<&CachedBuffer> = self.buffers.get_buffer(&buffer_id);
+                    let buffer_last_size = buffer_mapping.last_size;
+
                     if let Some(buffer) = buffer {
                         if buffer.is_free() {
-                            if buffer.buffer().size() >= required_size {
+                            if buffer.buffer().size() >= minimum_size {
+                                tracing::info!("mapping: use buffer {:?}", buffer_id);
                                 let buf_dest_reference =
                                     self.buffer_reference.get_mut(buf_dest_id).unwrap();
                                 //use this buffer for the buffer reference:
                                 buf_dest_reference.set_cached_buffer_id(buffer_id);
-                                buf_dest_cached_id = buffer_id;
                                 self.buffers.use_buffer(&buffer_id, command_id);
+
+                                self.mappings.reuse_buffer(buf_dest_size);
 
                                 //reuse a bindgroup, if we could find one:
                                 let bindgroup_inputs =
@@ -485,72 +528,51 @@ impl ModelCache {
                                     .cloned()
                                 {
                                     self.bindgroups.cached_bindgroup_use_counter_inc();
-                                    self.mappings.add_buffer(buffer_id, pipeline);
                                     return bg.clone();
                                 }
-                            } else {
-                                //the required size increased -> also request a little bit more
-                                required_size *= 2;
+
+                                else{
+                                    //create new bindgroup:
+                                    let bindgroup_reference = get_buffer_referece_key(self, buffer_id, bindgroup_reference);
+                                    let bindgroup_id = self.create_bindgroup(dev, bindgroup_reference);
+                                    return bindgroup_id;
+                                }
+                            }
+                            else{
+                                tracing::info!("mapping: buffer was not big enaugh {:?}", buffer_id);
                             }
                         }
+                        else{
+                            tracing::info!("mapping: buffer was not free {:?}", buffer_id);
+                        }
+                    }
+                    else{
+                        tracing::info!("mapping: buffer was deleted {:?}", buffer_id);
+                    }
+                    //replace buffer:
+                    if optimal_size > buffer_last_size{
+                        let delta_size = optimal_size - buffer_last_size; 
+                        let new_size = optimal_size + delta_size * self.mappings.get_current_mapping_count() as u64;
+                        if new_size != optimal_size {
+                            tracing::info!("increase required size: {} -> {}", optimal_size, new_size);
+                        }
+                        optimal_size  = new_size;
                     }
                 }
+            }
 
+            //the destination buffer of this bindgroup already has a buffer set
+            if buffer_already_set{
                 let bindgroup_inputs =
-                    get_buffer_referece_key(self, CachedBufferId::new(0, 0), &bindgroup_reference);
-                // let bindgroup_inputs = &bindgroup_reference.1;
-                let max_size: u64 =
-                    BufferCacheStorage::max_cached_size(required_size as u64, buf_dest_length);
-
-                let candidates_to_process = self
+                    get_buffer_referece_key(self, buf_dest_cached_id, &bindgroup_reference);
+                if let Some(bg) = self
                     .bindgroups
-                    .enumerate_bindgroup_by_description_input(&bindgroup_inputs.1)
-                    .filter_map(|(id, bindgroup)| {
-                        let cbuf_dest_id = bindgroup.buffer().get_dest();
-
-                        if buf_dest_cached_id.is_valid() {
-                            if let Some(bindgroup) = self.bindgroups.get_bindgroup(&id) {
-                                if buf_dest_cached_id == *bindgroup.buffer().get_dest() {
-                                    if let Some(c_buf_dest) = self.buffers.get_buffer(cbuf_dest_id)
-                                    {
-                                        return Some((id, bindgroup, c_buf_dest.buffer().size()));
-                                    }
-                                }
-                            }
-                        } else {
-                            if let Some(c_buf_dest) = self.buffers.get_buffer(cbuf_dest_id) {
-                                if c_buf_dest.buffer().size() >= required_size
-                                    && c_buf_dest.is_free()
-                                    && c_buf_dest.buffer().size() <= max_size
-                                {
-                                    return Some((id, bindgroup, c_buf_dest.buffer().size()));
-                                }
-                            }
-                        }
-                        return None;
-                    });
-
-                //cachedBindgroupId, CachedDest_BufferId
-                let mut candidate_to_process = None;
-                let mut best_size = u64::MAX;
-
-                for (ele_id, ele_bindgroup, dest_buffer_size) in candidates_to_process {
-                    let cbuf_dest_id = ele_bindgroup.buffer().get_dest();
-                    if dest_buffer_size < best_size {
-                        candidate_to_process = Some((ele_id, cbuf_dest_id));
-                        best_size = dest_buffer_size;
-                    }
-                }
-
-                //if we found a bindgroup we can reuse -> use this bindgroup
-                if let Some((cached_bindgroup_id, cached_dest_buffer_id)) = candidate_to_process {
-                    //use this buffer for the buffer reference:
-                    let buf_dest_reference = self.buffer_reference.get_mut(buf_dest_id).unwrap();
-                    buf_dest_reference.set_cached_buffer_id(*cached_dest_buffer_id);
-                    self.buffers.use_buffer(&cached_dest_buffer_id, command_id);
-                    self.mappings.add_buffer(*cached_dest_buffer_id, pipeline);
+                    .get_bindgroup_reference_by_description(&bindgroup_inputs)
+                    .cloned()
+                {
                     self.bindgroups.cached_bindgroup_use_counter_inc();
-                    return cached_bindgroup_id;
+                    self.mappings.add_new_buffer(buf_dest_cached_id, pipeline, buf_dest_size);
+                    return bg;
                 }
             }
         }
@@ -566,7 +588,7 @@ impl ModelCache {
             //create a new buffer
             dest_buffer_id =
                 self.buffers
-                    .search_buffer(dev, required_size, command_id, buf_dest_length);
+                    .search_buffer(dev, minimum_size,optimal_size, command_id, buf_dest_dur);
             //use this buffer for the buffer reference:
             buf_dest_reference.set_cached_buffer_id(dest_buffer_id);
         }
@@ -577,7 +599,7 @@ impl ModelCache {
         let bindgroup_id = self.create_bindgroup(dev, bindgroup_reference);
 
         if dev.configuration.use_cache {
-            self.mappings.add_buffer(dest_buffer_id, pipeline);
+            self.mappings.add_new_buffer(dest_buffer_id, pipeline, buf_dest_size);
         }
         return bindgroup_id;
     }

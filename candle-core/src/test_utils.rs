@@ -4,7 +4,7 @@ use crate::{Result, Tensor};
 macro_rules! test_device {
     // TODO: Switch to generating the two last arguments automatically once concat_idents is
     // stable. https://github.com/rust-lang/rust/issues/29599
-    ($fn_name: ident, $test_cpu: ident, $test_cuda: ident, $test_metal: ident, $test_webgpu: ident) => {
+    ($fn_name: ident, $test_cpu: ident, $test_cuda: ident, $test_metal: ident, $test_wgpu: ident) => {
         #[test]
         fn $test_cpu() -> Result<()> {
             $fn_name(&Device::Cpu)
