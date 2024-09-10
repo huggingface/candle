@@ -235,7 +235,7 @@ impl Error {
     /// Create a new error based on a printable error message.
     ///
     /// If the message implements `std::error::Error`, prefer using [`Error::wrap`] instead.
-    pub fn msg<M: Display + Send + Sync>(msg: M) -> Self {
+    pub fn msg<M: Display>(msg: M) -> Self {
         Self::Msg(msg.to_string()).bt()
     }
 
