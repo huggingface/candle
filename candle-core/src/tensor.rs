@@ -2290,27 +2290,43 @@ impl Tensor {
     /// Pad the input tensor using 0s along dimension `dim`. This adds `left` elements before the
     /// input tensor values and `right` elements after.
     pub fn pad_with_zeros<D: Dim>(&self, dim: D, left: usize, right: usize) -> Result<Self> {
+        self.pad_with(0.0, dim, left, right)
+    }
+
+    /// Pad the input tensor using the specified values along dimension `dim`. This adds `left` elements before the
+    /// input tensor values and `right` elements after.
+    ///
+    /// The type of the value will be cast to match `self`.
+    pub fn pad_with<D: Dim, E: crate::WithDType>(
+        &self,
+        value: E,
+        dim: D,
+        left: usize,
+        right: usize,
+    ) -> Result<Self> {
         if left == 0 && right == 0 {
             Ok(self.clone())
         } else if left == 0 {
-            let dim = dim.to_index(self.shape(), "pad_with_zeros")?;
+            let dim = dim.to_index(self.shape(), "pad_with")?;
             let mut dims = self.dims().to_vec();
             dims[dim] = right;
-            let right = Tensor::zeros(dims.as_slice(), self.dtype, self.device())?;
+            let right =
+                Tensor::full(value, dims.as_slice(), self.device())?.to_dtype(self.dtype)?;
             Tensor::cat(&[self, &right], dim)
         } else if right == 0 {
-            let dim = dim.to_index(self.shape(), "pad_with_zeros")?;
+            let dim = dim.to_index(self.shape(), "pad_with")?;
             let mut dims = self.dims().to_vec();
             dims[dim] = left;
-            let left = Tensor::zeros(dims.as_slice(), self.dtype, self.device())?;
+            let left = Tensor::full(value, dims.as_slice(), self.device())?.to_dtype(self.dtype)?;
             Tensor::cat(&[&left, self], dim)
         } else {
-            let dim = dim.to_index(self.shape(), "pad_with_zeros")?;
+            let dim = dim.to_index(self.shape(), "pad_with")?;
             let mut dims = self.dims().to_vec();
             dims[dim] = left;
-            let left = Tensor::zeros(dims.as_slice(), self.dtype, self.device())?;
+            let left = Tensor::full(value, dims.as_slice(), self.device())?.to_dtype(self.dtype)?;
             dims[dim] = right;
-            let right = Tensor::zeros(dims.as_slice(), self.dtype, self.device())?;
+            let right =
+                Tensor::full(value, dims.as_slice(), self.device())?.to_dtype(self.dtype)?;
             Tensor::cat(&[&left, self, &right], dim)
         }
     }
