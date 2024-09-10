@@ -4,6 +4,8 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+use std::time::Instant;
+
 use candle_transformers::models::stable_diffusion;
 use candle_transformers::models::wuerstchen;
 
@@ -236,6 +238,9 @@ fn run(args: Args) -> Result<()> {
     let height = height.unwrap_or(1024);
     let width = width.unwrap_or(1024);
 
+    
+   let start = Instant::now();
+
     let prior_text_embeddings = {
         let tokenizer = ModelFile::PriorTokenizer.get(args.prior_tokenizer)?;
         let weights = ModelFile::PriorClip.get(args.prior_clip_weights)?;
@@ -379,6 +384,7 @@ fn run(args: Args) -> Result<()> {
 
         match &device {
             candle::Device::Wgpu(gpu) => {
+                #[cfg(feature="wgpu")]
                 gpu.print_bindgroup_reuseinfo2();
                 #[cfg(feature = "wgpu_debug")]{
                     let info = pollster::block_on(gpu.get_debug_info()).unwrap();
@@ -398,6 +404,7 @@ fn run(args: Args) -> Result<()> {
 
         match &device {
             candle::Device::Wgpu(gpu) => {
+                #[cfg(feature="wgpu")]
                 gpu.print_bindgroup_reuseinfo2();
                 #[cfg(feature = "wgpu_debug")]{
                     let info = pollster::block_on(gpu.get_debug_info()).unwrap();
@@ -412,6 +419,8 @@ fn run(args: Args) -> Result<()> {
             _ => {},
         };
     }
+    
+    println!("elapsed: {:?}", start.elapsed()); 
     Ok(())
 }
 
