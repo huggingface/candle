@@ -1,3 +1,5 @@
+use std::fmt::{Debug, Display};
+
 use crate::{DType, DeviceLocation, Layout, MetalError, Shape};
 
 #[derive(Debug, Clone)]
@@ -215,14 +217,21 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
+    /// Create a new error by wrapping another.
     pub fn wrap(err: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self::Wrapped(Box::new(err)).bt()
     }
 
-    pub fn msg(err: impl std::error::Error) -> Self {
-        Self::Msg(err.to_string()).bt()
+    /// Create a new error based on a printable error message.
+    ///
+    /// If the message implements `std::error::Error`, prefer using [`Error::wrap`] instead.
+    pub fn msg<M: Display + Debug + Send + Sync>(msg: M) -> Self {
+        Self::Msg(msg.to_string()).bt()
     }
 
+    /// Create a new error based on a debuggable error message.
+    ///
+    /// If the message implements `std::error::Error`, prefer using [`Error::wrap`] instead.
     pub fn debug(err: impl std::fmt::Debug) -> Self {
         Self::Msg(format!("{err:?}")).bt()
     }
