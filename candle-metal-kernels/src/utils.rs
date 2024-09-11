@@ -165,7 +165,7 @@ pub trait EncoderProvider {
     type Encoder<'a>: AsRef<metal::ComputeCommandEncoderRef>
     where
         Self: 'a;
-    fn encoder<'a>(&'a self) -> Self::Encoder<'a>;
+    fn encoder(&self) -> Self::Encoder<'_>;
 }
 
 pub struct WrappedEncoder<'a>(&'a ComputeCommandEncoderRef);
@@ -178,7 +178,7 @@ impl<'a> Drop for WrappedEncoder<'a> {
 
 impl<'a> AsRef<metal::ComputeCommandEncoderRef> for WrappedEncoder<'a> {
     fn as_ref(&self) -> &metal::ComputeCommandEncoderRef {
-        &self.0
+        self.0
     }
 }
 
@@ -186,7 +186,7 @@ impl EncoderProvider for &metal::CommandBuffer {
     type Encoder<'a> = WrappedEncoder<'a>
     where
         Self: 'a;
-    fn encoder<'a>(&'a self) -> Self::Encoder<'a> {
+    fn encoder(&self) -> Self::Encoder<'_> {
         WrappedEncoder(self.new_compute_command_encoder())
     }
 }
@@ -195,7 +195,7 @@ impl EncoderProvider for &metal::CommandBufferRef {
     type Encoder<'a> = WrappedEncoder<'a>
     where
         Self: 'a;
-    fn encoder<'a>(&'a self) -> Self::Encoder<'a> {
+    fn encoder(&self) -> Self::Encoder<'_> {
         WrappedEncoder(self.new_compute_command_encoder())
     }
 }

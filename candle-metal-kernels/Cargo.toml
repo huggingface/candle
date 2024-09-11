@@ -23,3 +23,4 @@ half = { version = "2.3.1", features = [
   "rand_distr",
 ] }
 rand = "0.8.5"
+rand_distr = "0.4.3"
