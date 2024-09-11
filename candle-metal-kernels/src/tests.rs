@@ -329,7 +329,7 @@ fn run_cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
 
 #[test]
 fn cast_f32() {
-    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f64 = [1.0f64, 2.0, 3.0];
     let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
     let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
     let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
@@ -360,7 +360,7 @@ fn cast_f32() {
 
 #[test]
 fn cast_f16() {
-    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f64 = [1.0f64, 2.0, 3.0];
     let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
     let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
     let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
@@ -391,7 +391,7 @@ fn cast_f16() {
 
 #[test]
 fn cast_bf16() {
-    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f64 = [1.0f64, 2.0, 3.0];
     let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
     let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
     let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
@@ -422,7 +422,7 @@ fn cast_bf16() {
 
 #[test]
 fn cast_u32() {
-    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f64 = [1.0f64, 2.0, 3.0];
     let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
     let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
     let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
@@ -453,7 +453,7 @@ fn cast_u32() {
 
 #[test]
 fn cast_u8() {
-    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f64 = [1.0f64, 2.0, 3.0];
     let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
     let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
     let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
@@ -484,7 +484,7 @@ fn cast_u8() {
 
 #[test]
 fn cast_i64() {
-    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f64 = [1.0f64, 2.0, 3.0];
     let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
     let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
     let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
@@ -911,7 +911,7 @@ fn softmax() {
         vec![0.0900, 0.2447, 0.6652, 0.0900, 0.2447, 0.6652]
     );
 
-    let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
+    let v = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
         .iter()
         .map(|v| f16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -922,7 +922,7 @@ fn softmax() {
         vec![0.0043, 0.0116, 0.0316, 0.0858, 0.2332, 0.6338]
     );
 
-    let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
+    let v = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
         .iter()
         .map(|v| bf16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -1045,6 +1045,7 @@ fn where_cond_u32_f32() {
     assert_eq!(approx(results, 4), vec![-1.0f32, 2.0, -3.0, -4.0, 5.0, 6.0]);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_gemm<T: Clone>(
     name: &'static str,
     (b, m, n, k): (usize, usize, usize, usize),
@@ -1280,7 +1281,7 @@ fn random() {
         variance.sqrt()
     }
 
-    let shape = vec![1024, 10];
+    let shape = [1024, 10];
 
     let length = shape.iter().product::<usize>();
     let seed = 299792458;
@@ -1636,7 +1637,7 @@ fn max_pool2d_f16() {
         &strides,
         "max_pool2d_f16",
     );
-    let expected = vec![5.0, 6.0, 7.0, 9.0, 10.0, 11.0, 13.0, 14.0, 15.0]
+    let expected = [5.0, 6.0, 7.0, 9.0, 10.0, 11.0, 13.0, 14.0, 15.0]
         .iter()
         .map(|v| half::f16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -1656,7 +1657,7 @@ fn max_pool2d_f16() {
         &strides,
         "max_pool2d_f16",
     );
-    let expected = vec![5.0, 7.0, 13.0, 15.0]
+    let expected = [5.0, 7.0, 13.0, 15.0]
         .iter()
         .map(|v| half::f16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -1679,7 +1680,7 @@ fn max_pool2d_bf16() {
         &strides,
         "max_pool2d_bf16",
     );
-    let expected = vec![5.0, 6.0, 7.0, 9.0, 10.0, 11.0, 13.0, 14.0, 15.0]
+    let expected = [5.0, 6.0, 7.0, 9.0, 10.0, 11.0, 13.0, 14.0, 15.0]
         .iter()
         .map(|v| half::bf16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -1699,7 +1700,7 @@ fn max_pool2d_bf16() {
         &strides,
         "max_pool2d_bf16",
     );
-    let expected = vec![5.0, 7.0, 13.0, 15.0]
+    let expected = [5.0, 7.0, 13.0, 15.0]
         .iter()
         .map(|v| half::bf16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -1818,7 +1819,7 @@ fn avg_pool2d_f16() {
         &strides,
         "avg_pool2d_f16",
     );
-    let expected = vec![
+    let expected = [
         2.5000, 3.5000, 4.5000, 6.5000, 7.5000, 8.5000, 10.5000, 11.5000, 12.5000,
     ]
     .iter()
@@ -1843,7 +1844,7 @@ fn avg_pool2d_bf16() {
         &strides,
         "avg_pool2d_bf16",
     );
-    let expected = vec![
+    let expected = [
         2.5000, 3.5000, 4.5000, 6.5000, 7.5000, 8.5000, 10.5000, 11.5000, 12.5000,
     ]
     .iter()
@@ -1981,14 +1982,14 @@ fn conv_transpose1d_f32() {
 
 #[test]
 fn conv_transpose1d_f16() {
-    let input: Vec<f16> = vec![1.0, 2.0, 3.0, 4.0]
+    let input: Vec<f16> = [1.0, 2.0, 3.0, 4.0]
         .iter()
         .map(|v| f16::from_f32(*v))
         .collect();
     let input_shape = &[1, 1, 4];
     let input_stride = &[4, 4, 1];
 
-    let kernel: Vec<f16> = vec![1.0, 2.0, 3.0, 4.0]
+    let kernel: Vec<f16> = [1.0, 2.0, 3.0, 4.0]
         .iter()
         .map(|v| f16::from_f32(*v))
         .collect();
@@ -2009,7 +2010,7 @@ fn conv_transpose1d_f16() {
         "conv_transpose1d_f16",
     );
 
-    let expected = vec![1., 4., 10., 20., 25., 24., 16.]
+    let expected = [1., 4., 10., 20., 25., 24., 16.]
         .iter()
         .map(|v| f16::from_f32(*v))
         .collect::<Vec<_>>();
@@ -2018,14 +2019,14 @@ fn conv_transpose1d_f16() {
 
 #[test]
 fn conv_transpose1d_bf16() {
-    let input: Vec<bf16> = vec![1.0, 2.0, 3.0, 4.0]
+    let input: Vec<bf16> = [1.0, 2.0, 3.0, 4.0]
         .iter()
         .map(|v| bf16::from_f32(*v))
         .collect();
     let input_shape = &[1, 1, 4];
     let input_stride = &[4, 4, 1];
 
-    let kernel: Vec<bf16> = vec![1.0, 2.0, 3.0, 4.0]
+    let kernel: Vec<bf16> = [1.0, 2.0, 3.0, 4.0]
         .iter()
         .map(|v| bf16::from_f32(*v))
         .collect();
@@ -2046,7 +2047,7 @@ fn conv_transpose1d_bf16() {
         "conv_transpose1d_bf16",
     );
 
-    let expected = vec![1., 4., 10., 20., 25., 24., 16.]
+    let expected = [1., 4., 10., 20., 25., 24., 16.]
         .iter()
         .map(|v| bf16::from_f32(*v))
         .collect::<Vec<_>>();
