@@ -1050,10 +1050,10 @@ fn run_gemm<T: Clone>(
     name: &'static str,
     (b, m, n, k): (usize, usize, usize, usize),
     lhs: &[T],
-    lhs_stride: Vec<usize>,
+    lhs_stride: &[usize],
     lhs_offset: usize,
     rhs: &[T],
-    rhs_stride: Vec<usize>,
+    rhs_stride: &[usize],
     rhs_offset: usize,
 ) -> Vec<T> {
     let device = device();
@@ -1106,10 +1106,10 @@ fn gemm() {
         "sgemm",
         (b, m, n, k),
         &lhs,
-        lhs_stride,
+        &lhs_stride,
         0,
         &rhs,
-        rhs_stride,
+        &rhs_stride,
         0,
     );
     assert_eq!(
@@ -1126,10 +1126,10 @@ fn gemm() {
         "sgemm",
         (b, m, n, k),
         &lhs,
-        lhs_stride,
+        &lhs_stride,
         0,
         &rhs,
-        rhs_stride,
+        &rhs_stride,
         0,
     );
     assert_eq!(
@@ -1151,10 +1151,10 @@ fn gemm() {
         "sgemm",
         (1, m, n, k),
         &lhs,
-        lhs_stride,
+        &lhs_stride,
         0,
         &rhs,
-        rhs_stride,
+        &rhs_stride,
         12 * 4,
     );
     assert_eq!(
@@ -1173,10 +1173,10 @@ fn gemm() {
             "bgemm",
             (b, m, n, k),
             &lhs,
-            lhs_stride,
+            &lhs_stride,
             0,
             &rhs,
-            rhs_stride,
+            &rhs_stride,
             0,
         );
         assert_eq!(
@@ -1195,10 +1195,10 @@ fn gemm() {
         "hgemm",
         (b, m, n, k),
         &lhs,
-        lhs_stride,
+        &lhs_stride,
         0,
         &rhs,
-        rhs_stride,
+        &rhs_stride,
         0,
     );
     assert_eq!(
@@ -1212,10 +1212,10 @@ fn run_mlx_gemm<T: Clone>(
     dtype: GemmDtype,
     (b, m, n, k): (usize, usize, usize, usize),
     lhs: &[T],
-    lhs_stride: Vec<usize>,
+    lhs_stride: &[usize],
     lhs_offset: usize,
     rhs: &[T],
-    rhs_stride: Vec<usize>,
+    rhs_stride: &[usize],
     rhs_offset: usize,
 ) -> Vec<T> {
     let device = device();
@@ -1242,10 +1242,10 @@ fn run_mlx_gemm<T: Clone>(
         &kernels,
         dtype,
         (b, m, n, k),
-        &lhs_stride,
+        lhs_stride,
         lhs_offset,
         &lhs,
-        &rhs_stride,
+        rhs_stride,
         rhs_offset,
         &rhs,
         &output,
@@ -1257,21 +1257,63 @@ fn run_mlx_gemm<T: Clone>(
     read_to_vec(&output, length)
 }
 
+fn mlx_vs_mfa_one(b: usize, m: usize, n: usize, k: usize, dtype: GemmDtype) {
+    use rand::SeedableRng;
+    use rand_distr::Distribution;
+
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42424242);
+    let normal = rand_distr::Normal::new(0.0, 1.0).unwrap();
+
+    let lhs: Vec<_> = (0..b * m * k).map(|_| normal.sample(&mut rng)).collect();
+    let rhs: Vec<_> = (0..b * n * k).map(|_| normal.sample(&mut rng)).collect();
+    let v1: Vec<f32> = run_mlx_gemm(
+        dtype,
+        (b, m, n, k),
+        &lhs,
+        &[m * k, k, 1],
+        0,
+        &rhs,
+        &[k * n, n, 1],
+        0,
+    );
+    let v2: Vec<f32> = run_gemm(
+        "sgemm",
+        (b, m, n, k),
+        &lhs,
+        &[m * k, k, 1],
+        0,
+        &rhs,
+        &[k * n, n, 1],
+        0,
+    );
+    for (a, b) in v1.iter().zip(v2.iter()) {
+        let diff = (a - b).abs();
+        assert_eq!((diff * 1e4).round(), 0.)
+    }
+}
+
+#[test]
+fn mlx_vs_mfa() {
+    mlx_vs_mfa_one(1, 32, 32, 25, GemmDtype::F32);
+    mlx_vs_mfa_one(1, 128, 128, 100, GemmDtype::F32);
+    mlx_vs_mfa_one(1, 256, 256, 256, GemmDtype::F32);
+    mlx_vs_mfa_one(1, 192, 200, 75, GemmDtype::F32);
+    mlx_vs_mfa_one(3, 27, 67, 64, GemmDtype::F32);
+}
+
 #[test]
 fn mlx_gemm() {
     let (b, m, n, k) = (1, 2, 4, 3);
-    let lhs_stride = vec![m * k, k, 1];
     let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
-    let rhs_stride = vec![n * k, n, 1];
     let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
     let results = run_mlx_gemm(
         GemmDtype::F32,
         (b, m, n, k),
         &lhs,
-        lhs_stride,
+        &[m * k, k, 1],
         0,
         &rhs,
-        rhs_stride,
+        &[n * k, n, 1],
         0,
     );
     assert_eq!(
@@ -1280,18 +1322,16 @@ fn mlx_gemm() {
     );
 
     let (b, m, n, k) = (2, 2, 4, 3);
-    let lhs_stride = vec![m * k, k, 1];
     let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
-    let rhs_stride = vec![n * k, n, 1];
     let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
     let results = run_mlx_gemm(
         GemmDtype::F32,
         (b, m, n, k),
         &lhs,
-        lhs_stride,
+        &[m * k, k, 1],
         0,
         &rhs,
-        rhs_stride,
+        &[n * k, n, 1],
         0,
     );
     assert_eq!(
@@ -1304,19 +1344,17 @@ fn mlx_gemm() {
 
     // OFFSET
     let (b, m, n, k) = (2, 2, 4, 3);
-    let lhs_stride = vec![m * k, k, 1];
     let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
-    let rhs_stride = vec![n * k, n, 1];
     let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
     // Manually set batch_size=1 and offset 12 elements * 4 the number of bytes for f32
     let results = run_mlx_gemm(
         GemmDtype::F32,
         (1, m, n, k),
         &lhs,
-        lhs_stride,
+        &[m * k, k, 1],
         0,
         &rhs,
-        rhs_stride,
+        &[n * k, n, 1],
         12 * 4,
     );
     assert_eq!(
@@ -1327,18 +1365,16 @@ fn mlx_gemm() {
     // bgemm sanity test
     {
         let (b, m, n, k) = (1, 2, 4, 3);
-        let lhs_stride = vec![m * k, k, 1];
         let lhs: Vec<bf16> = (0..b * m * k).map(|f| bf16::from_f32(f as f32)).collect();
-        let rhs_stride = vec![n * k, n, 1];
         let rhs: Vec<bf16> = (0..b * n * k).map(|f| bf16::from_f32(f as f32)).collect();
         let results = run_mlx_gemm(
             GemmDtype::Bf16,
             (b, m, n, k),
             &lhs,
-            lhs_stride,
+            &[m * k, k, 1],
             0,
             &rhs,
-            rhs_stride,
+            &[n * k, n, 1],
             0,
         );
         assert_eq!(
@@ -1350,18 +1386,16 @@ fn mlx_gemm() {
     {
         // hgemm sanity test
         let (b, m, n, k) = (1, 2, 4, 3);
-        let lhs_stride = vec![m * k, k, 1];
         let lhs: Vec<f16> = (0..b * m * k).map(|f| f16::from_f32(f as f32)).collect();
-        let rhs_stride = vec![n * k, n, 1];
         let rhs: Vec<f16> = (0..b * n * k).map(|f| f16::from_f32(f as f32)).collect();
         let results = run_mlx_gemm(
             GemmDtype::F16,
             (b, m, n, k),
             &lhs,
-            lhs_stride,
+            &[m * k, k, 1],
             0,
             &rhs,
-            rhs_stride,
+            &[n * k, n, 1],
             0,
         );
         assert_eq!(
