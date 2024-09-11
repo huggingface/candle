@@ -1209,7 +1209,7 @@ fn gemm() {
 
 #[allow(clippy::too_many_arguments)]
 fn run_mlx_gemm<T: Clone>(
-    dtype: GemmDtype,
+    dtype: GemmDType,
     (b, m, n, k): (usize, usize, usize, usize),
     lhs: &[T],
     lhs_stride: &[usize],
@@ -1257,7 +1257,7 @@ fn run_mlx_gemm<T: Clone>(
     read_to_vec(&output, length)
 }
 
-fn mlx_vs_mfa_one(b: usize, m: usize, n: usize, k: usize, dtype: GemmDtype) {
+fn mlx_vs_mfa_one(b: usize, m: usize, n: usize, k: usize, dtype: GemmDType) {
     use rand::SeedableRng;
     use rand_distr::Distribution;
 
@@ -1294,11 +1294,11 @@ fn mlx_vs_mfa_one(b: usize, m: usize, n: usize, k: usize, dtype: GemmDtype) {
 
 #[test]
 fn mlx_vs_mfa() {
-    mlx_vs_mfa_one(1, 32, 32, 25, GemmDtype::F32);
-    mlx_vs_mfa_one(1, 128, 128, 100, GemmDtype::F32);
-    mlx_vs_mfa_one(1, 256, 256, 256, GemmDtype::F32);
-    mlx_vs_mfa_one(1, 192, 200, 75, GemmDtype::F32);
-    mlx_vs_mfa_one(3, 27, 67, 64, GemmDtype::F32);
+    mlx_vs_mfa_one(1, 32, 32, 25, GemmDType::F32);
+    mlx_vs_mfa_one(1, 128, 128, 100, GemmDType::F32);
+    mlx_vs_mfa_one(1, 256, 256, 256, GemmDType::F32);
+    mlx_vs_mfa_one(1, 192, 200, 75, GemmDType::F32);
+    mlx_vs_mfa_one(3, 27, 67, 64, GemmDType::F32);
 }
 
 #[test]
@@ -1307,7 +1307,7 @@ fn mlx_gemm() {
     let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
     let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
     let results = run_mlx_gemm(
-        GemmDtype::F32,
+        GemmDType::F32,
         (b, m, n, k),
         &lhs,
         &[m * k, k, 1],
@@ -1325,7 +1325,7 @@ fn mlx_gemm() {
     let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
     let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
     let results = run_mlx_gemm(
-        GemmDtype::F32,
+        GemmDType::F32,
         (b, m, n, k),
         &lhs,
         &[m * k, k, 1],
@@ -1348,7 +1348,7 @@ fn mlx_gemm() {
     let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
     // Manually set batch_size=1 and offset 12 elements * 4 the number of bytes for f32
     let results = run_mlx_gemm(
-        GemmDtype::F32,
+        GemmDType::F32,
         (1, m, n, k),
         &lhs,
         &[m * k, k, 1],
@@ -1368,7 +1368,7 @@ fn mlx_gemm() {
         let lhs: Vec<bf16> = (0..b * m * k).map(|f| bf16::from_f32(f as f32)).collect();
         let rhs: Vec<bf16> = (0..b * n * k).map(|f| bf16::from_f32(f as f32)).collect();
         let results = run_mlx_gemm(
-            GemmDtype::Bf16,
+            GemmDType::BF16,
             (b, m, n, k),
             &lhs,
             &[m * k, k, 1],
@@ -1389,7 +1389,7 @@ fn mlx_gemm() {
         let lhs: Vec<f16> = (0..b * m * k).map(|f| f16::from_f32(f as f32)).collect();
         let rhs: Vec<f16> = (0..b * n * k).map(|f| f16::from_f32(f as f32)).collect();
         let results = run_mlx_gemm(
-            GemmDtype::F16,
+            GemmDType::F16,
             (b, m, n, k),
             &lhs,
             &[m * k, k, 1],

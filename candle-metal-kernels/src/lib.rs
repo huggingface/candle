@@ -2193,7 +2193,7 @@ pub fn call_mlx_gemm(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
-    dtype: GemmDtype,
+    dtype: GemmDType,
     (b, m, n, k): (usize, usize, usize, usize),
     lhs_stride: &[usize],
     lhs_offset: usize,
@@ -2304,18 +2304,18 @@ pub fn call_mlx_gemm(
     // TODO(laurent): generate the name
     // template [[host_name("gemm_" #tname "_"  #iname "_" #oname "_bm" #bm "_bn" #bn "_bk" #bk "_wm" #wm "_wn" #wn)]]
     let name = match (dtype, a_trans, b_trans) {
-        (GemmDtype::F32, false, false) => "gemm_nn_f32_f32_32_32_16_2_2",
-        (GemmDtype::F32, true, false) => "gemm_tn_f32_f32_32_32_16_2_2",
-        (GemmDtype::F32, false, true) => "gemm_nt_f32_f32_32_32_16_2_2",
-        (GemmDtype::F32, true, true) => "gemm_tt_f32_f32_32_32_16_2_2",
-        (GemmDtype::Bf16, false, false) => "gemm_nn_bf16_bf16_32_32_16_2_2",
-        (GemmDtype::Bf16, true, false) => "gemm_tn_bf16_bf16_32_32_16_2_2",
-        (GemmDtype::Bf16, false, true) => "gemm_nt_bf16_bf16_32_32_16_2_2",
-        (GemmDtype::Bf16, true, true) => "gemm_tt_bf16_bf16_32_32_16_2_2",
-        (GemmDtype::F16, false, false) => "gemm_nn_f16_f16_32_32_16_2_2",
-        (GemmDtype::F16, true, false) => "gemm_tn_f16_f16_32_32_16_2_2",
-        (GemmDtype::F16, false, true) => "gemm_nt_f16_f16_32_32_16_2_2",
-        (GemmDtype::F16, true, true) => "gemm_tt_f16_f16_32_32_16_2_2",
+        (GemmDType::F32, false, false) => "gemm_nn_f32_f32_32_32_16_2_2",
+        (GemmDType::F32, true, false) => "gemm_tn_f32_f32_32_32_16_2_2",
+        (GemmDType::F32, false, true) => "gemm_nt_f32_f32_32_32_16_2_2",
+        (GemmDType::F32, true, true) => "gemm_tt_f32_f32_32_32_16_2_2",
+        (GemmDType::BF16, false, false) => "gemm_nn_bf16_bf16_32_32_16_2_2",
+        (GemmDType::BF16, true, false) => "gemm_tn_bf16_bf16_32_32_16_2_2",
+        (GemmDType::BF16, false, true) => "gemm_nt_bf16_bf16_32_32_16_2_2",
+        (GemmDType::BF16, true, true) => "gemm_tt_bf16_bf16_32_32_16_2_2",
+        (GemmDType::F16, false, false) => "gemm_nn_f16_f16_32_32_16_2_2",
+        (GemmDType::F16, true, false) => "gemm_tn_f16_f16_32_32_16_2_2",
+        (GemmDType::F16, false, true) => "gemm_nt_f16_f16_32_32_16_2_2",
+        (GemmDType::F16, true, true) => "gemm_tt_f16_f16_32_32_16_2_2",
     };
     let pipeline = kernels.load_pipeline_with_constants(device, Source::Gemm, name, constants)?;
     let encoder = ep.encoder();
