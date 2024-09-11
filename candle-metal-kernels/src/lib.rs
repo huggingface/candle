@@ -2181,6 +2181,7 @@ pub fn call_arg_sort(
     Ok(())
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum GemmDtype {
     Bf16,
     F16,
