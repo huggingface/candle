@@ -2203,6 +2203,7 @@ pub fn call_mlx_gemm(
     rhs_buffer: &Buffer,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
+    #[derive(Debug)]
     #[repr(C)]
     struct GemmParams {
         m: i32,
@@ -2282,12 +2283,13 @@ pub fn call_mlx_gemm(
         n * k
     };
 
+    println!("{lda} {ldb} {a_trans} {b_trans}");
     let gemm_params = GemmParams {
         m: m as i32,
         n: n as i32,
         k: k as i32,
         lda,
-        ldb,
+        ldb: 1,
         ldd: n as i32,
         tiles_n: tn as i32,
         tiles_m: tm as i32,
@@ -2295,9 +2297,13 @@ pub fn call_mlx_gemm(
         batch_stride_a: batch_stride_a as isize,
         batch_stride_b: batch_stride_b as isize,
         batch_stride_d: (m * n) as isize,
-        batch_ndim: b as i32,
+        batch_ndim: 1i32,
         gemm_k_iterations_aligned: (k / bk) as i32,
     };
+    let batch_strides = vec![
+        gemm_params.batch_stride_a as isize,
+        gemm_params.batch_stride_b as isize,
+    ];
 
     // TODO(laurent): generate the name
     // template [[host_name("gemm_" #tname "_"  #iname "_" #oname "_bm" #bm "_bn" #bn "_bk" #bk "_wm" #wm "_wn" #wn)]]
@@ -2332,7 +2338,11 @@ pub fn call_mlx_gemm(
         std::mem::size_of::<i32>() as u64,
         &(b as i32) as *const i32 as *const c_void,
     );
-    encoder.set_bytes(7, 0, std::ptr::null());
+    encoder.set_bytes(
+        7,
+        (std::mem::size_of::<isize>() * batch_strides.len()) as u64,
+        batch_strides.as_ptr() as *const c_void,
+    );
 
     let grid_size = MTLSize {
         width: tn as u64,
