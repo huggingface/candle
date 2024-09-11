@@ -167,6 +167,7 @@ where
     ///     [4., 5.]
     /// ]);
     /// # Ok::<(), candle_core::Error>(())
+    /// ```
     fn i(&self, index: T) -> Result<Tensor, Error> {
         self.index(&[index.into()])
     }
@@ -202,6 +203,7 @@ where
     ///     [4., 5.]
     /// ]);
     /// # Ok::<(), candle_core::Error>(())
+    /// ```
     fn i(&self, (a,): (A,)) -> Result<Tensor, Error> {
         self.index(&[a.into()])
     }
@@ -227,6 +229,7 @@ where
     /// assert_eq!(c.shape().dims(), &[2]);
     /// assert_eq!(c.to_vec1::<f32>()?, &[1., 4.]);
     /// # Ok::<(), candle_core::Error>(())
+    /// ```
     fn i(&self, (a, b): (A, B)) -> Result<Tensor, Error> {
         self.index(&[a.into(), b.into()])
     }
