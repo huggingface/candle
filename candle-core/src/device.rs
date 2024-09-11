@@ -142,6 +142,15 @@ impl Device {
         }
     }
 
+    /// Get the current seed for the device RNG.
+    pub fn get_current_seed(&self) -> Result<u64> {
+        match self {
+            Self::Cpu => CpuDevice.get_current_seed(),
+            Self::Cuda(c) => c.get_current_seed(),
+            Self::Metal(m) => m.get_current_seed(),
+        }
+    }
+
     pub fn same_device(&self, rhs: &Self) -> bool {
         match (self, rhs) {
             (Self::Cpu, Self::Cpu) => true,

@@ -208,6 +208,10 @@ impl crate::backend::BackendDevice for CudaDevice {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    fn get_current_seed(&self) -> Result<u64> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     fn location(&self) -> crate::DeviceLocation {
         fail!()
     }

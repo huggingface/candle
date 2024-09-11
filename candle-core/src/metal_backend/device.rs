@@ -70,6 +70,8 @@ pub struct MetalDevice {
     pub(crate) buffers: AllocatedBuffers,
     /// Seed for random number generation.
     pub(crate) seed: Arc<Mutex<Buffer>>,
+    /// Value of the current seed
+    pub(crate) seed_value: Arc<RwLock<u64>>,
 }
 
 impl std::fmt::Debug for MetalDevice {

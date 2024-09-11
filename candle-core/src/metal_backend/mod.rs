@@ -1944,6 +1944,7 @@ impl BackendDevice for MetalDevice {
             buffers,
             kernels,
             seed,
+            seed_value: Arc::new(RwLock::new(299792458)),
         })
     }
 
@@ -2105,7 +2106,13 @@ impl BackendDevice for MetalDevice {
         }
         seed_buffer.did_modify_range(metal::NSRange::new(0, 4));
 
+        *self.seed_value.write().unwrap() = seed;
+
         Ok(())
+    }
+
+    fn get_current_seed(&self) -> Result<u64> {
+        Ok(*self.seed_value.read().unwrap())
     }
 
     fn synchronize(&self) -> Result<()> {
