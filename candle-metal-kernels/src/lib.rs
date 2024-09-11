@@ -2181,5 +2181,106 @@ pub fn call_arg_sort(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn call_mlx_gemm(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    (b, m, n, k): (usize, usize, usize, usize),
+    lhs_stride: &[usize],
+    lhs_offset: usize,
+    lhs_buffer: &Buffer,
+    rhs_stride: &[usize],
+    rhs_offset: usize,
+    rhs_buffer: &Buffer,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    assert!(rhs_stride.len() >= 2);
+    assert!(lhs_stride.len() >= 2);
+    let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
+    let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
+    let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
+    let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
+    // lhs has shape b, m, k
+    // We also allow for the case where the stride on the minor dimension is not as expected but
+    // there is a single element.
+    let a_trans = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
+        false
+    } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
+        true
+    } else {
+        return Err(MetalKernelError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        })?;
+    };
+    // rhs has shape b, k, n
+    let b_trans = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
+        false
+    } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
+        true
+    } else {
+        return Err(MetalKernelError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        })?;
+    };
+    let (bm, bn, bk, wn, wm) = (32, 32, 16, 2, 2);
+    // https://github.com/ml-explore/mlx/blob/02efb310cac667bc547d1b96f21596c221f84fe7/mlx/backend/metal/matmul.cpp#L422
+    let constants = Some(ConstantValues::new(vec![
+        (10, Value::Bool(/* has_batch */ b > 1)),
+        (100, Value::Bool(/* use_out_source */ false)),
+        (110, Value::Bool(/* do_axpby */ false)),
+        (200, Value::Bool(/* align_m */ m % bm == 0)),
+        (201, Value::Bool(/* align_n */ n % bn == 0)),
+        (202, Value::Bool(/* align_k */ k % bk == 0)),
+        (300, Value::Bool(/* do_gather */ false)),
+    ]));
+
+    let swizzle_log = 0;
+    let tile = 1 << swizzle_log;
+    let tn = n.div_ceil(bn);
+    let tm = m.div_ceil(bm);
+    let tn = tn * tile;
+    let tm = tm.div_ceil(tile);
+
+    // TODO(laurent): generate the name
+    // template [[host_name("gemm_" #tname "_"  #iname "_" #oname "_bm" #bm "_bn" #bn "_bk" #bk "_wm" #wm "_wn" #wn)]]
+    let name = match (a_trans, b_trans) {
+        (false, false) => "gemm_nn_f32_f32_32_32_16_2_2",
+        (true, false) => "gemm_tn_f32_f32_32_32_16_2_2",
+        (false, true) => "gemm_nt_f32_f32_32_32_16_2_2",
+        (true, true) => "gemm_tt_f32_f32_32_32_16_2_2",
+    };
+    let pipeline = kernels.load_pipeline_with_constants(device, Source::Gemm, name, constants)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_buffer(0, Some(lhs_buffer), lhs_offset as NSUInteger);
+    encoder.set_buffer(1, Some(rhs_buffer), rhs_offset as NSUInteger);
+    encoder.set_buffer(3, Some(output), 0);
+    encoder.set_bytes(4, 0, std::ptr::null());
+    encoder.set_bytes(6, 0, std::ptr::null());
+    encoder.set_bytes(7, 0, std::ptr::null());
+
+    let grid_size = MTLSize {
+        width: tn as u64,
+        height: tm as u64,
+        depth: /* batch_size_out */ b as u64,
+    };
+    let group_size = MTLSize {
+        width: 32,
+        height: wn,
+        depth: wm,
+    };
+    encoder.use_resource(lhs_buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(rhs_buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(grid_size, group_size);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;
