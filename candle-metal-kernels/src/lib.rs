@@ -11,33 +11,35 @@ pub use utils::BufferOffset;
 use utils::{get_block_dims, linear_split, EncoderProvider};
 
 const AFFINE: &str = include_str!("affine.metal");
-const INDEXING: &str = include_str!("indexing.metal");
-const UNARY: &str = include_str!("unary.metal");
 const BINARY: &str = include_str!("binary.metal");
-const TERNARY: &str = include_str!("ternary.metal");
 const CAST: &str = include_str!("cast.metal");
 const CONV: &str = include_str!("conv.metal");
-const REDUCE: &str = include_str!("reduce.metal");
-const RANDOM: &str = include_str!("random.metal");
+const INDEXING: &str = include_str!("indexing.metal");
 // Current source: https://github.com/ivarflakstad/metal-flash-attention/tree/candle
 const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
+const MLX_GEMM: &str = include_str!("mlx_gemm.metal");
 const QUANTIZED: &str = include_str!("quantized.metal");
+const RANDOM: &str = include_str!("random.metal");
+const REDUCE: &str = include_str!("reduce.metal");
 const SORT: &str = include_str!("sort.metal");
+const TERNARY: &str = include_str!("ternary.metal");
+const UNARY: &str = include_str!("unary.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     Affine,
-    Indexing,
-    Unary,
     Binary,
-    Ternary,
     Cast,
-    Reduce,
-    Mfa,
     Conv,
-    Random,
+    Indexing,
+    Mfa,
+    MlxGemm,
     Quantized,
+    Random,
+    Reduce,
     Sort,
+    Ternary,
+    Unary,
 }
 
 pub mod copy2d {
@@ -191,16 +193,17 @@ impl Kernels {
     fn get_library_source(&self, source: Source) -> &'static str {
         match source {
             Source::Affine => AFFINE,
-            Source::Unary => UNARY,
             Source::Binary => BINARY,
-            Source::Ternary => TERNARY,
-            Source::Indexing => INDEXING,
             Source::Cast => CAST,
-            Source::Reduce => REDUCE,
             Source::Conv => CONV,
-            Source::Random => RANDOM,
+            Source::Indexing => INDEXING,
+            Source::MlxGemm => MLX_GEMM,
             Source::Quantized => QUANTIZED,
+            Source::Random => RANDOM,
+            Source::Reduce => REDUCE,
             Source::Sort => SORT,
+            Source::Ternary => TERNARY,
+            Source::Unary => UNARY,
             Source::Mfa => panic!("Invalid lib"),
         }
     }
