@@ -2231,9 +2231,9 @@ pub fn call_mlx_gemm(
     // We also allow for the case where the stride on the minor dimension is not as expected but
     // there is a single element.
     let (lda, a_trans) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
-        (n as i32, false)
+        (k as i32, false)
     } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
-        (k as i32, true)
+        (m as i32, true)
     } else {
         return Err(MetalKernelError::MatMulNonContiguous {
             lhs_stride: lhs_stride.to_vec(),
@@ -2243,9 +2243,9 @@ pub fn call_mlx_gemm(
     };
     // rhs has shape b, k, n
     let (ldb, b_trans) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
-        (k as i32, false)
+        (n as i32, false)
     } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
-        (m as i32, true)
+        (k as i32, true)
     } else {
         return Err(MetalKernelError::MatMulNonContiguous {
             lhs_stride: lhs_stride.to_vec(),
@@ -2283,13 +2283,12 @@ pub fn call_mlx_gemm(
         n * k
     };
 
-    println!("{lda} {ldb} {a_trans} {b_trans}");
     let gemm_params = GemmParams {
         m: m as i32,
         n: n as i32,
         k: k as i32,
         lda,
-        ldb: 1,
+        ldb,
         ldd: n as i32,
         tiles_n: tn as i32,
         tiles_m: tm as i32,
@@ -2300,10 +2299,7 @@ pub fn call_mlx_gemm(
         batch_ndim: 1i32,
         gemm_k_iterations_aligned: (k / bk) as i32,
     };
-    let batch_strides = vec![
-        gemm_params.batch_stride_a as isize,
-        gemm_params.batch_stride_b as isize,
-    ];
+    let batch_strides = [gemm_params.batch_stride_a, gemm_params.batch_stride_b];
 
     // TODO(laurent): generate the name
     // template [[host_name("gemm_" #tname "_"  #iname "_" #oname "_bm" #bm "_bn" #bn "_bk" #bk "_wm" #wm "_wn" #wn)]]

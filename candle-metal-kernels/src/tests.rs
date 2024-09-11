@@ -1259,7 +1259,7 @@ fn run_mlx_gemm<T: Clone>(
 
 #[test]
 fn mlx_gemm() {
-    let (b, m, n, k) = (1, 1, 1, 3);
+    let (b, m, n, k) = (1, 2, 4, 3);
     let lhs_stride = vec![m * k, k, 1];
     let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
     let rhs_stride = vec![n * k, n, 1];
