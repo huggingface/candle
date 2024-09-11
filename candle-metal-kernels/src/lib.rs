@@ -2181,11 +2181,18 @@ pub fn call_arg_sort(
     Ok(())
 }
 
+pub enum GemmDtype {
+    Bf16,
+    F16,
+    F32,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn call_mlx_gemm(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
+    dtype: GemmDtype,
     (b, m, n, k): (usize, usize, usize, usize),
     lhs_stride: &[usize],
     lhs_offset: usize,
@@ -2195,6 +2202,23 @@ pub fn call_mlx_gemm(
     rhs_buffer: &Buffer,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
+    #[repr(C)]
+    struct GemmParams {
+        m: i32,
+        n: i32,
+        k: i32,
+        lda: i32,
+        ldb: i32,
+        ldd: i32,
+        tiles_n: i32,
+        tiles_m: i32,
+        batch_stride_a: isize,
+        batch_stride_b: isize,
+        batch_stride_d: isize,
+        swizzle_log: i32,
+        gemm_k_iterations_aligned: i32,
+        batch_ndim: i32,
+    }
     assert!(rhs_stride.len() >= 2);
     assert!(lhs_stride.len() >= 2);
     let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
@@ -2204,10 +2228,10 @@ pub fn call_mlx_gemm(
     // lhs has shape b, m, k
     // We also allow for the case where the stride on the minor dimension is not as expected but
     // there is a single element.
-    let a_trans = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
-        false
+    let (lda, a_trans) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
+        (n as i32, false)
     } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
-        true
+        (k as i32, true)
     } else {
         return Err(MetalKernelError::MatMulNonContiguous {
             lhs_stride: lhs_stride.to_vec(),
@@ -2216,10 +2240,10 @@ pub fn call_mlx_gemm(
         })?;
     };
     // rhs has shape b, k, n
-    let b_trans = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
-        false
+    let (ldb, b_trans) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
+        (k as i32, false)
     } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
-        true
+        (m as i32, true)
     } else {
         return Err(MetalKernelError::MatMulNonContiguous {
             lhs_stride: lhs_stride.to_vec(),
@@ -2246,13 +2270,49 @@ pub fn call_mlx_gemm(
     let tn = tn * tile;
     let tm = tm.div_ceil(tile);
 
+    let batch_stride_a = if lhs_stride.len() > 2 {
+        lhs_stride[lhs_stride.len() - 3]
+    } else {
+        m * k
+    };
+    let batch_stride_b = if rhs_stride.len() > 2 {
+        rhs_stride[rhs_stride.len() - 3]
+    } else {
+        n * k
+    };
+
+    let gemm_params = GemmParams {
+        m: m as i32,
+        n: n as i32,
+        k: k as i32,
+        lda,
+        ldb,
+        ldd: n as i32,
+        tiles_n: tn as i32,
+        tiles_m: tm as i32,
+        swizzle_log,
+        batch_stride_a: batch_stride_a as isize,
+        batch_stride_b: batch_stride_b as isize,
+        batch_stride_d: (m * n) as isize,
+        batch_ndim: b as i32,
+        gemm_k_iterations_aligned: (k / bk) as i32,
+    };
+
     // TODO(laurent): generate the name
     // template [[host_name("gemm_" #tname "_"  #iname "_" #oname "_bm" #bm "_bn" #bn "_bk" #bk "_wm" #wm "_wn" #wn)]]
-    let name = match (a_trans, b_trans) {
-        (false, false) => "gemm_nn_f32_f32_32_32_16_2_2",
-        (true, false) => "gemm_tn_f32_f32_32_32_16_2_2",
-        (false, true) => "gemm_nt_f32_f32_32_32_16_2_2",
-        (true, true) => "gemm_tt_f32_f32_32_32_16_2_2",
+    let name = match (dtype, a_trans, b_trans) {
+        (GemmDtype::F32, false, false) => "gemm_nn_f32_f32_32_32_16_2_2",
+        (GemmDtype::F32, true, false) => "gemm_tn_f32_f32_32_32_16_2_2",
+        (GemmDtype::F32, false, true) => "gemm_nt_f32_f32_32_32_16_2_2",
+        (GemmDtype::F32, true, true) => "gemm_tt_f32_f32_32_32_16_2_2",
+        (GemmDtype::Bf16, false, false) => "gemm_nn_bf16_bf16_32_32_16_2_2",
+        (GemmDtype::Bf16, true, false) => "gemm_tn_bf16_bf16_32_32_16_2_2",
+        (GemmDtype::Bf16, false, true) => "gemm_nt_bf16_bf16_32_32_16_2_2",
+        (GemmDtype::Bf16, true, true) => "gemm_tt_bf16_bf16_32_32_16_2_2",
+        (GemmDtype::F16, false, false) => "gemm_nn_f16_f16_32_32_16_2_2",
+        (GemmDtype::F16, true, false) => "gemm_tn_f16_f16_32_32_16_2_2",
+        (GemmDtype::F16, false, true) => "gemm_nt_f16_f16_32_32_16_2_2",
+        (GemmDtype::F16, true, true) => "gemm_tt_f16_f16_32_32_16_2_2",
     };
     let pipeline = kernels.load_pipeline_with_constants(device, Source::Gemm, name, constants)?;
     let encoder = ep.encoder();
@@ -2261,8 +2321,16 @@ pub fn call_mlx_gemm(
     encoder.set_buffer(0, Some(lhs_buffer), lhs_offset as NSUInteger);
     encoder.set_buffer(1, Some(rhs_buffer), rhs_offset as NSUInteger);
     encoder.set_buffer(3, Some(output), 0);
-    encoder.set_bytes(4, 0, std::ptr::null());
-    encoder.set_bytes(6, 0, std::ptr::null());
+    encoder.set_bytes(
+        4,
+        std::mem::size_of::<GemmParams>() as u64,
+        &gemm_params as *const GemmParams as *const c_void,
+    );
+    encoder.set_bytes(
+        6, // batch_shape
+        std::mem::size_of::<i32>() as u64,
+        &(b as i32) as *const i32 as *const c_void,
+    );
     encoder.set_bytes(7, 0, std::ptr::null());
 
     let grid_size = MTLSize {
