@@ -1425,6 +1425,33 @@ impl BackendStorage for MetalStorage {
                 &buffer,
             )
             .map_err(MetalError::from)?;
+        } else if self.device.use_mlx_mm {
+            let dtype = match self.dtype {
+                DType::F32 => candle_metal_kernels::GemmDType::F32,
+                DType::F16 => candle_metal_kernels::GemmDType::F16,
+                DType::BF16 => candle_metal_kernels::GemmDType::BF16,
+                dtype => {
+                    return Err(MetalError::Message(format!(
+                        "mlx matmul doesn't support {dtype:?}"
+                    ))
+                    .into())
+                }
+            };
+            candle_metal_kernels::call_mlx_gemm(
+                &self.device.device,
+                &command_buffer,
+                &self.device.kernels,
+                dtype,
+                (b, m, n, k),
+                lhs_l.stride(),
+                lhs_l.start_offset() * self.dtype.size_in_bytes(),
+                &self.buffer,
+                rhs_l.stride(),
+                rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
+                &rhs.buffer,
+                &buffer,
+            )
+            .map_err(MetalError::from)?;
         } else {
             let name = match self.dtype {
                 DType::F32 => "sgemm",
@@ -1818,6 +1845,10 @@ impl BackendDevice for MetalDevice {
         let command_buffer_index = Arc::new(RwLock::new(0));
         let kernels = Arc::new(Kernels::new());
         let buffers = Arc::new(RwLock::new(HashMap::new()));
+        let use_mlx_mm = match std::env::var("CANDLE_USE_MLX_MM").as_deref() {
+            Ok("false") | Ok("False") | Ok("FALSE") | Ok("0") | Err(_) => false,
+            Ok(_) => true,
+        };
         let compute_per_buffer = match std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER") {
             Ok(val) => val.parse()?,
             _ => 50,
@@ -1837,6 +1868,7 @@ impl BackendDevice for MetalDevice {
             buffers,
             kernels,
             seed,
+            use_mlx_mm,
         })
     }
 
