@@ -412,6 +412,8 @@ impl BackendStorage for MetalStorage {
             .map_err(MetalError::from)?;
         } else {
             let kernel_name = match (self.dtype, dtype) {
+                (DType::U32, DType::F16) => "cast_u32_f16_strided",
+                (DType::U32, DType::BF16) => "cast_u32_bf16_strided",
                 (DType::U32, DType::F32) => "cast_u32_f32_strided",
                 (DType::U32, DType::U8) => "cast_u32_u8_strided",
                 (DType::U32, DType::I64) => "cast_u32_i64_strided",
