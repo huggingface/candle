@@ -48,6 +48,10 @@ impl QCudaStorage {
     ) -> Result<(CudaStorage, crate::Shape)> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+
+    pub fn data(&self) -> Result<Vec<u8>> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
 }
 
 pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(

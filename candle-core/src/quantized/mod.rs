@@ -134,9 +134,8 @@ impl QStorage {
                 let data = unsafe { std::slice::from_raw_parts(data_ptr, size_in_bytes) };
                 Ok(Cow::from(data))
             }
-            QStorage::Metal(_) | QStorage::Cuda(_) => {
-                crate::bail!("not implemented");
-            }
+            QStorage::Cuda(storage) => Ok(Cow::from(storage.data()?)),
+            QStorage::Metal(storage) => Ok(Cow::from(storage.data()?)),
         }
     }
 }

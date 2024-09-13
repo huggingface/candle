@@ -44,6 +44,10 @@ impl QMetalStorage {
     ) -> Result<(MetalStorage, crate::Shape)> {
         Err(Error::NotCompiledWithMetalSupport)
     }
+
+    pub fn data(&self) -> Result<Vec<u8>> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
 }
 
 pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(

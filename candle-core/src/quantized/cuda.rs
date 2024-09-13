@@ -493,6 +493,10 @@ impl QCudaStorage {
             self.dequantize_matmul(self_shape, storage, layout)
         }
     }
+
+    pub fn data(&self) -> Result<Vec<u8>> {
+        self.device.dtoh_sync_copy(&self.data.slice(..)).w()
+    }
 }
 
 impl QCudaStorage {
