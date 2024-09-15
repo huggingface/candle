@@ -199,6 +199,12 @@ INDEX_OP(is_i32_f16, int32_t, half)
 INDEX_OP(is_i32_bf16, int32_t, bfloat)
 #endif
 
+INDEX_OP(is_i16_f32, int16_t, float)
+INDEX_OP(is_i16_f16, int16_t, half)
+#if defined(__HAVE_BFLOAT__)
+INDEX_OP(is_i16_bf16, int16_t, bfloat)
+#endif
+
 INDEX_OP(is_u32_f32, uint32_t, float)
 INDEX_OP(is_u32_f16, uint32_t, half)
 #if defined(__HAVE_BFLOAT__)
@@ -219,10 +225,12 @@ GATHER_OP(gather_u32_bf16, uint, bfloat)
 
 SCATTER_ADD_OP(sa_u32_f32, uint32_t, float)
 SCATTER_ADD_OP(sa_u8_f32, uint8_t, float)
+SCATTER_ADD_OP(sa_i16_f32, int16_t, float)
 SCATTER_ADD_OP(sa_i32_f32, int32_t, float)
 SCATTER_ADD_OP(sa_i64_f32, int64_t, float)
 SCATTER_ADD_OP(sa_u32_f16, uint32_t, half)
 SCATTER_ADD_OP(sa_u8_f16, uint8_t, half)
+SCATTER_ADD_OP(sa_i16_f16, int16_t, half)
 SCATTER_ADD_OP(sa_i32_f16, int32_t, half)
 SCATTER_ADD_OP(sa_i64_f16, int64_t, half)
 #if defined(__HAVE_BFLOAT__)
@@ -234,6 +242,7 @@ SCATTER_ADD_OP(sa_i64_bf16, int64_t, bfloat)
 // i64
 INDEX_ADD_OP(ia_i64_f16, int64_t, half)
 INDEX_ADD_OP(ia_i64_f32, int64_t, float)
+INDEX_ADD_OP(ia_i64_i16, int64_t, int16_t)
 INDEX_ADD_OP(ia_i64_i32, int64_t, int32_t)
 INDEX_ADD_OP(ia_i64_i64, int64_t, int64_t)
 INDEX_ADD_OP(ia_i64_u32, int64_t, uint32_t)
@@ -242,7 +251,7 @@ INDEX_ADD_OP(ia_i64_u8, int64_t, uint8_t)
 INDEX_ADD_OP(ia_i64_bf16, int64_t, bfloat)
 #endif
 
-// i64
+// i32
 INDEX_ADD_OP(ia_i32_f16, int32_t, half)
 INDEX_ADD_OP(ia_i32_f32, int32_t, float)
 INDEX_ADD_OP(ia_i32_i64, int32_t, int64_t)
@@ -253,9 +262,23 @@ INDEX_ADD_OP(ia_i32_u8, int32_t, uint8_t)
 INDEX_ADD_OP(ia_i32_bf16, int32_t, bfloat)
 #endif
 
+// i16
+INDEX_ADD_OP(ia_i16_f16, int16_t, half)
+INDEX_ADD_OP(ia_i16_f32, int16_t, float)
+INDEX_ADD_OP(ia_i16_i16, int16_t, int16_t)
+INDEX_ADD_OP(ia_i16_i32, int16_t, int32_t)
+INDEX_ADD_OP(ia_i16_i64, int16_t, int64_t)
+INDEX_ADD_OP(ia_i16_u32, int16_t, uint32_t)
+INDEX_ADD_OP(ia_i16_u8, int16_t, uint8_t)
+#if defined(__HAVE_BFLOAT__)
+INDEX_ADD_OP(ia_i16_bf16, int16_t, bfloat)
+#endif
+
+
 // u32
 INDEX_ADD_OP(ia_u32_f16, uint32_t, half)
 INDEX_ADD_OP(ia_u32_f32, uint32_t, float)
+INDEX_ADD_OP(ia_u32_i16, uint32_t, int16_t)
 INDEX_ADD_OP(ia_u32_i32, uint32_t, int32_t)
 INDEX_ADD_OP(ia_u32_i64, uint32_t, int64_t)
 INDEX_ADD_OP(ia_u32_u32, uint32_t, uint32_t)
@@ -267,6 +290,7 @@ INDEX_ADD_OP(ia_u32_bf16, uint32_t, bfloat)
 // u8
 INDEX_ADD_OP(ia_u8_f16, uint8_t, half)
 INDEX_ADD_OP(ia_u8_f32, uint8_t, float)
+INDEX_ADD_OP(ia_u8_i16, uint8_t, int16_t)
 INDEX_ADD_OP(ia_u8_i32, uint8_t, int32_t)
 INDEX_ADD_OP(ia_u8_i64, uint8_t, int64_t)
 INDEX_ADD_OP(ia_u8_u32, uint8_t, uint32_t)

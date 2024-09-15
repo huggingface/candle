@@ -189,6 +189,7 @@ pub trait UnaryOpT {
     fn f64(v1: f64) -> f64;
     fn u8(v1: u8) -> u8;
     fn u32(v1: u32) -> u32;
+    fn i16(v1: i16) -> i16;
     fn i32(v1: i32) -> i32;
     fn i64(v1: i64) -> i64;
 
@@ -214,6 +215,7 @@ pub trait BinaryOpT {
     fn f64(v1: f64, v2: f64) -> f64;
     fn u8(v1: u8, v2: u8) -> u8;
     fn u32(v1: u32, v2: u32) -> u32;
+    fn i16(v1: i16, v2: i16) -> i16;
     fn i32(v1: i32, v2: i32) -> i32;
     fn i64(v1: i64, v2: i64) -> i64;
 
@@ -233,6 +235,8 @@ pub trait BinaryOpT {
     fn i64_vec(_xs1: &[i64], _xs2: &[i64], _ys: &mut [i64]) {}
     const I32_VEC: bool = false;
     fn i32_vec(_xs1: &[i32], _xs2: &[i32], _ys: &mut [i32]) {}
+    const I16_VEC: bool = false;
+    fn i16_vec(_xs1: &[i16], _xs2: &[i16], _ys: &mut [i16]) {}
 }
 
 pub(crate) struct Add;
@@ -289,6 +293,10 @@ macro_rules! bin_op {
             }
             #[inline(always)]
             fn u32(v1: u32, v2: u32) -> u32 {
+                $e(v1, v2)
+            }
+            #[inline(always)]
+            fn i16(v1: i16, v2: i16) -> i16 {
                 $e(v1, v2)
             }
             #[inline(always)]
@@ -391,6 +399,10 @@ macro_rules! unary_op {
             fn i32(_: i32) -> i32 {
                 todo!("no unary function for i32")
             }
+            #[inline(always)]
+            fn i16(_: i16) -> i16 {
+                todo!("no unary function for i16")
+            }
         }
     };
 
@@ -430,6 +442,10 @@ macro_rules! unary_op {
             #[inline(always)]
             fn i32(_: i32) -> i32 {
                 todo!("no unary function for i32")
+            }
+            #[inline(always)]
+            fn i16(_: i16) -> i16 {
+                todo!("no unary function for i16")
             }
 
             #[cfg(feature = "mkl")]
@@ -534,6 +550,10 @@ impl UnaryOpT for Gelu {
     fn i32(_: i32) -> i32 {
         0
     }
+    #[inline(always)]
+    fn i16(_: i16) -> i16 {
+        0
+    }
     const KERNEL: &'static str = "ugelu";
 
     #[cfg(feature = "mkl")]
@@ -611,6 +631,10 @@ impl UnaryOpT for Erf {
     fn i32(_: i32) -> i32 {
         0
     }
+    #[inline(always)]
+    fn i16(_: i16) -> i16 {
+        0
+    }
 }
 
 /// Silu operation
@@ -647,6 +671,10 @@ impl UnaryOpT for Silu {
     }
     #[inline(always)]
     fn i32(_: i32) -> i32 {
+        0
+    }
+    #[inline(always)]
+    fn i16(_: i16) -> i16 {
         0
     }
     const KERNEL: &'static str = "usilu";
@@ -724,6 +752,10 @@ impl UnaryOpT for Abs {
     fn i32(v: i32) -> i32 {
         v.abs()
     }
+    #[inline(always)]
+    fn i16(v: i16) -> i16 {
+        v.abs()
+    }
 }
 
 impl UnaryOpT for Ceil {
@@ -760,6 +792,10 @@ impl UnaryOpT for Ceil {
     }
     #[inline(always)]
     fn i32(v: i32) -> i32 {
+        v
+    }
+    #[inline(always)]
+    fn i16(v: i16) -> i16 {
         v
     }
 }
@@ -800,6 +836,10 @@ impl UnaryOpT for Floor {
     fn i32(v: i32) -> i32 {
         v
     }
+    #[inline(always)]
+    fn i16(v: i16) -> i16 {
+        v
+    }
 }
 
 impl UnaryOpT for Round {
@@ -836,6 +876,10 @@ impl UnaryOpT for Round {
     }
     #[inline(always)]
     fn i32(v: i32) -> i32 {
+        v
+    }
+    #[inline(always)]
+    fn i16(v: i16) -> i16 {
         v
     }
 }
@@ -876,6 +920,10 @@ impl UnaryOpT for GeluErf {
     fn i32(_: i32) -> i32 {
         0
     }
+    #[inline(always)]
+    fn i16(_: i16) -> i16 {
+        0
+    }
 }
 
 impl UnaryOpT for Relu {
@@ -912,6 +960,10 @@ impl UnaryOpT for Relu {
     }
     #[inline(always)]
     fn i32(v: i32) -> i32 {
+        v
+    }
+    #[inline(always)]
+    fn i16(v: i16) -> i16 {
         v
     }
 }
@@ -1015,5 +1067,9 @@ impl UnaryOpT for Sign {
     #[inline(always)]
     fn i32(v: i32) -> i32 {
         (v > 0) as i32 - (v < 0) as i32
+    }
+    #[inline(always)]
+    fn i16(v: i16) -> i16 {
+        (v > 0) as i16 - (v < 0) as i16
     }
 }

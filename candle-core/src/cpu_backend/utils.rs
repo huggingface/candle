@@ -10,6 +10,7 @@ pub trait Map1 {
         match vs {
             C::U8(vs) => Ok(C::U8(self.f(vs, layout)?)),
             C::U32(vs) => Ok(C::U32(self.f(vs, layout)?)),
+            C::I16(vs) => Ok(C::I16(self.f(vs, layout)?)),
             C::I32(vs) => Ok(C::I32(self.f(vs, layout)?)),
             C::I64(vs) => Ok(C::I64(self.f(vs, layout)?)),
             C::BF16(vs) => Ok(C::BF16(self.f(vs, layout)?)),
@@ -27,6 +28,7 @@ pub trait Map1Any {
         match vs {
             C::U8(vs) => Ok(self.f(vs, layout, C::U8)?),
             C::U32(vs) => Ok(self.f(vs, layout, C::U32)?),
+            C::I16(vs) => Ok(self.f(vs, layout, C::I16)?),
             C::I32(vs) => Ok(self.f(vs, layout, C::I32)?),
             C::I64(vs) => Ok(self.f(vs, layout, C::I64)?),
             C::BF16(vs) => Ok(self.f(vs, layout, C::BF16)?),

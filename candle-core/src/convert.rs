@@ -130,6 +130,11 @@ impl Tensor {
                     f.write_u32::<LittleEndian>(v)?
                 }
             }
+            DType::I16 => {
+                for v in vs.to_vec1::<i16>()? {
+                    f.write_i16::<LittleEndian>(v)?
+                }
+            }
             DType::I32 => {
                 for v in vs.to_vec1::<i32>()? {
                     f.write_i32::<LittleEndian>(v)?

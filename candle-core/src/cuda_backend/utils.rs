@@ -19,6 +19,7 @@ pub trait Map1 {
         let out = match s {
             S::U8(s) => S::U8(self.f(s, d, l)?),
             S::U32(s) => S::U32(self.f(s, d, l)?),
+            S::I16(s) => S::I16(self.f(s, d, l)?),
             S::I32(s) => S::I32(self.f(s, d, l)?),
             S::I64(s) => S::I64(self.f(s, d, l)?),
             S::BF16(s) => S::BF16(self.f(s, d, l)?),
@@ -137,6 +138,7 @@ pub trait Map1Any {
         let out = match s {
             S::U8(s) => self.f(s, d, l, S::U8)?,
             S::U32(s) => self.f(s, d, l, S::U32)?,
+            S::I16(s) => self.f(s, d, l, S::I16)?,
             S::I32(s) => self.f(s, d, l, S::I32)?,
             S::I64(s) => self.f(s, d, l, S::I64)?,
             S::BF16(s) => self.f(s, d, l, S::BF16)?,

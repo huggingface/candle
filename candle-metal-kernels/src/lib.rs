@@ -47,6 +47,7 @@ pub mod copy2d {
     pub const BFLOAT: Kernel = Kernel("copy2d_bf16");
     pub const I64: Kernel = Kernel("copy2d_i64");
     pub const I32: Kernel = Kernel("copy2d_i32");
+    pub const I16: Kernel = Kernel("copy2d_i16");
     pub const U32: Kernel = Kernel("copy2d_u32");
     pub const U8: Kernel = Kernel("copy2d_u8");
 }
@@ -64,6 +65,7 @@ macro_rules! ops{
             pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bf16"));
             pub const I64: Kernel = Kernel(concat!(stringify!($name), "_i64"));
             pub const I32: Kernel = Kernel(concat!(stringify!($name), "_i32"));
+            pub const I16: Kernel = Kernel(concat!(stringify!($name), "_i16"));
             pub const U32: Kernel = Kernel(concat!(stringify!($name), "_u32"));
             pub const U8: Kernel = Kernel(concat!(stringify!($name), "_u8"));
         }
@@ -75,6 +77,7 @@ macro_rules! ops{
                 pub const BFLOAT: Kernel = Kernel("copy_bf16");
                 pub const I64: Kernel = Kernel("copy_i64");
                 pub const I32: Kernel = Kernel("copy_i32");
+                pub const I16: Kernel = Kernel("copy_i16");
                 pub const U32: Kernel = Kernel("copy_u32");
                 pub const U8: Kernel = Kernel("copy_u8");
             }
@@ -90,6 +93,7 @@ macro_rules! ops{
             pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bf16_tiled"));
             pub const I64: Kernel = Kernel(concat!(stringify!($name), "_i64_tiled"));
             pub const I32: Kernel = Kernel(concat!(stringify!($name), "_i32_tiled"));
+            pub const I16: Kernel = Kernel(concat!(stringify!($name), "_i16_tiled"));
             pub const U32: Kernel = Kernel(concat!(stringify!($name), "_u32_tiled"));
             pub const U8: Kernel = Kernel(concat!(stringify!($name), "_u8_tiled"));
         }
@@ -101,6 +105,7 @@ macro_rules! ops{
                 pub const BFLOAT: Kernel = Kernel("copy_bf16_tiled");
                 pub const I64: Kernel = Kernel("copy_i64_tiled");
                 pub const I32: Kernel = Kernel("copy_i32_tiled");
+                pub const I16: Kernel = Kernel("copy_i16_tiled");
                 pub const U32: Kernel = Kernel("copy_u32_tiled");
                 pub const U8: Kernel = Kernel("copy_u8_tiled");
             }
@@ -116,6 +121,7 @@ macro_rules! ops{
             pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bf16_strided"));
             pub const I64: Kernel = Kernel(concat!(stringify!($name), "_i64_strided"));
             pub const I32: Kernel = Kernel(concat!(stringify!($name), "_i32_strided"));
+            pub const I16: Kernel = Kernel(concat!(stringify!($name), "_i16_strided"));
             pub const U32: Kernel = Kernel(concat!(stringify!($name), "_u32_strided"));
             pub const U8: Kernel = Kernel(concat!(stringify!($name), "_u8_strided"));
         }
@@ -127,6 +133,7 @@ macro_rules! ops{
                 pub const BFLOAT: Kernel = Kernel("copy_bf16_strided");
                 pub const I64: Kernel = Kernel("copy_i64_strided");
                 pub const I32: Kernel = Kernel("copy_i32_strided");
+                pub const I16: Kernel = Kernel("copy_i16_strided");
                 pub const U32: Kernel = Kernel("copy_u32_strided");
                 pub const U8: Kernel = Kernel("copy_u8_strided");
             }

@@ -181,6 +181,8 @@ __device__ __forceinline__ double absg(double a) { return fabs(a); }
 __device__ __forceinline__ float copysigng(float a, float b) { return copysignf(a, b); }
 __device__ __forceinline__ double copysigng(double a, double b) { return copysign(a, b); }
 
+__device__ __forceinline__ int16_t ming(int16_t a, int16_t b) { return min(a, b); }
+__device__ __forceinline__ int16_t maxg(int16_t a, int16_t b) { return max(a, b); }
 __device__ __forceinline__ int32_t ming(int32_t a, int32_t b) { return min(a, b); }
 __device__ __forceinline__ int32_t maxg(int32_t a, int32_t b) { return max(a, b); }
 __device__ __forceinline__ int64_t ming(int64_t a, int64_t b) { return min(a, b); }

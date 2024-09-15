@@ -172,6 +172,9 @@ COPY2D(copy2d_i64, int64_t)
 UNARY(id, int32_t, copy_i32, copy_i32_strided)
 COPY2D(copy2d_i32, int32_t)
 
+UNARY(id, int16_t, copy_i16, copy_i16_strided)
+COPY2D(copy2d_i16, int16_t)
+
 #if defined(__HAVE_BFLOAT__)
 BFLOAT_UNARY_OP(cos)
 BFLOAT_UNARY_OP(sin)

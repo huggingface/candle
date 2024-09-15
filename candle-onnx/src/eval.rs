@@ -712,6 +712,8 @@ fn simple_eval_(
                 let output = match start.dtype() {
                     DType::U8 => arange_step!(u8),
                     DType::U32 => arange_step!(u32),
+                    DType::I16 => arange_step!(i16),
+                    DType::I32 => arange_step!(i32),
                     DType::I64 => arange_step!(i64),
                     DType::BF16 => arange_step!(f32),
                     DType::F16 => arange_step!(f32),
@@ -1305,7 +1307,7 @@ fn simple_eval_(
                 let input = get(&node.input[0])?;
                 let dt = input.dtype();
                 match dt {
-                    DType::U8 | DType::U32 | DType::I64 => {
+                    DType::U8 | DType::U32 | DType::I64 | DType::I16 | DType::I32 => {
                         bail!(
                             "unsupported dtype {}, only float types are allowed for LeakyRelu",
                             dt.as_str()

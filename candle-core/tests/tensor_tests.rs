@@ -18,6 +18,10 @@ fn ones(device: &Device) -> Result<()> {
         [[1, 1, 1], [1, 1, 1]],
     );
     assert_eq!(
+        Tensor::ones((2, 3), DType::I16, device)?.to_vec2::<i16>()?,
+        [[1, 1, 1], [1, 1, 1]],
+    );
+    assert_eq!(
         Tensor::ones((2, 3), DType::I32, device)?.to_vec2::<i32>()?,
         [[1, 1, 1], [1, 1, 1]],
     );
@@ -809,7 +813,7 @@ fn index_select(device: &Device) -> Result<()> {
             [9.0, 10.0, 11.0]
         ]
     );
-    for dtype in [DType::U8, DType::U32, DType::I32, DType::I64] {
+    for dtype in [DType::U8, DType::U32, DType::I16, DType::I32, DType::I64] {
         let ids = ids.to_dtype(dtype)?;
         let hs = t.index_select(&ids, 1)?;
         assert_eq!(
