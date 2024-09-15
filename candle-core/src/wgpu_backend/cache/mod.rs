@@ -593,15 +593,26 @@ impl ModelCache {
             buf_dest_reference.set_cached_buffer_id(dest_buffer_id);
         }
 
-        //create new bindgroup:
-        let bindgroup_reference =
-            get_buffer_referece_key(self, dest_buffer_id, bindgroup_reference);
-        let bindgroup_id = self.create_bindgroup(dev, bindgroup_reference);
-
+        let bindgroup_inputs = get_buffer_referece_key(self, dest_buffer_id, &bindgroup_reference);
+        
         if dev.configuration.use_cache {
             self.mappings.add_new_buffer(dest_buffer_id, pipeline, buf_dest_size);
         }
-        return bindgroup_id;
+        
+        if let Some(bg) = self
+        .bindgroups
+        .get_bindgroup_reference_by_description(&bindgroup_inputs)
+        .cloned()
+        {
+            self.bindgroups.cached_bindgroup_use_counter_inc();
+            return bg;
+        }
+        else{
+            //create new bindgroup:
+            let bindgroup_reference = get_buffer_referece_key(self, dest_buffer_id, bindgroup_reference);
+            let bindgroup_id = self.create_bindgroup(dev, bindgroup_reference);
+            return bindgroup_id;
+        }
     }
 
     //creats a Bindgroup
@@ -611,6 +622,9 @@ impl ModelCache {
         dev: &WgpuDevice,
         bindgroup_d: CachedBindgroupFull,
     ) -> CachedBindgroupId {
+
+        
+
         let bindgroup = wgpu_functions::create_bindgroup(dev, bindgroup_d.clone(), self);
         let bindgroup = CachedBindgroup::new(bindgroup, bindgroup_d.clone());
 

@@ -92,9 +92,16 @@ impl BindgroupCacheStorage {
         let bindgroup_d = bindgroup.buffer.clone();
         let id = self.storage.insert(bindgroup);
 
-        self.bindgroups
-            .add_mapping(bindgroup_d.1.clone(), id);
+        tracing::info!("Create Bindgroup: {id:?}, {:?}", bindgroup_d);
+
+        self.bindgroups.add_mapping(bindgroup_d.1.clone(), id);
+        
+        if self.bindgroups_full.contains_key(&bindgroup_d){
+            panic!("bindgroup {:?} was tried to add to the bindgroup cache, but it was already be created", bindgroup_d);
+        }
+
         self.bindgroups_full.insert(bindgroup_d, id);
+    
         self.bindgroup_counter += 1;
         return id;
     }
