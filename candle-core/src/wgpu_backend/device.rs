@@ -350,6 +350,7 @@ pub enum MatmulAlgorithm {
     Matmul1,
     Matmul1_4,
     Matmul16_16,
+    Matmul32_64,
     Matmul32_32(bool, bool), //Prefetch, NoPadded, LoadA, LoadB
     Matmul64_64(bool, bool),
     Matmul64_64_8_8(bool, bool),
@@ -374,6 +375,7 @@ impl fmt::Debug for MatmulAlgorithm {
             Self::Matmul1 => write!(f, "Matmul1"),
             Self::Matmul1_4 => write!(f, "Matmul1_4"),
             Self::Matmul16_16 => write!(f, "Matmul5_16_16"),
+            Self::Matmul32_64 => write!(f, "Matmul5_32_64"),
             Self::Matmul32_32(prefatch, no_padded) => write!(
                 f,
                 "Matmul5_32_32({}{})",

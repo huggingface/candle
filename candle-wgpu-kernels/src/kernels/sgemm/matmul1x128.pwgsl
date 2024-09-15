@@ -3,7 +3,6 @@
 #define TSK 128u                     // The tile-size in dimension K
 #define WPTM 1u                     // The work-per-thread in dimension M
 #define WPTN 4u                     // The work-per-thread in dimension N
-#define PREFETCH 1u
 
 #define WIDTHA 4u
 #define WIDTHB 4u

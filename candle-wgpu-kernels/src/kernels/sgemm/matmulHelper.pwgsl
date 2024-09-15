@@ -54,11 +54,11 @@ override IsOutputPadded : bool = false;
 
 
 #ifndef WIDTHA
-#define WIDTHA 4
+#define WIDTHA 4u
 #endif
 
 #ifndef WIDTHB
-#define WIDTHB 4
+#define WIDTHB 4u
 #endif
 
 
@@ -93,6 +93,14 @@ var<storage> v_input_a: array<ARRAY_TYPEA>;
 var<storage> v_input_b: array<ARRAY_TYPEB>;
 
 
+
+#ifdef PREFETCH
+#define PREFETCH 2
+#else
+#define PREFETCH 1
+#endif
+
+
 #ifndef WONT_USE_LOADA
 var<workgroup> Asub: array<array<array<DTYPE, TSM>, TSK>, PREFETCH>;
 #endif
@@ -107,9 +115,7 @@ var<workgroup> Bsub: array<array<array<DTYPE, TSN>, TSK>, PREFETCH>;
 #ifndef WONT_USE_LOADA
 fn loadA(tile : u32, tid : u32, t_offset1 : u32){
     for(var la = 0u; la < LPTAWITDH; la += 1u){
-        //let id = la + tid * (LPTA / WIDTHA);
         let id = la*THREADS + tid;
-
         if op_matmul_input1_stride_k == 1{
             let id_k = id % TSKAWIDTH;
             let id_m = id / TSKAWIDTH;
@@ -141,7 +147,6 @@ fn loadA(tile : u32, tid : u32, t_offset1 : u32){
 #ifndef WONT_USE_LOADB
 fn loadB(tile : u32, tid : u32, t_offset2 : u32){
     for(var lb = 0u; lb < LPTBWITDH; lb += 1u){
-        //let id = lb + tid * ( LPTB / WIDTHB);
         let id = lb*THREADS + tid;
 
         if (op_matmul_input2_stride_n == 1){
@@ -299,7 +304,7 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
                             }
                             for (var wn=0u; wn<WPTN; wn++) {
                                 let id = t_offset2 + k * op_matmul_input2_stride_k + (lx + wn) * op_matmul_input2_stride_n;
-                                let vecB : ARRAY_TYPEB = v_input_b[id / WIDTHB];
+                                var vecB : ARRAY_TYPEB = v_input_b[id / WIDTHB];
         
                                 for(var ki=0u; ki < WIDTHB; ki++){
                                     acc[wm][wn] += a_reg[ki] * vecB[ki];
@@ -324,19 +329,18 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
                     b_reg[wn] = Bsub[tt][k][lx + wn];
                 }
             #else    
-                #if WPTN % WIDTHB == 0
-                    #definec WPTNBWIDTH WPTN / WIDTHB
-                    if op_matmul_input2_stride_n == 1{
-                        for (var wn=0u; wn<WPTNBWIDTH; wn++) {
-                            let id = t_offset2 + k * op_matmul_input2_stride_k + (lx + wn*WIDTHB) * op_matmul_input2_stride_n;
-                            let vecB : ARRAY_TYPEB = v_input_b[id / WIDTHB];
+                #assert WPTN % WIDTHB == 0
+                #definec WPTNBWIDTH WPTN / WIDTHB
+                if op_matmul_input2_stride_n == 1{
+                    for (var wn=0u; wn<WPTNBWIDTH; wn++) {
+                        let id = t_offset2 + k * op_matmul_input2_stride_k + (lx + wn*WIDTHB) * op_matmul_input2_stride_n;
+                        var vecB : ARRAY_TYPEB = v_input_b[id / WIDTHB];
 
-                            for(var j = 0u; j < WIDTHB; j++){
-                                b_reg[WIDTHB*wn + j] = vecB[j];
-                            }
+                        for(var j = 0u; j < WIDTHB; j++){
+                            b_reg[WIDTHB*wn + j] = vecB[j];
                         }
                     }
-                #endif
+                }
             #endif
 
             // Perform the computation

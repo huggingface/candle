@@ -1,3 +1,5 @@
+use sgemm::{GenericMatmulSettings, StrideOptimization};
+
 use crate::wgpu_backend::MatmulAlgorithm;
 
 use super::*;
@@ -118,6 +120,33 @@ mod sgemm{
         (num + n - 1) / n * n
     }    
     
+    pub(crate) enum StrideOptimization {
+        None, //no stride preferred
+        StrideK(bool), //if true stride must be 1, if false stride is preferred to 1
+        StrideNM(bool), //if true stride must be 1, if false stride is preferred to 1
+    }
+
+    pub(crate)  struct GenericMatmulSettings{
+        pub m_tile : u32,
+        pub n_tile : u32,
+        pub k_tile : u32,
+
+        pub input1_stride : StrideOptimization,
+        pub input2_stride : StrideOptimization,
+
+        pub needs_padding : bool //wheter this shader input matrices must be padded if it is not divisible by tile size
+    }
+    
+    impl GenericMatmulSettings {
+        pub(crate) fn new(m_tile: u32, n_tile: u32, k_tile: u32, input1_stride: StrideOptimization, input2_stride: StrideOptimization) -> Self {
+            Self { m_tile, n_tile, k_tile, input1_stride, input2_stride, needs_padding : true }
+        }
+
+        pub(crate) fn new_nopadding(m_tile: u32, n_tile: u32, k_tile: u32, input1_stride: StrideOptimization, input2_stride: StrideOptimization) -> Self {
+            Self { m_tile, n_tile, k_tile, input1_stride, input2_stride, needs_padding : false }
+        }
+    }
+
     pub fn queue_matmul_generic( 
         dev: &WgpuDevice,
         buffer_dest: BufferReferenceId,
@@ -127,13 +156,13 @@ mod sgemm{
         layout_input1: &Layout,
         layout_input2: &Layout,
         dtype: crate::DType,
-    
-        m_tile : u32,
-        n_tile : u32,
-        k_tile : u32,
-        get_pipeline : impl Fn(candle_wgpu_kernels::DType) -> Pipelines,
-        transpose_b : bool,
+        settings : GenericMatmulSettings,
+        pipeline : Pipelines
     ) -> crate::Result<()> {
+
+        let m_tile = settings.m_tile;
+        let n_tile = settings.n_tile;
+        let k_tile = settings.k_tile;
 
         const NON_PADDED : bool = false;
 
@@ -160,7 +189,7 @@ mod sgemm{
         let mut input2_stride = layout_input2.stride().iter().rev();
     
         let input1_stride_k = *input1_stride.next().unwrap_or(&1);
-        let input1_stride_n = *input1_stride.next().unwrap_or(&1);
+        let input1_stride_m = *input1_stride.next().unwrap_or(&1);
     
         let input2_stride_n = *input2_stride.next().unwrap_or(&1);
         let input2_stride_k = *input2_stride.next().unwrap_or(&1);
@@ -169,12 +198,15 @@ mod sgemm{
 
         let no_padding_needed_input1 =  ((params.m % m_tile == 0 && params.k % k_tile == 0) || NON_PADDED)
             && layout_input1.start_offset() % 4 == 0 //input will be loaded 16 bytes aligned
-            && (input1_stride_k == 1 || input1_stride_n == 1);
+            && (input1_stride_k == 1 || input1_stride_m == 1) && 
+            !(input1_stride_k != 1 && matches!(settings.input1_stride, StrideOptimization::StrideK(true) )) &&
+            !(input1_stride_m != 1 && matches!(settings.input1_stride, StrideOptimization::StrideNM(true) ));
 
         let no_padding_needed_input2 = ((params.n % n_tile == 0 && params.k % k_tile == 0) || NON_PADDED) 
             && layout_input2.start_offset() % 4 == 0 //input will be loaded 16 bytes aligned
             && (input2_stride_n == 1 || input2_stride_k == 1) &&
-            (input2_stride_k == 1 || !transpose_b);
+            !(input2_stride_k != 1 && matches!(settings.input2_stride, StrideOptimization::StrideK(true) )) &&
+            !(input2_stride_n != 1 && matches!(settings.input2_stride, StrideOptimization::StrideNM(true) ));
 
 
         let (buffer_input1_padded, layout_input1_padded) = 
@@ -185,7 +217,21 @@ mod sgemm{
                 let mut cache = dev.cache.lock().unwrap();
                 let buffer_input1_padded = cache.create_buffer_reference(params.b * (new_m * new_k) * dtype.size_in_bytes() as u32, false);
 
-                let dest_layout = crate::Layout::contiguous(&Shape::from((params.b as usize, new_m as usize, new_k as usize)));
+                let dest_layout;
+
+                if let StrideOptimization::StrideNM(_) = settings.input1_stride{
+                    dest_layout = crate::Layout::new(Shape::from((params.b as usize, new_m as usize, new_k as usize)), vec![(new_m * new_k) as usize, 1, new_m as usize], 0);
+                }
+                else if let StrideOptimization::StrideK(_) = settings.input1_stride{
+                    dest_layout = crate::Layout::contiguous(&Shape::from((params.b as usize, new_m as usize, new_k as usize)));
+                }
+                else if input1_stride_m == 1 {
+                    dest_layout = crate::Layout::new(Shape::from((params.b as usize, new_m as usize, new_k as usize)), vec![(new_m * new_k) as usize, 1, new_m as usize], 0);
+                }
+                else{
+                    dest_layout = crate::Layout::contiguous(&Shape::from((params.b as usize, new_m as usize, new_k as usize)));
+                }
+             
                 super::queue_copy3d_padded(dev, buffer_input1_padded.clone(), buffer_input1, dtype, layout_input1, (params.b, params.m, params.k), &dest_layout)?;
                 //let res : Vec<f32> = block_on(read_data_from_gpu_async(dev, buffer_input1_padded.clone()));
                 //println!("pad1: {:?}", res);
@@ -201,11 +247,18 @@ mod sgemm{
                 let buffer_input2_padded = cache.create_buffer_reference(params.b * (new_k * new_n) * dtype.size_in_bytes() as u32, false);
                 
                 let dest_layout;
-                if transpose_b{
+
+                if let StrideOptimization::StrideNM(_) = settings.input2_stride{
+                    dest_layout = crate::Layout::contiguous(Shape::from((params.b as usize, new_k as usize, new_n as usize)));
+                }
+                else if let StrideOptimization::StrideK(_) = settings.input2_stride{
+                    dest_layout = crate::Layout::new(Shape::from((params.b as usize, new_k as usize, new_n as usize)), vec![(new_n * new_k) as usize, 1, new_k as usize], 0);
+                }
+                else if input2_stride_k == 1{
                     dest_layout = crate::Layout::new(Shape::from((params.b as usize, new_k as usize, new_n as usize)), vec![(new_n * new_k) as usize, 1, new_k as usize], 0);
                 }
                 else{
-                   dest_layout = crate::Layout::contiguous(Shape::from((params.b as usize, new_k as usize, new_n as usize)));
+                    dest_layout = crate::Layout::contiguous(Shape::from((params.b as usize, new_k as usize, new_n as usize)));
                 }
                 super::queue_copy3d_padded(dev, buffer_input2_padded.clone(), buffer_input2, dtype, layout_input2, (params.b, params.k, params.n),&dest_layout)?;
                 //let res : Vec<f32> = block_on(read_data_from_gpu_async(dev, buffer_input2_padded.clone()));
@@ -258,7 +311,7 @@ mod sgemm{
             meta.add_const(candle_wgpu_kernels::Constants::Isoutputpadded, true);
         }
 
-        let pipeline = meta.get_pipeline_const(get_pipeline(get_dtype(dtype)?), const_vec.clone());
+        let pipeline = meta.get_pipeline_const(pipeline, const_vec.clone());
         let input_alignment : BindgroupAlignment = dtype.into();
         if input_alignment != BindgroupAlignment::Aligned4{
             panic!("matmul can only be performed with f32 and i32");
@@ -281,10 +334,6 @@ mod sgemm{
             lx = (new_n ) / n_tile;
             ly = (new_m ) / m_tile;
         }
-
-        // if use_multiple_threads_per_k{
-        //     lx *= 32;
-        // }
 
         enqueue_workgroups_extra(
             meta,
@@ -327,6 +376,29 @@ pub fn queue_matmul_buffer(
     queue_matmul_buffer_alg(dev, buffer_dest, buffer_input1, buffer_input2, params, layout_input1, layout_input2, dtype, alg.clone())
 }
 
+fn get_matmul_setting(alg : &MatmulAlgorithm) -> GenericMatmulSettings{
+    return  match alg{
+        MatmulAlgorithm::Matmul7 => GenericMatmulSettings::new(16, 16, 16, StrideOptimization::None, StrideOptimization::None),
+        MatmulAlgorithm::Matmul1 => GenericMatmulSettings::new_nopadding(16, 16, 16, StrideOptimization::None, StrideOptimization::None),
+        MatmulAlgorithm::Matmul1_4 => GenericMatmulSettings::new_nopadding(16, 16, 16, StrideOptimization::None, StrideOptimization::None),
+        MatmulAlgorithm::Matmul16_16 => GenericMatmulSettings::new(16, 16, 16, StrideOptimization::None, StrideOptimization::None),
+        
+        MatmulAlgorithm::Matmul32_64 => GenericMatmulSettings::new(32, 64, 4, StrideOptimization::None, StrideOptimization::None),
+        
+        MatmulAlgorithm::Matmul32_32(_, _) =>GenericMatmulSettings::new(32, 32, 32, StrideOptimization::None, StrideOptimization::None),
+        MatmulAlgorithm::Matmul64_64(_, _) =>  GenericMatmulSettings::new(64, 64, 16, StrideOptimization::None, StrideOptimization::None),
+        MatmulAlgorithm::Matmul64_64_8_8(_, _) => GenericMatmulSettings::new(64, 64, 16, StrideOptimization::None, StrideOptimization::None),
+        MatmulAlgorithm::Matmul64_64_4_8(_, _) =>  GenericMatmulSettings::new(64, 64, 16, StrideOptimization::None, StrideOptimization::None),
+        MatmulAlgorithm::Matmul16_64(_, _) => GenericMatmulSettings::new(16, 64, 16, StrideOptimization::None, StrideOptimization::None),
+        MatmulAlgorithm::Matmul1_64(_, _) =>  GenericMatmulSettings::new(1, 64, 64, StrideOptimization::None, StrideOptimization::None),
+        MatmulAlgorithm::Matmul1_64B(_, _) => GenericMatmulSettings::new(1, 64, 4, StrideOptimization::StrideK(true), StrideOptimization::StrideK(true)),
+        MatmulAlgorithm::Matmul1_128(_, _) => GenericMatmulSettings::new(1, 128, 128, StrideOptimization::StrideNM(true), StrideOptimization::None),
+        MatmulAlgorithm::Matmul24_24(_, _) => GenericMatmulSettings::new(24, 24, 24, StrideOptimization::None, StrideOptimization::None),
+        MatmulAlgorithm::Matmul24_48(_, _) => GenericMatmulSettings::new(24, 48, 24, StrideOptimization::None, StrideOptimization::None),
+        alg => {panic!("alg {alg:?} not supported")}
+    };
+}
+
 pub fn queue_matmul_buffer_alg(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
@@ -335,30 +407,43 @@ pub fn queue_matmul_buffer_alg(
     params : SGEMMParams,
     layout_input1: &Layout,
     layout_input2: &Layout,
-    dtype: crate::DType,
+    cdtype: crate::DType,
     alg : MatmulAlgorithm
 ) -> crate::Result<()> {
+    let dtype = get_dtype(cdtype)?;
     match alg{
-        crate::wgpu_backend::MatmulAlgorithm::MatmulX => queue_matmul_buffer_best(dev, buffer_dest, buffer_input1, buffer_input2, params, layout_input1, layout_input2, dtype),
-       
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1_4 => sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, params,layout_input1, layout_input2, dtype, Pipelines::Matmul(get_dtype(dtype)?, candle_wgpu_kernels::matmul::Functions::Matmul116), true),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul7 => sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, params,  layout_input1, layout_input2, dtype, Pipelines::Matmul(get_dtype(dtype)?, candle_wgpu_kernels::matmul::Functions::Matmul7), false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1 => sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, params, layout_input1, layout_input2, dtype, Pipelines::Matmul(get_dtype(dtype)?, candle_wgpu_kernels::matmul::Functions::Matmul1), false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul16_16 => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, layout_input1, layout_input2, dtype, 16, 16,16, |dtype| Pipelines::Matmul(dtype, candle_wgpu_kernels::matmul::Functions::Matmul5), false),
-        
-        crate::wgpu_backend::MatmulAlgorithm::Matmul32_32(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, layout_input1, layout_input2, dtype, 32, 32,32, |dtype| Pipelines::Matmul32x32(dtype, candle_wgpu_kernels::sgemm::matmul32x32::Functions::Matmul), false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params,  layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x64(dtype, candle_wgpu_kernels::sgemm::matmul64x64::Functions::Matmul), false),
-       
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64_8_8(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params,  layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x648x8(dtype, candle_wgpu_kernels::sgemm::matmul64x64_8x8::Functions::Matmul),   false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul64_64_4_8(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params,  layout_input1, layout_input2, dtype, 64, 64,16, |dtype| Pipelines::Matmul64x644x8(dtype, candle_wgpu_kernels::sgemm::matmul64x64_4x8::Functions::Matmul),   false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul16_64(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params,  layout_input1, layout_input2, dtype, 16, 64,16, |dtype| Pipelines::Matmul16x64(dtype, candle_wgpu_kernels::sgemm::matmul16x64::Functions::Matmul), false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1_128 (false, false)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, layout_input1, layout_input2, dtype, 1, 128,128, |dtype| Pipelines::Matmul1x128(dtype, candle_wgpu_kernels::sgemm::matmul1x128::Functions::Matmul),  false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1_64 (false, false)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, layout_input1, layout_input2, dtype, 1, 64,64, |dtype| Pipelines::Matmul1x64(dtype, candle_wgpu_kernels::sgemm::matmul1x64::Functions::Matmul), false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul1_64B (false, false)=> sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params,  layout_input1, layout_input2, dtype, 1, 64,4, |dtype| Pipelines::Matmul1x64b(dtype, candle_wgpu_kernels::sgemm::matmul1x64b::Functions::Matmul),  true),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul24_24(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params,  layout_input1, layout_input2, dtype, 24, 24,24, |dtype| Pipelines::Matmul24x24(dtype, candle_wgpu_kernels::sgemm::matmul24x24::Functions::Matmul),  false),
-        crate::wgpu_backend::MatmulAlgorithm::Matmul24_48(false, false) => sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params,  layout_input1, layout_input2, dtype, 24, 48,24, |dtype| Pipelines::Matmul24x48(dtype, candle_wgpu_kernels::sgemm::matmul24x48::Functions::Matmul), false),
-        _ => {panic!()}
+        MatmulAlgorithm::MatmulX => return queue_matmul_buffer_best(dev, buffer_dest, buffer_input1, buffer_input2, params, layout_input1, layout_input2, cdtype),
+        MatmulAlgorithm::Matmul1_4 => return super::matmul::sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, params,layout_input1, layout_input2, cdtype, Pipelines::Matmul(dtype, matmul::Functions::Matmul116), true),
+        MatmulAlgorithm::Matmul7 => return super::matmul::sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, params,  layout_input1, layout_input2, cdtype, Pipelines::Matmul(dtype, matmul::Functions::Matmul7), false),
+        MatmulAlgorithm::Matmul1 => return super::matmul::sgemm::queue_matmul_buffer1(dev, buffer_dest, buffer_input1, buffer_input2, params, layout_input1, layout_input2, cdtype, Pipelines::Matmul(dtype, matmul::Functions::Matmul1), false),
+         _ => {}
     }
+    use candle_wgpu_kernels::{sgemm, matmul};
+    
+    let setting = get_matmul_setting(&alg);
+
+    let pipeline = match alg{
+        MatmulAlgorithm::Matmul7 => Pipelines::Matmul(dtype, matmul::Functions::Matmul7),
+        MatmulAlgorithm::Matmul1 => Pipelines::Matmul(dtype, matmul::Functions::Matmul1),
+        MatmulAlgorithm::Matmul1_4 => Pipelines::Matmul(dtype, matmul::Functions::Matmul116),
+        MatmulAlgorithm::Matmul16_16 => Pipelines::Matmul16x16(dtype, sgemm::matmul16x16::Functions::Matmul),
+        
+        MatmulAlgorithm::Matmul32_64 => Pipelines::Matmul32x64(dtype, sgemm::matmul32x64::Functions::Matmul),
+        
+        MatmulAlgorithm::Matmul32_32(_, _) => Pipelines::Matmul32x32(dtype, sgemm::matmul32x32::Functions::Matmul),
+        MatmulAlgorithm::Matmul64_64(_, _) =>  Pipelines::Matmul64x64(dtype, sgemm::matmul64x64::Functions::Matmul),
+        MatmulAlgorithm::Matmul64_64_8_8(_, _) => Pipelines::Matmul64x648x8(dtype, sgemm::matmul64x64_8x8::Functions::Matmul),
+        MatmulAlgorithm::Matmul64_64_4_8(_, _) => Pipelines::Matmul64x644x8(dtype, sgemm::matmul64x64_4x8::Functions::Matmul),
+        MatmulAlgorithm::Matmul16_64(_, _) => Pipelines::Matmul16x64(dtype, sgemm::matmul16x64::Functions::Matmul),
+        MatmulAlgorithm::Matmul1_64(_, _) =>  Pipelines::Matmul1x64(dtype, sgemm::matmul1x64::Functions::Matmul),
+        MatmulAlgorithm::Matmul1_64B(_, _) => Pipelines::Matmul1x64b(dtype, sgemm::matmul1x64b::Functions::Matmul),
+        MatmulAlgorithm::Matmul1_128(_, _) => Pipelines::Matmul1x128(dtype, sgemm::matmul1x128::Functions::Matmul),
+        MatmulAlgorithm::Matmul24_24(_, _) => Pipelines::Matmul24x24(dtype, sgemm::matmul24x24::Functions::Matmul),
+        MatmulAlgorithm::Matmul24_48(_, _) => Pipelines::Matmul24x48(dtype, sgemm::matmul24x48::Functions::Matmul),
+        alg => {panic!("alg {alg:?} not supported")}
+    };
+
+    return super::matmul::sgemm::queue_matmul_generic(dev, buffer_dest, buffer_input1, buffer_input2, params, layout_input1, layout_input2, cdtype,setting,pipeline);
 }
 
 
@@ -399,140 +484,196 @@ pub fn queue_matmul_buffer_best(
     let k = params.k as usize;
     let n = params.n as usize;
 
-    let input2_stride = layout_input2.stride();
-
-    let get_matmul_alg = |size1 : usize, size2 : usize, size3 : usize|{
-        //we might use kernel 64x64 if the dimensions are big enaugh:
-        if m >= 64 * 11 && n >= 64 * 11 && k >= 16 && (m >= 64*size1 || n >= 64*size1) {
-            if dev.backend == wgpu::Backend::Vulkan{
-                //on native vulkan this was up two twice as fast, but in the browser this was 30 times slower
-                return crate::wgpu_backend::device::MatmulAlgorithm::Matmul64_64_8_8(false, false); 
-            }
-            else{
-                return crate::wgpu_backend::device::MatmulAlgorithm::Matmul64_64_4_8(false, false);
-            }
-        }
-        if m >= 48 && n >= 48 && k >= 16 && ( m >= 64*size2 || n >= 64*size2){
-            return crate::wgpu_backend::device::MatmulAlgorithm::Matmul64_64(false, false);
-        }
-        if m >= 16 && n >= 16 && k >= 16 && (m >= 32*size3 || n >= 32*size3){
-            return crate::wgpu_backend::device::MatmulAlgorithm::Matmul32_32(false, false);
-        } 
-        else{
-            return crate::wgpu_backend::device::MatmulAlgorithm::Matmul7;
-        }
-    };
+    // let get_matmul_alg = |size1 : usize, size2 : usize, size3 : usize|{
+    //     //we might use kernel 32x64 if the dimensions are big enaugh:
+    //     if m >= 64 * 11 && n >= 64 * 11 && k >= 16 && (m >= 64*size1 || n >= 64*size1) {
+    //         return MatmulAlgorithm::Matmul32_64;
+    //     }
+    //     if m >= 48 && n >= 48 && k >= 16 && ( m >= 64*size2 || n >= 64*size2){
+    //         return crate::wgpu_backend::device::MatmulAlgorithm::Matmul64_64(false, false);
+    //     }
+    //     if m >= 16 && n >= 16 && k >= 16 && (m >= 32*size3 || n >= 32*size3){
+    //         return crate::wgpu_backend::device::MatmulAlgorithm::Matmul32_32(false, false);
+    //     } 
+    //     else{
+    //         return crate::wgpu_backend::device::MatmulAlgorithm::Matmul7;
+    //     }
+    // };
 
     let alg;
 
 
     if m <= 2 || n <= 2{ 
 
-        //use 1x128 shader for small m:
-        if k >= 128 && n >= 128{ //m <= 2:
-            if input2_stride[1] == 1{
+        if m <= 2{
+            let mut input2_stride = layout_input2.stride().iter().rev();
+            let input2_stride_n = *input2_stride.next().unwrap_or(&1);
+            let input2_stride_k = *input2_stride.next().unwrap_or(&1);
+
+            if k % 64 == 0 && n % 128 == 0 && input2_stride_k == 1{
                 alg = MatmulAlgorithm::Matmul1_64B(false, false);
             }
-            else{
-                alg = MatmulAlgorithm::Matmul1_128(false, false);
+            else if k % 64 == 0 && n % 64 == 0 && input2_stride_n == 1{
+                alg = MatmulAlgorithm::Matmul1_64(false, false);
             }
-        }
+            else{
+                alg = get_matmul_naive(k, layout_input1, layout_input2);
+            }
+        }   
         else{
             alg = get_matmul_naive(k, layout_input1, layout_input2);
         }
+
+        //use 1x128 shader for small m:
+        // if k >= 128 && n >= 128{ //m <= 2:
+            
+        //     if input2_stride[1] == 1{
+        //         alg = MatmulAlgorithm::Matmul1_64B(false, false);
+        //     }
+        //     else{
+        //         alg = MatmulAlgorithm::Matmul1_64(false, false);
+        //     }
+        // }
+        // else{
+        //     alg = get_matmul_naive(k, layout_input1, layout_input2);
+        // }
     }
     else{
-        if m < 16 && n < 16{
+
+        let shaders = [MatmulAlgorithm::Matmul32_64, 
+            MatmulAlgorithm::Matmul32_32(false, false), 
+            MatmulAlgorithm::Matmul24_48(false, false),  
+            MatmulAlgorithm::Matmul24_24(false, false), 
+            MatmulAlgorithm::Matmul16_16];
+
+        let mut best_no_padding_25: Option<&MatmulAlgorithm> = None;
+        let mut best_wgs_25: Option<&MatmulAlgorithm> = None;
+
+        for a in shaders.iter(){
+            let s = get_matmul_setting(a);
+            let padding_score = !s.needs_padding || (m % s.m_tile as usize == 0 && k % s.k_tile as usize == 0 && n % s.n_tile as usize == 0);
+            
+            let new_m = (m as u32+ s.m_tile - 1) / s.m_tile;
+            let new_n = (n as u32+ s.n_tile - 1) / s.n_tile;
+            let wgs = new_m * new_n;
+
+            if padding_score{
+                if wgs > 64{
+                    alg = a.clone();
+                    return queue_matmul_buffer_alg(dev, buffer_dest, buffer_input1, buffer_input2, params, layout_input1, layout_input2, dtype, alg);
+                }
+                if wgs >= 25{
+                    if best_no_padding_25.is_none() {
+                        best_no_padding_25 = Some(a); // Store the first match
+                    }
+                }
+            }
+            else if wgs >= 25 {
+                if best_wgs_25.is_none() {
+                    best_wgs_25 = Some(a); // Store the first match
+                }
+            }
+        }
+        if let Some(entry) = best_no_padding_25 {
+            alg = entry.clone();
+        } else if let Some(entry) = best_wgs_25 {
+            alg = entry.clone();
+        } else {
             alg = get_matmul_naive(k, layout_input1, layout_input2);
         }
-        else if m <= 32 && n <= 32{
-            if m % 16 == 0 && n % 16 == 0 && k % 16 == 0{
-                alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul16_16;
-            } 
-            else{
-                alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul7;
-            }
-        }
-        else{ //we may pad an input matrix
-            //if a dimension is not divisible by 2, padding may be way faster for bigger matrices:
-            let need_pad_a = m % 2 == 1 || k % 2 == 1;
-            let need_pad_b = n % 2 == 1 || k % 2 == 1;
 
-            let might_use_64x64 =  ((m % 64 == 0 && k % 64 == 0)|| need_pad_a) && ((n % 64 == 0 && k % 16 == 0) || need_pad_b);
-            let might_use_32x32 =  ((m % 32 == 0 && k % 32 == 0)|| need_pad_a) && ((n % 32 == 0 && k % 16 == 0) || need_pad_b);
 
-            //let might_use_64x64 =  ((m % 64 == 0 && k % 64 == 0)) && ((n % 64 == 0 && k % 16 == 0));
-            //let might_use_32x32 =  ((m % 32 == 0 && k % 32 == 0)) && ((n % 32 == 0 && k % 16 == 0));
+        // if m < 16 && n < 16{
+        //     alg = get_matmul_naive(k, layout_input1, layout_input2);
+        // }
+        // else if m <= 32 && n <= 32{
+        //     if m % 16 == 0 && n % 16 == 0 && k % 16 == 0{
+        //         alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul16_16;
+        //     } 
+        //     else{
+        //         alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul7;
+        //     }
+        // }
+        // else{ //we may pad an input matrix
+        //     //if a dimension is not divisible by 2, padding may be way faster for bigger matrices:
+        //     let need_pad_a = m % 2 == 1 || k % 2 == 1;
+        //     let need_pad_b = n % 2 == 1 || k % 2 == 1;
 
-            //use 64x64 or 32x32: 
-            if need_pad_a || need_pad_b{
-                if might_use_32x32{
-                    if !might_use_64x64{
-                        alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul32_32(false, false);
-                    }
-                    else{
-                        alg = get_matmul_alg(16, 4, 0);
-                    }
-                }
-                else{
-                    if might_use_64x64{
-                        alg = get_matmul_alg(16, 2, 0);
-                    }
-                    else if might_use_32x32{
-                        alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul32_32(false, false);
-                    }
-                    else{ //only for big sizes for m, n padding is worth;
-                        alg = get_matmul_alg(64, 32, 1000);
-                    }
-                }
-            }
-            else{
-                if might_use_64x64{
-                    alg = get_matmul_alg(16, 4, 0);
-                }
-                else if might_use_32x32{
-                    alg = MatmulAlgorithm::Matmul32_32(false, false);
-                }
-                else{
-                    //use 24x24 shader:
-                    if m % 24 == 0 && n % 24 == 0 && k % 24 == 0{
-                        alg = MatmulAlgorithm::Matmul24_24(false, false);
-                    }
-                    else{
-                        //only for big sizes for m, n padding is worth;
+        //     let might_use_64x64 =  ((m % 64 == 0 && k % 64 == 0)|| need_pad_a) && ((n % 64 == 0 && k % 16 == 0) || need_pad_b);
+        //     let might_use_32x32 =  ((m % 32 == 0 && k % 32 == 0)|| need_pad_a) && ((n % 32 == 0 && k % 16 == 0) || need_pad_b);
 
-                        //padding input matrices may be faster, as the 64x64-shader is faster
-                        //but this needs more memory. 
-                        //alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul7;
+        //     //let might_use_64x64 =  ((m % 64 == 0 && k % 64 == 0)) && ((n % 64 == 0 && k % 16 == 0));
+        //     //let might_use_32x32 =  ((m % 32 == 0 && k % 32 == 0)) && ((n % 32 == 0 && k % 16 == 0));
 
-                        //let single_pad_64 =  (m % 64 == 0 || n % 64 == 0) && k % 16 == 0;
-                        //let single_pad_32 =  (m % 32 == 0 || n % 32 == 0) && k % 16 == 0;
+        //     //use 64x64 or 32x32: 
+        //     if need_pad_a || need_pad_b{
+        //         if might_use_32x32{
+        //             if !might_use_64x64{
+        //                 alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul32_32(false, false);
+        //             }
+        //             else{
+        //                 alg = get_matmul_alg(16, 4, 0);
+        //             }
+        //         }
+        //         else{
+        //             if might_use_64x64{
+        //                 alg = get_matmul_alg(16, 2, 0);
+        //             }
+        //             else if might_use_32x32{
+        //                 alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul32_32(false, false);
+        //             }
+        //             else{ //only for big sizes for m, n padding is worth;
+        //                 alg = get_matmul_alg(64, 32, 1000);
+        //             }
+        //         }
+        //     }
+        //     else{
+        //         if might_use_64x64{
+        //             alg = get_matmul_alg(16, 4, 0);
+        //         }
+        //         else if might_use_32x32{
+        //             alg = MatmulAlgorithm::Matmul32_32(false, false);
+        //         }
+        //         else{
+        //             //use 24x24 shader:
+        //             if m % 24 == 0 && n % 24 == 0 && k % 24 == 0{
+        //                 alg = MatmulAlgorithm::Matmul24_24(false, false);
+        //             }
+        //             else{
+        //                 //only for big sizes for m, n padding is worth;
 
-                        let new_m = next_divisible_by_n(m, 32);
-                        let new_n = next_divisible_by_n(n, 32);
+        //                 //padding input matrices may be faster, as the 64x64-shader is faster
+        //                 //but this needs more memory. 
+        //                 //alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul7;
 
-                        if n >= 128 || m >= 128{
-                            //padding needed for 32x32, will also make 64x64 usable:
-                            if new_m % 64 == 0 && new_n % 64 == 0{
-                                if dev.backend == wgpu::Backend::Vulkan{
-                                    //on native vulkan this was up two twice as fast, but in the browser this was 30 times slower
-                                    alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul64_64_8_8(false, false); 
-                                }
-                                else{
-                                    alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul64_64_4_8(false, false);
-                                }
-                            }
-                            else{
-                                alg = MatmulAlgorithm::Matmul32_32(false, false);
-                            }
-                        }
-                        else{
-                            alg = MatmulAlgorithm::Matmul7;
-                        }
-                    }
-                }
-            }
-        }
+        //                 //let single_pad_64 =  (m % 64 == 0 || n % 64 == 0) && k % 16 == 0;
+        //                 //let single_pad_32 =  (m % 32 == 0 || n % 32 == 0) && k % 16 == 0;
+
+        //                 let new_m = next_divisible_by_n(m, 32);
+        //                 let new_n = next_divisible_by_n(n, 32);
+
+        //                 if n >= 128 || m >= 128{
+        //                     //padding needed for 32x32, will also make 64x64 usable:
+        //                     if new_m % 64 == 0 && new_n % 64 == 0{
+        //                         if dev.backend == wgpu::Backend::Vulkan{
+        //                             //on native vulkan this was up two twice as fast, but in the browser this was 30 times slower
+        //                             alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul64_64_8_8(false, false); 
+        //                         }
+        //                         else{
+        //                             alg = crate::wgpu_backend::device::MatmulAlgorithm::Matmul64_64_4_8(false, false);
+        //                         }
+        //                     }
+        //                     else{
+        //                         alg = MatmulAlgorithm::Matmul32_32(false, false);
+        //                     }
+        //                 }
+        //                 else{
+        //                     alg = MatmulAlgorithm::Matmul7;
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
     }
     queue_matmul_buffer_alg(dev, buffer_dest, buffer_input1, buffer_input2, params, layout_input1, layout_input2, dtype, alg)
 }

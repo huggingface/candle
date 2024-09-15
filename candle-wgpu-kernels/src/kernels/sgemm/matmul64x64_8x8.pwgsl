@@ -4,7 +4,6 @@
 
 #define WPTM 8u                     // The work-per-thread in dimension M
 #define WPTN 8u                     // The work-per-thread in dimension N
-#define PREFETCH 1u
 
 #include "matmulHelper.pwgsl"
 

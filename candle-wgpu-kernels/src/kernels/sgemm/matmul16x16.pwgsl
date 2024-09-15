@@ -1,9 +1,10 @@
-#define TSM 64u                     // The tile-size in dimension M
-#define TSN 64u                     // The tile-size in dimension N
-#define TSK 16u                     // The tile-size in dimension K               
-#define WPTM 8u                     // The work-per-thread in dimension M
-#define WPTN 4u                     // The work-per-thread in dimension N
-
+#define TSM 16u                     // The tile-size in dimension M
+#define TSN 16u                     // The tile-size in dimension N
+#define TSK 4u                     // The tile-size in dimension K
+#define WPTM 4u                     // The work-per-thread in dimension M
+#define WPTN 2u                     // The work-per-thread in dimension N
+#define WIDTHA 2u
+#define WIDTHB 2u
 #include "matmulHelper.pwgsl"
 
 @compute @workgroup_size(RTSN, RTSM, 1)

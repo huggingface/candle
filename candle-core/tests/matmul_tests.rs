@@ -1,4 +1,4 @@
-use candle_core::{test_device, test_utils, DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{test_device, DType, Device, IndexOp, Result, Tensor, D};
 
 fn matmul(device: &Device) -> Result<()> {
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
@@ -194,6 +194,7 @@ fn test_matmul_kernels_wgpu()-> Result<()> {
     }
     
     let algs = vec![
+        MatmulAlgorithm::Matmul32_64,
         MatmulAlgorithm::Matmul1_64B(false, false),
         MatmulAlgorithm::Matmul7,
         MatmulAlgorithm::Matmul1,
@@ -202,17 +203,13 @@ fn test_matmul_kernels_wgpu()-> Result<()> {
     ];
 
     let algs = algs.into_iter()
-    // .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul32_32(*a, *b)))
-    // .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul128_128(*a, *b)))
-    // .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul64_64(*a, *b)))
-    // .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul64_64_8_8(*a, *b)))
-    // .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul64_128(*a, *b)))
-    // .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul64_128_8_8(*a, *b)))
-    // .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul16_64(*a, *b)))
+    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul32_32(*a, *b)))
+    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul64_64(*a, *b)))
+    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul64_64_8_8(*a, *b)))
+    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul16_64(*a, *b)))
     .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul1_64B(*a, *b)))
     .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul1_64(*a, *b)))
-    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul1_128(*a, *b)))
-    //.chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul1_256(*a, *b)))
+    //.chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul1_128(*a, *b))) //TODO: why is this not working?
     .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul24_24(*a, *b)))
     .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul24_48(*a, *b)));
 
@@ -223,8 +220,9 @@ fn test_matmul_kernels_wgpu()-> Result<()> {
             println!("Testing: {:?}", alg);
             (*wgpu.matmul_alg.lock().unwrap()) = alg;
 
-            big_matmul_wgpu(&device, false, true)?; //transpose b
             big_matmul_wgpu(&device, false, false)?; 
+            big_matmul_wgpu(&device, false, true)?; //transpose b
+            
            
             big_matmul_wgpu(&device, true, false)?; //transpoe a
             big_matmul_wgpu(&device, true, true)?; //transpose a and b
@@ -245,9 +243,14 @@ fn test_matmul_kernels_wgpu()-> Result<()> {
 #[cfg(feature="wgpu")]
 fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool)-> Result<()> {
     let b = 1;
-    let m = 1;
-    let n = 1;
-    let k = 128;
+    let m = 16;
+    let n = 6;
+    let k = 16;
+
+    // let b = 1;
+    // let m = 1;
+    // let n = 1;
+    // let k = 128;
 
     let lhs;
     if tpa{
@@ -271,8 +274,8 @@ fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool)-> Result<()> {
     let rhs = rhs.to_device(&device)?;
     let t2 = lhs.matmul(&rhs)?.reshape((b,m,n))?;
 
-    let m = test_utils::to_vec3_round(&t1, 3)?;
-    let m2 = test_utils::to_vec3_round(&t2, 3)?;
+    let m =  candle_core::test_utils::to_vec3_round(&t1, 3)?;
+    let m2 = candle_core::test_utils::to_vec3_round(&t2, 3)?;
 
     assert_eq!(m, m2);
     Ok(())

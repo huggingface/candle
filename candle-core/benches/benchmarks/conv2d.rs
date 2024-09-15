@@ -1,5 +1,5 @@
 use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
-use candle_core::{DType, Device, Tensor, D};
+use candle_core::{DType, Device, Tensor};
 use criterion::{black_box, criterion_group, Criterion};
 use std::time::Instant;
 
