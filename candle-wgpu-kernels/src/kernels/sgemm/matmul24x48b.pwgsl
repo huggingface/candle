@@ -1,8 +1,8 @@
 #define TSM 24u                     // The tile-size in dimension M
 #define TSN 48u                     // The tile-size in dimension N
-#define TSK 32u                     // The tile-size in dimension K
+#define TSK 8u                     // The tile-size in dimension K
 #define WPTM 6u                     // The work-per-thread in dimension M
 #define WPTN 6u                     // The work-per-thread in dimension N
-#define WIDTHA 4u
+#define WIDTHA 2u
 
 #include "matmulHelper.pwgsl"

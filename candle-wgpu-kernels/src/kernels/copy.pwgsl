@@ -259,6 +259,61 @@ fn copy3d_padded(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 
+const TILE_DIM: u32 = 32;
+const BLOCK_ROWS: u32 = 8;
+var<workgroup> tile: array<array<DTYPE, TILE_DIM>, TILE_DIM>;
+#define op_transpose_width          op_meta[0]
+#define op_transpose_height         op_meta[1]
+#define op_transpose_input_offset   op_meta[2]
+#define op_transpose_batch_stride   op_meta[3]
+
+
+#define op_transpose_use_batch    CONSTV_0
+#define op_transpose_input_offset_is_zero CONSTV_1
+
+@compute
+@workgroup_size(TILE_DIM, BLOCK_ROWS, 1)  // Matches the tile size and block row
+fn transpose_batched(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
+    @builtin(workgroup_id) workgroup_id: vec3<u32>,
+) {
+    // Get the batch index from the z-dimension of the global ID
+    let batch = select(op_transpose_use_batch==1,  global_id.z, 0u);
+    let input_offset = select(op_transpose_input_offset_is_zero, 0u, op_transpose_input_offset);
+
+
+    // Compute global indices for the input matrix within the batch
+    let x = workgroup_id.x * TILE_DIM + local_id.x;
+    let y = workgroup_id.y * TILE_DIM + local_id.y;
+    let width = op_transpose_width; // Width of the matrix (in elements)
+    let height = op_transpose_height;
+    // Step 1: Load data from global memory into shared memory for transposition
+    for (var j: u32 = 0; j < TILE_DIM; j += BLOCK_ROWS) {
+        let global_y = y + j;
+        if (global_y < height && x < width) {
+            // Access the correct batch using the batch index
+            tile[local_id.y + j][local_id.x] = v_input1[batch * op_transpose_batch_stride + global_y * width + x + input_offset];
+        }
+    }
+
+    // Synchronize to ensure all threads have finished loading
+    workgroupBarrier();
+
+    // Step 2: Compute transposed global indices for output matrix within the batch
+    let transposed_x = workgroup_id.y * TILE_DIM + local_id.x;
+    let transposed_y = workgroup_id.x * TILE_DIM + local_id.y;
+
+    // Step 3: Write the transposed data from shared memory back to global memory
+    for (var j: u32 = 0; j < TILE_DIM; j += BLOCK_ROWS) {
+        let global_transposed_y = transposed_y + j;
+        if (global_transposed_y < width && transposed_x < height) {
+            // Access the correct batch in the output matrix
+            v_dest[batch * height * width + global_transposed_y * height + transposed_x] = tile[local_id.x][local_id.y + j];
+        }
+    }
+}
+
 
 @compute
 @workgroup_size(16,16,1)

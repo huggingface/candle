@@ -131,6 +131,15 @@
 #define WIDTHB 2u
 //#define WONT_USE_LOADB
 
+Transpose B:
+336.65 GiB/s
+#define TSM 32u                     // The tile-size in dimension M
+#define TSN 64u                     // The tile-size in dimension N
+#define TSK 4u                     // The tile-size in dimension K
+#define WPTM 32u                     // The work-per-thread in dimension M
+#define WPTN 2u                     // The work-per-thread in dimension N
+#define WIDTHA 4u
+#define WIDTHB 2u
 
 24x1536 * 1536x6144:
 

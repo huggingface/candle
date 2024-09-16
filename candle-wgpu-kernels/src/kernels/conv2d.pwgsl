@@ -989,7 +989,7 @@ fn conv2d_2(@builtin(global_invocation_id) global_id: vec3<u32>,@builtin(local_i
 #define op_im2col_dilation        CONSTV_2
 #define op_im2col_h_k             CONSTV_3
 #define op_im2col_w_k             CONSTV_4
-#define op_im2col_input_offset    CONSTV_5
+#define op_im2col_input_offset_is_zero    CONSTV_5
 
 
 #define op_im2col_dst_numel       op_meta[0]
@@ -1004,11 +1004,12 @@ fn conv2d_2(@builtin(global_invocation_id) global_id: vec3<u32>,@builtin(local_i
 #define op_im2col_src_s1          op_meta[7]
 #define op_im2col_src_s2          op_meta[8]
 #define op_im2col_src_s3          op_meta[9]
+#define op_im2col_input_offset          select(op_im2col_input_offset_is_zero == 1, 0u, op_meta[10])
 
 @compute @workgroup_size(256)
 fn im2col(@builtin(global_invocation_id) global_id : vec3<u32>) {
     let dst_i = global_id.x + global_id.y * 65535 * 256;
-    //let dst_i = global_id.x;
+
     if (dst_i >= op_im2col_dst_numel) {
         return;
     }
@@ -1017,24 +1018,27 @@ fn im2col(@builtin(global_invocation_id) global_id : vec3<u32>) {
     let h_in = op_im2col_h_in;
     let w_in = op_im2col_w_in;
 
-    let dst_s4 = op_im2col_w_k;
-    let dst_s3 = op_im2col_h_k * dst_s4;
-    let dst_s2 = c_in * dst_s3;
-    let dst_s1 = op_im2col_w_out * dst_s2;
-    let dst_s0 = op_im2col_h_out * dst_s1;
+    let dst_s4 = op_im2col_w_out;
+    let dst_s3 = op_im2col_h_out * dst_s4;
+    
+    let dst_s2 = op_im2col_w_k * dst_s3;
+    let dst_s1 = op_im2col_h_k * dst_s2;
+    let dst_s0 = c_in * dst_s1;
 
     var tmp_dst_i = dst_i;
     let b_idx = tmp_dst_i / dst_s0;
     tmp_dst_i -= b_idx * dst_s0;
-    let h_idx = tmp_dst_i / dst_s1;
-    tmp_dst_i -= h_idx * dst_s1;
-    let w_idx = tmp_dst_i / dst_s2;
-    tmp_dst_i -= w_idx * dst_s2;
-    let c_idx = tmp_dst_i / dst_s3;
-    tmp_dst_i -= c_idx * dst_s3;
-    let h_k_idx = tmp_dst_i / dst_s4;
-    tmp_dst_i -= h_k_idx * dst_s4;
-    let w_k_idx = tmp_dst_i;
+
+    let c_idx = tmp_dst_i / dst_s1;
+    tmp_dst_i -= c_idx * dst_s1;
+    let h_k_idx = tmp_dst_i / dst_s2;
+    tmp_dst_i -= h_k_idx * dst_s2;
+    let w_k_idx = tmp_dst_i / dst_s3;
+    tmp_dst_i -= w_k_idx * dst_s3;
+
+    let h_idx = tmp_dst_i / dst_s4;
+    tmp_dst_i -= h_idx * dst_s4;
+    let w_idx = tmp_dst_i;
 
     var src_h_idx = h_idx * op_im2col_stride + h_k_idx * op_im2col_dilation;
     var src_w_idx = w_idx * op_im2col_stride + w_k_idx * op_im2col_dilation;

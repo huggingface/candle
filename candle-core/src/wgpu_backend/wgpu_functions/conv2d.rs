@@ -274,7 +274,7 @@ pub fn queue_conv2d_matmul(
         params.dilation,
         params.k_h,
         params.k_w,
-        input_layout.start_offset(),
+        (input_layout.start_offset() == 0) as usize,
     ];
 
     let mut meta = get_meta(&dev);
@@ -288,6 +288,7 @@ pub fn queue_conv2d_matmul(
     meta.add(src_stride[1] as u32); // op_conv2d_src_s1 (channel stride)
     meta.add(src_stride[2] as u32); // op_conv2d_src_s2 (height stride)
     meta.add(src_stride[3] as u32); // op_conv2d_src_s3 (width stride)
+    meta.add(input_layout.start_offset()); // op_conv2d_src_s3 (width stride)
 
     // Dispatch the convolution kernel
     let workgroup_size = 256; // Assumed workgroup size, adjust based on hardware
@@ -297,7 +298,7 @@ pub fn queue_conv2d_matmul(
     let n = o_h * o_w;
     let m: usize = params.c_out;
     let k = params.c_in * params.k_h * params.k_w;
-    let im2col_layout = Layout::new(Shape::from_dims(&[b, k, m]), vec![k * n, 1, k], 0);
+    let im2col_layout = Layout::new(Shape::from_dims(&[b, k, n]), vec![k * n, n, 1], 0);
 
     let im2col_buffer;
     let pipeline = meta.get_pipeline_const(
@@ -324,14 +325,12 @@ pub fn queue_conv2d_matmul(
             dst_numel,
             #[cfg(feature = "wgpu_debug")]
             Some(format!(
-                "{:?}, input1: ({:?}, {:?}, {}), kernel: ({:?}, {:?}, {})",
+                "{:?}, input1: ({:?}, {:?}), kernel: ({:?}, {:?})",
                 params,
                 input_layout.shape(),
                 input_layout.stride(),
-                input_layout.start_offset(),
                 kernel_layout.shape(),
                 kernel_layout.stride(),
-                kernel_layout.start_offset(),
             )),
         );
     }

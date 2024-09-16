@@ -48,7 +48,7 @@ pub use convert::{
     queue_convert, queue_convert_f32_to_u8,
     queue_convert_u32_to_u8, queue_convert_u8_to_f32,
 };
-pub use copy::{queue_copy, queue_copy2d, queue_copy3d, queue_copy3d_padded, queue_copy_strided};
+pub use copy::{queue_copy, queue_copy2d, queue_copy3d, queue_copy3d_padded, queue_copy_strided, queue_transpose3d};
 pub use gather::{queue_gather, queue_index_add_inplace, queue_scatter_add_inplace};
 pub use index_select::queue_index_select;
 pub use matmul::queue_matmul_buffer;
@@ -1126,7 +1126,6 @@ fn enqueue_big_extra(
     let id = (length + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
     let x = id.min(65535);
     let y = (id + 65534) / 65535;
-
     return enqueue_workgroups_extra(
         command_queue,
         pipeline,

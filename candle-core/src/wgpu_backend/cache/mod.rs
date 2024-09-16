@@ -234,6 +234,8 @@ pub struct ModelCache {
     pub(crate) unary_inplace_counter: u32,
     pub(crate) binary_inplace_counter: u32,
     pub(crate) copy_inplace_counter: u32,
+    
+    pub(crate) max_memory_size : u64,
 
     #[cfg(feature = "wgpu_debug")]
     pub(crate) debug:
@@ -241,7 +243,7 @@ pub struct ModelCache {
 }
 
 impl ModelCache {
-    pub fn new(mapping_size: u32) -> Self {
+    pub fn new(mapping_size: u32, max_memory_size : u64) -> Self {
         Self {
             buffer_reference: BufferReferenceStorage::new(),
             buffers: BufferCacheStorage::new(),
@@ -252,6 +254,7 @@ impl ModelCache {
             unary_inplace_counter : 0, 
             binary_inplace_counter : 0,
             copy_inplace_counter : 0,
+            max_memory_size,
             #[cfg(feature = "wgpu_debug")]
             debug: std::collections::HashMap::new(),
         }
@@ -263,7 +266,13 @@ impl ModelCache {
         size: T,
         referenced_by_candle_storage: bool,
     ) -> BufferReferenceId {
-        let buffer_reference = BufferReference::new(size.to_u64(), referenced_by_candle_storage);
+
+        let size = size.to_u64();
+        if size > self.max_memory_size {
+            panic!("tried to create too large a buffer: {}, max: {}", size, self.max_memory_size);
+        }
+
+        let buffer_reference = BufferReference::new(size, referenced_by_candle_storage);
         return self.buffer_reference.insert(buffer_reference);
     }
 
@@ -275,6 +284,10 @@ impl ModelCache {
         referenced_by_candle_storage: bool,
     ) -> BufferReferenceId {
         let data = bytemuck::cast_slice(data);
+        
+        if data.len() as u64 > self.max_memory_size{
+            panic!("tried to create_init too large a buffer: {}, max: {}", data.len(), self.max_memory_size);
+        }
 
         let buffer = self
             .buffers

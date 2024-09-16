@@ -351,20 +351,17 @@ pub enum MatmulAlgorithm {
     Matmul1_4,
     Matmul16_16,
     Matmul32_64,
-    Matmul32_32(bool, bool), //Prefetch, NoPadded, LoadA, LoadB
-    Matmul64_64(bool, bool),
-    Matmul64_64_8_8(bool, bool),
-    Matmul64_64_4_8(bool, bool),
-    Matmul64_128(bool, bool),
-    Matmul64_128_8_8(bool, bool),
-    Matmul128_128(bool, bool),
-    Matmul16_64(bool, bool),
-    Matmul1_64(bool, bool),
-    Matmul1_64B(bool, bool),
-    Matmul1_128(bool, bool),
-    Matmul1_256(bool, bool),
-    Matmul24_24(bool, bool),
-    Matmul24_48(bool, bool),
+    Matmul32_64B,
+    Matmul32_32,
+    Matmul64_64,
+    Matmul64_64_8_8,
+    Matmul64_64_4_8,
+    Matmul1_64,
+    Matmul1_64B,
+    Matmul24_24,
+    Matmul24_48,
+    Matmul24_24B,
+    Matmul24_48B,
 }
 
 impl fmt::Debug for MatmulAlgorithm {
@@ -376,90 +373,46 @@ impl fmt::Debug for MatmulAlgorithm {
             Self::Matmul1_4 => write!(f, "Matmul1_4"),
             Self::Matmul16_16 => write!(f, "Matmul5_16_16"),
             Self::Matmul32_64 => write!(f, "Matmul5_32_64"),
-            Self::Matmul32_32(prefatch, no_padded) => write!(
+            Self::Matmul32_64B => write!(f, "Matmul5_32_64B"),
+            Self::Matmul32_32 => write!(
                 f,
-                "Matmul5_32_32({}{})",
-                if *prefatch { "_Prefetch" } else { "" },
-                if *no_padded { "_NoPadded" } else { "" },
+                "Matmul5_32_32"
             ),
-            Self::Matmul64_64(prefatch, no_padded) => write!(
+            Self::Matmul64_64 => write!(
                 f,
-                "Matuml5_64_64({}{})",
-                if *prefatch { "_Prefetch" } else { "" },
-                if *no_padded { "_NoPadded" } else { "" }
+                "Matuml5_64_64"
             ),
-            Self::Matmul64_64_8_8(prefatch, no_padded) => write!(
+            Self::Matmul64_64_8_8 => write!(
                 f,
-                "Matmul5_64_64_8_8({}{})",
-                if *prefatch { "_Prefetch" } else { "" },
-                if *no_padded { "_NoPadded" } else { "" }
+                "Matmul5_64_64_8_8"
             ),
-            Self::Matmul64_64_4_8(prefatch, no_padded) => write!(
+            Self::Matmul64_64_4_8 => write!(
                 f,
-                "Matmul5_64_64_4_8({}{})",
-                if *prefatch { "_Prefetch" } else { "" },
-                if *no_padded { "_NoPadded" } else { "" }
+                "Matmul5_64_64_4_8"
             ),
-            Self::Matmul64_128(prefatch, no_padded) => write!(
+            Self::Matmul1_64 => write!(
                 f,
-                "Matuml5_64_128({}{})",
-                if *prefatch { "_Prefetch" } else { "" },
-                if *no_padded { "_NoPadded" } else { "" }
+                "Matmul5_1_64"
             ),
-            Self::Matmul64_128_8_8(prefatch, no_padded) => write!(
+            Self::Matmul1_64B => write!(
                 f,
-                "Matmul5_64_128_8_8({}{})",
-                if *prefatch { "_Prefetch" } else { "" },
-                if *no_padded { "_NoPadded" } else { "" }
+                "Matmul5_1_64B"
             ),
-            Self::Matmul128_128(prefatch, no_padded) => write!(
+            Self::Matmul24_24 => write!(
                 f,
-                "Matmul5_128_128({}{})",
-                if *prefatch { "_Prefetch" } else { "" },
-                if *no_padded { "_NoPadded" } else { "" }
+                "Matmul5_24_24"
             ),
-            Self::Matmul16_64(prefatch, no_padded) => write!(
+            Self::Matmul24_48 => write!(
                 f,
-                "Matmul5_16_64({}{})",
-                if *prefatch { "_Prefetch" } else { "" },
-                if *no_padded { "_NoPadded" } else { "" },
+                "Matmul5_24_48"
             ),
-            Self::Matmul1_64(prefatch, no_padded) => write!(
+            Self::Matmul24_24B => write!(
                 f,
-                "Matmul5_1_64({}{})",
-                if *prefatch { "_Prefetch" } else { "" },
-                if *no_padded { "_NoPadded" } else { "" },
+                "Matmul5_24_24B"
             ),
-            Self::Matmul1_64B(prefatch, no_padded) => write!(
+            Self::Matmul24_48B => write!(
                 f,
-                "Matmul5_1_64B({}{})",
-                if *prefatch { "_Prefetch" } else { "" },
-                if *no_padded { "_NoPadded" } else { "" },
-            ),
-            Self::Matmul1_128(prefatch, no_padded) => write!(
-                f,
-                "Matmul5_1_128({}{})",
-                if *prefatch { "_Prefetch" } else { "" },
-                if *no_padded { "_NoPadded" } else { "" },
-            ),
-            Self::Matmul1_256(prefatch, no_padded) => write!(
-                f,
-                "Matmul5_1_256({}{})",
-                if *prefatch { "_Prefetch" } else { "" },
-                if *no_padded { "_NoPadded" } else { "" },
-            ),
-
-            Self::Matmul24_24(prefatch, no_padded) => write!(
-                f,
-                "Matmul5_24_24({}{})",
-                if *prefatch { "_Prefetch" } else { "" },
-                if *no_padded { "_NoPadded" } else { "" },
-            ),
-            Self::Matmul24_48(prefatch, no_padded) => write!(
-                f,
-                "Matmul5_24_48({}{})",
-                if *prefatch { "_Prefetch" } else { "" },
-                if *no_padded { "_NoPadded" } else { "" },
+                "Matmul5_24_48B"
             ),
         }
     }
@@ -616,6 +569,8 @@ impl WgpuDevice {
             mapped_at_creation: false,
         });
 
+        let max_memory_size: u64 = device_limits.max_buffer_size.min(device_limits.max_storage_buffer_binding_size as u64);
+
         Ok(WgpuDevice {
             inner: Arc::new(WgpuDeviceInner {
                 device: device,
@@ -628,7 +583,7 @@ impl WgpuDevice {
                 debug: debug_info,
                 command_queue: Mutex::new(QueueBuffer::new(configuration.meta_buffer_size)),
                 meta_buffer: meta_buffer,
-                cache: Mutex::new(ModelCache::new(configuration.buffer_mapping_size)),
+                cache: Mutex::new(ModelCache::new(configuration.buffer_mapping_size, max_memory_size)),
                 bindgroup_layouts,
                 staging_probe_buffer: staging_buffer,
                 matmul_alg: Mutex::new(MatmulAlgorithm::MatmulX),

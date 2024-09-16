@@ -13,7 +13,3 @@
 //Loading input B into shared memory is theoretically not necessary (since each value is still read at most once), 
 //but it is beneficial in this case, as adjacent threads on input B can read adjacent values from memory).
 //As 1x64b is faster this shader is not needed any more.
-@compute @workgroup_size(RTSN, RTSM, 1)
-fn matmul(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {
-    generic_sgemm(group_id, local_id);
-}

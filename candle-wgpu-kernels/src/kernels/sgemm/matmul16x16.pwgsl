@@ -6,16 +6,3 @@
 #define WIDTHA 2u
 #define WIDTHB 2u
 #include "matmulHelper.pwgsl"
-
-@compute @workgroup_size(RTSN, RTSM, 1)
-//MxK * KxN = MxN
-fn matmul(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {
-    generic_sgemm(group_id, local_id);
-}
-
-@compute @workgroup_size(RTSN, RTSM, 1)
-//MxK * KxN = MxN
-fn matmul_no_padded(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {
-    generic_sgemm(group_id, local_id);
-    //generic_sgemm_no_padded(group_id, local_id);
-}

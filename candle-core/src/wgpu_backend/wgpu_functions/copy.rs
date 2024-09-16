@@ -238,7 +238,6 @@ pub fn queue_copy3d(
     input_shape: (u32, u32, u32), //b, m, k
     dest_layout: &crate::Layout,
 ) -> crate::Result<()> {
-    //if buffer_dest.size > 0 && buffer_input.size > 0{
     let mut input1_stride = input_layout.stride().iter().rev();
 
     let input1_stride_1 = *input1_stride.next().unwrap_or(&1); //k
@@ -285,7 +284,6 @@ pub fn queue_copy3d(
         input_shape.0 as u32,
         input_layout.shape().elem_count(),
     );
-    //}
     return Ok(());
 }
 
@@ -297,8 +295,8 @@ pub fn queue_copy3d_padded(
     input_layout: &crate::Layout,
     input_shape: (u32, u32, u32), //b, m, k
     dest_layout: &crate::Layout,
+    _debug_info : Option<String>,
 ) -> crate::Result<()> {
-    //if buffer_dest.size > 0 && buffer_input.size > 0{
     let mut input1_stride = input_layout.stride().iter().rev();
 
     let input1_stride_1 = *input1_stride.next().unwrap_or(&1); //k
@@ -341,7 +339,7 @@ pub fn queue_copy3d_padded(
         Functions::Copy3dPadded
     };
     let pipeline = meta.get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, pipeline), const_vec);
-    enqueue_workgroups(
+    enqueue_workgroups_extra(
         meta,
         pipeline,
         bind_group,
@@ -349,8 +347,45 @@ pub fn queue_copy3d_padded(
         ((dest_shape.1 + 15) / 16) as u32,
         input_shape.0 as u32,
         input_layout.shape().elem_count(),
+        #[cfg(feature="wgpu_debug")]
+        _debug_info
     );
-    //}
+    return Ok(());
+}
+
+pub fn queue_transpose3d(
+    dev: &WgpuDevice,
+    buffer_dest: BufferReferenceId,
+    buffer_input: BufferReferenceId,
+    dtype: crate::DType,
+    batch: u32,
+    width: u32,
+    height: u32,
+    start_offset : usize,
+    batch_stride : usize,
+) -> crate::Result<()> {
+    let mut meta = get_meta(&dev);
+    meta.add(width);
+    meta.add(height);
+    meta.add(start_offset);
+    meta.add(batch_stride);
+
+    let const_vec = vec![batch > 1, start_offset == 0];
+
+    let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
+    let pipeline = Functions::TransposeBatched;
+
+    let pipeline = meta.get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, pipeline), const_vec);
+    
+    enqueue_workgroups(
+        meta,
+        pipeline,
+        bind_group,
+        (width + 31) / 32,
+        (height + 31) / 32,
+        batch,
+        (width * height * batch) as usize,
+    );
     return Ok(());
 }
 

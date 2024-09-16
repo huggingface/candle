@@ -1,0 +1,4 @@
+#define TILE_DIM 32u
+#define BLOCK_ROWS 4u
+
+#include "transposeHelper.pwgsl"

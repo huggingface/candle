@@ -1,4 +1,4 @@
-use candle_core::{test_device, DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{test_device, DType, Device, IndexOp, Result, Tensor};
 
 fn matmul(device: &Device) -> Result<()> {
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
@@ -185,48 +185,43 @@ fn test_matmul_kernels_wgpu2()-> Result<()> {
 //test different wgpu matmul shaders
 fn test_matmul_kernels_wgpu()-> Result<()> {
     use candle_core::wgpu::MatmulAlgorithm;
-    let mut combinations = Vec::new();
-    
-    for a in &[false] { //prefatch
-        for b in &[false] { //nopadding
-            combinations.push((*a, *b));
-        }
-    }
     
     let algs = vec![
         MatmulAlgorithm::Matmul32_64,
-        MatmulAlgorithm::Matmul1_64B(false, false),
+        MatmulAlgorithm::Matmul32_64B,
+        MatmulAlgorithm::Matmul1_64B,
         MatmulAlgorithm::Matmul7,
         MatmulAlgorithm::Matmul1,
         MatmulAlgorithm::MatmulX,
         MatmulAlgorithm::Matmul16_16,
+        MatmulAlgorithm::Matmul32_32,
+        MatmulAlgorithm::Matmul64_64,
+        MatmulAlgorithm::Matmul64_64_8_8,
+        MatmulAlgorithm::Matmul1_64,
+        MatmulAlgorithm::Matmul24_24,
+        MatmulAlgorithm::Matmul24_48,
+        MatmulAlgorithm::Matmul24_24B,
+        MatmulAlgorithm::Matmul24_48B
     ];
-
-    let algs = algs.into_iter()
-    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul32_32(*a, *b)))
-    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul64_64(*a, *b)))
-    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul64_64_8_8(*a, *b)))
-    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul16_64(*a, *b)))
-    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul1_64B(*a, *b)))
-    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul1_64(*a, *b)))
-    //.chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul1_128(*a, *b))) //TODO: why is this not working?
-    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul24_24(*a, *b)))
-    .chain(combinations.iter().map(|(a, b)| MatmulAlgorithm::Matmul24_48(*a, *b)));
 
     let device = Device::new_wgpu_sync(0)?;
 
     if let Device::Wgpu(wgpu) = &device{
         for alg in algs{
             println!("Testing: {:?}", alg);
-            (*wgpu.matmul_alg.lock().unwrap()) = alg;
+            (*wgpu.matmul_alg.lock().unwrap()) = alg.clone();
 
-            big_matmul_wgpu(&device, false, false)?; 
-            big_matmul_wgpu(&device, false, true)?; //transpose b
-            
-           
-            big_matmul_wgpu(&device, true, false)?; //transpoe a
-            big_matmul_wgpu(&device, true, true)?; //transpose a and b
-
+            for tpa in [true, false]{
+                for tpb in [true, false]{
+                    for use_start_offset in [true, false]{
+                        for tpb_batch in [true, false]{
+                            for tpa_batch in [true, false]{
+                                big_matmul_wgpu(&device, tpa, tpb, use_start_offset, tpb_batch, tpa_batch);
+                            }
+                        }
+                    }
+                }
+            }
 
             matmul(&device)?;
             broadcast_matmul(&device)?;
@@ -241,37 +236,69 @@ fn test_matmul_kernels_wgpu()-> Result<()> {
 
 //compares wgpu matmul impl, with cpu impl
 #[cfg(feature="wgpu")]
-fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool)-> Result<()> {
+fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool, use_start_offset : bool, tpb_batch : bool, tpa_batch : bool)-> Result<()> {
+    use candle_core::{cpu_backend, D};
     let b = 1;
-    let m = 16;
-    let n = 6;
-    let k = 16;
+    let m = 63;
+    let n = 63;
+    let k = 63;
 
     // let b = 1;
     // let m = 1;
     // let n = 1;
     // let k = 128;
 
+    let start_offset = if use_start_offset {100} else {0};
+    let lhs1 = Tensor::rand(0f32, 100f32, b * k * m + start_offset, &Device::Cpu)?.to_dtype(DType::U32)?.to_dtype(DType::F32)?.i((start_offset..))?;
+    let rhs1 = Tensor::rand(0f32, 100f32, b * k * n + start_offset, &Device::Cpu)?.to_dtype(DType::U32)?.to_dtype(DType::F32)?.i((start_offset..))?;
+
     let lhs;
-    if tpa{
-        lhs = Tensor::arange(0.0f32, (b*m*k) as f32,&Device::Cpu)?.reshape((b, k, m))?.transpose(D::Minus1, D::Minus2)?;
+    if tpa_batch{
+        if tpa{
+            lhs = lhs1.reshape((m,k,b))?.transpose(D::Minus1, D::Minus2)?.transpose(0, 1)?;
+        }
+        else{
+            lhs = lhs1.reshape((k,m,b))?.transpose(0, 2)?;
+        }
     }
     else{
-        lhs = Tensor::arange(0.0f32, (b*m*k) as f32,&Device::Cpu)?.reshape((b, m, k))?;
+        if tpa{
+            lhs = lhs1.reshape((b,k,m))?.transpose(D::Minus1, D::Minus2)?;
+        }
+        else{
+            lhs = lhs1.reshape((b,m,k))?;
+        }
     }
+    
 
     let rhs;
-    if tpb{
-        rhs = Tensor::arange(0.0f32, (b*k*n) as f32,&Device::Cpu)?.reshape((b, n, k))?.transpose(D::Minus1, D::Minus2)?;
+    if(tpb_batch){
+        if tpb{
+            rhs = rhs1.reshape((k,n,b))?.transpose(D::Minus1, D::Minus2)?.transpose(0, 1)?;
+        }
+        else{
+            rhs = rhs1.reshape((n,k,b))?.transpose(0, 2)?;
+        }
     }
     else{
-        rhs = Tensor::arange(0.0f32, (b*k*n) as f32,&Device::Cpu)?.reshape((b, k, n))?;
+        if tpb{
+            rhs = rhs1.reshape((b,n,k))?.transpose(D::Minus1, D::Minus2)?;
+        }
+        else{
+            rhs = rhs1.reshape((b,k,n))?;
+        }
     }
+   
+    
 
     let t1 = lhs.matmul(&rhs)?.reshape((b,m,n))?;
 
+
     let lhs = lhs.to_device(&device)?;
     let rhs = rhs.to_device(&device)?;
+
+    println!("gpu lhs: {:?} rhs: {:?}", lhs.layout(), rhs.layout());
+
     let t2 = lhs.matmul(&rhs)?.reshape((b,m,n))?;
 
     let m =  candle_core::test_utils::to_vec3_round(&t1, 3)?;
@@ -287,9 +314,9 @@ fn big_matmul_wgpu_tests()-> Result<()> {
     let device = Device::new_wgpu_sync(0)?;
    
     if let Device::Wgpu(wgpu) = &device{
-        (*wgpu.matmul_alg.lock().unwrap()) = candle_core::wgpu::MatmulAlgorithm::Matmul32_32(false, false);
+        (*wgpu.matmul_alg.lock().unwrap()) = candle_core::wgpu::MatmulAlgorithm::Matmul32_32;
     }
    
-    big_matmul_wgpu(&device, false, false)?;
+    big_matmul_wgpu(&device, false, false, false, false, false)?;
     Ok(())
 }
