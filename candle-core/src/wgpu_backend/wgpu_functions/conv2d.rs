@@ -68,23 +68,32 @@ pub fn queue_conv2d(
             * params.b_size
             * params.out_h()
             * params.out_w();
-        if mem_needed < dev.device_limits.max_storage_buffer_binding_size as usize {
-            return queue_conv2d_matmul(
-                dev,
-                buffer_dest,
-                buffer_input1,
-                buffer_input2,
-                dtype,
-                params,
-                input_layout,
-                kernel_layout,
-            );
-        }
+        //for small c_in, k_h, k_w,  matmul k will be small (e.g. 9)
+        //for small c_out            matmul m will be small (e.g. 1)
+        //in this case only a relativ slowly naive matmul impl will be used.
+        //it may be faster to just use the conv2d shader directly instead of using im2col as this conversion will not result in a fast matrix multipliation. 
+        
+        let m = params.c_out;
+        let k = params.c_in * params.k_h * params.k_w;
+        if k >= 64 || m >= 16{
+            if  mem_needed < dev.device_limits.max_storage_buffer_binding_size as usize {
+                return queue_conv2d_matmul(
+                    dev,
+                    buffer_dest,
+                    buffer_input1,
+                    buffer_input2,
+                    dtype,
+                    params,
+                    input_layout,
+                    kernel_layout,
+                );
+            }
+        } 
     }
 
     let mut use_padded = false;
 
-    const MAY_PAD_INPUT: bool = true;
+    const MAY_PAD_INPUT: bool = false;
 
     let is_continues_in_c_in = input_stride[1] == 1;
 
