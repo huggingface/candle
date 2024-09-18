@@ -72,8 +72,8 @@ impl LSTMState {
 
 #[derive(Debug, Clone, Copy)]
 pub enum Direction {
-    Forward = 1,
-    Backward = 2,
+    Forward,
+    Backward,
 }
 
 #[allow(clippy::upper_case_acronyms)]
