@@ -138,8 +138,8 @@ pub fn lstm(
 ) -> Result<LSTM> {
     let layer_idx = config.layer_idx;
     let direction_str = match config.direction {
-        Direction::Forward => String::from(""),
-        Direction::Backward => String::from("_reverse"),
+        Direction::Forward => "",
+        Direction::Backward => "_reverse",
     };
     let w_ih = vb.get_with_hints(
         (4 * hidden_dim, in_dim),
