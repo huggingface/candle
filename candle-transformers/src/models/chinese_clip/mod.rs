@@ -18,6 +18,19 @@ pub enum Activation {
     QuickGelu,
     Gelu,
     GeluNew,
+    Relu,
+}
+
+impl From<String> for Activation {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "quick_gelu" => Activation::QuickGelu,
+            "gelu" => Activation::Gelu,
+            "gelu_new" => Activation::GeluNew,
+            "relu" => Activation::Relu,
+            _ => panic!("Invalid activation function: {}", value),
+        }
+    }
 }
 
 impl Module for Activation {
@@ -26,6 +39,7 @@ impl Module for Activation {
             Activation::QuickGelu => xs * nn::ops::sigmoid(&(xs * 1.702f64)?)?,
             Activation::Gelu => xs.gelu_erf(),
             Activation::GeluNew => xs.gelu(),
+            Activation::Relu => xs.relu(),
         }
     }
 }
