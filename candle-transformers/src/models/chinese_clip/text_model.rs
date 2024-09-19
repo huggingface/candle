@@ -1,6 +1,4 @@
-use candle::{DType, Device, IndexOp, Module, Result, Tensor};
-
-use crate::models::{metavoice::tokenizers, stable_diffusion::embeddings};
+use candle::{DType, Module, Result, Tensor};
 
 use super::Activation;
 
@@ -139,28 +137,32 @@ pub struct ChineseClipTextEmbeddings {
 }
 
 impl ChineseClipTextEmbeddings {
-    pub fn new(vs: candle_nn::VarBuilder, c: &ChineseClipTextConfig) -> Result<Self> {
-        let word_embeddings =
-            candle_nn::embedding(c.vocab_size, c.hidden_size, vs.pp("word_embeddings"))?;
+    pub fn new(var: candle_nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+        let word_embeddings = candle_nn::embedding(
+            config.vocab_size,
+            config.hidden_size,
+            var.pp("word_embeddings"),
+        )?;
         let position_embeddings = candle_nn::embedding(
-            c.max_position_embeddings,
-            c.hidden_size,
-            vs.pp("position_embeddings"),
+            config.max_position_embeddings,
+            config.hidden_size,
+            var.pp("position_embeddings"),
         )?;
         let token_type_embeddings = candle_nn::embedding(
-            c.type_vocab_size,
-            c.hidden_size,
-            vs.pp("token_type_embeddings"),
+            config.type_vocab_size,
+            config.hidden_size,
+            var.pp("token_type_embeddings"),
         )?;
         let layer_norm = candle_nn::layer_norm::<f64>(
-            c.hidden_size,
-            c.layer_norm_eps.into(),
-            vs.pp("layer_norm"),
+            config.hidden_size,
+            config.layer_norm_eps.into(),
+            var.pp("layer_norm"),
         )?;
-        let dropout = candle_nn::Dropout::new(c.hidden_dropout_prob);
+        let dropout = candle_nn::Dropout::new(config.hidden_dropout_prob);
         let position_ids =
-            Tensor::arange(0u32, c.max_position_embeddings as u32, vs.device())?.unsqueeze(0)?;
-        let token_type_ids = Tensor::zeros(position_ids.shape(), DType::I64, vs.device())?;
+            Tensor::arange(0u32, config.max_position_embeddings as u32, var.device())?
+                .unsqueeze(0)?;
+        let token_type_ids = Tensor::zeros(position_ids.shape(), DType::I64, var.device())?;
 
         Ok(Self {
             word_embeddings,
@@ -168,7 +170,7 @@ impl ChineseClipTextEmbeddings {
             token_type_embeddings,
             layer_norm,
             dropout,
-            position_embedding_type: c.position_embedding_type.clone(),
+            position_embedding_type: config.position_embedding_type.clone(),
             position_ids,
             token_type_ids: token_type_ids,
         })
@@ -177,11 +179,14 @@ impl ChineseClipTextEmbeddings {
 
 impl Module for ChineseClipTextEmbeddings {
     fn forward(&self, xs: &candle::Tensor) -> Result<Tensor> {
+        // let seq_length = input_ids.dim(D::Minus1)?;
+        // let inputs_embeds = self.token_embedding.forward(input_ids)?;
+        // let position_ids = self.position_ids.narrow(1, 0, seq_length)?;
+        // let position_embedding = self.position_embedding.forward(&position_ids)?;
+        // inputs_embeds.broadcast_add(&position_embedding)
+
         let input_shape = xs.shape();
         let seq_length = input_shape.dims1()?;
-        // let batch_size = input_shape.dims0()?;
-
-        // self.position_ids.slice, dim, offset)
         let position_ids = (0..seq_length as u32).collect::<Vec<_>>();
         let position_ids = self.position_ids.index_select(
             &Tensor::new(&position_ids[..], self.position_ids.device())?,
@@ -208,8 +213,9 @@ impl Module for ChineseClipTextEmbeddings {
 mod tests {
 
     use super::*;
-    #[test]
+    use candle::{Device, IndexOp};
 
+    #[test]
     pub fn test_tmp() {
         let data = candle::Tensor::arange(0.0, 100.0, &Device::Cpu).unwrap();
         println!("{:?}", data);
@@ -226,5 +232,10 @@ mod tests {
             .unwrap();
         println!("{:?}", position_ids);
         println!("{:?}", position_ids.shape());
+
+        let data = candle::Tensor::rand(1.0, 10.0, vec![2, 3], &Device::Cpu).unwrap();
+        println!("---> {}", data.to_string());
+        let data = data.i((.., 1..=2)).unwrap();
+        print!("{}", data.to_string());
     }
 }

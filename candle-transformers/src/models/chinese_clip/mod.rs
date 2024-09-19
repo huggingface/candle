@@ -52,3 +52,46 @@ impl ChineseClipConfig {
         }
     }
 }
+
+#[derive(Clone, Debug)]
+pub enum EncoderConfig {
+    Text(text_model::ChineseClipTextConfig),
+    Vision(vision_model::ChineseClipVisionConfig),
+}
+
+impl EncoderConfig {
+    pub fn embed_dim(&self) -> usize {
+        match self {
+            Self::Text(c) => c.hidden_size,
+            Self::Vision(c) => c.hidden_size,
+        }
+    }
+
+    pub fn num_attention_heads(&self) -> usize {
+        match self {
+            Self::Text(c) => c.num_attention_heads,
+            Self::Vision(c) => c.num_attention_heads,
+        }
+    }
+
+    pub fn intermediate_size(&self) -> usize {
+        match self {
+            Self::Text(c) => c.intermediate_size,
+            Self::Vision(c) => c.intermediate_size,
+        }
+    }
+
+    pub fn num_hidden_layers(&self) -> usize {
+        match self {
+            Self::Text(c) => c.num_hidden_layers,
+            Self::Vision(c) => c.num_hidden_layers,
+        }
+    }
+
+    pub fn activation(&self) -> Activation {
+        match self {
+            Self::Text(c) => c.hidden_act,
+            Self::Vision(c) => c.hidden_act,
+        }
+    }
+}
