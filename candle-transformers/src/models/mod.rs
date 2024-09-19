@@ -5,6 +5,7 @@ pub mod bigcode;
 pub mod blip;
 pub mod blip_text;
 pub mod chatglm;
+pub mod chinese_clip;
 pub mod clip;
 pub mod codegeex4_9b;
 pub mod convmixer;
