@@ -179,7 +179,11 @@ impl VectorQuantization {
             (Some(p_in), Some(p_out))
         };
         let codebook = EuclideanCodebook::new(codebook_dim, codebook_size, vb.pp("_codebook"))?;
-        Ok(Self { project_in, project_out, codebook })
+        Ok(Self {
+            project_in,
+            project_out,
+            codebook,
+        })
     }
 
     pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
@@ -304,7 +308,11 @@ impl ResidualVectorQuantizer {
             /* codebook_dim */ None,
             vb.pp("vq"),
         )?;
-        Ok(Self { vq, input_proj, output_proj })
+        Ok(Self {
+            vq,
+            input_proj,
+            output_proj,
+        })
     }
 
     pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
@@ -363,7 +371,13 @@ impl SplitResidualVectorQuantizer {
         )?;
         let span_encode = tracing::span!(tracing::Level::TRACE, "split-rvq-encode");
         let span_decode = tracing::span!(tracing::Level::TRACE, "split-rvq-decode");
-        Ok(Self { rvq_first, rvq_rest, n_q, span_encode, span_decode })
+        Ok(Self {
+            rvq_first,
+            rvq_rest,
+            n_q,
+            span_encode,
+            span_decode,
+        })
     }
 
     pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
