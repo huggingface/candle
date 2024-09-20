@@ -169,13 +169,13 @@ impl StreamingMultiheadAttention {
         let head_dim = hd / self.num_heads;
         let q = xs
             .apply(&self.q_proj)?
-            .reshape((b, t, self.num_heads, hd))?;
+            .reshape((b, t, self.num_heads, head_dim))?;
         let k = xs
             .apply(&self.k_proj)?
-            .reshape((b, t, self.num_heads, hd))?;
+            .reshape((b, t, self.num_heads, head_dim))?;
         let v = xs
             .apply(&self.v_proj)?
-            .reshape((b, t, self.num_heads, hd))?;
+            .reshape((b, t, self.num_heads, head_dim))?;
         // qk_layer_norm = None
         // kv_repeat = 1, otherwise we would need repeat_kv
         let mut q = q.transpose(1, 2)?.contiguous()?; // b,h,t,d
