@@ -1,5 +1,13 @@
+//! Chinese contrastive Language-Image Pre-Training
+//!
+//! Chinese contrastive Language-Image Pre-Training (CLIP) is an architecture trained on
+//! pairs of images with related texts.
+//!
+//! https://github.com/OFA-Sys/Chinese-CLIP
+//! https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py
+
 use candle::{DType, IndexOp, Module, Result, Shape, Tensor, D};
-use candle_nn::{conv2d, embedding, Conv2dConfig, VarBuilder};
+use candle_nn as nn;
 
 use super::{Activation, EncoderConfig};
 
@@ -63,14 +71,14 @@ impl ChineseClipVisionConfig {
 
 #[derive(Clone, Debug)]
 pub struct ChineseClipVisionEmbeddings {
-    patch_embedding: candle_nn::Conv2d,
+    patch_embedding: nn::Conv2d,
     position_ids: Tensor,
     class_embedding: Tensor,
-    position_embedding: candle_nn::Embedding,
+    position_embedding: nn::Embedding,
 }
 
 impl ChineseClipVisionEmbeddings {
-    pub fn new(var: VarBuilder, config: &ChineseClipVisionConfig) -> Result<Self> {
+    pub fn new(var: nn::VarBuilder, config: &ChineseClipVisionConfig) -> Result<Self> {
         let embed_dim = config.hidden_size;
         // originally nn.Parameter
         let class_embedding = if var.contains_tensor("class_embedding") {
@@ -83,13 +91,13 @@ impl ChineseClipVisionEmbeddings {
         let num_positions = num_patches + 1;
         let position_ids = Tensor::arange(0, num_positions as i64, var.device())?;
 
-        let conv2dconfig = Conv2dConfig {
+        let conv2dconfig = nn::Conv2dConfig {
             stride: config.patch_size,
             ..Default::default()
         };
         let position_embedding =
-            candle_nn::embedding(num_positions, embed_dim, var.pp("position_embedding"))?;
-        let patch_embedding = candle_nn::conv2d_no_bias(
+            nn::embedding(num_positions, embed_dim, var.pp("position_embedding"))?;
+        let patch_embedding = nn::conv2d_no_bias(
             config.num_channels,
             embed_dim,
             config.patch_size,
@@ -122,28 +130,28 @@ impl Module for ChineseClipVisionEmbeddings {
 }
 
 #[derive(Clone, Debug)]
-struct ClipAttention {
-    k_proj: candle_nn::Linear,
-    v_proj: candle_nn::Linear,
-    q_proj: candle_nn::Linear,
-    out_proj: candle_nn::Linear,
+struct ChineseClipVisionAttention {
+    k_proj: nn::Linear,
+    v_proj: nn::Linear,
+    q_proj: nn::Linear,
+    out_proj: nn::Linear,
     head_dim: usize,
     scale: f64,
     num_attention_heads: usize,
 }
 
-impl ClipAttention {
-    fn new(vs: candle_nn::VarBuilder, c: &EncoderConfig) -> Result<Self> {
-        let embed_dim = c.embed_dim();
-        let num_attention_heads = c.num_attention_heads();
-        let k_proj = candle_nn::linear(embed_dim, embed_dim, vs.pp("k_proj"))?;
-        let v_proj = candle_nn::linear(embed_dim, embed_dim, vs.pp("v_proj"))?;
-        let q_proj = candle_nn::linear(embed_dim, embed_dim, vs.pp("q_proj"))?;
-        let out_proj = candle_nn::linear(embed_dim, embed_dim, vs.pp("out_proj"))?;
+impl ChineseClipVisionAttention {
+    fn new(var: nn::VarBuilder, config: &EncoderConfig) -> Result<Self> {
+        let embed_dim = config.embed_dim();
+        let num_attention_heads = config.num_attention_heads();
+        let k_proj = nn::linear(embed_dim, embed_dim, var.pp("k_proj"))?;
+        let v_proj = nn::linear(embed_dim, embed_dim, var.pp("v_proj"))?;
+        let q_proj = nn::linear(embed_dim, embed_dim, var.pp("q_proj"))?;
+        let out_proj = nn::linear(embed_dim, embed_dim, var.pp("out_proj"))?;
         let head_dim = embed_dim / num_attention_heads;
         let scale = (head_dim as f64).powf(-0.5);
 
-        Ok(ClipAttention {
+        Ok(ChineseClipVisionAttention {
             k_proj,
             v_proj,
             q_proj,
@@ -191,7 +199,7 @@ impl ClipAttention {
             attn_weights
         };
 
-        let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
+        let attn_weights = nn::ops::softmax(&attn_weights, D::Minus1)?;
 
         let attn_output = attn_weights.matmul(&value_states)?.to_dtype(in_dtype)?;
         let attn_output = attn_output
@@ -203,26 +211,34 @@ impl ClipAttention {
 }
 
 #[derive(Clone, Debug)]
-struct ClipMlp {
-    fc1: candle_nn::Linear,
-    fc2: candle_nn::Linear,
+struct ChineseClipVisionMlp {
+    fc1: nn::Linear,
+    fc2: nn::Linear,
     activation: Activation,
 }
 
-impl ClipMlp {
-    fn new(vs: candle_nn::VarBuilder, c: &EncoderConfig) -> Result<Self> {
-        let fc1 = candle_nn::linear(c.embed_dim(), c.intermediate_size(), vs.pp("fc1"))?;
-        let fc2 = candle_nn::linear(c.intermediate_size(), c.embed_dim(), vs.pp("fc2"))?;
+impl ChineseClipVisionMlp {
+    fn new(var: nn::VarBuilder, config: &EncoderConfig) -> Result<Self> {
+        let fc1 = nn::linear(
+            config.embed_dim(),
+            config.intermediate_size(),
+            var.pp("fc1"),
+        )?;
+        let fc2 = nn::linear(
+            config.intermediate_size(),
+            config.embed_dim(),
+            var.pp("fc2"),
+        )?;
 
-        Ok(ClipMlp {
+        Ok(ChineseClipVisionMlp {
             fc1,
             fc2,
-            activation: c.activation(),
+            activation: config.activation(),
         })
     }
 }
 
-impl ClipMlp {
+impl ChineseClipVisionMlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs = self.fc1.forward(xs)?;
         self.fc2.forward(&self.activation.forward(&xs)?)
@@ -230,21 +246,21 @@ impl ClipMlp {
 }
 
 #[derive(Clone, Debug)]
-struct ClipEncoderLayer {
-    self_attn: ClipAttention,
-    layer_norm1: candle_nn::LayerNorm,
-    mlp: ClipMlp,
-    layer_norm2: candle_nn::LayerNorm,
+struct ChineseClipVisionEncoderLayer {
+    self_attn: ChineseClipVisionAttention,
+    layer_norm1: nn::LayerNorm,
+    mlp: ChineseClipVisionMlp,
+    layer_norm2: nn::LayerNorm,
 }
 
-impl ClipEncoderLayer {
-    fn new(vs: candle_nn::VarBuilder, c: &EncoderConfig) -> Result<Self> {
-        let self_attn = ClipAttention::new(vs.pp("self_attn"), c)?;
-        let layer_norm1 = candle_nn::layer_norm(c.embed_dim(), 1e-5, vs.pp("layer_norm1"))?;
-        let mlp = ClipMlp::new(vs.pp("mlp"), c)?;
-        let layer_norm2 = candle_nn::layer_norm(c.embed_dim(), 1e-5, vs.pp("layer_norm2"))?;
+impl ChineseClipVisionEncoderLayer {
+    fn new(var: nn::VarBuilder, config: &EncoderConfig) -> Result<Self> {
+        let self_attn = ChineseClipVisionAttention::new(var.pp("self_attn"), config)?;
+        let layer_norm1 = nn::layer_norm(config.embed_dim(), 1e-5, var.pp("layer_norm1"))?;
+        let mlp = ChineseClipVisionMlp::new(var.pp("mlp"), config)?;
+        let layer_norm2 = nn::layer_norm(config.embed_dim(), 1e-5, var.pp("layer_norm2"))?;
 
-        Ok(ClipEncoderLayer {
+        Ok(ChineseClipVisionEncoderLayer {
             self_attn,
             layer_norm1,
             mlp,
@@ -266,19 +282,19 @@ impl ClipEncoderLayer {
 }
 
 #[derive(Clone, Debug)]
-pub struct ClipEncoder {
-    layers: Vec<ClipEncoderLayer>,
+pub struct ChineseClipVisionEncoder {
+    layers: Vec<ChineseClipVisionEncoderLayer>,
 }
 
-impl ClipEncoder {
-    pub fn new(vs: candle_nn::VarBuilder, c: &EncoderConfig) -> Result<Self> {
-        let vs = vs.pp("layers");
-        let mut layers: Vec<ClipEncoderLayer> = Vec::new();
-        for index in 0..c.num_hidden_layers() {
-            let layer = ClipEncoderLayer::new(vs.pp(index.to_string()), c)?;
+impl ChineseClipVisionEncoder {
+    pub fn new(var: nn::VarBuilder, config: &EncoderConfig) -> Result<Self> {
+        let vs = var.pp("layers");
+        let mut layers: Vec<ChineseClipVisionEncoderLayer> = Vec::new();
+        for index in 0..config.num_hidden_layers() {
+            let layer = ChineseClipVisionEncoderLayer::new(vs.pp(index.to_string()), config)?;
             layers.push(layer)
         }
-        Ok(ClipEncoder { layers })
+        Ok(ChineseClipVisionEncoder { layers })
     }
 
     pub fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
@@ -307,18 +323,21 @@ impl ClipEncoder {
 #[derive(Clone, Debug)]
 pub struct ChineseClipVisionTransformer {
     embeddings: ChineseClipVisionEmbeddings,
-    encoder: ClipEncoder,
-    pre_layer_norm: candle_nn::LayerNorm,
-    final_layer_norm: candle_nn::LayerNorm,
+    encoder: ChineseClipVisionEncoder,
+    pre_layer_norm: nn::LayerNorm,
+    final_layer_norm: nn::LayerNorm,
 }
 
 impl ChineseClipVisionTransformer {
-    pub fn new(vs: candle_nn::VarBuilder, c: &ChineseClipVisionConfig) -> Result<Self> {
-        let embed_dim = c.hidden_size;
-        let embeddings = ChineseClipVisionEmbeddings::new(vs.pp("embeddings"), c)?;
-        let pre_layer_norm = candle_nn::layer_norm(embed_dim, 1e-5, vs.pp("pre_layrnorm"))?;
-        let encoder = ClipEncoder::new(vs.pp("encoder"), &EncoderConfig::Vision(c.clone()))?;
-        let final_layer_norm = candle_nn::layer_norm(embed_dim, 1e-5, vs.pp("post_layernorm"))?;
+    pub fn new(var: nn::VarBuilder, config: &ChineseClipVisionConfig) -> Result<Self> {
+        let embed_dim = config.hidden_size;
+        let embeddings = ChineseClipVisionEmbeddings::new(var.pp("embeddings"), config)?;
+        let pre_layer_norm = nn::layer_norm(embed_dim, 1e-5, var.pp("pre_layrnorm"))?;
+        let encoder = ChineseClipVisionEncoder::new(
+            var.pp("encoder"),
+            &EncoderConfig::Vision(config.clone()),
+        )?;
+        let final_layer_norm = nn::layer_norm(embed_dim, 1e-5, var.pp("post_layernorm"))?;
         Ok(Self {
             embeddings,
             encoder,

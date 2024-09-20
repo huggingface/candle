@@ -1,5 +1,13 @@
-use candle::{DType, IndexOp, Module, Result, Tensor};
-use candle_nn::{layer_norm, linear, Dropout, LayerNorm, Linear, VarBuilder};
+//! Chinese contrastive Language-Image Pre-Training
+//!
+//! Chinese contrastive Language-Image Pre-Training (CLIP) is an architecture trained on
+//! pairs of images with related texts.
+//!
+//! https://github.com/OFA-Sys/Chinese-CLIP
+//! https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py
+
+use candle::{DType, Device, IndexOp, Module, Result, Tensor};
+use candle_nn as nn;
 
 use super::Activation;
 
@@ -126,40 +134,41 @@ impl ChineseClipTextConfig {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ChineseClipTextEmbeddings {
-    word_embeddings: candle_nn::Embedding,
-    position_embeddings: candle_nn::Embedding,
-    token_type_embeddings: candle_nn::Embedding,
-    layer_norm: candle_nn::LayerNorm,
-    dropout: candle_nn::Dropout,
+    word_embeddings: nn::Embedding,
+    position_embeddings: nn::Embedding,
+    token_type_embeddings: nn::Embedding,
+    layer_norm: nn::LayerNorm,
+    dropout: nn::Dropout,
     position_embedding_type: PositionEmbeddingType,
-    position_ids: candle::Tensor,
-    token_type_ids: candle::Tensor,
+    position_ids: Tensor,
+    token_type_ids: Tensor,
 }
 
 impl ChineseClipTextEmbeddings {
-    pub fn new(var: candle_nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
-        let word_embeddings = candle_nn::embedding(
+    pub fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+        let word_embeddings = nn::embedding(
             config.vocab_size,
             config.hidden_size,
             var.pp("word_embeddings"),
         )?;
-        let position_embeddings = candle_nn::embedding(
+        let position_embeddings = nn::embedding(
             config.max_position_embeddings,
             config.hidden_size,
             var.pp("position_embeddings"),
         )?;
-        let token_type_embeddings = candle_nn::embedding(
+        let token_type_embeddings = nn::embedding(
             config.type_vocab_size,
             config.hidden_size,
             var.pp("token_type_embeddings"),
         )?;
-        let layer_norm = candle_nn::layer_norm::<f64>(
+        let layer_norm = nn::layer_norm::<f64>(
             config.hidden_size,
             config.layer_norm_eps.into(),
             var.pp("layer_norm"),
         )?;
-        let dropout = candle_nn::Dropout::new(config.hidden_dropout_prob);
+        let dropout = nn::Dropout::new(config.hidden_dropout_prob);
         let position_ids =
             Tensor::arange(0u32, config.max_position_embeddings as u32, var.device())?
                 .unsqueeze(0)?;
@@ -176,15 +185,15 @@ impl ChineseClipTextEmbeddings {
             token_type_ids: token_type_ids,
         })
     }
-}
 
-impl Module for ChineseClipTextEmbeddings {
-    fn forward(&self, xs: &candle::Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, token_type_ids: Option<&Tensor>) -> Result<Tensor> {
         // let seq_length = input_ids.dim(D::Minus1)?;
         // let inputs_embeds = self.token_embedding.forward(input_ids)?;
         // let position_ids = self.position_ids.narrow(1, 0, seq_length)?;
         // let position_embedding = self.position_embedding.forward(&position_ids)?;
         // inputs_embeds.broadcast_add(&position_embedding)
+
+        // FIXME: 2024/09/20 10:04:23 token_type_ids 是应该使用成员变量还是局部变量？
 
         let input_shape = xs.shape();
         let seq_length = input_shape.dims1()?;
@@ -195,7 +204,8 @@ impl Module for ChineseClipTextEmbeddings {
         )?;
 
         let word_embeddings = self.word_embeddings.forward(&xs)?;
-        let token_type_embeddings = self.token_type_embeddings.forward(&self.token_type_ids)?;
+        let token_type_ids = token_type_ids.unwrap_or(&self.token_type_ids);
+        let token_type_embeddings = self.token_type_embeddings.forward(token_type_ids)?;
         let embeddings = (word_embeddings + token_type_embeddings)?;
         let embeddings = match self.position_embedding_type {
             PositionEmbeddingType::Absolute => {
@@ -210,58 +220,24 @@ impl Module for ChineseClipTextEmbeddings {
     }
 }
 
-struct Tanh;
-
-impl Tanh {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-impl Module for Tanh {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.tanh()
-    }
-}
-
-struct ChineseClipTextPooler {
-    dense: candle_nn::Linear,
-    activation: Tanh,
-}
-
-impl ChineseClipTextPooler {
-    pub fn new(var: candle_nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
-        let dense = candle_nn::linear(config.hidden_size, config.hidden_size, var.pp("dense"))?;
-        let activation = Tanh::new();
-        Ok(Self { dense, activation })
-    }
-}
-
-impl Module for ChineseClipTextPooler {
-    fn forward(&self, hidden_states: &candle::Tensor) -> Result<Tensor> {
-        let first_token_tensor = hidden_states.i((.., 0))?;
-        let pooled_output = self.dense.forward(&first_token_tensor)?;
-        let pooled_output = self.activation.forward(&pooled_output)?;
-        Ok(pooled_output)
-    }
-}
-
-/// Copied from [`crate::models:models::bert::BertSelfOutput`] to [`ChineseClipTextSelfOutput`]
+/// Copied from [`crate::models::bert::BertSelfOutput`] to [`ChineseClipTextSelfOutput`]
+#[derive(Clone, Debug)]
 struct ChineseClipTextSelfOutput {
-    dense: Linear,
-    layer_norm: LayerNorm,
-    dropout: Dropout,
+    dense: nn::Linear,
+    layer_norm: nn::LayerNorm,
+    dropout: nn::Dropout,
     span: tracing::Span,
 }
 
 impl ChineseClipTextSelfOutput {
-    fn new(var: VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
-        let dense = linear(config.hidden_size, config.hidden_size, var.pp("dense"))?;
-        let layer_norm = layer_norm(
+    fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+        let dense = nn::linear(config.hidden_size, config.hidden_size, var.pp("dense"))?;
+        let layer_norm = nn::layer_norm(
             config.hidden_size,
             config.layer_norm_eps,
             var.pp("LayerNorm"),
         )?;
-        let dropout = Dropout::new(config.hidden_dropout_prob);
+        let dropout = nn::Dropout::new(config.hidden_dropout_prob);
         Ok(Self {
             dense,
             layer_norm,
@@ -278,12 +254,13 @@ impl ChineseClipTextSelfOutput {
     }
 }
 
-/// Copied from [`crate::models:models::bert::BertSelfAttention`] to [`ChineseClipTextSelfAttention`]
+/// Copied from [`crate::models::bert::BertSelfAttention`] to [`ChineseClipTextSelfAttention`]
+#[derive(Clone, Debug)]
 struct ChineseClipTextSelfAttention {
-    query: Linear,
-    key: Linear,
-    value: Linear,
-    dropout: Dropout,
+    query: nn::Linear,
+    key: nn::Linear,
+    value: nn::Linear,
+    dropout: nn::Dropout,
     num_attention_heads: usize,
     attention_head_size: usize,
     span: tracing::Span,
@@ -291,14 +268,14 @@ struct ChineseClipTextSelfAttention {
 }
 
 impl ChineseClipTextSelfAttention {
-    fn new(var: VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+    fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
         let attention_head_size = config.hidden_size / config.num_attention_heads;
         let all_head_size = config.num_attention_heads * attention_head_size;
-        let dropout = Dropout::new(config.hidden_dropout_prob);
+        let dropout = nn::Dropout::new(config.hidden_dropout_prob);
         let hidden_size = config.hidden_size;
-        let query = linear(hidden_size, all_head_size, var.pp("query"))?;
-        let value = linear(hidden_size, all_head_size, var.pp("value"))?;
-        let key = linear(hidden_size, all_head_size, var.pp("key"))?;
+        let query = nn::linear(hidden_size, all_head_size, var.pp("query"))?;
+        let value = nn::linear(hidden_size, all_head_size, var.pp("value"))?;
+        let key = nn::linear(hidden_size, all_head_size, var.pp("key"))?;
         Ok(Self {
             query,
             key,
@@ -335,7 +312,7 @@ impl ChineseClipTextSelfAttention {
         let attention_scores = attention_scores.broadcast_add(attention_mask)?;
         let attention_probs = {
             let _enter_sm = self.span_softmax.enter();
-            candle_nn::ops::softmax(&attention_scores, candle::D::Minus1)?
+            nn::ops::softmax(&attention_scores, candle::D::Minus1)?
         };
         let attention_probs = self.dropout.forward(&attention_probs, false)?;
 
@@ -346,7 +323,8 @@ impl ChineseClipTextSelfAttention {
     }
 }
 
-/// Copied from [`crate::models:models::bert::BertAttention`] to [`ChineseClipTextSelfAttention`]
+/// Copied from [`crate::models::bert::BertAttention`] to [`ChineseClipTextAttention`]
+#[derive(Clone, Debug)]
 struct ChineseClipTextAttention {
     self_attention: ChineseClipTextSelfAttention,
     self_output: ChineseClipTextSelfOutput,
@@ -354,9 +332,9 @@ struct ChineseClipTextAttention {
 }
 
 impl ChineseClipTextAttention {
-    fn new(vb: VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
-        let self_attention = ChineseClipTextSelfAttention::new(vb.pp("self"), config)?;
-        let self_output = ChineseClipTextSelfOutput::new(vb.pp("output"), config)?;
+    fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+        let self_attention = ChineseClipTextSelfAttention::new(var.pp("self"), config)?;
+        let self_output = ChineseClipTextSelfOutput::new(var.pp("output"), config)?;
         Ok(Self {
             self_attention,
             self_output,
@@ -374,16 +352,17 @@ impl ChineseClipTextAttention {
 
 type HiddenActLayer = Activation;
 
-/// Copied from [`crate::models:models::bert::BertIntermediate`] to [`ChineseClipTextIntermediate`]
+/// Copied from [`crate::models::bert::BertIntermediate`] to [`ChineseClipTextIntermediate`]
+#[derive(Clone, Debug)]
 struct ChineseClipTextIntermediate {
-    dense: Linear,
+    dense: nn::Linear,
     intermediate_act: HiddenActLayer,
     span: tracing::Span,
 }
 
 impl ChineseClipTextIntermediate {
-    fn new(var: VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
-        let dense = linear(
+    fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+        let dense = nn::linear(
             config.hidden_size,
             config.intermediate_size,
             var.pp("dense"),
@@ -405,27 +384,28 @@ impl Module for ChineseClipTextIntermediate {
     }
 }
 
-/// Copied from [`crate::models:models::bert::BertOutput`] to [`ChineseClipTextOutput`]
+/// Copied from [`crate::models::bert::BertOutput`] to [`ChineseClipTextOutput`]
+#[derive(Clone, Debug)]
 struct ChineseClipTextOutput {
-    dense: Linear,
-    layer_norm: LayerNorm,
-    dropout: Dropout,
+    dense: nn::Linear,
+    layer_norm: nn::LayerNorm,
+    dropout: nn::Dropout,
     span: tracing::Span,
 }
 
 impl ChineseClipTextOutput {
-    fn new(var: VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
-        let dense = linear(
+    fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+        let dense = nn::linear(
             config.intermediate_size,
             config.hidden_size,
             var.pp("dense"),
         )?;
-        let layer_norm = layer_norm(
+        let layer_norm = nn::layer_norm(
             config.hidden_size,
             config.layer_norm_eps,
             var.pp("LayerNorm"),
         )?;
-        let dropout = Dropout::new(config.hidden_dropout_prob);
+        let dropout = nn::Dropout::new(config.hidden_dropout_prob);
         Ok(Self {
             dense,
             layer_norm,
@@ -442,15 +422,17 @@ impl ChineseClipTextOutput {
     }
 }
 
-struct BertLayer {
+/// Copied from [`crate::models::bert::BertLayer`] to [`ChineseClipTextLayer`]
+#[derive(Clone, Debug)]
+struct ChineseClipTextLayer {
     attention: ChineseClipTextAttention,
     intermediate: ChineseClipTextIntermediate,
     output: ChineseClipTextOutput,
     span: tracing::Span,
 }
 
-impl BertLayer {
-    fn load(var: VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+impl ChineseClipTextLayer {
+    fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
         let attention = ChineseClipTextAttention::new(var.pp("attention"), config)?;
         let intermediate = ChineseClipTextIntermediate::new(var.pp("intermediate"), config)?;
         let output = ChineseClipTextOutput::new(var.pp("output"), config)?;
@@ -476,6 +458,69 @@ impl BertLayer {
     }
 }
 
+#[derive(Clone, Debug)]
+struct Tanh;
+
+impl Tanh {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+impl Module for Tanh {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.tanh()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ChineseClipTextPooler {
+    dense: nn::Linear,
+    activation: Tanh,
+}
+
+impl ChineseClipTextPooler {
+    pub fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+        let dense = nn::linear(config.hidden_size, config.hidden_size, var.pp("dense"))?;
+        let activation = Tanh::new();
+        Ok(Self { dense, activation })
+    }
+}
+
+impl Module for ChineseClipTextPooler {
+    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        let first_token_tensor = hidden_states.i((.., 0))?;
+        let pooled_output = self.dense.forward(&first_token_tensor)?;
+        let pooled_output = self.activation.forward(&pooled_output)?;
+        Ok(pooled_output)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ChineseClipTextEncoder {
+    layers: Vec<ChineseClipTextLayer>,
+    span: tracing::Span,
+}
+
+impl ChineseClipTextEncoder {
+    fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+        let layers = (0..config.num_hidden_layers)
+            .map(|index| ChineseClipTextLayer::new(var.pp(format!("layer.{index}")), config))
+            .collect::<Result<Vec<_>>>()?;
+        let span = tracing::span!(tracing::Level::TRACE, "encoder");
+        Ok(ChineseClipTextEncoder { layers, span })
+    }
+
+    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let mut hidden_states = hidden_states.clone();
+        // Use a loop rather than a fold as it's easier to modify when adding debug/...
+        for layer in self.layers.iter() {
+            hidden_states = layer.forward(&hidden_states, attention_mask)?
+        }
+        Ok(hidden_states)
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -484,7 +529,7 @@ mod tests {
 
     #[test]
     pub fn test_tmp() {
-        let data = candle::Tensor::arange(0.0, 100.0, &Device::Cpu).unwrap();
+        let data = Tensor::arange(0.0, 100.0, &Device::Cpu).unwrap();
         println!("{:?}", data);
         println!("{:?}", data.shape());
 
@@ -500,9 +545,67 @@ mod tests {
         println!("{:?}", position_ids);
         println!("{:?}", position_ids.shape());
 
-        let data = candle::Tensor::rand(1.0, 10.0, vec![2, 3], &Device::Cpu).unwrap();
+        let data = Tensor::rand(1.0, 10.0, vec![2, 3], &Device::Cpu).unwrap();
         println!("---> {}", data.to_string());
         let data = data.i((.., 1..=2)).unwrap();
         print!("{}", data.to_string());
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct ChineseClipTextTransformer {
+    embeddings: ChineseClipTextEmbeddings,
+    encoder: ChineseClipTextEncoder,
+    pooler: ChineseClipTextPooler,
+    pub device: Device,
+    span: tracing::Span,
+}
+
+impl ChineseClipTextTransformer {
+    pub fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+        let embeddings = ChineseClipTextEmbeddings::new(var.pp("embeddings"), config)?;
+        let encoder = ChineseClipTextEncoder::new(var.pp("encoder"), config)?;
+        let pooler = ChineseClipTextPooler::new(var.pp("pooler"), config)?;
+        Ok(Self {
+            embeddings,
+            encoder,
+            pooler,
+            device: var.device().clone(),
+            span: tracing::span!(tracing::Level::TRACE, "model"),
+        })
+    }
+
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        token_type_ids: Option<&Tensor>,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let embedding_output = self.embeddings.forward(input_ids, token_type_ids)?;
+        let attention_mask = match attention_mask {
+            Some(attention_mask) => attention_mask.clone(),
+            None => input_ids.ones_like()?,
+        };
+        // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L995
+        let attention_mask = get_extended_attention_mask(&attention_mask, DType::F32)?;
+        let encoder_outputs = self.encoder.forward(&embedding_output, &attention_mask)?;
+        let encoder_output = encoder_outputs.get(0)?;
+        let pooled_output = self.pooler.forward(&encoder_output)?;
+        // FIXME: 2024/09/20 10:23:00 这里还有一些处理，https://github.com/huggingface/transformers/blob/e40bb4845e0eefb52ec1e9cac9c2446ab36aef81/src/transformers/models/chinese_clip/modeling_chinese_clip.py#L1265C19-L1265C74
+        // 后续再研究
+        Ok(pooled_output)
+    }
+}
+
+fn get_extended_attention_mask(attention_mask: &Tensor, dtype: DType) -> Result<Tensor> {
+    let attention_mask = match attention_mask.rank() {
+        3 => attention_mask.unsqueeze(1)?,
+        2 => attention_mask.unsqueeze(1)?.unsqueeze(1)?,
+        _ => candle::bail!("Wrong shape for input_ids or attention_mask"),
+    };
+    let attention_mask = attention_mask.to_dtype(dtype)?;
+    // torch.finfo(dtype).min
+    (attention_mask.ones_like()? - &attention_mask)?
+        .broadcast_mul(&Tensor::try_from(f32::MIN)?.to_device(attention_mask.device())?)
 }

@@ -6,9 +6,11 @@
 //! https://github.com/OFA-Sys/Chinese-CLIP
 //! https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py
 
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{Result, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
+use text_model::ChineseClipTextTransformer;
+use vision_model::ChineseClipVisionTransformer;
 
 pub mod text_model;
 pub mod vision_model;
@@ -48,6 +50,7 @@ impl Module for Activation {
 pub struct ChineseClipConfig {
     pub text_config: text_model::ChineseClipTextConfig,
     pub vision_config: vision_model::ChineseClipVisionConfig,
+    pub projection_dim: usize,
     pub logit_scale_init_value: f32,
     pub image_size: usize,
 }
@@ -61,6 +64,7 @@ impl ChineseClipConfig {
         Self {
             text_config,
             vision_config,
+            projection_dim: 512,
             logit_scale_init_value: 2.6592,
             image_size: 512,
         }
@@ -108,4 +112,76 @@ impl EncoderConfig {
             Self::Vision(c) => c.hidden_act,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct ChineseClipModel {
+    text_model: ChineseClipTextTransformer,
+    vision_model: ChineseClipVisionTransformer,
+    visual_projection: candle_nn::Linear,
+    text_projection: candle_nn::Linear,
+    logit_scale: Tensor,
+}
+
+impl ChineseClipModel {
+    pub fn new(vs: candle_nn::VarBuilder, c: &ChineseClipConfig) -> Result<Self> {
+        let text_model = ChineseClipTextTransformer::new(vs.pp("text_model"), &c.text_config)?;
+
+        let vision_model =
+            ChineseClipVisionTransformer::new(vs.pp("vision_model"), &c.vision_config)?;
+
+        let vision_embed_dim = c.vision_config.hidden_size;
+        let vision_projection = candle_nn::linear_no_bias(
+            vision_embed_dim,
+            c.projection_dim,
+            vs.pp("visual_projection"),
+        )?;
+
+        let text_embed_dim = c.text_config.hidden_size;
+        let text_projection =
+            candle_nn::linear_no_bias(text_embed_dim, c.projection_dim, vs.pp("text_projection"))?;
+
+        // originally nn.Parameter
+        let logit_scale = if vs.contains_tensor("logit_scale") {
+            vs.get(&[], "logit_scale")?
+        } else {
+            Tensor::new(&[c.logit_scale_init_value], vs.device())?
+        };
+
+        Ok(Self {
+            text_model,
+            vision_model,
+            visual_projection: vision_projection,
+            text_projection,
+            logit_scale,
+        })
+    }
+
+    pub fn get_text_features(&self, input_ids: &Tensor) -> Result<Tensor> {
+        let output = self.text_model.forward(input_ids, None, None)?;
+        self.text_projection.forward(&output)
+    }
+
+    pub fn get_image_features(&self, pixel_values: &Tensor) -> Result<Tensor> {
+        pixel_values
+            .apply(&self.vision_model)?
+            .apply(&self.visual_projection)
+    }
+
+    pub fn forward(&self, pixel_values: &Tensor, input_ids: &Tensor) -> Result<(Tensor, Tensor)> {
+        let image_features = self.get_image_features(pixel_values)?;
+        let text_features = self.get_text_features(input_ids)?;
+        let image_features_normalized = div_l2_norm(&image_features)?;
+        let text_features_normalized = div_l2_norm(&text_features)?;
+        let logits_per_text = text_features_normalized.matmul(&image_features_normalized.t()?)?;
+        let logit_scale = self.logit_scale.exp()?;
+        let logits_per_text = logits_per_text.broadcast_mul(&logit_scale)?;
+        let logits_per_image = logits_per_text.t()?;
+        Ok((logits_per_text, logits_per_image))
+    }
+}
+
+pub fn div_l2_norm(v: &Tensor) -> Result<Tensor> {
+    let l2_norm = v.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?;
+    v.broadcast_div(&l2_norm)
 }
