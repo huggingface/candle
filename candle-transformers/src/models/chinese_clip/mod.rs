@@ -6,9 +6,9 @@
 //! https://github.com/OFA-Sys/Chinese-CLIP
 //! https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py
 
-use candle::{Result, Tensor, D};
+use candle::{Module, Result, Tensor, D};
 use candle_nn as nn;
-use candle_nn::Module;
+
 use text_model::ChineseClipTextTransformer;
 use vision_model::ChineseClipVisionTransformer;
 
@@ -118,20 +118,20 @@ impl EncoderConfig {
 pub struct ChineseClipModel {
     text_model: ChineseClipTextTransformer,
     vision_model: ChineseClipVisionTransformer,
-    visual_projection: candle_nn::Linear,
-    text_projection: candle_nn::Linear,
+    visual_projection: nn::Linear,
+    text_projection: nn::Linear,
     logit_scale: Tensor,
 }
 
 impl ChineseClipModel {
-    pub fn new(vs: candle_nn::VarBuilder, c: &ChineseClipConfig) -> Result<Self> {
+    pub fn new(vs: nn::VarBuilder, c: &ChineseClipConfig) -> Result<Self> {
         let text_model = ChineseClipTextTransformer::new(vs.pp("text_model"), &c.text_config)?;
 
         let vision_model =
             ChineseClipVisionTransformer::new(vs.pp("vision_model"), &c.vision_config)?;
 
         let vision_embed_dim = c.vision_config.hidden_size;
-        let vision_projection = candle_nn::linear_no_bias(
+        let vision_projection = nn::linear_no_bias(
             vision_embed_dim,
             c.projection_dim,
             vs.pp("visual_projection"),
@@ -139,7 +139,7 @@ impl ChineseClipModel {
 
         let text_embed_dim = c.text_config.hidden_size;
         let text_projection =
-            candle_nn::linear_no_bias(text_embed_dim, c.projection_dim, vs.pp("text_projection"))?;
+            nn::linear_no_bias(text_embed_dim, c.projection_dim, vs.pp("text_projection"))?;
 
         // originally nn.Parameter
         let logit_scale = if vs.contains_tensor("logit_scale") {
