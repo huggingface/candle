@@ -11,10 +11,10 @@ low latency interaction with an audio model.
 Generating some audio tokens from an audio files.
 ```bash
 wget https://github.com/metavoiceio/metavoice-src/raw/main/assets/bria.mp3
-cargo run --example mimi --features encodec --release -- audio-to-code bria.mp3 bria.safetensors
+cargo run --example mimi --features mimi --release -- audio-to-code bria.mp3 bria.safetensors
 ```
 
 And decoding the audio tokens back into a sound file.
 ```bash
-cargo run --example mimi --features encodec --release -- code-to-audio bria.safetensors bria.wav
+cargo run --example mimi --features mimi --release -- code-to-audio bria.safetensors bria.wav
 ```
