@@ -33,6 +33,7 @@ pub mod llava;
 pub mod mamba;
 pub mod marian;
 pub mod metavoice;
+pub mod mimi;
 pub mod mistral;
 pub mod mixformer;
 pub mod mixtral;
