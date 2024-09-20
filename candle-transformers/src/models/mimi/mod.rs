@@ -18,3 +18,5 @@ pub enum NormType {
     RmsNorm,
     LayerNorm,
 }
+
+pub use encodec::{load, Config, Encodec as Model};
