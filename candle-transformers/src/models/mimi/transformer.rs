@@ -356,8 +356,8 @@ impl Mlp {
             None => {
                 let span1 = tracing::span!(tracing::Level::TRACE, "lin1");
                 let span2 = tracing::span!(tracing::Level::TRACE, "lin2");
-                let linear1 = linear(d_model, cfg.dim_feedforward, cfg.bias_ff, vb.pp("linear1"))?;
-                let linear2 = linear(cfg.dim_feedforward, d_model, cfg.bias_ff, vb.pp("linear2"))?;
+                let linear1 = linear(d_model, cfg.dim_feedforward, cfg.bias_ff, vb.pp("mlp.fc1"))?;
+                let linear2 = linear(cfg.dim_feedforward, d_model, cfg.bias_ff, vb.pp("mlp.fc2"))?;
                 Ok(Self::NoGating {
                     linear1,
                     linear2,
@@ -706,7 +706,7 @@ impl ProjectedTransformer {
         cfg: &Config,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let transformer = StreamingTransformer::new(cfg, vb.pp("transformer"))?;
+        let transformer = StreamingTransformer::new(cfg, vb.clone())?;
         let input_proj = if input_dim == cfg.d_model {
             None
         } else {

@@ -132,7 +132,7 @@ impl NormConvTranspose1d {
         groups: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let vb = vb.pp("convtr");
+        let vb = vb.pp("conv");
         let bs = if bias {
             Some(vb.get(out_c, "bias")?)
         } else {
@@ -268,7 +268,7 @@ impl StreamableConv1d {
             dilation,
             groups,
         };
-        let conv = NormConv1d::new(in_c, out_c, k_size, causal, norm, bias, cfg, vb.pp("conv"))?;
+        let conv = NormConv1d::new(in_c, out_c, k_size, causal, norm, bias, cfg, vb)?;
         if k_size < stride {
             candle::bail!("kernel-size {k_size} is smaller than stride {stride}")
         }
@@ -377,17 +377,8 @@ impl StreamableConvTranspose1d {
         norm: Option<Norm>,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let convtr = NormConvTranspose1d::new(
-            in_c,
-            out_c,
-            k_size,
-            causal,
-            norm,
-            bias,
-            stride,
-            groups,
-            vb.pp("convtr"),
-        )?;
+        let convtr =
+            NormConvTranspose1d::new(in_c, out_c, k_size, causal, norm, bias, stride, groups, vb)?;
         Ok(Self {
             convtr,
             causal,
@@ -483,7 +474,7 @@ impl ConvDownsample1d {
             /* causal */ causal,
             /* norm */ None,
             /* pad_mode */ PadMode::Replicate,
-            vb.pp("conv"),
+            vb,
         )?;
         Ok(Self { conv })
     }
@@ -530,7 +521,7 @@ impl ConvTrUpsample1d {
             /* bias */ false,
             /* causal */ causal,
             /* norm */ None,
-            vb.pp("convtr"),
+            vb,
         )?;
         Ok(Self { convtr })
     }

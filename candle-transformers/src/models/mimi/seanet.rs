@@ -169,7 +169,7 @@ impl SeaNetEncoder {
             Some(cfg.norm)
         };
         let mut layer_idx = 0;
-        let vb = vb.pp("model");
+        let vb = vb.pp("layers");
         let init_conv1d = StreamableConv1d::new(
             cfg.channels,
             mult * cfg.n_filters,
@@ -327,7 +327,7 @@ impl SeaNetDecoder {
             Some(cfg.norm)
         };
         let mut layer_idx = 0;
-        let vb = vb.pp("model");
+        let vb = vb.pp("layers");
         let init_conv1d = StreamableConv1d::new(
             cfg.dimension,
             mult * cfg.n_filters,
