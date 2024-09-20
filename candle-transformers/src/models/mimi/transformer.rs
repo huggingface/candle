@@ -118,7 +118,9 @@ pub(crate) fn get_mask(
 
 #[derive(Debug, Clone)]
 pub struct StreamingMultiheadAttention {
-    in_proj: Linear,
+    q_proj: Linear,
+    k_proj: Linear,
+    v_proj: Linear,
     out_proj: Linear,
     kv_repeat: usize,
     num_heads: usize,
@@ -135,18 +137,16 @@ impl StreamingMultiheadAttention {
     pub fn new(rope: &Option<Arc<RotaryEmbedding>>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let embed_dim = cfg.d_model;
         let num_kv = cfg.num_heads / cfg.kv_repeat;
-        let out_dim = embed_dim + 2 * num_kv * (embed_dim / cfg.num_heads);
-        let in_proj_weight = vb.get((out_dim, embed_dim), "in_proj_weight")?;
-        let in_proj_bias = if cfg.bias_attn {
-            Some(vb.get(out_dim, "in_proj_bias")?)
-        } else {
-            None
-        };
-        let in_proj = Linear::new(in_proj_weight, in_proj_bias);
-        let out_proj = linear(embed_dim, embed_dim, cfg.bias_attn, vb.pp("out_proj"))?;
+        let kv_dim = num_kv * (embed_dim / cfg.num_heads);
+        let q_proj = linear(embed_dim, embed_dim, cfg.bias_attn, vb.pp("q_proj"))?;
+        let k_proj = linear(embed_dim, kv_dim, cfg.bias_attn, vb.pp("k_proj"))?;
+        let v_proj = linear(embed_dim, kv_dim, cfg.bias_attn, vb.pp("v_proj"))?;
+        let out_proj = linear(embed_dim, embed_dim, cfg.bias_attn, vb.pp("o_proj"))?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?;
         Ok(Self {
-            in_proj,
+            q_proj,
+            k_proj,
+            v_proj,
             out_proj,
             rope: rope.clone(),
             kv_repeat: cfg.kv_repeat,
@@ -167,13 +167,15 @@ impl StreamingMultiheadAttention {
         }
         let (b, t, hd) = xs.dims3()?;
         let head_dim = hd / self.num_heads;
-        // time_dim = 1, layout: b,t,h,d
-        let qkv = xs
-            .apply(&self.in_proj)?
-            .reshape((b, t, 3, self.num_heads, head_dim))?;
-        let q = qkv.i((.., .., 0))?;
-        let k = qkv.i((.., .., 1))?;
-        let v = qkv.i((.., .., 2))?;
+        let q = xs
+            .apply(&self.q_proj)?
+            .reshape((b, t, self.num_heads, hd))?;
+        let k = xs
+            .apply(&self.k_proj)?
+            .reshape((b, t, self.num_heads, hd))?;
+        let v = xs
+            .apply(&self.v_proj)?
+            .reshape((b, t, self.num_heads, hd))?;
         // qk_layer_norm = None
         // kv_repeat = 1, otherwise we would need repeat_kv
         let mut q = q.transpose(1, 2)?.contiguous()?; // b,h,t,d
@@ -497,27 +499,28 @@ impl StreamingTransformerLayer {
         let mlp = Mlp::new(cfg, vb.clone())?;
         let (norm1, norm2) = match cfg.norm {
             super::NormType::LayerNorm => {
-                let norm1 = candle_nn::layer_norm(d_model, 1e-5, vb.pp("norm1"))?;
-                let norm2 = candle_nn::layer_norm(d_model, 1e-5, vb.pp("norm2"))?;
+                let norm1 = candle_nn::layer_norm(d_model, 1e-5, vb.pp("input_layernorm"))?;
+                let norm2 =
+                    candle_nn::layer_norm(d_model, 1e-5, vb.pp("post_attention_layernorm"))?;
                 (Norm::LayerNorm(norm1), Norm::LayerNorm(norm2))
             }
             super::NormType::RmsNorm => {
-                let norm1 = RmsNorm::new(d_model, 1e-8, vb.pp("norm1"))?;
-                let norm2 = RmsNorm::new(d_model, 1e-8, vb.pp("norm2"))?;
+                let norm1 = RmsNorm::new(d_model, 1e-8, vb.pp("input_rmsnorm"))?;
+                let norm2 = RmsNorm::new(d_model, 1e-8, vb.pp("post_attention_rmsnorm"))?;
                 (Norm::RmsNorm(norm1), Norm::RmsNorm(norm2))
             }
         };
         let layer_scale_1 = match cfg.layer_scale {
             None => None,
             Some(ls) => {
-                let ls = LayerScale::new(d_model, ls, vb.pp("layer_scale_1"))?;
+                let ls = LayerScale::new(d_model, ls, vb.pp("self_attn_layer_scale"))?;
                 Some(ls)
             }
         };
         let layer_scale_2 = match cfg.layer_scale {
             None => None,
             Some(ls) => {
-                let ls = LayerScale::new(d_model, ls, vb.pp("layer_scale_2"))?;
+                let ls = LayerScale::new(d_model, ls, vb.pp("mlp_layer_scale"))?;
                 Some(ls)
             }
         };

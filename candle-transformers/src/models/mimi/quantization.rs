@@ -85,9 +85,9 @@ pub struct EuclideanCodebook {
 impl EuclideanCodebook {
     pub fn new(dim: usize, codebook_size: usize, vb: VarBuilder) -> Result<Self> {
         let epsilon = 1e-5;
-        let initialized = vb.get(1, "_initialized")?;
+        let initialized = vb.get(1, "initialized")?;
         let cluster_usage = vb.get(codebook_size, "cluster_usage")?;
-        let embedding_sum = vb.get((codebook_size, dim), "embedding_sum")?;
+        let embedding_sum = vb.get((codebook_size, dim), "embed_sum")?;
         let embedding = {
             let cluster_usage = cluster_usage.maximum(epsilon)?.unsqueeze(1)?;
             embedding_sum.broadcast_div(&cluster_usage)?
@@ -178,7 +178,7 @@ impl VectorQuantization {
             let p_out = linear(codebook_dim, dim, vb.pp("project_out"))?;
             (Some(p_in), Some(p_out))
         };
-        let codebook = EuclideanCodebook::new(codebook_dim, codebook_size, vb.pp("_codebook"))?;
+        let codebook = EuclideanCodebook::new(codebook_dim, codebook_size, vb.pp("codebook"))?;
         Ok(Self {
             project_in,
             project_out,
@@ -302,11 +302,7 @@ impl ResidualVectorQuantizer {
         };
 
         let vq = ResidualVectorQuantization::new(
-            n_q,
-            dim,
-            /* codebook_size */ bins,
-            /* codebook_dim */ None,
-            vb.pp("vq"),
+            n_q, dim, /* codebook_size */ bins, /* codebook_dim */ None, vb,
         )?;
         Ok(Self {
             vq,
@@ -358,7 +354,7 @@ impl SplitResidualVectorQuantizer {
             1,
             bins,
             true,
-            vb.pp("rvq_first"),
+            vb.pp("semantic_residual_vector_quantizer"),
         )?;
         let rvq_rest = ResidualVectorQuantizer::new(
             dim,
@@ -367,7 +363,7 @@ impl SplitResidualVectorQuantizer {
             n_q - 1,
             bins,
             true,
-            vb.pp("rvq_rest"),
+            vb.pp("acoustic_residual_vector_quantizer"),
         )?;
         let span_encode = tracing::span!(tracing::Level::TRACE, "split-rvq-encode");
         let span_decode = tracing::span!(tracing::Level::TRACE, "split-rvq-decode");
