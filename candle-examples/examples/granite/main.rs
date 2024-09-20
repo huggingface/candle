@@ -186,7 +186,6 @@ fn main() -> Result<()> {
     let use_cache_kv = cache.use_kv_cache;
 
     (0..args.sample_len)
-        .into_iter()
         .inspect(|index| {
             if *index == 1 {
                 start_gen = Instant::now();
@@ -237,7 +236,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         })
-        .unwrap_or_else(|_| ());
+        .unwrap_or(());
 
     if let Some(rest) = tokenizer.decode_rest().map_err(E::msg)? {
         print!("{rest}");
