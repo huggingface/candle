@@ -166,7 +166,7 @@ impl ChineseClipTextEmbeddings {
         let layer_norm = nn::layer_norm::<f64>(
             config.hidden_size,
             config.layer_norm_eps.into(),
-            var.pp("layer_norm"),
+            var.pp("LayerNorm"),
         )?;
         let dropout = nn::Dropout::new(config.hidden_dropout_prob);
         let position_ids =
@@ -556,7 +556,7 @@ mod tests {
 pub struct ChineseClipTextTransformer {
     embeddings: ChineseClipTextEmbeddings,
     encoder: ChineseClipTextEncoder,
-    pooler: ChineseClipTextPooler,
+    pooler: Option<ChineseClipTextPooler>,
     pub device: Device,
     span: tracing::Span,
 }
@@ -565,7 +565,13 @@ impl ChineseClipTextTransformer {
     pub fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
         let embeddings = ChineseClipTextEmbeddings::new(var.pp("embeddings"), config)?;
         let encoder = ChineseClipTextEncoder::new(var.pp("encoder"), config)?;
-        let pooler = ChineseClipTextPooler::new(var.pp("pooler"), config)?;
+        //see: https://github.com/huggingface/transformers/blob/e40bb4845e0eefb52ec1e9cac9c2446ab36aef81/src/transformers/models/chinese_clip/modeling_chinese_clip.py#L1362
+        // In the original Python version of the code, the pooler is not used, and there are no parameters for the pooler in the weight file.
+        let pooler = if var.contains_tensor("pooler") {
+            Some(ChineseClipTextPooler::new(var.pp("pooler"), config)?)
+        } else {
+            None
+        };
         Ok(Self {
             embeddings,
             encoder,
@@ -591,7 +597,10 @@ impl ChineseClipTextTransformer {
         let attention_mask = get_extended_attention_mask(&attention_mask, DType::F32)?;
         let encoder_outputs = self.encoder.forward(&embedding_output, &attention_mask)?;
         let encoder_output = encoder_outputs.get(0)?;
-        let pooled_output = self.pooler.forward(&encoder_output)?;
+        let pooled_output = match &self.pooler {
+            Some(pooler) => pooler.forward(&encoder_output)?,
+            None => encoder_output,
+        };
         // FIXME: 2024/09/20 10:23:00 这里还有一些处理，https://github.com/huggingface/transformers/blob/e40bb4845e0eefb52ec1e9cac9c2446ab36aef81/src/transformers/models/chinese_clip/modeling_chinese_clip.py#L1265C19-L1265C74
         // 后续再研究
         Ok(pooled_output)
