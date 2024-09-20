@@ -24,11 +24,8 @@ const EOS_TOKEN: &str = "</s>";
 const DEFAULT_CODE_PROMPT: &str =
     "Write a program in Rust programming language for my Arbitrary Waveform Generator device";
 
-const DEFAULT_PROMPT: &str = "Quantum Computing is meant to";
-
 #[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
 enum GraniteModel {
-    Granite7bBase,
     Granite7bInstruct,
 }
 
@@ -121,7 +118,6 @@ fn main() -> Result<()> {
     let (granite, tokenizer_filename, mut cache, config) = {
         let api = Api::new()?;
         let model_id = args.model_id.unwrap_or_else(|| match args.model_type {
-            GraniteModel::Granite7bBase => "ibm-granite/granite-7b-base".to_string(),
             GraniteModel::Granite7bInstruct => "ibm-granite/granite-7b-instruct".to_string(),
         });
         println!("loading the model weights from {model_id}");
@@ -134,7 +130,7 @@ fn main() -> Result<()> {
         let config = config.into_config(args.use_flash_attn);
 
         let filenames = match args.model_type {
-            GraniteModel::Granite7bBase | GraniteModel::Granite7bInstruct => {
+            GraniteModel::Granite7bInstruct => {
                 candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?
             }
         };
@@ -156,7 +152,6 @@ fn main() -> Result<()> {
     });
 
     let default_prompt = match args.model_type {
-        GraniteModel::Granite7bBase => DEFAULT_PROMPT,
         GraniteModel::Granite7bInstruct => DEFAULT_CODE_PROMPT,
     };
 
@@ -188,22 +183,21 @@ fn main() -> Result<()> {
     let mut start_gen = std::time::Instant::now();
     let mut index_pos = 0;
     let mut token_generated = 0;
+    let use_cache_kv = cache.use_kv_cache;
 
     (0..args.sample_len)
         .into_iter()
-        .filter_map(|index| {
-            if index == 1 {
+        .inspect(|index| {
+            if *index == 1 {
                 start_gen = Instant::now();
             }
-            Some(index)
         })
         .try_for_each(|index| -> Result<()> {
-            let (context_size, context_index) = if cache.use_kv_cache && index > 0 {
+            let (context_size, context_index) = if use_cache_kv && index > 0 {
                 (1, index_pos)
             } else {
                 (tokens.len(), 0)
             };
-
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
             let logits = granite
@@ -241,7 +235,6 @@ fn main() -> Result<()> {
                 print!("{t}");
                 std::io::stdout().flush()?;
             }
-
             Ok(())
         })
         .unwrap_or_else(|_| ());
@@ -249,6 +242,7 @@ fn main() -> Result<()> {
     if let Some(rest) = tokenizer.decode_rest().map_err(E::msg)? {
         print!("{rest}");
     }
+
     let dt = start_gen.elapsed();
     println!(
         "\n\n{} tokens generated ({} token/s)\n",
