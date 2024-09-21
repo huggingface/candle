@@ -21,8 +21,7 @@ use model::{Granite, GraniteConfig};
 use std::time::Instant;
 
 const EOS_TOKEN: &str = "</s>";
-const DEFAULT_CODE_PROMPT: &str =
-    "Write a program in Rust programming language for my Arbitrary Waveform Generator device";
+const DEFAULT_PROMPT: &str = "How Fault Tolerant Quantum Computers will help humanity?";
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
 enum GraniteModel {
@@ -152,7 +151,7 @@ fn main() -> Result<()> {
     });
 
     let default_prompt = match args.model_type {
-        GraniteModel::Granite7bInstruct => DEFAULT_CODE_PROMPT,
+        GraniteModel::Granite7bInstruct => DEFAULT_PROMPT,
     };
 
     let prompt = args.prompt.as_ref().map_or(default_prompt, |p| p.as_str());
