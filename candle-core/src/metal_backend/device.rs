@@ -41,20 +41,6 @@ pub(crate) struct Commands {
     command_buffer_index: usize,
     /// The maximum amount of [compute command encoder](https://developer.apple.com/documentation/metal/mtlcomputecommandencoder?language=objc) per [command buffer](https://developer.apple.com/documentation/metal/mtlcommandbuffer?language=objc)
     compute_per_buffer: usize,
-    /// Simple allocator struct.
-    /// The buffers are stored in size buckets since ML tends to use similar shapes over and over.
-    /// We store the buffers in [`Arc`] because it's much faster than Obj-c internal ref counting
-    /// (could be linked to FFI communication overhead).
-    ///
-    /// Whenever a buffer has a strong_count==1, we can reuse it, it means it was dropped in the
-    /// graph calculation, and only we the allocator kept a reference to it, therefore it's free
-    /// to be reused. However, in order for this to work, we need to guarantee the order of
-    /// operation, so that this buffer is not being used by another kernel at the same time.
-    /// Arc is the CPU reference count, it doesn't mean anything on the GPU side of things.
-    ///
-    /// Whenever we actually allocate a new buffer, we make a full sweep to clean up unused buffers
-    /// (strong_count = 1).
-    buffers: BufferMap,
 }
 
 impl Commands {
@@ -70,34 +56,21 @@ impl Commands {
             command_buffer,
             command_buffer_index: 0,
             compute_per_buffer,
-            buffers: HashMap::new(),
         })
     }
 
-    fn drop_unused_buffers(&mut self) -> Result<()> {
-        for subbuffers in self.buffers.values_mut() {
-            let newbuffers = subbuffers
-                .iter()
-                .filter(|s| Arc::strong_count(*s) > 1)
-                .map(Arc::clone)
-                .collect();
-            *subbuffers = newbuffers;
-        }
-        Ok(())
-    }
-
-    pub fn command_buffer(&mut self) -> Result<CommandBuffer> {
+    pub fn command_buffer(&mut self) -> Result<(bool, CommandBuffer)> {
         let mut command_buffer = self.command_buffer.to_owned();
+        let mut flushed = false;
         if self.command_buffer_index > self.compute_per_buffer {
             self.command_buffer.commit();
             command_buffer = self.command_queue.new_command_buffer().to_owned();
             self.command_buffer = command_buffer.clone();
             self.command_buffer_index = 0;
-
-            self.drop_unused_buffers()?;
+            flushed = true;
         }
         self.command_buffer_index += 1;
-        Ok(command_buffer)
+        Ok((flushed, command_buffer))
     }
 
     pub fn wait_until_completed(&mut self) -> Result<()> {
@@ -127,6 +100,21 @@ pub struct MetalDevice {
     pub(crate) device: metal::Device,
 
     pub(crate) commands: Arc<RwLock<Commands>>,
+
+    /// Simple allocator struct.
+    /// The buffers are stored in size buckets since ML tends to use similar shapes over and over.
+    /// We store the buffers in [`Arc`] because it's much faster than Obj-c internal ref counting
+    /// (could be linked to FFI communication overhead).
+    ///
+    /// Whenever a buffer has a strong_count==1, we can reuse it, it means it was dropped in the
+    /// graph calculation, and only we the allocator kept a reference to it, therefore it's free
+    /// to be reused. However, in order for this to work, we need to guarantee the order of
+    /// operation, so that this buffer is not being used by another kernel at the same time.
+    /// Arc is the CPU reference count, it doesn't mean anything on the GPU side of things.
+    ///
+    /// Whenever we actually allocate a new buffer, we make a full sweep to clean up unused buffers
+    /// (strong_count = 1).
+    pub(crate) buffers: Arc<RwLock<BufferMap>>,
 
     /// Simple keeper struct to keep track of the already compiled kernels so we can reuse them.
     /// Heavily used by [`candle_metal_kernels`]
@@ -164,9 +152,26 @@ impl MetalDevice {
         &self.device
     }
 
+    fn drop_unused_buffers(&self) -> Result<()> {
+        let mut buffers = self.buffers.write().map_err(MetalError::from)?;
+        for subbuffers in buffers.values_mut() {
+            let newbuffers = subbuffers
+                .iter()
+                .filter(|s| Arc::strong_count(*s) > 1)
+                .map(Arc::clone)
+                .collect();
+            *subbuffers = newbuffers;
+        }
+        Ok(())
+    }
+
     pub fn command_buffer(&self) -> Result<CommandBuffer> {
         let mut commands = self.commands.write().map_err(MetalError::from)?;
-        commands.command_buffer()
+        let (flushed, command_buffer) = commands.command_buffer()?;
+        if flushed {
+            self.drop_unused_buffers()?
+        }
+        Ok(command_buffer)
     }
 
     pub fn wait_until_completed(&self) -> Result<()> {
@@ -218,9 +223,9 @@ impl MetalDevice {
             size,
             MTLResourceOptions::StorageModeManaged,
         );
-        let mut commands = self.commands.write().map_err(MetalError::from)?;
-        let subbuffers = commands
-            .buffers
+        let mut buffers = self.buffers.write().map_err(MetalError::from)?;
+
+        let subbuffers = buffers
             .entry((size, MTLResourceOptions::StorageModeManaged))
             .or_insert(vec![]);
 
@@ -250,27 +255,6 @@ impl MetalDevice {
         Ok(buffer)
     }
 
-    fn find_available_buffer(
-        &self,
-        size: NSUInteger,
-        option: MTLResourceOptions,
-        buffers: &BufferMap,
-    ) -> Option<Arc<Buffer>> {
-        let mut best_buffer: Option<&Arc<Buffer>> = None;
-        let mut best_buffer_size: NSUInteger = NSUInteger::MAX;
-        for ((buffer_size, buffer_option), subbuffers) in buffers.iter() {
-            if buffer_size >= &size && buffer_size < &best_buffer_size && buffer_option == &option {
-                for sub in subbuffers {
-                    if Arc::strong_count(sub) == 1 {
-                        best_buffer = Some(sub);
-                        best_buffer_size = *buffer_size;
-                    }
-                }
-            }
-        }
-        best_buffer.cloned()
-    }
-
     /// The critical allocator algorithm
     fn allocate_buffer(
         &self,
@@ -278,14 +262,14 @@ impl MetalDevice {
         option: MTLResourceOptions,
         _name: &str,
     ) -> Result<Arc<Buffer>> {
-        let mut commands = self.commands.write().map_err(MetalError::from)?;
-        if let Some(b) = self.find_available_buffer(size, option, &commands.buffers) {
+        let mut buffers = self.buffers.write().map_err(MetalError::from)?;
+        if let Some(b) = find_available_buffer(size, option, &buffers) {
             // Cloning also ensures we increment the strong count
             return Ok(b.clone());
         }
 
         let size = buf_size(size);
-        let subbuffers = commands.buffers.entry((size, option)).or_insert(vec![]);
+        let subbuffers = buffers.entry((size, option)).or_insert(vec![]);
 
         let new_buffer = self.device.new_buffer(size as NSUInteger, option);
         let new_buffer = Arc::new(new_buffer);
@@ -317,4 +301,24 @@ impl MetalDevice {
 
 fn buf_size(size: NSUInteger) -> NSUInteger {
     size.saturating_sub(1).next_power_of_two() as NSUInteger
+}
+
+fn find_available_buffer(
+    size: NSUInteger,
+    option: MTLResourceOptions,
+    buffers: &BufferMap,
+) -> Option<Arc<Buffer>> {
+    let mut best_buffer: Option<&Arc<Buffer>> = None;
+    let mut best_buffer_size: NSUInteger = NSUInteger::MAX;
+    for ((buffer_size, buffer_option), subbuffers) in buffers.iter() {
+        if buffer_size >= &size && buffer_size < &best_buffer_size && buffer_option == &option {
+            for sub in subbuffers {
+                if Arc::strong_count(sub) == 1 {
+                    best_buffer = Some(sub);
+                    best_buffer_size = *buffer_size;
+                }
+            }
+        }
+    }
+    best_buffer.cloned()
 }

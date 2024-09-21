@@ -4,6 +4,7 @@ use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 use candle_metal_kernels::{BufferOffset, CallConvTranspose2dCfg, Kernels};
 use metal::{Buffer, MTLResourceOptions, NSUInteger};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
 
@@ -1878,6 +1879,7 @@ impl BackendDevice for MetalDevice {
             id: DeviceId::new(),
             device,
             commands: Arc::new(RwLock::new(commands)),
+            buffers: Arc::new(RwLock::new(HashMap::new())),
             kernels,
             seed,
             use_mlx_mm,
