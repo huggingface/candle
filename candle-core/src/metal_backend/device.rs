@@ -4,7 +4,7 @@ use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger}
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock, RwLockWriteGuard};
+use std::sync::{Arc, Mutex, RwLock};
 
 use super::MetalError;
 
@@ -22,17 +22,7 @@ impl DeviceId {
 }
 
 type BufferMap = HashMap<(NSUInteger, MTLResourceOptions), Vec<Arc<Buffer>>>;
-type AllocatedBuffers = Arc<RwLock<BufferMap>>;
-
-#[derive(Clone)]
-pub struct MetalDevice {
-    /// Unique identifier, the registryID is not sufficient as it identifies the GPU rather than
-    /// the device itself.
-    pub(crate) id: DeviceId,
-
-    /// Raw metal device: <https://developer.apple.com/documentation/metal/mtldevice?language=objc>
-    pub(crate) device: metal::Device,
-
+pub struct Commands {
     /// Single command queue for the entire device.
     pub(crate) command_queue: CommandQueue,
     /// One command buffer at a time.
@@ -44,16 +34,13 @@ pub struct MetalDevice {
     /// Despite what the documentation says, command buffers are NOT ordered. They are ordered
     /// for their START time, but there's no guarantee that command buffer1 will finish before
     /// command buffer2 starts (or there are metal bugs there)
-    pub(crate) command_buffer: Arc<RwLock<CommandBuffer>>,
+    pub(crate) command_buffer: CommandBuffer,
     /// Keeps track of the current amount of compute command encoders on the current
     /// command buffer
     /// Arc, RwLock because of the interior mutability.
-    pub(crate) command_buffer_index: Arc<RwLock<usize>>,
+    pub(crate) command_buffer_index: usize,
     /// The maximum amount of [compute command encoder](https://developer.apple.com/documentation/metal/mtlcomputecommandencoder?language=objc) per [command buffer](https://developer.apple.com/documentation/metal/mtlcommandbuffer?language=objc)
     pub(crate) compute_per_buffer: usize,
-    /// Simple keeper struct to keep track of the already compiled kernels so we can reuse them.
-    /// Heavily used by [`candle_metal_kernels`]
-    pub(crate) kernels: Arc<Kernels>,
     /// Simple allocator struct.
     /// The buffers are stored in size buckets since ML tends to use similar shapes over and over.
     /// We store the buffers in [`Arc`] because it's much faster than Obj-c internal ref counting
@@ -67,7 +54,67 @@ pub struct MetalDevice {
     ///
     /// Whenever we actually allocate a new buffer, we make a full sweep to clean up unused buffers
     /// (strong_count = 1).
-    pub(crate) buffers: AllocatedBuffers,
+    pub(crate) buffers: BufferMap,
+}
+
+impl Commands {
+    fn drop_unused_buffers(&mut self) -> Result<()> {
+        for subbuffers in self.buffers.values_mut() {
+            let newbuffers = subbuffers
+                .iter()
+                .filter(|s| Arc::strong_count(*s) > 1)
+                .map(Arc::clone)
+                .collect();
+            *subbuffers = newbuffers;
+        }
+        Ok(())
+    }
+
+    pub fn command_buffer(&mut self) -> Result<CommandBuffer> {
+        let mut command_buffer = self.command_buffer.to_owned();
+        if self.command_buffer_index > self.compute_per_buffer {
+            self.command_buffer.commit();
+            command_buffer = self.command_queue.new_command_buffer().to_owned();
+            self.command_buffer = command_buffer.clone();
+            self.command_buffer_index = 0;
+
+            self.drop_unused_buffers()?;
+        }
+        self.command_buffer_index += 1;
+        Ok(command_buffer)
+    }
+
+    pub fn wait_until_completed(&mut self) -> Result<()> {
+        match self.command_buffer.status() {
+            metal::MTLCommandBufferStatus::Committed
+            | metal::MTLCommandBufferStatus::Scheduled
+            | metal::MTLCommandBufferStatus::Completed => {
+                panic!("Already committed");
+            }
+            _ => {}
+        }
+        self.command_buffer.commit();
+        self.command_buffer.wait_until_completed();
+        self.command_buffer = self.command_queue.new_command_buffer().to_owned();
+
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct MetalDevice {
+    /// Unique identifier, the registryID is not sufficient as it identifies the GPU rather than
+    /// the device itself.
+    pub(crate) id: DeviceId,
+
+    /// Raw metal device: <https://developer.apple.com/documentation/metal/mtldevice?language=objc>
+    pub(crate) device: metal::Device,
+
+    pub(crate) commands: Arc<RwLock<Commands>>,
+
+    /// Simple keeper struct to keep track of the already compiled kernels so we can reuse them.
+    /// Heavily used by [`candle_metal_kernels`]
+    pub(crate) kernels: Arc<Kernels>,
     /// Seed for random number generation.
     pub(crate) seed: Arc<Mutex<Buffer>>,
     /// Whether to use the MLX matmul kernels instead of the MFA ones.
@@ -101,44 +148,14 @@ impl MetalDevice {
         &self.device
     }
 
-    pub fn command_queue(&self) -> &CommandQueue {
-        &self.command_queue
-    }
-
     pub fn command_buffer(&self) -> Result<CommandBuffer> {
-        let mut command_buffer_lock = self.command_buffer.write().map_err(MetalError::from)?;
-        let mut command_buffer = command_buffer_lock.to_owned();
-        let mut index = self
-            .command_buffer_index
-            .write()
-            .map_err(MetalError::from)?;
-        if *index > self.compute_per_buffer {
-            command_buffer.commit();
-            command_buffer = self.command_queue.new_command_buffer().to_owned();
-            *command_buffer_lock = command_buffer.clone();
-            *index = 0;
-
-            self.drop_unused_buffers()?;
-        }
-        *index += 1;
-        Ok(command_buffer)
+        let mut commands = self.commands.write().map_err(MetalError::from)?;
+        commands.command_buffer()
     }
 
     pub fn wait_until_completed(&self) -> Result<()> {
-        let mut command_buffer = self.command_buffer.write().map_err(MetalError::from)?;
-        match command_buffer.status() {
-            metal::MTLCommandBufferStatus::Committed
-            | metal::MTLCommandBufferStatus::Scheduled
-            | metal::MTLCommandBufferStatus::Completed => {
-                panic!("Already committed");
-            }
-            _ => {}
-        }
-        command_buffer.commit();
-        command_buffer.wait_until_completed();
-        *command_buffer = self.command_queue.new_command_buffer().to_owned();
-
-        Ok(())
+        let mut commands = self.commands.write().map_err(MetalError::from)?;
+        commands.wait_until_completed()
     }
 
     pub fn kernels(&self) -> &Kernels {
@@ -185,8 +202,9 @@ impl MetalDevice {
             size,
             MTLResourceOptions::StorageModeManaged,
         );
-        let mut buffers = self.buffers.write().map_err(MetalError::from)?;
-        let subbuffers = buffers
+        let mut commands = self.commands.write().map_err(MetalError::from)?;
+        let subbuffers = commands
+            .buffers
             .entry((size, MTLResourceOptions::StorageModeManaged))
             .or_insert(vec![]);
 
@@ -220,7 +238,7 @@ impl MetalDevice {
         &self,
         size: NSUInteger,
         option: MTLResourceOptions,
-        buffers: &RwLockWriteGuard<BufferMap>,
+        buffers: &BufferMap,
     ) -> Option<Arc<Buffer>> {
         let mut best_buffer: Option<&Arc<Buffer>> = None;
         let mut best_buffer_size: NSUInteger = NSUInteger::MAX;
@@ -237,19 +255,6 @@ impl MetalDevice {
         best_buffer.cloned()
     }
 
-    fn drop_unused_buffers(&self) -> Result<()> {
-        let mut buffers = self.buffers.write().map_err(MetalError::from)?;
-        for subbuffers in buffers.values_mut() {
-            let newbuffers = subbuffers
-                .iter()
-                .filter(|s| Arc::strong_count(*s) > 1)
-                .map(Arc::clone)
-                .collect();
-            *subbuffers = newbuffers;
-        }
-        Ok(())
-    }
-
     /// The critical allocator algorithm
     fn allocate_buffer(
         &self,
@@ -257,14 +262,14 @@ impl MetalDevice {
         option: MTLResourceOptions,
         _name: &str,
     ) -> Result<Arc<Buffer>> {
-        let mut buffers = self.buffers.write().map_err(MetalError::from)?;
-        if let Some(b) = self.find_available_buffer(size, option, &buffers) {
+        let mut commands = self.commands.write().map_err(MetalError::from)?;
+        if let Some(b) = self.find_available_buffer(size, option, &commands.buffers) {
             // Cloning also ensures we increment the strong count
             return Ok(b.clone());
         }
 
         let size = buf_size(size);
-        let subbuffers = buffers.entry((size, option)).or_insert(vec![]);
+        let subbuffers = commands.buffers.entry((size, option)).or_insert(vec![]);
 
         let new_buffer = self.device.new_buffer(size as NSUInteger, option);
         let new_buffer = Arc::new(new_buffer);

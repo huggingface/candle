@@ -1866,10 +1866,7 @@ impl BackendDevice for MetalDevice {
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer().to_owned();
         command_buffer.enqueue();
-        let command_buffer = Arc::new(RwLock::new(command_buffer));
-        let command_buffer_index = Arc::new(RwLock::new(0));
         let kernels = Arc::new(Kernels::new());
-        let buffers = Arc::new(RwLock::new(HashMap::new()));
         let use_mlx_mm = match std::env::var("CANDLE_USE_MLX_MM").as_deref() {
             Ok("false") | Ok("False") | Ok("FALSE") | Ok("0") | Err(_) => false,
             Ok(_) => true,
@@ -1883,14 +1880,17 @@ impl BackendDevice for MetalDevice {
             4,
             MTLResourceOptions::StorageModeManaged,
         )));
+        let commands = device::Commands {
+            command_buffer,
+            command_buffer_index: 0,
+            compute_per_buffer,
+            command_queue,
+            buffers: HashMap::new(),
+        };
         Ok(Self {
             id: DeviceId::new(),
             device,
-            command_queue,
-            command_buffer,
-            command_buffer_index,
-            compute_per_buffer,
-            buffers,
+            commands: Arc::new(RwLock::new(commands)),
             kernels,
             seed,
             use_mlx_mm,
