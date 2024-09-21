@@ -22,9 +22,9 @@ impl DeviceId {
 }
 
 type BufferMap = HashMap<(NSUInteger, MTLResourceOptions), Vec<Arc<Buffer>>>;
-pub struct Commands {
+pub(crate) struct Commands {
     /// Single command queue for the entire device.
-    pub(crate) command_queue: CommandQueue,
+    command_queue: CommandQueue,
     /// One command buffer at a time.
     /// The scheduler works by allowing multiple
     /// [ComputeCommandEncoder](https://developer.apple.com/documentation/metal/mtlcomputecommandencoder?language=objc)
@@ -34,13 +34,13 @@ pub struct Commands {
     /// Despite what the documentation says, command buffers are NOT ordered. They are ordered
     /// for their START time, but there's no guarantee that command buffer1 will finish before
     /// command buffer2 starts (or there are metal bugs there)
-    pub(crate) command_buffer: CommandBuffer,
+    command_buffer: CommandBuffer,
     /// Keeps track of the current amount of compute command encoders on the current
     /// command buffer
     /// Arc, RwLock because of the interior mutability.
-    pub(crate) command_buffer_index: usize,
+    command_buffer_index: usize,
     /// The maximum amount of [compute command encoder](https://developer.apple.com/documentation/metal/mtlcomputecommandencoder?language=objc) per [command buffer](https://developer.apple.com/documentation/metal/mtlcommandbuffer?language=objc)
-    pub(crate) compute_per_buffer: usize,
+    compute_per_buffer: usize,
     /// Simple allocator struct.
     /// The buffers are stored in size buckets since ML tends to use similar shapes over and over.
     /// We store the buffers in [`Arc`] because it's much faster than Obj-c internal ref counting
@@ -54,10 +54,26 @@ pub struct Commands {
     ///
     /// Whenever we actually allocate a new buffer, we make a full sweep to clean up unused buffers
     /// (strong_count = 1).
-    pub(crate) buffers: BufferMap,
+    buffers: BufferMap,
 }
 
 impl Commands {
+    pub(crate) fn new(command_queue: CommandQueue) -> Result<Self> {
+        let command_buffer = command_queue.new_command_buffer().to_owned();
+        command_buffer.enqueue();
+        let compute_per_buffer = match std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER") {
+            Ok(val) => val.parse()?,
+            _ => 50,
+        };
+        Ok(Self {
+            command_queue,
+            command_buffer,
+            command_buffer_index: 0,
+            compute_per_buffer,
+            buffers: HashMap::new(),
+        })
+    }
+
     fn drop_unused_buffers(&mut self) -> Result<()> {
         for subbuffers in self.buffers.values_mut() {
             let newbuffers = subbuffers

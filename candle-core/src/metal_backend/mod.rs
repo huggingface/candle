@@ -4,7 +4,6 @@ use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 use candle_metal_kernels::{BufferOffset, CallConvTranspose2dCfg, Kernels};
 use metal::{Buffer, MTLResourceOptions, NSUInteger};
-use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
 
@@ -1864,29 +1863,17 @@ impl BackendDevice for MetalDevice {
     fn new(ordinal: usize) -> Result<Self> {
         let device = metal::Device::all().swap_remove(ordinal);
         let command_queue = device.new_command_queue();
-        let command_buffer = command_queue.new_command_buffer().to_owned();
-        command_buffer.enqueue();
         let kernels = Arc::new(Kernels::new());
         let use_mlx_mm = match std::env::var("CANDLE_USE_MLX_MM").as_deref() {
             Ok("false") | Ok("False") | Ok("FALSE") | Ok("0") | Err(_) => false,
             Ok(_) => true,
-        };
-        let compute_per_buffer = match std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER") {
-            Ok(val) => val.parse()?,
-            _ => 50,
         };
         let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
             [299792458].as_ptr() as *const c_void,
             4,
             MTLResourceOptions::StorageModeManaged,
         )));
-        let commands = device::Commands {
-            command_buffer,
-            command_buffer_index: 0,
-            compute_per_buffer,
-            command_queue,
-            buffers: HashMap::new(),
-        };
+        let commands = device::Commands::new(command_queue)?;
         Ok(Self {
             id: DeviceId::new(),
             device,
