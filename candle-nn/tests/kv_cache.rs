@@ -71,7 +71,7 @@ fn rotating_kv_cache() -> Result<()> {
 
         let t = Tensor::new(&[0., 1., 2., 3., 4., 5., 6., 7., 8.], &Device::Cpu)?;
         let data = cache.append(&t)?;
-        assert_eq!(data.to_vec1::<f64>()?, [3., 4., 5., 6., 7., 8.]);
+        assert_eq!(data.to_vec1::<f64>()?, [0., 1., 2., 3., 4., 5., 6., 7., 8.]);
         assert_eq!(cache.current_seq_len(), 22);
         assert_eq!(cache.offset(), 0);
 

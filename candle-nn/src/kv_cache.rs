@@ -224,23 +224,27 @@ impl RotatingCache {
 
         self.current_seq_len += seq_len;
         if seq_len >= self.max_seq_len {
-            let src = src.narrow(self.dim, seq_len - self.max_seq_len, self.max_seq_len)?;
-            ad.slice_set(&src, self.dim, 0)?;
+            let to_copy = src
+                .narrow(self.dim, seq_len - self.max_seq_len, self.max_seq_len)?
+                .contiguous()?;
+            ad.slice_set(&to_copy, self.dim, 0)?;
             self.offset = 0;
             // Here we return `src` rather than `ad` so that all the past can be used.
-            Ok(src)
+            Ok(src.clone())
         } else {
             let rem_len = self.max_seq_len - self.offset;
             if seq_len <= rem_len {
-                ad.slice_set(src, self.dim, self.offset)?;
+                ad.slice_set(&src.contiguous()?, self.dim, self.offset)?;
                 self.offset = (self.offset + seq_len) % self.max_seq_len;
             } else {
                 // We have to make two copies here as we go over the boundary of the cache.
                 if rem_len > 0 {
-                    let src1 = src.narrow(self.dim, 0, rem_len)?;
+                    let src1 = src.narrow(self.dim, 0, rem_len)?.contiguous()?;
                     ad.slice_set(&src1, self.dim, self.offset)?;
                 }
-                let src2 = src.narrow(self.dim, rem_len, seq_len - rem_len)?;
+                let src2 = src
+                    .narrow(self.dim, rem_len, seq_len - rem_len)?
+                    .contiguous()?;
                 ad.slice_set(&src2, self.dim, 0)?;
                 self.offset = seq_len - rem_len;
             }
