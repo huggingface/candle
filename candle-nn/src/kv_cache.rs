@@ -228,7 +228,7 @@ impl RotatingCache {
             self.offset = 0;
         } else {
             let rem_len = self.max_seq_len - self.offset;
-            if rem_len <= seq_len {
+            if seq_len <= rem_len {
                 ad.slice_set(src, self.dim, self.offset)?;
                 self.offset = (self.offset + seq_len) % self.max_seq_len;
             } else {
