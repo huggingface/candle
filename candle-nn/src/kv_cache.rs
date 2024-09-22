@@ -210,7 +210,7 @@ impl RotatingCache {
         self.all_data = None;
     }
 
-    pub fn append(&mut self, src: &Tensor) -> Result<()> {
+    pub fn append(&mut self, src: &Tensor) -> Result<Tensor> {
         let seq_len = src.dim(self.dim)?;
         // This doesn't seem very idiomatic but because the creation can fail, it's tricky to use
         // self.all_data.get_or_insert_with.
@@ -222,10 +222,13 @@ impl RotatingCache {
         };
         let ad = self.all_data.as_mut().unwrap();
 
+        self.current_seq_len += seq_len;
         if seq_len >= self.max_seq_len {
             let src = src.narrow(self.dim, seq_len - self.max_seq_len, self.max_seq_len)?;
             ad.slice_set(&src, self.dim, 0)?;
             self.offset = 0;
+            // Here we return `src` rather than `ad` so that all the past can be used.
+            Ok(src)
         } else {
             let rem_len = self.max_seq_len - self.offset;
             if seq_len <= rem_len {
@@ -241,9 +244,12 @@ impl RotatingCache {
                 ad.slice_set(&src2, self.dim, 0)?;
                 self.offset = seq_len - rem_len;
             }
+            if self.current_seq_len >= self.max_seq_len {
+                Ok(ad.clone())
+            } else {
+                Ok(ad.narrow(self.dim, 0, self.current_seq_len)?)
+            }
         }
-        self.current_seq_len += seq_len;
-        Ok(())
     }
 }
 
@@ -285,27 +291,9 @@ impl RotatingKvCache {
     }
 
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
-        self.k.append(k)?;
-        self.v.append(v)?;
-        let out_k = self.k.current_data()?;
-        let out_v = self.v.current_data()?;
-        let k = match out_k {
-            None => {
-                let mut shape = k.dims().to_vec();
-                shape[self.k.dim] = 0;
-                Tensor::zeros(shape, k.dtype(), k.device())?
-            }
-            Some(k) => k,
-        };
-        let v = match out_v {
-            None => {
-                let mut shape = v.dims().to_vec();
-                shape[self.k.dim] = 0;
-                Tensor::zeros(shape, v.dtype(), v.device())?
-            }
-            Some(v) => v,
-        };
-        Ok((k, v))
+        let out_k = self.k.append(k)?;
+        let out_v = self.v.append(v)?;
+        Ok((out_k, out_v))
     }
 
     pub fn offset(&self) -> usize {
