@@ -126,7 +126,10 @@ fn main() -> Result<()> {
                     for chunk_start in (0..seq_len).step_by(chunk_size) {
                         let chunk_len = usize::min(chunk_size, seq_len - chunk_start);
                         let codes = codes.narrow(candle::D::Minus1, chunk_start, chunk_len)?;
-                        pcm_chunks.push(model.decode(&codes)?)
+                        let pcm = model.decode_step(&codes.into())?;
+                        if let Some(pcm) = pcm.as_option() {
+                            pcm_chunks.push(pcm.clone())
+                        }
                     }
                     Tensor::cat(&pcm_chunks, candle::D::Minus1)?
                 }
