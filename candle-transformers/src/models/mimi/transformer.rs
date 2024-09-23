@@ -101,21 +101,6 @@ impl Module for LayerScale {
     }
 }
 
-pub(crate) fn get_mask(
-    size1: usize,
-    size2: usize,
-    context: usize,
-    device: &Device,
-) -> Result<Tensor> {
-    let mask: Vec<_> = (0..size1)
-        .flat_map(|i| {
-            (0..size2)
-                .map(move |j| u8::from(size1 + j > size2 + i || size1 + j + context < size2 + i))
-        })
-        .collect();
-    Tensor::from_slice(&mask, (size1, size2), device)
-}
-
 #[derive(Debug, Clone)]
 pub struct StreamingMultiheadAttention {
     q_proj: Linear,
@@ -590,7 +575,6 @@ impl StreamingTransformerLayer {
 #[derive(Debug, Clone)]
 pub struct StreamingTransformer {
     layers: Vec<StreamingTransformerLayer>,
-    context: usize,
     positional_embedding: PositionalEmbedding,
     max_period: usize,
 }
@@ -617,7 +601,6 @@ impl StreamingTransformer {
         }
         Ok(Self {
             layers,
-            context: cfg.context,
             positional_embedding: cfg.positional_embedding,
             max_period: cfg.max_period,
         })
@@ -629,23 +612,11 @@ impl StreamingTransformer {
 
     pub fn forward_ca(&mut self, xs: &Tensor, ca_src: Option<&Tensor>) -> Result<Tensor> {
         let (_b, t, c) = xs.dims3()?;
-        let pos = self.layers[0]
+        let pos = self.layers[0].self_attn.kv_cache.current_seq_len();
+        let mask = self.layers[0]
             .self_attn
             .kv_cache
-            .k_cache()
-            .current_seq_len();
-        let mask = if t == 1 {
-            None
-        } else {
-            let cache_out_len = if t < self.context {
-                (pos + t).min(self.context)
-            } else {
-                t
-            };
-            // TODO: this is wrong, the mask depends on the kv-cache offset because of its rotating
-            // nature.
-            Some(get_mask(t, cache_out_len, self.context, xs.device())?)
-        };
+            .attn_mask(t, xs.device())?;
         let mut xs = match self.positional_embedding {
             PositionalEmbedding::Rope | PositionalEmbedding::None => xs.clone(),
             PositionalEmbedding::Sin => {

@@ -1,4 +1,4 @@
-use candle::{Result, Tensor};
+use candle::{Device, Result, Tensor};
 
 #[derive(Debug, Clone)]
 pub struct Cache {
@@ -255,6 +255,43 @@ impl RotatingCache {
             }
         }
     }
+
+    fn get_mask(&self, size1: usize, size2: usize, device: &Device) -> Result<Tensor> {
+        let context = self.max_seq_len;
+        let upd_offset = (self.offset + size1) % self.max_seq_len;
+        let mask: Vec<_> = (0..size1)
+            .flat_map(|pos_src| {
+                // The absolute position of the elements that will get added to the cache.
+                let pos_src = self.current_seq_len + pos_src;
+                (0..size2).map(move |pos_cache_rel| {
+                    // The absolute position of the cache elements after the addition.
+                    let pos_cache = self.current_seq_len + size1 + pos_cache_rel - upd_offset;
+                    let pos_cache = if pos_cache_rel < upd_offset {
+                        pos_cache
+                    } else {
+                        pos_cache - self.max_seq_len
+                    };
+                    u8::from(pos_cache > pos_src || pos_cache + context < pos_src)
+                })
+            })
+            .collect();
+        Tensor::from_slice(&mask, (size1, size2), device)
+    }
+
+    /// Returns the attn_mask to be applied *after* adding `seq_len` to the cache.
+    pub fn attn_mask(&self, seq_len: usize, device: &Device) -> Result<Option<Tensor>> {
+        let mask = if seq_len == 1 {
+            None
+        } else {
+            let cache_out_len = if seq_len < self.max_seq_len {
+                (self.current_seq_len + seq_len).min(self.max_seq_len)
+            } else {
+                seq_len
+            };
+            Some(self.get_mask(seq_len, cache_out_len, device)?)
+        };
+        Ok(mask)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -306,6 +343,10 @@ impl RotatingKvCache {
 
     pub fn current_seq_len(&self) -> usize {
         self.k.current_seq_len()
+    }
+
+    pub fn attn_mask(&self, seq_len: usize, device: &Device) -> Result<Option<Tensor>> {
+        self.k.attn_mask(seq_len, device)
     }
 
     pub fn reset(&mut self) {
