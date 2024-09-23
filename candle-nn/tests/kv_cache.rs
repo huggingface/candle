@@ -69,13 +69,36 @@ fn rotating_kv_cache() -> Result<()> {
         assert_eq!(cache.current_seq_len(), 13);
         assert_eq!(cache.offset(), 1);
 
+        let mask = cache.attn_mask(2, &Device::Cpu)?.unwrap();
+        assert_eq!(
+            mask.to_vec2::<u8>()?,
+            &[[0, 0, 1, 0, 0, 0], [0, 0, 0, 0, 0, 0]]
+        );
+        let mask = cache.attn_mask(3, &Device::Cpu)?.unwrap();
+        assert_eq!(
+            mask.to_vec2::<u8>()?,
+            &[[0, 0, 1, 1, 0, 0], [0, 0, 0, 1, 0, 0], [0, 0, 0, 0, 0, 0]],
+        );
         let t = Tensor::new(&[0., 1., 2., 3., 4., 5., 6., 7., 8.], &Device::Cpu)?;
         let data = cache.append(&t)?;
         assert_eq!(data.to_vec1::<f64>()?, [0., 1., 2., 3., 4., 5., 6., 7., 8.]);
         assert_eq!(cache.current_seq_len(), 22);
         assert_eq!(cache.offset(), 0);
 
+        let mask = cache.attn_mask(1, &Device::Cpu)?;
+        assert!(mask.is_none());
+        let mask = cache.attn_mask(2, &Device::Cpu)?.unwrap();
+        assert_eq!(
+            mask.to_vec2::<u8>()?,
+            &[[0, 1, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]]
+        );
+        let mask = cache.attn_mask(3, &Device::Cpu)?.unwrap();
+        assert_eq!(
+            mask.to_vec2::<u8>()?,
+            &[[0, 1, 1, 0, 0, 0], [0, 0, 1, 0, 0, 0], [0, 0, 0, 0, 0, 0]]
+        );
         let t = Tensor::new(&[42.], &Device::Cpu)?;
+
         let data = cache.append(&t)?;
         assert_eq!(data.to_vec1::<f64>()?, [42., 4., 5., 6., 7., 8.]);
         assert_eq!(cache.current_seq_len(), 23);
