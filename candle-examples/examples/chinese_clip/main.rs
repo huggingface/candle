@@ -53,12 +53,13 @@ fn main() -> anyhow::Result<()> {
     // tracing::info!("Images feature: {:?}", images_feature);
 
     let tokenizer = load_tokenizer()?;
-    let (token, text_sequences) = tokenize_sequences(args.sequences, &tokenizer, &device)?;
+    let (input_ids, type_ids, text_sequences) =
+        tokenize_sequences(args.sequences, &tokenizer, &device)?;
     // let token = tokenizer
     //     .encode("hello", true)
     //     .map_err(anyhow::Error::msg)?;
-    tracing::info!("token: {}", token.to_string());
-    let text_feature =text_transformer.forward(&token.i(0)?, None, None)?;
+    tracing::info!("token: {}", input_ids.to_string());
+    let text_feature = text_transformer.forward(&input_ids, None, None)?;
     tracing::info!("Text feature: {:?}", text_feature);
 
     Ok(())
@@ -122,7 +123,7 @@ pub fn tokenize_sequences(
     sequences: Option<Vec<String>>,
     tokenizer: &Tokenizer,
     device: &Device,
-) -> anyhow::Result<(Tensor, Vec<String>)> {
+) -> anyhow::Result<(Tensor, Tensor, Vec<String>)> {
     let pad_id = *tokenizer
         .get_vocab(true)
         .get("[PAD]")
@@ -140,10 +141,14 @@ pub fn tokenize_sequences(
 
     let mut tokens = vec![];
 
+    let mut type_ids = vec![];
     for seq in vec_seq.clone() {
         let encoding = tokenizer.encode(seq, true).map_err(anyhow::Error::msg)?;
-        tracing::info!("encoding: {:?}", encoding);
+        tracing::debug!("encoding: {:?}", encoding);
         tokens.push(encoding.get_ids().to_vec());
+        if encoding.get_type_ids().len() > type_ids.len() {
+            type_ids = encoding.get_type_ids().to_vec();
+        }
     }
 
     let max_len = tokens.iter().map(|v| v.len()).max().unwrap_or(0);
@@ -157,8 +162,9 @@ pub fn tokenize_sequences(
     }
 
     let input_ids = Tensor::new(tokens, device)?;
+    let type_ids = Tensor::new(type_ids, device)?;
 
-    Ok((input_ids, vec_seq))
+    Ok((input_ids, type_ids, vec_seq))
 }
 
 pub fn load_images(images: Option<Vec<String>>, device: &Device) -> anyhow::Result<Tensor> {

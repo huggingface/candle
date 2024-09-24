@@ -187,16 +187,7 @@ impl ChineseClipTextEmbeddings {
     }
 
     fn forward(&self, xs: &Tensor, token_type_ids: Option<&Tensor>) -> Result<Tensor> {
-        // let seq_length = input_ids.dim(D::Minus1)?;
-        // let inputs_embeds = self.token_embedding.forward(input_ids)?;
-        // let position_ids = self.position_ids.narrow(1, 0, seq_length)?;
-        // let position_embedding = self.position_embedding.forward(&position_ids)?;
-        // inputs_embeds.broadcast_add(&position_embedding)
-
-        // FIXME: 2024/09/20 10:04:23 token_type_ids 是应该使用成员变量还是局部变量？
-
-        let input_shape = xs.shape();
-        let seq_length = input_shape.dims1()?;
+        let (_batch_size, seq_length) = xs.dims2()?;
         let position_ids = (0..seq_length as u32).collect::<Vec<_>>();
         let position_ids = self.position_ids.index_select(
             &Tensor::new(&position_ids[..], self.position_ids.device())?,
@@ -204,12 +195,19 @@ impl ChineseClipTextEmbeddings {
         )?;
 
         let word_embeddings = self.word_embeddings.forward(&xs)?;
-        let token_type_ids = token_type_ids.unwrap_or(&self.token_type_ids);
-        let token_type_embeddings = self.token_type_embeddings.forward(token_type_ids)?;
-        let embeddings = (word_embeddings + token_type_embeddings)?;
+
+        let token_type_ids = match token_type_ids {
+            Some(token_type_ids) => token_type_ids,
+            None => &self.token_type_ids.i((.., 0..seq_length))?,
+        };
+        let token_type_ids = token_type_ids.expand(xs.shape())?;
+        let token_type_embeddings = self.token_type_embeddings.forward(&token_type_ids)?;
+
+        let embeddings = (&word_embeddings + token_type_embeddings)?;
         let embeddings = match self.position_embedding_type {
             PositionEmbeddingType::Absolute => {
                 let position_embeddings = self.position_embeddings.forward(&position_ids)?;
+                let position_embeddings = position_embeddings.expand(embeddings.shape())?;
                 (embeddings + position_embeddings)?
             }
             _ => embeddings,
