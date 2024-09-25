@@ -6,31 +6,31 @@ use std::{collections::HashMap, f32::consts::PI};
 pub const DEFAULT_MAX_SEQ_LEN: usize = 4096;
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
-pub enum Llama3RopeType {
-    #[serde(rename = "llama3")]
-    Llama3,
+pub enum GraniteRopeType {
+    #[serde(rename = "granite")]
+    Granite,
     #[default]
     #[serde(rename = "default")]
     Default,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
-pub struct Llama3RopeConfig {
+pub struct GraniteRopeConfig {
     pub factor: f32,
     pub low_freq_factor: f32,
     pub high_freq_factor: f32,
     pub original_max_position_embeddings: usize,
-    pub rope_type: Llama3RopeType,
+    pub rope_type: GraniteRopeType,
 }
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(untagged)]
-pub enum LlamaEosToks {
+pub enum GraniteEosToks {
     Single(u32),
     Multiple(Vec<u32>),
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct LlamaConfig {
+pub struct GraniteConfig {
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub vocab_size: usize,
@@ -41,12 +41,12 @@ pub struct LlamaConfig {
     #[serde(default = "default_rope")]
     pub rope_theta: f32,
     pub bos_token_id: Option<u32>,
-    pub eos_token_id: Option<LlamaEosToks>,
-    pub rope_scaling: Option<Llama3RopeConfig>,
+    pub eos_token_id: Option<GraniteEosToks>,
+    pub rope_scaling: Option<GraniteRopeConfig>,
     pub max_position_embeddings: usize,
 }
 
-impl LlamaConfig {
+impl GraniteConfig {
     pub fn num_key_value_heads(&self) -> usize {
         self.num_key_value_heads.unwrap_or(self.num_attention_heads)
     }
@@ -56,7 +56,7 @@ fn default_rope() -> f32 {
     10_000.0
 }
 
-impl LlamaConfig {
+impl GraniteConfig {
     pub fn into_config(self, use_flash_attn: bool) -> Config {
         Config {
             hidden_size: self.hidden_size,
@@ -88,47 +88,9 @@ pub struct Config {
     pub rms_norm_eps: f64,
     pub rope_theta: f32,
     pub bos_token_id: Option<u32>,
-    pub eos_token_id: Option<LlamaEosToks>,
-    pub rope_scaling: Option<Llama3RopeConfig>,
+    pub eos_token_id: Option<GraniteEosToks>,
+    pub rope_scaling: Option<GraniteRopeConfig>,
     pub max_position_embeddings: usize,
-}
-
-impl Config {
-    pub fn config_7b_v1(use_flash_attn: bool) -> Self {
-        Self {
-            hidden_size: 4096,
-            intermediate_size: 11008,
-            vocab_size: 32000,
-            num_hidden_layers: 32,
-            num_attention_heads: 32,
-            num_key_value_heads: 32,
-            use_flash_attn,
-            rms_norm_eps: 1e-6,
-            rope_theta: 10_000.0,
-            bos_token_id: None,
-            eos_token_id: None,
-            rope_scaling: None,
-            max_position_embeddings: DEFAULT_MAX_SEQ_LEN,
-        }
-    }
-
-    pub fn config_7b_v2(use_flash_attn: bool) -> Self {
-        Self {
-            hidden_size: 4096,
-            intermediate_size: 11008,
-            vocab_size: 32000,
-            num_hidden_layers: 32,
-            num_attention_heads: 32,
-            num_key_value_heads: 32,
-            use_flash_attn,
-            rms_norm_eps: 1e-5,
-            rope_theta: 10_000.0,
-            bos_token_id: None,
-            eos_token_id: None,
-            rope_scaling: None,
-            max_position_embeddings: DEFAULT_MAX_SEQ_LEN,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -154,8 +116,8 @@ impl Cache {
         // precompute freqs_cis
         let theta = match &config.rope_scaling {
             None
-            | Some(Llama3RopeConfig {
-                rope_type: Llama3RopeType::Default,
+            | Some(GraniteRopeConfig {
+                rope_type: GraniteRopeType::Default,
                 ..
             }) => calculate_default_inv_freq(config),
             Some(rope_scaling) => {
@@ -190,8 +152,6 @@ impl Cache {
             .to_dtype(DType::F32)?
             .reshape((config.max_position_embeddings, 1))?
             .matmul(&theta.reshape((1, theta.elem_count()))?)?;
-        // This is different from the paper, see:
-        // https://github.com/huggingface/transformers/blob/6112b1c6442aaf7affd2b0676a1cd4eee30c45cf/src/transformers/models/llama/modeling_llama.py#L112
         let cos = idx_theta.cos()?.to_dtype(dtype)?;
         let sin = idx_theta.sin()?.to_dtype(dtype)?;
         Ok(Self {
@@ -460,36 +420,14 @@ impl Block {
 }
 
 #[derive(Debug, Clone)]
-pub struct Llama {
+pub struct Granite {
     wte: Embedding,
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: Linear,
 }
 
-impl Llama {
-    // required by LLaVA
-    pub fn embed(&self, x: &Tensor) -> Result<Tensor> {
-        self.wte.forward(x)
-    }
-    // required by LLaVA
-    pub fn forward_input_embed(
-        &self,
-        input_embed: &Tensor,
-        index_pos: usize,
-        cache: &mut Cache,
-    ) -> Result<Tensor> {
-        let (_, seq_len, _) = input_embed.dims3()?;
-        let mut x = input_embed.clone();
-        for (block_idx, block) in self.blocks.iter().enumerate() {
-            x = block.forward(&x, index_pos, block_idx, cache)?;
-        }
-        let x = self.ln_f.forward(&x)?;
-        let x = x.i((.., seq_len - 1, ..))?.contiguous()?;
-        let logits = self.lm_head.forward(&x)?;
-        logits.to_dtype(DType::F32)
-    }
-
+impl Granite {
     pub fn forward(&self, x: &Tensor, index_pos: usize, cache: &mut Cache) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mut x = self.wte.forward(x)?;
