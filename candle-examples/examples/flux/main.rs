@@ -167,8 +167,10 @@ fn run(args: Args) -> Result<()> {
                 println!("{timesteps:?}");
                 if quantized {
                     let model_file = match model {
-                        Model::Schnell => bf_repo.get("flux1-schnell.safetensors")?,
-                        Model::Dev => bf_repo.get("flux1-dev.safetensors")?,
+                        Model::Schnell => api
+                            .repo(hf_hub::Repo::model("lmz/candle-flux".to_string()))
+                            .get("flux1-schnell.gguf")?,
+                        Model::Dev => todo!(),
                     };
                     let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
                         model_file, &device,
