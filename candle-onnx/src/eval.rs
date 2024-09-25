@@ -323,6 +323,7 @@ fn simple_eval_(
             Some(value) => Ok(value),
             None => bail!("cannot find {input_name} for op {}", node.name),
         };
+
         // TODO: Validate node.input for each operator.
         match node.op_type.as_str() {
             "Add" => {
@@ -1207,6 +1208,8 @@ fn simple_eval_(
                 };
                 values.insert(node.output[0].clone(), output);
             }
+            //https://github.com/onnx/onnx/blob/main/docs/Operators.md#Split
+            // Version 18 impl
             "Split" => {
                 let input_tensor = get(&node.input[0])?;
                 let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(0);
@@ -1224,7 +1227,6 @@ fn simple_eval_(
                         node.output.len()
                     };
 
-                    // If num_outputs is provided, calculate equal parts
                     let input_dim = input_tensor.dim(axis)?;
 
                     let mut split_sizes =
@@ -1234,7 +1236,6 @@ fn simple_eval_(
                         // If there's a remainder, add it to the last split size
                         split_sizes[num_outputs as usize - 1] += remainder;
                     }
-
 
                     split_sizes
                 };
@@ -1254,6 +1255,8 @@ fn simple_eval_(
                     values.insert(output.clone(), slice);
                 }
             }
+            //https://github.com/onnx/onnx/blob/main/docs/Operators.md#Expand
+            // Version 13 impl
             "Expand" => {
                 // unlike broadcast_to, expand allows for the output shape to
                 // be different from the specified shape.
@@ -1279,6 +1282,38 @@ fn simple_eval_(
                 let expanded_tensor = input_tensor.broadcast_as(target_shape)?;
 
                 values.insert(node.output[0].clone(), expanded_tensor);
+            }
+            //https://github.com/onnx/onnx/blob/main/docs/Operators.md#ReduceSum
+            // Version 13 impl
+            "ReduceSum" => {
+                let input = get(&node.input[0])?;
+                let axes = values.get(&node.input[1]);
+                let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1);
+                let noop_with_empty_axes = get_attr_opt::<i64>(node, "noop_with_empty_axes")?.copied().unwrap_or(0);
+
+                let axes = match axes {
+                    Some(axes) => {
+                        axes.to_vec1::<i64>()?.into_iter().map(|x| x as usize).collect::<Vec<_>>()
+                    }
+                    None => {
+                        if noop_with_empty_axes == 1 {
+                            vec![]
+                        }else{
+                            (0..input.rank()).collect()
+                        }
+                    }
+                };
+
+                let output = if keepdims == 1 {
+                    input.sum_keepdim(axes)?
+                } else {
+                    input.sum(axes)?
+                };
+
+                values.insert(node.output[0].clone(), output);
+            }
+            "ReduceL2" => {
+
             }
             random_type @ ("RandomUniform" | "RandomNormal") => {
                 let dt: i64 = get_attr_opt(node, "dtype")?.copied().unwrap_or(1); // 1 is float
