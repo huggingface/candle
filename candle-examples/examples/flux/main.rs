@@ -23,6 +23,10 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
+    /// Use the quantized model.
+    #[arg(long)]
+    quantized: bool,
+
     /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
     tracing: bool,
@@ -60,6 +64,7 @@ fn run(args: Args) -> Result<()> {
         tracing,
         decode_only,
         model,
+        quantized,
     } = args;
     let width = width.unwrap_or(1360);
     let height = height.unwrap_or(768);
@@ -146,12 +151,6 @@ fn run(args: Args) -> Result<()> {
             };
             println!("CLIP\n{clip_emb}");
             let img = {
-                let model_file = match model {
-                    Model::Schnell => bf_repo.get("flux1-schnell.safetensors")?,
-                    Model::Dev => bf_repo.get("flux1-dev.safetensors")?,
-                };
-                let vb =
-                    unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)? };
                 let cfg = match model {
                     Model::Dev => flux::model::Config::dev(),
                     Model::Schnell => flux::model::Config::schnell(),
@@ -164,20 +163,48 @@ fn run(args: Args) -> Result<()> {
                     }
                     Model::Schnell => flux::sampling::get_schedule(4, None),
                 };
-                let model = flux::model::Flux::new(&cfg, vb)?;
-
                 println!("{state:?}");
                 println!("{timesteps:?}");
-                flux::sampling::denoise(
-                    &model,
-                    &state.img,
-                    &state.img_ids,
-                    &state.txt,
-                    &state.txt_ids,
-                    &state.vec,
-                    &timesteps,
-                    4.,
-                )?
+                if quantized {
+                    let model_file = match model {
+                        Model::Schnell => bf_repo.get("flux1-schnell.safetensors")?,
+                        Model::Dev => bf_repo.get("flux1-dev.safetensors")?,
+                    };
+                    let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
+                        model_file, &device,
+                    )?;
+
+                    let model = flux::quantized_model::Flux::new(&cfg, vb)?;
+                    flux::sampling::denoise(
+                        &model,
+                        &state.img,
+                        &state.img_ids,
+                        &state.txt,
+                        &state.txt_ids,
+                        &state.vec,
+                        &timesteps,
+                        4.,
+                    )?
+                } else {
+                    let model_file = match model {
+                        Model::Schnell => bf_repo.get("flux1-schnell.safetensors")?,
+                        Model::Dev => bf_repo.get("flux1-dev.safetensors")?,
+                    };
+                    let vb = unsafe {
+                        VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)?
+                    };
+                    let model = flux::model::Flux::new(&cfg, vb)?;
+                    flux::sampling::denoise(
+                        &model,
+                        &state.img,
+                        &state.img_ids,
+                        &state.txt,
+                        &state.txt_ids,
+                        &state.vec,
+                        &timesteps,
+                        4.,
+                    )?
+                }
             };
             flux::sampling::unpack(&img, height, width)?
         }
