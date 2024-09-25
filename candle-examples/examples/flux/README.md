@@ -13,7 +13,7 @@ descriptions,
 
 ```bash
 cargo run --features cuda --example flux -r -- \
-    --height 1024 --width 1024
+    --height 1024 --width 1024 \
     --prompt "a rusty robot walking on a beach holding a small torch, the robot has the word "rust" written on it, high quality, 4k"
 ```
 

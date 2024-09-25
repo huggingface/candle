@@ -156,7 +156,15 @@ fn run(args: Args) -> Result<()> {
                     Model::Schnell => flux::model::Config::schnell(),
                 };
                 let img = flux::sampling::get_noise(1, height, width, &device)?.to_dtype(dtype)?;
-                let state = flux::sampling::State::new(&t5_emb, &clip_emb, &img)?;
+                let state = if quantized {
+                    flux::sampling::State::new(
+                        &t5_emb.to_dtype(candle::DType::F32)?,
+                        &clip_emb.to_dtype(candle::DType::F32)?,
+                        &img.to_dtype(candle::DType::F32)?,
+                    )?
+                } else {
+                    flux::sampling::State::new(&t5_emb, &clip_emb, &img)?
+                };
                 let timesteps = match model {
                     Model::Dev => {
                         flux::sampling::get_schedule(50, Some((state.img.dim(1)?, 0.5, 1.15)))
@@ -187,6 +195,7 @@ fn run(args: Args) -> Result<()> {
                         &timesteps,
                         4.,
                     )?
+                    .to_dtype(dtype)?
                 } else {
                     let model_file = match model {
                         Model::Schnell => bf_repo.get("flux1-schnell.safetensors")?,
