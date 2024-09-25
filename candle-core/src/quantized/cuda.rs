@@ -34,10 +34,13 @@ fn ceil_div(p: usize, q: usize) -> usize {
 }
 
 fn pad(p: usize, q: usize) -> usize {
+    ceil_div(p, q) * q
+}
+
+fn pad_for_alloc(p: usize) -> usize {
     // Overallocate by q rather than just padding by q as this should pad the last row
     // and we don't have enough information here to know how many elements to add :(
-    // ceil_div(p, q) * q
-    p + q
+    p + MATRIX_ROW_PADDING
 }
 
 fn quantize_q8_1(
@@ -442,7 +445,7 @@ impl QCudaStorage {
             }
             _ => crate::bail!("only f32 can be quantized"),
         };
-        let src_len = pad(src.len(), MATRIX_ROW_PADDING);
+        let src_len = pad_for_alloc(src.len());
         let src = crate::Storage::Cpu(crate::CpuStorage::F32(src));
         let mut qcpu_storage = crate::Device::Cpu.qzeros(src_len, self.dtype)?;
         qcpu_storage.quantize(&src)?;
