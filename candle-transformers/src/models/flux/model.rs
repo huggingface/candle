@@ -575,9 +575,11 @@ impl Flux {
             final_layer,
         })
     }
+}
 
+impl super::WithForward for Flux {
     #[allow(clippy::too_many_arguments)]
-    pub fn forward(
+    fn forward(
         &self,
         img: &Tensor,
         img_ids: &Tensor,
