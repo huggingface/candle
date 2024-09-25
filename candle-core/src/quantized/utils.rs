@@ -18,7 +18,7 @@ pub(super) fn group_for_quantization<'a, 'b, T: super::k_quants::GgmlType>(
     let actual_blocks = ys.len();
 
     // Validate that the input is the right size
-    if expected_blocks != actual_blocks {
+    if expected_blocks > actual_blocks {
         crate::bail!("quantize {dtype:?}: expected {expected_blocks} blocks but only {actual_blocks} were provided!")
     }
 
