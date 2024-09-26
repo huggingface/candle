@@ -44,6 +44,10 @@ struct Args {
 
     #[arg(long, value_enum, default_value = "schnell")]
     model: Model,
+
+    /// Use the faster kernels which are buggy at the moment.
+    #[arg(long)]
+    no_dmmv: bool,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
@@ -65,6 +69,7 @@ fn run(args: Args) -> Result<()> {
         decode_only,
         model,
         quantized,
+        ..
     } = args;
     let width = width.unwrap_or(1360);
     let height = height.unwrap_or(768);
@@ -244,5 +249,7 @@ fn run(args: Args) -> Result<()> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    #[cfg(feature = "cuda")]
+    candle::quantized::cuda::set_force_dmmv(!args.no_dmmv);
     run(args)
 }
