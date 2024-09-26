@@ -445,13 +445,16 @@ impl QCudaStorage {
             }
             _ => crate::bail!("only f32 can be quantized"),
         };
-        let src_len = pad_for_alloc(src.len());
+        let src_len = src.len();
         let src = crate::Storage::Cpu(crate::CpuStorage::F32(src));
         let mut qcpu_storage = crate::Device::Cpu.qzeros(src_len, self.dtype)?;
         qcpu_storage.quantize(&src)?;
         let data = qcpu_storage.data()?;
-        let data = self.device.htod_sync_copy(data.as_ref()).w()?;
-        self.data = data;
+        let mut dst = self.device.alloc_zeros::<u8>(pad_for_alloc(src_len)).w()?;
+        self.device
+            .htod_sync_copy_into(data.as_ref(), &mut dst.slice_mut(..src_len))
+            .w()?;
+        self.data = dst;
         Ok(())
     }
 
