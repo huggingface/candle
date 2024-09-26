@@ -323,6 +323,12 @@ fn simple_eval_(
             Some(value) => Ok(value),
             None => bail!("cannot find {input_name} for op {}", node.name),
         };
+        let get_opt = |i: usize| {
+            node.input
+                .get(i)
+                .filter(|s: &&String| !s.is_empty())
+                .map(|s| get(s))
+        };
 
         // TODO: Validate node.input for each operator.
         match node.op_type.as_str() {
@@ -609,14 +615,12 @@ fn simple_eval_(
             }
             "Clip" => {
                 let xs = get(&node.input[0])?;
-                let xs = if node.input.len() >= 2 {
-                    let mins = get(&node.input[1])?;
+                let xs = if let Some(mins) = get_opt(1) {
                     xs.broadcast_maximum(mins)?
                 } else {
                     xs.clone()
                 };
-                let xs = if node.input.len() >= 3 {
-                    let maxs = get(&node.input[2])?;
+                let xs = if let Some(maxs) = get_opt(2) {
                     xs.broadcast_minimum(maxs)?
                 } else {
                     xs.clone()
@@ -1287,7 +1291,7 @@ fn simple_eval_(
             // Version 13 impl
             "ReduceSum" => {
                 let input = get(&node.input[0])?;
-                let axes = values.get(&node.input[1]);
+                let axes = get_opt(1);
                 let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1);
                 let noop_with_empty_axes = get_attr_opt::<i64>(node, "noop_with_empty_axes")?.copied().unwrap_or(0);
 
@@ -1316,7 +1320,7 @@ fn simple_eval_(
             // Version 18 impl
             "ReduceL2" => {
                 let input = get(&node.input[0])?;
-                let axes = values.get(&node.input[1]);
+                let axes = get_opt(1);
                 let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1);
                 let noop_with_empty_axes = get_attr_opt::<i64>(node, "noop_with_empty_axes")?.copied().unwrap_or(0);
 
@@ -1538,13 +1542,6 @@ fn simple_eval_(
                 // Concatenation of `R[iofc]` and `RB[iofc]` (if bidirectional) along dimension 0.
                 // This tensor has shape `[num_directions, 4*hidden_size, hidden_size]`.
                 let r = get(&node.input[2])?;
-
-                let get_opt = |i: usize| {
-                    node.input
-                        .get(i)
-                        .filter(|s: &&String| !s.is_empty())
-                        .map(|s| get(s))
-                };
 
                 // The bias tensor for input gate.
                 // Concatenation of `[Wb[iofc], Rb[iofc]]`, and `[WBb[iofc], RBb[iofc]]` (if bidirectional) along dimension 0.
