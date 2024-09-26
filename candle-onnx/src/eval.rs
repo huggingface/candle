@@ -229,6 +229,24 @@ pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
     }
 }
 
+fn check_input_with_prev_op(input_op: &str, prev_op: Option<&str>) -> Result<()> {
+    if let Some(p) = prev_op {
+        if input_op
+            .chars()
+            .filter(|c| !c.is_numeric())
+            .collect::<String>()
+            != p.chars().filter(|c| !c.is_numeric()).collect::<String>()
+        {
+            bail!(
+                "input operation `{}` doesn't match the previous node's operation `{}`",
+                input_op,
+                p
+            )
+        }
+    }
+    Ok(())
+}
+
 // This function provides a direct evaluation of the proto.
 // Longer-term, we should first convert the proto to an intermediate representation of the compute
 // graph so as to make multiple evaluations more efficient.
@@ -318,12 +336,14 @@ fn simple_eval_(
         }
     }
     // The nodes are topologically sorted so we can just process them in order.
+    let mut prev_op: Option<&str> = None;
     for node in graph.node.iter() {
         let get = |input_name: &str| match values.get(input_name) {
             Some(value) => Ok(value),
             None => bail!("cannot find {input_name} for op {}", node.name),
         };
-        // TODO: Validate node.input for each operator.
+        check_input_with_prev_op(node.input.get(0).unwrap(), prev_op)?;
+        prev_op = Some(&node.output.get(0).unwrap());
         match node.op_type.as_str() {
             "Add" => {
                 let input0 = get(&node.input[0])?;
