@@ -616,12 +616,12 @@ fn simple_eval_(
             "Clip" => {
                 let xs = get(&node.input[0])?;
                 let xs = if let Some(mins) = get_opt(1) {
-                    xs.broadcast_maximum(mins)?
+                    xs.broadcast_maximum(mins?)?
                 } else {
                     xs.clone()
                 };
                 let xs = if let Some(maxs) = get_opt(2) {
-                    xs.broadcast_minimum(maxs)?
+                    xs.broadcast_minimum(maxs?)?
                 } else {
                     xs.clone()
                 };
@@ -1301,7 +1301,7 @@ fn simple_eval_(
                     .unwrap_or(0);
 
                 let axes = match axes {
-                    Some(axes) => axes
+                    Some(axes) => axes?
                         .to_vec1::<i64>()?
                         .into_iter()
                         .map(|x| x as usize)
@@ -1336,7 +1336,7 @@ fn simple_eval_(
                 let input_sq = input.sqr()?;
 
                 let axes = match axes {
-                    Some(axes) => axes
+                    Some(axes) => axes?
                         .to_vec1::<i64>()?
                         .into_iter()
                         .map(|x| x as usize)
