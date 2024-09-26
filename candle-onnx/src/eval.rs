@@ -1225,7 +1225,9 @@ fn simple_eval_(
                     let split_tensor = get(&node.input[1])?.to_vec1::<i64>()?;
                     split_tensor.iter().map(|&x| x as usize).collect::<Vec<_>>()
                 } else {
-                    let num_outputs = if let Some(&num_outputs_attrib) = get_attr_opt::<i64>(node, "num_outputs")? {
+                    let num_outputs = if let Some(&num_outputs_attrib) =
+                        get_attr_opt::<i64>(node, "num_outputs")?
+                    {
                         num_outputs_attrib as usize
                     } else {
                         node.output.len()
@@ -1281,7 +1283,8 @@ fn simple_eval_(
                     .map(|x| x as usize)
                     .collect::<Vec<_>>();
 
-                let target_shape = broadcast_shape(&input_tensor_dims, input_shape_dims.as_slice())?;
+                let target_shape =
+                    broadcast_shape(&input_tensor_dims, input_shape_dims.as_slice())?;
 
                 let expanded_tensor = input_tensor.broadcast_as(target_shape)?;
 
@@ -1293,16 +1296,20 @@ fn simple_eval_(
                 let input = get(&node.input[0])?;
                 let axes = get_opt(1);
                 let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1);
-                let noop_with_empty_axes = get_attr_opt::<i64>(node, "noop_with_empty_axes")?.copied().unwrap_or(0);
+                let noop_with_empty_axes = get_attr_opt::<i64>(node, "noop_with_empty_axes")?
+                    .copied()
+                    .unwrap_or(0);
 
                 let axes = match axes {
-                    Some(axes) => {
-                        axes.to_vec1::<i64>()?.into_iter().map(|x| x as usize).collect::<Vec<_>>()
-                    }
+                    Some(axes) => axes
+                        .to_vec1::<i64>()?
+                        .into_iter()
+                        .map(|x| x as usize)
+                        .collect::<Vec<_>>(),
                     None => {
                         if noop_with_empty_axes == 1 {
                             vec![]
-                        }else{
+                        } else {
                             (0..input.rank()).collect()
                         }
                     }
@@ -1322,18 +1329,22 @@ fn simple_eval_(
                 let input = get(&node.input[0])?;
                 let axes = get_opt(1);
                 let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1);
-                let noop_with_empty_axes = get_attr_opt::<i64>(node, "noop_with_empty_axes")?.copied().unwrap_or(0);
+                let noop_with_empty_axes = get_attr_opt::<i64>(node, "noop_with_empty_axes")?
+                    .copied()
+                    .unwrap_or(0);
 
                 let input_sq = input.sqr()?;
 
                 let axes = match axes {
-                    Some(axes) => {
-                        axes.to_vec1::<i64>()?.into_iter().map(|x| x as usize).collect::<Vec<_>>()
-                    }
+                    Some(axes) => axes
+                        .to_vec1::<i64>()?
+                        .into_iter()
+                        .map(|x| x as usize)
+                        .collect::<Vec<_>>(),
                     None => {
                         if noop_with_empty_axes == 1 {
                             vec![]
-                        }else{
+                        } else {
                             (0..input_sq.rank()).collect()
                         }
                     }
@@ -1734,7 +1745,11 @@ fn broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Result<Vec<usize>> {
         if *dim1 == *dim2 || *dim2 == 1 || *dim1 == 1 {
             target_shape.push(usize::max(*dim1, *dim2));
         } else {
-            bail!("Expand: incompatible shapes for broadcast, {:?} and {:?}", shape_a, shape_b);
+            bail!(
+                "Expand: incompatible shapes for broadcast, {:?} and {:?}",
+                shape_a,
+                shape_b
+            );
         }
     }
     Ok(target_shape)

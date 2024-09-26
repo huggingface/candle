@@ -4047,7 +4047,12 @@ fn test_expand_dim_changed() -> Result<()> {
     Ok(())
 }
 
-fn make_graph_helper(op_name: &str, inputs: &[&str], outputs: &[&str], attribs : Vec<AttributeProto>) -> ModelProto {
+fn make_graph_helper(
+    op_name: &str,
+    inputs: &[&str],
+    outputs: &[&str],
+    attribs: Vec<AttributeProto>,
+) -> ModelProto {
     create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
             op_type: op_name.to_string(),
@@ -4133,7 +4138,8 @@ fn test_split_equal_parts_1d_opset13() -> Result<()> {
     inputs.insert("input".to_string(), input);
 
     {
-        let manual_graph = make_split_graph_helper(&["input"], &["output_1", "output_2", "output_3"], 0);
+        let manual_graph =
+            make_split_graph_helper(&["input"], &["output_1", "output_2", "output_3"], 0);
         let eval = candle_onnx::simple_eval(&manual_graph, inputs.clone())?;
         assert_eq!(eval.len(), 3);
 
@@ -4150,7 +4156,8 @@ fn test_split_equal_parts_1d_opset13() -> Result<()> {
         let splits = Tensor::from_vec(vec![2i64, 4], (2,), &Device::Cpu)?;
         inputs.insert("split".to_string(), splits);
 
-        let manual_graph = make_split_graph_helper(&["input", "split"], &["output_1", "output_2"], 0);
+        let manual_graph =
+            make_split_graph_helper(&["input", "split"], &["output_1", "output_2"], 0);
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 2);
 
@@ -4163,7 +4170,12 @@ fn test_split_equal_parts_1d_opset13() -> Result<()> {
     Ok(())
 }
 
-fn make_reduce_sum_graph_helper(inputs: &[&str], outputs: &[&str], keepdims: Option<i64>, noop_with_empty_axes: Option<i64>) -> ModelProto {
+fn make_reduce_sum_graph_helper(
+    inputs: &[&str],
+    outputs: &[&str],
+    keepdims: Option<i64>,
+    noop_with_empty_axes: Option<i64>,
+) -> ModelProto {
     let mut attribs = vec![];
     if let Some(keepdims) = keepdims {
         attribs.push(AttributeProto {
@@ -4186,13 +4198,13 @@ fn make_reduce_sum_graph_helper(inputs: &[&str], outputs: &[&str], keepdims: Opt
 
 #[test]
 fn test_reduce_sum_default_axes_keepdims() -> Result<()> {
-    let manual_graph =  make_reduce_sum_graph_helper(&["data","axes"], &["reduced"], Some(1), None);
+    let manual_graph = make_reduce_sum_graph_helper(&["data", "axes"], &["reduced"], Some(1), None);
 
     // Test with example data
     {
         let data = Tensor::from_vec(
             vec![
-                1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0
+                1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
             ],
             (3, 2, 2),
             &Device::Cpu,
@@ -4215,9 +4227,7 @@ fn test_reduce_sum_default_axes_keepdims() -> Result<()> {
     {
         let data = Tensor::from_vec(
             vec![
-                -5.2f32, 7.8, -3.1, 9.4,
-                2.6, -8.7, 4.3, -1.9,
-                6.5, -0.8, -7.2, 3.6
+                -5.2f32, 7.8, -3.1, 9.4, 2.6, -8.7, 4.3, -1.9, 6.5, -0.8, -7.2, 3.6,
             ],
             (3, 2, 2),
             &Device::Cpu,
@@ -4238,7 +4248,6 @@ fn test_reduce_sum_default_axes_keepdims() -> Result<()> {
     Ok(())
 }
 
-
 #[test]
 fn test_reduce_sum_do_not_keep_dims() -> Result<()> {
     let manual_graph = make_reduce_sum_graph_helper(&["data", "axes"], &["reduced"], Some(0), None);
@@ -4247,9 +4256,7 @@ fn test_reduce_sum_do_not_keep_dims() -> Result<()> {
     {
         let data = Tensor::from_vec(
             vec![
-                1.0f32, 2.0, 3.0, 4.0,
-                5.0, 6.0, 7.0, 8.0,
-                9.0, 10.0, 11.0, 12.0
+                1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
             ],
             (3, 2, 2),
             &Device::Cpu,
@@ -4278,9 +4285,7 @@ fn test_reduce_sum_do_not_keep_dims() -> Result<()> {
         let shape = (3, 2, 2);
         let data = Tensor::from_vec(
             vec![
-                -5.2f32, 7.8, -3.1, 9.4,
-                2.6, -8.7, 4.3, -1.9,
-                6.5, -0.8, -7.2, 3.6
+                -5.2f32, 7.8, -3.1, 9.4, 2.6, -8.7, 4.3, -1.9, 6.5, -0.8, -7.2, 3.6,
             ],
             (3, 2, 2),
             &Device::Cpu,
