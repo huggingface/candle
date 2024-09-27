@@ -14,6 +14,7 @@ const AFFINE: &str = include_str!("affine.metal");
 const BINARY: &str = include_str!("binary.metal");
 const CAST: &str = include_str!("cast.metal");
 const CONV: &str = include_str!("conv.metal");
+const FILL: &str = include_str!("fill.metal");
 const INDEXING: &str = include_str!("indexing.metal");
 // Current source: https://github.com/ivarflakstad/metal-flash-attention/tree/candle
 const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
@@ -31,6 +32,7 @@ pub enum Source {
     Binary,
     Cast,
     Conv,
+    Fill,
     Gemm,
     Indexing,
     Mfa,
@@ -196,6 +198,7 @@ impl Kernels {
             Source::Binary => BINARY,
             Source::Cast => CAST,
             Source::Conv => CONV,
+            Source::Fill => FILL,
             Source::Gemm => MLX_GEMM,
             Source::Indexing => INDEXING,
             Source::Quantized => QUANTIZED,
@@ -2354,6 +2357,18 @@ pub fn call_mlx_gemm(
     encoder.use_resource(rhs_buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(grid_size, group_size);
+    Ok(())
+}
+
+pub fn call_const_fill(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    name: &'static str,
+    output: &Buffer,
+    v: f64
+) -> Result<(), MetalKernelError> {
+    
     Ok(())
 }
 

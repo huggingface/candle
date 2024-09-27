@@ -95,6 +95,7 @@ primitive!(i64);
 primitive!(u32);
 primitive!(u64);
 primitive!(f32);
+primitive!(f64);
 
 pub struct BufferOffset<'a> {
     pub buffer: &'a Buffer,
