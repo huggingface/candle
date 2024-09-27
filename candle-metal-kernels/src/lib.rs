@@ -2365,10 +2365,25 @@ pub fn call_const_fill(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     name: &'static str,
+    length: usize,
     output: &Buffer,
-    v: f64
+    v: f32
 ) -> Result<(), MetalKernelError> {
-    
+    let pipeline = kernels.load_pipeline(device, Source::Fill, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (output, v));
+
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+
+    let grid_size = MTLSize { width: length as u64, height: 1, depth: 1 };
+    let thread_group_size = MTLSize { width: pipeline.max_total_threads_per_threadgroup(), height: 1, depth: 1 };
+
+    encoder.dispatch_threads(grid_size, thread_group_size);
+
     Ok(())
 }
 
