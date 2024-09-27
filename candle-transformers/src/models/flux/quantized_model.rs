@@ -1,173 +1,12 @@
+use super::model::{attention, timestep_embedding, Config, EmbedNd};
+use crate::quantized_nn::{linear, linear_b, Linear};
+use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, IndexOp, Result, Tensor, D};
-use candle_nn::{LayerNorm, Linear, RmsNorm, VarBuilder};
-
-// https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/model.py#L12
-#[derive(Debug, Clone)]
-pub struct Config {
-    pub in_channels: usize,
-    pub vec_in_dim: usize,
-    pub context_in_dim: usize,
-    pub hidden_size: usize,
-    pub mlp_ratio: f64,
-    pub num_heads: usize,
-    pub depth: usize,
-    pub depth_single_blocks: usize,
-    pub axes_dim: Vec<usize>,
-    pub theta: usize,
-    pub qkv_bias: bool,
-    pub guidance_embed: bool,
-}
-
-impl Config {
-    // https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/util.py#L32
-    pub fn dev() -> Self {
-        Self {
-            in_channels: 64,
-            vec_in_dim: 768,
-            context_in_dim: 4096,
-            hidden_size: 3072,
-            mlp_ratio: 4.0,
-            num_heads: 24,
-            depth: 19,
-            depth_single_blocks: 38,
-            axes_dim: vec![16, 56, 56],
-            theta: 10_000,
-            qkv_bias: true,
-            guidance_embed: true,
-        }
-    }
-
-    // https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/util.py#L64
-    pub fn schnell() -> Self {
-        Self {
-            in_channels: 64,
-            vec_in_dim: 768,
-            context_in_dim: 4096,
-            hidden_size: 3072,
-            mlp_ratio: 4.0,
-            num_heads: 24,
-            depth: 19,
-            depth_single_blocks: 38,
-            axes_dim: vec![16, 56, 56],
-            theta: 10_000,
-            qkv_bias: true,
-            guidance_embed: false,
-        }
-    }
-}
+use candle_nn::{LayerNorm, RmsNorm};
 
 fn layer_norm(dim: usize, vb: VarBuilder) -> Result<LayerNorm> {
-    let ws = Tensor::ones(dim, vb.dtype(), vb.device())?;
+    let ws = Tensor::ones(dim, DType::F32, vb.device())?;
     Ok(LayerNorm::new_no_bias(ws, 1e-6))
-}
-
-fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
-    let dim = q.dim(D::Minus1)?;
-    let scale_factor = 1.0 / (dim as f64).sqrt();
-    let mut batch_dims = q.dims().to_vec();
-    batch_dims.pop();
-    batch_dims.pop();
-    let q = q.flatten_to(batch_dims.len() - 1)?;
-    let k = k.flatten_to(batch_dims.len() - 1)?;
-    let v = v.flatten_to(batch_dims.len() - 1)?;
-    let attn_weights = (q.matmul(&k.t()?)? * scale_factor)?;
-    let attn_scores = candle_nn::ops::softmax_last_dim(&attn_weights)?.matmul(&v)?;
-    batch_dims.push(attn_scores.dim(D::Minus2)?);
-    batch_dims.push(attn_scores.dim(D::Minus1)?);
-    attn_scores.reshape(batch_dims)
-}
-
-fn rope(pos: &Tensor, dim: usize, theta: usize) -> Result<Tensor> {
-    if dim % 2 == 1 {
-        candle::bail!("dim {dim} is odd")
-    }
-    let dev = pos.device();
-    let theta = theta as f64;
-    let inv_freq: Vec<_> = (0..dim)
-        .step_by(2)
-        .map(|i| 1f32 / theta.powf(i as f64 / dim as f64) as f32)
-        .collect();
-    let inv_freq_len = inv_freq.len();
-    let inv_freq = Tensor::from_vec(inv_freq, (1, 1, inv_freq_len), dev)?;
-    let inv_freq = inv_freq.to_dtype(pos.dtype())?;
-    let freqs = pos.unsqueeze(2)?.broadcast_mul(&inv_freq)?;
-    let cos = freqs.cos()?;
-    let sin = freqs.sin()?;
-    let out = Tensor::stack(&[&cos, &sin.neg()?, &sin, &cos], 3)?;
-    let (b, n, d, _ij) = out.dims4()?;
-    out.reshape((b, n, d, 2, 2))
-}
-
-fn apply_rope(x: &Tensor, freq_cis: &Tensor) -> Result<Tensor> {
-    let dims = x.dims();
-    let (b_sz, n_head, seq_len, n_embd) = x.dims4()?;
-    let x = x.reshape((b_sz, n_head, seq_len, n_embd / 2, 2))?;
-    let x0 = x.narrow(D::Minus1, 0, 1)?;
-    let x1 = x.narrow(D::Minus1, 1, 1)?;
-    let fr0 = freq_cis.get_on_dim(D::Minus1, 0)?;
-    let fr1 = freq_cis.get_on_dim(D::Minus1, 1)?;
-    (fr0.broadcast_mul(&x0)? + fr1.broadcast_mul(&x1)?)?.reshape(dims.to_vec())
-}
-
-pub(crate) fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> {
-    let q = apply_rope(q, pe)?.contiguous()?;
-    let k = apply_rope(k, pe)?.contiguous()?;
-    let x = scaled_dot_product_attention(&q, &k, v)?;
-    x.transpose(1, 2)?.flatten_from(2)
-}
-
-pub(crate) fn timestep_embedding(t: &Tensor, dim: usize, dtype: DType) -> Result<Tensor> {
-    const TIME_FACTOR: f64 = 1000.;
-    const MAX_PERIOD: f64 = 10000.;
-    if dim % 2 == 1 {
-        candle::bail!("{dim} is odd")
-    }
-    let dev = t.device();
-    let half = dim / 2;
-    let t = (t * TIME_FACTOR)?;
-    let arange = Tensor::arange(0, half as u32, dev)?.to_dtype(candle::DType::F32)?;
-    let freqs = (arange * (-MAX_PERIOD.ln() / half as f64))?.exp()?;
-    let args = t
-        .unsqueeze(1)?
-        .to_dtype(candle::DType::F32)?
-        .broadcast_mul(&freqs.unsqueeze(0)?)?;
-    let emb = Tensor::cat(&[args.cos()?, args.sin()?], D::Minus1)?.to_dtype(dtype)?;
-    Ok(emb)
-}
-
-#[derive(Debug, Clone)]
-pub struct EmbedNd {
-    #[allow(unused)]
-    dim: usize,
-    theta: usize,
-    axes_dim: Vec<usize>,
-}
-
-impl EmbedNd {
-    pub fn new(dim: usize, theta: usize, axes_dim: Vec<usize>) -> Self {
-        Self {
-            dim,
-            theta,
-            axes_dim,
-        }
-    }
-}
-
-impl candle::Module for EmbedNd {
-    fn forward(&self, ids: &Tensor) -> Result<Tensor> {
-        let n_axes = ids.dim(D::Minus1)?;
-        let mut emb = Vec::with_capacity(n_axes);
-        for idx in 0..n_axes {
-            let r = rope(
-                &ids.get_on_dim(D::Minus1, idx)?,
-                self.axes_dim[idx],
-                self.theta,
-            )?;
-            emb.push(r)
-        }
-        let emb = Tensor::cat(&emb, 2)?;
-        emb.unsqueeze(1)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -178,8 +17,8 @@ pub struct MlpEmbedder {
 
 impl MlpEmbedder {
     fn new(in_sz: usize, h_sz: usize, vb: VarBuilder) -> Result<Self> {
-        let in_layer = candle_nn::linear(in_sz, h_sz, vb.pp("in_layer"))?;
-        let out_layer = candle_nn::linear(h_sz, h_sz, vb.pp("out_layer"))?;
+        let in_layer = linear(in_sz, h_sz, vb.pp("in_layer"))?;
+        let out_layer = linear(h_sz, h_sz, vb.pp("out_layer"))?;
         Ok(Self {
             in_layer,
             out_layer,
@@ -201,9 +40,9 @@ pub struct QkNorm {
 
 impl QkNorm {
     fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
-        let query_norm = vb.get(dim, "query_norm.scale")?;
+        let query_norm = vb.get(dim, "query_norm.scale")?.dequantize(vb.device())?;
         let query_norm = RmsNorm::new(query_norm, 1e-6);
-        let key_norm = vb.get(dim, "key_norm.scale")?;
+        let key_norm = vb.get(dim, "key_norm.scale")?.dequantize(vb.device())?;
         let key_norm = RmsNorm::new(key_norm, 1e-6);
         Ok(Self {
             query_norm,
@@ -236,7 +75,7 @@ struct Modulation1 {
 
 impl Modulation1 {
     fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
-        let lin = candle_nn::linear(dim, 3 * dim, vb.pp("lin"))?;
+        let lin = linear(dim, 3 * dim, vb.pp("lin"))?;
         Ok(Self { lin })
     }
 
@@ -264,7 +103,7 @@ struct Modulation2 {
 
 impl Modulation2 {
     fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
-        let lin = candle_nn::linear(dim, 6 * dim, vb.pp("lin"))?;
+        let lin = linear(dim, 6 * dim, vb.pp("lin"))?;
         Ok(Self { lin })
     }
 
@@ -302,9 +141,9 @@ pub struct SelfAttention {
 impl SelfAttention {
     fn new(dim: usize, num_heads: usize, qkv_bias: bool, vb: VarBuilder) -> Result<Self> {
         let head_dim = dim / num_heads;
-        let qkv = candle_nn::linear_b(dim, dim * 3, qkv_bias, vb.pp("qkv"))?;
+        let qkv = linear_b(dim, dim * 3, qkv_bias, vb.pp("qkv"))?;
         let norm = QkNorm::new(head_dim, vb.pp("norm"))?;
-        let proj = candle_nn::linear(dim, dim, vb.pp("proj"))?;
+        let proj = linear(dim, dim, vb.pp("proj"))?;
         Ok(Self {
             qkv,
             norm,
@@ -340,8 +179,8 @@ struct Mlp {
 
 impl Mlp {
     fn new(in_sz: usize, mlp_sz: usize, vb: VarBuilder) -> Result<Self> {
-        let lin1 = candle_nn::linear(in_sz, mlp_sz, vb.pp("0"))?;
-        let lin2 = candle_nn::linear(mlp_sz, in_sz, vb.pp("2"))?;
+        let lin1 = linear(in_sz, mlp_sz, vb.pp("0"))?;
+        let lin2 = linear(mlp_sz, in_sz, vb.pp("2"))?;
         Ok(Self { lin1, lin2 })
     }
 }
@@ -456,8 +295,8 @@ impl SingleStreamBlock {
         let h_sz = cfg.hidden_size;
         let mlp_sz = (h_sz as f64 * cfg.mlp_ratio) as usize;
         let head_dim = h_sz / cfg.num_heads;
-        let linear1 = candle_nn::linear(h_sz, h_sz * 3 + mlp_sz, vb.pp("linear1"))?;
-        let linear2 = candle_nn::linear(h_sz + mlp_sz, h_sz, vb.pp("linear2"))?;
+        let linear1 = linear(h_sz, h_sz * 3 + mlp_sz, vb.pp("linear1"))?;
+        let linear2 = linear(h_sz + mlp_sz, h_sz, vb.pp("linear2"))?;
         let norm = QkNorm::new(head_dim, vb.pp("norm"))?;
         let pre_norm = layer_norm(h_sz, vb.pp("pre_norm"))?;
         let modulation = Modulation1::new(h_sz, vb.pp("modulation"))?;
@@ -502,11 +341,11 @@ pub struct LastLayer {
 impl LastLayer {
     fn new(h_sz: usize, p_sz: usize, out_c: usize, vb: VarBuilder) -> Result<Self> {
         let norm_final = layer_norm(h_sz, vb.pp("norm_final"))?;
-        let linear = candle_nn::linear(h_sz, p_sz * p_sz * out_c, vb.pp("linear"))?;
-        let ada_ln_modulation = candle_nn::linear(h_sz, 2 * h_sz, vb.pp("adaLN_modulation.1"))?;
+        let linear_ = linear(h_sz, p_sz * p_sz * out_c, vb.pp("linear"))?;
+        let ada_ln_modulation = linear(h_sz, 2 * h_sz, vb.pp("adaLN_modulation.1"))?;
         Ok(Self {
             norm_final,
-            linear,
+            linear: linear_,
             ada_ln_modulation,
         })
     }
@@ -537,8 +376,8 @@ pub struct Flux {
 
 impl Flux {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let img_in = candle_nn::linear(cfg.in_channels, cfg.hidden_size, vb.pp("img_in"))?;
-        let txt_in = candle_nn::linear(cfg.context_in_dim, cfg.hidden_size, vb.pp("txt_in"))?;
+        let img_in = linear(cfg.in_channels, cfg.hidden_size, vb.pp("img_in"))?;
+        let txt_in = linear(cfg.context_in_dim, cfg.hidden_size, vb.pp("txt_in"))?;
         let mut double_blocks = Vec::with_capacity(cfg.depth);
         let vb_d = vb.pp("double_blocks");
         for idx in 0..cfg.depth {
