@@ -32,7 +32,7 @@ impl<'a, B: Backend> Clone for VarBuilderArgs<'a, B> {
 pub type VarBuilder<'a> = VarBuilderArgs<'a, Box<dyn SimpleBackend + 'a>>;
 
 struct TensorData<B: Backend> {
-    backend: B,
+    backend: Arc<B>,
     pub dtype: DType,
     pub device: Device,
 }
@@ -94,7 +94,7 @@ impl<'a> Backend for Box<dyn SimpleBackend + 'a> {
 impl<'a, B: Backend> VarBuilderArgs<'a, B> {
     pub fn new_with_args(backend: B, dtype: DType, dev: &Device) -> Self {
         let data = TensorData {
-            backend,
+            backend: Arc::new(backend),
             dtype,
             device: dev.clone(),
         };
@@ -148,6 +148,23 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
     /// The device used by default.
     pub fn device(&self) -> &Device {
         &self.data.device
+    }
+
+    /// If the target device is the same as the VarBuilder device, only a shallow copy is performed.
+    pub fn to_device(&self, dev: &Device) -> Self {
+        if self.device().same_device(dev) {
+            self.clone()
+        } else {
+            Self {
+                data: Arc::new(TensorData {
+                    backend: self.data.backend.clone(),
+                    dtype: self.data.dtype,
+                    device: dev.clone(),
+                }),
+                path: self.path.clone(),
+                _phantom: self._phantom,
+            }
+        }
     }
 
     /// The dtype used by default.
@@ -461,7 +478,7 @@ impl<'a> VarBuilder<'a> {
         device: Device,
     ) -> Self {
         let data = TensorData {
-            backend,
+            backend: Arc::new(backend),
             dtype,
             device,
         };
