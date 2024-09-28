@@ -495,7 +495,6 @@ fn fastvit_model(cfg: &Config, nclasses: Option<usize>, vb: VarBuilder) -> Resul
             .apply(&stage3)?
             .apply(&stage4)?
             .apply(&final_conv)?;
-
         match &cls {
             None => Ok(xs),
             Some(cls) => xs.mean(D::Minus2)?.mean(D::Minus1)?.apply(cls),

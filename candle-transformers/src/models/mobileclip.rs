@@ -22,7 +22,6 @@ impl MobileClipConfig {
     pub fn s1() -> Self {
         let text_config = text_model::Config::vit_base_patch32();
         let vision_config = fastvit::Config::mci1();
-
         Self {
             text_config,
             vision_config,
@@ -32,7 +31,6 @@ impl MobileClipConfig {
     pub fn s2() -> Self {
         let text_config = text_model::Config::vit_base_patch32();
         let vision_config = fastvit::Config::mci2();
-
         Self {
             text_config,
             vision_config,
@@ -45,12 +43,10 @@ impl MobileClipModel {
     pub fn new(vs: VarBuilder, c: &MobileClipConfig) -> Result<Self> {
         let vision_model = fastvit::fastvit(&c.vision_config, 512, vs.pp("visual.trunk"))?;
         let text_model = text_model::OpenClipTextTransformer::new(vs.pp("text"), &c.text_config)?;
-
         let text_projection = vs.get(
             (c.text_config.embed_dim, c.text_config.projection_dim),
             "text.text_projection",
         )?;
-
         let logit_scale = vs.get(&[], "logit_scale")?;
         Ok(Self {
             text_model,
