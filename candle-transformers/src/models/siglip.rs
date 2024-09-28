@@ -1,3 +1,4 @@
+use crate::models::clip::div_l2_norm;
 use candle::{IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, linear, LayerNorm, Linear, VarBuilder};
 
@@ -89,6 +90,135 @@ pub struct Config {
     pub vision_config: VisionConfig,
 }
 
+impl Config {
+    pub fn base_patch16_224() -> Self {
+        let text_config = TextConfig {
+            // https://huggingface.co/google/siglip-base-patch16-224/blob/main/config.json
+            hidden_size: 768,
+            intermediate_size: 3072,
+            num_attention_heads: 12,
+            vocab_size: 32000,
+            // Default values.
+            pad_token_id: 1,
+            bos_token_id: 49406,
+            eos_token_id: 49407,
+            layer_norm_eps: 1e-6,
+            hidden_act: candle_nn::Activation::GeluPytorchTanh,
+            max_position_embeddings: 64,
+            num_hidden_layers: 12,
+        };
+        let vision_config = VisionConfig {
+            patch_size: 16,
+            // Default values.
+            hidden_size: 768,
+            intermediate_size: 3072,
+            num_hidden_layers: 12,
+            num_attention_heads: 12,
+            num_channels: 3,
+            image_size: 224,
+            hidden_act: candle_nn::Activation::GeluPytorchTanh,
+            layer_norm_eps: 1e-6,
+        };
+        Self {
+            text_config,
+            vision_config,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct MultiheadAttention {
+    q_proj: Linear,
+    k_proj: Linear,
+    v_proj: Linear,
+    out_proj: Linear,
+    num_heads: usize,
+}
+
+impl MultiheadAttention {
+    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+        let h = cfg.hidden_size;
+        let num_heads = cfg.num_attention_heads;
+        let w_in_proj = vb.get((3 * h, h), "in_proj_weight")?.chunk(3, 0)?;
+        let b_in_proj = vb.get(3 * h, "in_proj_bias")?.chunk(3, 0)?;
+        let q_proj = Linear::new(w_in_proj[0].clone(), Some(b_in_proj[0].clone()));
+        let k_proj = Linear::new(w_in_proj[1].clone(), Some(b_in_proj[1].clone()));
+        let v_proj = Linear::new(w_in_proj[2].clone(), Some(b_in_proj[2].clone()));
+        let out_proj = linear(h, h, vb.pp("out_proj"))?;
+        Ok(Self {
+            q_proj,
+            k_proj,
+            v_proj,
+            out_proj,
+            num_heads,
+        })
+    }
+
+    fn separate_heads(&self, x: &Tensor) -> Result<Tensor> {
+        let (b, n, c) = x.dims3()?;
+        x.reshape((b, n, self.num_heads, c / self.num_heads))?
+            .transpose(1, 2)?
+            .contiguous()
+    }
+
+    fn recombine_heads(&self, x: &Tensor) -> Result<Tensor> {
+        let (b, n_heads, n_tokens, c_per_head) = x.dims4()?;
+        x.transpose(1, 2)?
+            .reshape((b, n_tokens, n_heads * c_per_head))
+    }
+
+    fn forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+        let q = self.q_proj.forward(&q.contiguous()?)?;
+        let k = self.k_proj.forward(&k.contiguous()?)?;
+        let v = self.v_proj.forward(&v.contiguous()?)?;
+
+        let q = self.separate_heads(&q)?;
+        let k = self.separate_heads(&k)?;
+        let v = self.separate_heads(&v)?;
+
+        let (_, _, _, c_per_head) = q.dims4()?;
+        let attn = (q.matmul(&k.t()?)? / (c_per_head as f64).sqrt())?;
+        let attn = candle_nn::ops::softmax_last_dim(&attn)?;
+
+        let out = attn.matmul(&v)?;
+        self.recombine_heads(&out)?.apply(&self.out_proj)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MultiheadAttentionPoolingHead {
+    probe: Tensor,
+    attention: MultiheadAttention,
+    layernorm: LayerNorm,
+    mlp: Mlp,
+}
+
+impl MultiheadAttentionPoolingHead {
+    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+        let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
+        let layernorm = layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("layernorm"))?;
+        let probe = vb.get((1, 1, cfg.hidden_size), "probe")?;
+        let attention = MultiheadAttention::new(cfg, vb.pp("attention"))?;
+        Ok(Self {
+            probe,
+            attention,
+            layernorm,
+            mlp,
+        })
+    }
+}
+
+impl Module for MultiheadAttentionPoolingHead {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let batch_size = xs.dim(0)?;
+        let probe = self.probe.repeat((batch_size, 1, 1))?;
+        let xs = self.attention.forward(&probe, xs, xs)?;
+        let residual = &xs;
+        let xs = xs.apply(&self.layernorm)?.apply(&self.mlp)?;
+        (xs + residual)?.i((.., 0))
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Attention {
     q_proj: Linear,
@@ -127,9 +257,9 @@ impl Attention {
         let value_states = xs.apply(&self.v_proj)?;
 
         let shape = (batch_size, q_len, self.num_heads, self.head_dim);
-        let query_states = query_states.reshape(shape)?.transpose(1, 2)?;
-        let key_states = key_states.reshape(shape)?.transpose(1, 2)?;
-        let value_states = value_states.reshape(shape)?.transpose(1, 2)?;
+        let query_states = query_states.reshape(shape)?.transpose(1, 2)?.contiguous()?;
+        let key_states = key_states.reshape(shape)?.transpose(1, 2)?.contiguous()?;
+        let value_states = value_states.reshape(shape)?.transpose(1, 2)?.contiguous()?;
 
         let attn_weights = (query_states.matmul(&key_states.t()?)? * self.scale)?;
         let attn_weights = match attention_mask {
@@ -287,19 +417,25 @@ struct VisionTransformer {
     embeddings: VisionEmbeddings,
     encoder: Encoder,
     post_layernorm: LayerNorm,
-    // head: Option<MultiheadAttentionPoolingHead>,
+    head: Option<MultiheadAttentionPoolingHead>,
 }
 
 impl VisionTransformer {
-    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &VisionConfig, use_head: bool, vb: VarBuilder) -> Result<Self> {
         let embeddings = VisionEmbeddings::new(cfg, vb.pp("embeddings"))?;
         let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
         let post_layernorm =
             layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("post_layernorm"))?;
+        let head = if use_head {
+            Some(MultiheadAttentionPoolingHead::new(cfg, vb.pp("head"))?)
+        } else {
+            None
+        };
         Ok(Self {
             embeddings,
             encoder,
             post_layernorm,
+            head,
         })
     }
 }
@@ -308,7 +444,11 @@ impl Module for VisionTransformer {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs = xs.apply(&self.embeddings)?;
         let xs = self.encoder.forward(&xs, None)?;
-        xs.apply(&self.post_layernorm)
+        let xs = xs.apply(&self.post_layernorm)?;
+        match self.head.as_ref() {
+            None => Ok(xs),
+            Some(h) => xs.apply(h),
+        }
     }
 }
 
@@ -318,8 +458,8 @@ pub struct VisionModel {
 }
 
 impl VisionModel {
-    pub fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
-        let vision_model = VisionTransformer::new(cfg, vb.pp("vision_model"))?;
+    pub fn new(cfg: &VisionConfig, use_head: bool, vb: VarBuilder) -> Result<Self> {
+        let vision_model = VisionTransformer::new(cfg, use_head, vb)?;
         Ok(Self { vision_model })
     }
 }
@@ -367,11 +507,11 @@ impl Module for TextEmbeddings {
 }
 
 #[derive(Debug, Clone)]
-struct TextTransformer {
+pub struct TextTransformer {
     embeddings: TextEmbeddings,
     encoder: Encoder,
     final_layer_norm: LayerNorm,
-    head: Linear,
+    pub head: Linear,
 }
 
 impl TextTransformer {
@@ -425,6 +565,7 @@ impl TextTransformer {
         let last_hidden_state = self.final_layer_norm.forward(&input_ids)?;
         last_hidden_state
             .i((.., seq_len - 1, ..))?
+            .contiguous()?
             .apply(&self.head)
     }
 }
@@ -437,12 +578,12 @@ impl Module for TextTransformer {
 
 #[derive(Debug, Clone)]
 pub struct TextModel {
-    text_model: TextTransformer,
+    pub text_model: TextTransformer,
 }
 
 impl TextModel {
     pub fn new(cfg: &TextConfig, vb: VarBuilder) -> Result<Self> {
-        let text_model = TextTransformer::new(cfg, vb.pp("text_model"))?;
+        let text_model = TextTransformer::new(cfg, vb)?;
         Ok(Self { text_model })
     }
 }
@@ -450,5 +591,50 @@ impl TextModel {
 impl Module for TextModel {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         xs.apply(&self.text_model)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Model {
+    text_model: TextModel,
+    vision_model: VisionModel,
+    logit_bias: Tensor,
+    logit_scale: Tensor,
+}
+
+impl Model {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let text_model = TextModel::new(&cfg.text_config, vb.pp("text_model"))?;
+        let vision_model = VisionModel::new(&cfg.vision_config, true, vb.pp("vision_model"))?;
+        let logit_scale = vb.get(&[1], "logit_scale")?;
+        let logit_bias = vb.get(&[1], "logit_bias")?;
+        Ok(Self {
+            text_model,
+            vision_model,
+            logit_bias,
+            logit_scale,
+        })
+    }
+
+    pub fn get_text_features(&self, input_ids: &Tensor) -> Result<Tensor> {
+        input_ids.apply(&self.text_model)
+    }
+
+    pub fn get_image_features(&self, pixel_values: &Tensor) -> Result<Tensor> {
+        pixel_values.apply(&self.vision_model)
+    }
+
+    pub fn forward(&self, pixel_values: &Tensor, input_ids: &Tensor) -> Result<(Tensor, Tensor)> {
+        let image_features = self.get_image_features(pixel_values)?;
+        let text_features = self.get_text_features(input_ids)?;
+        let image_features_normalized = div_l2_norm(&image_features)?;
+        let text_features_normalized = div_l2_norm(&text_features)?;
+        let logits_per_text = text_features_normalized.matmul(&image_features_normalized.t()?)?;
+        let logit_scale = self.logit_scale.exp()?;
+        let logits_per_text = logits_per_text
+            .broadcast_mul(&logit_scale)?
+            .broadcast_add(&self.logit_bias)?;
+        let logits_per_image = logits_per_text.t()?;
+        Ok((logits_per_text, logits_per_image))
     }
 }

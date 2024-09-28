@@ -9,7 +9,7 @@ use clap::Parser;
 
 use candle::{DType, Device, Tensor};
 use candle_nn::{ops::softmax, VarBuilder};
-use candle_transformers::models::clip;
+use candle_transformers::models::siglip;
 
 use tokenizers::Tokenizer;
 
@@ -66,19 +66,13 @@ pub fn main() -> anyhow::Result<()> {
     let model_file = match args.model {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
-
-            let api = api.repo(hf_hub::Repo::with_revision(
-                "openai/clip-vit-base-patch32".to_string(),
-                hf_hub::RepoType::Model,
-                "refs/pr/15".to_string(),
-            ));
-
+            let api = api.model("google/siglip-base-patch16-224".to_string());
             api.get("model.safetensors")?
         }
         Some(model) => model.into(),
     };
     let tokenizer = get_tokenizer(args.tokenizer)?;
-    let config = clip::ClipConfig::vit_base_patch32();
+    let config = siglip::Config::base_patch16_224();
     let device = candle_examples::device(args.cpu)?;
     let vec_imgs = match args.images {
         Some(imgs) => imgs,
@@ -87,10 +81,10 @@ pub fn main() -> anyhow::Result<()> {
             "candle-examples/examples/yolo-v8/assets/bike.jpg".to_string(),
         ],
     };
-    let images = load_images(&vec_imgs, config.image_size)?.to_device(&device)?;
+    let images = load_images(&vec_imgs, config.vision_config.image_size)?.to_device(&device)?;
     let vb =
         unsafe { VarBuilder::from_mmaped_safetensors(&[model_file.clone()], DType::F32, &device)? };
-    let model = clip::ClipModel::new(vb, &config)?;
+    let model = siglip::Model::new(&config, vb)?;
     let (input_ids, vec_seq) = tokenize_sequences(args.sequences, &tokenizer, &device)?;
     let (_logits_per_text, logits_per_image) = model.forward(&images, &input_ids)?;
     let softmax_image = softmax(&logits_per_image, 1)?;
@@ -126,6 +120,7 @@ pub fn get_tokenizer(tokenizer: Option<String>) -> anyhow::Result<Tokenizer> {
         }
         Some(file) => file.into(),
     };
+
     Tokenizer::from_file(tokenizer).map_err(E::msg)
 }
 
