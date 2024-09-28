@@ -236,7 +236,7 @@ impl Attention {
         let q_proj = linear(embed_dim, embed_dim, vb.pp("q_proj"))?;
         let k_proj = linear(embed_dim, embed_dim, vb.pp("k_proj"))?;
         let v_proj = linear(embed_dim, embed_dim, vb.pp("v_proj"))?;
-        let out_proj = linear(embed_dim, embed_dim, vb.pp("v_proj"))?;
+        let out_proj = linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
         let num_heads = cfg.num_attention_heads();
         let head_dim = embed_dim / num_heads;
         Ok(Self {
@@ -339,7 +339,8 @@ impl EncoderLayer {
         let xs = (residual + xs)?;
         let residual = &xs;
         let xs = xs.apply(&self.layer_norm2)?.apply(&self.mlp)?;
-        xs + residual
+        let xs = (xs + residual)?;
+        Ok(xs)
     }
 }
 
@@ -403,10 +404,8 @@ impl VisionEmbeddings {
 impl Module for VisionEmbeddings {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (_batch, _channels, _height, _width) = xs.dims4()?;
-        let embeddings = xs
-            .apply(&self.patch_embedding)?
-            .flatten_from(2)?
-            .transpose(1, 2)?;
+        let embeddings = xs.apply(&self.patch_embedding)?;
+        let embeddings = embeddings.flatten_from(2)?.transpose(1, 2)?;
         let position_embedding = self.position_embedding.forward(&self.position_ids)?;
         embeddings.broadcast_add(&position_embedding)
     }
