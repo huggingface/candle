@@ -140,7 +140,7 @@ pub fn tokenize_sequences(
         let encoding = tokenizer.encode(seq, true).map_err(E::msg)?;
         tokens.push(encoding.get_ids().to_vec());
     }
-    let max_len = tokens.iter().map(|v| v.len()).max().unwrap_or(0);
+    let max_len = config.text_config.max_position_embeddings;
     // Pad the sequences to have the same length
     for token_vec in tokens.iter_mut() {
         let len_diff = max_len - token_vec.len();

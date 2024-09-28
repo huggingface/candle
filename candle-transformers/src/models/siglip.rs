@@ -530,48 +530,17 @@ impl TextTransformer {
             head,
         })
     }
-
-    // TODO: rewrite to newer version
-    fn build_causal_attention_mask(
-        bsz: usize,
-        seq_len: usize,
-        mask_after: usize,
-        device: &candle::Device,
-    ) -> Result<Tensor> {
-        let mask: Vec<_> = (0..seq_len)
-            .flat_map(|i| {
-                (0..seq_len).map(move |j| {
-                    if j > i || j > mask_after {
-                        f32::MIN
-                    } else {
-                        0.
-                    }
-                })
-            })
-            .collect();
-        let mask = Tensor::from_slice(&mask, (seq_len, seq_len), device)?;
-        mask.broadcast_as((bsz, 1, seq_len, seq_len))
-    }
-
-    pub fn forward_with_mask(&self, input_ids: &Tensor, mask_after: usize) -> Result<Tensor> {
-        let (bsz, seq_len) = input_ids.dims2()?;
+}
+impl Module for TextTransformer {
+    fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+        let (_bsz, seq_len) = input_ids.dims2()?;
         let input_ids = self.embeddings.forward(input_ids)?;
-        let causal_attention_mask =
-            Self::build_causal_attention_mask(bsz, seq_len, mask_after, input_ids.device())?;
-        let input_ids = self
-            .encoder
-            .forward(&input_ids, Some(&causal_attention_mask))?;
+        let input_ids = self.encoder.forward(&input_ids, None)?;
         let last_hidden_state = self.final_layer_norm.forward(&input_ids)?;
         last_hidden_state
             .i((.., seq_len - 1, ..))?
             .contiguous()?
             .apply(&self.head)
-    }
-}
-
-impl Module for TextTransformer {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.forward_with_mask(xs, usize::MAX)
     }
 }
 
