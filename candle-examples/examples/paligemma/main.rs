@@ -270,6 +270,7 @@ fn main() -> Result<()> {
         args.repeat_last_n,
         &device,
     );
-    pipeline.run(&args.prompt, args.sample_len)?;
+    let prompt = format!("{}\n", args.prompt);
+    pipeline.run(&prompt, args.sample_len)?;
     Ok(())
 }
