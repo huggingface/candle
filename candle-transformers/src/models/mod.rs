@@ -46,6 +46,7 @@ pub mod moondream;
 pub mod mpt;
 pub mod olmo;
 pub mod openclip;
+pub mod paligemma;
 pub mod parler_tts;
 pub mod persimmon;
 pub mod phi;
