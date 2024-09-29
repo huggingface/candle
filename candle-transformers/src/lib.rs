@@ -1,4 +1,5 @@
 pub mod generation;
+pub mod layers;
 pub mod models;
 pub mod object_detection;
 pub mod pipelines;
