@@ -40,6 +40,7 @@ impl Module for MultiModalProjector {
 
 #[derive(Clone, Debug)]
 pub struct Model {
+    pos: usize,
     vision_tower: siglip::VisionModel,
     multi_modal_projector: MultiModalProjector,
     language_model: gemma::Model,
@@ -52,17 +53,35 @@ impl Model {
         let multi_modal_projector = MultiModalProjector::new(cfg, vb.pp("multi_modal_projector"))?;
         let language_model = gemma::Model::new(false, &cfg.text_config, vb.pp("language_model"))?;
         Ok(Self {
+            pos: 0,
             language_model,
             vision_tower,
             multi_modal_projector,
         })
     }
 
-    pub fn forward(&mut self, _input_ids: &Tensor, _pos: usize) -> Result<Tensor> {
-        todo!()
+    pub fn setup(&mut self, pixel_values: &Tensor, input_ids: &Tensor) -> Result<Tensor> {
+        self.clear_kv_cache();
+        let image_features = self
+            .vision_tower
+            .forward(pixel_values)?
+            .apply(&self.multi_modal_projector)?;
+        let image_features = crate::models::clip::div_l2_norm(&image_features)?;
+        let text_features = self.language_model.embed_tokens().forward(input_ids)?;
+        let input_embeds = Tensor::cat(&[image_features, text_features], 1)?;
+        self.pos = input_embeds.dim(1)?;
+        self.language_model.forward_embeds(&input_embeds, None, 0)
+    }
+
+    pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+        let pos = self.pos;
+        let seq_len = input_ids.dim(1)?;
+        self.pos = pos + seq_len;
+        self.language_model.forward(input_ids, pos)
     }
 
     pub fn clear_kv_cache(&mut self) {
+        self.pos = 0;
         self.language_model.clear_kv_cache()
     }
 }
