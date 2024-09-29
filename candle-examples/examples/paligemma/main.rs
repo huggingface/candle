@@ -18,6 +18,7 @@ use tokenizers::Tokenizer;
 
 struct TextGeneration {
     model: Model,
+    image: Tensor,
     device: Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
@@ -29,6 +30,7 @@ impl TextGeneration {
     #[allow(clippy::too_many_arguments)]
     fn new(
         model: Model,
+        image: Tensor,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
@@ -40,6 +42,7 @@ impl TextGeneration {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
             model,
+            image,
             tokenizer: TokenOutputStream::new(tokenizer),
             logits_processor,
             repeat_penalty,
@@ -76,7 +79,11 @@ impl TextGeneration {
             let start_pos = tokens.len().saturating_sub(context_size);
             let ctxt = &tokens[start_pos..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input)?;
+            let logits = if index > 0 {
+                self.model.forward(&input)?
+            } else {
+                self.model.setup(&self.image, &input)?
+            };
             let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
                 logits
@@ -153,9 +160,6 @@ struct Args {
     tokenizer_file: Option<String>,
 
     #[arg(long)]
-    config_file: Option<String>,
-
-    #[arg(long)]
     weight_files: Option<String>,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
@@ -165,6 +169,26 @@ struct Args {
     /// The context size to consider for the repeat penalty.
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
+
+    #[arg(long)]
+    image: String,
+}
+
+fn load_image<T: AsRef<std::path::Path>>(path: T, image_size: usize) -> anyhow::Result<Tensor> {
+    let img = image::ImageReader::open(path)?.decode()?;
+    let (height, width) = (image_size, image_size);
+    let img = img.resize_to_fill(
+        width as u32,
+        height as u32,
+        image::imageops::FilterType::Triangle,
+    );
+    let img = img.to_rgb8();
+    let img = img.into_raw();
+    let img = Tensor::from_vec(img, (height, width, 3), &Device::Cpu)?
+        .permute((2, 0, 1))?
+        .to_dtype(DType::F32)?
+        .affine(2. / 255., -1.)?;
+    Ok(img)
 }
 
 fn main() -> Result<()> {
@@ -208,10 +232,6 @@ fn main() -> Result<()> {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.get("tokenizer.json")?,
     };
-    let config_filename = match args.config_file {
-        Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("config.json")?,
-    };
     let filenames = match args.weight_files {
         Some(files) => files
             .split(',')
@@ -222,22 +242,26 @@ fn main() -> Result<()> {
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
-    let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
     let dtype = if device.is_cuda() {
         DType::BF16
     } else {
         DType::F32
     };
+    let config = Config::paligemma_3b_224();
+    let image = load_image(&args.image, config.vision_config.image_size)?
+        .to_device(&device)?
+        .to_dtype(dtype)?
+        .unsqueeze(0)?;
+    println!("loaded image with shape {:?}", image);
+    let start = std::time::Instant::now();
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-    let model = {
-        let config: Config = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
-        Model::new(&config, vb)?
-    };
+    let model = Model::new(&config, vb)?;
     println!("loaded the model in {:?}", start.elapsed());
 
     let mut pipeline = TextGeneration::new(
         model,
+        image,
         tokenizer,
         args.seed,
         args.temperature,

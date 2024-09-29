@@ -1,19 +1,38 @@
-#![allow(unused)]
 use crate::models::{gemma, siglip};
-use candle::{Module, Result, Tensor, D};
+use candle::{Module, Result, Tensor};
 use candle_nn::{linear, Linear, VarBuilder};
 
 #[derive(serde::Deserialize, Clone, Debug)]
 pub struct Config {
     pub vision_config: siglip::VisionConfig,
     pub text_config: gemma::Config,
-    pub ignore_index: i64,
-    pub bos_token_id: usize,
-    pub eos_token_id: usize,
-    pub image_token_index: usize,
-    pub pad_token_id: usize,
     pub projection_dim: usize,
-    pub vocab_size: usize,
+}
+
+impl Config {
+    pub fn paligemma_3b_224() -> Self {
+        // https://huggingface.co/google/paligemma-3b-pt-224/blob/main/config.json
+        Self {
+            vision_config: siglip::VisionConfig::paligemma_3b_224(),
+            text_config: gemma::Config {
+                hidden_size: 2048,
+                intermediate_size: 16384,
+                num_attention_heads: 8,
+                num_hidden_layers: 18,
+                num_key_value_heads: 1,
+                vocab_size: 257216,
+                // Default values.
+                rope_theta: 10000.,
+                head_dim: 256,
+                hidden_act: Some(candle_nn::Activation::GeluPytorchTanh),
+                hidden_activation: None,
+                attention_bias: false,
+                max_position_embeddings: 8192,
+                rms_norm_eps: 1e-6,
+            },
+            projection_dim: 2048,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -48,8 +67,11 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let vision_tower =
-            siglip::VisionModel::new(&cfg.vision_config, false, vb.pp("vision_tower"))?;
+        let vision_tower = siglip::VisionModel::new(
+            &cfg.vision_config,
+            false,
+            vb.pp("vision_tower.vision_model"),
+        )?;
         let multi_modal_projector = MultiModalProjector::new(cfg, vb.pp("multi_modal_projector"))?;
         let language_model = gemma::Model::new(false, &cfg.text_config, vb.pp("language_model"))?;
         Ok(Self {
