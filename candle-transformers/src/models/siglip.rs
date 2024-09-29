@@ -100,6 +100,38 @@ impl VisionConfig {
         }
     }
 
+    pub fn paligemma_3b_448() -> Self {
+        Self {
+            // https://huggingface.co/google/paligemma-3b-pt-448/blob/main/config.json
+            patch_size: 14,
+            num_attention_heads: 16,
+            num_hidden_layers: 27,
+            hidden_size: 1152,
+            intermediate_size: 4304,
+            image_size: 448, // num_image_tokens: (448 / 14)^2 = 1024
+            // Default values.
+            num_channels: 3,
+            hidden_act: candle_nn::Activation::GeluPytorchTanh,
+            layer_norm_eps: 1e-6,
+        }
+    }
+
+    pub fn paligemma_3b_896() -> Self {
+        Self {
+            // https://huggingface.co/google/paligemma-3b-pt-448/blob/main/config.json
+            patch_size: 14,
+            num_attention_heads: 16,
+            num_hidden_layers: 27,
+            hidden_size: 1152,
+            intermediate_size: 4304,
+            image_size: 896, // num_image_tokens: (896 / 14)^2 = 4096
+            // Default values.
+            num_channels: 3,
+            hidden_act: candle_nn::Activation::GeluPytorchTanh,
+            layer_norm_eps: 1e-6,
+        }
+    }
+
     pub fn num_patches(&self) -> usize {
         (self.image_size / self.patch_size).pow(2)
     }
