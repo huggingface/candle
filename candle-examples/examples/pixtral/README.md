@@ -13,14 +13,16 @@ cargo run --profile=release-with-debug --features cuda --example pixtral -- \
 
 ```
 Describe the image.
-In the center of the image shows a small, detailed robot with glowing green eyes
-stands on a beach, holding a 3D. It has a lit candle, giving off to the sand,
-with clouds, sea, and sky background.
 
-The image features a small robot is predominantly orange and blue and white,
-with the robot is made of metal, with a small, with clouds, giving a 3d with
-human-like eyes, beach, holding a candle. Its body is detailed, appears to be
-making it appears, on the sand, holding a small, with waves, giving off. sky,
-back as if its with clouds, detailed robot, be it seems, metal and metal,
-giving, with, human-like eyes, be on the sea, back of clouds in a candlelit sky.
+The image depicts a charming, rustic robot standing on a sandy beach at sunset.
+The robot has a vintage, steampunk aesthetic with visible gears and mechanical
+parts. It is holding a small lantern in one hand, which emits a warm glow, and
+its other arm is extended forward as if reaching out or guiding the way. The
+robot's body is adorned with the word "RUST" in bright orange letters, adding to
+its rustic theme.
+
+The background features a dramatic sky filled with clouds, illuminated by the
+setting sun, casting a golden hue over the scene. Gentle waves lap against the
+shore, creating a serene and picturesque atmosphere. The overall mood of the
+image is whimsical and nostalgic, evoking a sense of adventure and tranquility.
 ```
