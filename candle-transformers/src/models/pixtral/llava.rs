@@ -47,18 +47,26 @@ pub struct Model {
     pub language_model: mistral::Model,
     pub vision_tower: vision_model::Model,
     pub patch_size: usize,
+    pub dtype: candle::DType,
 }
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let multi_modal_projector = MultiModalProjector::new(cfg, vb.pp("multi_modal_projector"))?;
         let language_model = mistral::Model::new(&cfg.text_config, vb.pp("language_model"))?;
-        let vision_tower = vision_model::Model::new(&cfg.vision_config, vb.pp("vision_tower"))?;
+        let vision_tower = vision_model::Model::new(
+            &cfg.vision_config,
+            vb.pp("vision_tower").to_dtype(candle::DType::F32),
+        )?;
+        let multi_modal_projector = MultiModalProjector::new(
+            cfg,
+            vb.pp("multi_modal_projector").to_dtype(candle::DType::F32),
+        )?;
         Ok(Self {
             multi_modal_projector,
             language_model,
             vision_tower,
             patch_size: cfg.vision_config.patch_size,
+            dtype: vb.dtype(),
         })
     }
 }

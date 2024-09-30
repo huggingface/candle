@@ -90,6 +90,7 @@ impl TextGeneration {
                 let image_embeds = self.model.vision_tower.forward(&self.image)?;
                 let image_embeds = self.model.multi_modal_projector.forward(&image_embeds)?;
                 println!("generated image embeddings {image_embeds:?}");
+                let image_embeds = image_embeds.to_dtype(self.model.dtype)?;
                 for &t in tokens.iter() {
                     if let Some(t) = self.tokenizer.next_token(t)? {
                         print!("{t}")
@@ -302,7 +303,10 @@ fn main() -> Result<()> {
             &[0.26862954, 0.261_302_6, 0.275_777_1],
         )?
     };
-    let image = image.to_device(&device)?.to_dtype(dtype)?.unsqueeze(0)?;
+    let image = image
+        .to_device(&device)?
+        .to_dtype(DType::F32)?
+        .unsqueeze(0)?;
     println!("loaded image with shape {:?}", image);
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
 
