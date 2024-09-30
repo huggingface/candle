@@ -46,6 +46,7 @@ pub struct Model {
     pub multi_modal_projector: MultiModalProjector,
     pub language_model: mistral::Model,
     pub vision_tower: vision_model::Model,
+    pub patch_size: usize,
 }
 
 impl Model {
@@ -57,6 +58,7 @@ impl Model {
             multi_modal_projector,
             language_model,
             vision_tower,
+            patch_size: cfg.vision_config.patch_size,
         })
     }
 }
