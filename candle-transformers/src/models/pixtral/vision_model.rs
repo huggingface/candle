@@ -227,8 +227,8 @@ impl RotaryEmbedding {
         let freqs_w = Tensor::new(freqs_w, dev)?;
         let h = Tensor::arange(0u32, max_patches_per_side as u32, dev)?.to_dtype(DType::F32)?;
         let w = Tensor::arange(0u32, max_patches_per_side as u32, dev)?.to_dtype(DType::F32)?;
-        let freqs_h = h.matmul(&freqs_h)?;
-        let freqs_w = w.matmul(&freqs_w)?;
+        let freqs_h = h.unsqueeze(1)?.matmul(&freqs_h.unsqueeze(0)?)?;
+        let freqs_w = w.unsqueeze(1)?.matmul(&freqs_w.unsqueeze(0)?)?;
         let inv_freq = Tensor::cat(
             &[
                 freqs_h.unsqueeze(1)?.repeat((1, max_patches_per_side, 1))?,
@@ -237,7 +237,6 @@ impl RotaryEmbedding {
             D::Minus1,
         )?
         .reshape(((), dim / 2))?;
-        let inv_freq = Tensor::cat(&[&inv_freq, &inv_freq], D::Minus1)?;
         let cos = inv_freq.cos()?.to_dtype(dtype)?;
         let sin = inv_freq.sin()?.to_dtype(dtype)?;
         Ok(Self { cos, sin })

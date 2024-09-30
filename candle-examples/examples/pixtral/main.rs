@@ -9,7 +9,7 @@ use clap::Parser;
 
 use candle_transformers::models::pixtral::vision_model::{Config, Model};
 
-use candle::{DType, Device, Module, Tensor};
+use candle::{DType, Module};
 use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
@@ -68,23 +68,6 @@ struct Args {
     image: String,
 }
 
-fn load_image<T: AsRef<std::path::Path>>(path: T, image_size: usize) -> anyhow::Result<Tensor> {
-    let img = image::ImageReader::open(path)?.decode()?;
-    let (height, width) = (image_size, image_size);
-    let img = img.resize_to_fill(
-        width as u32,
-        height as u32,
-        image::imageops::FilterType::Triangle,
-    );
-    let img = img.to_rgb8();
-    let img = img.into_raw();
-    let img = Tensor::from_vec(img, (height, width, 3), &Device::Cpu)?
-        .permute((2, 0, 1))?
-        .to_dtype(DType::F32)?
-        .affine(2. / 255., -1.)?;
-    Ok(img)
-}
-
 fn main() -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
@@ -138,19 +121,24 @@ fn main() -> Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
     let dtype = if device.is_cuda() {
-        DType::BF16
+        DType::F32
     } else {
         DType::F32
     };
     let config = Config::pixtral_12b_2409();
-    let image = load_image(&args.image, 1024)?
-        .to_device(&device)?
-        .to_dtype(dtype)?
-        .unsqueeze(0)?;
+    let image = candle_examples::imagenet::load_image_with_std_mean(
+        &args.image,
+        1024,
+        &[0.48145466, 0.4578275, 0.40821073],
+        &[0.26862954, 0.26130258, 0.27577711],
+    )?
+    .to_device(&device)?
+    .to_dtype(dtype)?
+    .unsqueeze(0)?;
     println!("loaded image with shape {:?}", image);
     let start = std::time::Instant::now();
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-    let model = Model::new(&config, vb)?;
+    let model = Model::new(&config, vb.pp("vision_tower"))?;
     println!("loaded the model in {:?}", start.elapsed());
     let embs = model.forward(&image)?;
     println!("EMBS\n{embs}");
