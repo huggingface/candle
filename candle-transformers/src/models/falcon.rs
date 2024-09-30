@@ -448,7 +448,7 @@ impl Falcon {
             vb.pp("transformer.word_embeddings"),
         )?;
         let blocks = (0..cfg.num_hidden_layers)
-            .map(|i| FalconDecoderLayer::load(vb.pp(&format!("transformer.h.{i}")), &cfg))
+            .map(|i| FalconDecoderLayer::load(vb.pp(format!("transformer.h.{i}")), &cfg))
             .collect::<Result<Vec<_>>>()?;
         let ln_f = layer_norm(
             cfg.hidden_size,
