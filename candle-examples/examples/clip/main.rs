@@ -15,8 +15,7 @@ use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 #[derive(Parser)]
-struct Args { 
-
+struct Args {
     /// model to use from local file. If not provided will download from huggingface
     #[arg(long)]
     model: Option<String>,
@@ -98,15 +97,13 @@ pub fn main() -> anyhow::Result<()> {
         let api = Api::new()?;
         let api = api.repo(repo);
         let config = api.get("config.json")?;
-        let tokenizer = 
-        match args.tokenizer {
+        let tokenizer = match args.tokenizer {
             Some(tokenizer) => tokenizer.into(),
-            None => api.get("tokenizer.json")?
+            None => api.get("tokenizer.json")?,
         };
-        let weights = 
-        match args.model {
+        let weights = match args.model {
             Some(model) => model.into(),
-            None =>{
+            None => {
                 if args.use_pth {
                     api.get("pytorch_model.bin")?
                 } else {
@@ -129,7 +126,7 @@ pub fn main() -> anyhow::Result<()> {
             "candle-examples/examples/yolo-v8/assets/bike.jpg".to_string(),
         ],
     };
-    
+
     let images = load_images(&vec_imgs, config.vision_config.image_size)?.to_device(&device)?;
 
     let vb = unsafe {

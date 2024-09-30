@@ -292,7 +292,8 @@ impl ClipTextTransformer {
     pub fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
         let embeddings = ClipTextEmbeddings::new(vs.pp("embeddings"), c)?;
         let encoder = ClipEncoder::new(vs.pp("encoder"), &EncoderConfig::Text(c.clone()))?;
-        let final_layer_norm = candle_nn::layer_norm(c.hidden_size, 1e-5, vs.pp("final_layer_norm"))?;
+        let final_layer_norm =
+            candle_nn::layer_norm(c.hidden_size, 1e-5, vs.pp("final_layer_norm"))?;
         Ok(ClipTextTransformer {
             embeddings,
             encoder,

@@ -34,8 +34,6 @@ pub struct ClipVisionConfig {
 
     #[serde(default = "default_channels")]
     pub num_channels: usize,
-
-
 }
 
 impl ClipVisionConfig {
