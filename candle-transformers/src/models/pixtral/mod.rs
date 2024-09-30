@@ -1,1 +1,1 @@
-mod vision_model;
+pub mod vision_model;

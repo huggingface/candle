@@ -1,5 +1,4 @@
-#![allow(unused)]
-use candle::{DType, IndexOp, Module, Result, Tensor, D};
+use candle::{DType, Module, Result, Tensor, D};
 use candle_nn::{linear_b, rms_norm, Linear, RmsNorm, VarBuilder};
 
 fn default_act() -> candle_nn::Activation {
@@ -21,7 +20,7 @@ pub struct Config {
 }
 
 impl Config {
-    fn pixtral_12b_2409() -> Self {
+    pub fn pixtral_12b_2409() -> Self {
         Self {
             hidden_size: 1024,
             num_channels: 3,
@@ -186,6 +185,7 @@ impl Transformer {
         let vb = vb.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = AttentionLayer::new(cfg, vb.pp(layer_idx))?;
+            layers.push(layer)
         }
         Ok(Self { layers })
     }
@@ -244,7 +244,7 @@ impl RotaryEmbedding {
     }
 
     fn apply_rotary_emb_qkv(&self, q: &Tensor, k: &Tensor) -> Result<(Tensor, Tensor)> {
-        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
+        let (_b_sz, _h, _seq_len, _n_embd) = q.dims4()?;
         let cos = &self.cos;
         let sin = &self.sin;
         let q_embed = candle_nn::rotary_emb::rope(q, cos, sin)?;
@@ -291,10 +291,7 @@ impl Module for Model {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let patch_embeds = xs.apply(&self.patch_conv)?;
         let patch_embeds = patch_embeds.flatten_from(2)?.t()?.apply(&self.ln_pre)?;
-        // TODO: emb
-        // TODO: generate_block_attention_mask
-        let attn_mask = None;
         self.transformer
-            .forward(&patch_embeds, &self.patch_positional_embedding, attn_mask)
+            .forward(&patch_embeds, &self.patch_positional_embedding, None)
     }
 }
