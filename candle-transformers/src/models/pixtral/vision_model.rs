@@ -7,16 +7,16 @@ fn default_act() -> candle_nn::Activation {
 
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct Config {
-    hidden_size: usize,
-    num_channels: usize,
-    image_size: usize,
-    patch_size: usize,
-    rope_theta: f64,
-    intermediate_size: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
+    pub hidden_size: usize,
+    pub num_channels: usize,
+    pub image_size: usize,
+    pub patch_size: usize,
+    pub rope_theta: f64,
+    pub intermediate_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
     #[serde(default = "default_act")]
-    hidden_act: candle_nn::Activation,
+    pub hidden_act: candle_nn::Activation,
 }
 
 impl Config {
