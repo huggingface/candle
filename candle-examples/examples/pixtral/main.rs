@@ -7,7 +7,7 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::Parser;
 
-use candle_transformers::models::pixtral::vision_model::{Config, Model};
+use candle_transformers::models::pixtral::{vision_model, Config};
 
 use candle::{DType, Module};
 use candle_nn::VarBuilder;
@@ -52,6 +52,9 @@ struct Args {
 
     #[arg(long)]
     tokenizer_file: Option<String>,
+
+    #[arg(long)]
+    config_file: Option<String>,
 
     #[arg(long)]
     weight_files: Option<String>,
@@ -126,7 +129,13 @@ fn main() -> Result<()> {
     } else {
         DType::F32
     };
-    let config = Config::pixtral_12b_2409();
+    let config: Config = match args.config_file {
+        Some(config_file) => serde_json::from_slice(&std::fs::read(config_file)?)?,
+        None => {
+            let config_file = repo.get("config.json")?;
+            serde_json::from_slice(&std::fs::read(config_file)?)?
+        }
+    };
     let image = if args.image.ends_with(".safetensors") {
         match candle::safetensors::load(&args.image, &device)?.remove("img") {
             None => anyhow::bail!("no img tensor in {}", args.image),
@@ -144,7 +153,7 @@ fn main() -> Result<()> {
     println!("loaded image with shape {:?}", image);
     let start = std::time::Instant::now();
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-    let model = Model::new(&config, vb.pp("vision_tower"))?;
+    let model = vision_model::Model::new(&config.vision_config, vb.pp("vision_tower"))?;
     println!("loaded the model in {:?}", start.elapsed());
     let embs = model.forward(&image)?;
     println!("EMBS\n{embs}");

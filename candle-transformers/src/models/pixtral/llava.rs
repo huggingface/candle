@@ -9,7 +9,7 @@ pub struct Config {
     pub projector_hidden_act: candle_nn::Activation,
     pub text_config: mistral::Config,
     pub vision_config: vision_model::Config,
-    pub image_token_size: usize,
+    pub image_token_index: usize,
     pub image_seq_length: usize,
 }
 

@@ -4,8 +4,16 @@ use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
+fn default_num_attention_heads() -> usize {
+    32
+}
+
 fn default_use_flash_attn() -> bool {
     false
+}
+
+fn default_hidden_act() -> candle_nn::Activation {
+    candle_nn::Activation::Silu
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -14,9 +22,11 @@ pub struct Config {
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub num_hidden_layers: usize,
+    #[serde(default = "default_num_attention_heads")]
     pub num_attention_heads: usize,
     pub head_dim: Option<usize>,
     pub num_key_value_heads: usize,
+    #[serde(default = "default_hidden_act")]
     pub hidden_act: Activation,
     pub max_position_embeddings: usize,
     pub rms_norm_eps: f64,

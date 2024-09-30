@@ -5,15 +5,41 @@ fn default_act() -> candle_nn::Activation {
     candle_nn::Activation::Gelu
 }
 
+fn default_hidden_size() -> usize {
+    1024
+}
+
+fn default_intermediate_size() -> usize {
+    4096
+}
+
+fn default_num_channels() -> usize {
+    3
+}
+
+fn default_num_hidden_layers() -> usize {
+    24
+}
+
+fn default_num_attention_heads() -> usize {
+    16
+}
+
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct Config {
+    #[serde(default = "default_hidden_size")]
     pub hidden_size: usize,
+    #[serde(default = "default_num_channels")]
     pub num_channels: usize,
     pub image_size: usize,
     pub patch_size: usize,
     pub rope_theta: f64,
+    #[serde(default = "default_intermediate_size")]
     pub intermediate_size: usize,
+    #[serde(default = "default_num_hidden_layers")]
     pub num_hidden_layers: usize,
+    pub head_dim: Option<usize>,
+    #[serde(default = "default_num_attention_heads")]
     pub num_attention_heads: usize,
     #[serde(default = "default_act")]
     pub hidden_act: candle_nn::Activation,
@@ -30,13 +56,15 @@ impl Config {
             intermediate_size: 4096,
             num_hidden_layers: 24,
             num_attention_heads: 16,
+            head_dim: None,
             // Default
             hidden_act: candle_nn::Activation::Gelu,
         }
     }
 
     fn head_dim(&self) -> usize {
-        self.hidden_size / self.num_attention_heads
+        self.head_dim
+            .unwrap_or(self.hidden_size / self.num_attention_heads)
     }
 }
 
