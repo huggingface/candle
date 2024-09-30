@@ -152,15 +152,19 @@ pub fn lstm(
         config.w_hh_init,
     )?;
     let b_ih = match config.b_ih_init {
-        Some(init) => {
-            Some(vb.get_with_hints(4 * hidden_dim, &format!("bias_ih_l{layer_idx}{direction_str}"), init)?)
-        }
+        Some(init) => Some(vb.get_with_hints(
+            4 * hidden_dim,
+            &format!("bias_ih_l{layer_idx}{direction_str}"),
+            init,
+        )?),
         None => None,
     };
     let b_hh = match config.b_hh_init {
-        Some(init) => {
-            Some(vb.get_with_hints(4 * hidden_dim, &format!("bias_hh_l{layer_idx}{direction_str}"), init)?)
-        }
+        Some(init) => Some(vb.get_with_hints(
+            4 * hidden_dim,
+            &format!("bias_hh_l{layer_idx}{direction_str}"),
+            init,
+        )?),
         None => None,
     };
     Ok(LSTM {
