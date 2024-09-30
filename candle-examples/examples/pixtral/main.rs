@@ -87,6 +87,7 @@ impl TextGeneration {
                 let h = h / self.model.patch_size;
                 let w = w / self.model.patch_size;
                 let image_embeds = self.model.vision_tower.forward(&self.image)?;
+                let image_embeds = self.model.multi_modal_projector.forward(&image_embeds)?;
                 println!("generated image embeddings {image_embeds:?}");
                 for &t in tokens.iter() {
                     if let Some(t) = self.tokenizer.next_token(t)? {
