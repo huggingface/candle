@@ -7,7 +7,7 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::Parser;
 
-use candle_transformers::models::pixtral::{vision_model, Config};
+use candle_transformers::models::pixtral::{vision_model, Config, Model};
 
 use candle::{DType, Module};
 use candle_nn::VarBuilder;
@@ -69,6 +69,9 @@ struct Args {
 
     #[arg(long)]
     image: String,
+
+    #[arg(long)]
+    vision_only: bool,
 }
 
 fn main() -> Result<()> {
@@ -151,12 +154,19 @@ fn main() -> Result<()> {
     };
     let image = image.to_device(&device)?.to_dtype(dtype)?.unsqueeze(0)?;
     println!("loaded image with shape {:?}", image);
-    let start = std::time::Instant::now();
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-    let model = vision_model::Model::new(&config.vision_config, vb.pp("vision_tower"))?;
-    println!("loaded the model in {:?}", start.elapsed());
-    let embs = model.forward(&image)?;
-    println!("EMBS\n{embs}");
+
+    if args.vision_only {
+        let start = std::time::Instant::now();
+        let model = vision_model::Model::new(&config.vision_config, vb.pp("vision_tower"))?;
+        println!("loaded the model in {:?}", start.elapsed());
+        let embs = model.forward(&image)?;
+        println!("EMBS\n{embs}");
+    } else {
+        let start = std::time::Instant::now();
+        let _model = Model::new(&config, vb)?;
+        println!("loaded the model in {:?}", start.elapsed());
+    }
 
     Ok(())
 }
