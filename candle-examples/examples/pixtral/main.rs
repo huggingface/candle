@@ -121,20 +121,26 @@ fn main() -> Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
     let dtype = if device.is_cuda() {
+        // Use F32 in all cases for now as we only run the vision encoder.
         DType::F32
     } else {
         DType::F32
     };
     let config = Config::pixtral_12b_2409();
-    let image = candle_examples::imagenet::load_image_with_std_mean(
-        &args.image,
-        1024,
-        &[0.48145466, 0.4578275, 0.40821073],
-        &[0.26862954, 0.26130258, 0.27577711],
-    )?
-    .to_device(&device)?
-    .to_dtype(dtype)?
-    .unsqueeze(0)?;
+    let image = if args.image.ends_with(".safetensors") {
+        match candle::safetensors::load(&args.image, &device)?.remove("img") {
+            None => anyhow::bail!("no img tensor in {}", args.image),
+            Some(v) => v,
+        }
+    } else {
+        candle_examples::imagenet::load_image_with_std_mean(
+            &args.image,
+            1024,
+            &[0.48145466, 0.4578275, 0.40821073],
+            &[0.26862954, 0.26130258, 0.27577711],
+        )?
+    };
+    let image = image.to_device(&device)?.to_dtype(dtype)?.unsqueeze(0)?;
     println!("loaded image with shape {:?}", image);
     let start = std::time::Instant::now();
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
