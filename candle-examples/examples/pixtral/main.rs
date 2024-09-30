@@ -80,8 +80,9 @@ impl TextGeneration {
                 let start_pos = tokens.len().saturating_sub(context_size);
                 let ctxt = &tokens[start_pos..];
                 let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
+                let logits = self.model.language_model.forward(&input, pos)?;
                 pos += context_size;
-                self.model.language_model.forward(&input, pos)?
+                logits
             } else {
                 let (_b, _c, h, w) = self.image.dims4()?;
                 let h = h / self.model.patch_size;
@@ -122,10 +123,12 @@ impl TextGeneration {
                 input_embeds.push(end_embeds);
 
                 let input_embeds = Tensor::cat(&input_embeds, 1)?;
-                pos += input_embeds.dim(1)?;
-                self.model
+                let logits = self
+                    .model
                     .language_model
-                    .forward_embeds(&input_embeds, None, pos)?
+                    .forward_embeds(&input_embeds, None, pos)?;
+                pos += input_embeds.dim(1)?;
+                logits
             };
             let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
