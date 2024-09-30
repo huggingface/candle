@@ -1,5 +1,5 @@
 #![allow(unused)]
-use candle::{Module, Result, Tensor};
+use candle::{DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{linear_b, rms_norm, Linear, RmsNorm, VarBuilder};
 
 fn default_act() -> candle_nn::Activation {
@@ -35,10 +35,14 @@ impl Config {
             hidden_act: candle_nn::Activation::Gelu,
         }
     }
+
+    fn head_dim(&self) -> usize {
+        self.hidden_size / self.num_attention_heads
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct Attention {
+struct Attention {
     q_proj: Linear,
     k_proj: Linear,
     v_proj: Linear,
@@ -49,10 +53,10 @@ pub struct Attention {
 }
 
 impl Attention {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let h = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
-        let head_dim = h / num_heads;
+        let head_dim = cfg.head_dim();
         let q_proj = linear_b(h, h, false, vb.pp("q_proj"))?;
         let k_proj = linear_b(h, h, false, vb.pp("k_proj"))?;
         let v_proj = linear_b(h, h, false, vb.pp("v_proj"))?;
@@ -68,10 +72,42 @@ impl Attention {
             head_dim,
         })
     }
+
+    fn forward(
+        &self,
+        xs: &Tensor,
+        emb: &RotaryEmbedding,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let (b, patches, _) = xs.dims3()?;
+        let query_states = xs.apply(&self.q_proj)?;
+        let key_states = xs.apply(&self.k_proj)?;
+        let value_states = xs.apply(&self.v_proj)?;
+
+        let shape = (b, patches, self.num_heads, self.head_dim);
+        let query_states = query_states.reshape(shape)?.transpose(1, 2)?.contiguous()?;
+        let key_states = key_states.reshape(shape)?.transpose(1, 2)?.contiguous()?;
+        let value_states = value_states.reshape(shape)?.transpose(1, 2)?.contiguous()?;
+
+        let (query_states, key_states) = emb.apply_rotary_emb_qkv(&query_states, &key_states)?;
+        let attn_weights = (query_states.matmul(&key_states.t()?)? * self.scale)?;
+
+        let attn_weights = match attention_mask {
+            None => attn_weights,
+            Some(mask) => attn_weights.broadcast_add(mask)?,
+        };
+
+        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        attn_weights
+            .matmul(&value_states)?
+            .transpose(1, 2)?
+            .reshape((b, patches, ()))?
+            .apply(&self.o_proj)
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct Mlp {
+struct Mlp {
     gate_proj: Linear,
     up_proj: Linear,
     down_proj: Linear,
@@ -79,7 +115,7 @@ pub struct Mlp {
 }
 
 impl Mlp {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let (h, i) = (cfg.hidden_size, cfg.intermediate_size);
         let gate_proj = linear_b(h, i, false, vb.pp("gate_proj"))?;
         let up_proj = linear_b(h, i, false, vb.pp("up_proj"))?;
@@ -101,7 +137,7 @@ impl Module for Mlp {
 }
 
 #[derive(Debug, Clone)]
-pub struct AttentionLayer {
+struct AttentionLayer {
     attention_norm: RmsNorm,
     feed_forward: Mlp,
     attention: Attention,
@@ -109,7 +145,7 @@ pub struct AttentionLayer {
 }
 
 impl AttentionLayer {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let attention_norm = rms_norm(cfg.hidden_size, 1e-5, vb.pp("attention_norm"))?;
         let feed_forward = Mlp::new(cfg, vb.pp("feed_forward"))?;
         let attention = Attention::new(cfg, vb.pp("attention"))?;
@@ -121,15 +157,31 @@ impl AttentionLayer {
             ffn_norm,
         })
     }
+
+    fn forward(
+        &self,
+        xs: &Tensor,
+        emb: &RotaryEmbedding,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let residual = xs;
+        let xs = self
+            .attention
+            .forward(&xs.apply(&self.attention_norm)?, emb, attention_mask)?;
+        let xs = (residual + xs)?;
+        let residual = &xs;
+        let xs = xs.apply(&self.ffn_norm)?.apply(&self.feed_forward)?;
+        xs + residual
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct Transformer {
+struct Transformer {
     layers: Vec<AttentionLayer>,
 }
 
 impl Transformer {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb = vb.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -137,14 +189,67 @@ impl Transformer {
         }
         Ok(Self { layers })
     }
+
+    fn forward(
+        &self,
+        xs: &Tensor,
+        emb: &RotaryEmbedding,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let mut xs = xs.clone();
+        for layer in self.layers.iter() {
+            xs = layer.forward(&xs, emb, attention_mask)?
+        }
+        Ok(xs)
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct RotaryEmbedding {}
+struct RotaryEmbedding {
+    cos: Tensor,
+    sin: Tensor,
+}
 
 impl RotaryEmbedding {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        todo!()
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let dtype = vb.dtype();
+        let dev = vb.device();
+        let dim = cfg.head_dim();
+        let rope_theta = cfg.rope_theta as f32;
+        let max_patches_per_side = cfg.image_size / cfg.patch_size;
+        let freqs: Vec<_> = (0..dim)
+            .step_by(2)
+            .map(|i| 1f32 / rope_theta.powf(i as f32 / dim as f32))
+            .collect();
+        let freqs_h = freqs.iter().step_by(2).copied().collect::<Vec<_>>();
+        let freqs_h = Tensor::new(freqs_h, dev)?;
+        let freqs_w = freqs.iter().skip(1).step_by(2).copied().collect::<Vec<_>>();
+        let freqs_w = Tensor::new(freqs_w, dev)?;
+        let h = Tensor::arange(0u32, max_patches_per_side as u32, dev)?.to_dtype(DType::F32)?;
+        let w = Tensor::arange(0u32, max_patches_per_side as u32, dev)?.to_dtype(DType::F32)?;
+        let freqs_h = h.matmul(&freqs_h)?;
+        let freqs_w = w.matmul(&freqs_w)?;
+        let inv_freq = Tensor::cat(
+            &[
+                freqs_h.unsqueeze(1)?.repeat((1, max_patches_per_side, 1))?,
+                freqs_w.unsqueeze(0)?.repeat((max_patches_per_side, 1, 1))?,
+            ],
+            D::Minus1,
+        )?
+        .reshape(((), dim / 2))?;
+        let inv_freq = Tensor::cat(&[&inv_freq, &inv_freq], D::Minus1)?;
+        let cos = inv_freq.cos()?.to_dtype(dtype)?;
+        let sin = inv_freq.sin()?.to_dtype(dtype)?;
+        Ok(Self { cos, sin })
+    }
+
+    fn apply_rotary_emb_qkv(&self, q: &Tensor, k: &Tensor) -> Result<(Tensor, Tensor)> {
+        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
+        let cos = &self.cos;
+        let sin = &self.sin;
+        let q_embed = candle_nn::rotary_emb::rope(q, cos, sin)?;
+        let k_embed = candle_nn::rotary_emb::rope(k, cos, sin)?;
+        Ok((q_embed, k_embed))
     }
 }
 
@@ -184,6 +289,12 @@ impl Model {
 
 impl Module for Model {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        todo!()
+        let patch_embeds = xs.apply(&self.patch_conv)?;
+        let patch_embeds = patch_embeds.flatten_from(2)?.t()?.apply(&self.ln_pre)?;
+        // TODO: emb
+        // TODO: generate_block_attention_mask
+        let attn_mask = None;
+        self.transformer
+            .forward(&patch_embeds, &self.patch_positional_embedding, attn_mask)
     }
 }
