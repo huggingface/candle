@@ -78,7 +78,7 @@ impl Model {
     }
 
     pub fn encode_image(&self, image: &Tensor) -> Result<Tensor> {
-        let image_embeds = self.vision_tower.forward(&image)?;
+        let image_embeds = self.vision_tower.forward(image)?;
         self.multi_modal_projector.forward(&image_embeds)
     }
 
