@@ -86,12 +86,19 @@ pub fn queue_unary_inplace_op(
         if op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
             meta.add(dev.rand_state.lock().unwrap().next_u32());
         }
-        
        
+       
+        let mut is_contiguous4 = false;
         let pipeline = match op{
-            UnaryOperation::SetZero | UnaryOperation::SetOne | UnaryOperation::IncOne |  UnaryOperation::DecOne => 
+            UnaryOperation::SetZero | UnaryOperation::SetOne => 
             {
-                Pipelines::Unary(get_dtype(dtype)?, Functions::ConstInplaceContiguous)
+                if layout.shape().elem_count() % 4 == 0 && dtype.size_in_bytes() == 4 {
+                    is_contiguous4 = true;
+                    Pipelines::Unary(get_dtype(dtype)?, Functions::ConstInplaceContiguous4)
+                }
+                else{
+                    Pipelines::Unary(get_dtype(dtype)?, Functions::ConstInplaceContiguous)
+                }
             },
             UnaryOperation::RandNormal |  UnaryOperation::RandUniform => 
             {
@@ -103,14 +110,28 @@ pub fn queue_unary_inplace_op(
             }
         };
 
+        let length;
+        if is_contiguous4{
+            length = (layout.shape().elem_count() / 4) as u32; 
+        }
+        else{
+            length = layout.shape().elem_count() as u32;
+        }
+
+        if length > 65535 * 64 {
+            meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+        }
+
         let pipeline = meta.get_pipeline_const(pipeline,const_vec);
 
-        let bind_group = create_bind_group_input0(buffer, dtype.into());
+        let bind_group = create_bind_group_input0(buffer, if is_contiguous4 { BindgroupAlignment::Aligned16 } else {dtype.into()});
+       
+        
         enqueue_big_extra(
             meta,
             pipeline,
             bind_group,
-            layout.shape().elem_count() as u32,
+            length,
             #[cfg(feature = "wgpu_debug")]
             Some(format!("OP: {:?}, layout: {:?}", op, layout)),
         );
@@ -150,6 +171,9 @@ pub fn queue_unary_from_buffer_op(
             input2_inplaceable: false,
         };
 
+        if input_layout.shape().elem_count() > 65535 * 64 {
+            meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+        }
 
         meta.get_pipeline_const_inplace(
             Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryFromBufferContiguous),
@@ -164,11 +188,17 @@ pub fn queue_unary_from_buffer_op(
         meta.add(scalar2);
         meta.add_layout1(&input_layout);
 
+        
+        if input_layout.shape().elem_count() > 65535 * 64 {
+            meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+        }
+
         meta.get_pipeline_const(Pipelines::Unary(
             get_dtype(dtype)?,
             Functions::UnaryFromBuffer,
         ), const_vec)
     };
+
 
     let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
     enqueue_big_extra(

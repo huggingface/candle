@@ -71,7 +71,7 @@ fn erf(x : f32) -> f32{
 
 #endif
 
-//all Const Operations(No Input)
+//all Const Operations
 fn set_const(operation : u32, id : u32){
     switch operation {
         case 0u{ // set 0
@@ -80,18 +80,12 @@ fn set_const(operation : u32, id : u32){
         case 1u{ //set 1
             v_dest[id] = ONE;
         }
-        case 2u{ 
-            v_dest[id] += ONE;
-        }
-        case 3u{ 
-            v_dest[id] -= ONE;
-        }
         default{
         }
     }
 }
 
-//all rand Operations(No Input)
+//all rand Operations
 fn set_rand(operation : u32, id : u32, scalar1 : f32, scalar2 : f32, seed : u32){
     switch operation {
     #ifdef f32
@@ -108,9 +102,15 @@ fn set_rand(operation : u32, id : u32, scalar1 : f32, scalar2 : f32, seed : u32)
     }
 }
 
-//all Unary Operations(No Input)
+//all Unary Operations
 fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32){
     switch operation {
+        case 2u{ 
+            v_dest[id] += ONE;
+        }
+        case 3u{ 
+            v_dest[id] -= ONE;
+        }
         case 4u{ //Identity
             v_dest[id] = x;
         }
@@ -280,6 +280,7 @@ fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32)
 
 
 override CONSTV_0 : u32 = 1u;
+override USE_Z : bool = false;
 
 #define op_unary_operation         CONSTV_0
 
@@ -300,7 +301,7 @@ override CONSTV_0 : u32 = 1u;
 @compute
 @workgroup_size(64,1,1)
 fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x + global_id.y * 65535 * 64;
+    let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
     let pos1 = get_index1(op_unary_input1_layout, id);
     if(pos1.is_valid){
         let x = v_input1[pos1.id];
@@ -311,7 +312,7 @@ fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute
 @workgroup_size(64,1,1)
 fn unary_from_buffer_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x + global_id.y * 65535 * 64;
+    let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
     if (id >= op_unary_contiguous_length){
         return;
     }
@@ -323,7 +324,7 @@ fn unary_from_buffer_contiguous(@builtin(global_invocation_id) global_id: vec3<u
 @compute
 @workgroup_size(64,1,1)
 fn unary_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x + global_id.y * 65535 * 64;
+    let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
     if (id >= op_unary_contiguous_length){
         return;
     }
@@ -337,17 +338,38 @@ fn unary_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>)
 @compute
 @workgroup_size(64,1,1)
 fn const_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x + global_id.y * 65535 * 64;
+    let id = global_id.x +select(USE_Z, global_id.y * 65535 * 64, 0u);
     if (id >= op_unary_contiguous_length){
         return;
     }
     set_const(op_unary_contiguous_operation, id);
 }
 
+//for constant functions, e.g. Set Zero:
+@compute
+@workgroup_size(64,1,1)
+fn const_inplace_contiguous_4(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
+    if (id >= op_unary_contiguous_length){
+        return;
+    }
+
+    switch op_unary_contiguous_operation {
+        case 0u{ // set 0
+            v_dest_4[id] = vec4(ZERO,ZERO,ZERO,ZERO);
+        }
+        case 1u{ //set 1
+            v_dest_4[id] = vec4(ONE,ONE,ONE,ONE);
+        }
+        default{
+        }
+    }
+}
+
 @compute
 @workgroup_size(64,1,1)
 fn rand_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x + global_id.y * 65535 * 64;
+    let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
     if (id >= op_unary_contiguous_length){
         return;
     }

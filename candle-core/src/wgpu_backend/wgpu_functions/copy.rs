@@ -44,6 +44,10 @@ pub fn queue_copy_strided(
         meta.add(dst_offset);
         meta.add_layout1(&input_layout);
 
+        if input_layout.shape().elem_count() > 65535 * 64 {
+            meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+        }
+
         let pipeline =
             meta.get_pipeline(Pipelines::Copy(get_dtype(dtype)?, Functions::CopyStrided));
 
@@ -118,40 +122,47 @@ pub fn queue_copy(
         ];
 
         let mut meta = get_meta(&dev);
-        // if copy_size % 4 == 0 && source_offset % 4 == 0 && destination_offset % 4 == 0{
-        //     meta.add(copy_size/4);
-        //     meta.add(destination_offset/4);
-        //     meta.add(source_offset/4);
-
-        //     let inplaceble = OpIsInplaceable{ input1_inplaceable:  destination_offset == source_offset, input2_inplaceable: false };
-        //     let pipeline = meta.get_pipeline_const_inplace(Pipelines::Copy(get_dtype(dtype)?, Functions::Copy4), const_vec, inplaceble);
-
-        //     let bind_group = create_bind_group_input1_16( buffer_dest, buffer_input);
-        //     enqueue_big(
-        //         meta,
-        //         pipeline,
-        //         bind_group,
-        //         (copy_size/4) as u32
-        //     );
-        // }
-        // else{
-        meta.add(copy_size);
-        meta.add(destination_offset);
-        meta.add(source_offset);
 
         let inplaceble = OpIsInplaceable {
             input1_inplaceable: destination_offset == source_offset,
             input2_inplaceable: false,
         };
-        let pipeline = meta.get_pipeline_const_inplace(
-            Pipelines::Copy(get_dtype(dtype)?, Functions::Copy),
-            const_vec,
-            inplaceble,
-        );
 
-        let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
-        enqueue_big(meta, pipeline, bind_group, copy_size as u32);
-        //}
+        let use_vec4 =  copy_size % 4 == 0 && source_offset % 4 == 0 && destination_offset % 4 == 0 && dtype.size_in_bytes() == 4;
+
+        if use_vec4{
+            meta.add(copy_size/4);
+            meta.add(destination_offset/4);
+            meta.add(source_offset/4);
+            if copy_size / 4 > 65535 * 64 {
+                meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+            }
+    
+            let pipeline = meta.get_pipeline_const_inplace(Pipelines::Copy(get_dtype(dtype)?, Functions::Copy4), const_vec, inplaceble);
+            let bind_group = create_bind_group_input1( buffer_dest, buffer_input, BindgroupAlignment::Aligned16);
+            enqueue_big(
+                meta,
+                pipeline,
+                bind_group,
+                (copy_size/4) as u32
+            );
+        }
+        else{
+            meta.add(copy_size);
+            meta.add(destination_offset);
+            meta.add(source_offset);
+            if copy_size > 65535 * 64 {
+                meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+            }
+            let pipeline = meta.get_pipeline_const_inplace(
+                Pipelines::Copy(get_dtype(dtype)?, Functions::Copy),
+                const_vec,
+                inplaceble,
+            );
+    
+            let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
+            enqueue_big(meta, pipeline, bind_group, copy_size as u32);
+        }
     }
     return Ok(());
 }
@@ -200,6 +211,8 @@ pub fn queue_copy2d(
     let y = (d2 + 15) / 16;
 
     if y > MAX_DISPATCH_SIZE {
+        meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+
         let pipeline = meta.get_pipeline_const(
             Pipelines::Copy(get_dtype(dtype)?, Functions::Copy2dTranspose),
             const_vec,
@@ -214,6 +227,9 @@ pub fn queue_copy2d(
             (d1 * d2) as usize,
         );
     } else {
+        if x > 65535 {
+            meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+        }
         let pipeline = meta.get_pipeline_const(
             Pipelines::Copy(get_dtype(dtype)?, Functions::Copy2d),
             const_vec,

@@ -37,6 +37,11 @@ pub fn queue_binary_buffer_from_buffer(
             input1_inplaceable: lay1.start_offset() == 0,
             input2_inplaceable: lay2.start_offset() == 0,
         };
+
+        if lay1.shape().elem_count() > 65535 * 64 {
+            meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+        }
+
         meta.get_pipeline_const_inplace(
             Pipelines::Binary(
                 get_dtype(dtype)?,
@@ -49,6 +54,10 @@ pub fn queue_binary_buffer_from_buffer(
         let const_vec = vec![op as usize];
         meta.add_layout1(&lay1);
         meta.add_layout2(&lay2);
+
+        if lay1.shape().elem_count() > 65535 * 64 {
+            meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+        }
 
         meta.get_pipeline_const(
             Pipelines::Binary(get_dtype(dtype)?, Functions::BinaryBufferFromBuffer),
