@@ -2375,14 +2375,12 @@ pub fn call_const_fill(
 
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (output, v));
+    set_params!(encoder, (output, v, length));
+    
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
 
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
-
-    let grid_size = MTLSize { width: length as u64, height: 1, depth: 1 };
-    let thread_group_size = MTLSize { width: pipeline.max_total_threads_per_threadgroup(), height: 1, depth: 1 };
-
-    encoder.dispatch_threads(grid_size, thread_group_size);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
 
     Ok(())
 }
