@@ -36,6 +36,7 @@ serde_json = { workspace = true }
 symphonia = { version = "0.5.3", features = ["all"], optional = true }
 tokenizers = { workspace = true, features = ["onig"] }
 cpal = { version = "0.15.2", optional = true }
+pdf2image = { version = "0.1.2" , optional = true}
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -65,7 +66,7 @@ mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl", "candle-transformers/
 nccl = ["cuda", "cudarc/nccl", "dep:half"]
 onnx = ["candle-onnx"]
 metal = ["candle/metal", "candle-nn/metal"]
-microphone = ["cpal"]
+microphone = ["cpal", "rubato"]
 encodec = ["cpal", "symphonia", "rubato"]
 mimi = ["cpal", "symphonia", "rubato"]
 depth_anything_v2 = ["palette", "enterpolation"]
@@ -117,3 +118,7 @@ required-features = ["depth_anything_v2"]
 [[example]]
 name = "silero-vad"
 required-features = ["onnx"]
+
+[[example]]
+name = "colpali"
+required-features = ["pdf2image"]
