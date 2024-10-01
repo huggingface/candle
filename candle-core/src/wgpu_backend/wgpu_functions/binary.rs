@@ -26,9 +26,12 @@ pub fn queue_binary_buffer_from_buffer(
 ) -> crate::Result<()> {
     let mut meta = get_meta(&dev);
     let pipeline = if lay1.is_contiguous() && lay2.is_contiguous() {
-        let const_vec = vec![op as usize, lay1.start_offset(), lay2.start_offset()];
+        let const_vec = vec![op as usize, (lay1.start_offset() == 0) as usize, (lay2.start_offset() == 0) as usize];
 
         meta.add(lay1.shape().elem_count()); //input1_length
+        meta.add(lay1.start_offset());
+        meta.add(lay2.start_offset());
+
 
         let inplaceable = OpIsInplaceable {
             input1_inplaceable: lay1.start_offset() == 0,
@@ -61,7 +64,7 @@ pub fn queue_binary_buffer_from_buffer(
         bind_group,
         lay1.shape().elem_count() as u32,
         #[cfg(feature = "wgpu_debug")]
-        Some(format!("OP: {:?}", op)),
+        Some(format!("OP: {:?}, layout: {:?}", op, lay1)),
     );
     return Ok(());
 }

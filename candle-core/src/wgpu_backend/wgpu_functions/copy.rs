@@ -180,15 +180,18 @@ pub fn queue_copy2d(
             dtype,
         );
     }
-    let const_vec = vec![input_offset, (dest_offset == 0) as u32];
+    let const_vec = vec![input_offset == 0, dest_offset == 0];
 
     let mut meta = get_meta(&dev);
     meta.add(d1);
     meta.add(d2);
     meta.add(input_stride1);
     meta.add(dest_stride1);
-    if dest_offset != 0 {
+    if dest_offset != 0 || input_offset != 0 {
         meta.add(dest_offset);
+    }
+    if input_offset != 0{
+        meta.add(input_offset);
     }
 
     let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
@@ -250,13 +253,13 @@ pub fn queue_copy3d(
     let dest_stride_3 = *dest_stride.next().unwrap_or(&1);
 
     let const_vec = vec![
-        input_layout.start_offset(),
-        (dest_stride_1 != 1) as usize,
-        (dest_stride_2 != 1) as usize,
-        (dest_stride_3 != 1) as usize,
-        (input1_stride_1 != 1) as usize,
-        (input1_stride_2 != 1) as usize,
-        (input1_stride_3 != 1) as usize,
+        input_layout.start_offset() == 0,
+        (dest_stride_1 != 1),
+        (dest_stride_2 != 1),
+        (dest_stride_3 != 1),
+        (input1_stride_1 != 1),
+        (input1_stride_2 != 1),
+        (input1_stride_3 != 1),
     ];
 
     let mut meta = get_meta(&dev);
@@ -268,6 +271,10 @@ pub fn queue_copy3d(
     meta.add(input1_stride_1);
     meta.add(input1_stride_2);
     meta.add(input1_stride_3);
+    if input_layout.start_offset() != 0{
+        meta.add(input_layout.start_offset());
+    }
+   
 
     let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
 
@@ -311,13 +318,13 @@ pub fn queue_copy3d_padded(
     let dest_shape = dest_layout.shape().dims3()?;
 
     let const_vec = vec![
-        input_layout.start_offset(),
-        (dest_stride_1 != 1) as usize,
-        (dest_stride_2 != 1) as usize,
-        (dest_stride_3 != 1) as usize,
-        (input1_stride_1 != 1) as usize,
-        (input1_stride_2 != 1) as usize,
-        (input1_stride_3 != 1) as usize,
+        input_layout.start_offset() == 0,
+        dest_stride_1 != 1,
+        dest_stride_2 != 1,
+        dest_stride_3 != 1,
+        input1_stride_1 != 1,
+        input1_stride_2 != 1,
+        input1_stride_3 != 1,
     ];
 
     let mut meta = get_meta(&dev);
@@ -331,6 +338,9 @@ pub fn queue_copy3d_padded(
     meta.add(input1_stride_3);
     meta.add(dest_shape.2);
     meta.add(dest_shape.1);
+    if input_layout.start_offset() != 0 {
+        meta.add(input_layout.start_offset());
+    }
 
     let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
     let pipeline = if input_shape.0 == 1 {
@@ -406,7 +416,7 @@ pub fn queue_copy4d_padded(
     let dest_shape = dest_layout.shape().dims4()?;
 
     let const_vec = vec![
-        input_layout.start_offset(),
+        (input_layout.start_offset() == 0) as usize,
         (dest_stride[3] != 1) as usize, //x (d1)
         (dest_stride[2] != 1) as usize, //y (d2)
         (dest_stride[1] != 1) as usize, //cin
@@ -434,6 +444,10 @@ pub fn queue_copy4d_padded(
     meta.add(input1_stride[0]);
     meta.add(dest_shape.3);
     meta.add(dest_shape.2);
+
+    if input_layout.start_offset() != 0{
+        meta.add(input_layout.start_offset());
+    }
 
     let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
 

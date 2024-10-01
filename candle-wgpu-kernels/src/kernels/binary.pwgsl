@@ -37,8 +37,8 @@ fn set_binary(operation : u32, id : u32, x : DTYPE, y : DTYPE){
 
 
 override CONSTV_0 : u32 = 1u;
-override CONSTV_1 : u32 = 1u;
-override CONSTV_2 : u32 = 1u;
+override CONSTV_1 : bool = true;
+override CONSTV_2 : bool = true;
 
 #define op_binary_operation         CONSTV_0
 
@@ -47,8 +47,11 @@ override CONSTV_2 : u32 = 1u;
 
 #define op_binary_contiguous_both_operation                 CONSTV_0
 #define op_binary_contiguous_both_input1_length             op_meta[0]
-#define op_binary_contiguous_both_input1_offset             CONSTV_1
-#define op_binary_contiguous_both_input2_offset             CONSTV_2
+#define op_binary_contiguous_both_is_input1_offset_zero     CONSTV_1
+#define op_binary_contiguous_both_is_input2_offset_zero     CONSTV_2
+
+#define op_binary_contiguous_both_input1_offset             select(op_binary_contiguous_both_is_input1_offset_zero, 0u, op_meta[1])
+#define op_binary_contiguous_both_input2_offset             select(op_binary_contiguous_both_is_input2_offset_zero, 0u, op_meta[2])
 
 @compute
 @workgroup_size(64,1,1)

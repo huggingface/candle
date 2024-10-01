@@ -2,7 +2,7 @@ use super::*;
 use candle_wgpu_kernels::unary::Functions;
 use rand::RngCore;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum UnaryOperation {
     SetZero = 0,
     SetOne = 1,
@@ -73,18 +73,37 @@ pub fn queue_unary_inplace_op(
     layout: &crate::Layout,
 ) -> crate::Result<()> {
     if layout.is_contiguous() {
+
+        let const_vec = vec![op as u32, (layout.start_offset() == 0) as u32];
+
         let mut meta = get_meta(&dev);
-        meta.add(op as u32);
         meta.add(scalar1);
         meta.add(scalar2);
-        meta.add(dev.rand_state.lock().unwrap().next_u32());
-        meta.add(layout.start_offset());
         meta.add(layout.shape().elem_count()); //length
+        if layout.start_offset() == 0 || op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
+            meta.add(layout.start_offset());
+        }
+        if op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
+            meta.add(dev.rand_state.lock().unwrap().next_u32());
+        }
+        
+       
+        let pipeline = match op{
+            UnaryOperation::SetZero | UnaryOperation::SetOne | UnaryOperation::IncOne |  UnaryOperation::DecOne => 
+            {
+                Pipelines::Unary(get_dtype(dtype)?, Functions::ConstInplaceContiguous)
+            },
+            UnaryOperation::RandNormal |  UnaryOperation::RandUniform => 
+            {
+                Pipelines::Unary(get_dtype(dtype)?, Functions::RandInplaceContiguous)
+            },
+            _ => 
+            {
+                Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryInplaceContiguous)
+            }
+        };
 
-        let pipeline = meta.get_pipeline(Pipelines::Unary(
-            get_dtype(dtype)?,
-            Functions::UnaryInplaceContiguous,
-        ));
+        let pipeline = meta.get_pipeline_const(pipeline,const_vec);
 
         let bind_group = create_bind_group_input0(buffer, dtype.into());
         enqueue_big_extra(
@@ -93,7 +112,7 @@ pub fn queue_unary_inplace_op(
             bind_group,
             layout.shape().elem_count() as u32,
             #[cfg(feature = "wgpu_debug")]
-            Some(format!("OP: {:?}", op)),
+            Some(format!("OP: {:?}, layout: {:?}", op, layout)),
         );
     } else {
         panic!("can only query unary inplace for contigueos memory!");
@@ -113,32 +132,42 @@ pub fn queue_unary_from_buffer_op(
 ) -> crate::Result<()> {
     let mut meta = get_meta(&dev);
     let pipeline = if input_layout.is_contiguous() {
-        meta.add(op as u32);
+        let const_vec = vec![op as u32, (input_layout.start_offset() == 0) as u32];
+
         meta.add(scalar1);
         meta.add(scalar2);
-        meta.add(dev.rand_state.lock().unwrap().next_u32());
-        meta.add(input_layout.start_offset());
         meta.add(input_layout.shape().elem_count()); //length
+
+        if input_layout.start_offset() == 0 || op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
+            meta.add(input_layout.start_offset());
+        }
+        if op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
+            meta.add(dev.rand_state.lock().unwrap().next_u32());
+        }
 
         let inplaceable = OpIsInplaceable {
             input1_inplaceable: input_layout.start_offset() == 0,
             input2_inplaceable: false,
         };
-        meta.get_pipeline_inplaceable(
+
+
+        meta.get_pipeline_const_inplace(
             Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryFromBufferContiguous),
-            inplaceable,
+            const_vec,
+            inplaceable
         )
     } else {
-        meta.add(op as u32);
+        
+        let const_vec = vec![op as u32];
+
         meta.add(scalar1);
         meta.add(scalar2);
-        meta.add(dev.rand_state.lock().unwrap().next_u32());
         meta.add_layout1(&input_layout);
 
-        meta.get_pipeline(Pipelines::Unary(
+        meta.get_pipeline_const(Pipelines::Unary(
             get_dtype(dtype)?,
             Functions::UnaryFromBuffer,
-        ))
+        ), const_vec)
     };
 
     let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
@@ -148,7 +177,7 @@ pub fn queue_unary_from_buffer_op(
         bind_group,
         input_layout.shape().elem_count() as u32,
         #[cfg(feature = "wgpu_debug")]
-        Some(format!("OP: {:?}", op)),
+        Some(format!("OP: {:?}, layout: {:?}", op, input_layout)),
     );
 
     return Ok(());

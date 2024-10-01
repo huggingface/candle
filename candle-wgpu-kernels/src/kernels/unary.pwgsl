@@ -71,9 +71,9 @@ fn erf(x : f32) -> f32{
 
 #endif
 
-//all Unary Operations(No Input)
-fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32, seed : u32){
-switch operation {
+//all Const Operations(No Input)
+fn set_const(operation : u32, id : u32){
+    switch operation {
         case 0u{ // set 0
             v_dest[id] = ZERO;
         }
@@ -86,6 +86,31 @@ switch operation {
         case 3u{ 
             v_dest[id] -= ONE;
         }
+        default{
+        }
+    }
+}
+
+//all rand Operations(No Input)
+fn set_rand(operation : u32, id : u32, scalar1 : f32, scalar2 : f32, seed : u32){
+    switch operation {
+    #ifdef f32
+        case 47u{ //random_normal
+            v_dest[id] = rand_normal(id, scalar1, scalar2, seed);
+        }
+        case 48u{ //RandUniform
+            let r = pseudo_random_float(id, seed);
+            v_dest[id] = (scalar2 - scalar1) * r + scalar1;
+        }
+    #endif
+        default{
+        }
+    }
+}
+
+//all Unary Operations(No Input)
+fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32){
+    switch operation {
         case 4u{ //Identity
             v_dest[id] = x;
         }
@@ -198,13 +223,6 @@ switch operation {
         case 46u{ //inverse
             v_dest[id] = 1 / x;
         }
-        case 47u{ //random_normal
-            v_dest[id] = rand_normal(id, scalar1, scalar2, seed);
-        }
-        case 48u{ //RandUniform
-            let r = pseudo_random_float(id, seed);
-            v_dest[id] = (scalar2 - scalar1) * r + scalar1;
-        }
         case 49u{//Gelu
             v_dest[id] = 0.5 * x * (1.0 + tanh(SQRT_TWO_OVER_PI_F32 * x * (1.0 + 0.044715 * x * x)));
         }
@@ -261,19 +279,23 @@ switch operation {
 }
 
 
-#define op_unary_operation           op_meta[0]
-#define op_unary_scalar1             bitcast<f32>(op_meta[1])
-#define op_unary_scalar2             bitcast<f32>(op_meta[2])
-#define op_unary_seed                op_meta[3]
-#define op_unary_input1_layout       4u
+override CONSTV_0 : u32 = 1u;
+
+#define op_unary_operation         CONSTV_0
+
+#define op_unary_scalar1             bitcast<f32>(op_meta[0])
+#define op_unary_scalar2             bitcast<f32>(op_meta[1])
+#define op_unary_input1_layout       2u
 
 
-#define opop_unary_contiguous_operation           op_meta[0]
-#define opop_unary_contiguous_scalar1             bitcast<f32>(op_meta[1])
-#define opop_unary_contiguous_scalar2             bitcast<f32>(op_meta[2])
-#define opop_unary_contiguous_seed                op_meta[3]
-#define opop_unary_contiguous_offset              op_meta[4]
-#define opop_unary_contiguous_length              op_meta[5]
+#define op_unary_contiguous_operation         CONSTV_0
+#define op_unary_contiguous_scalar1             bitcast<f32>(op_meta[0])
+#define op_unary_contiguous_scalar2             bitcast<f32>(op_meta[1])
+#define op_unary_contiguous_length              op_meta[2]
+#define op_unary_contiguous_offset              op_meta[3]
+#define op_unary_contiguous_seed                op_meta[4]
+
+
 
 @compute
 @workgroup_size(64,1,1)
@@ -282,7 +304,7 @@ fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pos1 = get_index1(op_unary_input1_layout, id);
     if(pos1.is_valid){
         let x = v_input1[pos1.id];
-        set_unary(op_unary_operation,id, x, op_unary_scalar1, op_unary_scalar2, op_unary_seed);
+        set_unary(op_unary_operation,id, x, op_unary_scalar1, op_unary_scalar2);
     }
 }
 
@@ -290,11 +312,11 @@ fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @workgroup_size(64,1,1)
 fn unary_from_buffer_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x + global_id.y * 65535 * 64;
-    if (id >= opop_unary_contiguous_length){
+    if (id >= op_unary_contiguous_length){
         return;
     }
-    let x = v_input1[id + opop_unary_contiguous_offset];
-    set_unary(opop_unary_contiguous_operation, id, x, opop_unary_contiguous_scalar1, opop_unary_contiguous_scalar2, opop_unary_contiguous_seed);
+    let x = v_input1[id + op_unary_contiguous_offset];
+    set_unary(op_unary_contiguous_operation, id, x, op_unary_contiguous_scalar1, op_unary_contiguous_scalar2);
 }
 
 
@@ -302,9 +324,32 @@ fn unary_from_buffer_contiguous(@builtin(global_invocation_id) global_id: vec3<u
 @workgroup_size(64,1,1)
 fn unary_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x + global_id.y * 65535 * 64;
-    if (id >= opop_unary_contiguous_length){
+    if (id >= op_unary_contiguous_length){
         return;
     }
     let x = v_dest[id];
-    set_unary(opop_unary_contiguous_operation, id, x, opop_unary_contiguous_scalar1, opop_unary_contiguous_scalar2, opop_unary_contiguous_seed);
+    set_unary(op_unary_contiguous_operation, id, x, op_unary_contiguous_scalar1, op_unary_contiguous_scalar2);
+}
+
+
+
+//for constant functions, e.g. Set Zero:
+@compute
+@workgroup_size(64,1,1)
+fn const_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x + global_id.y * 65535 * 64;
+    if (id >= op_unary_contiguous_length){
+        return;
+    }
+    set_const(op_unary_contiguous_operation, id);
+}
+
+@compute
+@workgroup_size(64,1,1)
+fn rand_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x + global_id.y * 65535 * 64;
+    if (id >= op_unary_contiguous_length){
+        return;
+    }
+    set_rand(op_unary_contiguous_operation, id, op_unary_contiguous_scalar1, op_unary_contiguous_scalar2, op_unary_contiguous_seed);
 }
