@@ -7,6 +7,7 @@ pub mod blip_text;
 pub mod chatglm;
 pub mod clip;
 pub mod codegeex4_9b;
+pub mod colpali;
 pub mod convmixer;
 pub mod convnext;
 pub mod dac;
