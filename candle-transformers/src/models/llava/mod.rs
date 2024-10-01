@@ -279,7 +279,7 @@ impl LLaVA {
                             (),
                         ))?
                     } else {
-                        todo!("not implemented in original python LLaVA yet")
+                        bail!("not implemented in original python LLaVA yet")
                     };
                     let new_image_feature = if mm_patch_merge_type.contains("unpad") {
                         let new_image_feature = new_image_feature

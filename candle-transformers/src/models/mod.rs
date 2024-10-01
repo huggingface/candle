@@ -52,6 +52,7 @@ pub mod parler_tts;
 pub mod persimmon;
 pub mod phi;
 pub mod phi3;
+pub mod pixtral;
 pub mod quantized_blip;
 pub mod quantized_blip_text;
 pub mod quantized_llama;
