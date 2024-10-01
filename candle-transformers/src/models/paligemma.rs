@@ -85,7 +85,7 @@ pub struct Model {
     pos: usize,
     vision_tower: siglip::VisionModel,
     multi_modal_projector: MultiModalProjector,
-    pub language_model: gemma::Model,
+    language_model: gemma::Model,
 }
 
 impl Model {

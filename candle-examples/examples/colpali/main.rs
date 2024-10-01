@@ -206,14 +206,15 @@ fn main() -> Result<()> {
         args.revision,
     ));
 
-    
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => api.repo(Repo::with_revision(
-            "vidore/colpali".to_string(),
-            RepoType::Model,
-            "main".to_string(),
-        )).get("tokenizer.json")?,
+        None => api
+            .repo(Repo::with_revision(
+                "vidore/colpali".to_string(),
+                RepoType::Model,
+                "main".to_string(),
+            ))
+            .get("tokenizer.json")?,
     };
 
     let filenames = match args.weight_files {
@@ -225,10 +226,6 @@ fn main() -> Result<()> {
     };
 
     let start = std::time::Instant::now();
-    // let weight_files = [
-    //     PathBuf::from("/home/akshay/colpali/colpali_merged/model-00001-of-00002.safetensors"),
-    //     PathBuf::from("/home/akshay/colpali/colpali_merged/model-00002-of-00002.safetensors"),
-    // ];
 
     let config: paligemma::Config = paligemma::Config::paligemma_3b_448();
 

@@ -1,9 +1,10 @@
 # Colpali
 
-[HuggingFace Model Card](https://huggingface.co/akshayballal/colpali-merged)
+[HuggingFace Model Card](https://huggingface.co/vidore/colpali-v1.2-merged)
 
-```bash
-cargo run --features cuda,pdf2image --release --example colpali -- --prompt "What is Positional Encoding" --pdf "candle-examples/examples/colpali/assets/attention.pdf"
+```
+wget https://arxiv.org/pdf/1706.03762.pdf
+cargo run --features cuda,pdf2image --release --example colpali -- --prompt "What is Positional Encoding" --pdf "1706.03762.pdf"
 ```
 
 ```
