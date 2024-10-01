@@ -242,25 +242,6 @@ impl QueueBuffer {
         return PipelineType(pipeline, index, OpIsInplaceable::new());
     }
 
-    pub(crate) fn get_pipeline_inplaceable(
-        &mut self,
-        pipeline: Pipelines,
-        inplaceable: OpIsInplaceable,
-    ) -> PipelineType {
-        let (index, is_new) = self.const_id_map.get_or_insert(&self.const_array);
-        if is_new {
-            let hmap = HashMap::from_iter(
-                self.const_array
-                    .0
-                    .iter()
-                    .map(|(k, v)| (k.get_entry_point().to_owned(), v.to_f64())),
-            );
-            self.id_to_const_array.push(hmap)
-        }
-        self.init();
-        return PipelineType(pipeline, index, inplaceable);
-    }
-
     pub(crate) fn get_pipeline_const<T: ToU32>(
         &mut self,
         pipeline: Pipelines,

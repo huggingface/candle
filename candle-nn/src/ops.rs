@@ -967,6 +967,56 @@ impl candle::CustomOp3 for LayerNorm {
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
     }
+
+    #[cfg(feature = "wgpu")]
+    fn wgpu_fwd(
+        &self,
+        src: &WgpuStorage,
+        layout: &Layout,
+        alpha: &WgpuStorage,
+        alpha_layout: &Layout,
+        beta: &WgpuStorage,
+        beta_layout: &Layout,
+    ) -> Result<(WgpuStorage, Shape)> {
+        //start offset and length:
+        use candle::wgpu::create_wgpu_storage;
+        use candle::wgpu::wgpu_functions;
+
+        if !(layout.is_contiguous()){
+            candle::bail!("input has to be contiguous")
+        }
+        if !(alpha_layout.is_contiguous()){
+            candle::bail!("alpha has to be contiguous")
+        }
+        if !(beta_layout.is_contiguous()){
+            candle::bail!("beta has to be contiguous")
+        }
+       
+        let el_count = layout.shape().elem_count();
+        let dims = layout.shape().dims();
+        let dim_m1 = dims[dims.len() - 1];
+
+        let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
+
+        let output_buffer = create_wgpu_storage(src.device(), src.dtype,  el_count * src.dtype.size_in_bytes());
+
+        wgpu_functions::queue_layer_norm(
+            src.device(),
+            output_buffer.buffer.clone(),
+            src.buffer.clone(),
+            alpha.buffer.clone(),
+            beta.buffer.clone(),
+            src.dtype,
+            layout.start_offset() as u32,
+            alpha_layout.start_offset() as u32,
+            beta_layout.start_offset() as u32,
+            dim_m1 as u32,
+            dest_size as u32,
+            self.eps,
+        )?;
+        return Ok((output_buffer, Shape::from_dims(dims)));
+    }
+
 }
 
 pub fn layer_norm_slow(x: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Result<Tensor> {

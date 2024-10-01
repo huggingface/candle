@@ -54,7 +54,7 @@ pub use index_select::queue_index_select;
 pub use matmul::queue_matmul_buffer;
 pub use pool2d::{queue_avg_pool2d, queue_max_pool2d};
 pub use reduce::queue_reduce_from_buffer_op;
-pub use rms_norm::queue_rms_norm;
+pub use rms_norm::{queue_rms_norm, queue_layer_norm};
 pub use softmax::queue_softmax;
 pub use unary::{queue_unary_from_buffer_op, queue_unary_inplace_op};
 pub use upsample::{queue_upsample1d, queue_upsample2d};
@@ -1366,6 +1366,22 @@ fn create_bind_group_input2_with_alignment(
         buffer_dest,
         BindgroupInputBase::Bindgroup2(buffer_input1, buffer_input2, alignment),
     )
+}
+
+fn create_bind_group_input3(
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
+    buffer_input2: BufferReferenceId,
+    buffer_input3: BufferReferenceId,
+    alignment: BindgroupAlignment,
+) -> BindGroupReference {
+    return create_bind_group_input3_with_alignment(
+        buffer_dest,
+        buffer_input1,
+        buffer_input2,
+        buffer_input3,
+        BindgroupAlignmentLayout::Bindgroup3(alignment, alignment, alignment,alignment),
+    );
 }
 
 fn create_bind_group_input3_with_alignment(
