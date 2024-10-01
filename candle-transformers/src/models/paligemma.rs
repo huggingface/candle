@@ -33,6 +33,29 @@ impl Config {
             projection_dim: 2048,
         }
     }
+
+    pub fn paligemma_3b_448() -> Self {
+        Self {
+            vision_config: siglip::VisionConfig::paligemma_3b_448(),
+            text_config: gemma::Config {
+                hidden_size: 2048,
+                intermediate_size: 16384,
+                num_attention_heads: 8,
+                num_hidden_layers: 18,
+                num_key_value_heads: 1,
+                // Default values.
+                rope_theta: 10000.,
+                head_dim: 256,
+                hidden_act: Some(candle_nn::Activation::GeluPytorchTanh),
+                hidden_activation: None,
+                attention_bias: false,
+                max_position_embeddings: 8192,
+                rms_norm_eps: 1e-6,
+                vocab_size: 257216,
+            },
+            projection_dim: 2048,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -102,6 +125,28 @@ impl Model {
         self.language_model.forward(input_ids, pos)
     }
 
+    pub fn forward_without_projection(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+        self.clear_kv_cache();
+        let input_embeds = self.language_model.embed_tokens().forward(input_ids)?;
+        self.language_model
+            .forward_embeds_without_projection(&input_embeds, None, 0)
+    }
+    pub fn setup_without_projection(
+        &mut self,
+        pixel_values: &Tensor,
+        input_ids: &Tensor,
+    ) -> Result<Tensor> {
+        self.clear_kv_cache();
+        let image_features = self
+            .vision_tower
+            .forward(pixel_values)?
+            .apply(&self.multi_modal_projector)?;
+        let image_features = crate::models::clip::div_l2_norm(&image_features)?;
+        let text_features = self.language_model.embed_tokens().forward(input_ids)?;
+        let input_embeds = Tensor::cat(&[image_features, text_features], 1)?;
+        self.language_model
+            .forward_embeds_without_projection(&input_embeds, None, 0)
+    }
     pub fn clear_kv_cache(&mut self) {
         self.pos = 0;
         self.language_model.clear_kv_cache()
