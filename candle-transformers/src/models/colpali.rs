@@ -11,7 +11,7 @@ pub struct Model {
 
 impl Model {
     pub fn new(config: &paligemma::Config, vb: VarBuilder) -> Result<Self> {
-        let model = paligemma::Model::new(&config, vb.pp("model"))?;
+        let model = paligemma::Model::new(config, vb.pp("model"))?;
         let custom_text_projection = linear(
             config.text_config.hidden_size,
             128,
