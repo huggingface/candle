@@ -37,17 +37,29 @@ pub fn queue_reduce_from_buffer_op(
     meta.add(dest_size);
     meta.add_layout1(layout_input1);
 
-    if dest_size > 65535 {
+   
+
+    let use_small_reduce =  reduction_length < 16 || stride_reduction != 1;
+
+    if (!use_small_reduce && dest_size > 65535) || (use_small_reduce && dest_size > 65535*64) {
         meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
     }
 
-    let pipeline_type = match op {
-        ReduceOperations::Sum => Functions::Reduce,
-        ReduceOperations::Min => Functions::Reduce,
-        ReduceOperations::Max => Functions::Reduce,
-        ReduceOperations::ArgMin => Functions::ReduceIndex,
-        ReduceOperations::ArgMax => Functions::ReduceIndex,
-    };
+    let pipeline_type = 
+        if use_small_reduce{
+            match op {
+                ReduceOperations::Sum |ReduceOperations::Min | ReduceOperations::Max => Functions::ReduceSmall,
+                ReduceOperations::ArgMin | ReduceOperations::ArgMax => Functions::ReduceIndexSmall,
+            }
+        }
+        else{
+            match op {
+                ReduceOperations::Sum |ReduceOperations::Min | ReduceOperations::Max => Functions::Reduce,
+                ReduceOperations::ArgMin | ReduceOperations::ArgMax => Functions::ReduceIndex,
+            }
+        };
+    
+   
     let pipeline = meta.get_pipeline_const(
         Pipelines::Reduce(get_dtype(dtype)?, pipeline_type),
         const_vec,
@@ -55,10 +67,19 @@ pub fn queue_reduce_from_buffer_op(
 
     let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
 
-    let y = dest_size.min(65535);
-    let z = (dest_size + 65534) / 65535;
+    let y;
+    let z;
+    if use_small_reduce{
+        let dest_size = (dest_size + 63) / 64;
+        y = dest_size.min(65535);
+        z = (dest_size + 65534) / 65535;
+    }
+    else{
+        y = dest_size.min(65535);
+        z = (dest_size + 65534) / 65535;
+    }
 
-    enqueue_workgroups(
+    enqueue_workgroups_extra(
         meta,
         pipeline,
         bind_group,
@@ -66,6 +87,8 @@ pub fn queue_reduce_from_buffer_op(
         y,
         z,
         (reduction_length * dest_size) as usize,
+        #[cfg(feature="wgpu_debug")]
+        Some(format!("layout: {:?} reduction :{}, dest_size: {}", layout_input1, reduction_length, dest_size))
     );
     return Ok(());
 }

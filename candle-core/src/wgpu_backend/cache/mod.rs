@@ -566,6 +566,11 @@ impl ModelCache {
                     if optimal_size > buffer_last_size{
                         let delta_size = optimal_size - buffer_last_size; 
                         let new_size = optimal_size + delta_size * self.mappings.get_current_mapping_count() as u64;
+                        
+                        //We try to determine a good new buffer size for constantly growing buffers,
+                        //but do not use more than 2 * optimal_size:
+                        let new_size = new_size.min(2 * optimal_size);
+                        
                         if new_size != optimal_size {
                             tracing::info!("increase required size: {} -> {}", optimal_size, new_size);
                         }

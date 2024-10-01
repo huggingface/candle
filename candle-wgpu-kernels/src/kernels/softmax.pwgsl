@@ -8,8 +8,6 @@ override CONSTV_1 : u32 = 1u;
 
 var<workgroup> sharedSums: array<DTYPE, 64>; 
 
-var<workgroup> sharedM: f32; 
-
 #ifdef f32
 
 override USE_Z : bool = false;
@@ -31,65 +29,35 @@ fn softmax(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if(output_index < op_softmax_dest_size || !USE_Z)
     {
         //Now Reduce from start to end
-        var maxVal = MINVALUE;
-        for (var i = tid; i < op_softmax_length; i += 64u) {
-            maxVal = max(maxVal, v_input1[start_index1 + i]);
-        }
-
-        sharedSums[tid] = maxVal; 
-    }
-    workgroupBarrier();
-
-    //calculate max
-    if (tid == 0 && (output_index < op_softmax_dest_size || !USE_Z)){
-        let cnt = op_softmax_workgroup_count;
-        //Finnaly Sum of all worker threads:
-        var sum = MINVALUE;
-        for (var i = 0u; i < cnt; i++){
-            sum = max(sum,sharedSums[i]) ;
-        }
-        sharedSums[0] = sum;
-    }
-
-    workgroupBarrier();
-
-    let maxElement = sharedSums[0];
-
-    if (output_index < op_softmax_dest_size || !USE_Z) {
         var sum = ZERO;
-        
         for (var i = tid; i < op_softmax_length; i += 64u) {
-            let val = exp(v_input1[start_index1 + i] - maxElement);
-            v_dest[start_index + i] = val;
+            let value = v_input1[start_index1 + i];
+            let val = exp(value);
             sum += val;
         }
-
         sharedSums[tid] = sum;
     }
-   
     workgroupBarrier();
 
-    //This is not optimal (only 1 of 64 threads sums the partial result of each thread)
-    //TODO: Either use multiple threads for the sum(e.g. first 32 threads, then 16, then 8, ...)
-    //      or let one thread calculate multiple outputs in sharedSums, and then let multiple threads sum the partial results of one output(like in matmul1x64b) 
-    if (tid == 0 && (output_index < op_softmax_dest_size || !USE_Z)){
-        let cnt = op_softmax_workgroup_count;
+    if (tid < 32u) {
+        sharedSums[tid] += sharedSums[tid + 32u];   
+    }
+    workgroupBarrier();
+    if (tid == 0){
         var sum = ZERO;
-        for (var i = 0u; i < cnt; i++){
+        for (var i = 0u; i < 32u; i++){
             sum += sharedSums[i];
         }
-
         sharedSums[0] = sum;
     }
-
     workgroupBarrier();
 
-    let totalSum = sharedSums[0];
+    let sumElement = sharedSums[0];
+
     if (output_index < op_softmax_dest_size || !USE_Z) {
         for (var i = tid; i < op_softmax_length; i += 64u) {
-            v_dest[start_index + i] /= totalSum;
+            v_dest[start_index + i] = exp(v_input1[start_index1 + i]) / sumElement;
         }
     }
 }
-
 #endif
