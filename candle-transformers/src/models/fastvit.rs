@@ -11,13 +11,13 @@ use candle_nn::{
     BatchNorm, Conv2d, Conv2dConfig, Func, VarBuilder,
 };
 
-#[derive(Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct Config {
-    exp_ratio: usize,
-    in_channels: usize,
-    blocks: [usize; 4],
-    attn: bool,
-    lkc_use_act: bool,
+    pub exp_ratio: usize,
+    pub in_channels: usize,
+    pub blocks: [usize; 4],
+    pub attn: bool,
+    pub lkc_use_act: bool,
 }
 
 impl Config {
