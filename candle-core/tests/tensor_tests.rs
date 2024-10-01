@@ -31,11 +31,33 @@ fn ones(device: &Device) -> Result<()> {
     );
     assert_eq!(
         Tensor::ones((2, 3), DType::F16, device)?.to_vec2::<half::f16>()?,
-        [[half::f16::from_f32(1.0), half::f16::from_f32(1.0), half::f16::from_f32(1.0)], [half::f16::from_f32(1.0), half::f16::from_f32(1.0), half::f16::from_f32(1.0)]],
+        [
+            [
+                half::f16::from_f32(1.0),
+                half::f16::from_f32(1.0),
+                half::f16::from_f32(1.0)
+            ],
+            [
+                half::f16::from_f32(1.0),
+                half::f16::from_f32(1.0),
+                half::f16::from_f32(1.0)
+            ]
+        ],
     );
     assert_eq!(
         Tensor::ones((2, 3), DType::BF16, device)?.to_vec2::<half::bf16>()?,
-        [[half::bf16::from_f32(1.0), half::bf16::from_f32(1.0), half::bf16::from_f32(1.0)], [half::bf16::from_f32(1.0), half::bf16::from_f32(1.0), half::bf16::from_f32(1.0)]],
+        [
+            [
+                half::bf16::from_f32(1.0),
+                half::bf16::from_f32(1.0),
+                half::bf16::from_f32(1.0)
+            ],
+            [
+                half::bf16::from_f32(1.0),
+                half::bf16::from_f32(1.0),
+                half::bf16::from_f32(1.0)
+            ]
+        ],
     );
     Ok(())
 }

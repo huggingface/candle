@@ -1939,8 +1939,9 @@ impl BackendDevice for MetalDevice {
             name,
             shape.elem_count(),
             &buffer,
-            1.
-        ).map_err(MetalError::from)?;
+            1.,
+        )
+        .map_err(MetalError::from)?;
 
         Ok(MetalStorage::new(
             buffer,

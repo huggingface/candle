@@ -2315,17 +2315,12 @@ fn constant_fill<T: Clone>(name: &'static str, len: usize, value: f32) -> Vec<T>
     let command_queue = dev.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
 
-    let buffer = dev.new_buffer((len * std::mem::size_of::<T>()) as u64, MTLResourceOptions::StorageModePrivate);
+    let buffer = dev.new_buffer(
+        (len * std::mem::size_of::<T>()) as u64,
+        MTLResourceOptions::StorageModePrivate,
+    );
 
-    call_const_fill(
-        &dev,
-        command_buffer,
-        &kernels,
-        name,
-        len,
-        &buffer,
-        value
-    ).unwrap();
+    call_const_fill(&dev, command_buffer, &kernels, name, len, &buffer, value).unwrap();
 
     command_buffer.commit();
     command_buffer.wait_until_completed();
@@ -2341,12 +2336,12 @@ fn const_fill() {
         "fill_i64",
         "fill_f16",
         "fill_bf16",
-        "fill_f32"
+        "fill_f32",
     ];
 
     for name in fills {
-        let len = rand::thread_rng().gen_range(2 .. 16) * rand::thread_rng().gen_range(4 .. 16);
-        let value = rand::thread_rng().gen_range(1. .. 19.);
+        let len = rand::thread_rng().gen_range(2..16) * rand::thread_rng().gen_range(4..16);
+        let value = rand::thread_rng().gen_range(1. ..19.);
 
         match name {
             "fill_u8" => {
@@ -2373,7 +2368,7 @@ fn const_fill() {
                 let v = constant_fill::<f32>(name, len, value);
                 assert_eq!(v, vec![value; len])
             }
-            _ => unimplemented!()
+            _ => unimplemented!(),
         };
     }
 }

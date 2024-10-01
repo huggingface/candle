@@ -2367,7 +2367,7 @@ pub fn call_const_fill(
     name: &'static str,
     length: usize,
     output: &Buffer,
-    v: f32
+    v: f32,
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Fill, name)?;
     let encoder = ep.encoder();
@@ -2376,7 +2376,7 @@ pub fn call_const_fill(
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (output, v, length));
-    
+
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
 
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
