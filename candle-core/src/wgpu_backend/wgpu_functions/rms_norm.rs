@@ -40,3 +40,47 @@ pub fn queue_rms_norm(
     );
     return Ok(());
 }
+
+
+
+pub fn queue_layer_norm(
+    dev: &WgpuDevice,
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
+    buffer_alpha: BufferReferenceId,
+    buffer_beta: BufferReferenceId,
+    dtype: crate::DType,
+    input1_offset: u32,
+    alpha_offset: u32,
+    beta_offset: u32,
+    reduction_length: u32,
+    dest_size: u32,
+    eps: f32,
+) -> crate::Result<()> {
+    let workgroup_count = u32::min(64, (reduction_length / 10 + 1) as u32);
+    let workgroup_size = reduction_length as u32 / workgroup_count + 1;
+
+    let mut meta = get_meta(&dev);
+
+    meta.add(workgroup_count);
+    meta.add(workgroup_size);
+    meta.add(reduction_length);
+    meta.add(input1_offset);
+    meta.add(alpha_offset);
+    meta.add(eps);
+    meta.add(beta_offset);
+    
+    let pipeline = meta.get_pipeline(Pipelines::RmsNorm(get_dtype(dtype)?, Functions::LayerNorm));
+
+    let bind_group = create_bind_group_input3(buffer_dest, buffer_input1, buffer_alpha, buffer_beta, dtype.into());
+    enqueue_workgroups(
+        meta,
+        pipeline,
+        bind_group,
+        1,
+        dest_size,
+        1,
+        (reduction_length * dest_size) as usize,
+    );
+    return Ok(());
+}

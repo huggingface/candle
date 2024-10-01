@@ -8,7 +8,8 @@
 #define oop_rms_norm_contiguous_eps                          bitcast<f32>(op_meta[5])
 
 var<workgroup> sharedSums: array<DTYPE, 64>; 
-var<workgroup> sharedM: f32; 
+var<workgroup> sharedMean: f32; 
+var<workgroup> sharedNorm: f32; 
 
 @compute
 @workgroup_size(64,1,1)
@@ -48,17 +49,83 @@ fn rms_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgro
         }
         let mean = f32(sum) / f32(length);    
         let m = sqrt(mean + oop_rms_norm_contiguous_eps);
-        sharedM = m;
+        sharedMean = m;
     }
 
     workgroupBarrier();
 
     for (var i = start; i < end; i++){
 #ifdef f32 
-        v_dest[start_index + i] = v_input1[start_index1 + i] / sharedM * v_input2[start_index2 + i];
+        v_dest[start_index + i] = v_input1[start_index1 + i] / sharedMean * v_input2[start_index2 + i];
 #endif 
 #ifdef u32 
-        v_dest[start_index + i] = u32(f32(v_input1[start_index1 + i]) / sharedM * f32(v_input2[start_index2 + i]));
+        v_dest[start_index + i] = u32(f32(v_input1[start_index1 + i]) / sharedMean * f32(v_input2[start_index2 + i]));
+#endif  
+    }
+
+}
+
+#define oop_rms_norm_contiguous_input3_offset                op_meta[6]
+
+var<workgroup> sharedSumsSquared: array<DTYPE, 64>; 
+
+@compute
+@workgroup_size(64,1,1)
+fn layer_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgroup_id) output_id3: vec3<u32>,) {
+    let workgroup_id = local_id.x;
+    let output_index = output_id3.y;
+    
+    //Start Index of the Elements to Reduce
+    let length = oop_rms_norm_contiguous_length; //length of the elements to reduce
+    let start_index = output_index * length;
+    let start_index1 = start_index + oop_rms_norm_contiguous_input1_offset;
+    let start_index2 = oop_rms_norm_contiguous_input2_offset;
+    let start_index3 = oop_rms_norm_contiguous_input3_offset;
+
+    //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
+    let start = workgroup_id * oop_rms_norm_contiguous_workgroup_size;
+    let end = min(length, (workgroup_id + 1) * oop_rms_norm_contiguous_workgroup_size);
+
+    //Now Reduce from start to end
+    var sum = ZERO;
+    var sum_squared = ZERO;
+    for (var i = start; i < end; i++){
+        let v = v_input1[start_index1 + i];
+        sum_squared += v*v;
+        sum += v;
+    }
+    sharedSums[workgroup_id] = sum;
+    sharedSumsSquared[workgroup_id] = sum_squared;
+        
+    workgroupBarrier();
+
+    //This is not optimal (only 1 of 64 threads sums the partial result of each thread)
+    //TODO: Either use multiple threads for the sum(e.g. first 32 threads, then 16, then 8, ...)
+    //      or let one thread calculate multiple outputs in sharedSums, and then let multiple threads sum the partial results of one output(like in matmul1x64b) 
+    if (workgroup_id == 0){
+        let cnt = oop_rms_norm_contiguous_workgroup_count;
+        //Finnaly Sum of all worker threads:
+        var sum = ZERO;
+        var sum_squared = ZERO;
+        for (var i = 0u; i < cnt; i++){
+            sum +=  sharedSums[i];
+            sum_squared +=  sharedSumsSquared[i];
+        }
+        let mean_x = f32(sum) / f32(length);
+        let norm_x = (f32(sum_squared) / f32(length)) - mean_x * mean_x;
+        let m = sqrt(norm_x + oop_rms_norm_contiguous_eps);
+        sharedMean = mean_x;
+        sharedNorm = m;
+    }
+
+    workgroupBarrier();
+
+    for (var i = start; i < end; i++){
+#ifdef f32 
+        v_dest[start_index + i] = ((v_input1[start_index1 + i] - sharedMean) / sharedNorm) * v_input2[start_index2 + i] + v_input3[start_index3 + i];
+#endif 
+#ifdef u32 
+        v_dest[start_index + i] = u32(((f32(v_input1[start_index1 + i]) - sharedMean) / sharedNorm) * f32(v_input2[start_index2 + i]) + f32(v_input3[start_index3 + i]));
 #endif  
     }
 
