@@ -208,19 +208,19 @@ impl QMetalStorage {
     }
 
     pub fn data(&self) -> Result<Vec<u8>> {
-        let size = (self.count * self.dtype.size_in_bytes()) as NSUInteger;
+        use metal::NSUInteger;
 
-        let buffer = self.device.new_buffer_managed(size)?;
+        let buffer = self.device.new_buffer_managed(self.buffer.length())?;
         {
             let command_buffer = self.device.command_buffer()?;
             command_buffer.set_label("to_cpu");
             let blit = command_buffer.new_blit_command_encoder();
             blit.set_label("blit_to_cpu");
-            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
+            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
             blit.end_encoding();
         }
         self.device.wait_until_completed()?;
-        Ok(read_to_vec::<u8>(&buffer, self.count))
+        Ok(read_to_vec::<u8>(&buffer, self.buffer.length()))
     }
 }
 

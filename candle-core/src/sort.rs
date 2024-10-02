@@ -152,6 +152,7 @@ impl crate::CustomOp1 for ArgSort {
                     DType::U32 => "asort_asc_u32",
                     DType::I64 => "asort_asc_i64",
                     DType::I32 => "asort_asc_i32",
+                    DType::I16 => "asort_asc_i16",
                 }
             } else {
                 match storage.dtype() {
@@ -163,6 +164,7 @@ impl crate::CustomOp1 for ArgSort {
                     DType::U32 => "asort_desc_u32",
                     DType::I64 => "asort_desc_i64",
                     DType::I32 => "asort_desc_i32",
+                    DType::I16 => "asort_desc_i16",
                 }
             }
         };

@@ -33,6 +33,8 @@ FILL_OPS(u32, uint)
 FILL_OPS(i64, long)
 FILL_OPS(f16, half)
 FILL_OPS(f32, float)
+FILL_OPS(i32, int)
+FILL_OPS(i16, short)
 
 #if __METAL_VERSION__ >= 310
 FILL_OPS(bf16, bfloat)

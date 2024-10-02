@@ -1578,7 +1578,7 @@ impl BackendStorage for MetalStorage {
         if self.dtype == DType::BF16 {
             if s.unwrap_or(1.) != 1. {
                 return Err(
-                    MetalError::Message(format!("mlx matmul doesn't support alpha {s}")).into(),
+                    MetalError::Message(format!("mlx matmul doesn't support alpha {s:?}")).into(),
                 );
             }
             candle_metal_kernels::call_mlx_gemm(
@@ -1599,7 +1599,7 @@ impl BackendStorage for MetalStorage {
         } else if self.device.use_mlx_mm {
             if s.unwrap_or(1.) != 1. {
                 return Err(
-                    MetalError::Message(format!("mlx matmul doesn't support alpha {s}")).into(),
+                    MetalError::Message(format!("mlx matmul doesn't support alpha {s:?}")).into(),
                 );
             }
             let dtype = match self.dtype {
@@ -2131,6 +2131,8 @@ impl BackendDevice for MetalDevice {
             DType::F16 => "fill_f16",
             DType::BF16 => "fill_bf16",
             DType::F32 => "fill_f32",
+            DType::I32 => "fill_i32",
+            DType::I16 => "fill_i16",
             DType::F64 => {
                 let cpu_storage = crate::cpu_backend::CpuDevice.ones_impl(shape, dtype)?;
                 return self.storage_from_cpu_storage(&cpu_storage);
