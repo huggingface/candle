@@ -14,6 +14,7 @@ use std::sync::Arc;
 pub struct VarBuilderArgs<'a, B: Backend> {
     data: Arc<TensorData<B>>,
     path: Vec<String>,
+    pub dtype: DType,
     _phantom: std::marker::PhantomData<&'a B>,
 }
 
@@ -22,6 +23,7 @@ impl<'a, B: Backend> Clone for VarBuilderArgs<'a, B> {
         Self {
             data: self.data.clone(),
             path: self.path.clone(),
+            dtype: self.dtype,
             _phantom: self._phantom,
         }
     }
@@ -101,6 +103,7 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         Self {
             data: Arc::new(data),
             path: vec![],
+            dtype,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -115,6 +118,7 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         Self {
             data: self.data.clone(),
             path: vec![],
+            dtype: self.dtype,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -124,6 +128,7 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         Self {
             data: self.data.clone(),
             path: vec![prefix.to_string()],
+            dtype: self.dtype,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -136,6 +141,7 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         Self {
             data: self.data.clone(),
             path,
+            dtype: self.dtype,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -152,7 +158,17 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
 
     /// The dtype used by default.
     pub fn dtype(&self) -> DType {
-        self.data.dtype
+        self.dtype
+    }
+
+    /// Clone the VarBuilder tweaking its dtype
+    pub fn to_dtype(&self, dtype: DType) -> Self {
+        Self {
+            data: self.data.clone(),
+            path: self.path.clone(),
+            dtype,
+            _phantom: std::marker::PhantomData,
+        }
     }
 
     fn path(&self, tensor_name: &str) -> String {
@@ -178,7 +194,7 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         name: &str,
         hints: B::Hints,
     ) -> Result<Tensor> {
-        self.get_with_hints_dtype(s, name, hints, self.data.dtype)
+        self.get_with_hints_dtype(s, name, hints, self.dtype)
     }
 
     /// Retrieve the tensor associated with the given name at the current path.
@@ -492,6 +508,7 @@ impl<'a> VarBuilder<'a> {
         Self {
             data: Arc::new(data),
             path: vec![],
+            dtype,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -598,6 +615,7 @@ impl<'a> VarBuilder<'a> {
         };
         Self {
             data: Arc::new(data),
+            dtype,
             path,
             _phantom: std::marker::PhantomData,
         }

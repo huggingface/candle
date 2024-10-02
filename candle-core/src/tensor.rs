@@ -2015,7 +2015,11 @@ impl Tensor {
                 }
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
                 _ => {
-                    bail!("not implemented yet")
+                    bail!(
+                        "not implemented yet, self.device: {:?}, device: {:?}",
+                        self.device(),
+                        device
+                    )
                 }
             };
             let op = BackpropOp::new1(self, Op::ToDevice);

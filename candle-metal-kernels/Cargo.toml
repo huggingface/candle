@@ -1,6 +1,6 @@
 [package]
 name = "candle-metal-kernels"
-version = "0.6.1"
+version = "0.7.2"
 edition = "2021"
 
 description = "Metal kernels for Candle"
@@ -17,9 +17,12 @@ thiserror = "1"
 tracing = "0.1.37"
 
 [dev-dependencies]
+clap = { version = "4.2.4", features = ["derive"] }
 half = { version = "2.3.1", features = [
   "num-traits",
   "use-intrinsics",
   "rand_distr",
 ] }
+anyhow = "1"
 rand = "0.8.5"
+rand_distr = "0.4.3"

@@ -82,7 +82,7 @@ pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, Inp
 pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
 pub use error::{Context, Error, Result};
-pub use indexer::IndexOp;
+pub use indexer::{IndexOp, TensorIndexer};
 pub use layout::Layout;
 pub use shape::{Shape, D};
 pub use storage::Storage;
