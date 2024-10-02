@@ -220,7 +220,7 @@ impl QMetalStorage {
             blit.end_encoding();
         }
         self.device.wait_until_completed()?;
-        Ok(read_to_vec::<u8>(&buffer, self.buffer.length()))
+        Ok(read_to_vec::<u8>(&buffer, self.buffer.length() as usize))
     }
 }
 
