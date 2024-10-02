@@ -144,6 +144,20 @@ impl CudaDevice {
     }
 }
 
+impl CudaDevice {
+    pub fn new_with_stream(ordinal: usize) -> Result<Self> {
+        let device = cudarc::driver::CudaDevice::new_with_stream(ordinal).w()?;
+        let blas = cudarc::cublas::CudaBlas::new(device.clone()).w()?;
+        let curand = cudarc::curand::CudaRng::new(299792458, device.clone()).w()?;
+        Ok(Self {
+            id: DeviceId::new(),
+            device,
+            blas: Arc::new(blas),
+            curand: Arc::new(Mutex::new(CudaRng(curand))),
+        })
+    }
+}
+
 impl BackendDevice for CudaDevice {
     type Storage = CudaStorage;
 
