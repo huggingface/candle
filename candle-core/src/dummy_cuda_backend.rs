@@ -14,6 +14,12 @@ macro_rules! fail {
     };
 }
 
+impl CudaDevice {
+    pub fn new_with_stream(_: usize) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+}
+
 impl crate::backend::BackendStorage for CudaStorage {
     type Device = CudaDevice;
 
