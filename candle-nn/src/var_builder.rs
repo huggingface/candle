@@ -236,6 +236,7 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
                 dtype,
                 device: self.data.device.clone(),
             }),
+            dtype,
             ..self
         }
     }
