@@ -1,4 +1,3 @@
-#![allow(unused)]
 use anyhow::{Context, Result};
 use std::sync::{Arc, Mutex};
 
