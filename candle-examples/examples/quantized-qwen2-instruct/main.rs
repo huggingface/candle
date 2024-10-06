@@ -151,7 +151,7 @@ impl Args {
 
 fn format_size(size_in_bytes: usize) -> String {
     if size_in_bytes < 1_000 {
-        format!("{}B", size_in_bytes)
+        format!("{size_in_bytes}B")
     } else if size_in_bytes < 1_000_000 {
         format!("{:.2}KB", size_in_bytes as f64 / 1e3)
     } else if size_in_bytes < 1_000_000_000 {
@@ -213,8 +213,7 @@ fn main() -> anyhow::Result<()> {
     let mut tos = TokenOutputStream::new(tokenizer);
     let prompt_str = args.prompt.unwrap_or_else(|| DEFAULT_PROMPT.to_string());
     let prompt_str = format!(
-        "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-        prompt_str
+        "<|im_start|>user\n{prompt_str}<|im_end|>\n<|im_start|>assistant\n"
     );
     print!("formatted instruct prompt: {}", &prompt_str);
     let tokens = tos

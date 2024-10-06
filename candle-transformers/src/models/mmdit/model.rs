@@ -142,7 +142,7 @@ impl MMDiTCore {
             joint_blocks.push(JointBlock::new(
                 hidden_size,
                 num_heads,
-                vb.pp(format!("joint_blocks.{}", i)),
+                vb.pp(format!("joint_blocks.{i}")),
             )?);
         }
 
