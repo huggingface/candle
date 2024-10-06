@@ -212,9 +212,7 @@ fn main() -> anyhow::Result<()> {
     let tokenizer = args.tokenizer()?;
     let mut tos = TokenOutputStream::new(tokenizer);
     let prompt_str = args.prompt.unwrap_or_else(|| DEFAULT_PROMPT.to_string());
-    let prompt_str = format!(
-        "<|im_start|>user\n{prompt_str}<|im_end|>\n<|im_start|>assistant\n"
-    );
+    let prompt_str = format!("<|im_start|>user\n{prompt_str}<|im_end|>\n<|im_start|>assistant\n");
     print!("formatted instruct prompt: {}", &prompt_str);
     let tokens = tos
         .tokenizer()
