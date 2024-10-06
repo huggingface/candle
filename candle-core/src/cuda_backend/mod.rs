@@ -7,6 +7,7 @@ use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
 use cudarc::driver::{
     CudaSlice, DevicePtr, DeviceRepr, DeviceSlice, LaunchAsync, LaunchConfig, ValidAsZeroBits,
 };
+use float8::F8E4M3;
 use half::{bf16, f16};
 
 #[cfg(feature = "cudnn")]
@@ -54,6 +55,7 @@ pub enum CudaStorageSlice {
     F16(CudaSlice<f16>),
     F32(CudaSlice<f32>),
     F64(CudaSlice<f64>),
+    F8E4M3(CudaSlice<F8E4M3>),
 }
 
 struct Clone;
@@ -1183,6 +1185,7 @@ impl BackendStorage for CudaStorage {
             CudaStorageSlice::F16(_) => DType::F16,
             CudaStorageSlice::F32(_) => DType::F32,
             CudaStorageSlice::F64(_) => DType::F64,
+            CudaStorageSlice::F8E4M3(_) => DType::F8E4M3,
         }
     }
 
@@ -1211,6 +1214,7 @@ impl BackendStorage for CudaStorage {
             CudaStorageSlice::F16(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::F32(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::F64(inp) => *inp.slice(start_o..).device_ptr(),
+            CudaStorageSlice::F8E4M3(inp) => *inp.slice(start_o..).device_ptr(),
         };
         let inp = &inp;
 
@@ -1270,6 +1274,12 @@ impl BackendStorage for CudaStorage {
                 let params = (el, dims.len(), &ds, *inp, &out);
                 unsafe { func.launch(cfg, params) }.w()?;
                 CudaStorageSlice::F64(out)
+            }
+            DType::F8E4M3 => {
+                let out = unsafe { dev.alloc::<F8E4M3>(el) }.w()?;
+                let params = (el, dims.len(), &ds, *inp, &out);
+                unsafe { func.launch(cfg, params) }.w()?;
+                CudaStorageSlice::F8E4M3(out)
             }
         };
         Ok(Self {
@@ -1371,6 +1381,11 @@ impl BackendStorage for CudaStorage {
                 let dev = slice.device();
                 let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
                 Ok(CpuStorage::F64(cpu_storage))
+            }
+            CudaStorageSlice::F8E4M3(slice) => {
+                let dev = slice.device();
+                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                Ok(CpuStorage::F8E4M3(cpu_storage))
             }
         }
     }
