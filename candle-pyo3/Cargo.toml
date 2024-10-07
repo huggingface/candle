@@ -20,10 +20,10 @@ candle-nn = { workspace = true }
 candle-onnx = { workspace = true, optional = true }
 half = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
-pyo3 = { version = "0.21.0", features = ["extension-module", "abi3-py38"] }
+pyo3 = { version = "0.22.0", features = ["extension-module", "abi3-py38"] }
 
 [build-dependencies]
-pyo3-build-config = "0.21"
+pyo3-build-config = "0.22"
 
 [features]
 default = []
