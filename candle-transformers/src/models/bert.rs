@@ -554,8 +554,7 @@ impl BertLMPredictionHead {
 
 impl Module for BertLMPredictionHead {
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        self
-            .decoder
+        self.decoder
             .forward(&self.transform.forward(hidden_states)?)
     }
 }
