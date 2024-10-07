@@ -48,7 +48,7 @@ fn main() -> Result<()> {
     let api = Api::new()?;
     let model_id = match &args.model_id {
         Some(model_id) => model_id.to_string(),
-        None => "naver/splade-cocondenser-ensembledistil".to_string(),
+        None => "prithivida/Splade_PP_en_v1".to_string(),
     };
     let repo = api.repo(Repo::with_revision(
         model_id,
