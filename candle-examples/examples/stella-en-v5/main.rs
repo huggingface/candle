@@ -4,6 +4,8 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
+use std::path::Path;
+
 use anyhow::{anyhow, Error as E, Result};
 use clap::Parser;
 
@@ -236,6 +238,30 @@ struct Args {
     task: Option<EncodeTask>,
 }
 
+// Tokenizer creation is super critical in our case.
+// We are going to be `padding: Left` for each batch
+fn create_tokenizer(tokenizer_file: &Path) -> Result<Tokenizer> {
+    let mut tokenizer = Tokenizer::from_file(tokenizer_file).map_err(E::msg)?;
+    let pad_id = if let Some(pad_id) = tokenizer.token_to_id("<|endoftext|>") {
+        pad_id
+    } else {
+        return Err(anyhow!(
+            "Tokenizer doesn't contain expected `<|endoftext|>` token"
+        ));
+    };
+
+    // This part is super important, we are padding the tokens to the *`left`* and not the usual *`right`* padding
+    tokenizer.with_padding(Some(PaddingParams {
+        strategy: PaddingStrategy::BatchLongest,
+        direction: PaddingDirection::Left,
+        pad_id,
+        pad_token: "<|endoftext|>".to_string(),
+        ..Default::default()
+    }));
+
+    Ok(tokenizer)
+}
+
 fn main() -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
@@ -293,23 +319,8 @@ fn main() -> Result<()> {
 
     println!("retrieved the files in {:?}", start.elapsed());
 
-    // Initializing the tokenizer which would require us to add padding to the right for batch encoding
-    let mut tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
-    let pad_id = if let Some(pad_id) = tokenizer.token_to_id("<|endoftext|>") {
-        pad_id
-    } else {
-        return Err(anyhow!(
-            "Tokenizer doesn't contain expected `<|endoftext|>` token"
-        ));
-    };
-
-    tokenizer.with_padding(Some(PaddingParams {
-        strategy: PaddingStrategy::BatchLongest,
-        direction: PaddingDirection::Left,
-        pad_id,
-        pad_token: "<|endoftext|>".to_string(),
-        ..Default::default()
-    }));
+    // Initializing the tokenizer which would require us to add padding to the `left` for batch encoding
+    let tokenizer = create_tokenizer(tokenizer_filename.as_path())?;
 
     let start = std::time::Instant::now();
 
