@@ -33,6 +33,7 @@ pub struct EmbedHead {
 
 /// An enum variant representing the Embedding head dimensions `stella` is trained on
 /// As the [model-card](https://huggingface.co/dunzhang/stella_en_1.5B_v5#introduction) suggests, D1024 is good enough for most cases
+#[derive(Debug, Clone, Copy)]
 pub enum EmbedDim {
     Dim256,
     Dim768,
