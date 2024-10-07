@@ -1,12 +1,8 @@
-# candle-qwen: large language model series from Alibaba Cloud
+# candle-stella-en-v5: Implementation of [stella_en_1.5B_v5](https://huggingface.co/dunzhang/stella_en_1.5B_v5) embedding model
 
-Qwen 1.5 is a series of large language models that provide strong performances
-on English and Chinese.
+As of 7th Oct 2024, *Stella_en_1.5B_v5* is one of the top ranking model on `retrieval` and `reranking` tasks in [MTEB](https://huggingface.co/spaces/mteb/leaderboard) leaderboard.
 
-- [Blog post](https://qwenlm.github.io/blog/qwen1.5/) introducing Qwen1.5.
-- [Model card](https://huggingface.co/Qwen/Qwen1.5-0.5B) on the HuggingFace Hub.
-- [Blog post](https://qwenlm.github.io/blog/qwen-moe/) for the
-  mixture-of-experts (MoE) variant.
+[Model card](https://huggingface.co/dunzhang/stella_en_1.5B_v5) on the HuggingFace Hub.
 
 ## Running the example
 
@@ -20,14 +16,10 @@ $ cargo run --example stella-en-v5 --release  -- --query "What are safetensors?"
 >  Tensor[[1, 1024], f32]
 ```
 
-Various model sizes are available via the `--model` argument, including the MoE
-variant.
+Stella_en_1.5B_v5 is trained by [MRL](https://arxiv.org/abs/2205.13147) enabling multiple embedding dimensions.
+
+The following reproduces the example in the [model card](https://huggingface.co/dunzhang/stella_en_1.5B_v5) for a retrieval task (s2p).
 
 ```bash
-$ cargo run --example qwen --release  -- --model moe-a2.7b --prompt 'def print_prime(n: int): '
-def print_prime(n: int):  # n is the number of primes to be printed
-    for i in range(2, n + 1):
-        if all(i % j != 0 for j in range(2, i)):
-            print(i)
+$ cargo run --example stella-en-v5 --release --features <metal | cuda>
 ```
-
