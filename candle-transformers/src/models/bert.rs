@@ -593,8 +593,8 @@ impl BertForMaskedLM {
     pub fn forward(
         &self,
         input_ids: &Tensor,
-        attention_mask: Option<&Tensor>,
         token_type_ids: &Tensor,
+        attention_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let sequence_output = self
             .bert
