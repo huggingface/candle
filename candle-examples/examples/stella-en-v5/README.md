@@ -18,8 +18,23 @@ $ cargo run --example stella-en-v5 --release  -- --query "What are safetensors?"
 
 Stella_en_1.5B_v5 is trained by [MRL](https://arxiv.org/abs/2205.13147) enabling multiple embedding dimensions.
 
-The following reproduces the example in the [model card](https://huggingface.co/dunzhang/stella_en_1.5B_v5) for a retrieval task (s2p).
+The following reproduces the example in the [model card](https://huggingface.co/dunzhang/stella_en_1.5B_v5) for a retrieval task (s2p). The sample queries and docs are hardcoded in the example.
 
 ```bash
 $ cargo run --example stella-en-v5 --release --features <metal | cuda>
+
+>
+> Score: 0.8178786
+> Query: What are some ways to reduce stress?
+> Answer: There are many effective ways to reduce stress. Some common techniques include deep breathing, meditation, and physical activity. Engaging in hobbies, spending
+> time in nature, and connecting with loved ones can also help alleviate stress. Additionally, setting boundaries, practicing self-care, and learning to say no can prevent
+> stress from building up.
+>
+>
+> Score: 0.7853528
+> Query: What are the benefits of drinking green tea?
+> Answer: Green tea has been consumed for centuries and is known for its potential health benefits. It contains antioxidants that may help protect the body against damage 
+> caused by free radicals. Regular consumption of green tea has been associated with improved heart health, enhanced cognitive function, and a reduced risk of certain types >
+> of cancer. The polyphenols in green tea may also have anti-inflammatory and weight loss properties.
+>
 ```

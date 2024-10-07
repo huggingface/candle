@@ -119,14 +119,19 @@ impl Embedding {
                 qry_embed.shape(),
                 doc_embed.shape()
             ); // [2, 1024] for head dim `1024`
-               // a matmul to generate the `similarity` score
+
+            // a matmul to generate the `similarity` score
             let res = qry_embed.matmul(&doc_embed.t()?)?;
             for (k, v) in queries.iter().enumerate() {
                 let tnsr = res.get(k)?;
-                let max = tnsr.argmax(0)?;
-                println!("Score: {}\tQuery: {}\tAnswer: {}", )
+                let max = tnsr.argmax(0)?.to_scalar::<u32>()?;
+                println!(
+                    "\nScore: {}\nQuery: {}\nAnswer: {}\n\n",
+                    tnsr.get(max as usize)?.to_scalar::<f32>()?,
+                    v,
+                    docs[k]
+                );
             }
-            
         }
 
         Ok(())
