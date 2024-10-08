@@ -138,6 +138,11 @@ impl ClipModel {
     pub fn forward(&self, pixel_values: &Tensor, input_ids: &Tensor) -> Result<(Tensor, Tensor)> {
         let image_features = self.get_image_features(pixel_values)?;
         let text_features = self.get_text_features(input_ids)?;
+        tracing::info!(
+            "image_features shape: {:?}, text_features shape: {:?}",
+            image_features.shape(),
+            text_features.shape()
+        );
         let image_features_normalized = div_l2_norm(&image_features)?;
         let text_features_normalized = div_l2_norm(&text_features)?;
         let logits_per_text = text_features_normalized.matmul(&image_features_normalized.t()?)?;

@@ -1,7 +1,3 @@
-use std::any;
-
-use anyhow::Ok;
-
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
@@ -10,15 +6,11 @@ extern crate accelerate_src;
 
 use clap::Parser;
 
-use candle::{DType, Device, IndexOp, Module, Tensor};
-use candle_nn::VarBuilder;
-use candle_transformers::models::chinese_clip::{
-    text_model::{self, ChineseClipTextTransformer},
-    vision_model,
-};
+use candle::{DType, Device, Tensor};
+use candle_nn as nn;
+use candle_transformers::models::chinese_clip::{ChineseClipConfig, ChineseClipModel};
 
-use rayon::vec;
-use tokenizers::{tokenizer, Tokenizer};
+use tokenizers::Tokenizer;
 
 #[derive(Parser)]
 struct Args {
@@ -44,28 +36,56 @@ fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let device = candle_examples::device(args.cpu)?;
-    let (vision_transformer, text_transformer) = load_transformer(args.model, &device)?;
+    let var = load_weights(args.model, &device)?;
+    let clip_model = ChineseClipModel::new(var, &ChineseClipConfig::clip_vit_base_patch16())?;
     tracing::info!("Transformer loaded. ");
 
-    let images = load_images(args.images, &device)?;
+    let (pixel_values, vec_imgs) = load_images(args.images, &device)?;
     tracing::info!("Image loaded. ");
-    // let images_feature = vision_transformer.forward(&images)?;
-    // tracing::info!("Images feature: {:?}", images_feature);
+    tracing::info!("pixel_values: {:?}", pixel_values.shape());
+
+    let features = clip_model.get_image_features(&pixel_values)?;
+    tracing::warn!("features: {}", features.to_string());
 
     let tokenizer = load_tokenizer()?;
-    let (input_ids, type_ids, text_sequences) =
+    let (input_ids, _type_ids, text_sequences) =
         tokenize_sequences(args.sequences, &tokenizer, &device)?;
-    // let token = tokenizer
-    //     .encode("hello", true)
-    //     .map_err(anyhow::Error::msg)?;
-    tracing::info!("token: {}", input_ids.to_string());
-    let text_feature = text_transformer.forward(&input_ids, None, None)?;
-    tracing::info!("Text feature: {:?}", text_feature);
+    tracing::info!("\n{}", input_ids.to_string());
+    let features = clip_model.get_text_features(&input_ids, None, None)?;
+    tracing::warn!("features: {}", features.to_string());
+
+    let (_logits_per_text, logits_per_image) = clip_model.forward(&pixel_values, &input_ids)?;
+    tracing::info!(
+        "====> {:?}, {:?}",
+        _logits_per_text.shape(),
+        logits_per_image.shape()
+    );
+    let softmax_image = nn::ops::softmax(&logits_per_image, 1)?;
+    let softmax_image_vec = softmax_image.flatten_all()?.to_vec1::<f32>()?;
+    tracing::info!("softmax_image_vec: {:?}", softmax_image_vec);
+
+    let probability_vec = softmax_image_vec
+        .iter()
+        .map(|v| v * 100.0)
+        .collect::<Vec<f32>>();
+
+    let probability_per_image = probability_vec.len() / vec_imgs.len();
+
+    for (i, img) in vec_imgs.iter().enumerate() {
+        let start = i * probability_per_image;
+        let end = start + probability_per_image;
+        let prob = &probability_vec[start..end];
+        tracing::info!("\n\nResults for image: {}\n", img);
+
+        for (i, p) in prob.iter().enumerate() {
+            tracing::info!("Probability: {:.4}% Text: {} ", p, text_sequences[i]);
+        }
+    }
 
     Ok(())
 }
 
-pub fn load_weights(model: Option<String>, device: &Device) -> anyhow::Result<VarBuilder> {
+pub fn load_weights(model: Option<String>, device: &Device) -> anyhow::Result<nn::VarBuilder> {
     let model_file = match model {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
@@ -79,26 +99,7 @@ pub fn load_weights(model: Option<String>, device: &Device) -> anyhow::Result<Va
         }
         Some(model) => model.into(),
     };
-    Ok(VarBuilder::from_pth(model_file, DType::F32, device)?)
-}
-
-pub fn load_transformer(
-    model: Option<String>,
-    device: &Device,
-) -> anyhow::Result<(
-    vision_model::ChineseClipVisionTransformer,
-    text_model::ChineseClipTextTransformer,
-)> {
-    let var = load_weights(model, device)?;
-    let vision_transformer = vision_model::ChineseClipVisionTransformer::new(
-        var.pp("vision_model"),
-        &vision_model::ChineseClipVisionConfig::clip_vit_base_patch16(),
-    )?;
-    let text_transformer = text_model::ChineseClipTextTransformer::new(
-        var.pp("text_model"),
-        &text_model::ChineseClipTextConfig::clip_vit_base_patch16(),
-    )?;
-    Ok((vision_transformer, text_transformer))
+    Ok(nn::VarBuilder::from_pth(model_file, DType::F32, device)?)
 }
 
 pub fn load_tokenizer() -> anyhow::Result<Tokenizer> {
@@ -128,46 +129,53 @@ pub fn tokenize_sequences(
         .get_vocab(true)
         .get("[PAD]")
         .ok_or(anyhow::Error::msg("No pad token"))?;
-    tracing::info!("pad_id: {}", pad_id);
+    tracing::debug!("pad_id: {}", pad_id);
 
     let vec_seq = match sequences {
         Some(seq) => seq,
         None => vec![
-            "一场自行车比赛".to_string(),
-            "一张包含两只猫的照片".to_string(),
-            "一个拿着蜡烛的机器人".to_string(),
+            "自行车比赛".to_string(),
+            "两只猫".to_string(),
+            "拿着蜡烛的机器人".to_string(),
+            // "a cycling race".to_string(),
+            // "a photo of two cats".to_string(),
+            // "a robot holding a candle".to_string(),
         ],
     };
 
     let mut tokens = vec![];
 
-    let mut type_ids = vec![];
+    // let mut type_ids = vec![];
     for seq in vec_seq.clone() {
         let encoding = tokenizer.encode(seq, true).map_err(anyhow::Error::msg)?;
-        tracing::debug!("encoding: {:?}", encoding);
-        tokens.push(encoding.get_ids().to_vec());
-        if encoding.get_type_ids().len() > type_ids.len() {
-            type_ids = encoding.get_type_ids().to_vec();
-        }
+        tracing::info!("encoding: {:?}", encoding);
+        tokens.push(encoding);
     }
 
     let max_len = tokens.iter().map(|v| v.len()).max().unwrap_or(0);
+    
+
+
 
     // Pad the sequences to have the same length
-    for token_vec in tokens.iter_mut() {
-        let len_diff = max_len - token_vec.len();
-        if len_diff > 0 {
-            token_vec.extend(vec![pad_id; len_diff]);
-        }
-    }
+    // for token_vec in tokens.iter_mut() {
+    //     let len_diff = max_len - token_vec.len();
+    //     if len_diff > 0 {
+    //         token_vec.extend(vec![pad_id; len_diff]);
+    //     }
+    // }
 
-    let input_ids = Tensor::new(tokens, device)?;
-    let type_ids = Tensor::new(type_ids, device)?;
+    // let input_ids = Tensor::new(tokens, device)?;
+    // let type_ids = Tensor::new(type_ids, device)?;
 
-    Ok((input_ids, type_ids, vec_seq))
+    // Ok((input_ids, type_ids, vec_seq))
+    todo!()
 }
 
-pub fn load_images(images: Option<Vec<String>>, device: &Device) -> anyhow::Result<Tensor> {
+pub fn load_images(
+    images: Option<Vec<String>>,
+    device: &Device,
+) -> anyhow::Result<(Tensor, Vec<String>)> {
     let vec_imgs = match images {
         Some(imgs) => imgs,
         None => vec![
@@ -184,7 +192,7 @@ pub fn load_images(images: Option<Vec<String>>, device: &Device) -> anyhow::Resu
     }
 
     let images = Tensor::stack(&images, 0)?.to_device(device)?;
-    Ok(images)
+    Ok((images, vec_imgs))
 }
 
 fn load_image<T: AsRef<std::path::Path>>(path: T, image_size: usize) -> anyhow::Result<Tensor> {

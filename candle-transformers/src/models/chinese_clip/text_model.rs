@@ -587,6 +587,7 @@ impl ChineseClipTextTransformer {
     ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let embedding_output = self.embeddings.forward(input_ids, token_type_ids)?;
+        tracing::info!("embedding_output: {:?}", embedding_output.shape());
         let attention_mask = match attention_mask {
             Some(attention_mask) => attention_mask.clone(),
             None => input_ids.ones_like()?,
@@ -594,7 +595,9 @@ impl ChineseClipTextTransformer {
         // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L995
         let attention_mask = get_extended_attention_mask(&attention_mask, DType::F32)?;
         let encoder_outputs = self.encoder.forward(&embedding_output, &attention_mask)?;
-        let encoder_output = encoder_outputs.get(0)?;
+        tracing::info!("encoder_outputs: {:?}", encoder_outputs.shape());
+        let encoder_output = encoder_outputs.i((.., 0, ..))?;
+        tracing::info!("encoder_output: {:?}", encoder_output.shape());
         let pooled_output = match &self.pooler {
             Some(pooler) => pooler.forward(&encoder_output)?,
             None => encoder_output,

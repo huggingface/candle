@@ -157,8 +157,14 @@ impl ChineseClipModel {
         })
     }
 
-    pub fn get_text_features(&self, input_ids: &Tensor) -> Result<Tensor> {
-        let output = self.text_model.forward(input_ids, None, None)?;
+    pub fn get_text_features(
+        &self,
+        input_ids: &Tensor,
+        token_type_ids: Option<&Tensor>,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let output = self.text_model.forward(input_ids, token_type_ids, attention_mask)?;
+        tracing::info!("text_model output shape: {:?}", output.shape());
         self.text_projection.forward(&output)
     }
 
@@ -170,7 +176,12 @@ impl ChineseClipModel {
 
     pub fn forward(&self, pixel_values: &Tensor, input_ids: &Tensor) -> Result<(Tensor, Tensor)> {
         let image_features = self.get_image_features(pixel_values)?;
-        let text_features = self.get_text_features(input_ids)?;
+        let text_features = self.get_text_features(input_ids, None, None)?;
+        tracing::info!(
+            "image_features shape: {:?}, text_features shape: {:?}",
+            image_features.shape(),
+            text_features.shape()
+        );
         let image_features_normalized = div_l2_norm(&image_features)?;
         let text_features_normalized = div_l2_norm(&text_features)?;
         let logits_per_text = text_features_normalized.matmul(&image_features_normalized.t()?)?;

@@ -115,6 +115,11 @@ pub fn main() -> anyhow::Result<()> {
     let (input_ids, vec_seq) = tokenize_sequences(args.sequences, &tokenizer, &device)?;
 
     let (_logits_per_text, logits_per_image) = model.forward(&images, &input_ids)?;
+    tracing::info!(
+        "====> {:?}, {:?}",
+        _logits_per_text.shape(),
+        logits_per_image.shape()
+    );
 
     let softmax_image = softmax(&logits_per_image, 1)?;
 
@@ -176,6 +181,9 @@ pub fn tokenize_sequences(
             "a cycling race".to_string(),
             "a photo of two cats".to_string(),
             "a robot holding a candle".to_string(),
+            "一场自行车比赛".to_string(),
+            "一张包含两只猫的照片".to_string(),
+            "一个拿着蜡烛的机器人".to_string(),
         ],
     };
 
