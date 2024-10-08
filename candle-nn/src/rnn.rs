@@ -297,6 +297,7 @@ pub struct GRUConfig {
     pub w_hh_init: super::Init,
     pub b_ih_init: Option<super::Init>,
     pub b_hh_init: Option<super::Init>,
+    pub layer_idx: usize,
     pub direction: Direction,
 }
 
@@ -307,6 +308,7 @@ impl Default for GRUConfig {
             w_hh_init: super::init::DEFAULT_KAIMING_UNIFORM,
             b_ih_init: Some(super::Init::Const(0.)),
             b_hh_init: Some(super::Init::Const(0.)),
+            layer_idx: 0,
             direction: Direction::Forward,
         }
     }
@@ -319,6 +321,7 @@ impl GRUConfig {
             w_hh_init: super::init::DEFAULT_KAIMING_UNIFORM,
             b_ih_init: None,
             b_hh_init: None,
+            layer_idx: 0,
             direction: Direction::Forward,
         }
     }
@@ -348,24 +351,25 @@ impl GRU {
         config: GRUConfig,
         vb: crate::VarBuilder,
     ) -> Result<Self> {
+        let layer_idx = config.layer_idx;
         let direction_str = match config.direction {
             Direction::Forward => "",
             Direction::Backward => "_reverse",
         };
         let w_ih = vb.get_with_hints(
             (3 * hidden_dim, in_dim),
-            &format!("weight_ih_l0{direction_str}"), // Only a single layer is supported.
+            &format!("weight_ih_l{layer_idx}{direction_str}"),
             config.w_ih_init,
         )?;
         let w_hh = vb.get_with_hints(
             (3 * hidden_dim, hidden_dim),
-            &format!("weight_hh_l0{direction_str}"), // Only a single layer is supported.
+            &format!("weight_hh_l{layer_idx}{direction_str}"),
             config.w_hh_init,
         )?;
         let b_ih = match config.b_ih_init {
             Some(init) => Some(vb.get_with_hints(
                 3 * hidden_dim,
-                &format!("bias_ih_l0{direction_str}"),
+                &format!("bias_ih_l{layer_idx}{direction_str}"),
                 init,
             )?),
             None => None,
@@ -373,7 +377,7 @@ impl GRU {
         let b_hh = match config.b_hh_init {
             Some(init) => Some(vb.get_with_hints(
                 3 * hidden_dim,
-                &format!("bias_hh_l0{direction_str}"),
+                &format!("bias_hh_l{layer_idx}{direction_str}"),
                 init,
             )?),
             None => None,
