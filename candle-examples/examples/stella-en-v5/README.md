@@ -38,3 +38,8 @@ $ cargo run --example stella-en-v5 --release --features <metal | cuda>
 > of cancer. The polyphenols in green tea may also have anti-inflammatory and weight loss properties.
 >
 ```
+
+## Supported options:
+- `Stella_en_15B_v5` supports 256, 768, 1024, 2048, 4096, 6144 and 8192 embedding dimensions (though the model card mentions 512, I couldn't find weights for the same). In the example run this is supported with `--embed-dim` option. E.g. `... --embed-dim 4096`. Defaults to `1024`.
+
+- As per the [model card](https://huggingface.co/dunzhang/stella_en_1.5B_v5), the model has been primarily trained on `s2s` (similarity) and `s2p` (retrieval) tasks. These require a slightly different `query` preprocessing (a different prompt template for each). In this example this is enabled though `--task` option.
