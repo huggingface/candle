@@ -1,3 +1,6 @@
+//! Tensor ops.
+//!
+
 use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
