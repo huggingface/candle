@@ -1,3 +1,5 @@
+//! Cache Implementations
+//!
 use candle::{Device, Result, Tensor};
 
 #[derive(Debug, Clone)]

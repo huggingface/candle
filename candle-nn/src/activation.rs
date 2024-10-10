@@ -1,3 +1,5 @@
+//! Activation Functions
+//!
 use candle::{Result, Tensor};
 use serde::Deserialize;
 
