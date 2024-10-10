@@ -18,7 +18,6 @@ use super::Activation;
 /// with Better Relative Position Embeddings (Huang et al.)](https://arxiv.org/abs/2009.13658).
 #[derive(Clone, Debug)]
 pub enum PositionEmbeddingType {
-    // TODO: 2024/09/19 11:04:35 使用 serde 转成下划线命名
     Absolute,
     RelativeKey,
     RelativeKeyQuery,
@@ -26,22 +25,6 @@ pub enum PositionEmbeddingType {
 
 #[derive(Clone, Debug)]
 pub struct ChineseClipTextConfig {
-    //  vocab_size=30522,
-    //     hidden_size=768,
-    //     num_hidden_layers=12,
-    //     num_attention_heads=12,
-    //     intermediate_size=3072,
-    //     hidden_act="gelu",
-    //     hidden_dropout_prob=0.1,
-    //     attention_probs_dropout_prob=0.1,
-    //     max_position_embeddings=512,
-    //     type_vocab_size=2,
-    //     initializer_range=0.02,
-    //     initializer_factor=1.0,
-    //     layer_norm_eps=1e-12,
-    //     pad_token_id=0,
-    //     position_embedding_type="absolute",
-    //     use_cache=True,
     pub vocab_size: usize,
     pub hidden_size: usize,
     pub num_hidden_layers: usize,
@@ -84,33 +67,6 @@ impl Default for ChineseClipTextConfig {
 }
 
 impl ChineseClipTextConfig {
-    // "architectures": [
-    //   "ChineseCLIPTextModel"
-    // ],
-    // "attention_probs_dropout_prob": 0.1,
-    // "bos_token_id": 0,
-    // "directionality": "bidi",
-    // "eos_token_id": 2,
-    // "hidden_act": "gelu",
-    // "hidden_dropout_prob": 0.1,
-    // "hidden_size": 768,
-    // "initializer_range": 0.02,
-    // "intermediate_size": 3072,
-    // "layer_norm_eps": 1e-12,
-    // "max_position_embeddings": 512,
-    // "model_type": "chinese_clip_text_model",
-    // "num_attention_heads": 12,
-    // "num_hidden_layers": 12,
-    // "output_past": true,
-    // "pad_token_id": 0,
-    // "pooler_fc_size": 768,
-    // "pooler_num_attention_heads": 12,
-    // "pooler_num_fc_layers": 3,
-    // "pooler_size_per_head": 128,
-    // "pooler_type": "first_token_transform",
-    // "type_vocab_size": 2,
-    // "vocab_size": 21128
-
     /// referer: https://huggingface.co/OFA-Sys/chinese-clip-vit-base-patch16/blob/main/config.json
     pub fn clip_vit_base_patch16() -> Self {
         Self {
@@ -445,9 +401,7 @@ impl ChineseClipTextLayer {
     fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let attention_output = self.attention.forward(hidden_states, attention_mask)?;
-        // TODO: Support cross-attention?
         // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L523
-        // TODO: Support something similar to `apply_chunking_to_forward`?
         let intermediate_output = self.intermediate.forward(&attention_output)?;
         let layer_output = self
             .output
@@ -532,7 +486,7 @@ impl ChineseClipTextTransformer {
     pub fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
         let embeddings = ChineseClipTextEmbeddings::new(var.pp("embeddings"), config)?;
         let encoder = ChineseClipTextEncoder::new(var.pp("encoder"), config)?;
-        //see: https://github.com/huggingface/transformers/blob/e40bb4845e0eefb52ec1e9cac9c2446ab36aef81/src/transformers/models/chinese_clip/modeling_chinese_clip.py#L1362
+        // see: https://github.com/huggingface/transformers/blob/e40bb4845e0eefb52ec1e9cac9c2446ab36aef81/src/transformers/models/chinese_clip/modeling_chinese_clip.py#L1362
         // In the original Python version of the code, the pooler is not used, and there are no parameters for the pooler in the weight file.
         let pooler = if var.contains_tensor("pooler") {
             Some(ChineseClipTextPooler::new(var.pp("pooler"), config)?)
@@ -569,8 +523,6 @@ impl ChineseClipTextTransformer {
             None => encoder_output,
         };
 
-        // FIXME: 2024/09/20 10:23:00 这里还有一些处理，https://github.com/huggingface/transformers/blob/e40bb4845e0eefb52ec1e9cac9c2446ab36aef81/src/transformers/models/chinese_clip/modeling_chinese_clip.py#L1265C19-L1265C74
-        // 后续再研究
         Ok(pooled_output)
     }
 }

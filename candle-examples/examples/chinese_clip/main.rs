@@ -4,12 +4,10 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use clap::Parser;
-
-use candle::{DType, Device, IndexOp, Tensor};
+use candle::{DType, Device, Tensor};
 use candle_nn as nn;
 use candle_transformers::models::chinese_clip::{ChineseClipConfig, ChineseClipModel};
-
+use clap::Parser;
 use tokenizers::Tokenizer;
 
 #[derive(Parser)]
@@ -39,12 +37,6 @@ fn main() -> anyhow::Result<()> {
     let var = load_weights(args.model, &device)?;
     let clip_model = ChineseClipModel::new(var, &ChineseClipConfig::clip_vit_base_patch16())?;
     tracing::info!("Transformer loaded. ");
-
-    // let pixel_values = candle::pickle::PthTensors::new(
-    //     "/home/shawn/workspace/rum-backend-python/tmp/pixel_values.pt",
-    //     None,
-    // )?;
-    // let pixel_values = pixel_values.get("pixel_values")?.unwrap();
 
     let (pixel_values, vec_imgs) = load_images(args.images, &device)?;
     tracing::info!("Images loaded. ");
@@ -86,44 +78,35 @@ fn main() -> anyhow::Result<()> {
 }
 
 pub fn load_weights(model: Option<String>, device: &Device) -> anyhow::Result<nn::VarBuilder> {
-    // let model_file = match model {
-    //     None => {
-    //         let api = hf_hub::api::sync::Api::new()?;
-    //         let repo = hf_hub::Repo::with_revision(
-    //             "OFA-Sys/chinese-clip-vit-base-patch16".to_string(),
-    //             hf_hub::RepoType::Model,
-    //             "36e679e".to_string(),
-    //         );
-    //         let api = api.repo(repo);
-    //         api.get("pytorch_model.bin")?
-    //     }
-    //     Some(model) => model.into(),
-    // };
-    // Ok(nn::VarBuilder::from_pth(model_file, DType::F32, device)?)
+    let model_file = match model {
+        None => {
+            let api = hf_hub::api::sync::Api::new()?;
+            let repo = hf_hub::Repo::with_revision(
+                "OFA-Sys/chinese-clip-vit-base-patch16".to_string(),
+                hf_hub::RepoType::Model,
+                "refs/pr/3".to_string(),
+            );
+            let api = api.repo(repo);
+            api.get("model.safetensors")?
+        }
+        Some(model) => model.into(),
+    };
 
-    let model_file = std::path::Path::new(
-        "/home/shawn/workspace/rum-backend-python/tmp/chinese-clip-vit-base-patch16.safetensors",
-    );
-    let vb =
-        unsafe { nn::VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
-    Ok(vb)
+    Ok(unsafe { nn::VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? })
 }
 
 pub fn load_tokenizer() -> anyhow::Result<Tokenizer> {
-    // let model_file = match model {
-    //     None => {
-    //         let api = hf_hub::api::sync::Api::new()?;
-    //         let repo = hf_hub::Repo::with_revision(
-    //             "OFA-Sys/chinese-clip-vit-base-patch16".to_string(),
-    //             hf_hub::RepoType::Model,
-    //             "36e679e".to_string(),
-    //         );
-    //         let api = api.repo(repo);
-    //         api.get("pytorch_model.bin")?
-    //     }
-    //     Some(model) => model.into(),
-    // };
-    let tokenizer_file = "/home/shawn/workspace/rum-backend-python/tmp/tokenizer.json";
+    let tokenizer_file = {
+        let api = hf_hub::api::sync::Api::new()?;
+        let repo = hf_hub::Repo::with_revision(
+            "OFA-Sys/chinese-clip-vit-base-patch16".to_string(),
+            hf_hub::RepoType::Model,
+            "refs/pr/3".to_string(),
+        );
+        let api = api.repo(repo);
+        api.get("tokenizer.json")?
+    };
+
     Tokenizer::from_file(tokenizer_file).map_err(anyhow::Error::msg)
 }
 
@@ -228,14 +211,7 @@ fn load_image<T: AsRef<std::path::Path>>(
         image::imageops::FilterType::Triangle,
     );
 
-    let img = img.to_rgb8();
-
-    let img = img.into_raw();
-    // let img = Tensor::from_vec(img, (height, width, 3), device)?
-    //     .permute((2, 0, 1))?
-    //     .to_dtype(DType::F32)?
-    //     .affine(2. / 255., -1.)?;
-
+    let img = img.to_rgb8().into_raw();
     let img = Tensor::from_vec(img, (height, width, 3), device)?.permute((2, 0, 1))?;
     let mean = Tensor::new(&[0.48145466f32, 0.4578275, 0.40821073], device)?.reshape((3, 1, 1))?;
     let std = Tensor::new(&[0.26862954f32, 0.26130258, 0.27577711], device)?.reshape((3, 1, 1))?;

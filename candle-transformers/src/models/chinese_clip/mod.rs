@@ -148,7 +148,6 @@ impl ChineseClipModel {
         let text_projection =
             nn::linear_no_bias(text_embed_dim, c.projection_dim, vs.pp("text_projection"))?;
 
-        // originally nn.Parameter
         let logit_scale = if vs.contains_tensor("logit_scale") {
             vs.get(&[], "logit_scale")?
         } else {

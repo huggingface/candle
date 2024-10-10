@@ -8,7 +8,6 @@
 
 use candle::{DType, IndexOp, Module, Result, Shape, Tensor, D};
 use candle_nn as nn;
-use serde::de::value;
 
 use super::{Activation, EncoderConfig};
 
@@ -170,7 +169,6 @@ impl ChineseClipVisionAttention {
     }
 
     fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
-        // FIXME: 2024/10/09 18:06:36 这里与python版本计算结果不一样
         let in_dtype = xs.dtype();
         let (bsz, seq_len, embed_dim) = xs.dims3()?;
 
@@ -379,9 +377,8 @@ impl Module for ChineseClipVisionTransformer {
             .apply(&self.pre_layer_norm)?;
 
         let encoder_outputs = self.encoder.forward(&hidden_states, None)?;
-        
-        // https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L787
-        // pooled_output = encoder_outputs[:, 0, :]
+
+        // referer: https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L787
         let pooled_output = encoder_outputs.i((.., 0, ..))?;
         self.final_layer_norm.forward(&pooled_output)
     }

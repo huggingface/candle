@@ -115,11 +115,6 @@ pub fn main() -> anyhow::Result<()> {
     let (input_ids, vec_seq) = tokenize_sequences(args.sequences, &tokenizer, &device)?;
 
     let (_logits_per_text, logits_per_image) = model.forward(&images, &input_ids)?;
-    tracing::info!(
-        "====> {:?}, {:?}",
-        _logits_per_text.shape(),
-        logits_per_image.shape()
-    );
 
     let softmax_image = softmax(&logits_per_image, 1)?;
 
