@@ -112,6 +112,13 @@ impl EncoderConfig {
             Self::Vision(c) => c.hidden_act,
         }
     }
+
+    pub fn layer_norm_eps(&self) -> f64 {
+        match self {
+            Self::Text(c) => c.layer_norm_eps,
+            Self::Vision(c) => c.layer_norm_eps,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -163,8 +170,9 @@ impl ChineseClipModel {
         token_type_ids: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
-        let output = self.text_model.forward(input_ids, token_type_ids, attention_mask)?;
-        tracing::info!("text_model output shape: {:?}", output.shape());
+        let output = self
+            .text_model
+            .forward(input_ids, token_type_ids, attention_mask)?;
         self.text_projection.forward(&output)
     }
 
@@ -174,16 +182,19 @@ impl ChineseClipModel {
             .apply(&self.visual_projection)
     }
 
-    pub fn forward(&self, pixel_values: &Tensor, input_ids: &Tensor) -> Result<(Tensor, Tensor)> {
+    pub fn forward(
+        &self,
+        pixel_values: &Tensor,
+        input_ids: &Tensor,
+        token_type_ids: Option<&Tensor>,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<(Tensor, Tensor)> {
         let image_features = self.get_image_features(pixel_values)?;
-        let text_features = self.get_text_features(input_ids, None, None)?;
-        tracing::info!(
-            "image_features shape: {:?}, text_features shape: {:?}",
-            image_features.shape(),
-            text_features.shape()
-        );
+        let text_features = self.get_text_features(input_ids, token_type_ids, attention_mask)?;
+
         let image_features_normalized = div_l2_norm(&image_features)?;
         let text_features_normalized = div_l2_norm(&text_features)?;
+
         let logits_per_text = text_features_normalized.matmul(&image_features_normalized.t()?)?;
         let logit_scale = self.logit_scale.exp()?;
         let logits_per_text = logits_per_text.broadcast_mul(&logit_scale)?;

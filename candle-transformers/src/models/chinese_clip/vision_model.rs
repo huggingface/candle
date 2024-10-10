@@ -8,6 +8,7 @@
 
 use candle::{DType, IndexOp, Module, Result, Shape, Tensor, D};
 use candle_nn as nn;
+use serde::de::value;
 
 use super::{Activation, EncoderConfig};
 
@@ -22,7 +23,7 @@ pub struct ChineseClipVisionConfig {
     pub image_size: usize,
     pub patch_size: usize,
     pub hidden_act: Activation,
-    pub layer_norm_eps: f32,
+    pub layer_norm_eps: f64,
     pub attention_dropout: f32,
     pub initializer_range: f32,
     pub initializer_factor: f32,
@@ -169,13 +170,13 @@ impl ChineseClipVisionAttention {
     }
 
     fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
+        // FIXME: 2024/10/09 18:06:36 这里与python版本计算结果不一样
         let in_dtype = xs.dtype();
         let (bsz, seq_len, embed_dim) = xs.dims3()?;
 
-        let query_states = (self.q_proj.forward(xs)? * self.scale)?;
         let proj_shape = (bsz * self.num_attention_heads, seq_len, self.head_dim);
         let query_states = self
-            .shape(&query_states, seq_len, bsz)?
+            .shape(&(self.q_proj.forward(xs)? * self.scale)?, seq_len, bsz)?
             .reshape(proj_shape)?
             .to_dtype(DType::F32)?;
         let key_states = self
@@ -186,6 +187,7 @@ impl ChineseClipVisionAttention {
             .shape(&self.v_proj.forward(xs)?, seq_len, bsz)?
             .reshape(proj_shape)?
             .to_dtype(DType::F32)?;
+
         let attn_weights = query_states.matmul(&key_states.transpose(1, 2)?)?;
 
         let src_len = key_states.dim(1)?;
@@ -256,9 +258,17 @@ struct ChineseClipVisionEncoderLayer {
 impl ChineseClipVisionEncoderLayer {
     fn new(var: nn::VarBuilder, config: &EncoderConfig) -> Result<Self> {
         let self_attn = ChineseClipVisionAttention::new(var.pp("self_attn"), config)?;
-        let layer_norm1 = nn::layer_norm(config.embed_dim(), 1e-5, var.pp("layer_norm1"))?;
+        let layer_norm1 = nn::layer_norm(
+            config.embed_dim(),
+            config.layer_norm_eps(),
+            var.pp("layer_norm1"),
+        )?;
         let mlp = ChineseClipVisionMlp::new(var.pp("mlp"), config)?;
-        let layer_norm2 = nn::layer_norm(config.embed_dim(), 1e-5, var.pp("layer_norm2"))?;
+        let layer_norm2 = nn::layer_norm(
+            config.embed_dim(),
+            config.layer_norm_eps(),
+            var.pp("layer_norm2"),
+        )?;
 
         Ok(ChineseClipVisionEncoderLayer {
             self_attn,
@@ -304,6 +314,7 @@ impl ChineseClipVisionEncoder {
         }
         Ok(xs)
     }
+
     // required by LLaVA
     pub fn output_hidden_states(
         &self,
@@ -332,12 +343,14 @@ impl ChineseClipVisionTransformer {
     pub fn new(var: nn::VarBuilder, config: &ChineseClipVisionConfig) -> Result<Self> {
         let embed_dim = config.hidden_size;
         let embeddings = ChineseClipVisionEmbeddings::new(var.pp("embeddings"), config)?;
-        let pre_layer_norm = nn::layer_norm(embed_dim, 1e-5, var.pp("pre_layrnorm"))?;
+        let pre_layer_norm =
+            nn::layer_norm(embed_dim, config.layer_norm_eps, var.pp("pre_layrnorm"))?;
         let encoder = ChineseClipVisionEncoder::new(
             var.pp("encoder"),
             &EncoderConfig::Vision(config.clone()),
         )?;
-        let final_layer_norm = nn::layer_norm(embed_dim, 1e-5, var.pp("post_layernorm"))?;
+        let final_layer_norm =
+            nn::layer_norm(embed_dim, config.layer_norm_eps, var.pp("post_layernorm"))?;
         Ok(Self {
             embeddings,
             encoder,
@@ -350,6 +363,7 @@ impl ChineseClipVisionTransformer {
         let hidden_states = pixel_values
             .apply(&self.embeddings)?
             .apply(&self.pre_layer_norm)?;
+
         let mut result = self.encoder.output_hidden_states(&hidden_states, None)?;
         let encoder_outputs = result.last().unwrap();
         let pooled_output = encoder_outputs.i((.., 0, ..))?;
@@ -365,6 +379,7 @@ impl Module for ChineseClipVisionTransformer {
             .apply(&self.pre_layer_norm)?;
 
         let encoder_outputs = self.encoder.forward(&hidden_states, None)?;
+        
         // https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L787
         // pooled_output = encoder_outputs[:, 0, :]
         let pooled_output = encoder_outputs.i((.., 0, ..))?;

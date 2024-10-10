@@ -519,37 +519,6 @@ impl ChineseClipTextEncoder {
     }
 }
 
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-    use candle::{Device, IndexOp};
-
-    #[test]
-    pub fn test_tmp() {
-        let data = Tensor::arange(0.0, 100.0, &Device::Cpu).unwrap();
-        println!("{:?}", data);
-        println!("{:?}", data.shape());
-
-        let data = data.unsqueeze(0).unwrap();
-        println!("{:?}", data);
-        println!("{:?}", data.shape());
-
-        let seq_length = 10;
-        let position_ids = (0..seq_length as u32).collect::<Vec<_>>();
-        let position_ids = data
-            .index_select(&Tensor::new(&position_ids[..], data.device()).unwrap(), 1)
-            .unwrap();
-        println!("{:?}", position_ids);
-        println!("{:?}", position_ids.shape());
-
-        let data = Tensor::rand(1.0, 10.0, vec![2, 3], &Device::Cpu).unwrap();
-        println!("---> {}", data.to_string());
-        let data = data.i((.., 1..=2)).unwrap();
-        print!("{}", data.to_string());
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct ChineseClipTextTransformer {
     embeddings: ChineseClipTextEmbeddings,
@@ -587,7 +556,6 @@ impl ChineseClipTextTransformer {
     ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let embedding_output = self.embeddings.forward(input_ids, token_type_ids)?;
-        tracing::info!("embedding_output: {:?}", embedding_output.shape());
         let attention_mask = match attention_mask {
             Some(attention_mask) => attention_mask.clone(),
             None => input_ids.ones_like()?,
@@ -595,13 +563,12 @@ impl ChineseClipTextTransformer {
         // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L995
         let attention_mask = get_extended_attention_mask(&attention_mask, DType::F32)?;
         let encoder_outputs = self.encoder.forward(&embedding_output, &attention_mask)?;
-        tracing::info!("encoder_outputs: {:?}", encoder_outputs.shape());
         let encoder_output = encoder_outputs.i((.., 0, ..))?;
-        tracing::info!("encoder_output: {:?}", encoder_output.shape());
         let pooled_output = match &self.pooler {
             Some(pooler) => pooler.forward(&encoder_output)?,
             None => encoder_output,
         };
+
         // FIXME: 2024/09/20 10:23:00 这里还有一些处理，https://github.com/huggingface/transformers/blob/e40bb4845e0eefb52ec1e9cac9c2446ab36aef81/src/transformers/models/chinese_clip/modeling_chinese_clip.py#L1265C19-L1265C74
         // 后续再研究
         Ok(pooled_output)

@@ -6,7 +6,7 @@ extern crate accelerate_src;
 
 use clap::Parser;
 
-use candle::{DType, Device, Tensor};
+use candle::{DType, Device, IndexOp, Tensor};
 use candle_nn as nn;
 use candle_transformers::models::chinese_clip::{ChineseClipConfig, ChineseClipModel};
 
@@ -40,29 +40,29 @@ fn main() -> anyhow::Result<()> {
     let clip_model = ChineseClipModel::new(var, &ChineseClipConfig::clip_vit_base_patch16())?;
     tracing::info!("Transformer loaded. ");
 
-    let (pixel_values, vec_imgs) = load_images(args.images, &device)?;
-    tracing::info!("Image loaded. ");
-    tracing::info!("pixel_values: {:?}", pixel_values.shape());
+    // let pixel_values = candle::pickle::PthTensors::new(
+    //     "/home/shawn/workspace/rum-backend-python/tmp/pixel_values.pt",
+    //     None,
+    // )?;
+    // let pixel_values = pixel_values.get("pixel_values")?.unwrap();
 
-    let features = clip_model.get_image_features(&pixel_values)?;
-    tracing::warn!("features: {}", features.to_string());
+    let (pixel_values, vec_imgs) = load_images(args.images, &device)?;
+    tracing::info!("Images loaded. ");
 
     let tokenizer = load_tokenizer()?;
-    let (input_ids, _type_ids, text_sequences) =
+    let (input_ids, type_ids, attention_mask, text_sequences) =
         tokenize_sequences(args.sequences, &tokenizer, &device)?;
-    tracing::info!("\n{}", input_ids.to_string());
-    let features = clip_model.get_text_features(&input_ids, None, None)?;
-    tracing::warn!("features: {}", features.to_string());
 
-    let (_logits_per_text, logits_per_image) = clip_model.forward(&pixel_values, &input_ids)?;
-    tracing::info!(
-        "====> {:?}, {:?}",
-        _logits_per_text.shape(),
-        logits_per_image.shape()
-    );
+    tracing::info!("Computing ... ");
+    let (_logits_per_text, logits_per_image) = clip_model.forward(
+        &pixel_values,
+        &input_ids,
+        Some(&type_ids),
+        Some(&attention_mask),
+    )?;
     let softmax_image = nn::ops::softmax(&logits_per_image, 1)?;
+
     let softmax_image_vec = softmax_image.flatten_all()?.to_vec1::<f32>()?;
-    tracing::info!("softmax_image_vec: {:?}", softmax_image_vec);
 
     let probability_vec = softmax_image_vec
         .iter()
@@ -86,20 +86,27 @@ fn main() -> anyhow::Result<()> {
 }
 
 pub fn load_weights(model: Option<String>, device: &Device) -> anyhow::Result<nn::VarBuilder> {
-    let model_file = match model {
-        None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let repo = hf_hub::Repo::with_revision(
-                "OFA-Sys/chinese-clip-vit-base-patch16".to_string(),
-                hf_hub::RepoType::Model,
-                "36e679e".to_string(),
-            );
-            let api = api.repo(repo);
-            api.get("pytorch_model.bin")?
-        }
-        Some(model) => model.into(),
-    };
-    Ok(nn::VarBuilder::from_pth(model_file, DType::F32, device)?)
+    // let model_file = match model {
+    //     None => {
+    //         let api = hf_hub::api::sync::Api::new()?;
+    //         let repo = hf_hub::Repo::with_revision(
+    //             "OFA-Sys/chinese-clip-vit-base-patch16".to_string(),
+    //             hf_hub::RepoType::Model,
+    //             "36e679e".to_string(),
+    //         );
+    //         let api = api.repo(repo);
+    //         api.get("pytorch_model.bin")?
+    //     }
+    //     Some(model) => model.into(),
+    // };
+    // Ok(nn::VarBuilder::from_pth(model_file, DType::F32, device)?)
+
+    let model_file = std::path::Path::new(
+        "/home/shawn/workspace/rum-backend-python/tmp/chinese-clip-vit-base-patch16.safetensors",
+    );
+    let vb =
+        unsafe { nn::VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
+    Ok(vb)
 }
 
 pub fn load_tokenizer() -> anyhow::Result<Tokenizer> {
@@ -124,52 +131,65 @@ pub fn tokenize_sequences(
     sequences: Option<Vec<String>>,
     tokenizer: &Tokenizer,
     device: &Device,
-) -> anyhow::Result<(Tensor, Tensor, Vec<String>)> {
-    let pad_id = *tokenizer
-        .get_vocab(true)
-        .get("[PAD]")
-        .ok_or(anyhow::Error::msg("No pad token"))?;
-    tracing::debug!("pad_id: {}", pad_id);
-
+) -> anyhow::Result<(Tensor, Tensor, Tensor, Vec<String>)> {
     let vec_seq = match sequences {
         Some(seq) => seq,
         None => vec![
             "自行车比赛".to_string(),
-            "两只猫".to_string(),
+            "两只猫咪".to_string(),
             "拿着蜡烛的机器人".to_string(),
-            // "a cycling race".to_string(),
-            // "a photo of two cats".to_string(),
-            // "a robot holding a candle".to_string(),
         ],
     };
 
-    let mut tokens = vec![];
+    let mut input_ids = vec![];
+    let mut type_ids = vec![];
+    let mut attention_mask = vec![];
+    let mut max_len = 0;
 
-    // let mut type_ids = vec![];
     for seq in vec_seq.clone() {
         let encoding = tokenizer.encode(seq, true).map_err(anyhow::Error::msg)?;
-        tracing::info!("encoding: {:?}", encoding);
-        tokens.push(encoding);
+        input_ids.push(encoding.get_ids().to_vec());
+        type_ids.push(encoding.get_type_ids().to_vec());
+        attention_mask.push(encoding.get_attention_mask().to_vec());
+        if encoding.get_ids().len() > max_len {
+            max_len = encoding.get_ids().len();
+        }
     }
 
-    let max_len = tokens.iter().map(|v| v.len()).max().unwrap_or(0);
-    
+    let pad_id = *tokenizer
+        .get_vocab(true)
+        .get("[PAD]")
+        .ok_or(anyhow::Error::msg("No pad token"))?;
 
+    let input_ids: Vec<Vec<u32>> = input_ids
+        .iter_mut()
+        .map(|item| {
+            item.extend(vec![pad_id; max_len - item.len()]);
+            item.to_vec()
+        })
+        .collect();
 
+    let type_ids: Vec<Vec<u32>> = type_ids
+        .iter_mut()
+        .map(|item| {
+            item.extend(vec![0; max_len - item.len()]);
+            item.to_vec()
+        })
+        .collect();
 
-    // Pad the sequences to have the same length
-    // for token_vec in tokens.iter_mut() {
-    //     let len_diff = max_len - token_vec.len();
-    //     if len_diff > 0 {
-    //         token_vec.extend(vec![pad_id; len_diff]);
-    //     }
-    // }
+    let attention_mask: Vec<Vec<u32>> = attention_mask
+        .iter_mut()
+        .map(|item| {
+            item.extend(vec![0; max_len - item.len()]);
+            item.to_vec()
+        })
+        .collect();
 
-    // let input_ids = Tensor::new(tokens, device)?;
-    // let type_ids = Tensor::new(type_ids, device)?;
+    let input_ids = Tensor::new(input_ids, device)?;
+    let type_ids = Tensor::new(type_ids, device)?;
+    let attention_mask = Tensor::new(attention_mask, device)?;
 
-    // Ok((input_ids, type_ids, vec_seq))
-    todo!()
+    Ok((input_ids, type_ids, attention_mask, vec_seq))
 }
 
 pub fn load_images(
@@ -187,7 +207,7 @@ pub fn load_images(
     let mut images = vec![];
 
     for path in vec_imgs.iter() {
-        let tensor = load_image(path, 224)?;
+        let tensor = load_image(path, 224, device)?;
         images.push(tensor);
     }
 
@@ -195,7 +215,11 @@ pub fn load_images(
     Ok((images, vec_imgs))
 }
 
-fn load_image<T: AsRef<std::path::Path>>(path: T, image_size: usize) -> anyhow::Result<Tensor> {
+fn load_image<T: AsRef<std::path::Path>>(
+    path: T,
+    image_size: usize,
+    device: &Device,
+) -> anyhow::Result<Tensor> {
     let img = image::ImageReader::open(path)?.decode()?;
     let (height, width) = (image_size, image_size);
     let img = img.resize_to_fill(
@@ -207,10 +231,17 @@ fn load_image<T: AsRef<std::path::Path>>(path: T, image_size: usize) -> anyhow::
     let img = img.to_rgb8();
 
     let img = img.into_raw();
-    let img = Tensor::from_vec(img, (height, width, 3), &Device::Cpu)?
-        .permute((2, 0, 1))?
-        .to_dtype(DType::F32)?
-        .affine(2. / 255., -1.)?;
-    // .unsqueeze(0)?;
+    // let img = Tensor::from_vec(img, (height, width, 3), device)?
+    //     .permute((2, 0, 1))?
+    //     .to_dtype(DType::F32)?
+    //     .affine(2. / 255., -1.)?;
+
+    let img = Tensor::from_vec(img, (height, width, 3), device)?.permute((2, 0, 1))?;
+    let mean = Tensor::new(&[0.48145466f32, 0.4578275, 0.40821073], device)?.reshape((3, 1, 1))?;
+    let std = Tensor::new(&[0.26862954f32, 0.26130258, 0.27577711], device)?.reshape((3, 1, 1))?;
+    let img = (img.to_dtype(DType::F32)? / 255.)?
+        .broadcast_sub(&mean)?
+        .broadcast_div(&std)?;
+
     Ok(img)
 }
