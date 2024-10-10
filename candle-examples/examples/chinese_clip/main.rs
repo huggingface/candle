@@ -92,7 +92,7 @@ pub fn load_weights(model: Option<String>, device: &Device) -> anyhow::Result<nn
         Some(model) => model.into(),
     };
 
-    Ok(unsafe { nn::VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? })
+    Ok(unsafe { nn::VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, device)? })
 }
 
 pub fn load_tokenizer() -> anyhow::Result<Tokenizer> {
@@ -214,7 +214,7 @@ fn load_image<T: AsRef<std::path::Path>>(
     let img = img.to_rgb8().into_raw();
     let img = Tensor::from_vec(img, (height, width, 3), device)?.permute((2, 0, 1))?;
     let mean = Tensor::new(&[0.48145466f32, 0.4578275, 0.40821073], device)?.reshape((3, 1, 1))?;
-    let std = Tensor::new(&[0.26862954f32, 0.26130258, 0.27577711], device)?.reshape((3, 1, 1))?;
+    let std = Tensor::new(&[0.26862954f32, 0.261_302_6, 0.275_777_1], device)?.reshape((3, 1, 1))?;
     let img = (img.to_dtype(DType::F32)? / 255.)?
         .broadcast_sub(&mean)?
         .broadcast_div(&std)?;

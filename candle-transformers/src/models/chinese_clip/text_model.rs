@@ -121,7 +121,7 @@ impl ChineseClipTextEmbeddings {
         )?;
         let layer_norm = nn::layer_norm::<f64>(
             config.hidden_size,
-            config.layer_norm_eps.into(),
+            config.layer_norm_eps,
             var.pp("LayerNorm"),
         )?;
         let dropout = nn::Dropout::new(config.hidden_dropout_prob);
@@ -138,7 +138,7 @@ impl ChineseClipTextEmbeddings {
             dropout,
             position_embedding_type: config.position_embedding_type.clone(),
             position_ids,
-            token_type_ids: token_type_ids,
+            token_type_ids,
         })
     }
 
@@ -150,7 +150,7 @@ impl ChineseClipTextEmbeddings {
             1,
         )?;
 
-        let word_embeddings = self.word_embeddings.forward(&xs)?;
+        let word_embeddings = self.word_embeddings.forward(xs)?;
 
         let token_type_ids = match token_type_ids {
             Some(token_type_ids) => token_type_ids,
