@@ -57,7 +57,7 @@ pub trait RNN {
     fn states_to_tensor(&self, states: &[Self::State]) -> Result<Tensor>;
 
     /// Combines forward and backward states to a tensor.
-    fn combine_states_to_tensor(
+    fn bidirectional_states_to_tensor(
         &self,
         forward_states: &[Self::State],
         backward_states: &[Self::State],
@@ -259,7 +259,7 @@ impl RNN for LSTM {
         Tensor::stack(&states, 1)
     }
 
-    fn combine_states_to_tensor(
+    fn bidirectional_states_to_tensor(
         &self,
         forward_states: &[Self::State],
         backward_states: &[Self::State],
@@ -447,7 +447,7 @@ impl RNN for GRU {
         Tensor::stack(&states, 1)
     }
 
-    fn combine_states_to_tensor(
+    fn bidirectional_states_to_tensor(
         &self,
         forward_states: &[Self::State],
         backward_states: &[Self::State],
