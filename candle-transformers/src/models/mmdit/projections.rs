@@ -42,7 +42,6 @@ pub struct QkvOnlyAttnProjections {
 
 impl QkvOnlyAttnProjections {
     pub fn new(dim: usize, num_heads: usize, vb: nn::VarBuilder) -> Result<Self> {
-        // {'dim': 1536, 'num_heads': 24}
         let head_dim = dim / num_heads;
         let qkv = nn::linear(dim, dim * 3, vb.pp("qkv"))?;
         Ok(Self { qkv, head_dim })

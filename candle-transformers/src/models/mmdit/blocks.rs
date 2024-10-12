@@ -250,6 +250,7 @@ impl ContextQkvOnlyJointBlock {
 
 // A QKV-attention that is compatible with the interface of candle_flash_attn::flash_attn
 // Flash attention regards q, k, v dimensions as (batch_size, seqlen, nheads, headdim)
+#[cfg(not(feature = "flash-attn"))]
 fn flash_compatible_attention(
     q: &Tensor,
     k: &Tensor,
@@ -282,7 +283,11 @@ fn joint_attn(context_qkv: &Qkv, x_qkv: &Qkv, num_heads: usize) -> Result<(Tenso
 
     let headdim = qkv.q.dim(D::Minus1)?;
     let softmax_scale = 1.0 / (headdim as f64).sqrt();
-    // let attn: Tensor = candle_flash_attn::flash_attn(&qkv.q, &qkv.k, &qkv.v, softmax_scale as f32, false)?;
+    #[cfg(feature = "flash-attn")]
+    let attn: Tensor =
+        candle_flash_attn::flash_attn(&qkv.q, &qkv.k, &qkv.v, softmax_scale as f32, false)?;
+
+    #[cfg(not(feature = "flash-attn"))]
     let attn = flash_compatible_attention(&qkv.q, &qkv.k, &qkv.v, softmax_scale as f32)?;
 
     let attn = attn.reshape((batch_size, seqlen, ()))?;

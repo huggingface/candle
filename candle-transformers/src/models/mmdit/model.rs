@@ -23,7 +23,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn sd3() -> Self {
+    pub fn sd3_medium() -> Self {
         Self {
             patch_size: 2,
             in_channels: 16,
