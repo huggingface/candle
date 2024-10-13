@@ -139,7 +139,7 @@ fn run(args: Args) -> Result<()> {
         }
 
         let start_time = std::time::Instant::now();
-        let x = sampling::eular_sample(&mmdit, &y, &context, num_inference_steps, height, width)?;
+        let x = sampling::euler_sample(&mmdit, &y, &context, num_inference_steps, height, width)?;
         let dt = start_time.elapsed().as_secs_f32();
         println!(
             "Sampling done. {num_inference_steps} steps. {:.2}s. Average rate: {:.2} iter/s",

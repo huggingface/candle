@@ -4,7 +4,7 @@ use candle::{DType, Tensor};
 use candle_transformers::models::flux;
 use candle_transformers::models::mmdit::model::MMDiT; // for the get_noise function
 
-pub fn eular_sample(
+pub fn euler_sample(
     mmdit: &MMDiT,
     y: &Tensor,
     context: &Tensor,
