@@ -4,6 +4,7 @@ use candle::{DType, Tensor};
 use candle_transformers::models::flux;
 use candle_transformers::models::mmdit::model::MMDiT; // for the get_noise function
 
+#[allow(clippy::too_many_arguments)]
 pub fn euler_sample(
     mmdit: &MMDiT,
     y: &Tensor,
@@ -14,11 +15,11 @@ pub fn euler_sample(
     height: usize,
     width: usize,
 ) -> Result<Tensor> {
-    let mut x = flux::sampling::get_noise(1, height, width, &y.device())?.to_dtype(DType::F16)?;
+    let mut x = flux::sampling::get_noise(1, height, width, y.device())?.to_dtype(DType::F16)?;
     let sigmas = (0..=num_inference_steps)
         .map(|x| x as f64 / num_inference_steps as f64)
         .rev()
-        .map(|x| time_snr_shift(time_shift, x as f64))
+        .map(|x| time_snr_shift(time_shift, x))
         .collect::<Vec<f64>>();
 
     for window in sigmas.windows(2) {
@@ -30,11 +31,11 @@ pub fn euler_sample(
         let timestep = (*s_curr) * 1000.0;
         let noise_pred = mmdit.forward(
             &Tensor::cat(&[x.clone(), x.clone()], 0)?,
-            &Tensor::full(timestep, (2,), &x.device())?.contiguous()?,
-            &y,
-            &context,
+            &Tensor::full(timestep, (2,), x.device())?.contiguous()?,
+            y,
+            context,
         )?;
-        x = (x + (apply_cfg(cfg_scale, &noise_pred)? * (*s_prev as f64 - *s_curr as f64))?)?;
+        x = (x + (apply_cfg(cfg_scale, &noise_pred)? * (*s_prev - *s_curr))?)?;
     }
     Ok(x)
 }

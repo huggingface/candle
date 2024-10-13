@@ -1,5 +1,3 @@
-use std::usize;
-
 use anyhow::{Error as E, Ok, Result};
 use candle::{DType, IndexOp, Module, Tensor, D};
 use candle_transformers::models::{stable_diffusion, t5};
@@ -36,7 +34,7 @@ impl ClipWithTokenizer {
     }
 
     fn encode_text_to_embedding(
-        self: &Self,
+        &self,
         prompt: &str,
         device: &candle::Device,
     ) -> Result<(Tensor, Tensor)> {
@@ -107,7 +105,7 @@ impl T5WithTokenizer {
     }
 
     fn encode_text_to_embedding(
-        self: &mut Self,
+        &mut self,
         prompt: &str,
         device: &candle::Device,
     ) -> Result<Tensor> {
@@ -118,7 +116,7 @@ impl T5WithTokenizer {
             .get_ids()
             .to_vec();
         tokens.resize(self.max_position_embeddings, 0);
-        let input_token_ids = Tensor::new(&tokens[..], &device)?.unsqueeze(0)?;
+        let input_token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
         let embeddings = self.t5.forward(&input_token_ids)?;
         Ok(embeddings)
     }
@@ -170,7 +168,7 @@ impl StableDiffusion3TripleClipWithTokenizer {
     }
 
     pub fn encode_text_to_embedding(
-        self: &mut Self,
+        &mut self,
         prompt: &str,
         device: &candle::Device,
     ) -> Result<(Tensor, Tensor)> {

@@ -58,9 +58,8 @@ pub fn sd3_vae_vb_rename(name: &str) -> String {
                 result.push("nin_shortcut");
             }
             "attentions" => {
-                match parts[i + 1] {
-                    "0" => result.push("attn_1"),
-                    _ => {}
+                if parts[i + 1] == "0" {
+                    result.push("attn_1")
                 }
                 i += 1; // Skip the number after attentions.
             }
