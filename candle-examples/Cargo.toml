@@ -125,4 +125,3 @@ required-features = ["pdf2image"]
 
 [[example]]
 name = "stable-diffusion-3"
-required-features = ["cuda"]
