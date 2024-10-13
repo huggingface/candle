@@ -1,6 +1,6 @@
 # candle-stable-diffusion-3: Candle Implementation of Stable Diffusion 3 Medium
 
-![](assets/stable-diffusion-3.png)
+![](assets/stable-diffusion-3.jpg)
 
 *A cute rusty robot holding a candle torch in its hand, with glowing neon text \"LETS GO RUSTY\" displayed on its chest, bright background, high quality, 4k*
 

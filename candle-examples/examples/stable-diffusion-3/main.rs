@@ -181,6 +181,6 @@ fn run(args: Args) -> Result<()> {
         autoencoder.decode(&((x.clone() / 1.5305)? + 0.0609)?)?
     };
     let img = ((img.clamp(-1f32, 1f32)? + 1.0)? * 127.5)?.to_dtype(candle::DType::U8)?;
-    candle_examples::save_image(&img.i(0)?, "out.png")?;
+    candle_examples::save_image(&img.i(0)?, "out.jpg")?;
     Ok(())
 }
