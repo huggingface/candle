@@ -43,23 +43,23 @@ struct Args {
     use_flash_attn: bool,
 
     /// The height in pixels of the generated image.
-    #[arg(long, default_value = "1024")]
+    #[arg(long, default_value_t = 1024)]
     height: usize,
 
     /// The width in pixels of the generated image.
-    #[arg(long, default_value = "1024")]
+    #[arg(long, default_value_t = 1024)]
     width: usize,
 
     /// The seed to use when generating random samples.
-    #[arg(long, default_value = "28")]
+    #[arg(long, default_value_t = 28)]
     num_inference_steps: usize,
 
     // CFG scale.
-    #[arg(long, default_value = "4.0")]
+    #[arg(long, default_value_t = 4.0)]
     cfg_scale: f64,
 
     // Time shift factor (alpha).
-    #[arg(long, default_value = "3.0")]
+    #[arg(long, default_value_t = 3.0)]
     time_shift: f64,
 
     /// The seed to use when generating random samples.
