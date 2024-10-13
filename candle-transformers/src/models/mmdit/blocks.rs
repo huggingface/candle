@@ -194,10 +194,16 @@ pub struct JointBlock {
     x_block: DiTBlock,
     context_block: DiTBlock,
     num_heads: usize,
+    use_flash_attn: bool,
 }
 
 impl JointBlock {
-    pub fn new(hidden_size: usize, num_heads: usize, vb: nn::VarBuilder) -> Result<Self> {
+    pub fn new(
+        hidden_size: usize,
+        num_heads: usize,
+        use_flash_attn: bool,
+        vb: nn::VarBuilder,
+    ) -> Result<Self> {
         let x_block = DiTBlock::new(hidden_size, num_heads, vb.pp("x_block"))?;
         let context_block = DiTBlock::new(hidden_size, num_heads, vb.pp("context_block"))?;
 
@@ -205,13 +211,15 @@ impl JointBlock {
             x_block,
             context_block,
             num_heads,
+            use_flash_attn,
         })
     }
 
     pub fn forward(&self, context: &Tensor, x: &Tensor, c: &Tensor) -> Result<(Tensor, Tensor)> {
         let (context_qkv, context_interm) = self.context_block.pre_attention(context, c)?;
         let (x_qkv, x_interm) = self.x_block.pre_attention(x, c)?;
-        let (context_attn, x_attn) = joint_attn(&context_qkv, &x_qkv, self.num_heads)?;
+        let (context_attn, x_attn) =
+            joint_attn(&context_qkv, &x_qkv, self.num_heads, self.use_flash_attn)?;
         let context_out =
             self.context_block
                 .post_attention(&context_attn, context, &context_interm)?;
@@ -224,16 +232,23 @@ pub struct ContextQkvOnlyJointBlock {
     x_block: DiTBlock,
     context_block: QkvOnlyDiTBlock,
     num_heads: usize,
+    use_flash_attn: bool,
 }
 
 impl ContextQkvOnlyJointBlock {
-    pub fn new(hidden_size: usize, num_heads: usize, vb: nn::VarBuilder) -> Result<Self> {
+    pub fn new(
+        hidden_size: usize,
+        num_heads: usize,
+        use_flash_attn: bool,
+        vb: nn::VarBuilder,
+    ) -> Result<Self> {
         let x_block = DiTBlock::new(hidden_size, num_heads, vb.pp("x_block"))?;
         let context_block = QkvOnlyDiTBlock::new(hidden_size, num_heads, vb.pp("context_block"))?;
         Ok(Self {
             x_block,
             context_block,
             num_heads,
+            use_flash_attn,
         })
     }
 
@@ -241,7 +256,7 @@ impl ContextQkvOnlyJointBlock {
         let context_qkv = self.context_block.pre_attention(context, c)?;
         let (x_qkv, x_interm) = self.x_block.pre_attention(x, c)?;
 
-        let (_, x_attn) = joint_attn(&context_qkv, &x_qkv, self.num_heads)?;
+        let (_, x_attn) = joint_attn(&context_qkv, &x_qkv, self.num_heads, self.use_flash_attn)?;
 
         let x_out = self.x_block.post_attention(&x_attn, x, &x_interm)?;
         Ok(x_out)
@@ -250,7 +265,6 @@ impl ContextQkvOnlyJointBlock {
 
 // A QKV-attention that is compatible with the interface of candle_flash_attn::flash_attn
 // Flash attention regards q, k, v dimensions as (batch_size, seqlen, nheads, headdim)
-#[cfg(not(feature = "flash-attn"))]
 fn flash_compatible_attention(
     q: &Tensor,
     k: &Tensor,
@@ -267,7 +281,28 @@ fn flash_compatible_attention(
     attn_scores.reshape(q_dims_for_matmul)?.transpose(1, 2)
 }
 
-fn joint_attn(context_qkv: &Qkv, x_qkv: &Qkv, num_heads: usize) -> Result<(Tensor, Tensor)> {
+#[cfg(feature = "flash-attn")]
+fn flash_attn(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+    causal: bool,
+) -> Result<Tensor> {
+    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
+}
+
+#[cfg(not(feature = "flash-attn"))]
+fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+    unimplemented!("compile with '--features flash-attn'")
+}
+
+fn joint_attn(
+    context_qkv: &Qkv,
+    x_qkv: &Qkv,
+    num_heads: usize,
+    use_flash_attn: bool,
+) -> Result<(Tensor, Tensor)> {
     let qkv = Qkv {
         q: Tensor::cat(&[&context_qkv.q, &x_qkv.q], 1)?,
         k: Tensor::cat(&[&context_qkv.k, &x_qkv.k], 1)?,
@@ -283,12 +318,12 @@ fn joint_attn(context_qkv: &Qkv, x_qkv: &Qkv, num_heads: usize) -> Result<(Tenso
 
     let headdim = qkv.q.dim(D::Minus1)?;
     let softmax_scale = 1.0 / (headdim as f64).sqrt();
-    #[cfg(feature = "flash-attn")]
-    let attn: Tensor =
-        candle_flash_attn::flash_attn(&qkv.q, &qkv.k, &qkv.v, softmax_scale as f32, false)?;
 
-    #[cfg(not(feature = "flash-attn"))]
-    let attn = flash_compatible_attention(&qkv.q, &qkv.k, &qkv.v, softmax_scale as f32)?;
+    let attn = if use_flash_attn {
+        flash_attn(&qkv.q, &qkv.k, &qkv.v, softmax_scale as f32, false)?
+    } else {
+        flash_compatible_attention(&qkv.q, &qkv.k, &qkv.v, softmax_scale as f32)?
+    };
 
     let attn = attn.reshape((batch_size, seqlen, ()))?;
     let context_qkv_seqlen = context_qkv.q.dim(1)?;

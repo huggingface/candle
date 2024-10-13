@@ -30,10 +30,10 @@ To display other options available,
 cargo run --example stable-diffusion-3 --release --features=cuda -- --help
 ```
 
-If GPU supports, Flash-Attention is a strongly recommended feature as it can greatly improve the speed of inference, as MMDiT is a transformer model heavily depends on attentions. To utilize [candle-flash-attn](https://github.com/huggingface/candle/tree/main/candle-flash-attn) in the demo, simply add the `flash-attn` to the feature list:
+If GPU supports, Flash-Attention is a strongly recommended feature as it can greatly improve the speed of inference, as MMDiT is a transformer model heavily depends on attentions. To utilize [candle-flash-attn](https://github.com/huggingface/candle/tree/main/candle-flash-attn) in the demo, you will need both `--features flash-attn` and `--use-flash-attn`.
 
 ```shell
-cargo run --example stable-diffusion-3 --release --features=cuda,flash-attn -- ..
+cargo run --example stable-diffusion-3 --release --features=cuda,flash-attn -- --use-flash-attn ...
 ```
 
 ## Performance Benchmark

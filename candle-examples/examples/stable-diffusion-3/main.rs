@@ -38,6 +38,10 @@ struct Args {
     #[arg(long)]
     tracing: bool,
 
+    /// Use flash_attn to accelerate attention operation in the MMDiT.
+    #[arg(long)]
+    use_flash_attn: bool,
+
     /// The height in pixels of the generated image.
     #[arg(long, default_value = "1024")]
     height: usize,
@@ -79,6 +83,7 @@ fn run(args: Args) -> Result<()> {
         cpu,
         cuda_device_id,
         tracing,
+        use_flash_attn,
         height,
         width,
         num_inference_steps,
@@ -136,6 +141,7 @@ fn run(args: Args) -> Result<()> {
     let x = {
         let mmdit = MMDiT::new(
             &MMDiTConfig::sd3_medium(),
+            use_flash_attn,
             vb_fp16.pp("model.diffusion_model"),
         )?;
 
