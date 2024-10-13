@@ -23,8 +23,10 @@ impl ClipWithTokenizer {
         let path_buf = hf_hub::api::sync::Api::new()?
             .model(tokenizer_path.to_string())
             .get("tokenizer.json")?;
-        let tokenizer =
-            Tokenizer::from_file(path_buf.to_str().ok_or(E::msg("Nooooo...."))?).map_err(E::msg)?;
+        let tokenizer = Tokenizer::from_file(path_buf.to_str().ok_or(E::msg(
+            "Failed to serialize huggingface PathBuf of CLIP tokenizer",
+        ))?)
+        .map_err(E::msg)?;
         Ok(Self {
             clip,
             config,
@@ -43,12 +45,12 @@ impl ClipWithTokenizer {
                 .tokenizer
                 .get_vocab(true)
                 .get(padding.as_str())
-                .ok_or(E::msg("something"))?,
+                .ok_or(E::msg("Failed to tokenize CLIP padding."))?,
             None => *self
                 .tokenizer
                 .get_vocab(true)
                 .get("<|endoftext|>")
-                .ok_or(E::msg("something"))?,
+                .ok_or(E::msg("Failed to tokenize CLIP end-of-text."))?,
         };
 
         let mut tokens = self
