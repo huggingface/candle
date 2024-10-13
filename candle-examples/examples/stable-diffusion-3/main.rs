@@ -50,6 +50,14 @@ struct Args {
     #[arg(long)]
     num_inference_steps: Option<usize>,
 
+    // CFG scale.
+    #[arg(long)]
+    cfg_scale: Option<f64>,
+
+    // Time shift factor (alpha).
+    #[arg(long)]
+    time_shift: Option<f64>,
+
     /// The seed to use when generating random samples.
     #[arg(long)]
     seed: Option<u64>,
@@ -74,6 +82,8 @@ fn run(args: Args) -> Result<()> {
         height,
         width,
         num_inference_steps,
+        cfg_scale,
+        time_shift,
         seed,
     } = args;
 
@@ -134,12 +144,22 @@ fn run(args: Args) -> Result<()> {
         let num_inference_steps = num_inference_steps.unwrap_or(28);
         let height = height.unwrap_or(1024);
         let width = width.unwrap_or(1024);
+        let cfg_scale = cfg_scale.unwrap_or(4.0);
+        let time_shift = time_shift.unwrap_or(3.0);
         if let Some(seed) = seed {
             device.set_seed(seed)?;
         }
-
         let start_time = std::time::Instant::now();
-        let x = sampling::euler_sample(&mmdit, &y, &context, num_inference_steps, height, width)?;
+        let x = sampling::euler_sample(
+            &mmdit,
+            &y,
+            &context,
+            num_inference_steps,
+            cfg_scale,
+            time_shift,
+            height,
+            width,
+        )?;
         let dt = start_time.elapsed().as_secs_f32();
         println!(
             "Sampling done. {num_inference_steps} steps. {:.2}s. Average rate: {:.2} iter/s",

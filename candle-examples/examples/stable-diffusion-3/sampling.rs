@@ -9,6 +9,8 @@ pub fn euler_sample(
     y: &Tensor,
     context: &Tensor,
     num_inference_steps: usize,
+    cfg_scale: f64,
+    time_shift: f64,
     height: usize,
     width: usize,
 ) -> Result<Tensor> {
@@ -16,22 +18,23 @@ pub fn euler_sample(
     let sigmas = (0..=num_inference_steps)
         .map(|x| x as f64 / num_inference_steps as f64)
         .rev()
-        .map(|x| time_snr_shift(3.0, x as f64))
+        .map(|x| time_snr_shift(time_shift, x as f64))
         .collect::<Vec<f64>>();
 
     for window in sigmas.windows(2) {
-        let (t_curr, t_prev) = match window {
+        let (s_curr, s_prev) = match window {
             [a, b] => (a, b),
             _ => continue,
         };
+
+        let timestep = (*s_curr) * 1000.0;
         let noise_pred = mmdit.forward(
             &Tensor::cat(&[x.clone(), x.clone()], 0)?,
-            &Tensor::full((*t_curr) * 1000.0, (2,), &x.device())?.contiguous()?,
+            &Tensor::full(timestep, (2,), &x.device())?.contiguous()?,
             &y,
             &context,
         )?;
-        let cfg_scale = 4.0;
-        x = (x + (apply_cfg(cfg_scale, &noise_pred)? * (*t_prev as f64 - *t_curr as f64))?)?;
+        x = (x + (apply_cfg(cfg_scale, &noise_pred)? * (*s_prev as f64 - *s_curr as f64))?)?;
     }
     Ok(x)
 }
