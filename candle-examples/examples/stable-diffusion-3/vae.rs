@@ -90,6 +90,5 @@ pub fn sd3_vae_vb_rename(name: &str) -> String {
         }
         i += 1;
     }
-    let outcome = result.join(".");
-    outcome
+    result.join(".")
 }
