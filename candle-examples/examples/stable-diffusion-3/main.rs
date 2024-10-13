@@ -31,32 +31,32 @@ struct Args {
     cpu: bool,
 
     /// The CUDA device ID to use.
-    #[arg(long)]
-    cuda_device_id: Option<usize>,
+    #[arg(long, default_value = "0")]
+    cuda_device_id: usize,
 
     /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
     tracing: bool,
 
     /// The height in pixels of the generated image.
-    #[arg(long)]
-    height: Option<usize>,
+    #[arg(long, default_value = "1024")]
+    height: usize,
 
     /// The width in pixels of the generated image.
-    #[arg(long)]
-    width: Option<usize>,
+    #[arg(long, default_value = "1024")]
+    width: usize,
 
     /// The seed to use when generating random samples.
-    #[arg(long)]
-    num_inference_steps: Option<usize>,
+    #[arg(long, default_value = "28")]
+    num_inference_steps: usize,
 
     // CFG scale.
-    #[arg(long)]
-    cfg_scale: Option<f64>,
+    #[arg(long, default_value = "4.0")]
+    cfg_scale: f64,
 
     // Time shift factor (alpha).
-    #[arg(long)]
-    time_shift: Option<f64>,
+    #[arg(long, default_value = "3.0")]
+    time_shift: f64,
 
     /// The seed to use when generating random samples.
     #[arg(long)]
@@ -94,8 +94,6 @@ fn run(args: Args) -> Result<()> {
     } else {
         None
     };
-
-    let cuda_device_id = cuda_device_id.unwrap_or(0);
 
     // TODO: Support and test on Metal.
     let device = if cpu {
@@ -141,11 +139,6 @@ fn run(args: Args) -> Result<()> {
             vb_fp16.pp("model.diffusion_model"),
         )?;
 
-        let num_inference_steps = num_inference_steps.unwrap_or(28);
-        let height = height.unwrap_or(1024);
-        let width = width.unwrap_or(1024);
-        let cfg_scale = cfg_scale.unwrap_or(4.0);
-        let time_shift = time_shift.unwrap_or(3.0);
         if let Some(seed) = seed {
             device.set_seed(seed)?;
         }
