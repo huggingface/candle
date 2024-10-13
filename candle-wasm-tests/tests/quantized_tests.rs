@@ -1,3 +1,4 @@
+#![allow(unused)]
 use candle::{
     quantized::{self, k_quants, GgmlDType, GgmlType},
     test_utils::to_vec2_round,
