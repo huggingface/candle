@@ -1190,22 +1190,17 @@ fn simple_eval_(
                 values.insert(node.output[0].clone(), out);
             }
             // https://onnx.ai/onnx/operators/onnx__ReduceMax.html#reducemax
+            // Version 18 impl
             "ReduceMax" => {
                 let input = get(&node.input[0])?;
-                let axes = get_attr_opt::<[i64]>(node, "axes")?;
+                let axes = get_opt(1);
                 let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1) == 1;
 
-                // TODO: Handle empty set
-                // Definition:
-                // "Reduction over an empty set of values yields minus infinity (if supported by the datatype) or the minimum value of the data type otherwise"
-                // Numpy yields error: ValueError: zero-size array to reduction operation maximum which has no identity
-
-                let output = if let Some(a) = axes {
+                let axes = if let Some(Ok(axes)) = axes {
                     let rank = input.rank();
-
                     let mut axes_set = HashSet::new();
-                    // Resolve negative axis and sort!
-                    let mut axes = a
+                    let mut axes = axes
+                        .to_vec1::<i64>()?
                         .iter()
                         .map(|a| {
                             let axis = if *a < 0 {
@@ -1227,6 +1222,17 @@ fn simple_eval_(
                         axes.sort();
                     }
 
+                    Some(axes)
+                } else {
+                    None
+                };
+
+                // TODO: Handle empty set
+                // Definition:
+                // "Reduction over an empty set of values yields minus infinity (if supported by the datatype) or the minimum value of the data type otherwise"
+                // Numpy yields error: ValueError: zero-size array to reduction operation maximum which has no identity
+
+                let output = if let Some(axes) = axes {
                     let mut result = input.clone();
                     for &axis in axes.iter().rev() {
                         result = if keepdims {
@@ -1281,22 +1287,17 @@ fn simple_eval_(
                 values.insert(node.output[0].clone(), output);
             }
             // https://onnx.ai/onnx/operators/onnx__ReduceMin.html#reducemin-20
+            // Version 18 impl
             "ReduceMin" => {
                 let input = get(&node.input[0])?;
-                let axes = get_attr_opt::<[i64]>(node, "axes")?;
+                let axes = get_opt(1);
                 let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1) == 1;
 
-                // TODO: Handle empty set
-                // Definition:
-                // "Reduction over an empty set of values yields minus infinity (if supported by the datatype) or the minimum value of the data type otherwise"
-                // Numpy yields error: ValueError: zero-size array to reduction operation maximum which has no identity
-
-                let output = if let Some(a) = axes {
+                let axes = if let Some(Ok(axes)) = axes {
                     let rank = input.rank();
-
                     let mut axes_set = HashSet::new();
-                    // Resolve negative axis and sort!
-                    let mut axes = a
+                    let mut axes = axes
+                        .to_vec1::<i64>()?
                         .iter()
                         .map(|a| {
                             let axis = if *a < 0 {
@@ -1318,6 +1319,17 @@ fn simple_eval_(
                         axes.sort();
                     }
 
+                    Some(axes)
+                } else {
+                    None
+                };
+
+                // TODO: Handle empty set
+                // Definition:
+                // "Reduction over an empty set of values yields minus infinity (if supported by the datatype) or the minimum value of the data type otherwise"
+                // Numpy yields error: ValueError: zero-size array to reduction operation maximum which has no identity
+
+                let output = if let Some(axes) = axes {
                     let mut result = input.clone();
                     for &axis in axes.iter().rev() {
                         result = if keepdims {

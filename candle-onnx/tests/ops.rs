@@ -1990,6 +1990,10 @@ fn test_reduce_max() -> Result<()> {
         ],
     )?;
 
+    // Rank-0 arrays are also valid
+    test(42., None, 0, None, 42.)?;
+    test(42., None, 1, None, 42.)?;
+
     // Negative test - expect error
     // axes = np.array([-2, 0, 1], dtype=np.int64)
     // np.maximum.reduce(data, axis=tuple(axes), keepdims=True)
@@ -2016,27 +2020,6 @@ fn test_reduce_max() -> Result<()> {
     ) -> Result<()> {
         let has_axes = axes.is_some();
 
-        let att_axes = AttributeProto {
-            name: "axes".to_string(),
-            ref_attr_name: "axes".to_string(),
-            i: 0,
-            doc_string: "axes".to_string(),
-            r#type: 7,
-            f: 0.0,
-            s: vec![],
-            t: None,
-            g: None,
-            sparse_tensor: None,
-            tp: None,
-            floats: vec![],
-            ints: axes.unwrap_or_default(),
-            strings: vec![],
-            tensors: vec![],
-            graphs: vec![],
-            sparse_tensors: vec![],
-            type_protos: vec![],
-        };
-
         let att_keepdims = AttributeProto {
             name: "keepdims".to_string(),
             ref_attr_name: "keepdims".to_string(),
@@ -2059,31 +2042,31 @@ fn test_reduce_max() -> Result<()> {
         };
 
         let mut attribute = vec![att_keepdims];
-        if has_axes {
-            attribute.push(att_axes);
-        } else if let Some(noop) = noop_with_empty_axes {
-            let att_no_op_empty_axes = AttributeProto {
-                name: "noop_with_empty_axes".to_string(),
-                ref_attr_name: "noop_with_empty_axes".to_string(),
-                i: noop,
-                doc_string: "noop_with_empty_axes".to_string(),
-                r#type: 2,
-                f: 0.0,
-                s: vec![],
-                t: None,
-                g: None,
-                sparse_tensor: None,
-                tp: None,
-                floats: vec![],
-                ints: vec![],
-                strings: vec![],
-                tensors: vec![],
-                graphs: vec![],
-                sparse_tensors: vec![],
-                type_protos: vec![],
-            };
+        if let Some(noop) = noop_with_empty_axes {
+            if !has_axes {
+                let att_no_op_empty_axes = AttributeProto {
+                    name: "noop_with_empty_axes".to_string(),
+                    ref_attr_name: "noop_with_empty_axes".to_string(),
+                    i: noop,
+                    doc_string: "noop_with_empty_axes".to_string(),
+                    r#type: 2,
+                    f: 0.0,
+                    s: vec![],
+                    t: None,
+                    g: None,
+                    sparse_tensor: None,
+                    tp: None,
+                    floats: vec![],
+                    ints: vec![],
+                    strings: vec![],
+                    tensors: vec![],
+                    graphs: vec![],
+                    sparse_tensors: vec![],
+                    type_protos: vec![],
+                };
 
-            attribute.push(att_no_op_empty_axes);
+                attribute.push(att_no_op_empty_axes);
+            }
         }
 
         let manual_graph = create_model_proto_with_graph(Some(GraphProto {
@@ -2091,7 +2074,11 @@ fn test_reduce_max() -> Result<()> {
                 op_type: "ReduceMax".to_string(),
                 domain: "".to_string(),
                 attribute,
-                input: vec![INPUT_X.to_string()],
+                input: if has_axes {
+                    vec![INPUT_X.to_string(), INPUT_Y.to_string()]
+                } else {
+                    vec![INPUT_X.to_string()]
+                },
                 output: vec![OUTPUT_Z.to_string()],
                 name: "".to_string(),
                 doc_string: "".to_string(),
@@ -2114,6 +2101,9 @@ fn test_reduce_max() -> Result<()> {
         let input_tensor = Tensor::new(data, &Device::Cpu)?;
         let input_dtype = input_tensor.dtype();
         inputs.insert(INPUT_X.to_string(), input_tensor);
+        if let Some(a) = axes {
+            inputs.insert(INPUT_Y.to_string(), Tensor::new(a, &Device::Cpu)?);
+        }
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
@@ -2415,7 +2405,7 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![1]),
         1,
         None,
-        &[[[20., 2.]], [[40., 2.]], [[60., 2.]]],
+        &[[[5., 1.]], [[30., 1.]], [[55., 1.]]],
     )?;
     // keepdims with random data
     // `np.minimum.reduce(data, axis=tuple(axes), keepdims=True)`
@@ -2429,9 +2419,9 @@ fn test_reduce_min() -> Result<()> {
         1,
         None,
         &[
-            [[-7.318765, 7.2374434]],
-            [[6.304022, 4.939862]],
-            [[9.587318, 8.008944]],
+            [[-7.648377, -5.4018507]],
+            [[4.5435624, 3.072864]],
+            [[-2.5058026, -8.794852]],
         ],
     )?;
 
@@ -2447,7 +2437,7 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![-1]),
         1,
         None,
-        &[[[5.], [20.]], [[30.], [40.]], [[55.], [60.]]],
+        &[[[1.], [2.]], [[1.], [2.]], [[1.], [2.]]],
     )?;
     // axes = np.array([-2], dtype=np.int64)
     test(
@@ -2459,7 +2449,7 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![-2]),
         1,
         None,
-        &[[[20., 2.]], [[40., 2.]], [[60., 2.]]],
+        &[[[5., 1.]], [[30., 1.]], [[55., 1.]]],
     )?;
     // with random
     test(
@@ -2472,9 +2462,9 @@ fn test_reduce_min() -> Result<()> {
         1,
         None,
         &[
-            [[-4.1676497, -0.762791]],
-            [[-6.3792877, 7.1619177]],
-            [[9.046973, 5.4642754]],
+            [[-4.5138783, -2.7603748]],
+            [[-9.958144, 6.3753467]],
+            [[-5.4674335, 3.4554052]],
         ],
     )?;
 
@@ -2490,7 +2480,7 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![0, 1]),
         1,
         None,
-        &[[[60., 2.]]],
+        &[[[5., 1.]]],
     )?;
     // axes = np.array([0, 2], dtype=np.int64)
     // np.minimum.reduce(data, axis=tuple(axes), keepdims=True)
@@ -2503,7 +2493,7 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![0, 2]),
         1,
         None,
-        &[[[55.], [60.]]],
+        &[[[1.], [2.]]],
     )?;
     // axes = np.array([2, 1], dtype=np.int64)
     // np.minimum.reduce(data, axis=tuple(axes), keepdims=True)
@@ -2516,7 +2506,7 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![2, 1]),
         1,
         None,
-        &[[[20.]], [[40.]], [[60.]]],
+        &[[[1.]], [[1.]], [[1.]]],
     )?;
     // axes = np.array([2, 0, 1], dtype=np.int64)
     // np.minimum.reduce(data, axis=tuple(axes), keepdims=True)
@@ -2529,7 +2519,7 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![2, 0, 1]),
         1,
         None,
-        &[[[60.]]],
+        &[[[1.]]],
     )?;
     // Multiple axes - keepdims=0 (false)
     // axes = np.array([0, 1], dtype=np.int64)
@@ -2543,7 +2533,7 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![0, 1]),
         0,
         None,
-        &[60., 2.],
+        &[5., 1.],
     )?;
     // axes = np.array([0, 2], dtype=np.int64)
     // np.minimum.reduce(data, axis=tuple(axes), keepdims=False)
@@ -2556,7 +2546,7 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![0, 2]),
         0,
         None,
-        &[55., 60.],
+        &[1., 2.],
     )?;
     // axes = np.array([2, 1], dtype=np.int64)
     // np.minimum.reduce(data, axis=tuple(axes), keepdims=False)
@@ -2569,7 +2559,7 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![2, 1]),
         0,
         None,
-        &[20., 40., 60.],
+        &[1., 1., 1.],
     )?;
     // axes = np.array([2, 0, 1], dtype=np.int64)
     // np.minimum.reduce(data, axis=tuple(axes), keepdims=False)
@@ -2582,7 +2572,7 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![2, 0, 1]),
         0,
         None,
-        60.,
+        1.,
     )?;
 
     // Multiple axes - negative `axes` - keepdims=1 (true)
@@ -2597,7 +2587,7 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![-1, 0, 1]),
         1,
         None,
-        &[[[60.]]],
+        &[[[1.]]],
     )?;
     // Multiple axes - negative `axes` - keepdims=0 (false)
     // axes = np.array([-1, 0, 1], dtype=np.int64)
@@ -2611,7 +2601,7 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![-1, 0, 1]),
         0,
         None,
-        60.,
+        1.,
     )?;
 
     // `noop_with_empty_axes = true (1)` should yield tensor equivallent to the input tensor
@@ -2631,6 +2621,10 @@ fn test_reduce_min() -> Result<()> {
         ],
     )?;
 
+    // Rank-0 tensors are also valid
+    test(42., None, 0, None, 42.)?;
+    test(42., None, 1, None, 42.)?;
+
     // Negative test - expect error
     // axes = np.array([-2, 0, 1], dtype=np.int64)
     // np.minimum.reduce(data, axis=tuple(axes), keepdims=True)
@@ -2644,7 +2638,7 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![-2, 0, 1]),
         1,
         None,
-        &[[[60.]]]
+        &[0.]
     )
     .is_err());
 
@@ -2656,27 +2650,6 @@ fn test_reduce_min() -> Result<()> {
         expected: impl NdArray,
     ) -> Result<()> {
         let has_axes = axes.is_some();
-
-        let att_axes = AttributeProto {
-            name: "axes".to_string(),
-            ref_attr_name: "axes".to_string(),
-            i: 0,
-            doc_string: "axes".to_string(),
-            r#type: 7,
-            f: 0.0,
-            s: vec![],
-            t: None,
-            g: None,
-            sparse_tensor: None,
-            tp: None,
-            floats: vec![],
-            ints: axes.unwrap_or_default(),
-            strings: vec![],
-            tensors: vec![],
-            graphs: vec![],
-            sparse_tensors: vec![],
-            type_protos: vec![],
-        };
 
         let att_keepdims = AttributeProto {
             name: "keepdims".to_string(),
@@ -2700,31 +2673,31 @@ fn test_reduce_min() -> Result<()> {
         };
 
         let mut attribute = vec![att_keepdims];
-        if has_axes {
-            attribute.push(att_axes);
-        } else if let Some(noop) = noop_with_empty_axes {
-            let att_no_op_empty_axes = AttributeProto {
-                name: "noop_with_empty_axes".to_string(),
-                ref_attr_name: "noop_with_empty_axes".to_string(),
-                i: noop,
-                doc_string: "noop_with_empty_axes".to_string(),
-                r#type: 2,
-                f: 0.0,
-                s: vec![],
-                t: None,
-                g: None,
-                sparse_tensor: None,
-                tp: None,
-                floats: vec![],
-                ints: vec![],
-                strings: vec![],
-                tensors: vec![],
-                graphs: vec![],
-                sparse_tensors: vec![],
-                type_protos: vec![],
-            };
+        if let Some(noop) = noop_with_empty_axes {
+            if !has_axes {
+                let att_no_op_empty_axes = AttributeProto {
+                    name: "noop_with_empty_axes".to_string(),
+                    ref_attr_name: "noop_with_empty_axes".to_string(),
+                    i: noop,
+                    doc_string: "noop_with_empty_axes".to_string(),
+                    r#type: 2,
+                    f: 0.0,
+                    s: vec![],
+                    t: None,
+                    g: None,
+                    sparse_tensor: None,
+                    tp: None,
+                    floats: vec![],
+                    ints: vec![],
+                    strings: vec![],
+                    tensors: vec![],
+                    graphs: vec![],
+                    sparse_tensors: vec![],
+                    type_protos: vec![],
+                };
 
-            attribute.push(att_no_op_empty_axes);
+                attribute.push(att_no_op_empty_axes);
+            }
         }
 
         let manual_graph = create_model_proto_with_graph(Some(GraphProto {
@@ -2732,7 +2705,11 @@ fn test_reduce_min() -> Result<()> {
                 op_type: "ReduceMin".to_string(),
                 domain: "".to_string(),
                 attribute,
-                input: vec![INPUT_X.to_string()],
+                input: if has_axes {
+                    vec![INPUT_X.to_string(), INPUT_Y.to_string()]
+                } else {
+                    vec![INPUT_X.to_string()]
+                },
                 output: vec![OUTPUT_Z.to_string()],
                 name: "".to_string(),
                 doc_string: "".to_string(),
@@ -2755,6 +2732,9 @@ fn test_reduce_min() -> Result<()> {
         let input_tensor = Tensor::new(data, &Device::Cpu)?;
         let input_dtype = input_tensor.dtype();
         inputs.insert(INPUT_X.to_string(), input_tensor);
+        if let Some(a) = axes {
+            inputs.insert(INPUT_Y.to_string(), Tensor::new(a, &Device::Cpu)?);
+        }
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
