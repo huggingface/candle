@@ -1189,6 +1189,59 @@ fn simple_eval_(
                 }
                 values.insert(node.output[0].clone(), out);
             }
+            // https://onnx.ai/onnx/operators/onnx__ReduceMax.html#reducemax
+            "ReduceMax" => {
+                let input = get(&node.input[0])?;
+                let axes = get_attr_opt::<[i64]>(node, "axes")?;
+                let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1) == 1;
+
+                // If `axes` is empty and `noop_with_empty_axes` is set to `true (1)`
+                // ""input tensor will not be reduced,and the output tensor would be equivalent to input tensor.""
+                let output = if axes.is_none() && get_attr_opt::<i64>(node, "noop_with_empty_axes")?.copied() == Some(1) {
+                    input.clone()
+                } else {
+                    match axes {
+                        None => {
+                            let mut result = input.flatten_all()?;
+                            if keepdims {
+                                result = result.max_keepdim(0)?;
+                                // If keepdims is true, reshape to match input dimensions
+                                let shape = vec![1; input.rank()];
+                                result.reshape(shape)?
+                            } else {
+                                result.max(0)?
+                            }
+                        }
+                        Some(a) => {
+                            if a.len() == 1 {
+                                if keepdims {
+                                    input.max_keepdim(a[0] as usize)?
+                                } else {
+                                    input.max(a[0] as usize)?
+                                }
+                            } else {
+                                todo!()
+                            }
+                        }
+                    }
+                    // let n_dims = input.dims().len();
+                    // let axes: Vec<usize> = if let Some(axes) = axes {
+                    //     axes.iter()
+                    //         .map(|e| (if e < &0 { (n_dims as i64) + *e } else { *e }) as usize)
+                    //         .collect()
+                    // } else {
+                    //     (0..n_dims).collect()
+                    // };
+                    
+                    // let output = if keepdims == 1 {
+                    //     input.max_keepdim(axes.into())?;
+                    // } else {
+                    //     input.max(axes.into())?;
+                    // };
+                };
+
+                values.insert(node.output[0].clone(), output);
+            }
             // https://onnx.ai/onnx/operators/onnx__ReduceMean.html#reducemean-13
             // TODO: This version is only compatible with ReduceMean V13 and below.
             "ReduceMean" => {
