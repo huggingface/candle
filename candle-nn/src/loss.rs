@@ -60,13 +60,10 @@ pub fn mse(inp: &Tensor, target: &Tensor) -> Result<Tensor> {
 ///
 /// The resulting tensor is a scalar containing the average value over the batch.
 pub fn binary_cross_entropy_with_logit(inp: &Tensor, target: &Tensor) -> Result<Tensor> {
-    let inp = crate::ops::sigmoid(inp)?;
+    let log_sigmoid_input = crate::ops::sigmoid(inp)?.log()?;
 
-    let left_side = target * inp.log()?;
-    let right_side = (target.affine(-1., 1.))? * inp.affine(-1., 1.)?.log()?;
+    let loss = (1.0 - target)?.mul(inp)?.sub(&log_sigmoid_input)?.mean_all()?;
 
-    let loss = left_side? + right_side?;
-    let loss = loss?.neg()?.mean_all()?;
 
     Ok(loss)
 }
