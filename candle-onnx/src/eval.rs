@@ -2,7 +2,7 @@ use crate::onnx::attribute_proto::AttributeType;
 use crate::onnx::tensor_proto::DataType;
 use crate::onnx::{self, GraphProto};
 use candle::{bail, DType, Device, Result, Tensor};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub type Value = Tensor;
 
@@ -1195,49 +1195,64 @@ fn simple_eval_(
                 let axes = get_attr_opt::<[i64]>(node, "axes")?;
                 let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1) == 1;
 
-                // If `axes` is empty and `noop_with_empty_axes` is set to `true (1)`
-                // ""input tensor will not be reduced,and the output tensor would be equivalent to input tensor.""
-                let output = if axes.is_none() && get_attr_opt::<i64>(node, "noop_with_empty_axes")?.copied() == Some(1) {
-                    input.clone()
-                } else {
-                    match axes {
-                        None => {
-                            let mut result = input.flatten_all()?;
-                            if keepdims {
-                                result = result.max_keepdim(0)?;
-                                // If keepdims is true, reshape to match input dimensions
-                                let shape = vec![1; input.rank()];
-                                result.reshape(shape)?
+                // TODO: Handle empty set
+                // Definition:
+                // "Reduction over an empty set of values yields minus infinity (if supported by the datatype) or the minimum value of the data type otherwise"
+                // Numpy yields error: ValueError: zero-size array to reduction operation maximum which has no identity
+
+                let output = if let Some(a) = axes {
+                    let rank = input.rank();
+
+                    let mut axes_set = HashSet::new();
+                    // Resolve negative axis and sort!
+                    let mut axes = a
+                        .iter()
+                        .map(|a| {
+                            let axis = if *a < 0 {
+                                (rank as i64 + *a) as usize
                             } else {
-                                result.max(0)?
-                            }
-                        }
-                        Some(a) => {
-                            if a.len() == 1 {
-                                if keepdims {
-                                    input.max_keepdim(a[0] as usize)?
-                                } else {
-                                    input.max(a[0] as usize)?
-                                }
-                            } else {
-                                todo!()
-                            }
+                                *a as usize
+                            };
+
+                            axes_set.insert(axis);
+                            axis
+                        })
+                        .collect::<Vec<_>>();
+
+                    if axes_set.len() < axes.len() {
+                        bail!("Duplicate value in 'axes'");
+                    }
+
+                    if axes.len() > 1 {
+                        axes.sort();
+                    }
+
+                    let mut result = input.clone();
+                    for &axis in axes.iter().rev() {
+                        result = if keepdims {
+                            result.max_keepdim(axis)?
+                        } else {
+                            result.max(axis)?
                         }
                     }
-                    // let n_dims = input.dims().len();
-                    // let axes: Vec<usize> = if let Some(axes) = axes {
-                    //     axes.iter()
-                    //         .map(|e| (if e < &0 { (n_dims as i64) + *e } else { *e }) as usize)
-                    //         .collect()
-                    // } else {
-                    //     (0..n_dims).collect()
-                    // };
-                    
-                    // let output = if keepdims == 1 {
-                    //     input.max_keepdim(axes.into())?;
-                    // } else {
-                    //     input.max(axes.into())?;
-                    // };
+
+                    result
+                } else {
+                    // If `axes` is empty and `noop_with_empty_axes` is set to `true (1)`
+                    // ""input tensor will not be reduced,and the output tensor would be equivalent to input tensor.""
+                    if get_attr_opt::<i64>(node, "noop_with_empty_axes")?.copied() == Some(1) {
+                        input.clone()
+                    } else {
+                        let mut result = input.flatten_all()?;
+                        if keepdims {
+                            result = result.max_keepdim(0)?;
+                            // If keepdims is true, reshape to match input dimensions
+                            let shape = vec![1; input.rank()];
+                            result.reshape(shape)?
+                        } else {
+                            result.max(0)?
+                        }
+                    }
                 };
 
                 values.insert(node.output[0].clone(), output);
@@ -1263,6 +1278,74 @@ fn simple_eval_(
                 } else {
                     input.mean(axes)?
                 };
+                values.insert(node.output[0].clone(), output);
+            }
+            // https://onnx.ai/onnx/operators/onnx__ReduceMin.html#reducemin-20
+            "ReduceMin" => {
+                let input = get(&node.input[0])?;
+                let axes = get_attr_opt::<[i64]>(node, "axes")?;
+                let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1) == 1;
+
+                // TODO: Handle empty set
+                // Definition:
+                // "Reduction over an empty set of values yields minus infinity (if supported by the datatype) or the minimum value of the data type otherwise"
+                // Numpy yields error: ValueError: zero-size array to reduction operation maximum which has no identity
+
+                let output = if let Some(a) = axes {
+                    let rank = input.rank();
+
+                    let mut axes_set = HashSet::new();
+                    // Resolve negative axis and sort!
+                    let mut axes = a
+                        .iter()
+                        .map(|a| {
+                            let axis = if *a < 0 {
+                                (rank as i64 + *a) as usize
+                            } else {
+                                *a as usize
+                            };
+
+                            axes_set.insert(axis);
+                            axis
+                        })
+                        .collect::<Vec<_>>();
+
+                    if axes_set.len() < axes.len() {
+                        bail!("Duplicate value in 'axes'");
+                    }
+
+                    if axes.len() > 1 {
+                        axes.sort();
+                    }
+
+                    let mut result = input.clone();
+                    for &axis in axes.iter().rev() {
+                        result = if keepdims {
+                            result.min_keepdim(axis)?
+                        } else {
+                            result.min(axis)?
+                        }
+                    }
+
+                    result
+                } else {
+                    // If `axes` is empty and `noop_with_empty_axes` is set to `true (1)`
+                    // ""input tensor will not be reduced,and the output tensor would be equivalent to input tensor.""
+                    if get_attr_opt::<i64>(node, "noop_with_empty_axes")?.copied() == Some(1) {
+                        input.clone()
+                    } else {
+                        let mut result = input.flatten_all()?;
+                        if keepdims {
+                            result = result.min_keepdim(0)?;
+                            // If keepdims is true, reshape to match input dimensions
+                            let shape = vec![1; input.rank()];
+                            result.reshape(shape)?
+                        } else {
+                            result.min(0)?
+                        }
+                    }
+                };
+
                 values.insert(node.output[0].clone(), output);
             }
             //https://github.com/onnx/onnx/blob/main/docs/Operators.md#Split
