@@ -388,6 +388,37 @@ impl ClipTextTransformer {
         let xs = self.encoder.forward(&xs, &causal_attention_mask)?;
         self.final_layer_norm.forward(&xs)
     }
+
+    pub fn forward_until_encoder_layer(
+        &self,
+        xs: &Tensor,
+        mask_after: usize,
+        until_layer: isize,
+    ) -> Result<(Tensor, Tensor)> {
+        let (bsz, seq_len) = xs.dims2()?;
+        let xs = self.embeddings.forward(xs)?;
+        let causal_attention_mask =
+            Self::build_causal_attention_mask(bsz, seq_len, mask_after, xs.device())?;
+
+        let mut xs = xs.clone();
+        let mut intermediate = xs.clone();
+
+        // Modified encoder.forward that returns the intermediate tensor along with final output.
+        let until_layer = if until_layer < 0 {
+            self.encoder.layers.len() as isize + until_layer
+        } else {
+            until_layer
+        } as usize;
+
+        for (layer_id, layer) in self.encoder.layers.iter().enumerate() {
+            xs = layer.forward(&xs, &causal_attention_mask)?;
+            if layer_id == until_layer {
+                intermediate = xs.clone();
+            }
+        }
+
+        Ok((self.final_layer_norm.forward(&xs)?, intermediate))
+    }
 }
 
 impl Module for ClipTextTransformer {

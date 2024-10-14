@@ -275,6 +275,8 @@ pub struct AutoEncoderKLConfig {
     pub layers_per_block: usize,
     pub latent_channels: usize,
     pub norm_num_groups: usize,
+    pub use_quant_conv: bool,
+    pub use_post_quant_conv: bool,
 }
 
 impl Default for AutoEncoderKLConfig {
@@ -284,6 +286,8 @@ impl Default for AutoEncoderKLConfig {
             layers_per_block: 1,
             latent_channels: 4,
             norm_num_groups: 32,
+            use_quant_conv: true,
+            use_post_quant_conv: true,
         }
     }
 }
@@ -315,8 +319,8 @@ impl DiagonalGaussianDistribution {
 pub struct AutoEncoderKL {
     encoder: Encoder,
     decoder: Decoder,
-    quant_conv: nn::Conv2d,
-    post_quant_conv: nn::Conv2d,
+    quant_conv: Option<nn::Conv2d>,
+    post_quant_conv: Option<nn::Conv2d>,
     pub config: AutoEncoderKLConfig,
 }
 
@@ -342,20 +346,33 @@ impl AutoEncoderKL {
         };
         let decoder = Decoder::new(vs.pp("decoder"), latent_channels, out_channels, decoder_cfg)?;
         let conv_cfg = Default::default();
-        let quant_conv = nn::conv2d(
-            2 * latent_channels,
-            2 * latent_channels,
-            1,
-            conv_cfg,
-            vs.pp("quant_conv"),
-        )?;
-        let post_quant_conv = nn::conv2d(
-            latent_channels,
-            latent_channels,
-            1,
-            conv_cfg,
-            vs.pp("post_quant_conv"),
-        )?;
+
+        let quant_conv = {
+            if config.use_quant_conv {
+                Some(nn::conv2d(
+                    2 * latent_channels,
+                    2 * latent_channels,
+                    1,
+                    conv_cfg,
+                    vs.pp("quant_conv"),
+                )?)
+            } else {
+                None
+            }
+        };
+        let post_quant_conv = {
+            if config.use_post_quant_conv {
+                Some(nn::conv2d(
+                    latent_channels,
+                    latent_channels,
+                    1,
+                    conv_cfg,
+                    vs.pp("post_quant_conv"),
+                )?)
+            } else {
+                None
+            }
+        };
         Ok(Self {
             encoder,
             decoder,
@@ -368,13 +385,19 @@ impl AutoEncoderKL {
     /// Returns the distribution in the latent space.
     pub fn encode(&self, xs: &Tensor) -> Result<DiagonalGaussianDistribution> {
         let xs = self.encoder.forward(xs)?;
-        let parameters = self.quant_conv.forward(&xs)?;
+        let parameters = match &self.quant_conv {
+            None => xs,
+            Some(quant_conv) => quant_conv.forward(&xs)?,
+        };
         DiagonalGaussianDistribution::new(&parameters)
     }
 
     /// Takes as input some sampled values.
     pub fn decode(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = self.post_quant_conv.forward(xs)?;
-        self.decoder.forward(&xs)
+        let xs = match &self.post_quant_conv {
+            None => xs,
+            Some(post_quant_conv) => &post_quant_conv.forward(xs)?,
+        };
+        self.decoder.forward(xs)
     }
 }

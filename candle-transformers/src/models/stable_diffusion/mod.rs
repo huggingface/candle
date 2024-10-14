@@ -65,6 +65,8 @@ impl StableDiffusionConfig {
             layers_per_block: 2,
             latent_channels: 4,
             norm_num_groups: 32,
+            use_quant_conv: true,
+            use_post_quant_conv: true,
         };
         let height = if let Some(height) = height {
             assert_eq!(height % 8, 0, "height has to be divisible by 8");
@@ -133,6 +135,8 @@ impl StableDiffusionConfig {
             layers_per_block: 2,
             latent_channels: 4,
             norm_num_groups: 32,
+            use_quant_conv: true,
+            use_post_quant_conv: true,
         };
         let scheduler = Arc::new(ddim::DDIMSchedulerConfig {
             prediction_type,
@@ -214,6 +218,8 @@ impl StableDiffusionConfig {
             layers_per_block: 2,
             latent_channels: 4,
             norm_num_groups: 32,
+            use_quant_conv: true,
+            use_post_quant_conv: true,
         };
         let scheduler = Arc::new(ddim::DDIMSchedulerConfig {
             prediction_type,
@@ -281,6 +287,8 @@ impl StableDiffusionConfig {
             layers_per_block: 2,
             latent_channels: 4,
             norm_num_groups: 32,
+            use_quant_conv: true,
+            use_post_quant_conv: true,
         };
         let scheduler = Arc::new(
             euler_ancestral_discrete::EulerAncestralDiscreteSchedulerConfig {
@@ -378,6 +386,8 @@ impl StableDiffusionConfig {
             layers_per_block: 2,
             latent_channels: 4,
             norm_num_groups: 32,
+            use_quant_conv: true,
+            use_post_quant_conv: true,
         };
         let scheduler = Arc::new(ddim::DDIMSchedulerConfig {
             ..Default::default()
