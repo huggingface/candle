@@ -30,7 +30,7 @@ impl Which {
             Self::Large => "large",
             Self::Huge => "huge",
         };
-        format!("timm/hiera_{}_224.mae_in1k_ft_in1k", name)
+        format!("timm/hiera_{name}_224.mae_in1k_ft_in1k")
     }
 
     fn config(&self) -> hiera::Config {

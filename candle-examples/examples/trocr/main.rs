@@ -93,7 +93,7 @@ pub fn main() -> anyhow::Result<()> {
                 .get("model.safetensors")?
             }
         };
-        println!("model: {:?}", model);
+        println!("model: {model:?}");
         unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? }
     };
 

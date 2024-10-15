@@ -108,8 +108,7 @@ impl TextGeneration {
                     .expect("Token error");
                 if self.verbose_prompt {
                     println!(
-                        "[Count: {}] [Raw Token: {}] [Decode Token: {}]",
-                        count, next_token, token
+                        "[Count: {count}] [Raw Token: {next_token}] [Decode Token: {token}]"
                     );
                 }
                 result.push(token);

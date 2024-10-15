@@ -123,7 +123,7 @@ async fn simplified() -> anyhow::Result<()> {
                 break;
             },
             Err(e) => {
-                println!("Error: {}", e);
+                println!("Error: {e}");
                 continue;
             }
         }
@@ -142,8 +142,8 @@ async fn simplified() -> anyhow::Result<()> {
         .argmax(D::Minus1)?
         .to_dtype(DType::F32)?
         .get(0).map(|x| x.to_scalar::<f32>())??;
-    println!("real_life_votes: {:?}", real_world_votes);
-    println!("neural_network_prediction_result: {:?}", result);
+    println!("real_life_votes: {real_world_votes:?}");
+    println!("neural_network_prediction_result: {result:?}");
 
     Ok(())
 

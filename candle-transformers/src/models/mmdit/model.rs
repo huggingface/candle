@@ -145,7 +145,7 @@ impl MMDiTCore {
                 hidden_size,
                 num_heads,
                 use_flash_attn,
-                vb.pp(format!("joint_blocks.{}", i)),
+                vb.pp(format!("joint_blocks.{i}")),
             )?);
         }
 
