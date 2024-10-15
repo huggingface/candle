@@ -122,6 +122,3 @@ required-features = ["onnx"]
 [[example]]
 name = "colpali"
 required-features = ["pdf2image"]
-
-[[example]]
-name = "stable-diffusion-3"
