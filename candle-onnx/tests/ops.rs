@@ -1708,6 +1708,7 @@ fn test_reduce_max() -> Result<()> {
         1,
         None,
         &[[1_u8], [1], [1], [0]],
+        false,
     )?;
 
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-119 default_axes_keepdims
@@ -1722,6 +1723,7 @@ fn test_reduce_max() -> Result<()> {
         1,
         None,
         &[[[60.]]],
+        false,
     )?;
     // same as above but with random
     test(
@@ -1734,6 +1736,7 @@ fn test_reduce_max() -> Result<()> {
         1,
         None,
         &[[[9.587318]]],
+        false,
     )?;
 
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-119 default_axes_donot_keep_dims
@@ -1748,6 +1751,7 @@ fn test_reduce_max() -> Result<()> {
         0,
         None,
         60.,
+        false,
     )?;
     // same as above but with random
     // `np.maximum.reduce(data, axis=None, keepdims=False)`
@@ -1761,6 +1765,7 @@ fn test_reduce_max() -> Result<()> {
         0,
         None,
         9.587318,
+        false,
     )?;
 
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-119 keepdims
@@ -1775,6 +1780,7 @@ fn test_reduce_max() -> Result<()> {
         1,
         None,
         &[[[20., 2.]], [[40., 2.]], [[60., 2.]]],
+        false,
     )?;
     // keepdims with random data
     // `np.maximum.reduce(data, axis=tuple(axes), keepdims=True)`
@@ -1792,6 +1798,7 @@ fn test_reduce_max() -> Result<()> {
             [[6.304022, 4.939862]],
             [[9.587318, 8.008944]],
         ],
+        false,
     )?;
 
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-119 negative_axes_keepdims
@@ -1807,6 +1814,7 @@ fn test_reduce_max() -> Result<()> {
         1,
         None,
         &[[[5.], [20.]], [[30.], [40.]], [[55.], [60.]]],
+        false,
     )?;
     // axes = np.array([-2], dtype=np.int64)
     test(
@@ -1819,6 +1827,7 @@ fn test_reduce_max() -> Result<()> {
         1,
         None,
         &[[[20., 2.]], [[40., 2.]], [[60., 2.]]],
+        false,
     )?;
     // with random
     test(
@@ -1835,6 +1844,7 @@ fn test_reduce_max() -> Result<()> {
             [[-6.3792877, 7.1619177]],
             [[9.046973, 5.4642754]],
         ],
+        false,
     )?;
 
     // Multiple axes - keepdims=1 (true)
@@ -1850,6 +1860,7 @@ fn test_reduce_max() -> Result<()> {
         1,
         None,
         &[[[60., 2.]]],
+        false,
     )?;
     // axes = np.array([0, 2], dtype=np.int64)
     // np.maximum.reduce(data, axis=tuple(axes), keepdims=True)
@@ -1863,6 +1874,7 @@ fn test_reduce_max() -> Result<()> {
         1,
         None,
         &[[[55.], [60.]]],
+        false,
     )?;
     // axes = np.array([2, 1], dtype=np.int64)
     // np.maximum.reduce(data, axis=tuple(axes), keepdims=True)
@@ -1876,6 +1888,7 @@ fn test_reduce_max() -> Result<()> {
         1,
         None,
         &[[[20.]], [[40.]], [[60.]]],
+        false,
     )?;
     // axes = np.array([2, 0, 1], dtype=np.int64)
     // np.maximum.reduce(data, axis=tuple(axes), keepdims=True)
@@ -1889,6 +1902,7 @@ fn test_reduce_max() -> Result<()> {
         1,
         None,
         &[[[60.]]],
+        false,
     )?;
     // Multiple axes - keepdims=0 (false)
     // axes = np.array([0, 1], dtype=np.int64)
@@ -1903,6 +1917,7 @@ fn test_reduce_max() -> Result<()> {
         0,
         None,
         &[60., 2.],
+        false,
     )?;
     // axes = np.array([0, 2], dtype=np.int64)
     // np.maximum.reduce(data, axis=tuple(axes), keepdims=False)
@@ -1916,6 +1931,7 @@ fn test_reduce_max() -> Result<()> {
         0,
         None,
         &[55., 60.],
+        false,
     )?;
     // axes = np.array([2, 1], dtype=np.int64)
     // np.maximum.reduce(data, axis=tuple(axes), keepdims=False)
@@ -1929,6 +1945,7 @@ fn test_reduce_max() -> Result<()> {
         0,
         None,
         &[20., 40., 60.],
+        false,
     )?;
     // axes = np.array([2, 0, 1], dtype=np.int64)
     // np.maximum.reduce(data, axis=tuple(axes), keepdims=False)
@@ -1942,6 +1959,7 @@ fn test_reduce_max() -> Result<()> {
         0,
         None,
         60.,
+        false,
     )?;
 
     // Multiple axes - negative `axes` - keepdims=1 (true)
@@ -1957,6 +1975,7 @@ fn test_reduce_max() -> Result<()> {
         1,
         None,
         &[[[60.]]],
+        false,
     )?;
     // Multiple axes - negative `axes` - keepdims=0 (false)
     // axes = np.array([-1, 0, 1], dtype=np.int64)
@@ -1971,6 +1990,7 @@ fn test_reduce_max() -> Result<()> {
         0,
         None,
         60.,
+        false,
     )?;
 
     // `noop_with_empty_axes = true (1)` should yield tensor equivallent to the input tensor
@@ -1988,11 +2008,12 @@ fn test_reduce_max() -> Result<()> {
             [[6.304022, 4.939862], [4.5435624, 3.072864]],
             [[-2.5058026, 8.008944], [9.587318, -8.794852]],
         ],
+        false,
     )?;
 
     // Rank-0 arrays are also valid
-    test(42., None, 0, None, 42.)?;
-    test(42., None, 1, None, 42.)?;
+    test(42., None, 0, None, 42., false)?;
+    test(42., None, 1, None, 42., false)?;
 
     // Negative test - expect error
     // axes = np.array([-2, 0, 1], dtype=np.int64)
@@ -2007,9 +2028,28 @@ fn test_reduce_max() -> Result<()> {
         Some(vec![-2, 0, 1]),
         1,
         None,
-        &[[[60.]]]
+        &[[[60.]]],
+        false
     )
     .is_err());
+
+    // Negative test - expect error
+    // Should error out on empty set
+    assert!(test(&[[1_u8; 0]], Some(vec![-2, 0, 1]), 1, None, &[0.], false).is_err());
+
+    // Backward compatibility
+    test(
+        &[
+            [[5., 1.], [20., 2.]],
+            [[30., 1.], [40., 2.]],
+            [[55., 1.], [60., 2.]],
+        ],
+        Some(vec![-1, 0, 1]),
+        0,
+        None,
+        60.,
+        true,
+    )?;
 
     fn test(
         data: impl NdArray,
@@ -2017,6 +2057,7 @@ fn test_reduce_max() -> Result<()> {
         keepdims: i64,
         noop_with_empty_axes: Option<i64>,
         expected: impl NdArray,
+        backward_comp: bool,
     ) -> Result<()> {
         let has_axes = axes.is_some();
 
@@ -2068,13 +2109,35 @@ fn test_reduce_max() -> Result<()> {
                 attribute.push(att_no_op_empty_axes);
             }
         }
+        if has_axes && backward_comp {
+            attribute.push(AttributeProto {
+                name: "axes".to_string(),
+                ref_attr_name: "axes".to_string(),
+                i: 0,
+                doc_string: "axes".to_string(),
+                r#type: 7,
+                f: 0.0,
+                s: vec![],
+                t: None,
+                g: None,
+                sparse_tensor: None,
+                tp: None,
+                floats: vec![],
+                ints: axes.clone().unwrap_or_default(),
+                strings: vec![],
+                tensors: vec![],
+                graphs: vec![],
+                sparse_tensors: vec![],
+                type_protos: vec![],
+            });
+        }
 
         let manual_graph = create_model_proto_with_graph(Some(GraphProto {
             node: vec![NodeProto {
                 op_type: "ReduceMax".to_string(),
                 domain: "".to_string(),
                 attribute,
-                input: if has_axes {
+                input: if has_axes && !backward_comp {
                     vec![INPUT_X.to_string(), INPUT_Y.to_string()]
                 } else {
                     vec![INPUT_X.to_string()]
@@ -2101,8 +2164,10 @@ fn test_reduce_max() -> Result<()> {
         let input_tensor = Tensor::new(data, &Device::Cpu)?;
         let input_dtype = input_tensor.dtype();
         inputs.insert(INPUT_X.to_string(), input_tensor);
-        if let Some(a) = axes {
-            inputs.insert(INPUT_Y.to_string(), Tensor::new(a, &Device::Cpu)?);
+        if !backward_comp {
+            if let Some(a) = axes {
+                inputs.insert(INPUT_Y.to_string(), Tensor::new(a, &Device::Cpu)?);
+            }
         }
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
@@ -2162,6 +2227,7 @@ fn test_reduce_min() -> Result<()> {
         1,
         None,
         &[[1_u8], [0], [0], [0]],
+        false,
     )?;
 
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-121 default_axes_keepdims
@@ -2176,6 +2242,7 @@ fn test_reduce_min() -> Result<()> {
         1,
         None,
         &[[[1.]]],
+        false,
     )?;
     // same as above but with random
     test(
@@ -2188,6 +2255,7 @@ fn test_reduce_min() -> Result<()> {
         1,
         None,
         &[[[-8.794852]]],
+        false,
     )?;
 
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-121 default_axes_donot_keep_dims
@@ -2202,6 +2270,7 @@ fn test_reduce_min() -> Result<()> {
         0,
         None,
         1.,
+        false,
     )?;
     // same as above but with random
     // `np.minimum.reduce(data, axis=None, keepdims=False)`
@@ -2215,6 +2284,7 @@ fn test_reduce_min() -> Result<()> {
         0,
         None,
         -8.794852,
+        false,
     )?;
 
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-121 keepdims
@@ -2229,6 +2299,7 @@ fn test_reduce_min() -> Result<()> {
         1,
         None,
         &[[[5., 1.]], [[30., 1.]], [[55., 1.]]],
+        false,
     )?;
     // keepdims with random data
     // `np.minimum.reduce(data, axis=tuple(axes), keepdims=True)`
@@ -2246,6 +2317,7 @@ fn test_reduce_min() -> Result<()> {
             [[4.5435624, 3.072864]],
             [[-2.5058026, -8.794852]],
         ],
+        false,
     )?;
 
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-121 negative_axes_keepdims
@@ -2261,6 +2333,7 @@ fn test_reduce_min() -> Result<()> {
         1,
         None,
         &[[[1.], [2.]], [[1.], [2.]], [[1.], [2.]]],
+        false,
     )?;
     // axes = np.array([-2], dtype=np.int64)
     test(
@@ -2273,6 +2346,7 @@ fn test_reduce_min() -> Result<()> {
         1,
         None,
         &[[[5., 1.]], [[30., 1.]], [[55., 1.]]],
+        false,
     )?;
     // with random
     test(
@@ -2289,6 +2363,7 @@ fn test_reduce_min() -> Result<()> {
             [[-9.958144, 6.3753467]],
             [[-5.4674335, 3.4554052]],
         ],
+        false,
     )?;
 
     // Multiple axes - keepdims=1 (true)
@@ -2304,6 +2379,7 @@ fn test_reduce_min() -> Result<()> {
         1,
         None,
         &[[[5., 1.]]],
+        false,
     )?;
     // axes = np.array([0, 2], dtype=np.int64)
     // np.minimum.reduce(data, axis=tuple(axes), keepdims=True)
@@ -2317,6 +2393,7 @@ fn test_reduce_min() -> Result<()> {
         1,
         None,
         &[[[1.], [2.]]],
+        false,
     )?;
     // axes = np.array([2, 1], dtype=np.int64)
     // np.minimum.reduce(data, axis=tuple(axes), keepdims=True)
@@ -2330,6 +2407,7 @@ fn test_reduce_min() -> Result<()> {
         1,
         None,
         &[[[1.]], [[1.]], [[1.]]],
+        false,
     )?;
     // axes = np.array([2, 0, 1], dtype=np.int64)
     // np.minimum.reduce(data, axis=tuple(axes), keepdims=True)
@@ -2343,6 +2421,7 @@ fn test_reduce_min() -> Result<()> {
         1,
         None,
         &[[[1.]]],
+        false,
     )?;
     // Multiple axes - keepdims=0 (false)
     // axes = np.array([0, 1], dtype=np.int64)
@@ -2357,6 +2436,7 @@ fn test_reduce_min() -> Result<()> {
         0,
         None,
         &[5., 1.],
+        false,
     )?;
     // axes = np.array([0, 2], dtype=np.int64)
     // np.minimum.reduce(data, axis=tuple(axes), keepdims=False)
@@ -2370,6 +2450,7 @@ fn test_reduce_min() -> Result<()> {
         0,
         None,
         &[1., 2.],
+        false,
     )?;
     // axes = np.array([2, 1], dtype=np.int64)
     // np.minimum.reduce(data, axis=tuple(axes), keepdims=False)
@@ -2383,6 +2464,7 @@ fn test_reduce_min() -> Result<()> {
         0,
         None,
         &[1., 1., 1.],
+        false,
     )?;
     // axes = np.array([2, 0, 1], dtype=np.int64)
     // np.minimum.reduce(data, axis=tuple(axes), keepdims=False)
@@ -2396,6 +2478,7 @@ fn test_reduce_min() -> Result<()> {
         0,
         None,
         1.,
+        false,
     )?;
 
     // Multiple axes - negative `axes` - keepdims=1 (true)
@@ -2411,6 +2494,7 @@ fn test_reduce_min() -> Result<()> {
         1,
         None,
         &[[[1.]]],
+        false,
     )?;
     // Multiple axes - negative `axes` - keepdims=0 (false)
     // axes = np.array([-1, 0, 1], dtype=np.int64)
@@ -2425,6 +2509,7 @@ fn test_reduce_min() -> Result<()> {
         0,
         None,
         1.,
+        false,
     )?;
 
     // `noop_with_empty_axes = true (1)` should yield tensor equivallent to the input tensor
@@ -2442,11 +2527,12 @@ fn test_reduce_min() -> Result<()> {
             [[6.304022, 4.939862], [4.5435624, 3.072864]],
             [[-2.5058026, 8.008944], [9.587318, -8.794852]],
         ],
+        false,
     )?;
 
     // Rank-0 tensors are also valid
-    test(42., None, 0, None, 42.)?;
-    test(42., None, 1, None, 42.)?;
+    test(42., None, 0, None, 42., false)?;
+    test(42., None, 1, None, 42., false)?;
 
     // Negative test - expect error
     // axes = np.array([-2, 0, 1], dtype=np.int64)
@@ -2461,9 +2547,28 @@ fn test_reduce_min() -> Result<()> {
         Some(vec![-2, 0, 1]),
         1,
         None,
-        &[0.]
+        &[0.],
+        false
     )
     .is_err());
+
+    // Negative test - expect error
+    // Should error out on empty set
+    assert!(test(&[[1_u8; 0]], Some(vec![-2, 0, 1]), 1, None, &[0.], false).is_err());
+
+    // Backward compatibility
+    test(
+        &[
+            [[5., 1.], [20., 2.]],
+            [[30., 1.], [40., 2.]],
+            [[55., 1.], [60., 2.]],
+        ],
+        Some(vec![-1, 0, 1]),
+        0,
+        None,
+        1.,
+        true,
+    )?;
 
     fn test(
         data: impl NdArray,
@@ -2471,6 +2576,7 @@ fn test_reduce_min() -> Result<()> {
         keepdims: i64,
         noop_with_empty_axes: Option<i64>,
         expected: impl NdArray,
+        backward_comp: bool,
     ) -> Result<()> {
         let has_axes = axes.is_some();
 
@@ -2522,13 +2628,35 @@ fn test_reduce_min() -> Result<()> {
                 attribute.push(att_no_op_empty_axes);
             }
         }
+        if has_axes && backward_comp {
+            attribute.push(AttributeProto {
+                name: "axes".to_string(),
+                ref_attr_name: "axes".to_string(),
+                i: 0,
+                doc_string: "axes".to_string(),
+                r#type: 7,
+                f: 0.0,
+                s: vec![],
+                t: None,
+                g: None,
+                sparse_tensor: None,
+                tp: None,
+                floats: vec![],
+                ints: axes.clone().unwrap_or_default(),
+                strings: vec![],
+                tensors: vec![],
+                graphs: vec![],
+                sparse_tensors: vec![],
+                type_protos: vec![],
+            });
+        }
 
         let manual_graph = create_model_proto_with_graph(Some(GraphProto {
             node: vec![NodeProto {
                 op_type: "ReduceMin".to_string(),
                 domain: "".to_string(),
                 attribute,
-                input: if has_axes {
+                input: if has_axes && !backward_comp {
                     vec![INPUT_X.to_string(), INPUT_Y.to_string()]
                 } else {
                     vec![INPUT_X.to_string()]
@@ -2555,8 +2683,10 @@ fn test_reduce_min() -> Result<()> {
         let input_tensor = Tensor::new(data, &Device::Cpu)?;
         let input_dtype = input_tensor.dtype();
         inputs.insert(INPUT_X.to_string(), input_tensor);
-        if let Some(a) = axes {
-            inputs.insert(INPUT_Y.to_string(), Tensor::new(a, &Device::Cpu)?);
+        if !backward_comp {
+            if let Some(a) = axes {
+                inputs.insert(INPUT_Y.to_string(), Tensor::new(a, &Device::Cpu)?);
+            }
         }
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
