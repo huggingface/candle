@@ -379,41 +379,28 @@ fn run(args: Args) -> Result<()> {
             idx + 1,
             num_samples
         );
-
-       
-
-        match &device {
-            candle::Device::Wgpu(gpu) => {
-                #[cfg(feature="wgpu")]
-                gpu.print_bindgroup_reuseinfo2();
-                #[cfg(feature = "wgpu_debug")]{
-                    let info = pollster::block_on(gpu.get_debug_info()).unwrap();
-                    let map2 = candle::wgpu::debug_info::calulate_measurment(&info);
-                    candle::wgpu::debug_info::save_list(&map2, & format!("wgpu_wuerstchen_test_{TEST_NAME}_a.json")).unwrap();
-                }
-            },
-            _ => {},
-        };
-
+        
         let image = vqgan.decode(&(&latents * 0.3764)?)?;
         let image = (image.clamp(0f32, 1f32)? * 255.)?.to_device(&Device::Cpu)?
             .to_dtype(DType::U8)?
             .i(0)?;
         let image_filename = output_filename(&final_image, idx + 1, num_samples, None);
         candle_examples::save_image(&image, image_filename)?;
-
+        #[cfg(feature="wgpu")]
         match &device {
             candle::Device::Wgpu(gpu) => {
-                #[cfg(feature="wgpu")]
                 gpu.print_bindgroup_reuseinfo2();
                 #[cfg(feature = "wgpu_debug")]{
                     let info = pollster::block_on(gpu.get_debug_info()).unwrap();
                     let map2 = candle::wgpu::debug_info::calulate_measurment(&info);
-                    candle::wgpu::debug_info::save_list(&map2,& format!("wgpu_wuerstchen_test_{TEST_NAME}_b.json")).unwrap();
-                
+                    candle::wgpu::debug_info::save_list(&map2,& format!("wgpu_wuerstchen_test_1_b.json")).unwrap();
                 
                     let info: Vec<candle::wgpu::debug_info::ShaderInfo> = gpu.get_pipeline_info().unwrap();
-                    candle::wgpu::debug_info::save_list(&info,& format!("wgpu_wuerstchen_test_{TEST_NAME}_c.json")).unwrap();
+                    candle::wgpu::debug_info::save_list(&info,& format!("wgpu_wuerstchen_test_1_c.json")).unwrap();
+
+                    let (pipelines, consts) = gpu.get_used_pipelines();
+                    std::fs::write(format!("wgpu_wuerstchen_test_1_d.json"), pipelines)?;   
+                    std::fs::write(format!("wgpu_wuerstchen_test_1_e.json"), consts)?;   
                 }
             },
             _ => {},

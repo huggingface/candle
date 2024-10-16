@@ -4,6 +4,8 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+use std::time::Instant;
+
 use candle_transformers::models::stable_diffusion;
 
 use anyhow::{Error as E, Result};
@@ -489,6 +491,8 @@ fn run(args: Args) -> Result<()> {
         StableDiffusionVersion::Xl | StableDiffusionVersion::Turbo => vec![true, false],
         _ => vec![true],
     };
+    let start = Instant::now();
+
     let text_embeddings = which
         .iter()
         .map(|first| {
@@ -605,25 +609,6 @@ fn run(args: Args) -> Result<()> {
                     num_samples,
                     Some(timestep_index + 1),
                 )?;
-                match &device {
-                    candle::Device::Wgpu(gpu) => {
-                        #[cfg(feature="wgpu")]
-                        gpu.print_bindgroup_reuseinfo2();
-                        #[cfg(feature = "wgpu_debug")]{
-                            let info = pollster::block_on(gpu.get_debug_info()).unwrap();
-                            let map2 = candle::wgpu::debug_info::calulate_measurment(&info);
-                            candle::wgpu::debug_info::save_list(&map2,& format!("wgpu_stable_diffusion_test_1_b.json")).unwrap();
-                        
-                            let info: Vec<candle::wgpu::debug_info::ShaderInfo> = gpu.get_pipeline_info().unwrap();
-                            candle::wgpu::debug_info::save_list(&info,& format!("wgpu_stable_diffusion_test_1_c.json")).unwrap();
-
-                            let (pipelines, consts) = gpu.get_used_pipelines();
-                            std::fs::write(format!("wgpu_stable_diffusion_test_1_d.json"), pipelines)?;   
-                            std::fs::write(format!("wgpu_stable_diffusion_test_1_e.json"), consts)?;   
-                        }
-                    },
-                    _ => {},
-                };
             }
         }
 
@@ -649,22 +634,24 @@ fn run(args: Args) -> Result<()> {
                 #[cfg(feature="wgpu")]
                 gpu.print_bindgroup_reuseinfo2();
                 #[cfg(feature = "wgpu_debug")]{
+                    let version = "8";
                     let info = pollster::block_on(gpu.get_debug_info()).unwrap();
                     let map2 = candle::wgpu::debug_info::calulate_measurment(&info);
-                    candle::wgpu::debug_info::save_list(&map2,& format!("wgpu_stable_diffusion_test_1_b.json")).unwrap();
+                    candle::wgpu::debug_info::save_list(&map2,& format!("wgpu_stable_diffusion_test_{version}_b.json")).unwrap();
                 
                 
                     let info: Vec<candle::wgpu::debug_info::ShaderInfo> = gpu.get_pipeline_info().unwrap();
-                    candle::wgpu::debug_info::save_list(&info,& format!("wgpu_stable_diffusion_test_1_c.json")).unwrap();
+                    candle::wgpu::debug_info::save_list(&info,& format!("wgpu_stable_diffusion_test_{version}_c.json")).unwrap();
 
                     let (pipelines, consts) = gpu.get_used_pipelines();
-                    std::fs::write(format!("wgpu_stable_diffusion_test_1_d.json"), pipelines)?;   
-                    std::fs::write(format!("wgpu_stable_diffusion_test_1_e.json"), consts)?;   
+                    std::fs::write(format!("wgpu_stable_diffusion_test_{version}_d.json"), pipelines)?;   
+                    std::fs::write(format!("wgpu_stable_diffusion_test_{version}_e.json"), consts)?;   
                 }
             },
             _ => {},
         };
     }
+    println!("elapsed: {:?}", start.elapsed()); 
     Ok(())
 }
 

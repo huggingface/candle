@@ -620,6 +620,24 @@ impl WgpuDevice {
     }
 
     #[cfg(feature = "wgpu_debug")]
+    pub fn log_debuginfo_to_file(&self, folder : &str, name : &str, version : &str) -> crate::Result<()>{
+        let info = pollster::block_on(self.get_debug_info()).unwrap();
+        let map2 = crate::wgpu::debug_info::calulate_measurment(&info);
+        crate::wgpu::debug_info::save_list(&map2,& format!("{folder}wgpu_{name}_test_{version}_b.json")).unwrap();
+    
+    
+        let info: Vec<crate::wgpu::debug_info::ShaderInfo> = self.get_pipeline_info().unwrap();
+        crate::wgpu::debug_info::save_list(&info,& format!("{folder}wgpu_{name}_test_{version}_c.json")).unwrap();
+
+        let (pipelines, consts) = self.get_used_pipelines();
+        std::fs::write(format!("{folder}wgpu_{name}_test_{version}_d.json"), pipelines)?;   
+        std::fs::write(format!("{folder}wgpu_{name}_test_{version}_e.json"), consts)?;
+        Ok(())
+    }
+
+    
+
+    #[cfg(feature = "wgpu_debug")]
     pub fn get_used_pipelines(&self) -> (String, String) {
         let cache = self.cache.lock().unwrap();
         let queue = self.command_queue.lock().unwrap();

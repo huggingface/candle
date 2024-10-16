@@ -272,7 +272,7 @@ pub fn queue_conv2d_matmul(
     let kernel_stride = kernel_layout.stride();
 
     if kernel_stride[2] != params.k_w || kernel_stride[1] != params.k_h * params.k_w {
-        panic!("kernel is not contigues in c_in, k_h, k_w")
+        panic!("kernel is not contiguous in c_in, k_h, k_w")
     }
 
     let dst_numel = params.k_h * params.k_w * params.b_size * params.c_in * o_h * o_w;

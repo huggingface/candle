@@ -4,6 +4,8 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
+use std::time::Instant;
+
 use anyhow::Error as E;
 use clap::Parser;
 
@@ -95,7 +97,6 @@ pub fn main() -> anyhow::Result<()> {
     let config = clip::ClipConfig::vit_base_patch32();
 
     let device = candle_examples::device(args.cpu)?;
-
     let vec_imgs = match args.images {
         Some(imgs) => imgs,
         None => vec![
@@ -104,13 +105,16 @@ pub fn main() -> anyhow::Result<()> {
         ],
     };
 
-    // let image = load_image(args.image, config.image_size)?.to_device(&device)?;
-    let images = load_images(&vec_imgs, config.image_size)?.to_device(&device)?;
-
+    
     let vb =
         unsafe { VarBuilder::from_mmaped_safetensors(&[model_file.clone()], DType::F32, &device)? };
 
     let model = clip::ClipModel::new(vb, &config)?;
+
+
+    let start = Instant::now();
+    // let image = load_image(args.image, config.image_size)?.to_device(&device)?;
+    let images = load_images(&vec_imgs, config.image_size)?.to_device(&device)?;
 
     let (input_ids, vec_seq) = tokenize_sequences(args.sequences, &tokenizer, &device)?;
 
@@ -139,7 +143,7 @@ pub fn main() -> anyhow::Result<()> {
             info!("Probability: {:.4}% Text: {} ", p, vec_seq[i]);
         }
     }
-
+    println!("elapsed: {:?}", start.elapsed()); 
     Ok(())
 }
 
