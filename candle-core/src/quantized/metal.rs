@@ -208,8 +208,6 @@ impl QMetalStorage {
     }
 
     pub fn data(&self) -> Result<Vec<u8>> {
-        use metal::NSUInteger;
-
         let buffer = self.device.new_buffer_managed(self.buffer.length())?;
         {
             let command_buffer = self.device.command_buffer()?;
