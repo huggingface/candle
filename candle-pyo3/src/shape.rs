@@ -56,8 +56,7 @@ impl<'source> pyo3::FromPyObject<'source> for PyShapeWithHole {
         let any_invalid_dimensions = dims.iter().any(|&x| x < -1 || x == 0);
         if negative_ones > 1 || any_invalid_dimensions {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Invalid dimension in shape: {:?}",
-                dims
+                "Invalid dimension in shape: {dims:?}"
             )));
         }
 
@@ -89,8 +88,7 @@ impl PyShapeWithHole {
                 new_dims.push(elements);
             } else {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "Invalid dimension in shape: {}",
-                    dim
+                    "Invalid dimension in shape: {dim}"
                 )));
             }
         }

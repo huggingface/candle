@@ -204,7 +204,7 @@ impl Component for App {
                         });
                         self.status = match dt {
                             None => "processing succeeded!".to_string(),
-                            Some(dt) => format!("processing succeeded in {:.2}s", dt,),
+                            Some(dt) => format!("processing succeeded in {dt:.2}s",),
                         };
                         self.current_decode = None;
                         if let Err(err) = draw_bboxes(bboxes) {

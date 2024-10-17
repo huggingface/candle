@@ -206,10 +206,8 @@ fn main() -> Result<()> {
     let llava: LLaVA = LLaVA::load(vb, &llava_config, clip_vision_config)?;
 
     println!("generating conv template");
-    let image_token_se = format!(
-        "{}{}{}",
-        DEFAULT_IM_START_TOKEN, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_END_TOKEN
-    );
+    let image_token_se =
+        format!("{DEFAULT_IM_START_TOKEN}{DEFAULT_IMAGE_TOKEN}{DEFAULT_IM_END_TOKEN}");
     let qs = if args.prompt.contains(IMAGE_PLACEHOLDER) {
         if llava_config.mm_use_im_start_end {
             args.prompt.replace(IMAGE_PLACEHOLDER, &image_token_se)

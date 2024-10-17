@@ -107,10 +107,7 @@ impl TextGeneration {
                     .decode(&[next_token], true)
                     .expect("Token error");
                 if self.verbose_prompt {
-                    println!(
-                        "[Count: {}] [Raw Token: {}] [Decode Token: {}]",
-                        count, next_token, token
-                    );
+                    println!("[Count: {count}] [Raw Token: {next_token}] [Decode Token: {token}]");
                 }
                 result.push(token);
                 std::io::stdout().flush()?;
