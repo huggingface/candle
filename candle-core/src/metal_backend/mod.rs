@@ -103,6 +103,7 @@ impl BackendStorage for MetalStorage {
             DType::BF16 => Ok(CpuStorage::BF16(self.to_cpu()?)),
             DType::F32 => Ok(CpuStorage::F32(self.to_cpu()?)),
             DType::F64 => Ok(CpuStorage::F64(self.to_cpu()?)),
+            DType::F8E4M3 => Ok(CpuStorage::F64(self.to_cpu()?)),
         }
     }
 
@@ -2133,6 +2134,7 @@ impl BackendDevice for MetalDevice {
             DType::F32 => "fill_f32",
             DType::I32 => "fill_i32",
             DType::I16 => "fill_i16",
+            DType::F8E4M3 => crate::bail!("Metal device does not yet support F8E4M3."),
             DType::F64 => {
                 let cpu_storage = crate::cpu_backend::CpuDevice.ones_impl(shape, dtype)?;
                 return self.storage_from_cpu_storage(&cpu_storage);
@@ -2170,6 +2172,7 @@ impl BackendDevice for MetalDevice {
             CpuStorageRef::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::F8E4M3(_) => crate::bail!("Metal device does not yet support F8E4M3."),
         };
         Ok(Self::Storage::new(buffer?, self.clone(), count, T::DTYPE))
     }
@@ -2185,6 +2188,7 @@ impl BackendDevice for MetalDevice {
             CpuStorage::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F8E4M3(_) => crate::bail!("Metal device does not yet support F8E4M3."),
         };
         Ok(Self::Storage::new(
             buffer?,

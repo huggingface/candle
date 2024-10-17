@@ -72,6 +72,7 @@ impl crate::CustomOp1 for ArgSort {
             crate::CpuStorage::F16(vs) => self.asort(vs, layout),
             crate::CpuStorage::F32(vs) => self.asort(vs, layout),
             crate::CpuStorage::F64(vs) => self.asort(vs, layout),
+            crate::CpuStorage::F8E4M3(vs) => self.asort(vs, layout),
         };
         let sort_indexes = crate::CpuStorage::U32(sort_indexes);
         Ok((sort_indexes, layout.shape().into()))
@@ -153,6 +154,7 @@ impl crate::CustomOp1 for ArgSort {
                     DType::I64 => "asort_asc_i64",
                     DType::I32 => "asort_asc_i32",
                     DType::I16 => "asort_asc_i16",
+                    DType::F8E4M3 => crate::bail!("Metal device does not yet support F8E4M3."),
                 }
             } else {
                 match storage.dtype() {
@@ -165,6 +167,7 @@ impl crate::CustomOp1 for ArgSort {
                     DType::I64 => "asort_desc_i64",
                     DType::I32 => "asort_desc_i32",
                     DType::I16 => "asort_desc_i16",
+                    DType::F8E4M3 => crate::bail!("Metal device does not yet support F8E4M3."),
                 }
             }
         };
