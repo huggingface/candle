@@ -280,6 +280,7 @@ fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32)
 
 
 override CONSTV_0 : u32 = 1u;
+override CONSTV_1 : bool = true;
 override USE_Z : bool = false;
 
 #define op_unary_operation         CONSTV_0
@@ -289,11 +290,12 @@ override USE_Z : bool = false;
 #define op_unary_input1_layout       2u
 
 
-#define op_unary_contiguous_operation         CONSTV_0
+#define op_unary_contiguous_operation           CONSTV_0
+#define op_unary_contiguous_offset_is_zero      CONSTV_1
 #define op_unary_contiguous_scalar1             bitcast<f32>(op_meta[0])
 #define op_unary_contiguous_scalar2             bitcast<f32>(op_meta[1])
 #define op_unary_contiguous_length              op_meta[2]
-#define op_unary_contiguous_offset              op_meta[3]
+#define op_unary_contiguous_offset              select(op_unary_contiguous_offset_is_zero, 0u, op_meta[3]) 
 #define op_unary_contiguous_seed                op_meta[4]
 
 

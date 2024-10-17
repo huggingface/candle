@@ -80,7 +80,7 @@ pub fn queue_unary_inplace_op(
         meta.add(scalar1);
         meta.add(scalar2);
         meta.add(layout.shape().elem_count()); //length
-        if layout.start_offset() == 0 || op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
+        if layout.start_offset() != 0 || op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
             meta.add(layout.start_offset());
         }
         if op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
@@ -159,7 +159,7 @@ pub fn queue_unary_from_buffer_op(
         meta.add(scalar2);
         meta.add(input_layout.shape().elem_count()); //length
 
-        if input_layout.start_offset() == 0 || op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
+        if input_layout.start_offset() != 0 || op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
             meta.add(input_layout.start_offset());
         }
         if op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {

@@ -8,6 +8,8 @@ override CONSTV_1 : u32 = 1u;
 
 var<workgroup> sharedSums: array<DTYPE, 64>; 
 
+var<workgroup> sharedM: f32; 
+
 #ifdef f32
 
 override USE_Z : bool = false;
@@ -26,38 +28,67 @@ fn softmax(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let start_index1 = start_index + op_softmax_input1_offset;
 
     //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
+    var maxVal = MINVALUE;
     if(output_index < op_softmax_dest_size || !USE_Z)
     {
         //Now Reduce from start to end
-        var sum = ZERO;
         for (var i = tid; i < op_softmax_length; i += 64u) {
-            let value = v_input1[start_index1 + i];
-            let val = exp(value);
-            sum += val;
+            maxVal = max(maxVal, v_input1[start_index1 + i]);
         }
-        sharedSums[tid] = sum;
     }
+    sharedSums[tid] = maxVal; 
     workgroupBarrier();
 
+    //calculate max
     if (tid < 32u) {
-        sharedSums[tid] += sharedSums[tid + 32u];   
+        sharedSums[tid] = max(sharedSums[tid], sharedSums[tid + 32u]);
     }
     workgroupBarrier();
-    if (tid == 0){
-        var sum = ZERO;
-        for (var i = 0u; i < 32u; i++){
-            sum += sharedSums[i];
+    if (tid == 0) {
+        var global_max = sharedSums[0];
+        for (var i = 1u; i < 32u; i++) {
+            global_max = max(global_max, sharedSums[i]);
         }
-        sharedSums[0] = sum;
+        sharedSums[0] = global_max;
     }
+
     workgroupBarrier();
 
-    let sumElement = sharedSums[0];
+    let maxElement = sharedSums[0];
 
+    var sum = ZERO;
     if (output_index < op_softmax_dest_size || !USE_Z) {
         for (var i = tid; i < op_softmax_length; i += 64u) {
-            v_dest[start_index + i] = exp(v_input1[start_index1 + i]) / sumElement;
+            let val = exp(v_input1[start_index1 + i] - maxElement);
+            v_dest[start_index + i] = val;
+            sum += val;
+        }
+    }
+    sharedSums[tid] = sum;
+   
+    workgroupBarrier();
+
+    // Parallel reduction to sum the exponentials
+    if (tid < 32u) {
+        sharedSums[tid] += sharedSums[tid + 32u];
+    }
+    workgroupBarrier();
+    if (tid == 0) {
+        var global_sum = sharedSums[0];
+        for (var i = 1u; i < 32u; i++) {
+            global_sum += sharedSums[i];
+        }
+        sharedSums[0] = global_sum;
+    }
+
+    workgroupBarrier();
+
+    let totalSum = sharedSums[0];
+    if (output_index < op_softmax_dest_size || !USE_Z) {
+        for (var i = tid; i < op_softmax_length; i += 64u) {
+            v_dest[start_index + i] /= totalSum;
         }
     }
 }
+
 #endif

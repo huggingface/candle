@@ -216,7 +216,7 @@ fn test_matmul_kernels_wgpu()-> Result<()> {
                     for use_start_offset in [true, false]{
                         for tpb_batch in [true, false]{
                             for tpa_batch in [true, false]{
-                                big_matmul_wgpu(&device, tpa, tpb, use_start_offset, tpb_batch, tpa_batch);
+                                big_matmul_wgpu(&device, tpa, tpb, use_start_offset, tpb_batch, tpa_batch)?;
                             }
                         }
                     }
@@ -237,7 +237,7 @@ fn test_matmul_kernels_wgpu()-> Result<()> {
 //compares wgpu matmul impl, with cpu impl
 #[cfg(feature="wgpu")]
 fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool, use_start_offset : bool, tpb_batch : bool, tpa_batch : bool)-> Result<()> {
-    use candle_core::{cpu_backend, D};
+    use candle_core::D;
     let b = 1;
     let m = 63;
     let n = 63;
@@ -249,8 +249,8 @@ fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool, use_start_offset : b
     // let k = 128;
 
     let start_offset = if use_start_offset {100} else {0};
-    let lhs1 = Tensor::rand(0f32, 100f32, b * k * m + start_offset, &Device::Cpu)?.to_dtype(DType::U32)?.to_dtype(DType::F32)?.i((start_offset..))?;
-    let rhs1 = Tensor::rand(0f32, 100f32, b * k * n + start_offset, &Device::Cpu)?.to_dtype(DType::U32)?.to_dtype(DType::F32)?.i((start_offset..))?;
+    let lhs1 = Tensor::rand(0f32, 100f32, b * k * m + start_offset, &Device::Cpu)?.to_dtype(DType::U32)?.to_dtype(DType::F32)?.i(start_offset..)?;
+    let rhs1 = Tensor::rand(0f32, 100f32, b * k * n + start_offset, &Device::Cpu)?.to_dtype(DType::U32)?.to_dtype(DType::F32)?.i(start_offset..)?;
 
     let lhs;
     if tpa_batch{
@@ -272,7 +272,7 @@ fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool, use_start_offset : b
     
 
     let rhs;
-    if(tpb_batch){
+    if tpb_batch {
         if tpb{
             rhs = rhs1.reshape((k,n,b))?.transpose(D::Minus1, D::Minus2)?.transpose(0, 1)?;
         }

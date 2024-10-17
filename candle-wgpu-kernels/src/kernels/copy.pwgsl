@@ -41,8 +41,6 @@ fn copy_strided(@builtin(global_invocation_id) global_id: vec3<u32>) {
 #define op_copy_is_src_offset_zero      CONSTV_0
 #define op_copy_is_dest_offset_zero     CONSTV_1
 
-#define op_copy_src_offset    op_meta[0]
-
 @compute
 @workgroup_size(64,1,1)
 fn copy(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -134,9 +132,13 @@ override CONSTV_6 : bool = true;
 #define op_copy_3d_input_stride1    op_meta[5]
 #define op_copy_3d_input_stride2    op_meta[6]
 #define op_copy_3d_input_stride3    op_meta[7]
+
+#define op_copy_3d_input1_offset    select(op_copy_3d_is_input1_offset_zero, 0u, op_meta[8])
+
 #define op_copy_3d_size_d1          op_meta[8]
 #define op_copy_3d_size_d2          op_meta[9]
-#define op_copy_3d_input1_offset    select(op_copy_3d_is_input1_offset_zero, 0u, op_meta[10])
+
+#define op_copy_3d_padded_input1_offset    select(op_copy_3d_is_input1_offset_zero, 0u, op_meta[10])
 
 @compute
 @workgroup_size(16,16,1)
@@ -189,7 +191,7 @@ fn copy3d_padded(@builtin(global_invocation_id) global_id: vec3<u32>) {
         v_dest[d1 * dest_stride1 + d2 * dest_stride2 + d3 * dest_stride3] = ZERO;
     }
     else{
-        v_dest[d1 * dest_stride1 + d2 * dest_stride2 + d3 * dest_stride3] = v_input1[op_copy_3d_input1_offset + d1 * input_stride1 + d2 * input_stride2 + d3 * input_stride3];
+        v_dest[d1 * dest_stride1 + d2 * dest_stride2 + d3 * dest_stride3] = v_input1[op_copy_3d_padded_input1_offset + d1 * input_stride1 + d2 * input_stride2 + d3 * input_stride3];
     } 
 }
 
@@ -275,7 +277,7 @@ fn copy3d_padded_nobatch(@builtin(global_invocation_id) global_id: vec3<u32>) {
         v_dest[d1 * dest_stride1 + d2 * dest_stride2] = ZERO;
     }
     else{
-        v_dest[d1 * dest_stride1 + d2 * dest_stride2] = v_input1[op_copy_3d_input1_offset + d1 * input_stride1 + d2 * input_stride2]; 
+        v_dest[d1 * dest_stride1 + d2 * dest_stride2] = v_input1[op_copy_3d_padded_input1_offset + d1 * input_stride1 + d2 * input_stride2]; 
     } 
 }
 
