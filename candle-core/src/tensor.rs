@@ -2544,6 +2544,13 @@ impl Tensor {
     pub fn broadcast_pow(&self, rhs: &Tensor) -> Result<Self> {
         rhs.broadcast_mul(&self.log()?)?.exp()
     }
+
+    pub fn masked_fill(&self, rhs: &Tensor, value: f32) -> Result<Self> {
+        rhs.where_cond(
+            &Tensor::new(value, self.device())?.broadcast_as(rhs.shape().dims())?,
+            self,
+        )
+    }
 }
 
 macro_rules! bin_trait {
