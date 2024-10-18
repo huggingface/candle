@@ -37,6 +37,17 @@ pub trait GgmlType: Sized + Clone + Send + Sync {
 
     /// Generic implementation of the dot product without simd optimizations.
     fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32>;
+
+    /// Multiply 2 rows by 2 columns and return a 2x2 matrix
+    /// based on aarch64 NEON i8mm instructions
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        n: usize,
+        xs_0: &[Self],
+        xs_1: &[Self],
+        ys_0: &[Self::VecDotType],
+        ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -252,6 +263,20 @@ impl GgmlType for BlockQ4_0 {
         }
         Ok(sumf)
     }
+    #[allow(unreachable_code)]
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        n: usize,
+        xs_0: &[Self],
+        xs_1: &[Self],
+        ys_0: &[Self::VecDotType],
+        ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]> {
+        #[cfg(target_feature = "neon")]
+        return super::neon::i8mm_q4_0_q8_0(n, xs_0, xs_1, ys_0, ys_1);
+
+        todo!();
+    }
 }
 
 impl GgmlType for BlockQ4_1 {
@@ -346,6 +371,18 @@ impl GgmlType for BlockQ4_1 {
             }
         }
         Ok(())
+    }
+    #[allow(unreachable_code)]
+    #[allow(unused)]
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        n: usize,
+        xs_0: &[Self],
+        xs_1: &[Self],
+        ys_0: &[Self::VecDotType],
+        ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]> {
+        todo!();
     }
 }
 
@@ -448,6 +485,17 @@ impl GgmlType for BlockQ5_0 {
             }
         }
         Ok(())
+    }
+    #[allow(unused)]
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        n: usize,
+        xs_0: &[Self],
+        xs_1: &[Self],
+        ys_0: &[Self::VecDotType],
+        ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]> {
+        todo!();
     }
 }
 
@@ -557,6 +605,17 @@ impl GgmlType for BlockQ5_1 {
         }
         Ok(())
     }
+    #[allow(unused)]
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        n: usize,
+        xs_0: &[Self],
+        xs_1: &[Self],
+        ys_0: &[Self::VecDotType],
+        ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]> {
+        todo!();
+    }
 }
 
 impl GgmlType for BlockQ8_0 {
@@ -647,6 +706,20 @@ impl GgmlType for BlockQ8_0 {
         }
         Ok(sumf)
     }
+    #[allow(unreachable_code)]
+    #[allow(unused)]
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        n: usize,
+        xs_0: &[Self],
+        xs_1: &[Self],
+        ys_0: &[Self::VecDotType],
+        ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]> {
+        #[cfg(target_feature = "neon")]
+        return super::neon::i8mm_q8_0_q8_0(n, xs_0, xs_1, ys_0, ys_1);
+        todo!();
+    }
 }
 
 impl GgmlType for BlockQ8_1 {
@@ -692,6 +765,16 @@ impl GgmlType for BlockQ8_1 {
 
     fn to_float(_xs: &[Self], _ys: &mut [f32]) -> Result<()> {
         unimplemented!("no support for vec-dot on Q8_1")
+    }
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        _n: usize,
+        _xs_0: &[Self],
+        _xs_1: &[Self],
+        _ys_0: &[Self::VecDotType],
+        _ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]> {
+        unimplemented!("no support for i8mm matmul on Q8_1")
     }
 }
 
@@ -868,6 +951,19 @@ impl GgmlType for BlockQ2K {
             }
         }
         Ok(())
+    }
+    #[allow(unreachable_code)]
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        n: usize,
+        xs_0: &[Self],
+        xs_1: &[Self],
+        ys_0: &[Self::VecDotType],
+        ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]> {
+        #[cfg(target_feature = "neon")]
+        return super::neon::i8mm_q2k_q8k(n, xs_0, xs_1, ys_0, ys_1);
+        todo!();
     }
 }
 
@@ -1147,6 +1243,20 @@ impl GgmlType for BlockQ3K {
 
         Ok(())
     }
+    #[allow(unreachable_code)]
+    #[allow(unused)]
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        n: usize,
+        xs_0: &[Self],
+        xs_1: &[Self],
+        ys_0: &[Self::VecDotType],
+        ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]> {
+        #[cfg(target_feature = "neon")]
+        return super::neon::i8mm_q3k_q8k(n, xs_0, xs_1, ys_0, ys_1);
+        todo!();
+    }
 }
 
 impl GgmlType for BlockQ4K {
@@ -1338,6 +1448,18 @@ impl GgmlType for BlockQ4K {
             }
         }
         Ok(())
+    }
+    #[allow(unreachable_code)]
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        n: usize,
+        xs_0: &[Self],
+        xs_1: &[Self],
+        ys_0: &[Self::VecDotType],
+        ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]> {
+        #[cfg(target_feature = "neon")]
+        return super::neon::i8mm_q4k_q8k(n, xs_0, xs_1, ys_0, ys_1);
     }
 }
 
@@ -1561,6 +1683,20 @@ impl GgmlType for BlockQ5K {
         }
         Ok(())
     }
+    #[allow(unreachable_code)]
+    #[allow(unused)]
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        n: usize,
+        xs_0: &[Self],
+        xs_1: &[Self],
+        ys_0: &[Self::VecDotType],
+        ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]> {
+        #[cfg(target_feature = "neon")]
+        return super::neon::i8mm_q5k_q8k(n, xs_0, xs_1, ys_0, ys_1);
+        todo!();
+    }
 }
 
 impl GgmlType for BlockQ6K {
@@ -1744,6 +1880,20 @@ impl GgmlType for BlockQ6K {
         }
         Ok(())
     }
+    #[allow(unreachable_code)]
+    #[allow(unused)]
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        n: usize,
+        xs_0: &[Self],
+        xs_1: &[Self],
+        ys_0: &[Self::VecDotType],
+        ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]> {
+        #[cfg(target_feature = "neon")]
+        return super::neon::i8mm_q6k_q8k(n, xs_0, xs_1, ys_0, ys_1);
+        todo!();
+    }
 }
 
 impl GgmlType for BlockQ8K {
@@ -1836,9 +1986,20 @@ impl GgmlType for BlockQ8K {
         }
         Ok(())
     }
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        _n: usize,
+        _xs_0: &[Self],
+        _xs_1: &[Self],
+        _ys_0: &[Self::VecDotType],
+        _ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]> {
+        unreachable!();
+    }
 }
 
 // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L10605
+#[cfg(not(target_feature = "i8mm"))]
 pub fn matmul<T: GgmlType>(
     mkn: (usize, usize, usize),
     lhs: &[f32],
@@ -1882,6 +2043,93 @@ pub fn matmul<T: GgmlType>(
     Ok(())
 }
 
+#[cfg(target_feature = "i8mm")]
+#[cfg(feature = "arm-nightly-feat")]
+pub fn matmul<T: GgmlType>(
+    mkn: (usize, usize, usize),
+    lhs: &[f32],
+    rhs_t: &[T],
+    dst: &mut [f32],
+) -> Result<()> {
+    let (m, k, n) = mkn;
+    if m * k != lhs.len() {
+        crate::bail!("unexpected lhs length {} {mkn:?}", lhs.len());
+    }
+
+    let k_in_lhs_blocks = (k + T::BLCK_SIZE - 1) / T::BLCK_SIZE;
+    let k_in_rhs_blocks = (k + T::VecDotType::BLCK_SIZE - 1) / T::VecDotType::BLCK_SIZE;
+    // TODO: Do not make this copy if the DotType is f32.
+    // TODO: Pre-allocate this.
+    let mut lhs_b = vec![T::VecDotType::zeros(); m * k_in_lhs_blocks];
+    for row_idx in 0..m {
+        let lhs_b = &mut lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
+        let lhs = &lhs[row_idx * k..(row_idx + 1) * k];
+        T::VecDotType::from_float(lhs, lhs_b)?
+    }
+    let lhs_b = lhs_b.as_slice();
+
+    let m_even = m % 2 == 0;
+    let m_limit = if m_even { m } else { m - 1 };
+    let n_even = n % 2 == 0;
+    let n_limit = if n_even { n } else { n - 1 };
+
+    for row_idx in (0..m_limit).step_by(2) {
+        let lhs_row_0 = &lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
+        let lhs_row_1 = &lhs_b[(row_idx + 1) * k_in_lhs_blocks..(row_idx + 2) * k_in_lhs_blocks];
+
+        let dst_2_rows = &mut dst[row_idx * n..(row_idx + 2) * n];
+        let (dst_row_0, dst_row_1) = dst_2_rows.split_at_mut(dst_2_rows.len() / 2);
+
+        let dst_row_0_n = &mut dst_row_0[0..n_limit];
+        let dst_row_1_n = &mut dst_row_1[0..n_limit];
+
+        let _result: Vec<_> = dst_row_0_n
+            .par_chunks_mut(2)
+            .zip(dst_row_1_n.par_chunks_mut(2))
+            .enumerate()
+            .with_min_len(128)
+            .with_max_len(512)
+            .map(|(half_of_col_idx, (dst_0, dst_1))| {
+                let col_idx = half_of_col_idx * 2; // each step has 2 columns
+                let rhs_col_0 = &rhs_t[col_idx * k_in_rhs_blocks..(col_idx + 1) * k_in_rhs_blocks];
+                let rhs_col_1 =
+                    &rhs_t[(col_idx + 1) * k_in_rhs_blocks..(col_idx + 2) * k_in_rhs_blocks];
+
+                T::matmul_i8mm(k, rhs_col_0, rhs_col_1, lhs_row_0, lhs_row_1).map(|mm| {
+                    dst_0[0] = mm[0];
+                    dst_0[1] = mm[1];
+                    dst_1[0] = mm[2];
+                    dst_1[1] = mm[3];
+                })
+            })
+            .collect();
+        if !n_even {
+            let col_idx = n - 1;
+            let rhs_col = &rhs_t[col_idx * k_in_rhs_blocks..(col_idx + 1) * k_in_rhs_blocks];
+            dst_row_0[col_idx] = T::vec_dot(k, rhs_col, lhs_row_0).unwrap();
+            dst_row_1[col_idx] = T::vec_dot(k, rhs_col, lhs_row_1).unwrap();
+        }
+    }
+    if !m_even {
+        let row_idx = m - 1;
+        let lhs_row = &lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
+
+        let dst_row = &mut dst[row_idx * n..(row_idx + 1) * n];
+        let result: Result<Vec<_>> = dst_row
+            .into_par_iter()
+            .enumerate()
+            .with_min_len(128)
+            .with_max_len(512)
+            .map(|(col_idx, dst)| {
+                let rhs_col = &rhs_t[col_idx * k_in_rhs_blocks..(col_idx + 1) * k_in_rhs_blocks];
+                T::vec_dot(k, rhs_col, lhs_row).map(|value| *dst = value)
+            })
+            .collect();
+
+        result?;
+    }
+    Ok(())
+}
 impl GgmlType for f32 {
     const DTYPE: GgmlDType = GgmlDType::F32;
     const BLCK_SIZE: usize = 1;
@@ -1917,6 +2165,17 @@ impl GgmlType for f32 {
         }
         ys.copy_from_slice(xs);
         Ok(())
+    }
+    #[allow(unused)]
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        n: usize,
+        xs_0: &[Self],
+        xs_1: &[Self],
+        ys_0: &[Self::VecDotType],
+        ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]> {
+        todo!();
     }
 }
 
@@ -1961,5 +2220,16 @@ impl GgmlType for f16 {
             *y = x.to_f32()
         }
         Ok(())
+    }
+    #[allow(unused)]
+    #[cfg(feature = "arm-nightly-feat")]
+    fn matmul_i8mm(
+        n: usize,
+        xs_0: &[Self],
+        xs_1: &[Self],
+        ys_0: &[Self::VecDotType],
+        ys_1: &[Self::VecDotType],
+    ) -> Result<[f32; 4]> {
+        todo!();
     }
 }
