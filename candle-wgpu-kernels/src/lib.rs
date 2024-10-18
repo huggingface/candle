@@ -1,4 +1,6 @@
-mod generated;
+mod generated{
+    include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+}
 pub use generated::kernels::*;
 pub use generated::*;
 
