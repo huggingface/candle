@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use std::hash::Hash;
 
-use candle_wgpu_kernels::{Constants, EntryPoint, Pipelines};
+use candle_wgpu_kernels::{Constants, EntryPoint};
 use rand::SeedableRng;
 use tracing::instrument;
 use wgpu::{Backends, InstanceDescriptor, InstanceFlags};
@@ -67,7 +67,7 @@ impl OpIsInplaceable {
     derive(serde::Serialize, serde::Deserialize)
 )]
 pub struct PipelineType(
-    pub candle_wgpu_kernels::Pipelines,
+    pub candle_wgpu_kernels::PipelineIndex,
     pub(crate) usize,
     #[cfg_attr(
         any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
@@ -139,7 +139,7 @@ impl QueueBuffer {
         return &mut self.meta_array.0;
     }
 
-    fn add_layout(
+    pub fn add_layout(
         &mut self,
         layout: &Layout,
         is_contiguous: bool,
@@ -166,7 +166,7 @@ impl QueueBuffer {
         }
     }
 
-    pub(crate) fn add_layout1(&mut self, layout: &Layout) {
+    pub fn add_layout1(&mut self, layout: &Layout) {
         self.add_layout(
             layout,
             layout.is_contiguous(),
@@ -176,7 +176,7 @@ impl QueueBuffer {
         );
     }
 
-    pub(crate) fn add_layout2(&mut self, layout: &Layout) {
+    pub fn add_layout2(&mut self, layout: &Layout) {
         self.add_layout(
             layout,
             layout.is_contiguous(),
@@ -186,7 +186,7 @@ impl QueueBuffer {
         );
     }
 
-    pub(crate) fn add_layout3(&mut self, layout: &Layout) {
+    pub fn add_layout3(&mut self, layout: &Layout) {
         self.add_layout(
             layout,
             layout.is_contiguous(),
@@ -197,7 +197,7 @@ impl QueueBuffer {
     }
 
     //forces to write the shapes and strides
-    pub(crate) fn add_layout1_non_contiguous(&mut self, layout: &Layout) {
+    pub fn add_layout1_non_contiguous(&mut self, layout: &Layout) {
         self.add_layout(
             layout,
             false,
@@ -207,7 +207,7 @@ impl QueueBuffer {
         );
     }
 
-    pub(crate) fn add_layout2_non_contiguous(&mut self, layout: &Layout) {
+    pub fn add_layout2_non_contiguous(&mut self, layout: &Layout) {
         self.add_layout(
             layout,
             false,
@@ -217,7 +217,7 @@ impl QueueBuffer {
         );
     }
 
-    pub(crate) fn add_layout3_non_contiguous(&mut self, layout: &Layout) {
+    pub fn add_layout3_non_contiguous(&mut self, layout: &Layout) {
         self.add_layout(
             layout,
             false,
@@ -227,7 +227,7 @@ impl QueueBuffer {
         );
     }
 
-    pub(crate) fn get_pipeline(&mut self, pipeline: Pipelines) -> PipelineType {
+    pub fn get_pipeline(&mut self, pipeline: impl Into<candle_wgpu_kernels::PipelineIndex>) -> PipelineType {
         let (index, is_new) = self.const_id_map.get_or_insert(&self.const_array);
         if is_new {
             let hmap = HashMap::from_iter(
@@ -239,12 +239,12 @@ impl QueueBuffer {
             self.id_to_const_array.push(hmap)
         }
         self.init();
-        return PipelineType(pipeline, index, OpIsInplaceable::new());
+        return PipelineType(pipeline.into(), index, OpIsInplaceable::new());
     }
 
-    pub(crate) fn get_pipeline_const<T: ToU32>(
+    pub fn get_pipeline_const<T: ToU32>(
         &mut self,
-        pipeline: Pipelines,
+        pipeline: impl Into<candle_wgpu_kernels::PipelineIndex>,
         const_vec: Vec<T>,
     ) -> PipelineType {
         for (index, v) in const_vec.into_iter().enumerate() {
@@ -264,11 +264,11 @@ impl QueueBuffer {
             self.id_to_const_array.push(hmap)
         }
         self.init();
-        return PipelineType(pipeline, index, OpIsInplaceable::new());
+        return PipelineType(pipeline.into(), index, OpIsInplaceable::new());
     }
-    pub(crate) fn get_pipeline_const_inplace<T: ToU32>(
+    pub fn get_pipeline_const_inplace<T: ToU32>(
         &mut self,
-        pipeline: Pipelines,
+        pipeline: impl Into<candle_wgpu_kernels::PipelineIndex>,
         const_vec: Vec<T>,
         inplaceable: OpIsInplaceable,
     ) -> PipelineType {
@@ -289,14 +289,14 @@ impl QueueBuffer {
             self.id_to_const_array.push(hmap)
         }
         self.init();
-        return PipelineType(pipeline, index, inplaceable);
+        return PipelineType(pipeline.into(), index, inplaceable);
     }
 
-    pub(crate) fn add<T: KernelParameterMeta>(&mut self, value: T) {
+    pub fn add<T: KernelParameterMeta>(&mut self, value: T) {
         self.meta_array.add(value);
     }
 
-    pub(crate) fn add_const<T: ToU32>(&mut self, key: candle_wgpu_kernels::Constants, value: T) {
+    pub fn add_const<T: ToU32>(&mut self, key: candle_wgpu_kernels::Constants, value: T) {
         self.const_array.insert(key, value);
     }
 
@@ -578,6 +578,11 @@ impl WgpuDevice {
         wgpu_functions::flush_gpu_command(self, &mut queue)
     }
 
+    pub fn add_wgpu_shader_loader<T : candle_wgpu_kernels::ShaderLoader + 'static + Send + Sync>(&self, index : candle_wgpu_kernels::LoaderIndex, shader_loader : impl Fn() -> T){
+        let mut cache = self.cache.lock().unwrap();
+        cache.shader.add_wgpu_shader_loader(index, shader_loader);
+    }
+
     pub fn print_bindgroup_reuseinfo(&self) {
         let cache = self.cache.lock().unwrap();
 
@@ -677,20 +682,20 @@ impl WgpuDevice {
                 super::cache::BindgroupInputBase::Bindgroup0(*alignment)
             }
             super::cache::BindgroupInputBase::Bindgroup1(_, alignment) => {
-                super::cache::BindgroupInputBase::Bindgroup1(input1_buffer.buffer, *alignment)
+                super::cache::BindgroupInputBase::Bindgroup1(*input1_buffer.buffer(), *alignment)
             }
             super::cache::BindgroupInputBase::Bindgroup2(_, _, alignment) => {
                 super::cache::BindgroupInputBase::Bindgroup2(
-                    input1_buffer.buffer,
-                    input2_buffer.buffer,
+                    *input1_buffer.buffer(),
+                    *input2_buffer.buffer(),
                     *alignment,
                 )
             }
             super::cache::BindgroupInputBase::Bindgroup3(_, _, _, alignment) => {
                 super::cache::BindgroupInputBase::Bindgroup3(
-                    input1_buffer.buffer,
-                    input2_buffer.buffer,
-                    input3_buffer.buffer,
+                    *input1_buffer.buffer(),
+                    *input2_buffer.buffer(),
+                    *input3_buffer.buffer(),
                     *alignment,
                 )
             }
@@ -702,7 +707,7 @@ impl WgpuDevice {
             z: command.z,
             pipeline: command.pipeline.clone(),
             pipeline_cached: None,
-            bindgroup: BindGroupReference::new(dest_buffer.buffer, new_input),
+            bindgroup: BindGroupReference::new(*dest_buffer.buffer(), new_input),
             bindgroup_cached: None,
             meta: command_queue.current_meta,
             workload_size: 0 as usize,
@@ -868,7 +873,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
         if shape.elem_count() > 0 {
             wgpu_functions::queue_unary_inplace_op(
                 self,
-                buffer.buffer.clone(),
+                *buffer.buffer(),
                 UnaryOperation::SetZero,
                 0.0,
                 0.0,
@@ -886,7 +891,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
         if shape.elem_count() > 0 {
             wgpu_functions::queue_unary_inplace_op(
                 self,
-                buffer.buffer.clone(),
+                *buffer.buffer(),
                 UnaryOperation::SetOne,
                 0.0,
                 0.0,
@@ -976,7 +981,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
         let buffer = create_wgpu_storage(self, dtype, shape.elem_count() * dtype.size_in_bytes());
         wgpu_functions::queue_unary_inplace_op(
             self,
-            buffer.buffer.clone(),
+            *buffer.buffer(),
             UnaryOperation::RandUniform,
             lo as f32,
             up as f32,
@@ -996,7 +1001,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
         let buffer = create_wgpu_storage(self, dtype, shape.elem_count() * dtype.size_in_bytes());
         wgpu_functions::queue_unary_inplace_op(
             self,
-            buffer.buffer.clone(),
+            *buffer.buffer(),
             UnaryOperation::RandNormal,
             mean as f32,
             std as f32,

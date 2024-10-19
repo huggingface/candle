@@ -68,6 +68,9 @@ fn main() {
         println!("Found File: {:?}", file);
         let parent_name = file.file_stem().unwrap().to_str().unwrap().to_string();
         let parent_dir = file.parent().unwrap();
+        let mut absolute_path = parent_dir.to_str().unwrap().replace("\\", "/");
+        absolute_path.push('/');
+        
         let relativ_path = parent_dir.strip_prefix(&shader_dir).unwrap();
         let mut relativ_path = relativ_path.to_str().unwrap().replace("\\", "/");
         relativ_path.push('/');
@@ -136,17 +139,35 @@ fn main() {
                 }}
             }} 
         }}
+
+        impl Functions{{
+            pub fn get_index(&self, shader : crate::ShaderIndex) -> crate::PipelineIndex{{
+                match self{{
+                    {}
+                }}
+            }} 
+            pub fn from_index(index : u16) -> Self{{
+                match index{{
+                    {}
+                    _=> {{todo!()}}
+                }}
+            }} 
+        }}
+
         pub fn load_shader(typ : crate::DType) -> &'static str {{
             match typ{{
-                crate::DType::F32 => include_str!(\"{relativ_path}/generated/{parent_name}.pwgsl_generated_f32.wgsl\"),
-                crate::DType::U32 => include_str!(\"{relativ_path}/generated/{parent_name}.pwgsl_generated_u32.wgsl\"),
-                crate::DType::U8 => include_str!(\"{relativ_path}/generated/{parent_name}.pwgsl_generated_u8.wgsl\"),
-                crate::DType::I64 => include_str!(\"{relativ_path}/generated/{parent_name}.pwgsl_generated_i64.wgsl\"),
-                crate::DType::F64 => include_str!(\"{relativ_path}/generated/{parent_name}.pwgsl_generated_f64.wgsl\"),
+                crate::DType::F32 => include_str!(\"{absolute_path}/generated/{parent_name}.pwgsl_generated_f32.wgsl\"),
+                crate::DType::U32 => include_str!(\"{absolute_path}/generated/{parent_name}.pwgsl_generated_u32.wgsl\"),
+                crate::DType::U8 => include_str!(\"{absolute_path}/generated/{parent_name}.pwgsl_generated_u8.wgsl\"),
+                crate::DType::I64 => include_str!(\"{absolute_path}/generated/{parent_name}.pwgsl_generated_i64.wgsl\"),
+                crate::DType::F64 => include_str!(\"{absolute_path}/generated/{parent_name}.pwgsl_generated_f64.wgsl\"),
             }}
         }}
     }}
-        ",parent_name, functions.join(","), functions_match.join(","));
+        ",parent_name, functions.join(","), functions_match.join(","), 
+        global_functions.iter().enumerate().map(|(index, (key, _))| format!("\t\tFunctions::{} => crate::PipelineIndex::new(shader, {index}),", to_upper_camel_case(key))).collect::<Vec<String>>().join("\n"),
+        global_functions.iter().enumerate().map(|(index, (key, _))| format!("\t\t{index} => Functions::{},", to_upper_camel_case(key))).collect::<Vec<String>>().join("\n")
+    );
             
             modules.push((parent_name.clone(),relativ_path.clone(), content));
         }
@@ -214,6 +235,73 @@ modules.iter().map(|(m, path, _)| format!("\t\tPipelines::{}(typ, _) => {}{}::lo
 
 shader_content.push_str(
     &format!("
+
+
+impl Into<ShaderIndex> for Shaders
+{{
+    fn into(self) -> ShaderIndex{{
+        match self{{
+            {}
+        }}
+    }}
+}}
+
+    
+impl Into<Shaders> for ShaderIndex
+{{
+    fn into(self) -> Shaders{{
+        let typ = self.get_index() % DTYPE_COUNT;
+        let shader_index  = self.get_index() / DTYPE_COUNT;
+        match shader_index{{
+            {}
+            _ => {{todo!()}}
+        }}
+    }}
+}}
+
+
+
+impl Into<PipelineIndex> for Pipelines
+{{
+    fn into(self) -> PipelineIndex{{
+        let shader = self.get_shader();
+        match self{{
+            {}
+        }}
+    }}
+}}
+
+
+
+impl Into<Pipelines> for PipelineIndex
+{{
+    fn into(self) -> Pipelines{{
+        let shader = self.get_shader();
+        let typ = shader.get_index() % DTYPE_COUNT;
+        let shader_index  = shader.get_index() / DTYPE_COUNT;
+        match shader_index{{
+            {}
+            _ => {{todo!()}}
+        }}
+    }}
+}}
+    ",
+modules.iter().enumerate().map(|(i, (m, _, _))| format!("\t\t\tShaders::{}(typ) => {{
+        ShaderIndex::new(DefaultWgpuShader::LOADER_INDEX, {i}*DTYPE_COUNT + typ.get_index())
+    }}", to_upper_camel_case(m))).collect::<Vec<String>>().join(",\n"),
+
+modules.iter().enumerate().map(|(i, (m, _, _))| format!("\t\t\t{i} => Shaders::{}(DType::from_index(typ)),", to_upper_camel_case(m))).collect::<Vec<String>>().join("\n"),
+
+
+modules.iter().enumerate().map(|(_, (m, _, _))| format!("\t\t\tPipelines::{}(_, functions) => {{
+        let shader_index : ShaderIndex = shader.into();
+        functions.get_index(shader_index)
+    }}", to_upper_camel_case(m))).collect::<Vec<String>>().join(",\n"),
+modules.iter().enumerate().map(|(i, (m, path, _))| format!("\t\t\t{i} => Pipelines::{}(DType::from_index(typ), {}{}::Functions::from_index(self.get_index())),", to_upper_camel_case(m), change_path(path), m)).collect::<Vec<String>>().join("\n"),
+));
+
+shader_content.push_str(
+    &format!("
 impl Shaders {{
     pub fn get_shader(&self) -> Shaders{{
         match self{{
@@ -262,13 +350,17 @@ shader_info.global_overrides.iter().map(|(k, v)| format!("\t\t\tConstants::{} =>
 
     shader_content.push_str(&organize_modules(modules.iter().map(|(_m, p, code)| (p.clone(), code.clone()))));
 
-    fs::write("src/generated.rs", shader_content).expect("Failed to write shader map file");
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let dest_path = Path::new(&out_dir).join("generated.rs");
+    fs::write(dest_path, shader_content).expect("Failed to write shader map file");
+
+
 }
 
 fn organize_modules(snippets: impl Iterator<Item=(String, String)>) -> String {
     let mut module_map: HashMap<String, Vec<String>> = HashMap::new();
 
-    // Step 1: Group code snippets by their relative paths
+    // Step 1: Group code snippets by their relative pathsq
     for (path, code) in snippets {
         module_map.entry(path).or_default().push(code);
     }
@@ -333,7 +425,6 @@ mod shader_loader{
 
     pub fn load_shader(path: &PathBuf, global_defines : &Vec<&'static str>, global_functions : &mut shader_shortener::ShaderInfo) -> String {
         let mut result = shader_defines::load_shader(path, &mut HashMap::new(), global_defines); 
-        //let result = Regex::new(r"\n\s*(?=\n)", ).unwrap().replace_all(&result, ""); //remove comments
         
         if REMOVE_SPACES{
             result = Regex::new(r"((\s+)(?![\w\s])|(?<!\w)(\s+))", ).unwrap().replace_all(&result, "").to_string(); //replaces newline and not used spaces

@@ -487,13 +487,13 @@ impl candle::CustomOp1 for SoftmaxLastDim {
 
             let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
 
-            let output_buffer = create_wgpu_storage(storage.device(), storage.dtype,  el_count * storage.dtype.size_in_bytes());
+            let output_buffer = create_wgpu_storage(storage.device(), storage.dtype(),  el_count * storage.dtype().size_in_bytes());
 
             wgpu_functions::queue_softmax(
                 storage.device(),
-                output_buffer.buffer.clone(),
-                storage.buffer.clone(),
-                storage.dtype,
+                *output_buffer.buffer(),
+                *storage.buffer(),
+                storage.dtype(),
                 layout.start_offset() as u32,
                 dim_m1 as u32,
                 dest_size as u32,
@@ -712,14 +712,14 @@ impl candle::CustomOp2 for RmsNorm {
 
         let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
 
-        let output_buffer = create_wgpu_storage(src.device(), src.dtype,  el_count * src.dtype.size_in_bytes());
+        let output_buffer = create_wgpu_storage(src.device(), src.dtype(),  el_count * src.dtype().size_in_bytes());
 
         wgpu_functions::queue_rms_norm(
             src.device(),
-            output_buffer.buffer.clone(),
-            src.buffer.clone(),
-            alpha.buffer.clone(),
-            src.dtype,
+            *output_buffer.buffer(),
+            *src.buffer(),
+            *alpha.buffer(),
+            src.dtype(),
             layout.start_offset() as u32,
             alpha_layout.start_offset() as u32,
             dim_m1 as u32,
@@ -998,15 +998,15 @@ impl candle::CustomOp3 for LayerNorm {
 
         let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
 
-        let output_buffer = create_wgpu_storage(src.device(), src.dtype,  el_count * src.dtype.size_in_bytes());
+        let output_buffer = create_wgpu_storage(src.device(), src.dtype(),  el_count * src.dtype().size_in_bytes());
 
         wgpu_functions::queue_layer_norm(
             src.device(),
-            output_buffer.buffer.clone(),
-            src.buffer.clone(),
-            alpha.buffer.clone(),
-            beta.buffer.clone(),
-            src.dtype,
+            *output_buffer.buffer(),
+            *src.buffer(),
+            *alpha.buffer(),
+            *beta.buffer(),
+            src.dtype(),
             layout.start_offset() as u32,
             alpha_layout.start_offset() as u32,
             beta_layout.start_offset() as u32,

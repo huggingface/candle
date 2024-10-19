@@ -1,9 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
-
 use tracing::instrument;
 
 use crate::wgpu_backend::{device::PipelineType, wgpu_functions};
-use candle_wgpu_kernels::EntryPoint;
 
 #[derive(Debug)]
 pub struct ShaderModuleComputePipelines {
@@ -13,14 +11,22 @@ pub struct ShaderModuleComputePipelines {
 
 #[derive(Debug)]
 pub(crate) struct ShaderCache {
-    pub(crate) shaders: HashMap<candle_wgpu_kernels::Shaders, ShaderModuleComputePipelines>,
+    loader_cache : candle_wgpu_kernels::ShaderLoaderCache,
+    pub(crate) shaders: HashMap<candle_wgpu_kernels::ShaderIndex, ShaderModuleComputePipelines>,
 }
 
 impl ShaderCache {
     pub(crate) fn new() -> Self {
+        let mut loader_cache = candle_wgpu_kernels::ShaderLoaderCache::new();
+        loader_cache.add_wgpu_shader_loader(candle_wgpu_kernels::DefaultWgpuShader::LOADER_INDEX, || {candle_wgpu_kernels::DefaultWgpuShader{}});
         Self {
+            loader_cache : loader_cache,
             shaders: HashMap::new(),
         }
+    }
+
+    pub fn add_wgpu_shader_loader<T : candle_wgpu_kernels::ShaderLoader + 'static + Send + Sync>(&mut self, index : candle_wgpu_kernels::LoaderIndex, shader_loader : impl Fn() -> T){
+        self.loader_cache.add_wgpu_shader_loader(index, shader_loader);
     }
 
     #[instrument(skip(self, pipeline_layout, consts, pipeline))]
@@ -38,7 +44,8 @@ impl ShaderCache {
             .entry(shader.clone())
             .or_insert_with(|| 
                 {
-                    let s = wgpu_functions::get_shader(device, shader.load_shader());
+                    let shader_str = self.loader_cache.get_shader(shader);
+                    let s = wgpu_functions::get_shader(device,  shader_str);
                     ShaderModuleComputePipelines {
                         shader: Arc::new(s),
                         pipelines: HashMap::new(),
@@ -47,7 +54,8 @@ impl ShaderCache {
         
         let pipelines = &mut s.pipelines;
         if !pipelines.contains_key(&pipeline) {
-            let p = load_pipeline(device, s.shader.clone(), pipeline, pipeline_layout, consts);
+            let entry_point_str = self.loader_cache.get_entry_point(pipeline.0);
+            let p = load_pipeline(device, s.shader.clone(), entry_point_str, pipeline, pipeline_layout, consts);
             pipelines.insert(pipeline.clone(), Arc::new(p));
         }
 
@@ -63,11 +71,11 @@ impl ShaderCache {
 fn load_pipeline(
     device: &wgpu::Device,
     shader: Arc<wgpu::ShaderModule>,
+    entry_point : &str,
     pipeline: &PipelineType,
     pipeline_layout: &wgpu::PipelineLayout,
     consts: &HashMap<String, f64>,
 ) -> wgpu::ComputePipeline {
-    let entry_point = pipeline.0.get_entry_point();
     let compilation_options = if consts.is_empty() {
         wgpu::PipelineCompilationOptions::default()
     } else {

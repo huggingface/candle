@@ -125,7 +125,7 @@ pub fn get_dtype(dtype: crate::DType) -> crate::Result<DType> {
 }
 
 #[instrument(skip(device, shader))]
-pub fn get_shader(device: &wgpu::Device, shader: &'static str) -> ShaderModule {
+pub fn get_shader(device: &wgpu::Device, shader: &str) -> ShaderModule {
     let cs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
         source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader)),
@@ -199,7 +199,7 @@ fn next_divisible_by_n<T: num_traits::Num + Clone>(value: T, n: T) -> T {
     }
 }
 
-pub(crate) fn get_meta(dev: &WgpuDevice) -> MutexGuard<QueueBuffer> {
+pub fn get_meta(dev: &WgpuDevice) -> MutexGuard<QueueBuffer> {
     let mut command_queue = dev
         .command_queue
         .lock()
@@ -565,130 +565,134 @@ fn set_buffers(
                 }
 
                 let bindgroup_reference = &q.bindgroup;
-                if let Pipelines::Unary(
-                    dtype,
-                    candle_wgpu_kernels::unary::Functions::UnaryFromBufferContiguous,
-                ) = &q.pipeline.0
-                {
-                    if q.pipeline.2.input1_inplaceable {
-                        if let BindgroupReferenceInput::Bindgroup1(
+
+                if q.pipeline.0.get_shader().get_loader() == candle_wgpu_kernels::DefaultWgpuShader::LOADER_INDEX{
+                    let pipeline : Pipelines = q.pipeline.0.into();
+                    if let Pipelines::Unary(
+                        dtype,
+                        candle_wgpu_kernels::unary::Functions::UnaryFromBufferContiguous,
+                    ) = &pipeline
+                    {
+                        if q.pipeline.2.input1_inplaceable {
+                            if let BindgroupReferenceInput::Bindgroup1(
+                                v1_id,
+                                BindgroupAlignmentLayout::Bindgroup1(dest_alignment, _),
+                            ) = bindgroup_reference.get_input()
+                            {
+                                if should_optimize_inplace(&mut cache, bindgroup_reference.get_dest(), v1_id, command_index) {
+                                    cache.unary_inplace_counter += 1;
+                                    input_replaced_buffer = v1_id.clone();
+                                    q.pipeline.0 = Pipelines::Unary(
+                                        dtype.clone(),
+                                        candle_wgpu_kernels::unary::Functions::UnaryInplaceContiguous,
+                                    ).into();
+                                    q.bindgroup = BindGroupReference::new(
+                                        v1_id.clone(),
+                                        BindgroupInputBase::Bindgroup0(
+                                            BindgroupAlignmentLayout::Bindgroup0(*dest_alignment),
+                                        ),
+                                    );
+    
+                                }
+                            }
+                        }
+                    } else if let Pipelines::Binary(
+                        dtype,
+                        candle_wgpu_kernels::binary::Functions::BinaryBufferFromBufferContiguousBoth,
+                    ) = &pipeline
+                    {
+                        if let BindgroupReferenceInput::Bindgroup2(
                             v1_id,
-                            BindgroupAlignmentLayout::Bindgroup1(dest_alignment, _),
+                            v2_id,
+                            BindgroupAlignmentLayout::Bindgroup2(dest_alignment, _, _),
                         ) = bindgroup_reference.get_input()
                         {
-                            if should_optimize_inplace(&mut cache, bindgroup_reference.get_dest(), v1_id, command_index) {
-                                cache.unary_inplace_counter += 1;
-                                input_replaced_buffer = v1_id.clone();
-                                q.pipeline.0 = Pipelines::Unary(
-                                    dtype.clone(),
-                                    candle_wgpu_kernels::unary::Functions::UnaryInplaceContiguous,
-                                );
-                                q.bindgroup = BindGroupReference::new(
-                                    v1_id.clone(),
-                                    BindgroupInputBase::Bindgroup0(
-                                        BindgroupAlignmentLayout::Bindgroup0(*dest_alignment),
-                                    ),
-                                );
-
+                            if !cache
+                                .buffer_reference
+                                .get(v1_id)
+                                .expect("buffer_reference v1 not found")
+                                .cached_buffer_id()
+                                .is_valid()
+                            {
+                                panic!("input buffer v1 {:?}({:?}) has not input cache storage set {command_index}", cache.buffer_reference.get(v1_id).unwrap(), v1_id);
                             }
-                        }
-                    }
-                } else if let Pipelines::Binary(
-                    dtype,
-                    candle_wgpu_kernels::binary::Functions::BinaryBufferFromBufferContiguousBoth,
-                ) = &q.pipeline.0
-                {
-                    if let BindgroupReferenceInput::Bindgroup2(
-                        v1_id,
-                        v2_id,
-                        BindgroupAlignmentLayout::Bindgroup2(dest_alignment, _, _),
-                    ) = bindgroup_reference.get_input()
-                    {
-                        if !cache
-                            .buffer_reference
-                            .get(v1_id)
-                            .expect("buffer_reference v1 not found")
-                            .cached_buffer_id()
-                            .is_valid()
-                        {
-                            panic!("input buffer v1 {:?}({:?}) has not input cache storage set {command_index}", cache.buffer_reference.get(v1_id).unwrap(), v1_id);
-                        }
-                        if !cache
-                            .buffer_reference
-                            .get(v2_id)
-                            .expect("buffer_reference v2 not found")
-                            .cached_buffer_id()
-                            .is_valid()
-                        {
-                            panic!("input buffer v2 {:?}({:?}) has not input cache storage set {command_index}", cache.buffer_reference.get(v2_id).unwrap(), v2_id);
-                        }
-
-                        if q.pipeline.2.input1_inplaceable {
-                            if should_optimize_inplace(&mut cache, bindgroup_reference.get_dest(), v1_id, command_index) {
-                                input_replaced_buffer = v1_id.clone();
-                                cache.binary_inplace_counter += 1;
-
-                                q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace1ContiguousBoth);
-                                q.bindgroup = BindGroupReference::new(
-                                    v1_id.clone(),
-                                    BindgroupInputBase::Bindgroup1(
-                                        v2_id.clone(),
-                                        BindgroupAlignmentLayout::Bindgroup1(
-                                            *dest_alignment,
-                                            *dest_alignment,
-                                        ),
-                                    ),
-                                );
+                            if !cache
+                                .buffer_reference
+                                .get(v2_id)
+                                .expect("buffer_reference v2 not found")
+                                .cached_buffer_id()
+                                .is_valid()
+                            {
+                                panic!("input buffer v2 {:?}({:?}) has not input cache storage set {command_index}", cache.buffer_reference.get(v2_id).unwrap(), v2_id);
                             }
-                        } else if q.pipeline.2.input2_inplaceable {
-                            if should_optimize_inplace(&mut cache, bindgroup_reference.get_dest(), v2_id, command_index) {
-                                input_replaced_buffer = v2_id.clone();
-                                cache.binary_inplace_counter += 1;
-                                q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace2ContiguousBoth);
-                                q.bindgroup = BindGroupReference::new(
-                                    v2_id.clone(),
-                                    BindgroupInputBase::Bindgroup1(
+    
+                            if q.pipeline.2.input1_inplaceable {
+                                if should_optimize_inplace(&mut cache, bindgroup_reference.get_dest(), v1_id, command_index) {
+                                    input_replaced_buffer = v1_id.clone();
+                                    cache.binary_inplace_counter += 1;
+    
+                                    q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace1ContiguousBoth).into();
+                                    q.bindgroup = BindGroupReference::new(
                                         v1_id.clone(),
-                                        BindgroupAlignmentLayout::Bindgroup1(
-                                            *dest_alignment,
-                                            *dest_alignment,
+                                        BindgroupInputBase::Bindgroup1(
+                                            v2_id.clone(),
+                                            BindgroupAlignmentLayout::Bindgroup1(
+                                                *dest_alignment,
+                                                *dest_alignment,
+                                            ),
                                         ),
-                                    ),
-                                );
+                                    );
+                                }
+                            } else if q.pipeline.2.input2_inplaceable {
+                                if should_optimize_inplace(&mut cache, bindgroup_reference.get_dest(), v2_id, command_index) {
+                                    input_replaced_buffer = v2_id.clone();
+                                    cache.binary_inplace_counter += 1;
+                                    q.pipeline.0 = Pipelines::Binary(dtype.clone(), candle_wgpu_kernels::binary::Functions::BinaryBufferInplace2ContiguousBoth).into();
+                                    q.bindgroup = BindGroupReference::new(
+                                        v2_id.clone(),
+                                        BindgroupInputBase::Bindgroup1(
+                                            v1_id.clone(),
+                                            BindgroupAlignmentLayout::Bindgroup1(
+                                                *dest_alignment,
+                                                *dest_alignment,
+                                            ),
+                                        ),
+                                    );
+                                }
                             }
                         }
-                    }
-                } else if let Pipelines::Copy(_, candle_wgpu_kernels::copy::Functions::Copy) =
-                    &q.pipeline.0
-                {
-                    if q.pipeline.2.input1_inplaceable {
-                        if let BindgroupReferenceInput::Bindgroup1(v1_id, _) =
-                            bindgroup_reference.get_input()
-                        {
-                            let v1 = cache.buffer_reference.get(v1_id);
-                            if let Some(v1) = v1 {
-                                let vdest_id = bindgroup_reference.get_dest();
-
-                                let v1_cached_id = v1.cached_buffer_id().clone();
-                                let v1_size = v1.size();
-                                //this buffer was last used in this pipeline
-                                if v1.last_used() == command_index {
-                                    let vdest = cache.buffer_reference.get_mut(vdest_id);
-                                    if let Some(vdest) = vdest {
-                                        if vdest.size() <= v1_size {
-                                            if !vdest.cached_buffer_id().is_valid() {
-                                                vdest.set_cached_buffer_id(v1_cached_id);
-
-                                                cache.copy_inplace_counter += 1;
-                                                optimize_copy_inplace = true;
+                    } else if let Pipelines::Copy(_, candle_wgpu_kernels::copy::Functions::Copy) =
+                        &pipeline
+                    {
+                        if q.pipeline.2.input1_inplaceable {
+                            if let BindgroupReferenceInput::Bindgroup1(v1_id, _) =
+                                bindgroup_reference.get_input()
+                            {
+                                let v1 = cache.buffer_reference.get(v1_id);
+                                if let Some(v1) = v1 {
+                                    let vdest_id = bindgroup_reference.get_dest();
+    
+                                    let v1_cached_id = v1.cached_buffer_id().clone();
+                                    let v1_size = v1.size();
+                                    //this buffer was last used in this pipeline
+                                    if v1.last_used() == command_index {
+                                        let vdest = cache.buffer_reference.get_mut(vdest_id);
+                                        if let Some(vdest) = vdest {
+                                            if vdest.size() <= v1_size {
+                                                if !vdest.cached_buffer_id().is_valid() {
+                                                    vdest.set_cached_buffer_id(v1_cached_id);
+    
+                                                    cache.copy_inplace_counter += 1;
+                                                    optimize_copy_inplace = true;
+                                                }
                                             }
                                         }
-                                    }
-
-                                    if optimize_copy_inplace {
-                                        let v1 = cache.buffer_reference.get_mut(v1_id);
-                                        if let Some(v1) = v1 {
-                                            v1.set_cached_buffer_id(CachedBufferId::new(0, 0));
+    
+                                        if optimize_copy_inplace {
+                                            let v1 = cache.buffer_reference.get_mut(v1_id);
+                                            if let Some(v1) = v1 {
+                                                v1.set_cached_buffer_id(CachedBufferId::new(0, 0));
+                                            }
                                         }
                                     }
                                 }
@@ -1061,7 +1065,7 @@ pub(crate) async fn flush_gpu_command_async(
     Ok(())
 }
 
-fn enqueue(
+pub fn enqueue(
     command_queue: MutexGuard<QueueBuffer>,
     pipeline: PipelineType,
     bind_group: BindGroupReference,
@@ -1079,7 +1083,7 @@ fn enqueue(
     );
 }
 
-fn enqueue_extra(
+pub fn enqueue_extra(
     command_queue: MutexGuard<QueueBuffer>,
     pipeline: PipelineType,
     bind_group: BindGroupReference,
@@ -1100,7 +1104,7 @@ fn enqueue_extra(
     );
 }
 
-fn enqueue_big(
+pub fn enqueue_big(
     command_queue: MutexGuard<QueueBuffer>,
     pipeline: PipelineType,
     bind_group: BindGroupReference,
@@ -1116,7 +1120,7 @@ fn enqueue_big(
     );
 }
 
-fn enqueue_big_extra(
+pub fn enqueue_big_extra(
     command_queue: MutexGuard<QueueBuffer>,
     pipeline: PipelineType,
     bind_group: BindGroupReference,
@@ -1308,7 +1312,7 @@ pub fn create_bindgroup(
     }
 }
 
-fn create_bind_group_input0(
+pub fn create_bind_group_input0(
     buffer_dest: BufferReferenceId,
     alignment: BindgroupAlignment,
 ) -> BindGroupReference {
@@ -1317,7 +1321,7 @@ fn create_bind_group_input0(
     BindGroupReference::new(buffer_dest, BindgroupInputBase::Bindgroup0(alignment))
 }
 
-fn create_bind_group_input1(
+pub fn create_bind_group_input1(
     buffer_dest: BufferReferenceId,
     buffer_input1: BufferReferenceId,
     alignment: BindgroupAlignment,
@@ -1329,7 +1333,7 @@ fn create_bind_group_input1(
     );
 }
 
-fn create_bind_group_input1_with_alignment(
+pub fn create_bind_group_input1_with_alignment(
     buffer_dest: BufferReferenceId,
     buffer_input1: BufferReferenceId,
     alignment: BindgroupAlignmentLayout,
@@ -1341,7 +1345,7 @@ fn create_bind_group_input1_with_alignment(
     )
 }
 
-fn create_bind_group_input2(
+pub fn create_bind_group_input2(
     buffer_dest: BufferReferenceId,
     buffer_input1: BufferReferenceId,
     buffer_input2: BufferReferenceId,
@@ -1355,7 +1359,7 @@ fn create_bind_group_input2(
     );
 }
 
-fn create_bind_group_input2_with_alignment(
+pub fn create_bind_group_input2_with_alignment(
     buffer_dest: BufferReferenceId,
     buffer_input1: BufferReferenceId,
     buffer_input2: BufferReferenceId,
@@ -1368,7 +1372,7 @@ fn create_bind_group_input2_with_alignment(
     )
 }
 
-fn create_bind_group_input3(
+pub fn create_bind_group_input3(
     buffer_dest: BufferReferenceId,
     buffer_input1: BufferReferenceId,
     buffer_input2: BufferReferenceId,
@@ -1384,7 +1388,7 @@ fn create_bind_group_input3(
     );
 }
 
-fn create_bind_group_input3_with_alignment(
+pub fn create_bind_group_input3_with_alignment(
     buffer_dest: BufferReferenceId,
     buffer_input1: BufferReferenceId,
     buffer_input2: BufferReferenceId,

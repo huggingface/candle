@@ -45,6 +45,13 @@ pub trait ToU64 {
     fn to_u64(self) -> u64;
 }
 
+impl ToU64 for i32 {
+    fn to_u64(self) -> u64 {
+        return self as u64;
+    }
+}
+
+
 impl ToU64 for u32 {
     fn to_u64(self) -> u64 {
         return self as u64;

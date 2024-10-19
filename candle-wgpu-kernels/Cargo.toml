@@ -12,6 +12,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+candle-wgpu-kernels-macro = {path = "./candle-wgpu-kernels-macro"}
 
 [build-dependencies]
 fancy-regex = "0.13.0"

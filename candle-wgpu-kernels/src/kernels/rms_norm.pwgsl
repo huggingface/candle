@@ -13,8 +13,8 @@ var<workgroup> sharedNorm: f32;
 
 @compute
 @workgroup_size(64,1,1)
-fn rms_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgroup_id) output_id3: vec3<u32>,) {
-    let workgroup_id = local_id.x;
+fn rms_norm(@builtin(local_invocation_id) local_id: vec3<u32>, @builtin(workgroup_id) output_id3: vec3<u32>,) {
+    let tid = local_id.x;
     let output_index = output_id3.y;
     
     //Start Index of the Elements to Reduce
@@ -24,8 +24,8 @@ fn rms_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgro
     let start_index2 = oop_rms_norm_contiguous_input2_offset;
 
     //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
-    let start = workgroup_id * oop_rms_norm_contiguous_workgroup_size;
-    let end = min(length, (workgroup_id + 1) * oop_rms_norm_contiguous_workgroup_size);
+    let start = tid * oop_rms_norm_contiguous_workgroup_size;
+    let end = min(length, (tid + 1) * oop_rms_norm_contiguous_workgroup_size);
 
     //Now Reduce from start to end
     var sum = ZERO;
@@ -33,14 +33,14 @@ fn rms_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgro
         let v = v_input1[start_index1 + i];
         sum += v*v;
     }
-    sharedSums[workgroup_id] = sum;
+    sharedSums[tid] = sum;
         
     workgroupBarrier();
 
     //This is not optimal (only 1 of 64 threads sums the partial result of each thread)
     //TODO: Either use multiple threads for the sum(e.g. first 32 threads, then 16, then 8, ...)
     //      or let one thread calculate multiple outputs in sharedSums, and then let multiple threads sum the partial results of one output(like in matmul1x64b) 
-    if (workgroup_id == 0){
+    if (tid == 0){
         let cnt = oop_rms_norm_contiguous_workgroup_count;
         //Finnaly Sum of all worker threads:
         var sum = ZERO;
@@ -71,8 +71,8 @@ var<workgroup> sharedSumsSquared: array<DTYPE, 64>;
 
 @compute
 @workgroup_size(64,1,1)
-fn layer_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgroup_id) output_id3: vec3<u32>,) {
-    let workgroup_id = local_id.x;
+fn layer_norm(@builtin(local_invocation_id) local_id: vec3<u32>, @builtin(workgroup_id) output_id3: vec3<u32>,) {
+    let tid = local_id.x;
     let output_index = output_id3.y;
     
     //Start Index of the Elements to Reduce
@@ -83,8 +83,8 @@ fn layer_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workg
     let start_index3 = oop_rms_norm_contiguous_input3_offset;
 
     //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
-    let start = workgroup_id * oop_rms_norm_contiguous_workgroup_size;
-    let end = min(length, (workgroup_id + 1) * oop_rms_norm_contiguous_workgroup_size);
+    let start = tid * oop_rms_norm_contiguous_workgroup_size;
+    let end = min(length, (tid + 1) * oop_rms_norm_contiguous_workgroup_size);
 
     //Now Reduce from start to end
     var sum = ZERO;
@@ -94,15 +94,15 @@ fn layer_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workg
         sum_squared += v*v;
         sum += v;
     }
-    sharedSums[workgroup_id] = sum;
-    sharedSumsSquared[workgroup_id] = sum_squared;
+    sharedSums[tid] = sum;
+    sharedSumsSquared[tid] = sum_squared;
         
     workgroupBarrier();
 
     //This is not optimal (only 1 of 64 threads sums the partial result of each thread)
     //TODO: Either use multiple threads for the sum(e.g. first 32 threads, then 16, then 8, ...)
     //      or let one thread calculate multiple outputs in sharedSums, and then let multiple threads sum the partial results of one output(like in matmul1x64b) 
-    if (workgroup_id == 0){
+    if (tid == 0){
         let cnt = oop_rms_norm_contiguous_workgroup_count;
         //Finnaly Sum of all worker threads:
         var sum = ZERO;

@@ -1,6 +1,6 @@
 use tracing::instrument;
 
-use crate::{backend::BackendStorage, DType, Layout, Shape};
+use crate::{DType, Layout, Shape};
 
 use super::{
     cache::BufferReferenceId,
@@ -14,11 +14,12 @@ use super::{
 
 #[derive(Debug)]
 pub struct WgpuStorage {
-    pub buffer: BufferReferenceId,
-    pub size: u64,
-    pub wgpu_device: WgpuDevice,
-    pub dtype: crate::DType,
+    buffer: BufferReferenceId,
+    size: u64,
+    wgpu_device: WgpuDevice,
+    dtype: crate::DType,
 }
+
 
 #[instrument(skip(dev, size))]
 pub fn create_wgpu_storage<T: ToU64>(
@@ -55,6 +56,19 @@ pub fn create_wgpu_storage_init<T: bytemuck::Pod>(
 }
 
 impl WgpuStorage {
+
+    pub fn buffer(&self) -> &BufferReferenceId{
+        &self.buffer
+    }
+
+    pub fn device(&self) -> &WgpuDevice{
+        &self.wgpu_device
+    }
+
+    pub fn dtype(&self) ->  crate::DType {
+        self.dtype
+    }
+
     pub fn new(
         buffer: BufferReferenceId,
         wgpu_device: WgpuDevice,
