@@ -43,6 +43,9 @@ candle-wasm-examples/**/config*.json
 __pycache__
 out.safetensors
 out.wav
+bria.mp3
+bria.safetensors
+bria.wav
 
 #generated wgpu shader files
 **/generated/*.pwgsl_generated_*.wgsl

@@ -155,7 +155,7 @@ impl C2f {
         let cv2 = ConvBlock::load(vb.pp("cv2"), (2 + n) * c, c2, 1, 1, None)?;
         let mut bottleneck = Vec::with_capacity(n);
         for idx in 0..n {
-            let b = Bottleneck::load(vb.pp(&format!("bottleneck.{idx}")), c, c, shortcut)?;
+            let b = Bottleneck::load(vb.pp(format!("bottleneck.{idx}")), c, c, shortcut)?;
             bottleneck.push(b)
         }
         Ok(Self {
