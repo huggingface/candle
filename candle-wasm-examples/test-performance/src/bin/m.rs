@@ -47,27 +47,48 @@ fn load_recording_consts(device : &Device) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+fn format_bytes(bytes: f64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    const TB: f64 = GB * 1024.0;
+
+    if bytes >= TB {
+        format!("{:.2} TiB", bytes as f64 / TB as f64)
+    } else if bytes >= GB {
+        format!("{:.2} GiB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MiB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KiB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} bytes", bytes)
+    }
+}
+
 async fn test_matmul() -> Result<(), Box<dyn std::error::Error>>{
     let device = candle::Device::new_wgpu(0).await?;
 
-    let b = 16;
-    let m = 4096;
-    let k = 4096;
-    let n = 64;
+    let b = 1;
+    let m = 2048;
+    let k = 2048;
+    let n = 2048;
+
+    let flops = b*m*k*n;
 
     let algs = vec![
-       // MatmulAlgorithm::Matmul1,
-        MatmulAlgorithm::Matmul64_64(false, false),
-        MatmulAlgorithm::Matmul64_64_8_8(false, false),
-        MatmulAlgorithm::Matmul64_64_4_8(false, false),
+       // MatmulAlgorithm::Matmul1
+        MatmulAlgorithm::Matmul32_64,
+        //MatmulAlgorithm::Matmul64_64_8_8,
+        //MatmulAlgorithm::Matmul64_64_4_8,
        
         // MatmulAlgorithm::MatmulX,
         // MatmulAlgorithm::Matmul7,
         // MatmulAlgorithm::Matmul16_16,
-        // MatmulAlgorithm::Matmul32_32(false, false, true, true),
-        // MatmulAlgorithm::Matmul24_24(false,false, true, true),
-        // MatmulAlgorithm::Matmul24_48(false,false, true, true),
-        // MatmulAlgorithm::Matmul64_64(false, false),
+        // MatmulAlgorithm::Matmul32_32,
+        // MatmulAlgorithm::Matmul24_24,
+        // MatmulAlgorithm::Matmul24_48,
+        // MatmulAlgorithm::Matmul64_64,
        ];
 
    
@@ -84,10 +105,16 @@ async fn test_matmul() -> Result<(), Box<dyn std::error::Error>>{
             for alg in algs{
                 *wgpu.matmul_alg.lock().unwrap() = alg.clone();
 
-                test_func(&device, 10, || {
+                test_func(&device, 1000, || {
                     buffer_a.matmul(&buffer_b).unwrap();
                     return Ok(())}, &format!("{:?}:",alg), &mut measurements, 0).await;    
-            }
+                }
+
+                if let Some(l) = measurements.last()
+                {
+                    log::warn!("throughput: {}",  format_bytes(flops as f64 / l.result.mean))
+                }
+
         },
         _ => {todo!()}
     }
@@ -118,7 +145,7 @@ pub async fn performance_test() -> Result<(), Box<dyn std::error::Error>>{
 
     let debug_recordings = include_str!("wgpu_stable_diffusion_test_1_d.json");
     let debug_recordings : Vec<candle::wgpu_backend::DebugPipelineRecording> = serde_json::from_str(debug_recordings)?;
-    let debug_recordings : Vec<_> = debug_recordings.iter().filter(|v| if let Pipelines::Matmul64x648x8(_,_) = &v.pipeline.0 {return true;} else {return false;}).collect();
+    let debug_recordings : Vec<_> = debug_recordings.iter().filter(|v| if let Pipelines::Matmul64x648x8(_,_) = &v.pipeline.0.into() {return true;} else {return false;}).collect();
 
 
     let mut measurements : Vec<MeasurementInfo> = vec![];
