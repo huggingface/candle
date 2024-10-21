@@ -46,7 +46,6 @@ impl st::View for Tensor {
     fn data(&self) -> Cow<[u8]> {
         // This copies data from GPU to CPU.
         // TODO: Avoid the unwrap here.
-        #[allow(deprecated)] //no way to use this external crates trait async
         Cow::Owned(convert_back(self).unwrap())
     }
 
@@ -68,7 +67,6 @@ impl st::View for &Tensor {
     fn data(&self) -> Cow<[u8]> {
         // This copies data from GPU to CPU.
         // TODO: Avoid the unwrap here.
-        #[allow(deprecated)] //no way to use this external crates trait async
         Cow::Owned(convert_back(self).unwrap())
     }
 
@@ -155,7 +153,6 @@ fn convert_<T: WithDType>(view: &st::TensorView<'_>, device: &Device) -> Result<
     convert_slice::<T>(view.data(), view.shape(), device)
 }
 
-
 fn convert_back_<T: WithDType>(mut vs: Vec<T>) -> Vec<u8> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
     let length = vs.len() * size_in_bytes;
@@ -220,7 +217,7 @@ fn convert(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
     }
 }
 
-#[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `convert_back_async` for wasm support instead"))]
+
 fn convert_back(tensor: &Tensor) -> Result<Vec<u8>> {
     // TODO: This makes an unnecessary copy when the tensor is on the cpu.
     let tensor = tensor.flatten_all()?;

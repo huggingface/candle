@@ -134,14 +134,6 @@ impl Args {
 }
 
 fn main() -> anyhow::Result<()> {
-    //env_logger::builder().filter_level(log::LevelFilter::Info).init();
-
-    //use tracing_chrome::ChromeLayerBuilder;
-    //use tracing_subscriber::prelude::*;
-
-    //let (chrome_layer, _guard) = ChromeLayerBuilder::new().build();
-    //tracing_subscriber::registry().with(chrome_layer).init();
-    
     let args = Args::parse();
     match &args.task {
         None => {
@@ -362,7 +354,6 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
 
         let next_token = logits_processor.sample(&logits)?;
         tokens.push(next_token);
-
         if let Some(t) = tokenizer.next_token(next_token)? {
             print!("{t}");
             std::io::stdout().flush()?;
@@ -376,17 +367,6 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
         "\n{} tokens generated ({:.2} token/s)\n",
         tokens.len(),
         tokens.len() as f64 / dt.as_secs_f64(),
-    );   
-
-    match &device {
-        candle::Device::Wgpu(gpu) => {
-            gpu.print_bindgroup_reuseinfo2();
-            #[cfg(feature = "wgpu_debug")]{
-                gpu.log_debuginfo_to_file("", "llama2c", "2")?;
-            }
-        },
-        _ => {},
-    };
-
+    );
     Ok(())
 }

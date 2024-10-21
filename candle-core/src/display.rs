@@ -1,5 +1,3 @@
-use std::fmt::Debug;
-
 /// Pretty printing of tensors
 /// This implementation should be in line with the PyTorch version.
 /// https://github.com/pytorch/pytorch/blob/7b419e8513a024e172eae767e24ec1b849976b13/torch/_tensor_str.py
@@ -19,7 +17,9 @@ impl Tensor {
             crate::DeviceLocation::Metal { gpu_id } => {
                 format!(", metal:{}", gpu_id)
             }
-            crate::DeviceLocation::Wgpu { gpu_id } => format!(", wgpu: {}", gpu_id),
+            crate::DeviceLocation::Wgpu { gpu_id } => {
+                format!(", wgpu: {}", gpu_id)
+            }
         };
 
         write!(f, "Tensor[")?;
@@ -510,7 +510,9 @@ impl std::fmt::Display for Tensor {
             crate::DeviceLocation::Metal { gpu_id } => {
                 format!(", metal:{}", gpu_id)
             }
-            crate::DeviceLocation::Wgpu { gpu_id } =>  format!(", wgpu:{}", gpu_id),
+            crate::DeviceLocation::Wgpu { gpu_id } => {
+                format!(", wgpu:{}", gpu_id)
+            }
         };
 
         write!(

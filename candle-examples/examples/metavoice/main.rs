@@ -7,7 +7,6 @@ extern crate accelerate_src;
 use anyhow::Result;
 use clap::Parser;
 use std::io::Write;
-use std::time::Instant;
 
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::encodec;
@@ -93,12 +92,6 @@ struct Args {
 fn main() -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
-
-    use tracing_subscriber::layer::SubscriberExt;
-
-    tracing::subscriber::set_global_default(
-        tracing_subscriber::registry().with(tracing_tracy::TracyLayer::default())
-    ).expect("setup tracy layer");
 
     let args = Args::parse();
     let _guard = if args.tracing {
@@ -201,8 +194,6 @@ fn main() -> Result<()> {
     let spk_emb = spk_emb.to_device(&device)?;
     let mut logits_processor = LogitsProcessor::new(args.seed, Some(args.temperature), Some(0.95));
 
-    let mut start = Instant::now();
-    let total_start = Instant::now();
     // First stage generation.
     for index in 0..args.max_tokens {
         let context_size = if index > 0 { 1 } else { tokens.len() };
@@ -222,22 +213,13 @@ fn main() -> Result<()> {
         let logits = logits.to_dtype(DType::F32)?;
         let next_token = logits_processor.sample(&logits)?;
         tokens.push(next_token);
-
-        if index % 20 == 0{
-            println!("{index} / {}", args.max_tokens);
-            println!("elapsed: {:?}", start.elapsed());
-            start = Instant::now();
-            std::io::stdout().flush()?;
-        }
-
+        print!(".");
+        std::io::stdout().flush()?;
         if next_token == 2048 {
             break;
         }
     }
     println!();
-
-    println!("total_dur: {:?}", total_start.elapsed());
-
     let fie2c = adapters::FlattenedInterleavedEncodec2Codebook::new(ENCODEC_NTOKENS);
     let (text_ids, ids1, ids2) = fie2c.decode(&tokens);
     println!("text ids len: {}", text_ids.len());
@@ -286,28 +268,6 @@ fn main() -> Result<()> {
     println!("audio_ids shape: {:?}", audio_ids.shape());
     let pcm = encodec_model.decode(&audio_ids)?;
     println!("output pcm shape: {:?}", pcm.shape());
-
-    match &device {
-        candle::Device::Wgpu(_gpu) => {
-            #[cfg(feature="wgpu")]
-            _gpu.print_bindgroup_reuseinfo2();
-            #[cfg(feature = "wgpu_debug")]{
-                let info = pollster::block_on(_gpu.get_debug_info()).unwrap();
-                let map2 = candle::wgpu::debug_info::calulate_measurment(&info);
-                candle::wgpu::debug_info::save_list(&map2,& format!("wgpu_metavoice_test_1_b.json")).unwrap();
-            
-            
-                let info: Vec<candle::wgpu::debug_info::ShaderInfo> = _gpu.get_pipeline_info().unwrap();
-                candle::wgpu::debug_info::save_list(&info,& format!("wgpu_metavoice_test_1_c.json")).unwrap();
-
-                let (pipelines, consts) = _gpu.get_used_pipelines();
-                std::fs::write(format!("wgpu_metavoice_test_1_d.json"), pipelines)?;   
-                std::fs::write(format!("wgpu_metavoice_test_1_e.json"), consts)?;   
-            }
-        },
-        _ => {},
-    };
-
     let pcm = pcm.i(0)?.i(0)?.to_dtype(DType::F32)?;
     let pcm = candle_examples::audio::normalize_loudness(&pcm, 24_000, true)?;
     let pcm = pcm.to_vec1::<f32>()?;

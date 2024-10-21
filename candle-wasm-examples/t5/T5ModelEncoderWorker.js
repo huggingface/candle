@@ -39,7 +39,7 @@ class Encoder {
         weightsArrayU8,
         tokenizerArrayU8,
         configArrayU8,
-        wgpu
+        wgpu === 'true'
       );
     } else {
       self.postMessage({ status: "ready", message: "Model Already Loaded" });

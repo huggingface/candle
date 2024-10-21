@@ -1,7 +1,4 @@
-use candle::{
-    backend::BackendStorage, CpuStorage, DType, Layout, Module, Result, Shape,
-    Tensor, D, WgpuStorage,
-};
+use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D, WgpuStorage};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -54,6 +51,8 @@ impl candle::CustomOp1 for Sigmoid {
     }
 
     fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+        use candle::backend::BackendStorage;
+
         fn fwd<T: num_traits::Float>(v: T) -> T {
             (v.neg().exp() + T::one()).recip()
         }
@@ -229,6 +228,8 @@ impl candle::CustomOp1 for Sigmoid {
     }
 
     fn wgpu_fwd(&self, _storage: &WgpuStorage, _layout: &Layout) -> Result<(WgpuStorage, Shape)> {
+        use candle::backend::BackendStorage;
+
         let s = _storage.unary_impl::<Self>(_layout)?;
         return Ok((s, _layout.shape().clone()));
     }
@@ -524,6 +525,8 @@ impl candle::CustomOp2 for RmsNorm {
         s2: &CpuStorage,
         l2: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
+        use candle::backend::BackendStorage;
+
         let eps = self.eps;
         fn inner<
             T: candle::WithDType

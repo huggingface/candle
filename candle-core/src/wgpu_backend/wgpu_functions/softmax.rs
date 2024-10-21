@@ -11,8 +11,7 @@ pub fn queue_softmax(
     reduction_length: u32,
     dest_size: u32,
 ) -> crate::Result<()> {
-    let workgroup_count = u32::min(64, reduction_length);
-    let const_vec = vec![workgroup_count, input1_offset];
+    let const_vec = vec![input1_offset];
 
     let mut meta = get_meta(&dev);
     meta.add(reduction_length);

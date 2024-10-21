@@ -1,7 +1,6 @@
 import init, { Model } from "./build/m.js";
 
 Error.stackTraceLimit = 50;
-
 async function fetchArrayBuffer(url) {
   const cacheName = "llama2c-candle-cache";
   const cache = await caches.open(cacheName);
@@ -61,12 +60,7 @@ async function generate(data) {
   try {
     self.postMessage({ status: "loading", message: "Starting llama2.c" });
 
-    console.log("generate useWgpu:")
-    console.log(useWgpu)
-    console.log((useWgpu === 'true'))
-    console.log((useWgpu === 'True'))
-
-    const model = await Llama2C.getInstance(weightsURL, modelID, tokenizerURL,(useWgpu === 'true'));
+    const model = await Llama2C.getInstance(weightsURL, modelID, tokenizerURL, useWgpu === 'true');
 
     self.postMessage({ status: "loading", message: "Initializing model" });
     const firstToken = await model.init_with_prompt(

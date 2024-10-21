@@ -36,7 +36,6 @@ serde_json = { workspace = true }
 symphonia = { version = "0.5.3", features = ["all"], optional = true }
 tokenizers = { workspace = true, features = ["onig"] }
 cpal = { version = "0.15.2", optional = true }
-pollster = "0.3.0"
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -49,11 +48,8 @@ ab_glyph = { workspace = true }
 tracing = { workspace = true }
 tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }
-tracing-tracy = "0.11.2"
 # Necessary to disambiguate with tokio in wasm examples which are 1.28.1
 tokio = "1.29.1"
-env_logger = "0.11.3"
-log = "0.4.22"
 
 [build-dependencies]
 anyhow = { workspace = true }
@@ -74,9 +70,6 @@ wgpu = ["candle/wgpu", "candle-nn/wgpu"]
 wgpu_debug = ["wgpu", "candle/wgpu_debug"]
 default = []
 depth_anything_v2 = ["palette", "enterpolation"]
-
-
-
 
 [[example]]
 name = "llama_multiprocess"

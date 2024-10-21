@@ -5,8 +5,6 @@ use wasm_bindgen::JsCast;
 use crate::generic_error::GenericResult;
 
 pub async fn download_file(url : &str) -> GenericResult<web_sys::Blob> {
-    //let encoded = encode(url);
-    //let new_url = format!("http://localhost:3000/fetch-resource/?url={}", encoded);
     log::info!("download file: {url}");
     
     let opts = RequestInit::new();
@@ -19,8 +17,6 @@ pub async fn download_file(url : &str) -> GenericResult<web_sys::Blob> {
 
     log::info!("request: {request:?}");
 
-    //request .headers().set("Accept", "")?;
-
     let window = web_sys::window().unwrap();
     let resp_value = JsFuture::from(window.fetch_with_request(&request)).await?;
 
@@ -29,8 +25,6 @@ pub async fn download_file(url : &str) -> GenericResult<web_sys::Blob> {
     // `resp_value` is a `Response` object.
     assert!(resp_value.is_instance_of::<Response>());
     let resp: Response = resp_value.dyn_into().unwrap();
-
-
 
     log::info!("resp: {resp:?}");
     
@@ -49,20 +43,4 @@ pub async fn download_file(url : &str) -> GenericResult<web_sys::Blob> {
     log::info!("blob created");
 
     return Ok(blob);
-
-    // log::info!("trying to create array buffer");
-
-    // // Convert this other `Promise` into a rust `Future`.
-    // let buffer = JsFuture::from(resp.array_buffer()?).await?;
-    // log::info!("buffer created");
-   
-    // let array : js_sys::ArrayBuffer = buffer.into(); 
-    
-    // let uint8_array = js_sys::Uint8Array::new(&array);
-
-    // //log::info!("buffer: {buffer:?}");
-
-    // log::info!("uint8_array: {uint8_array:?}");
-
-    // return Ok(uint8_array.to_vec())
 }

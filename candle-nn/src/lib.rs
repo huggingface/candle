@@ -1,3 +1,5 @@
+#![cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))] //for wasm32 and wgpu, async functions may be used instead of sync functions. 
+                                                                               //this will allow the deprecated warnings inside this crate
 pub mod activation;
 pub mod batch_norm;
 pub mod conv;
@@ -39,3 +41,4 @@ pub use var_builder::VarBuilder;
 pub use var_map::VarMap;
 
 pub use candle::{Module, ModuleT};
+

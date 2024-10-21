@@ -34,7 +34,8 @@ class Phi {
     modelID,
     tokenizerURL,
     configURL,
-    quantized
+    quantized,
+    useWgpu
   ) {
     // load individual modelID only once
     if (!this.instance[modelID]) {
@@ -48,11 +49,12 @@ class Phi {
           fetchArrayBuffer(configURL),
         ]);
 
-      this.instance[modelID] = new Model(
+      this.instance[modelID] = await new Model(
         weightsArrayU8,
         tokenizerArrayU8,
         configArrayU8,
-        quantized
+        quantized,
+        useWgpu === 'true'
       );
     }
     return this.instance[modelID];
@@ -82,6 +84,7 @@ async function generate(data) {
     repeatPenalty,
     seed,
     maxSeqLen,
+    useWgpu
   } = data;
   try {
     self.postMessage({ status: "loading", message: "Starting Phi" });
@@ -90,7 +93,8 @@ async function generate(data) {
       modelID,
       tokenizerURL,
       configURL,
-      quantized
+      quantized,
+      useWgpu
     );
 
     self.postMessage({ status: "loading", message: "Initializing model" });

@@ -45,6 +45,8 @@ impl Module for Mlp {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="This sync function will not work for webgpu, use an async imp."))]
+#[cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))]
 enum MlpOrMoe {
     Mlp(Mlp),
     MoE {

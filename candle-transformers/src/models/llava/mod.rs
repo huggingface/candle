@@ -226,6 +226,8 @@ impl LLaVA {
         Ok(image_features)
     }
     // currently only for single image, 4 dim tensor
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="This sync function will not work for webgpu, use an async imp."))]
+    #[cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))]
     pub fn prepare_inputs_labels_for_multimodal(
         &self,
         input_ids: &Tensor,

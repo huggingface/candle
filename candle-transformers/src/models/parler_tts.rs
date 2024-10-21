@@ -363,6 +363,8 @@ impl Model {
     }
 
     /// Note that the returned tensor uses the CPU device.
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="This sync function will not work for webgpu, use an async imp."))]
+    #[cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))]
     pub fn generate(
         &mut self,
         prompt_tokens: &Tensor,

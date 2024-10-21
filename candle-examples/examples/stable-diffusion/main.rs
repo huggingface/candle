@@ -4,8 +4,6 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
-use std::time::Instant;
-
 use candle_transformers::models::stable_diffusion;
 
 use anyhow::{Error as E, Result};
@@ -481,7 +479,6 @@ fn run(args: Args) -> Result<()> {
 
     let scheduler = sd_config.build_scheduler(n_steps)?;
     let device = candle_examples::device(cpu)?;
-    
     if let Some(seed) = seed {
         device.set_seed(seed)?;
     }
@@ -491,8 +488,6 @@ fn run(args: Args) -> Result<()> {
         StableDiffusionVersion::Xl | StableDiffusionVersion::Turbo => vec![true, false],
         _ => vec![true],
     };
-    let start = Instant::now();
-
     let text_embeddings = which
         .iter()
         .map(|first| {
@@ -594,7 +589,6 @@ fn run(args: Args) -> Result<()> {
             };
 
             latents = scheduler.step(&noise_pred, timestep, &latents)?;
-            device.synchronize()?;
             let dt = start_time.elapsed().as_secs_f32();
             println!("step {}/{n_steps} done, {:.2}s", timestep_index + 1, dt);
 
@@ -617,8 +611,6 @@ fn run(args: Args) -> Result<()> {
             idx + 1,
             num_samples
         );
-        
-        device.synchronize()?;
         save_image(
             &vae,
             &latents,
@@ -629,34 +621,11 @@ fn run(args: Args) -> Result<()> {
             num_samples,
             None,
         )?;
-        match &device {
-            candle::Device::Wgpu(gpu) => {
-                #[cfg(feature="wgpu")]
-                gpu.print_bindgroup_reuseinfo2();
-                #[cfg(feature = "wgpu_debug")]{
-                    let version = "8";
-                    let info = pollster::block_on(gpu.get_debug_info()).unwrap();
-                    let map2 = candle::wgpu::debug_info::calulate_measurment(&info);
-                    candle::wgpu::debug_info::save_list(&map2,& format!("wgpu_stable_diffusion_test_{version}_b.json")).unwrap();
-                
-                
-                    let info: Vec<candle::wgpu::debug_info::ShaderInfo> = gpu.get_pipeline_info().unwrap();
-                    candle::wgpu::debug_info::save_list(&info,& format!("wgpu_stable_diffusion_test_{version}_c.json")).unwrap();
-
-                    let (pipelines, consts) = gpu.get_used_pipelines();
-                    std::fs::write(format!("wgpu_stable_diffusion_test_{version}_d.json"), pipelines)?;   
-                    std::fs::write(format!("wgpu_stable_diffusion_test_{version}_e.json"), consts)?;   
-                }
-            },
-            _ => {},
-        };
     }
-    println!("elapsed: {:?}", start.elapsed()); 
     Ok(())
 }
 
 fn main() -> Result<()> {
-    env_logger::builder().filter_level(log::LevelFilter::Warn).init();
     let args = Args::parse();
     run(args)
 }

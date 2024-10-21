@@ -27,9 +27,9 @@ class Yolo {
       const weightsArrayU8 = await fetchArrayBuffer(modelURL);
       if (/pose/.test(modelID)) {
         // if pose model, use ModelPose
-        this.instance[modelID] = new ModelPose(weightsArrayU8, modelSize);
+        this.instance[modelID] = await new ModelPose(weightsArrayU8, modelSize);
       } else {
-        this.instance[modelID] = new Model(weightsArrayU8, modelSize);
+        this.instance[modelID] = await new Model(weightsArrayU8, modelSize);
       }
     } else {
       self.postMessage({ status: "model already loaded" });
@@ -52,7 +52,7 @@ self.addEventListener("message", async (event) => {
     const imageArrayU8 = new Uint8Array(imgData);
 
     self.postMessage({ status: `running inference ${modelID}:${modelSize}` });
-    const bboxes = yolo.run(imageArrayU8, confidence, iou_threshold);
+    const bboxes = await yolo.run(imageArrayU8, confidence, iou_threshold);
 
     // Send the output back to the main thread as JSON
     self.postMessage({

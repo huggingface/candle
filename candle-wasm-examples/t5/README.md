@@ -26,7 +26,7 @@ The full example can be found under `./index.html`. All needed assets are fetche
 Finally, you can preview the example by running a local HTTP server. For example:
 
 ```bash
-python3 -m http.server
+python -m http.server
 ```
 
 Then open `http://localhost:8000/index.html` in your browser.

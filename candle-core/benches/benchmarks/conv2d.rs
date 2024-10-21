@@ -36,10 +36,7 @@ fn run_conv2d_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: 
     //     .unwrap()
     //     .transpose(3, 1).unwrap();
    
-    //let bias = Tensor::zeros(K, dtype, device).unwrap();
     let input = Tensor::ones((B, C, M, K), dtype, device).unwrap();
-    //let input = Tensor::ones((B, K,M, C), dtype, device).unwrap().transpose(1, 3).unwrap().transpose(2, 3).unwrap();
-
 
     println!("weight: {:?}", weight.layout());
     println!("input: {:?}", input.layout());
@@ -47,7 +44,6 @@ fn run_conv2d_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: 
     let flops = B * C * M * K * K_SIZE * K_SIZE; 
 
     let mut group = c.benchmark_group(device.bench_name(name));
-    //group.sample_size(10);
     group.throughput(criterion::Throughput::Bytes(flops as u64*4));
     group.bench_function("iter", move |b| {
         b.iter_custom(|iters| {

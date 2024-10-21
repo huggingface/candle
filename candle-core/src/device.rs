@@ -144,12 +144,16 @@ impl Device {
         Ok(Self::Wgpu(crate::WgpuDevice::create(ordinal, configuration).await?))
     }
 
-    #[cfg(feature="wgpu")]
+    ///creates a new wgpu device synchronously. 
+    ///If you are targeting wasm32, use the async functions to create a new device.
+    #[cfg(all(feature="wgpu", not(target_arch = "wasm32")))]
     pub fn new_wgpu_sync(ordinal: usize) -> Result<Self> {
         return pollster::block_on(Device::new_wgpu(ordinal));
     }
 
-    #[cfg(feature="wgpu")]
+    ///creates a new wgpu device synchronously. 
+    ///If you are targeting wasm32, use the async functions to create a new device.
+    #[cfg(all(feature="wgpu", not(target_arch = "wasm32")))]
     pub fn new_wgpu_sync_config(ordinal: usize, configuration : crate::WgpuDeviceConfig) -> Result<Self> {
         return pollster::block_on(Device::new_wgpu_config(ordinal, configuration));
     }

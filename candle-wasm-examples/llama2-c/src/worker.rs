@@ -6,7 +6,23 @@ use candle_transformers::generation::LogitsProcessor;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::spawn_local;
 use yew_agent::{HandlerId, Public, WorkerLink};
+
+#[wasm_bindgen]
+extern "C" {
+    // Use `js_namespace` here to bind `console.log(..)` instead of just
+    // `log(..)`
+    #[wasm_bindgen(js_namespace = console)]
+    pub fn log(s: &str);
+}
+
+#[macro_export]
+macro_rules! console_log {
+    // Note that this is using the `log` function imported above during
+    // `bare_bones`
+    ($($t:tt)*) => ($crate::worker::log(&format_args!($($t)*).to_string()))
+}
 
 // Communication to the worker happens through bincode, the model weights and configs are fetched
 // on the main thread and transferred via the following structure.
@@ -34,6 +50,7 @@ fn read_tensor<R: std::io::Read, S: Into<Shape>>(
     Ok(tensor)
 }
 
+#[derive(Clone)]
 pub struct Model {
     pub cache: Cache,
     pub config: Config,
@@ -59,7 +76,7 @@ impl Model {
         } else {
             Some(top_p)
         };
-        log::info!("temp: {temp:?} top_p: {top_p:?} prompt: {prompt}");
+        console_log!("temp: {temp:?} top_p: {top_p:?} prompt: {prompt}");
         let mut logits_processor = LogitsProcessor::new(299792458, temp, top_p);
         let mut index_pos = 0;
         let mut tokens = self
@@ -271,9 +288,13 @@ pub enum WorkerOutput {
     WeightsLoaded,
 }
 
+pub enum WorkerMessage{
+    SetModel(Model)
+}
+
 impl yew_agent::Worker for Worker {
     type Input = WorkerInput;
-    type Message = ();
+    type Message = WorkerMessage;
     type Output = std::result::Result<WorkerOutput, String>;
     type Reach = Public<Self>;
 
@@ -281,25 +302,32 @@ impl yew_agent::Worker for Worker {
         Self { link, model: None }
     }
 
-    fn update(&mut self, _msg: Self::Message) {
-        // no messaging
+    fn update(&mut self, msg: Self::Message) {
+        match msg{
+            WorkerMessage::SetModel(model) => self.model = Some(model),
+        }
     }
 
     fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
-        let output = match msg {
+        let link = self.link.clone();
+        match msg {
             WorkerInput::ModelData(md) => 
             {
-                let dev = pollster::block_on(Device::new_wgpu(0)).unwrap();
-                match pollster::block_on(Model::load(md,&dev)) {
-                    Ok(model) => {
-                        self.model = Some(model);
-                        Ok(WorkerOutput::WeightsLoaded)
-                    }
-                    Err(err) => Err(format!("model creation error {err:?}")),
-                }
+                spawn_local(async move{
+                    let dev = Device::new_wgpu(0).await.unwrap();
+                    let model = Model::load(md, &dev).await;
+                    let output = match model{
+                        Ok(model) => {
+                            link.send_message(WorkerMessage::SetModel(model));
+                            Ok(WorkerOutput::WeightsLoaded)
+                        },
+                        Err(err) => Err(format!("model creation error {err:?}")),
+                    };
+                    link.respond(id, output);
+                });
             },
             WorkerInput::Run(temp, top_p, prompt) => match &mut self.model {
-                None => Err("model has not been set yet".to_string()),
+                None => link.respond(id, Err("model has not been set yet".to_string())),
                 Some(model) => {
                     {
                         let mut cache = model.cache.kvs.lock().unwrap();
@@ -307,14 +335,18 @@ impl yew_agent::Worker for Worker {
                             *elem = None
                         }
                     }
-                    let result = pollster::block_on(model
-                        .run(&self.link, id, temp, top_p, prompt))
-                        .map_err(|e| e.to_string());
-                    Ok(WorkerOutput::GenerationDone(result))
+                    let model = model.clone();
+                    spawn_local(async move{
+                        let result = model
+                            .run(&link, id, temp, top_p, prompt).await
+                            .map_err(|e| e.to_string());
+                        link.respond(id, Ok(WorkerOutput::GenerationDone(result)))
+                    });
+
+                    
                 }
             },
         };
-        self.link.respond(id, output);
     }
 
     fn name_of_resource() -> &'static str {

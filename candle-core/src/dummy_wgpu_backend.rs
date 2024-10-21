@@ -82,15 +82,29 @@ impl std::ops::BitAnd for WgpuBackends{
 
 #[derive(Debug)]
 pub struct WgpuDeviceConfig{
-    pub meta_buffer_size : u32, //the size of the buffer used for storing meta information (e.g. input layouts)
-    pub max_workload_size : u64, //specifys how much max floating point operations will be queued in one single command. (e.g. a matrix multiplication of 1000x1000 * 1000x1000 would be about 1gb operations, so only 2 of theses may be queued in one command buffer) 
-    pub buffer_cached_max_allowed_size : u64,//maximum size for cached wgpu::buffers. When this size is reached, free buffers will be deleted until only 75% of this max size is used. 
-                                             //if this value is to low for the desired model, the performance may drop significatly(e.g. model needs at least 2gb of data, if this value would be e.g. only 100mb all free buffers would be deleted after each command)
+    ///the size of the buffer used for storing meta information (e.g. input layouts)
+    pub meta_buffer_size : u32,
+    ///specifies the maximum number of floating point operations to be queued in a single command buffer. 
+    ///(For example, a matrix multiplication of 1000x1000 * 1000x1000 would be 1,000,000 operations, 
+    ///so only 2 of these multiplications can be queued in a command buffer if max_workload_size is set to 2,000,000). 
+    pub max_workload_size : u64,
+    ///Maximum size for cached wgpu::buffers. When this size is reached, free buffers will be deleted until only 75% of this maximum size is used. 
+    ///if this value is too low for the desired model, performance may drop significantly (e.g. the model requires at least 2gb of data, if this value is e.g. 100mb, all free buffers will be cleared after every command).
+    pub buffer_cached_max_allowed_size : u64,
+
+    ///Whether created buffers are cached and reused. 
+    ///If set to false, a new wgpu::Buffer is created for each tensor used.
     pub use_cache : bool, 
-    pub flush_gpu_before_buffer_init : bool, //when data is copied from cpu to the wgpu device, all previous commands may be flushed, to allow other buffers to be freed and reused. 
-                                            //But on webGpu this may not be optimal, as we can not wait for commands to finish (as this functin is not asyny) 
+
+    ///When data is copied from the CPU to the WGPU device, all previous commands may be flushed to free up other buffers for reuse. 
+    ///However, on a webGPU this may not be optimal as we cannot wait for commands to finish (as this function is not asynchronous). 
+    pub flush_gpu_before_buffer_init : bool,
+
+    ///The buffers used for previously flushed gpu commands are cached to improve performance when finding buffers for future calls of the same model.  
+    ///buffer_mapping_size' specifies how many previously flushed gpu commands are cached.
     pub buffer_mapping_size : u32,
 
+    ///Defines the backend to use (Vulkan, Metal, Dx12,GL or WebGpu)
     pub backend : WgpuBackends
 }
 

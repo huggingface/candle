@@ -75,9 +75,8 @@ fn broadcast_matmul(device: &Device) -> Result<()> {
             let rhs = rhs.i(idx2)?;
             let out2 = lhs.matmul(&rhs);
             let sum_diff2 = (out - out2)?.sqr()?.sum_all()?;
-            let sum_diff2 = sum_diff2.to_vec0::<f32>()?;
             // With cuda, we see errors of up to ~1e-12.
-            assert!(sum_diff2 < 1e-6)
+            assert!(sum_diff2.to_vec0::<f32>()? < 1e-6)
         }
     }
     Ok(())
@@ -129,60 +128,9 @@ test_device!(squeeze_mm, squeeze_mm_cpu, squeeze_mm_gpu, squeeze_mm_metal,squeez
 test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal, mm_layout_wgpu);
 
 
-
-fn test_functions(device: &Device, fm : impl Fn(usize) -> usize){
-    let sizes = vec![1usize, 8, 32, 128, 130, 256,258, 1024,1026, 2048, 2050].into_iter();
-   
-    for size in sizes{
-        println!("size: {size}");
-        test_matmul(device, 1, fm(size), size, size);
-    }
-}
-
-
-fn test_matmul(device: &Device, b : usize, m : usize, n : usize, k : usize){
-    let dtype = DType::F32;
-   
-    let lhs = Tensor::zeros((b, m, k), dtype, device).unwrap();
-    let rhs = Tensor::zeros((b, k, n), dtype, device).unwrap();
-
-    lhs.matmul(&rhs).unwrap();
-
-}
-
 #[cfg(feature="wgpu")]
 #[test]
-fn test_matmul_kernels_wgpu2()-> Result<()> {
-    let device = &Device::new_wgpu_sync(0)?;
-
-    println!("matmul_m_1");
-    test_functions(device, |_| 1);
-
-    println!("matmul_full");
-    test_functions(device, |size| size);
-    
-    println!("matmul_(24x1544)");
-    test_matmul(device, 1, 24, 6144, 1536);
-
-    println!("matmul_(32x2320)");
-    test_matmul(device, 1, 32, 5120, 2304);
-
-    println!("matmul_2*(653x1536)");
-    test_matmul(device, 2, 653, 1536, 1536);
-
-    println!("matmul_48*(24x6144) ");
-    test_matmul(device, 48, 24, 6144, 1536);
-
-    println!("matmul_32*(32x2304 * 2304x5120)");
-    test_matmul(device, 32, 32, 5120, 2304);
-
-    Ok(())
-}
-
-
-#[cfg(feature="wgpu")]
-#[test]
-//test different wgpu matmul shaders
+//test different wgpu matmul shaders, compares results with cpu impl
 fn test_matmul_kernels_wgpu()-> Result<()> {
     use candle_core::wgpu::MatmulAlgorithm;
     
@@ -208,7 +156,6 @@ fn test_matmul_kernels_wgpu()-> Result<()> {
 
     if let Device::Wgpu(wgpu) = &device{
         for alg in algs{
-            println!("Testing: {:?}", alg);
             (*wgpu.matmul_alg.lock().unwrap()) = alg.clone();
 
             for tpa in [true, false]{
@@ -242,11 +189,6 @@ fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool, use_start_offset : b
     let m = 63;
     let n = 63;
     let k = 63;
-
-    // let b = 1;
-    // let m = 1;
-    // let n = 1;
-    // let k = 128;
 
     let start_offset = if use_start_offset {100} else {0};
     let lhs1 = Tensor::rand(0f32, 100f32, b * k * m + start_offset, &Device::Cpu)?.to_dtype(DType::U32)?.to_dtype(DType::F32)?.i(start_offset..)?;
@@ -297,26 +239,11 @@ fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool, use_start_offset : b
     let lhs = lhs.to_device(&device)?;
     let rhs = rhs.to_device(&device)?;
 
-    println!("gpu lhs: {:?} rhs: {:?}", lhs.layout(), rhs.layout());
-
     let t2 = lhs.matmul(&rhs)?.reshape((b,m,n))?;
 
     let m =  candle_core::test_utils::to_vec3_round(&t1, 3)?;
     let m2 = candle_core::test_utils::to_vec3_round(&t2, 3)?;
 
     assert_eq!(m, m2);
-    Ok(())
-}
-
-#[cfg(feature="wgpu")]
-#[test]
-fn big_matmul_wgpu_tests()-> Result<()> {
-    let device = Device::new_wgpu_sync(0)?;
-   
-    if let Device::Wgpu(wgpu) = &device{
-        (*wgpu.matmul_alg.lock().unwrap()) = candle_core::wgpu::MatmulAlgorithm::Matmul32_32;
-    }
-   
-    big_matmul_wgpu(&device, false, false, false, false, false)?;
     Ok(())
 }

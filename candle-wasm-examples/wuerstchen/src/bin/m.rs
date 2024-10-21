@@ -290,10 +290,6 @@ impl Model {
     pub async fn run(&self, config: String) -> Result<JsValue, JsError> {
         log::info!("Start run, config: {config}");
 
-        //clear_all(true).await?;
-
-        //clear_directory(open_dir("/.cache/huggingface/models--warp-ai--wuerstchen").await?, true).await?;
-
         let args: Args = serde_json::from_str(&config)?;
         log::info!("loaded args");
         let Args {
@@ -311,14 +307,6 @@ impl Model {
             vgan_steps,
             ..
         } = args;
-
-        // let _guard = if tracing {
-        //     let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
-        //     tracing_subscriber::registry().with(chrome_layer).init();
-        //     Some(guard)
-        // } else {
-        //     None
-        // };
 
         let device = &self.device;
         log::info!("loaded device");

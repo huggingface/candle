@@ -44,53 +44,40 @@
         const getValue = (id) => document.querySelector(`#${id}`).value;
         const useWgpu = getValue("useWgpu");
         const prompt = getValue("prompt");
-        const temperature = getValue("temperature");
-        const topP = getValue("top-p");
-        const repeatPenalty = getValue("repeat_penalty");
-        const seed = getValue("seed");
-        const maxSeqLen = getValue("max-seq");
-     
-        function updateStatus(data) {
+        const sdVersions = getValue("model");
+        
+        function updateStatus(status) {
           const outStatus = document.querySelector("#output-status");
           const outGen = document.querySelector("#output-generation");
-          const outCounter = document.querySelector("#output-counter");
         
 
-          switch (data.status) {
+          switch (status) {
             case "loading":
+              outGen.style.display = 'flex';
+              outGen.hidden = false;
               outStatus.hidden = false;
-              outStatus.textContent = data.message;
-              outGen.hidden = true;
-              outCounter.hidden = true;
+              outStatus.textContent = "Loading Model";
               break;
             case "generating":
-              const { message, prompt, sentence, tokensSec, totalTime } = data;
-              outStatus.hidden = true;
-              outCounter.hidden = false;
+              outGen.style.display = 'flex';
               outGen.hidden = false;
-              outGen.innerHTML = `<span class="font-semibold">${prompt}</span>${sentence.replace(
-                /\<s\>|\<\/s\>/g,
-                ""
-              )}`;
-              outCounter.innerHTML = `${(totalTime / 1000).toFixed(
-                2
-              )}s (${tokensSec.toFixed(2)} tok/s)`;
+              outStatus.hidden = false;
+              outStatus.textContent = "Generating... Image";
               break;
             case "complete":
+              outGen.style.display = 'none';
+              outGen.hidden = true;
               outStatus.hidden = true;
-              outGen.hidden = false;
               break;
           }
         
         }
-        let weightsURL = "test";
-        let modelID = "test2";
 
-       
         console.log("before init");
         await init();
 
         if(model == null){
+          updateStatus("loading")
           model = await new Model(
             JSON.stringify(
               {use_gpu : true, 
@@ -100,8 +87,9 @@
               flush_gpu_before_buffer_init : false
             }));
         } 
-      
-        let result = await model.run(JSON.stringify({prompt : prompt}));
+        updateStatus("generating")
+        let result = await model.run(JSON.stringify({prompt : prompt, sd_version : sdVersions}));
+        updateStatus("complete")
         console.log("Got Result");
         var blob = new Blob([result], {'type': 'image/png'});
         console.log("Loaded Blob");
@@ -175,7 +163,19 @@
           to run  Stable diffusion in the browser using rust/wasm.
         </p>
       </div>
-
+      <div>
+        <label for="model" class="font-medium">Models Options: </label>
+        <select
+          id="model"
+          class="border-2 border-gray-500 rounded-md font-light">
+          <option value="V1_5" selected>
+            V1-5 (4.26 Gb)
+          </option>
+          <option value="V2_5">V2-5 (5.15 Gb) </option>
+          <option value="Xl">Xl (13.90 Gb)</option>
+          <option value="Turbo">Turbo (13.90 Gb)</option>
+        </select>
+      </div>
       <div>
         <label for="useWgpu" class="font-medium">Use Wgpu </label>
         <select
@@ -184,6 +184,15 @@
           <option value="true" selected>True</option>
           <option value="false">False</option>
         </select>
+      </div>
+      <div>
+        <p class="text-xs italic max-w-lg">
+          <b>Note:</b>
+          The model may only work with WGPU enabled as there is not enough memory in WASM to run on the CPU. 
+          In addition, only the smallest model, V1-5, may run with WGPU enabled. 
+          At the moment there is no feedback that the model is being downloaded 
+          (you may have to look for external tools, e.g. the network speed in the task manager, to monitor the download).
+        </p>
       </div>
       <form
         id="form"
@@ -215,99 +224,11 @@
           Run
         </button>
       </form>
-      <details>
-        <summary class="font-medium cursor-pointer">Advanced Options</summary>
-        <div class="grid grid-cols-3 max-w-md items-center gap-3 py-3">
-          <label class="text-sm font-medium" for="max-seq"
-            >Maximum length
-          </label>
-          <input
-            type="range"
-            id="max-seq"
-            name="max-seq"
-            min="1"
-            max="256"
-            step="1"
-            value="200"
-            oninput="this.nextElementSibling.value = Number(this.value)" />
-          <output
-            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
-            200</output
-          >
-          <label class="text-sm font-medium" for="temperature"
-            >Temperature</label
-          >
-          <input
-            type="range"
-            id="temperature"
-            name="temperature"
-            min="0"
-            max="2"
-            step="0.01"
-            value="0.40"
-            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
-          <output
-            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
-            0.40</output
-          >
-          <label class="text-sm font-medium" for="top-p">Top-p</label>
-          <input
-            type="range"
-            id="top-p"
-            name="top-p"
-            min="0"
-            max="1"
-            step="0.01"
-            value="1.00"
-            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
-          <output
-            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
-            1.00</output
-          >
-
-          <label class="text-sm font-medium" for="repeat_penalty"
-            >Repeat Penalty</label
-          >
-
-          <input
-            type="range"
-            id="repeat_penalty"
-            name="repeat_penalty"
-            min="1"
-            max="2"
-            step="0.01"
-            value="1.10"
-            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
-          <output
-            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
-            >1.10</output
-          >
-          <label class="text-sm font-medium" for="seed">Seed</label>
-          <input
-            type="number"
-            id="seed"
-            name="seed"
-            value="299792458"
-            class="font-light border border-gray-700 text-right rounded-md p-2" />
-          <button
-            id="run"
-            onclick="document.querySelector('#seed').value = BigInt(Math.floor(Math.random() * 2**64-1))"
-            class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-1 w-[50px] rounded disabled:bg-gray-300 disabled:cursor-not-allowed text-sm">
-            Rand
-          </button>
-        </div>
-      </details>
       <div>
         <h3 class="font-medium">Generation:</h3>
         <div
-          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md flex flex-col gap-2">
-          <div
-            id="output-counter"
-            hidden
-            class="ml-auto font-semibold grid-rows-1 text-sm"></div>
-          <p hidden id="output-generation" class="grid-rows-2"></p>
-          <span id="output-status" class="m-auto font-light"
-            >No output yet</span
+          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md flex flex-col gap-2" id="output-generation">
+          <span id="output-status" class="m-auto font-light">No output yet</span
           >
         </div>
         <img id="output-canvas">

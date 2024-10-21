@@ -29,6 +29,24 @@ macro_rules! test_device {
             $fn_name(&device)
         }
     };
+    ($fn_name: ident, $test_cpu: ident, $test_cuda: ident, $test_metal: ident) => {
+        #[test]
+        fn $test_cpu() -> Result<()> {
+            $fn_name(&Device::Cpu)
+        }
+
+        #[cfg(feature = "cuda")]
+        #[test]
+        fn $test_cuda() -> Result<()> {
+            $fn_name(&Device::new_cuda(0)?)
+        }
+
+        #[cfg(feature = "metal")]
+        #[test]
+        fn $test_metal() -> Result<()> {
+            $fn_name(&Device::new_metal(0)?)
+        }
+    };
 }
 
 pub fn to_vec0_round(t: &Tensor, digits: i32) -> Result<f32> {

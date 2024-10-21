@@ -283,9 +283,9 @@ impl ModelFile {
     }
 }
 
-// Saves an image to disk using the image crate, this expects an input with shape
+// Saves an image using the image crate, this expects an input with shape
 // (c, height, width).
-pub fn save_image2(img: &Tensor) -> GenericResult<Vec<u8>> {
+pub fn save_image(img: &Tensor) -> GenericResult<Vec<u8>> {
     let (channel, height, width) = img.dims3()?;
     if channel != 3 {
         return Err(GenericError::from(
@@ -293,6 +293,7 @@ pub fn save_image2(img: &Tensor) -> GenericResult<Vec<u8>> {
         ));
     }
     let img = img.permute((1, 2, 0))?.flatten_all()?;
+    #[allow(deprecated)]
     let pixels = img.to_vec1::<u8>()?;
     let image: image::ImageBuffer<image::Rgb<u8>, Vec<u8>> =
         match image::ImageBuffer::from_raw(width as u32, height as u32, pixels) {
@@ -308,7 +309,7 @@ pub fn save_image2(img: &Tensor) -> GenericResult<Vec<u8>> {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn save_image(
+async fn save_image_async(
     vae: &AutoEncoderKL,
     latents: &Tensor,
     vae_scale: f64,
@@ -323,7 +324,7 @@ async fn save_image(
     let mut result = vec![];
     for batch in 0..bsize {
         let image = images.i(batch)?;
-        result.push(save_image2(&image)?);
+        result.push(save_image(&image)?);
     }
     Ok(result)
 }
@@ -488,14 +489,6 @@ impl Model {
             .into());
         }
 
-        // let _guard = if tracing {
-        //     let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
-        //     tracing_subscriber::registry().with(chrome_layer).init();
-        //     Some(guard)
-        // } else {
-        //     None
-        // };
-
         let guidance_scale = match guidance_scale {
             Some(guidance_scale) => guidance_scale,
             None => match sd_version {
@@ -611,7 +604,7 @@ impl Model {
             let timesteps = scheduler.timesteps();
             let latents = match &init_latent_dist {
                 Some(init_latent_dist) => {
-                    let latents = (init_latent_dist.sample()? * vae_scale)?.to_device(&device)?;
+                    let latents = (init_latent_dist.sample()? * vae_scale)?.to_device_async(&device).await?;
                     if t_start < timesteps.len() {
                         let noise = latents.randn_like(0f64, 1f64)?;
                         scheduler.add_noise(&latents, noise, timesteps[t_start])?
@@ -672,7 +665,7 @@ impl Model {
             );
 
             device.synchronize_async().await?;
-            let result = save_image(&vae, &latents, vae_scale, bsize).await?;
+            let result = save_image_async(&vae, &latents, vae_scale, bsize).await?;
 
             match &device {
                 candle::Device::Wgpu(gpu) => {

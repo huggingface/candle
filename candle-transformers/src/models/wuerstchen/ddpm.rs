@@ -89,8 +89,7 @@ impl DDPMWScheduler {
 
         let std_noise = mu.randn_like(0., 1.)?;
         let std =
-            (std_noise * ((1. - alpha) * (1. - alpha_cumprod_prev) / (1. - alpha_cumprod)).sqrt())?;
-
+            std_noise * ((1. - alpha) * (1. - alpha_cumprod_prev) / (1. - alpha_cumprod)).sqrt();
         if prev_t == 0. {
             Ok(mu)
         } else {

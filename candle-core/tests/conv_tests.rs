@@ -99,27 +99,6 @@ fn conv1d_small(dev: &Device) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "wgpu")]
-#[test]
-fn conv2d_transpose() -> Result<()> {
-    let dev = &pollster::block_on(Device::new_wgpu(0))?; 
-    //let dev = &Device::Cpu;
-    let t = Tensor::new(&[2.0f32,4.0,0.0,1.0], dev)?.reshape((1, 1, 2,2))?;
-    let w = Tensor::new(&[3f32, 1.0, 1.0,5.0], dev)?.reshape((1, 1, 2,2))?;
-    let res1 = t.conv_transpose2d(&w, 0,0, 1, 1)?;
-    let res2 = t.conv_transpose2d(&w, 1,0, 1, 1)?;
-    let res3 = t.conv_transpose2d(&w, 0,0, 2, 1)?;
-    let res4 = t.conv_transpose2d(&w, 1,0, 2, 1)?;
-    println!("res1 {res1}");
-    println!("res2 {res2}");
-    println!("res3 {res3}");
-    println!("res4 {res4}");
-
-    assert!(true);
-    Ok(())
-}
-
-
 /* This test is based on the following script.
 import torch
 torch.manual_seed(4242)

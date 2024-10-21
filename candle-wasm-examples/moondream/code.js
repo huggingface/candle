@@ -10,6 +10,16 @@ const MODELS = {
     quantized: true,
     size: "1.51 GB",
   },
+  moondream2: {
+    base_url:
+      "https://huggingface.co/vikhyatk/moondream2/resolve/30c7cdf3fa6914f50bee3956694374143f5cc884/",
+    model: "model.safetensors",
+    tokenizer: "tokenizer.json",
+    quantized: false,
+    size: "1.51 GB",
+  },
+
+
 };
 
 const moodreamWorker = new Worker("./moondreamWorker.js", {
@@ -32,6 +42,7 @@ async function generateSequence(controller) {
   const repeatPenalty = getValue("repeat_penalty");
   const seed = getValue("seed");
   const maxSeqLen = getValue("max-seq");
+  const useWgpu = getValue("useWgpu");
 
   if (prompt?.value?.trim() === "") {
     return;
@@ -82,6 +93,7 @@ async function generateSequence(controller) {
       maxSeqLen,
       verbose_prompt: false,
       command: "start",
+      useWgpu
     });
 
     const handleAbort = () => {

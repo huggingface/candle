@@ -39,7 +39,8 @@
         modelURL, // URL to the weights file
         modelID, // model ID
         imageURL, // URL to the image file
-        points // {x, y} points to prompt image
+        useWgpu,
+        points, // {x, y} points to prompt image
       ) {
         return new Promise((resolve, reject) => {
           function messageHandler(event) {
@@ -66,6 +67,7 @@
             modelID,
             imageURL,
             points,
+            useWgpu
           });
         });
       }
@@ -89,6 +91,7 @@
       const imagesExamples = document.querySelector("#image-select");
       const modelSelection = document.querySelector("#model");
       const statusOutput = document.querySelector("#output-status");
+      const useWgpuEl = document.querySelector("#useWgpu");
 
       //add event listener to file input
       fileUpload.addEventListener("input", (e) => {
@@ -281,14 +284,16 @@
       }
 
       async function getSegmentationMask(points) {
+        const useWgpu = useWgpuEl.value;
         const modelID = modelSelection.value;
         const modelURL = MODEL_BASEURL + MODELS[modelID].url;
         const imageURL = currentImageURL;
         const { maskURL } = await segmentPoints(
           modelURL,
           modelID,
-          imageURL,
-          points
+          imageURL, 
+          useWgpu,
+          points,
         );
         return { maskURL };
       }
@@ -299,10 +304,11 @@
         canvas.classList.remove("cursor-pointer");
         canvas.classList.add("cursor-wait");
         clearBtn.disabled = true;
+        const useWgpu = useWgpuEl.value;
         const modelID = modelSelection.value;
         const modelURL = MODEL_BASEURL + MODELS[modelID].url;
         isEmbedding = true;
-        await segmentPoints(modelURL, modelID, imageURL);
+        await segmentPoints(modelURL, modelID, imageURL, useWgpu);
         canvas.classList.remove("cursor-wait");
         canvas.classList.add("cursor-pointer");
         clearBtn.disabled = false;
@@ -432,6 +438,18 @@
             Mobile SAM Tiny (40.6 MB)
           </option>
           <option value="sam_base">SAM Base (375 MB)</option>
+        </select>
+      </div>
+      <div>
+        <label for="useWgpu" class="font-medium block">UseWgpu</label>
+        <select
+          id="useWgpu"
+          class="border-2 border-gray-500 rounded-md font-light interactive disabled:cursor-not-allowed w-full max-w-max"
+        >
+          <option value="true" selected>True
+          </option>
+          <option value="false">False
+          </option>
         </select>
       </div>
       <div>

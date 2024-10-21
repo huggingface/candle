@@ -591,6 +591,7 @@ impl Tensor {
 
     /// Retrieves the single scalar value hold in the tensor. If the tensor contains multiple
     /// dimensions, an error is returned instead.
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `to_scalar_async` for wasm support instead"))]
     pub fn to_scalar<S: crate::WithDType>(&self) -> Result<S> {
         if self.rank() != 0 {
             Err(Error::UnexpectedNumberOfDims {
@@ -643,6 +644,7 @@ impl Tensor {
 
 
     /// An alias for `to_scalar`.
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `to_vec0_async` for wasm support instead"))]
     pub fn to_vec0<S: crate::WithDType>(&self) -> Result<S> {
         self.to_scalar::<S>()
     }
@@ -1633,6 +1635,7 @@ impl Tensor {
     }
 
     /// Returns the data contained in a 1D tensor as a vector of scalar values.
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `to_vec1_async` for wasm support instead"))]
     pub fn to_vec1<S: crate::WithDType>(&self) -> Result<Vec<S>> {
         if self.rank() != 1 {
             Err(Error::UnexpectedNumberOfDims {
@@ -1686,6 +1689,7 @@ impl Tensor {
 
 
     /// Returns the data contained in a 2D tensor as a vector of vector of scalar values.
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `to_vec2_async` for wasm support instead"))]
     pub fn to_vec2<S: crate::WithDType>(&self) -> Result<Vec<Vec<S>>> {
         let (dim1, dim2) = self.dims2()?;
         let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
@@ -2097,6 +2101,7 @@ impl Tensor {
     }
 
     /// If the target device is the same as the tensor device, only a shallow copy is performed.
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `to_device_async` for wasm support instead"))]
     pub fn to_device(&self, device: &Device) -> Result<Tensor> {
         if self.device().same_device(device) {
             Ok(self.clone())

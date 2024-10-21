@@ -18,13 +18,13 @@ impl Model {
     }
 
     #[wasm_bindgen]
-    pub fn run(
+    pub async fn run(
         &self,
         image: Vec<u8>,
         conf_threshold: f32,
         iou_threshold: f32,
     ) -> Result<String, JsError> {
-        let bboxes = self.inner.run(image, conf_threshold, iou_threshold)?;
+        let bboxes = self.inner.run(image, conf_threshold, iou_threshold).await?;
         let mut detections: Vec<(String, Bbox)> = vec![];
 
         for (class_index, bboxes_for_class) in bboxes.into_iter().enumerate() {
@@ -45,19 +45,19 @@ pub struct ModelPose {
 #[wasm_bindgen]
 impl ModelPose {
     #[wasm_bindgen(constructor)]
-    pub fn new(data: Vec<u8>, model_size: &str, use_wgpu : bool) -> Result<ModelPose, JsError> {
+    pub async fn new(data: Vec<u8>, model_size: &str, use_wgpu : bool) -> Result<ModelPose, JsError> {
         let inner = P::load_(data, model_size, use_wgpu).await?;
         Ok(Self { inner })
     }
 
     #[wasm_bindgen]
-    pub fn run(
+    pub async fn run(
         &self,
         image: Vec<u8>,
         conf_threshold: f32,
         iou_threshold: f32,
     ) -> Result<String, JsError> {
-        let bboxes = self.inner.run(image, conf_threshold, iou_threshold)?;
+        let bboxes = self.inner.run(image, conf_threshold, iou_threshold).await?;
         let json = serde_json::to_string(&bboxes)?;
         Ok(json)
     }

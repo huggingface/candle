@@ -91,15 +91,12 @@ impl WPrior {
             .apply(&self.cond_mapper_lin1)?
             .apply(&|xs: &_| candle_nn::ops::leaky_relu(xs, 0.2))?
             .apply(&self.cond_mapper_lin2)?;
-
         let r_embed = self.gen_r_embedding(r)?;
-
-        for block in self.blocks.iter(){
+        for block in self.blocks.iter() {
             xs = block.res_block.forward(&xs, None)?;
             xs = block.ts_block.forward(&xs, &r_embed)?;
             xs = block.attn_block.forward(&xs, &c_embed)?;
         }
-        
         let ab = xs.apply(&self.out_ln)?.apply(&self.out_conv)?.chunk(2, 1)?;
         (x_in - &ab[0])? / ((&ab[1] - 1.)?.abs()? + 1e-5)
     }

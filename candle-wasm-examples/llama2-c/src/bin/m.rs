@@ -20,9 +20,7 @@ impl Model {
         
         let logits = self.inner.llama.forward(&input, tokens.len()).await?;
         
-  
         let logits = logits.squeeze(0)?;
-
         let logits = if self.repeat_penalty == 1. || tokens.is_empty() {
             logits
         } else {
@@ -96,7 +94,6 @@ impl Model {
         repeat_penalty: f32,
         seed: u64,
     ) -> Result<String, JsError> {
-        log::info!("Init With Prompt");
         // First reset the cache.
         {
             let mut cache = self.inner.cache.kvs.lock().unwrap();
@@ -120,14 +117,9 @@ impl Model {
             .map_err(|m| JsError::new(&m.to_string()))?
             .get_ids()
             .to_vec();
-
-        log::info!("Before Process");
-
         let text = self
             .process(&tokens).await
             .map_err(|m| JsError::new(&m.to_string()))?;
-        
-        log::info!("After Process");
         Ok(text)
     }
 

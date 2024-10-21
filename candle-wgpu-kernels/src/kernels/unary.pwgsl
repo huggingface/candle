@@ -326,6 +326,8 @@ fn unary_from_buffer_contiguous(@builtin(global_invocation_id) global_id: vec3<u
 @compute
 @workgroup_size(64,1,1)
 fn unary_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let unused = op_unary_contiguous_offset_is_zero;
+
     let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
     if (id >= op_unary_contiguous_length){
         return;
@@ -340,6 +342,8 @@ fn unary_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>)
 @compute
 @workgroup_size(64,1,1)
 fn const_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let unused = op_unary_contiguous_offset_is_zero;
+
     let id = global_id.x +select(USE_Z, global_id.y * 65535 * 64, 0u);
     if (id >= op_unary_contiguous_length){
         return;
@@ -351,6 +355,8 @@ fn const_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>)
 @compute
 @workgroup_size(64,1,1)
 fn const_inplace_contiguous_4(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let unused = op_unary_contiguous_offset_is_zero;
+
     let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
     if (id >= op_unary_contiguous_length){
         return;
@@ -371,6 +377,7 @@ fn const_inplace_contiguous_4(@builtin(global_invocation_id) global_id: vec3<u32
 @compute
 @workgroup_size(64,1,1)
 fn rand_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let unused = op_unary_contiguous_offset_is_zero;
     let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
     if (id >= op_unary_contiguous_length){
         return;

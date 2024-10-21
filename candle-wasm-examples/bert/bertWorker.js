@@ -28,7 +28,7 @@ class Bert {
           fetchArrayBuffer(configURL),
         ]);
 
-      this.instance[modelID] = new Model(
+      this.instance[modelID] = await new Model(
         weightsArrayU8,
         tokenizerArrayU8,
         mel_filtersArrayU8,
@@ -64,7 +64,7 @@ self.addEventListener("message", async (event) => {
       status: "embedding",
       message: "Calculating Embeddings",
     });
-    const output = model.get_embeddings({
+    const output = await model.get_embeddings({
       sentences: sentences,
       normalize_embeddings: normalize,
     });

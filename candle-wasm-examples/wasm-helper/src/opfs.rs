@@ -43,7 +43,6 @@ extern "C" {
 }
 
 //opfs API:
-
 pub enum FileSystemDirectoryEntries{
     Directory(web_sys::FileSystemDirectoryHandle),
     File(web_sys::FileSystemFileHandle),

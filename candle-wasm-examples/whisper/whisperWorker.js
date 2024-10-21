@@ -29,6 +29,7 @@ class Whisper {
       timestamps,
       task,
       language,
+      useWgpu
     } = params;
     // load individual modelID only once
     if (!this.instance[modelID]) {
@@ -46,8 +47,7 @@ class Whisper {
         fetchArrayBuffer(mel_filtersURL),
         fetchArrayBuffer(configURL),
       ]);
-
-      this.instance[modelID] = new Decoder(
+      this.instance[modelID] = await new Decoder(
         weightsArrayU8,
         tokenizerArrayU8,
         mel_filtersArrayU8,
@@ -56,7 +56,8 @@ class Whisper {
         is_multilingual,
         timestamps,
         task,
-        language
+        language,
+        useWgpu === 'true'
       );
     } else {
       self.postMessage({ status: "loading", message: "Model Already Loaded" });
@@ -73,6 +74,7 @@ self.addEventListener("message", async (event) => {
     configURL,
     mel_filtersURL,
     audioURL,
+    useWgpu
   } = event.data;
   try {
     self.postMessage({ status: "decoding", message: "Starting Decoder" });
@@ -96,13 +98,14 @@ self.addEventListener("message", async (event) => {
       timestamps,
       task: null,
       language: null,
+      useWgpu
     });
 
     self.postMessage({ status: "decoding", message: "Loading Audio" });
     const audioArrayU8 = await fetchArrayBuffer(audioURL);
 
     self.postMessage({ status: "decoding", message: "Running Decoder..." });
-    const segments = decoder.decode(audioArrayU8);
+    const segments = await decoder.decode(audioArrayU8);
 
     // Send the segment back to the main thread as JSON
     self.postMessage({

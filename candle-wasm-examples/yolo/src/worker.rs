@@ -3,7 +3,7 @@ use candle::{DType, Device, Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
-use yew::platform::spawn_local;
+use wasm_bindgen_futures::spawn_local;
 use yew_agent::{HandlerId, Public, WorkerLink};
 
 #[wasm_bindgen]
@@ -37,6 +37,7 @@ pub struct RunData {
     pub iou_threshold: f32,
 }
 
+#[derive(Clone)]
 pub struct Model {
     model: YoloV8,
     device : Device
@@ -127,7 +128,7 @@ pub struct ModelPose {
 }
 
 impl ModelPose {
-    pub fn run(
+    pub async fn run(
         &self,
         image_data: Vec<u8>,
         conf_threshold: f32,
@@ -175,7 +176,7 @@ impl ModelPose {
             height,
             conf_threshold,
             iou_threshold,
-        )?;
+        ).await?;
         Ok(bboxes)
     }
 
@@ -222,35 +223,15 @@ pub enum WorkerOutput {
     WeightsLoaded,
 }
 
-impl Worker{
-    async fn handle_input_async(&mut self, msg: WorkerInput, id: HandlerId){
-        let output = match msg {
-            WorkerInput::ModelData(md) => match Model::load(md).await {
-                Ok(model) => {
-                    self.model = Some(model);
-                    Ok(WorkerOutput::WeightsLoaded)
-                }
-                Err(err) => Err(format!("model creation error {err:?}")),
-            },
-            WorkerInput::RunData(rd) => match &mut self.model {
-                None => Err("model has not been set yet".to_string()),
-                Some(model) => {
-                    let result = model
-                        .run(rd.image_data, rd.conf_threshold, rd.iou_threshold).await
-                        .map_err(|e| e.to_string());
-                    Ok(WorkerOutput::ProcessingDone(result))
-                }
-            },
-        };
-        self.link.respond(id, output);
-    }
+pub enum WorkerMessage{
+    SetModel(Option<Model>)
 }
 
-
-
+use async_trait::async_trait;
+#[async_trait]
 impl yew_agent::Worker for Worker {
     type Input = WorkerInput;
-    type Message = ();
+    type Message = WorkerMessage;
     type Output = std::result::Result<WorkerOutput, String>;
     type Reach = Public<Self>;
 
@@ -258,12 +239,50 @@ impl yew_agent::Worker for Worker {
         Self { link, model: None }
     }
 
-    fn update(&mut self, _msg: Self::Message) {
-        // no messaging
+    fn update(&mut self, msg: Self::Message) {
+        match msg{
+            WorkerMessage::SetModel(model) => self.model = model,
+        }
     }
 
     fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
-        spawn_local(self.handle_input_async(msg, id))
+        let link = self.link.clone();
+
+        match msg {
+            WorkerInput::ModelData(md) => {
+                // Spawn an async task to handle the async logic
+                spawn_local(async move {
+                    let output = match Model::load(md).await {
+                        Ok(model) => {
+                            link.send_message(WorkerMessage::SetModel(Some(model)));
+                            Ok(WorkerOutput::WeightsLoaded)
+                        }
+                        Err(err) => Err(format!("model creation error {err:?}")),
+                    };
+                    link.respond(id, output);
+                });
+            }
+            WorkerInput::RunData(rd) =>{
+
+                match &mut self.model{
+                    None => self.link.respond(id, Err("model has not been set yet".to_string())),
+                    Some(model) => {
+                        let model = model.clone();
+                        spawn_local(async move{
+                            let output =  {
+                                    let result = model
+                                        .run(rd.image_data, rd.conf_threshold, rd.iou_threshold).await
+                                        .map_err(|e| e.to_string());
+                                    Ok(WorkerOutput::ProcessingDone(result))
+                                };
+                            link.respond(id, output);
+                        });
+                    }
+                }
+
+              
+            }
+        }
     }
 
     fn name_of_resource() -> &'static str {

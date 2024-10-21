@@ -33,6 +33,11 @@
 //!
 //! Rust is cool, and a lot of the HF ecosystem already has Rust crates [safetensors](https://github.com/huggingface/safetensors) and [tokenizers](https://github.com/huggingface/tokenizers)
 
+
+
+#![cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))] //for wasm32 and wgpu, async functions may be used instead of sync functions. 
+                                                                               //this will allow the deprecated warnings inside this crate
+
 #[cfg(feature = "accelerate")]
 mod accelerate;
 pub mod backend;

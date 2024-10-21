@@ -39,7 +39,7 @@ class Moondream {
   static instance = {};
   static currentModelID = null;
 
-  static async getInstance(weightsURL, modelID, tokenizerURL, quantized) {
+  static async getInstance(weightsURL, modelID, tokenizerURL, quantized, useWgpu) {
     // load individual modelID only once
     if (!this.instance[modelID]) {
       await init();
@@ -52,10 +52,11 @@ class Moondream {
         fetchArrayBuffer(tokenizerURL),
       ]);
 
-      this.instance[modelID] = new Model(
+      this.instance[modelID] = await new Model(
         weightsArrayU8,
         tokenizerArrayU8,
-        quantized
+        quantized,
+        useWgpu === 'true'
       );
     }
     this.currentModelID = modelID;
@@ -115,6 +116,7 @@ async function generate(data) {
     repeatPenalty,
     maxSeqLen,
     verbose_prompt,
+    useWgpu
   } = data;
   try {
     self.postMessage({ status: "loading", message: "Starting Moondream" });
@@ -122,7 +124,8 @@ async function generate(data) {
       weightsURL,
       modelID,
       tokenizerURL,
-      quantized
+      quantized,
+      useWgpu
     );
 
     self.postMessage({ status: "loading", message: "Initializing model" });

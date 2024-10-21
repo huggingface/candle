@@ -464,7 +464,7 @@ impl Falcon {
             config: cfg,
         })
     }
-
+    
     pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
         let (b_sz, seq_len) = input_ids.dims2()?;
         let mut hidden_state = self.word_embeddings.forward(input_ids)?;

@@ -19,34 +19,6 @@ pub struct SafeTensors {
     data_offset : usize,
 }
 
-// /// Serialize to a regular file the dictionnary of tensors.
-// /// Writing directly to file reduces the need to allocate the whole amount to
-// /// memory.
-// pub fn serialize_to_file<
-//     S: AsRef<str> + Ord + std::fmt::Display,
-//     V: View,
-//     I: IntoIterator<Item = (S, V)>,
-// >(
-//     data: I,
-//     data_info: &Option<HashMap<String, String>>,
-//     filename: &Path,
-// ) -> Result<(), SafeTensorError> {
-//     let (
-//         PreparedData {
-//             n, header_bytes, ..
-//         },
-//         tensors,
-//     ) = prepare(data, data_info)?;
-//     let mut f = BufWriter::new(File::create(filename)?);
-//     f.write_all(n.to_le_bytes().as_ref())?;
-//     f.write_all(&header_bytes)?;
-//     for tensor in tensors {
-//         f.write_all(tensor.data().as_ref())?;
-//     }
-//     f.flush()?;
-//     Ok(())
-// }
-
 impl SafeTensors {
     /// Given a byte-buffer representing a chunk of the byte array
     /// parses the header, and returns the size of the header + the parsed data.
@@ -61,7 +33,6 @@ impl SafeTensors {
 
         let arr = buffer.get_bytes(0, 8).await?;
 
-        //let arr = buffer.read_bytes(8).await?;
         let arr: [u8; 8] = [
             arr[0], arr[1], arr[2], arr[3], arr[4], arr[5], arr[6], arr[7],
         ];

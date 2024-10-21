@@ -80,7 +80,7 @@ pub trait CustomOp2 {
         ))
     }
 
-    /// The forward pass, as run on a metal device. Note that the storage can use arbitrary strides,
+    /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
     fn metal_fwd(
         &self,

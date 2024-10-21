@@ -55,7 +55,8 @@
       const imagesExamples = document.querySelector("#image-select");
       const canvas = document.querySelector("#canvas");
       const ctxCanvas = canvas.getContext("2d");
-
+      const useWgpuEl = document.querySelector("#useWgpu");
+      
       let isCaptioning = false;
       let currentImageURL = null;
       clearBtn.addEventListener("click", () => {
@@ -169,6 +170,7 @@
         modelID,
         imageURL,
         quantized,
+        useWgpu,
         updateStatus = null
       ) {
         return new Promise((resolve, reject) => {
@@ -179,6 +181,7 @@
             modelID,
             imageURL,
             quantized,
+            useWgpu
           });
           function messageHandler(event) {
             if ("error" in event.data) {
@@ -212,6 +215,7 @@
         isCaptioning = true;
         const selectedModel = modelSelectEl.value;
         const model = MODELS[selectedModel];
+        const useWgpu = useWgpuEl.value;
         const weightsURL = `${model.base_url}${model.model}`;
         const tokenizerURL = `${model.base_url}${model.tokenizer}`;
         const configURL = `${model.base_url}${model.config}`;
@@ -226,6 +230,7 @@
             selectedModel,
             imageURL,
             quantized,
+            useWgpu,
             updateStatus
           );
           outputStatusEl.hidden = true;
@@ -280,6 +285,18 @@
           id="model"
           class="border-2 border-gray-500 rounded-md font-light interactive disabled:cursor-not-allowed w-full max-w-max"
         ></select>
+      </div>
+      <div>
+        <label for="useWgpu" class="font-medium block">UseWgpu</label>
+        <select
+          id="useWgpu"
+          class="border-2 border-gray-500 rounded-md font-light interactive disabled:cursor-not-allowed w-full max-w-max"
+        >
+          <option value="true" selected>True
+          </option>
+          <option value="false">False
+          </option>
+        </select>
       </div>
       <!-- drag and drop area -->
       <div class="grid gap-4 sm:grid-cols-2 py-4">

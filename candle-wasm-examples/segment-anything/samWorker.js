@@ -22,7 +22,7 @@ class SAMModel {
   // Add a new property to hold the current modelID
   static currentModelID = null;
 
-  static async getInstance(modelURL, modelID) {
+  static async getInstance(modelURL, modelID, useWgpu) {
     if (!this.instance[modelID]) {
       await init();
 
@@ -31,9 +31,10 @@ class SAMModel {
         message: `Loading Model ${modelID}`,
       });
       const weightsArrayU8 = await fetchArrayBuffer(modelURL);
-      this.instance[modelID] = new Model(
+      this.instance[modelID] = await new Model(
         weightsArrayU8,
-        /tiny|mobile/.test(modelID)
+        /tiny|mobile/.test(modelID),
+        useWgpu
       );
     } else {
       self.postMessage({ status: "loading", message: "Model Already Loaded" });
@@ -121,10 +122,10 @@ async function createImageCanvas(
 }
 
 self.addEventListener("message", async (event) => {
-  const { modelURL, modelID, imageURL, points } = event.data;
+  const { modelURL, modelID, imageURL, points, useWgpu } = event.data;
   try {
     self.postMessage({ status: "loading", message: "Starting SAM" });
-    const sam = await SAMModel.getInstance(modelURL, modelID);
+    const sam = await SAMModel.getInstance(modelURL, modelID, useWgpu==='true');
 
     self.postMessage({ status: "loading", message: "Loading Image" });
     const imageArrayU8 = await fetchArrayBuffer(imageURL, false);
@@ -141,7 +142,7 @@ self.addEventListener("message", async (event) => {
     }
 
     self.postMessage({ status: "segmenting", message: "Segmenting" });
-    const { mask, image } = sam.mask_for_point({ points });
+    const { mask, image } = await sam.mask_for_point({ points });
     const maskDataURL = await createImageCanvas(mask, image);
     // Send the segment back to the main thread as JSON
     self.postMessage({

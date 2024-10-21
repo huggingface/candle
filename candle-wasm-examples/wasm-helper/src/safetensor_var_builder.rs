@@ -5,11 +5,6 @@ use candle_nn::{var_builder::SimpleBackend, VarBuilder};
 
 use crate::{generic_error::GenericResult, opfs::get_rust_blob, safetensors::{SafeTensors, TensorView}};
 
-
-// pub struct BufferedSafeTensor{
-//   data : Vec<(String, TensorView)>
-// }
-
 pub struct MmapedSafetensors {
     data : HashMap<String, TensorView>
 }

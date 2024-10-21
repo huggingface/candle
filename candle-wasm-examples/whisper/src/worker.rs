@@ -7,7 +7,7 @@ use rand::{distributions::Distribution, rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
-use yew::platform::spawn_local;
+use wasm_bindgen_futures::spawn_local;
 use yew_agent::{HandlerId, Public, WorkerLink};
 
 #[wasm_bindgen]
@@ -27,6 +27,7 @@ macro_rules! console_log {
 
 pub const DTYPE: DType = DType::F32;
 
+#[derive(Clone)]
 pub enum Model {
     Normal(m::model::Whisper),
     Quantized(m::quantized_model::Whisper),
@@ -85,6 +86,7 @@ pub struct Segment {
     pub dr: DecodingResult,
 }
 
+#[derive(Clone)]
 pub struct Decoder {
     model: Model,
     rng: rand::rngs::StdRng,
@@ -159,10 +161,10 @@ impl Decoder {
         })
     }
 
-    fn decode(&mut self, mel: &Tensor, t: f64) -> anyhow::Result<DecodingResult> {
+    async fn decode(&mut self, mel: &Tensor, t: f64) -> anyhow::Result<DecodingResult> {
         let model = &mut self.model;
         let language_token = match (self.is_multilingual, &self.language) {
-            (true, None) => Some(detect_language(model, &self.tokenizer, mel)?),
+            (true, None) => Some(detect_language(model, &self.tokenizer, mel).await?),
             (false, None) => None,
             (true, Some(language)) => {
                 match token_id(&self.tokenizer, &format!("<|{:?}|>", self.language)) {
@@ -205,7 +207,7 @@ impl Decoder {
                 let logits = model.decoder_final_linear(&ys.i(..1)?)?.i(0)?.i(0)?;
                 no_speech_prob = softmax(&logits, 0)?
                     .i(self.no_speech_token as usize)?
-                    .to_scalar::<f32>()? as f64;
+                    .to_scalar_async::<f32>().await? as f64;
             }
 
             let (_, seq_len, _) = ys.dims3()?;
@@ -223,11 +225,11 @@ impl Decoder {
             let logits = logits.broadcast_add(&self.suppress_tokens)?;
             let next_token = if t > 0f64 {
                 let prs = softmax(&(&logits / t)?, 0)?;
-                let logits_v: Vec<f32> = prs.to_vec1()?;
+                let logits_v: Vec<f32> = prs.to_vec1_async().await?;
                 let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
                 distr.sample(&mut self.rng) as u32
             } else {
-                let logits_v: Vec<f32> = logits.to_vec1()?;
+                let logits_v: Vec<f32> = logits.to_vec1_async().await?;
                 logits_v
                     .iter()
                     .enumerate()
@@ -238,7 +240,7 @@ impl Decoder {
             tokens.push(next_token);
             let prob = softmax(&logits, candle::D::Minus1)?
                 .i(next_token as usize)?
-                .to_scalar::<f32>()? as f64;
+                .to_scalar_async::<f32>().await? as f64;
             if next_token == self.eot_token || tokens.len() > model.config().max_target_positions {
                 break;
             }
@@ -257,9 +259,9 @@ impl Decoder {
         })
     }
 
-    fn decode_with_fallback(&mut self, segment: &Tensor) -> anyhow::Result<DecodingResult> {
+    async fn decode_with_fallback(&mut self, segment: &Tensor) -> anyhow::Result<DecodingResult> {
         for (i, &t) in m::TEMPERATURES.iter().enumerate() {
-            let dr: Result<DecodingResult, _> = self.decode(segment, t);
+            let dr: Result<DecodingResult, _> = self.decode(segment, t).await;
             if i == m::TEMPERATURES.len() - 1 {
                 return dr;
             }
@@ -280,7 +282,7 @@ impl Decoder {
         unreachable!()
     }
 
-    fn run(&mut self, mel: &Tensor) -> anyhow::Result<Vec<Segment>> {
+    async fn run(&mut self, mel: &Tensor) -> anyhow::Result<Vec<Segment>> {
         let (_, _, content_frames) = mel.dims3()?;
         let mut seek = 0;
         let mut segments = vec![];
@@ -289,7 +291,7 @@ impl Decoder {
             let segment_size = usize::min(content_frames - seek, m::N_FRAMES);
             let mel_segment = mel.narrow(2, seek, segment_size)?;
             let segment_duration = (segment_size * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
-            let dr = self.decode_with_fallback(&mel_segment)?;
+            let dr = self.decode_with_fallback(&mel_segment).await?;
             seek += segment_size;
             if dr.no_speech_prob > m::NO_SPEECH_THRESHOLD && dr.avg_logprob < m::LOGPROB_THRESHOLD {
                 console_log!("no speech detected, skipping {seek} {dr:?}");
@@ -317,7 +319,7 @@ impl Decoder {
         let mel_filters = safetensors::tensor::SafeTensors::deserialize(&md.mel_filters)?;
         let mel_filters = mel_filters.tensor("mel_80")?.load(&device)?;
         console_log!("loaded mel filters {:?}", mel_filters.shape());
-        let mel_filters = mel_filters.flatten_all()?.to_vec1::<f32>()?;
+        let mel_filters = mel_filters.flatten_all()?.to_vec1_async::<f32>().await?;
         let config: Config = serde_json::from_slice(&md.config)?;
         let model = if md.quantized {
             let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf_buffer(
@@ -349,7 +351,7 @@ impl Decoder {
         Ok(decoder)
     }
 
-    pub fn convert_and_run(&mut self, wav_input: &[u8]) -> anyhow::Result<Vec<Segment>> {
+    pub async fn convert_and_run(&mut self, wav_input: &[u8]) -> anyhow::Result<Vec<Segment>> {
         let mut wav_input = std::io::Cursor::new(wav_input);
         let wav_reader = hound::WavReader::new(&mut wav_input)?;
         let spec = wav_reader.spec();
@@ -370,13 +372,13 @@ impl Decoder {
         let n_mels = self.model.config().num_mel_bins;
         let mel = Tensor::from_vec(mel, (1, n_mels, mel_len / n_mels), &self.device)?;
         console_log!("loaded mel: {:?}", mel.dims());
-        let segments = self.run(&mel)?;
+        let segments = self.run(&mel).await?;
         Ok(segments)
     }
 }
 
 /// Returns the token id for the selected language.
-pub fn detect_language(model: &mut Model, tokenizer: &Tokenizer, mel: &Tensor) -> Result<u32, E> {
+pub async fn detect_language(model: &mut Model, tokenizer: &Tokenizer, mel: &Tensor) -> Result<u32, E> {
     console_log!("detecting language");
     let (_bsize, _, seq_len) = mel.dims3()?;
     let mel = mel.narrow(
@@ -400,7 +402,7 @@ pub fn detect_language(model: &mut Model, tokenizer: &Tokenizer, mel: &Tensor) -
     let logits = model.decoder_final_linear(&ys.i(..1)?)?.i(0)?.i(0)?;
     let logits = logits.index_select(&language_token_ids, 0)?;
     let probs = candle_nn::ops::softmax(&logits, D::Minus1)?;
-    let probs = probs.to_vec1::<f32>()?;
+    let probs = probs.to_vec1_async::<f32>().await?;
     let mut probs = LANGUAGES.iter().zip(probs.iter()).collect::<Vec<_>>();
     probs.sort_by(|(_, p1), (_, p2)| p2.total_cmp(p1));
     for ((_, language), p) in probs.iter().take(5) {
@@ -456,31 +458,13 @@ pub enum WorkerOutput {
     WeightsLoaded,
 }
 
-impl Worker{
-    async fn handle_input_async(&mut self, msg: WorkerInput, id: HandlerId) {
-        let output = match msg {
-            WorkerInput::ModelData(md) => match Decoder::load(md).await {
-                Ok(decoder) => {
-                    self.decoder = Some(decoder);
-                    Ok(WorkerOutput::WeightsLoaded)
-                }
-                Err(err) => Err(format!("model creation error {err:?}")),
-            },
-            WorkerInput::DecodeTask { wav_bytes } => match &mut self.decoder {
-                None => Err("model has not been set".to_string()),
-                Some(decoder) => decoder
-                    .convert_and_run(&wav_bytes)
-                    .map(WorkerOutput::Decoded)
-                    .map_err(|e| e.to_string()),
-            },
-        };
-        self.link.respond(id, output);
-    }
+pub enum WorkerMessage{
+    SetDecoder(Decoder)
 }
 
 impl yew_agent::Worker for Worker {
     type Input = WorkerInput;
-    type Message = ();
+    type Message = WorkerMessage;
     type Output = Result<WorkerOutput, String>;
     type Reach = Public<Self>;
 
@@ -491,8 +475,10 @@ impl yew_agent::Worker for Worker {
         }
     }
 
-    fn update(&mut self, _msg: Self::Message) {
-        // no messaging
+    fn update(&mut self, msg: Self::Message) {
+        match msg{
+            WorkerMessage::SetDecoder(decoder) => self.decoder = Some(decoder),
+        }
     }
 
     
@@ -506,6 +492,40 @@ impl yew_agent::Worker for Worker {
     }
     
     fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
-        spawn_local(self.handle_input_async(msg, id));
+        let link = self.link.clone();
+       
+
+       
+        match msg {
+            WorkerInput::ModelData(md) =>
+            {
+                spawn_local(async move {
+                    let output =  match Decoder::load(md).await {
+                        Ok(decoder) => {
+                            link.send_message(WorkerMessage::SetDecoder(decoder));
+                            Ok(WorkerOutput::WeightsLoaded)
+                        }
+                        Err(err) => Err(format!("model creation error {err:?}")),
+                    };
+                    link.respond(id, output);
+                });
+            },
+            WorkerInput::DecodeTask { wav_bytes } => match &mut self.decoder {
+                None => {link.respond(id, Err("model has not been set".to_string()));},
+                Some(decoder) => 
+                {
+                    let mut decoder = decoder.clone();
+                    spawn_local(async move{
+                        let output = decoder
+                        .convert_and_run(&wav_bytes).await
+                        .map(WorkerOutput::Decoded)
+                        .map_err(|e| e.to_string());
+                        link.respond(id, output);
+                    });
+                }
+                
+               ,
+            },
+        };
     }
 }

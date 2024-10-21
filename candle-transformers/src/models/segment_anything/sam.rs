@@ -320,6 +320,7 @@ impl Sam {
     }
 
     #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `process_crop_async` for wasm support instead"))]
+    #[cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))]
     fn process_crop(
         &self,
         img: &Tensor,

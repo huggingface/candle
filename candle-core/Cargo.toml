@@ -14,7 +14,6 @@ accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
 candle-kernels = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
-candle-wgpu-kernels = { workspace = true, optional = true }
 metal = { workspace = true, optional = true}
 cudarc = { workspace = true, optional = true }
 gemm = { workspace = true }
@@ -39,10 +38,11 @@ flume = { workspace = true, optional = true}
 bytemuck = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 log = {workspace = true, optional = true}
+serde_json = { workspace = true, optional = true }
+candle-wgpu-kernels = { workspace = true, optional = true }
 
 #for wgpu_debug || wgpu_debug_serialize
 serde = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
 
 
 [dev-dependencies]

@@ -4,8 +4,6 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
-use std::time::Instant;
-
 use candle_transformers::models::stable_diffusion;
 use candle_transformers::models::wuerstchen;
 
@@ -19,9 +17,6 @@ const RESOLUTION_MULTIPLE: f64 = 42.67;
 const LATENT_DIM_SCALE: f64 = 10.67;
 const PRIOR_CIN: usize = 16;
 const DECODER_CIN: usize = 4;
-
-#[cfg(feature = "wgpu_debug")]
-const TEST_NAME : &str = "3";
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -238,9 +233,6 @@ fn run(args: Args) -> Result<()> {
     let height = height.unwrap_or(1024);
     let width = width.unwrap_or(1024);
 
-    
-   let start = Instant::now();
-
     let prior_text_embeddings = {
         let tokenizer = ModelFile::PriorTokenizer.get(args.prior_tokenizer)?;
         let weights = ModelFile::PriorClip.get(args.prior_clip_weights)?;
@@ -298,16 +290,14 @@ fn run(args: Args) -> Result<()> {
                 vb,
             )?
         };
-        let prior_scheduler = wuerstchen::ddpm::DDPMWScheduler::new(12, Default::default())?;
+        let prior_scheduler = wuerstchen::ddpm::DDPMWScheduler::new(60, Default::default())?;
         let timesteps = prior_scheduler.timesteps();
         let timesteps = &timesteps[..timesteps.len() - 1];
         println!("prior denoising");
         for (index, &t) in timesteps.iter().enumerate() {
             let start_time = std::time::Instant::now();
             let latent_model_input = Tensor::cat(&[&latents, &latents], 0)?;
-
-            let ratio: Tensor = (Tensor::ones(2, DType::F32, &device)? * t)?;
-
+            let ratio = (Tensor::ones(2, DType::F32, &device)? * t)?;
             let noise_pred = prior.forward(&latent_model_input, &ratio, &prior_text_embeddings)?;
             let noise_pred = noise_pred.chunk(2, 0)?;
             let (noise_pred_text, noise_pred_uncond) = (&noise_pred[0], &noise_pred[1]);
@@ -379,40 +369,17 @@ fn run(args: Args) -> Result<()> {
             idx + 1,
             num_samples
         );
-        
         let image = vqgan.decode(&(&latents * 0.3764)?)?;
-        let image = (image.clamp(0f32, 1f32)? * 255.)?.to_device(&Device::Cpu)?
+        let image = (image.clamp(0f32, 1f32)? * 255.)?
             .to_dtype(DType::U8)?
             .i(0)?;
         let image_filename = output_filename(&final_image, idx + 1, num_samples, None);
-        candle_examples::save_image(&image, image_filename)?;
-        #[cfg(feature="wgpu")]
-        match &device {
-            candle::Device::Wgpu(gpu) => {
-                gpu.print_bindgroup_reuseinfo2();
-                #[cfg(feature = "wgpu_debug")]{
-                    let info = pollster::block_on(gpu.get_debug_info()).unwrap();
-                    let map2 = candle::wgpu::debug_info::calulate_measurment(&info);
-                    candle::wgpu::debug_info::save_list(&map2,& format!("wgpu_wuerstchen_test_1_b.json")).unwrap();
-                
-                    let info: Vec<candle::wgpu::debug_info::ShaderInfo> = gpu.get_pipeline_info().unwrap();
-                    candle::wgpu::debug_info::save_list(&info,& format!("wgpu_wuerstchen_test_1_c.json")).unwrap();
-
-                    let (pipelines, consts) = gpu.get_used_pipelines();
-                    std::fs::write(format!("wgpu_wuerstchen_test_1_d.json"), pipelines)?;   
-                    std::fs::write(format!("wgpu_wuerstchen_test_1_e.json"), consts)?;   
-                }
-            },
-            _ => {},
-        };
+        candle_examples::save_image(&image, image_filename)?
     }
-    
-    println!("elapsed: {:?}", start.elapsed()); 
     Ok(())
 }
 
 fn main() -> Result<()> {
-    env_logger::builder().filter_level(log::LevelFilter::Warn).init();
     let args = Args::parse();
     run(args)
 }

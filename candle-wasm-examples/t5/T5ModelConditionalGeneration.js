@@ -16,7 +16,7 @@ async function fetchArrayBuffer(url) {
 class ConditionalGeneration {
   static instance = {};
 
-  static async getInstance(weightsURL, tokenizerURL, configURL, modelID) {
+  static async getInstance(weightsURL, tokenizerURL, configURL, modelID, useWgpu) {
     if (modelID.includes("quantized")) {
       ({ default: init, ModelConditionalGeneration } = await import(
         "./build/m-quantized.js"
@@ -41,7 +41,7 @@ class ConditionalGeneration {
         weightsArrayU8,
         tokenizerArrayU8,
         configArrayU8,
-        true
+        useWgpu == 'true'
       );
     } else {
       self.postMessage({ status: "ready", message: "Model Already Loaded" });
@@ -51,8 +51,9 @@ class ConditionalGeneration {
 }
 
 self.addEventListener("message", async (event) => {
-  const { weightsURL, tokenizerURL, configURL, modelID, prompt, params } =
+  const { weightsURL, tokenizerURL, configURL, modelID, prompt, params, useWgpu } =
     event.data;
+
   let {
     temperature = 0.0,
     seed = 299792458,
@@ -69,7 +70,8 @@ self.addEventListener("message", async (event) => {
       weightsURL,
       tokenizerURL,
       configURL,
-      modelID
+      modelID,
+      useWgpu
     );
     self.postMessage({
       status: "decoding",

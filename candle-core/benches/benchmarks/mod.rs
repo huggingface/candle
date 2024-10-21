@@ -3,6 +3,7 @@ pub(crate) mod conv_transpose2d;
 pub(crate) mod conv2d;
 pub(crate) mod matmul;
 pub(crate) mod qmatmul;
+pub(crate) mod matmul_wgpu;
 pub(crate) mod random;
 pub(crate) mod unary;
 pub(crate) mod binary;

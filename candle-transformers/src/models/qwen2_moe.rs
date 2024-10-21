@@ -205,6 +205,8 @@ impl Attention {
 
 // https://github.com/huggingface/transformers/blob/536ea2aca234fb48c5c69769431d643b0d93b233/src/transformers/models/qwen2_moe/modeling_qwen2_moe.py#L800
 #[derive(Debug, Clone)]
+#[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="This sync function will not work for webgpu, use an async imp."))]
+#[cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))]
 struct SparseMoeBlock {
     gate: Linear,
     experts: Vec<MLP>,

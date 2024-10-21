@@ -17,7 +17,7 @@ impl Model {
     #[wasm_bindgen(constructor)]
     pub async fn load(weights: Vec<u8>, tokenizer: Vec<u8>, config: Vec<u8>, use_wgpu : bool) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
-        console_log!("loading model, gpu:{use_wgpu}");
+        console_log!("loading model");
         let device = match use_wgpu{
             true => Device::new_wgpu(0).await?,
             false => Device::Cpu,
@@ -32,7 +32,7 @@ impl Model {
         Ok(Self { bert, tokenizer, device})
     }
 
-    pub fn get_embeddings(&mut self, input: JsValue) -> Result<JsValue, JsError> {
+    pub async fn get_embeddings(&mut self, input: JsValue) -> Result<JsValue, JsError> {
         let input: Params =
             serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
         let sentences = input.sentences;
@@ -84,7 +84,7 @@ impl Model {
         } else {
             embeddings
         };
-        let embeddings_data = embeddings.to_vec2()?;
+        let embeddings_data = embeddings.to_vec2_async().await?;
         Ok(serde_wasm_bindgen::to_value(&Embeddings {
             data: embeddings_data,
         })?)

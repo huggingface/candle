@@ -60,12 +60,13 @@ impl Model {
         let image_t = {
             let img = image.resize_exact(width, height, image::imageops::FilterType::CatmullRom);
             let data = img.to_rgb8().into_raw();
+            #[allow(deprecated)]
             Tensor::from_vec(
                 data,
                 (img.height() as usize, img.width() as usize, 3),
-                &self.device,
+                &Device::Cpu,
             )?
-            .permute((2, 0, 1))?
+            .permute((2, 0, 1))?.to_dtype(DType::F32)?.to_device(&self.device)?
         };
         let data = self.sam.embeddings(&image_t)?;
         self.embeddings = Some(Embeddings {
@@ -79,7 +80,7 @@ impl Model {
     }
 
     pub async fn mask_for_point(&self, input: JsValue) -> Result<JsValue, JsError> {
-        let input: PointsInput =
+        let input : PointsInput =
             serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
         let transformed_points = input.points;
 
@@ -110,7 +111,7 @@ impl Model {
         )?;
         let iou = iou_predictions.flatten(0, 1)?.to_vec1_async::<f32>().await?[0];
         let mask_shape = mask.dims().to_vec();
-        let mask_data = mask.ge(0f32)?.flatten_all()?.to_vec1_async::<u8>().await?;
+        let mask_data = mask.to_device_async(&Device::Cpu).await?.ge(0f32)?.flatten_all()?.to_vec1_async::<u8>().await?;
         let mask = Mask {
             iou,
             mask_shape,

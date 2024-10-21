@@ -22,3 +22,29 @@ fn where_cond_index_u32(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 }
+
+@compute
+@workgroup_size(64,1,1)
+fn where_cond_index_u8(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+
+    let input1_layout = 0u;
+    let input2_layout = input1_layout + get_size1();
+    let input3_layout = input2_layout + get_size2();
+
+    let pos1 = get_index1(input1_layout, id);
+    if(pos1.is_valid){
+
+        let mem_id = pos1.id / 4;
+        let u8_offset = pos1.id % 4;
+        let x = (v_input1_u32[mem_id] >> (8 * u8_offset)) & 0xFF;
+        if x == 0{
+            let pos3 = get_index3(input3_layout, id);
+            v_dest[id] = v_input3[pos3.id]; 
+        }
+        else{
+            let pos2 = get_index2(input2_layout, id);
+            v_dest[id] = v_input2[pos2.id];   
+        }
+    }
+}

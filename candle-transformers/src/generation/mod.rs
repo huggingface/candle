@@ -34,6 +34,7 @@ impl LogitsProcessor {
     }
 
     #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `sample_argmax_async` for wasm support instead"))]
+    #[cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))]
     fn sample_argmax(&mut self, logits: Tensor) -> Result<u32> {
         let logits_v: Vec<f32> = logits.to_vec1()?;
         let next_token = logits_v
@@ -168,6 +169,7 @@ impl LogitsProcessor {
     }
 
     #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `sample_f_async` for wasm support instead"))]
+    #[cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))]
     pub fn sample_f(&mut self, logits: &Tensor, f: impl FnOnce(&mut [f32])) -> Result<u32> {
         let logits = logits.to_dtype(DType::F32)?;
         let prs = |temperature: f64| -> Result<Vec<f32>> {
@@ -180,8 +182,7 @@ impl LogitsProcessor {
         
         #[allow(deprecated)] //we are already ina deprecated function!
         let next_token = match &self.sampling {
-            Sampling::ArgMax => 
-                self.sample_argmax(logits)?,
+            Sampling::ArgMax => self.sample_argmax(logits)?,
             Sampling::All { temperature } => {
                 let prs = prs(*temperature)?;
                 self.sample_multinomial(&prs)?
