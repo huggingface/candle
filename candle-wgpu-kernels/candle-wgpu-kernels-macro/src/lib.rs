@@ -5,15 +5,15 @@ use quote::quote;
 use syn::{parse_macro_input, Ident};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::env;
 use std::io::{Seek, SeekFrom};
 
-static COUNTER: AtomicU16 = AtomicU16::new(0);
+static COUNTER: AtomicU8 = AtomicU8::new(0);
 
 
 /// Reads the current loader indices from the file, returning a Vec of (crate_name, loader_name, index)
-fn read_loader_indices(file : &File) -> Vec<(String, String, u16)> {
+fn read_loader_indices(file : &File) -> Vec<(String, String, u8)> {
     let reader = BufReader::new(file);
     let mut indices = Vec::new();
     for line in reader.lines() {
@@ -25,7 +25,7 @@ fn read_loader_indices(file : &File) -> Vec<(String, String, u16)> {
                     
                     let crate_name = parts[0].to_string();
                     let loader_name = parts[1].to_string();
-                    let index = parts[2].parse::<u16>().expect("Error parsing loader index.");
+                    let index = parts[2].parse::<u8>().expect("Error parsing loader index.");
                     indices.push((crate_name, loader_name, index));
                 }
 
@@ -41,7 +41,7 @@ fn read_loader_indices(file : &File) -> Vec<(String, String, u16)> {
 }
 
 /// Writes the updated loader indices to the file
-fn write_loader_indices(file : &mut File, indices: &Vec<(String, String, u16)>) {
+fn write_loader_indices(file : &mut File, indices: &Vec<(String, String, u8)>) {
     file.set_len(0).expect("could not set size to 0"); // Set length to 0 to truncate
 
     // Optionally seek back to the beginning if you want to write immediately

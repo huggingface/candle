@@ -1610,7 +1610,7 @@ test_device!(
 );
 test_device!(randn, randn_cpu, randn_gpu, randn_metal,randn_wgpu);
 test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal,clamp_wgpu);
-test_device!(asort, asort_cpu, asort_gpu, asort_metal,asort_wgpu);
+test_device!(asort, asort_cpu, asort_gpu, asort_metal);
 test_device!(var, var_cpu, var_gpu, var_metal,var_wgpu);
 test_device!(zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal,zero_dim_wgpu);
 

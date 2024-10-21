@@ -81,7 +81,7 @@ pub use candle_wgpu_kernels_macro::create_loader;
     any(feature = "wgpu_debug_serialize"),
     derive(serde::Serialize, serde::Deserialize)
 )]
-pub struct LoaderIndex(pub u16);
+pub struct LoaderIndex(pub u8);
 
 #[derive(Copy, Clone, Debug, PartialEq,Hash, Eq)]
 #[cfg_attr(
@@ -110,10 +110,10 @@ impl ShaderIndex{
     any(feature = "wgpu_debug_serialize"),
     derive(serde::Serialize, serde::Deserialize)
 )]
-pub struct PipelineIndex(ShaderIndex, u16); //Shader, entry point
+pub struct PipelineIndex(ShaderIndex, u8); //Shader, entry point
 
 impl PipelineIndex{
-    pub fn new(shader : ShaderIndex, index : u16) -> Self{
+    pub fn new(shader : ShaderIndex, index : u8) -> Self{
         PipelineIndex(shader, index)
     }
 
@@ -121,7 +121,7 @@ impl PipelineIndex{
         self.0
     }
 
-    pub fn get_index(&self) -> u16{
+    pub fn get_index(&self) -> u8{
         self.1
     }
 }
@@ -184,7 +184,7 @@ pub trait ShaderLoader : std::fmt::Debug{
     /// impl ShaderLoader for Example{
     ///     fn get_entry_point(&self, index : PipelineIndex) -> &str{
     ///         let shader : ShaderIndex = index.get_shader(); //wich shader to load
-    ///         let index : u16 = index.get_index();        //wich entry point to load
+    ///         let index : u8 = index.get_index();        //wich entry point to load
     ///         match (shader.get_index(), index){
     ///             (0,0) => "compute1_i32",
     ///             (0,1) => "compute2_i32",

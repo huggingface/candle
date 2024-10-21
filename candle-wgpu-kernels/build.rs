@@ -146,7 +146,7 @@ fn main() {
                     {}
                 }}
             }} 
-            pub fn from_index(index : u16) -> Self{{
+            pub fn from_index(index : u8) -> Self{{
                 match index{{
                     {}
                     _=> {{todo!()}}

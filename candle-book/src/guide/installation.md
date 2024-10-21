@@ -57,3 +57,8 @@ cargo build
 **With mkl support**
 
 You can also see the `mkl` feature which could be interesting to get faster inference on CPU. [Using mkl](./advanced/mkl.md)
+
+
+**With wgpu support**
+
+You can also see the `wgpu` feature which could be interesting to get faster inference with (Vulkan, Dx12, Metal or WebGpu). [Using wgpu](../wgpu/)
