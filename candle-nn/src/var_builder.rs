@@ -203,7 +203,7 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         hints: B::Hints,
         device : &Device
     ) -> Result<Tensor> {
-        self.get_with_hints_dtype_device(s, name, hints, self.data.dtype, device)
+        self.get_with_hints_dtype_device(s, name, hints, self.dtype, device)
     }
 
     /// Retrieve the tensor associated with the given name at the current path.

@@ -227,8 +227,6 @@ pub enum WorkerMessage{
     SetModel(Option<Model>)
 }
 
-use async_trait::async_trait;
-#[async_trait]
 impl yew_agent::Worker for Worker {
     type Input = WorkerInput;
     type Message = WorkerMessage;
