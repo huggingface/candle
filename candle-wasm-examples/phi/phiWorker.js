@@ -38,7 +38,7 @@ class Phi {
     useWgpu
   ) {
     // load individual modelID only once
-    if (!this.instance[modelID]) {
+    if (!this.instance[modelID + useWgpu]) {
       await init();
 
       self.postMessage({ status: "loading", message: "Loading Model" });
@@ -49,15 +49,15 @@ class Phi {
           fetchArrayBuffer(configURL),
         ]);
 
-      this.instance[modelID] = await new Model(
+      this.instance[modelID + useWgpu] = await new Model(
         weightsArrayU8,
         tokenizerArrayU8,
         configArrayU8,
         quantized,
-        useWgpu === 'true'
+        useWgpu
       );
     }
-    return this.instance[modelID];
+    return this.instance[modelID + useWgpu];
   }
 }
 

@@ -18,7 +18,7 @@ class Llama2C {
 
   static async getInstance(weightsURL, modelID, tokenizerURL, useWgpu) {
     // load individual modelID only once
-    if (!this.instance[modelID]) {
+    if (!this.instance[modelID + useWgpu]) {
       await init();
 
       self.postMessage({ status: "loading", message: "Loading Model" });
@@ -28,9 +28,9 @@ class Llama2C {
         fetchArrayBuffer(tokenizerURL),
       ]);
 
-      this.instance[modelID] = new Model(weightsArrayU8, tokenizerArrayU8, useWgpu);
+      this.instance[modelID + useWgpu] = new Model(weightsArrayU8, tokenizerArrayU8, useWgpu);
     }
-    return this.instance[modelID];
+    return this.instance[modelID + useWgpu];
   }
 }
 
@@ -60,7 +60,7 @@ async function generate(data) {
   try {
     self.postMessage({ status: "loading", message: "Starting llama2.c" });
 
-    const model = await Llama2C.getInstance(weightsURL, modelID, tokenizerURL, useWgpu === 'true');
+    const model = await Llama2C.getInstance(weightsURL, modelID, tokenizerURL, useWgpu);
 
     self.postMessage({ status: "loading", message: "Initializing model" });
     const firstToken = await model.init_with_prompt(

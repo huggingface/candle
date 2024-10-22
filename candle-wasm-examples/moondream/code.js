@@ -42,7 +42,7 @@ async function generateSequence(controller) {
   const repeatPenalty = getValue("repeat_penalty");
   const seed = getValue("seed");
   const maxSeqLen = getValue("max-seq");
-  const useWgpu = getValue("useWgpu");
+  const useWgpu = getValue("useWgpu") === 'true';
 
   if (prompt?.value?.trim() === "") {
     return;

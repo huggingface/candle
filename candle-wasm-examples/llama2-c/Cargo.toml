@@ -34,9 +34,6 @@ console_log = "0.1"
 yew-agent = "0.2.0"
 yew = { version = "0.20.0", features = ["csr"] }
 
-#wgpu test:
-pollster = { workspace = true }
-
 [dependencies.web-sys]
 version = "0.3.70"
 features = [

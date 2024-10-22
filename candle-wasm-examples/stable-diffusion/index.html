@@ -42,7 +42,7 @@
 
       async function generateSequence(controller) {
         const getValue = (id) => document.querySelector(`#${id}`).value;
-        const useWgpu = getValue("useWgpu");
+        const useWgpu = getValue("useWgpu") === 'true';
         const prompt = getValue("prompt");
         const sdVersions = getValue("model");
         

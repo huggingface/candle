@@ -68,6 +68,8 @@ impl Model {
         top_p: f64,
         prompt: String,
     ) -> Result<()> {
+        const REPEAT_LAST_N: usize = 64;
+        const REPEAT_PENALTY : f32 = 1.1;
         let dev = &self.device;
 
         let temp = if temp <= 0. { None } else { Some(temp) };
@@ -91,7 +93,7 @@ impl Model {
             if tokens.len() >= self.config.seq_len {
                 break;
             }
-            let context_size = if self.cache.use_kv_cache && index > 0 {
+            let context_size = if index > 0 {
                 1
             } else {
                 tokens.len()
@@ -100,6 +102,16 @@ impl Model {
             let input = Tensor::new(ctxt, &dev)?.unsqueeze(0)?;
             let logits = self.llama.forward(&input, index_pos).await?;
             let logits = logits.squeeze(0)?;
+            let logits = if REPEAT_PENALTY == 1. || tokens.is_empty() {
+                logits
+            } else {
+                let start_at = tokens.len().saturating_sub(REPEAT_LAST_N);
+                candle_transformers::utils::apply_repeat_penalty_async(
+                    &logits,
+                    REPEAT_PENALTY,
+                    &tokens[start_at..],
+                ).await?
+            };
             index_pos += ctxt.len();
 
             let next_token = logits_processor.sample_async(&logits).await?;
@@ -313,8 +325,13 @@ impl yew_agent::Worker for Worker {
         match msg {
             WorkerInput::ModelData(md) => 
             {
-                spawn_local(async move{
-                    let dev = Device::new_wgpu(0).await.unwrap();
+                let future = async move{
+                    let use_wgpu = true;
+                    let dev = match use_wgpu{
+                        true => Device::new_wgpu(0).await.unwrap(),
+                        false => Device::Cpu,
+                    };
+                
                     let model = Model::load(md, &dev).await;
                     let output = match model{
                         Ok(model) => {
@@ -324,7 +341,8 @@ impl yew_agent::Worker for Worker {
                         Err(err) => Err(format!("model creation error {err:?}")),
                     };
                     link.respond(id, output);
-                });
+                };
+                spawn_local(future);
             },
             WorkerInput::Run(temp, top_p, prompt) => match &mut self.model {
                 None => link.respond(id, Err("model has not been set yet".to_string())),

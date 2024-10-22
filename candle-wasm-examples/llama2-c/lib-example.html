@@ -53,7 +53,7 @@
       async function generateSequence(controller) {
         const getValue = (id) => document.querySelector(`#${id}`).value;
         const modelID = getValue("model");
-        const useWgpu = getValue("useWgpu");
+        const useWgpu = getValue("useWgpu") === 'true';
         const model = MODELS[modelID];
         const weightsURL = `${MODELS_BASE_URL}/${model.url}`;
         const prompt = getValue("prompt");

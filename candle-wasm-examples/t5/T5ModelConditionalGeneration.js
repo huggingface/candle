@@ -26,7 +26,7 @@ class ConditionalGeneration {
         "./build/m.js"
       ));
     }
-    if (!this.instance[modelID]) {
+    if (!this.instance[modelID + useWgpu]) {
       await init();
 
       self.postMessage({ status: "loading", message: "Loading Model" });
@@ -37,7 +37,7 @@ class ConditionalGeneration {
           fetchArrayBuffer(configURL),
         ]);
 
-      this.instance[modelID] = await new ModelConditionalGeneration(
+      this.instance[modelID + useWgpu] = await new ModelConditionalGeneration(
         weightsArrayU8,
         tokenizerArrayU8,
         configArrayU8,
@@ -46,7 +46,7 @@ class ConditionalGeneration {
     } else {
       self.postMessage({ status: "ready", message: "Model Already Loaded" });
     }
-    return this.instance[modelID];
+    return this.instance[modelID + useWgpu];
   }
 }
 

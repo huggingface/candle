@@ -284,7 +284,7 @@
       }
 
       async function getSegmentationMask(points) {
-        const useWgpu = useWgpuEl.value;
+        const useWgpu = useWgpuEl.value === 'true';
         const modelID = modelSelection.value;
         const modelURL = MODEL_BASEURL + MODELS[modelID].url;
         const imageURL = currentImageURL;
@@ -304,7 +304,7 @@
         canvas.classList.remove("cursor-pointer");
         canvas.classList.add("cursor-wait");
         clearBtn.disabled = true;
-        const useWgpu = useWgpuEl.value;
+        const useWgpu = useWgpuEl.value === 'true';
         const modelID = modelSelection.value;
         const modelURL = MODEL_BASEURL + MODELS[modelID].url;
         isEmbedding = true;

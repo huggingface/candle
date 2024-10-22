@@ -97,7 +97,7 @@
         
         const getValue = (id) => document.querySelector(`#${id}`).value;
         const promptText = promptEl.value;
-        const useWgpu = getValue("useWgpu");
+        const useWgpu = getValue("useWgpu") === 'true';
         const modelID = modelEl.value;
         const { modelURL, configURL, tokenizerURL, maxLength } = getModelInfo(
           modelID,

@@ -41,7 +41,7 @@ class Moondream {
 
   static async getInstance(weightsURL, modelID, tokenizerURL, quantized, useWgpu) {
     // load individual modelID only once
-    if (!this.instance[modelID]) {
+    if (!this.instance[modelID + useWgpu]) {
       await init();
 
       self.postMessage({ status: "loading", message: "Loading Model" });
@@ -52,15 +52,15 @@ class Moondream {
         fetchArrayBuffer(tokenizerURL),
       ]);
 
-      this.instance[modelID] = await new Model(
+      this.instance[modelID + useWgpu] = await new Model(
         weightsArrayU8,
         tokenizerArrayU8,
         quantized,
-        useWgpu === 'true'
+        useWgpu
       );
     }
     this.currentModelID = modelID;
-    return this.instance[modelID];
+    return this.instance[modelID + useWgpu];
   }
 
   // Remove the modelID parameter from setImageEmbeddings

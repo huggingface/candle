@@ -175,7 +175,7 @@ Very polite review:`,
         const repeatPenalty = getValue("repeat_penalty");
         const seed = getValue("seed");
         const maxSeqLen = getValue("max-seq");
-        const useWgpu = getValue("useWgpu");
+        const useWgpu = getValue("useWgpu") === 'true';
 
         function updateStatus(data) {
           const outStatus = document.querySelector("#output-status");

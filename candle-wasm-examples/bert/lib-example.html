@@ -97,7 +97,7 @@
         if (isCalculating || currInputText === "") return;
         toggleInputs(true);
         const modelID = modelSelectEl.value;
-        const useWgpu = useWgpuEl.value;
+        const useWgpu = useWgpuEl.value === 'true';
         const { modelURL, tokenizerURL, configURL, search_prefix } =
           getModelInfo(modelID);
 
@@ -179,7 +179,7 @@
             configURL,
             modelID,
             [query],
-            useWgpuEl.value,
+            useWgpuEl.value === 'true',
             updateStatus
           );
           allEmbeddings.push(embeddings);

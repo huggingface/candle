@@ -32,7 +32,7 @@ class Whisper {
       useWgpu
     } = params;
     // load individual modelID only once
-    if (!this.instance[modelID]) {
+    if (!this.instance[modelID + useWgpu]) {
       await init();
 
       self.postMessage({ status: "loading", message: "Loading Model" });
@@ -47,7 +47,7 @@ class Whisper {
         fetchArrayBuffer(mel_filtersURL),
         fetchArrayBuffer(configURL),
       ]);
-      this.instance[modelID] = await new Decoder(
+      this.instance[modelID + useWgpu] = await new Decoder(
         weightsArrayU8,
         tokenizerArrayU8,
         mel_filtersArrayU8,
@@ -57,12 +57,12 @@ class Whisper {
         timestamps,
         task,
         language,
-        useWgpu === 'true'
+        useWgpu
       );
     } else {
       self.postMessage({ status: "loading", message: "Model Already Loaded" });
     }
-    return this.instance[modelID];
+    return this.instance[modelID + useWgpu];
   }
 }
 

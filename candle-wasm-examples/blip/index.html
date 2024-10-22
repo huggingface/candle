@@ -215,7 +215,7 @@
         isCaptioning = true;
         const selectedModel = modelSelectEl.value;
         const model = MODELS[selectedModel];
-        const useWgpu = useWgpuEl.value;
+        const useWgpu = useWgpuEl.value === 'true';
         const weightsURL = `${model.base_url}${model.model}`;
         const tokenizerURL = `${model.base_url}${model.tokenizer}`;
         const configURL = `${model.base_url}${model.config}`;
@@ -276,6 +276,7 @@
           <b>Note:</b>
           The image captioning on the smallest model takes about ~50 seconds, it
           will vary depending on your machine and model size.
+          If you want to use wgpu, you must select a model that is not quantised.
         </p>
       </div>
 
@@ -292,9 +293,9 @@
           id="useWgpu"
           class="border-2 border-gray-500 rounded-md font-light interactive disabled:cursor-not-allowed w-full max-w-max"
         >
-          <option value="true" selected>True
+          <option value="true">True
           </option>
-          <option value="false">False
+          <option value="false" selected>False
           </option>
         </select>
       </div>

@@ -23,7 +23,7 @@ class SAMModel {
   static currentModelID = null;
 
   static async getInstance(modelURL, modelID, useWgpu) {
-    if (!this.instance[modelID]) {
+    if (!this.instance[modelID + useWgpu]) {
       await init();
 
       self.postMessage({
@@ -31,7 +31,7 @@ class SAMModel {
         message: `Loading Model ${modelID}`,
       });
       const weightsArrayU8 = await fetchArrayBuffer(modelURL);
-      this.instance[modelID] = await new Model(
+      this.instance[modelID + useWgpu] = await new Model(
         weightsArrayU8,
         /tiny|mobile/.test(modelID),
         useWgpu
@@ -41,7 +41,7 @@ class SAMModel {
     }
     // Set the current modelID to the modelID that was passed in
     this.currentModelID = modelID;
-    return this.instance[modelID];
+    return this.instance[modelID + useWgpu];
   }
 
   // Remove the modelID parameter from setImageEmbeddings

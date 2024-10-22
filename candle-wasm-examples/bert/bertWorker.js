@@ -17,7 +17,7 @@ class Bert {
   static instance = {};
 
   static async getInstance(weightsURL, tokenizerURL, configURL, modelID, useWgpu) {
-    if (!this.instance[modelID]) {
+    if (!this.instance[modelID + useWgpu]) {
       await init();
 
       self.postMessage({ status: "loading", message: "Loading Model" });
@@ -28,7 +28,7 @@ class Bert {
           fetchArrayBuffer(configURL),
         ]);
 
-      this.instance[modelID] = await new Model(
+      this.instance[modelID + useWgpu] = await new Model(
         weightsArrayU8,
         tokenizerArrayU8,
         mel_filtersArrayU8,
@@ -37,7 +37,7 @@ class Bert {
     } else {
       self.postMessage({ status: "ready", message: "Model Already Loaded" });
     }
-    return this.instance[modelID];
+    return this.instance[modelID + useWgpu];
   }
 }
 
@@ -58,7 +58,7 @@ self.addEventListener("message", async (event) => {
       tokenizerURL,
       configURL,
       modelID,
-      useWgpu === 'true'
+      useWgpu
     );
     self.postMessage({
       status: "embedding",

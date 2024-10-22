@@ -2,6 +2,13 @@ use std::collections::HashMap;
 use std::{env, fs};
 use std::path::{Path, PathBuf};
 
+const SHORTEN_NORMAL_VARIABLES : bool = true;
+const SHORTEN_GLOBAL_FUNCTIONS : bool = true;
+const SHORTEN_OVERRIDES : bool = true;
+const REMOVE_UNUSED : bool = true;
+const REMOVE_SPACES : bool = true;
+const REMOVE_NEW_LINES : bool = true;
+
 fn get_all_wgsl_files<P: AsRef<Path>>(dir: P) -> Vec<PathBuf> {
     let mut files = Vec::new();
     visit_dirs(dir.as_ref(), &mut files).unwrap();
@@ -87,7 +94,7 @@ fn main() {
             let new_file_path = generated_dir.join(new_file_name);
             fs::write(new_file_path, shader_content).expect("Failed to write shader file");
         }
-       
+
         let shader_content = shader_loader::load_shader(&file,&vec!["u32"], &mut shader_info);
         if !shader_info.global_functions.is_empty(){
             let new_file_name = format!("{}_generated_u32.wgsl", original_file_name);
@@ -413,15 +420,8 @@ fn organize_modules(snippets: impl Iterator<Item=(String, String)>) -> String {
 
 mod shader_loader{
     use std::{collections::HashMap, path::PathBuf};
-
     use fancy_regex::Regex;
-
-    const SHORTEN_NORMAL_VARIABLES : bool = true;
-    const SHORTEN_GLOBAL_FUNCTIONS : bool = true;
-    const SHORTEN_OVERRIDES : bool = true;
-    const REMOVE_UNUSED : bool = true;
-    const REMOVE_SPACES : bool = true;
-    const REMOVE_NEW_LINES : bool = true;
+    use super::*;
 
     pub fn load_shader(path: &PathBuf, global_defines : &Vec<&'static str>, global_functions : &mut shader_shortener::ShaderInfo) -> String {
         let mut result = shader_defines::load_shader(path, &mut HashMap::new(), global_defines); 
@@ -429,11 +429,16 @@ mod shader_loader{
         if REMOVE_SPACES{
             result = Regex::new(r"((\s+)(?![\w\s])|(?<!\w)(\s+))", ).unwrap().replace_all(&result, "").to_string(); //replaces newline and not used spaces
         }
-       
         result = global_functions.shorten_variable_names(&result);
         if REMOVE_UNUSED{
-            result = global_functions.remove_unused(&result);
-            result = global_functions.remove_unused(&result);
+            loop{
+                let new_result = global_functions.remove_unused(&result);
+                if new_result == result{
+                    break;
+                }
+                result = new_result;
+            }
+           
         }
         if REMOVE_NEW_LINES{
             result = result.replace("\n", "");
@@ -1196,17 +1201,32 @@ mod shader_loader{
                 let mut defined_variables = HashSet::new();
 
                 let mut used_variables = HashSet::new();
+                let mut last_token = None;
 
                 while let Some(token) = tokens.next(){
                     match token{
                         Token::Word(w) => {                
                             if defined_variables.contains(w){
+                                //Check for 42e+42 
+                                //here e is not a variable that is used. no number can be placed before a variable.
+                                if let Some(last_token) = &last_token{
+                                    match last_token{
+                                        Token::Symbol(s) => {
+                                            if s.is_numeric(){
+                                                continue;
+                                            }
+                                        },
+                                        _ => {}
+                                    }
+                                }
+
                                 used_variables.insert(w.to_string());
                             }
                             defined_variables.insert(w.to_string());
                         },
                         Token::Symbol(_) => {},
                     }
+                    last_token = Some(token);
                 }
 
                 let tokenizer = Tokenizer::new(shader_code);
