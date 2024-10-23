@@ -28,7 +28,7 @@ impl Which {
             Self::Large => "conv_large.e600_r384",
             Self::HybridLarge => "hybrid_large.ix_e600_r384",
         };
-        format!("timm/mobilenetv4_{}_in1k", name)
+        format!("timm/mobilenetv4_{name}_in1k")
     }
 
     fn resolution(&self) -> u32 {
