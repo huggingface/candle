@@ -46,7 +46,7 @@ impl BufferMappingCache {
         if let Some(mapping) = &self.current_buffer_mapping {
             return mapping.count;
         }
-        return 0;
+        0
     }
 
     pub (crate) fn get_current_mapping(&mut self) -> &mut CachedBufferMappings{
@@ -140,6 +140,6 @@ impl CachedBufferMappings {
                 }
             }
         }
-        return None;
+        None
     }
 }

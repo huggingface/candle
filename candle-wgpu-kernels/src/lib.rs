@@ -1,3 +1,4 @@
+#[allow(clippy::all)]
 mod generated{
     include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 }
@@ -44,11 +45,11 @@ const DTYPE_COUNT : u16 = 5;
 impl DType{
     pub fn get_index(&self) -> u16{
         match self {
-            DType::F32 => return 0,
-            DType::U32 => return 1,
-            DType::U8 => return 2,
-            DType::I64 => return 3,
-            DType::F64 => return 4,
+            DType::F32 => 0,
+            DType::U32 => 1,
+            DType::U8 => 2,
+            DType::I64 => 3,
+            DType::F64 => 4,
         }
     }
 
@@ -126,21 +127,21 @@ impl PipelineIndex{
     }
 }
 
-impl Into<ShaderIndex> for PipelineIndex{
-    fn into(self) -> ShaderIndex {
-       self.get_shader()
+impl From<PipelineIndex> for ShaderIndex{
+    fn from(val: PipelineIndex) -> Self {
+       val.get_shader()
     }
 }
 
-impl Into<LoaderIndex> for ShaderIndex{
-    fn into(self) -> LoaderIndex {
-       self.get_loader()
+impl From<ShaderIndex> for LoaderIndex{
+    fn from(val: ShaderIndex) -> Self {
+       val.get_loader()
     }
 }
 
-impl Into<LoaderIndex> for PipelineIndex{
-    fn into(self) -> LoaderIndex {
-       self.get_shader().get_loader()
+impl From<PipelineIndex> for LoaderIndex{
+    fn from(val: PipelineIndex) -> Self {
+       val.get_shader().get_loader()
     }
 }
 
@@ -247,6 +248,12 @@ impl ShaderLoaderCache{
 
 }
 
+impl Default for ShaderLoaderCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 create_loader_internal!(DefaultWgpuShader);
 
 impl ShaderLoader for DefaultWgpuShader{
@@ -257,6 +264,6 @@ impl ShaderLoader for DefaultWgpuShader{
 
     fn get_entry_point(&self, index : PipelineIndex) -> &str {
         let pipeline : Pipelines = index.into();
-        return pipeline.get_entry_point();
+        pipeline.get_entry_point()
     }
 }

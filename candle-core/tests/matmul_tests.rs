@@ -203,13 +203,11 @@ fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool, use_start_offset : b
             lhs = lhs1.reshape((k,m,b))?.transpose(0, 2)?;
         }
     }
+    else if tpa{
+        lhs = lhs1.reshape((b,k,m))?.transpose(D::Minus1, D::Minus2)?;
+    }
     else{
-        if tpa{
-            lhs = lhs1.reshape((b,k,m))?.transpose(D::Minus1, D::Minus2)?;
-        }
-        else{
-            lhs = lhs1.reshape((b,m,k))?;
-        }
+        lhs = lhs1.reshape((b,m,k))?;
     }
     
 
@@ -222,13 +220,11 @@ fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool, use_start_offset : b
             rhs = rhs1.reshape((n,k,b))?.transpose(0, 2)?;
         }
     }
+    else if tpb{
+        rhs = rhs1.reshape((b,n,k))?.transpose(D::Minus1, D::Minus2)?;
+    }
     else{
-        if tpb{
-            rhs = rhs1.reshape((b,n,k))?.transpose(D::Minus1, D::Minus2)?;
-        }
-        else{
-            rhs = rhs1.reshape((b,k,n))?;
-        }
+        rhs = rhs1.reshape((b,k,n))?;
     }
    
     
@@ -236,8 +232,8 @@ fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool, use_start_offset : b
     let t1 = lhs.matmul(&rhs)?.reshape((b,m,n))?;
 
 
-    let lhs = lhs.to_device(&device)?;
-    let rhs = rhs.to_device(&device)?;
+    let lhs = lhs.to_device(device)?;
+    let rhs = rhs.to_device(device)?;
 
     let t2 = lhs.matmul(&rhs)?.reshape((b,m,n))?;
 

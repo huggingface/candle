@@ -14,10 +14,10 @@ pub fn queue_rms_norm(
     dest_size: u32,
     eps: f32,
 ) -> crate::Result<()> {
-    let workgroup_count = u32::min(64, (reduction_length / 10 + 1) as u32);
-    let workgroup_size = reduction_length as u32 / workgroup_count + 1;
+    let workgroup_count = u32::min(64, reduction_length / 10 + 1);
+    let workgroup_size = reduction_length / workgroup_count + 1;
 
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
 
     meta.add(workgroup_count);
     meta.add(workgroup_size);
@@ -38,7 +38,7 @@ pub fn queue_rms_norm(
         1,
         (reduction_length * dest_size) as usize,
     );
-    return Ok(());
+    Ok(())
 }
 
 
@@ -57,10 +57,10 @@ pub fn queue_layer_norm(
     dest_size: u32,
     eps: f32,
 ) -> crate::Result<()> {
-    let workgroup_count = u32::min(64, (reduction_length / 10 + 1) as u32);
-    let workgroup_size = reduction_length as u32 / workgroup_count + 1;
+    let workgroup_count = u32::min(64, reduction_length / 10 + 1);
+    let workgroup_size = reduction_length / workgroup_count + 1;
 
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
 
     meta.add(workgroup_count);
     meta.add(workgroup_size);
@@ -82,5 +82,5 @@ pub fn queue_layer_norm(
         1,
         (reduction_length * dest_size) as usize,
     );
-    return Ok(());
+    Ok(())
 }

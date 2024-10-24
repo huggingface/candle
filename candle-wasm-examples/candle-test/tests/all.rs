@@ -1,3 +1,5 @@
+#![allow(clippy::approx_constant)]
+
 use candle::quantized::{self, k_quants, GgmlDType, GgmlType};
 use candle::{bail, cpu_backend, CpuStorage, CustomOp1, DType, Device, IndexOp, Layout, Module, Shape, Tensor, Var, D};
 use candle_test::{test_device, to_vec1_round, to_vec2_round, ToVecRound};
@@ -910,10 +912,10 @@ async fn convert(device: &Device) -> Result<()> {
 
 async fn alloc(device: &Device) -> Result<()> {
     let t = 5.0f64;
-    let ratio = (Tensor::ones(1, candle::DType::F32, &device)? * t)?;
+    let ratio = (Tensor::ones(1, candle::DType::F32, device)? * t)?;
     assert_eq!(ratio.to_vec1_round(3).await?, [5f32]);
 
-    let ratio = (Tensor::ones(1, candle::DType::U32, &device)? * t)?;
+    let ratio = (Tensor::ones(1, candle::DType::U32, device)? * t)?;
 
     assert_eq!(ratio.to_vec1_async::<u32>().await?, [5u32]);
 
@@ -2217,13 +2219,11 @@ async fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool, use_start_offs
             lhs = lhs1.reshape((k,m,b))?.transpose(0, 2)?;
         }
     }
+    else if tpa{
+        lhs = lhs1.reshape((b,k,m))?.transpose(D::Minus1, D::Minus2)?;
+    }
     else{
-        if tpa{
-            lhs = lhs1.reshape((b,k,m))?.transpose(D::Minus1, D::Minus2)?;
-        }
-        else{
-            lhs = lhs1.reshape((b,m,k))?;
-        }
+        lhs = lhs1.reshape((b,m,k))?;
     }
     
 
@@ -2236,13 +2236,11 @@ async fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool, use_start_offs
             rhs = rhs1.reshape((n,k,b))?.transpose(0, 2)?;
         }
     }
+    else if tpb{
+        rhs = rhs1.reshape((b,n,k))?.transpose(D::Minus1, D::Minus2)?;
+    }
     else{
-        if tpb{
-            rhs = rhs1.reshape((b,n,k))?.transpose(D::Minus1, D::Minus2)?;
-        }
-        else{
-            rhs = rhs1.reshape((b,k,n))?;
-        }
+        rhs = rhs1.reshape((b,k,n))?;
     }
    
     
@@ -2250,8 +2248,8 @@ async fn big_matmul_wgpu(device: &Device, tpa : bool, tpb : bool, use_start_offs
     let t1 = lhs.matmul(&rhs)?.reshape((b,m,n))?;
 
 
-    let lhs = lhs.to_device_async(&device).await?;
-    let rhs = rhs.to_device_async(&device).await?;
+    let lhs = lhs.to_device_async(device).await?;
+    let rhs = rhs.to_device_async(device).await?;
 
     let t2 = lhs.matmul(&rhs)?.reshape((b,m,n))?;
 
@@ -3586,76 +3584,6 @@ async fn quantized_matmul_q8k() -> Result<()> {
     ggml_matmul_error_test::<BlockQ8K>().await?;
     Ok(())
 }
-
-struct TmpFile(std::path::PathBuf);
-
-impl TmpFile {
-    fn create(base: &str) -> TmpFile {
-        let filename = std::env::temp_dir().join(format!(
-            "candle-{}-{}-{:?}",
-            base,
-            std::process::id(),
-            std::thread::current().id(),
-        ));
-        TmpFile(filename)
-    }
-}
-
-impl std::convert::AsRef<std::path::Path> for TmpFile {
-    fn as_ref(&self) -> &std::path::Path {
-        self.0.as_path()
-    }
-}
-
-impl Drop for TmpFile {
-    fn drop(&mut self) {
-        std::fs::remove_file(&self.0).unwrap()
-    }
-}
-
-// #[test]
-// async fn npy() -> Result<()> {
-//     let npy = Tensor::read_npy("tests/test.npy")?;
-//     assert_eq!(
-//         npy.to_dtype(DType::U8)?.to_vec1_async::<u8>().await?,
-//         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-//     );
-//     Ok(())
-// }
-
-// #[test]
-// async fn npz() -> Result<()> {
-//     let npz = Tensor::read_npz("tests/test.npz")?;
-//     assert_eq!(npz.len(), 2);
-//     assert_eq!(npz[0].0, "x");
-//     assert_eq!(npz[1].0, "x_plus_one");
-//     assert_eq!(
-//         npz[1].1.to_dtype(DType::U8)?.to_vec1_async::<u8>().await?,
-//         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-//     );
-//     Ok(())
-// }
-
-// #[test]
-// async fn safetensors() -> Result<()> {
-//     use candle::safetensors::Load;
-
-//     let tmp_file = TmpFile::create("st");
-//     let t = Tensor::arange(0f32, 24f32, &candle::Device::Cpu)?;
-//     t.save_safetensors("t", &tmp_file)?;
-//     // Load from file.
-//     let st = candle::safetensors::load(&tmp_file, &candle::Device::Cpu)?;
-//     let t2 = st.get("t").unwrap();
-//     let diff = (&t - t2)?.abs()?.sum_all()?.to_vec0_async::<f32>().await?;
-//     assert_eq!(diff, 0f32);
-//     // Load from bytes.
-//     let bytes = std::fs::read(tmp_file)?;
-//     let st = candle::safetensors::SliceSafetensors::new(&bytes)?;
-//     let t2 = st.get("t").unwrap().load(&candle::Device::Cpu);
-//     let diff = (&t - t2)?.abs()?.sum_all()?.to_vec0_async::<f32>().await?;
-//     assert_eq!(diff, 0f32);
-//     Ok(())
-// }
 
 
 
@@ -5125,7 +5053,7 @@ async fn randn(device: &Device) -> Result<()> {
 
 
 async fn where_cond(device: &Device) -> Result<()> {
-    let cond = Tensor::new(&[0u32, 2u32, 1u32, 0, 0, 0, 35, 255, 53, 0,029,0], device)?.reshape((4,3))?;
+    let cond = Tensor::new(&[0u32, 2u32, 1u32, 0, 0, 0, 35, 255, 53, 0, 29 ,0], device)?.reshape((4,3))?;
     let t = Tensor::arange(0f32, 12f32, device)?.reshape((4, 3))?;
     assert_eq!(
         t.to_vec2_async::<f32>().await?,

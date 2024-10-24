@@ -75,19 +75,17 @@ pub fn queue_conv2d(
         
         let m = params.c_out;
         let k = params.c_in * params.k_h * params.k_w;
-        if k >= 64 || m >= 16{
-            if  mem_needed < dev.device_limits.max_storage_buffer_binding_size as usize {
-                return queue_conv2d_matmul(
-                    dev,
-                    buffer_dest,
-                    buffer_input1,
-                    buffer_input2,
-                    dtype,
-                    params,
-                    input_layout,
-                    kernel_layout,
-                );
-            }
+        if (k >= 64 || m >= 16) && mem_needed < dev.device_limits.max_storage_buffer_binding_size as usize {
+            return queue_conv2d_matmul(
+                dev,
+                buffer_dest,
+                buffer_input1,
+                buffer_input2,
+                dtype,
+                params,
+                input_layout,
+                kernel_layout,
+            );
         } 
     }
 
@@ -114,7 +112,7 @@ pub fn queue_conv2d(
         queue_copy4d_padded(
             dev,
             tmp_buffer,
-            buffer_input1.clone(),
+            buffer_input1,
             dtype,
             input_layout,
             params.padding,
@@ -131,15 +129,15 @@ pub fn queue_conv2d(
 
             queue_copy_strided(
                 dev,
-                tmp_buffer.clone(),
-                buffer_input1.clone(),
+                tmp_buffer,
+                buffer_input1,
                 dtype,
                 input_layout,
                 0,
             )?;
             (tmp_buffer, Layout::contiguous(input_layout.shape()))
         } else {
-            (buffer_input1.clone(), input_layout.clone())
+            (buffer_input1, input_layout.clone())
         }
     };
 
@@ -148,7 +146,7 @@ pub fn queue_conv2d(
     let input_stride = input_layout.stride();
     let kernel_stride = kernel_layout.stride();
 
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
 
     let const_vec = vec![
         kernel_stride[3], //kernel_x_stride
@@ -246,7 +244,7 @@ pub fn queue_conv2d(
     );
     //}
 
-    return Ok(());
+    Ok(())
 }
 
 //calculated conv2d(uses im2col and matmul)
@@ -286,7 +284,7 @@ pub fn queue_conv2d_matmul(
         (input_layout.start_offset() == 0) as usize,
     ];
 
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
     meta.add(dst_numel); // op_conv2d_dst_numel
     meta.add(o_h); // op_conv2d_h_out
     meta.add(o_w); // op_conv2d_w_out
@@ -360,7 +358,7 @@ pub fn queue_conv2d_matmul(
         dtype,
     )?;
 
-    return Ok(());
+    Ok(())
 }
 
 pub fn queue_conv2d_transpose(
@@ -376,7 +374,7 @@ pub fn queue_conv2d_transpose(
     let input_stride = input_layout.stride();
     let kernel_stride = kernel_layout.stride();
 
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
 
     let const_vec = vec![
         kernel_stride[3], //kernel_x_stride
@@ -427,7 +425,7 @@ pub fn queue_conv2d_transpose(
             * params.b_size
             * kernel_layout.shape().elem_count(),
     );
-    return Ok(());
+    Ok(())
 }
 
 pub fn queue_conv1d(
@@ -454,7 +452,7 @@ pub fn queue_conv1d(
         params.b_size,
         params.c_in,
     ];
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
 
     meta.add(kernel_stride[1]); //kernel_c_stride
     meta.add(kernel_stride[0]); //kernel_b_stride
@@ -482,7 +480,7 @@ pub fn queue_conv1d(
         1,
         params.l_out() * params.c_out * params.b_size * kernel_layout.shape().elem_count(),
     );
-    return Ok(());
+    Ok(())
 }
 
 pub fn queue_conv1d_transpose(
@@ -509,7 +507,7 @@ pub fn queue_conv1d_transpose(
         params.b_size,
         params.c_in,
     ];
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
     meta.add(kernel_stride[0]); //kernel_c_stride
     meta.add(kernel_stride[1]); //kernel_b_stride
     meta.add(kernel_layout.start_offset());
@@ -535,5 +533,5 @@ pub fn queue_conv1d_transpose(
         1u32,
         params.l_out() * params.c_out * params.b_size * kernel_layout.shape().elem_count(),
     );
-    return Ok(());
+    Ok(())
 }

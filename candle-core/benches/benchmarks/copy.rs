@@ -12,7 +12,7 @@ fn run_copy_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &s
     let m = 1024;
     let k = 1024;
 
-    let tensor = Tensor::arange(0.0f32, (b * m * k) as f32, &device)
+    let tensor = Tensor::arange(0.0f32, (b * m * k) as f32, device)
         .unwrap()
         .to_dtype(dtype)
         .unwrap()

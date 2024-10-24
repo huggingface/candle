@@ -61,8 +61,7 @@ pub async fn bench_function_single_async<F : Fn() -> T, T : IntoFuture>(func : F
     let val = func().await;
     let end = Instant::now();
     pretend_to_use(val);
-    let dur = end - start;
-    return dur;
+    end - start
 }
 
 
@@ -105,5 +104,5 @@ pub async fn bench_function_max_time_async<F : Fn() -> T, T : IntoFuture>(id : &
         count : count as u32 };
 
     warn!("time: [{:?} {:?} {:?}] +-{:?} ({count} iterations)", Duration::from_secs_f64(d_min), Duration::from_secs_f64(d_mean) ,Duration::from_secs_f64(d_max), Duration::from_secs_f64(d_std));
-    return result;
+    result
 }

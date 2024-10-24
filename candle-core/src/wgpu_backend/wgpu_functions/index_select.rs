@@ -20,21 +20,21 @@ pub fn queue_index_select(
     let new_stride = Shape::from(new_shape.clone()).stride_contiguous();
 
     let output_stride_y = new_shape[(dim + 1)..].iter().fold(1, |prev, c| prev * *c) as u32; //Mul All Shapes after dim
-    let input_stride_y = output_stride_y as u32;
+    let input_stride_y = output_stride_y;
     let output_stride_x = new_stride[0..dim].iter().fold(1, |prev, c| prev * *c) as u32; //Mul all New Strides left of dim
     let input_stride_x = lay_input.stride()[0..dim]
         .iter()
         .fold(1, |prev, c| prev * *c) as u32; //Mul Strides Left of dim
 
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
 
     meta.add(input_stride_x);
     meta.add(input_stride_y);
     meta.add(output_stride_x);
     meta.add(output_stride_y);
     meta.add(length);
-    meta.add_layout1(&lay_input);
-    meta.add_layout2(&lay_index);
+    meta.add_layout1(lay_input);
+    meta.add_layout2(lay_index);
 
     let pipeline = match index_dtype {
         crate::DType::U32 => Pipelines::IndexSelect(get_dtype(dtype)?, candle_wgpu_kernels::index_select::Functions::IndexSelectU32),
@@ -58,5 +58,5 @@ pub fn queue_index_select(
         1,
         length as usize * index_length,
     );
-    return Ok(());
+    Ok(())
 }

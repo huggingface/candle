@@ -52,8 +52,8 @@ pub fn queue_binary_buffer_from_buffer(
         )
     } else {
         let const_vec = vec![op as usize];
-        meta.add_layout1(&lay1);
-        meta.add_layout2(&lay2);
+        meta.add_layout1(lay1);
+        meta.add_layout2(lay2);
 
         if lay1.shape().elem_count() > 65535 * 64 {
             meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
@@ -75,5 +75,5 @@ pub fn queue_binary_buffer_from_buffer(
         #[cfg(feature = "wgpu_debug")]
         Some(format!("OP: {:?}, layout: {:?}", op, lay1)),
     );
-    return Ok(());
+    Ok(())
 }

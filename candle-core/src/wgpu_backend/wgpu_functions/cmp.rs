@@ -23,10 +23,10 @@ pub fn queue_cmp_buffer_from_buffer(
     layout_input1: &Layout,
     layout_input2: &Layout,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
     meta.add(op as u32);
-    meta.add_layout1(&layout_input1);
-    meta.add_layout2(&layout_input2);
+    meta.add_layout1(layout_input1);
+    meta.add_layout2(layout_input2);
 
     let pipeline = meta.get_pipeline(Pipelines::Cmp(
         get_dtype(dtype)?,
@@ -41,5 +41,5 @@ pub fn queue_cmp_buffer_from_buffer(
         ((layout_input1.shape().elem_count() + 3) / 4) as u32,
         layout_input1.shape().elem_count(),
     );
-    return Ok(());
+    Ok(())
 }

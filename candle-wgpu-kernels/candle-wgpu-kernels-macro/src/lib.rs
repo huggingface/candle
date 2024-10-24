@@ -61,12 +61,13 @@ fn get_file() -> File{
     .read(true)
     .write(true)
     .create(true)
+    .truncate(false)
     .open(dest_path)
     .expect("Unable to open or create loader indices file.");
 
     // Lock the file for writing
     file.lock_exclusive().expect("Unable to lock indices file.");
-    return file;
+    file
 }
 
 /// Procedural macro to create a loader with a unique constant index

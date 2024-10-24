@@ -40,9 +40,9 @@ pub fn queue_copy_strided(
             }
         }
 
-        let mut meta = get_meta(&dev);
+        let mut meta = get_meta(dev);
         meta.add(dst_offset);
-        meta.add_layout1(&input_layout);
+        meta.add_layout1(input_layout);
 
         if input_layout.shape().elem_count() > 65535 * 64 {
             meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
@@ -65,7 +65,7 @@ pub fn queue_copy_strided(
             )),
         );
     }
-    return Ok(());
+    Ok(())
 }
 
 //This is ~30% faster than using a shader to copy, but a shader dispatch call can be easier cached. therefore we just use the slower copy function at the moment.
@@ -121,7 +121,7 @@ pub fn queue_copy(
             (destination_offset == 0) as u32,
         ];
 
-        let mut meta = get_meta(&dev);
+        let mut meta = get_meta(dev);
 
         let inplaceble = OpIsInplaceable {
             input1_inplaceable: destination_offset == source_offset,
@@ -164,7 +164,7 @@ pub fn queue_copy(
             enqueue_big(meta, pipeline, bind_group, copy_size as u32);
         }
     }
-    return Ok(());
+    Ok(())
 }
 
 pub fn queue_copy2d(
@@ -193,7 +193,7 @@ pub fn queue_copy2d(
     }
     let const_vec = vec![input_offset == 0, dest_offset == 0];
 
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
     meta.add(d1);
     meta.add(d2);
     meta.add(input_stride1);
@@ -245,7 +245,7 @@ pub fn queue_copy2d(
         );
     }
     //}
-    return Ok(());
+    Ok(())
 }
 
 pub fn queue_copy3d(
@@ -278,7 +278,7 @@ pub fn queue_copy3d(
         (input1_stride_3 != 1),
     ];
 
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
     meta.add(input_shape.2);
     meta.add(input_shape.1);
     meta.add(dest_stride_1);
@@ -302,12 +302,12 @@ pub fn queue_copy3d(
         meta,
         pipeline,
         bind_group,
-        (input_shape.2 + 15) / 16 as u32,
-        (input_shape.1 + 15) / 16 as u32,
-        input_shape.0 as u32,
+        (input_shape.2 + 15) / 16_u32,
+        (input_shape.1 + 15) / 16_u32,
+        input_shape.0,
         input_layout.shape().elem_count(),
     );
-    return Ok(());
+    Ok(())
 }
 
 pub fn queue_copy3d_padded(
@@ -343,7 +343,7 @@ pub fn queue_copy3d_padded(
         input1_stride_3 != 1,
     ];
 
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
     meta.add(input_shape.2);
     meta.add(input_shape.1);
     meta.add(dest_stride_1);
@@ -371,12 +371,12 @@ pub fn queue_copy3d_padded(
         bind_group,
         ((dest_shape.2 + 15) / 16) as u32,
         ((dest_shape.1 + 15) / 16) as u32,
-        input_shape.0 as u32,
+        input_shape.0,
         input_layout.shape().elem_count(),
         #[cfg(feature="wgpu_debug")]
         _debug_info
     );
-    return Ok(());
+    Ok(())
 }
 
 pub fn queue_transpose3d(
@@ -390,7 +390,7 @@ pub fn queue_transpose3d(
     start_offset : usize,
     batch_stride : usize,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
     meta.add(width);
     meta.add(height);
     meta.add(start_offset);
@@ -412,7 +412,7 @@ pub fn queue_transpose3d(
         batch,
         (width * height * batch) as usize,
     );
-    return Ok(());
+    Ok(())
 }
 
 pub fn queue_copy4d_padded(
@@ -441,10 +441,10 @@ pub fn queue_copy4d_padded(
         (input1_stride[2] != 1) as usize,
         (input1_stride[1] != 1) as usize,
         (input1_stride[0] != 1) as usize,
-        input_shape.1 as usize, //channels
+        input_shape.1, //channels
     ];
 
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
     meta.add(input_shape.3 + padding);
     meta.add(input_shape.2 + padding);
     meta.add(padding);
@@ -486,5 +486,5 @@ pub fn queue_copy4d_padded(
         input_layout.shape().elem_count(),
     );
     //}
-    return Ok(());
+    Ok(())
 }

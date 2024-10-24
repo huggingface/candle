@@ -99,7 +99,7 @@ pub(crate) struct BufferCacheStorage {
 
 impl BufferCacheStorage {
     pub fn new() -> Self {
-        return Self {
+        Self {
             storage: StorageOptional::new(),
             order: BTreeSet::new(),
             buffer_counter: 0,
@@ -107,7 +107,7 @@ impl BufferCacheStorage {
             buffer_memory: 0,
             buffer_memory_free: 0,
             max_memory_allowed: 0,
-        };
+        }
     }
 
     //creats a Buffer, expect that it will be used and not be part of free memory
@@ -149,7 +149,7 @@ impl BufferCacheStorage {
         tracing::info!("free buffer {:?}", id);
         let buffer: Option<&mut CachedBuffer> = self.storage.get_mut(id);
         if let Some(buffer) = buffer {
-            if buffer.is_free == false {
+            if !buffer.is_free {
                 //the buffer is currently not free -> add it into the free order list
                 self.order
                     .insert(OrderedIndex::new(id.id(), buffer.buffer.size()));
@@ -165,7 +165,7 @@ impl BufferCacheStorage {
         tracing::info!("use buffer {:?}", id);
         let buffer: Option<&mut CachedBuffer> = self.storage.get_mut(id);
         if let Some(buffer) = buffer {
-            if buffer.is_free == true {
+            if buffer.is_free {
                 //the buffer is currently free -> remove it from the free order list
                 self.order
                     .remove(&OrderedIndex::new(id.id(), buffer.buffer.size()));
@@ -204,10 +204,10 @@ impl BufferCacheStorage {
     //the length, this buffer should be used for(if a buffer is only used temporary we may use a way bigger buffer for just one command)
     pub(crate) fn max_cached_size(size: u64, length: u32) -> u64 {
         let length = (length + 1).min(100);
-        let i = (300 / (length * length * length)).min(64).max(1) as u64;
+        let i = (300 / (length * length * length)).clamp(1, 64) as u64;
 
         const TRANSITION_POINT: u64 = 1000 * 1024;
-        return size + (i * size * TRANSITION_POINT / (TRANSITION_POINT + size));
+        size + (i * size * TRANSITION_POINT / (TRANSITION_POINT + size))
     }
 
     //will try to find a free buffer in the cache, or create a new one
@@ -286,7 +286,7 @@ impl BufferCacheStorage {
                     .storage
                     .get_reference(entry.index)
                     .expect("item in order, that could ne be found in storage");
-                return (id, val.last_used_counter);
+                (id, val.last_used_counter)
             }).rev()
             .collect();
     }

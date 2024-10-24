@@ -367,8 +367,7 @@ async fn text_embeddings(
             "the prompt is too long, {} > max-tokens ({})",
             tokens.len(),
             sd_config.clip.max_position_embeddings
-        ))
-        .into());
+        )));
     }
     while tokens.len() < sd_config.clip.max_position_embeddings {
         tokens.push(pad_id)
@@ -392,7 +391,7 @@ async fn text_embeddings(
 
     let vs = var_builder_from_opfs_safetensors(&clip_weights, DType::F32, device).await?;
 
-    let text_model = clip::ClipTextTransformer::new(vs, &clip_config)?;
+    let text_model = clip::ClipTextTransformer::new(vs, clip_config)?;
     let text_embeddings = text_model.forward(&tokens)?;
 
     let text_embeddings = if use_guide_scale {
@@ -406,8 +405,7 @@ async fn text_embeddings(
                 "the negative prompt is too long, {} > max-tokens ({})",
                 uncond_tokens.len(),
                 sd_config.clip.max_position_embeddings
-            ))
-            .into());
+            )));
         }
         while uncond_tokens.len() < sd_config.clip.max_position_embeddings {
             uncond_tokens.push(pad_id)
@@ -458,7 +456,7 @@ impl Model {
             }
         };
 
-        return Ok(Model { device });
+        Ok(Model { device })
     }
 
     pub async fn run(&self, config: String) -> Result<JsValue, JsError> {
@@ -549,7 +547,7 @@ impl Model {
                     sd_version,
                     &sd_config,
                     use_f16,
-                    &device,
+                    device,
                     dtype,
                     use_guide_scale,
                     first,
@@ -604,7 +602,7 @@ impl Model {
             let timesteps = scheduler.timesteps();
             let latents = match &init_latent_dist {
                 Some(init_latent_dist) => {
-                    let latents = (init_latent_dist.sample()? * vae_scale)?.to_device_async(&device).await?;
+                    let latents = (init_latent_dist.sample()? * vae_scale)?.to_device_async(device).await?;
                     if t_start < timesteps.len() {
                         let noise = latents.randn_like(0f64, 1f64)?;
                         scheduler.add_noise(&latents, noise, timesteps[t_start])?
@@ -617,7 +615,7 @@ impl Model {
                         0f32,
                         1f32,
                         (bsize, 4, sd_config.height / 8, sd_config.width / 8),
-                        &device,
+                        device,
                     )?;
                     // scale the initial noise by the standard deviation required by the scheduler
                     (latents * scheduler.init_noise_sigma())?
@@ -667,11 +665,8 @@ impl Model {
             device.synchronize_async().await?;
             let result = save_image_async(&vae, &latents, vae_scale, bsize).await?;
 
-            match &device {
-                candle::Device::Wgpu(gpu) => {
-                    gpu.print_bindgroup_reuseinfo2();
-                }
-                _ => {}
+            if let candle::Device::Wgpu(gpu) = &device {
+                gpu.print_bindgroup_reuseinfo2();
             };
 
             if let Some(val) = result.first() {

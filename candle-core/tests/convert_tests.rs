@@ -27,10 +27,10 @@ fn convert(device: &Device) -> Result<()> {
 
 fn alloc(device: &Device) -> Result<()> {
     let t = 5.0f64;
-    let ratio = (Tensor::ones(1, candle_core::DType::F32, &device)? * t)?;
+    let ratio = (Tensor::ones(1, candle_core::DType::F32, device)? * t)?;
     assert_eq!(ratio.to_vec1::<f32>()?, [5f32]);
 
-    let ratio = (Tensor::ones(1, candle_core::DType::U32, &device)? * t)?;
+    let ratio = (Tensor::ones(1, candle_core::DType::U32, device)? * t)?;
 
     assert_eq!(ratio.to_vec1::<u32>()?, [5u32]);
 

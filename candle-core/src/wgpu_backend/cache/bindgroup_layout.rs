@@ -31,7 +31,7 @@ impl BindgroupAlignmentLayout {
     fn values() -> [BindgroupAlignmentLayout; 23] {
         use BindgroupAlignment::{Aligned16, Aligned4, Aligned8};
         use BindgroupAlignmentLayout::{Bindgroup0, Bindgroup1, Bindgroup2, Bindgroup3};
-        return [
+        [
             Bindgroup0(Aligned4),
             Bindgroup0(Aligned8),
             Bindgroup0(Aligned16),
@@ -55,7 +55,7 @@ impl BindgroupAlignmentLayout {
             Bindgroup3(Aligned16, Aligned16, Aligned16, Aligned16),
             Bindgroup3(Aligned4, Aligned8, Aligned4, Aligned4),
             Bindgroup3(Aligned8, Aligned4, Aligned8, Aligned8),
-        ];
+        ]
     }
 
     pub fn validate(&self){
@@ -106,13 +106,13 @@ impl std::ops::Index<BindgroupAlignmentLayout> for BindgroupLayouts {
     type Output = BindgroupLayoutAndPipeline;
 
     fn index(&self, index: BindgroupAlignmentLayout) -> &Self::Output {
-        return &self.data[index.get_index()];
+        &self.data[index.get_index()]
     }
 }
 
 impl std::ops::IndexMut<BindgroupAlignmentLayout> for BindgroupLayouts {
     fn index_mut(&mut self, index: BindgroupAlignmentLayout) -> &mut Self::Output {
-        return &mut self.data[index.get_index()];
+        &mut self.data[index.get_index()]
     }
 }
 
@@ -124,18 +124,18 @@ impl BindgroupLayouts {
             alignment: u32,
             read_only: bool,
         ) -> wgpu::BindGroupLayoutEntry {
-            return wgpu::BindGroupLayoutEntry {
-                binding: binding,
+            wgpu::BindGroupLayoutEntry {
+                binding,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage {
-                        read_only: read_only,
+                        read_only,
                     },
                     has_dynamic_offset: false,
                     min_binding_size: Some(NonZeroU64::new(alignment.into()).unwrap()),
                 },
                 count: None,
-            };
+            }
         }
 
         fn create_bindgroup_layout_and_pipeline(
@@ -144,7 +144,7 @@ impl BindgroupLayouts {
         ) -> BindgroupLayoutAndPipeline {
             let bindgroup_layout = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: None,
-                entries: entries,
+                entries,
             });
 
             let pipeline_layout = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -153,7 +153,7 @@ impl BindgroupLayouts {
                 push_constant_ranges: &[],
             });
 
-            return BindgroupLayoutAndPipeline(bindgroup_layout, pipeline_layout);
+            BindgroupLayoutAndPipeline(bindgroup_layout, pipeline_layout)
         }
 
         let meta_entry = wgpu::BindGroupLayoutEntry {
@@ -210,6 +210,6 @@ impl BindgroupLayouts {
             }
         });
 
-        return BindgroupLayouts { data: data };
+        return BindgroupLayouts { data };
     }
 }

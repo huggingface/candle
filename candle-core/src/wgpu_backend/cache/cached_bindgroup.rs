@@ -41,13 +41,13 @@ pub(crate) struct BindgroupCacheStorage {
 
 impl BindgroupCacheStorage {
     pub (crate) fn new() -> Self {
-        return Self {
+        Self {
             storage: StorageOptional::new(),
             bindgroups: HashMapMulti::new(),
             bindgroups_full: HashMap::new(),
             bindgroup_counter: 0,
             cached_bindgroup_use_counter: 0,
-        };
+        }
     }
 
     #[instrument(skip(self, keep))]
@@ -56,12 +56,12 @@ impl BindgroupCacheStorage {
             let keep = keep(bg);
 
             if !keep {
-                let id = id.clone();
+                let id = *id;
                 let buf_reference_input_full = &bg.buffer;
                 self.bindgroups.remove_mapping(&buf_reference_input_full.1, &id);
                 self.bindgroups_full.remove(buf_reference_input_full);
             }
-            return keep;
+            keep
         });
     }
 
@@ -103,6 +103,6 @@ impl BindgroupCacheStorage {
         self.bindgroups_full.insert(bindgroup_d, id);
     
         self.bindgroup_counter += 1;
-        return id;
+        id
     }
 }

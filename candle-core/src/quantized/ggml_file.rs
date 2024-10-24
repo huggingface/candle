@@ -130,7 +130,7 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
         Device::Cpu => QStorage::Cpu(Box::new(data.to_vec())),
         Device::Metal(metal) => super::metal::load_quantized(metal, data)?,
         Device::Cuda(cuda) => super::cuda::load_quantized(cuda, data)?,
-        Device::Wgpu(_) => return Err(Error::Wgpu(format!("no wgpu implementation for QTensor").into()))
+        Device::Wgpu(_) => return Err(Error::Wgpu("no wgpu implementation for QTensor".to_string().into()))
     };
     super::QTensor::new(data, dims)
 }

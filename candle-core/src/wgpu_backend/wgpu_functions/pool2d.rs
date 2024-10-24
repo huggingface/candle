@@ -18,7 +18,7 @@ pub fn queue_max_pool2d(
 
     let input_stride = layout.stride();
 
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
 
     meta.add(b);
     meta.add(c);
@@ -51,7 +51,7 @@ pub fn queue_max_pool2d(
         c as u32,
         h_out * w_out * b * c,
     );
-    return Ok(());
+    Ok(())
 }
 
 pub fn queue_avg_pool2d(
@@ -69,7 +69,7 @@ pub fn queue_avg_pool2d(
 
     let input_stride = layout.stride();
 
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
 
     meta.add(b);
     meta.add(c);
@@ -102,5 +102,5 @@ pub fn queue_avg_pool2d(
         c as u32,
         w_out * h_out * c * b,
     );
-    return Ok(());
+    Ok(())
 }

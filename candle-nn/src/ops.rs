@@ -499,7 +499,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
                 dim_m1 as u32,
                 dest_size as u32,
             )?;
-            return Ok((output_buffer, Shape::from_dims(dims)));
+            Ok((output_buffer, Shape::from_dims(dims)))
     }
 
 }
@@ -729,7 +729,7 @@ impl candle::CustomOp2 for RmsNorm {
             dest_size as u32,
             self.eps,
         )?;
-        return Ok((output_buffer, Shape::from_dims(dims)));
+        Ok((output_buffer, Shape::from_dims(dims)))
     }
 }
 
@@ -1017,7 +1017,7 @@ impl candle::CustomOp3 for LayerNorm {
             dest_size as u32,
             self.eps,
         )?;
-        return Ok((output_buffer, Shape::from_dims(dims)));
+        Ok((output_buffer, Shape::from_dims(dims)))
     }
 
 }

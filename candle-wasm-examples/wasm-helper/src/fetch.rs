@@ -13,7 +13,7 @@ pub async fn download_file(url : &str) -> GenericResult<web_sys::Blob> {
 
     log::info!("Method: {opts:?}");
 
-    let request = Request::new_with_str_and_init(&url, &opts)?;
+    let request = Request::new_with_str_and_init(url, &opts)?;
 
     log::info!("request: {request:?}");
 
@@ -42,5 +42,5 @@ pub async fn download_file(url : &str) -> GenericResult<web_sys::Blob> {
 
     log::info!("blob created");
 
-    return Ok(blob);
+    Ok(blob)
 }

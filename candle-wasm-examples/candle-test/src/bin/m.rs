@@ -54,13 +54,13 @@ fn format_bytes(bytes: f64) -> String {
     const TB: f64 = GB * 1024.0;
 
     if bytes >= TB {
-        format!("{:.2} TiB", bytes as f64 / TB as f64)
+        format!("{:.2} TiB", bytes / TB)
     } else if bytes >= GB {
-        format!("{:.2} GiB", bytes as f64 / GB as f64)
+        format!("{:.2} GiB", bytes / GB)
     } else if bytes >= MB {
-        format!("{:.2} MiB", bytes as f64 / MB as f64)
+        format!("{:.2} MiB", bytes / MB)
     } else if bytes >= KB {
-        format!("{:.2} KiB", bytes as f64 / KB as f64)
+        format!("{:.2} KiB", bytes / KB)
     } else {
         format!("{} bytes", bytes)
     }
@@ -107,7 +107,7 @@ async fn test_matmul() -> Result<(), Box<dyn std::error::Error>>{
 
                 test_func(&device, 1000, || {
                     buffer_a.matmul(&buffer_b).unwrap();
-                    return Ok(())}, &format!("{:?}:",alg), &mut measurements, 0).await;    
+                    Ok(())}, &format!("{:?}:",alg), &mut measurements, 0).await;    
                 }
 
                 if let Some(l) = measurements.last()
@@ -131,7 +131,7 @@ fn create_buffers(device : &Device) -> Result<[WgpuStorage;4], Box<dyn std::erro
             let buf2 = wgpu.ones_impl(&shape, dtype)?;
             let buf3 = wgpu.ones_impl(&shape, dtype)?;
             let buf4 = wgpu.ones_impl(&shape, dtype)?;
-           return Ok([buf1, buf2, buf3, buf4]);
+           Ok([buf1, buf2, buf3, buf4])
         },
         _ => todo!(),
     }
@@ -145,7 +145,7 @@ pub async fn performance_test() -> Result<(), Box<dyn std::error::Error>>{
 
     let debug_recordings = include_str!("wgpu_stable_diffusion_test_1_d.json");
     let debug_recordings : Vec<candle::wgpu_backend::DebugPipelineRecording> = serde_json::from_str(debug_recordings)?;
-    let debug_recordings : Vec<_> = debug_recordings.iter().filter(|v| if let Pipelines::Matmul64x648x8(_,_) = &v.pipeline.0.into() {return true;} else {return false;}).collect();
+    let debug_recordings : Vec<_> = debug_recordings.iter().filter(|v| matches!(&v.pipeline.0.into(), Pipelines::Matmul64x648x8(_,_))).collect();
 
 
     let mut measurements : Vec<MeasurementInfo> = vec![];
@@ -157,7 +157,7 @@ pub async fn performance_test() -> Result<(), Box<dyn std::error::Error>>{
                 
                 log::warn!("progress: {index}/{total}");
                 test_func(&device, 10, || {
-                    wgpu.simulate_command(command, &buffers[0], &buffers[1], &buffers[2], &buffers[3]); return Ok(())}, &format!("{}", serde_json::to_string(command).unwrap()), &mut measurements, command.count).await;    
+                    wgpu.simulate_command(command, &buffers[0], &buffers[1], &buffers[2], &buffers[3]); Ok(())}, &serde_json::to_string(command).unwrap().to_string(), &mut measurements, command.count).await;    
             }
 
         },
@@ -181,7 +181,7 @@ pub async fn performance_test() -> Result<(), Box<dyn std::error::Error>>{
     }
     
    
-    return Ok(());
+    Ok(())
 }
 
 async fn test_func<'a,F>(device : &Device, count: u32, func : F, name : &str, measures : &mut Vec<MeasurementInfo>, total_counts : u32)

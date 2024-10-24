@@ -12,14 +12,14 @@ fn run_binary_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: 
     let m = 1024;
     let k = 1024;
 
-    let tensor1 = Tensor::arange(0.0f32, (b * m * k) as f32, &device)
+    let tensor1 = Tensor::arange(0.0f32, (b * m * k) as f32, device)
         .unwrap()
         .to_dtype(dtype)
         .unwrap()
         .reshape((b, m, k))
         .unwrap();
 
-    let tensor2 = Tensor::arange(0.0f32, (b * m * k) as f32, &device)
+    let tensor2 = Tensor::arange(0.0f32, (b * m * k) as f32, device)
         .unwrap()
         .to_dtype(dtype)
         .unwrap()

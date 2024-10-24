@@ -12,7 +12,6 @@ pub use cached_buffer::*;
 pub use cached_bindgroup::*;
 use buffer_mapping::*;
 
-use std::u32;
 
 use tracing::{instrument, span};
 
@@ -96,10 +95,10 @@ pub enum BindgroupAlignment {
 impl BindgroupAlignment {
     pub fn get_index(&self) -> usize {
         match self {
-            BindgroupAlignment::Aligned2 => return 0,
-            BindgroupAlignment::Aligned4 => return 1,
-            BindgroupAlignment::Aligned8 => return 2,
-            BindgroupAlignment::Aligned16 => return 3,
+            BindgroupAlignment::Aligned2 => 0,
+            BindgroupAlignment::Aligned4 => 1,
+            BindgroupAlignment::Aligned8 => 2,
+            BindgroupAlignment::Aligned16 => 3,
         }
     }
 }
@@ -185,7 +184,7 @@ impl<T: Clone> BindgroupInputBase<T> {
     }
 
     pub fn fold_owned<TOut>(&self, mut f: impl FnMut(T) -> TOut) -> BindgroupInputBase<TOut> {
-        return self.fold(|k| f(k.clone()));
+        self.fold(|k| f(k.clone()))
     }
 }
 
@@ -205,15 +204,15 @@ pub struct BindgroupFullBase<T>(
 
 impl<T> BindgroupFullBase<T> {
     pub(crate) fn new(dest: T, input: BindgroupInputBase<T>) -> Self {
-        return BindgroupFullBase(dest, input);
+        BindgroupFullBase(dest, input)
     }
 
     pub(crate) fn get_dest(&self) -> &T {
-        return &self.0;
+        &self.0
     }
 
     pub(crate) fn get_input(&self) -> &BindgroupInputBase<T> {
-        return &self.1;
+        &self.1
     }
 }
 
@@ -394,7 +393,7 @@ impl ModelCache {
                     return false;
                 }
 
-                return true;
+                true
             });
         }
         return false;
@@ -417,46 +416,40 @@ impl ModelCache {
                 if let Some(buffer_reference) = cache.buffer_reference.get(&buffer_reference_id) {
                     if !buffer_reference.cached_buffer_id().is_valid() {
                         panic!("input buffer {:?}({:?}) in {:?} had no cached_storage set for pipeline {:?}", buffer_reference,buffer_reference_id, bindgroup_reference, pipeline);
-                    } else {
-                        if cache
-                            .buffers
-                            .get_buffer(&buffer_reference.cached_buffer_id())
-                            .is_none()
+                    } else if cache
+                        .buffers
+                        .get_buffer(buffer_reference.cached_buffer_id())
+                        .is_none()
+                    {
+                        if let Some(buffer_reference) =
+                            cache.buffer_reference.get(&buffer_reference_id)
                         {
-                            if let Some(buffer_reference) =
-                                cache.buffer_reference.get(&buffer_reference_id)
-                            {
-                                panic!("input buffer {:?}({:?}) in {:?} had no cached_storage set to {:?} widch could not be found for pipeline {:?}", buffer_reference,buffer_reference_id, bindgroup_reference,buffer_reference.cached_buffer_id(), pipeline);
-                            }
+                            panic!("input buffer {:?}({:?}) in {:?} had no cached_storage set to {:?} widch could not be found for pipeline {:?}", buffer_reference,buffer_reference_id, bindgroup_reference,buffer_reference.cached_buffer_id(), pipeline);
                         }
                     }
+                } else if let Some(val) = cache
+                    .buffer_reference
+                    .get_reference(buffer_reference_id.id())
+                {
+                    panic!("Reference {:?} inside Bindgroup {:?} invalid for pipeline {:?}, Reference was replaced, current: {:?}", buffer_reference_id, bindgroup_reference, pipeline, val.0);
                 } else {
-                    if let Some(val) = cache
-                        .buffer_reference
-                        .get_reference(buffer_reference_id.id())
-                    {
-                        panic!("Reference {:?} inside Bindgroup {:?} invalid for pipeline {:?}, Reference was replaced, current: {:?}", buffer_reference_id, bindgroup_reference, pipeline, val.0);
-                    } else {
-                        panic!("Reference {:?} inside Bindgroup {:?} invalid for pipeline {:?} (Reference was deleted)", buffer_reference_id, bindgroup_reference, pipeline);
-                    }
+                    panic!("Reference {:?} inside Bindgroup {:?} invalid for pipeline {:?} (Reference was deleted)", buffer_reference_id, bindgroup_reference, pipeline);
                 }
             };
 
             bindgroup_reference.1.fold_owned(|v| {
                 check_buffer(v);
-                return ();
             });
         }
 
         check_buffer_reference(self, bindgroup_reference, pipeline.clone());
 
         fn get_storage(cache: &ModelCache, id: &BufferReferenceId) -> CachedBufferId {
-            cache
+            *cache
                 .buffer_reference
-                .get(&id)
+                .get(id)
                 .unwrap()
                 .cached_buffer_id()
-                .clone()
         }
 
         fn get_buffer_referece_key(
@@ -464,10 +457,10 @@ impl ModelCache {
             dest_buffer: CachedBufferId,
             bindgroup_reference: &BindgroupReferenceFull,
         ) -> CachedBindgroupFull {
-            return BindgroupFullBase(
+            BindgroupFullBase(
                 dest_buffer,
-                bindgroup_reference.1.fold(|v| return get_storage(cache, v)),
-            );
+                bindgroup_reference.1.fold(|v| get_storage(cache, v)),
+            )
         }
 
         let buf_dest_id = bindgroup_reference.get_dest();
@@ -476,7 +469,7 @@ impl ModelCache {
         let buf_dest_cached_id;
         {
             let buf_dest_reference = self.buffer_reference.get(buf_dest_id).unwrap();
-            buf_dest_cached_id = buf_dest_reference.cached_buffer_id().clone();
+            buf_dest_cached_id = *buf_dest_reference.cached_buffer_id();
             buf_dest_size = buf_dest_reference.size();
             buf_dest_dur = buf_dest_reference.last_used() - buf_dest_reference.first_used();
             if buf_dest_reference.last_used() < buf_dest_reference.first_used() {
@@ -496,7 +489,7 @@ impl ModelCache {
             if let Some(buffer_mapping) = current_mapping.get_buffer_mapping(&pipeline, current_mapping_index) {
                 if buffer_already_set{
                     let bindgroup_inputs =
-                    get_buffer_referece_key(self, buf_dest_cached_id, &bindgroup_reference);
+                    get_buffer_referece_key(self, buf_dest_cached_id, bindgroup_reference);
                    
                     self.mappings.reuse_buffer(buf_dest_size);
                     
@@ -534,14 +527,14 @@ impl ModelCache {
 
                                 //reuse a bindgroup, if we could find one:
                                 let bindgroup_inputs =
-                                    get_buffer_referece_key(self, buffer_id, &bindgroup_reference);
+                                    get_buffer_referece_key(self, buffer_id, bindgroup_reference);
                                 if let Some(bg) = self
                                     .bindgroups
                                     .get_bindgroup_reference_by_description(&bindgroup_inputs)
                                     .cloned()
                                 {
                                     self.bindgroups.cached_bindgroup_use_counter_inc();
-                                    return bg.clone();
+                                    return bg;
                                 }
 
                                 else{
@@ -582,7 +575,7 @@ impl ModelCache {
             //the destination buffer of this bindgroup already has a buffer set
             if buffer_already_set{
                 let bindgroup_inputs =
-                    get_buffer_referece_key(self, buf_dest_cached_id, &bindgroup_reference);
+                    get_buffer_referece_key(self, buf_dest_cached_id, bindgroup_reference);
                 if let Some(bg) = self
                     .bindgroups
                     .get_bindgroup_reference_by_description(&bindgroup_inputs)
@@ -601,7 +594,7 @@ impl ModelCache {
         let dest_buffer_id;
         if buf_dest_reference.cached_buffer_id().is_valid() {
             //this buffer reference already has a buffer connected,use this buffer
-            dest_buffer_id = buf_dest_reference.cached_buffer_id().clone();
+            dest_buffer_id = *buf_dest_reference.cached_buffer_id();
         } else {
             //create a new buffer
             dest_buffer_id =
@@ -611,7 +604,7 @@ impl ModelCache {
             buf_dest_reference.set_cached_buffer_id(dest_buffer_id);
         }
 
-        let bindgroup_inputs = get_buffer_referece_key(self, dest_buffer_id, &bindgroup_reference);
+        let bindgroup_inputs = get_buffer_referece_key(self, dest_buffer_id, bindgroup_reference);
         
         if dev.configuration.use_cache {
             self.mappings.add_new_buffer(dest_buffer_id, pipeline, buf_dest_size);

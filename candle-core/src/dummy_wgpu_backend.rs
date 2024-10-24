@@ -67,7 +67,7 @@ impl std::ops::BitOr for WgpuBackends{
     type Output = WgpuBackends;
 
     fn bitor(self, rhs: Self) -> Self::Output {
-        return WgpuBackends(self.0 | rhs.0);
+        WgpuBackends(self.0 | rhs.0)
     }
 }
 
@@ -75,7 +75,7 @@ impl std::ops::BitAnd for WgpuBackends{
     type Output = bool;
 
     fn bitand(self, rhs: Self) -> Self::Output {
-        return (self.0 & rhs.0) > 0;
+        (self.0 & rhs.0) > 0
     }
 }
 

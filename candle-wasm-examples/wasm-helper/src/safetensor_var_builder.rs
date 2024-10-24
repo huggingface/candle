@@ -55,7 +55,7 @@ impl MmapedSafetensors {
     }
 
     pub fn tensors(&self) -> impl Iterator<Item=(&String, &TensorView)> {
-        return self.data.iter().map(|(k, v)| (k, v));
+        return self.data.iter();
     }
 
     pub fn get(&self, name: &str) -> GenericResult<&TensorView> {
@@ -65,7 +65,7 @@ impl MmapedSafetensors {
         }
         .bt()
       })?;
-      return Ok(data);
+      Ok(data)
     }
 }
 
@@ -78,7 +78,7 @@ impl SimpleBackend for MmapedSafetensors {
       dtype: DType,
       dev: &Device,
   ) -> candle::Result<Tensor> {
-      let tensor = self.load(name, dev).map_err(|f|candle::Error::msg(f))?.to_dtype(dtype)?;
+      let tensor = self.load(name, dev).map_err(candle::Error::msg)?.to_dtype(dtype)?;
       if tensor.shape() != &s {
           Err(candle::Error::UnexpectedShape {
               msg: format!("shape mismatch for {name}"),

@@ -26,7 +26,7 @@ pub fn queue_reduce_from_buffer_op(
     reduction_length: u32,
     stride_reduction: u32,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
 
     let const_vec = vec![op as u32, stride_reduction];
 
@@ -90,5 +90,5 @@ pub fn queue_reduce_from_buffer_op(
         #[cfg(feature="wgpu_debug")]
         Some(format!("layout: {:?} reduction :{}, dest_size: {}", layout_input1, reduction_length, dest_size))
     );
-    return Ok(());
+    Ok(())
 }

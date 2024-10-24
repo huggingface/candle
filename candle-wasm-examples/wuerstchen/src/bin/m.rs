@@ -284,7 +284,7 @@ impl Model {
             }
         };
 
-        return Ok(Model { device });
+        Ok(Model { device })
     }
 
     pub async fn run(&self, config: String) -> Result<JsValue, JsError> {
@@ -432,60 +432,60 @@ impl Model {
             )?
         };
         device.synchronize_async().await?;
-        for idx in 0..num_samples {
-            // https://huggingface.co/warp-ai/wuerstchen/blob/main/model_index.json
-            let latent_height = (image_embeddings.dim(2)? as f64 * LATENT_DIM_SCALE) as usize;
-            let latent_width = (image_embeddings.dim(3)? as f64 * LATENT_DIM_SCALE) as usize;
+        let idx = 0;
+        //for idx in 0..num_samples {
+        // https://huggingface.co/warp-ai/wuerstchen/blob/main/model_index.json
+        let latent_height = (image_embeddings.dim(2)? as f64 * LATENT_DIM_SCALE) as usize;
+        let latent_width = (image_embeddings.dim(3)? as f64 * LATENT_DIM_SCALE) as usize;
 
-            let mut latents = Tensor::randn(
-                0f32,
-                1f32,
-                (b_size, DECODER_CIN, latent_height, latent_width),
-                device,
-            )?;
+        let mut latents = Tensor::randn(
+            0f32,
+            1f32,
+            (b_size, DECODER_CIN, latent_height, latent_width),
+            device,
+        )?;
 
-            log::info!("diffusion process with prior {image_embeddings:?}");
-            let scheduler =
-                wuerstchen::ddpm::DDPMWScheduler::new(vgan_steps as usize, Default::default())?;
-            let timesteps = scheduler.timesteps();
-            let timesteps = &timesteps[..timesteps.len() - 1];
-            for (index, &t) in timesteps.iter().enumerate() {
-                let start_time = Instant::now();
-                let ratio = (Tensor::ones(1, DType::F32, device)? * t)?;
-                let noise_pred =
-                    decoder.forward(&latents, &ratio, &image_embeddings, Some(&text_embeddings))?;
-                latents = scheduler.step(&noise_pred, t, &latents)?;
+        log::info!("diffusion process with prior {image_embeddings:?}");
+        let scheduler =
+            wuerstchen::ddpm::DDPMWScheduler::new(vgan_steps as usize, Default::default())?;
+        let timesteps = scheduler.timesteps();
+        let timesteps = &timesteps[..timesteps.len() - 1];
+        for (index, &t) in timesteps.iter().enumerate() {
+            let start_time = Instant::now();
+            let ratio = (Tensor::ones(1, DType::F32, device)? * t)?;
+            let noise_pred =
+                decoder.forward(&latents, &ratio, &image_embeddings, Some(&text_embeddings))?;
+            latents = scheduler.step(&noise_pred, t, &latents)?;
 
-                device.synchronize_async().await?;
-                let dt = start_time.elapsed().as_secs_f32();
-                log::info!("step {}/{} done, {:.2}s", index + 1, timesteps.len(), dt);
-            }
-            log::info!(
-                "Generating the final image for sample {}/{}.",
-                idx + 1,
-                num_samples
-            );
-
-            log::info!("decoding image:");
-
-            let image = vqgan.decode(&(&latents * 0.3764)?)?;
-
-            log::info!("Image decoded");
-
-            let image = (image.clamp(0f32, 1f32)? * 255.)?
-                .to_cpu_device()
-                .await?
-                .to_dtype(DType::U8)?
-                .i(0)?;
-
-            log::info!("Image created");
-
-            let image_png = save_image(&image)?;
-
-            log::info!("Image saved");
-            return Ok(js_sys::Uint8Array::from(&image_png[..]).into());
+            device.synchronize_async().await?;
+            let dt = start_time.elapsed().as_secs_f32();
+            log::info!("step {}/{} done, {:.2}s", index + 1, timesteps.len(), dt);
         }
-        Ok(JsValue::null())
+        log::info!(
+            "Generating the final image for sample {}/{}.",
+            idx + 1,
+            num_samples
+        );
+
+        log::info!("decoding image:");
+
+        let image = vqgan.decode(&(&latents * 0.3764)?)?;
+
+        log::info!("Image decoded");
+
+        let image = (image.clamp(0f32, 1f32)? * 255.)?
+            .to_cpu_device()
+            .await?
+            .to_dtype(DType::U8)?
+            .i(0)?;
+
+        log::info!("Image created");
+
+        let image_png = save_image(&image)?;
+
+        log::info!("Image saved");
+        Ok(js_sys::Uint8Array::from(&image_png[..]).into())
+        //}
     }
 }
 

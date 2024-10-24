@@ -32,8 +32,8 @@ pub fn queue_convert_u8_to_f32(
     buffer_input: BufferReferenceId,
     input_layout: &crate::Layout,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(&dev);
-    meta.add_layout1(&input_layout);
+    let mut meta = get_meta(dev);
+    meta.add_layout1(input_layout);
 
     let pipeline = meta.get_pipeline(Pipelines::Convert(DType::U8, Functions::ConvertU8ToF32));
     let bind_group =
@@ -45,7 +45,7 @@ pub fn queue_convert_u8_to_f32(
         input_layout.shape().elem_count() as u32,
         input_layout.shape().elem_count(),
     );
-    return Ok(());
+    Ok(())
 }
 
 // pub fn queue_convert_f32_to_u32(
@@ -78,7 +78,7 @@ pub fn queue_convert_u32_to_u8(
     start_offset: u32,
     size: u32,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
     meta.add(start_offset);
     meta.add(size);
 
@@ -90,10 +90,10 @@ pub fn queue_convert_u32_to_u8(
         meta,
         pipeline,
         bind_group,
-        ((size + 3) / 4) as u32,
+        (size + 3) / 4,
         size as usize,
     );
-    return Ok(());
+    Ok(())
 }
 
 pub fn queue_convert_f32_to_u8(
@@ -103,7 +103,7 @@ pub fn queue_convert_f32_to_u8(
     start_offset: u32,
     size: u32,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
     meta.add(start_offset);
     meta.add(size);
 
@@ -115,10 +115,10 @@ pub fn queue_convert_f32_to_u8(
         meta,
         pipeline,
         bind_group,
-        ((size + 3) / 4) as u32,
+        (size + 3) / 4,
         size as usize,
     );
-    return Ok(());
+    Ok(())
 }
 
 pub fn queue_convert(
@@ -129,8 +129,8 @@ pub fn queue_convert(
     dest_dtype: crate::DType,
     input_dtype: crate::DType,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(&dev);
-    meta.add_layout1(&input_layout);
+    let mut meta = get_meta(dev);
+    meta.add_layout1(input_layout);
 
     let pipeline = match dest_dtype{
         crate::DType::U32 => Pipelines::Convert(get_dtype(input_dtype)?, Functions::ConvertToU32),
@@ -155,5 +155,5 @@ pub fn queue_convert(
         input_layout.shape().elem_count() as u32,
         input_layout.shape().elem_count(),
     );
-    return Ok(());
+    Ok(())
 }

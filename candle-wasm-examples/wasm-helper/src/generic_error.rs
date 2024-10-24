@@ -42,19 +42,19 @@ pub enum GenericError {
 
 impl From<JsError> for GenericError{
     fn from(value: JsError) -> Self {
-        return GenericError::JsError(value.into())
+        GenericError::JsError(value.into())
     }
 }
 
 impl From<String> for GenericError{
     fn from(value: String) -> Self {
-        return GenericError::JsError(value.into())
+        GenericError::JsError(value.into())
     }
 }
 
 impl From<JsValue> for GenericError{
     fn from(value: JsValue) -> Self {
-        return GenericError::JsValue(value)
+        GenericError::JsValue(value)
     }
 }
 
@@ -72,7 +72,7 @@ impl From<GenericError> for JsValue{
 
 impl From<&'static str> for GenericError{
     fn from(value: &'static str) -> Self {
-        return GenericError::Anyhow(anyhow::Error::msg(value));
+        GenericError::Anyhow(anyhow::Error::msg(value))
     }
 }
 

@@ -20,7 +20,7 @@ impl ShaderCache {
         let mut loader_cache = candle_wgpu_kernels::ShaderLoaderCache::new();
         loader_cache.add_wgpu_shader_loader(candle_wgpu_kernels::DefaultWgpuShader::LOADER_INDEX, || {candle_wgpu_kernels::DefaultWgpuShader{}});
         Self {
-            loader_cache : loader_cache,
+            loader_cache,
             shaders: HashMap::new(),
         }
     }
@@ -41,7 +41,7 @@ impl ShaderCache {
         let shaders = &mut self.shaders;
 
         let s = shaders
-            .entry(shader.clone())
+            .entry(shader)
             .or_insert_with(|| 
                 {
                     let shader_str = self.loader_cache.get_shader(shader);
@@ -53,13 +53,13 @@ impl ShaderCache {
                 });
         
         let pipelines = &mut s.pipelines;
-        if !pipelines.contains_key(&pipeline) {
+        if !pipelines.contains_key(pipeline) {
             let entry_point_str = self.loader_cache.get_entry_point(pipeline.0);
             let p = load_pipeline(device, s.shader.clone(), entry_point_str, pipeline, pipeline_layout, consts);
             pipelines.insert(pipeline.clone(), Arc::new(p));
         }
 
-        if let Some(p) = pipelines.get(&pipeline) {
+        if let Some(p) = pipelines.get(pipeline) {
             return Ok(p.clone());
         } else {
             panic!("Not expected")
@@ -80,7 +80,7 @@ fn load_pipeline(
         wgpu::PipelineCompilationOptions::default()
     } else {
         wgpu::PipelineCompilationOptions {
-            constants: &consts,
+            constants: consts,
             zero_initialize_workgroup_memory: true,
             vertex_pulling_transform: false,
         }
@@ -89,8 +89,8 @@ fn load_pipeline(
         label: None,
         layout: Some(pipeline_layout),
         module: &shader,
-        entry_point: entry_point,
-        compilation_options: compilation_options,
+        entry_point,
+        compilation_options,
         cache: None,
     });
 }

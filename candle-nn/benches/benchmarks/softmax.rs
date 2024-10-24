@@ -8,7 +8,7 @@ fn run(input: &Tensor){
 }
 
 fn run_softmax_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str, (b, m, k) : (usize, usize, usize)) {
-    let tensor = Tensor::arange(0.0f32, (b * m * k) as f32, &device)
+    let tensor = Tensor::arange(0.0f32, (b * m * k) as f32, device)
         .unwrap()
         .to_dtype(dtype)
         .unwrap()

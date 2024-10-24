@@ -76,7 +76,7 @@ pub fn queue_unary_inplace_op(
 
         let const_vec = vec![op as u32, (layout.start_offset() == 0) as u32];
 
-        let mut meta = get_meta(&dev);
+        let mut meta = get_meta(dev);
         meta.add(scalar1);
         meta.add(scalar2);
         meta.add(layout.shape().elem_count()); //length
@@ -110,13 +110,13 @@ pub fn queue_unary_inplace_op(
             }
         };
 
-        let length;
-        if is_contiguous4{
-            length = (layout.shape().elem_count() / 4) as u32; 
-        }
-        else{
-            length = layout.shape().elem_count() as u32;
-        }
+        let length =
+            if is_contiguous4{
+                (layout.shape().elem_count() / 4) as u32
+            }
+            else{
+                layout.shape().elem_count() as u32
+            };
 
         if length > 65535 * 64 {
             meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
@@ -138,7 +138,7 @@ pub fn queue_unary_inplace_op(
     } else {
         panic!("can only query unary inplace for contigueos memory!");
     }
-    return Ok(());
+    Ok(())
 }
 
 pub fn queue_unary_from_buffer_op(
@@ -151,7 +151,7 @@ pub fn queue_unary_from_buffer_op(
     dtype: crate::DType,
     input_layout: &crate::Layout,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
     let pipeline = if input_layout.is_contiguous() {
         let const_vec = vec![op as u32, (input_layout.start_offset() == 0) as u32];
 
@@ -186,7 +186,7 @@ pub fn queue_unary_from_buffer_op(
 
         meta.add(scalar1);
         meta.add(scalar2);
-        meta.add_layout1(&input_layout);
+        meta.add_layout1(input_layout);
 
         
         if input_layout.shape().elem_count() > 65535 * 64 {
@@ -210,5 +210,5 @@ pub fn queue_unary_from_buffer_op(
         Some(format!("OP: {:?}, layout: {:?}", op, input_layout)),
     );
 
-    return Ok(());
+    Ok(())
 }

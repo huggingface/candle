@@ -132,11 +132,11 @@ impl QueueBuffer {
     }
 
     pub fn get_meta(&self) -> &Vec<u32> {
-        return &self.meta_array.0;
+        &self.meta_array.0
     }
 
     pub fn get_meta_mut(&mut self) -> &mut Vec<u32> {
-        return &mut self.meta_array.0;
+        &mut self.meta_array.0
     }
 
     pub fn add_layout(
@@ -239,7 +239,7 @@ impl QueueBuffer {
             self.id_to_const_array.push(hmap)
         }
         self.init();
-        return PipelineType(pipeline.into(), index, OpIsInplaceable::new());
+        PipelineType(pipeline.into(), index, OpIsInplaceable::new())
     }
 
     pub fn get_pipeline_const<T: ToU32>(
@@ -264,7 +264,7 @@ impl QueueBuffer {
             self.id_to_const_array.push(hmap)
         }
         self.init();
-        return PipelineType(pipeline.into(), index, OpIsInplaceable::new());
+        PipelineType(pipeline.into(), index, OpIsInplaceable::new())
     }
     pub fn get_pipeline_const_inplace<T: ToU32>(
         &mut self,
@@ -289,7 +289,7 @@ impl QueueBuffer {
             self.id_to_const_array.push(hmap)
         }
         self.init();
-        return PipelineType(pipeline.into(), index, inplaceable);
+        PipelineType(pipeline.into(), index, inplaceable)
     }
 
     pub fn add<T: KernelParameterMeta>(&mut self, value: T) {
@@ -435,7 +435,7 @@ impl std::ops::Deref for WgpuDevice {
     type Target = WgpuDeviceInner;
 
     fn deref(&self) -> &Self::Target {
-        return &self.inner;
+        &self.inner
     }
 }
 
@@ -520,7 +520,7 @@ impl WgpuDevice {
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
-                    required_features: features.clone(),
+                    required_features: features,
                     required_limits: limits,
                     memory_hints: wgpu::MemoryHints::Performance,
                 },
@@ -554,21 +554,21 @@ impl WgpuDevice {
 
         Ok(WgpuDevice {
             inner: Arc::new(WgpuDeviceInner {
-                device: device,
-                device_limits: device_limits,
+                device,
+                device_limits,
                 device_features: features,
                 backend: adapter.get_info().backend,
-                queue: queue,
+                queue,
                 rand_state: Mutex::new(rand::rngs::StdRng::from_entropy()),
                 #[cfg(feature = "wgpu_debug")]
                 debug: debug_info,
                 command_queue: Mutex::new(QueueBuffer::new(configuration.meta_buffer_size)),
-                meta_buffer: meta_buffer,
+                meta_buffer,
                 cache: Mutex::new(ModelCache::new(configuration.buffer_mapping_size, max_memory_size)),
                 bindgroup_layouts,
                 staging_probe_buffer: staging_buffer,
                 matmul_alg: Mutex::new(MatmulAlgorithm::MatmulX),
-                configuration: configuration,
+                configuration,
             }),
         })
     }
@@ -672,7 +672,7 @@ impl WgpuDevice {
         input2_buffer: &WgpuStorage,
         input3_buffer: &WgpuStorage,
     ) {
-        let mut command_queue = wgpu_functions::get_meta(&self);
+        let mut command_queue = wgpu_functions::get_meta(self);
         command_queue
             .get_meta_mut()
             .append(&mut command.meta.clone());
@@ -710,7 +710,7 @@ impl WgpuDevice {
             bindgroup: BindGroupReference::new(*dest_buffer.buffer(), new_input),
             bindgroup_cached: None,
             meta: command_queue.current_meta,
-            workload_size: 0 as usize,
+            workload_size: 0_usize,
             #[cfg(feature = "wgpu_debug")]
             debug: None,
         });
@@ -833,10 +833,10 @@ impl WgpuDevice {
             DType::F32 => true,
             DType::U8 => false,
             DType::I64 => {
-                return self.device_features.contains(wgpu::Features::SHADER_INT64);
+                self.device_features.contains(wgpu::Features::SHADER_INT64)
             }
             DType::F64 => {
-                return self.device_features.contains(wgpu::Features::SHADER_F64);
+                self.device_features.contains(wgpu::Features::SHADER_F64)
             }
 
             DType::BF16 => false,
@@ -849,19 +849,19 @@ impl crate::backend::BackendDevice for WgpuDevice {
     type Storage = WgpuStorage;
 
     fn new(_: usize) -> crate::Result<Self> {
-        return Err(crate::Error::Wgpu(
+        Err(crate::Error::Wgpu(
             "A WgpuDevice must be created using the asynchronous create method"
                 .to_owned()
                 .into(),
-        ));
+        ))
     }
 
     fn location(&self) -> crate::DeviceLocation {
-        return crate::DeviceLocation::Wgpu { gpu_id: 0 };
+        crate::DeviceLocation::Wgpu { gpu_id: 0 }
     }
 
     fn same_device(&self, other: &Self) -> bool {
-        return self.device.global_id() == other.device.global_id();
+        self.device.global_id() == other.device.global_id()
     }
 
     fn zeros_impl(
@@ -882,7 +882,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
             )?;
         }
 
-        return Ok(buffer);
+        Ok(buffer)
     }
 
     fn ones_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
@@ -899,7 +899,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
                 &Layout::contiguous(shape),
             )?;
         }
-        return Ok(buffer);
+        Ok(buffer)
     }
 
     unsafe fn alloc_uninit(
@@ -908,11 +908,11 @@ impl crate::backend::BackendDevice for WgpuDevice {
         dtype: crate::DType,
     ) -> crate::Result<Self::Storage> {
         if self.is_dtype_available(dtype) {
-            return Ok(create_wgpu_storage(
+            Ok(create_wgpu_storage(
                 self,
                 dtype,
                 shape.elem_count() * dtype.size_in_bytes(),
-            ));
+            ))
         } else {
             wrongType!(alloc_uninit, dtype);
         }
@@ -923,16 +923,16 @@ impl crate::backend::BackendDevice for WgpuDevice {
         if T::DTYPE == crate::DType::F32 {
             let data =
                 unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, data.len()) };
-            buffer = create_wgpu_storage_init(self, T::DTYPE, &data)?;
+            buffer = create_wgpu_storage_init(self, T::DTYPE, data)?;
         } else if T::DTYPE == crate::DType::U32 {
             let data =
                 unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u32, data.len()) };
-            buffer = create_wgpu_storage_init(self, T::DTYPE, &data)?;
+            buffer = create_wgpu_storage_init(self, T::DTYPE, data)?;
         } else {
             // Panic if T is not f32 or u32
             wrongType!(storage_from_slice, T::DTYPE);
         }
-        return Ok(buffer);
+        Ok(buffer)
     }
 
     fn storage_from_cpu_storage(
@@ -941,10 +941,10 @@ impl crate::backend::BackendDevice for WgpuDevice {
     ) -> crate::Result<Self::Storage> {
         match storage {
             crate::CpuStorage::F32(data) => {
-                return create_wgpu_storage_init(self, crate::DType::F32, data);
+                create_wgpu_storage_init(self, crate::DType::F32, data)
             }
             crate::CpuStorage::U32(data) => {
-                return create_wgpu_storage_init(self, crate::DType::U32, data);
+                create_wgpu_storage_init(self, crate::DType::U32, data)
             }
             _ => wrongType!(storage_from_cpu_storage, storage.dtype()),
         }
@@ -956,16 +956,16 @@ impl crate::backend::BackendDevice for WgpuDevice {
     ) -> crate::Result<Self::Storage> {
         match storage {
             crate::CpuStorage::F32(data) => {
-                return create_wgpu_storage_init(self, crate::DType::F32, &data);
+                create_wgpu_storage_init(self, crate::DType::F32, &data)
             }
             crate::CpuStorage::U32(data) => {
-                return create_wgpu_storage_init(self, crate::DType::U32, &data);
+                create_wgpu_storage_init(self, crate::DType::U32, &data)
             }
             crate::CpuStorage::I64(data) => {
-                return create_wgpu_storage_init(self, crate::DType::I64, &data);
+                create_wgpu_storage_init(self, crate::DType::I64, &data)
             }
             crate::CpuStorage::F64(data) => {
-                return create_wgpu_storage_init(self, crate::DType::F64, &data);
+                create_wgpu_storage_init(self, crate::DType::F64, &data)
             }
             _ => wrongType!(storage_from_cpu_storage_owned, storage.dtype()),
         }
@@ -988,7 +988,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
             dtype,
             &Layout::contiguous(shape),
         )?;
-        return Ok(buffer);
+        Ok(buffer)
     }
 
     fn rand_normal(
@@ -1008,7 +1008,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
             dtype,
             &Layout::contiguous(shape),
         )?;
-        return Ok(buffer);
+        Ok(buffer)
     }
 
     fn set_seed(&self, _: u64) -> crate::Result<()> {

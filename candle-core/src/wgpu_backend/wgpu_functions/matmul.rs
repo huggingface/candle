@@ -77,7 +77,7 @@ mod transpose {
 
         let const_vec = vec![batch > 1, start_offset == 0];
 
-        let mut meta = get_meta(&dev);
+        let mut meta = get_meta(dev);
 
         meta.add(width);
         meta.add(height);
@@ -98,7 +98,7 @@ mod transpose {
             #[cfg(feature="wgpu_debug")]
             _debug_info
         );
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -152,7 +152,7 @@ mod sgemm {
             (params.b != 1) as usize,
         ];
 
-        let mut meta = get_meta(&dev);
+        let mut meta = get_meta(dev);
         meta.add(params.b);
         meta.add(params.m);
         meta.add(params.k);
@@ -207,7 +207,7 @@ mod sgemm {
             #[cfg(feature = "wgpu_debug")]
             Some(get_debug_string(&params)),
         );
-        return Ok(());
+        Ok(())
     }
 
     fn round_to_next_divisible(num: u32, n: u32) -> u32 {
@@ -274,21 +274,21 @@ mod sgemm {
         }
 
         pub(crate) fn need_padding_input1(&self, k_stride: usize, m_stride: usize) -> bool {
-            return (m_stride != 1 && k_stride != 1)
+            (m_stride != 1 && k_stride != 1)
                 || match &self.input1_stride {
                     StrideOptimization::StrideK(true) => k_stride != 1,
                     StrideOptimization::StrideNM(true) => m_stride != 1,
                     _ => false,
-                };
+                }
         }
 
         pub(crate) fn need_padding_input2(&self, n_stride: usize, k_stride: usize) -> bool {
-            return (n_stride != 1 && k_stride != 1)
+            (n_stride != 1 && k_stride != 1)
                 || match &self.input2_stride {
                     StrideOptimization::StrideK(true) => k_stride != 1,
                     StrideOptimization::StrideNM(true) => n_stride != 1,
                     _ => false,
-                };
+                }
         }
     }
 
@@ -382,7 +382,7 @@ mod sgemm {
                 };
 
                 if is_contiguous {
-                    dest_layout = crate::Layout::contiguous(&Shape::from((
+                    dest_layout = crate::Layout::contiguous(Shape::from((
                         params.b as usize,
                         new_m as usize,
                         new_k as usize,
@@ -397,7 +397,7 @@ mod sgemm {
                 }
                 super::queue_copy3d_padded(
                     dev,
-                    buffer_input1_padded.clone(),
+                    buffer_input1_padded,
                     buffer_input1,
                     dtype,
                     layout_input1,
@@ -419,7 +419,7 @@ mod sgemm {
                 let width;
                 let height;
                 let start_offset =  dest_layout.start_offset();
-                let batch_stride = dest_layout.stride().iter().rev().nth(2).unwrap_or(&1).clone();
+                let batch_stride = *dest_layout.stride().iter().rev().nth(2).unwrap_or(&1);
                 if let StrideOptimization::StrideNM(_) = settings.input1_stride {
                     dest_layout = crate::Layout::new(
                         Shape::from((params.b as usize, new_m as usize, new_k as usize)),
@@ -430,7 +430,7 @@ mod sgemm {
                     height = new_m;
                 } else {
                     dest_layout = crate::Layout::contiguous_with_offset(
-                        &Shape::from((params.b as usize, new_m as usize, new_k as usize)),
+                        Shape::from((params.b as usize, new_m as usize, new_k as usize)),
                         0,
                     );
                     width = new_m;
@@ -497,7 +497,7 @@ mod sgemm {
                 }
                 super::queue_copy3d_padded(
                     dev,
-                    buffer_input2_padded.clone(),
+                    buffer_input2_padded,
                     buffer_input2,
                     dtype,
                     layout_input2,
@@ -519,7 +519,7 @@ mod sgemm {
                 let width;
                 let height;
                 let start_offset = dest_layout.start_offset();
-                let batch_stride = dest_layout.stride().iter().rev().nth(2).unwrap_or(&1).clone();
+                let batch_stride = *dest_layout.stride().iter().rev().nth(2).unwrap_or(&1);
                 if let StrideOptimization::StrideNM(_) = settings.input2_stride {
                     dest_layout = crate::Layout::contiguous_with_offset(
                         Shape::from((params.b as usize, new_k as usize, new_n as usize)),
@@ -562,7 +562,7 @@ mod sgemm {
                 false,
             )
         } else {
-            buffer_dest.clone()
+            buffer_dest
         };
 
         let mut input1_stride = layout_input1_padded.stride().iter().rev();
@@ -585,7 +585,7 @@ mod sgemm {
             use_batch as usize,
         ];
 
-        let mut meta = get_meta(&dev);
+        let mut meta = get_meta(dev);
         meta.add(params.b);
         meta.add(if USE_DIFFERENT_PADDED_OUTPUT {
             new_m
@@ -625,9 +625,9 @@ mod sgemm {
         }
 
         let bind_group = create_bind_group_input2_with_alignment(
-            buffer_dest_padded.clone(),
-            buffer_input1_padded.clone(),
-            buffer_input2_padded.clone(),
+            buffer_dest_padded,
+            buffer_input1_padded,
+            buffer_input2_padded,
             BindgroupAlignmentLayout::Bindgroup2(
                 BindgroupAlignment::Aligned4,
                 BindgroupAlignment::Aligned16,
@@ -660,12 +660,12 @@ mod sgemm {
         if need_different_output_buffer && USE_DIFFERENT_PADDED_OUTPUT {
             //let res : Vec<f32> = pollster::block_on(read_data_from_gpu_async(dev, buffer_dest_padded.clone()));
             //println!("res: {:?}", res);
-            let dest_padding_layout = crate::Layout::contiguous(&Shape::from((
+            let dest_padding_layout = crate::Layout::contiguous(Shape::from((
                 params.b as usize,
                 new_m as usize,
                 new_n as usize,
             )));
-            let dest_layout = crate::Layout::contiguous(&Shape::from((
+            let dest_layout = crate::Layout::contiguous(Shape::from((
                 params.b as usize,
                 params.m as usize,
                 params.n as usize,
@@ -682,7 +682,7 @@ mod sgemm {
             )?;
         }
 
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -711,7 +711,7 @@ pub fn queue_matmul_buffer(
 }
 
 fn get_matmul_setting(alg: &MatmulAlgorithm) -> GenericMatmulSettings {
-    return match alg {
+    match alg {
         MatmulAlgorithm::Matmul7 => GenericMatmulSettings::new(
             16,
             16,
@@ -831,7 +831,7 @@ fn get_matmul_setting(alg: &MatmulAlgorithm) -> GenericMatmulSettings {
         alg => {
             panic!("alg {alg:?} not supported")
         }
-    };
+    }
 }
 
 pub fn queue_matmul_buffer_alg(
@@ -957,7 +957,7 @@ pub fn queue_matmul_buffer_alg(
         }
     };
 
-    return super::matmul::sgemm::queue_matmul_generic(
+    super::matmul::sgemm::queue_matmul_generic(
         dev,
         buffer_dest,
         buffer_input1,
@@ -968,7 +968,7 @@ pub fn queue_matmul_buffer_alg(
         cdtype,
         setting,
         pipeline,
-    );
+    )
 }
 
 fn get_matmul_naive(
@@ -990,7 +990,7 @@ fn get_matmul_naive(
             return crate::wgpu_backend::MatmulAlgorithm::Matmul1_4;
         }
     }
-    return crate::wgpu_backend::MatmulAlgorithm::Matmul1;
+    crate::wgpu_backend::MatmulAlgorithm::Matmul1
 }
 
 pub fn queue_matmul_buffer_best(
@@ -1071,27 +1071,23 @@ pub fn queue_matmul_buffer_best(
             let wgs = lm * ln;
 
             if no_padding_needed {
-                if wgs > 64 {
-                    if best_no_padding_tiled_wgs == 0 || wgs * 8 < best_no_padding_tiled_wgs {
-                        //make sure, that we dont select 16x16, if we could use 32x64 but have to transpose matrix b
-                        alg = a.clone();
-                        return queue_matmul_buffer_alg(
-                            dev,
-                            buffer_dest,
-                            buffer_input1,
-                            buffer_input2,
-                            params,
-                            layout_input1,
-                            layout_input2,
-                            dtype,
-                            alg,
-                        );
-                    }
+                if wgs > 64 && (best_no_padding_tiled_wgs == 0 || wgs * 8 < best_no_padding_tiled_wgs) {
+                    //make sure, that we dont select 16x16, if we could use 32x64 but have to transpose matrix b
+                    alg = a.clone();
+                    return queue_matmul_buffer_alg(
+                        dev,
+                        buffer_dest,
+                        buffer_input1,
+                        buffer_input2,
+                        params,
+                        layout_input1,
+                        layout_input2,
+                        dtype,
+                        alg,
+                    );
                 }
-                if wgs >= 25 {
-                    if best_no_padding_25.is_none() {
-                        best_no_padding_25 = Some(a); // Store the first match
-                    }
+                if wgs >= 25 && best_no_padding_25.is_none() {
+                    best_no_padding_25 = Some(a); // Store the first match
                 }
             } else {
                 let new_input1_size = b * new_k * new_m * dtype.size_in_bytes();
@@ -1105,11 +1101,9 @@ pub fn queue_matmul_buffer_best(
                     continue;
                 }
                 if wgs >= 25 {
-                    if no_padding_tiled {
-                        if best_no_padding_tiled_25.is_none() {
-                            best_no_padding_tiled_25 = Some(a); // Store the first match
-                            best_no_padding_tiled_wgs = wgs;
-                        }
+                    if no_padding_tiled && best_no_padding_tiled_25.is_none() {
+                        best_no_padding_tiled_25 = Some(a); // Store the first match
+                        best_no_padding_tiled_wgs = wgs;
                     }
                     if best_wgs_25.is_none() {
                         best_wgs_25 = Some(a); // Store the first match

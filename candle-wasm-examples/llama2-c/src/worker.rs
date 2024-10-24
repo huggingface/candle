@@ -99,7 +99,7 @@ impl Model {
                 tokens.len()
             };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-            let input = Tensor::new(ctxt, &dev)?.unsqueeze(0)?;
+            let input = Tensor::new(ctxt, dev)?.unsqueeze(0)?;
             let logits = self.llama.forward(&input, index_pos).await?;
             let logits = logits.squeeze(0)?;
             let logits = if REPEAT_PENALTY == 1. || tokens.is_empty() {
@@ -266,8 +266,8 @@ impl Model {
     pub async fn load(md: ModelData,dev : &Device) -> Result<Self> {
         let mut model = std::io::Cursor::new(md.model);
         let config = Config::from_reader(&mut model)?;
-        let weights = TransformerWeights::from_reader(&mut model, &config, &dev)?;
-        let vb = weights.var_builder(&config, &dev)?;
+        let weights = TransformerWeights::from_reader(&mut model, &config, dev)?;
+        let vb = weights.var_builder(&config, dev)?;
         let cache = Cache::new(false, &config, vb.pp("rot"))?;
         let llama = Llama::load(vb, &cache, &config)?;
         let tokenizer =

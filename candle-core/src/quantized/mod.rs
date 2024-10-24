@@ -51,7 +51,7 @@ impl Device {
                 let storage = cuda::QCudaStorage::zeros(cuda, elem_count, dtype)?;
                 Ok(QStorage::Cuda(storage))
             }
-            Device::Wgpu(_) => Err(Error::Wgpu(format!("no wgpu implementation for QTensor").into()))
+            Device::Wgpu(_) => Err(Error::Wgpu("no wgpu implementation for QTensor".to_string().into()))
         }
     }
 }

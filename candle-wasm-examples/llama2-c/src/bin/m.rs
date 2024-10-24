@@ -76,7 +76,7 @@ impl Model {
             }),
             Err(e) => {
                 log::error!("Error at model: {:?}", e);
-                return Err(JsError::new(&e.to_string()))},
+                Err(JsError::new(&e.to_string()))},
         }
     }
 

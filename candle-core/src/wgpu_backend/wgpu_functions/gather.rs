@@ -11,11 +11,11 @@ pub fn queue_gather(
     lay_index: &crate::Layout,
     dim: usize,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
 
     meta.add(dim);
-    meta.add_layout1_non_contiguous(&lay_input);
-    meta.add_layout2_non_contiguous(&lay_index);
+    meta.add_layout1_non_contiguous(lay_input);
+    meta.add_layout2_non_contiguous(lay_index);
 
     let pipeline = meta.get_pipeline(Pipelines::Gather(get_dtype(dtype)?, Functions::Gather));
 
@@ -29,7 +29,7 @@ pub fn queue_gather(
         1,
         lay_index.shape().elem_count(),
     );
-    return Ok(());
+    Ok(())
 }
 
 pub fn queue_scatter_add_inplace(
@@ -43,14 +43,14 @@ pub fn queue_scatter_add_inplace(
     lay_src: &crate::Layout,
     dim: usize,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
 
     let selected_index_length = lay_index.shape().dims()[dim];
 
     meta.add(dim);
-    meta.add_layout1_non_contiguous(&lay_input);
-    meta.add_layout2_non_contiguous(&lay_index);
-    meta.add_layout3_non_contiguous(&lay_src);
+    meta.add_layout1_non_contiguous(lay_input);
+    meta.add_layout2_non_contiguous(lay_index);
+    meta.add_layout3_non_contiguous(lay_src);
 
     let pipeline = meta.get_pipeline(Pipelines::Gather(
         get_dtype(dtype)?,
@@ -67,7 +67,7 @@ pub fn queue_scatter_add_inplace(
         1,
         lay_index.shape().elem_count(),
     );
-    return Ok(());
+    Ok(())
 }
 
 pub fn queue_index_add_inplace(
@@ -81,14 +81,14 @@ pub fn queue_index_add_inplace(
     lay_src: &crate::Layout,
     dim: usize,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
 
     let selected_index_length = lay_index.shape().elem_count();
 
     meta.add(dim);
-    meta.add_layout1_non_contiguous(&lay_input);
-    meta.add_layout2_non_contiguous(&lay_index);
-    meta.add_layout3_non_contiguous(&lay_src);
+    meta.add_layout1_non_contiguous(lay_input);
+    meta.add_layout2_non_contiguous(lay_index);
+    meta.add_layout3_non_contiguous(lay_src);
 
     let pipeline = meta.get_pipeline(Pipelines::Gather(
         get_dtype(dtype)?,
@@ -105,5 +105,5 @@ pub fn queue_index_add_inplace(
         1,
         lay_input.shape().elem_count(),
     );
-    return Ok(());
+    Ok(())
 }

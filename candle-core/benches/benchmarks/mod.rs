@@ -34,7 +34,7 @@ impl BenchDevice for Device {
                 #[cfg(not(feature = "metal"))]
                 panic!("Metal device without metal feature enabled: {:?}", device)
             }
-            Device::Wgpu(device) => return Ok(device.synchronize()?)
+            Device::Wgpu(device) => Ok(device.synchronize()?)
         }
     }
 

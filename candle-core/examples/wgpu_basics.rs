@@ -11,7 +11,7 @@ candle_wgpu_kernels::create_loader!(MyCustomLoader);
 impl candle_wgpu_kernels::ShaderLoader for MyCustomLoader{
     //define the shader:
     fn load(&self, _ : candle_wgpu_kernels::ShaderIndex) -> &str {
-        return "
+        "
 //Binding Order: Dest, Meta, Input1, Input2, Input3
 @group(0) @binding(0)
 var<storage, read_write> v_dest: array<u32>;
@@ -30,7 +30,7 @@ fn main1() {
 fn main2() {
     v_dest[0] = v_input1[0] * op_meta[0];
 }
-        ";
+        "
     }
 
     //define the entry point:
@@ -53,13 +53,13 @@ fn main() -> Result<()> {
             wgpu_device.add_wgpu_shader_loader(MyCustomLoader::LOADER_INDEX, || {MyCustomLoader{}});
 
             //2. add optional data to the meta - structure
-            let mut meta = candle_core::wgpu::wgpu_functions::get_meta(&wgpu_device);
+            let mut meta = candle_core::wgpu::wgpu_functions::get_meta(wgpu_device);
             meta.add(42);
         
             //3. define the pipeline to use:
             let pipeline = meta.get_pipeline(PipelineIndex::new(ShaderIndex::new(MyCustomLoader::LOADER_INDEX, 0), 0));
             
-            let output_buffer =  candle_core::wgpu::create_wgpu_storage(&wgpu_device, candle_core::DType::U32, 1 * candle_core::DType::U32.size_in_bytes());
+            let output_buffer =  candle_core::wgpu::create_wgpu_storage(wgpu_device, candle_core::DType::U32, candle_core::DType::U32.size_in_bytes());
 
             //4. define the bindgroup to use (defines dest, input buffer and the alignment)
             let bind_group = candle_core::wgpu::wgpu_functions::create_bind_group_input0(*output_buffer.buffer(), candle_core::DType::U32.into());
@@ -87,7 +87,7 @@ fn main() -> Result<()> {
     }
 
     
-    let input = Tensor::from_slice(&[17u32], (), &device)?;
+    let input = Tensor::from_slice(&[17u32], (), device)?;
     let output = input.apply_op1(CustomExampleOp{})?;
 
     assert_eq!(output.to_vec0::<u32>()?, 17*42u32);
@@ -118,13 +118,13 @@ impl CustomOp1 for CustomExampleOp{
         storage.device().add_wgpu_shader_loader(MyCustomLoader::LOADER_INDEX, || {MyCustomLoader{}});
 
         //2. add optional data to the meta - structure
-        let mut meta = candle_core::wgpu::wgpu_functions::get_meta(&storage.device());
+        let mut meta = candle_core::wgpu::wgpu_functions::get_meta(storage.device());
         meta.add(42);
     
         //3. define the pipeline to use:
         let pipeline = meta.get_pipeline(PipelineIndex::new(ShaderIndex::new(MyCustomLoader::LOADER_INDEX, 0), 1));
         
-        let output_buffer =  candle_core::wgpu::create_wgpu_storage(&storage.device(), candle_core::DType::U32, 1 * candle_core::DType::U32.size_in_bytes());
+        let output_buffer =  candle_core::wgpu::create_wgpu_storage(storage.device(), candle_core::DType::U32, candle_core::DType::U32.size_in_bytes());
 
         //4. define the bindgroup to use (defines dest, input buffer and the alignment)
         let bind_group = candle_core::wgpu::wgpu_functions::create_bind_group_input1(*output_buffer.buffer(), *storage.buffer(), candle_core::DType::U32.into());

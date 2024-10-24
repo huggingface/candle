@@ -49,7 +49,7 @@ pub enum FileSystemDirectoryEntries{
 }
 
 pub async fn get_root() -> web_sys::FileSystemDirectoryHandle{
-    return getDirectory().await.into();
+    getDirectory().await.into()
 }
 
 pub async fn get_dir_entries(dir : FileSystemDirectoryHandleCustom) -> GenericResult<Vec<(String, FileSystemDirectoryEntries)>> {
@@ -77,7 +77,7 @@ pub async fn get_dir_entries(dir : FileSystemDirectoryHandleCustom) -> GenericRe
             result.push((name.into(), FileSystemDirectoryEntries::File(file)));
         }
     }   
-    return Ok(result);
+    Ok(result)
 }
 
 
@@ -121,28 +121,25 @@ where
     let path = file_name.as_ref();
     let components : Vec<_> = path.components().collect();
     for (index, p) in components.iter().enumerate(){
-        match p{
-            std::path::Component::Normal(p) => {
-                let name = p.to_str().unwrap();
-                let is_file = index == components.len() - 1;
-                if !is_file{
-                    let fsgdo = FileSystemGetDirectoryOptions::new();
-                    fsgdo.set_create(true);
-                    root = JsFuture::from(root.get_directory_handle_with_options(name, &fsgdo)).await?.into();
-                }
-                else{
-                    let fsgfo = FileSystemGetFileOptions::new();
-                    fsgfo.set_create(true);
-                    let file_handle : web_sys::FileSystemFileHandle = JsFuture::from(root.get_file_handle_with_options(name, &fsgfo)).await?.into();
-                    return Ok(file_handle);
-                }
-            },
-            _ => {},
+        if let std::path::Component::Normal(p) = p {
+            let name = p.to_str().unwrap();
+            let is_file = index == components.len() - 1;
+            if !is_file{
+                let fsgdo = FileSystemGetDirectoryOptions::new();
+                fsgdo.set_create(true);
+                root = JsFuture::from(root.get_directory_handle_with_options(name, &fsgdo)).await?.into();
+            }
+            else{
+                let fsgfo = FileSystemGetFileOptions::new();
+                fsgfo.set_create(true);
+                let file_handle : web_sys::FileSystemFileHandle = JsFuture::from(root.get_file_handle_with_options(name, &fsgfo)).await?.into();
+                return Ok(file_handle);
+            }
         }
       
     }
 
-    return Err("File Creating File".into());
+    Err("File Creating File".into())
 }
 
 
@@ -154,22 +151,19 @@ where
     let path = file_name.as_ref();
     let components : Vec<_> = path.components().collect();
     for (index, p) in components.iter().enumerate(){
-        match p{
-            std::path::Component::Normal(p) => {
-                let name = p.to_str().unwrap();
-                let is_file = index == components.len() - 1;
-                if !is_file{
-                    root = JsFuture::from(root.get_directory_handle(name)).await?.into();
-                }
-                else{
-                    let file_handle : web_sys::FileSystemFileHandle = JsFuture::from(root.get_file_handle(name)).await?.into();
-                    return Ok(file_handle);
-                }
-            },
-            _ => {},
+        if let std::path::Component::Normal(p) = p {
+            let name = p.to_str().unwrap();
+            let is_file = index == components.len() - 1;
+            if !is_file{
+                root = JsFuture::from(root.get_directory_handle(name)).await?.into();
+            }
+            else{
+                let file_handle : web_sys::FileSystemFileHandle = JsFuture::from(root.get_file_handle(name)).await?.into();
+                return Ok(file_handle);
+            }
         }
     }
-    return Err("File not Found".into());
+    Err("File not Found".into())
 }
 
 
@@ -181,20 +175,17 @@ where
     let path = file_name.as_ref();
     let components : Vec<_> = path.components().collect();
     for p in components.iter(){
-        match p{
-            std::path::Component::Normal(p) => {
-                let name = p.to_str().unwrap();
-                root = JsFuture::from(root.get_directory_handle(name)).await?.into();
-            },
-            _ => {},
+        if let std::path::Component::Normal(p) = p {
+            let name = p.to_str().unwrap();
+            root = JsFuture::from(root.get_directory_handle(name)).await?.into();
         }
     }
-    return Ok(root);
+    Ok(root)
 }
 
 pub async fn get_file(file_handle : web_sys::FileSystemFileHandle) -> GenericResult<web_sys::File> {
     let file : web_sys::File =  JsFuture::from(file_handle.get_file()).await?.into();
-    return Ok(file);
+    Ok(file)
 }
 
 pub async fn read_file<P>(file_name : P) -> GenericResult<Vec<u8>>
@@ -219,7 +210,7 @@ where
                 let mut chunk = value.to_vec();
                 result.append(&mut chunk);
             }
-            return Ok(result)
+            Ok(result)
         },
         Err(e) =>  Err(e),
     }
@@ -240,7 +231,11 @@ impl ReadableRustStream {
     }
 
     pub fn len(&self) -> usize{
-        return self.total_length as usize
+        self.total_length as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub async fn read_bytes(&mut self, size : usize) -> GenericResult<Vec<u8>>{
@@ -265,7 +260,7 @@ impl ReadableRustStream {
             }
         }
         
-        return Ok(result);
+        Ok(result)
     }
 }
 
@@ -281,7 +276,11 @@ impl Blob {
     }
 
     pub fn len(&self) -> usize{
-        return self.blob.size() as usize;
+        self.blob.size() as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub async fn get_bytes(&self, start : usize, length : usize) -> GenericResult<Vec<u8>>{
@@ -293,14 +292,14 @@ impl Blob {
             panic!("Get Bytes could not load {length} bytes, only got: {}", data.len());
         }
 
-        return Ok(data)
+        Ok(data)
     }
 
     pub fn get_stream(&self)-> GenericResult<ReadableRustStream>
     {   
         let stream : JsValue = self.blob.stream().into();
         let stream : ReadableStreamCustom = stream.into();
-        return Ok(ReadableRustStream::new(stream, self.len() as u64));
+        Ok(ReadableRustStream::new(stream, self.len() as u64))
     }
 }
 
@@ -311,7 +310,7 @@ where
         match open_file(&file_name).await{
             Ok(file_handle) =>{
                 let file : web_sys::File =  JsFuture::from(file_handle.get_file()).await?.into();
-                return Ok(Blob::new(file));
+                Ok(Blob::new(file))
             },
             Err(e) =>  Err(e),
         }

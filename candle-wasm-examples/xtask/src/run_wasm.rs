@@ -30,7 +30,7 @@ fn copy_newest_matching_file(
     if let Some(file_path) = newest_file {
         let destination_path = Path::new(destination_folder).join(format!("{filename}.wasm"));
 
-        fs::copy(&file_path, &destination_path)?;
+        fs::copy(file_path, &destination_path)?;
         println!("Copied {} to {}", filename, destination_path.display());
     } else {
         println!("No matching files found for pattern '{}' in {}", filename, source_folder);
@@ -131,7 +131,7 @@ pub(crate) fn run_wasm(shell: Shell, mut args: Arguments) -> Result<(), anyhow::
                 println!("event: {:?}", event);
                 if event.paths.iter().any(|p| p.components().any(|c| c.as_os_str() == "src")) {
                     let now = time::Instant::now();
-                    if now.duration_since(last_compile).as_secs_f32() > 0.5 && compiling == false {
+                    if now.duration_since(last_compile).as_secs_f32() > 0.5 && !compiling {
                         let shell = xshell::Shell::new().context("Couldn't create xshell shell").expect("Couldn't create xshell shell");
                         _ = compile(&shell, args.clone(), &name, is_bench).inspect_err(|err|  error!("couldnt compile changes: {}", err));
                         last_compile = time::Instant::now();

@@ -133,7 +133,7 @@ impl Model {
 impl Model {
     async fn process(&mut self, tokens: &[u32]) -> candle::Result<String> {
         let dev = &self.device;
-        let input = Tensor::new(tokens, &dev)?.unsqueeze(0)?;
+        let input = Tensor::new(tokens, dev)?.unsqueeze(0)?;
         let logits = match &mut self.model {
             SelectedModel::MixFormer(m) => m.forward(&input)?,
             SelectedModel::Quantized(m) => m.forward(&input)?,

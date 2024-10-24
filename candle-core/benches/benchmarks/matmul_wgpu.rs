@@ -9,7 +9,7 @@ use candle_core::wgpu::MatmulAlgorithm;
 use criterion::{black_box, criterion_group, BenchmarkId, Criterion, Throughput};
 
 fn run(a: &Tensor, b: &Tensor) {
-    a.matmul(&b).unwrap();
+    a.matmul(b).unwrap();
 }
 
 fn test_matmul(
@@ -27,25 +27,25 @@ fn test_matmul(
 ) {
     let dtype = DType::F32;
 
-    let lhs;
-    if tpa {
-        lhs = Tensor::zeros((b, k, m), dtype, device)
-            .unwrap()
-            .transpose(D::Minus1, D::Minus2)
-            .unwrap();
-    } else {
-        lhs = Tensor::zeros((b, m, k), dtype, device).unwrap();
-    }
+    let lhs = 
+        if tpa {
+            Tensor::zeros((b, k, m), dtype, device)
+                .unwrap()
+                .transpose(D::Minus1, D::Minus2)
+                .unwrap()
+        } else {
+            Tensor::zeros((b, m, k), dtype, device).unwrap()
+        };
 
-    let rhs;
-    if tpb {
-        rhs = Tensor::zeros((b, n, k), dtype, device)
-            .unwrap()
-            .transpose(D::Minus1, D::Minus2)
-            .unwrap();
-    } else {
-        rhs = Tensor::zeros((b, k, n), dtype, device).unwrap();
-    }
+    let rhs = 
+        if tpb {
+            Tensor::zeros((b, n, k), dtype, device)
+                .unwrap()
+                .transpose(D::Minus1, D::Minus2)
+                .unwrap()
+        } else {
+            Tensor::zeros((b, k, n), dtype, device).unwrap()
+        };
 
     let flops = b * m * n * k;
     group.throughput(Throughput::Bytes(flops as u64));
@@ -175,11 +175,8 @@ fn test_functions(
         );
     }
     #[cfg(feature = "wgpu")]
-    match &device {
-        candle_core::Device::Wgpu(gpu) => {
-            gpu.print_bindgroup_reuseinfo2();
-        }
-        _ => {}
+    if let candle_core::Device::Wgpu(gpu) = &device {
+        gpu.print_bindgroup_reuseinfo2();
     };
 }
 

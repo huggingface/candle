@@ -13,31 +13,31 @@ pub trait ToU32 {
 
 impl ToU32 for i32 {
     fn to_u32(self) -> u32 {
-        return self as u32;
+        self as u32
     }
 }
 
 impl ToU32 for u32 {
     fn to_u32(self) -> u32 {
-        return self;
+        self
     }
 }
 
 impl ToU32 for f32 {
     fn to_u32(self) -> u32 {
-        return f32::to_bits(self);
+        f32::to_bits(self)
     }
 }
 
 impl ToU32 for usize {
     fn to_u32(self) -> u32 {
-        return self as u32;
+        self as u32
     }
 }
 
 impl ToU32 for bool {
     fn to_u32(self) -> u32 {
-        return if self { 1 } else { 0 };
+        if self { 1 } else { 0 }
     }
 }
 
@@ -47,26 +47,26 @@ pub trait ToU64 {
 
 impl ToU64 for i32 {
     fn to_u64(self) -> u64 {
-        return self as u64;
+        self as u64
     }
 }
 
 
 impl ToU64 for u32 {
     fn to_u64(self) -> u64 {
-        return self as u64;
+        self as u64
     }
 }
 
 impl ToU64 for u64 {
     fn to_u64(self) -> u64 {
-        return self;
+        self
     }
 }
 
 impl ToU64 for usize {
     fn to_u64(self) -> u64 {
-        return self as u64;
+        self as u64
     }
 }
 
@@ -76,19 +76,19 @@ pub trait ToF64 {
 
 impl ToF64 for usize {
     fn to_f64(self) -> f64 {
-        return self as f64;
+        self as f64
     }
 }
 
 impl ToF64 for u32 {
     fn to_f64(self) -> f64 {
-        return self as f64;
+        self as f64
     }
 }
 
 impl ToF64 for bool {
     fn to_f64(self) -> f64 {
-        return if self { 1.0 } else { 0.0 };
+        if self { 1.0 } else { 0.0 }
     }
 }
 
@@ -109,7 +109,7 @@ impl<K: std::cmp::Eq + PartialEq + std::hash::Hash, V> HashMapMulti<K, V> {
 
     #[instrument(skip(self, key, value))]
     pub fn add_mapping(&mut self, key: K, value: V) {
-        self.map.entry(key).or_insert_with(Vec::new).push(value);
+        self.map.entry(key).or_default().push(value);
     }
 
     #[instrument(skip(self, key))]
@@ -169,7 +169,7 @@ pub struct Counter(AtomicU32);
 
 impl Counter {
     pub fn new(default: u32) -> Self {
-        return Counter(AtomicU32::new(default));
+        Counter(AtomicU32::new(default))
     }
 
     pub fn inc(&self) -> u32 {
@@ -196,14 +196,14 @@ impl<const TSIZE: usize, T: std::marker::Copy + std::default::Default> FixedArra
     }
 
     pub fn get(&self) -> &[T] {
-        return &self.data[0..self.len];
+        &self.data[0..self.len]
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         return self.data[0..self.len].iter();
     }
 
-    pub fn from_vec(vec: &Vec<T>) -> Self {
+    pub fn from_vec(vec: &[T]) -> Self {
         let mut data = [Default::default(); TSIZE];
         let len = vec.len();
         assert!(len <= TSIZE);
@@ -222,6 +222,12 @@ impl<const TSIZE: usize, T: std::marker::Copy + std::default::Default> FixedArra
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+}
+
+impl<const TSIZE: usize, T: std::marker::Copy + std::default::Default> Default for FixedArray<T, TSIZE> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -262,7 +268,7 @@ impl<K: std::cmp::Eq + Hash + Clone> ObjectToIdMapper<K> {
     }
 
     pub fn get_or_insert(&mut self, key: &K) -> (usize, bool) {
-        if let Some(id) = self.map.get(&key) {
+        if let Some(id) = self.map.get(key) {
             (*id, false)
         } else {
             let id = self.next_id;
@@ -273,8 +279,13 @@ impl<K: std::cmp::Eq + Hash + Clone> ObjectToIdMapper<K> {
     }
 }
 
+impl<K: std::cmp::Eq + Hash + Clone> Default for ObjectToIdMapper<K> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 ///////////// STORAGE Field Helper Struct:
-///
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, std::marker::Copy, Default)]
 #[cfg_attr(
@@ -299,7 +310,7 @@ pub trait ReferenceTrait {
     fn id(&self) -> u32;
     fn time(&self) -> ReferenceTime;
     fn is_valid(&self) -> bool {
-        return self.time() != 0;
+        self.time() != 0
     }
 }
 
@@ -320,7 +331,7 @@ impl Reference {
     }
 
     pub fn is_valid(&self) -> bool {
-        return self.time != 0;
+        self.time != 0
     }
 }
 
@@ -362,6 +373,9 @@ pub trait StorageTrait<T, TREF> {
     fn retain(&mut self, keep: impl Fn((&TREF, &T)) -> bool);
     fn retain_mut(&mut self, keep: impl FnMut((&TREF, &T)) -> bool);
     fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl<T, TREF> StorageTrait<T, TREF> for StorageOptional<T, TREF>
@@ -372,7 +386,7 @@ where
         Self {
             data: vec![],
             free: vec![],
-            phantom: PhantomData::default(),
+            phantom: PhantomData,
         }
     }
 
@@ -380,7 +394,7 @@ where
         if let Some(id) = self.free.pop() {
             self.data[id].value = Some(value);
             self.data[id].is_used = true;
-            return TREF::new(id as u32, self.data[id].time_stamp);
+            TREF::new(id as u32, self.data[id].time_stamp)
         } else {
             let field = StorageField {
                 time_stamp: 1,
@@ -388,7 +402,7 @@ where
                 is_used: true,
             };
             self.data.push(field);
-            return TREF::new((self.data.len() - 1) as u32, 1);
+            TREF::new((self.data.len() - 1) as u32, 1)
         }
     }
 
@@ -398,7 +412,7 @@ where
                 return val.value.as_ref();
             }
         }
-        return None;
+        None
     }
 
     fn get_mut(&mut self, id: &TREF) -> Option<&mut T> {
@@ -407,7 +421,7 @@ where
                 return val.value.as_mut();
             }
         }
-        return None;
+        None
     }
 
     fn delete(&mut self, id: &TREF) -> bool {
@@ -420,7 +434,7 @@ where
                 return true;
             }
         }
-        return false;
+        false
     }
 
     fn get_reference(&self, pos: u32) -> Option<(TREF, &T)> {
@@ -430,7 +444,7 @@ where
                 return Some((TREF::new(pos, val.time_stamp), value));
             }
         }
-        return None;
+        None
     }
 
     fn iter<'a>(&'a self) -> impl Iterator<Item = &T>
@@ -474,7 +488,7 @@ where
     }
 
     fn len(&self) -> usize {
-        return self.data.len() - self.free.len();
+        self.data.len() - self.free.len()
     }
 }
 
@@ -491,7 +505,7 @@ where
                 return val.value.take();
             }
         }
-        return None;
+        None
     }
 
     pub fn iter_option(&self) -> impl Iterator<Item = &T> {
@@ -535,7 +549,7 @@ where
         Self {
             data: vec![],
             free: vec![],
-            phantom: PhantomData::default(),
+            phantom: PhantomData,
         }
     }
 
@@ -543,7 +557,7 @@ where
         if let Some(id) = self.free.pop() {
             self.data[id].value = referece;
             self.data[id].is_used = true;
-            return TREF::new(id as u32, self.data[id].time_stamp);
+            TREF::new(id as u32, self.data[id].time_stamp)
         } else {
             let field = StorageField {
                 time_stamp: 1,
@@ -551,7 +565,7 @@ where
                 is_used: true,
             };
             self.data.push(field);
-            return TREF::new((self.data.len() - 1) as u32, 1);
+            TREF::new((self.data.len() - 1) as u32, 1)
         }
     }
 
@@ -561,7 +575,7 @@ where
                 return Some(&val.value);
             }
         }
-        return None;
+        None
     }
 
     fn get_mut(&mut self, id: &TREF) -> Option<&mut T> {
@@ -570,7 +584,7 @@ where
                 return Some(&mut val.value);
             }
         }
-        return None;
+        None
     }
 
     fn delete(&mut self, id: &TREF) -> bool {
@@ -582,7 +596,7 @@ where
                 return true;
             }
         }
-        return false;
+        false
     }
 
     fn get_reference(&self, pos: u32) -> Option<(TREF, &T)> {
@@ -592,7 +606,7 @@ where
                 return Some((TREF::new(pos, val.time_stamp), value));
             }
         }
-        return None;
+        None
     }
 
     fn iter<'a>(&'a self) -> impl Iterator<Item = &T>
@@ -623,6 +637,6 @@ where
     }
 
     fn len(&self) -> usize {
-        return self.data.len() - self.free.len();
+        self.data.len() - self.free.len()
     }
 }

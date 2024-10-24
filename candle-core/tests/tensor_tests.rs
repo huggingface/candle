@@ -1487,7 +1487,7 @@ fn randn(device: &Device) -> Result<()> {
 
 
 fn where_cond(device: &Device) -> Result<()> {
-    let cond = Tensor::new(&[0u32, 2u32, 1u32, 0, 0, 0, 35, 255, 53, 0,029,0], device)?.reshape((4,3))?;
+    let cond = Tensor::new(&[0u32, 2u32, 1u32, 0, 0, 0, 35, 255, 53, 0, 29, 0], device)?.reshape((4,3))?;
     let t = Tensor::arange(0f32, 12f32, device)?.reshape((4, 3))?;
     assert_eq!(
         t.to_vec2::<f32>()?,

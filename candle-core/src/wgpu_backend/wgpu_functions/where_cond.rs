@@ -14,10 +14,10 @@ pub fn queue_where_cond(
     cond_type: crate::DType,
     dtype: crate::DType,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(&dev);
-    meta.add_layout1(&layout_input);
-    meta.add_layout2(&layout_true);
-    meta.add_layout3(&layout_false);
+    let mut meta = get_meta(dev);
+    meta.add_layout1(layout_input);
+    meta.add_layout2(layout_true);
+    meta.add_layout3(layout_false);
 
     let (pipeline, cond_alignment) = match cond_type {
         crate::DType::U32 => (Pipelines::WhereCond(get_dtype(dtype)?, candle_wgpu_kernels::where_cond::Functions::WhereCondIndexU32), cond_type.into()),
@@ -46,5 +46,5 @@ pub fn queue_where_cond(
         layout_input.shape().elem_count() as u32,
         layout_input.shape().elem_count(),
     );
-    return Ok(());
+    Ok(())
 }
