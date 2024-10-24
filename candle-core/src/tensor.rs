@@ -1755,6 +1755,7 @@ impl Tensor {
     }
 
     /// Returns the data contained in a 3D tensor.
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `to_vec3_async` for wasm support instead"))]
     pub fn to_vec3<S: crate::WithDType>(&self) -> Result<Vec<Vec<Vec<S>>>> {
         let (dim1, dim2, dim3) = self.dims3()?;
         let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
@@ -1793,6 +1794,48 @@ impl Tensor {
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+        }
+    }
+
+    /// Returns the data contained in a 3D tensor.
+    pub async fn to_vec3_async<S: crate::WithDType>(&self) -> Result<Vec<Vec<Vec<S>>>> {
+        let (dim1, dim2, dim3) = self.dims3()?;
+        let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
+            let data = S::cpu_storage_as_slice(cpu_storage)?;
+            let mut top_rows = vec![];
+            match self.layout.contiguous_offsets() {
+                Some((o1, o2)) => {
+                    let data = &data[o1..o2];
+                    let dim23 = dim2 * dim3;
+                    for idx1 in 0..dim1 {
+                        let data = &data[idx1 * dim23..(idx1 + 1) * dim23];
+                        let mut rows = vec![];
+                        for idx2 in 0..dim2 {
+                            rows.push(data[idx2 * dim3..(idx2 + 1) * dim3].to_vec())
+                        }
+                        top_rows.push(rows);
+                    }
+                }
+                None => {
+                    let mut src_index = self.strided_index();
+                    for _idx in 0..dim1 {
+                        let mut rows = vec![];
+                        for _jdx in 0..dim2 {
+                            let row = (0..dim3).map(|_| data[src_index.next().unwrap()]).collect();
+                            rows.push(row)
+                        }
+                        top_rows.push(rows);
+                    }
+                    assert!(src_index.next().is_none());
+                }
+            }
+            Ok(top_rows)
+        };
+        match &*self.storage() {
+            Storage::Cpu(storage) => from_cpu_storage(storage),
+            Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage_async().await?),
         }
     }
 

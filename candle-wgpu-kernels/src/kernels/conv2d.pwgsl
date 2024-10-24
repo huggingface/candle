@@ -736,7 +736,9 @@ fn conv2d_kernel_size_1(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let size_y_out = op_conv2d_size_y_out;
     let size_x_out = op_conv2d_stride_y_out;
-
+    
+    let unused = op_conv2d_b;
+    
     if i_out_x >= size_x_out || i_out_y >= size_y_out {
         return;
     }
@@ -804,6 +806,8 @@ fn conv2d_kernel_size_1_nopadding(@builtin(global_invocation_id) global_id: vec3
 
     let size_y_out = op_conv2d_size_y_out;
     let size_x_out = op_conv2d_stride_y_out;
+
+    let unused = op_conv2d_b;
 
     if i_out_x >= size_x_out || i_out_y >= size_y_out {
         return;

@@ -29,6 +29,8 @@ fn gather(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var new_index2 = start_offset2;   
     var new_index_out = 0u; 
 
+    let unused = CONST_IS_CONTIGUOUS2;
+
     for (var i2 : i32 = i32(dims1) - 1; i2 >= 0; i2--){
         let i = u32(i2);
         let prev_shapes_i = shapes_i;
@@ -76,6 +78,7 @@ fn scatter_add_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let start_shape_offset2 = input_offset2 + select(CONST_IS_STARTOFFSET_ZERO2, 0u, 1u);
     let start_shape_offset3 = input_offset3 + select(CONST_IS_STARTOFFSET_ZERO3, 0u, 1u);
 
+    let unused = CONST_IS_CONTIGUOUS3;
    
     //var new_index_out = 0u; 
 
@@ -126,7 +129,7 @@ fn index_add_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let input_offset2 = op_index_input_layout1 + get_size1(); //index
     let input_offset3 = input_offset2 + get_size2(); //src
     let dim = op_gather_dim;
-
+    let unused = CONST_IS_CONTIGUOUS3;
     
     let dims1 = CONST_DIMS1;
     let start_offset1 = select(CONST_IS_STARTOFFSET_ZERO1, 0u, op_meta[input_offset1]);

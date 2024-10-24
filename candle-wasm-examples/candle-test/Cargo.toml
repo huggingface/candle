@@ -1,5 +1,5 @@
 [package]
-name = "candle-performance-test"
+name = "candle-test"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
@@ -64,3 +64,16 @@ features = [
   'FileSystemDirectoryEntry',
   'FileSystemRemoveOptions'
 ]
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3.45"
+futures = "0.3"
+
+
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio = { version = "1.41.0", features = ["full"] }
+
+[features]
+wgpu = ["candle-nn/wgpu", "candle/wgpu", "candle-transformers/wgpu"]
+default=["wgpu"]

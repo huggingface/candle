@@ -1,4 +1,5 @@
-## Running [wuersthcnen] Examples
+## Test project
+This is a test project to test performance with wasm and to run candle core tests in the browser.
 
 ### Xtask
 one can compile this example for wasm and start a web server with the following command:
@@ -31,5 +32,8 @@ python -m http.server
 
 Then open `http://localhost:8000/index.html` in your browser.
 
-
-Please note that the model download will take some time. The Chrome Network tab may not show the download accurately. 
+# Run Tests:
+To Run the test call
+```bash
+wasm-pack test --chrome --test all
+```
