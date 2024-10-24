@@ -3,7 +3,7 @@ use crate::{fetch::download_file, generic_error::GenericError, opfs::{create_fil
 
 use std::path::PathBuf;
 
-use super::hfhub::{Cache, Repo, RepoType};
+use super::{Cache, Repo, RepoType};
 
 /// Helper to create [`Api`] with all the options.
 pub struct ApiBuilder {
@@ -21,7 +21,7 @@ impl Default for ApiBuilder {
 impl ApiBuilder {
     /// Default api builder
     /// ```
-    /// use hf_hub::api::sync::ApiBuilder;
+    /// use wasm_helper::hfhub::api::ApiBuilder;
     /// let api = ApiBuilder::new().build().unwrap();
     /// ```
     pub fn new() -> Self {
@@ -31,7 +31,7 @@ impl ApiBuilder {
 
     /// From a given cache
     /// ```
-    /// use hf_hub::{api::sync::ApiBuilder, Cache};
+    /// use wasm_helper::hfhub::{api::ApiBuilder, Cache};
     /// let path = std::path::PathBuf::from("/tmp");
     /// let cache = Cache::new(path);
     /// let api = ApiBuilder::from_cache(cache).build().unwrap();
@@ -86,7 +86,7 @@ impl Api {
 
     /// Simple wrapper over
     /// ```
-    /// # use hf_hub::{api::sync::Api, Repo, RepoType};
+    /// # use wasm_helper::hfhub::{api::Api, Repo, RepoType};
     /// # let model_id = "gpt2".to_string();
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Model));
@@ -97,7 +97,7 @@ impl Api {
 
     /// Simple wrapper over
     /// ```
-    /// # use hf_hub::{api::sync::Api, Repo, RepoType};
+    /// # use wasm_helper::hfhub::{api::Api, Repo, RepoType};
     /// # let model_id = "gpt2".to_string();
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Dataset));
@@ -108,7 +108,7 @@ impl Api {
 
     /// Simple wrapper over
     /// ```
-    /// # use hf_hub::{api::sync::Api, Repo, RepoType};
+    /// # use wasm_helper::hfhub::{api::Api, Repo, RepoType};
     /// # let model_id = "gpt2".to_string();
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Space));
@@ -133,7 +133,7 @@ impl ApiRepo {
 impl ApiRepo {
     /// Get the fully qualified URL of the remote filename
     /// ```
-    /// # use hf_hub::api::sync::Api;
+    /// # use wasm_helper::hfhub::api::Api;
     /// let api = Api::new().unwrap();
     /// let url = api.model("gpt2".to_string()).url("model.safetensors");
     /// assert_eq!(url, "https://huggingface.co/gpt2/resolve/main/model.safetensors");
@@ -152,9 +152,12 @@ impl ApiRepo {
     /// This will attempt the fetch the file locally first, then [`Api.download`]
     /// if the file is not present.
     /// ```no_run
-    /// use hf_hub::{api::sync::Api};
+    /// # wasm_bindgen_futures::spawn_local(async {
+    /// use wasm_helper::hfhub::{api::Api};
     /// let api = Api::new().unwrap();
-    /// let local_filename = api.model("gpt2".to_string()).get("model.safetensors").unwrap();
+    /// let local_filename = api.model("gpt2".to_string()).get("model.safetensors").await.unwrap();
+    /// # })
+    /// ```
     pub async fn get(&self, filename: &str) -> Result<PathBuf, GenericError> {
         if let Some(path) = self.api.cache.repo(self.repo.clone()).get(filename).await {
             Ok(path)
@@ -168,9 +171,11 @@ impl ApiRepo {
     /// This functions require internet access to verify if new versions of the file
     /// exist, even if a file is already on disk at location.
     /// ```no_run
-    /// # use hf_hub::api::sync::Api;
+    /// # wasm_bindgen_futures::spawn_local(async {
+    /// # use wasm_helper::hfhub::api::Api;
     /// let api = Api::new().unwrap();
-    /// let local_filename = api.model("gpt2".to_string()).download("model.safetensors").unwrap();
+    /// let local_filename = api.model("gpt2".to_string()).download("model.safetensors").await.unwrap();
+    /// # })
     /// ```
     pub async fn download(&self, filename: &str) -> Result<PathBuf, GenericError> {
         let url = self.url(filename);
