@@ -6,7 +6,7 @@ pub(crate) mod random;
 pub(crate) mod unary;
 pub(crate) mod where_cond;
 
-use candle_core::{cuda::WrapErr, Device, Result};
+use candle_core::{Device, Result};
 
 pub(crate) trait BenchDevice {
     fn sync(&self) -> Result<()>;
@@ -20,7 +20,10 @@ impl BenchDevice for Device {
             Device::Cpu => Ok(()),
             Device::Cuda(device) => {
                 #[cfg(feature = "cuda")]
-                return Ok(device.synchronize().w()?);
+                {
+                    use cuda::WrapErr;
+                    return Ok(device.synchronize().w()?);
+                }
                 #[cfg(not(feature = "cuda"))]
                 panic!("Cuda device without cuda feature enabled: {:?}", device)
             }
