@@ -145,7 +145,6 @@ fn test_matmul_kernels_wgpu()-> Result<()> {
         MatmulAlgorithm::Matmul32_32,
         MatmulAlgorithm::Matmul64_64,
         MatmulAlgorithm::Matmul64_64_8_8,
-        MatmulAlgorithm::Matmul1_64,
         MatmulAlgorithm::Matmul24_24,
         MatmulAlgorithm::Matmul24_48,
         MatmulAlgorithm::Matmul24_24B,

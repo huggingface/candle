@@ -8,8 +8,29 @@ categories.workspace = true
 
 [dependencies]
 candle = { workspace = true }
+candle-nn = { workspace = true , features = ["wgpu"]}
+candle-transformers = { workspace = true , features = ["wgpu"]}
 rand = { workspace = true }
 getrandom = { version = "0.2", features = ["js"] }
+anyhow = { workspace = true }
+num-traits = { workspace = true }
+half = { workspace = true }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.0"
+
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio = { version = "1.41.0", features = ["full"] }
+
+[build-dependencies]
+fancy-regex = "0.14.0"
+syn = "2.0"
+quote = "1.0"
+proc-macro2 = "1.0"
+prettyplease = "0.2"
+
+
+[features]
+wgpu = ["candle-nn/wgpu", "candle/wgpu", "candle-transformers/wgpu"]
+default=["wgpu"]
