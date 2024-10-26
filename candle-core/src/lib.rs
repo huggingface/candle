@@ -33,6 +33,11 @@
 //!
 //! Rust is cool, and a lot of the HF ecosystem already has Rust crates [safetensors](https://github.com/huggingface/safetensors) and [tokenizers](https://github.com/huggingface/tokenizers)
 
+#![cfg_attr(feature = "arm-nightly-feat", feature(stdarch_neon_dotprod))]
+#![cfg_attr(feature = "arm-nightly-feat", feature(array_chunks))]
+#![cfg_attr(feature = "arm-nightly-feat", feature(stdarch_neon_i8mm))]
+#![cfg_attr(feature = "arm-nightly-feat", feature(portable_simd))]
+
 #[cfg(feature = "accelerate")]
 mod accelerate;
 pub mod backend;
