@@ -30,7 +30,7 @@ pub fn euler_sample(
 
         let timestep = (*s_curr) * 1000.0;
         let noise_pred = mmdit.forward(
-            &Tensor::cat(&[x.clone(), x.clone()], 0)?,
+            &Tensor::cat(&[&x, &x], 0)?,
             &Tensor::full(timestep as f32, (2,), x.device())?.contiguous()?,
             y,
             context,
