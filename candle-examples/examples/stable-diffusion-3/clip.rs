@@ -138,13 +138,13 @@ impl StableDiffusion3TripleClipWithTokenizer {
         device: &candle::Device,
     ) -> Result<Self> {
         let vb_clip_g = unsafe {
-            candle_nn::VarBuilder::from_mmaped_safetensors(&[clip_g_file], DType::F16, &device)?
+            candle_nn::VarBuilder::from_mmaped_safetensors(&[clip_g_file], DType::F16, device)?
         };
         let vb_clip_l = unsafe {
-            candle_nn::VarBuilder::from_mmaped_safetensors(&[clip_l_file], DType::F16, &device)?
+            candle_nn::VarBuilder::from_mmaped_safetensors(&[clip_l_file], DType::F16, device)?
         };
         let vb_t5 = unsafe {
-            candle_nn::VarBuilder::from_mmaped_safetensors(&[t5xxl_file], DType::F32, &device)?
+            candle_nn::VarBuilder::from_mmaped_safetensors(&[t5xxl_file], DType::F32, device)?
         };
         let max_position_embeddings = 77usize;
         let clip_l = ClipWithTokenizer::new(
