@@ -24,7 +24,7 @@ pub fn queue_binary_buffer_from_buffer(
     lay1: &crate::Layout,
     lay2: &crate::Layout,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(&dev);
+    let mut meta = get_meta(dev);
     let pipeline = if lay1.is_contiguous() && lay2.is_contiguous() {
         let const_vec = vec![op as usize, (lay1.start_offset() == 0) as usize, (lay2.start_offset() == 0) as usize];
 

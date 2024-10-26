@@ -1,14 +1,29 @@
 use std::fs::{self, File};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use syn::ItemFn;
 use quote::quote;
 
-fn copy_test_folders(source_dir : &str) -> io::Result<()> {
+fn write_file(file_path : &std::path::PathBuf, content : &str) -> io::Result<()>{     
+    if let Ok(old_content) = fs::read_to_string(file_path.clone()) {
+        if old_content == content {
+            // No change, so skip rewriting
+            return Ok(());
+        }
+    }
+
+    // Write the new content to the destination file.
+    let mut file = File::create(file_path)?;
+    file.write_all(content.as_bytes())?;
+    Ok(())
+}
+
+fn copy_test_folders(source_dir : &str, crate_replace : &str) -> io::Result<Vec<(String, String)>> {
     let destination_dir = "./tests/";
     // Ensure the destination directory exists.
     fs::create_dir_all(destination_dir)?;
-
+    let mut data = Vec::new();
     // Iterate over all .rs files in the source directory.
     for entry in fs::read_dir(source_dir)? {
         let entry = entry?;
@@ -26,33 +41,32 @@ fn copy_test_folders(source_dir : &str) -> io::Result<()> {
             let content = fs::read_to_string(&path)?;
 
             // Process the content.
-            let new_content = process_content(&content);
-
+            let new_content = process_content(&content, crate_replace);
+          
             // Get the filename and create the destination path.
             if let Some(file_name) = path.file_name() {
+                data.push((new_content.clone(),path.file_stem().unwrap().to_str().unwrap().to_string()));
                 let destination_path = Path::new(destination_dir).join(file_name);
-                
-                if let Ok(old_content) = fs::read_to_string(destination_path.clone()) {
-                    if old_content == new_content {
-                        // No change, so skip rewriting
-                        continue;
-                    }
-                }
-
-                // Write the new content to the destination file.
-                let mut file = File::create(destination_path)?;
-                file.write_all(new_content.as_bytes())?;
+                write_file(&destination_path, &new_content)?;
             }
         }
     }
-    Ok(())
+    Ok(data)
 }
 
 fn main() -> io::Result<()> {
-    copy_test_folders("../candle-core/tests/")?;
-    copy_test_folders("../candle-nn/tests/")?;
-    copy_test_folders("../candle-transformers/tests/")?;
+    let mut data = vec![];
+    data.extend(copy_test_folders("../candle-core/tests/", "candle")?);
+    data.extend(copy_test_folders("../candle-nn/tests/","candle_nn")?);
+    data.extend(copy_test_folders("../candle-transformers/tests/", "candle_transformers")?);
 
+    let mut all = String::new();
+    for (content, name) in data.iter(){
+        all.push_str(&format!("pub mod {name} {{"));
+        all.push_str(content);
+        all.push('}');
+    }
+    write_file(&PathBuf::from_str("./tests/all.rs").unwrap(), &all)?;
     Ok(())
 }
 
@@ -81,7 +95,7 @@ fn make_fn_async_same_name_same_file<'h>(content : &'h str, function_name : &str
     re.replace_all(content, &format!("{function_name}$1$2.await"))
 }
 
-fn process_content(content: &str) -> String {
+fn process_content(content: &str, crate_replace : &str) -> String {
     let global_start = "#![allow(unused_imports, unexpected_cfgs)]".to_string();
 
     let header = "
@@ -126,7 +140,7 @@ use candle_wasm_tests::{to_vec0_round_async, to_vec1_round_async, to_vec2_round_
 
     transformed_content = transformed_content.replace("candle_core", "candle");
     transformed_content = transformed_content.replace("candle_nn::encoding::one_hot", "candle_nn::encoding::one_hot_async");
-   
+    transformed_content = transformed_content.replace("crate::", &format!("{crate_replace}::"));
     transformed_content = transformed_content.replace("test_device!", "candle_wasm_tests::test_device!");
 
     transformed_content = transformed_content.replace("fn $fn_name", "async fn $fn_name");
