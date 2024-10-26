@@ -15,16 +15,14 @@ fn run(a: &Tensor, b: &Tensor) {
 fn test_matmul(
     device: &Device,
     group: &mut criterion::BenchmarkGroup<criterion::measurement::WallTime>,
-    b: usize,
-    m: usize,
-    n: usize,
-    k: usize,
+    bmnk : (usize,usize,usize,usize),
     _is_small_line: bool,
     size: usize,
     multiple_sizes: bool,
-    tpa: bool,
-    tpb: bool,
+    tp : (bool, bool)
 ) {
+    let (b, m, n, k) = bmnk;
+    let (tpa, tpb) = tp;
     let dtype = DType::F32;
 
     let lhs = 
@@ -163,15 +161,12 @@ fn test_functions(
         test_matmul(
             device,
             group,
-            1,
-            fm(size),
-            size,
-            size,
+            (1,fm(size),size,size),
             fm(2) == 1,
             size,
             true,
-            false,
-            false,
+            (false,
+            false,)
         );
     }
     #[cfg(feature = "wgpu")]
@@ -197,101 +192,101 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("matmul_(2048x2048 * 2048x2048)");
     for device in handler.devices.iter() {
-        test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, false, false);
-        test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, true, false);
-        // test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, false, true);
-        // test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, true, true);
+        test_matmul(device, &mut group, (1, 2048, 2048, 2048), false, 1, false, (false, false));
+        test_matmul(device, &mut group, (1, 2048, 2048, 2048), false, 1, false, (true, false));
+        // test_matmul(device, &mut group, (1, 2048, 2048, 2048), false, 1, false, (false, true));
+        // test_matmul(device, &mut group, (1, 2048, 2048, 2048), false, 1, false, (true, true));
      }
     group.finish();
 
     // let mut group = c.benchmark_group("matmul_(2050x2050 * 2050x2050)");
     // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group, 1, 2050, 2050, 2050, false, 1, false, false, false);
-    //     // test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, true, false);
-    //     // test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, false, true);
-    //     // test_matmul(device, &mut group, 1, 2048, 2048, 2048, false, 1, false, true, true);
+    //     test_matmul(device, &mut group, (1, 2050, 2050, 2050), false, 1, false, (false, false));
+    //     // test_matmul(device, &mut group, (1, 2048, 2048, 2048), false, 1, false, (true, false));
+    //     // test_matmul(device, &mut group, (1, 2048, 2048, 2048), false, 1, false, (false, true));
+    //     // test_matmul(device, &mut group, (1, 2048, 2048, 2048), false, 1, false, (true, true));
     //  }
     // group.finish();
 
     // let mut group = c.benchmark_group("matmul_2*(1x9 * 9x576)");
     // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group, 2, 1, 576, 9, true, 1, false, false, false);
+    //     test_matmul(device, &mut group, (2, 1, 576, 9), true, 1, false, (false, false));
     // }
     // group.finish();
 
 
     // let mut group = c.benchmark_group("matmul_(32x2304 * 2304x5120)");
     // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group, 1, 32, 5120, 2304, false, 1, false, false, false);
-    //     // test_matmul(device, &mut group, 1, 32, 5120, 2304, false, 1, false, true, false);
-    //     // test_matmul(device, &mut group, 1, 32, 5120, 2304, false, 1, false, false, true);
-    //     // test_matmul(device, &mut group, 1, 32, 5120, 2304, false, 1, false, true, true);
+    //     test_matmul(device, &mut group, (1, 32, 5120, 2304), false, 1, false, (false, false));
+    //     // test_matmul(device, &mut group, (1, 32, 5120, 2304), false, 1, false, (true, false));
+    //     // test_matmul(device, &mut group, (1, 32, 5120, 2304), false, 1, false, (false, true));
+    //     // test_matmul(device, &mut group, 81, 32, 5120, 2304), false, 1, false, (true, true));
     // }
     // group.finish();
 
     // let mut group = c.benchmark_group("matmul_2*(1x2048 * 2048x5632)");
     // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group, 2, 1, 5632, 2048, true, 1, false, false, false);
-    //     test_matmul(device, &mut group, 2, 1, 5632, 2048, true, 1, false, true, false);
-    //     test_matmul(device, &mut group, 2, 1, 5632, 2048, true, 1, false, false, true);
-    //     test_matmul(device, &mut group, 2, 1, 5632, 2048, true, 1, false, true, true);
+    //     test_matmul(device, &mut group, (2, 1, 5632, 2048), true, 1, false, (false, false));
+    //     test_matmul(device, &mut group, (2, 1, 5632, 2048), true, 1, false, (true, false));
+    //     test_matmul(device, &mut group, (2, 1, 5632, 2048), true, 1, false, (false, true));
+    //     test_matmul(device, &mut group, (2, 1, 5632, 2048), true, 1, false, (true, true));
     // }
     //group.finish();
 
     // let mut group = c.benchmark_group("matmul_1*(1x2048 * 2048x1)");
     // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group, 1, 1, 1, 2048, true, 1, false, false, false);
+    //     test_matmul(device, &mut group, (1, 1, 1, 2048), true, 1, false, (false, false));
     // }
     // group.finish();
 
     // let mut group = c.benchmark_group("matmul_(64x2304 * 2304x5120)");
     // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group, 1, 64, 5120, 2304, false, 1, false, false, false);
-    //     // test_matmul(device, &mut group, 1, 64, 5120, 2304, false, 1, false, true, false);
-    //     // test_matmul(device, &mut group, 1, 64, 5120, 2304, false, 1, false, false, true);
-    //     // test_matmul(device, &mut group, 1, 64, 5120, 2304, false, 1, false, true, true);
+    //     test_matmul(device, &mut group, (1, 64, 5120, 2304), false, 1, false, (false, false));
+    //     // test_matmul(device, &mut group, (1, 64, 5120, 2304), false, 1, false, (true, false));
+    //     // test_matmul(device, &mut group, (1, 64, 5120, 2304), false, 1, false, (false, true));
+    //     // test_matmul(device, &mut group, (1, 64, 5120, 2304), false, 1, false, (true, true));
     // }
     // group.finish();
 
     // let mut group = c.benchmark_group("matmul_(24x1536 * 1536x6144)");
     // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group, 1, 24, 6144, 1536, false, 1, false, false, false);
+    //     test_matmul(device, &mut group, (1, 24, 6144, 1536), false, 1, false, (false, false));
     // }
     // group.finish();
 
     // let mut group = c.benchmark_group("matmul_2*(653x1536 * 1536x1536)");
     // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group, 2, 653, 1536, 1536, false, 1, false, false, false);
+    //     test_matmul(device, &mut group, (2, 653, 1536, 1536), false, 1, false, (false, false));
     // }
     // group.finish();
 
     // let mut group = c.benchmark_group("matmul_32*(32x2304 * 2304x5120)");
     // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group, 32, 32, 5120, 2304, false, 1, false, false, false);
+    //     test_matmul(device, &mut group, (32, 32, 5120, 2304), false, 1, false, (false, false));
     // }
     // group.finish();
 
     // let mut group = c.benchmark_group("matmul_(1101x1280 * 1280x1280)");
     // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group, 1, 1101, 1280, 1280, false, 1, false, false, false);
+    //     test_matmul(device, &mut group, (1, 1101, 1280, 1280), false, 1, false, (false, false));
     // }
     // group.finish();
 
     // let mut group = c.benchmark_group("matmul_10*(4096x64 * 64x4173)");
     // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group, 10, 4096, 4173, 64, false, 1, false, false, false);
+    //     test_matmul(device, &mut group, (10, 4096, 4173, 64), false, 1, false, (false, false));
     // }
     // group.finish();
 
     // let mut group = c.benchmark_group("matmul_20*(1024x64 * 64x1101)");
     // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group,  20, 1024, 1101, 64, false, 1, false, false, false);
+    //     test_matmul(device, &mut group,  (20, 1024, 1101, 64), false, 1, false, (false, false));
     // }
     // group.finish();
 
     // let mut group = c.benchmark_group("matmul_64*(64x1664 * 1664x2560)");
     // for device in handler.devices.iter() {
-    //     test_matmul(device, &mut group, 64, 64, 2560, 1664, false, 1, false);
+    //     test_matmul(device, &mut group, (64, 64, 2560, 1664), false, 1, false, (false, false)alse);
     // }
     // group.finish();
 }

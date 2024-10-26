@@ -169,16 +169,16 @@ pub fn queue_copy(
 
 pub fn queue_copy2d(
     dev: &WgpuDevice,
-    buffer_dest: BufferReferenceId,
-    buffer_input: BufferReferenceId,
+    dest: (BufferReferenceId, u32, u32),
+    input: (BufferReferenceId, u32, u32),
     dtype: crate::DType,
     d1: u32,
-    d2: u32,
-    input_stride1: u32,
-    dest_stride1: u32,
-    input_offset: u32,
-    dest_offset: u32,
+    d2: u32
 ) -> crate::Result<()> {
+
+    let (buffer_input, input_stride1, input_offset) = input;
+    let (buffer_dest, dest_stride1, dest_offset) = dest;
+
     //if buffer_dest.size > 0 && buffer_input.size > 0{
     if d1 == 1 || (input_stride1 == d2 && input_stride1 == dest_stride1) {
         return queue_copy(
@@ -313,14 +313,13 @@ pub fn queue_copy3d(
 pub fn queue_copy3d_padded(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    buffer_input: BufferReferenceId,
+    input : WgpuTensor,
     dtype: crate::DType,
-    input_layout: &crate::Layout,
     input_shape: (u32, u32, u32), //b, m, k
     dest_layout: &crate::Layout,
     _debug_info : Option<String>,
 ) -> crate::Result<()> {
-    let mut input1_stride = input_layout.stride().iter().rev();
+    let mut input1_stride = input.layout().stride().iter().rev();
 
     let input1_stride_1 = *input1_stride.next().unwrap_or(&1); //k
     let input1_stride_2 = *input1_stride.next().unwrap_or(&1); //m
@@ -334,7 +333,7 @@ pub fn queue_copy3d_padded(
     let dest_shape = dest_layout.shape().dims3()?;
 
     let const_vec = vec![
-        input_layout.start_offset() == 0,
+        input.layout().start_offset() == 0,
         dest_stride_1 != 1,
         dest_stride_2 != 1,
         dest_stride_3 != 1,
@@ -354,11 +353,11 @@ pub fn queue_copy3d_padded(
     meta.add(input1_stride_3);
     meta.add(dest_shape.2);
     meta.add(dest_shape.1);
-    if input_layout.start_offset() != 0 {
-        meta.add(input_layout.start_offset());
+    if input.layout().start_offset() != 0 {
+        meta.add(input.layout().start_offset());
     }
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
+    let bind_group = create_bind_group_input1(buffer_dest, input.buffer(), dtype.into());
     let pipeline = if input_shape.0 == 1 {
         Functions::Copy3dPaddedNobatch
     } else {
@@ -372,7 +371,7 @@ pub fn queue_copy3d_padded(
         ((dest_shape.2 + 15) / 16) as u32,
         ((dest_shape.1 + 15) / 16) as u32,
         input_shape.0,
-        input_layout.shape().elem_count(),
+        input.layout().shape().elem_count(),
         #[cfg(feature="wgpu_debug")]
         _debug_info
     );
@@ -384,12 +383,11 @@ pub fn queue_transpose3d(
     buffer_dest: BufferReferenceId,
     buffer_input: BufferReferenceId,
     dtype: crate::DType,
-    batch: u32,
-    width: u32,
-    height: u32,
+    input_shape: (u32, u32, u32), //b, width, height
     start_offset : usize,
     batch_stride : usize,
 ) -> crate::Result<()> {
+    let (batch, width, height) = input_shape;
     let mut meta = get_meta(dev);
     meta.add(width);
     meta.add(height);

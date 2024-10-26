@@ -4,28 +4,6 @@ use crate::wgpuError;
 
 use super::*;
 
-// pub fn queue_convert_u32_to_f32(
-//     dev: &WgpuDevice,
-//     buffer_dest: BufferReferenceId,
-//     buffer_input: BufferReferenceId,
-//     input_layout: &crate::Layout,
-// ) -> crate::Result<()> {
-//     let mut meta = get_meta(&dev);
-//     meta.add_layout1(&input_layout);
-
-//     let pipeline = meta.get_pipeline(Pipelines::Convert(DType::U32, Functions::ConvertToF32));
-//     let bind_group =
-//         create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned4);
-//     enqueue(
-//         meta,
-//         pipeline,
-//         bind_group,
-//         input_layout.shape().elem_count() as u32,
-//         input_layout.shape().elem_count(),
-//     );
-//     return Ok(());
-// }
-
 pub fn queue_convert_u8_to_f32(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
@@ -47,29 +25,6 @@ pub fn queue_convert_u8_to_f32(
     );
     Ok(())
 }
-
-// pub fn queue_convert_f32_to_u32(
-//     dev: &WgpuDevice,
-//     buffer_dest: BufferReferenceId,
-//     buffer_input: BufferReferenceId,
-//     input_layout: &crate::Layout,
-// ) -> crate::Result<()> {
-//     let mut meta = get_meta(&dev);
-//     meta.add_layout1(&input_layout);
-
-//     let pipeline = meta.get_pipeline(Pipelines::Convert(DType::F32, Functions::ConvertToU32));
-
-//     let bind_group =
-//         create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned4);
-//     enqueue(
-//         meta,
-//         pipeline,
-//         bind_group,
-//         input_layout.shape().elem_count() as u32,
-//         input_layout.shape().elem_count(),
-//     );
-//     return Ok(());
-// }
 
 pub fn queue_convert_u32_to_u8(
     dev: &WgpuDevice,

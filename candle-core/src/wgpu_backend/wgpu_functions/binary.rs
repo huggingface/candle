@@ -17,28 +17,26 @@ pub enum BinaryOperation {
 pub fn queue_binary_buffer_from_buffer(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    buffer_input2: BufferReferenceId,
+    input1 : WgpuTensor,
+    input2 : WgpuTensor,
     op: BinaryOperation,
     dtype: crate::DType,
-    lay1: &crate::Layout,
-    lay2: &crate::Layout,
 ) -> crate::Result<()> {
     let mut meta = get_meta(dev);
-    let pipeline = if lay1.is_contiguous() && lay2.is_contiguous() {
-        let const_vec = vec![op as usize, (lay1.start_offset() == 0) as usize, (lay2.start_offset() == 0) as usize];
+    let pipeline = if input1.layout().is_contiguous() && input2.layout().is_contiguous() {
+        let const_vec = vec![op as usize, (input1.layout().start_offset() == 0) as usize, (input2.layout().start_offset() == 0) as usize];
 
-        meta.add(lay1.shape().elem_count()); //input1_length
-        meta.add(lay1.start_offset());
-        meta.add(lay2.start_offset());
+        meta.add(input1.layout().shape().elem_count()); //input1_length
+        meta.add(input1.layout().start_offset());
+        meta.add(input2.layout().start_offset());
 
 
         let inplaceable = OpIsInplaceable {
-            input1_inplaceable: lay1.start_offset() == 0,
-            input2_inplaceable: lay2.start_offset() == 0,
+            input1_inplaceable: input1.layout().start_offset() == 0,
+            input2_inplaceable: input2.layout().start_offset() == 0,
         };
 
-        if lay1.shape().elem_count() > 65535 * 64 {
+        if input1.layout().shape().elem_count() > 65535 * 64 {
             meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
         }
 
@@ -52,10 +50,10 @@ pub fn queue_binary_buffer_from_buffer(
         )
     } else {
         let const_vec = vec![op as usize];
-        meta.add_layout1(lay1);
-        meta.add_layout2(lay2);
+        meta.add_layout1(input1.layout());
+        meta.add_layout2(input2.layout());
 
-        if lay1.shape().elem_count() > 65535 * 64 {
+        if input1.layout().shape().elem_count() > 65535 * 64 {
             meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
         }
 
@@ -65,13 +63,13 @@ pub fn queue_binary_buffer_from_buffer(
         )
     };
 
-    let bind_group = create_bind_group_input2(buffer_dest, buffer_input1, buffer_input2, dtype.into());
+    let bind_group = create_bind_group_input2(buffer_dest, input1.buffer(), input2.buffer(), dtype.into());
 
     enqueue_big_extra(
         meta,
         pipeline,
         bind_group,
-        lay1.shape().elem_count() as u32,
+        input1.layout().shape().elem_count() as u32,
         #[cfg(feature = "wgpu_debug")]
         Some(format!("OP: {:?}, layout: {:?}", op, lay1)),
     );

@@ -144,34 +144,33 @@ pub fn queue_unary_inplace_op(
 pub fn queue_unary_from_buffer_op(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    buffer_input: BufferReferenceId,
+    input : WgpuTensor,
     op: UnaryOperation,
     scalar1: f32,
     scalar2: f32,
-    dtype: crate::DType,
-    input_layout: &crate::Layout,
+    dtype: crate::DType
 ) -> crate::Result<()> {
     let mut meta = get_meta(dev);
-    let pipeline = if input_layout.is_contiguous() {
-        let const_vec = vec![op as u32, (input_layout.start_offset() == 0) as u32];
+    let pipeline = if input.layout().is_contiguous() {
+        let const_vec = vec![op as u32, (input.layout().start_offset() == 0) as u32];
 
         meta.add(scalar1);
         meta.add(scalar2);
-        meta.add(input_layout.shape().elem_count()); //length
+        meta.add(input.layout().shape().elem_count()); //length
 
-        if input_layout.start_offset() != 0 || op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
-            meta.add(input_layout.start_offset());
+        if input.layout().start_offset() != 0 || op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
+            meta.add(input.layout().start_offset());
         }
         if op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
             meta.add(dev.rand_state.lock().unwrap().next_u32());
         }
 
         let inplaceable = OpIsInplaceable {
-            input1_inplaceable: input_layout.start_offset() == 0,
+            input1_inplaceable: input.layout().start_offset() == 0,
             input2_inplaceable: false,
         };
 
-        if input_layout.shape().elem_count() > 65535 * 64 {
+        if input.layout().shape().elem_count() > 65535 * 64 {
             meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
         }
 
@@ -186,10 +185,10 @@ pub fn queue_unary_from_buffer_op(
 
         meta.add(scalar1);
         meta.add(scalar2);
-        meta.add_layout1(input_layout);
+        meta.add_layout1(input.layout());
 
         
-        if input_layout.shape().elem_count() > 65535 * 64 {
+        if input.layout().shape().elem_count() > 65535 * 64 {
             meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
         }
 
@@ -200,14 +199,14 @@ pub fn queue_unary_from_buffer_op(
     };
 
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
+    let bind_group = create_bind_group_input1(buffer_dest, input.buffer(), dtype.into());
     enqueue_big_extra(
         meta,
         pipeline,
         bind_group,
-        input_layout.shape().elem_count() as u32,
+        input.layout().shape().elem_count() as u32,
         #[cfg(feature = "wgpu_debug")]
-        Some(format!("OP: {:?}, layout: {:?}", op, input_layout)),
+        Some(format!("OP: {:?}, layout: {:?}", op, input.layout())),
     );
 
     Ok(())

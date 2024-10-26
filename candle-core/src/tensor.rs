@@ -613,6 +613,24 @@ impl Tensor {
         }
     }
 
+    async fn tensor_from_cpu_storage_async<T>(&self, from_cpu_storage : impl Fn(&crate::CpuStorage) -> Result<T>) -> Result<T>{
+        let wgpu_storage;
+        {
+            match &*self.storage() {
+                Storage::Cpu(cpu_storage) => return from_cpu_storage(cpu_storage),
+                Storage::Cuda(storage) => return from_cpu_storage(&storage.to_cpu_storage()?),
+                Storage::Metal(storage) => return from_cpu_storage(&storage.to_cpu_storage()?),
+                Storage::Wgpu(storage) => 
+                {
+                    //https://github.com/rust-lang/rust-clippy/issues/6446
+                    //We need to return the scope here so that Clippy can detect that we are not using the MutexGuard with the await.
+                    wgpu_storage = storage.temporary_clone();
+                },
+            }
+        }
+        from_cpu_storage(&wgpu_storage.to_cpu_storage_async().await?)
+    }
+
     /// Retrieves the single scalar value hold in the tensor. If the tensor contains multiple
     /// dimensions, an error is returned instead.
     pub async fn to_scalar_async<S: crate::WithDType>(&self) -> Result<S> {
@@ -628,12 +646,7 @@ impl Tensor {
             let data = S::cpu_storage_as_slice(cpu_storage)?;
             Ok::<_, Error>(data[self.layout().start_offset()])
         };
-        match &*self.storage() {
-            Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
-            Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage_async().await?),
-        }
+        self.tensor_from_cpu_storage_async(from_cpu_storage).await
     }
 
 
@@ -1680,12 +1693,8 @@ impl Tensor {
             };
             Ok::<Vec<_>, Error>(data)
         };
-        match &*self.storage() {
-            Storage::Cpu(storage) => from_cpu_storage(storage),
-            Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage_async().await?),
-        }
+
+        self.tensor_from_cpu_storage_async(from_cpu_storage).await
     }
 
 
@@ -1746,12 +1755,7 @@ impl Tensor {
             }
             Ok(rows)
         };
-        match &*self.storage() {
-            Storage::Cpu(storage) => from_cpu_storage(storage),
-            Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage_async().await?),
-        }
+        self.tensor_from_cpu_storage_async(from_cpu_storage).await
     }
 
     /// Returns the data contained in a 3D tensor.
@@ -1831,12 +1835,7 @@ impl Tensor {
             }
             Ok(top_rows)
         };
-        match &*self.storage() {
-            Storage::Cpu(storage) => from_cpu_storage(storage),
-            Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Wgpu(storage) => from_cpu_storage(&storage.to_cpu_storage_async().await?),
-        }
+        self.tensor_from_cpu_storage_async(from_cpu_storage).await
     }
 
     /// The dtype for the elements stored in the input tensor.
@@ -2194,71 +2193,62 @@ impl Tensor {
         if self.device().same_device(device) {
             Ok(self.clone())
         } else {
-            let storage = match (&*self.storage(), device) {
-                (Storage::Cpu(storage), Device::Cuda(cuda)) => {
-                    Storage::Cuda(cuda.storage_from_cpu_storage(storage)?)
-                }
-                (Storage::Cpu(storage), Device::Metal(metal)) => {
-                    Storage::Metal(metal.storage_from_cpu_storage(storage)?)
-                }
-                (Storage::Cpu(storage), Device::Wgpu(wgpu)) => {
-                    Storage::Wgpu(wgpu.storage_from_cpu_storage(storage)?)
-                }
-                (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
-                (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
-                (Storage::Cuda(storage), Device::Cuda(cuda)) => {
-                    // TODO: Avoid passing through the cpu storage here, especially if the gpu ids
-                    // are the same.
-                    let cpu_storage = storage.to_cpu_storage()?;
-                    Storage::Cuda(cuda.storage_from_cpu_storage(&cpu_storage)?)
-                }
-                (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
-                (Storage::Wgpu(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage_async().await?),
-                _ => {
-                    bail!(
-                        "not implemented yet, self.device: {:?}, device: {:?}",
-                        self.device(),
-                        device
-                    )
-                }
+            
+            let to_device_helper = |storage| {
+                let op = BackpropOp::new1(self, Op::ToDevice);
+                let tensor_ = Tensor_ {
+                    id: TensorId::new(),
+                    storage: Arc::new(RwLock::new(storage)),
+                    layout: self.layout.clone(),
+                    op,
+                    is_variable: false,
+                    dtype: self.dtype,
+                    device: device.clone(),
+                };
+                Ok(Tensor(Arc::new(tensor_)))
             };
-            let op = BackpropOp::new1(self, Op::ToDevice);
-            let tensor_ = Tensor_ {
-                id: TensorId::new(),
-                storage: Arc::new(RwLock::new(storage)),
-                layout: self.layout.clone(),
-                op,
-                is_variable: false,
-                dtype: self.dtype,
-                device: device.clone(),
-            };
-            Ok(Tensor(Arc::new(tensor_)))
-        }
-    }
-
-    /// If the target device is the same as the tensor device, only a shallow copy is performed.
-    /// This Function is only needed for wgpu -> Cpu, in all other cases one can use the sync version.
-    pub async fn to_cpu_device(&self) -> Result<Tensor> {
-        if self.device().same_device(&Device::Cpu) {
-            Ok(self.clone())
-        } else {
-            let storage = match &*self.storage() {
-                Storage::Cuda(storage) => Storage::Cpu(storage.to_cpu_storage()?),
-                Storage::Metal(storage) => Storage::Cpu(storage.to_cpu_storage()?),
-                Storage::Cpu(storage) => Storage::Cpu(storage.clone()),
-                Storage::Wgpu(storage) => Storage::Cpu(storage.to_cpu_storage_async().await?),
-            };
-            let op = BackpropOp::new1(self, Op::ToDevice);
-            let tensor_ = Tensor_ {
-                id: TensorId::new(),
-                storage: Arc::new(RwLock::new(storage)),
-                layout: self.layout.clone(),
-                op,
-                is_variable: false,
-                dtype: self.dtype,
-                device: Device::Cpu,
-            };
-            Ok(Tensor(Arc::new(tensor_)))
+            
+            let wgpu_storage;
+            {
+                let storage_guard = self.storage();
+                match (&*storage_guard, device) {
+                    (Storage::Cpu(storage), Device::Cuda(cuda)) => {
+                        return to_device_helper(Storage::Cuda(cuda.storage_from_cpu_storage(storage)?));
+                    }
+                    (Storage::Cpu(storage), Device::Metal(metal)) => {
+                        return to_device_helper(Storage::Metal(metal.storage_from_cpu_storage(storage)?));
+                    }
+                    (Storage::Cpu(storage), Device::Wgpu(wgpu)) => {
+                        return to_device_helper(Storage::Wgpu(wgpu.storage_from_cpu_storage(storage)?));
+                    }
+                    (Storage::Cuda(storage), Device::Cpu) => {return to_device_helper(Storage::Cpu(storage.to_cpu_storage()?));},
+                    (Storage::Metal(storage), Device::Cpu) => {return to_device_helper(Storage::Cpu(storage.to_cpu_storage()?));},
+                    (Storage::Cuda(storage), Device::Cuda(cuda)) => {
+                        // TODO: Avoid passing through the cpu storage here, especially if the gpu ids
+                        // are the same.
+                        let cpu_storage = storage.to_cpu_storage()?;
+                        return to_device_helper(Storage::Cuda(cuda.storage_from_cpu_storage(&cpu_storage)?));
+                    }
+                    (Storage::Cpu(storage), Device::Cpu) => {return to_device_helper(Storage::Cpu(storage.clone()));},
+                    (Storage::Wgpu(storage), Device::Cpu) => {
+                        wgpu_storage = Some(storage.temporary_clone());
+                    },
+                    _ => {
+                        bail!(
+                            "not implemented yet, self.device: {:?}, device: {:?}",
+                            self.device(),
+                            device
+                        )
+                    }
+                };
+            }
+            
+            if let Some(wgpu_storage) = wgpu_storage{
+                to_device_helper(Storage::Cpu(wgpu_storage.to_cpu_storage_async().await?))
+            }
+            else{
+                unreachable!()
+            }
         }
     }
 

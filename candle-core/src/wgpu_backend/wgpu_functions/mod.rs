@@ -62,6 +62,26 @@ pub use where_cond::queue_where_cond;
 
 pub const MAX_DISPATCH_SIZE: u32 = 65535;
 
+#[derive(Debug, Copy, Clone)]
+pub struct WgpuTensor<'a>{
+    layout : &'a Layout,
+    buffer : BufferReferenceId,
+}
+
+impl<'a> WgpuTensor<'a> {
+    pub fn new(layout: &'a Layout, buffer: BufferReferenceId) -> Self {
+        Self { layout, buffer }
+    }
+    
+    pub fn layout(&self) -> &Layout {
+        self.layout
+    }
+    
+    pub fn buffer(&self) -> BufferReferenceId {
+        self.buffer
+    }
+}
+
 ///Helper Type MetaArray, for constructing the MetaBuffer
 #[derive(Debug)]
 pub struct MetaArray(pub Vec<u32>);
@@ -877,8 +897,7 @@ pub(crate) fn flush_gpu_command(
     if !queue_buffer.command_queue.is_empty() {
         let mut cache = dev
             .cache
-            .lock()
-            .expect("flush gpu_commadn could not lock cache");
+            .lock().expect("");
         prepare(dev, queue_buffer, &mut cache);
         {
             let mut start_index = 0;
@@ -961,8 +980,7 @@ pub(crate) async fn flush_gpu_command_async(
         log::debug!("flush_gpu_command_async");
         let mut cache = dev
             .cache
-            .lock()
-            .expect("flush gpu_command could not lock cache");
+            .lock().expect("");
         prepare(dev, queue_buffer, &mut cache);
         {
             let mut start_index = 0;
@@ -1406,30 +1424,6 @@ async fn synchronize_device(dev: &WgpuDevice) -> crate::Result<()> {
     wait_for_gpu_buffer_async(dev).await
 }
 
-#[instrument(skip(dev,buffer))]
-pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
-    dev: &WgpuDevice,
-    buffer: BufferReferenceId,
-) -> crate::Result<Vec<T>> {
-    let mut command_queue = dev.command_queue.lock().unwrap();
-    flush_gpu_command_async(dev, &mut command_queue).await?; //send all previous commands to the gpu
-
-    let cache = dev.cache.lock().unwrap();
-    if let Some(buffer) = cache.buffer_reference.get(&buffer) {
-        let buffer_storage = buffer.cached_buffer_id();
-        if buffer_storage.is_valid() {
-            if let Some(buffer) = cache.buffers.get_buffer(buffer_storage) {
-                Ok(read_data_from_gpu_async_buffer(dev, buffer.buffer()).await)
-            } else {
-                panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
-            }
-        } else {
-            panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
-        }
-    } else {
-        panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer Reference")
-    }
-}
 
 pub fn copy_to_staging_probe(dev: &WgpuDevice, buffer: &wgpu::Buffer) {
     let mut encoder = dev
@@ -1476,13 +1470,12 @@ pub async fn wait_for_gpu_buffer_async(dev: &WgpuDevice) -> crate::Result<()> {
 }
 
 #[instrument(skip(dev, buffer))]
-pub async fn read_data_from_gpu_async_buffer<T: bytemuck::Pod>(
+pub async fn read_from_buffer_async<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: &wgpu::Buffer,
-) -> Vec<T> {
+) -> crate::Result<Vec<T>> {
     let dest_size = buffer.size();
 
-    //TODO: use cached staging buffer!
     let staging_buffer = dev.device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: dest_size,
@@ -1498,6 +1491,64 @@ pub async fn read_data_from_gpu_async_buffer<T: bytemuck::Pod>(
     // Submits command encoder for processing
     dev.queue.submit(Some(encoder.finish()));
 
+    read_from_staging_buffer_async(dev, staging_buffer).await
+}
+
+fn copy_buffer_to_staging_buffer(dev: &WgpuDevice, buffer : &wgpu::Buffer) -> wgpu::Buffer{
+    let dest_size = buffer.size();
+    let staging_buffer = dev.device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: dest_size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = dev
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+    encoder.copy_buffer_to_buffer(buffer, 0, &staging_buffer, 0, dest_size);
+
+    // Submits command encoder for processing
+    dev.queue.submit(Some(encoder.finish()));
+    staging_buffer
+} 
+
+#[instrument(skip(dev))]
+pub async fn read_from_buffer_reference_async<T: bytemuck::Pod>(
+    dev: &WgpuDevice,
+    buffer_reference : BufferReferenceId
+) -> crate::Result<Vec<T>> {
+
+    let mut command_queue = dev.command_queue.lock().unwrap();
+    flush_gpu_command_async(dev, &mut command_queue).await?; //send all previous commands to the gpu
+    let staging_buffer;
+    {
+        let cache = dev.cache.lock().unwrap();
+        if let Some(buffer) = cache.buffer_reference.get(&buffer_reference) {
+            let buffer_storage = buffer.cached_buffer_id();
+            if buffer_storage.is_valid() {
+                if let Some(buffer) = cache.buffers.get_buffer(buffer_storage) {
+                    staging_buffer = copy_buffer_to_staging_buffer(dev, buffer.buffer());
+                } else {
+                    panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
+                }
+            } else {
+                panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
+            }
+        } else {
+            panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer Reference")
+        }
+    }
+   
+    read_from_staging_buffer_async(dev, staging_buffer).await
+}
+
+
+#[instrument(skip(dev, staging_buffer))]
+async fn read_from_staging_buffer_async<T: bytemuck::Pod>(
+    dev: &WgpuDevice,
+    staging_buffer : wgpu::Buffer
+) -> crate::Result<Vec<T>> {
     // Note that we're not calling `.await` here.
     let buffer_slice = staging_buffer.slice(..);
     // Sets the buffer up for mapping, sending over the result of the mapping back to us when it is finished.
@@ -1530,7 +1581,7 @@ pub async fn read_data_from_gpu_async_buffer<T: bytemuck::Pod>(
                                 // It effectively frees the memory
 
         // Returns data from buffer
-        result
+        Ok(result)
     } else {
         panic!("failed to run compute on gpu!")
     }

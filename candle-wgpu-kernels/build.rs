@@ -379,8 +379,7 @@ fn organize_modules(snippets: impl Iterator<Item=(String, String)>) -> String {
         let mut immediate_modules: HashMap<&str, Vec<&String>> = HashMap::new();
         let mut immediate_code = Vec::new();
         for (path, codes) in module_map {
-            if path.starts_with(prefix) {
-                let remainder = &path[prefix.len()..];
+            if let Some(remainder) = path.strip_prefix(prefix) {
                 if remainder.is_empty() {
                     immediate_code.extend(codes.iter());
                 } else {

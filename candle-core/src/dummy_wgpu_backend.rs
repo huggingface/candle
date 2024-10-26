@@ -146,6 +146,10 @@ impl WgpuStorage{
     pub async fn to_cpu_storage_async(&self) -> crate::Result<crate::CpuStorage> {
         Err(Error::NotCompiledWithWgpuSupport)
     }
+
+    pub (crate) fn temporary_clone(&self) -> Self{
+        Self
+    }
 }
 
 impl crate::backend::BackendStorage for WgpuStorage {

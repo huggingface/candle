@@ -474,7 +474,7 @@ impl Model {
         log::info!("Image decoded");
 
         let image = (image.clamp(0f32, 1f32)? * 255.)?
-            .to_cpu_device()
+            .to_device_async(&Device::Cpu)
             .await?
             .to_dtype(DType::U8)?
             .i(0)?;

@@ -721,7 +721,7 @@ impl WgpuDevice {
     pub async fn get_debug_info_full(&self) -> crate::Result<Measurements> {
         use super::wgpu_functions::synchronize_async;
         synchronize_async(self).await?;
-        let data = wgpu_functions::read_data_from_gpu_async_buffer::<u64>(
+        let data = wgpu_functions::read_from_buffer_async::<u64>(
             self,
             &self.debug.query_set_buffer,
         )

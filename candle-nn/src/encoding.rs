@@ -152,15 +152,14 @@ pub fn one_hot<D: WithDType>(
 /// ## One-hot encoding
 ///
 /// ```rust
-/// # wasm_bindgen_futures::spawn_local(async {
 /// use candle::{Shape, Tensor, Device};
-/// use candle_nn::encoding::one_hot_async;
+/// use candle_nn::encoding::one_hot;
 ///
 /// let device = candle::Device::Cpu;
 ///
 /// let indices = Tensor::new(vec![vec![0i64, 2], vec![1, -1]], &device).unwrap();
 /// let depth = 4;
-/// let one_hot = one_hot_async(indices, depth, 1f32, 0f32).await.unwrap();
+/// let one_hot = one_hot(indices, depth, 1f32, 0f32).unwrap();
 ///
 /// let expected_matrix = [
 ///     [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
@@ -172,12 +171,10 @@ pub fn one_hot<D: WithDType>(
 /// let matrix = one_hot.to_vec3::<f32>().unwrap();
 ///
 /// assert_eq!(matrix, expected_matrix);
-/// # }
 ///```
 /// ## One-cold Encoding
 ///
 /// ```rust
-/// # wasm_bindgen_futures::spawn_local(async {
 /// use candle::{Shape, Tensor, Device};
 /// use candle_nn::encoding::one_hot;
 ///
@@ -185,7 +182,7 @@ pub fn one_hot<D: WithDType>(
 /// let device = candle::Device::Cpu;
 /// let depth = 4;
 /// let indices = Tensor::new(vec![vec![0u8, 2], vec![1, 3]], &device).unwrap();
-/// let one_cold = one_hot_async(indices, depth, 0u8, 1u8).await.unwrap();
+/// let one_cold = one_hot(indices, depth, 0u8, 1u8).unwrap();
 ///
 /// let expected_matrix = [[[0, 1, 1, 1], [1, 1, 0, 1]], [[1, 0, 1, 1], [1, 1, 1, 0]]];
 ///
@@ -194,7 +191,6 @@ pub fn one_hot<D: WithDType>(
 /// let matrix = one_cold.to_vec3::<u8>().unwrap();
 ///
 /// assert_eq!(matrix, expected_matrix);
-/// # }
 /// ```
 ///
 ///

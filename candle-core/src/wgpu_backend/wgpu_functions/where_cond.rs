@@ -5,19 +5,16 @@ use super::*;
 pub fn queue_where_cond(
     dev: &WgpuDevice,
     dest_buffer: BufferReferenceId,
-    input_buffer: BufferReferenceId,
-    true_buffer: BufferReferenceId,
-    false_buffer: BufferReferenceId,
-    layout_input: &crate::Layout,
-    layout_true: &crate::Layout,
-    layout_false: &crate::Layout,
+    input : WgpuTensor, 
+    tensor_true : WgpuTensor, 
+    tensor_false : WgpuTensor,
     cond_type: crate::DType,
     dtype: crate::DType,
 ) -> crate::Result<()> {
     let mut meta = get_meta(dev);
-    meta.add_layout1(layout_input);
-    meta.add_layout2(layout_true);
-    meta.add_layout3(layout_false);
+    meta.add_layout1(input.layout());
+    meta.add_layout2(tensor_true.layout());
+    meta.add_layout3(tensor_false.layout());
 
     let (pipeline, cond_alignment) = match cond_type {
         crate::DType::U32 => (Pipelines::WhereCond(get_dtype(dtype)?, candle_wgpu_kernels::where_cond::Functions::WhereCondIndexU32), cond_type.into()),
@@ -29,9 +26,9 @@ pub fn queue_where_cond(
     
     let bind_group = create_bind_group_input3_with_alignment(
         dest_buffer,
-        input_buffer,
-        true_buffer,
-        false_buffer,
+        input.buffer(),
+        tensor_true.buffer(),
+        tensor_false.buffer(),
         BindgroupAlignmentLayout::Bindgroup3(
             dtype.into(),
             cond_alignment,
@@ -43,8 +40,8 @@ pub fn queue_where_cond(
         meta,
         pipeline,
         bind_group,
-        layout_input.shape().elem_count() as u32,
-        layout_input.shape().elem_count(),
+        input.layout().shape().elem_count() as u32,
+        input.layout().shape().elem_count(),
     );
     Ok(())
 }

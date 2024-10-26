@@ -12,6 +12,15 @@ pub enum ReduceOperations {
     ArgMax = 4,
 }
 
+pub struct ReduceParams{
+    pub dest_size: u32,
+    pub output_to_start_shape_stride2: u32,
+    pub output_to_start_stride1: u32,
+    pub output_to_start_stride2: u32,
+    pub reduction_length: u32,
+    pub stride_reduction: u32,
+}
+
 pub fn queue_reduce_from_buffer_op(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
@@ -19,13 +28,16 @@ pub fn queue_reduce_from_buffer_op(
     op: ReduceOperations,
     dtype: crate::DType,
     layout_input1: &Layout,
-    dest_size: u32,
-    output_to_start_shape_stride2: u32,
-    output_to_start_stride1: u32,
-    output_to_start_stride2: u32,
-    reduction_length: u32,
-    stride_reduction: u32,
+    params : ReduceParams
 ) -> crate::Result<()> {
+    let ReduceParams {
+        dest_size, 
+        output_to_start_shape_stride2,
+        output_to_start_stride1, 
+        output_to_start_stride2,
+        reduction_length,
+        stride_reduction} = params;
+
     let mut meta = get_meta(dev);
 
     let const_vec = vec![op as u32, stride_reduction];
@@ -36,8 +48,6 @@ pub fn queue_reduce_from_buffer_op(
     meta.add(output_to_start_stride2);
     meta.add(dest_size);
     meta.add_layout1(layout_input1);
-
-   
 
     let use_small_reduce =  reduction_length < 16 || stride_reduction != 1;
 

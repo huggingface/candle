@@ -30,13 +30,11 @@ mod transpose {
         buffer_dest: BufferReferenceId,
         buffer_input: BufferReferenceId,
         dtype: crate::DType,
-        batch: u32,
-        width: u32,
-        height: u32,
+        input_shape : (u32, u32, u32), //batch, width, height
         start_offset: usize,
-        batch_stride : usize,
-        _debug_info : Option<String>
+        batch_stride : usize
     ) -> crate::Result<()> {
+        let (batch, width, height) = input_shape;
         let pipeline;
         let tile_w;
         let tile_h;
@@ -67,9 +65,7 @@ mod transpose {
                 buffer_dest,
                 buffer_input,
                 dtype,
-                batch,
-                width,
-                height,
+                (batch, width, height),
                 start_offset,
                 batch_stride
             );
@@ -87,16 +83,14 @@ mod transpose {
         let pipeline = meta.get_pipeline_const(pipeline, const_vec);
 
         let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
-        enqueue_workgroups_extra(
+        enqueue_workgroups(
             meta,
             pipeline,
             bind_group,
             (width + tile_w - 1) / tile_w,
             (height + tile_h - 1) / tile_h,
             batch,
-            (width * height * batch) as usize,
-            #[cfg(feature="wgpu_debug")]
-            _debug_info
+            (width * height * batch) as usize
         );
         Ok(())
     }
@@ -105,7 +99,7 @@ mod transpose {
 mod sgemm {
 
     use super::*;
-    use crate::{Layout, Shape};
+    use crate::Shape;
 
     //#[cfg(feature = "wgpu_debug")]
     fn get_debug_string(params: &SGEMMParams) -> String {
@@ -121,20 +115,19 @@ mod sgemm {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn queue_matmul_buffer1(
         dev: &WgpuDevice,
         buffer_dest: BufferReferenceId,
-        buffer_input1: BufferReferenceId,
-        buffer_input2: BufferReferenceId,
+        input1 : WgpuTensor,
+        input2 : WgpuTensor,
         params: SGEMMParams,
-        layout_input1: &Layout,
-        layout_input2: &Layout,
-        _dtype: crate::DType,
+        dtype: crate::DType,
         pipeline: Pipelines,
         is_16bytes_aligned: bool,
     ) -> crate::Result<()> {
-        let mut input1_stride = layout_input1.stride().iter().rev();
-        let mut input2_stride = layout_input2.stride().iter().rev();
+        let mut input1_stride = input1.layout().stride().iter().rev();
+        let mut input2_stride = input2.layout().stride().iter().rev();
 
         let input1_stride_k = *input1_stride.next().unwrap_or(&1);
         let input1_stride_m = *input1_stride.next().unwrap_or(&1);
@@ -159,10 +152,10 @@ mod sgemm {
         meta.add(params.n);
 
         meta.add(input1_stride_b); //input1_stride_b
-        meta.add(layout_input1.start_offset()); //input1_offset
+        meta.add(input1.layout().start_offset()); //input1_offset
 
         meta.add(input2_stride_b); //input2_stride_b
-        meta.add(layout_input2.start_offset()); //input2_offset
+        meta.add(input2.layout().start_offset()); //input2_offset
 
         meta.add(input1_stride_k);
         meta.add(input1_stride_m);
@@ -171,12 +164,12 @@ mod sgemm {
 
         let pipeline = meta.get_pipeline_const(pipeline, const_vec.clone());
 
-        let input_alignment: BindgroupAlignment = _dtype.into();
+        let input_alignment: BindgroupAlignment = dtype.into();
         let bind_group = if input_alignment == BindgroupAlignment::Aligned4 && is_16bytes_aligned {
             create_bind_group_input2_with_alignment(
                 buffer_dest,
-                buffer_input1,
-                buffer_input2,
+                input1.buffer(),
+                input2.buffer(),
                 BindgroupAlignmentLayout::Bindgroup2(
                     BindgroupAlignment::Aligned4,
                     BindgroupAlignment::Aligned16,
@@ -186,8 +179,8 @@ mod sgemm {
         } else {
             create_bind_group_input2_with_alignment(
                 buffer_dest,
-                buffer_input1,
-                buffer_input2,
+                input1.buffer(),
+                input2.buffer(),
                 BindgroupAlignmentLayout::Bindgroup2(
                     BindgroupAlignment::Aligned4,
                     BindgroupAlignment::Aligned4,
@@ -292,14 +285,13 @@ mod sgemm {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn queue_matmul_generic(
         dev: &WgpuDevice,
         buffer_dest: BufferReferenceId,
-        buffer_input1: BufferReferenceId,
-        buffer_input2: BufferReferenceId,
+        input1 : WgpuTensor,
+        input2 : WgpuTensor,
         params: SGEMMParams,
-        layout_input1: &Layout,
-        layout_input2: &Layout,
         dtype: crate::DType,
         settings: GenericMatmulSettings,
         pipeline: Pipelines,
@@ -328,8 +320,8 @@ mod sgemm {
 
         let need_different_output_buffer = params.m != new_m || params.n != new_n;
 
-        let mut input1_stride = layout_input1.stride().iter().rev();
-        let mut input2_stride = layout_input2.stride().iter().rev();
+        let mut input1_stride = input1.layout().stride().iter().rev();
+        let mut input2_stride = input2.layout().stride().iter().rev();
 
         let input1_stride_k = *input1_stride.next().unwrap_or(&1);
         let input1_stride_m = *input1_stride.next().unwrap_or(&1);
@@ -340,7 +332,7 @@ mod sgemm {
         assert!(k_tile % 4 == 0);
 
         let no_padding_needed_input1_tile = ((params.m % m_tile == 0 && params.k % k_tile == 0) || NON_PADDED)
-            && layout_input1.start_offset() % 4 == 0 //input will be loaded 16 bytes aligned
+            && input1.layout().start_offset() % 4 == 0 //input will be loaded 16 bytes aligned
             && !(input1_stride_m != 1 && input1_stride_k != 1);
 
         let no_padding_needed_input1_stride =
@@ -350,7 +342,7 @@ mod sgemm {
 
         let no_padding_needed_input2_tile = ((params.n % n_tile == 0 && params.k % k_tile == 0)
             || NON_PADDED)
-            && layout_input2.start_offset() % 4 == 0
+            && input2.layout().start_offset() % 4 == 0
             && !(input2_stride_n != 1 && input2_stride_k != 1);
 
         let no_padding_needed_input2_stride =
@@ -359,7 +351,7 @@ mod sgemm {
             no_padding_needed_input2_tile && no_padding_needed_input2_stride;
 
         let (buffer_input1_padded, layout_input1_padded) = if no_padding_needed_input1 {
-            (buffer_input1, layout_input1.clone())
+            (input1.buffer(), input1.layout().clone())
         } else {
             let mut cache = dev.cache.lock().unwrap();
             let buffer_input1_padded;
@@ -398,16 +390,15 @@ mod sgemm {
                 super::queue_copy3d_padded(
                     dev,
                     buffer_input1_padded,
-                    buffer_input1,
+                    input1,
                     dtype,
-                    layout_input1,
                     (params.b, params.m, params.k),
                     &dest_layout,
                     Some(format!("{}: input1", get_debug_string(&params)))
                 )?;
             } else {
-                buffer_input1_padded = buffer_input1;
-                dest_layout = layout_input1.clone();
+                buffer_input1_padded = input1.buffer();
+                dest_layout = input1.layout().clone();
             }
 
             //we need to transpose the input matrix
@@ -441,12 +432,9 @@ mod sgemm {
                     buffer_input1_tranposed,
                     buffer_input1_padded,
                     dtype,
-                    params.b,
-                    width,
-                    height,
+                    (params.b, width, height),
                     start_offset,
-                    batch_stride,
-                    Some(format!("{}: input1", get_debug_string(&params)))
+                    batch_stride
                 )?;
 
                 (buffer_input1_tranposed, dest_layout)
@@ -456,7 +444,7 @@ mod sgemm {
         };
 
         let (buffer_input2_padded, layout_input2_padded) = if no_padding_needed_input2 {
-            (buffer_input2, layout_input2.clone())
+            (input2.buffer(), input2.layout().clone())
         } else {
             let mut cache = dev.cache.lock().unwrap();
 
@@ -498,16 +486,15 @@ mod sgemm {
                 super::queue_copy3d_padded(
                     dev,
                     buffer_input2_padded,
-                    buffer_input2,
+                    input2,
                     dtype,
-                    layout_input2,
                     (params.b, params.k, params.n),
                     &dest_layout,
                     Some(format!("{}: input2", get_debug_string(&params))),
                 )?;
             } else {
-                buffer_input2_padded = buffer_input2;
-                dest_layout = layout_input2.clone();
+                buffer_input2_padded = input2.buffer();
+                dest_layout = input2.layout().clone();
             }
 
             if !no_padding_needed_input2_stride && can_transpose {
@@ -542,12 +529,9 @@ mod sgemm {
                     buffer_input2_tranposed,
                     buffer_input2_padded,
                     dtype,
-                    params.b,
-                    width,
-                    height,
+                    (params.b, width, height),
                     start_offset,
-                    batch_stride,
-                    Some(format!("{}: input2", get_debug_string(&params)))
+                    batch_stride
                 )?;
                 (buffer_input2_tranposed, dest_layout)
             } else {
@@ -689,22 +673,18 @@ mod sgemm {
 pub fn queue_matmul_buffer(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    buffer_input2: BufferReferenceId,
+    input1 : WgpuTensor,
+    input2 : WgpuTensor,
     params: SGEMMParams,
-    layout_input1: &Layout,
-    layout_input2: &Layout,
     dtype: crate::DType,
 ) -> crate::Result<()> {
     let alg = dev.matmul_alg.lock().unwrap();
     queue_matmul_buffer_alg(
         dev,
         buffer_dest,
-        buffer_input1,
-        buffer_input2,
+        input1,
+        input2,
         params,
-        layout_input1,
-        layout_input2,
         dtype,
         alg.clone(),
     )
@@ -837,11 +817,9 @@ fn get_matmul_setting(alg: &MatmulAlgorithm) -> GenericMatmulSettings {
 pub fn queue_matmul_buffer_alg(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    buffer_input2: BufferReferenceId,
+    input1 : WgpuTensor,
+    input2 : WgpuTensor,
     params: SGEMMParams,
-    layout_input1: &Layout,
-    layout_input2: &Layout,
     cdtype: crate::DType,
     alg: MatmulAlgorithm,
 ) -> crate::Result<()> {
@@ -851,11 +829,9 @@ pub fn queue_matmul_buffer_alg(
             return queue_matmul_buffer_best(
                 dev,
                 buffer_dest,
-                buffer_input1,
-                buffer_input2,
+                input1,
+                input2,
                 params,
-                layout_input1,
-                layout_input2,
                 cdtype,
             )
         }
@@ -863,11 +839,9 @@ pub fn queue_matmul_buffer_alg(
             return super::matmul::sgemm::queue_matmul_buffer1(
                 dev,
                 buffer_dest,
-                buffer_input1,
-                buffer_input2,
+                input1,
+                input2,
                 params,
-                layout_input1,
-                layout_input2,
                 cdtype,
                 Pipelines::Matmul(dtype, matmul::Functions::Matmul116),
                 true,
@@ -877,11 +851,9 @@ pub fn queue_matmul_buffer_alg(
             return super::matmul::sgemm::queue_matmul_buffer1(
                 dev,
                 buffer_dest,
-                buffer_input1,
-                buffer_input2,
+                input1,
+                input2,
                 params,
-                layout_input1,
-                layout_input2,
                 cdtype,
                 Pipelines::Matmul(dtype, matmul::Functions::Matmul7),
                 false,
@@ -891,11 +863,9 @@ pub fn queue_matmul_buffer_alg(
             return super::matmul::sgemm::queue_matmul_buffer1(
                 dev,
                 buffer_dest,
-                buffer_input1,
-                buffer_input2,
+                input1,
+                input2,
                 params,
-                layout_input1,
-                layout_input2,
                 cdtype,
                 Pipelines::Matmul(dtype, matmul::Functions::Matmul1),
                 false,
@@ -960,11 +930,9 @@ pub fn queue_matmul_buffer_alg(
     super::matmul::sgemm::queue_matmul_generic(
         dev,
         buffer_dest,
-        buffer_input1,
-        buffer_input2,
+        input1,
+        input2,
         params,
-        layout_input1,
-        layout_input2,
         cdtype,
         setting,
         pipeline,
@@ -973,13 +941,13 @@ pub fn queue_matmul_buffer_alg(
 
 fn get_matmul_naive(
     k: usize,
-    layout_input1: &Layout,
-    layout_input2: &Layout,
+    input1: WgpuTensor,
+    input2: WgpuTensor,
 ) -> crate::wgpu_backend::MatmulAlgorithm {
-    if k % 4 == 0 && layout_input1.start_offset() % 4 == 0 && layout_input2.start_offset() % 4 == 0
+    if k % 4 == 0 && input1.layout().start_offset() % 4 == 0 && input2.layout().start_offset() % 4 == 0
     {
-        let mut input1_stride = layout_input1.stride().iter().rev();
-        let mut input2_stride = layout_input2.stride().iter().rev();
+        let mut input1_stride = input1.layout().stride().iter().rev();
+        let mut input2_stride = input2.layout().stride().iter().rev();
 
         let input1_stride_k = *input1_stride.next().unwrap_or(&1);
 
@@ -996,11 +964,9 @@ fn get_matmul_naive(
 pub fn queue_matmul_buffer_best(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    buffer_input2: BufferReferenceId,
+    input1 : WgpuTensor,
+    input2 : WgpuTensor,
     params: SGEMMParams,
-    layout_input1: &Layout,
-    layout_input2: &Layout,
     dtype: crate::DType,
 ) -> crate::Result<()> {
     let b = params.b as usize;
@@ -1008,11 +974,11 @@ pub fn queue_matmul_buffer_best(
     let k = params.k as usize;
     let n = params.n as usize;
 
-    let mut input1_stride = layout_input1.stride().iter().rev();
+    let mut input1_stride = input1.layout().stride().iter().rev();
     let input1_stride_k = *input1_stride.next().unwrap_or(&1);
     let input1_stride_m = *input1_stride.next().unwrap_or(&1);
 
-    let mut input2_stride = layout_input2.stride().iter().rev();
+    let mut input2_stride = input2.layout().stride().iter().rev();
     let input2_stride_n = *input2_stride.next().unwrap_or(&1);
     let input2_stride_k = *input2_stride.next().unwrap_or(&1);
 
@@ -1024,10 +990,10 @@ pub fn queue_matmul_buffer_best(
             } else if k % 64 == 0 && n % 64 == 0 && input2_stride_n == 1 {
                 alg = MatmulAlgorithm::Matmul1_64;
             } else {
-                alg = get_matmul_naive(k, layout_input1, layout_input2);
+                alg = get_matmul_naive(k, input1, input2);
             }
         } else {
-            alg = get_matmul_naive(k, layout_input1, layout_input2);
+            alg = get_matmul_naive(k, input1, input2);
         }
     } else {
         let shaders = [
@@ -1058,8 +1024,8 @@ pub fn queue_matmul_buffer_best(
                 || (!s.need_padding_input1(input1_stride_k, input1_stride_m)
                     && !s.need_padding_input2(input2_stride_n, input2_stride_k)
                     && (!s.alignment
-                        || (layout_input1.start_offset() % 4 == 0
-                            && layout_input2.start_offset() % 4 == 0)));
+                        || (input1.layout().start_offset() % 4 == 0
+                            && input2.layout().start_offset() % 4 == 0)));
 
             let no_padding_needed = no_padding_tiled && no_padding_stride;
 
@@ -1077,11 +1043,9 @@ pub fn queue_matmul_buffer_best(
                     return queue_matmul_buffer_alg(
                         dev,
                         buffer_dest,
-                        buffer_input1,
-                        buffer_input2,
+                        input1,
+                        input2,
                         params,
-                        layout_input1,
-                        layout_input2,
                         dtype,
                         alg,
                     );
@@ -1119,17 +1083,15 @@ pub fn queue_matmul_buffer_best(
         } else if let Some(entry) = best_wgs_25 {
             alg = entry.clone();
         } else {
-            alg = get_matmul_naive(k, layout_input1, layout_input2);
+            alg = get_matmul_naive(k, input1, input2);
         }
     }
     queue_matmul_buffer_alg(
         dev,
         buffer_dest,
-        buffer_input1,
-        buffer_input2,
+        input1,
+        input2,
         params,
-        layout_input1,
-        layout_input2,
         dtype,
         alg,
     )
