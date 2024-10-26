@@ -74,8 +74,8 @@ struct Args {
     num_inference_steps: Option<usize>,
 
     // CFG scale.
-    #[arg(long, default_value_t = 4.0)]
-    cfg_scale: f64,
+    #[arg(long)]
+    cfg_scale: Option<f64>,
 
     // Time shift factor (alpha).
     #[arg(long, default_value_t = 3.0)]
@@ -120,6 +120,12 @@ fn main() -> Result<()> {
         Which::V3Medium => 28,
     };
     let num_inference_steps = num_inference_steps.unwrap_or(default_inference_steps);
+    let default_cfg_scale = match which {
+        Which::V3_5Large => 4.0,
+        Which::V3_5LargeTurbo => 1.0,
+        Which::V3Medium => 4.0,
+    };
+    let cfg_scale = cfg_scale.unwrap_or(default_cfg_scale);
 
     let api = hf_hub::api::sync::Api::new()?;
     let img = if which.is_3_5() {
