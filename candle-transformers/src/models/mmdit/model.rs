@@ -36,6 +36,20 @@ impl Config {
             frequency_embedding_size: 256,
         }
     }
+
+    pub fn sd3_5_large() -> Self {
+        Self {
+            patch_size: 2,
+            in_channels: 16,
+            out_channels: 16,
+            depth: 38,
+            head_size: 64,
+            adm_in_channels: 2048,
+            pos_embed_max_size: 192,
+            context_embed_size: 4096,
+            frequency_embedding_size: 256,
+        }
+    }
 }
 
 pub struct MMDiT {
