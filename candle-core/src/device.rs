@@ -130,6 +130,14 @@ impl Device {
         Ok(Self::Cuda(crate::CudaDevice::new(ordinal)?))
     }
 
+    pub fn as_cuda_device(&self) -> Result<&crate::CudaDevice> {
+        match self {
+            Self::Cuda(d) => Ok(d),
+            Self::Cpu => crate::bail!("expected a cuda device, got cpu"),
+            Self::Metal(_) => crate::bail!("expected a cuda device, got Metal"),
+        }
+    }
+
     pub fn new_cuda_with_stream(ordinal: usize) -> Result<Self> {
         Ok(Self::Cuda(crate::CudaDevice::new_with_stream(ordinal)?))
     }
