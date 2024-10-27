@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::RwLock;
 
-mod utils;
+pub mod utils;
 pub use utils::BufferOffset;
 use utils::{get_block_dims, linear_split, EncoderProvider};
 
