@@ -28,6 +28,9 @@ rand_distr = { workspace = true }
 rayon = { workspace = true }
 safetensors = { workspace = true }
 thiserror = { workspace = true }
+ug = { workspace = true }
+ug-cuda = { workspace = true, optional = true }
+ug-metal = { workspace = true, optional = true }
 yoke = { workspace = true }
 zip = { workspace = true }
 
@@ -39,11 +42,11 @@ criterion = { workspace = true }
 
 [features]
 default = []
-cuda = ["cudarc", "dep:candle-kernels"]
+cuda = ["cudarc", "dep:candle-kernels", "dep:ug-cuda"]
 cudnn = ["cuda", "cudarc/cudnn"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
-metal = ["dep:metal", "dep:candle-metal-kernels"]
+metal = ["dep:metal", "dep:candle-metal-kernels", "dep:ug-metal"]
 
 [[bench]]
 name = "bench_main"
