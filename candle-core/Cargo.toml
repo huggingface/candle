@@ -40,7 +40,6 @@ pollster = { workspace = true, optional = true }
 log = {workspace = true, optional = true}
 serde_json = { workspace = true, optional = true }
 candle-wgpu-kernels = { workspace = true, optional = true }
-
 #for wgpu_debug || wgpu_debug_serialize
 serde = { workspace = true, optional = true }
 
@@ -68,3 +67,8 @@ harness = false
 [[example]]
 name = "metal_basics"
 required-features = ["metal"]
+
+
+[[example]]
+name = "wgpu_basics"
+required-features = ["wgpu"]

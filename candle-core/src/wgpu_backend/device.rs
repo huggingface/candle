@@ -412,6 +412,15 @@ impl std::ops::Deref for WgpuDevice {
     }
 }
 
+#[cfg(feature = "wgpu_debug")]
+    pub struct WgpuDebugInfo{
+        pub duration : u64,
+        pub output_size : u64,
+        pub x : u32, 
+        pub y : u32, 
+        pub z : u32,
+    }
+
 impl WgpuDevice {
     #[instrument]
     pub(crate) async fn create(
@@ -640,12 +649,12 @@ impl WgpuDevice {
         let queue = self.command_queue.lock().unwrap();
         let consts = &queue.id_to_const_array;
 
-        let debug: Vec<_> = cache.debug.iter().map(|(_, v)| v).collect();
+        let debug: Vec<_> = cache.debug.values().collect();
 
-        return (
+        (
             serde_json::to_string(&debug).unwrap(),
             serde_json::to_string(consts).unwrap(),
-        );
+        )
     }
 
     //allows to load const debug info(for simulating calls)
@@ -714,17 +723,16 @@ impl WgpuDevice {
         use super::wgpu_functions::synchronize_async;
         synchronize_async(self).await?;
         let data =
-            wgpu_functions::read_from_buffer_async::<u64>(self, &self.debug.query_set_buffer).await;
+            wgpu_functions::read_from_buffer_async::<u64>(self, &self.debug.query_set_buffer).await?;
 
         let period = self.queue.get_timestamp_period();
         let mut result = Measurements::new(period);
         let mut last_end_time = 0u64;
-        let mut i = 0;
         let mut shader_pipeline2 = self.debug.shader_pipeline.lock().unwrap();
         let shader_pipeline = shader_pipeline2.clone();
         let mut indexes: Vec<_> = shader_pipeline.into_iter().collect();
         indexes.sort_by_key(|f| f.0);
-        for p in indexes {
+        for (i, p) in indexes.into_iter().enumerate() {
             let start_time = data[(p.0 / 8) as usize];
             let end_time = data[(p.0 / 8) as usize + 1];
             if end_time < start_time {
@@ -743,15 +751,14 @@ impl WgpuDevice {
                 panic!("Start Time was before last End Time! startTime: {start_time}, last endTime:{last_end_time}, i:{i}");
             }
             last_end_time = end_time;
-            i += 1;
             result.data.push(MInfo::new(
-                p.1 .0.to_owned(),
+                p.1.pipeline.to_owned(),
                 start_time,
                 end_time,
-                p.1 .1,
-                p.1 .2,
-                p.1 .3,
-                p.1 .4,
+                p.1.workload_size,
+                p.1.x,
+                p.1.y,
+                p.1.z,
             ));
         }
         self.debug
@@ -764,23 +771,23 @@ impl WgpuDevice {
     #[cfg(feature = "wgpu_debug")]
     pub async fn get_debug_info(
         &self,
-    ) -> crate::Result<std::collections::HashMap<String, Vec<(u64, u64, u32, u32, u32)>>> {
+    ) -> crate::Result<std::collections::HashMap<String, Vec<WgpuDebugInfo>>> {
         let info = self.get_debug_info_full().await?;
-        let mut map: std::collections::HashMap<String, Vec<(u64, u64, u32, u32, u32)>> =
+        let mut map: std::collections::HashMap<String, Vec<WgpuDebugInfo>> =
             std::collections::HashMap::new();
 
         for item in info.data.iter() {
             map.entry(item.label.clone())
-                .or_insert_with(Vec::new)
-                .push((
-                    item.end_time - item.start_time,
-                    item.output_size,
-                    item.x,
-                    item.y,
-                    item.z,
-                ));
+                .or_default()
+                .push(WgpuDebugInfo {
+                    duration :  item.end_time - item.start_time,
+                    output_size :  item.output_size,
+                    x : item.x,
+                    y : item.y,
+                    z : item.z
+                });
         }
-        return Ok(map);
+        Ok(map)
     }
 
     #[cfg(feature = "wgpu_debug")]
@@ -801,14 +808,14 @@ impl WgpuDevice {
                     pipelines: pipelines
                         .iter()
                         .map(|(pk, _)| {
-                            return debug_info::PipelineInfo {
+                            debug_info::PipelineInfo {
                                 name: format!("{:?}", pk.0).to_owned(),
                                 consts: queue.id_to_const_array[pk.1].clone(),
-                            };
+                            }
                         })
                         .collect(),
                 };
-                return s;
+                s
             })
             .collect());
     }

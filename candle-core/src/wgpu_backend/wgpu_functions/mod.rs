@@ -24,9 +24,7 @@ use super::{
     cache::{
         BindgroupAlignmentLayout, BindgroupInputBase, BindgroupReferenceFull, CachedBindgroupFull,
         CachedBindgroupInput, CachedBufferId, ModelCache,
-    },
-    device::{BindGroupReference, MlQueue, OpIsInplaceable, PipelineType, QueueBuffer},
-    util::{FixedArray, ToU32},
+    }, device::{BindGroupReference, MlQueue, OpIsInplaceable, PipelineType, QueueBuffer}, util::{FixedArray, ToU32}
 };
 use crate::wgpu_backend::{cache::BindgroupAlignment, util::ReferenceTrait};
 use tracing::{instrument, span, Level};
@@ -181,6 +179,7 @@ fn enqueue_workgroups(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn enqueue_workgroups_extra(
     mut command_queue: MutexGuard<QueueBuffer>,
     pipeline: PipelineType,
@@ -256,12 +255,12 @@ fn end_debug_queue(
     }
 
     encoder.resolve_query_set(
-        &query_set,
+        query_set,
         0..length,
         &dev.debug.query_set_buffer,
         global_index as u64,
     );
-    let global_index = global_index + (length * 8) as u32;
+    let global_index = global_index + (length * 8);
 
     let remainder = global_index % 256;
     let global_index = if remainder == 0 {
@@ -326,7 +325,7 @@ fn get_command_buffer(
                         let meta = q.meta - current_meta as u32;
 
                         #[cfg(feature = "wgpu_debug")]
-                        cpass.write_timestamp(&query_set, debug_index);
+                        cpass.write_timestamp(query_set, debug_index);
                         let span1 = span!(Level::INFO, "Set Pipeline");
                         let _enter1 = span1.enter();
                         cpass.set_pipeline(pipeline);
@@ -389,20 +388,20 @@ fn get_command_buffer(
 
                         #[cfg(feature = "wgpu_debug")]
                         {
-                            cpass.write_timestamp(&query_set, debug_index + 1);
+                            cpass.write_timestamp(query_set, debug_index + 1);
                             dev.debug.insert_info(
                                 global_index + debug_index * 8,
-                                (
-                                    format!(
+                                ShaderDebugInfo{
+                                    pipeline: format!(
                                         "Pipeline: {:?}, {}",
                                         q.pipeline.0,
                                         q.debug.to_owned().map_or("".to_string(), |s| s)
                                     ),
-                                    q.workload_size as u64,
-                                    q.x,
-                                    q.y,
-                                    q.z,
-                                ),
+                                    workload_size: q.workload_size as u64,
+                                    x : q.x,
+                                    y : q.y,
+                                    z : q.z,
+                                },
                             );
                             debug_index += 2;
                         }
@@ -431,7 +430,7 @@ fn get_command_buffer(
         command_queue.len() as u32 * 2,
         global_index,
         &mut encoder,
-        &query_set,
+        query_set,
     );
 
     let span1 = span!(Level::INFO, "Encoder Finish");
@@ -862,10 +861,14 @@ fn finish_commands(command_buffer: &mut QueueBuffer, index: usize, _cache: &mut 
                         command_buffer.get_meta()[q.meta as usize..next_meta].into();
 
                     //the scalar and randstate on unary should have no performance effect:
-                    if let Pipelines::Unary(_, _) = q.pipeline.0 {
+                    if let Pipelines::Unary(_, candle_wgpu_kernels::unary::Functions::RandInplaceContiguous) = q.pipeline.0.into() {
                         meta[1] = f32::to_bits(1.0);
                         meta[2] = f32::to_bits(1.0);
                         meta[3] = 0; //rand state
+                    }
+                    else if let Pipelines::Unary(_, _) = q.pipeline.0.into() {
+                        meta[1] = f32::to_bits(1.0);
+                        meta[2] = f32::to_bits(1.0);
                     }
 
                     let debug_info = crate::wgpu_backend::device::DebugPipelineRecording {
@@ -873,7 +876,7 @@ fn finish_commands(command_buffer: &mut QueueBuffer, index: usize, _cache: &mut 
                         y: q.y,
                         z: q.z,
                         pipeline: q.pipeline.clone(),
-                        meta: meta,
+                        meta,
                         bindgroup: new_bindgroup,
                         count: 1,
                     };

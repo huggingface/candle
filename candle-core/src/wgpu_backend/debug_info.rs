@@ -8,12 +8,23 @@ use wgpu::Device;
 use serde::{Deserialize, Serialize};
 use serde_json::{to_string, to_writer};
 
+use super::device::WgpuDebugInfo;
+
+#[derive(Debug, Clone)]
+pub struct ShaderDebugInfo {
+    pub pipeline: String,
+    pub workload_size: u64,
+    pub x: u32,
+    pub y: u32,
+    pub z: u32,
+}
+
 #[derive(Debug)]
 pub struct DebugInfo {
     pub(crate) query_set_buffer: wgpu::Buffer,
     pub(crate) query_set: wgpu::QuerySet,
     pub(crate) counter: AtomicU32,
-    pub(crate) shader_pipeline: Mutex<HashMap<u32, (String, u64, u32, u32, u32)>>,
+    pub(crate) shader_pipeline: Mutex<HashMap<u32, ShaderDebugInfo>>,
 }
 
 impl DebugInfo {
@@ -21,7 +32,7 @@ impl DebugInfo {
         // Create a buffer to store the query results
         let query_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 256 * 1_000_000 as u64,
+            size: 256 * 1_000_000_u64,
             usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::QUERY_RESOLVE,
             mapped_at_creation: false,
         });
@@ -32,15 +43,15 @@ impl DebugInfo {
             label: None,
         });
 
-        return DebugInfo {
+        DebugInfo {
             counter: AtomicU32::new(0),
-            query_set: query_set,
+            query_set,
             shader_pipeline: Mutex::new(HashMap::new()),
             query_set_buffer: query_buffer,
-        };
+        }
     }
 
-    pub(crate) fn insert_info(&self, index: u32, info: (String, u64, u32, u32, u32)) {
+    pub(crate) fn insert_info(&self, index: u32, info: ShaderDebugInfo) {
         self.shader_pipeline
             .lock()
             .expect("could not lock debug info")
@@ -151,9 +162,7 @@ pub struct ShaderInfo {
     pub pipelines: Vec<PipelineInfo>,
 }
 
-pub fn calulate_measurment(
-    map: &HashMap<String, Vec<(u64, u64, u32, u32, u32)>>,
-) -> Vec<Measurement> {
+pub fn calulate_measurment(map: &HashMap<String, Vec<WgpuDebugInfo>>) -> Vec<Measurement> {
     const NANO: f64 = 1e9;
 
     return map
@@ -162,7 +171,7 @@ pub fn calulate_measurment(
             let count = data.len();
 
             //dur
-            let iter = data.iter().map(|f| f.0);
+            let iter = data.iter().map(|f| f.duration);
 
             let sum: u64 = iter.clone().sum();
             let mean = (sum as f64 / count as f64) / NANO;
@@ -172,7 +181,7 @@ pub fn calulate_measurment(
             let variance = iter
                 .clone()
                 .map(|value| {
-                    let diff = mean - (value as f64 / NANO) as f64;
+                    let diff = mean - (value as f64 / NANO);
                     diff * diff
                 })
                 .sum::<f64>()
@@ -190,7 +199,7 @@ pub fn calulate_measurment(
             };
 
             //out_size
-            let iter = data.iter().map(|f| f.1);
+            let iter = data.iter().map(|f| f.output_size);
 
             let sum: u64 = iter.clone().sum();
             let mean = sum as f64 / count as f64;
@@ -200,7 +209,7 @@ pub fn calulate_measurment(
             let variance = iter
                 .clone()
                 .map(|value| {
-                    let diff = mean - (value as f64) as f64;
+                    let diff = mean - (value as f64);
                     diff * diff
                 })
                 .sum::<f64>()
@@ -217,7 +226,7 @@ pub fn calulate_measurment(
             };
 
             //dispatch size
-            let iter = data.iter().map(|f| f.2 * f.3 * f.4);
+            let iter = data.iter().map(|f| f.x * f.y * f.z);
 
             let sum: u32 = iter.clone().sum();
             let mean = sum as f64 / count as f64;
@@ -227,7 +236,7 @@ pub fn calulate_measurment(
             let variance = iter
                 .clone()
                 .map(|value| {
-                    let diff = mean - (value as f64) as f64;
+                    let diff = mean - (value as f64);
                     diff * diff
                 })
                 .sum::<f64>()
@@ -243,7 +252,7 @@ pub fn calulate_measurment(
                 m_type: MeasurementType::DispatchSize,
             };
 
-            return [m1, m2, m3];
+            [m1, m2, m3]
         })
         .collect();
 }

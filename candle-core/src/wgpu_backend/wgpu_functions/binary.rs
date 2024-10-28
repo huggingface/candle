@@ -75,7 +75,7 @@ pub fn queue_binary_buffer_from_buffer(
         bind_group,
         input1.layout().shape().elem_count() as u32,
         #[cfg(feature = "wgpu_debug")]
-        Some(format!("OP: {:?}, layout: {:?}", op, lay1)),
+        Some(format!("OP: {:?}, layout: {:?}", op, input1.layout())),
     );
     Ok(())
 }
