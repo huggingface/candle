@@ -40,6 +40,7 @@ pollster = { workspace = true, optional = true }
 log = {workspace = true, optional = true}
 serde_json = { workspace = true, optional = true }
 candle-wgpu-kernels = { workspace = true, optional = true }
+rustc-hash = {workspace = true, optional = true}
 #for wgpu_debug || wgpu_debug_serialize
 serde = { workspace = true, optional = true }
 
@@ -55,7 +56,7 @@ cudnn = ["cuda", "cudarc/cudnn"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
 metal = ["dep:metal", "dep:candle-metal-kernels"]
-wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume", "dep:candle-wgpu-kernels", "dep:log", "dep:tracing"]
+wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume", "dep:candle-wgpu-kernels", "dep:log", "dep:tracing", "dep:rustc-hash"]
 wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize"]
 wgpu_debug_serialize = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize"]
 default=[]

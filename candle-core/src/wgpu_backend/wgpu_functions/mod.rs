@@ -14,8 +14,9 @@ pub mod unary;
 pub mod upsample;
 pub mod where_cond;
 
+use rustc_hash::FxHasher;
 use std::{
-    hash::{DefaultHasher, Hash, Hasher},
+    hash::{Hash, Hasher},
     num::NonZeroU64,
     sync::MutexGuard,
 };
@@ -446,7 +447,8 @@ fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer, cache: &mut ModelCa
 
     let queue = &mut queue_buffer.command_queue;
     {
-        let mut hasher = DefaultHasher::new();
+       
+        let mut hasher = FxHasher::default();
         for q in queue.iter() {
             match q {
                 MlQueue::Dispatch(q) => {

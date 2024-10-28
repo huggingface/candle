@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use tracing::instrument;
 
@@ -41,7 +41,7 @@ impl BindgroupCacheStorage {
         Self {
             storage: StorageOptional::new(),
             bindgroups: HashMapMulti::new(),
-            bindgroups_full: HashMap::new(),
+            bindgroups_full: HashMap::default(),
             bindgroup_counter: 0,
             cached_bindgroup_use_counter: 0,
         }

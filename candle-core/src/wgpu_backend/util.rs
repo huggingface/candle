@@ -1,5 +1,6 @@
+use rustc_hash::FxHashMap as HashMap;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     hash::{Hash, Hasher},
     marker::PhantomData,
     sync::atomic::AtomicU32,
@@ -108,7 +109,7 @@ pub(crate) struct HashMapMulti<K, V> {
 impl<K: std::cmp::Eq + PartialEq + std::hash::Hash, V> HashMapMulti<K, V> {
     pub fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            map: HashMap::default(),
             _empty: vec![],
         }
     }
@@ -263,7 +264,7 @@ pub struct ObjectToIdMapper<K> {
 impl<K: std::cmp::Eq + Hash + Clone> ObjectToIdMapper<K> {
     pub fn new() -> Self {
         ObjectToIdMapper {
-            map: HashMap::new(),
+            map: HashMap::default(),
             next_id: 0,
         }
     }
