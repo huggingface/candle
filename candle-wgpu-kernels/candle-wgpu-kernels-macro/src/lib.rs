@@ -31,7 +31,8 @@ fn read_loader_indices(file: &File) -> Vec<Loader> {
         .expect("Unable to read file");
 
     // Parse the content as TOML into LoadersFile
-    let loaders_file: LoadersFile = toml::from_str(&content).expect("Error parsing TOML");
+    let loaders_file: LoadersFile =
+        toml::from_str(&content).unwrap_or(LoadersFile { loader: vec![] });
     loaders_file.loader
 }
 
@@ -92,26 +93,29 @@ pub fn create_loader(input: TokenStream) -> TokenStream {
 
     let mut index = None;
 
-
-    for e in indices.iter(){
-        if e.crate_name == crate_name && e.loader_name == loader_name_str{
+    for e in indices.iter() {
+        if e.crate_name == crate_name && e.loader_name == loader_name_str {
             index = Some(e.index);
         }
     }
 
     //element not found:
-    if index.is_none(){
+    if index.is_none() {
         //search new index:
         for i in 0.. {
             if indices.iter().all(|c| c.index != i) {
                 index = Some(i);
-                indices.push(Loader{crate_name, loader_name : loader_name_str, index : i});
+                indices.push(Loader {
+                    crate_name,
+                    loader_name: loader_name_str,
+                    index: i,
+                });
                 write_loader_indices(&mut file, &indices);
                 break;
             }
         }
     }
-        
+
     let new_index = index.unwrap();
 
     // Generate the loader code with a unique index
@@ -147,26 +151,29 @@ pub fn create_loader_internal(input: TokenStream) -> TokenStream {
 
     let mut index = None;
 
-
-    for e in indices.iter(){
-        if e.crate_name == crate_name && e.loader_name == loader_name_str{
+    for e in indices.iter() {
+        if e.crate_name == crate_name && e.loader_name == loader_name_str {
             index = Some(e.index);
         }
     }
 
     //element not found:
-    if index.is_none(){
+    if index.is_none() {
         //search new index:
         for i in 0.. {
             if indices.iter().all(|c| c.index != i) {
                 index = Some(i);
-                indices.push(Loader{crate_name, loader_name : loader_name_str, index : i});
+                indices.push(Loader {
+                    crate_name,
+                    loader_name: loader_name_str,
+                    index: i,
+                });
                 write_loader_indices(&mut file, &indices);
                 break;
             }
         }
     }
-        
+
     let new_index = index.unwrap();
 
     // Generate the loader code with a unique index
