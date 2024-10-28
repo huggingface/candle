@@ -180,6 +180,8 @@ fn main() -> Result<()> {
     let (context, y) = triple.encode_text_to_embedding(prompt.as_str(), &device)?;
     let (context_uncond, y_uncond) =
         triple.encode_text_to_embedding(uncond_prompt.as_str(), &device)?;
+    // Drop the text model early to avoid using too much memory.
+    drop(triple);
     let context = Tensor::cat(&[context, context_uncond], 0)?;
     let y = Tensor::cat(&[y, y_uncond], 0)?;
 
