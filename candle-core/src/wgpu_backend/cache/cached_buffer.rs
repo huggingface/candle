@@ -38,20 +38,6 @@ impl CachedBuffer {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // Struct used for ordering by size
 #[derive(Debug, Eq, PartialEq)]
 struct OrderedIndex<TI, TV> {
@@ -79,10 +65,6 @@ impl<TI: PartialOrd + Ord, TV: PartialOrd + Ord> PartialOrd for OrderedIndex<TI,
         Some(self.cmp(other))
     }
 }
-
-
-
-
 
 /// Cache of all free CachedBuffers
 #[derive(Debug)]
@@ -112,7 +94,12 @@ impl BufferCacheStorage {
 
     //creats a Buffer, expect that it will be used and not be part of free memory
     #[instrument(skip(self, dev, command_id, size))]
-    pub(crate) fn create_buffer(&mut self, dev: &WgpuDevice, size: u64, command_id: u32) -> CachedBufferId {
+    pub(crate) fn create_buffer(
+        &mut self,
+        dev: &WgpuDevice,
+        size: u64,
+        command_id: u32,
+    ) -> CachedBufferId {
         let buffer = wgpu_functions::create_buffer(dev, size);
         let mut buffer = CachedBuffer::new(buffer);
         buffer.last_used_counter = command_id;
@@ -211,7 +198,7 @@ impl BufferCacheStorage {
     }
 
     //will try to find a free buffer in the cache, or create a new one
-    #[instrument(skip(self, dev, command_id, minimum_size,optimal_size, duration))]
+    #[instrument(skip(self, dev, command_id, minimum_size, optimal_size, duration))]
     pub fn search_buffer(
         &mut self,
         dev: &WgpuDevice,
@@ -221,7 +208,8 @@ impl BufferCacheStorage {
         duration: u32,
     ) -> CachedBufferId {
         //println!("search buffer: size: {size}");
-        let max_size = BufferCacheStorage::max_cached_size(minimum_size, duration).max(optimal_size);
+        let max_size =
+            BufferCacheStorage::max_cached_size(minimum_size, duration).max(optimal_size);
 
         if dev.configuration.use_cache {
             let mut buffer_found = None;
@@ -287,7 +275,8 @@ impl BufferCacheStorage {
                     .get_reference(entry.index)
                     .expect("item in order, that could ne be found in storage");
                 (id, val.last_used_counter)
-            }).rev()
+            })
+            .rev()
             .collect();
     }
 }

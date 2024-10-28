@@ -15,8 +15,8 @@ pub enum CmpOperation {
 pub fn queue_cmp_buffer_from_buffer(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    input1 : WgpuTensor,
-    input2 : WgpuTensor,
+    input1: WgpuTensor,
+    input2: WgpuTensor,
     op: CmpOperation,
     dtype: crate::DType,
 ) -> crate::Result<()> {
@@ -30,7 +30,8 @@ pub fn queue_cmp_buffer_from_buffer(
         Functions::CmpBufferFromBuffer,
     ));
 
-    let bind_group = create_bind_group_input2(buffer_dest, input1.buffer(), input2.buffer(), dtype.into());
+    let bind_group =
+        create_bind_group_input2(buffer_dest, input1.buffer(), input2.buffer(), dtype.into());
     enqueue(
         meta,
         pipeline,

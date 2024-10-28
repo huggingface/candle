@@ -12,7 +12,7 @@ pub enum ReduceOperations {
     ArgMax = 4,
 }
 
-pub struct ReduceParams{
+pub struct ReduceParams {
     pub dest_size: u32,
     pub output_to_start_shape_stride2: u32,
     pub output_to_start_stride1: u32,
@@ -28,15 +28,16 @@ pub fn queue_reduce_from_buffer_op(
     op: ReduceOperations,
     dtype: crate::DType,
     layout_input1: &Layout,
-    params : ReduceParams
+    params: ReduceParams,
 ) -> crate::Result<()> {
     let ReduceParams {
-        dest_size, 
+        dest_size,
         output_to_start_shape_stride2,
-        output_to_start_stride1, 
+        output_to_start_stride1,
         output_to_start_stride2,
         reduction_length,
-        stride_reduction} = params;
+        stride_reduction,
+    } = params;
 
     let mut meta = get_meta(dev);
 
@@ -49,27 +50,28 @@ pub fn queue_reduce_from_buffer_op(
     meta.add(dest_size);
     meta.add_layout1(layout_input1);
 
-    let use_small_reduce =  reduction_length < 16 || stride_reduction != 1;
+    let use_small_reduce = reduction_length < 16 || stride_reduction != 1;
 
-    if (!use_small_reduce && dest_size > 65535) || (use_small_reduce && dest_size > 65535*64) {
+    if (!use_small_reduce && dest_size > 65535) || (use_small_reduce && dest_size > 65535 * 64) {
         meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
     }
 
-    let pipeline_type = 
-        if use_small_reduce{
-            match op {
-                ReduceOperations::Sum |ReduceOperations::Min | ReduceOperations::Max => Functions::ReduceSmall,
-                ReduceOperations::ArgMin | ReduceOperations::ArgMax => Functions::ReduceIndexSmall,
+    let pipeline_type = if use_small_reduce {
+        match op {
+            ReduceOperations::Sum | ReduceOperations::Min | ReduceOperations::Max => {
+                Functions::ReduceSmall
             }
+            ReduceOperations::ArgMin | ReduceOperations::ArgMax => Functions::ReduceIndexSmall,
         }
-        else{
-            match op {
-                ReduceOperations::Sum |ReduceOperations::Min | ReduceOperations::Max => Functions::Reduce,
-                ReduceOperations::ArgMin | ReduceOperations::ArgMax => Functions::ReduceIndex,
+    } else {
+        match op {
+            ReduceOperations::Sum | ReduceOperations::Min | ReduceOperations::Max => {
+                Functions::Reduce
             }
-        };
-    
-   
+            ReduceOperations::ArgMin | ReduceOperations::ArgMax => Functions::ReduceIndex,
+        }
+    };
+
     let pipeline = meta.get_pipeline_const(
         Pipelines::Reduce(get_dtype(dtype)?, pipeline_type),
         const_vec,
@@ -79,12 +81,11 @@ pub fn queue_reduce_from_buffer_op(
 
     let y;
     let z;
-    if use_small_reduce{
+    if use_small_reduce {
         let dest_size = (dest_size + 63) / 64;
         y = dest_size.min(65535);
         z = (dest_size + 65534) / 65535;
-    }
-    else{
+    } else {
         y = dest_size.min(65535);
         z = (dest_size + 65534) / 65535;
     }
@@ -97,8 +98,11 @@ pub fn queue_reduce_from_buffer_op(
         y,
         z,
         (reduction_length * dest_size) as usize,
-        #[cfg(feature="wgpu_debug")]
-        Some(format!("layout: {:?} reduction :{}, dest_size: {}", layout_input1, reduction_length, dest_size))
+        #[cfg(feature = "wgpu_debug")]
+        Some(format!(
+            "layout: {:?} reduction :{}, dest_size: {}",
+            layout_input1, reduction_length, dest_size
+        )),
     );
     Ok(())
 }

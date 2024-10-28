@@ -41,13 +41,7 @@ pub fn queue_convert_u32_to_u8(
 
     let bind_group =
         create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned4);
-    enqueue(
-        meta,
-        pipeline,
-        bind_group,
-        (size + 3) / 4,
-        size as usize,
-    );
+    enqueue(meta, pipeline, bind_group, (size + 3) / 4, size as usize);
     Ok(())
 }
 
@@ -66,13 +60,7 @@ pub fn queue_convert_f32_to_u8(
 
     let bind_group =
         create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned4);
-    enqueue(
-        meta,
-        pipeline,
-        bind_group,
-        (size + 3) / 4,
-        size as usize,
-    );
+    enqueue(meta, pipeline, bind_group, (size + 3) / 4, size as usize);
     Ok(())
 }
 
@@ -87,11 +75,17 @@ pub fn queue_convert(
     let mut meta = get_meta(dev);
     meta.add_layout1(input_layout);
 
-    let pipeline = match dest_dtype{
+    let pipeline = match dest_dtype {
         crate::DType::U32 => Pipelines::Convert(get_dtype(input_dtype)?, Functions::ConvertToU32),
         crate::DType::F32 => Pipelines::Convert(get_dtype(input_dtype)?, Functions::ConvertToF32),
-        crate::DType::I64 => Pipelines::ConvertToI64(get_dtype(input_dtype)?, candle_wgpu_kernels::convert_to_i64::Functions::ConvertToI64),
-        crate::DType::F64 => Pipelines::ConvertToF64(get_dtype(input_dtype)?, candle_wgpu_kernels::convert_to_f64::Functions::ConvertToF64),
+        crate::DType::I64 => Pipelines::ConvertToI64(
+            get_dtype(input_dtype)?,
+            candle_wgpu_kernels::convert_to_i64::Functions::ConvertToI64,
+        ),
+        crate::DType::F64 => Pipelines::ConvertToF64(
+            get_dtype(input_dtype)?,
+            candle_wgpu_kernels::convert_to_f64::Functions::ConvertToF64,
+        ),
         _ => wgpuError!(format!("to dtype: {:?} cannot be converted ", dest_dtype)),
     };
 

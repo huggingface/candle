@@ -128,26 +128,28 @@ pub fn queue_copy(
             input2_inplaceable: false,
         };
 
-        let use_vec4 =  copy_size % 4 == 0 && source_offset % 4 == 0 && destination_offset % 4 == 0 && dtype.size_in_bytes() == 4;
+        let use_vec4 = copy_size % 4 == 0
+            && source_offset % 4 == 0
+            && destination_offset % 4 == 0
+            && dtype.size_in_bytes() == 4;
 
-        if use_vec4{
-            meta.add(copy_size/4);
-            meta.add(destination_offset/4);
-            meta.add(source_offset/4);
+        if use_vec4 {
+            meta.add(copy_size / 4);
+            meta.add(destination_offset / 4);
+            meta.add(source_offset / 4);
             if copy_size / 4 > 65535 * 64 {
                 meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
             }
-    
-            let pipeline = meta.get_pipeline_const_inplace(Pipelines::Copy(get_dtype(dtype)?, Functions::Copy4), const_vec, inplaceble);
-            let bind_group = create_bind_group_input1( buffer_dest, buffer_input, BindgroupAlignment::Aligned16);
-            enqueue_big(
-                meta,
-                pipeline,
-                bind_group,
-                (copy_size/4) as u32
+
+            let pipeline = meta.get_pipeline_const_inplace(
+                Pipelines::Copy(get_dtype(dtype)?, Functions::Copy4),
+                const_vec,
+                inplaceble,
             );
-        }
-        else{
+            let bind_group =
+                create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned16);
+            enqueue_big(meta, pipeline, bind_group, (copy_size / 4) as u32);
+        } else {
             meta.add(copy_size);
             meta.add(destination_offset);
             meta.add(source_offset);
@@ -159,7 +161,7 @@ pub fn queue_copy(
                 const_vec,
                 inplaceble,
             );
-    
+
             let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
             enqueue_big(meta, pipeline, bind_group, copy_size as u32);
         }
@@ -173,9 +175,8 @@ pub fn queue_copy2d(
     input: (BufferReferenceId, u32, u32),
     dtype: crate::DType,
     d1: u32,
-    d2: u32
+    d2: u32,
 ) -> crate::Result<()> {
-
     let (buffer_input, input_stride1, input_offset) = input;
     let (buffer_dest, dest_stride1, dest_offset) = dest;
 
@@ -201,7 +202,7 @@ pub fn queue_copy2d(
     if dest_offset != 0 || input_offset != 0 {
         meta.add(dest_offset);
     }
-    if input_offset != 0{
+    if input_offset != 0 {
         meta.add(input_offset);
     }
 
@@ -287,10 +288,9 @@ pub fn queue_copy3d(
     meta.add(input1_stride_1);
     meta.add(input1_stride_2);
     meta.add(input1_stride_3);
-    if input_layout.start_offset() != 0{
+    if input_layout.start_offset() != 0 {
         meta.add(input_layout.start_offset());
     }
-   
 
     let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
 
@@ -313,11 +313,11 @@ pub fn queue_copy3d(
 pub fn queue_copy3d_padded(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    input : WgpuTensor,
+    input: WgpuTensor,
     dtype: crate::DType,
     input_shape: (u32, u32, u32), //b, m, k
     dest_layout: &crate::Layout,
-    _debug_info : Option<String>,
+    _debug_info: Option<String>,
 ) -> crate::Result<()> {
     let mut input1_stride = input.layout().stride().iter().rev();
 
@@ -372,8 +372,8 @@ pub fn queue_copy3d_padded(
         ((dest_shape.1 + 15) / 16) as u32,
         input_shape.0,
         input.layout().shape().elem_count(),
-        #[cfg(feature="wgpu_debug")]
-        _debug_info
+        #[cfg(feature = "wgpu_debug")]
+        _debug_info,
     );
     Ok(())
 }
@@ -384,8 +384,8 @@ pub fn queue_transpose3d(
     buffer_input: BufferReferenceId,
     dtype: crate::DType,
     input_shape: (u32, u32, u32), //b, width, height
-    start_offset : usize,
-    batch_stride : usize,
+    start_offset: usize,
+    batch_stride: usize,
 ) -> crate::Result<()> {
     let (batch, width, height) = input_shape;
     let mut meta = get_meta(dev);
@@ -400,7 +400,7 @@ pub fn queue_transpose3d(
     let pipeline = Functions::TransposeBatched;
 
     let pipeline = meta.get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, pipeline), const_vec);
-    
+
     enqueue_workgroups(
         meta,
         pipeline,
@@ -459,7 +459,7 @@ pub fn queue_copy4d_padded(
     meta.add(dest_shape.3);
     meta.add(dest_shape.2);
 
-    if input_layout.start_offset() != 0{
+    if input_layout.start_offset() != 0 {
         meta.add(input_layout.start_offset());
     }
 

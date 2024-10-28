@@ -17,19 +17,22 @@ pub enum BinaryOperation {
 pub fn queue_binary_buffer_from_buffer(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    input1 : WgpuTensor,
-    input2 : WgpuTensor,
+    input1: WgpuTensor,
+    input2: WgpuTensor,
     op: BinaryOperation,
     dtype: crate::DType,
 ) -> crate::Result<()> {
     let mut meta = get_meta(dev);
     let pipeline = if input1.layout().is_contiguous() && input2.layout().is_contiguous() {
-        let const_vec = vec![op as usize, (input1.layout().start_offset() == 0) as usize, (input2.layout().start_offset() == 0) as usize];
+        let const_vec = vec![
+            op as usize,
+            (input1.layout().start_offset() == 0) as usize,
+            (input2.layout().start_offset() == 0) as usize,
+        ];
 
         meta.add(input1.layout().shape().elem_count()); //input1_length
         meta.add(input1.layout().start_offset());
         meta.add(input2.layout().start_offset());
-
 
         let inplaceable = OpIsInplaceable {
             input1_inplaceable: input1.layout().start_offset() == 0,
@@ -63,7 +66,8 @@ pub fn queue_binary_buffer_from_buffer(
         )
     };
 
-    let bind_group = create_bind_group_input2(buffer_dest, input1.buffer(), input2.buffer(), dtype.into());
+    let bind_group =
+        create_bind_group_input2(buffer_dest, input1.buffer(), input2.buffer(), dtype.into());
 
     enqueue_big_extra(
         meta,

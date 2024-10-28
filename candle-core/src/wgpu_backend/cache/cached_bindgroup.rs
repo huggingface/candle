@@ -6,7 +6,6 @@ use crate::wgpu_backend::util::{HashMapMulti, StorageOptional, StorageTrait};
 
 use super::{CachedBindgroupFull, CachedBindgroupId, CachedBindgroupInput};
 
-
 #[derive(Debug)]
 pub struct CachedBindgroup {
     bindgroup: wgpu::BindGroup,
@@ -27,8 +26,6 @@ impl CachedBindgroup {
     }
 }
 
-
-
 /// Cache of all available CachedBindGroups
 #[derive(Debug)]
 pub(crate) struct BindgroupCacheStorage {
@@ -40,7 +37,7 @@ pub(crate) struct BindgroupCacheStorage {
 }
 
 impl BindgroupCacheStorage {
-    pub (crate) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             storage: StorageOptional::new(),
             bindgroups: HashMapMulti::new(),
@@ -58,7 +55,8 @@ impl BindgroupCacheStorage {
             if !keep {
                 let id = *id;
                 let buf_reference_input_full = &bg.buffer;
-                self.bindgroups.remove_mapping(&buf_reference_input_full.1, &id);
+                self.bindgroups
+                    .remove_mapping(&buf_reference_input_full.1, &id);
                 self.bindgroups_full.remove(buf_reference_input_full);
             }
             keep
@@ -84,24 +82,24 @@ impl BindgroupCacheStorage {
         self.cached_bindgroup_use_counter
     }
 
-    pub(crate) fn cached_bindgroup_use_counter_inc(&mut self){
+    pub(crate) fn cached_bindgroup_use_counter_inc(&mut self) {
         self.cached_bindgroup_use_counter += 1;
     }
 
-    pub (crate) fn insert_bindgroup(&mut self, bindgroup : CachedBindgroup) -> CachedBindgroupId{
+    pub(crate) fn insert_bindgroup(&mut self, bindgroup: CachedBindgroup) -> CachedBindgroupId {
         let bindgroup_d = bindgroup.buffer.clone();
         let id = self.storage.insert(bindgroup);
 
         tracing::info!("Create Bindgroup: {id:?}, {:?}", bindgroup_d);
 
         self.bindgroups.add_mapping(bindgroup_d.1.clone(), id);
-        
-        if self.bindgroups_full.contains_key(&bindgroup_d){
+
+        if self.bindgroups_full.contains_key(&bindgroup_d) {
             panic!("bindgroup {:?} was tried to add to the bindgroup cache, but it was already be created", bindgroup_d);
         }
 
         self.bindgroups_full.insert(bindgroup_d, id);
-    
+
         self.bindgroup_counter += 1;
         id
     }

@@ -11,7 +11,7 @@ pub(crate) struct BufferMappingCache {
 }
 
 impl BufferMappingCache {
-    pub (crate) fn new(size: u32) -> Self {
+    pub(crate) fn new(size: u32) -> Self {
         Self {
             last_buffer_mappings: FixedSizeQueue::new(size as usize),
             current_buffer_mapping: None,
@@ -19,7 +19,7 @@ impl BufferMappingCache {
         }
     }
 
-    pub(crate) fn set_current_buffer_mapping(&mut self, hash: u64){
+    pub(crate) fn set_current_buffer_mapping(&mut self, hash: u64) {
         let index = self
             .last_buffer_mappings
             .iter()
@@ -42,30 +42,34 @@ impl BufferMappingCache {
         }
     }
 
-    pub (crate) fn get_current_mapping_count(&self) -> u32{
+    pub(crate) fn get_current_mapping_count(&self) -> u32 {
         if let Some(mapping) = &self.current_buffer_mapping {
             return mapping.count;
         }
         0
     }
 
-    pub (crate) fn get_current_mapping(&mut self) -> &mut CachedBufferMappings{
+    pub(crate) fn get_current_mapping(&mut self) -> &mut CachedBufferMappings {
         return self.current_buffer_mapping.as_mut().unwrap();
     }
 
- 
     ///Stores, that at the provided buffer was used
-    pub(crate) fn add_new_buffer(&mut self, buffer: CachedBufferId, pipeline: PipelineType, last_size : u64) {
+    pub(crate) fn add_new_buffer(
+        &mut self,
+        buffer: CachedBufferId,
+        pipeline: PipelineType,
+        last_size: u64,
+    ) {
         if let Some(mapping) = &mut self.current_buffer_mapping {
             mapping.add_new(buffer, pipeline, last_size, self.current_index);
         } else {
             panic!("expected current buffer to be set");
         }
-      
+
         self.current_index += 1;
     }
 
-    pub(crate) fn reuse_buffer(&mut self, last_size : u64) {
+    pub(crate) fn reuse_buffer(&mut self, last_size: u64) {
         if let Some(mapping) = &mut self.current_buffer_mapping {
             mapping.reuse_buffer(last_size, self.current_index);
         } else {
@@ -86,16 +90,16 @@ impl BufferMappingCache {
 pub(crate) struct CachedBufferMapping {
     pub(crate) pipeline: PipelineType,
     pub(crate) used_buffer: CachedBufferId, //index in cachedBUfferMappings
-    pub(crate) last_size : u64, //size of the buffer at the last run(used to determine if this buffer is growing)
+    pub(crate) last_size: u64, //size of the buffer at the last run(used to determine if this buffer is growing)
 }
 
 impl CachedBufferMapping {
-    fn new(pipeline: PipelineType, used_buffer: CachedBufferId, last_size : u64) -> Self {
+    fn new(pipeline: PipelineType, used_buffer: CachedBufferId, last_size: u64) -> Self {
         Self {
             pipeline,
             used_buffer,
-            last_size
-        }   
+            last_size,
+        }
     }
 }
 
@@ -103,16 +107,26 @@ impl CachedBufferMapping {
 pub(crate) struct CachedBufferMappings {
     pub(crate) data: Vec<CachedBufferMapping>, //all shader calls, and there used BufferCache
     pub(crate) hash: u64,
-    pub(crate) count : u32,//how many times this mapping has been used (used to determine the size of increasing buffers,
-                           //e.g. if this mapping has been used 100 times, we can allocate enough memory for 200 runs) 
+    pub(crate) count: u32, //how many times this mapping has been used (used to determine the size of increasing buffers,
+                           //e.g. if this mapping has been used 100 times, we can allocate enough memory for 200 runs)
 }
 
 impl CachedBufferMappings {
     fn new(hash: u64) -> Self {
-        Self { data: vec![], hash, count : 0 }
+        Self {
+            data: vec![],
+            hash,
+            count: 0,
+        }
     }
 
-    fn add_new(&mut self, buffer: CachedBufferId, pipeline: PipelineType, last_size : u64, index : u32){
+    fn add_new(
+        &mut self,
+        buffer: CachedBufferId,
+        pipeline: PipelineType,
+        last_size: u64,
+        index: u32,
+    ) {
         let data = CachedBufferMapping::new(pipeline, buffer, last_size);
         if (index as usize) < self.data.len() {
             self.data[index as usize] = data;
@@ -121,22 +135,28 @@ impl CachedBufferMappings {
         }
     }
 
-    fn reuse_buffer(&mut self, last_size : u64, index : u32){
+    fn reuse_buffer(&mut self, last_size: u64, index: u32) {
         if (index as usize) < self.data.len() {
             let mapping = &mut self.data[index as usize];
             mapping.last_size = last_size;
-        }   
+        }
     }
 
-    pub(crate) fn get_buffer_mapping(&self, pipeline: &PipelineType, index : u32) -> Option<&CachedBufferMapping> {
+    pub(crate) fn get_buffer_mapping(
+        &self,
+        pipeline: &PipelineType,
+        index: u32,
+    ) -> Option<&CachedBufferMapping> {
         if let Some(mapping) = &self.data.get(index as usize) {
             if &mapping.pipeline == pipeline {
                 return Some(mapping);
-            }
-            else{
+            } else {
                 //if this pipeline is inplaceable the pipeline might be different based wheter the buffer was inplaced or not.
-                if !pipeline.2.input1_inplaceable &&  !pipeline.2.input2_inplaceable {
-                    panic!("expected: {pipeline:?} at index {index}, but got {:?}", mapping.pipeline);
+                if !pipeline.2.input1_inplaceable && !pipeline.2.input2_inplaceable {
+                    panic!(
+                        "expected: {pipeline:?} at index {index}, but got {:?}",
+                        mapping.pipeline
+                    );
                 }
             }
         }

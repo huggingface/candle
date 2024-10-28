@@ -1,24 +1,20 @@
 mod bindgroup_layout;
-mod shader;
-mod buffer_reference;
-mod cached_buffer;
-mod cached_bindgroup;
 mod buffer_mapping;
+mod buffer_reference;
+mod cached_bindgroup;
+mod cached_buffer;
+mod shader;
 
 pub use bindgroup_layout::*;
-pub use shader::*;
-pub use buffer_reference::*;
-pub use cached_buffer::*;
-pub use cached_bindgroup::*;
 use buffer_mapping::*;
-
+pub use buffer_reference::*;
+pub use cached_bindgroup::*;
+pub use cached_buffer::*;
+pub use shader::*;
 
 use tracing::{instrument, span};
 
-use super::{
-    device::PipelineType,
-    wgpu_functions,
-};
+use super::{device::PipelineType, wgpu_functions};
 use super::{
     util::{Reference, ReferenceTrait, ToU64},
     WgpuDevice,
@@ -77,8 +73,6 @@ impl ReferenceTrait for CachedBindgroupId {
         self.0.time()
     }
 }
-
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, std::marker::Copy)]
 #[cfg_attr(
@@ -221,38 +215,39 @@ pub type CachedBindgroupFull = BindgroupFullBase<CachedBufferId>;
 pub type BindgroupReferenceInput = BindgroupInputBase<BufferReferenceId>;
 pub type BindgroupReferenceFull = BindgroupFullBase<BufferReferenceId>;
 
-
 #[derive(Debug)]
 pub struct ModelCache {
     pub(crate) buffer_reference: BufferReferenceStorage,
     pub(crate) buffers: BufferCacheStorage,
     pub(crate) bindgroups: BindgroupCacheStorage,
     pub(crate) mappings: BufferMappingCache,
-    pub(crate) shader : ShaderCache,
+    pub(crate) shader: ShaderCache,
 
     pub(crate) unary_inplace_counter: u32,
     pub(crate) binary_inplace_counter: u32,
     pub(crate) copy_inplace_counter: u32,
-    
-    pub(crate) max_memory_size : u64,
+
+    pub(crate) max_memory_size: u64,
 
     #[cfg(feature = "wgpu_debug")]
-    pub(crate) debug:
-        std::collections::HashMap<super::device::DebugPipelineRecording, super::device::DebugPipelineRecording>, //stores all queed commands (e.g. used to test performance in the browser so we can measure the performance of each unnique operation alone)
+    pub(crate) debug: std::collections::HashMap<
+        super::device::DebugPipelineRecording,
+        super::device::DebugPipelineRecording,
+    >, //stores all queed commands (e.g. used to test performance in the browser so we can measure the performance of each unnique operation alone)
 }
 
 impl ModelCache {
-    pub fn new(mapping_size: u32, max_memory_size : u64) -> Self {
+    pub fn new(mapping_size: u32, max_memory_size: u64) -> Self {
         Self {
             buffer_reference: BufferReferenceStorage::new(),
             buffers: BufferCacheStorage::new(),
             bindgroups: BindgroupCacheStorage::new(),
             mappings: BufferMappingCache::new(mapping_size),
-            shader : ShaderCache::new(),
-            
-            unary_inplace_counter : 0, 
-            binary_inplace_counter : 0,
-            copy_inplace_counter : 0,
+            shader: ShaderCache::new(),
+
+            unary_inplace_counter: 0,
+            binary_inplace_counter: 0,
+            copy_inplace_counter: 0,
             max_memory_size,
             #[cfg(feature = "wgpu_debug")]
             debug: std::collections::HashMap::new(),
@@ -265,10 +260,12 @@ impl ModelCache {
         size: T,
         referenced_by_candle_storage: bool,
     ) -> BufferReferenceId {
-
         let size = size.to_u64();
         if size > self.max_memory_size {
-            panic!("tried to create too large a buffer: {}, max: {}", size, self.max_memory_size);
+            panic!(
+                "tried to create too large a buffer: {}, max: {}",
+                size, self.max_memory_size
+            );
         }
 
         let buffer_reference = BufferReference::new(size, referenced_by_candle_storage);
@@ -283,14 +280,18 @@ impl ModelCache {
         referenced_by_candle_storage: bool,
     ) -> BufferReferenceId {
         let data = bytemuck::cast_slice(data);
-        
-        if data.len() as u64 > self.max_memory_size{
-            panic!("tried to create_init too large a buffer: {}, max: {}", data.len(), self.max_memory_size);
+
+        if data.len() as u64 > self.max_memory_size {
+            panic!(
+                "tried to create_init too large a buffer: {}, max: {}",
+                data.len(),
+                self.max_memory_size
+            );
         }
 
-        let buffer = self
-            .buffers
-            .search_buffer(dev, data.len() as u64,data.len() as u64, 0, u32::MAX - 1); //TODO use exact size?
+        let buffer =
+            self.buffers
+                .search_buffer(dev, data.len() as u64, data.len() as u64, 0, u32::MAX - 1); //TODO use exact size?
         dev.queue
             .write_buffer(self.buffers.get_buffer(&buffer).unwrap().buffer(), 0, data);
 
@@ -399,7 +400,7 @@ impl ModelCache {
         return false;
     }
 
-    #[instrument(skip(self, dev, bindgroup_reference, command_id,pipeline))]
+    #[instrument(skip(self, dev, bindgroup_reference, command_id, pipeline))]
     pub(crate) fn get_bind_group(
         &mut self,
         dev: &WgpuDevice,
@@ -445,11 +446,7 @@ impl ModelCache {
         check_buffer_reference(self, bindgroup_reference, pipeline.clone());
 
         fn get_storage(cache: &ModelCache, id: &BufferReferenceId) -> CachedBufferId {
-            *cache
-                .buffer_reference
-                .get(id)
-                .unwrap()
-                .cached_buffer_id()
+            *cache.buffer_reference.get(id).unwrap().cached_buffer_id()
         }
 
         fn get_buffer_referece_key(
@@ -486,13 +483,15 @@ impl ModelCache {
             let buffer_already_set = self.buffers.get_buffer(&buf_dest_cached_id).is_some();
 
             //search in buffer mapping, and use the same buffer as last run:
-            if let Some(buffer_mapping) = current_mapping.get_buffer_mapping(&pipeline, current_mapping_index) {
-                if buffer_already_set{
+            if let Some(buffer_mapping) =
+                current_mapping.get_buffer_mapping(&pipeline, current_mapping_index)
+            {
+                if buffer_already_set {
                     let bindgroup_inputs =
-                    get_buffer_referece_key(self, buf_dest_cached_id, bindgroup_reference);
-                   
+                        get_buffer_referece_key(self, buf_dest_cached_id, bindgroup_reference);
+
                     self.mappings.reuse_buffer(buf_dest_size);
-                    
+
                     if let Some(bg) = self
                         .bindgroups
                         .get_bindgroup_reference_by_description(&bindgroup_inputs)
@@ -500,16 +499,15 @@ impl ModelCache {
                     {
                         self.bindgroups.cached_bindgroup_use_counter_inc();
                         return bg;
-                    }
-                    else{
+                    } else {
                         //create new bindgroup:
-                        let bindgroup_reference = get_buffer_referece_key(self, buf_dest_cached_id, bindgroup_reference);
+                        let bindgroup_reference =
+                            get_buffer_referece_key(self, buf_dest_cached_id, bindgroup_reference);
                         let bindgroup_id = self.create_bindgroup(dev, bindgroup_reference);
                         return bindgroup_id;
                     }
-                }
-                else{
-                    let buffer_id =  buffer_mapping.used_buffer;
+                } else {
+                    let buffer_id = buffer_mapping.used_buffer;
                     let buffer: Option<&CachedBuffer> = self.buffers.get_buffer(&buffer_id);
                     let buffer_last_size = buffer_mapping.last_size;
 
@@ -535,45 +533,53 @@ impl ModelCache {
                                 {
                                     self.bindgroups.cached_bindgroup_use_counter_inc();
                                     return bg;
-                                }
-
-                                else{
+                                } else {
                                     //create new bindgroup:
-                                    let bindgroup_reference = get_buffer_referece_key(self, buffer_id, bindgroup_reference);
-                                    let bindgroup_id = self.create_bindgroup(dev, bindgroup_reference);
+                                    let bindgroup_reference = get_buffer_referece_key(
+                                        self,
+                                        buffer_id,
+                                        bindgroup_reference,
+                                    );
+                                    let bindgroup_id =
+                                        self.create_bindgroup(dev, bindgroup_reference);
                                     return bindgroup_id;
                                 }
+                            } else {
+                                tracing::info!(
+                                    "mapping: buffer was not big enaugh {:?}",
+                                    buffer_id
+                                );
                             }
-                            else{
-                                tracing::info!("mapping: buffer was not big enaugh {:?}", buffer_id);
-                            }
-                        }
-                        else{
+                        } else {
                             tracing::info!("mapping: buffer was not free {:?}", buffer_id);
                         }
-                    }
-                    else{
+                    } else {
                         tracing::info!("mapping: buffer was deleted {:?}", buffer_id);
                     }
                     //replace buffer:
-                    if optimal_size > buffer_last_size{
-                        let delta_size = optimal_size - buffer_last_size; 
-                        let new_size = optimal_size + delta_size * self.mappings.get_current_mapping_count() as u64;
-                        
+                    if optimal_size > buffer_last_size {
+                        let delta_size = optimal_size - buffer_last_size;
+                        let new_size = optimal_size
+                            + delta_size * self.mappings.get_current_mapping_count() as u64;
+
                         //We try to determine a good new buffer size for constantly growing buffers,
                         //but do not use more than 2 * optimal_size:
                         let new_size = new_size.min(2 * optimal_size);
-                        
+
                         if new_size != optimal_size {
-                            tracing::info!("increase required size: {} -> {}", optimal_size, new_size);
+                            tracing::info!(
+                                "increase required size: {} -> {}",
+                                optimal_size,
+                                new_size
+                            );
                         }
-                        optimal_size  = new_size;
+                        optimal_size = new_size;
                     }
                 }
             }
 
             //the destination buffer of this bindgroup already has a buffer set
-            if buffer_already_set{
+            if buffer_already_set {
                 let bindgroup_inputs =
                     get_buffer_referece_key(self, buf_dest_cached_id, bindgroup_reference);
                 if let Some(bg) = self
@@ -582,7 +588,8 @@ impl ModelCache {
                     .cloned()
                 {
                     self.bindgroups.cached_bindgroup_use_counter_inc();
-                    self.mappings.add_new_buffer(buf_dest_cached_id, pipeline, buf_dest_size);
+                    self.mappings
+                        .add_new_buffer(buf_dest_cached_id, pipeline, buf_dest_size);
                     return bg;
                 }
             }
@@ -597,30 +604,35 @@ impl ModelCache {
             dest_buffer_id = *buf_dest_reference.cached_buffer_id();
         } else {
             //create a new buffer
-            dest_buffer_id =
-                self.buffers
-                    .search_buffer(dev, minimum_size,optimal_size, command_id, buf_dest_dur);
+            dest_buffer_id = self.buffers.search_buffer(
+                dev,
+                minimum_size,
+                optimal_size,
+                command_id,
+                buf_dest_dur,
+            );
             //use this buffer for the buffer reference:
             buf_dest_reference.set_cached_buffer_id(dest_buffer_id);
         }
 
         let bindgroup_inputs = get_buffer_referece_key(self, dest_buffer_id, bindgroup_reference);
-        
+
         if dev.configuration.use_cache {
-            self.mappings.add_new_buffer(dest_buffer_id, pipeline, buf_dest_size);
+            self.mappings
+                .add_new_buffer(dest_buffer_id, pipeline, buf_dest_size);
         }
-        
+
         if let Some(bg) = self
-        .bindgroups
-        .get_bindgroup_reference_by_description(&bindgroup_inputs)
-        .cloned()
+            .bindgroups
+            .get_bindgroup_reference_by_description(&bindgroup_inputs)
+            .cloned()
         {
             self.bindgroups.cached_bindgroup_use_counter_inc();
             return bg;
-        }
-        else{
+        } else {
             //create new bindgroup:
-            let bindgroup_reference = get_buffer_referece_key(self, dest_buffer_id, bindgroup_reference);
+            let bindgroup_reference =
+                get_buffer_referece_key(self, dest_buffer_id, bindgroup_reference);
             let bindgroup_id = self.create_bindgroup(dev, bindgroup_reference);
             return bindgroup_id;
         }
@@ -633,9 +645,6 @@ impl ModelCache {
         dev: &WgpuDevice,
         bindgroup_d: CachedBindgroupFull,
     ) -> CachedBindgroupId {
-
-        
-
         let bindgroup = wgpu_functions::create_bindgroup(dev, bindgroup_d.clone(), self);
         let bindgroup = CachedBindgroup::new(bindgroup, bindgroup_d.clone());
 

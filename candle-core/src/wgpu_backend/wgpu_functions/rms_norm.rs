@@ -13,7 +13,6 @@ pub fn queue_rms_norm(
     dest_size: u32,
     eps: f32,
 ) -> crate::Result<()> {
-
     let (buffer_input1, input1_offset) = buffer_input1;
     let (buffer_alpha, alpha_offset) = buffer_alpha;
 
@@ -31,7 +30,8 @@ pub fn queue_rms_norm(
 
     let pipeline = meta.get_pipeline(Pipelines::RmsNorm(get_dtype(dtype)?, Functions::RmsNorm));
 
-    let bind_group = create_bind_group_input2(buffer_dest, buffer_input1, buffer_alpha, dtype.into());
+    let bind_group =
+        create_bind_group_input2(buffer_dest, buffer_input1, buffer_alpha, dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,
@@ -43,7 +43,6 @@ pub fn queue_rms_norm(
     );
     Ok(())
 }
-
 
 #[allow(clippy::too_many_arguments)]
 pub fn queue_layer_norm(
@@ -57,7 +56,6 @@ pub fn queue_layer_norm(
     dest_size: u32,
     eps: f32,
 ) -> crate::Result<()> {
-
     let (buffer_input1, input1_offset) = buffer_input1;
     let (buffer_alpha, alpha_offset) = buffer_alpha;
     let (buffer_beta, beta_offset) = buffer_beta;
@@ -74,10 +72,16 @@ pub fn queue_layer_norm(
     meta.add(alpha_offset);
     meta.add(eps);
     meta.add(beta_offset);
-    
+
     let pipeline = meta.get_pipeline(Pipelines::RmsNorm(get_dtype(dtype)?, Functions::LayerNorm));
 
-    let bind_group = create_bind_group_input3(buffer_dest, buffer_input1, buffer_alpha, buffer_beta, dtype.into());
+    let bind_group = create_bind_group_input3(
+        buffer_dest,
+        buffer_input1,
+        buffer_alpha,
+        buffer_beta,
+        dtype.into(),
+    );
     enqueue_workgroups(
         meta,
         pipeline,

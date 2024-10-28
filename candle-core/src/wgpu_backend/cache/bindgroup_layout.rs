@@ -58,8 +58,8 @@ impl BindgroupAlignmentLayout {
         ]
     }
 
-    pub fn validate(&self){
-        _= self.get_index();
+    pub fn validate(&self) {
+        _ = self.get_index();
     }
 
     pub fn get_index(&self) -> usize {
@@ -128,9 +128,7 @@ impl BindgroupLayouts {
                 binding,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage {
-                        read_only,
-                    },
+                    ty: wgpu::BufferBindingType::Storage { read_only },
                     has_dynamic_offset: false,
                     min_binding_size: Some(NonZeroU64::new(alignment.into()).unwrap()),
                 },

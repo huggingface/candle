@@ -4,8 +4,8 @@ use crate::{wgpuError, Shape};
 pub fn queue_index_select(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    input : WgpuTensor,
-    index : WgpuTensor,
+    input: WgpuTensor,
+    index: WgpuTensor,
     dtype: crate::DType,
     index_dtype: crate::DType,
     dim: usize,
@@ -35,9 +35,18 @@ pub fn queue_index_select(
     meta.add_layout2(index.layout());
 
     let pipeline = match index_dtype {
-        crate::DType::U32 => Pipelines::IndexSelect(get_dtype(dtype)?, candle_wgpu_kernels::index_select::Functions::IndexSelectU32),
-        crate::DType::I64 => Pipelines::IndexSelecti64(get_dtype(dtype)?, candle_wgpu_kernels::index_selecti64::Functions::IndexSelectI64),
-        _ => wgpuError!(format!("dtype: {:?} is not supported for indexing in index select", index_dtype)),
+        crate::DType::U32 => Pipelines::IndexSelect(
+            get_dtype(dtype)?,
+            candle_wgpu_kernels::index_select::Functions::IndexSelectU32,
+        ),
+        crate::DType::I64 => Pipelines::IndexSelecti64(
+            get_dtype(dtype)?,
+            candle_wgpu_kernels::index_selecti64::Functions::IndexSelectI64,
+        ),
+        _ => wgpuError!(format!(
+            "dtype: {:?} is not supported for indexing in index select",
+            index_dtype
+        )),
     };
     let pipeline = meta.get_pipeline(pipeline);
 

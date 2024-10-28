@@ -4,8 +4,8 @@ use candle_wgpu_kernels::gather::Functions;
 pub fn queue_gather(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    input : WgpuTensor,
-    index : WgpuTensor,
+    input: WgpuTensor,
+    index: WgpuTensor,
     dtype: crate::DType,
     dim: usize,
 ) -> crate::Result<()> {
@@ -17,7 +17,8 @@ pub fn queue_gather(
 
     let pipeline = meta.get_pipeline(Pipelines::Gather(get_dtype(dtype)?, Functions::Gather));
 
-    let bind_group = create_bind_group_input2(buffer_dest, input.buffer(), index.buffer(), dtype.into());
+    let bind_group =
+        create_bind_group_input2(buffer_dest, input.buffer(), index.buffer(), dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,
@@ -33,8 +34,8 @@ pub fn queue_gather(
 pub fn queue_scatter_add_inplace(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    index : WgpuTensor,
-    src : WgpuTensor,
+    index: WgpuTensor,
+    src: WgpuTensor,
     dtype: crate::DType,
     lay_input: &crate::Layout,
     dim: usize,
@@ -53,7 +54,8 @@ pub fn queue_scatter_add_inplace(
         Functions::ScatterAddInplace,
     ));
 
-    let bind_group = create_bind_group_input2(buffer_dest, index.buffer(), src.buffer(), dtype.into());
+    let bind_group =
+        create_bind_group_input2(buffer_dest, index.buffer(), src.buffer(), dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,
@@ -69,8 +71,8 @@ pub fn queue_scatter_add_inplace(
 pub fn queue_index_add_inplace(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    index : WgpuTensor,
-    src : WgpuTensor,
+    index: WgpuTensor,
+    src: WgpuTensor,
     dtype: crate::DType,
     lay_input: &crate::Layout,
     dim: usize,
@@ -89,7 +91,8 @@ pub fn queue_index_add_inplace(
         Functions::IndexAddInplace,
     ));
 
-    let bind_group = create_bind_group_input2(buffer_dest, index.buffer(), src.buffer(), dtype.into());
+    let bind_group =
+        create_bind_group_input2(buffer_dest, index.buffer(), src.buffer(), dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,

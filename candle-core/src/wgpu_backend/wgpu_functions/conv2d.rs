@@ -10,8 +10,8 @@ use super::*;
 pub fn queue_conv2d(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    input : WgpuTensor,
-    kernel : WgpuTensor,
+    input: WgpuTensor,
+    kernel: WgpuTensor,
     dtype: crate::DType,
     params: &crate::conv::ParamsConv2D,
 ) -> crate::Result<()> {
@@ -45,8 +45,8 @@ pub fn queue_conv2d(
         queue_matmul_buffer(
             dev,
             buffer_dest,
-            WgpuTensor::new( &new_kernel_layout, kernel.buffer()),
-            WgpuTensor::new( &new_input_layout, input.buffer()),
+            WgpuTensor::new(&new_kernel_layout, kernel.buffer()),
+            WgpuTensor::new(&new_input_layout, input.buffer()),
             SGEMMParams::new(params.b_size, m, k, n),
             dtype,
         )?;
@@ -67,20 +67,15 @@ pub fn queue_conv2d(
         //for small c_in, k_h, k_w,  matmul k will be small (e.g. 9)
         //for small c_out            matmul m will be small (e.g. 1)
         //in this case only a relativ slowly naive matmul impl will be used.
-        //it may be faster to just use the conv2d shader directly instead of using im2col as this conversion will not result in a fast matrix multipliation. 
-        
+        //it may be faster to just use the conv2d shader directly instead of using im2col as this conversion will not result in a fast matrix multipliation.
+
         let m = params.c_out;
         let k = params.c_in * params.k_h * params.k_w;
-        if (k >= 64 || m >= 16) && mem_needed < dev.device_limits.max_storage_buffer_binding_size as usize {
-            return queue_conv2d_matmul(
-                dev,
-                buffer_dest,
-                input,
-                kernel,
-                dtype,
-                params,
-            );
-        } 
+        if (k >= 64 || m >= 16)
+            && mem_needed < dev.device_limits.max_storage_buffer_binding_size as usize
+        {
+            return queue_conv2d_matmul(dev, buffer_dest, input, kernel, dtype, params);
+        }
     }
 
     let mut use_padded = false;
@@ -101,7 +96,10 @@ pub fn queue_conv2d(
         let new_layout = Layout::contiguous_with_offset(Shape::from(padded_shape), 0);
 
         let mut cache = dev.cache.lock().unwrap();
-        let tmp_buffer = cache.create_buffer_reference(new_layout.shape().elem_count() * dtype.size_in_bytes(), false);
+        let tmp_buffer = cache.create_buffer_reference(
+            new_layout.shape().elem_count() * dtype.size_in_bytes(),
+            false,
+        );
         drop(cache);
         queue_copy4d_padded(
             dev,
@@ -118,17 +116,12 @@ pub fn queue_conv2d(
         //the performance is bad if the input is not contiguous
         if input_stride[3] != 1 && (params.c_out > 32) && (params.i_h >= 64 && params.i_w >= 64) {
             let mut cache = dev.cache.lock().unwrap();
-            let tmp_buffer =
-                cache.create_buffer_reference(input.layout().shape().elem_count() * dtype.size_in_bytes(), false);
+            let tmp_buffer = cache.create_buffer_reference(
+                input.layout().shape().elem_count() * dtype.size_in_bytes(),
+                false,
+            );
 
-            queue_copy_strided(
-                dev,
-                tmp_buffer,
-                input.buffer(),
-                dtype,
-                input.layout(),
-                0,
-            )?;
+            queue_copy_strided(dev, tmp_buffer, input.buffer(), dtype, input.layout(), 0)?;
             (tmp_buffer, Layout::contiguous(input.layout().shape()))
         } else {
             (input.buffer(), input.layout().clone())
@@ -196,7 +189,8 @@ pub fn queue_conv2d(
         const_vec,
     );
 
-    let bind_group = create_bind_group_input2(buffer_dest, input_buffer, kernel.buffer(), dtype.into());
+    let bind_group =
+        create_bind_group_input2(buffer_dest, input_buffer, kernel.buffer(), dtype.into());
 
     // if use_channels2
     // {
@@ -246,10 +240,10 @@ pub fn queue_conv2d(
 pub fn queue_conv2d_matmul(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    input : WgpuTensor,
-    kernel : WgpuTensor,
+    input: WgpuTensor,
+    kernel: WgpuTensor,
     dtype: crate::DType,
-    params: &crate::conv::ParamsConv2D
+    params: &crate::conv::ParamsConv2D,
 ) -> crate::Result<()> {
     //1. im2col
     // Calculate output dimensions
@@ -306,7 +300,7 @@ pub fn queue_conv2d_matmul(
     {
         let mut cache = dev.cache.lock().unwrap();
 
-        im2col_buffer = cache.create_buffer_reference(n * k * b * dtype.size_in_bytes() , false);
+        im2col_buffer = cache.create_buffer_reference(n * k * b * dtype.size_in_bytes(), false);
 
         let bind_group = create_bind_group_input1(im2col_buffer, input.buffer(), dtype.into());
 
@@ -340,7 +334,7 @@ pub fn queue_conv2d_matmul(
     );
     queue_matmul_buffer(
         dev,
-        buffer_dest,   // The final output buffer
+        buffer_dest, // The final output buffer
         WgpuTensor::new(&flattened_kernel_layout, kernel.buffer()),
         WgpuTensor::new(&im2col_layout, im2col_buffer),
         SGEMMParams::new(params.b_size, m, k, n),
@@ -352,9 +346,9 @@ pub fn queue_conv2d_matmul(
 
 pub fn queue_conv2d_transpose(
     dev: &WgpuDevice,
-    buffer_dest: BufferReferenceId, 
-    input : WgpuTensor,
-    kernel : WgpuTensor,
+    buffer_dest: BufferReferenceId,
+    input: WgpuTensor,
+    kernel: WgpuTensor,
     dtype: crate::DType,
     params: &crate::conv::ParamsConvTranspose2D,
 ) -> crate::Result<()> {
@@ -398,7 +392,8 @@ pub fn queue_conv2d_transpose(
         Pipelines::Conv2d(get_dtype(dtype)?, Functions::Conv2dTranspose),
         const_vec,
     );
-    let bind_group = create_bind_group_input2(buffer_dest, input.buffer(), kernel.buffer(), dtype.into());
+    let bind_group =
+        create_bind_group_input2(buffer_dest, input.buffer(), kernel.buffer(), dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,
@@ -418,8 +413,8 @@ pub fn queue_conv2d_transpose(
 pub fn queue_conv1d(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    input : WgpuTensor,
-    kernel : WgpuTensor,
+    input: WgpuTensor,
+    kernel: WgpuTensor,
     dtype: crate::DType,
     params: &crate::conv::ParamsConv1D,
 ) -> crate::Result<()> {
@@ -455,7 +450,8 @@ pub fn queue_conv1d(
         const_vec,
     );
 
-    let bind_group = create_bind_group_input2(buffer_dest, input.buffer(), kernel.buffer(), dtype.into());
+    let bind_group =
+        create_bind_group_input2(buffer_dest, input.buffer(), kernel.buffer(), dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,
@@ -471,8 +467,8 @@ pub fn queue_conv1d(
 pub fn queue_conv1d_transpose(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    input : WgpuTensor,
-    kernel : WgpuTensor,
+    input: WgpuTensor,
+    kernel: WgpuTensor,
     dtype: crate::DType,
     params: &crate::conv::ParamsConvTranspose1D,
 ) -> crate::Result<()> {
@@ -506,7 +502,8 @@ pub fn queue_conv1d_transpose(
         Pipelines::Conv1d(get_dtype(dtype)?, Functions1d::Conv1dTranspose),
         const_vec,
     );
-    let bind_group = create_bind_group_input2(buffer_dest, input.buffer(), kernel.buffer(), dtype.into());
+    let bind_group =
+        create_bind_group_input2(buffer_dest, input.buffer(), kernel.buffer(), dtype.into());
     enqueue_workgroups(
         meta,
         pipeline,

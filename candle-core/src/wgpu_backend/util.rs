@@ -37,7 +37,11 @@ impl ToU32 for usize {
 
 impl ToU32 for bool {
     fn to_u32(self) -> u32 {
-        if self { 1 } else { 0 }
+        if self {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -50,7 +54,6 @@ impl ToU64 for i32 {
         self as u64
     }
 }
-
 
 impl ToU64 for u32 {
     fn to_u64(self) -> u64 {
@@ -88,7 +91,11 @@ impl ToF64 for u32 {
 
 impl ToF64 for bool {
     fn to_f64(self) -> f64 {
-        if self { 1.0 } else { 0.0 }
+        if self {
+            1.0
+        } else {
+            0.0
+        }
     }
 }
 
@@ -97,7 +104,6 @@ pub(crate) struct HashMapMulti<K, V> {
     pub(crate) map: HashMap<K, Vec<V>>,
     pub(crate) _empty: Vec<V>,
 }
-
 
 impl<K: std::cmp::Eq + PartialEq + std::hash::Hash, V> HashMapMulti<K, V> {
     pub fn new() -> Self {
@@ -119,8 +125,6 @@ impl<K: std::cmp::Eq + PartialEq + std::hash::Hash, V> HashMapMulti<K, V> {
 }
 
 impl<K: std::cmp::Eq + PartialEq + std::hash::Hash, V: PartialEq> HashMapMulti<K, V> {
-    
-
     #[instrument(skip(self, key, value))]
     pub fn remove_mapping(&mut self, key: &K, value: &V) {
         if let Some(vec) = self.map.get_mut(key) {
@@ -225,7 +229,9 @@ impl<const TSIZE: usize, T: std::marker::Copy + std::default::Default> FixedArra
     }
 }
 
-impl<const TSIZE: usize, T: std::marker::Copy + std::default::Default> Default for FixedArray<T, TSIZE> {
+impl<const TSIZE: usize, T: std::marker::Copy + std::default::Default> Default
+    for FixedArray<T, TSIZE>
+{
     fn default() -> Self {
         Self::new()
     }

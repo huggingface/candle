@@ -227,7 +227,10 @@ impl QueueBuffer {
         );
     }
 
-    pub fn get_pipeline(&mut self, pipeline: impl Into<candle_wgpu_kernels::PipelineIndex>) -> PipelineType {
+    pub fn get_pipeline(
+        &mut self,
+        pipeline: impl Into<candle_wgpu_kernels::PipelineIndex>,
+    ) -> PipelineType {
         let (index, is_new) = self.const_id_map.get_or_insert(&self.const_array);
         if is_new {
             let hmap = HashMap::from_iter(
@@ -355,46 +358,16 @@ impl fmt::Debug for MatmulAlgorithm {
             Self::Matmul16_16 => write!(f, "Matmul5_16_16"),
             Self::Matmul32_64 => write!(f, "Matmul5_32_64"),
             Self::Matmul32_64B => write!(f, "Matmul5_32_64B"),
-            Self::Matmul32_32 => write!(
-                f,
-                "Matmul5_32_32"
-            ),
-            Self::Matmul64_64 => write!(
-                f,
-                "Matuml5_64_64"
-            ),
-            Self::Matmul64_64_8_8 => write!(
-                f,
-                "Matmul5_64_64_8_8"
-            ),
-            Self::Matmul64_64_4_8 => write!(
-                f,
-                "Matmul5_64_64_4_8"
-            ),
-            Self::Matmul1_64 => write!(
-                f,
-                "Matmul5_1_64"
-            ),
-            Self::Matmul1_64B => write!(
-                f,
-                "Matmul5_1_64B"
-            ),
-            Self::Matmul24_24 => write!(
-                f,
-                "Matmul5_24_24"
-            ),
-            Self::Matmul24_48 => write!(
-                f,
-                "Matmul5_24_48"
-            ),
-            Self::Matmul24_24B => write!(
-                f,
-                "Matmul5_24_24B"
-            ),
-            Self::Matmul24_48B => write!(
-                f,
-                "Matmul5_24_48B"
-            ),
+            Self::Matmul32_32 => write!(f, "Matmul5_32_32"),
+            Self::Matmul64_64 => write!(f, "Matuml5_64_64"),
+            Self::Matmul64_64_8_8 => write!(f, "Matmul5_64_64_8_8"),
+            Self::Matmul64_64_4_8 => write!(f, "Matmul5_64_64_4_8"),
+            Self::Matmul1_64 => write!(f, "Matmul5_1_64"),
+            Self::Matmul1_64B => write!(f, "Matmul5_1_64B"),
+            Self::Matmul24_24 => write!(f, "Matmul5_24_24"),
+            Self::Matmul24_48 => write!(f, "Matmul5_24_48"),
+            Self::Matmul24_24B => write!(f, "Matmul5_24_24B"),
+            Self::Matmul24_48B => write!(f, "Matmul5_24_48B"),
         }
     }
 }
@@ -440,7 +413,6 @@ impl std::ops::Deref for WgpuDevice {
 }
 
 impl WgpuDevice {
-
     #[instrument]
     pub(crate) async fn create(
         _: usize,
@@ -550,7 +522,9 @@ impl WgpuDevice {
             mapped_at_creation: false,
         });
 
-        let max_memory_size: u64 = device_limits.max_buffer_size.min(device_limits.max_storage_buffer_binding_size as u64);
+        let max_memory_size: u64 = device_limits
+            .max_buffer_size
+            .min(device_limits.max_storage_buffer_binding_size as u64);
 
         Ok(WgpuDevice {
             inner: Arc::new(WgpuDeviceInner {
@@ -564,7 +538,10 @@ impl WgpuDevice {
                 debug: debug_info,
                 command_queue: Mutex::new(QueueBuffer::new(configuration.meta_buffer_size)),
                 meta_buffer,
-                cache: Mutex::new(ModelCache::new(configuration.buffer_mapping_size, max_memory_size)),
+                cache: Mutex::new(ModelCache::new(
+                    configuration.buffer_mapping_size,
+                    max_memory_size,
+                )),
                 bindgroup_layouts,
                 staging_probe_buffer: staging_buffer,
                 matmul_alg: Mutex::new(MatmulAlgorithm::MatmulX),
@@ -578,7 +555,11 @@ impl WgpuDevice {
         wgpu_functions::flush_gpu_command(self, &mut queue)
     }
 
-    pub fn add_wgpu_shader_loader<T : candle_wgpu_kernels::ShaderLoader + 'static + Send + Sync>(&self, index : candle_wgpu_kernels::LoaderIndex, shader_loader : impl Fn() -> T){
+    pub fn add_wgpu_shader_loader<T: candle_wgpu_kernels::ShaderLoader + 'static + Send + Sync>(
+        &self,
+        index: candle_wgpu_kernels::LoaderIndex,
+        shader_loader: impl Fn() -> T,
+    ) {
         let mut cache = self.cache.lock().unwrap();
         cache.shader.add_wgpu_shader_loader(index, shader_loader);
     }
@@ -618,29 +599,40 @@ impl WgpuDevice {
         );
         println!(
             "Inplace used: unary: {}, binary {}, copy: {}",
-            cache.unary_inplace_counter,
-            cache.binary_inplace_counter,
-            cache.copy_inplace_counter
+            cache.unary_inplace_counter, cache.binary_inplace_counter, cache.copy_inplace_counter
         );
     }
 
     #[cfg(feature = "wgpu_debug")]
-    pub fn log_debuginfo_to_file(&self, folder : &str, name : &str, version : &str) -> crate::Result<()>{
+    pub fn log_debuginfo_to_file(
+        &self,
+        folder: &str,
+        name: &str,
+        version: &str,
+    ) -> crate::Result<()> {
         let info = pollster::block_on(self.get_debug_info()).unwrap();
         let map2 = crate::wgpu::debug_info::calulate_measurment(&info);
-        crate::wgpu::debug_info::save_list(&map2,& format!("{folder}wgpu_{name}_test_{version}_b.json")).unwrap();
-    
-    
+        crate::wgpu::debug_info::save_list(
+            &map2,
+            &format!("{folder}wgpu_{name}_test_{version}_b.json"),
+        )
+        .unwrap();
+
         let info: Vec<crate::wgpu::debug_info::ShaderInfo> = self.get_pipeline_info().unwrap();
-        crate::wgpu::debug_info::save_list(&info,& format!("{folder}wgpu_{name}_test_{version}_c.json")).unwrap();
+        crate::wgpu::debug_info::save_list(
+            &info,
+            &format!("{folder}wgpu_{name}_test_{version}_c.json"),
+        )
+        .unwrap();
 
         let (pipelines, consts) = self.get_used_pipelines();
-        std::fs::write(format!("{folder}wgpu_{name}_test_{version}_d.json"), pipelines)?;   
+        std::fs::write(
+            format!("{folder}wgpu_{name}_test_{version}_d.json"),
+            pipelines,
+        )?;
         std::fs::write(format!("{folder}wgpu_{name}_test_{version}_e.json"), consts)?;
         Ok(())
     }
-
-    
 
     #[cfg(feature = "wgpu_debug")]
     pub fn get_used_pipelines(&self) -> (String, String) {
@@ -721,11 +713,8 @@ impl WgpuDevice {
     pub async fn get_debug_info_full(&self) -> crate::Result<Measurements> {
         use super::wgpu_functions::synchronize_async;
         synchronize_async(self).await?;
-        let data = wgpu_functions::read_from_buffer_async::<u64>(
-            self,
-            &self.debug.query_set_buffer,
-        )
-        .await;
+        let data =
+            wgpu_functions::read_from_buffer_async::<u64>(self, &self.debug.query_set_buffer).await;
 
         let period = self.queue.get_timestamp_period();
         let mut result = Measurements::new(period);
@@ -802,7 +791,8 @@ impl WgpuDevice {
 
         let queue = self.command_queue.lock().unwrap();
 
-        return Ok(shaders.shaders
+        return Ok(shaders
+            .shaders
             .iter()
             .map(|(k, v)| {
                 let pipelines = &v.pipelines;
@@ -832,12 +822,8 @@ impl WgpuDevice {
             DType::U32 => true,
             DType::F32 => true,
             DType::U8 => false,
-            DType::I64 => {
-                self.device_features.contains(wgpu::Features::SHADER_INT64)
-            }
-            DType::F64 => {
-                self.device_features.contains(wgpu::Features::SHADER_F64)
-            }
+            DType::I64 => self.device_features.contains(wgpu::Features::SHADER_INT64),
+            DType::F64 => self.device_features.contains(wgpu::Features::SHADER_F64),
 
             DType::BF16 => false,
             DType::F16 => false,
@@ -940,12 +926,8 @@ impl crate::backend::BackendDevice for WgpuDevice {
         storage: &crate::CpuStorage,
     ) -> crate::Result<Self::Storage> {
         match storage {
-            crate::CpuStorage::F32(data) => {
-                create_wgpu_storage_init(self, crate::DType::F32, data)
-            }
-            crate::CpuStorage::U32(data) => {
-                create_wgpu_storage_init(self, crate::DType::U32, data)
-            }
+            crate::CpuStorage::F32(data) => create_wgpu_storage_init(self, crate::DType::F32, data),
+            crate::CpuStorage::U32(data) => create_wgpu_storage_init(self, crate::DType::U32, data),
             _ => wrongType!(storage_from_cpu_storage, storage.dtype()),
         }
     }

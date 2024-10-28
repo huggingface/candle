@@ -1,4 +1,3 @@
-
 ////////////////// BUFFER REFERENCE:
 
 use tracing::instrument;
@@ -87,9 +86,6 @@ impl BufferReference {
     }
 }
 
-
-
-
 #[derive(Debug)]
 pub(crate) struct BufferReferenceStorage {
     storage: Storage<BufferReference, BufferReferenceId>,
@@ -97,15 +93,15 @@ pub(crate) struct BufferReferenceStorage {
 }
 
 impl BufferReferenceStorage {
-    pub (crate) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             storage: Storage::new(),
             deletion_queue: vec![],
         }
     }
 
-    #[instrument(skip(self,referece))]
-    pub (crate) fn insert(&mut self, referece: BufferReference) -> BufferReferenceId {
+    #[instrument(skip(self, referece))]
+    pub(crate) fn insert(&mut self, referece: BufferReference) -> BufferReferenceId {
         let id = self.storage.insert(referece);
         //println!("create new buffer Reference: {:?}", id);
         return id;

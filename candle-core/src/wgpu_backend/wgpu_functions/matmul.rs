@@ -30,9 +30,9 @@ mod transpose {
         buffer_dest: BufferReferenceId,
         buffer_input: BufferReferenceId,
         dtype: crate::DType,
-        input_shape : (u32, u32, u32), //batch, width, height
+        input_shape: (u32, u32, u32), //batch, width, height
         start_offset: usize,
-        batch_stride : usize
+        batch_stride: usize,
     ) -> crate::Result<()> {
         let (batch, width, height) = input_shape;
         let pipeline;
@@ -67,7 +67,7 @@ mod transpose {
                 dtype,
                 (batch, width, height),
                 start_offset,
-                batch_stride
+                batch_stride,
             );
         }
 
@@ -90,7 +90,7 @@ mod transpose {
             (width + tile_w - 1) / tile_w,
             (height + tile_h - 1) / tile_h,
             batch,
-            (width * height * batch) as usize
+            (width * height * batch) as usize,
         );
         Ok(())
     }
@@ -119,8 +119,8 @@ mod sgemm {
     pub fn queue_matmul_buffer1(
         dev: &WgpuDevice,
         buffer_dest: BufferReferenceId,
-        input1 : WgpuTensor,
-        input2 : WgpuTensor,
+        input1: WgpuTensor,
+        input2: WgpuTensor,
         params: SGEMMParams,
         dtype: crate::DType,
         pipeline: Pipelines,
@@ -289,8 +289,8 @@ mod sgemm {
     pub fn queue_matmul_generic(
         dev: &WgpuDevice,
         buffer_dest: BufferReferenceId,
-        input1 : WgpuTensor,
-        input2 : WgpuTensor,
+        input1: WgpuTensor,
+        input2: WgpuTensor,
         params: SGEMMParams,
         dtype: crate::DType,
         settings: GenericMatmulSettings,
@@ -325,7 +325,7 @@ mod sgemm {
 
         let input1_stride_k = *input1_stride.next().unwrap_or(&1);
         let input1_stride_m = *input1_stride.next().unwrap_or(&1);
-     
+
         let input2_stride_n = *input2_stride.next().unwrap_or(&1);
         let input2_stride_k = *input2_stride.next().unwrap_or(&1);
 
@@ -357,17 +357,19 @@ mod sgemm {
             let buffer_input1_padded;
             let mut dest_layout;
             //we need to realy pad the input:
-            let can_transpose = (input1_stride_k==1) != (input1_stride_m ==1); //either stride k or m (but not both) must be one for the transpose shader to work.
-            
-            let should_transpose_while_padding =  !no_padding_needed_input1_stride && !can_transpose;
-            
+            let can_transpose = (input1_stride_k == 1) != (input1_stride_m == 1); //either stride k or m (but not both) must be one for the transpose shader to work.
+
+            let should_transpose_while_padding = !no_padding_needed_input1_stride && !can_transpose;
+
             if !no_padding_needed_input1_tile || should_transpose_while_padding {
                 buffer_input1_padded = cache.create_buffer_reference(
                     params.b * (new_m * new_k) * dtype.size_in_bytes() as u32,
                     false,
                 );
 
-                let is_contiguous = if should_transpose_while_padding ||  ((input1_stride_k==1) && (input1_stride_m ==1)){
+                let is_contiguous = if should_transpose_while_padding
+                    || ((input1_stride_k == 1) && (input1_stride_m == 1))
+                {
                     !matches!(settings.input1_stride, StrideOptimization::StrideNM(_))
                 } else {
                     input1_stride_k == 1
@@ -379,8 +381,7 @@ mod sgemm {
                         new_m as usize,
                         new_k as usize,
                     )));
-                }
-                else{
+                } else {
                     dest_layout = crate::Layout::new(
                         Shape::from((params.b as usize, new_m as usize, new_k as usize)),
                         vec![(new_m * new_k) as usize, 1, new_m as usize],
@@ -394,7 +395,7 @@ mod sgemm {
                     dtype,
                     (params.b, params.m, params.k),
                     &dest_layout,
-                    Some(format!("{}: input1", get_debug_string(&params)))
+                    Some(format!("{}: input1", get_debug_string(&params))),
                 )?;
             } else {
                 buffer_input1_padded = input1.buffer();
@@ -409,7 +410,7 @@ mod sgemm {
                 );
                 let width;
                 let height;
-                let start_offset =  dest_layout.start_offset();
+                let start_offset = dest_layout.start_offset();
                 let batch_stride = *dest_layout.stride().iter().rev().nth(2).unwrap_or(&1);
                 if let StrideOptimization::StrideNM(_) = settings.input1_stride {
                     dest_layout = crate::Layout::new(
@@ -434,7 +435,7 @@ mod sgemm {
                     dtype,
                     (params.b, width, height),
                     start_offset,
-                    batch_stride
+                    batch_stride,
                 )?;
 
                 (buffer_input1_tranposed, dest_layout)
@@ -455,9 +456,8 @@ mod sgemm {
                 (input2_stride_k==1) != (input2_stride_n ==1); //either stride k or n (but not both) must be one for the transpose shader to work.
 
             let should_transpose_while_padding = !no_padding_needed_input2_stride && !can_transpose;
-            
-            if !no_padding_needed_input2_tile || should_transpose_while_padding
-            {
+
+            if !no_padding_needed_input2_tile || should_transpose_while_padding {
                 buffer_input2_padded = cache.create_buffer_reference(
                     params.b * (new_k * new_n) * dtype.size_in_bytes() as u32,
                     false,
@@ -475,8 +475,7 @@ mod sgemm {
                         new_k as usize,
                         new_n as usize,
                     )));
-                }
-                else{
+                } else {
                     dest_layout = crate::Layout::new(
                         Shape::from((params.b as usize, new_k as usize, new_n as usize)),
                         vec![(new_n * new_k) as usize, 1, new_k as usize],
@@ -518,7 +517,7 @@ mod sgemm {
                     dest_layout = crate::Layout::new(
                         Shape::from((params.b as usize, new_k as usize, new_n as usize)),
                         vec![(new_n * new_k) as usize, 1, new_k as usize],
-                        0
+                        0,
                     );
                     width = new_n;
                     height = new_k;
@@ -531,7 +530,7 @@ mod sgemm {
                     dtype,
                     (params.b, width, height),
                     start_offset,
-                    batch_stride
+                    batch_stride,
                 )?;
                 (buffer_input2_tranposed, dest_layout)
             } else {
@@ -673,21 +672,13 @@ mod sgemm {
 pub fn queue_matmul_buffer(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    input1 : WgpuTensor,
-    input2 : WgpuTensor,
+    input1: WgpuTensor,
+    input2: WgpuTensor,
     params: SGEMMParams,
     dtype: crate::DType,
 ) -> crate::Result<()> {
     let alg = dev.matmul_alg.lock().unwrap();
-    queue_matmul_buffer_alg(
-        dev,
-        buffer_dest,
-        input1,
-        input2,
-        params,
-        dtype,
-        alg.clone(),
-    )
+    queue_matmul_buffer_alg(dev, buffer_dest, input1, input2, params, dtype, alg.clone())
 }
 
 fn get_matmul_setting(alg: &MatmulAlgorithm) -> GenericMatmulSettings {
@@ -735,8 +726,7 @@ fn get_matmul_setting(alg: &MatmulAlgorithm) -> GenericMatmulSettings {
             8,
             StrideOptimization::None,
             StrideOptimization::StrideK(true),
-        ), 
-
+        ),
 
         MatmulAlgorithm::Matmul32_32 => GenericMatmulSettings::new(
             32,
@@ -817,8 +807,8 @@ fn get_matmul_setting(alg: &MatmulAlgorithm) -> GenericMatmulSettings {
 pub fn queue_matmul_buffer_alg(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    input1 : WgpuTensor,
-    input2 : WgpuTensor,
+    input1: WgpuTensor,
+    input2: WgpuTensor,
     params: SGEMMParams,
     cdtype: crate::DType,
     alg: MatmulAlgorithm,
@@ -826,14 +816,7 @@ pub fn queue_matmul_buffer_alg(
     let dtype = get_dtype(cdtype)?;
     match alg {
         MatmulAlgorithm::MatmulX => {
-            return queue_matmul_buffer_best(
-                dev,
-                buffer_dest,
-                input1,
-                input2,
-                params,
-                cdtype,
-            )
+            return queue_matmul_buffer_best(dev, buffer_dest, input1, input2, params, cdtype)
         }
         MatmulAlgorithm::Matmul1_4 => {
             return super::matmul::sgemm::queue_matmul_buffer1(
@@ -944,7 +927,9 @@ fn get_matmul_naive(
     input1: WgpuTensor,
     input2: WgpuTensor,
 ) -> crate::wgpu_backend::MatmulAlgorithm {
-    if k % 4 == 0 && input1.layout().start_offset() % 4 == 0 && input2.layout().start_offset() % 4 == 0
+    if k % 4 == 0
+        && input1.layout().start_offset() % 4 == 0
+        && input2.layout().start_offset() % 4 == 0
     {
         let mut input1_stride = input1.layout().stride().iter().rev();
         let mut input2_stride = input2.layout().stride().iter().rev();
@@ -964,8 +949,8 @@ fn get_matmul_naive(
 pub fn queue_matmul_buffer_best(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
-    input1 : WgpuTensor,
-    input2 : WgpuTensor,
+    input1: WgpuTensor,
+    input2: WgpuTensor,
     params: SGEMMParams,
     dtype: crate::DType,
 ) -> crate::Result<()> {
@@ -1037,7 +1022,9 @@ pub fn queue_matmul_buffer_best(
             let wgs = lm * ln;
 
             if no_padding_needed {
-                if wgs > 64 && (best_no_padding_tiled_wgs == 0 || wgs * 8 < best_no_padding_tiled_wgs) {
+                if wgs > 64
+                    && (best_no_padding_tiled_wgs == 0 || wgs * 8 < best_no_padding_tiled_wgs)
+                {
                     //make sure, that we dont select 16x16, if we could use 32x64 but have to transpose matrix b
                     alg = a.clone();
                     return queue_matmul_buffer_alg(
@@ -1086,13 +1073,5 @@ pub fn queue_matmul_buffer_best(
             alg = get_matmul_naive(k, input1, input2);
         }
     }
-    queue_matmul_buffer_alg(
-        dev,
-        buffer_dest,
-        input1,
-        input2,
-        params,
-        dtype,
-        alg,
-    )
+    queue_matmul_buffer_alg(dev, buffer_dest, input1, input2, params, dtype, alg)
 }
