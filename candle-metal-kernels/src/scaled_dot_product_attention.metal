@@ -227,7 +227,9 @@ struct BlockSwizzle {
 
 // ============ "mlx/backend/metal/kernels/utils.h"
 
+#if defined(__HAVE_BFLOAT__)
 typedef bfloat bfloat16_t;
+#endif
 typedef half float16_t;
 
 METAL_FUNC ulong2 elem_to_loc_broadcast(
