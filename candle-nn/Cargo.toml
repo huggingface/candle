@@ -23,7 +23,7 @@ metal = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
 
 [dev-dependencies]
-pollster = "0.3.0"
+pollster = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 rand = { workspace = true }

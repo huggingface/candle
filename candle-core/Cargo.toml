@@ -30,7 +30,7 @@ safetensors = { workspace = true }
 thiserror = { workspace = true }
 yoke = { workspace = true }
 zip = { workspace = true }
-tracing = {workspace = true, features = ["release_max_level_off"]}
+tracing = {workspace = true, optional = true, features = ["release_max_level_off"]}
 
 #Wgpu Dependencies:
 wgpu = { workspace = true, optional = true}
@@ -55,7 +55,7 @@ cudnn = ["cuda", "cudarc/cudnn"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
 metal = ["dep:metal", "dep:candle-metal-kernels"]
-wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume", "dep:candle-wgpu-kernels", "dep:log"]
+wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume", "dep:candle-wgpu-kernels", "dep:log", "dep:tracing"]
 wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize"]
 wgpu_debug_serialize = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize"]
 default=[]

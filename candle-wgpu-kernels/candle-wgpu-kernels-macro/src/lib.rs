@@ -2,68 +2,72 @@ extern crate proc_macro;
 use fs2::FileExt;
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Ident};
-use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::env;
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::io::{Seek, SeekFrom};
+use syn::{parse_macro_input, Ident};
 
-static COUNTER: AtomicU8 = AtomicU8::new(0);
+use serde::Deserialize;
 
+#[derive(Debug, Deserialize)]
+struct Loader {
+    crate_name: String,
+    loader_name: String,
+    index: u8,
+}
 
-/// Reads the current loader indices from the file, returning a Vec of (crate_name, loader_name, index)
-fn read_loader_indices(file : &File) -> Vec<(String, String, u8)> {
-    let reader = BufReader::new(file);
-    let mut indices = Vec::new();
-    for line in reader.lines() {
-        match line {
-            Ok(line) => {
-                let parts: Vec<&str> = line.split(',').collect();
-               
-                if parts.len() == 3 {
-                    
-                    let crate_name = parts[0].to_string();
-                    let loader_name = parts[1].to_string();
-                    let index = parts[2].parse::<u8>().expect("Error parsing loader index.");
-                    indices.push((crate_name, loader_name, index));
-                }
+// Wrap loaders in a struct to match the TOML array of tables format.
+#[derive(Debug, Deserialize)]
+struct LoadersFile {
+    loader: Vec<Loader>,
+}
 
-            },
-            Err(err) => {
-                eprintln!("read line error: {err}");
-                break;
-            },
-        }
-    }
+fn read_loader_indices(file: &File) -> Vec<Loader> {
+    let mut reader = BufReader::new(file);
+    let mut content = String::new();
+    reader
+        .read_to_string(&mut content)
+        .expect("Unable to read file");
 
-    indices
+    // Parse the content as TOML into LoadersFile
+    let loaders_file: LoadersFile = toml::from_str(&content).expect("Error parsing TOML");
+    loaders_file.loader
 }
 
 /// Writes the updated loader indices to the file
-fn write_loader_indices(file : &mut File, indices: &Vec<(String, String, u8)>) {
+fn write_loader_indices(file: &mut File, indices: &Vec<Loader>) {
     file.set_len(0).expect("could not set size to 0"); // Set length to 0 to truncate
-
-    // Optionally seek back to the beginning if you want to write immediately
-    file.seek(SeekFrom::Start(0)).expect("could not seek to the beginning"); // Go back to the start of the file
+    file.seek(SeekFrom::Start(0))
+        .expect("could not seek to the beginning"); // Go back to the start of the file
     let mut writer = BufWriter::new(file);
-    for (crate_name, loader_name, index) in indices {
-        writeln!(writer, "{},{},{}", crate_name, loader_name, index)
+
+    for Loader {
+        crate_name,
+        loader_name,
+        index,
+    } in indices
+    {
+        writeln!(writer, "[[loader]]").expect("Unable to write to loader indices file.");
+        writeln!(writer, "crate_name = \"{}\"", crate_name)
             .expect("Unable to write to loader indices file.");
+        writeln!(writer, "loader_name = \"{}\"", loader_name)
+            .expect("Unable to write to loader indices file.");
+        writeln!(writer, "index = {}", index).expect("Unable to write to loader indices file.");
+        writeln!(writer).expect("Unable to write to loader indices file."); // Blank line between entries
     }
 }
-
-fn get_file() -> File{
+fn get_file() -> File {
     //let out_dir = std::env::var("OUT_DIR").expect("expected out_dir");
     //let dest_path = Path::new(&out_dir).join("wgpu_loader_indices.txt");
-    let dest_path = "wgpu_loader_indices.txt";
+    let dest_path = "wgpu_loader_indices.toml";
     let file = OpenOptions::new()
-    .read(true)
-    .write(true)
-    .create(true)
-    .truncate(false)
-    .open(dest_path)
-    .expect("Unable to open or create loader indices file.");
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dest_path)
+        .expect("Unable to open or create loader indices file.");
 
     // Lock the file for writing
     file.lock_exclusive().expect("Unable to lock indices file.");
@@ -86,25 +90,29 @@ pub fn create_loader(input: TokenStream) -> TokenStream {
     // Read the current loader indices from the file
     let mut indices = read_loader_indices(&file);
 
-   // Assign the next index using the atomic counter
-   let mut new_index = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let mut index = None;
 
-    if new_index == 0{
-        indices.retain(|(crate_name_existing, _, _)| *crate_name_existing != crate_name);
-    }
-    for i in 0..{
-        if indices.iter().all(|c| c.2 != i) {
-            new_index = i;
-            break;
+
+    for e in indices.iter(){
+        if e.crate_name == crate_name && e.loader_name == loader_name_str{
+            index = Some(e.index);
         }
     }
 
-    if !indices.iter().any(|c| c.0 == crate_name && c.1 == loader_name_str && c.2 == new_index){
-        indices.push((crate_name.clone(), loader_name_str.clone(), new_index));
+    //element not found:
+    if index.is_none(){
+        //search new index:
+        for i in 0.. {
+            if indices.iter().all(|c| c.index != i) {
+                index = Some(i);
+                indices.push(Loader{crate_name, loader_name : loader_name_str, index : i});
+                write_loader_indices(&mut file, &indices);
+                break;
+            }
+        }
     }
-   
- 
-    write_loader_indices(&mut file, &indices);
+        
+    let new_index = index.unwrap();
 
     // Generate the loader code with a unique index
     let expanded = quote! {
@@ -120,7 +128,6 @@ pub fn create_loader(input: TokenStream) -> TokenStream {
 
     TokenStream::from(expanded)
 }
-
 
 /// Procedural macro to create a loader with a unique constant index
 #[proc_macro]
@@ -138,25 +145,29 @@ pub fn create_loader_internal(input: TokenStream) -> TokenStream {
     // Read the current loader indices from the file
     let mut indices = read_loader_indices(&file);
 
-   // Assign the next index using the atomic counter
-   let mut new_index = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let mut index = None;
 
-    if new_index == 0{
-        indices.retain(|(crate_name_existing, _, _)| *crate_name_existing != crate_name);
-    }
-    for i in 0..{
-        if indices.iter().all(|c| c.2 != i) {
-            new_index = i;
-            break;
+
+    for e in indices.iter(){
+        if e.crate_name == crate_name && e.loader_name == loader_name_str{
+            index = Some(e.index);
         }
     }
 
-    if !indices.iter().any(|c| c.0 == crate_name && c.1 == loader_name_str && c.2 == new_index){
-        indices.push((crate_name.clone(), loader_name_str.clone(), new_index));
+    //element not found:
+    if index.is_none(){
+        //search new index:
+        for i in 0.. {
+            if indices.iter().all(|c| c.index != i) {
+                index = Some(i);
+                indices.push(Loader{crate_name, loader_name : loader_name_str, index : i});
+                write_loader_indices(&mut file, &indices);
+                break;
+            }
+        }
     }
-   
- 
-    write_loader_indices(&mut file, &indices);
+        
+    let new_index = index.unwrap();
 
     // Generate the loader code with a unique index
     let expanded = quote! {
