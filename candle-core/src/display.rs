@@ -12,10 +12,10 @@ impl Tensor {
         let device_str = match self.device().location() {
             crate::DeviceLocation::Cpu => "".to_owned(),
             crate::DeviceLocation::Cuda { gpu_id } => {
-                format!(", cuda:{}", gpu_id)
+                format!(", cuda:{gpu_id}")
             }
             crate::DeviceLocation::Metal { gpu_id } => {
-                format!(", metal:{}", gpu_id)
+                format!(", metal:{gpu_id}")
             }
         };
 
@@ -502,10 +502,10 @@ impl std::fmt::Display for Tensor {
         let device_str = match self.device().location() {
             crate::DeviceLocation::Cpu => "".to_owned(),
             crate::DeviceLocation::Cuda { gpu_id } => {
-                format!(", cuda:{}", gpu_id)
+                format!(", cuda:{gpu_id}")
             }
             crate::DeviceLocation::Metal { gpu_id } => {
-                format!(", metal:{}", gpu_id)
+                format!(", metal:{gpu_id}")
             }
         };
 
