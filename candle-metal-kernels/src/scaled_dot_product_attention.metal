@@ -227,7 +227,9 @@ struct BlockSwizzle {
 
 // ============ "mlx/backend/metal/kernels/utils.h"
 
+#if defined(__HAVE_BFLOAT__)
 typedef bfloat bfloat16_t;
+#endif
 typedef half float16_t;
 
 METAL_FUNC ulong2 elem_to_loc_broadcast(
@@ -1246,6 +1248,8 @@ instantiate_fast_inference_self_attention_kernel(half, half, 16, 16, 256, 2, 2);
   instantiate_sdpa_vector(type, 256)
 
 instantiate_sdpa_vector_heads(float)
+#if defined(__HAVE_BFLOAT__)
 instantiate_sdpa_vector_heads(bfloat16_t)
+#endif
 instantiate_sdpa_vector_heads(float16_t)
     // clang-format on
