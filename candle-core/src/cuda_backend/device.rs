@@ -205,6 +205,7 @@ impl CudaDevice {
             device,
             blas: Arc::new(blas),
             curand: Arc::new(Mutex::new(CudaRng(curand))),
+            seed_value: Arc::new(RwLock::new(299792458)),
         })
     }
 }
