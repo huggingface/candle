@@ -36,7 +36,6 @@ impl Module for LayerNormNoAffine {
 
 impl DiTBlock {
     pub fn new(hidden_size: usize, num_heads: usize, vb: nn::VarBuilder) -> Result<Self> {
-        // {'hidden_size': 1536, 'num_heads': 24}
         let norm1 = LayerNormNoAffine::new(1e-6);
         let attn = AttnProjections::new(hidden_size, num_heads, vb.pp("attn"))?;
         let norm2 = LayerNormNoAffine::new(1e-6);
@@ -316,6 +315,18 @@ fn joint_attn(
         v: qkv.v,
     };
 
+    let attn = attn(&qkv, use_flash_attn)?;
+    let context_qkv_seqlen = context_qkv.q.dim(1)?;
+    let context_attn = attn.narrow(1, 0, context_qkv_seqlen)?;
+    let x_attn = attn.narrow(1, context_qkv_seqlen, seqlen - context_qkv_seqlen)?;
+
+    Ok((context_attn, x_attn))
+}
+
+
+fn attn(qkv: &Qkv, use_flash_attn: bool) -> Result<Tensor> {
+    let batch_size = qkv.q.dim(0)?;
+    let seqlen = qkv.q.dim(1)?;
     let headdim = qkv.q.dim(D::Minus1)?;
     let softmax_scale = 1.0 / (headdim as f64).sqrt();
 
@@ -324,11 +335,5 @@ fn joint_attn(
     } else {
         flash_compatible_attention(&qkv.q, &qkv.k, &qkv.v, softmax_scale as f32)?
     };
-
-    let attn = attn.reshape((batch_size, seqlen, ()))?;
-    let context_qkv_seqlen = context_qkv.q.dim(1)?;
-    let context_attn = attn.narrow(1, 0, context_qkv_seqlen)?;
-    let x_attn = attn.narrow(1, context_qkv_seqlen, seqlen - context_qkv_seqlen)?;
-
-    Ok((context_attn, x_attn))
+    attn.reshape((batch_size, seqlen, ()))
 }
