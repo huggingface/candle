@@ -45,24 +45,24 @@ enum PositionEmbeddingType {
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/configuration_bert.py#L1
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
-    vocab_size: usize,
+    pub vocab_size: usize,
     pub hidden_size: usize,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
     pub intermediate_size: usize,
     pub hidden_act: HiddenAct,
     pub hidden_dropout_prob: f64,
-    max_position_embeddings: usize,
-    type_vocab_size: usize,
-    initializer_range: f64,
-    layer_norm_eps: f64,
-    pad_token_id: usize,
+    pub max_position_embeddings: usize,
+    pub type_vocab_size: usize,
+    pub initializer_range: f64,
+    pub layer_norm_eps: f64,
+    pub pad_token_id: usize,
     #[serde(default)]
-    position_embedding_type: PositionEmbeddingType,
+    pub position_embedding_type: PositionEmbeddingType,
     #[serde(default)]
-    use_cache: bool,
-    classifier_dropout: Option<f64>,
-    model_type: Option<String>,
+    pub use_cache: bool,
+    pub classifier_dropout: Option<f64>,
+    pub model_type: Option<String>,
 }
 
 impl Default for Config {
