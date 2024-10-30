@@ -308,14 +308,8 @@ fn joint_attn(
         v: Tensor::cat(&[&context_qkv.v, &x_qkv.v], 1)?,
     };
 
-    let (batch_size, seqlen, _) = qkv.q.dims3()?;
-    let qkv = Qkv {
-        q: qkv.q.reshape((batch_size, seqlen, num_heads, ()))?,
-        k: qkv.k.reshape((batch_size, seqlen, num_heads, ()))?,
-        v: qkv.v,
-    };
-
-    let attn = attn(&qkv, use_flash_attn)?;
+    let seqlen = qkv.q.dim(1)?;
+    let attn = attn(&qkv, num_heads, use_flash_attn)?;
     let context_qkv_seqlen = context_qkv.q.dim(1)?;
     let context_attn = attn.narrow(1, 0, context_qkv_seqlen)?;
     let x_attn = attn.narrow(1, context_qkv_seqlen, seqlen - context_qkv_seqlen)?;
@@ -324,12 +318,17 @@ fn joint_attn(
 }
 
 
-fn attn(qkv: &Qkv, use_flash_attn: bool) -> Result<Tensor> {
+fn attn(qkv: &Qkv, num_heads: usize, use_flash_attn: bool) -> Result<Tensor> {
     let batch_size = qkv.q.dim(0)?;
     let seqlen = qkv.q.dim(1)?;
+    let qkv = Qkv {
+        q: qkv.q.reshape((batch_size, seqlen, num_heads, ()))?,
+        k: qkv.k.reshape((batch_size, seqlen, num_heads, ()))?,
+        v: qkv.v.clone(),
+    };
+
     let headdim = qkv.q.dim(D::Minus1)?;
     let softmax_scale = 1.0 / (headdim as f64).sqrt();
-
     let attn = if use_flash_attn {
         flash_attn(&qkv.q, &qkv.k, &qkv.v, softmax_scale as f32, false)?
     } else {
