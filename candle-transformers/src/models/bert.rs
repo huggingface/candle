@@ -46,12 +46,12 @@ enum PositionEmbeddingType {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
     vocab_size: usize,
-    hidden_size: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    intermediate_size: usize,
+    pub hidden_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub intermediate_size: usize,
     pub hidden_act: HiddenAct,
-    hidden_dropout_prob: f64,
+    pub hidden_dropout_prob: f64,
     max_position_embeddings: usize,
     type_vocab_size: usize,
     initializer_range: f64,
@@ -376,7 +376,7 @@ impl BertOutput {
 }
 
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L470
-struct BertLayer {
+pub struct BertLayer {
     attention: BertAttention,
     intermediate: BertIntermediate,
     output: BertOutput,
@@ -417,7 +417,7 @@ pub struct BertEncoder {
 }
 
 impl BertEncoder {
-    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let layers = (0..config.num_hidden_layers)
             .map(|index| BertLayer::load(vb.pp(format!("layer.{index}")), config))
             .collect::<Result<Vec<_>>>()?;
@@ -425,7 +425,7 @@ impl BertEncoder {
         Ok(BertEncoder { layers, span })
     }
 
-    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let mut hidden_states = hidden_states.clone();
         // Use a loop rather than a fold as it's easier to modify when adding debug/...
