@@ -194,18 +194,11 @@ fn main() -> Result<()> {
             api.repo(hf_hub::Repo::model(name.to_string()))
         };
         let model_file = sai_repo.get("sd3_medium_incl_clips_t5xxlfp16.safetensors")?;
-        let vb_fp16 = unsafe {
+        let vb = unsafe {
             candle_nn::VarBuilder::from_mmaped_safetensors(&[&model_file], DType::F16, &device)?
         };
-
-        let vb_fp32 = unsafe {
-            candle_nn::VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)?
-        };
-        let triple = StableDiffusion3TripleClipWithTokenizer::new(
-            vb_fp16.pp("text_encoders"),
-            vb_fp32.pp("text_encoders"),
-        )?;
-        (MMDiTConfig::sd3_medium(), triple, vb_fp16)
+        let triple = StableDiffusion3TripleClipWithTokenizer::new(vb.pp("text_encoders"))?;
+        (MMDiTConfig::sd3_medium(), triple, vb)
     };
     let (context, y) = triple.encode_text_to_embedding(prompt.as_str(), &device)?;
     let (context_uncond, y_uncond) =
