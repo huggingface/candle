@@ -956,7 +956,7 @@ struct Sdpa {
 
 impl candle::CustomOp3 for Sdpa {
     fn name(&self) -> &'static str {
-        "sdpa"
+        "metal-sdpa"
     }
 
     fn cpu_fwd(
