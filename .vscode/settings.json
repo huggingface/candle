@@ -8,4 +8,5 @@
     ],
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
+    "rust-analyzer.cargo.features": ["metal"]
 }

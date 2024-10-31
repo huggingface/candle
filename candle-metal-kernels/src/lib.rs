@@ -1663,7 +1663,6 @@ pub fn call_sdpa_full(
     q_shape: &[usize],
     q_buffer: &Buffer,
     k_offset: usize,
-    k_shape: &[usize],
     k_buffer: &Buffer,
     v_offset: usize,
     v_buffer: &Buffer,
@@ -1744,13 +1743,7 @@ pub fn call_sdpa_full(
     // q = (bs, qhead, seq, hidden)
     // k/v = (bs, kv_head, seq, hidden)
 
-    let _hidden = q_shape[q_shape.len() - 1];
     let qseq = q_shape[q_shape.len() - 2];
-    let _qheads = q_shape[q_shape.len() - 3];
-
-    let _kvseq = k_shape[k_shape.len() - 2];
-    let _nq_heads = q_shape[1];
-    let _nkv_heads = k_shape[1];
 
     let m = q_shape[q_shape.len() - 2];
     let n = m;

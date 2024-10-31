@@ -1090,7 +1090,6 @@ impl candle::CustomOp3 for Sdpa {
                 q_l.dims(),
                 q.buffer(),
                 k_l.start_offset(),
-                k_l.dims(),
                 k.buffer(),
                 v_l.start_offset(),
                 v.buffer(),
