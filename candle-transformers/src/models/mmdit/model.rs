@@ -136,7 +136,7 @@ impl MMDiT {
         t: &Tensor,
         y: &Tensor,
         context: &Tensor,
-        skip_layers: Option<&Vec<usize>>,
+        skip_layers: Option<&[usize]>,
     ) -> Result<Tensor> {
         // Following the convention of the ComfyUI implementation.
         // https://github.com/comfyanonymous/ComfyUI/blob/78e133d0415784924cd2674e2ee48f3eeca8a2aa/comfy/ldm/modules/diffusionmodules/mmdit.py#L919
@@ -223,7 +223,7 @@ impl MMDiTCore {
         context: &Tensor,
         x: &Tensor,
         c: &Tensor,
-        skip_layers: Option<&Vec<usize>>,
+        skip_layers: Option<&[usize]>,
     ) -> Result<Tensor> {
         let (mut context, mut x) = (context.clone(), x.clone());
         for (i, joint_block) in self.joint_blocks.iter().enumerate() {
