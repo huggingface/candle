@@ -227,7 +227,7 @@ fn main() -> Result<()> {
                 end: 0.2,
                 layers: vec![7, 8, 9],
             }),
-            _ => unreachable!(),
+            _ => anyhow::bail!("--use-slg can only be used with 3.5-medium"),
         }
     } else {
         None
