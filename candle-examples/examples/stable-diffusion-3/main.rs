@@ -75,16 +75,16 @@ struct Args {
     #[arg(long)]
     num_inference_steps: Option<usize>,
 
-    // CFG scale.
+    /// CFG scale.
     #[arg(long)]
     cfg_scale: Option<f64>,
 
-    // Time shift factor (alpha).
+    /// Time shift factor (alpha).
     #[arg(long, default_value_t = 3.0)]
     time_shift: f64,
 
-    // Use Skip Layer Guidance (SLG) for the sampling.
-    // Currently only supports Stable Diffusion 3.5 Medium.
+    /// Use Skip Layer Guidance (SLG) for the sampling.
+    /// Currently only supports Stable Diffusion 3.5 Medium.
     #[arg(long)]
     use_slg: bool,
 
