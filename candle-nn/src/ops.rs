@@ -543,15 +543,23 @@ impl candle::CustomOp2 for RmsNorm {
                 let dim_m1 = dims[dims.len() - 1];
                 let (n_rows, n_cols) = (el / dim_m1, dim_m1);
 
+                let block_size = if n_cols < 1024 { 32 } else { 1024 };
                 let cfg = LaunchConfig {
                     grid_dim: (n_rows as u32, 1, 1),
-                    block_dim: (1024, 1, 1),
+                    block_dim: (block_size, 1, 1),
                     shared_mem_bytes: 0,
                 };
                 let func = dev.get_or_load_func(&kernel_name::<T>("rmsnorm"), kernels::REDUCE)?;
                 // SAFETY: Set later by running the kernel.
                 let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-                let params = (&src, &dst, &alpha, n_cols as i32, self.eps);
+                let params = (
+                    &src,
+                    &dst,
+                    &alpha,
+                    n_cols as i32,
+                    block_size as i32,
+                    self.eps,
+                );
                 // SAFETY: ffi.
                 unsafe { func.launch(cfg, params) }.w()?;
                 Ok(dst)
@@ -776,15 +784,24 @@ impl candle::CustomOp3 for LayerNorm {
                 let dim_m1 = dims[dims.len() - 1];
                 let (n_rows, n_cols) = (el / dim_m1, dim_m1);
 
+                let block_size = if n_cols < 1024 { 32 } else { 1024 };
                 let cfg = LaunchConfig {
                     grid_dim: (n_rows as u32, 1, 1),
-                    block_dim: (1024, 1, 1),
+                    block_dim: (block_size, 1, 1),
                     shared_mem_bytes: 0,
                 };
                 let func = dev.get_or_load_func(&kernel_name::<T>("layernorm"), kernels::REDUCE)?;
                 // SAFETY: Set later by running the kernel.
                 let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-                let params = (&src, &dst, &alpha, &beta, n_cols as i32, self.eps);
+                let params = (
+                    &src,
+                    &dst,
+                    &alpha,
+                    &beta,
+                    n_cols as i32,
+                    block_size as i32,
+                    self.eps,
+                );
                 // SAFETY: ffi.
                 unsafe { func.launch(cfg, params) }.w()?;
                 Ok(dst)
