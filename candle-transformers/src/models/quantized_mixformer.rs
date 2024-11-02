@@ -32,13 +32,6 @@ fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
     Tensor::from_slice(&mask, (size, size), device)
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
-    let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
-    let m = mask.where_cond(&on_true, on_false)?;
-    Ok(m)
-}
-
 #[derive(Debug, Clone)]
 struct RotaryEmbedding {
     sin: Tensor,
@@ -219,8 +212,7 @@ impl MHA {
         // scores = scores + causal_mask.to(dtype=scores.dtype)
         let attn_weights = match mask {
             None => attn_weights,
-            Some(mask) => masked_fill(
-                &attn_weights,
+            Some(mask) => attn_weights.masked_fill(
                 &mask.broadcast_left(b_size * self.n_head)?,
                 f32::NEG_INFINITY,
             )?,

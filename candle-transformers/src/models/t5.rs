@@ -56,13 +56,6 @@ fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
     Tensor::from_slice(&mask, (size, size), device)
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
-    let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
-    let m = mask.where_cond(&on_true, on_false)?;
-    Ok(m)
-}
-
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 pub struct ActivationWithOptionalGating {
     pub gated: bool,
@@ -436,8 +429,7 @@ impl T5Attention {
         };
         let scores = match mask {
             None => scores,
-            Some(mask) => masked_fill(
-                &scores,
+            Some(mask) => scores.masked_fill(
                 &mask
                     .unsqueeze(0)?
                     .unsqueeze(0)?

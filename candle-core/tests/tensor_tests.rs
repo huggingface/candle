@@ -1680,3 +1680,21 @@ fn pow() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn masked_fill() -> Result<()> {
+    let lhs = Tensor::zeros((5, 5), DType::F32, &Device::Cpu)?;
+    let rhs = Tensor::eye(5, DType::I64, &Device::Cpu)?;
+    let res = lhs.masked_fill(&rhs, f32::NEG_INFINITY)?;
+    assert_eq!(
+        res.to_vec2::<f32>()?,
+        [
+            [f32::NEG_INFINITY, 0.0, 0.0, 0.0, 0.0],
+            [0.0, f32::NEG_INFINITY, 0.0, 0.0, 0.0],
+            [0.0, 0.0, f32::NEG_INFINITY, 0.0, 0.0],
+            [0.0, 0.0, 0.0, f32::NEG_INFINITY, 0.0],
+            [0.0, 0.0, 0.0, 0.0, f32::NEG_INFINITY],
+        ]
+    );
+    Ok(())
+}

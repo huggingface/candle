@@ -339,7 +339,7 @@ impl CausalSelfAttention {
                 att
             } else {
                 let mask = cache.mask(seq_len)?.broadcast_as(att.shape())?;
-                masked_fill(&att, &mask, f32::NEG_INFINITY)?
+                att.masked_fill(&mask, f32::NEG_INFINITY)?
             };
 
             let att = candle_nn::ops::softmax_last_dim(&att)?;
@@ -379,13 +379,6 @@ impl CausalSelfAttention {
             max_position_embeddings: cfg.max_position_embeddings,
         })
     }
-}
-
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
-    let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
-    let m = mask.where_cond(&on_true, on_false)?;
-    Ok(m)
 }
 
 #[derive(Debug, Clone)]
