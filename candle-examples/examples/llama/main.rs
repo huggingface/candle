@@ -43,9 +43,9 @@ enum Which {
     Solar10_7B,
     #[value(name = "tiny-llama-1.1b-chat")]
     TinyLlama1_1BChat,
-    #[value(name = "SmoLM2-1B")]
+    #[value(name = "SmoLM2-1.7B")]
     SmolLM2_1B,
-    #[value(name = "SmoLM2-1B-Instruct")]
+    #[value(name = "SmoLM2-1.7B-Instruct")]
     SmolLM2_1BInstruct,
     #[value(name = "SmoLM2-360M")]
     SmolLM2_360M,
