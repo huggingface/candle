@@ -56,6 +56,7 @@ template <typename T, int D>
     const constant int& gqa_factor,
     const constant int& N,
     const constant size_t& k_stride,
+    const constant size_t& v_stride,
     const constant float& scale,
     const constant float& softcapping,
     uint3 tid [[threadgroup_position_in_grid]],
@@ -82,7 +83,7 @@ template <typename T, int D>
   const int kv_head_idx = head_idx / gqa_factor;
   queries += head_idx * D + simd_lid * elem_per_thread;
   keys += kv_head_idx * k_stride + simd_gid * D + simd_lid * elem_per_thread;
-  values += kv_head_idx * k_stride + simd_gid * D + simd_lid * elem_per_thread;
+  values += kv_head_idx * v_stride + simd_gid * D + simd_lid * elem_per_thread;
   out += head_idx * D + simd_gid * elem_per_thread;
 
   // Read the query and 0 the output accumulator
@@ -1234,6 +1235,7 @@ instantiate_fast_inference_self_attention_kernel(half, half, 16, 16, 256, 2, 2);
       const constant int& gqa_factor,                                        \
       const constant int& N,                                                 \
       const constant size_t& k_stride,                                       \
+      const constant size_t& v_stride,                                       \
       const constant float& scale,                                           \
       const constant float& softcapping,                                     \
       uint3 tid [[threadgroup_position_in_grid]],                            \

@@ -1879,6 +1879,7 @@ pub fn call_sdpa_vector(
     k_stride: &[usize],
     k_buffer: &Buffer,
     v_offset: usize,
+    v_stride: &[usize],
     v_buffer: &Buffer,
     output: &Buffer,
     alpha: f32,
@@ -1890,7 +1891,8 @@ pub fn call_sdpa_vector(
     let gqa_factor = (q_shape[1] / k_shape[1]) as i32;
     let n = k_shape[2] as i32;
     let b = (q_shape[0] * q_shape[1]) as i32;
-    let stride = k_stride[1];
+    let kstride = k_stride[1];
+    let vstride = v_stride[1];
 
     let name = match (bk, itype) {
         (32, SdpaDType::F16) => "sdpa_vector_float16_t_32",
@@ -1949,15 +1951,20 @@ pub fn call_sdpa_vector(
     encoder.set_bytes(
         6,
         std::mem::size_of::<usize>() as u64,
-        &stride as *const usize as *const c_void,
+        &kstride as *const usize as *const c_void,
     );
     encoder.set_bytes(
         7,
+        std::mem::size_of::<usize>() as u64,
+        &vstride as *const usize as *const c_void,
+    );
+    encoder.set_bytes(
+        8,
         std::mem::size_of::<f32>() as u64,
         &alpha as *const f32 as *const c_void,
     );
     encoder.set_bytes(
-        8,
+        9,
         std::mem::size_of::<f32>() as u64,
         &softcapping as *const f32 as *const c_void,
     );
