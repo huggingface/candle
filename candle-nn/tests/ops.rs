@@ -4,7 +4,8 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle::{test_device, test_utils::to_vec3_round, Device, Result, Tensor};
+use candle::{test_device, test_utils::to_vec3_round, Device, Result, Tensor, Module};
+use candle::test_utils::to_vec2_round;
 
 fn softmax(device: &Device) -> Result<()> {
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
@@ -249,6 +250,28 @@ fn sigmoid(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn adaptive_avg_1d(device: &Device) -> Result<()> {
+    let data_in_3d = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
+    let data_in_2d = &[[3f32, 1., 4.], [1., 5., 9.]];
+
+    let tensor_in_3d = Tensor::new(data_in_3d, device)?;
+    let tensor_in_2d = Tensor::new(data_in_2d, device)?;
+
+    let avgpool_1d = candle_nn::ops::AdaptiveAvgPool1d::new(2);
+
+    let out_3d = avgpool_1d.forward(&tensor_in_3d)?;
+    let expected_out_3d = &[[[2.0, 2.5], [3.0, 7.0]], [[1.5, 4.0], [5.0, 5.0]]];
+    assert!(out_3d.dims() == &[2, 2, 2]);
+    assert_eq!(to_vec3_round(&out_3d, 4)?, expected_out_3d);
+
+    let out_2d = avgpool_1d.forward(&tensor_in_2d)?;
+    let expected_out_2d = &[[2.0, 2.5], [3.0, 7.0]];
+    assert!(out_2d.dims() == &[2, 2]);
+    assert_eq!(to_vec2_round(&out_2d, 4)?, expected_out_2d);
+
+    Ok(())
+}
+
 test_device!(ropei, ropei_cpu, ropei_gpu, ropei_metal);
 test_device!(rope, rope_cpu, rope_gpu, rope_metal);
 test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal);
@@ -258,3 +281,4 @@ test_device!(rms_norml, rms_norml_cpu, rms_norml_gpu, rms_norml_metal);
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_metal);
 test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal);
 test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);
+test_device!(adaptive_avg_1d, adaptive_avg_1d_cpu, adaptive_avg_1d_gpu, adaptive_avg_1d_metal);

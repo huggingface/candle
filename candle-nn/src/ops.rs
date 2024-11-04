@@ -1,4 +1,5 @@
-use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
+use num_traits::ToPrimitive;
+use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D, CustomOp1};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -962,5 +963,106 @@ impl Default for Identity {
 impl Module for Identity {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         Ok(xs.clone())
+    }
+}
+
+fn start_index(curr_index: f32, output_size: f32, input_size: f32) -> usize {
+    (curr_index * input_size / output_size).floor() as usize
+}
+
+fn end_index(curr_index: f32, output_size: f32, input_size: f32) -> usize {
+    ((curr_index + 1.0f32) * input_size / output_size).ceil() as usize
+}
+
+pub fn adaptive_avg_pool1d<T>(xs: &Vec<T>, layout: &Layout, output_size: usize) -> Vec<T>
+where
+    T: Send+ Sync + ToPrimitive + num_traits::NumCast + Copy + std::ops::Add<Output=T> + std::ops::Div<Output = T> + Default,
+{
+    let ndim = layout.dims().len();
+    let channels = if ndim == 3 {
+        layout.dims()[1]
+    } else {
+        1
+    };
+    let B = layout.dims()[0];
+    let L = layout.dims()[ndim - 1];
+    let mut ys: Vec<T> = vec![T::from(0).unwrap(); B * channels * output_size];
+    ys.par_chunks_mut(output_size).enumerate().for_each(|(idx, chunk)| {
+        let b = idx / channels;
+        let c = idx % channels;
+
+        for i in 0..output_size {
+            let if32 = i.to_f32().unwrap();
+            let lf32 = L.to_f32().unwrap();
+            let output_size_f32 = output_size.to_f32().unwrap();
+            let start = start_index(if32, output_size_f32, lf32);
+            let end = end_index(if32, output_size_f32, lf32);
+            let mut sum: T = T::from(0).unwrap();
+
+            for j in start..end {
+                sum = sum + xs[b * channels * L + c * L + j];
+            }
+
+            let diff: T = T::from(end - start).unwrap();
+            chunk[i] = sum / diff;
+        }
+    });
+
+    ys
+}
+
+#[derive(Clone, Debug)]
+pub struct AdaptiveAvgPool1d {
+    output_size: usize,
+}
+
+impl AdaptiveAvgPool1d {
+    pub fn new(output_size: usize) -> AdaptiveAvgPool1d {
+        Self { output_size }
+    }
+}
+
+impl CustomOp1 for AdaptiveAvgPool1d {
+    fn name(&self) -> &'static str {
+        "adaptive_avg_pool1d"
+    }
+
+    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+        let x = match storage {
+            CpuStorage::F32(slice) => {
+                CpuStorage::F32(adaptive_avg_pool1d::<f32>(slice, layout, self.output_size))
+            }
+            CpuStorage::BF16(slice) => {
+                CpuStorage::BF16(adaptive_avg_pool1d::<half::bf16>(slice, layout, self.output_size))
+            }
+            CpuStorage::F16(slice) => {
+                CpuStorage::F16(adaptive_avg_pool1d::<half::f16>(slice, layout, self.output_size))
+            }
+            CpuStorage::F64(slice) => {
+                CpuStorage::F64(adaptive_avg_pool1d::<f64>(slice, layout, self.output_size))
+            }
+            CpuStorage::U8(slice) => {
+                CpuStorage::U8(adaptive_avg_pool1d::<u8>(slice, layout, self.output_size))
+            }
+            CpuStorage::U32(slice) => {
+                CpuStorage::U32(adaptive_avg_pool1d::<u32>(slice, layout, self.output_size))
+            }
+            CpuStorage::I64(slice) => {
+                CpuStorage::I64(adaptive_avg_pool1d::<i64>(slice, layout, self.output_size))
+            }
+        };
+
+        let mut dims = layout.dims().to_vec();
+        let last_index = dims.len() - 1;
+        dims[last_index] = self.output_size;
+        let new_shape = Shape::from_dims(&dims);
+
+        Ok((x, new_shape))
+    }
+}
+
+impl Module for AdaptiveAvgPool1d {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.apply_op1_no_bwd(&AdaptiveAvgPool1d { output_size: self.output_size })
     }
 }
