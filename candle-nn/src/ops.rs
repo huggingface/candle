@@ -1067,6 +1067,7 @@ impl candle::CustomOp3 for Sdpa {
                 k_l.stride(),
                 k.buffer(),
                 v_l.start_offset(),
+                v_l.stride(),
                 v.buffer(),
                 &output,
                 self.scale,
