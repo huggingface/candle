@@ -986,29 +986,29 @@ impl candle::CustomOp3 for Sdpa {
 
         let device = q.device();
 
-        let out_dims = vec![q_l.dims()[0], q_l.dims()[1], q_l.dims()[2], v_l.dims()[3]];
+        let out_dims = vec![q_l.dim(0)?, q_l.dim(1)?, q_l.dim(2)?, v_l.dim(3)?];
         let elem_count: usize = out_dims.iter().product();
 
         let output = device.new_buffer(elem_count, q.dtype(), "sdpa_o")?;
 
         // q,k must have matching emb dim
-        if q_l.dims()[q_l.dims().len() - 1] != k_l.dims()[k_l.dims().len() - 1] {
+        if q_l.dim(D::Minus1)? != k_l.dim(D::Minus1)? {
             candle::bail!("`q` and `k` last dims must match");
         }
 
         // k,v must have matching n kv heads
-        if v_l.dims()[v_l.dims().len() - 3] != k_l.dims()[k_l.dims().len() - 3] {
+        if v_l.dim(D::Minus(3))? != k_l.dim(D::Minus(3))? {
             candle::bail!("`k` and `v` head dims must match");
         }
 
         // n_heads % n_kv_heads == 0; n_heads >= 1, n_kv_heads >= 1.
-        if q_l.dims()[q_l.dims().len() - 3] % k_l.dims()[k_l.dims().len() - 3] != 0 {
+        if q_l.dim(D::Minus(3))? % k_l.dim(D::Minus(3))? != 0 {
             candle::bail!("query `n_heads` must be a multiple of `n_kv_heads`");
         }
 
-        let k_head = k_l.dims()[k_l.dims().len() - 1];
-        let q_head = q_l.dims()[q_l.dims().len() - 1];
-        let q_seq = q_l.dims()[2];
+        let k_head = k_l.dim(D::Minus1)?;
+        let q_head = q_l.dim(D::Minus1)?;
+        let q_seq = q_l.dim(2)?;
 
         let mut implementation_supports_use_case = q_head == k_head;
         let supported_head_dim =
@@ -1076,7 +1076,7 @@ impl candle::CustomOp3 for Sdpa {
             )
             .map_err(candle::Error::wrap)?;
         } else if supports_sdpa_full {
-            if q_l.dims()[2] != k_l.dims()[2] {
+            if q_l.dim(2)? != k_l.dim(2)? {
                 candle::bail!(
                     "query and key sequence length must be equal if using full metal sdpa"
                 )
