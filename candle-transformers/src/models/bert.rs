@@ -11,6 +11,7 @@ pub enum HiddenAct {
     Gelu,
     GeluApproximate,
     Relu,
+    Tanh,
 }
 
 struct HiddenActLayer {
@@ -31,6 +32,7 @@ impl HiddenActLayer {
             HiddenAct::Gelu => xs.gelu_erf(),
             HiddenAct::GeluApproximate => xs.gelu(),
             HiddenAct::Relu => xs.relu(),
+            HiddenAct::Tanh => xs.tanh(),
         }
     }
 }
@@ -436,16 +438,45 @@ impl BertEncoder {
     }
 }
 
+// https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L654
+struct BertPooler {
+    dense: Linear,
+    activation: HiddenActLayer,
+    span: tracing::Span,
+}
+
+impl BertPooler {
+    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+        let dense = linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?;
+        let activation = HiddenActLayer::new(HiddenAct::Tanh);
+        Ok(Self {
+            dense,
+            activation,
+            span: tracing::span!(tracing::Level::TRACE, "pooler"),
+        })
+    }
+
+    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let first_token_tensor = hidden_states.narrow(1, 0, 1)?;
+        let pooled_output = self
+            .activation
+            .forward(&self.dense.forward(&first_token_tensor)?)?;
+        Ok(pooled_output)
+    }
+}
+
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L874
 pub struct BertModel {
     embeddings: BertEmbeddings,
     encoder: BertEncoder,
+    pooler: Option<BertPooler>,
     pub device: Device,
     span: tracing::Span,
 }
 
 impl BertModel {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config, add_pooling_layer: bool) -> Result<Self> {
         let (embeddings, encoder) = match (
             BertEmbeddings::load(vb.pp("embeddings"), config),
             BertEncoder::load(vb.pp("encoder"), config),
@@ -466,9 +497,29 @@ impl BertModel {
                 }
             }
         };
+
+        let pooler = if add_pooling_layer {
+            match BertPooler::load(vb.pp("pooler"), config) {
+                Ok(pooler) => Some(pooler),
+                Err(err) => {
+                    if let Some(model_type) = &config.model_type {
+                        Some(BertPooler::load(
+                            vb.pp(format!("{model_type}.pooler")),
+                            config,
+                        )?)
+                    } else {
+                        return Err(err);
+                    }
+                }
+            }
+        } else {
+            None
+        };
+
         Ok(Self {
             embeddings,
             encoder,
+            pooler,
             device: vb.device().clone(),
             span: tracing::span!(tracing::Level::TRACE, "model"),
         })
@@ -583,8 +634,8 @@ pub struct BertForMaskedLM {
 }
 
 impl BertForMaskedLM {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
-        let bert = BertModel::load(vb.pp("bert"), config)?;
+    pub fn load(vb: VarBuilder, config: &Config, add_pooling_layer: bool) -> Result<Self> {
+        let bert = BertModel::load(vb.pp("bert"), config, add_pooling_layer)?;
         let cls = BertOnlyMLMHead::load(vb.pp("cls"), config)?;
         Ok(Self { bert, cls })
     }
