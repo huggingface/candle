@@ -540,7 +540,11 @@ impl BertModel {
         // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L995
         let attention_mask = get_extended_attention_mask(&attention_mask, DType::F32)?;
         let sequence_output = self.encoder.forward(&embedding_output, &attention_mask)?;
-        Ok(sequence_output)
+        if let Some(pooler) = &self.pooler {
+            pooler.forward(&sequence_output)
+        } else {
+            Ok(sequence_output)
+        }
     }
 }
 
