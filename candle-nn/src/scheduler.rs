@@ -66,3 +66,44 @@ impl LRScheduler<()> for StepLR {
         self.lr
     }
 }
+/// Decays the learning rate of each parameter group by gamma once the number of epoch reaches one of the milestones.
+// https://pytorch.org/docs/stable/generated/torch.optim.lr_scheduler.MultiStepLR.html#torch.optim.lr_scheduler.MultiStepLR
+pub struct MultiStepLR {
+    millstones: Vec<usize>,
+    gamma: f64,
+    last_epoch: usize,
+    lr: f64,
+}
+
+impl MultiStepLR {
+    pub fn new(millstones: Vec<usize>, gamma: f64, lr: f64) -> Result<Self> {
+        // Ensure millstones are sorted.
+        if !millstones.is_sorted() {
+            candle::bail!("millstones should be sorted")
+        }
+
+        Ok(Self {
+            millstones,
+            gamma,
+            last_epoch: 0,
+            lr,
+        })
+    }
+}
+
+impl LRScheduler<()> for MultiStepLR {
+    fn step(&mut self, _params: ()) -> Result<f64> {
+        self.last_epoch += 1;
+        if let Some(step) = self.millstones.first() {
+            if self.last_epoch == *step {
+                self.millstones.remove(0);
+                self.lr *= self.gamma;
+            }
+        }
+        Ok(self.lr)
+    }
+
+    fn get_lr(&self) -> f64 {
+        self.lr
+    }
+}
