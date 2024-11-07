@@ -107,3 +107,39 @@ impl LRScheduler<()> for MultiStepLR {
         self.lr
     }
 }
+
+/// Set the learning rate of each parameter group using a cosine annealing schedule.
+//https://pytorch.org/docs/stable/generated/torch.optim.lr_scheduler.CosineAnnealingLR.html#torch.optim.lr_scheduler.CosineAnnealingLR
+pub struct CosineAnnealingLR {
+    t_max: usize,
+    last_epoch: usize,
+    eta_min: f64,
+    lr: f64,
+}
+
+impl CosineAnnealingLR {
+    pub fn new(t_max: usize, eta_min: f64, lr: f64) -> Self {
+        Self {
+            t_max,
+            last_epoch: 0,
+            eta_min,
+            lr,
+        }
+    }
+}
+
+impl LRScheduler<()> for CosineAnnealingLR {
+    fn step(&mut self, _params: ()) -> Result<f64> {
+        self.lr = self.eta_min
+            + 0.5
+                * (self.lr - self.eta_min)
+                * (1. + ((self.last_epoch as f64 / self.t_max as f64) * std::f64::consts::PI)).cos();
+        self.last_epoch += 1;
+        self.last_epoch = self.last_epoch.min(self.t_max);
+        Ok(self.lr)
+    }
+
+    fn get_lr(&self) -> f64 {
+        self.lr
+    }
+}
