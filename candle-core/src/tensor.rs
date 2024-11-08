@@ -242,7 +242,7 @@ impl Tensor {
         Self::zeros_impl(shape, dtype, device, false)
     }
 
-    /// Creates a new tensor filled with ones with same shape, dtype, and device as the other
+    /// Creates a new tensor filled with zeros with same shape, dtype, and device as the other
     /// tensor.
     ///
     /// ```rust
