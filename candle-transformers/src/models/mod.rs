@@ -85,6 +85,7 @@ pub mod stable_diffusion;
 pub mod stable_lm;
 pub mod starcoder2;
 pub mod stella_en_v5;
+pub mod stella_en_v5_400m;
 pub mod t5;
 pub mod trocr;
 pub mod vgg;
