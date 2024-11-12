@@ -171,7 +171,8 @@ impl ChineseClipModel {
     ) -> Result<Tensor> {
         let output = self
             .text_model
-            .forward(input_ids, token_type_ids, attention_mask)?;
+            .forward(input_ids, token_type_ids, attention_mask)?
+            .contiguous()?;
         self.text_projection.forward(&output)
     }
 
