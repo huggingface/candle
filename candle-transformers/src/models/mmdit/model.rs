@@ -1,10 +1,15 @@
-// Implement the MMDiT model originally introduced for Stable Diffusion 3 (https://arxiv.org/abs/2403.03206).
+// Implement the MMDiT model originally introduced for Stable Diffusion 3 (https://arxiv.org/abs/2403.03206),
+// as well as the MMDiT-X variant introduced for Stable Diffusion 3.5-medium (https://huggingface.co/stabilityai/stable-diffusion-3.5-medium)
 // This follows the implementation of the MMDiT model in the ComfyUI repository.
 // https://github.com/comfyanonymous/ComfyUI/blob/78e133d0415784924cd2674e2ee48f3eeca8a2aa/comfy/ldm/modules/diffusionmodules/mmdit.py#L1
+// with MMDiT-X support following the Stability-AI/sd3.5 repository.
+// https://github.com/Stability-AI/sd3.5/blob/4e484e05308d83fb77ae6f680028e6c313f9da54/mmditx.py#L1
 use candle::{Module, Result, Tensor, D};
 use candle_nn as nn;
 
-use super::blocks::{ContextQkvOnlyJointBlock, FinalLayer, JointBlock};
+use super::blocks::{
+    ContextQkvOnlyJointBlock, FinalLayer, JointBlock, MMDiTJointBlock, MMDiTXJointBlock,
+};
 use super::embedding::{
     PatchEmbedder, PositionEmbedder, TimestepEmbedder, Unpatchifier, VectorEmbedder,
 };
@@ -32,6 +37,20 @@ impl Config {
             head_size: 64,
             adm_in_channels: 2048,
             pos_embed_max_size: 192,
+            context_embed_size: 4096,
+            frequency_embedding_size: 256,
+        }
+    }
+
+    pub fn sd3_5_medium() -> Self {
+        Self {
+            patch_size: 2,
+            in_channels: 16,
+            out_channels: 16,
+            depth: 24,
+            head_size: 64,
+            adm_in_channels: 2048,
+            pos_embed_max_size: 384,
             context_embed_size: 4096,
             frequency_embedding_size: 256,
         }
@@ -111,7 +130,14 @@ impl MMDiT {
         })
     }
 
-    pub fn forward(&self, x: &Tensor, t: &Tensor, y: &Tensor, context: &Tensor) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        x: &Tensor,
+        t: &Tensor,
+        y: &Tensor,
+        context: &Tensor,
+        skip_layers: Option<&[usize]>,
+    ) -> Result<Tensor> {
         // Following the convention of the ComfyUI implementation.
         // https://github.com/comfyanonymous/ComfyUI/blob/78e133d0415784924cd2674e2ee48f3eeca8a2aa/comfy/ldm/modules/diffusionmodules/mmdit.py#L919
         //
@@ -131,14 +157,14 @@ impl MMDiT {
         let c = (c + y)?;
         let context = self.context_embedder.forward(context)?;
 
-        let x = self.core.forward(&context, &x, &c)?;
+        let x = self.core.forward(&context, &x, &c, skip_layers)?;
         let x = self.unpatchifier.unpatchify(&x, h, w)?;
         x.narrow(2, 0, h)?.narrow(3, 0, w)
     }
 }
 
 pub struct MMDiTCore {
-    joint_blocks: Vec<JointBlock>,
+    joint_blocks: Vec<Box<dyn JointBlock>>,
     context_qkv_only_joint_block: ContextQkvOnlyJointBlock,
     final_layer: FinalLayer,
 }
@@ -155,12 +181,24 @@ impl MMDiTCore {
     ) -> Result<Self> {
         let mut joint_blocks = Vec::with_capacity(depth - 1);
         for i in 0..depth - 1 {
-            joint_blocks.push(JointBlock::new(
-                hidden_size,
-                num_heads,
-                use_flash_attn,
-                vb.pp(format!("joint_blocks.{}", i)),
-            )?);
+            let joint_block_vb_pp = format!("joint_blocks.{}", i);
+            let joint_block: Box<dyn JointBlock> =
+                if vb.contains_tensor(&format!("{}.x_block.attn2.qkv.weight", joint_block_vb_pp)) {
+                    Box::new(MMDiTXJointBlock::new(
+                        hidden_size,
+                        num_heads,
+                        use_flash_attn,
+                        vb.pp(&joint_block_vb_pp),
+                    )?)
+                } else {
+                    Box::new(MMDiTJointBlock::new(
+                        hidden_size,
+                        num_heads,
+                        use_flash_attn,
+                        vb.pp(&joint_block_vb_pp),
+                    )?)
+                };
+            joint_blocks.push(joint_block);
         }
 
         Ok(Self {
@@ -180,9 +218,20 @@ impl MMDiTCore {
         })
     }
 
-    pub fn forward(&self, context: &Tensor, x: &Tensor, c: &Tensor) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        context: &Tensor,
+        x: &Tensor,
+        c: &Tensor,
+        skip_layers: Option<&[usize]>,
+    ) -> Result<Tensor> {
         let (mut context, mut x) = (context.clone(), x.clone());
-        for joint_block in &self.joint_blocks {
+        for (i, joint_block) in self.joint_blocks.iter().enumerate() {
+            if let Some(skip_layers) = &skip_layers {
+                if skip_layers.contains(&i) {
+                    continue;
+                }
+            }
             (context, x) = joint_block.forward(&context, &x, c)?;
         }
         let x = self.context_qkv_only_joint_block.forward(&context, &x, c)?;

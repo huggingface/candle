@@ -19,13 +19,15 @@ enum Which {
     V3_5Large,
     #[value(name = "3.5-large-turbo")]
     V3_5LargeTurbo,
+    #[value(name = "3.5-medium")]
+    V3_5Medium,
 }
 
 impl Which {
     fn is_3_5(&self) -> bool {
         match self {
             Self::V3Medium => false,
-            Self::V3_5Large | Self::V3_5LargeTurbo => true,
+            Self::V3_5Large | Self::V3_5LargeTurbo | Self::V3_5Medium => true,
         }
     }
 }
@@ -73,13 +75,18 @@ struct Args {
     #[arg(long)]
     num_inference_steps: Option<usize>,
 
-    // CFG scale.
+    /// CFG scale.
     #[arg(long)]
     cfg_scale: Option<f64>,
 
-    // Time shift factor (alpha).
+    /// Time shift factor (alpha).
     #[arg(long, default_value_t = 3.0)]
     time_shift: f64,
+
+    /// Use Skip Layer Guidance (SLG) for the sampling.
+    /// Currently only supports Stable Diffusion 3.5 Medium.
+    #[arg(long)]
+    use_slg: bool,
 
     /// The seed to use when generating random samples.
     #[arg(long)]
@@ -103,6 +110,7 @@ fn main() -> Result<()> {
         time_shift,
         seed,
         which,
+        use_slg,
     } = Args::parse();
 
     let _guard = if tracing {
@@ -117,36 +125,59 @@ fn main() -> Result<()> {
     let default_inference_steps = match which {
         Which::V3_5Large => 28,
         Which::V3_5LargeTurbo => 4,
+        Which::V3_5Medium => 28,
         Which::V3Medium => 28,
     };
     let num_inference_steps = num_inference_steps.unwrap_or(default_inference_steps);
     let default_cfg_scale = match which {
         Which::V3_5Large => 4.0,
         Which::V3_5LargeTurbo => 1.0,
+        Which::V3_5Medium => 4.0,
         Which::V3Medium => 4.0,
     };
     let cfg_scale = cfg_scale.unwrap_or(default_cfg_scale);
 
     let api = hf_hub::api::sync::Api::new()?;
     let (mmdit_config, mut triple, vb) = if which.is_3_5() {
-        let sai_repo = {
+        let sai_repo_for_text_encoders = {
             let name = match which {
                 Which::V3_5Large => "stabilityai/stable-diffusion-3.5-large",
                 Which::V3_5LargeTurbo => "stabilityai/stable-diffusion-3.5-large-turbo",
+
+                // Unfortunately, stabilityai/stable-diffusion-3.5-medium doesn't have the monolithic text encoders that's usually
+                // placed under the text_encoders directory, like the case in stabilityai/stable-diffusion-3.5-large and -large-turbo.
+                // To make things worse, it currently only has partitioned model.fp16-00001-of-00002.safetensors and model.fp16-00002-of-00002.safetensors
+                // under the text_encoder_3 directory, for the t5xxl_fp16.safetensors model. This means that we need to merge the two partitions
+                // to get the monolithic text encoders. This is not a trivial task.
+                // Since the situation can change, we do not want to spend efforts to handle the uniqueness of stabilityai/stable-diffusion-3.5-medium,
+                // which involves different paths and merging the two partitions files for t5xxl_fp16.safetensors.
+                // so for now, we'll use the text encoder models from the stabilityai/stable-diffusion-3.5-large repository.
+                // TODO: Change to "stabilityai/stable-diffusion-3.5-medium" once the maintainers of the repository add back the monolithic text encoders.
+                Which::V3_5Medium => "stabilityai/stable-diffusion-3.5-large",
                 Which::V3Medium => unreachable!(),
             };
             api.repo(hf_hub::Repo::model(name.to_string()))
         };
-        let clip_g_file = sai_repo.get("text_encoders/clip_g.safetensors")?;
-        let clip_l_file = sai_repo.get("text_encoders/clip_l.safetensors")?;
-        let t5xxl_file = sai_repo.get("text_encoders/t5xxl_fp16.safetensors")?;
+        let sai_repo_for_mmdit = {
+            let name = match which {
+                Which::V3_5Large => "stabilityai/stable-diffusion-3.5-large",
+                Which::V3_5LargeTurbo => "stabilityai/stable-diffusion-3.5-large-turbo",
+                Which::V3_5Medium => "stabilityai/stable-diffusion-3.5-medium",
+                Which::V3Medium => unreachable!(),
+            };
+            api.repo(hf_hub::Repo::model(name.to_string()))
+        };
+        let clip_g_file = sai_repo_for_text_encoders.get("text_encoders/clip_g.safetensors")?;
+        let clip_l_file = sai_repo_for_text_encoders.get("text_encoders/clip_l.safetensors")?;
+        let t5xxl_file = sai_repo_for_text_encoders.get("text_encoders/t5xxl_fp16.safetensors")?;
         let model_file = {
             let model_file = match which {
                 Which::V3_5Large => "sd3.5_large.safetensors",
                 Which::V3_5LargeTurbo => "sd3.5_large_turbo.safetensors",
+                Which::V3_5Medium => "sd3.5_medium.safetensors",
                 Which::V3Medium => unreachable!(),
             };
-            sai_repo.get(model_file)?
+            sai_repo_for_mmdit.get(model_file)?
         };
         let triple = StableDiffusion3TripleClipWithTokenizer::new_split(
             &clip_g_file,
@@ -157,52 +188,70 @@ fn main() -> Result<()> {
         let vb = unsafe {
             candle_nn::VarBuilder::from_mmaped_safetensors(&[model_file], DType::F16, &device)?
         };
-        (MMDiTConfig::sd3_5_large(), triple, vb)
+        match which {
+            Which::V3_5Large => (MMDiTConfig::sd3_5_large(), triple, vb),
+            Which::V3_5LargeTurbo => (MMDiTConfig::sd3_5_large(), triple, vb),
+            Which::V3_5Medium => (MMDiTConfig::sd3_5_medium(), triple, vb),
+            Which::V3Medium => unreachable!(),
+        }
     } else {
         let sai_repo = {
             let name = "stabilityai/stable-diffusion-3-medium";
             api.repo(hf_hub::Repo::model(name.to_string()))
         };
         let model_file = sai_repo.get("sd3_medium_incl_clips_t5xxlfp16.safetensors")?;
-        let vb_fp16 = unsafe {
+        let vb = unsafe {
             candle_nn::VarBuilder::from_mmaped_safetensors(&[&model_file], DType::F16, &device)?
         };
-
-        let vb_fp32 = unsafe {
-            candle_nn::VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)?
-        };
-        let triple = StableDiffusion3TripleClipWithTokenizer::new(
-            vb_fp16.pp("text_encoders"),
-            vb_fp32.pp("text_encoders"),
-        )?;
-        (MMDiTConfig::sd3_medium(), triple, vb_fp16)
+        let triple = StableDiffusion3TripleClipWithTokenizer::new(vb.pp("text_encoders"))?;
+        (MMDiTConfig::sd3_medium(), triple, vb)
     };
     let (context, y) = triple.encode_text_to_embedding(prompt.as_str(), &device)?;
     let (context_uncond, y_uncond) =
         triple.encode_text_to_embedding(uncond_prompt.as_str(), &device)?;
+    // Drop the text model early to avoid using too much memory.
+    drop(triple);
     let context = Tensor::cat(&[context, context_uncond], 0)?;
     let y = Tensor::cat(&[y, y_uncond], 0)?;
-
-    let mmdit = MMDiT::new(
-        &mmdit_config,
-        use_flash_attn,
-        vb.pp("model.diffusion_model"),
-    )?;
 
     if let Some(seed) = seed {
         device.set_seed(seed)?;
     }
+
+    let slg_config = if use_slg {
+        match which {
+            // https://github.com/Stability-AI/sd3.5/blob/4e484e05308d83fb77ae6f680028e6c313f9da54/sd3_infer.py#L388-L394
+            Which::V3_5Medium => Some(sampling::SkipLayerGuidanceConfig {
+                scale: 2.5,
+                start: 0.01,
+                end: 0.2,
+                layers: vec![7, 8, 9],
+            }),
+            _ => anyhow::bail!("--use-slg can only be used with 3.5-medium"),
+        }
+    } else {
+        None
+    };
+
     let start_time = std::time::Instant::now();
-    let x = sampling::euler_sample(
-        &mmdit,
-        &y,
-        &context,
-        num_inference_steps,
-        cfg_scale,
-        time_shift,
-        height,
-        width,
-    )?;
+    let x = {
+        let mmdit = MMDiT::new(
+            &mmdit_config,
+            use_flash_attn,
+            vb.pp("model.diffusion_model"),
+        )?;
+        sampling::euler_sample(
+            &mmdit,
+            &y,
+            &context,
+            num_inference_steps,
+            cfg_scale,
+            time_shift,
+            height,
+            width,
+            slg_config,
+        )?
+    };
     let dt = start_time.elapsed().as_secs_f32();
     println!(
         "Sampling done. {num_inference_steps} steps. {:.2}s. Average rate: {:.2} iter/s",

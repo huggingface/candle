@@ -1171,8 +1171,8 @@ template <
       const device itype* V [[buffer(2)]],                                  \
       device otype* O [[buffer(3)]],                                        \
       const constant MLXFastAttentionParams* params [[buffer(4)]],          \
-      const constant int* batch_shape [[buffer(6)]],                        \
-      const constant size_t* batch_strides [[buffer(7)]],                   \
+      const constant int* batch_shape [[buffer(5)]],                        \
+      const constant size_t* batch_strides [[buffer(6)]],                   \
       uint simd_lane_id [[thread_index_in_simdgroup]],                      \
       uint simd_group_id [[simdgroup_index_in_threadgroup]],                \
       uint3 tid [[threadgroup_position_in_grid]],                           \
