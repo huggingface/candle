@@ -26,7 +26,6 @@ const SORT: &str = include_str!("sort.metal");
 const TERNARY: &str = include_str!("ternary.metal");
 const UNARY: &str = include_str!("unary.metal");
 const SDPA: &str = include_str!("scaled_dot_product_attention.metal");
-const SDPA: &str = include_str!("scaled_dot_product_attention.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {

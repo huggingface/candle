@@ -1,5 +1,5 @@
 use candle::{Module, Result, Tensor};
-use candle_nn as nn;
+use candle_nn::{self as nn, layer_norm::RmsNormNonQuantized};
 
 pub struct Qkv {
     pub q: Tensor,
@@ -56,8 +56,8 @@ impl QkvOnlyAttnProjections {
 pub struct AttnProjections {
     head_dim: usize,
     qkv: nn::Linear,
-    ln_k: Option<candle_nn::RmsNorm>,
-    ln_q: Option<candle_nn::RmsNorm>,
+    ln_k: Option<candle_nn::RmsNorm<RmsNormNonQuantized>>,
+    ln_q: Option<candle_nn::RmsNorm<RmsNormNonQuantized>>,
     proj: nn::Linear,
 }
 
@@ -67,8 +67,8 @@ impl AttnProjections {
         let qkv = nn::linear(dim, dim * 3, vb.pp("qkv"))?;
         let proj = nn::linear(dim, dim, vb.pp("proj"))?;
         let (ln_k, ln_q) = if vb.contains_tensor("ln_k.weight") {
-            let ln_k = candle_nn::rms_norm(head_dim, 1e-6, vb.pp("ln_k"))?;
-            let ln_q = candle_nn::rms_norm(head_dim, 1e-6, vb.pp("ln_q"))?;
+            let ln_k = candle_nn::rms_norm_non_quant(head_dim, 1e-6, vb.pp("ln_k"))?;
+            let ln_q = candle_nn::rms_norm_non_quant(head_dim, 1e-6, vb.pp("ln_q"))?;
             (Some(ln_k), Some(ln_q))
         } else {
             (None, None)

@@ -82,9 +82,12 @@ impl Embedding {
                         .to_dtype(DType::U8)?
                         .unsqueeze(0)?;
 
-                    ids =
-                        ids.slice_assign(&[i..i + 1, 0..input_id.dims2().unwrap().1], &input_id)?;
-                    masks = masks.slice_assign(&[i..i + 1, 0..mask.dims2().unwrap().1], &mask)?;
+                    ids = ids.slice_assign(
+                        &[&(i..i + 1), &(0..input_id.dims2().unwrap().1)],
+                        &input_id,
+                    )?;
+                    masks =
+                        masks.slice_assign(&[&(i..i + 1), &(0..mask.dims2().unwrap().1)], &mask)?;
                 }
 
                 // Let's generate the embeddings for the query, we are going to be normalizing the result.
@@ -104,9 +107,12 @@ impl Embedding {
                         .to_dtype(DType::U8)?
                         .unsqueeze(0)?;
 
-                    ids =
-                        ids.slice_assign(&[i..i + 1, 0..input_id.dims2().unwrap().1], &input_id)?;
-                    masks = masks.slice_assign(&[i..i + 1, 0..mask.dims2().unwrap().1], &mask)?;
+                    ids = ids.slice_assign(
+                        &[&(i..i + 1), &(0..input_id.dims2().unwrap().1)],
+                        &input_id,
+                    )?;
+                    masks =
+                        masks.slice_assign(&[&(i..i + 1), &(0..mask.dims2().unwrap().1)], &mask)?;
                 }
 
                 // Let's generate the embeddings for the query, we are going to be normalizing the result.

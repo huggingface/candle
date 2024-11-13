@@ -205,18 +205,6 @@ INDEX_OP(is_i16_f16, int16_t, half)
 INDEX_OP(is_i16_bf16, int16_t, bfloat)
 #endif
 
-INDEX_OP(is_i32_f32, int32_t, float)
-INDEX_OP(is_i32_f16, int32_t, half)
-#if defined(__HAVE_BFLOAT__)
-INDEX_OP(is_i32_bf16, int32_t, bfloat)
-#endif
-
-INDEX_OP(is_i16_f32, int16_t, float)
-INDEX_OP(is_i16_f16, int16_t, half)
-#if defined(__HAVE_BFLOAT__)
-INDEX_OP(is_i16_bf16, int16_t, bfloat)
-#endif
-
 INDEX_OP(is_u32_u8, uint32_t, uint8_t)
 INDEX_OP(is_u32_u32, uint32_t, uint32_t)
 INDEX_OP(is_u32_f32, uint32_t, float)

@@ -1401,14 +1401,6 @@ impl BackendStorage for MetalStorage {
             (DType::I32, DType::F16) => "is_i32_f16",
             (DType::I32, DType::BF16) => "is_i32_bf16",
 
-            (DType::I16, DType::F32) => "is_i16_f32",
-            (DType::I16, DType::F16) => "is_i16_f16",
-            (DType::I16, DType::BF16) => "is_i16_bf16",
-
-            (DType::I32, DType::F32) => "is_i32_f32",
-            (DType::I32, DType::F16) => "is_i32_f16",
-            (DType::I32, DType::BF16) => "is_i32_bf16",
-
             (DType::I64, DType::U8) => "is_i64_u8",
             (DType::I64, DType::U32) => "is_i64_u32",
             (DType::I64, DType::I64) => "is_i64_i64",
@@ -1613,12 +1605,7 @@ impl BackendStorage for MetalStorage {
                 &buffer,
             )
             .map_err(MetalError::from)?;
-        } else if self.device.use_mlx_mm {
-            if s.unwrap_or(1.) != 1. {
-                return Err(
-                    MetalError::Message(format!("mlx matmul doesn't support alpha {s:?}")).into(),
-                );
-            }
+        } else if self.device.use_mlx_mm && s.unwrap_or(1.) == 1. {
             let dtype = match self.dtype {
                 DType::F32 => candle_metal_kernels::GemmDType::F32,
                 DType::F16 => candle_metal_kernels::GemmDType::F16,
