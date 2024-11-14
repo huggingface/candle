@@ -721,6 +721,82 @@ pub fn call_last_softmax(
     Ok(())
 }
 
+// Requires continuous input and mask
+#[allow(clippy::too_many_arguments)]
+pub fn call_last_attn_softmax(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    input: &Buffer,
+    input_offset: usize,
+    mask: &Buffer,
+    mask_offset: usize,
+    input_shape: &[usize],
+    scale: f32,
+    ty: SdpaDType,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    // Everything is in reverse
+    let ne00 = input_shape[input_shape.len() - 1] as i64;
+    let ne01 = input_shape[input_shape.len() - 2] as i64;
+    let ne02 = input_shape[input_shape.len() - 3] as i64;
+    let ne03 = input_shape[input_shape.len() - 4] as i64;
+
+    let mut nth = 32; // SIMD width
+    let name = if ne00 % 4 == 0 {
+        while nth < ne00 / 4 && nth * ne01 * ne02 * ne03 < 256 {
+            nth *= 2;
+        }
+        match ty {
+            SdpaDType::F32 => "attn_soft_max_f32_4",
+            SdpaDType::F16 => "attn_soft_max_f16_4",
+            SdpaDType::BF16 => "attn_soft_max_bf16_4",
+        }
+    } else {
+        while nth < ne00 && nth * ne01 * ne02 * ne03 < 256 {
+            nth *= 2;
+        }
+        match ty {
+            SdpaDType::F32 => "attn_soft_max_f32",
+            SdpaDType::F16 => "attn_soft_max_f16",
+            SdpaDType::BF16 => "attn_soft_max_bf16",
+        }
+    };
+
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            (input, input_offset),
+            (mask, mask_offset),
+            output,
+            ne00,
+            ne01,
+            ne02,
+            scale
+        )
+    );
+
+    let thread_group_count = MTLSize {
+        width: (ne01 * ne02 * ne03) as u64,
+        height: 1,
+        depth: 1,
+    };
+    let thread_group_size = MTLSize {
+        width: nth as u64,
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.set_threadgroup_memory_length(0, 32 * std::mem::size_of::<f32>() as u64);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn call_rms_norm(
     device: &Device,

@@ -434,6 +434,105 @@ pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
     xs.apply_op1_no_bwd(&SoftmaxLastDim)
 }
 
+// TODO: need cpu and cuda impls
+#[allow(dead_code)]
+struct AttnSoftmaxLastDim {
+    scale: f32,
+}
+
+impl candle::CustomOp2 for AttnSoftmaxLastDim {
+    fn name(&self) -> &'static str {
+        "attn-softmax-last-dim"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _a_s: &CpuStorage,
+        _a_l: &Layout,
+        _mask_s: &CpuStorage,
+        _mask_l: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        candle::bail!("cpu attn-softmax-last-dim is not implemented");
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        a_s: &candle::MetalStorage,
+        a_l: &Layout,
+        mask_s: &candle::MetalStorage,
+        mask_l: &Layout,
+    ) -> Result<(candle::MetalStorage, Shape)> {
+        use candle::backend::BackendStorage;
+        let device = a_s.device();
+        let command_buffer = device.command_buffer()?;
+        let kernels = device.kernels();
+
+        let ty = match a_s.dtype() {
+            DType::F32 => candle_metal_kernels::SdpaDType::F32,
+            DType::F16 => candle_metal_kernels::SdpaDType::F16,
+            DType::BF16 => candle_metal_kernels::SdpaDType::BF16,
+            dtype => candle::bail!("attn-softmax-last-dim is not implemented for {dtype:?}"),
+        };
+
+        if !a_l.is_contiguous() {
+            candle::bail!("Non contiguous xs for attn-softmax-last-dim is not implemented");
+        }
+        if !mask_l.is_contiguous() {
+            candle::bail!("Non contiguous mask for attn-softmax-last-dim is not implemented");
+        }
+
+        if a_l.dims().len() != 4 {
+            candle::bail!("attn-softmax-last-dim expects xs of rank 2");
+        }
+        if mask_l.dims().len() != 2 {
+            candle::bail!("attn-softmax-last-dim expects mask of rank 2");
+        }
+        if mask_l.dim(D::Minus1)? != a_l.dim(D::Minus1)?
+            || mask_l.dim(D::Minus2)? != a_l.dim(D::Minus2)?
+        {
+            candle::bail!("attn-softmax-last-dim expects last 2 dims to match xs last 2 dims");
+        }
+
+        let elem_count = a_l.shape().elem_count();
+        let output = device.new_buffer(elem_count, a_s.dtype(), "attn-softmax")?;
+        candle_metal_kernels::call_last_attn_softmax(
+            device.metal_device(),
+            &command_buffer,
+            kernels,
+            a_s.buffer(),
+            a_l.start_offset(),
+            mask_s.buffer(),
+            mask_l.start_offset(),
+            a_l.dims(),
+            self.scale,
+            ty,
+            &output,
+        )
+        .map_err(candle::Error::wrap)?;
+        let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, a_s.dtype());
+        Ok((newstorage, a_l.shape().clone()))
+    }
+}
+
+/// Softmax with fused broadcast addition of a mask and scale.
+/// Equivalent to:
+/// ```ignore
+/// candle_nn::ops::softmax_last_dim(&(xs.broadcast_add(&mask)? * scale as f64)?)?
+/// ```
+/// - `xs` must be a rank-4 tensor
+/// - `mask` must be a rank-2 matrix
+/// - The last 2 dimensions of `xs` must match the dimensions of `mask`.
+///
+/// Note: if the last dim of `xs` is a multiple of 4, a vectorized implementation will be used.
+pub fn attn_softmax_last_dim(xs: &Tensor, mask: &Tensor, scale: f32) -> Result<Tensor> {
+    if xs.device().is_metal() {
+        xs.apply_op2_no_bwd(mask, &AttnSoftmaxLastDim { scale })
+    } else {
+        softmax_last_dim(&(xs.broadcast_add(mask)? * scale as f64)?)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RmsNorm {
     eps: f32,

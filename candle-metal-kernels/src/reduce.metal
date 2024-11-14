@@ -4,6 +4,8 @@ using namespace metal;
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 
+#define N_SIMDWIDTH 32 // assuming SIMD group size is 32
+
 METAL_FUNC uint get_strided_index(
     uint idx,
     constant size_t &num_dims,
@@ -561,6 +563,189 @@ kernel void FN_NAME_THD( \
     rope_thd<TYPENAME>(b, t, h, d, src, cos, sin, dst, idx); \
 }\
 
+
+template<typename T>
+kernel void attn_soft_max(
+        device const  char * src0,
+        device const  char * src1,
+        device        char * dst,
+        constant   int64_t & ne00,
+        constant   int64_t & ne01,
+        constant   int64_t & ne02,
+        constant     float & scale,
+        threadgroup  float * buf [[threadgroup(0)]],
+        uint  tgpig[[threadgroup_position_in_grid]],
+        uint  tpitg[[thread_position_in_threadgroup]],
+        uint  sgitg[[simdgroup_index_in_threadgroup]],
+        uint  tiisg[[thread_index_in_simdgroup]],
+        uint    ntg[[threads_per_threadgroup]]) {
+    const int64_t i03 = (tgpig) / (ne02*ne01);
+    const int64_t i02 = (tgpig - i03*ne02*ne01) / ne01;
+    const int64_t i01 = (tgpig - i03*ne02*ne01 - i02*ne01);
+
+    device const T * psrc0 =                (device const T *) src0 + (i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00);
+    device const T * pmask = src1 != src0 ? (device const T *) src1 + i01*ne00 : nullptr;
+    device       T * pdst  =                (device       T *) dst  + (i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00);
+
+    float slope = 1.0f;
+
+    // parallel max
+    float lmax = -INFINITY;
+
+    for (int i00 = tpitg; i00 < ne00; i00 += ntg) {
+        lmax = MAX(lmax, ((float)psrc0[i00])*scale + (pmask ? slope*((float)pmask[i00]) : 0.0f));
+    }
+
+    // find the max value in the block
+    float max_val = simd_max(lmax);
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = -INFINITY;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = max_val;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        max_val = buf[tiisg];
+        max_val = simd_max(max_val);
+    }
+
+    // parallel sum
+    float lsum = 0.0f;
+    for (int i00 = tpitg; i00 < ne00; i00 += ntg) {
+        const float exp_psrc0 = exp((((float)psrc0[i00])*scale + (pmask ? slope*((float)pmask[i00]) : 0.0f)) - max_val);
+        lsum += exp_psrc0;
+        pdst[i00] = static_cast<T>(exp_psrc0);
+    }
+
+    // This barrier fixes a failing test
+    // ref: https://github.com/ggerganov/ggml/pull/621#discussion_r1425156335
+    threadgroup_barrier(mem_flags::mem_none);
+
+    float sum = simd_sum(lsum);
+
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = 0.0f;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = sum;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        sum = buf[tiisg];
+        sum = simd_sum(sum);
+    }
+
+    const float inv_sum = 1.0f/sum;
+
+    for (int i00 = tpitg; i00 < ne00; i00 += ntg) {
+        pdst[i00] *= static_cast<T>(inv_sum);
+    }
+}
+
+template<typename T, typename S>
+kernel void attn_soft_max_4(
+        device const  char * src0,
+        device const  char * src1,
+        device        char * dst,
+        constant   int64_t & ne00,
+        constant   int64_t & ne01,
+        constant   int64_t & ne02,
+        constant     float & scale,
+        threadgroup  float * buf [[threadgroup(0)]],
+        uint  tgpig[[threadgroup_position_in_grid]],
+        uint  tpitg[[thread_position_in_threadgroup]],
+        uint  sgitg[[simdgroup_index_in_threadgroup]],
+        uint  tiisg[[thread_index_in_simdgroup]],
+        uint    ntg[[threads_per_threadgroup]]) {
+    const int64_t i03 = (tgpig) / (ne02*ne01);
+    const int64_t i02 = (tgpig - i03*ne02*ne01) / ne01;
+    const int64_t i01 = (tgpig - i03*ne02*ne01 - i02*ne01);
+
+    device const T * psrc4 =                (device const T *) src0 + (i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00)/4;
+    device const T * pmask = src1 != src0 ? (device const T *) src1 + i01*ne00/4 : nullptr;
+    device       T * pdst4 =                (device       T *) dst  + (i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00)/4;
+
+    float slope = 1.0f;
+
+    // parallel max
+    float4 lmax4 = -INFINITY;
+
+    for (int i00 = tpitg; i00 < ne00/4; i00 += ntg) {
+        lmax4 = fmax(lmax4, ((float4)psrc4[i00])*scale + (float4)((pmask ? slope*((float4)pmask[i00]) : 0.0f)));
+    }
+
+    const float lmax = MAX(MAX(lmax4[0], lmax4[1]), MAX(lmax4[2], lmax4[3]));
+
+    float max_val = simd_max(lmax);
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = -INFINITY;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = max_val;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        max_val = buf[tiisg];
+        max_val = simd_max(max_val);
+    }
+
+    // parallel sum
+    float4 lsum4 = 0.0f;
+    for (int i00 = tpitg; i00 < ne00/4; i00 += ntg) {
+        const float4 exp_psrc4 = exp((((float4)psrc4[i00])*scale + (float4)((pmask ? slope*((float4)pmask[i00]) : 0.0f))) - max_val);
+        lsum4 += exp_psrc4;
+        pdst4[i00] = static_cast<T>(exp_psrc4);
+    }
+
+    const float lsum = lsum4[0] + lsum4[1] + lsum4[2] + lsum4[3];
+
+    // This barrier fixes a failing test
+    // ref: https://github.com/ggerganov/ggml/pull/621#discussion_r1425156335
+    threadgroup_barrier(mem_flags::mem_none);
+
+    float sum = simd_sum(lsum);
+
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = 0.0f;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = sum;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        sum = buf[tiisg];
+        sum = simd_sum(sum);
+    }
+
+    const float inv_sum = 1.0f/sum;
+
+    for (int i00 = tpitg; i00 < ne00/4; i00 += ntg) {
+        pdst4[i00] = pdst4[i00] * static_cast<T>((S)inv_sum);
+    }
+}
+
+
 REDUCE(x + y, fast_sum_f32_strided, float, 0)
 REDUCE(x + y, fast_sum_u32_strided, uint, 0)
 REDUCE(x + y, fast_sum_f16_strided, half, 0)
@@ -587,6 +772,13 @@ ARGMAX(fast_argmax_u8_strided, uint8_t, 0)
 
 SOFTMAX(softmax_f32, float)
 SOFTMAX(softmax_f16, half)
+// Softmax for attention
+typedef decltype(attn_soft_max<float>)    attn_soft_max_t;
+typedef decltype(attn_soft_max_4<float4, float>) attn_soft_max_4_t;
+template [[host_name("attn_soft_max_f16")]]   kernel attn_soft_max_t   attn_soft_max<half>;
+template [[host_name("attn_soft_max_f32")]]   kernel attn_soft_max_t   attn_soft_max<float>;
+template [[host_name("attn_soft_max_f16_4")]] kernel attn_soft_max_4_t attn_soft_max_4<half4, half>;
+template [[host_name("attn_soft_max_f32_4")]] kernel attn_soft_max_4_t attn_soft_max_4<float4, float>;
 RMSNORM(rmsnorm_f32, float)
 RMSNORM(rmsnorm_f16, half)
 LAYERNORM(layernorm_f32, float)
@@ -626,6 +818,9 @@ REDUCE(MIN(x, y), fast_min_bf16_strided, bfloat, HUGE_VALBF)
 ARGMIN(fast_argmin_bf16, bfloat, HUGE_VALBF)
 ARGMAX(fast_argmax_bf16, bfloat, -HUGE_VALBF)
 SOFTMAX(softmax_bf16, bfloat)
+// // Softmax for attention
+template [[host_name("attn_soft_max_bf16")]]   kernel attn_soft_max_t   attn_soft_max<bfloat>;
+template [[host_name("attn_soft_max_bf16_4")]] kernel attn_soft_max_4_t attn_soft_max_4<bfloat4, bfloat>;
 RMSNORM(rmsnorm_bf16, bfloat)
 LAYERNORM(layernorm_bf16, bfloat)
 ROPE(rope_bf16, rope_i_bf16, rope_thd_bf16, bfloat)
