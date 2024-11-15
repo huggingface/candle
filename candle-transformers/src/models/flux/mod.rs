@@ -1,10 +1,26 @@
 //! Flux  Model
 //!
-//! Flux is a series of text-to-image generation models based on diffusion transformers.
+//! Flux is a 12B rectified flow transformer capable of generating images from text descriptions.
 //!
-//! - [GH Link](https://github.com/black-forest-labs/flux)
-//! - Transformers Python [reference implementation](https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py)
+//! - [Hugging Face Model](https://huggingface.co/black-forest-labs/FLUX.1-schnell)
+//! - [GitHub Repository](https://github.com/black-forest-labs/flux)
+//! - [Blog Post](https://blackforestlabs.ai/announcing-black-forest-labs/)
 //!
+//! # Usage
+//!
+//! ```bash
+//! cargo run --features cuda \
+//!     --example flux -r -- \
+//!     --height 1024 --width 1024 \
+//!     --prompt "a rusty robot walking on a beach holding a small torch, \
+//!               the robot has the word \"rust\" written on it, high quality, 4k"
+//! ```
+//!
+//! <div align=center>
+//!   <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/flux/assets/flux-robot.jpg" alt="" width=320>
+//! </div>
+//!
+
 use candle::{Result, Tensor};
 
 pub trait WithForward {
