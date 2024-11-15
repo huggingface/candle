@@ -1,3 +1,8 @@
+//! Implementation of EfficientBert, an efficient variant of BERT for computer vision tasks.
+//!
+//! See:
+//! - ["EfficientBERT: Progressively Searching Multilayer Perceptron Architectures for BERT"](https://arxiv.org/abs/2201.00462)
+//!
 use candle::{Result, Tensor, D};
 use candle_nn as nn;
 use nn::{Module, VarBuilder};

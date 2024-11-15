@@ -1,9 +1,14 @@
-// Adapted from the reference implementation at:
-// https://github.com/kyutai-labs/moshi
+//! mimi model
+//!
+//! Mimi is a state-of-the-art audio neural codec.
+//!
+//! - [HuggingFace Model Card](https://huggingface.co/kyutai/mimi)
+//! - [GitHub](https://github.com/kyutai-labs/moshi)
+//!
+
 // Copyright (c) Kyutai, all rights reserved.
 // This source code is licensed under the license found in the
 // LICENSE file in the root directory of this source tree.
-
 pub use candle;
 pub use candle_nn;
 

@@ -1,3 +1,20 @@
+//! Quantized BLIP text module implementation.
+//!
+//! Provides the text decoder portion of the BLIP model with 8-bit quantization.
+//! Uses a BERT-style transformer architecture for text processing.
+//!
+//! Key components:
+//! - Text embeddings layer with position embeddings
+//! - Multi-head self attention layers
+//! - Cross-attention for vision-text fusion
+//! - Layer normalization and feed-forward layers
+//! - Quantized linear transformations
+//!
+//! References:
+//! - [BLIP Paper](https://arxiv.org/abs/2201.12086)
+//! - [Hugging Face Implementation](https://huggingface.co/docs/transformers/model_doc/blip)
+//!
+
 use crate::models::with_tracing::QMatMul;
 use crate::quantized_nn::{layer_norm, linear, Embedding, Linear};
 pub use crate::quantized_var_builder::VarBuilder;

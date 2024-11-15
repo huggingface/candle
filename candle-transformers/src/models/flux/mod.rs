@@ -1,3 +1,10 @@
+//! Flux  Model
+//!
+//! Flux is a series of text-to-image generation models based on diffusion transformers.
+//!
+//! - [GH Link](https://github.com/black-forest-labs/flux)
+//! - Transformers Python [reference implementation](https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py)
+//!
 use candle::{Result, Tensor};
 
 pub trait WithForward {

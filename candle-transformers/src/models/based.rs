@@ -1,10 +1,9 @@
 //! Based from the Stanford Hazy Research group.
 //!
 //! See "Simple linear attention language models balance the recall-throughput tradeoff", Arora et al. 2024
-//! <https://arxiv.org/abs/2402.18668>
-
-//! Original code:
-//! https://github.com/HazyResearch/based
+//! - [Arxiv](https://arxiv.org/abs/2402.18668)
+//! - [Github](https://github.com/HazyResearch/based)
+//!
 
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{

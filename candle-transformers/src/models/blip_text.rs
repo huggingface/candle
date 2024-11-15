@@ -1,3 +1,9 @@
+//! Implementation of BLIP text encoder/decoder.
+//!
+//! See "BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation"
+//! https://arxiv.org/abs/2201.12086
+//!
+
 use super::with_tracing::{linear, Embedding, Linear};
 use candle::{Module, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};

@@ -1,3 +1,9 @@
+//! EVA-2 inference implementation.
+//!
+//! See ["EVA-02: A Visual Representation for Neon Genesis"](https://arxiv.org/abs/2303.11331)
+//!
+//! Based on implementation from [pytorch-image-models](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/eva2.py)
+
 use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 

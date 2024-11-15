@@ -1,3 +1,19 @@
+//! Mobile CLIP model, combining a lightweight vision encoder with a text encoder
+//!
+//! A mobile-optimized CLIP implementation that uses:
+//! - FastViT as the vision encoder
+//! - OpenCLIP text encoder
+//! - Projection layers to align the feature spaces
+//!
+//! See model details at:
+//! - [FastViT](https://arxiv.org/abs/2303.14189)
+//! - [OpenCLIP](https://github.com/mlfoundations/open_clip)
+//!
+//! References:
+//! - [MobileVLM](https://huggingface.co/mobileVLM)
+//! - [MetaCLIP](https://arxiv.org/abs/2309.16671)
+//!
+
 use super::fastvit;
 use super::openclip::text_model;
 use candle::{Result, Tensor, D};

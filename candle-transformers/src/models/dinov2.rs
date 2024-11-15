@@ -1,3 +1,8 @@
+//! Implementation of the DINOv2 models from Meta Research.
+//!
+//! See:
+//! - DINOv2: ["DINOv2: Learning Robust Visual Features without Supervision"](https://github.com/facebookresearch/dinov2)
+//!
 use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 

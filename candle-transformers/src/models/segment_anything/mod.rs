@@ -1,3 +1,11 @@
+//! Segment Anything Model (SAM)
+//!
+//! SAM is an architecture for image segmentation, capable of segmenting any object
+//! in an image based on prompts like points or boxes.
+//!
+//! - [GH Link](https://github.com/facebookresearch/segment-anything)
+//! - [Paper](https://arxiv.org/abs/2304.02643)
+//!
 pub use crate::models::with_tracing::Linear;
 use candle::{Result, Tensor};
 use candle_nn::{Module, VarBuilder};

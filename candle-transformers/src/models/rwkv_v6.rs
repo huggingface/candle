@@ -1,3 +1,19 @@
+//! RWKV v6 model implementation.
+//!
+//! RWKV is an RNN with transformer-like performance.
+//! Version 6 introduces refinements to the architecture.
+//!
+//! Key characteristics:
+//! - Linear attention mechanism
+//! - Time-mixing for temporal dependencies
+//! - Group normalization
+//! - Feed forward gating
+//! - State recycling for efficient inference
+//!
+//! References:
+//! - [RWKV Model](https://github.com/BlinkDL/RWKV-LM)
+//!
+
 use super::with_tracing::{layer_norm, linear_no_bias as linear, LayerNorm, Linear};
 use candle::{IndexOp, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};

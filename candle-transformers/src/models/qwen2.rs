@@ -1,3 +1,20 @@
+//! Qwen2 model implementation with quantization support.
+//!
+//! Qwen2 is a large language model from Alibaba optimized for efficiency.
+//! This implementation provides quantization for reduced memory and compute.
+//!
+//! Key characteristics:
+//! - Streaming decode support
+//! - Grouped query attention (GQA)
+//! - RMSNorm for layer normalization
+//! - Rotary positional embeddings (RoPE)
+//! - Support for 8-bit quantization
+//!
+//! References:
+//! - [Qwen2 Model](https://huggingface.co/Qwen/Qwen2-7B)
+//! - [Model Card](https://huggingface.co/Qwen/Qwen2-7B)
+//!
+
 use crate::models::with_tracing::{linear, linear_no_bias, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};

@@ -1,5 +1,10 @@
-/// A fast implementation of mamba for inference only.
-/// This is based on: https://github.com/LaurentMazare/mamba.rs
+//! Mamba inference implementation.
+//!
+//! See ["Mamba: Linear-Time Sequence Modeling with Selective State Spaces"](https://arxiv.org/abs/2312.00752)
+//!
+//! Based on reference implementation from the AlbertMamba project
+//! A fast implementation of mamba for inference only.
+//! Based on Laurent Mazare's rust implementation: [mamba.rs](https://github.com/LaurentMazare/mamba.rs)
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{RmsNorm, VarBuilder};

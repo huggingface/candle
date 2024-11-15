@@ -1,3 +1,14 @@
+//! MoonDream Model vision-to-text
+//!
+//! The model consists of:
+//! - Vision encoder using a ViT-style architecture
+//! - Text decoder based on Microsoft's Phi model
+//! - Vision projection module to align vision and text embeddings
+//!
+//! References:
+//! - [MoonDream Original Implementation](https://github.com/vikhyat/moondream)
+//!
+
 use crate::models::mixformer::{Config as PhiConfig, MixFormerSequentialForCausalLM as PhiModel};
 use crate::models::with_tracing::{layer_norm, linear_b, LayerNorm, Linear};
 use candle::{IndexOp, Module, Result, Tensor, D};

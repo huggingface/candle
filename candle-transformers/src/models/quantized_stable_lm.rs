@@ -1,3 +1,18 @@
+//! Module for quantized StableLM implementation.
+//!
+//! StableLM is a series of open-source large language models
+//! optimized for performance and stability. This implementation
+//! provides quantization support for efficient model deployment.
+//!
+//! Key characteristics:
+//! - RMSNorm for layer normalization
+//! - Rotary positional embeddings (RoPE)
+//! - Support for 8-bit quantization
+//!
+//! References:
+//! - [StableLM](https://github.com/Stability-AI/StableLM)
+//!
+
 use crate::quantized_nn::{layer_norm, linear, linear_no_bias, Embedding, Linear};
 pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, Module, Result, Tensor, D};

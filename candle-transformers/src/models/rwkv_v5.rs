@@ -1,3 +1,20 @@
+//! RWKV v5 model implementation.
+//!
+//! RWKV is an RNN with transformer-level performance that can be implemented
+//! as either a transformer or RNN.
+//!
+//! Key characteristics:
+//! - Time-mix attention mechanism
+//! - Channel-mix feed-forward network
+//! - Linear attention
+//! - Group normalization
+//! - Token shift mechanism
+//!
+//! References:
+//! - [RWKV Language Model](https://github.com/BlinkDL/RWKV-LM)
+//! - [RWKV v5 Release](https://github.com/BlinkDL/ChatRWKV/tree/main)
+//!
+
 use super::with_tracing::{layer_norm, linear_no_bias as linear, LayerNorm, Linear};
 use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};

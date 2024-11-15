@@ -1,3 +1,20 @@
+//! Mixtral Model, a sparse mixture of expert model based on the Mistral architecture
+//!
+//! See Mixtral model details at:
+//! - [Hugging Face](https://huggingface.co/docs/transformers/model_doc/mixtral)
+//! - [Mixtral-8x7B Blog Post](https://mistral.ai/news/mixtral-of-experts/)
+//!
+//! The model uses a mixture of experts architecture with:
+//! - 8 experts per layer
+//! - Top 2 expert routing
+//! - Sliding window attention
+//! - RoPE embeddings
+//!
+//! References:
+//! - [Hugging Face Implementation](https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py)
+//! - [Mixtral Blog Post](https://mistral.ai/news/mixtral-of-experts/)
+//!
+
 use crate::models::with_tracing::{linear_no_bias, Linear, RmsNorm};
 /// Mixtral Model
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py

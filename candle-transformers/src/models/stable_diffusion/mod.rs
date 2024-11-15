@@ -1,3 +1,12 @@
+//! Stable Diffusion
+//!
+//! Stable Diffusion is a latent text-to-image diffusion model capable of
+//! generating photo-realistic images given any text input.
+//!
+//! - [Original Repository](https://github.com/CompVis/stable-diffusion)
+//! - [Hugging Face](https://huggingface.co/runwayml/stable-diffusion-v1-5)
+//!
+
 pub mod attention;
 pub mod clip;
 pub mod ddim;

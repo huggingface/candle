@@ -1,3 +1,10 @@
+//! Implementation of the DINOv2 revision (4 regularization)
+//!
+//! See:
+//! - DINOv2: ["DINOv2: Learning Robust Visual Features without Supervision"](https://github.com/facebookresearch/dinov2)
+//!
+//! This code implements the regularization tokens version with 4 regularization tokens.
+//!
 use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 

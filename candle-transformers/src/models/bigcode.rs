@@ -1,3 +1,10 @@
+//! BigCode implementation in Rust based on the GPT-BigCode model.
+//!
+//! See "StarCoder: A State-of-the-Art LLM for Code", Mukherjee et al. 2023
+//! - [Arxiv](https://arxiv.org/abs/2305.06161)
+//! - [Github](https://github.com/bigcode-project/starcoder)
+//!
+
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, linear_b as linear, Embedding, LayerNorm, Linear, Module, VarBuilder};
 

@@ -1,5 +1,19 @@
-// T5 Text Model
-// https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
+//! T5 model implementation.
+//!
+//! T5 (Text-to-Text Transfer Transformer) is a unified text-to-text transformer model.
+//! This implementation follows the original model architecture.
+//!
+//! Key characteristics:
+//! - Text-to-text framework
+//! - Relative positional embeddings
+//! - T5-specific layer normalization
+//! - Encoder-decoder architecture
+//! - Support for sequence-to-sequence tasks
+//!
+//! References:
+//! - [T5 Paper](https://arxiv.org/abs/1910.10683)
+//! - [HuggingFace T5](https://huggingface.co/docs/transformers/model_doc/t5)
+//! - [GH Model](https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py)
 
 use crate::models::with_tracing::Embedding;
 use candle::{DType, Device, Module, Result, Tensor, D};
