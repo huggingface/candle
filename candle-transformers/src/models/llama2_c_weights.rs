@@ -1,3 +1,9 @@
+//! Llama2 inference implementation.
+//!
+//! See ["LLaMA 2: Open Foundation and Fine-Tuned Chat Models"](https://arxiv.org/abs/2307.09288)
+//!
+//! Based on implementation from Meta's official Llama2 release
+
 use byteorder::{LittleEndian, ReadBytesExt};
 use candle::{DType, Device, IndexOp, Result, Shape, Tensor};
 use candle_nn::VarBuilder;

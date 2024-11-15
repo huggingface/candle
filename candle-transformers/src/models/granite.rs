@@ -1,3 +1,10 @@
+//! Granite is a Long Context Transformer Language Model.
+//!
+//! A high performance transformer model optimized for efficient processing
+//! of very long context sequences
+//!
+//! Based on implementation from [Nod.ai](https://github.com/nod-ai/granite)
+
 use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
