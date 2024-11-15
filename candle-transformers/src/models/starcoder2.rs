@@ -15,7 +15,6 @@
 //! - [Model Card](https://huggingface.co/bigcode/starcoder)
 //!
 
-#![allow(unused)]
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, linear_b, LayerNorm, Linear, VarBuilder};
 use std::sync::Arc;
