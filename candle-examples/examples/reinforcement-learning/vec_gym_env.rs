@@ -2,6 +2,7 @@
 use candle::{DType, Device, Result, Tensor};
 use pyo3::prelude::*;
 
+#[allow(unused)]
 #[derive(Debug)]
 pub struct Step {
     pub obs: Tensor,
@@ -9,6 +10,7 @@ pub struct Step {
     pub is_done: Tensor,
 }
 
+#[allow(unused)]
 pub struct VecGymEnv {
     env: PyObject,
     action_space: usize,
@@ -19,6 +21,7 @@ fn w(res: PyErr) -> candle::Error {
     candle::Error::wrap(res)
 }
 
+#[allow(unused)]
 impl VecGymEnv {
     pub fn new(name: &str, img_dir: Option<&str>, nprocesses: usize) -> Result<VecGymEnv> {
         Python::with_gil(|py| {

@@ -166,6 +166,7 @@ fn track(
     Ok(())
 }
 
+#[allow(unused)]
 struct Actor<'a> {
     varmap: VarMap,
     vb: VarBuilder<'a>,
@@ -210,7 +211,7 @@ impl Actor<'_> {
         let target_network = make_network("target-actor")?;
 
         // this sets the two networks to be equal to each other using tau = 1.0
-        track(&mut varmap, &vb, "target-actor", "actor", &dims, 1.0);
+        track(&mut varmap, &vb, "target-actor", "actor", &dims, 1.0)?;
 
         Ok(Self {
             varmap,
@@ -243,6 +244,7 @@ impl Actor<'_> {
     }
 }
 
+#[allow(unused)]
 struct Critic<'a> {
     varmap: VarMap,
     vb: VarBuilder<'a>,
@@ -286,7 +288,7 @@ impl Critic<'_> {
         let target_network = make_network("target-critic")?;
 
         // this sets the two networks to be equal to each other using tau = 1.0
-        track(&mut varmap, &vb, "target-critic", "critic", &dims, 1.0);
+        track(&mut varmap, &vb, "target-critic", "critic", &dims, 1.0)?;
 
         Ok(Self {
             varmap,
@@ -321,6 +323,7 @@ impl Critic<'_> {
     }
 }
 
+#[allow(unused)]
 #[allow(clippy::upper_case_acronyms)]
 pub struct DDPG<'a> {
     actor: Actor<'a>,
