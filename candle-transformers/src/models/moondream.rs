@@ -1,4 +1,4 @@
-//! MoonDream Model provides vision-to-text capabilities based on Microsoft's Phi architecture
+//! MoonDream Model vision-to-text
 //!
 //! The model consists of:
 //! - Vision encoder using a ViT-style architecture

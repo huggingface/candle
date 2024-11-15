@@ -1,3 +1,9 @@
+//! BERT (Bidirectional Encoder Representations from Transformers)
+//!
+//! See "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding", Devlin et al. 2018
+//! - [Arxiv](https://arxiv.org/abs/1810.04805)
+//! - [Github](https://github.com/google-research/bert)
+//!
 use super::with_tracing::{layer_norm, linear, LayerNorm, Linear};
 use candle::{DType, Device, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};

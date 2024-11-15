@@ -1,6 +1,6 @@
-//! Persimmon Model, a transformer language model for efficient inference and general-purpose tasks
+//! Persimmon Model
 //!
-//! See Persimmon model details at:
+//! A transformer language model for efficient inference and general-purpose tasks. See Persimmon model details at:
 //! - [Hugging Face](https://huggingface.co/adept/persimmon-8b-base)
 //!
 //! The model uses a standard transformer architecture with:
