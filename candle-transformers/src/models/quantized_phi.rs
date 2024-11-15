@@ -1,3 +1,20 @@
+//! Phi2 model implementation with quantization support.
+//!
+//! Phi2 is a 2.7B parameter language model using scaled-up Transformer decoder architecture.
+//! This implementation provides quantization for reduced memory and compute usage.
+//!
+//! Key characteristics:
+//! - Partial attention with learned mixing to reduce quadratic costs
+//! - Layer reuse for improved inference efficiency
+//! - Linear transformations with scalar mixing
+//! - Rotary positional embeddings (RoPE)
+//! - Support for 8-bit quantization
+//!
+//! References:
+//! - [Phi2 Paper](https://arxiv.org/abs/2309.05463)
+//! - [Model Card](https://huggingface.co/microsoft/phi-2)
+//!
+
 use std::collections::HashMap;
 
 use candle::quantized::gguf_file;

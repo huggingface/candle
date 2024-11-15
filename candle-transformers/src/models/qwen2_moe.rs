@@ -1,3 +1,21 @@
+//! Qwen2 model implementation with Mixture of Experts support.
+//!
+//! Qwen2 is a large language model using sparse Mixture of Experts (MoE).
+//! This implementation provides support for sparsely activated MoE layers.
+//!
+//! Key characteristics:
+//! - Mixture of Experts architecture
+//! - Sparse expert activation
+//! - Shared expert routing mechanism
+//! - Grouped query attention (GQA)
+//! - RMSNorm for layer normalization
+//! - Rotary positional embeddings (RoPE)
+//!
+//! References:
+//! - [Qwen2 Paper](https://arxiv.org/abs/2401.08985)
+//! - [Model Card](https://huggingface.co/Qwen/Qwen2-7B-beta)
+//!
+
 use crate::models::with_tracing::{linear, linear_no_bias, Linear, RmsNorm};
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
