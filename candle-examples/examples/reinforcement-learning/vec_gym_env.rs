@@ -1,8 +1,6 @@
-#![allow(unused)]
 //! Vectorized version of the gym environment.
 use candle::{DType, Device, Result, Tensor};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 
 #[derive(Debug)]
 pub struct Step {

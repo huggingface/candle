@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::fmt::Display;
 
 use candle::{DType, Device, Error, Module, Result, Tensor, Var};
 use candle_nn::{
