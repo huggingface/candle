@@ -1,3 +1,9 @@
+//! Implementation of the Depth Anything model from FAIR.
+//!
+//! See:
+//! - ["Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data"](https://github.com/LiheYoung/Depth-Anything)
+//!
+
 use candle::D::Minus1;
 use candle::{Module, Result, Tensor};
 use candle_nn::ops::Identity;

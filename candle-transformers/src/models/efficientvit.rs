@@ -1,9 +1,8 @@
 //! EfficientViT (MSRA) inference implementation based on timm.
 //!
-//! See "EfﬁcientViT: Memory Efﬁcient Vision Transformer with Cascaded Group Attention"
-//! https://arxiv.org/abs/2305.07027
-
-//! https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/efficientvit_msra.py
+//! See ["EfficientViT: Memory Efficient Vision Transformer with Cascaded Group Attention"](https://arxiv.org/abs/2305.07027)
+//!
+//! Based on implementation from [pytorch-image-models](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/efficientvit_msra.py)
 
 use candle::{Result, Tensor, D};
 use candle_nn::{
