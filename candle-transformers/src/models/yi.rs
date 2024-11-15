@@ -1,4 +1,18 @@
-/// https://huggingface.co/01-ai/Yi-6B/blob/main/modeling_yi.py
+//! Yi model implementation.
+//!
+//! Yi is a decoder-only large language model trained by 01.AI.
+//! It follows a standard transformer architecture similar to Llama.
+//!
+//! Key characteristics:
+//! - Multi-head attention with rotary positional embeddings
+//! - RMS normalization
+//! - SwiGLU activation in feed-forward layers
+//! - Grouped-query attention for efficient inference
+//!
+//! References:
+//! - [Yi Model](https://huggingface.co/01-ai/Yi-6B)
+//! - [Hugging Face](https://huggingface.co/01-ai/Yi-6B/blob/main/modeling_yi.py)
+
 use crate::models::with_tracing::{linear_no_bias, Linear, RmsNorm};
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};

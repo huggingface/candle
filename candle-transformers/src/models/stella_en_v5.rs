@@ -1,3 +1,20 @@
+//! Stella v5 model implementation.
+//!
+//! Stella is a dense text embedding model optimized for retrieval and similarity tasks.
+//! This implementation provides support for multiple embedding dimensions.
+//!
+//! Key characteristics:
+//! - Dense text embeddings optimized for similarity search
+//! - Multiple output dimension support (256 to 8192)
+//! - Grouped query attention (GQA)
+//! - RMSNorm for layer normalization
+//! - Rotary positional embeddings (RoPE)
+//!
+//! References:
+//! - [MRL Framework](https://arxiv.org/abs/2205.13147)
+//! - [Model Card](https://huggingface.co/dunzhang/stella_en_1.5B_v5)
+//!
+
 use crate::models::with_tracing::{linear, linear_no_bias, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn::{Activation, VarBuilder};
