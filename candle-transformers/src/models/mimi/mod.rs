@@ -1,9 +1,13 @@
-// Adapted from the reference implementation at:
-// https://github.com/kyutai-labs/moshi
+//! mimi model
+//!
+//! mimi is a neural net model for speech generation and conversion.
+//!
+//! - [GH Link](https://github.com/kyutai-labs/mimi)
+//!
+
 // Copyright (c) Kyutai, all rights reserved.
 // This source code is licensed under the license found in the
 // LICENSE file in the root directory of this source tree.
-
 pub use candle;
 pub use candle_nn;
 
