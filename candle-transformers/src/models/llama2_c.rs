@@ -2,7 +2,7 @@
 //!
 //! See ["LLaMA 2: Open Foundation and Fine-Tuned Chat Models"](https://arxiv.org/abs/2307.09288)
 //!
-//! Based on implementation from Meta's official Llama2 release
+//! Based on the [llama2.c](https://github.com/karpathy/llama2.c) implementation
 
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::linear_no_bias as linear;
