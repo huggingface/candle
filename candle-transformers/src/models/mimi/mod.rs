@@ -1,8 +1,9 @@
 //! mimi model
 //!
-//! mimi is a neural net model for speech generation and conversion.
+//! Mimi is a state-of-the-art audio neural codec.
 //!
-//! - [GH Link](https://github.com/kyutai-labs/mimi)
+//! - [HuggingFace Model Card](https://huggingface.co/kyutai/mimi)
+//! - [GitHub](https://github.com/kyutai-labs/moshi)
 //!
 
 // Copyright (c) Kyutai, all rights reserved.
