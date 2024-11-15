@@ -1,8 +1,24 @@
 //! BigCode implementation in Rust based on the GPT-BigCode model.
 //!
-//! See "StarCoder: A State-of-the-Art LLM for Code", Mukherjee et al. 2023
+//! [StarCoder/BigCode](https://huggingface.co/bigcode/starcoderbase-1b) is a LLM
+//! model specialized to code generation. The initial model was trained on 80
+//! programming languages. See "StarCoder: A State-of-the-Art LLM for Code", Mukherjee et al. 2023
 //! - [Arxiv](https://arxiv.org/abs/2305.06161)
 //! - [Github](https://github.com/bigcode-project/starcoder)
+//!
+//! ## Running some example
+//!
+//! ```bash
+//! cargo run --example bigcode --release -- --prompt "fn fact(n: u64) -> u64"
+//!
+//! > fn fact(n: u64) -> u64  {
+//! >     if n == 0 {
+//! >         1
+//! >     } else {
+//! >         n * fact(n - 1)
+//! >     }
+//! > }
+//! ```
 //!
 
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
