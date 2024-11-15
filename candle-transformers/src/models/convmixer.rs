@@ -1,3 +1,10 @@
+//! ConvMixer implementation.
+//!
+//! See "Patches Are All You Need?" by Trockman et al. 2022
+//! - [Arxiv](https://arxiv.org/abs/2201.09792)
+//! - [Github](https://github.com/locuslab/convmixer)
+//!
+
 use candle::Result;
 use candle_nn::{batch_norm, Conv2dConfig, Module, VarBuilder};
 

@@ -1,3 +1,10 @@
+//! Based on the BLIP paper from Salesforce Research.
+//!
+//! See "BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation"
+//! - [Arxiv](https://arxiv.org/abs/2201.12086)
+//! - [Github](https://github.com/salesforce/BLIP)
+//!
+
 use super::blip_text;
 use super::with_tracing::{conv2d, linear, Conv2d, Linear};
 use candle::{Module, Result, Tensor, D};
