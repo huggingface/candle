@@ -1,8 +1,61 @@
 //! BERT (Bidirectional Encoder Representations from Transformers)
 //!
-//! See "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding", Devlin et al. 2018
-//! - [Arxiv](https://arxiv.org/abs/1810.04805)
-//! - [Github](https://github.com/google-research/bert)
+//! Bert is a general large language model that can be used for various language tasks:
+//! - Compute sentence embeddings for a prompt.
+//! - Compute similarities between a set of sentences.
+//! - [Arxiv](https://arxiv.org/abs/1810.04805) "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
+//! - Upstream [Github repo](https://github.com/google-research/bert).
+//! - See bert in [candle-examples](https://github.com/huggingface/candle/tree/main/candle-examples/) for runnable code
+//!
+//! ```no_run
+//! // for sentence embeddings
+//! # use candle_core::Tensor;
+//! # use candle_nn::{VarBuilder, Module};
+//! # fn main() -> candle_core::Result<()> {
+//! # let model = todo!();
+//! # let prompt = "Here is a test sentence";
+//! let embeddings = model.forward(prompt)?;
+//! // Returns tensor of shape [1, 7, 384]
+//! println!("{embeddings}");
+//! # Ok(())
+//! # }
+//!
+//! // Different models can be loaded using the model ID
+//! # use candle_core::Tensor;
+//! # use candle_nn::{VarBuilder, Module};
+//! # fn main() -> candle_core::Result<()> {
+//! # let vb = todo!();
+//! # let config = todo!();
+//! let model = BertModel::load(vb, &config )?;
+//! # Ok(())
+//! # }
+//!
+//! // Gelu approximation
+//! // You can get a speedup by configuring the model
+//! // to use an approximation of the gelu activation:
+//! # use candle_core::Tensor;
+//! # use candle_nn::{VarBuilder, Module};
+//! # fn main() -> candle_core::Result<()> {
+//! # let mut config = todo!();
+//! config.hidden_act = HiddenAct::GeluApproximate;
+//! # Ok(())
+//! # }
+//!
+//! // Similarities
+//! // Bert can compute sentence embeddings which can then be used to calculate
+//! // semantic similarities between sentences through cosine similarity scoring.
+//! // The sentence embeddings are computed using average pooling across all tokens.
+//! # use candle_core::Tensor;
+//! # use candle_nn::{VarBuilder, Module};
+//! # fn main() -> candle_core::Result<()> {
+//! # let model = todo!();
+//! let sentence1 = "The new movie is awesome";
+//! let sentence2 = "The new movie is so great";
+//! let emb1 = model.forward(sentence1)?;
+//! let emb2 = model.forward(sentence2)?;
+//! # Ok(())
+//! # }
+//! ```
 //!
 use super::with_tracing::{layer_norm, linear, LayerNorm, Linear};
 use candle::{DType, Device, Result, Tensor};
