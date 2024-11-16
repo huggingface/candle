@@ -31,7 +31,7 @@
 //! The model returns the probability for the image to belong to each of the 1000 ImageNet categories.
 //!
 //! <div align=center>
-//!   <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.jpg" alt="" width=320>
+//!   <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.jpg" alt="" width=640>
 //! </div>
 //!
 //! ```bash
