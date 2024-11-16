@@ -6,11 +6,12 @@
 //! points to be part of the background so _not_ in the target mask, specifying some
 //! bounding box).
 //!
-//! - [GH Link](https://github.com/facebookresearch/segment-anything)
-//! - [Paper](https://arxiv.org/abs/2304.02643)
-//! - [Interactive Wasm Example](https://huggingface.co/spaces/radames/candle-segment-anything-wasm)
-//! - The default backbone can be replaced by the smaller and faster TinyViT model
+//! - ⚡ [Interactive Wasm Example](https://huggingface.co/spaces/radames/candle-segment-anything-wasm)
+//! - 💻 [GH Link](https://github.com/facebookresearch/segment-anything)
+//! - 📝 [Paper](https://arxiv.org/abs/2304.02643)
+//! - 💡 The default backbone can be replaced by the smaller and faster TinyViT model
 //! based on [MobileSAM](https://github.com/ChaoningZhang/MobileSAM).
+//!
 //!
 //! ## Example
 //!
