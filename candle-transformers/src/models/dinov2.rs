@@ -1,8 +1,29 @@
 //! Implementation of the DINOv2 models from Meta Research.
 //!
-//! See:
-//! - DINOv2: ["DINOv2: Learning Robust Visual Features without Supervision"](https://github.com/facebookresearch/dinov2)
+//! This module implements the DINOv2 vision transformer model from Meta AI Research.
+//! DINOv2 is a self-supervised learning model that can learn visual features
+//! without using any labeled data. See: ["DINOv2: Learning Robust Visual Features without Supervision"](https://github.com/facebookresearch/dinov2)
 //!
+//! # Example usage:
+//!
+//! ```rust,no_run
+//! # use candle::Result;
+//! # fn main() -> Result<()> {
+//! use candle_transformers::dinov2::vit_small;
+//! let model = vit_small(vb)?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Running an example with color map and CUDA
+//!
+//! ```bash
+//! cargo run --features cuda,depth_anything_v2 \
+//!   --package candle-examples \
+//!   --example depth_anything_v2
+//!   -- --color-map --image candle-examples/examples/yolo-v8/assets/bike.jpg
+//! ```
+
 use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 
