@@ -1,9 +1,34 @@
 //! Implementation of the DINOv2 revision (4 regularization)
 //!
-//! See:
-//! - DINOv2: ["DINOv2: Learning Robust Visual Features without Supervision"](https://github.com/facebookresearch/dinov2)
+//! The DINOv2-reg4 model is a variant of DINOv2 that adds 4 regularization tokens to the
+//! original architecture. This implementation is specifically trained for plant species
+//! classification on the PlantCLEF2024 dataset with 7,806 classes.
 //!
-//! This code implements the regularization tokens version with 4 regularization tokens.
+//! - [Paper](https://arxiv.org/abs/2309.16588). DINOv2: Learning Robust Visual Features without Supervision
+//! - [GH Repo](https://github.com/facebookresearch/dinov2)
+//!
+//! # Example
+//!
+//! ```bash
+//! # Download classes names and a plant picture to identify
+//! # see candle/examples/dinov2reg4 for full code.
+//!
+//! # Perform inference
+//! cargo run \
+//!   --example dinov2reg4 \
+//!   --release -- \
+//!   --image <orchid-file>
+//!
+//! > Orchis simia Lam.       : 45.55%
+//! > Orchis × bergonii Nanteuil: 9.80%
+//! > Orchis italica Poir.    : 9.66%
+//! > Orchis × angusticruris Franch.: 2.76%
+//! > Orchis × bivonae Tod.   : 2.54%
+//! ```
+//!
+//! <div align=center>
+//!   <img src="https://bs.plantnet.org/image/o/bd2d3830ac3270218ba82fd24e2290becd01317c" alt="" width=320>
+//! </div>
 //!
 use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
