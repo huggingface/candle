@@ -1,10 +1,33 @@
 //! Segment Anything Model (SAM)
 //!
 //! SAM is an architecture for image segmentation, capable of segmenting any object
-//! in an image based on prompts like points or boxes.
+//! in an image based on prompts like points or boxes. //! This model provides a robust and fast image segmentation pipeline that can be tweaked via
+//! some prompting (requesting some points to be in the target mask, requesting some
+//! points to be part of the background so _not_ in the target mask, specifying some
+//! bounding box).
 //!
 //! - [GH Link](https://github.com/facebookresearch/segment-anything)
 //! - [Paper](https://arxiv.org/abs/2304.02643)
+//! - [Interactive Wasm Example](https://huggingface.co/spaces/radames/candle-segment-anything-wasm)
+//! - The default backbone can be replaced by the smaller and faster TinyViT model
+//! based on [MobileSAM](https://github.com/ChaoningZhang/MobileSAM).
+//!
+//! ## Example
+//!
+//! ```bash
+//! cargo run --example segment-anything --release -- \
+//!     --image candle-examples/examples/yolo-v8/assets/bike.jpg
+//!     --use-tiny --point 0.6,0.6 --point 0.6,0.55
+//! ```
+//!
+//! <div align=center style="display: flex; justify-content: center; gap: 10px;">
+//!   <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.jpg" alt="" width="30%">
+//!   <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/segment-anything/assets/single_pt_prompt.jpg" alt="" width="30%">
+//!   <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/segment-anything/assets/two_pt_prompt.jpg" alt="" width="30%">
+//! </div>
+//!
+//!
+//! > Original; Prompt with `--point 0.6,0.55`; Prompt with `--point 0.6,0.6 --point 0.6,0.55`
 //!
 pub use crate::models::with_tracing::Linear;
 use candle::{Result, Tensor};
