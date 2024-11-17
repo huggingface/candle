@@ -1,3 +1,14 @@
+//! Candle is a minimalist ML framework with a focus on performance and ease of use.
+//!
+//! This crate provides implementations of popular machine learning models and architectures.
+//! These include:
+//! * Transformer models like [`bert`], [`t5`], [`llama`], [`mistral`] etc.
+//! * Vision models like [`resnet`], [`vit`], [`convnext`], etc.
+//! * Audio models like [`whisper`].
+//! * Multi-modal models like [`blip`]  and [`llava`].
+//!
+//! The implementations aim to be readable while maintaining good performance.
+
 pub mod based;
 pub mod beit;
 pub mod bert;
