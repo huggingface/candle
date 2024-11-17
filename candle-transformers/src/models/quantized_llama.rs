@@ -12,6 +12,7 @@
 //!
 //! - 💻 [GH Link](https://github.com/facebookresearch/llama)
 //! - 📝 [Paper](https://arxiv.org/abs/2302.13971)
+//!
 //! ![](https://raw.githubusercontent.com/huggingface/candle/main/candle-examples/examples/quantized/assets/aoc.gif)
 //!
 
