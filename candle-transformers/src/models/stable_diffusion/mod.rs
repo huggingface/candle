@@ -3,9 +3,9 @@
 //! Stable Diffusion is a latent text-to-image diffusion model capable of
 //! generating photo-realistic images given any text input.
 //!
-//! - [Original Repository](https://github.com/CompVis/stable-diffusion)
-//! - [Hugging Face](https://huggingface.co/runwayml/stable-diffusion-v1-5)
-//! -  The default scheduler for the v1.5, v2.1 and XL 1.0 version is the Denoising Diffusion Implicit Model scheduler (DDIM). The original paper and some code can be found in the [associated repo](https://github.com/ermongroup/ddim). The default scheduler for the XL Turbo version is the Euler Ancestral scheduler.
+//! - 💻 [Original Repository](https://github.com/CompVis/stable-diffusion)
+//! - 🤗 [Hugging Face](https://huggingface.co/runwayml/stable-diffusion-v1-5)
+//! - The default scheduler for the v1.5, v2.1 and XL 1.0 version is the Denoising Diffusion Implicit Model scheduler (DDIM). The original paper and some code can be found in the [associated repo](https://github.com/ermongroup/ddim). The default scheduler for the XL Turbo version is the Euler Ancestral scheduler.
 //!
 //!
 //! # Example
