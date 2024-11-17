@@ -1,4 +1,4 @@
-//! Candle is a minimalist ML framework with a focus on performance and ease of use.
+//! Candle Implementaitons of many Transformer models
 //!
 //! This crate provides implementations of popular machine learning models and architectures.
 //! These include:
