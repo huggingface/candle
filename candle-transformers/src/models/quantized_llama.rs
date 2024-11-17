@@ -10,9 +10,9 @@
 //! - Optimized memory usage through quantization
 //! - Configurable model sizes and parameter counts
 //!
-//! References:
-//! - [LLaMA Paper](https://arxiv.org/abs/2302.13971)
-//! - [LLaMA Model](https://github.com/facebookresearch/llama)
+//! - 💻 [GH Link](https://github.com/facebookresearch/llama)
+//! - 📝 [Paper](https://arxiv.org/abs/2302.13971)
+//! ![](https://raw.githubusercontent.com/huggingface/candle/main/candle-examples/examples/quantized/assets/aoc.gif)
 //!
 
 use std::collections::HashMap;
