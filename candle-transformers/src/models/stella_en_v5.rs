@@ -3,29 +3,45 @@ use candle::{DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
+ // internal representation for identifying which model is being used
+ #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub enum ModelVariant {
+    Large, // 1.5B
+    Small  // 400M
+}
+
+impl Default for ModelVariant {
+    fn default() -> Self {
+        Self::Large
+    }
+}
+
 // Same as `qwen2` family of models with the exception being the `embed_head`
 // The final `output` causal modelling head is swapped with a learned `dense` layer, `embed_head`
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
+    pub variant: ModelVariant,
     pub vocab_size: usize,
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
     pub max_position_embeddings: usize,
-    pub max_window_layers: usize,
-    pub tie_word_embeddings: bool,
     pub rope_theta: f64,
-    pub rms_norm_eps: f64,
-    pub hidden_act: Activation,
     pub embed_head: EmbedHead,
+    pub norm_eps: f64, // RMSNorm for 1.5B || LayerNorm for 400M
+    pub activation_fn: Activation, // Silu for 1.5B || Gelu for 400M
+    // Unique to 1.5B
+    pub num_key_value_heads: usize,
+    // Unique to 400M
+    pub type_vocab_size: usize,
+    pub scaling_factor: f64,
 }
 
 // Excerpt from `stella` model card:
 // `Stella_en_1.5B_v5` models have been trained on [MRL](https://arxiv.org/abs/2205.13147) enabling multiple output dimensions
 // Embed head represents the config for various embedding dims supported
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, serde::Deserialize)]
 pub struct EmbedHead {
     pub in_features: usize,
     pub out_features: usize,
@@ -51,9 +67,9 @@ impl Default for EmbedDim {
 }
 
 impl EmbedDim {
-    pub fn config(&self) -> EmbedHead {
+    pub fn config(&self, in_features: usize) -> EmbedHead {
         EmbedHead {
-            in_features: 1536,
+            in_features,
             out_features: match &self {
                 Self::Dim256 => 256,
                 Self::Dim768 => 768,
@@ -74,7 +90,8 @@ impl Config {
         // Representing config.json at https://huggingface.co/dunzhang/stella_en_1.5B_v5/blob/main/config.json
         // Removed `sliding_window` related config which is basically being carried forward from `qwen2` but not used here
         Self {
-            hidden_act: candle_nn::Activation::Silu,
+            variant: ModelVariant::Large,
+            activation_fn: candle_nn::Activation::Silu,
             vocab_size: 151646,
             hidden_size: 1536,
             intermediate_size: 8960,
@@ -82,11 +99,32 @@ impl Config {
             num_attention_heads: 12,
             num_key_value_heads: 2,
             max_position_embeddings: 131072,
-            max_window_layers: 21,
-            tie_word_embeddings: false,
+            // max_window_layers: 21,
+            // tie_word_embeddings: false,
             rope_theta: 1000000.,
-            rms_norm_eps: 1e-06,
-            embed_head: embed_dim.config(),
+            norm_eps: 1e-06,
+            embed_head: embed_dim.config(1536),
+            ..Default::default()
+        }
+    }
+
+    /// Initialize new `stella_en_400M_v5`
+    pub fn new_400_m_v5(embed_dim: EmbedDim) -> Self {
+        Self {
+            variant: ModelVariant::Small,
+            vocab_size: 30528,
+            hidden_size: 1024,
+            intermediate_size: 4096,
+            num_hidden_layers: 24,
+            num_attention_heads: 16,
+            max_position_embeddings: 8192,
+            type_vocab_size: 2,
+            norm_eps: 1e-12,
+            scaling_factor: 2.0,
+            rope_theta: 160000.0,
+            activation_fn: Activation::Gelu,
+            embed_head: embed_dim.config(1024),
+            ..Default::default()
         }
     }
 }
@@ -100,23 +138,48 @@ struct RotaryEmbedding {
 impl RotaryEmbedding {
     fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
         let dim = cfg.hidden_size / cfg.num_attention_heads;
-        let max_seq_len = cfg.max_position_embeddings;
+        // Factoring in `scaling factor` for `400M` variant
+        let max_seq_len = if cfg.scaling_factor == 0. {
+            cfg.max_position_embeddings
+        } else {
+            ((cfg.max_position_embeddings as f64) * cfg.scaling_factor) as usize
+        };
+
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
-            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+            .map(|i| {
+                // Scaled rope_theta for 400M variant
+                let rope_theta = if cfg.scaling_factor == 0. { cfg.rope_theta } else { cfg.rope_theta * cfg.scaling_factor };
+                let mut freq = 1. / rope_theta.powf(i as f64 / dim as f64);
+
+                if cfg.scaling_factor != 0. {
+                    freq /= cfg.scaling_factor.powf(2.0 / (dim as f64))
+                }
+
+                freq as f32
+                
+            })
             .collect();
+
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
+
+        // Calculate position embeddings with scaled sequence length
         let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
             .to_dtype(dtype)?
             .reshape((max_seq_len, 1))?;
-        let freqs = t.matmul(&inv_freq)?;
+        let mut freqs = t.matmul(&inv_freq)?;
+        if cfg.variant == ModelVariant::Small {
+            freqs = Tensor::cat(&[&freqs, &freqs], 1)?
+        }
+
         Ok(Self {
             sin: freqs.sin()?,
             cos: freqs.cos()?,
         })
     }
-
+    
+    // TODO: re-visit this
     fn apply_rotary_emb_qkv(&self, q: &Tensor, k: &Tensor) -> Result<(Tensor, Tensor)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, 0, seq_len)?;
@@ -126,6 +189,12 @@ impl RotaryEmbedding {
         Ok((q_embed, k_embed))
     }
 }
+
+// impl Module for EmbeddingLayer {
+//     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        
+//     }
+// }
 
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
@@ -147,7 +216,7 @@ impl MLP {
             gate_proj,
             up_proj,
             down_proj,
-            act_fn: cfg.hidden_act,
+            act_fn: cfg.activation_fn,
         })
     }
 }
@@ -255,10 +324,10 @@ impl DecoderLayer {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
-            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+            RmsNorm::new(cfg.hidden_size, cfg.norm_eps, vb.pp("input_layernorm"))?;
         let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
-            cfg.rms_norm_eps,
+            cfg.norm_eps,
             vb.pp("post_attention_layernorm"),
         )?;
         Ok(Self {
@@ -301,7 +370,7 @@ impl Model {
             let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
-        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let norm = RmsNorm::new(cfg.hidden_size, cfg.norm_eps, vb_m.pp("norm"))?;
         Ok(Self {
             embed_tokens,
             layers,
@@ -343,7 +412,7 @@ impl Model {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct EmbeddingModel {
     base_model: Model,
     lm_head: Linear,
@@ -355,7 +424,7 @@ impl EmbeddingModel {
         let lm_head = linear(
             cfg.embed_head.in_features,
             cfg.embed_head.out_features,
-            embed_vb.pp("linear"),
+            embed_vb.pp("linear")
         )?;
 
         Ok(Self {
