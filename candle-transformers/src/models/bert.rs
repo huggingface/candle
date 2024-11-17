@@ -7,19 +7,7 @@
 //! - Upstream [Github repo](https://github.com/google-research/bert).
 //! - See bert in [candle-examples](https://github.com/huggingface/candle/tree/main/candle-examples/) for runnable code
 //!
-//! ```ignore
-//! // for sentence embeddings
-//! # use candle_core::Tensor;
-//! # use candle_nn::{VarBuilder, Module};
-//! # fn main() -> candle_core::Result<()> {
-//! # let model = todo!();
-//! # let prompt = "Here is a test sentence";
-//! let embeddings = model.forward(prompt)?;
-//! // Returns tensor of shape [1, 7, 384]
-//! println!("{embeddings}");
-//! # Ok(())
-//! # }
-//!
+//! ```rust,text
 //! // Different models can be loaded using the model ID
 //! # use candle_core::Tensor;
 //! # use candle_nn::{VarBuilder, Module};
@@ -27,6 +15,18 @@
 //! # let vb = todo!();
 //! # let config = todo!();
 //! let model = BertModel::load(vb, &config )?;
+//! # Ok(())
+//! # }
+//!
+//! // for sentence embeddings
+//! # use candle_core::Tensor;
+//! # use candle_nn::{VarBuilder, Module};
+//! # fn main() -> candle_core::Result<()> {
+//! # let model = todo!();
+//! let prompt = "Here is a test sentence";
+//! let embeddings = model.forward(prompt)?;
+//! // Returns tensor of shape [1, 7, 384]
+//! println!("{embeddings}");
 //! # Ok(())
 //! # }
 //!
