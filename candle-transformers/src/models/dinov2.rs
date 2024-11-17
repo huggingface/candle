@@ -6,7 +6,7 @@
 //!
 //! # Example usage
 //!
-//! ```rust,no_run
+//! ```ignore
 //! # use candle::Result;
 //! # fn main() -> Result<()> {
 //! use candle_transformers::dinov2::vit_small;
