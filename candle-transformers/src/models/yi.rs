@@ -1,7 +1,12 @@
 //! Yi model implementation.
 //!
-//! Yi is a decoder-only large language model trained by 01.AI.
-//! It follows a standard transformer architecture similar to Llama.
+//! This candle implementation uses a pre-trained Yi decoder-only large language model for inference.
+//! The model was trained by 01.AI and follows a standard transformer architecture similar to LLaMA.
+//!
+//! Original code:
+//! - 💻 [Yi Model](https://huggingface.co/01-ai/Yi-6B)
+//! - 💻 [Yi Modeling Code](https://huggingface.co/01-ai/Yi-6B/blob/main/modeling_yi.py)
+//! - 📝 [Technical Report](https://arxiv.org/abs/2403.04652) Yi: Open Foundation Models by 01.AI
 //!
 //! Key characteristics:
 //! - Multi-head attention with rotary positional embeddings
@@ -9,9 +14,6 @@
 //! - SwiGLU activation in feed-forward layers
 //! - Grouped-query attention for efficient inference
 //!
-//! References:
-//! - [Yi Model](https://huggingface.co/01-ai/Yi-6B)
-//! - [Hugging Face](https://huggingface.co/01-ai/Yi-6B/blob/main/modeling_yi.py)
 
 use crate::models::with_tracing::{linear_no_bias, Linear, RmsNorm};
 use candle::{DType, Device, Module, Result, Tensor, D};
