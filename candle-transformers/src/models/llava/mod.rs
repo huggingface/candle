@@ -1,13 +1,12 @@
 //! The LLaVA (Large Language and Vision Assistant) model.
 //!
 //! This provides the main model implementation combining a vision tower (CLIP) with
-//! language model (Llama) for multimodal capabilities.
+//! language model (Llama) for multimodal capabilities. The architecture implements the training-free projection technique.
 //!
-//! The architecture implements the training-free projection technique from the paper:
-//! [Visual Instruction Tuning](https://arxiv.org/abs/2304.08485).
+//! - 💻[GH Link](https://github.com/haotian-liu/LLaVA/tree/main)
+//! - 📝 [Paper](https://arxiv.org/abs/2304.08485)/ Visual Instruction Tuning
 //!
-//! - [GH Link](https://github.com/haotian-liu/LLaVA/tree/main)
-//!
+
 pub mod config;
 pub mod utils;
 
