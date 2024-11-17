@@ -4,17 +4,6 @@
 //! DINOv2 is a self-supervised learning model that can learn visual features
 //! without using any labeled data. See: ["DINOv2: Learning Robust Visual Features without Supervision"](https://github.com/facebookresearch/dinov2)
 //!
-//! # Example usage
-//!
-//! ```rust,text
-//! # use candle::Result;
-//! # fn main() -> Result<()> {
-//! use candle_transformers::dinov2::vit_small;
-//! let model = vit_small(vb)?;
-//! # Ok(())
-//! # }
-//! ```
-//!
 //! ## Running an example with color map and CUDA
 //!
 //! ```bash
