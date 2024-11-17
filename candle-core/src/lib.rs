@@ -32,6 +32,20 @@
 //! Python can really add overhead in more complex workflows and the [GIL](https://www.backblaze.com/blog/the-python-gil-past-present-and-future/) is a notorious source of headaches.
 //!
 //! Rust is cool, and a lot of the HF ecosystem already has Rust crates [safetensors](https://github.com/huggingface/safetensors) and [tokenizers](https://github.com/huggingface/tokenizers)
+//!
+//! ## Other Crates
+//!
+//! Candle consists of a number of crates. This crate holds core the common data structures but you may wish
+//! to look at the docs for the other crates which can be found here:
+//!
+//! - [candle-core](https://docs.rs/candle-core/). Core Datastructures and DataTypes.
+//! - [candle-nn](https://docs.rs/candle-nn/). Building blocks for Neural Nets.
+//! - [candle-datasets](https://docs.rs/candle-datasets/). Rust access to commonly used Datasets like MNIST.
+//! - [candle-examples](https://docs.rs/candle-examples/). Examples of Candle in Use.
+//! - [candle-onnx](https://docs.rs/candle-onnx/). Loading and using ONNX models.
+//! - [candle-pyo3](https://docs.rs/candle-pyo3/). Access to Candle from Python.
+//! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implemntation of many published transformer models.
+//!
 
 #[cfg(feature = "accelerate")]
 mod accelerate;
@@ -77,7 +91,7 @@ mod variable;
 pub use cuda_backend::cudnn;
 
 pub use cpu_backend::{CpuStorage, CpuStorageRef};
-pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
+pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3, UgIOp1};
 pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
 pub use error::{Error, Result};

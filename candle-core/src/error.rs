@@ -166,6 +166,9 @@ pub enum Error {
     Metal(#[from] MetalError),
 
     #[error(transparent)]
+    Ug(#[from] ug::Error),
+
+    #[error(transparent)]
     TryFromIntError(#[from] core::num::TryFromIntError),
 
     #[error("npy/npz error {0}")]
@@ -178,6 +181,10 @@ pub enum Error {
     /// Integer parse error.
     #[error(transparent)]
     ParseInt(#[from] std::num::ParseIntError),
+
+    /// Utf8 parse error.
+    #[error(transparent)]
+    FromUtf8(#[from] std::string::FromUtf8Error),
 
     /// I/O error.
     #[error(transparent)]
