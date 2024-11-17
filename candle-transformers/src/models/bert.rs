@@ -7,7 +7,7 @@
 //! - Upstream [Github repo](https://github.com/google-research/bert).
 //! - See bert in [candle-examples](https://github.com/huggingface/candle/tree/main/candle-examples/) for runnable code
 //!
-//! ```no_run
+//! ```ignore
 //! // for sentence embeddings
 //! # use candle_core::Tensor;
 //! # use candle_nn::{VarBuilder, Module};
