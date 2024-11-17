@@ -3,10 +3,10 @@
 //! Pixtral is an architecture trained for multimodal learning
 //! using images paired with text descriptions.
 //!
-//! - Transformers Python [reference implementation](https://github.com/huggingface/transformers/tree/main/src/transformers/models/pixtral)
-//! - [Blog Post](https://mistral.ai/news/pixtral-12b/) -
-//! - [HF Model Card](https://huggingface.co/mistralai/Pixtral-12B-2409) -
-//! - [HF Community Model Card](https://huggingface.co/mistral-community/pixtral-12b).
+//! - 💻 Transformers Python [reference implementation](https://github.com/huggingface/transformers/tree/main/src/transformers/models/pixtral)
+//! - 📝 [Blog Post](https://mistral.ai/news/pixtral-12b/)
+//! - 🤗 [HF Model Card](https://huggingface.co/mistralai/Pixtral-12B-2409)
+//! - 🤗 [HF Community Model Card](https://huggingface.co/mistral-community/pixtral-12b)
 //!
 //! # Example
 //!
