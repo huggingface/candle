@@ -1,9 +1,40 @@
 //! EfficientViT (MSRA) inference implementation based on timm.
 //!
-//! See ["EfficientViT: Memory Efficient Vision Transformer with Cascaded Group Attention"](https://arxiv.org/abs/2305.07027)
+//! This crate provides an implementation of the EfficientViT model from Microsoft Research Asia
+//! for efficient image classification. The model uses cascaded group attention modules
+//! to achieve strong performance while maintaining low memory usage.
 //!
-//! Based on implementation from [pytorch-image-models](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/efficientvit_msra.py)
-
+//! The model was originally described in the paper:
+//! ["EfficientViT: Memory Efficient Vision Transformer with Cascaded Group Attention"](https://arxiv.org/abs/2305.07027)
+//!
+//! This implementation is based on the reference implementation from
+//! [pytorch-image-models](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/efficientvit_msra.py).
+//!
+//! # Example Usage
+//!
+//! This candle implementation uses a pre-trained EfficientViT (from Microsoft Research Asia) network for inference.
+//! The classification head has been trained on the ImageNet dataset and returns the probabilities for the top-5 classes.
+//!
+//!
+//! ```bash
+//! cargo run
+//!   --example efficientvit \
+//!   --release -- \
+//!   --image candle-examples/examples/yolo-v8/assets/bike.jpg --which m1
+//!
+//! > loaded image Tensor[dims 3, 224, 224; f32]
+//! > model built
+//! > mountain bike, all-terrain bike, off-roader: 69.80%
+//! > unicycle, monocycle     : 13.03%
+//! > bicycle-built-for-two, tandem bicycle, tandem: 9.28%
+//! > crash helmet            : 2.25%
+//! > alp                     : 0.46%
+//! ```
+//!
+//! <div align=center>
+//!   <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.jpg" alt="" width=640>
+//! </div>
+//!
 use candle::{Result, Tensor, D};
 use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, linear, ops::sigmoid, ops::softmax, Conv2dConfig, Func,

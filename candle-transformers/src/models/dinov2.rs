@@ -1,8 +1,42 @@
 //! Implementation of the DINOv2 models from Meta Research.
 //!
-//! See:
-//! - DINOv2: ["DINOv2: Learning Robust Visual Features without Supervision"](https://github.com/facebookresearch/dinov2)
+//! This module implements the DINOv2 vision transformer model from Meta AI Research.
+//! DINOv2 is a self-supervised learning model that can learn visual features
+//! without using any labeled data. See: ["DINOv2: Learning Robust Visual Features without Supervision"](https://github.com/facebookresearch/dinov2)
 //!
+//! ## Running an example with color map and CUDA
+//!
+//! ```bash
+//! cargo run \
+//!   --features cuda,depth_anything_v2 \
+//!   --package candle-examples \
+//!   --example depth_anything_v2 \
+//!   -- --color-map \
+//!   --image candle-examples/examples/yolo-v8/assets/bike.jpg
+//! ```
+//!
+//! ## Running as an ImageNet classifier
+//!
+//! The model returns the probability for the image to belong to each of the 1000 ImageNet categories.
+//!
+//! <div align=center>
+//!   <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.jpg" alt="" width=640>
+//! </div>
+//!
+//! ```bash
+//! cargo run \
+//!   --example dinov2 \
+//!   --release \
+//!   -- --image candle-examples/examples/yolo-v8/assets/bike.jpg
+//!
+//! > mountain bike, all-terrain bike, off-roader: 43.67%
+//! > bicycle-built-for-two, tandem bicycle, tandem: 33.20%
+//! > crash helmet            : 13.23%
+//! > unicycle, monocycle     : 2.44%
+//! > maillot                 : 2.42%
+//! ```
+//!
+
 use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 
