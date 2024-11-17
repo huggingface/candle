@@ -2051,19 +2051,12 @@ impl MetalStorage {
     }
 
     pub(crate) fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
-        let size = (self.count * self.dtype.size_in_bytes()) as NSUInteger;
-
-        let buffer = self.device.new_buffer_managed(size)?;
-        {
-            let command_buffer = self.device.command_buffer()?;
-            command_buffer.set_label("to_cpu");
-            let blit = command_buffer.new_blit_command_encoder();
-            blit.set_label("blit_to_cpu");
-            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
-            blit.end_encoding();
-        }
         self.device.wait_until_completed()?;
-        Ok(read_to_vec(&buffer, self.count))
+
+        let ptr = self.buffer.contents() as *mut T;
+        assert!(!ptr.is_null());
+        let slice = unsafe { std::slice::from_raw_parts(ptr, self.count) };
+        Ok(slice.to_vec())
     }
 }
 
@@ -2081,7 +2074,7 @@ impl BackendDevice for MetalDevice {
         let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
             [299792458].as_ptr() as *const c_void,
             4,
-            MTLResourceOptions::StorageModeManaged,
+            MTLResourceOptions::StorageModeShared,
         )));
         let commands = device::Commands::new(command_queue)?;
         Ok(Self {
@@ -2301,11 +2294,4 @@ impl BackendDevice for MetalDevice {
     fn synchronize(&self) -> Result<()> {
         self.wait_until_completed()
     }
-}
-
-fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
-    let ptr = buffer.contents() as *const T;
-    assert!(!ptr.is_null());
-    let slice = unsafe { std::slice::from_raw_parts(ptr, n) };
-    slice.to_vec()
 }
