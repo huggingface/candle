@@ -8,6 +8,7 @@
 //! - 📝 [Paper](https://openreview.net/pdf?id=gU58AyJlYz)
 //!
 //! ## Example
+//!
 //! <div align=center>
 //!   <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/wuerstchen/assets/cat.jpg" alt="" width=320>
 //!   <p>"Anthropomorphic cat dressed as a fire fighter"</p>
