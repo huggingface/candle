@@ -14,6 +14,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
         rust: [stable]
+        python-version: ["3.11"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
