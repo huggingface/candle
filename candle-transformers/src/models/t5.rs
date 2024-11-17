@@ -12,7 +12,7 @@
 //!
 //! References:
 //! - ⚡ [Interactive Wasm Example](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm)
-//! -  💻[GH Model](https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py)
+//! - 💻[GH Model](https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py)
 //! - 🤗 [HF Link](https://huggingface.co/docs/transformers/model_doc/t5)
 //! - 📝 [T5 Paper](https://arxiv.org/abs/1910.10683)
 //!

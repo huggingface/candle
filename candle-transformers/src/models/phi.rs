@@ -1,18 +1,15 @@
 //! Microsoft Phi model implementation
 //!
-//! See Phi model details at:
-//! - [Phi-2 Model](https://huggingface.co/microsoft/phi-2)
-//!
 //! The Phi series are decoder-only transformers designed for code and language tasks.
+//!
 //! Key characteristics:
 //! - Decoder-only transformer architecture
 //! - RoPE embeddings
 //! - Layer normalization
 //! - QK normalization
 //!
-//! References:
-//! - [Hugging Face Implementation](https://huggingface.co/microsoft/phi-2)
-//! - [Alternative Implementation](https://huggingface.co/microsoft/phi-2/tree/main)
+//! - ⚡ [Interactive Wasm Example](https://huggingface.co/spaces/radames/Candle-phi1-phi2-wasm-demo)
+//! - 🤗 [HF Link](https://huggingface.co/microsoft/phi-2)
 //!
 
 use crate::models::with_tracing::{layer_norm, linear, Embedding, LayerNorm, Linear};
