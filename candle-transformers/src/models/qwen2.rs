@@ -11,8 +11,7 @@
 //! - Support for 8-bit quantization
 //!
 //! References:
-//! - [Qwen2 Model](https://huggingface.co/Qwen/Qwen2-7B)
-//! - [Model Card](https://huggingface.co/Qwen/Qwen2-7B)
+//! - 🤗 [Qwen2 Model](https://huggingface.co/Qwen/Qwen2-7B)
 //!
 
 use crate::models::with_tracing::{linear, linear_no_bias, Linear, RmsNorm};

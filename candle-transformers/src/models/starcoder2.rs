@@ -11,8 +11,8 @@
 //! - Support for 8-bit quantization
 //!
 //! References:
-//! - [StarCoder Paper](https://arxiv.org/abs/2305.06161)
-//! - [Model Card](https://huggingface.co/bigcode/starcoder)
+//! - 📝 [StarCoder Paper](https://arxiv.org/abs/2305.06161)
+//! - 🤗 [Model Card](https://huggingface.co/bigcode/starcoder)
 //!
 
 use candle::{DType, Device, Module, Result, Tensor, D};

@@ -11,9 +11,9 @@
 //! - Support for 8-bit quantization
 //!
 //! References:
-//! - [T5 Paper](https://arxiv.org/abs/1910.10683)
-//! - [Model Card](https://huggingface.co/t5-base)
-//! - Original model from [T5](https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py)
+//! - 📝 [T5 Paper](https://arxiv.org/abs/1910.10683)
+//! - 🤗 [Model Card](https://huggingface.co/t5-base)
+//! - 🤗 Original model from [T5](https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py)
 
 use crate::models::t5::{deserialize_feed_forward_proj_activation, ActivationWithOptionalGating};
 use crate::models::with_tracing::QMatMul;
