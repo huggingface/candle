@@ -49,7 +49,7 @@ impl Default for ChineseClipVisionConfig {
 }
 
 impl ChineseClipVisionConfig {
-    /// referer: https://huggingface.co/OFA-Sys/chinese-clip-vit-base-patch16/blob/main/config.json
+    /// [referer](https://huggingface.co/OFA-Sys/chinese-clip-vit-base-patch16/blob/main/config.json)
     pub fn clip_vit_base_patch16() -> Self {
         Self {
             hidden_size: 768,

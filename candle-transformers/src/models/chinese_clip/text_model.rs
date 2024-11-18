@@ -4,7 +4,7 @@
 //! pairs of images with related texts.
 //!
 //! - 💻 [Chinese-CLIP](https://github.com/OFA-Sys/Chinese-CLIP)
-//! - 💻 [HF](https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py_
+//! - 💻 [HF](https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py)
 
 use candle::{DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn as nn;

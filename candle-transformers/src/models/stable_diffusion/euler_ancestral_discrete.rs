@@ -1,8 +1,7 @@
 //! Ancestral sampling with Euler method steps.
 //!
-//! Based on the original [`k-diffusion` implementation by Katherine Crowson][kd].
+//! Based on the original [`k-diffusion` implementation by Katherine Crowson]( https://github.com/crowsonkb/k-diffusion/blob/481677d114f6ea445aa009cf5bd7a9cdee909e47/k_diffusion/sampling.py#L72).
 ///
-/// [kd]: https://github.com/crowsonkb/k-diffusion/blob/481677d114f6ea445aa009cf5bd7a9cdee909e47/k_diffusion/sampling.py#L72
 use super::{
     schedulers::{
         betas_for_alpha_bar, BetaSchedule, PredictionType, Scheduler, SchedulerConfig,
