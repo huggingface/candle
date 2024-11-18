@@ -1,8 +1,11 @@
 //! Based on the BLIP paper from Salesforce Research.
 //!
-//! See "BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation"
-//! - [Arxiv](https://arxiv.org/abs/2201.12086)
-//! - [Github](https://github.com/salesforce/BLIP)
+//! The blip-image-captioning model can generate captions for an input image.
+//!
+//! - ⚡ [Interactive Wasm Example](https://huggingface.co/spaces/radames/Candle-BLIP-Image-Captioning)
+//! - 💻 [GH Link](https://github.com/salesforce/BLIP)
+//! - 🤗 [HF Link](https://huggingface.co/Salesforce/blip-image-captioning-base)
+//! - 📝 [Paper](https://arxiv.org/abs/2201.12086)
 //!
 
 use super::blip_text;

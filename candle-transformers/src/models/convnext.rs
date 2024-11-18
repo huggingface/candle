@@ -1,13 +1,16 @@
 //! ConvNeXt implementation.
 //!
-//! See ["A ConvNet for the 2020s" Liu et al. 2022](https://arxiv.org/abs/2201.03545)
-//! and
-//! ["ConvNeXt V2: Co-designing and Scaling ConvNets with Masked Autoencoders" Woo et al. 2023](https://arxiv.org/abs/2301.00808)
+//! This candle implementation uses a pre-trained ConvNeXt network for inference. The
+//! classification head has been trained on the ImageNet dataset and returns the
+//! probabilities for the top-5 classes.
 //!
 //! Original code:
-//!  - [ConvNeXt](https://github.com/facebookresearch/ConvNeXt/)
-//!  - [ConvNeXt-V2](https://github.com/facebookresearch/ConvNeXt-V2/)
-//!  - [timm](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/convnext.py)
+//! - 💻 [ConvNeXt](https://github.com/facebookresearch/ConvNeXt/)
+//! - 💻 [ConvNeXt-V2](https://github.com/facebookresearch/ConvNeXt-V2/)
+//! - 💻 [timm](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/convnext.py)
+//! - 📝 [Paper](https://arxiv.org/abs/2201.03545) A ConvNet for the 2020s
+//! - 📝 [Paper](https://arxiv.org/abs/2301.00808) ConvNeXt V2: Co-designing and Scaling ConvNets with Masked Autoencoders
+//!
 
 use candle::shape::ShapeWithOneHole;
 use candle::{Result, D};

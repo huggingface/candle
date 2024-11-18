@@ -1,8 +1,9 @@
 //! CodeGeeX4 - A multi-language code generation model
 //!
-//! See "CodeGeeX: A Pre-Trained Model For Code Generation with Multilingual Evaluations on HumanEval-X", Qian et al. 2023
-//! - [Arxiv](https://arxiv.org/abs/2303.17568)
-//! - [Github](https://github.com/THUDM/CodeGeeX)
+//! A Pre-Trained Model For Code Generation with Multilingual Evaluations on HumanEval-X"
+//!
+//! - 📝 [Arxiv](https://arxiv.org/abs/2303.17568)
+//! - 💻 [Github](https://github.com/THUDM/CodeGeeX)
 //!
 
 use crate::models::with_tracing::{linear_b as linear, Linear};

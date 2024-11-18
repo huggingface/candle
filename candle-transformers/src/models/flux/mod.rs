@@ -2,9 +2,9 @@
 //!
 //! Flux is a 12B rectified flow transformer capable of generating images from text descriptions.
 //!
-//! - [Hugging Face Model](https://huggingface.co/black-forest-labs/FLUX.1-schnell)
-//! - [GitHub Repository](https://github.com/black-forest-labs/flux)
-//! - [Blog Post](https://blackforestlabs.ai/announcing-black-forest-labs/)
+//! - 🤗 [Hugging Face Model](https://huggingface.co/black-forest-labs/FLUX.1-schnell)
+//! - 💻 [GitHub Repository](https://github.com/black-forest-labs/flux)
+//! - 📝 [Blog Post](https://blackforestlabs.ai/announcing-black-forest-labs/)
 //!
 //! # Usage
 //!

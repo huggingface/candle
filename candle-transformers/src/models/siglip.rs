@@ -3,7 +3,7 @@
 //! Siglip architecture combining vision and language for zero-shot tasks.
 //!
 //! References:
-//! - [Model Card](https://huggingface.co/google/siglip-base-patch16-224)
+//! - 🤗 [Model Card](https://huggingface.co/google/siglip-base-patch16-224)
 //!
 
 use crate::models::clip::div_l2_norm;

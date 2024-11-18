@@ -10,7 +10,7 @@
 //! - Support for different model sizes (3B, 7B)
 //!
 //! References:
-//! - [Model Card](https://huggingface.co/stabilityai/stablelm-3b-4e1t)
+//! - 🤗 [Model Card](https://huggingface.co/stabilityai/stablelm-3b-4e1t)
 //!
 
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};

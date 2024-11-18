@@ -1,9 +1,8 @@
-//! [Hiera] inference implementation based on timm.
+//! Hiera inference implementation based on timm.
 //!
-//! See "[Hiera: A Hierarchical Vision Transformer without the Bells-and-Whistles]"
-//! [Hiera: A Hierarchical Vision Transformer without the Bells-and-Whistles]: https://arxiv.org/abs/2306.00989
 //!
-//! [Hiera]: https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/hiera.py
+//! - 💻 [Hiera](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/hiera.py)
+//! - 📝 [Paper](https://arxiv.org/abs/2306.00989). Hiera: A Hierarchical Vision Transformer without the Bells-and-Whistles
 
 use candle::{Result, D};
 use candle_nn::{conv2d, layer_norm, linear, ops::softmax, Conv2dConfig, Func, VarBuilder};

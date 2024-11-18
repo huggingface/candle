@@ -1,8 +1,5 @@
 //! RepVGG inference implementation
 //!
-//! See "RepVGG: Making VGG-style ConvNets Great Again" Ding et al. 2021
-//! https://arxiv.org/abs/2101.03697
-//!
 //! Key characteristics:
 //! - Efficient inference architecture through structural reparameterization
 //! - Single 3x3 conv layer after fusing 3x3 branch, 1x1 branch and identity branch
@@ -10,7 +7,7 @@
 //! - High accuracy with VGG-like plain architecture and training
 //!
 //! References:
-//! - [RepVGG Paper](https://arxiv.org/abs/2101.03697)
+//! - [RepVGG Paper](https://arxiv.org/abs/2101.03697). RepVGG: Making VGG-style ConvNets Great Again
 //! - [Official Implementation](https://github.com/DingXiaoH/RepVGG)
 //!
 
