@@ -152,9 +152,13 @@ impl ChineseClipTextEmbeddings {
 
         let word_embeddings = self.word_embeddings.forward(xs)?;
 
+        let iterated_ids; 
         let token_type_ids = match token_type_ids {
             Some(token_type_ids) => token_type_ids,
-            None => &self.token_type_ids.i((.., 0..seq_length))?,
+            None => {
+                iterated_ids = self.token_type_ids.i((.., 0..seq_length))?;
+                &iterated_ids
+            }
         };
         let token_type_ids = token_type_ids.expand(xs.shape())?;
         let token_type_embeddings = self.token_type_embeddings.forward(&token_type_ids)?;

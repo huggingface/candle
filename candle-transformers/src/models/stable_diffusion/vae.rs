@@ -394,9 +394,14 @@ impl AutoEncoderKL {
 
     /// Takes as input some sampled values.
     pub fn decode(&self, xs: &Tensor) -> Result<Tensor> {
+        let next_quant;
         let xs = match &self.post_quant_conv {
             None => xs,
-            Some(post_quant_conv) => &post_quant_conv.forward(xs)?,
+            Some(post_quant_conv) => 
+            { 
+                next_quant = post_quant_conv.forward(xs)?;
+                &next_quant
+            }
         };
         self.decoder.forward(xs)
     }
