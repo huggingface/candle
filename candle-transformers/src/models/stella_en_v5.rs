@@ -1,10 +1,10 @@
 use crate::models::with_tracing::{linear, linear_no_bias, Linear, RmsNorm};
-use candle::{DType, Device, IndexOp, Module, Result, Tensor};
-use candle_nn::{Activation, VarBuilder};
+use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_nn::{layer_norm, Activation, LayerNorm, VarBuilder};
 use std::sync::Arc;
 
  // internal representation for identifying which model is being used
- #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+ #[derive(Debug, Copy, Clone, PartialEq, serde::Deserialize)]
 pub enum ModelVariant {
     Large, // 1.5B
     Small  // 400M
@@ -99,8 +99,6 @@ impl Config {
             num_attention_heads: 12,
             num_key_value_heads: 2,
             max_position_embeddings: 131072,
-            // max_window_layers: 21,
-            // tie_word_embeddings: false,
             rope_theta: 1000000.,
             norm_eps: 1e-06,
             embed_head: embed_dim.config(1536),
@@ -190,17 +188,12 @@ impl RotaryEmbedding {
     }
 }
 
-// impl Module for EmbeddingLayer {
-//     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        
-//     }
-// }
-
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
+    variant: ModelVariant,
     gate_proj: Linear,
-    up_proj: Linear,
+    up_proj: Option<Linear>, // `up_proj` only for 1.5B variant
     down_proj: Linear,
     act_fn: Activation,
 }
@@ -209,10 +202,26 @@ impl MLP {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
-        let gate_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("gate_proj"))?;
-        let up_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("up_proj"))?;
-        let down_proj = linear_no_bias(intermediate_sz, hidden_sz, vb.pp("down_proj"))?;
+
+        let (gate_proj, up_proj, down_proj) = match cfg.variant {
+            ModelVariant::Large => {
+                (
+                    linear_no_bias(hidden_sz, intermediate_sz, vb.pp("gate_proj"))?,
+                    Some(linear_no_bias(hidden_sz, intermediate_sz, vb.pp("up_proj"))?),
+                    linear_no_bias(intermediate_sz, hidden_sz, vb.pp("down_proj"))?
+                )
+            }
+            ModelVariant::Small => {
+                (
+                    linear_no_bias(hidden_sz, intermediate_sz * 2, vb.pp("up_gate_proj"))?,
+                    None,
+                    linear(intermediate_sz, hidden_sz, vb.pp("down_proj"))?
+                )
+            }
+        };
+        
         Ok(Self {
+            variant: cfg.variant,
             gate_proj,
             up_proj,
             down_proj,
@@ -223,17 +232,36 @@ impl MLP {
 
 impl Module for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let lhs = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
-        let rhs = xs.apply(&self.up_proj)?;
+        let up = self.gate_proj.forward(xs)?;
+
+        let (lhs, rhs) = match self.variant {
+            ModelVariant::Large => {
+                let lhs = up.apply(&self.act_fn)?;
+                let rhs = xs.apply(self.up_proj.as_ref().unwrap())?;
+
+                (lhs, rhs)
+            }
+            ModelVariant::Small => {
+                // Get the dimensions
+                let (_batch_size, _seq_len, hidden_dim) = up.dims3()?;
+                let split_size = hidden_dim / 2;
+
+                // Split along the last dimension (hidden_dim)
+                let up_states = up.narrow(2, 0, split_size)?;
+                let gate = up.narrow(2, split_size, split_size)?
+                    .apply(&self.act_fn)?;
+
+                (up_states, gate)
+            }
+        };
+
         (lhs * rhs)?.apply(&self.down_proj)
     }
 }
 
 #[derive(Debug, Clone)]
 struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
+    qkv_proj: Linear,
     o_proj: Linear,
     num_heads: usize,
     num_kv_heads: usize,
@@ -241,6 +269,7 @@ struct Attention {
     head_dim: usize,
     hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
+    variant: ModelVariant
 }
 
 impl Attention {
@@ -250,14 +279,30 @@ impl Attention {
         let num_kv_heads = cfg.num_key_value_heads;
         let num_kv_groups = num_heads / num_kv_heads;
         let head_dim = hidden_sz / num_heads;
-        let q_proj = linear(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
-        let k_proj = linear(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
-        let v_proj = linear(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
+        
+        let qkv_proj = match cfg.variant {
+            ModelVariant::Large => {
+                // The 1.5B variant comes with separate `q, k, v` layers, let's merge it and standardize
+                // Weights
+                let q_w = vb.pp("q_proj").get((num_heads * head_dim, hidden_sz), "weight")?;
+                let k_w = vb.pp("k_proj").get((num_kv_heads * head_dim, hidden_sz), "weight")?;
+                let v_w = vb.pp("v_proj").get((num_kv_heads * head_dim, hidden_sz), "weight")?;
+                // Biases
+                let q_b = vb.pp("q_proj").get(num_heads * head_dim, "bias")?;
+                let k_b = vb.pp("k_proj").get(num_kv_heads * head_dim, "bias")?;
+                let v_b = vb.pp("v_proj").get(num_kv_heads * head_dim, "bias")?;
+                
+                let qkv_w = Tensor::cat(&[&q_w, &k_w, &v_w], 0)?;
+                let qkv_b = Tensor::cat(&[&q_b, &k_b, &v_b], 0)?;
+                
+                Linear::from_weights(qkv_w, Some(qkv_b))
+            }
+            ModelVariant::Small => linear(hidden_sz, 3 * num_heads * head_dim, vb.pp("qkv_proj"))?
+        };
+
         let o_proj = linear_no_bias(num_heads * head_dim, hidden_sz, vb.pp("o_proj"))?;
         Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
+            qkv_proj,
             o_proj,
             num_heads,
             num_kv_heads,
@@ -265,15 +310,24 @@ impl Attention {
             head_dim,
             hidden_size: hidden_sz,
             rotary_emb,
+            variant: cfg.variant
         })
     }
 
     fn forward(&mut self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let query_states = self.q_proj.forward(xs)?;
-        let key_states = self.k_proj.forward(xs)?;
-        let value_states = self.v_proj.forward(xs)?;
+        let qkv = self.qkv_proj.forward(xs)?;
+
+        let (query_states, key_states, value_states) = {
+            let q_sz = self.num_heads * self.head_dim;
+            let kv_sz = self.num_kv_heads * self.head_dim;
+            
+            let q = qkv.narrow(D::Minus1, 0, q_sz)?;
+            let k = qkv.narrow(D::Minus1, q_sz, kv_sz)?;
+            let v = qkv.narrow(D::Minus1, q_sz + kv_sz, kv_sz)?;
+            (q, k, v)
+        };
 
         let query_states = query_states
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -289,9 +343,18 @@ impl Attention {
             .rotary_emb
             .apply_rotary_emb_qkv(&query_states, &key_states)?;
 
-        let key_states = crate::utils::repeat_kv(key_states, self.num_kv_groups)?.contiguous()?;
-        let value_states =
-            crate::utils::repeat_kv(value_states, self.num_kv_groups)?.contiguous()?;
+        // The 1.5B is expected to have grouped query attention
+        let (key_states, value_states) = if self.variant == ModelVariant::Large {
+            (
+                crate::utils::repeat_kv(key_states, self.num_kv_groups)?.contiguous()?,
+                crate::utils::repeat_kv(value_states, self.num_kv_groups)?.contiguous()?
+            )
+        } else {
+            (
+                key_states,
+                value_states
+            )
+        };
 
         let attn_output = {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
@@ -312,48 +375,135 @@ impl Attention {
 }
 
 #[derive(Debug, Clone)]
-struct DecoderLayer {
-    self_attn: Attention,
-    mlp: MLP,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+enum NormType {
+    Layer(LayerNorm),
+    Rms(RmsNorm)
 }
 
-impl DecoderLayer {
+#[derive(Debug, Clone)]
+struct Layer {
+    variant: ModelVariant,
+    attention: Attention,
+    mlp: MLP,
+    // For 1.5B: this is `input_layernorm`
+    // For 400M: this is `output_layernorm`
+    layernorm: NormType,
+    post_attention_layernorm: NormType,
+}
+
+impl Layer {
     fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
+        let attention = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
-        let input_layernorm =
-            RmsNorm::new(cfg.hidden_size, cfg.norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm = RmsNorm::new(
-            cfg.hidden_size,
-            cfg.norm_eps,
-            vb.pp("post_attention_layernorm"),
-        )?;
+        let (layernorm, post_attention_layernorm) = match cfg.variant {
+            ModelVariant::Large => {
+                (
+                    NormType::Rms(RmsNorm::new(cfg.hidden_size, cfg.norm_eps, vb.pp("input_layernorm"))?),
+                    NormType::Rms(RmsNorm::new(
+                        cfg.hidden_size,
+                        cfg.norm_eps,
+                        vb.pp("post_attention_layernorm"),
+                    )?)
+                )
+            }
+            ModelVariant::Small => {
+                (
+                    NormType::Layer(layer_norm(
+                        cfg.hidden_size,
+                        candle_nn::LayerNormConfig { eps: cfg.norm_eps, ..Default::default() },
+                        vb.pp("attn_ln")
+                    )?),
+                    NormType::Layer(layer_norm(
+                        cfg.hidden_size,
+                        candle_nn::LayerNormConfig { eps: cfg.norm_eps, ..Default::default() },
+                        vb.pp("mlp_ln")
+                    )?)
+                )
+            }
+        };
+        
         Ok(Self {
-            self_attn,
+            variant: cfg.variant,
+            attention,
             mlp,
-            input_layernorm,
+            layernorm,
             post_attention_layernorm,
         })
     }
 
     fn forward(&mut self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
+        // Here, the application of normalizations and activation calculations differ
+        // For Large [1.5B]:
+        //  residual = x
+        //  state = other_layernorm(xs)
+        //  state = attention(state)
+        //  state += residual
+        //  residual = state
+        //  state = mlp(attention_layernorm(state))
+        //  -> residual + state
+        // For Small [400M]:
+        //  residual = x;
+        //  state = attention(x)
+        //  state += residual
+        //  state = attention_layernorm(state)
+        //  residual = state
+        //  state = mlp(state)
+        //  state += residual
+        //  -> other_layernorm(state)
         let residual = xs;
-        let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(&xs, attention_mask)?;
-        let xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
-        residual + xs
+
+        match self.variant {
+            ModelVariant::Large => {
+                let (attn_ln, input_ln) = if let (
+                    NormType::Rms(attn_ln),
+                    NormType::Rms(input_ln)
+                ) = (
+                    &self.post_attention_layernorm,
+                    &self.layernorm
+                ) {
+                    (attn_ln, input_ln)
+                } else {
+                    return Err(candle::error::Error::Msg("Stella 1.5B expects RMSNorm".to_string()));
+                };
+
+                let xs = input_ln.forward(xs)?;
+                let xs = (self.attention.forward(&xs, attention_mask)? + residual)?;
+
+                let residual = &xs;
+                let xs = xs.apply(attn_ln)?.apply(&self.mlp)?;
+
+                residual + xs
+            }
+            ModelVariant::Small => {
+                let (attn_ln, output_ln) = if let (
+                    NormType::Layer(attn_ln),
+                    NormType::Layer(input_ln)
+                ) = (
+                    &self.post_attention_layernorm,
+                    &self.layernorm
+                ) {
+                    (attn_ln, input_ln)
+                } else {
+                    return Err(candle::error::Error::Msg("Stella 400M expects RMSNorm".to_string()));
+                };
+
+                let xs = self.attention.forward(xs, attention_mask)?;
+                let xs = attn_ln.forward(&(xs + residual)?)?;
+
+                let residual = &xs;
+                let xs = (self.mlp.forward(&xs)? + residual)?;
+
+                output_ln.forward(&xs)
+            }
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
-    layers: Vec<DecoderLayer>,
-    norm: RmsNorm,
+    layers: Vec<Layer>,
+    norm: Option<RmsNorm>,
     device: Device,
     dtype: DType,
 }
@@ -361,21 +511,24 @@ pub struct Model {
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb_m = vb.pp("model");
+        // 400M Notes: Embedding seems to follow different path? Investigate and integrate
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
         let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
+            let layer = Layer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
-        let norm = RmsNorm::new(cfg.hidden_size, cfg.norm_eps, vb_m.pp("norm"))?;
+        let norm = match cfg.variant {
+            ModelVariant::Large => Some(RmsNorm::new(cfg.hidden_size, cfg.norm_eps, vb_m.pp("norm"))?),
+            ModelVariant::Small => None
+        };
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            // sliding_window: 0,
             device: vb.device().clone(),
             dtype: vb.dtype(),
         })
@@ -408,7 +561,12 @@ impl Model {
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref())?
         }
-        xs.apply(&self.norm)
+
+        if let Some(n) = &self.norm {
+            xs.apply(n)
+        } else {
+            Ok(xs)
+        }
     }
 }
 
