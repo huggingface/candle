@@ -217,7 +217,7 @@ enum Which {
     #[value(name = "1.5b")]
     Large,
     #[value(name = "400m")]
-    Small
+    Small,
 }
 
 #[derive(Parser, Debug)]
@@ -272,7 +272,7 @@ fn create_tokenizer(tokenizer_file: &Path, which: Which) -> Result<Tokenizer> {
                 "Tokenizer doesn't contain expected `<|endoftext|>` token"
             ));
         };
-    
+
         // This part is super important, we are padding the tokens to the *`left`* and not the usual *`right`* padding
         tokenizer.with_padding(Some(PaddingParams {
             strategy: PaddingStrategy::BatchLongest,
@@ -282,15 +282,12 @@ fn create_tokenizer(tokenizer_file: &Path, which: Which) -> Result<Tokenizer> {
             ..Default::default()
         }));
     } else {
-        tokenizer.with_padding(
-            Some(PaddingParams {
-                strategy: PaddingStrategy::BatchLongest,
-                direction: PaddingDirection::Right,
-                ..Default::default()
-            })
-        );
+        tokenizer.with_padding(Some(PaddingParams {
+            strategy: PaddingStrategy::BatchLongest,
+            direction: PaddingDirection::Right,
+            ..Default::default()
+        }));
     }
-    
 
     Ok(tokenizer)
 }
@@ -321,10 +318,16 @@ fn main() -> Result<()> {
         Some(d) => d,
         None => EmbedDim::Dim1024,
     };
-    
+
     let (repo, cfg) = match args.which {
-        Which::Large => ("dunzhang/stella_en_1.5B_v5", Config::new_1_5_b_v5(embed_dim.embed_dim())),
-        Which::Small => ("dunzhang/stella_en_400M_v5", Config::new_400_m_v5(embed_dim.embed_dim()))
+        Which::Large => (
+            "dunzhang/stella_en_1.5B_v5",
+            Config::new_1_5_b_v5(embed_dim.embed_dim()),
+        ),
+        Which::Small => (
+            "dunzhang/stella_en_400M_v5",
+            Config::new_400_m_v5(embed_dim.embed_dim()),
+        ),
     };
 
     let repo = api.repo(Repo::model(repo.to_string()));
@@ -372,11 +375,7 @@ fn main() -> Result<()> {
     let embed_vb =
         unsafe { VarBuilder::from_mmaped_safetensors(&embed_weight_files, DType::F32, &device)? };
 
-    let model = EmbeddingModel::new(
-        &cfg,
-        base_vb,
-        embed_vb,
-    )?;
+    let model = EmbeddingModel::new(&cfg, base_vb, embed_vb)?;
 
     println!("loaded the model in {:?}", start.elapsed());
 
