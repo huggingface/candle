@@ -1,13 +1,16 @@
-//! Candle Implementaitons of many Transformer models
+//! Candle Implementations of many Transformer models
 //!
 //! This crate provides implementations of popular machine learning models and architectures.
-//! These include:
-//! * Transformer models like [`bert`], [`t5`], [`llama`], [`mistral`] etc.
-//! * Vision models like [`resnet`], [`vit`], [`convnext`], etc.
-//! * Audio models like [`whisper`].
-//! * Multi-modal models like [`blip`]  and [`llava`].
 //!
-//! The implementations aim to be readable while maintaining good performance.
+//!  - Candle Includes language Models like [`llama`], [`phi3`], [`mamba`], [`mixtral`], and  [`bert`]
+//!  - Candle has text to text models like [`t5`] and iamge to text models like [`blip`]
+//!  - Candle has text to image models like [`stable_diffusion`] and [`wuerstchen`].
+//!  - Candle has audio models like [`whisper`], [`encodec`], [`metavoice`], and [`parler_tts`]
+//!  - Candle has many video models like [`dinov2`], [`convmixer`], [`efficientnet`], [`resnet`], [`vit`], [`vgg`], [`repvgg`], [`convnext`], ConvNeXTv2, [`mobileone`], [`efficientvit`] (MSRA), [`mobilenetv4`], [`hiera`], [`fastvit`]. yolo-v3, yolo-v8. [`segment_anything`]. [`segformer`].
+//!  - There are also a number of quantized moedels like  [`quantized_blip`], [`quantized_llama`] and  [`quantized_qwen2`].
+//!
+//! The implementations aim to be readable while maintaining good performance. For more information
+//! on each model see the model's module docs in the links below.
 
 pub mod based;
 pub mod beit;
