@@ -1,9 +1,5 @@
 //! Ancestral sampling with Euler method steps.
 //!
-//! Reference implementation in Rust:
-//!
-//! https://github.com/pykeio/diffusers/blob/250b9ad1898af41e76a74c0d8d4292652823338a/src/schedulers/euler_ancestral_discrete.rs
-//!
 //! Based on the original [`k-diffusion` implementation by Katherine Crowson][kd].
 ///
 /// [kd]: https://github.com/crowsonkb/k-diffusion/blob/481677d114f6ea445aa009cf5bd7a9cdee909e47/k_diffusion/sampling.py#L72
