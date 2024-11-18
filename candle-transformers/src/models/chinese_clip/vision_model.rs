@@ -3,8 +3,8 @@
 //! Chinese contrastive Language-Image Pre-Training (CLIP) is an architecture trained on
 //! pairs of images with related texts.
 //!
-//! https://github.com/OFA-Sys/Chinese-CLIP
-//! https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py
+//! - 💻 [Chinese-CLIP](https://github.com/OFA-Sys/Chinese-CLIP)
+//! - 💻 [GH](https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py_
 
 use candle::{DType, IndexOp, Module, Result, Shape, Tensor, D};
 use candle_nn as nn;
