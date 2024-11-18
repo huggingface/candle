@@ -25,7 +25,7 @@ pub struct EulerAncestralDiscreteSchedulerConfig {
     pub steps_offset: usize,
     /// prediction type of the scheduler function, one of `epsilon` (predicting
     /// the noise of the diffusion process), `sample` (directly predicting the noisy sample`)
-    /// or `v_prediction` (see section 2.4 https://imagen.research.google/video/paper.pdf)
+    /// or `v_prediction` (see [section 2.4](https://imagen.research.google/video/paper.pdf))
     pub prediction_type: PredictionType,
     /// number of diffusion steps used to train the model
     pub train_timesteps: usize,
