@@ -1,13 +1,15 @@
-//! Candle Implementations of many Transformer models
+//! Candle implementations for various deep learning models
 //!
-//! This crate provides implementations of popular machine learning models and architectures.
+//! This crate provides implementations of popular machine learning models and architectures for different modalities.
 //!
-//!  - Candle Includes language Models like [`llama`], [`phi3`], [`mamba`], [`mixtral`], and  [`bert`]
-//!  - Candle has text to text models like [`t5`] and iamge to text models like [`blip`]
-//!  - Candle has text to image models like [`stable_diffusion`] and [`wuerstchen`].
-//!  - Candle has audio models like [`whisper`], [`encodec`], [`metavoice`], and [`parler_tts`]
-//!  - Candle has many video models like [`dinov2`], [`convmixer`], [`efficientnet`], [`resnet`], [`vit`], [`vgg`], [`repvgg`], [`convnext`], ConvNeXTv2, [`mobileone`], [`efficientvit`] (MSRA), [`mobilenetv4`], [`hiera`], [`fastvit`]. yolo-v3, yolo-v8. [`segment_anything`]. [`segformer`].
-//!  - There are also a number of quantized moedels like  [`quantized_blip`], [`quantized_llama`] and  [`quantized_qwen2`].
+//!  - Large language models: [`llama`], [`phi3`], [`mamba`], [`mixtral`], [`bert`], ...
+//!  - Text to text models: [`t5`], ...
+//!  - Image to text models: [`blip`], ...
+//!  - Text to image models: [`stable_diffusion`] and [`wuerstchen`], ...
+//!  - Audio models: [`whisper`], [`encodec`], [`metavoice`], [`parler_tts`], ...
+//!  - Computer vision models: [`dinov2`], [`convmixer`], [`efficientnet`], ...
+//!  
+//! Some of the models also have quantized variants, e.g.  [`quantized_blip`], [`quantized_llama`] and  [`quantized_qwen2`].
 //!
 //! The implementations aim to be readable while maintaining good performance. For more information
 //! on each model see the model's module docs in the links below.
