@@ -1,3 +1,14 @@
+//! Module to load `safetensor` files into CPU/GPU memory.
+//!
+//! There are multiple ways to load tensors from safetensor files:
+//! - `load` function for loading directly into memory and returning a HashMap of tensors
+//! - `MmapedSafetensors` for memory mapping files and avoiding full allocation
+//! - `SliceSafetensors` for working with in-memory buffers
+//! - `BufferedSafetensors` for owning a buffer of data
+//!
+//! Tensors can also be serialized to safetensor format using the `save` function or
+//! `Tensor::save_safetensors` method.
+//!
 use crate::{DType, Device, Error, Result, Tensor, WithDType};
 use safetensors::tensor as st;
 use safetensors::tensor::SafeTensors;
