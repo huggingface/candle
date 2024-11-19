@@ -1,3 +1,5 @@
+//! StreamTensror useful for streaming ops.
+//!
 use crate::{Result, Shape, Tensor};
 
 pub trait Dim: crate::shape::Dim + Copy {}

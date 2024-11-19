@@ -1,6 +1,7 @@
-/// Pretty printing of tensors
-/// This implementation should be in line with the PyTorch version.
-/// https://github.com/pytorch/pytorch/blob/7b419e8513a024e172eae767e24ec1b849976b13/torch/_tensor_str.py
+//! Pretty printing of tensors
+//!
+//! This implementation should be in line with the [PyTorch version](https://github.com/pytorch/pytorch/blob/7b419e8513a024e172eae767e24ec1b849976b13/torch/_tensor_str.py).
+//!
 use crate::{DType, Result, Tensor, WithDType};
 use half::{bf16, f16};
 

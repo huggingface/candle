@@ -1,3 +1,5 @@
+//! Implementation of the Cuda backend when Cuda support has not been compiled in.
+//!
 #![allow(dead_code)]
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Error, Layout, Result, Shape};

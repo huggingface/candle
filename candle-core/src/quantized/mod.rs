@@ -1,3 +1,4 @@
+//! Code for GGML and GGUF files
 use crate::{CpuStorage, DType, Device, Result, Shape, Storage, Tensor};
 use k_quants::*;
 use std::borrow::Cow;
