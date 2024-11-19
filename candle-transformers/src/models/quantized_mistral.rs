@@ -1,3 +1,20 @@
+//! Mistral model implementation with quantization support.
+//!
+//! Mistral is a large language model optimized for efficiency.
+//! This implementation provides quantization for reduced memory and compute.
+//!
+//! Key characteristics:
+//! - Sliding window attention mechanism
+//! - Grouped query attention (GQA)
+//! - RMSNorm for layer normalization
+//! - Rotary positional embeddings (RoPE)
+//! - Support for 8-bit quantization
+//!
+//! References:
+//! - [Mistral Paper](https://arxiv.org/abs/2310.06825)
+//! - [Model Card](https://huggingface.co/mistralai/Mistral-7B-v0.1)
+//!
+
 use crate::quantized_nn::{linear_no_bias, Embedding, Linear, RmsNorm};
 pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, Module, Result, Tensor, D};

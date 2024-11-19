@@ -1,4 +1,20 @@
-#![allow(unused)]
+//! StarCoder model implementation with quantization support.
+//!
+//! StarCoder is a large language model optimized for code generation.
+//! This implementation provides quantization for reduced memory and compute.
+//!
+//! Key characteristics:
+//! - Causal self-attention mechanism
+//! - Multi-query attention (MQA)
+//! - LayerNorm for normalization
+//! - Absolute positional embeddings
+//! - Support for 8-bit quantization
+//!
+//! References:
+//! - 📝 [StarCoder Paper](https://arxiv.org/abs/2305.06161)
+//! - 🤗 [Model Card](https://huggingface.co/bigcode/starcoder)
+//!
+
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, linear_b, LayerNorm, Linear, VarBuilder};
 use std::sync::Arc;

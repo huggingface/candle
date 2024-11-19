@@ -1,5 +1,22 @@
-// This implementation is based on the python version from huggingface/transformers.
-// https://github.com/huggingface/transformers/blob/b109257f4fb8b1166e7c53cc5418632014ed53a5/src/transformers/models/recurrent_gemma/modeling_recurrent_gemma.py#L2
+//! Recurrent Gemma model implementation
+//!
+//! Recurrent Gemma is a version of the Gemma language model that incorporates recurrent memory.
+//! This allows the model to maintain state between predictions and have longer-range memory.
+//!
+//! Key characteristics:
+//! - Real-gated linear recurrent units (RGLRU)
+//! - 1D convolution for local context
+//! - RMSNorm for layer normalization
+//! - Rotary positional embeddings (RoPE)
+//! - Grouped query attention
+//!
+//! References:
+//! - [Gemma: Open Models Based on Gemini Technology](https://blog.google/technology/developers/gemma-open-models/)
+//! - [Recurrent Memory model architecture](https://arxiv.org/abs/2402.00441)
+//!
+//! This implementation is based on the python version from huggingface/transformers.
+//! https://github.com/huggingface/transformers/blob/b109257f4fb8b1166e7c53cc5418632014ed53a5/src/transformers/models/recurrent_gemma/modeling_recurrent_gemma.py#L2
+//!
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{linear_b as linear, Linear, VarBuilder};
 use std::sync::Arc;

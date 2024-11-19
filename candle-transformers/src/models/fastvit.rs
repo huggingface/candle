@@ -1,9 +1,9 @@
-//! FastViT inference implementation based on timm
+//! # FastViT inference implementation based on timm
 //!
-//! See "FastViT: A Fast Hybrid Vision Transformer using Structural Reparameterization"
-//! https://arxiv.org/pdf/2303.14189
+//! ## Description
+//! See ["FastViT: A Fast Hybrid Vision Transformer using Structural Reparameterization"](https://arxiv.org/pdf/2303.14189)
 //!
-//! https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/fastvit.py
+//! Implementation based on [timm model](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/fastvit.py)
 
 use candle::{DType, Result, Tensor, D};
 use candle_nn::{

@@ -1,3 +1,5 @@
+//! Tensor Opertion Enums and Traits
+//!
 #![allow(clippy::redundant_closure_call)]
 use crate::Tensor;
 use half::{bf16, f16};

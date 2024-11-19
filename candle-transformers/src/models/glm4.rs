@@ -1,3 +1,9 @@
+//! GLM-4 inference implementation.
+//!
+//! An open bilingual language model with 130B parameters.
+//!
+//! Based on implementation from [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B)
+
 use crate::models::with_tracing::{linear_b as linear, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;

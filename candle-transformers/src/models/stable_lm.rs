@@ -1,3 +1,18 @@
+//! StableLM model implementation.
+//!
+//! StableLM is a family of language models trained by Stability AI.
+//! This implementation supports the StableLM architecture.
+//!
+//! Key characteristics:
+//! - Grouped query attention (GQA)
+//! - Layer normalization
+//! - Rotary positional embeddings (RoPE)
+//! - Support for different model sizes (3B, 7B)
+//!
+//! References:
+//! - 🤗 [Model Card](https://huggingface.co/stabilityai/stablelm-3b-4e1t)
+//!
+
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, LayerNorm, VarBuilder};
