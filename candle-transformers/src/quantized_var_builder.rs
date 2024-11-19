@@ -1,6 +1,6 @@
 //! Varbuilder for Loading gguf files
 //!
-//! VarBuilder is a utility to store quantized tensors from a GGUF model file.
+//! VarBuilder is a utility to store quantized tensors from a [GGUF model file](https://huggingface.co/docs/hub/gguf).
 //! These tensors can be loaded from disk using `from_gguf` or from an in-memory
 //! buffer using `from_gguf_buffer`.
 
