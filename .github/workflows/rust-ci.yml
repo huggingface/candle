@@ -38,6 +38,7 @@ jobs:
         rust: [stable]
     steps:
       - name: Delete huge unnecessary tools folder
+        if: runner.os == 'Linux'
         run: rm -rf /opt/hostedtoolcache
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
