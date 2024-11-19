@@ -1,3 +1,9 @@
+//! Varbuilder for Loading gguf files
+//!
+//! VarBuilder is a utility to store quantized tensors from a GGUF model file.
+//! These tensors can be loaded from disk using `from_gguf` or from an in-memory
+//! buffer using `from_gguf_buffer`.
+
 use candle::quantized::QTensor;
 use candle::{Device, Result, Shape};
 use std::sync::Arc;
