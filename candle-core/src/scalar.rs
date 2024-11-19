@@ -1,3 +1,5 @@
+//! TensorScalar Enum and Trait
+//!
 use crate::{Result, Tensor, WithDType};
 
 pub enum TensorScalar {
