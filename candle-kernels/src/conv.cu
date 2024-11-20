@@ -692,6 +692,8 @@ extern "C" __global__ void FN_NAME(  \
 } \
 
 #if __CUDA_ARCH__ >= 800
+#include "cuda_bf16.h"
+
 CONV1D_OP(__nv_bfloat16, float, conv1d_bf16)
 CONV2D_OP(__nv_bfloat16, float, conv2d_bf16)
 CONVT1D_OP(__nv_bfloat16, float, conv_transpose1d_bf16)

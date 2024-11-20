@@ -213,6 +213,9 @@ __device__ __forceinline__ __half copysigng(__half a, __half b) { return __float
 #endif
 
 #if __CUDA_ARCH__ >= 800
+#include "cuda_fp8.h"
+#include "cuda_bf16.h"
+
 __device__ __forceinline__ __nv_bfloat16 powg(__nv_bfloat16 a, __nv_bfloat16 b) { return __float2bfloat16(powf(__bfloat162float(a), __bfloat162float(b))); }
 __device__ __forceinline__ bool isnang(__nv_bfloat16 a) { return __hisnan(a); }
 __device__ __forceinline__ __nv_bfloat16 sqrtg(__nv_bfloat16 a) { return hsqrt(a); }

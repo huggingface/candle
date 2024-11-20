@@ -98,6 +98,9 @@ __device__ T sign_(T t) {
 
 
 #if __CUDA_ARCH__ >= 800
+#include "cuda_fp8.h"
+#include "cuda_bf16.h"
+
 UNARY_OP(__nv_bfloat16, ucopy_bf16, x)
 UNARY_OP(__nv_bfloat16, uneg_bf16, -x)
 UNARY_OP(__nv_bfloat16, urecip_bf16, recipg(x))

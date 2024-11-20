@@ -142,6 +142,8 @@ extern "C" __global__ void FN_NAME( \
 } \
 
 #if __CUDA_ARCH__ >= 800
+#include "cuda_fp8.h"
+#include "cuda_bf16.h"
 CAST_OP(__nv_bfloat16, __nv_bfloat16, cast_bf16_bf16)
 CAST_OP(__nv_fp8_e4m3, __nv_fp8_e4m3, cast_f8_e4m3_f8_e4m3)
 

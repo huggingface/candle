@@ -572,6 +572,7 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
   } \
 
 #if __CUDA_ARCH__ >= 800
+#include "cuda_bf16.h"
 SOFTMAX_OP(__nv_bfloat16, float, softmax_bf16)
 RMSNORM_OP(__nv_bfloat16, rmsnorm_bf16)
 LAYERNORM_OP(__nv_bfloat16, layernorm_bf16)

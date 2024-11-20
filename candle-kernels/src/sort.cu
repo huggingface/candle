@@ -74,6 +74,7 @@ extern "C" __global__ void asort_desc_##RUST_NAME(  \
 } \
  
 #if __CUDA_ARCH__ >= 800
+#include "cuda_bf16.h"
 ASORT_OP(__nv_bfloat16, bf16)
 
 // NOTE: No sort ops for f8

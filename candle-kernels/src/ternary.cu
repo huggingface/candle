@@ -33,6 +33,9 @@ extern "C" __global__ void FN_NAME(  \
 } \
 
 #if __CUDA_ARCH__ >= 800
+#include "cuda_fp8.h"
+#include "cuda_bf16.h"
+
 WHERE_OP(__nv_bfloat16, int16_t, where_i16_bf16)
 WHERE_OP(__nv_bfloat16, int32_t, where_i32_bf16)
 WHERE_OP(__nv_bfloat16, int64_t, where_i64_bf16)

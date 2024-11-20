@@ -1,7 +1,6 @@
 // Kernels adapted from llama.cpp ggml-cuda.cu
 // https://github.com/ggerganov/llama.cpp/blob/master/ggml-cuda.cu
 #include "cuda_fp16.h"
-#include "cuda_bf16.h"
 #include<stdint.h>
 
 #define GGML_UNUSED(x) (void)(x)
