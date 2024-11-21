@@ -6,6 +6,7 @@ extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
 use clap::{Parser, ValueEnum};
+use std::path::Path;
 
 use candle_transformers::models::yi::{Config, Model};
 
@@ -22,6 +23,23 @@ enum Which {
     L6b,
     #[value(name = "34b")]
     L34b,
+}
+
+impl Which {
+    fn match_model_id(model_id: &str) -> Self {
+        if model_id.contains('6') {
+            Which::L6b
+        } else {
+            Which::L34b
+        }
+    }
+
+    fn config(&self) -> Config {
+        match self {
+            Which::L6b => Config::config_6b(),
+            Which::L34b => Config::config_34b(),
+        }
+    }
 }
 
 struct TextGeneration {
@@ -177,6 +195,31 @@ struct Args {
     which: Which,
 }
 
+pub fn load_local_safetensors(
+    model_id: &str,
+    json_file: &str,
+) -> candle::Result<Vec<std::path::PathBuf>> {
+    let json_file = std::fs::File::open(format!("{model_id}/{json_file}"))?;
+    let json: serde_json::Value =
+        serde_json::from_reader(&json_file).map_err(candle::Error::wrap)?;
+    let weight_map = match json.get("weight_map") {
+        None => candle::bail!("no weight map in {json_file:?}"),
+        Some(serde_json::Value::Object(map)) => map,
+        Some(_) => candle::bail!("weight map in {json_file:?} is not a map"),
+    };
+    let mut safetensors_files = std::collections::HashSet::new();
+    for value in weight_map.values() {
+        if let Some(file) = value.as_str() {
+            safetensors_files.insert(file.to_string());
+        }
+    }
+    let safetensors_files = safetensors_files
+        .iter()
+        .map(|v| std::path::PathBuf::from(format!("{model_id}/{v}")))
+        .collect();
+    Ok(safetensors_files)
+}
+
 fn main() -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
@@ -203,32 +246,43 @@ fn main() -> Result<()> {
         args.repeat_last_n
     );
 
+    let is_local_model = Path::new(&args.model_id).is_dir();
+
     let start = std::time::Instant::now();
     let api = Api::new()?;
     let repo = api.repo(Repo::with_revision(
-        args.model_id,
+        args.model_id.clone(),
         RepoType::Model,
         args.revision,
     ));
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => {
+            if is_local_model {
+                std::path::PathBuf::from(format!("{}/tokenizer.json", args.model_id))
+            } else {
+                repo.get("tokenizer.json")?
+            }
+        }
     };
     let filenames = match args.weight_files {
         Some(files) => files
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+        None => {
+            if is_local_model {
+                load_local_safetensors(&args.model_id, "model.safetensors.index.json")?
+            } else {
+                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
+            }
+        }
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config = match args.which {
-        Which::L6b => Config::config_6b(),
-        Which::L34b => Config::config_34b(),
-    };
+    let config = Which::match_model_id(&args.model_id).config();
     let device = candle_examples::device(args.cpu)?;
     let dtype = if device.is_cuda() {
         DType::BF16
