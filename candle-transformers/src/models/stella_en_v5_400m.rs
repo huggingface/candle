@@ -1,9 +1,9 @@
 use candle::{ DType, Device, IndexOp, Module, Result, Tensor };
-use candle_nn::{ Activation, VarBuilder, layer_norm };
+use candle_nn::{ layer_norm, Activation, LayerNorm, VarBuilder };
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::with_tracing::{ linear, linear_no_bias, Linear, RmsNorm };
+use super::with_tracing::{ linear, linear_no_bias, Linear };
 
 #[derive(Debug, Clone, Copy)]
 pub enum EmbedDim {
@@ -37,19 +37,19 @@ pub struct Config {
     pub num_attention_heads: usize,
     pub max_position_embeddings: usize,
     pub type_vocab_size: usize,
-    pub pad_token_id: usize,
-    pub hidden_dropout_prob: f64,
-    pub attention_probs_dropout_prob: f64,
-    pub layer_norm_eps: f64,
-    pub initializer_range: f64,
-    pub position_embedding_type: String,
+    // pub pad_token_id: usize,
+    // pub hidden_dropout_prob: f64,
+    // pub attention_probs_dropout_prob: f64,
+    pub norm_eps: f64,
+    // pub initializer_range: f64,
+    // pub position_embedding_type: String,
     pub scaling_factor: f64,
     pub rope_theta: f64,
-    pub use_memory_efficient_attention: bool,
-    pub unpad_inputs: bool,
-    pub layer_norm_type: String,
-    pub logn_attention_scale: bool,
-    pub logn_attention_clip1: bool,
+    // pub use_memory_efficient_attention: bool,
+    // pub unpad_inputs: bool,
+    // pub layer_norm_type: String,
+    // pub logn_attention_scale: bool,
+    // pub logn_attention_clip1: bool,
     pub activation_fn: Activation,
     pub embed_head: EmbedHead,
 }
@@ -77,19 +77,19 @@ impl Config {
             num_attention_heads: 16,
             max_position_embeddings: 8192,
             type_vocab_size: 2,
-            pad_token_id: 0,
-            hidden_dropout_prob: 0.1,
-            attention_probs_dropout_prob: 0.0,
-            layer_norm_eps: 1e-12,
-            initializer_range: 0.02,
-            position_embedding_type: "rope".to_string(),
+            // pad_token_id: 0,
+            // hidden_dropout_prob: 0.1,
+            // attention_probs_dropout_prob: 0.0,
+            norm_eps: 1e-12,
+            // initializer_range: 0.02,
+            // position_embedding_type: "rope".to_string(),
             scaling_factor: 2.0,
             rope_theta: 160000.0,
-            use_memory_efficient_attention: true,
-            unpad_inputs: false,
-            layer_norm_type: "layer_norm".to_string(),
-            logn_attention_scale: false,
-            logn_attention_clip1: false,
+            // use_memory_efficient_attention: true,
+            // unpad_inputs: false,
+            // layer_norm_type: "layer_norm".to_string(),
+            // logn_attention_scale: false,
+            // logn_attention_clip1: false,
             activation_fn: Activation::Gelu,
             embed_head,
         }
@@ -100,10 +100,10 @@ impl Config {
 struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
-    _scaling_factor: f64,
-    _mixed_b: Option<f64>,
-    _dim: usize,
-    _base: f64,
+    // _scaling_factor: f64,
+    // _mixed_b: Option<f64>,
+    // _dim: usize,
+    // _base: f64,
 }
 
 impl RotaryEmbedding {
@@ -144,10 +144,10 @@ impl RotaryEmbedding {
         Ok(Self {
             sin: emb.sin()?,
             cos: emb.cos()?,
-            _scaling_factor: scaling_factor,
-            _mixed_b: None,
-            _dim: dim,
-            _base: base,
+            // _scaling_factor: scaling_factor,
+            // _mixed_b: None,
+            // _dim: dim,
+            // _base: base,
         })
     }
 }
@@ -155,14 +155,14 @@ impl RotaryEmbedding {
 #[derive(Debug, Clone)]
 enum NormType {
     LayerNorm(candle_nn::LayerNorm),
-    RmsNorm(RmsNorm),
+    // RmsNorm(RmsNorm),
 }
 
 impl NormType {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         match self {
             Self::LayerNorm(ln) => ln.forward(x),
-            Self::RmsNorm(rms) => rms.forward(x),
+            // Self::RmsNorm(rms) => rms.forward(x),
         }
     }
 }
@@ -170,13 +170,13 @@ impl NormType {
 #[derive(Debug)]
 pub struct Embeddings {
     word_embeddings: candle_nn::Embedding,
-    position_embeddings: Option<candle_nn::Embedding>,
-    token_type_embeddings: Option<candle_nn::Embedding>,
-    layer_norm: NormType,
-    _padding_idx: usize,
-    _position_embedding_type: String,
-    rotary_emb: Option<Arc<RotaryEmbedding>>,
-    position_ids: Option<Tensor>,
+    // position_embeddings: Option<candle_nn::Embedding>,
+    token_type_embeddings: candle_nn::Embedding,
+    layer_norm: LayerNorm,
+    // _padding_idx: usize,
+    // _position_embedding_type: String,
+    rotary_emb: Arc<RotaryEmbedding>,
+    position_ids: Tensor,
 }
 
 impl Embeddings {
@@ -187,63 +187,70 @@ impl Embeddings {
             vb.pp("word_embeddings")
         )?;
 
-        let position_embeddings = if cfg.position_embedding_type == "absolute" {
-            Some(
-                candle_nn::embedding(
-                    cfg.max_position_embeddings,
-                    cfg.hidden_size,
-                    vb.pp("position_embeddings")
-                )?
-            )
-        } else {
-            None
-        };
+        // let position_embeddings = if cfg.position_embedding_type == "absolute" {
+        //     Some(
+        //         candle_nn::embedding(
+        //             cfg.max_position_embeddings,
+        //             cfg.hidden_size,
+        //             vb.pp("position_embeddings")
+        //         )?
+        //     )
+        // } else {
+        //     None
+        // };
 
-        let token_type_embeddings = if cfg.type_vocab_size > 0 {
-            Some(
-                candle_nn::embedding(
-                    cfg.type_vocab_size,
-                    cfg.hidden_size,
-                    vb.pp("token_type_embeddings")
-                )?
-            )
-        } else {
-            None
-        };
+        let token_type_embeddings = candle_nn::embedding(
+            cfg.type_vocab_size,
+            cfg.hidden_size,
+            vb.pp("token_type_embeddings")
+        )?;
+        //  if cfg.type_vocab_size > 0 {
+        //     Some(
+        //         candle_nn::embedding(
+        //             cfg.type_vocab_size,
+        //             cfg.hidden_size,
+        //             vb.pp("token_type_embeddings")
+        //         )?
+        //     )
+        // } else {
+        //     None
+        // };
 
-        let layer_norm = if cfg.layer_norm_type == "layer_norm" {
+        //if cfg.layer_norm_type == "layer_norm" {
             let weight = vb
                 .pp("LayerNorm")
                 .get_with_hints(cfg.hidden_size, "weight", candle_nn::Init::Const(1.0))?;
             let bias = vb
                 .pp("LayerNorm")
                 .get_with_hints(cfg.hidden_size, "bias", candle_nn::Init::Const(0.0))?;
-            NormType::LayerNorm(candle_nn::LayerNorm::new(weight, bias, cfg.layer_norm_eps))
-        } else {
-            NormType::RmsNorm(
-                RmsNorm::new(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("LayerNorm"))?
-            )
-        };
+        let layer_norm = candle_nn::LayerNorm::new(weight, bias, cfg.norm_eps);
+        // } else {
+        //     NormType::RmsNorm(
+        //         RmsNorm::new(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("LayerNorm"))?
+        //     )
+        // };
 
-        let rotary_emb = if cfg.position_embedding_type == "rope" {
-            Some(Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?))
-        } else {
-            None
-        };
+        // let rotary_emb = if cfg.position_embedding_type == "rope" {
+        //     Some(Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?))
+        // } else {
+        //     None
+        // };
+        let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?);
 
-        let position_ids = if cfg.position_embedding_type == "absolute" {
-            Some(Tensor::arange(0u32, cfg.max_position_embeddings as u32, vb.device())?)
-        } else {
-            None
-        };
+        // let position_ids = if cfg.position_embedding_type == "absolute" {
+        //     Some(Tensor::arange(0u32, cfg.max_position_embeddings as u32, vb.device())?)
+        // } else {
+        //     None
+        // };
+        let position_ids = Tensor::arange(0u32, cfg.max_position_embeddings as u32, word_embeddings.embeddings().device())?;
 
         Ok(Self {
             word_embeddings,
-            position_embeddings,
+            // position_embeddings,
             token_type_embeddings,
             layer_norm,
-            _padding_idx: cfg.pad_token_id,
-            _position_embedding_type: cfg.position_embedding_type.clone(),
+            // _padding_idx: cfg.pad_token_id,
+            // _position_embedding_type: cfg.position_embedding_type.clone(),
             rotary_emb,
             position_ids,
         })
@@ -252,57 +259,64 @@ impl Embeddings {
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
-        token_type_ids: Option<&Tensor>,
-        position_ids: Option<&Tensor>,
-        inputs_embeds: Option<&Tensor>,
-        unpad_inputs: bool,
-        attention_mask: Option<&Tensor>
-    ) -> Result<(Tensor, Option<Tensor>, Option<(Tensor, Tensor)>, Option<Vec<usize>>)> {
+        // token_type_ids: Option<&Tensor>,
+        // position_ids: Option<&Tensor>,
+        // inputs_embeds: Option<&Tensor>,
+        // unpad_inputs: bool,
+        // attention_mask: Option<&Tensor>
+    ) -> Result<(Tensor, Option<(Tensor, Tensor)>)> {
         let (batch_size, seq_length) = input_ids.dims2()?;
 
-        let mut embeddings = match inputs_embeds {
-            Some(e) => e.clone(),
-            None => self.word_embeddings.forward(input_ids)?,
-        };
+        let mut embeddings = self.word_embeddings.forward(input_ids)?;
+        // match inputs_embeds {
+        //     Some(e) => e.clone(),
+        //     None => self.word_embeddings.forward(input_ids)?,
+        // };
 
         // Get position_ids first
-        let position_ids = if let Some(ids) = position_ids {
-            ids.clone()
-        } else {
+        // let position_ids = if let Some(ids) = position_ids {
+        //     ids.clone()
+        // } else {
             // Get device from input_ids which is always available
-            let device = input_ids.device();
+            // let device = input_ids.device();
 
             // Initialize position_ids if None
-            if self.position_ids.is_none() {
-                self.position_ids = Some(Tensor::arange(0u32, seq_length as u32, device)?);
-            }
+            // if self.position_ids.is_none() {
+            //     self.position_ids = Some(Tensor::arange(0u32, seq_length as u32, device)?);
+            // }
 
-            // Now check if we need to extend it
-            if seq_length > self.position_ids.as_ref().unwrap().dim(0)? {
-                self.position_ids = Some(Tensor::arange(0u32, seq_length as u32, device)?);
-            }
+            // // Now check if we need to extend it
+            // if seq_length > self.position_ids.as_ref().unwrap().dim(0)? {
+            //     self.position_ids = Some(Tensor::arange(0u32, seq_length as u32, device)?);
+            // }
 
-            if unpad_inputs {
+        // let position_ids = 
+        /*if unpad_inputs {
                 // For now, just use the same position IDs as padded case since we don't have lengths
                 self.position_ids
                     .as_ref()
                     .unwrap()
                     .narrow(0, 0, seq_length)?
                     .expand((batch_size, seq_length))?
-            } else {
-                self.position_ids
-                    .as_ref()
-                    .unwrap()
-                    .narrow(0, 0, seq_length)?
-                    .expand((batch_size, seq_length))?
-            }
-        };
+            } else {*/
+                // self.position_ids
+                //     .as_ref()
+                //     .unwrap()
+                //     .narrow(0, 0, seq_length)?
+                //     .expand((batch_size, seq_length))?;
+            // };
+        // };
 
-        // Get rotary embeddings if using RoPE
-        let rope_embeds = if let Some(rotary) = &self.rotary_emb {
+        let position_ids = self.position_ids
+            .as_ref()
+            .narrow(0, 0, seq_length)?
+            .expand((batch_size, seq_length))?;
+
+
+        let rope_embeds = {
             // Get the cos and sin for this sequence length
-            let cos = rotary.cos.narrow(0, 0, seq_length)?; // [seq_len, head_dim]
-            let sin = rotary.sin.narrow(0, 0, seq_length)?; // [seq_len, head_dim]
+            let cos = self.rotary_emb.cos.narrow(0, 0, seq_length)?; // [seq_len, head_dim]
+            let sin = self.rotary_emb.sin.narrow(0, 0, seq_length)?; // [seq_len, head_dim]
 
             // Index using position_ids if needed
             let position_ids = position_ids.flatten_all()?;
@@ -310,33 +324,38 @@ impl Embeddings {
             let sin = sin.index_select(&position_ids, 0)?; // Use index_select instead of i()
 
             Some((cos, sin))
-        } else {
-            None
         };
+        // // Get rotary embeddings if using RoPE
+        // let rope_embeds = if let Some(rotary) = &self.rotary_emb {
+            
+        // } else {
+        //     None
+        // };
 
         // Handle token type embeddings
-        if let Some(token_emb) = &self.token_type_embeddings {
-            let token_type_ids = if let Some(ids) = token_type_ids {
-                ids.clone()
-            } else {
-                position_ids.zeros_like()? // Use mul(0) equivalent
-            };
-            if unpad_inputs {
-                todo!("Implement unpadded case");
-            } else {
-                embeddings = embeddings.add(&token_emb.forward(&token_type_ids)?)?;
-            }
-        }
+        embeddings = embeddings.add(&self.token_type_embeddings.forward(&position_ids.zeros_like()?)?).unwrap();
+        // if let Some(token_emb) = &self.token_type_embeddings {
+            // let token_type_ids = if let Some(ids) = token_type_ids {
+            //     ids.clone()
+            // } else {
+                // position_ids.zeros_like()? // Use mul(0) equivalent
+            // };
+            // if unpad_inputs {
+            //     todo!("Implement unpadded case");
+            // } else {
+                // embeddings = embeddings.add(&token_emb.forward(&position_ids.zeros_like()?)?).unwrap();
+            // }
+        // }
 
         // Handle absolute position embeddings
-        if let Some(pos_emb) = &self.position_embeddings {
-            let position_embeddings = pos_emb.forward(&position_ids)?;
-            embeddings = embeddings.add(&position_embeddings)?;
-        }
+        // if let Some(pos_emb) = &self.position_embeddings {
+        //     let position_embeddings = pos_emb.forward(&position_ids)?;
+        //     embeddings = embeddings.add(&position_embeddings)?;
+        // }
 
         let embeddings = self.layer_norm.forward(&embeddings)?;
 
-        Ok((embeddings, attention_mask.cloned(), rope_embeds, None))
+        Ok((embeddings, rope_embeds))
     }
 }
 
@@ -347,7 +366,7 @@ struct NewAttention {
     num_heads: usize,
     head_dim: usize,
     hidden_size: usize,
-    _use_memory_efficient_attention: bool,
+    // _use_memory_efficient_attention: bool,
 }
 
 impl NewAttention {
@@ -365,7 +384,7 @@ impl NewAttention {
             num_heads,
             head_dim,
             hidden_size: hidden_sz,
-            _use_memory_efficient_attention: cfg.use_memory_efficient_attention,
+            // _use_memory_efficient_attention: cfg.use_memory_efficient_attention,
         })
     }
 
@@ -374,7 +393,7 @@ impl NewAttention {
         hidden_states: &Tensor,
         attention_bias: Option<&Tensor>,
         rope_embeds: Option<&(Tensor, Tensor)>,
-        _attention_scale: Option<&Tensor>
+        // _attention_scale: Option<&Tensor>
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = hidden_states.dims3()?;
 
@@ -407,10 +426,10 @@ impl NewAttention {
 
         // Prepare tensors for batched matmul using matmul
         // Reshape tensors to merge batch and head dimensions
-        let bsz = b_sz as usize;
-        let nh = self.num_heads as usize;
-        let s_len = seq_len as usize;
-        let h_dim = self.head_dim as usize;
+        let bsz = b_sz;
+        let nh = self.num_heads;
+        let s_len = seq_len;
+        let h_dim = self.head_dim;
 
         // Reshape tensors to [batch_size * num_heads, seq_len, head_dim]
         let query_states_reshaped = query_states.reshape((bsz * nh, s_len, h_dim))?;
@@ -435,8 +454,8 @@ impl NewAttention {
 
         // Apply attention mask
         let mut attn_weights = if let Some(bias) = attention_bias {
-            let attn_weights = attn_weights.broadcast_add(bias)?;
-            attn_weights
+            // let attn_weights = attn_weights.broadcast_add(bias)?;
+            attn_weights.broadcast_add(bias)?
         } else {
             attn_weights
         };
@@ -525,26 +544,28 @@ impl NewLayer {
         let attention = NewAttention::new(cfg, vb.pp("attention"))?;
         let mlp = NewGatedMLP::new(cfg, vb.pp("mlp"))?;
 
-        let ln_eps = cfg.layer_norm_eps;
+        // let ln_eps = cfg.layer_norm_eps;
 
         // Use LayerNorm or RmsNorm based on config
-        let (attn_ln, mlp_ln) = if cfg.layer_norm_type == "layer_norm" {
+        let (attn_ln, mlp_ln) = {
             let attn_ln = layer_norm(
                 cfg.hidden_size,
-                candle_nn::LayerNormConfig { eps: ln_eps, ..Default::default() },
+                candle_nn::LayerNormConfig { eps: cfg.norm_eps, ..Default::default() },
                 vb.pp("attn_ln")
             )?;
             let mlp_ln = layer_norm(
                 cfg.hidden_size,
-                candle_nn::LayerNormConfig { eps: ln_eps, ..Default::default() },
+                candle_nn::LayerNormConfig { eps: cfg.norm_eps, ..Default::default() },
                 vb.pp("mlp_ln")
             )?;
             (NormType::LayerNorm(attn_ln), NormType::LayerNorm(mlp_ln))
-        } else {
-            let attn_ln = RmsNorm::new(cfg.hidden_size, ln_eps, vb.pp("attn_ln"))?;
-            let mlp_ln = RmsNorm::new(cfg.hidden_size, ln_eps, vb.pp("mlp_ln"))?;
-            (NormType::RmsNorm(attn_ln), NormType::RmsNorm(mlp_ln))
         };
+        //  else 
+        // {
+        //     let attn_ln = RmsNorm::new(cfg.hidden_size, ln_eps, vb.pp("attn_ln"))?;
+        //     let mlp_ln = RmsNorm::new(cfg.hidden_size, ln_eps, vb.pp("mlp_ln"))?;
+        //     (NormType::RmsNorm(attn_ln), NormType::RmsNorm(mlp_ln))
+        // };
 
         Ok(Self {
             attention,
@@ -559,7 +580,7 @@ impl NewLayer {
         hidden_states: &Tensor,
         attention_bias: Option<&Tensor>,
         rope_embeds: Option<&(Tensor, Tensor)>,
-        attention_scale: Option<&Tensor>
+        // attention_scale: Option<&Tensor>
     ) -> Result<Tensor> {
         // Store original input
         let original = hidden_states;
@@ -569,7 +590,7 @@ impl NewLayer {
             original,
             attention_bias,
             rope_embeds,
-            attention_scale
+            // attention_scale
         )?;
 
         let hidden_states = original.add(&hidden_states)?;
@@ -611,7 +632,7 @@ impl NewEncoder {
         hidden_states: &Tensor,
         attention_bias: Option<&Tensor>,
         rope_embeds: Option<&(Tensor, Tensor)>,
-        attention_scale: Option<&Tensor>
+        // attention_scale: Option<&Tensor>
     ) -> Result<Tensor> {
         let mut hidden_states = hidden_states.clone();
 
@@ -620,7 +641,7 @@ impl NewEncoder {
                 &hidden_states,
                 attention_bias,
                 rope_embeds,
-                attention_scale
+                // attention_scale
             )?;
         }
 
@@ -634,7 +655,7 @@ pub struct NewModel {
     encoder: NewEncoder,
     device: Device,
     dtype: DType,
-    config: Config,
+    // config: Config,
 }
 
 impl NewModel {
@@ -647,7 +668,7 @@ impl NewModel {
             encoder,
             device: vb.device().clone(),
             dtype: vb.dtype(),
-            config: cfg.clone(),
+            // config: cfg.clone(),
         })
     }
 
@@ -672,56 +693,53 @@ impl NewModel {
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
-        attention_mask: Option<&Tensor>,
-        token_type_ids: Option<&Tensor>,
-        position_ids: Option<&Tensor>
+        attention_mask: &Tensor,
+        // token_type_ids: Option<&Tensor>,
+        // position_ids: Option<&Tensor>
     ) -> Result<Tensor> {
-        let (batch_size, seq_length) = input_ids.dims2()?;
+        let (_, seq_length) = input_ids.dims2()?;
 
         // Get attention mask if not provided
-        let attention_mask = match attention_mask {
-            Some(mask) => mask.clone(),
-            None => Tensor::ones((batch_size, seq_length), self.dtype, &self.device)?,
-        };
+        // let attention_mask = mask;
 
         // Prepare attention bias
         let attention_bias = if seq_length <= 1 {
             None
         } else {
-            Some(self.prepare_attention_mask(&attention_mask)?)
+            Some(self.prepare_attention_mask(attention_mask)?)
         };
 
         // Get embeddings and rotary embeddings
-        let (hidden_states, _, rope_embeds, _) = self.embeddings.forward(
+        let (hidden_states, rope_embeds) = self.embeddings.forward(
             input_ids,
-            token_type_ids,
-            position_ids,
-            None,
-            self.config.unpad_inputs,
-            Some(&attention_mask)
+            // token_type_ids,
+            // position_ids,
+            // None,
+            // self.config.unpad_inputs,
+            // Some(&attention_mask)
         )?;
 
         // Compute attention scale if needed
-        let attention_scale = if self.config.logn_attention_scale {
-            let scale =
-                attention_mask.sum_keepdim(1)?.log()? /
-                (self.config.max_position_embeddings as f64).ln();
-            if self.config.logn_attention_clip1 {
-                let scale = scale?;
-                Some(scale.maximum(&Tensor::new(1f64, &self.device)?)?)
-            } else {
-                Some(scale?)
-            }
-        } else {
-            None
-        };
+        // let attention_scale = if self.config.logn_attention_scale {
+        //     let scale =
+        //         attention_mask.sum_keepdim(1)?.log()? /
+        //         (self.config.max_position_embeddings as f64).ln();
+        //     if self.config.logn_attention_clip1 {
+        //         let scale = scale?;
+        //         Some(scale.maximum(&Tensor::new(1f64, &self.device)?)?)
+        //     } else {
+        //         Some(scale?)
+        //     }
+        // } else {
+        //     None
+        // };
 
         // Forward through encoder
         let hidden_states = self.encoder.forward(
             &hidden_states,
             attention_bias.as_ref(),
             rope_embeds.as_ref(),
-            attention_scale.as_ref()
+            // attention_scale.as_ref()
         )?;
 
         Ok(hidden_states)
@@ -729,65 +747,65 @@ impl NewModel {
 }
 
 // Optional pooler implementation
-#[derive(Debug)]
-pub struct NewPooler {
-    dense: Linear,
-}
+// #[derive(Debug)]
+// pub struct NewPooler {
+//     dense: Linear,
+// }
 
-impl NewPooler {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let dense = linear(cfg.hidden_size, cfg.hidden_size, vb.pp("dense"))?;
-        Ok(Self { dense })
-    }
+// impl NewPooler {
+//     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+//         let dense = linear(cfg.hidden_size, cfg.hidden_size, vb.pp("dense"))?;
+//         Ok(Self { dense })
+//     }
 
-    pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let first_token = hidden_states.i((.., 0, ..))?;
-        let pooled = self.dense.forward(&first_token)?;
-        pooled.tanh()
-    }
-}
+//     pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+//         let first_token = hidden_states.i((.., 0, ..))?;
+//         let pooled = self.dense.forward(&first_token)?;
+//         pooled.tanh()
+//     }
+// }
 
-// Complete model with pooler
-#[derive(Debug)]
-pub struct NewModelWithPooler {
-    model: NewModel,
-    pooler: Option<NewPooler>,
-}
+// // Complete model with pooler
+// #[derive(Debug)]
+// pub struct NewModelWithPooler {
+//     model: NewModel,
+//     pooler: Option<NewPooler>,
+// }
 
-impl NewModelWithPooler {
-    pub fn new(cfg: &Config, vb: VarBuilder, add_pooling_layer: bool) -> Result<Self> {
-        let vb_m = vb.pp("new");
-        let model = NewModel::new(cfg, vb_m.pp("model"))?;
-        let pooler = if add_pooling_layer {
-            Some(NewPooler::new(cfg, vb.pp("new").pp("pooler"))?)
-        } else {
-            None
-        };
-        Ok(Self { model, pooler })
-    }
+// impl NewModelWithPooler {
+//     pub fn new(cfg: &Config, vb: VarBuilder, add_pooling_layer: bool) -> Result<Self> {
+//         let vb_m = vb.pp("new");
+//         let model = NewModel::new(cfg, vb_m.pp("model"))?;
+//         let pooler = if add_pooling_layer {
+//             Some(NewPooler::new(cfg, vb.pp("new").pp("pooler"))?)
+//         } else {
+//             None
+//         };
+//         Ok(Self { model, pooler })
+//     }
 
-    pub fn forward(
-        &mut self,
-        input_ids: &Tensor,
-        attention_mask: Option<&Tensor>,
-        token_type_ids: Option<&Tensor>,
-        position_ids: Option<&Tensor>
-    ) -> Result<(Tensor, Option<Tensor>)> {
-        let hidden_states = self.model.forward(
-            input_ids,
-            attention_mask,
-            token_type_ids,
-            position_ids
-        )?;
+//     pub fn forward(
+//         &mut self,
+//         input_ids: &Tensor,
+//         attention_mask: Option<&Tensor>,
+//         token_type_ids: Option<&Tensor>,
+//         position_ids: Option<&Tensor>
+//     ) -> Result<(Tensor, Option<Tensor>)> {
+//         let hidden_states = self.model.forward(
+//             input_ids,
+//             attention_mask,
+//             token_type_ids,
+//             position_ids
+//         )?;
 
-        let pooled_output = match &self.pooler {
-            Some(pooler) => Some(pooler.forward(&hidden_states)?),
-            None => None,
-        };
+//         let pooled_output = match &self.pooler {
+//             Some(pooler) => Some(pooler.forward(&hidden_states)?),
+//             None => None,
+//         };
 
-        Ok((hidden_states, pooled_output))
-    }
-}
+//         Ok((hidden_states, pooled_output))
+//     }
+// }
 
 #[derive(Debug)]
 pub struct EmbeddingModel {
@@ -811,7 +829,7 @@ impl EmbeddingModel {
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, mask: &Tensor) -> Result<Tensor> {
-        let x = self.base_model.forward(input_ids, Some(mask), None, None)?;
+        let x = self.base_model.forward(input_ids, mask)?;//, None, None)?;
         let x = self.pool(&x, mask)?;
         self.lm_head.forward(&x.to_dtype(DType::F32)?)
     }
