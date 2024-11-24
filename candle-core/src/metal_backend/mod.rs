@@ -431,6 +431,12 @@ impl BackendStorage for MetalStorage {
                 (DType::BF16, DType::U32) => "cast_bf16_u32",
                 (DType::BF16, DType::U8) => "cast_bf16_u8",
 
+                (DType::BF16, DType::F8E4M3) => "cast_bf16_f8e4m3",
+                (DType::F8E4M3, DType::BF16) => "cast_f8e4m3_bf16",
+
+                (DType::F32, DType::F8E4M3) => "cast_f32_f8e4m3",
+                (DType::F8E4M3, DType::F32) => "cast_f8e4m3_f32",
+
                 (left, right) => {
                     crate::bail!("Metal contiguous to_dtype {left:?} {right:?} not implemented")
                 }
@@ -2168,7 +2174,7 @@ impl BackendDevice for MetalDevice {
             CpuStorageRef::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::F8E4M3(_) => crate::bail!("Metal device does not yet support F8E4M3."),
+            CpuStorageRef::F8E4M3(storage) => (storage.len(), self.new_buffer_with_data(storage)),
         };
         Ok(Self::Storage::new(buffer?, self.clone(), count, T::DTYPE))
     }
@@ -2184,7 +2190,7 @@ impl BackendDevice for MetalDevice {
             CpuStorage::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::F8E4M3(_) => crate::bail!("Metal device does not yet support F8E4M3."),
+            CpuStorage::F8E4M3(storage) => (storage.len(), self.new_buffer_with_data(storage)),
         };
         Ok(Self::Storage::new(
             buffer?,

@@ -72,6 +72,153 @@ kernel void FN_NAME_STRIDED( \
     output[tid] = static_cast<RIGHT_TYPENAME>(static_cast<IR_TYPENAME>(input[get_strided_index(tid, num_dims, dims, strides)])); \
 } \
 
+uint8_t f32_to_fp8e4m3(float x) {
+    // Transmute float to uint32
+    uint32_t xbits = as_type<uint32_t>(x);
+
+    // Constants for E4M3 interpretation
+    const uint8_t fp8_mantissa_mask = 0x7;
+    const uint16_t fp8_exp_bias = 7;
+    const uint32_t fp8_significand_bits = 4;
+    const uint32_t fp8_mindenorm_o2 = 0x38800000;  // 2^-15 / 2 as float bits
+    const uint32_t fp8_overflow_threshold = 0x43000000;  // 2^8 as float bits
+    const uint32_t fp8_minnorm = 0x39000000;  // 2^-14 as float bits
+    const uint32_t FP_INF_BITS = 0x7F800000;  // Infinity for float
+
+    // Half ULP for FP8 rounding
+    const uint32_t fp8_fp_half_ulp = 1 << (23 - fp8_significand_bits - 1);
+
+    // Extract components
+    uint8_t sign = ((xbits >> 31) << 7);
+    uint8_t exp = (((((xbits >> 23) & 0xFF) - 127) + fp8_exp_bias) & 0xFF);
+    uint8_t mantissa = (xbits >> (23 - fp8_significand_bits)) & fp8_mantissa_mask;
+    uint32_t absx = xbits & 0x7FFFFFFF;
+
+    uint8_t res;
+
+    if (absx <= fp8_mindenorm_o2) {
+        // Zero or underflow
+        res = 0;
+    } else if (absx > FP_INF_BITS) {
+        // Preserve NaNs
+        res = 0x7F;
+    } else if (absx > fp8_overflow_threshold) {
+        // Saturate (NoSat -> NaN)
+        res = 0x7F; // NaN for NoSat
+    } else if (absx >= fp8_minnorm) {
+        // Normal range
+        res = (exp << (fp8_significand_bits - 1)) | mantissa;
+
+        // Rounding
+        uint32_t round = xbits & ((fp8_fp_half_ulp << 1) - 1);
+        if ((round > fp8_fp_half_ulp) || ((round == fp8_fp_half_ulp) && (mantissa & 1))) {
+            res += 1;
+        }
+    } else {
+        // Denormal numbers
+        uint8_t shift = 1 - exp;
+        mantissa |= (1 << (fp8_significand_bits - 1));
+        res = mantissa >> shift;
+
+        // Rounding
+        uint32_t round = (xbits | (1U << 22)) & ((fp8_fp_half_ulp << (shift + 1)) - 1);
+        if ((round > (fp8_fp_half_ulp << shift)) || 
+            ((round == (fp8_fp_half_ulp << shift)) && (res & 1))) {
+            res += 1;
+        }
+    }
+
+    // Combine result with sign
+    return res | sign;
+}
+
+ushort fp8e4m3_to_fp16(uchar x) {
+    ushort ur = (ushort(x) << 8);
+
+    ushort sign = ur & 0x8000U;
+    ushort exponent = static_cast<ushort>(((ur & 0x7800U) >> 1) + 0x2000U);
+    ushort mantissa = static_cast<ushort>((ur & 0x0700U) >> 1);
+    uchar absx = 0x7FU & static_cast<uchar>(x);
+
+    if (absx == 0x7FU) {
+        // NaN
+        ur = 0x7FFFU; // fp16 canonical NaN, discard sign
+    } else if (exponent == 0x2000U) {
+        // zero or denormal
+        if (mantissa != 0U) {
+            // normalize
+            mantissa = static_cast<ushort>(mantissa << 1);
+            while ((mantissa & 0x0400U) == 0U) {
+                mantissa = static_cast<ushort>(mantissa << 1);
+                exponent = static_cast<ushort>(exponent - 0x0400U);
+            }
+            // discard implicit leading bit
+            mantissa &= 0x03FFU;
+        } else {
+            // Zero
+            exponent = 0U;
+        }
+
+        ur = (sign | exponent) | mantissa;
+    } else {
+        ur = (sign | exponent) | mantissa;
+    }
+
+    return ur;
+}
+
+kernel void cast_bf16_f8e4m3(
+    constant size_t &dim,
+    device const bfloat *input,
+    device uint8_t *output,
+    uint tid [[ thread_position_in_grid ]]
+) {
+    if (tid >= dim) {
+        return;
+    }
+    float x = static_cast<float>(input[tid]);
+    output[tid] = f32_to_fp8e4m3(x);
+}
+
+kernel void cast_f8e4m3_bf16(
+    constant size_t &dim,
+    device const uint8_t *input,
+    device bfloat *output,
+    uint tid [[ thread_position_in_grid ]]
+) {
+    if (tid >= dim) {
+        return;
+    }
+    half x = as_type<half>(fp8e4m3_to_fp16(input[tid]));
+    output[tid] = static_cast<bfloat>(x);
+}
+
+kernel void cast_f32_f8e4m3(
+    constant size_t &dim,
+    device const float *input,
+    device uint8_t *output,
+    uint tid [[ thread_position_in_grid ]]
+) {
+    if (tid >= dim) {
+        return;
+    }
+    float x = input[tid];
+    output[tid] = f32_to_fp8e4m3(x);
+}
+
+kernel void cast_f8e4m3_f32(
+    constant size_t &dim,
+    device const uint8_t *input,
+    device float *output,
+    uint tid [[ thread_position_in_grid ]]
+) {
+    if (tid >= dim) {
+        return;
+    }
+    half x = as_type<half>(fp8e4m3_to_fp16(input[tid]));
+    output[tid] = static_cast<float>(x);
+}
+
 // u32
 CAST(cast_u32_f32, cast_u32_f32_strided, uint32_t, float)
 CAST(cast_u32_u8, cast_u32_u8_strided, uint32_t, uint8_t)
