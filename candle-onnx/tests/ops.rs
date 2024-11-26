@@ -5897,7 +5897,10 @@ fn test_sign_operation() -> Result<()> {
     }));
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
-    inputs.insert(INPUT_X.to_string(), Tensor::new(vec![-2f32, -1., 0., 1., 2.], &Device::Cpu)?);
+    inputs.insert(
+        INPUT_X.to_string(),
+        Tensor::new(vec![-2f32, -1., 0., 1., 2.], &Device::Cpu)?,
+    );
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
