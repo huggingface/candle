@@ -545,6 +545,7 @@ impl<'a> VarBuilder<'a> {
         Ok(Self::from_backend(Box::new(pth), dtype, dev.clone()))
     }
     /// Initializes a `VarBuilder` that retrieves tensors stored in a pytorch pth file.
+    /// similar to [`from_pth`] but requires a `state_key`.
     pub fn from_pth_with_state<P: AsRef<std::path::Path>>(
         p: P,
         dtype: DType,
