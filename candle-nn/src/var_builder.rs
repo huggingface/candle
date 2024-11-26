@@ -549,10 +549,10 @@ impl<'a> VarBuilder<'a> {
     pub fn from_pth_with_state<P: AsRef<std::path::Path>>(
         p: P,
         dtype: DType,
-        state_key: String,
+        state_key: &str,
         dev: &Device,
     ) -> Result<Self> {
-        let pth = candle::pickle::PthTensors::new(p, Some(state_key.as_str()))?;
+        let pth = candle::pickle::PthTensors::new(p, Some(state_key))?;
         Ok(Self::from_backend(Box::new(pth), dtype, dev.clone()))
     }
     /// Gets a VarBuilder that applies some renaming function on tensor it gets queried for before
