@@ -75,7 +75,7 @@ impl Map2U8 for Cmp {
 
 struct WCond<'a, T: IntDType>(&'a [T], &'a Layout);
 
-impl<'a, I: IntDType> Map2 for WCond<'a, I> {
+impl<I: IntDType> Map2 for WCond<'_, I> {
     const OP: &'static str = "where";
     #[inline(always)]
     fn f<T: WithDType>(&self, t: &[T], t_l: &Layout, f: &[T], f_l: &Layout) -> Result<Vec<T>> {
@@ -225,7 +225,7 @@ struct ReduceSum<'a> {
     reduce_dims_and_stride: Vec<(usize, usize)>,
 }
 
-impl<'a> ReduceSum<'a> {
+impl ReduceSum<'_> {
     #[inline(always)]
     fn fold_impl<T>(&self, src: &[T], src_l: &Layout, start_elt: T) -> Result<Vec<T>>
     where
@@ -290,7 +290,7 @@ impl<'a> ReduceSum<'a> {
     }
 }
 
-impl<'a> Map1 for ReduceSum<'a> {
+impl Map1 for ReduceSum<'_> {
     #[inline(always)]
     fn f<T: WithDType>(&self, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
         self.fold_impl(src, src_l, T::zero())
@@ -463,7 +463,7 @@ struct Gather<'a, I: IntDType> {
     dim: usize,
 }
 
-impl<'a, I: IntDType> Map1 for Gather<'a, I> {
+impl<I: IntDType> Map1 for Gather<'_, I> {
     fn f<T: WithDType>(&self, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
         let ids = match self.ids_l.contiguous_offsets() {
             Some((a, b)) => &self.ids[a..b],
@@ -516,7 +516,7 @@ struct IndexSelect<'a, T: IntDType> {
     dim: usize,
 }
 
-impl<'a, I: IntDType> Map1 for IndexSelect<'a, I> {
+impl<I: IntDType> Map1 for IndexSelect<'_, I> {
     fn f<T: WithDType>(&self, src: &[T], layout: &Layout) -> Result<Vec<T>> {
         let src = match layout.contiguous_offsets() {
             Some((a, b)) => &src[a..b],
@@ -569,7 +569,7 @@ struct ScatterAdd<'a, I: IntDType> {
     dim: usize,
 }
 
-impl<'a, I: IntDType> Map2 for ScatterAdd<'a, I> {
+impl<I: IntDType> Map2 for ScatterAdd<'_, I> {
     const OP: &'static str = "scatter-add";
     fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
         let dst_len = l1.shape().elem_count();
@@ -625,7 +625,7 @@ struct IndexAdd<'a, I: IntDType> {
     dim: usize,
 }
 
-impl<'a, I: IntDType> Map2 for IndexAdd<'a, I> {
+impl<I: IntDType> Map2 for IndexAdd<'_, I> {
     const OP: &'static str = "index-add";
     // https://pytorch.org/docs/stable/generated/torch.Tensor.index_add_.html#torch.Tensor.index_add_
     // v1, l1 -> self
@@ -745,7 +745,7 @@ fn copy_strided_src_<T: Copy>(src: &[T], dst: &mut [T], dst_offset: usize, src_l
 
 struct Conv1D<'a>(&'a crate::conv::ParamsConv1D);
 
-impl<'a> Map2 for Conv1D<'a> {
+impl Map2 for Conv1D<'_> {
     const OP: &'static str = "conv1d";
     fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
         let p = self.0;
@@ -969,7 +969,7 @@ impl Map1 for Col2Im1D {
 
 struct ConvTranspose1D<'a>(&'a crate::conv::ParamsConvTranspose1D);
 
-impl<'a> Map2 for ConvTranspose1D<'a> {
+impl Map2 for ConvTranspose1D<'_> {
     const OP: &'static str = "conv_transpose1d";
     fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
         let p = self.0;
@@ -1038,7 +1038,7 @@ impl<'a> Map2 for ConvTranspose1D<'a> {
 
 struct Conv2D<'a>(&'a crate::conv::ParamsConv2D);
 
-impl<'a> Map2 for Conv2D<'a> {
+impl Map2 for Conv2D<'_> {
     const OP: &'static str = "conv2d";
     fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
         let p = self.0;
@@ -1126,7 +1126,7 @@ impl<'a> Map2 for Conv2D<'a> {
 
 struct ConvTranspose2D<'a>(&'a crate::conv::ParamsConvTranspose2D);
 
-impl<'a> Map2 for ConvTranspose2D<'a> {
+impl Map2 for ConvTranspose2D<'_> {
     const OP: &'static str = "conv_transpose2d";
     fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
         let p = self.0;

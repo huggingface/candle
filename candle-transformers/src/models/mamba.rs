@@ -18,7 +18,7 @@ pub struct Config {
 impl Config {
     fn vocab_size(&self) -> usize {
         let pad = self.pad_vocab_size_multiple;
-        (self.vocab_size + pad - 1) / pad * pad
+        self.vocab_size.div_ceil(pad) * pad
     }
 
     fn dt_rank(&self) -> usize {

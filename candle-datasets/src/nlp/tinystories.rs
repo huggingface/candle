@@ -87,7 +87,7 @@ impl<'a> DatasetRandomIter<'a> {
     }
 }
 
-impl<'a> Iterator for DatasetRandomIter<'a> {
+impl Iterator for DatasetRandomIter<'_> {
     type Item = Result<(Tensor, Tensor)>;
 
     fn next(&mut self) -> Option<Self::Item> {

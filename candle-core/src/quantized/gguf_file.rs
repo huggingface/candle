@@ -458,7 +458,7 @@ impl Content {
             Some(Value::I32(v)) if *v >= 0 => *v as u64,
             _ => DEFAULT_ALIGNMENT,
         };
-        let tensor_data_offset = (position + alignment - 1) / alignment * alignment;
+        let tensor_data_offset = position.div_ceil(alignment) * alignment;
         Ok(Self {
             magic,
             metadata,

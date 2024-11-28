@@ -20,7 +20,7 @@ pub struct VarBuilderArgs<'a, B: Backend> {
     _phantom: std::marker::PhantomData<&'a B>,
 }
 
-impl<'a, B: Backend> Clone for VarBuilderArgs<'a, B> {
+impl<B: Backend> Clone for VarBuilderArgs<'_, B> {
     fn clone(&self) -> Self {
         Self {
             data: self.data.clone(),
@@ -77,7 +77,7 @@ pub trait SimpleBackend: Send + Sync {
     fn contains_tensor(&self, name: &str) -> bool;
 }
 
-impl<'a> Backend for Box<dyn SimpleBackend + 'a> {
+impl Backend for Box<dyn SimpleBackend + '_> {
     type Hints = crate::Init;
     fn get(
         &self,
@@ -95,7 +95,7 @@ impl<'a> Backend for Box<dyn SimpleBackend + 'a> {
     }
 }
 
-impl<'a, B: Backend> VarBuilderArgs<'a, B> {
+impl<B: Backend> VarBuilderArgs<'_, B> {
     pub fn new_with_args(backend: B, dtype: DType, dev: &Device) -> Self {
         let data = TensorData {
             backend: Arc::new(backend),
@@ -313,7 +313,7 @@ pub struct SafeTensorWithRouting<'a> {
     safetensors: Vec<SafeTensors<'a>>,
 }
 
-impl<'a> SimpleBackend for SafeTensorWithRouting<'a> {
+impl SimpleBackend for SafeTensorWithRouting<'_> {
     fn get(
         &self,
         s: Shape,
@@ -466,7 +466,7 @@ impl SimpleBackend for candle::safetensors::BufferedSafetensors {
     }
 }
 
-impl<'a> SimpleBackend for candle::safetensors::SliceSafetensors<'a> {
+impl SimpleBackend for candle::safetensors::SliceSafetensors<'_> {
     fn get(
         &self,
         s: Shape,
@@ -757,7 +757,7 @@ pub struct Rename<'a, R: Renamer> {
     renamer: R,
 }
 
-impl<'a, R: Renamer + Sync + Send> SimpleBackend for Rename<'a, R> {
+impl<R: Renamer + Sync + Send> SimpleBackend for Rename<'_, R> {
     fn get(
         &self,
         s: Shape,

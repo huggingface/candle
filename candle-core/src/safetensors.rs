@@ -176,7 +176,7 @@ pub trait Load {
     fn load(&self, device: &Device) -> Result<Tensor>;
 }
 
-impl<'a> Load for st::TensorView<'a> {
+impl Load for st::TensorView<'_> {
     fn load(&self, device: &Device) -> Result<Tensor> {
         convert(self, device)
     }
