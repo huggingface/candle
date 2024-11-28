@@ -32,7 +32,7 @@ impl<'a> StridedIndex<'a> {
     }
 }
 
-impl<'a> Iterator for StridedIndex<'a> {
+impl Iterator for StridedIndex<'_> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
