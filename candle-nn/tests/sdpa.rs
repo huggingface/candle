@@ -115,7 +115,7 @@ mod metal_sdpa_tests {
         let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
             .sum_all()?
             .to_scalar()?;
-
+        
         assert!(error <= 0.0004, "{}", error);
 
         Ok(())

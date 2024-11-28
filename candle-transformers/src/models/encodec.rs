@@ -89,7 +89,7 @@ impl Config {
 
     fn frame_rate(&self) -> usize {
         let hop_length: usize = self.upsampling_ratios.iter().product();
-        (self.sampling_rate + hop_length - 1) / hop_length
+        self.sampling_rate.div_ceil(hop_length)
     }
 
     fn num_quantizers(&self) -> usize {
