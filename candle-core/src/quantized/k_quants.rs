@@ -3,6 +3,7 @@ use super::utils::{
     make_qkx1_quants, make_qx_quants, nearest_int,
 };
 use super::GgmlDType;
+use crate::quantized::utils::{make_qkx3_quants, make_qp_quants};
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use half::{bf16, f16};
@@ -30,6 +31,12 @@ pub trait GgmlType: Sized + Clone + Send + Sync {
     }
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()>;
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()>;
+    fn from_float_imatrix(_xs: &[f32], _ys: &mut [Self], _imatrix_weights: &[f32]) -> Result<()> {
+        crate::bail!(
+            "`from_float_imatrix` is unimplemented for {:?}",
+            Self::DTYPE
+        );
+    }
 
     /// Dot product used as a building block for quantized mat-mul.
     /// n is the number of elements to be considered.
@@ -1309,6 +1316,74 @@ impl GgmlType for BlockQ4K {
         }
         Ok(())
     }
+
+    fn from_float_imatrix(xs: &[f32], ys: &mut [Self], imatrix_weights: &[f32]) -> Result<()> {
+        for (sblk_idx, (block, x)) in group_for_quantization(xs, ys)?.into_iter().enumerate() {
+            let mut mins: [f32; QK_K / 32] = [0.0; QK_K / 32];
+            let mut scales: [f32; QK_K / 32] = [0.0; QK_K / 32];
+            let mut weights: [f32; 32] = [0.0; 32];
+            let mut sw: [f32; QK_K / 32] = [0.0; QK_K / 32];
+            let mut ls: [u8; QK_K / 32] = [0; QK_K / 32];
+            let mut lm: [u8; QK_K / 32] = [0; QK_K / 32];
+
+            let sum_x2 = x.iter().map(|x| x * x).sum::<f32>();
+            let sigma2 = 2. * sum_x2 / QK_K as f32;
+            // let av_x = sigma2.sqrt();
+
+            for (j, x_scale_slice) in x.chunks_exact(32).enumerate() {
+                for (l, (w_elem, x_elem)) in weights.iter_mut().zip(x_scale_slice).enumerate() {
+                    let imatrix_row = sblk_idx % QK_K;
+                    let imatrix_w = imatrix_weights[imatrix_row * QK_K + 32 * j + l];
+                    *w_elem = imatrix_w * (sigma2 + x_elem * x_elem).sqrt();
+                }
+                let sumw = weights.iter().sum::<f32>();
+                sw[j] = sumw;
+                (scales[j], mins[j]) =
+                    make_qkx3_quants(15, x_scale_slice, Some(&weights), -0.9, 0.05, 36, false);
+            }
+
+            let d_block = make_qp_quants(QK_K / 32, 63, &scales, &mut ls, &sw);
+            let m_block = make_qp_quants(QK_K / 32, 63, &mins, &mut lm, &sw);
+            for j in 0..QK_K / 32 {
+                let ls_val = ls[j];
+                let lm_val = lm[j];
+                if j < 4 {
+                    block.scales[j] = ls_val;
+                    block.scales[j + 4] = lm_val;
+                } else {
+                    block.scales[j + 4] = (ls_val & 0xF) | ((lm_val & 0xF) << 4);
+                    block.scales[j - 4] |= (ls_val >> 4) << 6;
+                    block.scales[j] |= (lm_val >> 4) << 6;
+                }
+            }
+
+            block.d = f16::from_f32(d_block);
+            block.dmin = f16::from_f32(m_block);
+
+            let mut l: [u8; QK_K] = [0; QK_K];
+            for j in 0..QK_K / 32 {
+                let (sc, m) = get_scale_min_k4(j, &block.scales);
+                let d = block.d.to_f32() * sc as f32;
+                if d != 0.0 {
+                    let dm = block.dmin.to_f32() * m as f32;
+                    for ii in 0..32 {
+                        let l_val = nearest_int((x[32 * j + ii] + dm) / d);
+                        l[32 * j + ii] = l_val.clamp(0, 15) as u8;
+                    }
+                }
+            }
+
+            let q = &mut block.qs;
+            for j in (0..QK_K).step_by(64) {
+                for l_val in 0..32 {
+                    let offset_index = (j / 64) * 32 + l_val;
+                    q[offset_index] = l[j + l_val] | (l[j + l_val + 32] << 4);
+                }
+            }
+        }
+        Ok(())
+    }
+
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L735
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
         for (block, y) in group_for_dequantization(xs, ys)? {
