@@ -40,4 +40,4 @@ In this example, we pass a prompt to the model and it outputs the vector encodin
 29.25GB at fp32
 
 ## License
-This model should not be used for any commercial purpose. Refer the [license](https://spdx.org/licenses/CC-BY-NC-4.0) for the detailed terms.
+CC-BY-NC-4.0. This model should not be used for any commercial purpose. Refer the [license](https://spdx.org/licenses/CC-BY-NC-4.0) for the detailed terms.
