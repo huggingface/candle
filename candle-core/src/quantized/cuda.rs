@@ -472,6 +472,67 @@ impl QCudaStorage {
         Ok(())
     }
 
+    pub fn quantize_imatrix(
+        &mut self,
+        src: &CudaStorage,
+        imatrix_weights: &[f32],
+        n_per_row: usize,
+    ) -> Result<()> {
+        // Run the quantization on cpu.
+        let src = match &src.slice {
+            crate::cuda_backend::CudaStorageSlice::F32(data) => {
+                self.device.dtoh_sync_copy(data).w()?
+            }
+            _ => crate::bail!("only f32 can be quantized"),
+        };
+        let src_len = src.len();
+        let src = crate::Storage::Cpu(crate::CpuStorage::F32(src));
+        let mut qcpu_storage = crate::Device::Cpu.qzeros(src_len, self.dtype)?;
+        qcpu_storage.quantize_imatrix(&src, imatrix_weights, n_per_row)?;
+        let data = qcpu_storage.data()?;
+        let padded_len =
+            data.len() + MATRIX_ROW_PADDING * self.dtype.type_size() / self.dtype.block_size();
+        let mut inner = unsafe { self.device.alloc::<u8>(padded_len).w()? };
+        self.device
+            .htod_sync_copy_into(data.as_ref(), &mut inner.slice_mut(..data.len()))
+            .w()?;
+        self.data = PaddedCudaSlice {
+            inner,
+            len: data.len(),
+        };
+        Ok(())
+    }
+
+    pub fn quantize_imatrix_onto(
+        &mut self,
+        src: &crate::CpuStorage,
+        imatrix_weights: &[f32],
+        n_per_row: usize,
+    ) -> Result<()> {
+        // Run the quantization on cpu.
+        let src_len = src.as_slice::<f32>()?.len();
+        let mut qcpu_storage = crate::Device::Cpu.qzeros(src_len, self.dtype)?;
+
+        if let QStorage::Cpu(storage) = &mut qcpu_storage {
+            storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row)?;
+        } else {
+            unreachable!()
+        }
+
+        let data = qcpu_storage.data()?;
+        let padded_len =
+            data.len() + MATRIX_ROW_PADDING * self.dtype.type_size() / self.dtype.block_size();
+        let mut inner = unsafe { self.device.alloc::<u8>(padded_len).w()? };
+        self.device
+            .htod_sync_copy_into(data.as_ref(), &mut inner.slice_mut(..data.len()))
+            .w()?;
+        self.data = PaddedCudaSlice {
+            inner,
+            len: data.len(),
+        };
+        Ok(())
+    }
+
     pub fn quantize_onto(&mut self, src: &crate::CpuStorage) -> Result<()> {
         // Run the quantization on cpu.
         let src_len = src.as_slice::<f32>()?.len();
