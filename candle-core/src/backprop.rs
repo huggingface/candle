@@ -1,4 +1,4 @@
-/// Methods for backpropagation of gradients.
+//! Methods for backpropagation of gradients.
 use crate::op::{BinaryOp, Op, ReduceOp, UnaryOp};
 use crate::{Error, Result, Tensor, TensorId};
 use std::collections::HashMap;

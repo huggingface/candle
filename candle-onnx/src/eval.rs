@@ -1944,6 +1944,12 @@ fn simple_eval_(
 
                 values.insert(node.output[0].clone(), out);
             }
+            // https://onnx.ai/onnx/operators/onnx__Sign.html
+            "Sign" => {
+                let input = get(&node.input[0])?;
+                let output = input.sign()?;
+                values.insert(node.output[0].clone(), output);
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }

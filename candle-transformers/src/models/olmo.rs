@@ -1,3 +1,19 @@
+//! OLMo (Open Language Model) implementation
+//!
+//! See OLMo model details at:
+//! - [Hugging Face](https://huggingface.co/allenai/OLMo)
+//! - [OLMo Paper](https://allenai.org/olmo)
+//!
+//! The model uses:
+//! - RoPE embeddings
+//! - Sliding window attention
+//! - Transformer architecture
+//!
+//! References:
+//! - [Hugging Face Implementation](https://huggingface.co/allenai/OLMo)
+//! - [OLMo Paper](https://allenai.org/olmo)
+//!
+
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{linear_b, linear_no_bias, Activation, LayerNorm, Linear, VarBuilder};
 use std::sync::Arc;

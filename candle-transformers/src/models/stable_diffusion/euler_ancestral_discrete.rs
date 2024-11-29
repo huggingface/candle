@@ -1,12 +1,7 @@
 //! Ancestral sampling with Euler method steps.
 //!
-//! Reference implementation in Rust:
+//! Based on the original [`k-diffusion` implementation by Katherine Crowson]( https://github.com/crowsonkb/k-diffusion/blob/481677d114f6ea445aa009cf5bd7a9cdee909e47/k_diffusion/sampling.py#L72).
 //!
-//! https://github.com/pykeio/diffusers/blob/250b9ad1898af41e76a74c0d8d4292652823338a/src/schedulers/euler_ancestral_discrete.rs
-//!
-//! Based on the original [`k-diffusion` implementation by Katherine Crowson][kd].
-///
-/// [kd]: https://github.com/crowsonkb/k-diffusion/blob/481677d114f6ea445aa009cf5bd7a9cdee909e47/k_diffusion/sampling.py#L72
 use super::{
     schedulers::{
         betas_for_alpha_bar, BetaSchedule, PredictionType, Scheduler, SchedulerConfig,
@@ -29,7 +24,7 @@ pub struct EulerAncestralDiscreteSchedulerConfig {
     pub steps_offset: usize,
     /// prediction type of the scheduler function, one of `epsilon` (predicting
     /// the noise of the diffusion process), `sample` (directly predicting the noisy sample`)
-    /// or `v_prediction` (see section 2.4 https://imagen.research.google/video/paper.pdf)
+    /// or `v_prediction` (see [section 2.4](https://imagen.research.google/video/paper.pdf))
     pub prediction_type: PredictionType,
     /// number of diffusion steps used to train the model
     pub train_timesteps: usize,

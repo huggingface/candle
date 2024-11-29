@@ -3,8 +3,11 @@
 //! Contrastive Language-Image Pre-Training (CLIP) is an architecture trained on
 //! pairs of images with related texts.
 //!
-//! https://github.com/openai/CLIP
-//! https://github.com/huggingface/transformers/tree/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip
+//! - 💻 [GH Link](https://github.com/openai/CLIP)
+//! - 💻 Transformers Python [reference implementation](https://github.com/huggingface/transformers/tree/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip)
+//! - 🤗 [HF Model](https://huggingface.co/openai/clip-vit-large-patch14-336)
+//!
+
 use self::{
     text_model::{Activation, ClipTextTransformer},
     vision_model::ClipVisionTransformer,
