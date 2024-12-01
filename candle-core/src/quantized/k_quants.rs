@@ -1222,7 +1222,7 @@ impl GgmlType for BlockQ3K {
                 if j < 8 {
                     block.scales[j] = (l & 0xF) as u8;
                 } else {
-                    block.scales[j - 8] = ((l & 0xF) << 4) as u8;
+                    block.scales[j - 8] |= ((l & 0xF) << 4) as u8;
                 }
                 let l = l >> 4;
                 block.scales[j % 4 + 8] |= (l << (2 * (j / 4))) as u8;

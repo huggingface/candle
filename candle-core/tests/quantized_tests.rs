@@ -763,9 +763,9 @@ fn imatrix_quantize_q3k() -> Result<()> {
     let dequant1 = quant1.dequantize(cpu)?;
     let dequant2 = quant2.dequantize(cpu)?;
 
-    let _err1 = (dequant1 - &xs)?.abs()?.mean_all()?.to_scalar::<f32>()?;
+    let err1 = (dequant1 - &xs)?.abs()?.mean_all()?.to_scalar::<f32>()?;
     let err2 = (dequant2 - &xs)?.abs()?.mean_all()?.to_scalar::<f32>()?;
-    assert!(err2 < 0.16);
+    assert!(err2 < err1, "err2 {err2} > err1 {err1}");
 
     Ok(())
 }
