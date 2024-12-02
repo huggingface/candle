@@ -94,15 +94,14 @@ fn load_pipeline(
     } else {
         wgpu::PipelineCompilationOptions {
             constants: consts,
-            zero_initialize_workgroup_memory: true,
-            vertex_pulling_transform: false,
+            zero_initialize_workgroup_memory: true
         }
     };
     return device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,
         layout: Some(pipeline_layout),
         module: &shader,
-        entry_point,
+        entry_point: Some(entry_point),
         compilation_options,
         cache: None,
     });

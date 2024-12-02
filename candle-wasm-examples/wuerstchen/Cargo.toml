@@ -42,7 +42,7 @@ wasm-logger = "0.2.0"
 thiserror = "1.0.61"
 
 [dependencies.web-sys]
-version = "0.3.4"
+version = "0.3.74"
 features = [
   'Headers',
   'Request',

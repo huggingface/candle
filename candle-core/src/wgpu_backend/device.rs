@@ -372,8 +372,11 @@ impl fmt::Debug for MatmulAlgorithm {
     }
 }
 
+static DEVICE_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 #[derive(Debug)]
 pub struct WgpuDeviceInner {
+    pub device_id : u32,
     pub device: wgpu::Device,
     pub backend: wgpu::Backend,
     pub device_limits: wgpu::Limits, //we cache the limits here, because device.limit() was relatively slow on the browser
@@ -537,6 +540,7 @@ impl WgpuDevice {
 
         Ok(WgpuDevice {
             inner: Arc::new(WgpuDeviceInner {
+                device_id : DEVICE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
                 device,
                 device_limits,
                 device_features: features,
@@ -854,7 +858,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
     }
 
     fn same_device(&self, other: &Self) -> bool {
-        self.device.global_id() == other.device.global_id()
+        self.device_id == other.device_id
     }
 
     fn zeros_impl(

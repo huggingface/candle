@@ -37,7 +37,7 @@ serde_json = "1.0.120"
 #hf-hub = {version="0.3.0", default-features = false} 
 
 [dependencies.web-sys]
-version = "0.3.4"
+version = "0.3.74"
 features = [
   'Headers',
   'Request',
