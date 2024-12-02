@@ -8,13 +8,6 @@ use web_sys::{FileSystemGetDirectoryOptions, FileSystemGetFileOptions, FileSyste
 
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(js_namespace = ["navigator", "storage"])]
-    async fn getDirectory() -> JsValue;
-}
-
-
-#[wasm_bindgen]
-extern "C" {
     #[wasm_bindgen (js_name = FileSystemDirectoryHandle, extends=::web_sys::FileSystemDirectoryHandle, typescript_type = "FileSystemDirectoryHandle")]
     #[derive(Debug, Clone, PartialEq)]
     #[doc = "The `FileSystemDirectoryHandle` class."]
@@ -25,10 +18,7 @@ extern "C" {
     pub type FileSystemDirectoryHandleCustom;
     # [wasm_bindgen (method , structural , js_class = "FileSystemDirectoryHandle" , js_name = entries)]
     pub fn entries(this: &FileSystemDirectoryHandleCustom) -> ::js_sys::AsyncIterator;
-
 }
-
-
 
 #[wasm_bindgen]
 extern "C" {
@@ -48,8 +38,16 @@ pub enum FileSystemDirectoryEntries{
     File(web_sys::FileSystemFileHandle),
 }
 
-pub async fn get_root() -> web_sys::FileSystemDirectoryHandle{
-    getDirectory().await.into()
+pub async fn get_root() -> GenericResult<web_sys::FileSystemDirectoryHandle> {
+    let storage = js_sys::Reflect::get(
+        &web_sys::window().ok_or("no global `window` exists")?.navigator(),
+        &JsValue::from_str("storage"),
+    )?;
+    let get_directory = js_sys::Reflect::get(&storage, &JsValue::from_str("getDirectory"))?
+        .dyn_into::<js_sys::Function>()?;
+    let promise = get_directory.call0(&storage)?.dyn_into::<js_sys::Promise>()?;
+    let result = JsFuture::from(promise).await?;
+    result.dyn_into::<web_sys::FileSystemDirectoryHandle>().map_err(|_| "Failed to convert result".into())
 }
 
 pub async fn get_dir_entries(dir : FileSystemDirectoryHandleCustom) -> GenericResult<Vec<(String, FileSystemDirectoryEntries)>> {
@@ -99,7 +97,7 @@ pub async fn clear_directory(directory : web_sys::FileSystemDirectoryHandle, rec
 
 pub async fn clear_all(recursive : bool) -> GenericResult<()>{
     log::info!("clear all");
-    clear_directory(get_root().await, recursive).await
+    clear_directory(get_root().await?, recursive).await
 }
 
 
@@ -116,7 +114,7 @@ where
     P: AsRef<Path>
 {
     log::info!("create file: {:?}", file_name.as_ref());
-    let mut root = get_root().await;
+    let mut root = get_root().await?;
     
     let path = file_name.as_ref();
     let components : Vec<_> = path.components().collect();
@@ -147,7 +145,7 @@ pub async fn open_file<P>(file_name : P)  -> GenericResult<web_sys::FileSystemFi
 where
     P: AsRef<Path>
 {
-    let mut root = get_root().await;
+    let mut root = get_root().await?;
     let path = file_name.as_ref();
     let components : Vec<_> = path.components().collect();
     for (index, p) in components.iter().enumerate(){
@@ -171,7 +169,7 @@ pub async fn open_dir<P>(file_name : P)  -> GenericResult<web_sys::FileSystemDir
 where
     P: AsRef<Path>
 {
-    let mut root = get_root().await;
+    let mut root = get_root().await?;
     let path = file_name.as_ref();
     let components : Vec<_> = path.components().collect();
     for p in components.iter(){

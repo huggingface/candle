@@ -45,6 +45,8 @@ features = [
   'RequestMode',
   'Response',
   'Window',
+  'Navigator',
+  'StorageManager',
   'File',
   'FileSystem',
   'FileSystemDirectoryEntry',
