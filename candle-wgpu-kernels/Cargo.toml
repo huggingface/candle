@@ -1,6 +1,6 @@
 [package]
 name = "candle-wgpu-kernels"
-version = "0.7.2"
+version = "0.8.0"
 edition = "2021"
 
 description = "Wgpu kernels for Candle"

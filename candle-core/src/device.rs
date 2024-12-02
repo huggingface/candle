@@ -138,6 +138,7 @@ impl Device {
             Self::Cuda(d) => Ok(d),
             Self::Cpu => crate::bail!("expected a cuda device, got cpu"),
             Self::Metal(_) => crate::bail!("expected a cuda device, got Metal"),
+            Self::Wgpu(_) => crate::bail!("expected a cuda device, got Wgpu"),
         }
     }
 
@@ -146,6 +147,16 @@ impl Device {
             Self::Cuda(_) => crate::bail!("expected a metal device, got cuda"),
             Self::Cpu => crate::bail!("expected a metal device, got cpu"),
             Self::Metal(d) => Ok(d),
+            Self::Wgpu(_) => crate::bail!("expected a metal device, got Wgpu"),
+        }
+    }
+
+    pub fn as_wgpu_device(&self) -> Result<&crate::WgpuDevice> {
+        match self {
+            Self::Cuda(_) => crate::bail!("expected a wgpu device, got cuda"),
+            Self::Cpu => crate::bail!("expected a wgpu device, got cpu"),
+            Self::Metal(_) => crate::bail!("expected a wgpu device, got metal"),
+            Self::Wgpu(d) => Ok(d),
         }
     }
 
