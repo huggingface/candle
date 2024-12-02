@@ -3,7 +3,7 @@
 //! Contrastive Language-Image Pre-Training (CLIP) is an architecture trained on
 //! pairs of images with related texts.
 //!
-//! https://github.com/openai/CLIP
+//! - [CLIP](https://github.com/openai/CLIP)
 use candle::{DType, Device, Result, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;

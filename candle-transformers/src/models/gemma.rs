@@ -1,3 +1,9 @@
+//! Gemma inference implementation.
+//!
+//! See ["Gemma: Open Models Based on Gemini Technology"](https://blog.google/technology/developers/gemma-open-ai-model/)
+//!
+//! Based on implementation from Google and PyTorch
+
 use std::sync::Arc;
 
 use candle::{DType, Device, Module, Result, Tensor, D};

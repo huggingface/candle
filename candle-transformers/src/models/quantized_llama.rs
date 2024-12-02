@@ -1,3 +1,21 @@
+//! Quantized llama model implementation.
+//!
+//! This provides a quantized implementation of the llama language model architecture.
+//! The model implements parameter efficient quantization for reduced memory usage
+//! while maintaining model quality.
+//!
+//! Key characteristics:
+//! - Transformer decoder architecture
+//! - Support for 2/3/4/8-bit quantization
+//! - Optimized memory usage through quantization
+//! - Configurable model sizes and parameter counts
+//!
+//! - 💻 [GH Link](https://github.com/facebookresearch/llama)
+//! - 📝 [Paper](https://arxiv.org/abs/2302.13971)
+//!
+//! ![](https://raw.githubusercontent.com/huggingface/candle/main/candle-examples/examples/quantized/assets/aoc.gif)
+//!
+
 use std::collections::HashMap;
 
 use crate::quantized_nn::RmsNorm;
@@ -207,21 +225,27 @@ impl LayerWeights {
         };
         self.kv_cache = Some((k.clone(), v.clone()));
 
-        // Support for MQA, useful for 70B models and mistral.
-        let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
-        let v = crate::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
+        let y = if q.device().is_metal() && seq_len == 1 {
+            // SDPA will do MQA for us
+            candle_nn::ops::sdpa(&q, &k, &v, 1. / (self.head_dim as f32).sqrt(), 1.)?
+        } else {
+            // Support for MQA, useful for 70B models and mistral.
+            let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
+            let v = crate::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-        let att = match mask {
-            None => att,
-            Some(mask) => {
-                let mask = mask.broadcast_as(att.shape())?;
-                masked_fill(&att, &mask, &self.neg_inf)?
-            }
+            let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+            let att = match mask {
+                None => att,
+                Some(mask) => {
+                    let mask = mask.broadcast_as(att.shape())?;
+                    masked_fill(&att, &mask, &self.neg_inf)?
+                }
+            };
+            let att = candle_nn::ops::softmax_last_dim(&att)?;
+            // Convert to contiguous as matmul doesn't support strided vs for now.
+            att.matmul(&v.contiguous()?)?
         };
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
-        let y = att.matmul(&v.contiguous()?)?;
+
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.forward(&y)?;
         Ok(y)
@@ -353,13 +377,16 @@ impl ModelWeights {
         let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
-        let tok_embeddings = tok_embeddings.dequantize(device)?;
+        let tok_embeddings_q = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = tok_embeddings_q.dequantize(device)?;
         let norm = RmsNorm::from_qtensor(
             ct.tensor(reader, "output_norm.weight", device)?,
             rms_norm_eps,
         )?;
-        let output = ct.tensor(reader, "output.weight", device)?;
+        let output = match ct.tensor(reader, "output.weight", device) {
+            Ok(tensor) => tensor,
+            Err(_) => tok_embeddings_q,
+        };
         let mut layers = Vec::with_capacity(block_count);
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");

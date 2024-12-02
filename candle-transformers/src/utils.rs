@@ -1,3 +1,5 @@
+//! Apply penalty and repeat_kv
+
 use candle::{Result, Tensor};
 
 #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `apply_repeat_penalty_async` for wasm support instead"))]

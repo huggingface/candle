@@ -1,4 +1,9 @@
-/// Adapted from https://github.com/descriptinc/descript-audio-codec
+//! Implementation of the Descript Audio Codec (DAC) model
+//!
+//! See: [Descript Audio Codec](https://github.com/descriptinc/descript-audio-codec)
+//!
+/// An efficient neural codec for compressing/decompressing audio
+///
 use crate::models::encodec;
 use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, VarBuilder};

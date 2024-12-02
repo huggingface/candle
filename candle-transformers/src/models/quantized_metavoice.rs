@@ -1,3 +1,19 @@
+//! Quantized MetaVoice model implementation.
+//!
+//! MetaVoice is a conditional text-to-speech model based on a transformer architecture.
+//! This implementation provides quantization for reduced memory and compute.
+//!
+//! Key characteristics:
+//! - Transformer-based autoregressive decoder
+//! - Speaker conditioning
+//! - Support for 8-bit quantization
+//! - Key-value caching for efficient inference
+//! - RMS normalization layers
+//!
+//! References:
+//! - [MetaVoice Code](https://github.com/metavoiceio/metavoice)
+//!
+
 use crate::quantized_nn::{linear_b, Embedding, Linear, RmsNorm};
 pub use crate::quantized_var_builder::VarBuilder;
 

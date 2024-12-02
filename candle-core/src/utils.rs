@@ -1,3 +1,4 @@
+//! Useful functions for checking features.
 use std::str::FromStr;
 
 pub fn get_num_threads() -> usize {

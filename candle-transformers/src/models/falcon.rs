@@ -1,3 +1,9 @@
+//! Falcon language model inference implementation
+//!
+//! See ["Falcon: a new approach to large language models"](https://huggingface.co/blog/falcon)
+//!
+//! Based on implementation from [Huggingface Transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/falcon)
+
 use candle::{DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, linear_b as linear, Embedding, LayerNorm, Linear, Module, VarBuilder};
 use serde::Deserialize;

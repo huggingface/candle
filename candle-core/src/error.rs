@@ -1,3 +1,4 @@
+//! Candle-specific Error and Result
 use crate::{DType, DeviceLocation, Layout, MetalError, WgpuError, Shape};
 
 #[derive(Debug, Clone)]
@@ -168,6 +169,9 @@ pub enum Error {
     #[error("Metal error {0}")]
     Metal(#[from] MetalError),
 
+    #[error(transparent)]
+    Ug(#[from] ug::Error),
+
     #[error("Wgpu error {0}")]
     Wgpu(#[from] WgpuError),
 
@@ -184,6 +188,10 @@ pub enum Error {
     /// Integer parse error.
     #[error(transparent)]
     ParseInt(#[from] std::num::ParseIntError),
+
+    /// Utf8 parse error.
+    #[error(transparent)]
+    FromUtf8(#[from] std::string::FromUtf8Error),
 
     /// I/O error.
     #[error(transparent)]

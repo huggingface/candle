@@ -1,3 +1,9 @@
+//! Implementation of the Depth Anything model from FAIR.
+//!
+//! See:
+//! - ["Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data"](https://github.com/LiheYoung/Depth-Anything)
+//!
+
 use candle::D::Minus1;
 use candle::{Module, Result, Tensor};
 use candle_nn::ops::Identity;
@@ -537,7 +543,7 @@ impl<'a> DepthAnythingV2<'a> {
     }
 }
 
-impl<'a> Module for DepthAnythingV2<'a> {
+impl Module for DepthAnythingV2<'_> {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let features = self.pretrained.get_intermediate_layers(
             xs,

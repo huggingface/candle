@@ -1,4 +1,3 @@
-#![allow(unused)]
 //! Wrappers around the Python API of Gymnasium (the new version of OpenAI gym)
 use candle::{Device, Result, Tensor};
 use pyo3::prelude::*;

@@ -1,3 +1,5 @@
+//! Traits to Define Backend Behavior
+//!
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 

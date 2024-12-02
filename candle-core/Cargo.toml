@@ -28,6 +28,9 @@ rand_distr = { workspace = true }
 rayon = { workspace = true }
 safetensors = { workspace = true }
 thiserror = { workspace = true }
+ug = { workspace = true }
+ug-cuda = { workspace = true, optional = true }
+ug-metal = { workspace = true, optional = true }
 yoke = { workspace = true }
 zip = { workspace = true }
 tracing = {workspace = true, optional = true, features = ["release_max_level_off"]}
@@ -51,11 +54,11 @@ clap = { workspace = true }
 criterion = {version= "0.5.1", features = ["html_reports"]}
 
 [features]
-cuda = ["cudarc", "dep:candle-kernels"]
+cuda = ["cudarc", "dep:candle-kernels", "dep:ug-cuda"]
 cudnn = ["cuda", "cudarc/cudnn"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
-metal = ["dep:metal", "dep:candle-metal-kernels"]
+metal = ["dep:metal", "dep:candle-metal-kernels", "dep:ug-metal"]
 wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume", "dep:candle-wgpu-kernels", "dep:log", "dep:tracing", "dep:rustc-hash"]
 wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize"]
 wgpu_debug_serialize = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize"]

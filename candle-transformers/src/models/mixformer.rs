@@ -1,3 +1,10 @@
+//! MixFormer (Microsoft's Phi Architecture)
+//!
+//! See "Textbooks Are All You Need II: phi-1.5 technical report", Lin et al. 2023
+//! - [Arxiv](https://arxiv.org/abs/2309.05463)
+//! - [Github](https://huggingface.co/microsoft/phi-1_5)
+//!
+
 use crate::models::with_tracing::{linear, Embedding as E, Linear};
 /// MixFormer model.
 /// https://huggingface.co/microsoft/phi-1_5

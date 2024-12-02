@@ -1,3 +1,5 @@
+//! 1D and 2D Convolutions
+//!
 use crate::{op::BackpropOp, op::Op, Error, Result, Tensor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,9 +1,14 @@
+//! # MobileNet-v4
+//!
 //! MobileNet-v4 inference implementation based on timm.
 //!
-//! See "MobileNetV4 - Universal Models for the Mobile Ecosystem"
-//! https://arxiv.org/abs/2404.10518
+//! ## Paper
 //!
-//! https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/mobilenetv3.py
+//! ["MobileNetV4 - Universal Models for the Mobile Ecosystem"](https://arxiv.org/abs/2404.10518)
+//!
+//! ## References
+//!
+//! - [PyTorch Implementation](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/mobilenetv3.py)
 
 use candle::{Result, Tensor, D};
 use candle_nn::{

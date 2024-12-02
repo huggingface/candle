@@ -14,7 +14,7 @@ fn new_model(
 ) -> Result<(impl Module, VarMap)> {
     let input_size = input_shape.iter().product();
 
-    let mut varmap = VarMap::new();
+    let varmap = VarMap::new();
     let var_builder = VarBuilder::from_varmap(&varmap, dtype, device);
 
     let model = seq()

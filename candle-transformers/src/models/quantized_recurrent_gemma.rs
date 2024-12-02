@@ -1,3 +1,20 @@
+//! Recurrent Gemma model implementation with quantization support.
+//!
+//! Gemma is a large language model optimized for efficiency.
+//! This implementation provides quantization for reduced memory and compute.
+//!
+//! Key characteristics:
+//! - Recurrent blocks with gated recurrent units
+//! - Convolution and attention blocks
+//! - RMSNorm for layer normalization
+//! - Rotary positional embeddings (RoPE)
+//! - Support for 8-bit quantization
+//!
+//! References:
+//! - [Gemma Paper](https://arxiv.org/abs/2401.06751)
+//! - [Model Card](https://ai.google.dev/gemma)
+//!
+
 use crate::quantized_nn::{linear_b as linear, Embedding, Linear};
 pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};

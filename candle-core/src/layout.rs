@@ -1,3 +1,4 @@
+//! Tensor Layouts including contiguous or sparse strides
 use crate::{Error, Result, Shape};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -33,6 +34,12 @@ impl Layout {
 
     pub fn dims(&self) -> &[usize] {
         self.shape.dims()
+    }
+
+    /// The dimension size for a specified dimension index.
+    pub fn dim<D: crate::shape::Dim>(&self, dim: D) -> Result<usize> {
+        let dim = dim.to_index(&self.shape, "dim")?;
+        Ok(self.dims()[dim])
     }
 
     pub fn shape(&self) -> &Shape {

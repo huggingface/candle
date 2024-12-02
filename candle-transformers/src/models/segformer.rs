@@ -1,3 +1,19 @@
+//! Segformer model implementation for semantic segmentation and image classification.
+//!
+//! Segformer is a transformer-based model designed for vision tasks. It uses a hierarchical
+//! structure that progressively generates features at different scales.
+//!
+//! Key characteristics:
+//! - Efficient self-attention with sequence reduction
+//! - Hierarchical feature generation
+//! - Mix-FFN for local and global feature interaction
+//! - Lightweight all-MLP decode head
+//!
+//! References:
+//! - [SegFormer Paper](https://arxiv.org/abs/2105.15203)
+//! - [Model Card](https://huggingface.co/nvidia/mit-b0)
+//!
+
 use crate::models::with_tracing::{conv2d, linear, Conv2d, Linear};
 use candle::{Module, ModuleT, Result, Tensor, D};
 use candle_nn::{conv2d_no_bias, layer_norm, Activation, Conv2dConfig, VarBuilder};

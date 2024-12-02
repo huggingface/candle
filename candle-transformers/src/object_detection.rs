@@ -1,3 +1,9 @@
+//! Bounding Boxes and Intersection
+//!
+//! This module provides functionality for handling bounding boxes and their manipulation,
+//! particularly in the context of object detection. It includes tools for calculating
+//! intersection over union (IoU) and non-maximum suppression (NMS).
+
 /// A bounding box around an object.
 #[derive(Debug, Clone)]
 pub struct Bbox<D> {

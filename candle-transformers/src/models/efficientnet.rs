@@ -1,3 +1,8 @@
+//! Implementation of EfficientBert, an efficient variant of BERT for computer vision tasks.
+//!
+//! See:
+//! - ["EfficientBERT: Progressively Searching Multilayer Perceptron Architectures for BERT"](https://arxiv.org/abs/2201.00462)
+//!
 use candle::{Result, Tensor, D};
 use candle_nn as nn;
 use nn::{Module, VarBuilder};
@@ -120,8 +125,8 @@ impl Module for Conv2DSame {
         let s = self.s;
         let k = self.k;
         let (_, _, ih, iw) = xs.dims4()?;
-        let oh = (ih + s - 1) / s;
-        let ow = (iw + s - 1) / s;
+        let oh = ih.div_ceil(s);
+        let ow = iw.div_ceil(s);
         let pad_h = usize::max((oh - 1) * s + k - ih, 0);
         let pad_w = usize::max((ow - 1) * s + k - iw, 0);
         if pad_h > 0 || pad_w > 0 {
