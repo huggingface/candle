@@ -62,6 +62,7 @@ pub mod mobilenetv4;
 pub mod mobileone;
 pub mod moondream;
 pub mod mpt;
+pub mod nvembed_v2;
 pub mod olmo;
 pub mod openclip;
 pub mod paligemma;
