@@ -1,336 +1,201 @@
-// Copyright (c) NVIDIA CORPORATION, all rights reserved.
-// This source code is licensed under the CC-BY-NC-4.0 license.
-// See https://spdx.org/licenses/CC-BY-NC-4.0 for details.
-
-use super::decoder::Model as MistralModel;
+use super::embedding::Model as EmbeddingModel;
 use crate::models::{
     mistral::Config,
     with_tracing::{layer_norm, linear, linear_no_bias, LayerNorm, Linear},
 };
 use candle::{DType, Device, Result, Tensor, D};
-use candle_nn::{ops::softmax_last_dim, Module, VarBuilder};
-use serde::{Deserialize, Serialize};
+use candle_nn::{ops::softmax_last_dim, LayerNormConfig, Module, VarBuilder};
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-struct LatentAttentionConfig {
-    num_latents_value: usize,
-    num_cross_heads: usize,
-    output_normalize: bool,
-    hidden_dim: usize,
-    latent_dim: usize,
-    cross_dim_head: usize,
-    hidden_size: usize,
+// Geglu and feedforward from candle-transformers/src/models/stable_diffusion/attention.rs
+#[derive(Debug)]
+struct GeGlu {
+    proj: Linear,
+    span: tracing::Span,
 }
 
-impl LatentAttentionConfig {
-    fn new(hidden_size: usize, output_normalize: bool) -> Self {
-        Self {
-            num_latents_value: 512,
-            num_cross_heads: 8,
-            output_normalize,
-            hidden_dim: 4096,
-            latent_dim: 4096,
-            cross_dim_head: 4096,
-            hidden_size,
-        }
+impl GeGlu {
+    fn new(vs: VarBuilder, dim_in: usize, dim_out: usize) -> Result<Self> {
+        let proj = linear(dim_in, dim_out * 2, vs)?;
+        let span = tracing::span!(tracing::Level::TRACE, "geglu");
+        Ok(Self { proj, span })
     }
 }
 
-#[derive(Debug, Clone)]
-#[allow(clippy::upper_case_acronyms)]
-struct GEGLU {}
-
-impl GEGLU {
-    fn new() -> Self {
-        Self {}
-    }
-}
-impl Module for GEGLU {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let last_dim = x.dims().len() - 1;
-        let chunks = x.chunk(2, last_dim)?;
-        let (x, gates) = (chunks[0].clone(), chunks[1].clone());
-
-        let gates = gates.gelu()?;
-
-        x * gates
+impl Module for GeGlu {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let hidden_states_and_gate = self.proj.forward(xs)?.chunk(2, D::Minus1)?;
+        &hidden_states_and_gate[0] * hidden_states_and_gate[1].gelu()?
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct FeedForward {
-    linear1: Linear,
-    gelu: GEGLU,
-    linear2: Linear,
+    project_in: GeGlu,
+    linear: Linear,
+    span: tracing::Span,
 }
 
 impl FeedForward {
-    fn new(dim: usize, vb1: VarBuilder, vb2: VarBuilder) -> Result<Self> {
-        let linear1 = linear(dim, dim * 4 * 2, vb1)?;
-        let gelu = GEGLU::new();
-        let linear2 = linear(dim * 4, dim, vb2)?;
-
+    fn new(vs: VarBuilder, dim: usize, dim_out: Option<usize>, mult: usize) -> Result<Self> {
+        let inner_dim = dim * mult;
+        let dim_out = dim_out.unwrap_or(dim);
+        let vs = vs.pp("net");
+        let project_in = GeGlu::new(vs.pp("0"), dim, inner_dim)?;
+        let linear = linear(inner_dim, dim_out, vs.pp("2"))?;
+        let span = tracing::span!(tracing::Level::TRACE, "ff");
         Ok(Self {
-            linear1,
-            gelu,
-            linear2,
+            project_in,
+            linear,
+            span,
         })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = self.linear1.forward(xs)?;
-        let xs = self.gelu.forward(&xs)?;
-        let xs = self.linear2.forward(&xs)?;
-        Ok(xs)
     }
 }
 
-#[derive(Debug, Clone)]
-struct Attention {
-    heads: usize,
+impl Module for FeedForward {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let xs = self.project_in.forward(xs)?;
+        self.linear.forward(&xs)
+    }
+}
+
+// CrossAttention from candle-transformers/src/models/stable_diffusion/attention.rs
+#[derive(Debug)]
+struct CrossAttention {
     to_q: Linear,
     to_kv: Linear,
     to_out: Linear,
-    dim_head: usize,
+    heads: usize,
+    scale: f64,
+    span: tracing::Span,
+    span_attn: tracing::Span,
+    span_softmax: tracing::Span,
 }
 
-#[allow(clippy::too_many_arguments)]
-impl Attention {
+impl CrossAttention {
     fn new(
+        vs: VarBuilder,
         query_dim: usize,
         context_dim: Option<usize>,
-        heads: Option<usize>,
-        dim_head: Option<usize>,
-        vb_to_q: VarBuilder,
-        vb_to_kv: VarBuilder,
-        vb_to_out: VarBuilder,
+        heads: usize,
+        dim_head: usize,
     ) -> Result<Self> {
-        let heads = heads.unwrap_or(8);
-        let dim_head = dim_head.unwrap_or(64);
         let inner_dim = dim_head * heads;
         let context_dim = context_dim.unwrap_or(query_dim);
-
-        let to_q = linear_no_bias(query_dim, inner_dim, vb_to_q)?;
-        let to_kv = linear_no_bias(context_dim, inner_dim * 2, vb_to_kv)?;
-        let to_out = linear_no_bias(inner_dim, query_dim, vb_to_out)?;
+        let scale = 1.0 / f64::sqrt(dim_head as f64);
+        let to_q = linear_no_bias(query_dim, inner_dim, vs.pp("to_q"))?;
+        let to_kv = linear_no_bias(context_dim, inner_dim * 2, vs.pp("to_kv"))?;
+        let to_out = linear_no_bias(inner_dim, query_dim, vs.pp("to_out"))?;
+        let span = tracing::span!(tracing::Level::TRACE, "xa");
+        let span_attn = tracing::span!(tracing::Level::TRACE, "xa-attn");
+        let span_softmax = tracing::span!(tracing::Level::TRACE, "xa-softmax");
         Ok(Self {
-            heads,
             to_q,
             to_kv,
             to_out,
-            dim_head,
+            heads,
+            scale,
+            span,
+            span_attn,
+            span_softmax,
         })
     }
 
-    // Cross attn takes queries from the mistral decoder and kv from latent attention model
-    fn forward(&self, x: &Tensor, context: &Tensor) -> Result<Tensor> {
-        let h = self.heads;
-        let q = self.to_q.forward(x)?;
+    fn reshape_heads_to_batch_dim(&self, xs: &Tensor) -> Result<Tensor> {
+        let (batch_size, seq_len, dim) = xs.dims3()?;
+        xs.reshape((batch_size, seq_len, self.heads, dim / self.heads))?
+            .transpose(1, 2)?
+            .reshape((batch_size * self.heads, seq_len, dim / self.heads))
+    }
+
+    fn reshape_batch_dim_to_heads(&self, xs: &Tensor) -> Result<Tensor> {
+        let (batch_size, seq_len, dim) = xs.dims3()?;
+        xs.reshape((batch_size / self.heads, self.heads, seq_len, dim))?
+            .transpose(1, 2)?
+            .reshape((batch_size / self.heads, seq_len, dim * self.heads))
+    }
+
+    fn attention(&self, query: &Tensor, key: &Tensor, value: &Tensor) -> Result<Tensor> {
+        let _enter = self.span_attn.enter();
+
+        let in_dtype = query.dtype();
+        let query = query.to_dtype(DType::F32)?;
+        let key = key.to_dtype(DType::F32)?;
+        let value = value.to_dtype(DType::F32)?;
+        let xs = query.matmul(&(key.t()? * self.scale)?)?;
+        let xs = {
+            let _enter = self.span_softmax.enter();
+            softmax_last_dim(&xs)?
+        };
+        let xs = xs.matmul(&value)?.to_dtype(in_dtype)?;
+
+        self.reshape_batch_dim_to_heads(&xs)
+    }
+
+    fn forward(&self, xs: &Tensor, context: Option<&Tensor>) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let query = self.to_q.forward(xs)?;
+        let context = context.unwrap_or(xs).contiguous()?;
         let kv_chunks = self
             .to_kv
-            .forward(context)?
+            .forward(&context)?
             .chunk(2, context.shape().dims().len() - 1)?;
-        let (k, v) = (kv_chunks[0].clone(), kv_chunks[1].clone());
+        let (key, value) = (kv_chunks[0].clone(), kv_chunks[1].clone());
+        let query = self.reshape_heads_to_batch_dim(&query)?;
+        let key = self.reshape_heads_to_batch_dim(&key)?;
+        let value = self.reshape_heads_to_batch_dim(&value)?;
 
-        let (b_sz, q_len, _) = q.dims3()?;
-        let q = q
-            .reshape((b_sz, q_len, h, self.dim_head))?
-            .transpose(1, 2)?
-            .contiguous()?;
-
-        let (_, q_len, _) = k.dims3()?;
-        let k = k
-            .reshape((b_sz, q_len, h, self.dim_head))?
-            .transpose(1, 2)?
-            .contiguous()?;
-
-        let (_, q_len, _) = v.dims3()?;
-        let v = v
-            .reshape((b_sz, q_len, h, self.dim_head))?
-            .transpose(1, 2)?
-            .contiguous()?;
-
-        let scale = 1f64 / f64::sqrt(self.dim_head as f64);
-
-        let attn_weight = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
-        let attn_weight = softmax_last_dim(&attn_weight)?;
-
-        let out = attn_weight.matmul(&v)?;
-
-        let (_, _, q_len, _) = out.dims4()?;
-        let out = out
-            .transpose(1, 2)?
-            .reshape((b_sz, q_len, self.dim_head * h))?;
-
-        self.to_out.forward(&out)
+        let xs = self.attention(&query, &key, &value)?;
+        self.to_out.forward(&xs)
     }
 }
 
-#[derive(Debug, Clone)]
-enum PreNormInnerLayer {
-    Attention(Attention),
-    FeedForward(FeedForward),
-}
-
-#[derive(Debug, Clone)]
-struct PreNorm {
-    norm: LayerNorm,
-    norm_context: Option<LayerNorm>,
-    inner_layer: PreNormInnerLayer,
-}
-
-impl PreNorm {
-    fn new(
-        dim: usize,
-        context_dim: Option<usize>,
-        inner_layer: PreNormInnerLayer,
-        norm_vb: VarBuilder,
-        norm_context_vb: Option<VarBuilder>,
-    ) -> Result<Self> {
-        let norm = layer_norm(dim, candle_nn::LayerNormConfig::default(), norm_vb)?;
-
-        let norm_context = match context_dim {
-            Some(context_dim) => {
-                let norm_context_vb = norm_context_vb
-                    .expect("norm_context_vb must be passed if context_dim is passed");
-                match layer_norm(
-                    context_dim,
-                    candle_nn::LayerNormConfig::default(),
-                    norm_context_vb,
-                ) {
-                    Ok(norm_context) => Some(norm_context),
-                    Err(e) => return Err(e),
-                }
-            }
-            None => None,
-        };
-        Ok(Self {
-            norm,
-            norm_context,
-            inner_layer,
-        })
-    }
-
-    // Applies a layernorm to the input before passing to cross attn or feed forward
-    fn forward(&self, xs: &Tensor, context: Option<&Tensor>) -> Result<Tensor> {
-        let xs = self.norm.forward(xs)?;
-
-        let mut normed_context = None;
-        if let Some(norm_context) = &self.norm_context {
-            if let Some(context) = context {
-                normed_context = Some(norm_context.forward(context)?);
-            }
-        }
-
-        match &self.inner_layer {
-            PreNormInnerLayer::Attention(attn) => attn.forward(&xs, &normed_context.unwrap()),
-            PreNormInnerLayer::FeedForward(ff) => ff.forward(&xs),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct LatentAttentionModel {
-    cross_attn: PreNorm,
-    ff: PreNorm,
-    output_normalize: bool,
+#[derive(Debug)]
+pub struct Model {
+    embedding_model: EmbeddingModel,
+    cross_attn: CrossAttention,
+    cross_attn_norm: LayerNorm,
+    cross_attn_context_norm: LayerNorm,
+    ff: FeedForward,
+    ff_norm: LayerNorm,
     latents: Tensor,
-}
-
-impl LatentAttentionModel {
-    fn new(vb: VarBuilder, config: LatentAttentionConfig) -> Result<Self> {
-        let vb_cross = vb.pp("cross_attend_blocks");
-
-        let num_latents = config.num_latents_value;
-        let latent_dim = config.latent_dim;
-        let cross_heads = config.num_cross_heads;
-        let cross_dim_head = config.cross_dim_head;
-        let dim = config.hidden_dim;
-        let hidden_size = config.hidden_size;
-
-        let cross_attn = PreNorm::new(
-            latent_dim,
-            Some(hidden_size),
-            PreNormInnerLayer::Attention(Attention::new(
-                latent_dim,
-                Some(dim),
-                Some(cross_heads),
-                Some(cross_dim_head),
-                vb_cross.pp("0.fn.to_q"),
-                vb_cross.pp("0.fn.to_kv"),
-                vb_cross.pp("0.fn.to_out"),
-            )?),
-            vb_cross.pp("0.norm"),
-            Some(vb_cross.pp("0.norm_context")),
-        )?;
-
-        let ff = PreNorm::new(
-            latent_dim,
-            None,
-            PreNormInnerLayer::FeedForward(FeedForward::new(
-                latent_dim,
-                vb_cross.pp("1.fn.net.0"),
-                vb_cross.pp("1.fn.net.2"),
-            )?),
-            vb_cross.pp("1.norm"),
-            None,
-        )?;
-
-        let output_normalize = config.output_normalize;
-        let latents = vb.get((num_latents, latent_dim), "latents")?;
-
-        Ok(Self {
-            cross_attn,
-            ff,
-            output_normalize,
-            latents,
-        })
-    }
-
-    fn forward(&self, hiddens: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
-        let b = hiddens.dims()[0];
-        let x = self.latents.unsqueeze(0)?.repeat((b, 1, 1))?;
-
-        let hiddens = (self.cross_attn.forward(hiddens, Some(&x))? + hiddens)?;
-        let hiddens = (self.ff.forward(&hiddens, None)? + hiddens)?;
-
-        // Mean pooling
-        let hiddens_masked = hiddens.broadcast_mul(&attention_mask.unsqueeze(D::Minus1)?)?;
-        let s = hiddens_masked.sum(1)?;
-        let d = attention_mask.sum_keepdim(1)?;
-        let hiddens = s.broadcast_div(&d)?;
-
-        if self.output_normalize {
-            let hiddens = div_l2_norm(&hiddens)?;
-
-            Ok(hiddens)
-        } else {
-            Ok(hiddens)
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct NVEmbedModel {
-    latent_attention_model: LatentAttentionModel,
-    embedding_model: MistralModel,
     pub device: Device,
     pub dtype: DType,
 }
 
-impl NVEmbedModel {
-    pub fn new(vb: VarBuilder, output_normalize: bool) -> Result<Self> {
+impl Model {
+    pub fn new(vb: VarBuilder) -> Result<Self> {
+        // Embedding model
         let cfg = Config::config_7b_v0_1(false);
-        let embedding_model = MistralModel::new(&cfg, vb.pp("embedding_model"))?;
-        let hidden_size = embedding_model.cfg.hidden_size;
-        let latent_attention_model = LatentAttentionModel::new(
-            vb.pp("latent_attention_model"),
-            LatentAttentionConfig::new(hidden_size, output_normalize),
+        let embedding_model = EmbeddingModel::new(&cfg, vb.pp("embedding_model"))?;
+
+        // Latent attention
+        let dim = 4096;
+        let vb = vb.pp("latent_attention_model");
+        let latents = vb.get((512, dim), "latents")?;
+
+        // Cross attend blocks
+        let vb = vb.pp("cross_attend_blocks");
+        let cross_attn_norm = layer_norm(dim, LayerNormConfig::default(), vb.pp("0.norm"))?;
+        let cross_attn_context_norm = layer_norm(
+            dim,
+            candle_nn::LayerNormConfig::default(),
+            vb.pp("0.norm_context"),
         )?;
+        let cross_attn = CrossAttention::new(vb.pp("0.fn"), dim, None, 8, 4096)?;
+
+        let ff_norm = layer_norm(dim, LayerNormConfig::default(), vb.pp("1.norm"))?;
+        let ff = FeedForward::new(vb.pp("1.fn"), dim, None, 4)?;
 
         Ok(Self {
-            latent_attention_model,
             embedding_model,
+            cross_attn,
+            cross_attn_norm,
+            cross_attn_context_norm,
+            ff,
+            ff_norm,
+            latents,
             device: vb.device().clone(),
             dtype: vb.dtype(),
         })
@@ -342,15 +207,27 @@ impl NVEmbedModel {
         attn_mask: &Tensor,
         pool_mask: &Tensor,
     ) -> Result<Tensor> {
-        let outputs = self
+        // Embedding model
+        let hiddens = self
             .embedding_model
             .forward(attn_mask, input_ids, self.dtype)?;
 
-        self.latent_attention_model.forward(&outputs, pool_mask)
-    }
-}
+        // Latent attention
+        let b = hiddens.dims()[0];
+        let x = self.latents.unsqueeze(0)?.repeat((b, 1, 1))?;
+        let original_hiddens = &hiddens;
 
-fn div_l2_norm(v: &Tensor) -> Result<Tensor> {
-    let l2_norm = v.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?;
-    v.broadcast_div(&l2_norm)
+        let hiddens = self.cross_attn_norm.forward(original_hiddens)?;
+        let x = self.cross_attn_context_norm.forward(&x)?;
+        let cross_hiddens = (self.cross_attn.forward(&hiddens, Some(&x))? + original_hiddens)?;
+
+        let hiddens = self.ff_norm.forward(&cross_hiddens)?;
+        let hiddens = (self.ff.forward(&hiddens)? + cross_hiddens)?;
+
+        // Mean pooling
+        let hiddens_masked = hiddens.broadcast_mul(&pool_mask.unsqueeze(D::Minus1)?)?;
+        let s = hiddens_masked.sum(1)?;
+        let d = pool_mask.sum_keepdim(1)?;
+        s.broadcast_div(&d)
+    }
 }
