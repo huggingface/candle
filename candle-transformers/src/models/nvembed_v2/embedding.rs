@@ -1,7 +1,3 @@
-// Copyright (c) NVIDIA CORPORATION, all rights reserved.
-// This source code is licensed under the CC-BY-NC-4.0 license.
-// See https://spdx.org/licenses/CC-BY-NC-4.0 for details.
-
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use crate::models::{
     mistral::Config,
