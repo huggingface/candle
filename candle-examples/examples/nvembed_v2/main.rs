@@ -5,9 +5,9 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
-use candle::{DType, IndexOp, Shape, Tensor};
+use candle::{DType, IndexOp, Shape, Tensor, D};
 use candle_nn::VarBuilder;
-use candle_transformers::models::nvembed_v2::model;
+use candle_transformers::models::nvembed_v2::model::Model;
 use clap::Parser;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{PaddingDirection, PaddingParams, Tokenizer, TruncationParams};
@@ -43,9 +43,7 @@ struct Args {
 }
 
 impl Args {
-    fn build_model_and_tokenizer(
-        &self,
-    ) -> anyhow::Result<(model::NVEmbedModel, tokenizers::Tokenizer)> {
+    fn build_model_and_tokenizer(&self) -> anyhow::Result<(Model, tokenizers::Tokenizer)> {
         let model_name = match self.model.as_ref() {
             Some(model) => model.to_string(),
             None => "nvidia/NV-Embed-v2".to_string(),
@@ -85,9 +83,87 @@ impl Args {
 
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, DType::F32, &device) }?;
 
-        let nvembed_model = model::NVEmbedModel::new(vb, self.normalize_embeddings);
+        let nvembed_model = Model::new(vb);
         Ok((nvembed_model?, tokenizer))
     }
+}
+
+fn encode(
+    model: &mut Model,
+    tokenizer: &Tokenizer,
+    examples: Vec<String>,
+    instruction: &str,
+) -> Result<Tensor> {
+    let device = &model.device;
+    let dtype = model.dtype;
+
+    // Format input text
+    let eos_token = if let Some(padding) = tokenizer.get_padding() {
+        padding.pad_token.clone()
+    } else {
+        "".to_string()
+    };
+    let bos = "<s>".to_string();
+    let input_texts = examples
+        .iter()
+        .map(|input_example| format!("{bos}{instruction}{input_example}{eos_token}"))
+        .collect::<Vec<String>>();
+
+    // Tokenize
+    let encodings = tokenizer.encode_batch(input_texts, false).map_err(E::msg)?;
+
+    let input_ids_list = encodings
+        .iter()
+        .map(|encoding| {
+            Tensor::from_slice(
+                encoding.get_ids(),
+                Shape::from(encoding.get_ids().len()),
+                device,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let input_ids = Tensor::stack(&input_ids_list, 0)?;
+
+    // Mask out padding tokens for both embedding model and latent attention model
+    let attention_masks: Vec<Tensor> = encodings
+        .iter()
+        .map(|encoding| {
+            Tensor::from_slice(
+                encoding.get_attention_mask(),
+                Shape::from(encoding.get_attention_mask().len()),
+                device,
+            )?
+            .to_dtype(dtype)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let attention_mask = Tensor::stack(&attention_masks, 0)?;
+
+    // Mask out instruction tokens for latent attention model
+    let pool_mask = if !instruction.is_empty() {
+        let encoded_instruction = tokenizer.encode(instruction, false).map_err(E::msg)?;
+        let instruction_lens = encoded_instruction.get_tokens().len();
+        let zeros = Tensor::zeros(
+            attention_mask.i((.., ..instruction_lens))?.shape(),
+            dtype,
+            device,
+        )?;
+        let b = attention_mask.dims()[0];
+        attention_mask.slice_assign(&[..b, ..instruction_lens], &zeros)?
+    } else {
+        attention_mask.clone()
+    };
+
+    let hiddens = model
+        .forward(&input_ids, &attention_mask, &pool_mask)?
+        .squeeze(1)?;
+
+    // Normalize embedding
+    div_l2_norm(&hiddens)
+}
+
+fn div_l2_norm(v: &Tensor) -> Result<Tensor> {
+    let l2_norm = v.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?;
+    Ok(v.broadcast_div(&l2_norm)?)
 }
 
 fn main() -> anyhow::Result<()> {
@@ -135,79 +211,4 @@ fn main() -> anyhow::Result<()> {
         println!("scores: {scores}");
     }
     Ok(())
-}
-
-fn encode(
-    model: &mut model::NVEmbedModel,
-    tokenizer: &Tokenizer,
-    examples: Vec<String>,
-    instruction: &str,
-) -> Result<Tensor> {
-    let device = &model.device;
-    let dtype = model.dtype;
-
-    // Format input text
-    let eos_token = if let Some(padding) = tokenizer.get_padding() {
-        padding.pad_token.clone()
-    } else {
-        "".to_string()
-    };
-    let bos = "<s>".to_string();
-    let input_texts = examples
-        .iter()
-        .map(|input_example| format!("{bos}{instruction}{input_example}{eos_token}"))
-        .collect::<Vec<String>>();
-    let encodings = tokenizer.encode_batch(input_texts, false).map_err(E::msg)?;
-
-    let input_ids_list = encodings
-        .iter()
-        .map(|encoding| {
-            Tensor::from_slice(
-                encoding.get_ids(),
-                Shape::from(encoding.get_ids().len()),
-                device,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Mask out padding tokens for both mistral and latent attention model
-    let attention_masks: Vec<Tensor> = encodings
-        .iter()
-        .map(|encoding| {
-            Tensor::from_slice(
-                encoding.get_attention_mask(),
-                Shape::from(encoding.get_attention_mask().len()),
-                device,
-            )?
-            .to_dtype(dtype)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let input_ids = Tensor::stack(&input_ids_list, 0)?;
-    let attention_mask = Tensor::stack(&attention_masks, 0)?;
-
-    let instruction_lens = if !instruction.is_empty() {
-        let encoded_instruction = tokenizer.encode(instruction, false).map_err(E::msg)?;
-        encoded_instruction.get_tokens().len()
-    } else {
-        0
-    };
-
-    // Mask out instruction tokens for latent attention model
-    let pool_mask = if instruction_lens > 0 {
-        let zeros = Tensor::zeros(
-            attention_mask.i((.., ..instruction_lens))?.shape(),
-            dtype,
-            device,
-        )?;
-
-        let batch_size = attention_mask.dims()[0];
-        attention_mask.slice_assign(&[..batch_size, ..instruction_lens], &zeros)?
-    } else {
-        attention_mask.clone()
-    };
-
-    Ok(model
-        .forward(&input_ids, &attention_mask, &pool_mask)?
-        .squeeze(1)?)
 }
