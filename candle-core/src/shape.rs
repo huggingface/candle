@@ -142,6 +142,12 @@ impl Shape {
         &self.0
     }
 
+    /// The dimension size for a specified dimension index.
+    pub fn dim<D: Dim>(&self, dim: D) -> Result<usize> {
+        let dim = dim.to_index(self, "dim")?;
+        Ok(self.dims()[dim])
+    }
+
     /// The total number of elements, this is the product of all dimension sizes.
     pub fn elem_count(&self) -> usize {
         self.0.iter().product()
