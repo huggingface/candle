@@ -47,7 +47,7 @@ impl HiddenActLayer {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
-enum PositionEmbeddingType {
+pub enum PositionEmbeddingType {
     #[default]
     Absolute,
 }
