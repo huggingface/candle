@@ -1,4 +1,4 @@
-// Just enough pickle support to be able to read PyTorch checkpoints.
+//! Just enough pickle support to be able to read PyTorch checkpoints.
 // This hardcodes objects that are required for tensor reading, we may want to make this a bit more
 // composable/tensor agnostic at some point.
 use crate::{DType, Error as E, Layout, Result, Tensor};

@@ -1,3 +1,5 @@
+//! Implementation of Backend traits for CUDA device
+//!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape, WithDType};
@@ -253,7 +255,7 @@ impl Map1 for Powf {
 }
 
 struct FastReduce<'a>(&'a [usize], ReduceOp);
-impl<'a> Map1Any for FastReduce<'a> {
+impl Map1Any for FastReduce<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits, W: Fn(CudaSlice<T>) -> S>(
         &self,
         src: &CudaSlice<T>,
@@ -348,7 +350,7 @@ impl<U: UnaryOpT> Map1 for U {
 }
 
 struct IndexSelect<'a>(&'a CudaStorage, &'a Layout, usize);
-impl<'a> Map1 for IndexSelect<'a> {
+impl Map1 for IndexSelect<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         src: &CudaSlice<T>,
@@ -408,7 +410,7 @@ impl<'a> Map1 for IndexSelect<'a> {
 }
 
 struct Gather<'a>(&'a CudaStorage, &'a Layout, usize);
-impl<'a> Map1 for Gather<'a> {
+impl Map1 for Gather<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         src: &CudaSlice<T>,
@@ -459,7 +461,7 @@ impl<'a> Map1 for Gather<'a> {
 }
 
 struct IndexAdd<'a>(&'a CudaStorage, &'a Layout, usize);
-impl<'a> Map2InPlace for IndexAdd<'a> {
+impl Map2InPlace for IndexAdd<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         dst: &mut CudaSlice<T>,
@@ -507,7 +509,7 @@ impl<'a> Map2InPlace for IndexAdd<'a> {
 }
 
 struct ScatterAdd<'a>(&'a CudaStorage, &'a Layout, usize);
-impl<'a> Map2InPlace for ScatterAdd<'a> {
+impl Map2InPlace for ScatterAdd<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         dst: &mut CudaSlice<T>,
@@ -552,7 +554,7 @@ impl<'a> Map2InPlace for ScatterAdd<'a> {
 }
 
 struct Conv1D<'a>(&'a crate::conv::ParamsConv1D);
-impl<'a> Map2 for Conv1D<'a> {
+impl Map2 for Conv1D<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         inp: &CudaSlice<T>,
@@ -593,7 +595,7 @@ impl<'a> Map2 for Conv1D<'a> {
 }
 
 struct Conv2D<'a>(&'a crate::conv::ParamsConv2D);
-impl<'a> Map2 for Conv2D<'a> {
+impl Map2 for Conv2D<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         inp: &CudaSlice<T>,
@@ -658,7 +660,7 @@ impl Map1 for Col2Im1D {
 }
 
 struct ConvTranspose1D<'a>(&'a crate::conv::ParamsConvTranspose1D);
-impl<'a> Map2 for ConvTranspose1D<'a> {
+impl Map2 for ConvTranspose1D<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         inp: &CudaSlice<T>,
@@ -707,7 +709,7 @@ impl<'a> Map2 for ConvTranspose1D<'a> {
 }
 
 struct ConvTranspose2D<'a>(&'a crate::conv::ParamsConvTranspose2D);
-impl<'a> Map2 for ConvTranspose2D<'a> {
+impl Map2 for ConvTranspose2D<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         inp: &CudaSlice<T>,
@@ -848,7 +850,7 @@ impl Map1 for UpsampleNearest2D {
 }
 
 struct WhereCond<'a>(&'a CudaStorage, &'a Layout);
-impl<'a> Map2 for WhereCond<'a> {
+impl Map2 for WhereCond<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         t: &CudaSlice<T>,

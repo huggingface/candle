@@ -1,3 +1,19 @@
+//! Candle implementations for various deep learning models
+//!
+//! This crate provides implementations of popular machine learning models and architectures for different modalities.
+//!
+//!  - Large language models: [`llama`], [`phi3`], [`mamba`], [`mixtral`], [`bert`], ...
+//!  - Text to text models: [`t5`], ...
+//!  - Image to text models: [`blip`], ...
+//!  - Text to image models: [`stable_diffusion`] and [`wuerstchen`], ...
+//!  - Audio models: [`whisper`], [`encodec`], [`metavoice`], [`parler_tts`], ...
+//!  - Computer vision models: [`dinov2`], [`convmixer`], [`efficientnet`], ...
+//!  
+//! Some of the models also have quantized variants, e.g.  [`quantized_blip`], [`quantized_llama`] and  [`quantized_qwen2`].
+//!
+//! The implementations aim to be readable while maintaining good performance. For more information
+//! on each model see the model's module docs in the links below.
+
 pub mod based;
 pub mod beit;
 pub mod bert;
@@ -46,6 +62,7 @@ pub mod mobilenetv4;
 pub mod mobileone;
 pub mod moondream;
 pub mod mpt;
+pub mod nvembed_v2;
 pub mod olmo;
 pub mod openclip;
 pub mod paligemma;

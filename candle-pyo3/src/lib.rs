@@ -276,7 +276,7 @@ impl PyTensor {
     /// &RETURNS&: _ArrayLike
     fn values(&self, py: Python<'_>) -> PyResult<PyObject> {
         struct M<'a>(Python<'a>);
-        impl<'a> MapDType for M<'a> {
+        impl MapDType for M<'_> {
             type Output = PyObject;
             fn f<T: PyWithDType>(&self, t: &Tensor) -> PyResult<Self::Output> {
                 match t.rank() {

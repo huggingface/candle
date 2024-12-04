@@ -1,3 +1,5 @@
+//! Implementation of Backend traits for Metal
+//!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
@@ -1242,6 +1244,7 @@ impl BackendStorage for MetalStorage {
             (DType::U32, DType::F32) => "gather_u32_f32",
             (DType::U32, DType::F16) => "gather_u32_f16",
             (DType::U32, DType::BF16) => "gather_u32_bf16",
+            (DType::U32, DType::U32) => "gather_u32_u32",
             (left, right) => crate::bail!("Metal gather {left:?} {right:?} not implemented"),
         };
         let command_buffer = self.device.command_buffer()?;
@@ -1281,6 +1284,7 @@ impl BackendStorage for MetalStorage {
             (DType::U8, DType::F32) => "sa_u8_f32",
             (DType::U8, DType::F16) => "sa_u8_f16",
             (DType::U8, DType::BF16) => "sa_u8_bf16",
+            (DType::U32, DType::U32) => "sa_u32_u32",
             (DType::U32, DType::F32) => "sa_u32_f32",
             (DType::U32, DType::F16) => "sa_u32_f16",
             (DType::U32, DType::BF16) => "sa_u32_bf16",

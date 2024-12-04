@@ -11,6 +11,7 @@ pub enum DeviceLocation {
     Metal { gpu_id: usize },
 }
 
+/// Cpu, Cuda, or Metal
 #[derive(Debug, Clone)]
 pub enum Device {
     Cpu,

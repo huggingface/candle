@@ -36,7 +36,7 @@ pub const CUDA_DEQUANTIZE_BLOCK_SIZE: usize = 256;
 pub const MATRIX_ROW_PADDING: usize = 512;
 
 fn ceil_div(p: usize, q: usize) -> usize {
-    (p + q - 1) / q
+    p.div_ceil(q)
 }
 
 fn pad(p: usize, q: usize) -> usize {

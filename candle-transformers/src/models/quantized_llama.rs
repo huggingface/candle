@@ -1,3 +1,21 @@
+//! Quantized llama model implementation.
+//!
+//! This provides a quantized implementation of the llama language model architecture.
+//! The model implements parameter efficient quantization for reduced memory usage
+//! while maintaining model quality.
+//!
+//! Key characteristics:
+//! - Transformer decoder architecture
+//! - Support for 2/3/4/8-bit quantization
+//! - Optimized memory usage through quantization
+//! - Configurable model sizes and parameter counts
+//!
+//! - 💻 [GH Link](https://github.com/facebookresearch/llama)
+//! - 📝 [Paper](https://arxiv.org/abs/2302.13971)
+//!
+//! ![](https://raw.githubusercontent.com/huggingface/candle/main/candle-examples/examples/quantized/assets/aoc.gif)
+//!
+
 use std::collections::HashMap;
 
 use crate::quantized_nn::RmsNorm;

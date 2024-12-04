@@ -1,3 +1,4 @@
+//! Candle-specific Error and Result
 use crate::{DType, DeviceLocation, Layout, MetalError, Shape};
 
 #[derive(Debug, Clone)]

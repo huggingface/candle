@@ -1,3 +1,11 @@
+//! Module implementing the MPT (Multi-Purpose Transformer) model
+//!
+//! References:
+//! - [MPT Model used by replit-code-v1_5-3b](https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/modeling_mpt.py)
+//! - [Configuration](https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/configuration_mpt.py)
+//!
+//! The model uses grouped query attention and alibi positional embeddings.
+
 use crate::models::with_tracing::{linear_no_bias, Embedding, Linear};
 /// MPT model used by replit-code-v1_5-3b
 /// https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/modeling_mpt.py

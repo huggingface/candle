@@ -1,6 +1,11 @@
-#![allow(unused)]
+//! EnCodec neural audio codec based on the Encodec implementation.
+//!
+//! See ["High Fidelity Neural Audio Compression"](https://arxiv.org/abs/2210.13438)
+//!
+//! Based on implementation from [huggingface/transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/encodec/modeling_encodec.py)
+
 use candle::{DType, IndexOp, Layout, Module, Result, Shape, Tensor, D};
-use candle_nn::{conv1d, Conv1d, Conv1dConfig, ConvTranspose1d, VarBuilder};
+use candle_nn::{conv1d, Conv1d, ConvTranspose1d, VarBuilder};
 
 // Encodec Model
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/encodec/modeling_encodec.py
@@ -84,7 +89,7 @@ impl Config {
 
     fn frame_rate(&self) -> usize {
         let hop_length: usize = self.upsampling_ratios.iter().product();
-        (self.sampling_rate + hop_length - 1) / hop_length
+        self.sampling_rate.div_ceil(hop_length)
     }
 
     fn num_quantizers(&self) -> usize {
@@ -220,6 +225,7 @@ impl candle::CustomOp2 for CodebookEncode {
 }
 
 // https://github.com/huggingface/transformers/blob/abaca9f9432a84cfaa95531de4c72334f38a42f2/src/transformers/models/encodec/modeling_encodec.py#L340
+#[allow(unused)]
 #[derive(Clone, Debug)]
 pub struct EuclideanCodebook {
     inited: Tensor,
