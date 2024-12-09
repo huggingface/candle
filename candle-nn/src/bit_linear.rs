@@ -10,11 +10,11 @@
 //! use candle_nn::{BitLinear, Module};
 //! # fn main() -> candle::Result<()> {
 //!
-//! let w = Tensor::new(&[[1f32, 2.], [3., 4.], [5., 6.]], &Cpu)?;
+//! let w = Tensor::new(&[[1f32, -1.], [-1., 1.], [1., 1.]], &Cpu)?;
 //! let layer = BitLinear::new(w, None); // Use no bias.
-//! let xs = Tensor::new(&[[10f32, 100.]], &Cpu)?;
+//! let xs = Tensor::new(&[[1f32, -1.]], &Cpu)?;
 //! let ys = layer.forward(&xs)?;
-//! assert_eq!(ys.to_vec2::<f32>()?, &[[210.0, 430.0, 650.0]]);
+//! assert_eq!(ys.to_vec2::<f32>()?, &[[2.0f32, -2.0, 0.0]]);
 //! # Ok(()) }
 //! ```
 use candle::{Result, Tensor, D};
