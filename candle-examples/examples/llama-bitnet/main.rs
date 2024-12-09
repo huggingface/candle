@@ -30,6 +30,8 @@ const DEFAULT_PROMPT: &str = "My favorite theorem is ";
 #[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
 enum Which {
     BitnetB1_58Large,
+    Bitnet51_58XL,
+    Bitnet51_38_3B,
 }
 
 #[derive(Parser, Debug)]
@@ -124,6 +126,8 @@ fn main() -> Result<()> {
         let model_id = args.model_id.unwrap_or_else(|| {
             let str = match args.which {
                 Which::BitnetB1_58Large => "1bitLLM/bitnet_b1_58-large",
+                Which::Bitnet51_58XL => "1bitLLM/bitnet_b1_58-xl",
+                Which::Bitnet51_38_3B => "1bitLLM/bitnet_b1_38-3b",
             };
             str.to_string()
         });
@@ -139,6 +143,9 @@ fn main() -> Result<()> {
         let filenames = match args.which {
             | Which::BitnetB1_58Large => {
                 vec![api.get("model.safetensors")?]
+            }
+            | Which::Bitnet51_38_3B | Which::Bitnet51_58XL => {
+                candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?
             }
         };
         let cache = model::Cache::new(!args.no_kv_cache, dtype, &config, &device)?;
