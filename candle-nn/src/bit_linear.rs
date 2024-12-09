@@ -31,7 +31,7 @@ fn weight_quant(x: &Tensor) -> Result<Tensor> {
             .abs()?
             .mean_all()?
             .clamp(1e-5, f32::INFINITY)?)?
-            .to_dtype(x.dtype())?;
+    .to_dtype(x.dtype())?;
 
     let u = (x.broadcast_mul(&scale))?
         .round()?
@@ -47,16 +47,15 @@ fn activation_quant(x: &Tensor) -> Result<Tensor> {
             .max(D::Minus1)?
             .max(D::Minus1)?
             .clamp(1e-5, f32::INFINITY)?)?
-            .to_dtype(x.dtype())?;
+    .to_dtype(x.dtype())?;
 
     let y = x
-            .broadcast_mul(&scale.unsqueeze(D::Minus1)?.unsqueeze(D::Minus1)?)?
-            .clamp(-128.0, 127.0)?
-            .broadcast_div(&scale)?;
+        .broadcast_mul(&scale.unsqueeze(D::Minus1)?.unsqueeze(D::Minus1)?)?
+        .clamp(-128.0, 127.0)?
+        .broadcast_div(&scale)?;
 
     Ok(y)
 }
-
 
 impl BitLinear {
     pub fn new(weight: Tensor, bias: Option<Tensor>) -> Self {
@@ -109,7 +108,11 @@ pub fn bit_linear(in_dim: usize, out_dim: usize, vb: crate::VarBuilder) -> Resul
 }
 
 /// Create or initialize a new bit_linear layer without biases.
-pub fn bit_linear_no_bias(in_dim: usize, out_dim: usize, vb: crate::VarBuilder) -> Result<BitLinear> {
+pub fn bit_linear_no_bias(
+    in_dim: usize,
+    out_dim: usize,
+    vb: crate::VarBuilder,
+) -> Result<BitLinear> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
     Ok(BitLinear::new(ws, None))

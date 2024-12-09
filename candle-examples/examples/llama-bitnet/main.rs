@@ -141,10 +141,10 @@ fn main() -> Result<()> {
         let config = config.into_config(args.use_flash_attn);
 
         let filenames = match args.which {
-            | Which::BitnetB1_58Large => {
+            Which::BitnetB1_58Large => {
                 vec![api.get("model.safetensors")?]
             }
-            | Which::Bitnet51_38_3B | Which::Bitnet51_58XL => {
+            Which::Bitnet51_38_3B | Which::Bitnet51_58XL => {
                 candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?
             }
         };
