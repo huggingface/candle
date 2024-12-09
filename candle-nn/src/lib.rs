@@ -34,7 +34,7 @@ pub mod rotary_emb;
 pub mod sequential;
 pub mod var_builder;
 pub mod var_map;
-
+pub mod bit_linear;
 pub use activation::{prelu, Activation, PReLU};
 pub use batch_norm::{batch_norm, BatchNorm, BatchNormConfig};
 pub use conv::{
@@ -48,6 +48,7 @@ pub use group_norm::{group_norm, GroupNorm};
 pub use init::Init;
 pub use layer_norm::{layer_norm, rms_norm, LayerNorm, LayerNormConfig, RmsNorm};
 pub use linear::{linear, linear_b, linear_no_bias, Linear};
+pub use bit_linear::{bit_linear, BitLinear, bit_linear_b, bit_linear_no_bias};
 pub use ops::Dropout;
 pub use optim::{AdamW, Optimizer, ParamsAdamW, SGD};
 pub use rnn::{gru, lstm, GRUConfig, LSTMConfig, GRU, LSTM, RNN};
