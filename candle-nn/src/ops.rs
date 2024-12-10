@@ -573,6 +573,80 @@ struct AttnSoftmaxLastDim {
     scale: f32,
 }
 
+impl candle::InplaceOp2 for AttnSoftmaxLastDim {
+    fn name(&self) -> &'static str {
+        "attn-softmax-last-dim"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _a_s: &mut CpuStorage,
+        _a_l: &Layout,
+        _mask_s: &CpuStorage,
+        _mask_l: &Layout,
+    ) -> Result<()> {
+        candle::bail!("cpu attn-softmax-last-dim is not implemented");
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        a_s: &mut candle::MetalStorage,
+        a_l: &Layout,
+        mask_s: &candle::MetalStorage,
+        mask_l: &Layout,
+    ) -> Result<()> {
+        use candle::backend::BackendStorage;
+        let device = a_s.device();
+        let command_buffer = device.command_buffer()?;
+        let kernels = device.kernels();
+
+        let ty = match a_s.dtype() {
+            DType::F32 => candle_metal_kernels::SdpaDType::F32,
+            DType::F16 => candle_metal_kernels::SdpaDType::F16,
+            DType::BF16 => candle_metal_kernels::SdpaDType::BF16,
+            dtype => candle::bail!("attn-softmax-last-dim is not implemented for {dtype:?}"),
+        };
+
+        if !a_l.is_contiguous() {
+            candle::bail!("Non contiguous xs for attn-softmax-last-dim is not implemented");
+        }
+        if !mask_l.is_contiguous() {
+            candle::bail!("Non contiguous mask for attn-softmax-last-dim is not implemented");
+        }
+
+        if a_l.dims().len() != 4 {
+            candle::bail!("attn-softmax-last-dim expects xs of rank 2");
+        }
+        if mask_l.dims().len() != 2 {
+            candle::bail!("attn-softmax-last-dim expects mask of rank 2");
+        }
+        if mask_l.dim(D::Minus1)? != a_l.dim(D::Minus1)?
+            || mask_l.dim(D::Minus2)? != a_l.dim(D::Minus2)?
+        {
+            candle::bail!("attn-softmax-last-dim expects last 2 dims to match xs last 2 dims");
+        }
+
+        candle_metal_kernels::call_last_attn_softmax(
+            device.metal_device(),
+            &command_buffer,
+            kernels,
+            a_s.buffer(),
+            a_l.start_offset() * a_s.dtype().size_in_bytes(),
+            mask_s.buffer(),
+            mask_l.start_offset() * mask_s.dtype().size_in_bytes(),
+            a_l.dims(),
+            self.scale,
+            ty,
+            &a_s.buffer(),
+            0,
+        )
+        .map_err(candle::Error::wrap)?;
+
+        Ok(())
+    }
+}
+
 impl candle::CustomOp2 for AttnSoftmaxLastDim {
     fn name(&self) -> &'static str {
         "attn-softmax-last-dim"
@@ -634,13 +708,14 @@ impl candle::CustomOp2 for AttnSoftmaxLastDim {
             &command_buffer,
             kernels,
             a_s.buffer(),
-            a_l.start_offset(),
+            a_l.start_offset() * a_s.dtype().size_in_bytes(),
             mask_s.buffer(),
-            mask_l.start_offset(),
+            mask_l.start_offset() * mask_s.dtype().size_in_bytes(),
             a_l.dims(),
             self.scale,
             ty,
             &output,
+            a_l.start_offset() * a_s.dtype().size_in_bytes(),
         )
         .map_err(candle::Error::wrap)?;
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, a_s.dtype());
@@ -664,6 +739,16 @@ pub fn attn_softmax_last_dim(xs: &Tensor, mask: &Tensor, scale: f32) -> Result<T
     } else {
         softmax_last_dim(&(xs.broadcast_add(mask)? * scale as f64)?)
     }
+}
+
+/// Inplace equivalent of `attn_softmax_last_dim`
+pub fn inplace_attn_softmax_last_dim(xs: &mut Tensor, mask: &Tensor, scale: f32) -> Result<()> {
+    if xs.device().is_metal() {
+        xs.inplace_op2(mask, &AttnSoftmaxLastDim { scale })?;
+    } else {
+        *xs = softmax_last_dim(&(xs.broadcast_add(mask)? * scale as f64)?)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]

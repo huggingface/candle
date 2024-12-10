@@ -17,7 +17,7 @@ mod error;
 mod utils;
 pub use device::{CudaDevice, DeviceId};
 pub use error::{CudaError, WrapErr};
-pub use utils::{Map1, Map1InPlace, Map1Any, Map2, Map2Any, Map2InPlace, Map3, S};
+pub use utils::{Map1, Map1Any, Map1InPlace, Map2, Map2Any, Map2InPlace, Map3, S};
 
 pub enum SlicePtrOrNull<T> {
     Ptr(CudaSlice<T>),

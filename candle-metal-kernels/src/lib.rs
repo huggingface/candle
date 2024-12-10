@@ -736,6 +736,7 @@ pub fn call_last_attn_softmax(
     scale: f32,
     ty: SdpaDType,
     output: &Buffer,
+    output_offset: usize,
 ) -> Result<(), MetalKernelError> {
     // Everything is in reverse
     let ne00 = input_shape[input_shape.len() - 1] as i64;
@@ -774,7 +775,7 @@ pub fn call_last_attn_softmax(
         (
             (input, input_offset),
             (mask, mask_offset),
-            output,
+            (output, output_offset),
             ne00,
             ne01,
             ne02,
