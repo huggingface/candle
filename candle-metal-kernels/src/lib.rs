@@ -684,6 +684,7 @@ pub fn call_last_softmax(
     input: &Buffer,
     input_offset: usize,
     output: &Buffer,
+    output_offset: usize,
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
     let encoder = ep.encoder();
@@ -692,7 +693,7 @@ pub fn call_last_softmax(
 
     set_params!(
         encoder,
-        (length, elements_to_sum, (input, input_offset), output)
+        (length, elements_to_sum, (input, input_offset), (output, output_offset))
     );
 
     let out_length = length / elements_to_sum;
