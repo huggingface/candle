@@ -693,7 +693,12 @@ pub fn call_last_softmax(
 
     set_params!(
         encoder,
-        (length, elements_to_sum, (input, input_offset), (output, output_offset))
+        (
+            length,
+            elements_to_sum,
+            (input, input_offset),
+            (output, output_offset)
+        )
     );
 
     let out_length = length / elements_to_sum;
