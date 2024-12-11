@@ -32,6 +32,31 @@ pub trait Map1 {
     }
 }
 
+pub trait Map1InPlace {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        src: &mut CudaSlice<T>,
+        dev: &CudaDevice,
+        layout: &Layout,
+    ) -> Result<()>;
+
+    fn map(&self, s: &mut S, d: &CudaDevice, l: &Layout) -> Result<()> {
+        match s {
+            S::U8(s) => self.f(s, d, l)?,
+            S::U32(s) => self.f(s, d, l)?,
+            S::I16(s) => self.f(s, d, l)?,
+            S::I32(s) => self.f(s, d, l)?,
+            S::I64(s) => self.f(s, d, l)?,
+            S::BF16(s) => self.f(s, d, l)?,
+            S::F16(s) => self.f(s, d, l)?,
+            S::F32(s) => self.f(s, d, l)?,
+            S::F64(s) => self.f(s, d, l)?,
+            S::F8E4M3(s) => self.f(s, d, l)?,
+        };
+        Ok(())
+    }
+}
+
 pub trait Map2 {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,

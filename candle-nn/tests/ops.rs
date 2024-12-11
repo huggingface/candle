@@ -52,6 +52,22 @@ fn softmax(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn inplace_softmax(device: &Device) -> Result<()> {
+    let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
+    let mut tensor = Tensor::new(data, device)?.log()?;
+    candle_nn::ops::inplace_softmax_last_dim(&mut tensor)?;
+    assert_eq!(
+        to_vec3_round(&tensor, 4)?,
+        &[
+            // (3, 1, 4) / 8, (1, 5, 9) / 15
+            [[0.375, 0.125, 0.5], [0.0667, 0.3333, 0.6]],
+            // (2, 1, 7) / 10, (8, 2, 8) / 18
+            [[0.2, 0.1, 0.7], [0.4444, 0.1111, 0.4444]]
+        ]
+    );
+    Ok(())
+}
+
 fn rms_norm(device: &Device) -> Result<()> {
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
     let tensor = Tensor::new(data, device)?;
@@ -253,6 +269,12 @@ test_device!(ropei, ropei_cpu, ropei_gpu, ropei_metal);
 test_device!(rope, rope_cpu, rope_gpu, rope_metal);
 test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal);
 test_device!(softmax, softmax_cpu, softmax_gpu, softmax_metal);
+test_device!(
+    inplace_softmax,
+    inplace_softmax_cpu,
+    inplace_softmax_gpu,
+    inplace_softmax_metal
+);
 test_device!(rms_norm, rms_norm_cpu, rms_norm_gpu, rms_norm_metal);
 test_device!(rms_norml, rms_norml_cpu, rms_norml_gpu, rms_norml_metal);
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_metal);

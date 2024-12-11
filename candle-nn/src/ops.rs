@@ -288,6 +288,129 @@ impl candle::ModuleT for Dropout {
 
 struct SoftmaxLastDim;
 
+impl candle::InplaceOp1 for SoftmaxLastDim {
+    fn name(&self) -> &'static str {
+        "softmax-last-dim"
+    }
+
+    fn cpu_fwd(&self, storage: &mut CpuStorage, layout: &Layout) -> Result<()> {
+        fn softmax<T: candle::WithDType + num_traits::Float>(
+            src: &mut [T],
+            layout: &Layout,
+        ) -> Result<()> {
+            let src = match layout.contiguous_offsets() {
+                None => candle::bail!("input has to be contiguous"),
+                Some((o1, o2)) => &mut src[o1..o2],
+            };
+            let dims = layout.shape().dims();
+            let dim_m1 = dims[dims.len() - 1];
+            src.par_chunks_mut(dim_m1).for_each(|src| {
+                let mut max = T::neg_infinity();
+                unsafe { T::vec_reduce_max(src.as_ptr(), &mut max, dim_m1) };
+                for s in src.iter_mut() {
+                    *s = (*s - max).exp();
+                }
+                let mut sum_exp = T::zero();
+                unsafe { T::vec_reduce_sum(src.as_ptr(), &mut sum_exp, dim_m1) };
+                for d in src.iter_mut() {
+                    *d /= sum_exp
+                }
+            });
+            Ok(())
+        }
+
+        match storage {
+            CpuStorage::BF16(slice) => softmax::<half::bf16>(slice, layout),
+            CpuStorage::F16(slice) => softmax::<half::f16>(slice, layout),
+            CpuStorage::F32(slice) => softmax::<f32>(slice, layout),
+            CpuStorage::F64(slice) => softmax::<f64>(slice, layout),
+            _ => candle::bail!("unsupported dtype for softmax {:?}", storage),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(&self, storage: &mut candle::CudaStorage, layout: &Layout) -> Result<()> {
+        use candle::cuda_backend::cudarc::driver::{
+            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+        };
+        use candle::cuda_backend::{kernel_name, kernels, Map1InPlace, WrapErr};
+        use candle::{CudaDevice, WithDType};
+
+        struct S;
+        impl Map1InPlace for S {
+            fn f<T: DeviceRepr + WithDType>(
+                &self,
+                src: &mut CudaSlice<T>,
+                dev: &CudaDevice,
+                layout: &Layout,
+            ) -> Result<()> {
+                let src = match layout.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => src.slice(o1..o2),
+                };
+                let el = layout.shape().elem_count();
+                let dims = layout.shape().dims();
+                let dim_m1 = dims[dims.len() - 1];
+                let (n_rows, n_cols) = (el / dim_m1, dim_m1);
+
+                let func = dev.get_or_load_func(&kernel_name::<T>("softmax"), kernels::REDUCE)?;
+                let cfg = LaunchConfig {
+                    grid_dim: (n_rows as u32, 1, 1),
+                    block_dim: (1, 32, 1),
+                    shared_mem_bytes: 0,
+                };
+                let params = (&src, &src, n_cols as i32);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }.w()?;
+                Ok(())
+            }
+        }
+
+        use candle::backend::BackendStorage;
+        let dev = storage.device().clone();
+
+        S.map(&mut storage.slice, &dev, layout)?;
+
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(&self, storage: &mut candle::MetalStorage, layout: &Layout) -> Result<()> {
+        use candle::backend::BackendStorage;
+        let device = storage.device();
+        let command_buffer = device.command_buffer()?;
+        let kernels = device.kernels();
+        let name = match storage.dtype() {
+            DType::F32 => "softmax_f32",
+            DType::F16 => "softmax_f16",
+            DType::BF16 => "softmax_bf16",
+            dtype => candle::bail!("softmax-last-dim is not implemented for {dtype:?}"),
+        };
+
+        let n = layout.stride().len();
+        if !(layout.is_contiguous() && layout.stride()[n - 1] == 1) {
+            candle::bail!("Non contiguous softmax-last-dim is not implemented");
+        }
+
+        let last_dim = layout.dims()[layout.shape().rank() - 1];
+        let elem_count = layout.shape().elem_count();
+        candle_metal_kernels::call_last_softmax(
+            device.metal_device(),
+            &command_buffer,
+            kernels,
+            name,
+            elem_count,
+            last_dim,
+            storage.buffer(),
+            layout.start_offset() * storage.dtype().size_in_bytes(),
+            &storage.buffer(),
+            layout.start_offset() * storage.dtype().size_in_bytes(),
+        )
+        .map_err(candle::Error::wrap)?;
+        Ok(())
+    }
+}
+
 impl candle::CustomOp1 for SoftmaxLastDim {
     fn name(&self) -> &'static str {
         "softmax-last-dim"
@@ -422,6 +545,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             storage.buffer(),
             layout.start_offset() * storage.dtype().size_in_bytes(),
             &output,
+            0,
         )
         .map_err(candle::Error::wrap)?;
         let newstorage =
@@ -434,10 +558,88 @@ pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
     xs.apply_op1_no_bwd(&SoftmaxLastDim)
 }
 
+pub fn inplace_softmax_last_dim(xs: &mut Tensor) -> Result<()> {
+    xs.inplace_op1(&SoftmaxLastDim)
+}
+
 // TODO: need cpu and cuda impls
 #[allow(dead_code)]
 struct AttnSoftmaxLastDim {
     scale: f32,
+}
+
+impl candle::InplaceOp2 for AttnSoftmaxLastDim {
+    fn name(&self) -> &'static str {
+        "attn-softmax-last-dim"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _a_s: &mut CpuStorage,
+        _a_l: &Layout,
+        _mask_s: &CpuStorage,
+        _mask_l: &Layout,
+    ) -> Result<()> {
+        candle::bail!("cpu attn-softmax-last-dim is not implemented");
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        a_s: &mut candle::MetalStorage,
+        a_l: &Layout,
+        mask_s: &candle::MetalStorage,
+        mask_l: &Layout,
+    ) -> Result<()> {
+        use candle::backend::BackendStorage;
+        let device = a_s.device();
+        let command_buffer = device.command_buffer()?;
+        let kernels = device.kernels();
+
+        let ty = match a_s.dtype() {
+            DType::F32 => candle_metal_kernels::SdpaDType::F32,
+            DType::F16 => candle_metal_kernels::SdpaDType::F16,
+            DType::BF16 => candle_metal_kernels::SdpaDType::BF16,
+            dtype => candle::bail!("attn-softmax-last-dim is not implemented for {dtype:?}"),
+        };
+
+        if !a_l.is_contiguous() {
+            candle::bail!("Non contiguous xs for attn-softmax-last-dim is not implemented");
+        }
+        if !mask_l.is_contiguous() {
+            candle::bail!("Non contiguous mask for attn-softmax-last-dim is not implemented");
+        }
+
+        if a_l.dims().len() != 4 {
+            candle::bail!("attn-softmax-last-dim expects xs of rank 2");
+        }
+        if mask_l.dims().len() != 2 {
+            candle::bail!("attn-softmax-last-dim expects mask of rank 2");
+        }
+        if mask_l.dim(D::Minus1)? != a_l.dim(D::Minus1)?
+            || mask_l.dim(D::Minus2)? != a_l.dim(D::Minus2)?
+        {
+            candle::bail!("attn-softmax-last-dim expects last 2 dims to match xs last 2 dims");
+        }
+
+        candle_metal_kernels::call_last_attn_softmax(
+            device.metal_device(),
+            &command_buffer,
+            kernels,
+            a_s.buffer(),
+            a_l.start_offset() * a_s.dtype().size_in_bytes(),
+            mask_s.buffer(),
+            mask_l.start_offset() * mask_s.dtype().size_in_bytes(),
+            a_l.dims(),
+            self.scale,
+            ty,
+            &a_s.buffer(),
+            0,
+        )
+        .map_err(candle::Error::wrap)?;
+
+        Ok(())
+    }
 }
 
 impl candle::CustomOp2 for AttnSoftmaxLastDim {
@@ -501,13 +703,14 @@ impl candle::CustomOp2 for AttnSoftmaxLastDim {
             &command_buffer,
             kernels,
             a_s.buffer(),
-            a_l.start_offset(),
+            a_l.start_offset() * a_s.dtype().size_in_bytes(),
             mask_s.buffer(),
-            mask_l.start_offset(),
+            mask_l.start_offset() * mask_s.dtype().size_in_bytes(),
             a_l.dims(),
             self.scale,
             ty,
             &output,
+            a_l.start_offset() * a_s.dtype().size_in_bytes(),
         )
         .map_err(candle::Error::wrap)?;
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, a_s.dtype());
@@ -531,6 +734,16 @@ pub fn attn_softmax_last_dim(xs: &Tensor, mask: &Tensor, scale: f32) -> Result<T
     } else {
         softmax_last_dim(&(xs.broadcast_add(mask)? * scale as f64)?)
     }
+}
+
+/// Inplace equivalent of `attn_softmax_last_dim`
+pub fn inplace_attn_softmax_last_dim(xs: &mut Tensor, mask: &Tensor, scale: f32) -> Result<()> {
+    if xs.device().is_metal() {
+        xs.inplace_op2(mask, &AttnSoftmaxLastDim { scale })?;
+    } else {
+        *xs = softmax_last_dim(&(xs.broadcast_add(mask)? * scale as f64)?)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
