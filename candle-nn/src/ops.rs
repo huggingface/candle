@@ -329,11 +329,7 @@ impl candle::InplaceOp1 for SoftmaxLastDim {
     }
 
     #[cfg(feature = "cuda")]
-    fn cuda_fwd(
-        &self,
-        storage: &mut candle::CudaStorage,
-        layout: &Layout,
-    ) -> Result<(candle::CudaStorage, Shape)> {
+    fn cuda_fwd(&self, storage: &mut candle::CudaStorage, layout: &Layout) -> Result<()> {
         use candle::cuda_backend::cudarc::driver::{
             CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
         };
@@ -347,7 +343,7 @@ impl candle::InplaceOp1 for SoftmaxLastDim {
                 src: &mut CudaSlice<T>,
                 dev: &CudaDevice,
                 layout: &Layout,
-            ) -> Result<CudaSlice<T>> {
+            ) -> Result<()> {
                 let src = match layout.contiguous_offsets() {
                     None => candle::bail!("input has to be contiguous"),
                     Some((o1, o2)) => src.slice(o1..o2),
@@ -357,12 +353,13 @@ impl candle::InplaceOp1 for SoftmaxLastDim {
                 let dim_m1 = dims[dims.len() - 1];
                 let (n_rows, n_cols) = (el / dim_m1, dim_m1);
 
+                let func = dev.get_or_load_func(&kernel_name::<T>("softmax"), kernels::REDUCE)?;
                 let cfg = LaunchConfig {
                     grid_dim: (n_rows as u32, 1, 1),
                     block_dim: (1, 32, 1),
                     shared_mem_bytes: 0,
                 };
-                let params = (&src, &dst, n_cols as i32);
+                let params = (&src, &src, n_cols as i32);
                 // SAFETY: ffi.
                 unsafe { func.launch(cfg, params) }.w()?;
                 Ok(())
@@ -370,12 +367,10 @@ impl candle::InplaceOp1 for SoftmaxLastDim {
         }
 
         use candle::backend::BackendStorage;
-        let dev = storage.device();
-        let slice = S.map(&storage.slice, dev, layout)?;
-        let dst = candle::cuda_backend::CudaStorage {
-            slice,
-            device: dev.clone(),
-        };
+        let dev = storage.device().clone();
+
+        S.map(&mut storage.slice, &dev, layout)?;
+
         Ok(())
     }
 
