@@ -127,6 +127,7 @@ fn matmul_alpha_beta(device: &Device) -> Result<()> {
     let data = vec![1.0f32, 1.0, 1.0, 1.0];
     let mut c = Tensor::from_slice(&data, (2, 2), device)?;
 
+    println!("{}", a.matmul(&b)?);
     a.matmul_with_alpha_beta(&b, &mut c, Some(2.))?;
     assert_eq!(c.to_vec2::<f32>()?, &[[15.0f32, 21.0], [31.0, 45.0]]);
     Ok(())

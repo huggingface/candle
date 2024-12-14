@@ -1533,15 +1533,6 @@ impl BackendStorage for MetalStorage {
         rhs_l: &Layout,
         c_l: &Layout,
     ) -> Result<()> {
-        let name = match self.dtype {
-            DType::F32 => "sgemm",
-            DType::F16 => "hgemm",
-            DType::BF16 => "bgemm",
-            dtype => {
-                return Err(MetalError::Message(format!("matmul doesn't support {dtype:?}")).into())
-            }
-        };
-
         let elem_count = b * m * n;
 
         match c_l.contiguous_offsets() {
@@ -1557,12 +1548,24 @@ impl BackendStorage for MetalStorage {
         };
 
         let command_buffer = self.device.command_buffer()?;
-        command_buffer.set_label("matmul");
-        candle_metal_kernels::call_gemm(
+        command_buffer.set_label("matmul_with_alpha_beta");
+
+        let dtype = match self.dtype {
+            DType::F32 => candle_metal_kernels::GemmDType::F32,
+            DType::F16 => candle_metal_kernels::GemmDType::F16,
+            DType::BF16 => candle_metal_kernels::GemmDType::BF16,
+            dtype => {
+                return Err(MetalError::Message(format!(
+                    "matmul_with_alpha_beta doesn't support {dtype:?}"
+                ))
+                .into())
+            }
+        };
+        candle_metal_kernels::call_mlx_addmm(
             &self.device.device,
             &command_buffer,
             &self.device.kernels,
-            name,
+            dtype,
             (b, m, n, k),
             lhs_l.stride(),
             lhs_l.start_offset() * self.dtype.size_in_bytes(),
@@ -1570,11 +1573,15 @@ impl BackendStorage for MetalStorage {
             rhs_l.stride(),
             rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
             &rhs.buffer,
+            c_l.stride(),
+            c_l.start_offset() * c.dtype.size_in_bytes(),
+            &c.buffer,
             &c.buffer,
             s.unwrap_or(1.) as f32,
             1.,
         )
         .map_err(MetalError::from)?;
+
         Ok(())
     }
 
@@ -1586,9 +1593,11 @@ impl BackendStorage for MetalStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        let buffer = self.device.new_buffer(b * m * n, self.dtype, "matmul")?;
+        let buffer = self
+            .device
+            .new_buffer(b * m * n, self.dtype, "matmul_with_alpha")?;
         let command_buffer = self.device.command_buffer()?;
-        command_buffer.set_label("matmul");
+        command_buffer.set_label("matmul_with_alpha");
         if self.dtype == DType::BF16 {
             if s.unwrap_or(1.) != 1. {
                 return Err(
