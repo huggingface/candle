@@ -13,7 +13,7 @@ THUDM/CodeGeeX4 is a versatile model for all AI software development scenarios, 
 
 ** Running with ~cpu~
 #+begin_src shell
-  cargo run --example codegeex4-9b --release --cpu   -- --prompt "please write a insertion sort in rust" --sample-len 300
+  cargo run --example codegeex4-9b --release -- --cpu   --prompt "please write a insertion sort in rust" --sample-len 300
 #+end_src
 
 ** Output_Example
