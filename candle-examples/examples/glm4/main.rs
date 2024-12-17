@@ -214,7 +214,7 @@ fn main() -> anyhow::Result<()> {
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-            .model("THUDM/codegeex4-all-9b".to_string())
+            .model("THUDM/glm-4-9b".to_string())
             .get("tokenizer.json")
             .map_err(anyhow::Error::msg)?,
     };
