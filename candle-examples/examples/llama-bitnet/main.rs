@@ -32,6 +32,7 @@ enum Which {
     BitnetB1_58Large,
     Bitnet51_58XL,
     Bitnet51_38_3B,
+    Falcon3_7bInstruct158,
 }
 
 #[derive(Parser, Debug)]
@@ -128,6 +129,7 @@ fn main() -> Result<()> {
                 Which::BitnetB1_58Large => "1bitLLM/bitnet_b1_58-large",
                 Which::Bitnet51_58XL => "1bitLLM/bitnet_b1_58-xl",
                 Which::Bitnet51_38_3B => "1bitLLM/bitnet_b1_38-3b",
+                Which::Falcon3_7bInstruct158 => "tiiuae/Falcon3-7B-Instruct-1.58bit",
             };
             str.to_string()
         });
@@ -141,7 +143,7 @@ fn main() -> Result<()> {
         let config = config.into_config(args.use_flash_attn);
 
         let filenames = match args.which {
-            Which::BitnetB1_58Large => {
+            Which::Falcon3_7bInstruct158 | Which::BitnetB1_58Large => {
                 vec![api.get("model.safetensors")?]
             }
             Which::Bitnet51_38_3B | Which::Bitnet51_58XL => {

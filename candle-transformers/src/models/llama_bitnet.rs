@@ -4,7 +4,7 @@
 //!
 //! Implementation based on Hugging Face's [transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py)
 
-use super::with_tracing::{bit_linear_no_bias as bit_linear, linear, BitLinear, Linear, RmsNorm};
+use super::with_tracing::{bit_linear_no_bias as bit_linear, linear_no_bias as linear, BitLinear, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use std::{collections::HashMap, f32::consts::PI};
