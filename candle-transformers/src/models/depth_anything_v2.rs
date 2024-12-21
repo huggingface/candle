@@ -533,7 +533,7 @@ pub struct DepthAnythingV2 {
     conf: DepthAnythingV2Config,
 }
 
-impl<'a> DepthAnythingV2 {
+impl DepthAnythingV2 {
     pub fn new(
         pretrained: Arc<DinoVisionTransformer>,
         conf: DepthAnythingV2Config,
