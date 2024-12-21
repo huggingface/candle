@@ -6,10 +6,8 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
-use std::ffi::OsString;
-use std::path::PathBuf;
-
 use clap::Parser;
+use std::{ffi::OsString, path::PathBuf, sync::Arc};
 
 use candle::DType::{F32, U8};
 use candle::{DType, Device, Module, Result, Tensor};
@@ -82,7 +80,7 @@ pub fn main() -> anyhow::Result<()> {
     };
 
     let config = DepthAnythingV2Config::vit_small();
-    let depth_anything = DepthAnythingV2::new(&dinov2, &config, vb)?;
+    let depth_anything = DepthAnythingV2::new(Arc::new(dinov2), config, vb)?;
 
     let (original_height, original_width, image) = load_and_prep_image(&args.image, &device)?;
 
