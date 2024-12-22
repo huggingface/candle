@@ -3,7 +3,7 @@
 //! See:
 //! - ["EfficientBERT: Progressively Searching Multilayer Perceptron Architectures for BERT"](https://arxiv.org/abs/2201.00462)
 //!
-use candle::{Result, Tensor, D};
+use candle::{Context, Result, Tensor, D};
 use candle_nn as nn;
 use nn::{Module, VarBuilder};
 
@@ -289,7 +289,7 @@ impl EfficientNet {
     pub fn new(p: VarBuilder, configs: Vec<MBConvConfig>, nclasses: usize) -> Result<Self> {
         let f_p = p.pp("features");
         let first_in_c = configs[0].input_channels;
-        let last_out_c = configs.last().unwrap().out_channels;
+        let last_out_c = configs.last().context("no last")?.out_channels;
         let final_out_c = 4 * last_out_c;
         let init_cna = ConvNormActivation::new(f_p.pp(0), 3, first_in_c, 3, 2, 1)?;
         let nconfigs = configs.len();

@@ -2,7 +2,7 @@
 //!
 
 use super::{GgmlDType, QTensor};
-use crate::{Device, Result};
+use crate::{Context, Device, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashMap;
 
@@ -338,7 +338,7 @@ impl Value {
                     if value_type.len() != 1 {
                         crate::bail!("multiple value-types in the same array {value_type:?}")
                     }
-                    value_type.into_iter().next().unwrap()
+                    value_type.into_iter().next().context("empty value_type")?
                 };
                 w.write_u32::<LittleEndian>(value_type.to_u32())?;
                 w.write_u64::<LittleEndian>(v.len() as u64)?;

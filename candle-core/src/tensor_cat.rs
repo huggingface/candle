@@ -1,4 +1,4 @@
-use crate::{shape::Dim, Error, Result, Shape, Tensor};
+use crate::{shape::Dim, Context, Error, Result, Shape, Tensor};
 
 impl Tensor {
     /// Concatenates two or more tensors along a particular dimension.
@@ -134,7 +134,7 @@ impl Tensor {
                     .bt())?
                 }
             }
-            let next_offset = offsets.last().unwrap() + arg.elem_count();
+            let next_offset = offsets.last().context("empty offsets")? + arg.elem_count();
             offsets.push(next_offset);
         }
         let shape = Shape::from(cat_dims);
