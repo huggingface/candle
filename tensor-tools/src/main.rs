@@ -3,6 +3,7 @@ use candle::{Device, Result, Tensor};
 use clap::{Parser, Subcommand, ValueEnum};
 use rayon::prelude::*;
 use safetensors::tensor;
+use serde_json;
 
 #[derive(ValueEnum, Debug, Clone)]
 enum QuantizationMode {
@@ -428,7 +429,11 @@ fn run_quantize_safetensors(
 ) -> Result<()> {
     let mut out_file = std::fs::File::create(out_file)?;
     let mut tensors = std::collections::HashMap::new();
+    let metadata_file = in_files.iter().find(|f| f.to_string_lossy().ends_with("config.json"));
     for in_file in in_files.iter() {
+        if metadata_file.is_some() && in_file == metadata_file.unwrap() {
+            continue;
+        }
         let in_tensors = candle::safetensors::load(in_file, &Device::Cpu)?;
         tensors.extend(in_tensors)
     }
@@ -439,14 +444,15 @@ fn run_quantize_safetensors(
 
     let qtensors = tensors
         .into_par_iter()
-        .map(|(name, tensor)| {
-            let mut should_quantize = tensor.rank() == 2 && tensor.dim(1)? % block_size == 0;
+        .map(|(mut name, tensor)| {
+            let should_quantize = tensor.rank() == 2 && tensor.dim(1)? % block_size == 0;
             let mut tensor = tensor;
             if should_quantize && bitnet_mode {
-                let is_bitnet_weight = name.contains("self_attn.k_proj") ||
+                let is_bitnet_weight = 
                     name.contains("self_attn.v_proj") ||
                     name.contains("self_attn.q_proj") ||
                     name.contains("self_attn.o_proj") ||
+                    name.contains("self_attn.k_proj") ||
                     name.contains("mlp.down_proj") ||
                     name.contains("mlp.up_proj") ||
                     name.contains("mlp.gate_proj");
@@ -462,6 +468,30 @@ fn run_quantize_safetensors(
             } else {
                 QTensor::quantize(&tensor, GgmlDType::F32)?
             };
+            
+            if name == "model.embed_tokens.weight" {
+                name = "token_embd.weight".to_string();
+            }
+
+            if name == "model.norm.weight" {
+                name = "output_norm.weight".to_string()
+            }
+
+            if name == "lm_head.weight" {
+                name = "output.weight".to_string()
+            }
+
+            name = name.replace("model.layers.", "blk.");
+            name = name.replace("self_attn.q_proj", "attn_q");
+            name = name.replace("self_attn.k_proj", "attn_k");
+            name = name.replace("self_attn.v_proj", "attn_v");
+            name = name.replace("self_attn.o_proj", "attn_output");
+            name = name.replace("mlp.gate_proj", "ffn_gate");
+            name = name.replace("mlp.down_proj", "ffn_down");
+            name = name.replace("mlp.up_proj", "ffn_up");
+            name = name.replace("input_layernorm", "attn_norm");
+            name = name.replace("post_attention_layernorm", "ffn_norm");
+
             Ok((name, tensor))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -469,7 +499,56 @@ fn run_quantize_safetensors(
         .iter()
         .map(|(k, v)| (k.as_str(), v))
         .collect::<Vec<_>>();
-    gguf_file::write(&mut out_file, &[], &qtensors)?;
+
+    // Load metadata
+    let gguf_metadata: Vec<(&str, gguf_file::Value)> = if let Some(metadata_file) = metadata_file {
+        let metadata = std::fs::read_to_string(metadata_file)?;
+        let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+        
+        let num_attention_heads = gguf_file::Value::from_u32(metadata["num_attention_heads"].as_u64().unwrap() as u32);
+        let num_attention_heads_kv = gguf_file::Value::from_u32(metadata["num_key_value_heads"].as_u64().unwrap() as u32);
+
+        let num_hidden_layers = gguf_file::Value::from_u32(metadata["num_hidden_layers"].as_u64().unwrap() as u32);
+        let embedding_length = gguf_file::Value::from_u32(metadata["hidden_size"].as_u64().unwrap() as u32);
+        let rope_dimension_count = gguf_file::Value::from_u32(
+            (metadata["hidden_size"].as_u64().unwrap() as u32) / (metadata["num_attention_heads"].as_u64().unwrap() as u32)
+        );
+        let layer_norm_eps = gguf_file::Value::from_f32(metadata["rms_norm_eps"].as_f64().unwrap() as f32);
+
+        let mut gguf_metadata: Vec<(&str, gguf_file::Value)> = Vec::new();
+        gguf_metadata.push((
+            "llama.attention.head_count",
+            num_attention_heads.clone(),
+        ));
+        gguf_metadata.push((
+            "llama.attention.head_count_kv",
+            num_attention_heads_kv.clone(),
+        ));
+        gguf_metadata.push((
+            "llama.block_count",
+            num_hidden_layers.clone(),
+        ));
+        gguf_metadata.push((
+            "llama.embedding_length",
+            embedding_length.clone(),
+        ));
+        gguf_metadata.push((
+            "llama.attention.layer_norm_rms_epsilon", layer_norm_eps.clone()
+        ));
+        gguf_metadata.push((
+            "llama.rope.dimension_count",
+            rope_dimension_count.clone(),
+        ));
+
+        // Print metadata
+        for (key, value) in gguf_metadata.iter() {
+            println!("  {key}: {value:?}");
+        }
+        gguf_metadata
+    } else {
+        Vec::new()
+    };
+    gguf_file::write(&mut out_file, gguf_metadata.as_slice(), &qtensors)?;
     Ok(())
 }
 
@@ -542,7 +621,7 @@ fn run_quantize(
     let metadata = content
         .metadata
         .iter()
-        .map(|(k, v)| (k.as_str(), v))
+        .map(|(k, v)| (k.as_str(), v.clone()))
         .collect::<Vec<_>>();
     gguf_file::write(&mut out_file, metadata.as_slice(), &qtensors)?;
     Ok(())
