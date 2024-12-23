@@ -51,37 +51,20 @@ impl QMatMul {
 struct BitQMatMul {
     inner: candle::quantized::QMatMul,
     span: tracing::Span,
-}
-
-
-fn activation_quant(x: &Tensor) -> Result<(Tensor, Tensor)> {
-    let scale = (127.0
-        / x.abs()?
-            .max(D::Minus1)?
-            .max(D::Minus1)?
-            .clamp(1e-5, f32::INFINITY)?)?
-    .to_dtype(x.dtype())?;
-
-    let y = x
-        .broadcast_mul(&scale.unsqueeze(D::Minus1)?.unsqueeze(D::Minus1)?)?
-        .round()?
-        .clamp(-128.0, 127.0)?;
-
-    Ok((y, scale))
+    weight_scale: Tensor,
 }
 
 impl BitQMatMul {
-    fn from_qtensor(qtensor: QTensor) -> Result<Self> {
+    fn from_qtensor(qtensor: QTensor, weight_scale: QTensor) -> Result<Self> {
         let inner = candle::quantized::QMatMul::from_qtensor(qtensor)?;
         let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
-        Ok(Self { inner, span })
+        let weight_scale = weight_scale.dequantize(&weight_scale.device())?;
+        Ok(Self { inner, span, weight_scale })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let (x, x_scale) = activation_quant(x)?;
-
         let _enter = self.span.enter();
-        self.inner.forward(&x)?.broadcast_div(&x_scale)
+        self.inner.forward(&x)?.broadcast_div(&self.weight_scale)
     }
 }
 
@@ -333,17 +316,24 @@ impl ModelWeights {
         for layer_idx in 0..ct.hparams.n_layer {
             let prefix = format!("layers.{layer_idx}");
             let attention_wq = ct.remove(&format!("{prefix}.attention.wq.weight"))?;
+            let attention_wq_ws = ct.remove(&format!("{prefix}.attention.wq.weight_scale"))?;
             let attention_wk = ct.remove(&format!("{prefix}.attention.wk.weight"))?;
+            let attention_wk_ws = ct.remove(&format!("{prefix}.attention.wk.weight_scale"))?;
             let attention_wv = ct.remove(&format!("{prefix}.attention.wv.weight"))?;
+            let attention_wv_ws = ct.remove(&format!("{prefix}.attention.wv.weight_scale"))?;
             let attention_wo = ct.remove(&format!("{prefix}.attention.wo.weight"))?;
+            let attention_wo_ws = ct.remove(&format!("{prefix}.attention.wo.weight_scale"))?;
             let mlp_or_moe = {
                 let feed_forward_w1 = ct.remove(&format!("{prefix}.feed_forward.w1.weight"))?;
+                let feed_forward_w1_ws = ct.remove(&format!("{prefix}.feed_forward.w1.weight_scale"))?;
                 let feed_forward_w2 = ct.remove(&format!("{prefix}.feed_forward.w2.weight"))?;
+                let feed_forward_w2_ws = ct.remove(&format!("{prefix}.feed_forward.w2.weight_scale"))?;
                 let feed_forward_w3 = ct.remove(&format!("{prefix}.feed_forward.w3.weight"))?;
+                let feed_forward_w3_ws = ct.remove(&format!("{prefix}.feed_forward.w3.weight_scale"))?;
                 MlpOrMoe::Mlp(Mlp {
-                    feed_forward_w1: BitQMatMul::from_qtensor(feed_forward_w1)?,
-                    feed_forward_w2: BitQMatMul::from_qtensor(feed_forward_w2)?,
-                    feed_forward_w3: BitQMatMul::from_qtensor(feed_forward_w3)?,
+                    feed_forward_w1: BitQMatMul::from_qtensor(feed_forward_w1, feed_forward_w1_ws)?,
+                    feed_forward_w2: BitQMatMul::from_qtensor(feed_forward_w2, feed_forward_w2_ws)?,
+                    feed_forward_w3: BitQMatMul::from_qtensor(feed_forward_w3, feed_forward_w3_ws)?,
                 })
             };
             let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
@@ -352,10 +342,10 @@ impl ModelWeights {
             let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
             let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
             layers.push(LayerWeights {
-                attention_wq: BitQMatMul::from_qtensor(attention_wq)?,
-                attention_wk: BitQMatMul::from_qtensor(attention_wk)?,
-                attention_wv: BitQMatMul::from_qtensor(attention_wv)?,
-                attention_wo: BitQMatMul::from_qtensor(attention_wo)?,
+                attention_wq: BitQMatMul::from_qtensor(attention_wq, attention_wq_ws)?,
+                attention_wk: BitQMatMul::from_qtensor(attention_wk, attention_wk_ws)?,
+                attention_wv: BitQMatMul::from_qtensor(attention_wv, attention_wv_ws)?,
+                attention_wo: BitQMatMul::from_qtensor(attention_wo, attention_wo_ws)?,
                 attention_norm: RmsNorm::from_qtensor(attention_norm, 1e-5)?,
                 mlp_or_moe,
                 ffn_norm: RmsNorm::from_qtensor(ffn_norm, 1e-5)?,
@@ -429,20 +419,30 @@ impl ModelWeights {
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
             let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
+            let attention_wq_ws = ct.tensor(reader, &format!("{prefix}.attn_q.weight_scale"), device)?;
             let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
+            let attention_wk_ws = ct.tensor(reader, &format!("{prefix}.attn_k.weight_scale"), device)?;
             let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"), device)?;
+            let attention_wv_ws = ct.tensor(reader, &format!("{prefix}.attn_v.weight_scale"), device)?;
             let attention_wo = ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
+            let attention_wo_ws = ct.tensor(reader, &format!("{prefix}.attn_output.weight_scale"), device)?;
             let mlp_or_moe = if n_expert <= 1 {
                 let feed_forward_w1 =
                     ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"), device)?;
+                let feed_forward_w1_ws =
+                    ct.tensor(reader, &format!("{prefix}.ffn_gate.weight_scale"), device)?;
                 let feed_forward_w2 =
                     ct.tensor(reader, &format!("{prefix}.ffn_down.weight"), device)?;
+                let feed_forward_w2_ws =
+                    ct.tensor(reader, &format!("{prefix}.ffn_down.weight_scale"), device)?;
                 let feed_forward_w3 =
                     ct.tensor(reader, &format!("{prefix}.ffn_up.weight"), device)?;
+                let feed_forward_w3_ws =
+                    ct.tensor(reader, &format!("{prefix}.ffn_up.weight_scale"), device)?;
                 MlpOrMoe::Mlp(Mlp {
-                    feed_forward_w1: BitQMatMul::from_qtensor(feed_forward_w1)?,
-                    feed_forward_w2: BitQMatMul::from_qtensor(feed_forward_w2)?,
-                    feed_forward_w3: BitQMatMul::from_qtensor(feed_forward_w3)?,
+                    feed_forward_w1: BitQMatMul::from_qtensor(feed_forward_w1, feed_forward_w1_ws)?,
+                    feed_forward_w2: BitQMatMul::from_qtensor(feed_forward_w2, feed_forward_w2_ws)?,
+                    feed_forward_w3: BitQMatMul::from_qtensor(feed_forward_w3, feed_forward_w3_ws)?,
                 })
             } else {
                 let feed_forward_gate_inp =
@@ -451,15 +451,21 @@ impl ModelWeights {
                 for i in 0..n_expert {
                     let feed_forward_w1 =
                         ct.tensor(reader, &format!("{prefix}.ffn_gate.{i}.weight"), device)?;
+                    let feed_forward_w1_ws =
+                        ct.tensor(reader, &format!("{prefix}.ffn_gate.{i}.weight_scale"), device)?;
                     let feed_forward_w2 =
                         ct.tensor(reader, &format!("{prefix}.ffn_down.{i}.weight"), device)?;
+                    let feed_forward_w2_ws =
+                        ct.tensor(reader, &format!("{prefix}.ffn_down.{i}.weight_scale"), device)?;
                     let feed_forward_w3 =
                         ct.tensor(reader, &format!("{prefix}.ffn_up.{i}.weight"), device)?;
+                    let feed_forward_w3_ws =
+                        ct.tensor(reader, &format!("{prefix}.ffn_up.{i}.weight_scale"), device)?;
                     
                     experts.push(Mlp {
-                        feed_forward_w1: BitQMatMul::from_qtensor(feed_forward_w1)?,
-                        feed_forward_w2: BitQMatMul::from_qtensor(feed_forward_w2)?,
-                        feed_forward_w3: BitQMatMul::from_qtensor(feed_forward_w3)?,
+                        feed_forward_w1: BitQMatMul::from_qtensor(feed_forward_w1, feed_forward_w1_ws)?,
+                        feed_forward_w2: BitQMatMul::from_qtensor(feed_forward_w2, feed_forward_w2_ws)?,
+                        feed_forward_w3: BitQMatMul::from_qtensor(feed_forward_w3, feed_forward_w3_ws)?,
                     })
                 }
                 MlpOrMoe::MoE {
@@ -475,10 +481,10 @@ impl ModelWeights {
             let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
             let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
             layers.push(LayerWeights {
-                attention_wq: BitQMatMul::from_qtensor(attention_wq)?,
-                attention_wk: BitQMatMul::from_qtensor(attention_wk)?,
-                attention_wv: BitQMatMul::from_qtensor(attention_wv)?,
-                attention_wo: BitQMatMul::from_qtensor(attention_wo)?,
+                attention_wq: BitQMatMul::from_qtensor(attention_wq, attention_wq_ws)?,
+                attention_wk: BitQMatMul::from_qtensor(attention_wk, attention_wk_ws)?,
+                attention_wv: BitQMatMul::from_qtensor(attention_wv, attention_wv_ws)?,
+                attention_wo: BitQMatMul::from_qtensor(attention_wo, attention_wo_ws)?,
                 attention_norm: RmsNorm::from_qtensor(attention_norm, rms_norm_eps)?,
                 mlp_or_moe,
                 ffn_norm: RmsNorm::from_qtensor(ffn_norm, rms_norm_eps)?,

@@ -1,5 +1,5 @@
 use super::k_quants::{
-    BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K,
+    BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K, BlockQ2b0
 };
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
@@ -514,6 +514,63 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
             sumf += d * isum as f32;
         }
     }
+    Ok(sumf)
+}
+
+#[inline(always)]
+pub(crate) fn vec_dot_q2b0_q8k(n: usize, xs: &[BlockQ2b0], ys: &[BlockQ8K]) -> crate::Result<f32> {
+    if n % QK_K != 0 {
+        crate::bail!("vec_dot_q2b0_q8k: {n} is not divisible by {QK_K}")
+    }
+
+    let mut sumf = 0f32;
+
+    unsafe {
+        let m2b = vdupq_n_u8(0b11); // Máscara para extraer 2 bits por elemento
+
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            let d = y.d;
+
+            let mut q2_ptr = x.qs.as_ptr();
+            let mut q8_ptr = y.qs.as_ptr();
+
+            let mut sumi = 0i32;
+
+            for _ in 0..QK_K / 16 {
+                // Cargar bloques de datos
+                let q2bytes = vld1q_u8(q2_ptr as *const u8);
+                q2_ptr = q2_ptr.add(16);
+
+                let q8bytes_low = vld1q_s8(q8_ptr);
+                let q8bytes_high = vld1q_s8(q8_ptr.add(16));
+                q8_ptr = q8_ptr.add(32);
+
+                // Extraer los valores de los 2 bits (4 valores por byte)
+                let q2_vals_low = vreinterpretq_s8_u8(vandq_u8(q2bytes, m2b));
+                let q2_vals_high = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q2bytes, 2), m2b));
+                let q2_vals_mid_low = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q2bytes, 4), m2b));
+                let q2_vals_mid_high = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q2bytes, 6), m2b));
+
+                // Ajustar los valores de Q2 (centro en -2)
+                let q2_low = vsubq_s8(q2_vals_low, vdupq_n_s8(2));
+                let q2_high = vsubq_s8(q2_vals_high, vdupq_n_s8(2));
+                let q2_mid_low = vsubq_s8(q2_vals_mid_low, vdupq_n_s8(2));
+                let q2_mid_high = vsubq_s8(q2_vals_mid_high, vdupq_n_s8(2));
+
+                // Calcular productos punto para cada parte
+                let prod0 = vdotq_s32(q2_low, q8bytes_low);
+                let prod1 = vdotq_s32(q2_high, q8bytes_high);
+                let prod2 = vdotq_s32(q2_mid_low, q8bytes_low);
+                let prod3 = vdotq_s32(q2_mid_high, q8bytes_high);
+
+                // Sumar los productos
+                sumi += vaddvq_s32(prod0) + vaddvq_s32(prod1) + vaddvq_s32(prod2) + vaddvq_s32(prod3);
+            }
+
+            sumf += sumi as f32 * d;
+        }
+    }
+
     Ok(sumf)
 }
 

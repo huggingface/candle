@@ -1,3 +1,4 @@
+use candle::op::Op;
 use candle::quantized::{gguf_file, GgmlDType, QTensor};
 use candle::{Device, Result, Tensor};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -47,6 +48,8 @@ enum Quantization {
     Q8_0,
     #[value(name = "q8_1")]
     Q8_1,
+    #[value(name = "q2b0")]
+    Q2b0,
     Q2k,
     Q3k,
     Q4k,
@@ -74,6 +77,7 @@ impl Quantization {
             Quantization::Q8k => GgmlDType::Q8K,
             Quantization::F16 => GgmlDType::F16,
             Quantization::F32 => GgmlDType::F32,
+            Quantization::Q2b0 => GgmlDType::Q2b0,
         }
     }
 }
@@ -147,6 +151,10 @@ enum Command {
 
         #[clap(long, short, action)]
         bitnet_mode: bool,
+
+        // Allow to specify quantization_bitnet in case of bitnet_mode
+        #[arg(long, value_enum)]
+        bitnet_quantization: Option<Quantization>,
 
         /// The quantization schema to apply.
         #[arg(long, value_enum)]
@@ -293,7 +301,10 @@ fn run_print(
                         let tensor = tensor.dequantize(device)?;
                         println!("{tensor}")
                     }
-                    Err(_) => println!("not found"),
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        println!("not found")
+                    }
                 }
             }
         }
@@ -407,17 +418,20 @@ fn unpack_bitnet_weights(tensor: &Tensor) -> Result<Tensor> {
     let cols = tensor.dim(1).unwrap();
 
     let mut unpacked_vec = vec![0f32; rows * 4 * cols];
+
     for i in 0..rows {
         for j in 0..cols {
             let packed = packed_vec[i][j];
+
             for k in 0..4 {
                 let bits = ((packed >> (k * 2)) & 0b11) as i8 - 1;
-                unpacked_vec[(i * 4 + k) * cols + j] = bits as f32;
+                let index = (k * rows + i) * cols + j;
+                unpacked_vec[index] = bits as f32;
             }
         }
     }
 
-    let unpacked_tensor = Tensor::from_vec(unpacked_vec, (rows*4, cols), tensor.device())?;
+    let unpacked_tensor = Tensor::from_vec(unpacked_vec, (rows * 4, cols), tensor.device())?;
     Ok(unpacked_tensor)
 }
 
@@ -425,6 +439,7 @@ fn run_quantize_safetensors(
     in_files: &[std::path::PathBuf],
     out_file: std::path::PathBuf,
     q: Quantization,
+    bq: Option<Quantization>,
     bitnet_mode: bool,
 ) -> Result<()> {
     let mut out_file = std::fs::File::create(out_file)?;
@@ -445,6 +460,7 @@ fn run_quantize_safetensors(
     let qtensors = tensors
         .into_par_iter()
         .map(|(mut name, tensor)| {
+            let mut local_dtype = dtype.clone();
             let should_quantize = tensor.rank() == 2 && tensor.dim(1)? % block_size == 0;
             let mut tensor = tensor;
             if should_quantize && bitnet_mode {
@@ -460,11 +476,12 @@ fn run_quantize_safetensors(
                 if is_bitnet_weight {
                     println!("  unpacking {name} {tensor:?} {should_quantize}");
                     tensor = unpack_bitnet_weights(&tensor)?;
+                    local_dtype = bq.clone().unwrap().dtype();
                 }
             }
             println!("  quantizing {name} {tensor:?} {should_quantize}");
             let tensor = if should_quantize {
-                QTensor::quantize(&tensor, dtype)?
+                QTensor::quantize(&tensor, local_dtype)?
             } else {
                 QTensor::quantize(&tensor, GgmlDType::F32)?
             };
@@ -574,11 +591,15 @@ fn run_quantize(
     out_file: std::path::PathBuf,
     q: Quantization,
     qmode: QuantizationMode,
+    bq: Option<Quantization>,
     bitnet_mode: bool,
     device: &Device,
 ) -> Result<()> {
     if in_files.is_empty() {
         candle::bail!("no specified input files")
+    }
+    if bitnet_mode && bq.is_none() {
+        candle::bail!("bitnet mode requires a bitnet quantization")
     }
     if let Some(extension) = out_file.extension() {
         if extension == "safetensors" {
@@ -587,7 +608,7 @@ fn run_quantize(
     }
     if let Some(extension) = in_files[0].extension() {
         if extension == "safetensors" {
-            return run_quantize_safetensors(in_files, out_file, q, bitnet_mode);
+            return run_quantize_safetensors(in_files, out_file, q, bq, bitnet_mode);
         }
     }
 
@@ -655,9 +676,10 @@ fn main() -> anyhow::Result<()> {
             in_file,
             out_file,
             quantization,
+            bitnet_quantization,
             mode,
             bitnet_mode,
-        } => run_quantize(&in_file, out_file, quantization, mode, bitnet_mode, &device)?,
+        } => run_quantize(&in_file, out_file, quantization, mode, bitnet_quantization, bitnet_mode, &device)?,
         Command::Dequantize { in_file, out_file } => run_dequantize(in_file, out_file, &device)?,
     }
     Ok(())

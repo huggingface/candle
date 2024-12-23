@@ -29,30 +29,19 @@ enum Prompt {
 enum Which {
     #[value(name = "falcon3-1b-1.58")]
     Falcon3_1b1_58,
+    #[value(name = "falcon3-3b-1.58")]
+    Falcon3_3b1_58,
 }
 
 impl Which {
-    fn is_mistral(&self) -> bool {
-        match self {
-            Self::Falcon3_1b1_58 => false,
-        }
-    }
-
-    fn is_zephyr(&self) -> bool {
-        match self {
-            Self::Falcon3_1b1_58 => false,
-        }
-    }
-
-    fn is_open_chat(&self) -> bool {
-        match self {
-            Self::Falcon3_1b1_58 => false,
-        }
+    fn is_falcon(&self) -> bool {
+        matches!(self, Self::Falcon3_1b1_58)
     }
 
     fn tokenizer_repo(&self) -> &'static str {
         match self {
             Self::Falcon3_1b1_58 => "tiiuae/Falcon3-1B-Instruct-1.58bit",
+            Self::Falcon3_3b1_58 => "tiiuae/Falcon3-3B-Instruct-1.58bit",
         }
     }
 }
@@ -154,6 +143,10 @@ impl Args {
                     Which::Falcon3_1b1_58 => (
                         "tiiuae/Falcon3-1B-Instruct-1.58bit",
                         "Falcon3-1B-Instruct-1.58bit.gguf",
+                    ),
+                    Which::Falcon3_3b1_58 => (
+                        "tiiuae/Falcon3-3B-Instruct-1.58bit",
+                        "Falcon3-3B-Instruct-1.58bit.gguf",
                     ),
                 };
                 let revision = "main";
@@ -270,7 +263,13 @@ fn main() -> anyhow::Result<()> {
     let mut pre_prompt_tokens = vec![];
     for prompt_index in 0.. {
         let prompt_str = match &prompt {
-            Prompt::One(prompt) => prompt.clone(),
+            Prompt::One(prompt) => {
+                if args.which.is_falcon() {
+                    format!("<|user|>\n{prompt}\n<|assistant|>")
+                } else {
+                    prompt.clone()
+                }
+            }
             Prompt::Interactive | Prompt::Chat => {
                 let is_interactive = matches!(prompt, Prompt::Interactive);
                 print!("> ");
@@ -283,16 +282,8 @@ fn main() -> anyhow::Result<()> {
                         prompt.pop();
                     }
                 }
-                if args.which.is_open_chat() {
-                    format!("GPT4 Correct User: {prompt}<|end_of_turn|>GPT4 Correct Assistant:")
-                } else if args.which.is_zephyr() {
-                    if prompt_index == 0 || is_interactive {
-                        format!("<|system|>\n</s>\n<|user|>\n{prompt}</s>\n<|assistant|>",)
-                    } else {
-                        format!("<|user|>\n{prompt}</s>\n<|assistant|>")
-                    }
-                } else if args.which.is_mistral() {
-                    format!("[INST] {prompt} [/INST]")
+                if args.which.is_falcon() {
+                    format!("<|user|>\n{prompt}\n<|assistant|>")
                 } else {
                     prompt
                 }
@@ -358,10 +349,11 @@ fn main() -> anyhow::Result<()> {
         }
 
         let eos_token = match args.which {
-            Which::Falcon3_1b1_58 => "<|endoftext|>",
+            Which::Falcon3_3b1_58 | Which::Falcon3_1b1_58 => "<|endoftext|>",
         };
 
         let eos_token = *tos.tokenizer().get_vocab(true).get(eos_token).unwrap();
+
         let start_post_prompt = std::time::Instant::now();
         let mut sampled = 0;
         for index in 0..to_sample {
