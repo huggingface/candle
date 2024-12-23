@@ -2,7 +2,7 @@ use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{linear_b, rms_norm, Linear, RmsNorm, VarBuilder};
 
 fn default_act() -> candle_nn::Activation {
-    candle_nn::Activation::Gelu
+    candle_nn::Activation::Silu
 }
 
 fn default_hidden_size() -> usize {
@@ -58,7 +58,7 @@ impl Config {
             num_attention_heads: 16,
             head_dim: None,
             // Default
-            hidden_act: candle_nn::Activation::Gelu,
+            hidden_act: candle_nn::Activation::Silu,
         }
     }
 
