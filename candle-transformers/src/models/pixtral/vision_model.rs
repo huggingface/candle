@@ -342,8 +342,8 @@ impl Model {
         let idx = Tensor::arange(0, num_patches_h as u32, device)?;
         let idy = Tensor::arange(0, num_patches_w as u32, device)?;
         let mesh = Tensor::meshgrid(&[idx, idy], false)?;
-        let ids = (&mesh[0] * (self.max_image_width as f64) + &mesh[1])?;
-        Ok(ids.flatten_all())
+        let ids = (&mesh[0] * (self.max_image_width as f64) + &mesh[1])?.flatten_all()?;
+        Ok(ids)
     }
 }
 
