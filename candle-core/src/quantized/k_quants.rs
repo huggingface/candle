@@ -157,7 +157,8 @@ const _: () = assert!(4 + QK_K + QK_K / 16 * 2 == std::mem::size_of::<BlockQ8K>(
 #[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct BlockQ2b0 {
-    pub(crate) qs: [i8; QK_K / 4], // Every single byte represents 4 values.
+    pub(crate) qs: [u8; QK_K / 8], // Every single bit represents positive values, is a vector of {0, 1}
+    pub(crate) qd: [u8; QK_K / 8], // Every single bit represents negatives values, is a vector of {0, 1}
 }
 
 const _: () = assert!(QK_K / 4 == std::mem::size_of::<BlockQ2b0>());
@@ -1846,87 +1847,94 @@ impl GgmlType for BlockQ8K {
     }
 }
 
+
 impl GgmlType for BlockQ2b0 {
     const DTYPE: GgmlDType = GgmlDType::Q2b0;
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
 
-    fn to_float(xs: &[Self], ys: &mut [f32]) -> crate::Result<()> {
-        let k = ys.len();
-        if k % Self::BLCK_SIZE != 0 {
-            crate::bail!(
-                "to_float Q2b0: size {} is not divisible by {}",
-                k,
-                Self::BLCK_SIZE
-            );
-        }
-
-        let nb = k / Self::BLCK_SIZE;
-        for i in 0..nb {
-            let base = i * Self::BLCK_SIZE;
-            for (j, &qbyte) in xs[i].qs.iter().enumerate() {
-                let start = base + j * 4;
-                ys[start]     = (qbyte & 0b11) as f32 - 2.0;                    
-                ys[start + 1] = ((qbyte >> 2) & 0b11) as f32 - 2.0;        
-                ys[start + 2] = ((qbyte >> 4) & 0b11) as f32 - 2.0;       
-                ys[start + 3] = (((qbyte >> 6) & 0b11) as f32 - 2.0);  
-            }
-        }
-        Ok(())
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        Self::vec_dot_unopt(n, xs, ys)
     }
-
-    fn from_float(xs: &[f32], ys: &mut [Self]) -> crate::Result<()> {
-        let k = xs.len();
-        if k % Self::BLCK_SIZE != 0 {
-            crate::bail!("from_float Q2b0: size {} is not divisible by {}", k, Self::BLCK_SIZE);
+    
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        if n % QK_K != 0 {
+            crate::bail!("vec_dot_q2b0_q8k: {n} is not divisible by {QK_K}");
         }
+        let mut sumf = 0.0;
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            let mut isum = 0i32;
+            for i in 0..QK_K / 8 {
+                let qs = x.qs[i];
+                let qd = x.qd[i];
+                let mut y_cache = [0i32; 8];
+                y_cache.copy_from_slice(&y.qs[i * 8..(i + 1) * 8].iter().map(|&x| x as i32).collect::<Vec<_>>()[..]);
 
-        let nb = k / Self::BLCK_SIZE;
-        for i in 0..nb {
-            let slice = &xs[i * Self::BLCK_SIZE..(i + 1) * Self::BLCK_SIZE];
-            ys[i].qs.fill(0);
-
-            for (j, qbyte) in ys[i].qs.iter_mut().enumerate() {
-                let start = j * 4;
-                let q0 = ((slice[start] + 2.0).round().clamp(0.0, 3.0) as i8) & 0b11;
-                let q1 = ((slice[start + 1] + 2.0).round().clamp(0.0, 3.0) as i8) & 0b11;
-                let q2 = ((slice[start + 2] + 2.0).round().clamp(0.0, 3.0) as i8) & 0b11;
-                let q3 = ((slice[start + 3] + 2.0).round().clamp(0.0, 3.0) as i8) & 0b11;
-
-                *qbyte = q0 | (q1 << 2) | (q2 << 4) | (q3 << 6);
+                let pos_sum: i32 = (0..8).map(|bit| {
+                    let mask = 1 << bit;
+                    let is_active = ((qs & mask) >> bit) as i32;
+                    is_active * y_cache[bit]
+                }).sum();
+    
+                let neg_sum: i32 = (0..8).map(|bit| {
+                    let mask = 1 << bit;
+                    let is_active = ((qd & mask) >> bit) as i32;
+                    is_active * y_cache[bit]
+                }).sum();
+    
+                isum += pos_sum - neg_sum;
             }
-        }
-        Ok(())
-    }
-
-    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> crate::Result<f32> {
-        let nb = n / Self::BLCK_SIZE;
-        let mut sumf = 0f32;
-
-        for i in 0..nb {
-            let d8 = ys[i].d;
-
-            for (j, &qbyte) in xs[i].qs.iter().enumerate() {
-                let idx_base = j * 4;
-                let q_vals = [
-                    (qbyte & 0b11) - 2,
-                    ((qbyte >> 2) & 0b11) - 2,
-                    ((qbyte >> 4) & 0b11) - 2,
-                    ((qbyte >> 6) & 0b11) - 2,
-                ];
-
-                let sum_i = q_vals.iter().zip(ys[i].qs[idx_base..idx_base + 4].iter())
-                    .map(|(&q_val, &y_val)| q_val as i32 * y_val as i32)
-                    .sum::<i32>();
-
-                sumf += sum_i as f32 * d8;
-            }
+            sumf += isum as f32 * y.d;
         }
         Ok(sumf)
     }
 
-    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        Self::vec_dot_unopt(n, xs, ys)
+    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        if xs.len() % QK_K != 0 {
+            crate::bail!("quantize_row_q2b0: size mismatch {} not divisible by {}", xs.len(), QK_K);
+        }
+
+        for (block, x) in ys.iter_mut().zip(xs.chunks_exact(QK_K)) {
+            for (i, chunk) in x.chunks_exact(8).enumerate() {
+                let mut qs = 0u8;
+                let mut qd = 0u8;
+
+                for (b, &value) in chunk.iter().enumerate() {
+                    if value > 0.0 {
+                        qs |= 1 << b;
+                    } else if value < 0.0 {
+                        qd |= 1 << b;
+                    }
+                }
+                block.qs[i] = qs;
+                block.qd[i] = qd;
+            }
+        }
+        Ok(())
+    }
+
+    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
+        if ys.len() % QK_K != 0 {
+            crate::bail!("dequantize_row_q2b0: size mismatch {} not divisible by {}", ys.len(), QK_K);
+        }
+
+        for (block, y) in xs.iter().zip(ys.chunks_exact_mut(QK_K)) {
+            for (i, chunk) in y.chunks_exact_mut(8).enumerate() {
+                let qs = block.qs[i];
+                let qd = block.qd[i];
+
+                for b in 0..8 {
+                    chunk[b] = if (qs >> b) & 1 != 0 {
+                        1.0
+                    } else if (qd >> b) & 1 != 0 {
+                        -1.0
+                    } else {
+                        0.0
+                    };
+                }
+            }
+        }
+        Ok(())
     }
 }
 

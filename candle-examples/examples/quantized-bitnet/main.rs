@@ -31,17 +31,24 @@ enum Which {
     Falcon3_1b1_58,
     #[value(name = "falcon3-3b-1.58")]
     Falcon3_3b1_58,
+    #[value(name = "llama3-8b-1.58")]
+    Llama3_8b1_58,
 }
 
 impl Which {
     fn is_falcon(&self) -> bool {
-        matches!(self, Self::Falcon3_1b1_58)
+        matches!(self, Self::Falcon3_1b1_58 | Self::Falcon3_3b1_58)
+    }
+
+    fn is_llama(&self) -> bool {
+        matches!(self, Self::Llama3_8b1_58)
     }
 
     fn tokenizer_repo(&self) -> &'static str {
         match self {
             Self::Falcon3_1b1_58 => "tiiuae/Falcon3-1B-Instruct-1.58bit",
             Self::Falcon3_3b1_58 => "tiiuae/Falcon3-3B-Instruct-1.58bit",
+            Self::Llama3_8b1_58 => "HF1BitLLM/Llama3-8B-1.58-100B-tokens",
         }
     }
 }
@@ -148,6 +155,10 @@ impl Args {
                         "tiiuae/Falcon3-3B-Instruct-1.58bit",
                         "Falcon3-3B-Instruct-1.58bit.gguf",
                     ),
+                    Which::Llama3_8b1_58 => (
+                        "HF1BitLLM/Llama3-8B-1.58-100B-tokens",
+                        "Llama3-8B-1.58bit.gguf",
+                    ),
                 };
                 let revision = "main";
                 let api = hf_hub::api::sync::Api::new()?;
@@ -252,6 +263,7 @@ fn main() -> anyhow::Result<()> {
     println!("model built");
 
     let tokenizer = args.tokenizer()?;
+
     let mut tos = TokenOutputStream::new(tokenizer);
     let prompt = match args.prompt.as_deref() {
         Some("chat") => Prompt::Chat,
@@ -265,7 +277,7 @@ fn main() -> anyhow::Result<()> {
         let prompt_str = match &prompt {
             Prompt::One(prompt) => {
                 if args.which.is_falcon() {
-                    format!("<|user|>\n{prompt}\n<|assistant|>")
+                    format!("<|user|>{prompt}<|assistant|>")
                 } else {
                     prompt.clone()
                 }
@@ -284,6 +296,10 @@ fn main() -> anyhow::Result<()> {
                 }
                 if args.which.is_falcon() {
                     format!("<|user|>\n{prompt}\n<|assistant|>")
+                } else if args.which.is_llama() {
+                    format!(
+                        "<|start_header_id|>user<|end_header_id|>\n{prompt}\n<|eot_id|><|start_header_id|>assistant<|end_header_id|>"
+                    )
                 } else {
                     prompt
                 }
@@ -350,6 +366,7 @@ fn main() -> anyhow::Result<()> {
 
         let eos_token = match args.which {
             Which::Falcon3_3b1_58 | Which::Falcon3_1b1_58 => "<|endoftext|>",
+            Which::Llama3_8b1_58 => "<|eot_id|>",
         };
 
         let eos_token = *tos.tokenizer().get_vocab(true).get(eos_token).unwrap();

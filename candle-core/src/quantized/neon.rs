@@ -523,51 +523,52 @@ pub(crate) fn vec_dot_q2b0_q8k(n: usize, xs: &[BlockQ2b0], ys: &[BlockQ8K]) -> c
         crate::bail!("vec_dot_q2b0_q8k: {n} is not divisible by {QK_K}")
     }
 
-    let mut sumf = 0f32;
+    let mut sumf = 0.0_f32;
 
     unsafe {
-        let m2b = vdupq_n_u8(0b11); // Máscara para extraer 2 bits por elemento
-
         for (x, y) in xs.iter().zip(ys.iter()) {
-            let d = y.d;
+            let mut isum = 0_i32;
 
-            let mut q2_ptr = x.qs.as_ptr();
-            let mut q8_ptr = y.qs.as_ptr();
+            for i in 0..(QK_K / 8) {
+                let qs = x.qs[i];
+                let qd = x.qd[i];
 
-            let mut sumi = 0i32;
+                // Load y_cache: Load 8 i8 values from y.qs[i * 8..(i + 1) * 8]
+                let y_qs_ptr = y.qs.as_ptr().add(i * 8);
+                let y_cache_i8x8 = vld1_s8(y_qs_ptr);
 
-            for _ in 0..QK_K / 16 {
-                // Cargar bloques de datos
-                let q2bytes = vld1q_u8(q2_ptr as *const u8);
-                q2_ptr = q2_ptr.add(16);
+                // Extend y_cache_i8x8 to int16x8_t vector
+                let y_cache_i16x8 = vmovl_s8(y_cache_i8x8);
 
-                let q8bytes_low = vld1q_s8(q8_ptr);
-                let q8bytes_high = vld1q_s8(q8_ptr.add(16));
-                q8_ptr = q8_ptr.add(32);
+                // Prepare shift amounts: [0, -1, -2, -3, -4, -5, -6, -7]
+                let shift_vec_data: [i8; 8] = [0, -1, -2, -3, -4, -5, -6, -7];
+                let shift_vec = vld1_s8(shift_vec_data.as_ptr());
 
-                // Extraer los valores de los 2 bits (4 valores por byte)
-                let q2_vals_low = vreinterpretq_s8_u8(vandq_u8(q2bytes, m2b));
-                let q2_vals_high = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q2bytes, 2), m2b));
-                let q2_vals_mid_low = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q2bytes, 4), m2b));
-                let q2_vals_mid_high = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q2bytes, 6), m2b));
+                // Duplicate qs and qd into vectors
+                let qs_vec = vdup_n_u8(qs);
+                let qd_vec = vdup_n_u8(qd);
 
-                // Ajustar los valores de Q2 (centro en -2)
-                let q2_low = vsubq_s8(q2_vals_low, vdupq_n_s8(2));
-                let q2_high = vsubq_s8(q2_vals_high, vdupq_n_s8(2));
-                let q2_mid_low = vsubq_s8(q2_vals_mid_low, vdupq_n_s8(2));
-                let q2_mid_high = vsubq_s8(q2_vals_mid_high, vdupq_n_s8(2));
+                // Shift to bring bits into LSB
+                let qs_shifted = vshl_u8(qs_vec, shift_vec);
+                let qd_shifted = vshl_u8(qd_vec, shift_vec);
 
-                // Calcular productos punto para cada parte
-                let prod0 = vdotq_s32(q2_low, q8bytes_low);
-                let prod1 = vdotq_s32(q2_high, q8bytes_high);
-                let prod2 = vdotq_s32(q2_mid_low, q8bytes_low);
-                let prod3 = vdotq_s32(q2_mid_high, q8bytes_high);
+                // Mask LSB to get bits
+                let one_vec = vdup_n_u8(1);
+                let qs_bits = vand_u8(qs_shifted, one_vec);
+                let qd_bits = vand_u8(qd_shifted, one_vec);
 
-                // Sumar los productos
-                sumi += vaddvq_s32(prod0) + vaddvq_s32(prod1) + vaddvq_s32(prod2) + vaddvq_s32(prod3);
+                // Convert bits to int16x8_t
+                let qs_bits_i16x8 = vreinterpretq_s16_u16(vmovl_u8(qs_bits));
+                let qd_bits_i16x8 = vreinterpretq_s16_u16(vmovl_u8(qd_bits));
+
+                // Multiply and accumulate
+                let pos_sum = vaddvq_s16(vmulq_s16(qs_bits_i16x8, y_cache_i16x8));
+                let neg_sum = vaddvq_s16(vmulq_s16(qd_bits_i16x8, y_cache_i16x8));
+
+                isum += pos_sum as i32 - neg_sum as i32;
             }
 
-            sumf += sumi as f32 * d;
+            sumf += isum as f32 * y.d;
         }
     }
 
