@@ -47,6 +47,7 @@ pub mod resnet;
 pub mod schedulers;
 pub mod unet_2d;
 pub mod unet_2d_blocks;
+pub mod uni_pc;
 pub mod utils;
 pub mod vae;
 
