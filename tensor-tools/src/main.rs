@@ -50,6 +50,8 @@ enum Quantization {
     Q8_1,
     #[value(name = "q2b0")]
     Q2b0,
+    #[value(name = "qi8")]
+    QI8,
     Q2k,
     Q3k,
     Q4k,
@@ -78,6 +80,7 @@ impl Quantization {
             Quantization::F16 => GgmlDType::F16,
             Quantization::F32 => GgmlDType::F32,
             Quantization::Q2b0 => GgmlDType::Q2b0,
+            Quantization::QI8 => GgmlDType::QI8,
         }
     }
 }
@@ -470,7 +473,7 @@ fn run_quantize_safetensors(
             .into_par_iter()
             .map(|(mut name, tensor)| {
                 let mut local_dtype = dtype.clone();
-                let should_quantize = tensor.rank() == 2 && tensor.dim(1)? % block_size == 0;
+                let mut should_quantize = tensor.rank() == 2 && tensor.dim(1)? % block_size == 0;
                 let mut tensor = tensor;
 
                 if should_quantize && bitnet_mode {

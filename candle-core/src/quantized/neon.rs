@@ -1,6 +1,6 @@
-use super::k_quants::{
-    BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K, BlockQ2b0
-};
+use super::{k_quants::{
+    BlockQ2K, BlockQ2b0, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, Q2B_0, QK8_0, QK_K
+}, BlockQI8};
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -518,8 +518,8 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
 }
 
 #[inline(always)]
-pub(crate) fn vec_dot_q2b0_q8k(n: usize, xs: &[BlockQ2b0], ys: &[BlockQ8K]) -> crate::Result<f32> {
-    if n % QK_K != 0 {
+pub(crate) fn vec_dot_q2b0_qi8(n: usize, xs: &[BlockQ2b0], ys: &[BlockQI8]) -> crate::Result<f32> {
+    if n % Q2B_0 != 0 {
         crate::bail!("vec_dot_q2b0_q8k: {n} is not divisible by {QK_K}")
     }
 
@@ -529,7 +529,7 @@ pub(crate) fn vec_dot_q2b0_q8k(n: usize, xs: &[BlockQ2b0], ys: &[BlockQ8K]) -> c
         for (x, y) in xs.iter().zip(ys.iter()) {
             let mut isum = 0_i32;
 
-            for i in 0..(QK_K / 8) {
+            for i in 0..(Q2B_0 / 8) {
                 let qs = x.qs[i];
                 let qd = x.qd[i];
 
@@ -568,7 +568,7 @@ pub(crate) fn vec_dot_q2b0_q8k(n: usize, xs: &[BlockQ2b0], ys: &[BlockQ8K]) -> c
                 isum += pos_sum as i32 - neg_sum as i32;
             }
 
-            sumf += isum as f32 * y.d;
+            sumf += isum as f32;
         }
     }
 

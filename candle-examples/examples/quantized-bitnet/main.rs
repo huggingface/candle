@@ -5,8 +5,9 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use clap::{Parser, ValueEnum};
+use tracing_subscriber::fmt::time::FormatTime;
 use std::io::Write;
-use tokenizers::Tokenizer;
+use tokenizers::{Tokenizer, AddedToken};
 
 use candle::quantized::{ggml_file, gguf_file};
 use candle::Tensor;
@@ -31,13 +32,17 @@ enum Which {
     Falcon3_1b1_58,
     #[value(name = "falcon3-3b-1.58")]
     Falcon3_3b1_58,
+    #[value(name = "falcon3-7b-1.58")]
+    Falcon3_7b1_58,
+    #[value(name = "falcon3-10b-1.58")]
+    Falcon3_10b1_58,
     #[value(name = "llama3-8b-1.58")]
     Llama3_8b1_58,
 }
 
 impl Which {
     fn is_falcon(&self) -> bool {
-        matches!(self, Self::Falcon3_1b1_58 | Self::Falcon3_3b1_58)
+        matches!(self, Self::Falcon3_1b1_58 | Self::Falcon3_3b1_58 | Self::Falcon3_7b1_58 | Self::Falcon3_10b1_58)
     }
 
     fn is_llama(&self) -> bool {
@@ -49,6 +54,8 @@ impl Which {
             Self::Falcon3_1b1_58 => "tiiuae/Falcon3-1B-Instruct-1.58bit",
             Self::Falcon3_3b1_58 => "tiiuae/Falcon3-3B-Instruct-1.58bit",
             Self::Llama3_8b1_58 => "HF1BitLLM/Llama3-8B-1.58-100B-tokens",
+            Self::Falcon3_10b1_58 => "tiiuae/Falcon3-10B-Instruct-1.58bit",
+            Self::Falcon3_7b1_58 => "tiiuae/Falcon3-7B-Instruct-1.58bit",
         }
     }
 }
@@ -76,7 +83,7 @@ struct Args {
     tokenizer: Option<String>,
 
     /// The temperature used to generate samples, use 0 for greedy sampling.
-    #[arg(long, default_value_t = 0.8)]
+    #[arg(long, default_value_t = 0.2)]
     temperature: f64,
 
     /// Nucleus sampling probability cutoff.
@@ -108,7 +115,7 @@ struct Args {
     cpu: bool,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
-    #[arg(long, default_value_t = 1.1)]
+    #[arg(long, default_value_t = 1.5)]
     repeat_penalty: f32,
 
     /// The context size to consider for the repeat penalty.
@@ -154,6 +161,14 @@ impl Args {
                     Which::Falcon3_3b1_58 => (
                         "tiiuae/Falcon3-3B-Instruct-1.58bit",
                         "Falcon3-3B-Instruct-1.58bit.gguf",
+                    ),
+                    Which::Falcon3_10b1_58 => (
+                        "tiiuae/Falcon3-10B-Instruct-1.58bit",
+                        "Falcon3-10B-Instruct-1.58bit.gguf",
+                    ),
+                    Which::Falcon3_7b1_58 => (
+                        "tiiuae/Falcon3-7B-Instruct-1.58bit",
+                        "Falcon3-7B-Instruct-1.58bit.gguf",
                     ),
                     Which::Llama3_8b1_58 => (
                         "HF1BitLLM/Llama3-8B-1.58-100B-tokens",
@@ -256,7 +271,7 @@ fn main() -> anyhow::Result<()> {
                 start.elapsed().as_secs_f32(),
             );
             println!("params: {:?}", model.hparams);
-            let default_gqa = 1;
+            let default_gqa = 0;
             ModelWeights::from_ggml(model, args.gqa.unwrap_or(default_gqa))?
         }
     };
@@ -277,7 +292,11 @@ fn main() -> anyhow::Result<()> {
         let prompt_str = match &prompt {
             Prompt::One(prompt) => {
                 if args.which.is_falcon() {
-                    format!("<|user|>{prompt}<|assistant|>")
+                    format!("<|user|>\n{prompt}\n<|assistant|>")
+                } else if args.which.is_llama() {
+                    format!(
+                        "{prompt}"
+                    )
                 } else {
                     prompt.clone()
                 }
@@ -298,7 +317,7 @@ fn main() -> anyhow::Result<()> {
                     format!("<|user|>\n{prompt}\n<|assistant|>")
                 } else if args.which.is_llama() {
                     format!(
-                        "<|start_header_id|>user<|end_header_id|>\n{prompt}\n<|eot_id|><|start_header_id|>assistant<|end_header_id|>"
+                        "<|start_header_id|>user<|end_header_id|>\n\n{prompt}\n<|eot_id|><|start_header_id|>assistant<|end_header_id|>"
                     )
                 } else {
                     prompt
@@ -365,10 +384,10 @@ fn main() -> anyhow::Result<()> {
         }
 
         let eos_token = match args.which {
-            Which::Falcon3_3b1_58 | Which::Falcon3_1b1_58 => "<|endoftext|>",
+            Which::Falcon3_10b1_58 | Which::Falcon3_7b1_58 | Which::Falcon3_3b1_58 | Which::Falcon3_1b1_58 => "<|endoftext|>",
             Which::Llama3_8b1_58 => "<|eot_id|>",
         };
-
+        
         let eos_token = *tos.tokenizer().get_vocab(true).get(eos_token).unwrap();
 
         let start_post_prompt = std::time::Instant::now();

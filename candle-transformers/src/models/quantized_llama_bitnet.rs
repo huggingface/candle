@@ -54,20 +54,7 @@ struct BitQMatMul {
     weight_scale: Tensor,
 }
 
-fn activation_quant(x: &Tensor) -> Result<(Tensor, Tensor)> {
-    let scale = (127.0
-        / x.abs()?
-            .max(D::Minus1)?
-            .max(D::Minus1)?
-            .clamp(1e-5, f32::INFINITY)?)?
-    .to_dtype(x.dtype())?;
 
-    let y = x
-        .broadcast_mul(&scale.unsqueeze(D::Minus1)?.unsqueeze(D::Minus1)?)?
-        .clamp(-128.0, 127.0)?;
-
-    Ok((y, scale))
-}
 
 impl BitQMatMul {
     fn from_qtensor(qtensor: QTensor, weight_scale: QTensor) -> Result<Self> {
@@ -77,11 +64,24 @@ impl BitQMatMul {
         Ok(Self { inner, span, weight_scale })
     }
 
+    pub fn activation_quant(&self, x: &Tensor) -> Result<(Tensor, Tensor)> {
+        let last_dim = x.rank().saturating_sub(1);
+        let max_abs = x.abs()?.max_keepdim(last_dim)?;
+
+        let clamped = max_abs.clamp(1e-5, f32::INFINITY)?;
+        let scale = (127.0 / &clamped)?;
+
+        let scaled_rounded = x.broadcast_mul(&scale)?.round()?.clamp(-128f32, 127f32)?;
+
+        Ok((scaled_rounded, scale))
+    }
+
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let (x, xscale) = activation_quant(&x)?;
+        let (x, xscale) = self.activation_quant(x)?;
         let _enter = self.span.enter();
-        let scale = self.weight_scale.broadcast_mul(&xscale)?;
-        self.inner.forward(&x)?.broadcast_div(&scale)
+        self.inner.forward(&x)?
+            .broadcast_div(&self.weight_scale)?
+            .broadcast_div(&xscale)
     }
 }
 
