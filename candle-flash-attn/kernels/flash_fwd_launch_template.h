@@ -306,7 +306,6 @@ void run_mha_fwd_hdim192(Flash_fwd_params &params, cudaStream_t stream) {
     });
 }
 
-
 template<typename T, bool Is_causal>
 void run_mha_fwd_hdim224(Flash_fwd_params &params, cudaStream_t stream) {
     constexpr static int Headdim = 224;
