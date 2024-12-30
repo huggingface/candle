@@ -19,6 +19,12 @@ enum Model {
     XLMRobertaLarge,
 }
 
+#[derive(Debug, Clone, ValueEnum)]
+enum Task {
+    FillMask,
+    Reranker,
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -41,7 +47,7 @@ struct Args {
     model: Model,
 
     #[arg(long, default_value = "reranker")]
-    task: String,
+    task: Task,
 
     // Path to the tokenizer file.
     #[arg(long)]
@@ -65,26 +71,19 @@ fn main() -> Result<()> {
     let api = Api::new()?;
     let model_id = match &args.model_id {
         Some(model_id) => model_id.to_string(),
-        None => {
-            match args.task.as_str() {
-                "fill-mask" => match args.model {
-                    Model::XLMRobertaBase => "FacebookAI/xlm-roberta-base".to_string(),
-                    Model::XLMRobertaLarge => "FacebookAI/xlm-roberta-large".to_string(),
-                    Model::BgeRerankerBase | Model::BgeRerankerBaseV2 | Model::BgeRerankerLarge => {
-                        anyhow::bail!("BgeRerankerBase, BgeRerankerBaseV2, and BgeRerankerLarge are not supported for fill-mask task")
-                    }
-                },
-                "reranker" => match args.model {
-                    Model::BgeRerankerBase => "BAAI/bge-reranker-base".to_string(),
-                    Model::BgeRerankerLarge => "BAAI/bge-reranker-large".to_string(),
-                    Model::BgeRerankerBaseV2 => "BAAI/bge-reranker-base-v2-m3".to_string(),
-                    Model::XLMRobertaBase | Model::XLMRobertaLarge => {
-                        anyhow::bail!("XLMRobertaBase and XLMRobertaLarge are not supported for reranker task")
-                    }
-                },
-                _ => "BAAI/bge-reranker-base".to_string(),
-            }
-        }
+        None => match args.task {
+            Task::FillMask => match args.model {
+                Model::XLMRobertaBase => "FacebookAI/xlm-roberta-base".to_string(),
+                Model::XLMRobertaLarge => "FacebookAI/xlm-roberta-large".to_string(),
+                _ => anyhow::bail!("BGE models are not supported for fill-mask task"),
+            },
+            Task::Reranker => match args.model {
+                Model::BgeRerankerBase => "BAAI/bge-reranker-base".to_string(),
+                Model::BgeRerankerLarge => "BAAI/bge-reranker-large".to_string(),
+                Model::BgeRerankerBaseV2 => "BAAI/bge-reranker-base-v2-m3".to_string(),
+                _ => anyhow::bail!("XLM-RoBERTa models are not supported for reranker task"),
+            },
+        },
     };
     let repo = api.repo(Repo::with_revision(
         model_id,
@@ -139,8 +138,8 @@ fn main() -> Result<()> {
         .with_truncation(None)
         .map_err(E::msg)?;
 
-    match args.task.as_str() {
-        "fill-mask" => {
+    match args.task {
+        Task::FillMask => {
             let prompt = vec![
                 "Hello I'm a <mask> model.".to_string(),
                 "I'm a <mask> boy.".to_string(),
@@ -171,10 +170,10 @@ fn main() -> Result<()> {
             let max_out_refs: Vec<&[u32]> = max_out.iter().map(|v| v.as_slice()).collect();
             let decoded = tokenizer.decode_batch(&max_out_refs, true).unwrap();
             for (i, sentence) in decoded.iter().enumerate() {
-                println!("Sentence: {} : {}", i, sentence);
+                println!("Sentence: {} : {}", i + 1, sentence);
             }
         }
-        "reranker" => {
+        Task::Reranker => {
             let query = "what is panda?".to_string();
 
             let documents = vec![
@@ -219,9 +218,6 @@ fn main() -> Result<()> {
                 println!("Rank #{:<2} | Score: {:.4} | {}", rank + 1, score[0], doc);
             });
             println!("{:-<80}", "");
-        }
-        _ => {
-            println!("Invalid task");
         }
     }
     Ok(())

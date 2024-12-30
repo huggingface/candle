@@ -8,6 +8,11 @@ Fill Mask:
 ```bash
 cargo run --example xlm-roberta --release -- --task fill-mask --model xlm-roberta-base
 ```
+```markdown
+Sentence: 0 : Hello I'm a fashion model.
+Sentence: 1 : I'm a little boy.
+Sentence: 2 : I'm living in berlin.
+```
 
 Reranker:
 ```bash

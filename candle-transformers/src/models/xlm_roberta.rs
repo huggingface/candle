@@ -521,8 +521,8 @@ fn prepare_4d_attention_mask(
     dtype: DType,
     tgt_len: Option<usize>,
 ) -> Result<Tensor> {
-    let bsz = mask.dims()[0];
-    let src_len = mask.dims()[1];
+    let bsz = mask.dim(0)?;
+    let src_len = mask.dim(1)?;
     let tgt_len = tgt_len.unwrap_or(src_len);
 
     let expanded_mask = mask
