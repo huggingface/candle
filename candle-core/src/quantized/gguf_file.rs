@@ -190,6 +190,10 @@ impl Value {
         Self::F32(v)
     }
 
+    pub fn from_string(v: String) -> Self {
+        Self::String(v)
+    }
+
     pub fn to_u8(&self) -> Result<u8> {
         match self {
             Self::U8(v) => Ok(*v),

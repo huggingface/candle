@@ -301,8 +301,10 @@ fn run_print(
                 println!("==== {name} ====");
                 match content.tensor(&mut file, name, device) {
                     Ok(tensor) => {
+                        let dtype = tensor.dtype();
+
                         let tensor = tensor.dequantize(device)?;
-                        println!("{tensor}")
+                        println!("{tensor} {dtype:?}")
                     }
                     Err(e) => {
                         eprintln!("error: {e}");
@@ -438,11 +440,35 @@ fn unpack_bitnet_weights(tensor: &Tensor) -> Result<Tensor> {
     Ok(unpacked_tensor)
 }
 
+use core::num;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::PathBuf;
 use rayon::prelude::*;
 use serde_json::Value;
+
+fn permute(weights: &Tensor, n_head: usize, n_head_kv: Option<usize>) -> Result<Tensor> {
+    let n_head = match n_head_kv {
+        Some(n_head_kv) if n_head != n_head_kv => n_head_kv,
+        _ => n_head,
+    };
+
+    let shape = weights.shape();
+    let shape0 = shape.dims()[0];
+    if shape0 % (n_head * 2) != 0 {
+        candle::bail!("weights.shape()[0] is not divisible by (n_head * 2)");
+    }
+
+    let mut new_shape = vec![n_head, 2, shape0 / (n_head * 2)];
+    new_shape.extend_from_slice(&shape.dims()[1..]);
+
+    let permuted = weights
+        .reshape(new_shape)?
+        .transpose(1, 2)? 
+        .reshape(weights.shape())?;
+
+    Ok(permuted)
+}
 
 fn run_quantize_safetensors(
     in_files: &[PathBuf],
@@ -459,6 +485,34 @@ fn run_quantize_safetensors(
 
     let mut qtensors = Vec::new();
 
+    let mut num_attention_heads = 0;
+    let mut num_key_value_heads = 0;
+    let mut architecture = String::new();
+
+
+    let gguf_metadata = if let Some(metadata_file) = metadata_file {
+        let metadata_content = std::fs::read_to_string(metadata_file)?;
+        let metadata: serde_json::Value = serde_json::from_str(&metadata_content).unwrap();
+
+        num_attention_heads = metadata["num_attention_heads"].as_u64().unwrap();
+        num_key_value_heads = metadata["num_key_value_heads"].as_u64().unwrap();
+        architecture = metadata["model_type"].as_str().unwrap().to_string();
+
+        vec![
+            ("llama.attention.head_count", gguf_file::Value::from_u32(num_attention_heads as u32)),
+            ("llama.attention.head_count_kv", gguf_file::Value::from_u32(metadata["num_key_value_heads"].as_u64().unwrap() as u32)),
+            ("llama.block_count", gguf_file::Value::from_u32(metadata["num_hidden_layers"].as_u64().unwrap() as u32)),
+            ("llama.embedding_length", gguf_file::Value::from_u32(metadata["hidden_size"].as_u64().unwrap() as u32)),
+            ("llama.attention.layer_norm_rms_epsilon", gguf_file::Value::from_f32(metadata["rms_norm_eps"].as_f64().unwrap() as f32)),
+            ("llama.rope.dimension_count", gguf_file::Value::from_u32(
+                (metadata["hidden_size"].as_u64().unwrap() as u32) / (metadata["num_attention_heads"].as_u64().unwrap() as u32),
+            )),
+            ("llama.rope.freq_base", gguf_file::Value::from_f32(metadata["rope_theta"].as_f64().unwrap() as f32)),
+            ("general.architecture", gguf_file::Value::from_string(architecture.clone())),
+        ]
+    } else {
+        vec![]
+    };
     for in_file in in_files {
         if let Some(metadata) = &metadata_file {
             if Some(in_file) == Some(metadata) {
@@ -492,6 +546,24 @@ fn run_quantize_safetensors(
                         local_dtype = bq.clone().unwrap().dtype();
                     }
                 }
+
+                if name == "lm_head.weight" {
+                    local_dtype = GgmlDType::Q6K;
+                }
+
+                // apply transformations to the tensors, based on the architecture
+                match architecture.as_str() {
+                    "llama" => {
+                        if name.ends_with("self_attn.q_proj.weight") {
+                            tensor = permute(&tensor, num_attention_heads as usize, Some(num_attention_heads as usize))?;
+                        }
+                        if name.ends_with("self_attn.k_proj.weight") {
+                            tensor = permute(&tensor, num_attention_heads as usize, Some(num_key_value_heads as usize))?;
+                        }
+                    }
+                    _ => {}
+                }
+
                 println!("  quantizing {name} {tensor:?} {should_quantize}");
                 let tensor = if should_quantize {
                     QTensor::quantize(&tensor, local_dtype)?
@@ -529,24 +601,6 @@ fn run_quantize_safetensors(
         .iter()
         .map(|(k, v)| (k.as_str(), v))
         .collect::<Vec<_>>();
-
-    let gguf_metadata = if let Some(metadata_file) = metadata_file {
-        let metadata_content = std::fs::read_to_string(metadata_file)?;
-        let metadata: serde_json::Value = serde_json::from_str(&metadata_content).unwrap();
-
-        vec![
-            ("llama.attention.head_count", gguf_file::Value::from_u32(metadata["num_attention_heads"].as_u64().unwrap() as u32)),
-            ("llama.attention.head_count_kv", gguf_file::Value::from_u32(metadata["num_key_value_heads"].as_u64().unwrap() as u32)),
-            ("llama.block_count", gguf_file::Value::from_u32(metadata["num_hidden_layers"].as_u64().unwrap() as u32)),
-            ("llama.embedding_length", gguf_file::Value::from_u32(metadata["hidden_size"].as_u64().unwrap() as u32)),
-            ("llama.attention.layer_norm_rms_epsilon", gguf_file::Value::from_f32(metadata["rms_norm_eps"].as_f64().unwrap() as f32)),
-            ("llama.rope.dimension_count", gguf_file::Value::from_u32(
-                (metadata["hidden_size"].as_u64().unwrap() as u32) / (metadata["num_attention_heads"].as_u64().unwrap() as u32),
-            )),
-        ]
-    } else {
-        vec![]
-    };
 
     gguf_file::write(&mut out_file, &gguf_metadata, &qtensors)?;
     Ok(())

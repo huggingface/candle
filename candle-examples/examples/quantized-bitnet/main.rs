@@ -291,15 +291,7 @@ fn main() -> anyhow::Result<()> {
     for prompt_index in 0.. {
         let prompt_str = match &prompt {
             Prompt::One(prompt) => {
-                if args.which.is_falcon() {
-                    format!("<|user|>\n{prompt}\n<|assistant|>")
-                } else if args.which.is_llama() {
-                    format!(
-                        "{prompt}"
-                    )
-                } else {
-                    prompt.clone()
-                }
+                prompt.clone()
             }
             Prompt::Interactive | Prompt::Chat => {
                 let is_interactive = matches!(prompt, Prompt::Interactive);
@@ -324,6 +316,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         };
+        
         print!("{}", &prompt_str);
         let tokens = tos
             .tokenizer()
@@ -331,7 +324,7 @@ fn main() -> anyhow::Result<()> {
             .map_err(anyhow::Error::msg)?;
         if args.verbose_prompt {
             for (token, id) in tokens.get_tokens().iter().zip(tokens.get_ids().iter()) {
-                let token = token.replace('▁', " ").replace("<0x0A>", "\n");
+                let token = token.to_string().replace('▁', " ").replace("<0x0A>", "\n");
                 println!("{id:7} -> '{token}'");
             }
         }
@@ -383,12 +376,24 @@ fn main() -> anyhow::Result<()> {
             std::io::stdout().flush()?;
         }
 
-        let eos_token = match args.which {
-            Which::Falcon3_10b1_58 | Which::Falcon3_7b1_58 | Which::Falcon3_3b1_58 | Which::Falcon3_1b1_58 => "<|endoftext|>",
-            Which::Llama3_8b1_58 => "<|eot_id|>",
+        let eos_tokens = match args.which {
+            Which::Falcon3_10b1_58 | Which::Falcon3_7b1_58 | Which::Falcon3_3b1_58 | Which::Falcon3_1b1_58 => {
+                vec!["<|endoftext|>"]
+            }
+            Which::Llama3_8b1_58 => {
+                vec!["<|eot_id|>"]
+            }
         };
-        
-        let eos_token = *tos.tokenizer().get_vocab(true).get(eos_token).unwrap();
+
+        let eos_tokens: Vec<u32> = eos_tokens
+            .iter()
+            .map(|token| {
+                *tos.tokenizer()
+                    .get_vocab(true)
+                    .get(*token)
+                    .unwrap_or_else(|| panic!("EoS token not found: {}", token))
+            })
+            .collect();
 
         let start_post_prompt = std::time::Instant::now();
         let mut sampled = 0;
@@ -413,7 +418,8 @@ fn main() -> anyhow::Result<()> {
                 std::io::stdout().flush()?;
             }
             sampled += 1;
-            if next_token == eos_token {
+
+            if eos_tokens.contains(&next_token) {
                 break;
             };
         }
