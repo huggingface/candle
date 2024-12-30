@@ -45,6 +45,8 @@ extern "C" {
 
         window_size_left: c_int,
         window_size_right: c_int,
+
+        softcap: f32,
     );
 
 }
