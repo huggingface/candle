@@ -42,6 +42,17 @@ typedef struct {
     int8_t  qs[QK8_0]; // quants
 } block_q8_0;
 
+#define Q2B_0 32
+typedef struct {
+    uint8_t  qs[Q2B_0 / 8]; // Every single bit represents positive values, is a vector of {0, 1}
+    uint8_t  qd[Q2B_0 / 8]; // Every single bit represents negative values, is a vector of {0, 1}
+} block_q2b_0;
+
+#define QI8 32
+typedef struct {
+    int8_t  qs[QI8]; // quants
+} block_qi8;
+
 #define N_SIMDWIDTH 32 // assuming SIMD group size is 32
 
 enum ggml_sort_order {
@@ -3467,6 +3478,119 @@ kernel void kernel_mul_mv_q6_K_f32(
         uint  sgitg[[simdgroup_index_in_threadgroup]]) {
 
     kernel_mul_mv_q6_K_f32_impl(src0, src1, dst, ne00, ne01, ne02, ne10, ne12, ne0, ne1, r2, r3, tgpig, tiisg, sgitg);
+}
+
+#define NB_Q2B_0 8
+void kernel_mul_mv_q2b0_f32_impl(
+        device const  void * src0,
+        device const float * src1,
+        device       float * dst,
+        constant   int64_t & ne00,
+        constant   int64_t & ne01,
+        constant   int64_t & ne02,
+        constant   int64_t & ne10,
+        constant   int64_t & ne12,
+        constant   int64_t & ne0,
+        constant   int64_t & ne1,
+        constant   uint    & r2,
+        constant   uint    & r3,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint  tiisg[[thread_index_in_simdgroup]],
+        uint  sgitg[[simdgroup_index_in_threadgroup]]) {
+            
+    const int nr  = N_DST;
+    const int nsg = N_SIMDGROUP;
+    const int nw  = N_SIMDWIDTH;
+    const int nb = ne00 / Q2B_0;
+    const int r0 = tgpig.x;
+    const int r1 = tgpig.y;
+    const int im = tgpig.z;
+    const int first_row = (r0 * nsg + sgitg) * nr;
+    const uint i12 = im % ne12;
+    const uint i13 = im / ne12;
+
+    const uint offset0 = first_row * nb
+                       + (i12 / r2) * (nb * ne01)
+                       + (i13 / r3) * (nb * ne01 * ne02);
+
+    device const block_q2b_0 * x = (device const block_q2b_0 *) src0 + offset0;
+    device const float      * y = (device const float      *) src1
+                                  + r1 * ne10
+                                  + im * ne00 * ne1;
+
+    float yl[NB_Q2B_0];
+    float sumf[nr];
+    for (int i = 0; i < nr; ++i) {
+        sumf[i] = 0.0f;
+    }
+
+    const int ix = tiisg / 4; 
+    const int il = tiisg % 4; 
+
+    device const float * yb = y + ix * Q2B_0 + NB_Q2B_0 * il;
+
+    for (int ib = ix; ib < nb; ib += (nw / 4)) {
+        for (int i = 0; i < NB_Q2B_0; ++i) {
+            yl[i] = yb[i];
+        }
+
+        for (int row = 0; row < nr; row++) {
+            device const block_q2b_0 * bx = x + ib + row * nb;
+
+            float sumq = 0.f;
+            const int startBit = NB_Q2B_0 * il;
+
+            for (int iBit = 0; iBit < NB_Q2B_0; iBit++) {
+                int bit   = startBit + iBit;      
+                int bByte = bit >> 3;    
+                int bMask = 1 << (bit & 7);
+                int isPos = ((bx->qs[bByte] & bMask) != 0) ? 1 : 0;
+                int isNeg = ((bx->qd[bByte] & bMask) != 0) ? 1 : 0;
+
+                sumq += float(isPos - isNeg) * yl[iBit];
+            }
+
+            sumf[row] += sumq;
+        }
+
+        yb += NB_Q2B_0 * nw;
+    }
+
+    for (int row = 0; row < nr; ++row) {
+        const float tot = simd_sum(sumf[row]);
+        if (tiisg == 0 && (first_row + row) < ne01) {
+            dst[r1 * ne0 + im * ne0 * ne1 + (first_row + row)] = tot;
+        }
+    }
+}
+
+
+[[host_name("kernel_mul_mv_q2b0_f32")]]
+kernel void kernel_mul_mv_q2b0_f32(
+        device const  void * src0,
+        device const float * src1,
+        device       float * dst,
+        constant   int64_t & ne00,
+        constant   int64_t & ne01,
+        constant   int64_t & ne02,
+        constant  uint64_t & nb00,
+        constant  uint64_t & nb01,
+        constant  uint64_t & nb02,
+        constant   int64_t & ne10,
+        constant   int64_t & ne11,
+        constant   int64_t & ne12,
+        constant  uint64_t & nb10,
+        constant  uint64_t & nb11,
+        constant  uint64_t & nb12,
+        constant   int64_t & ne0,
+        constant   int64_t & ne1,
+        constant   uint    & r2,
+        constant   uint    & r3,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint  tiisg[[thread_index_in_simdgroup]],
+        uint  sgitg[[simdgroup_index_in_threadgroup]]) {
+
+    kernel_mul_mv_q2b0_f32_impl(src0, src1, dst, ne00, ne01, ne02, ne10, ne12, ne0, ne1, r2, r3, tgpig, tiisg, sgitg);
 }
 
 //============================= templates and their specializations =============================

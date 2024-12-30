@@ -54,7 +54,7 @@ impl Which {
             Self::Falcon3_1b1_58 => "tiiuae/Falcon3-1B-Instruct-1.58bit",
             Self::Falcon3_3b1_58 => "tiiuae/Falcon3-3B-Instruct-1.58bit",
             Self::Llama3_8b1_58 => "HF1BitLLM/Llama3-8B-1.58-100B-tokens",
-            Self::Falcon3_10b1_58 => "tiiuae/Falcon3-10B-Instruct-1.58bit",
+            Self::Falcon3_10b1_58 => "tiiuae/Falcon3-10B-Base-1.58bit",
             Self::Falcon3_7b1_58 => "tiiuae/Falcon3-7B-Instruct-1.58bit",
         }
     }
@@ -305,11 +305,10 @@ fn main() -> anyhow::Result<()> {
                         prompt.pop();
                     }
                 }
-                if args.which.is_falcon() {
-                    format!("<|user|>\n{prompt}\n<|assistant|>")
-                } else if args.which.is_llama() {
+                
+                if args.which.is_llama() {
                     format!(
-                        "<|start_header_id|>user<|end_header_id|>\n\n{prompt}\n<|eot_id|><|start_header_id|>assistant<|end_header_id|>"
+                        "<|start_header_id|>user<|end_header_id|>{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>"
                     )
                 } else {
                     prompt
