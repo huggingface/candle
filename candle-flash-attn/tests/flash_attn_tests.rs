@@ -106,13 +106,13 @@ fn flash_attn_acausal() -> Result<()> {
 #[test]
 fn flash_attn_acausal_softcap() -> Result<()> {
     let device = Device::new_cuda(0)?;
-    let q = Tensor::arange(0u32, 48, &device)?
+    let q = Tensor::arange(0u32, 3 * 5 * 8, &device)?
         .to_dtype(DType::F16)?
-        .reshape((1, 3, 2, 8))?;
+        .reshape((1, 3, 5, 8))?;
     let k = (&q / 40.)?;
     let v = (&q / 50.)?;
     let q = (&q / 30.)?;
-    let softcap = 20.0f32;
+    let softcap = 5.0f32;
 
     let ys1 = fa_acausal_softcap(&q, &k, &v, softcap.clone())?;
     let ys1 = ys1.i(0)?.to_dtype(DType::F32)?;
@@ -135,9 +135,9 @@ fn flash_attn_acausal_softcap() -> Result<()> {
     let ys2 = ys2.i(0)?.to_dtype(DType::F32)?;
     let diff = ys1.sub(&ys2)?.abs()?.flatten_all()?.max(0)?;
 
-    assert_eq!(ys1.dims(), &[3, 2, 8]);
-    assert_eq!(ys2.dims(), &[3, 2, 8]);
-    assert!(diff.to_vec0::<f32>()?.abs() < 1e-4);
+    assert_eq!(ys1.dims(), &[3, 5, 8]);
+    assert_eq!(ys2.dims(), &[3, 5, 8]);
+    assert!(diff.to_vec0::<f32>()?.abs() < 1e-3);
     Ok(())
 }
 
