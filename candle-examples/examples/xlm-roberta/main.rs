@@ -176,13 +176,11 @@ fn main() -> Result<()> {
         Task::Reranker => {
             let query = "what is panda?".to_string();
 
-            let documents = vec![
-                "South Korea is a country in East Asia.".to_string(),
+            let documents = ["South Korea is a country in East Asia.".to_string(),
                 "There are forests in the mountains.".to_string(),
                 "Pandas look like bears.".to_string(),
                 "There are some animals with black and white fur.".to_string(),
-                "The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China.".to_string(),
-            ];
+                "The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China.".to_string()];
 
             // create pairs of query and documents
             let pairs = documents
@@ -209,7 +207,7 @@ fn main() -> Result<()> {
             documents.iter().enumerate().for_each(|(idx, doc)| {
                 let rank = ranks.iter().position(|&r| r == idx as u32).unwrap();
                 let score = output
-                    .get_on_dim(1, idx as usize)
+                    .get_on_dim(1, idx)
                     .unwrap()
                     .to_dtype(candle::DType::F32)
                     .unwrap()
