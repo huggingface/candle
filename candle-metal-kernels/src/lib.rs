@@ -2210,7 +2210,6 @@ pub fn call_quantized_matmul_mv_t(
         | GgmlDType::Q5_0
         | GgmlDType::Q5_1
         | GgmlDType::Q8_0
-        | GgmlDType::Q2b0 
         | GgmlDType::Q8_1 => {
             let nth0 = 8;
             let nth1 = 8;
@@ -2229,6 +2228,12 @@ pub fn call_quantized_matmul_mv_t(
             let nth0 = 4;
             let nth1 = 8;
             let align = 4;
+            (nth0, nth1, align)
+        }
+        GgmlDType::Q2b0 => {
+            let nth0 = 8;
+            let nth1 = 8;
+            let align = 8;
             (nth0, nth1, align)
         }
         GgmlDType::Q3K | GgmlDType::Q5K => {

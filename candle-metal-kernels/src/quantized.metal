@@ -3544,10 +3544,11 @@ void kernel_mul_mv_q2b0_f32_impl(
                 int bit   = startBit + iBit;      
                 int bByte = bit >> 3;    
                 int bMask = 1 << (bit & 7);
-                int isPos = ((bx->qs[bByte] & bMask) != 0) ? 1 : 0;
-                int isNeg = ((bx->qd[bByte] & bMask) != 0) ? 1 : 0;
-
-                sumq += float(isPos - isNeg) * yl[iBit];
+                if ((bx->qs[bByte] & bMask) != 0) {
+                    sumq += yl[iBit];
+                } else if ((bx->qd[bByte] & bMask) != 0) {
+                    sumq -= yl[iBit];
+                }
             }
 
             sumf[row] += sumq;

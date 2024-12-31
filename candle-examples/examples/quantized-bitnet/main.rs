@@ -28,34 +28,35 @@ enum Prompt {
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
 enum Which {
-    #[value(name = "falcon3-1b-1.58")]
-    Falcon3_1b1_58,
+    #[value(name = "falcon3-1b-instruct-1.58")]
+    Falcon3_1bInstruct1_58,
+    #[value(name = "falcon3-3b-instruct-1.58")]
+    Falcon3_3bInstruct1_58,
     #[value(name = "falcon3-3b-1.58")]
     Falcon3_3b1_58,
+    #[value(name = "falcon3-7b-instruct-1.58")]
+    Falcon3_7bInstruct1_58,
     #[value(name = "falcon3-7b-1.58")]
     Falcon3_7b1_58,
+    #[value(name = "falcon3-10b-instruct-1.58")]
+    Falcon3_10bInstruct1_58,
     #[value(name = "falcon3-10b-1.58")]
     Falcon3_10b1_58,
     #[value(name = "llama3-8b-1.58")]
     Llama3_8b1_58,
 }
 
-impl Which {
-    fn is_falcon(&self) -> bool {
-        matches!(self, Self::Falcon3_1b1_58 | Self::Falcon3_3b1_58 | Self::Falcon3_7b1_58 | Self::Falcon3_10b1_58)
-    }
-
-    fn is_llama(&self) -> bool {
-        matches!(self, Self::Llama3_8b1_58)
-    }
-
+impl Which { 
     fn tokenizer_repo(&self) -> &'static str {
         match self {
-            Self::Falcon3_1b1_58 => "tiiuae/Falcon3-1B-Instruct-1.58bit",
-            Self::Falcon3_3b1_58 => "tiiuae/Falcon3-3B-Instruct-1.58bit",
-            Self::Llama3_8b1_58 => "HF1BitLLM/Llama3-8B-1.58-100B-tokens",
-            Self::Falcon3_10b1_58 => "tiiuae/Falcon3-10B-Base-1.58bit",
-            Self::Falcon3_7b1_58 => "tiiuae/Falcon3-7B-Instruct-1.58bit",
+            Self::Falcon3_1bInstruct1_58 => "nebuxcloud/Falcon3-1B-Instruct-1.58bit-GGUF",
+            Self::Falcon3_3bInstruct1_58 => "nebuxcloud/Falcon3-3B-Instruct-1.58bit-GGUF",
+            Self::Falcon3_3b1_58 => "nebuxcloud/Falcon3-3B-Base-1.58bit-GGUF",
+            Self::Falcon3_7bInstruct1_58 => "nebuxcloud/Falcon3-7B-Instruct-1.58bit-GGUF",
+            Self::Falcon3_10b1_58 => "nebuxcloud/Falcon3-10B-Base-1.58bit-GGUF",
+            Self::Falcon3_10bInstruct1_58 => "nebuxcloud/Falcon3-10B-Instruct-1.58bit-GGUF",
+            Self::Falcon3_7b1_58 => "nebuxcloud/Falcon3-7B-Base-1.58bit-GGUF",
+            Self::Llama3_8b1_58 => "nebuxcloud/Llama3-8B-1.58-100B-tokens-GGUF",
         }
     }
 }
@@ -123,7 +124,7 @@ struct Args {
     repeat_last_n: usize,
 
     /// The model size to use.
-    #[arg(long, default_value = "falcon3-1b-1.58")]
+    #[arg(long, default_value = "falcon3-1b-instruct-1.58")]
     which: Which,
 
     /// Group-Query Attention, use 8 for the 70B version of LLaMAv2.
@@ -154,25 +155,37 @@ impl Args {
             Some(config) => std::path::PathBuf::from(config),
             None => {
                 let (repo, filename) = match self.which {
-                    Which::Falcon3_1b1_58 => (
-                        "tiiuae/Falcon3-1B-Instruct-1.58bit",
-                        "Falcon3-1B-Instruct-1.58bit.gguf",
+                    Which::Falcon3_1bInstruct1_58 => (
+                        "nebuxcloud/Falcon3-1B-Instruct-1.58bit-GGUF",
+                        "Falcon3-1B-Instruct-1.58bit-q2b0.gguf",
+                    ),
+                    Which::Falcon3_3bInstruct1_58 => (
+                        "nebuxcloud/Falcon3-3B-Instruct-1.58bit-GGUF",
+                        "Falcon3-3B-Instruct-1.58bit-q2b0.gguf",
                     ),
                     Which::Falcon3_3b1_58 => (
-                        "tiiuae/Falcon3-3B-Instruct-1.58bit",
-                        "Falcon3-3B-Instruct-1.58bit.gguf",
+                        "nebuxcloud/Falcon3-3B-Base-1.58bit-GGUF",
+                        "Falcon3-3B-Base-1.58bit-q2b0.gguf",
                     ),
-                    Which::Falcon3_10b1_58 => (
-                        "tiiuae/Falcon3-10B-Instruct-1.58bit",
-                        "Falcon3-10B-Instruct-1.58bit.gguf",
+                    Which::Falcon3_7bInstruct1_58 => (
+                        "nebuxcloud/Falcon3-7B-Instruct-1.58bit-GGUF",
+                        "Falcon3-7B-Instruct-1.58bit-q2b0.gguf",
                     ),
                     Which::Falcon3_7b1_58 => (
-                        "tiiuae/Falcon3-7B-Instruct-1.58bit",
-                        "Falcon3-7B-Instruct-1.58bit.gguf",
+                        "nebuxcloud/Falcon3-7B-Base-1.58bit-GGUF",
+                        "Falcon3-7B-Base-1.58bit-q2b0.gguf",
+                    ),
+                    Which::Falcon3_10b1_58 => (
+                        "nebuxcloud/Falcon3-10B-Base-1.58bit-GGUF",
+                        "Falcon3-10B-Base-1.58bit-q2b0.gguf",
+                    ),
+                    Which::Falcon3_10bInstruct1_58 => (
+                        "nebuxcloud/Falcon3-10B-Instruct-1.58bit-GGUF",
+                        "Falcon3-10B-Instruct-1.58bit-q2b0.gguf",
                     ),
                     Which::Llama3_8b1_58 => (
-                        "HF1BitLLM/Llama3-8B-1.58-100B-tokens",
-                        "Llama3-8B-1.58bit.gguf",
+                        "nebuxcloud/Llama3-8B-1.58-100B-tokens-GGUF",
+                        "Llama3-8B-1.58-100B-tokens-q2b0.gguf",
                     ),
                 };
                 let revision = "main";
@@ -306,13 +319,7 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 
-                if args.which.is_llama() {
-                    format!(
-                        "<|start_header_id|>user<|end_header_id|>{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>"
-                    )
-                } else {
-                    prompt
-                }
+                prompt
             }
         };
         
@@ -376,11 +383,17 @@ fn main() -> anyhow::Result<()> {
         }
 
         let eos_tokens = match args.which {
-            Which::Falcon3_10b1_58 | Which::Falcon3_7b1_58 | Which::Falcon3_3b1_58 | Which::Falcon3_1b1_58 => {
+            Which::Falcon3_10b1_58 |
+            Which::Falcon3_10bInstruct1_58 |
+            Which::Falcon3_7bInstruct1_58 | 
+            Which::Falcon3_7b1_58 |
+            Which::Falcon3_3bInstruct1_58 | 
+            Which::Falcon3_3b1_58 |
+            Which::Falcon3_1bInstruct1_58 => {
                 vec!["<|endoftext|>"]
             }
             Which::Llama3_8b1_58 => {
-                vec!["<|eot_id|>"]
+                vec!["<|eot_id|>", "<|end_header_id|>", "<|start_header_id|>"]
             }
         };
 

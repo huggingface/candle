@@ -62,20 +62,13 @@ impl BitQMatMul {
         Ok(Self { inner, span, weight_scale })
     }
 
-    pub fn activation_quant(&self, x: &Tensor) -> Result<(Tensor, Tensor)> {
-        let target_dim = x.rank().saturating_sub(1);
+    fn activation_quant(&self, x: &Tensor) -> Result<(Tensor, Tensor)> {
+        let scale = x.abs()?.max_keepdim(D::Minus1)?.clamp(1e-5, f32::INFINITY)?;
+        let scale = (127.0 / scale)?;
+
+        let y = (x.broadcast_mul(&scale))?.round()?.clamp(-128., 127.)?;
     
-        let max_abs = x.abs()?.max_keepdim(target_dim)?;
-    
-        let scale = (127.0/ &max_abs)?; 
-    
-        let scaled_rounded = x
-            .broadcast_mul(&scale)?   
-            .round()?                
-            .clamp(-128f32, 127f32)?; 
-            
-    
-        Ok((scaled_rounded, scale))
+        Ok((y, scale))
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
