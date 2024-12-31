@@ -1,18 +1,19 @@
 //! # UniPC Scheduler
 //!
-//! UniPCMultistepScheduler is a training-free framework designed for
-//! fast sampling of diffusion models.
+//! UniPC is a training-free framework designed for the fast sampling of diffusion models, which consists of a
+//! corrector (UniC) and a predictor (UniP) that share a unified analytical form and support arbitrary orders.
 //!
-//! It consists of a corrector (UniC) and a predictor (UniP) that share a unified analytical form and
-//! support arbitrary orders. UniPC is by design model-agnostic, supporting pixel-space/latent-space
-//! DPMs on unconditional/conditional sampling. It can also be applied to both noise prediction and
-//! data prediction models. The corrector UniC can be also applied after any off-the-shelf solvers
-//! to increase the order of accuracy.
+//! UniPC is by design model-agnostic, supporting pixel-space/latent-space DPMs on unconditional/conditional
+//! sampling. It can also be applied to both noise prediction and data prediction models. Compared with prior
+//! methods, UniPC converges faster thanks to the increased order of accuracy. Both quantitative and qualitative
+//! results show UniPC can improve sampling quality, especially at very low step counts (5~10).
 //!
+//! For more information, see the original publication:
 //! UniPC: A Unified Predictor-Corrector Framework for Fast Sampling of Diffusion Models, W. Zhao et al, 2023.
 //! https://arxiv.org/abs/2302.04867
 //!
-//! This work is based largely on the diffusers implementation: https://github.com/huggingface/diffusers
+//! This work is based largely on UniPC implementation from the diffusers python package:
+//! https://raw.githubusercontent.com/huggingface/diffusers/refs/heads/main/src/diffusers/schedulers/scheduling_unipc_multistep.py
 use std::ops::Neg;
 use std::{cell::RefCell, collections::HashSet};
 
@@ -876,6 +877,8 @@ mod stats {
         }
     }
 
+    /// Provides total ordering for floats through this trick: http://stereopsis.com/radix.html
+    /// NaN | -Infinity | x < 0 | -0 | +0 | x > 0 | +Infinity | NaN
     #[derive(Clone, Copy)]
     struct FloatOrd(f64);
 
