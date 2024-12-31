@@ -14,8 +14,8 @@
 //!
 //! This work is based largely on UniPC implementation from the diffusers python package:
 //! https://raw.githubusercontent.com/huggingface/diffusers/refs/heads/main/src/diffusers/schedulers/scheduling_unipc_multistep.py
+use std::collections::HashSet;
 use std::ops::Neg;
-use std::{cell::RefCell, collections::HashSet};
 
 use super::schedulers::PredictionType;
 use super::{
@@ -245,56 +245,53 @@ impl SchedulerConfig for UniPCSchedulerConfig {
     }
 }
 
-struct Inner {
+struct State {
     model_outputs: Vec<Option<Tensor>>,
     lower_order_nums: usize,
     order: usize,
     last_sample: Option<Tensor>,
 }
 
-struct State(RefCell<Inner>);
-
 impl State {
     fn new(solver_order: usize) -> Self {
-        Self(RefCell::new(Inner {
+        Self {
             model_outputs: vec![None; solver_order],
             lower_order_nums: 0,
             order: 0,
             last_sample: None,
-        }))
+        }
     }
 
     fn lower_order_nums(&self) -> usize {
-        self.0.borrow().lower_order_nums
+        self.lower_order_nums
     }
 
-    fn update_lower_order_nums(&self, n: usize) {
-        let mut r = self.0.borrow_mut();
-        r.lower_order_nums = n;
+    fn update_lower_order_nums(&mut self, n: usize) {
+        self.lower_order_nums = n;
     }
 
-    fn model_outputs(&self) -> Vec<Option<Tensor>> {
-        self.0.borrow().model_outputs.clone()
+    fn model_outputs(&self) -> &[Option<Tensor>] {
+        self.model_outputs.as_slice()
     }
 
-    fn update_model_output(&self, idx: usize, output: Option<Tensor>) {
-        self.0.borrow_mut().model_outputs[idx] = output;
+    fn update_model_output(&mut self, idx: usize, output: Option<Tensor>) {
+        self.model_outputs[idx] = output;
     }
 
-    fn last_sample(&self) -> Option<Tensor> {
-        self.0.borrow().last_sample.clone()
+    fn last_sample(&self) -> Option<&Tensor> {
+        self.last_sample.as_ref()
     }
 
-    fn update_last_sample(&self, sample: Tensor) {
-        self.0.borrow_mut().last_sample.replace(sample);
+    fn update_last_sample(&mut self, sample: Tensor) {
+        let _ = self.last_sample.replace(sample);
     }
 
     fn order(&self) -> usize {
-        self.0.borrow().order
+        self.order
     }
 
-    fn update_order(&self, order: usize) {
-        self.0.borrow_mut().order = order;
+    fn update_order(&mut self, order: usize) {
+        self.order = order;
     }
 }
 
@@ -488,7 +485,7 @@ impl EdmDpmMultistepScheduler {
     fn multistep_uni_c_bh_update(
         &self,
         model_output: &Tensor,
-        model_outputs: Vec<Option<Tensor>>,
+        model_outputs: &[Option<Tensor>],
         last_sample: &Tensor,
         sample: &Tensor,
         timestep: usize,
@@ -602,7 +599,7 @@ impl EdmDpmMultistepScheduler {
 }
 
 impl Scheduler for EdmDpmMultistepScheduler {
-    fn step(&self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor> {
+    fn step(&mut self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor> {
         let step_index = self.step_index(timestep);
         let model_output_converted = &self.convert_model_output(model_output, sample, timestep)?;
         let sample = match &self.config.corrector {
@@ -612,7 +609,7 @@ impl Scheduler for EdmDpmMultistepScheduler {
                 &self.multistep_uni_c_bh_update(
                     model_output_converted,
                     self.state.model_outputs(),
-                    &self.state.last_sample().unwrap(),
+                    self.state.last_sample().unwrap(),
                     sample,
                     timestep,
                 )?
@@ -620,7 +617,7 @@ impl Scheduler for EdmDpmMultistepScheduler {
             _ => sample,
         };
 
-        let mut model_outputs = self.state.model_outputs();
+        let mut model_outputs = self.state.model_outputs().to_vec();
         for i in 0..self.config.solver_order.saturating_sub(1) {
             self.state
                 .update_model_output(i, model_outputs[i + 1].take());
