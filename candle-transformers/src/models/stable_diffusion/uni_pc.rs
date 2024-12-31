@@ -13,7 +13,7 @@
 //! https://arxiv.org/abs/2302.04867
 //!
 //! This work is based largely on UniPC implementation from the diffusers python package:
-//! https://raw.githubusercontent.com/huggingface/diffusers/refs/heads/main/src/diffusers/schedulers/scheduling_unipc_multistep.py
+//! https://raw.githubusercontent.com/huggingface/diffusers/e8aacda762e311505ba05ae340af23b149e37af3/src/diffusers/schedulers/scheduling_unipc_multistep.py
 use std::collections::HashSet;
 use std::ops::Neg;
 
