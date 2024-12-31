@@ -602,19 +602,21 @@ impl Scheduler for EdmDpmMultistepScheduler {
     fn step(&mut self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor> {
         let step_index = self.step_index(timestep);
         let model_output_converted = &self.convert_model_output(model_output, sample, timestep)?;
-        let sample = match &self.config.corrector {
-            CorrectorConfiguration::Enabled { skip_steps: s }
+        let sample = match (&self.config.corrector, self.state.last_sample()) {
+            (CorrectorConfiguration::Enabled { skip_steps: s }, Some(last_sample))
                 if !s.contains(&step_index) && step_index > 0 =>
             {
                 &self.multistep_uni_c_bh_update(
                     model_output_converted,
                     self.state.model_outputs(),
-                    self.state.last_sample().unwrap(),
+                    last_sample,
                     sample,
                     timestep,
                 )?
             }
-            _ => sample,
+            (CorrectorConfiguration::Enabled { .. }, _) | (CorrectorConfiguration::Disabled, _) => {
+                sample
+            }
         };
 
         let mut model_outputs = self.state.model_outputs().to_vec();
