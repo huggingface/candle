@@ -109,7 +109,7 @@ impl TextGeneration {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(name = "cache", short, long, default_value = ".")]
+    #[arg(name = "cache", short)]
     cache_path: Option<String>,
 
     /// Run on CPU rather than on GPU.
