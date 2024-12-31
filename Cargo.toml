@@ -46,7 +46,7 @@ criterion = { version = "0.5.1", default-features=false }
 cudarc = { version = "0.12.1", features = ["std", "cublas", "cublaslt", "curand", "driver", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-linking"], default-features=false }
 fancy-regex = "0.13.0"
 gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
-hf-hub = "0.4.0"
+hf-hub = "0.4.1"
 half = { version = "2.3.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }
 hound = "3.5.1"
 image = { version = "0.25.2", default-features = false, features = ["jpeg", "png"] }
