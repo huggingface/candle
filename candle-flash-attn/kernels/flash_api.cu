@@ -53,6 +53,7 @@ extern "C" void run_mha(
 
     int is_bf16,
     int is_causal,
+    int unpadded_lse,
 
     int window_size_left,
     int window_size_right,
@@ -128,6 +129,7 @@ extern "C" void run_mha(
 
     params.is_seqlens_k_cumulative = true;
     params.num_splits = 1;
+    params.unpadded_lse = unpadded_lse;
 
     cudaStream_t stream = 0; // Use the default stream.
     run_mha_fwd(params, stream);

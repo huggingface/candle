@@ -200,6 +200,7 @@ impl FlashAttn {
                 /* seqlen_k_rounded */ seqlen_k_rounded as u32,
                 /* is_bf16 */ is_bf16,
                 /* is_causal */ is_causal,
+                /* upadded_lse */ 0,
                 /* window_size_left */ window_size_left,
                 /* window_size_right */ window_size_right,
                 /* softcap */ self.softcap.unwrap_or(0f32),
@@ -518,7 +519,7 @@ impl FlashAttnVarLen {
             candle::bail!("the last dim of v must be contiguous {v_stride:?}")
         }
 
-        let (_total_q, num_heads, head_size_og) = q_l.shape().dims3()?;
+        let (total_q, num_heads, head_size_og) = q_l.shape().dims3()?;
         let (total_k, num_heads_k, _head_size_og) = k_l.shape().dims3()?;
         let expected_kv = (total_k, num_heads_k, head_size_og);
         if expected_kv != k_l.shape().dims3()? {
@@ -601,9 +602,7 @@ impl FlashAttnVarLen {
 
         let elem_count = out_shape.elem_count();
         let dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
-        let softmax_lse = dev
-            .alloc_zeros::<f32>(batch_size * num_heads * self.max_seqlen_q)
-            .w()?;
+        let softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q).w()?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -663,6 +662,7 @@ impl FlashAttnVarLen {
                 /* seqlen_k_rounded */ seqlen_k_rounded as u32,
                 /* is_bf16 */ is_bf16,
                 /* is_causal */ is_causal,
+                /* upadded_lse */ 1,
                 /* window_size_left */ window_size_left,
                 /* window_size_right */ window_size_right,
                 /* softcap */ self.softcap.unwrap_or(0.0),
