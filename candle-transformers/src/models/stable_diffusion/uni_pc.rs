@@ -914,8 +914,7 @@ mod stats {
     }
 
     fn sort_floats(v: &mut [f64]) {
-        let v_: &mut [FloatOrd] = unsafe { std::mem::transmute(v) };
-        v_.sort_unstable();
+        v.sort_unstable_by_key(|n| FloatOrd(*n));
     }
 }
 
