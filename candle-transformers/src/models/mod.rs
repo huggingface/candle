@@ -109,4 +109,5 @@ pub mod vit;
 pub mod whisper;
 pub mod with_tracing;
 pub mod wuerstchen;
+pub mod xlm_roberta;
 pub mod yi;
