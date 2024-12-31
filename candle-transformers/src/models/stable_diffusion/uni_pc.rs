@@ -307,7 +307,7 @@ impl EdmDpmMultistepScheduler {
     pub fn new(config: UniPCSchedulerConfig, num_inference_steps: usize) -> Result<Self> {
         let schedule = Schedule::new(
             config.timestep_schedule.clone(),
-            config.sigma_schedule.clone(),
+            config.sigma_schedule,
             num_inference_steps,
             config.num_training_timesteps,
         )?;
@@ -325,16 +325,15 @@ impl EdmDpmMultistepScheduler {
             .timesteps()
             .iter()
             .enumerate()
-            .filter_map(|(i, t)| (*t == timestep).then(|| i))
+            .filter(|(_, t)| (*t == &timestep))
+            .map(|(i, _)| i)
             .collect::<Vec<_>>();
 
-        let step_index = match index_candidates.len() {
-            n if n == 0 => 0,
-            n if n == 1 => index_candidates[0],
+        match index_candidates.len() {
+            0 => 0,
+            1 => index_candidates[0],
             _ => index_candidates[1],
-        };
-
-        step_index
+        }
     }
 
     fn timestep(&self, step_idx: usize) -> usize {
@@ -373,17 +372,14 @@ impl EdmDpmMultistepScheduler {
         let shape = sample.shape().clone().into_dims();
         let v = sample
             .abs()?
-            .reshape((
-                shape[0],
-                shape[1] * &shape[2..].iter().fold(1, |n, m| *m * n),
-            ))?
+            .reshape((shape[0], shape[1] * shape[2..].iter().product::<usize>()))?
             .to_dtype(candle::DType::F64)?
             .to_vec2::<f64>()?;
         let q = stats::Quantile::new(self.config.dynamic_thresholding_ratio)
             .with_samples(v.into_iter().flatten());
         let (threshold, max) = (q.quantile().max(self.config.sample_max_value), q.max());
 
-        Ok((sample.clamp(-threshold, threshold)? / (threshold / max).sqrt().min(1.))?)
+        sample.clamp(-threshold, threshold)? / (threshold / max).sqrt().min(1.)
     }
 
     fn multistep_uni_p_bh_update(&self, sample: &Tensor, timestep: usize) -> Result<Tensor> {
@@ -424,7 +420,7 @@ impl EdmDpmMultistepScheduler {
             d1s.push(((mi - m0)? / rk)?);
         }
         rks.push(1.0);
-        let rks = Tensor::new(rks, &device)?;
+        let rks = Tensor::new(rks, device)?;
         let (mut r, mut b) = (vec![], vec![]);
 
         let hh = h.neg();
@@ -446,10 +442,10 @@ impl EdmDpmMultistepScheduler {
 
         let (r, b) = (Tensor::stack(&r, 0)?, Tensor::new(b, device)?);
         let (d1s, rhos_p) = match d1s.len() {
-            n if n == 0 => (None, None),
+            0 => (None, None),
             _ => {
                 let rhos_p = match self.state.order() {
-                    n if n == 2 => Tensor::new(&[0.5f64], m0.device())?.to_dtype(m0.dtype())?,
+                    2 => Tensor::new(&[0.5f64], m0.device())?.to_dtype(m0.dtype())?,
                     _ => {
                         let ((r1, r2), b1) = (r.dims2()?, b.dims1()?);
                         let inverse = linalg::inverse(&r.i((..(r1 - 1), ..(r2 - 1)))?)?;
@@ -473,7 +469,7 @@ impl EdmDpmMultistepScheduler {
                 },
                 tensordot_fixed_position: TensordotFixedPosition {
                     len_uncontracted_lhs: 1,
-                    len_uncontracted_rhs: output_shape.dims().iter().fold(1, |len, n| len * n),
+                    len_uncontracted_rhs: output_shape.dims().iter().product::<usize>(),
                     len_contracted_axes: d1s.dim(1)?,
                     output_shape,
                 },
@@ -497,12 +493,7 @@ impl EdmDpmMultistepScheduler {
         timestep: usize,
     ) -> Result<Tensor> {
         let step_index = self.step_index(timestep);
-        let Some(m0) = model_outputs
-            .get(model_outputs.len() - 1)
-            .into_iter()
-            .flatten()
-            .next()
-        else {
+        let Some(m0) = model_outputs.last().into_iter().flatten().next() else {
             return Err(Error::Msg(
                 "Expected model output for corrector update".to_string(),
             ));
@@ -542,7 +533,7 @@ impl EdmDpmMultistepScheduler {
             d1s.push(((mi - m0)? / rk)?);
         }
         rks.push(1.0);
-        let rks = Tensor::new(rks, &device)?;
+        let rks = Tensor::new(rks, device)?;
         let (mut r, mut b) = (vec![], vec![]);
 
         let hh = h.neg();
@@ -564,11 +555,11 @@ impl EdmDpmMultistepScheduler {
 
         let (r, b) = (Tensor::stack(&r, 0)?, Tensor::new(b, device)?);
         let d1s = match d1s.len() {
-            n if n == 0 => None,
+            0 => None,
             _ => Some(Tensor::stack(&d1s, 1)?),
         };
         let rhos_c = match self.state.order() {
-            order if order == 1 => Tensor::new(&[0.5f64], m0.device())?.to_dtype(m0.dtype())?,
+            1 => Tensor::new(&[0.5f64], m0.device())?.to_dtype(m0.dtype())?,
             _ => {
                 let inverse = linalg::inverse(&r)?;
                 b.broadcast_mul(&inverse)?.sum(1)?.to_dtype(m0.dtype())?
@@ -587,16 +578,17 @@ impl EdmDpmMultistepScheduler {
                     },
                     tensordot_fixed_position: TensordotFixedPosition {
                         len_uncontracted_lhs: 1,
-                        len_uncontracted_rhs: output_shape.dims().iter().fold(1, |len, n| len * n),
+                        len_uncontracted_rhs: output_shape.dims().iter().product::<usize>(),
                         len_contracted_axes: d1s.dim(1)?,
                         output_shape,
                     },
                     output_permutation: Permutation {
                         dims: vec![0, 1, 2, 3],
                     },
-                }.eval(&rhos_c.i(..rhos_c.dims()[0] - 1)?, &d1s)
+                }
+                .eval(&rhos_c.i(..rhos_c.dims()[0] - 1)?, &d1s)
             })
-            .unwrap_or_else(|| Tensor::zeros_like(&m0))?;
+            .unwrap_or_else(|| Tensor::zeros_like(m0))?;
 
         let d1_t = (model_t - m0)?;
         let x_t = (x_t_
@@ -617,10 +609,10 @@ impl Scheduler for EdmDpmMultistepScheduler {
                 if !s.contains(&step_index) && step_index > 0 =>
             {
                 &self.multistep_uni_c_bh_update(
-                    &model_output_converted,
+                    model_output_converted,
                     self.state.model_outputs(),
                     &self.state.last_sample().unwrap(),
-                    &sample,
+                    sample,
                     timestep,
                 )?
             }
@@ -907,7 +899,7 @@ mod stats {
 
     impl std::cmp::PartialOrd for FloatOrd {
         fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-            self.convert().partial_cmp(&other.convert())
+            Some(self.convert().cmp(&other.convert()))
         }
     }
 
@@ -949,7 +941,7 @@ mod linalg {
             return Tensor::stack(&v, 1)?.squeeze(0);
         }
 
-        let minors = minors(&m)?;
+        let minors = minors(m)?;
         let mut v = vec![];
         for i in 0..s {
             let mut x = vec![];
