@@ -400,9 +400,9 @@ impl EdmDpmMultistepScheduler {
 
         let (mut rks, mut d1s) = (vec![], vec![]);
         for i in 1..self.state.order() {
-            let ti = self.timestep(step_index - (i + 1));
+            let ti = self.timestep(step_index.saturating_sub(i + 1));
             let Some(mi) = model_outputs
-                .get(model_outputs.len() - (i + 1))
+                .get(model_outputs.len().saturating_sub(i + 1))
                 .into_iter()
                 .flatten()
                 .next()
@@ -513,9 +513,9 @@ impl EdmDpmMultistepScheduler {
 
         let (mut rks, mut d1s) = (vec![], vec![]);
         for i in 1..self.state.order() {
-            let ti = self.timestep(step_index - (i + 1));
+            let ti = self.timestep(step_index.saturating_sub(i + 1));
             let Some(mi) = model_outputs
-                .get(model_outputs.len() - (i + 1))
+                .get(model_outputs.len().saturating_sub(i + 1))
                 .into_iter()
                 .flatten()
                 .next()
