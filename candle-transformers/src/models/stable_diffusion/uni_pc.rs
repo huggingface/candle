@@ -876,44 +876,8 @@ mod stats {
         }
     }
 
-    /// Provides total ordering for floats through this trick: http://stereopsis.com/radix.html
-    /// NaN | -Infinity | x < 0 | -0 | +0 | x > 0 | +Infinity | NaN
-    #[derive(Clone, Copy)]
-    struct FloatOrd(f64);
-
-    impl FloatOrd {
-        fn convert(self) -> u64 {
-            let u: u64 = self.0.to_bits();
-            let bit = 1 << (64 - 1);
-            if u & bit == 0 {
-                u | bit
-            } else {
-                !u
-            }
-        }
-    }
-
-    impl std::cmp::Ord for FloatOrd {
-        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            self.convert().cmp(&other.convert())
-        }
-    }
-
-    impl std::cmp::PartialOrd for FloatOrd {
-        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-            Some(self.convert().cmp(&other.convert()))
-        }
-    }
-
-    impl std::cmp::Eq for FloatOrd {}
-    impl std::cmp::PartialEq for FloatOrd {
-        fn eq(&self, other: &Self) -> bool {
-            self.convert().eq(&other.convert())
-        }
-    }
-
     fn sort_floats(v: &mut [f64]) {
-        v.sort_unstable_by_key(|n| FloatOrd(*n));
+        v.sort_unstable_by(|a, b| a.total_cmp(b));
     }
 }
 
