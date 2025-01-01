@@ -14,7 +14,13 @@ enum QuantizationMode {
 }
 
 impl QuantizationMode {
-    fn quantize(&self, name: &str, tensor: QTensor, dtype: GgmlDType, bitnet_mode: bool) -> Result<QTensor> {
+    fn quantize(
+        &self,
+        name: &str,
+        tensor: QTensor,
+        dtype: GgmlDType,
+        bitnet_mode: bool,
+    ) -> Result<QTensor> {
         match self {
             Self::Llama => {
                 // Same behavior as the llama.cpp quantization.
@@ -50,6 +56,8 @@ enum Quantization {
     Q8_1,
     #[value(name = "q2b0")]
     Q2b0,
+    #[value(name = "q2b1")]
+    Q2b1,
     #[value(name = "qi8")]
     QI8,
     Q2k,
@@ -81,6 +89,7 @@ impl Quantization {
             Quantization::F32 => GgmlDType::F32,
             Quantization::Q2b0 => GgmlDType::Q2b0,
             Quantization::QI8 => GgmlDType::QI8,
+            Quantization::Q2b1 => GgmlDType::Q2b1,
         }
     }
 }
@@ -441,11 +450,11 @@ fn unpack_bitnet_weights(tensor: &Tensor) -> Result<Tensor> {
 }
 
 use core::num;
+use rayon::prelude::*;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::PathBuf;
-use rayon::prelude::*;
-use serde_json::Value;
 
 fn permute(weights: &Tensor, n_head: usize, n_head_kv: Option<usize>) -> Result<Tensor> {
     let n_head = match n_head_kv {
@@ -464,7 +473,7 @@ fn permute(weights: &Tensor, n_head: usize, n_head_kv: Option<usize>) -> Result<
 
     let permuted = weights
         .reshape(new_shape)?
-        .transpose(1, 2)? 
+        .transpose(1, 2)?
         .reshape(weights.shape())?;
 
     Ok(permuted)
@@ -481,14 +490,15 @@ fn run_quantize_safetensors(
     let dtype = q.dtype();
     let block_size = dtype.block_size();
 
-    let metadata_file = in_files.iter().find(|f| f.to_string_lossy().ends_with("config.json"));
+    let metadata_file = in_files
+        .iter()
+        .find(|f| f.to_string_lossy().ends_with("config.json"));
 
     let mut qtensors = Vec::new();
 
     let mut num_attention_heads = 0;
     let mut num_key_value_heads = 0;
     let mut architecture = String::new();
-
 
     let gguf_metadata = if let Some(metadata_file) = metadata_file {
         let metadata_content = std::fs::read_to_string(metadata_file)?;
@@ -499,16 +509,41 @@ fn run_quantize_safetensors(
         architecture = metadata["model_type"].as_str().unwrap().to_string();
 
         vec![
-            ("llama.attention.head_count", gguf_file::Value::from_u32(num_attention_heads as u32)),
-            ("llama.attention.head_count_kv", gguf_file::Value::from_u32(metadata["num_key_value_heads"].as_u64().unwrap() as u32)),
-            ("llama.block_count", gguf_file::Value::from_u32(metadata["num_hidden_layers"].as_u64().unwrap() as u32)),
-            ("llama.embedding_length", gguf_file::Value::from_u32(metadata["hidden_size"].as_u64().unwrap() as u32)),
-            ("llama.attention.layer_norm_rms_epsilon", gguf_file::Value::from_f32(metadata["rms_norm_eps"].as_f64().unwrap() as f32)),
-            ("llama.rope.dimension_count", gguf_file::Value::from_u32(
-                (metadata["hidden_size"].as_u64().unwrap() as u32) / (metadata["num_attention_heads"].as_u64().unwrap() as u32),
-            )),
-            ("llama.rope.freq_base", gguf_file::Value::from_f32(metadata["rope_theta"].as_f64().unwrap() as f32)),
-            ("general.architecture", gguf_file::Value::from_string(architecture.clone())),
+            (
+                "llama.attention.head_count",
+                gguf_file::Value::from_u32(num_attention_heads as u32),
+            ),
+            (
+                "llama.attention.head_count_kv",
+                gguf_file::Value::from_u32(metadata["num_key_value_heads"].as_u64().unwrap() as u32),
+            ),
+            (
+                "llama.block_count",
+                gguf_file::Value::from_u32(metadata["num_hidden_layers"].as_u64().unwrap() as u32),
+            ),
+            (
+                "llama.embedding_length",
+                gguf_file::Value::from_u32(metadata["hidden_size"].as_u64().unwrap() as u32),
+            ),
+            (
+                "llama.attention.layer_norm_rms_epsilon",
+                gguf_file::Value::from_f32(metadata["rms_norm_eps"].as_f64().unwrap() as f32),
+            ),
+            (
+                "llama.rope.dimension_count",
+                gguf_file::Value::from_u32(
+                    (metadata["hidden_size"].as_u64().unwrap() as u32)
+                        / (metadata["num_attention_heads"].as_u64().unwrap() as u32),
+                ),
+            ),
+            (
+                "llama.rope.freq_base",
+                gguf_file::Value::from_f32(metadata["rope_theta"].as_f64().unwrap() as f32),
+            ),
+            (
+                "general.architecture",
+                gguf_file::Value::from_string(architecture.clone()),
+            ),
         ]
     } else {
         vec![]
@@ -531,14 +566,13 @@ fn run_quantize_safetensors(
                 let mut tensor = tensor;
 
                 if should_quantize && bitnet_mode {
-                    let is_bitnet_weight = 
-                        name.contains("self_attn.v_proj") ||
-                        name.contains("self_attn.q_proj") ||
-                        name.contains("self_attn.o_proj") ||
-                        name.contains("self_attn.k_proj") ||
-                        name.contains("mlp.down_proj") ||
-                        name.contains("mlp.up_proj") ||
-                        name.contains("mlp.gate_proj");
+                    let is_bitnet_weight = name.contains("self_attn.v_proj")
+                        || name.contains("self_attn.q_proj")
+                        || name.contains("self_attn.o_proj")
+                        || name.contains("self_attn.k_proj")
+                        || name.contains("mlp.down_proj")
+                        || name.contains("mlp.up_proj")
+                        || name.contains("mlp.gate_proj");
 
                     if is_bitnet_weight {
                         println!("  unpacking {name} {tensor:?} {should_quantize}");
@@ -555,10 +589,18 @@ fn run_quantize_safetensors(
                 match architecture.as_str() {
                     "llama" => {
                         if name.ends_with("self_attn.q_proj.weight") {
-                            tensor = permute(&tensor, num_attention_heads as usize, Some(num_attention_heads as usize))?;
+                            tensor = permute(
+                                &tensor,
+                                num_attention_heads as usize,
+                                Some(num_attention_heads as usize),
+                            )?;
                         }
                         if name.ends_with("self_attn.k_proj.weight") {
-                            tensor = permute(&tensor, num_attention_heads as usize, Some(num_key_value_heads as usize))?;
+                            tensor = permute(
+                                &tensor,
+                                num_attention_heads as usize,
+                                Some(num_key_value_heads as usize),
+                            )?;
                         }
                     }
                     _ => {}
@@ -716,7 +758,15 @@ fn main() -> anyhow::Result<()> {
             bitnet_quantization,
             mode,
             bitnet_mode,
-        } => run_quantize(&in_file, out_file, quantization, mode, bitnet_quantization, bitnet_mode, &device)?,
+        } => run_quantize(
+            &in_file,
+            out_file,
+            quantization,
+            mode,
+            bitnet_quantization,
+            bitnet_mode,
+            &device,
+        )?,
         Command::Dequantize { in_file, out_file } => run_dequantize(in_file, out_file, &device)?,
     }
     Ok(())

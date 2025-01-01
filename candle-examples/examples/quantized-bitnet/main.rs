@@ -5,9 +5,9 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use clap::{Parser, ValueEnum};
-use tracing_subscriber::fmt::time::FormatTime;
 use std::io::Write;
-use tokenizers::{Tokenizer, AddedToken};
+use tokenizers::{AddedToken, Tokenizer};
+use tracing_subscriber::fmt::time::FormatTime;
 
 use candle::quantized::{ggml_file, gguf_file};
 use candle::Tensor;
@@ -46,7 +46,7 @@ enum Which {
     Llama3_8b1_58,
 }
 
-impl Which { 
+impl Which {
     fn tokenizer_repo(&self) -> &'static str {
         match self {
             Self::Falcon3_1bInstruct1_58 => "nebuxcloud/Falcon3-1B-Instruct-1.58bit-GGUF",
@@ -303,9 +303,7 @@ fn main() -> anyhow::Result<()> {
     let mut pre_prompt_tokens = vec![];
     for prompt_index in 0.. {
         let prompt_str = match &prompt {
-            Prompt::One(prompt) => {
-                prompt.clone()
-            }
+            Prompt::One(prompt) => prompt.clone(),
             Prompt::Interactive | Prompt::Chat => {
                 let is_interactive = matches!(prompt, Prompt::Interactive);
                 print!("> ");
@@ -318,11 +316,11 @@ fn main() -> anyhow::Result<()> {
                         prompt.pop();
                     }
                 }
-                
-                prompt
+
+                prompt.clone()
             }
         };
-        
+
         print!("{}", &prompt_str);
         let tokens = tos
             .tokenizer()
@@ -383,13 +381,13 @@ fn main() -> anyhow::Result<()> {
         }
 
         let eos_tokens = match args.which {
-            Which::Falcon3_10b1_58 |
-            Which::Falcon3_10bInstruct1_58 |
-            Which::Falcon3_7bInstruct1_58 | 
-            Which::Falcon3_7b1_58 |
-            Which::Falcon3_3bInstruct1_58 | 
-            Which::Falcon3_3b1_58 |
-            Which::Falcon3_1bInstruct1_58 => {
+            Which::Falcon3_10b1_58
+            | Which::Falcon3_10bInstruct1_58
+            | Which::Falcon3_7bInstruct1_58
+            | Which::Falcon3_7b1_58
+            | Which::Falcon3_3bInstruct1_58
+            | Which::Falcon3_3b1_58
+            | Which::Falcon3_1bInstruct1_58 => {
                 vec!["<|endoftext|>"]
             }
             Which::Llama3_8b1_58 => {

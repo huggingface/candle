@@ -20,6 +20,7 @@ pub const QK5_1: usize = 32;
 pub const QK8_0: usize = 32;
 pub const QK8_1: usize = 32;
 pub const Q2B_0: usize = 32;
+pub const Q2B_1: usize = 32;
 pub const QI8: usize = 32;
 
 pub trait GgmlType: Sized + Clone + Send + Sync {
@@ -168,7 +169,14 @@ const _: () = assert!(Q2B_0 / 4 == std::mem::size_of::<BlockQ2b0>());
 
 #[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
-pub struct BlockQI8{
+pub struct BlockQ2b1 {
+    pub(crate) qs: [u8; Q2B_0 / 4], // Every single 2-bit represents {-1, 0, 1}
+}
+const _: () = assert!(Q2B_0 / 4 == std::mem::size_of::<BlockQ2b1>());
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct BlockQI8 {
     pub(crate) qs: [i8; QI8],
 }
 const _: () = assert!(std::mem::size_of::<BlockQI8>() == QI8);
@@ -1857,7 +1865,6 @@ impl GgmlType for BlockQ8K {
     }
 }
 
-
 impl GgmlType for BlockQ2b0 {
     const DTYPE: GgmlDType = GgmlDType::Q2b0;
     const BLCK_SIZE: usize = Q2B_0;
@@ -1869,7 +1876,7 @@ impl GgmlType for BlockQ2b0 {
 
         Self::vec_dot_unopt(n, xs, ys)
     }
-    
+
     fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         if n % Q2B_0 != 0 {
             crate::bail!("vec_dot_q2b0_q8k: {n} is not divisible by {Q2B_0}");
@@ -1881,20 +1888,29 @@ impl GgmlType for BlockQ2b0 {
                 let qs = x.qs[i];
                 let qd = x.qd[i];
                 let mut y_cache = [0i32; 8];
-                y_cache.copy_from_slice(&y.qs[i * 8..(i + 1) * 8].iter().map(|&x| x as i32).collect::<Vec<_>>()[..]);
+                y_cache.copy_from_slice(
+                    &y.qs[i * 8..(i + 1) * 8]
+                        .iter()
+                        .map(|&x| x as i32)
+                        .collect::<Vec<_>>()[..],
+                );
 
-                let pos_sum: i32 = (0..8).map(|bit| {
-                    let mask = 1 << bit;
-                    let is_active = ((qs & mask) >> bit) as i32;
-                    is_active * y_cache[bit]
-                }).sum();
-    
-                let neg_sum: i32 = (0..8).map(|bit| {
-                    let mask = 1 << bit;
-                    let is_active = ((qd & mask) >> bit) as i32;
-                    is_active * y_cache[bit]
-                }).sum();
-    
+                let pos_sum: i32 = (0..8)
+                    .map(|bit| {
+                        let mask = 1 << bit;
+                        let is_active = ((qs & mask) >> bit) as i32;
+                        is_active * y_cache[bit]
+                    })
+                    .sum();
+
+                let neg_sum: i32 = (0..8)
+                    .map(|bit| {
+                        let mask = 1 << bit;
+                        let is_active = ((qd & mask) >> bit) as i32;
+                        is_active * y_cache[bit]
+                    })
+                    .sum();
+
                 isum += pos_sum - neg_sum;
             }
             sumf += isum as f32;
@@ -1904,7 +1920,11 @@ impl GgmlType for BlockQ2b0 {
 
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
         if xs.len() % Q2B_0 != 0 {
-            crate::bail!("quantize_row_q2b0: size mismatch {} not divisible by {}", xs.len(), Q2B_0);
+            crate::bail!(
+                "quantize_row_q2b0: size mismatch {} not divisible by {}",
+                xs.len(),
+                Q2B_0
+            );
         }
 
         for (block, x) in ys.iter_mut().zip(xs.chunks_exact(Q2B_0)) {
@@ -1928,7 +1948,11 @@ impl GgmlType for BlockQ2b0 {
 
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
         if ys.len() % Q2B_0 != 0 {
-            crate::bail!("dequantize_row_q2b0: size mismatch {} not divisible by {}", ys.len(), Q2B_0);
+            crate::bail!(
+                "dequantize_row_q2b0: size mismatch {} not divisible by {}",
+                ys.len(),
+                Q2B_0
+            );
         }
 
         for (block, y) in xs.iter().zip(ys.chunks_exact_mut(Q2B_0)) {
@@ -1947,6 +1971,145 @@ impl GgmlType for BlockQ2b0 {
                 }
             }
         }
+        Ok(())
+    }
+}
+
+const fn build_decode_q2b1_lut_i8() -> [[i8; 4]; 256] {
+    let mut table = [[0i8; 4]; 256];
+    let mut i = 0;
+    while i < 256 {
+        let byte = i as u8;
+        let mut dec = [0i8; 4];
+        let mut b = 0;
+        while b < 4 {
+            let code = (byte >> (2 * b)) & 0b11;
+            dec[b as usize] = match code {
+                0b00 => 0,
+                0b01 => 1,
+                0b10 => -1,
+                0b11 => 0,
+                _ => unreachable!(),
+            };
+            b += 1;
+        }
+        table[i] = dec;
+        i += 1;
+    }
+    table
+}
+
+static LUT_DECODE_Q2B1_I8: [[i8; 4]; 256] = build_decode_q2b1_lut_i8();
+const fn build_decode_q2b1_lut_f32() -> [[f32; 4]; 256] {
+    let mut table = [[0.0_f32; 4]; 256];
+    let mut i = 0;
+    while i < 256 {
+        let byte = i as u8;
+        let mut dec = [0.0_f32; 4];
+        let mut b = 0;
+        while b < 4 {
+            let code = (byte >> (2 * b)) & 0b11;
+            dec[b as usize] = match code {
+                0b00 => 0.0,
+                0b01 => 1.0,
+                0b10 => -1.0,
+                0b11 => 0.0,
+                _ => unreachable!(),
+            };
+            b += 1;
+        }
+        table[i] = dec;
+        i += 1;
+    }
+    table
+}
+
+static LUT_DECODE_Q2B1_F32: [[f32; 4]; 256] = build_decode_q2b1_lut_f32();
+impl GgmlType for BlockQ2b1 {
+    const DTYPE: GgmlDType = GgmlDType::Q2b1;
+    const BLCK_SIZE: usize = Q2B_0;
+    type VecDotType = BlockQI8;
+
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        #[cfg(target_feature = "neon")]
+        return super::neon::vec_dot_q2b1_qi8(n, xs, ys);
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        if n % Q2B_0 != 0 {
+            crate::bail!("vec_dot_q2b1_qi8: n = {n} is not divisible by {Q2B_0}");
+        }
+
+        let mut sumf = 0.0;
+
+        for (block_x, block_y) in xs.iter().zip(ys.iter()) {
+            let mut isum = 0i32;
+
+            for i in 0..(Q2B_0 / 4) {
+                let enc_x = block_x.qs[i];
+                let y_slice = &block_y.qs[i * 4..(i + 1) * 4];
+
+                let dec_x = &LUT_DECODE_Q2B1_I8[enc_x as usize];
+
+                for b in 0..4 {
+                    let x_val = dec_x[b] as i32;
+                    let y_val = y_slice[b] as i32;
+                    isum += x_val * y_val;
+                }
+            }
+            sumf += isum as f32;
+        }
+
+        Ok(sumf)
+    }
+
+    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        if xs.len() % Q2B_0 != 0 {
+            crate::bail!(
+                "quantize_row_q2b1: size {} is not divisible by {}",
+                xs.len(),
+                Q2B_0
+            );
+        }
+
+        for (block, chunk) in ys.iter_mut().zip(xs.chunks_exact(Q2B_0)) {
+            for (i, subchunk) in chunk.chunks_exact(4).enumerate() {
+                let mut encoded: u8 = 0;
+                for (b, &val) in subchunk.iter().enumerate() {
+                    let bits = if val > 0.0 {
+                        0b01
+                    } else if val < 0.0 {
+                        0b10
+                    } else {
+                        0b00
+                    };
+                    encoded |= bits << (2 * b);
+                }
+                block.qs[i] = encoded;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
+        if ys.len() % Q2B_0 != 0 {
+            crate::bail!(
+                "dequantize_row_q2b1: size {} is not divisible by {}",
+                ys.len(),
+                Q2B_0
+            );
+        }
+
+        for (block, out_chunk) in xs.iter().zip(ys.chunks_exact_mut(Q2B_0)) {
+            for (i, subchunk) in out_chunk.chunks_exact_mut(4).enumerate() {
+                let enc = block.qs[i];
+                let dec = &LUT_DECODE_Q2B1_F32[enc as usize];
+                subchunk.copy_from_slice(dec);
+            }
+        }
+
         Ok(())
     }
 }
@@ -1990,7 +2153,7 @@ impl GgmlType for BlockQI8 {
         for (i, ys) in ys.iter_mut().enumerate() {
             let xs = &xs[i * Self::BLCK_SIZE..(i + 1) * Self::BLCK_SIZE];
             for (y, &x) in ys.qs.iter_mut().zip(xs.iter()) {
-               *y = x as i8;
+                *y = x as i8;
             }
         }
         Ok(())

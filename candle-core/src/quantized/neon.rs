@@ -1,6 +1,10 @@
-use super::{k_quants::{
-    BlockQ2K, BlockQ2b0, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, Q2B_0, QK8_0, QK_K
-}, BlockQI8};
+use super::{
+    k_quants::{
+        BlockQ2K, BlockQ2b0, BlockQ2b1, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K,
+        BlockQ8K, BlockQ8_0, Q2B_0, QK8_0, QK_K,
+    },
+    BlockQI8,
+};
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -11,6 +15,7 @@ use core::arch::arm::*;
 #[allow(unused_imports)]
 #[cfg(target_arch = "aarch64")]
 use core::arch::aarch64::*;
+use std::ptr;
 
 #[inline(always)]
 unsafe fn vdotq_s32(a: int8x16_t, b: int8x16_t) -> int32x4_t {
@@ -573,6 +578,78 @@ pub(crate) fn vec_dot_q2b0_qi8(n: usize, xs: &[BlockQ2b0], ys: &[BlockQI8]) -> c
     }
 
     Ok(sumf)
+}
+
+static LUT_DECODE_Q2B1_I8: [[i8; 4]; 256] = {
+    const fn build_decode_table() -> [[i8; 4]; 256] {
+        let mut table = [[0i8; 4]; 256];
+        let mut i = 0;
+        while i < 256 {
+            let byte = i as u8;
+            let mut dec = [0i8; 4];
+            let mut b = 0;
+            while b < 4 {
+                let code = (byte >> (2 * b)) & 0b11;
+                dec[b as usize] = match code {
+                    0b00 => 0,
+                    0b01 => 1,
+                    0b10 => -1,
+                    0b11 => 0,
+                    _ => 0,
+                };
+                b += 1;
+            }
+            table[i] = dec;
+            i += 1;
+        }
+        table
+    }
+    build_decode_table()
+};
+
+unsafe fn decode_q2b1_16(input: &[u8]) -> int8x16_t {
+    debug_assert_eq!(input.len(), 4, "input must be 4 bytes long");
+    let mut tmp = [0i8; 16];
+
+    for (i, &byte) in input.iter().enumerate() {
+        let decoded4 = LUT_DECODE_Q2B1_I8[byte as usize];
+        tmp[i * 4..i * 4 + 4].copy_from_slice(&decoded4);
+    }
+
+    vld1q_s8(tmp.as_ptr())
+}
+
+#[inline(always)]
+pub fn vec_dot_q2b1_qi8(n: usize, xs: &[BlockQ2b1], ys: &[BlockQI8]) -> crate::Result<f32> {
+    let blocks = n / 32;
+
+    let mut total_sum = 0i32;
+
+    unsafe {
+        for i in 0..blocks {
+            let x_block = &xs[i];
+            let y_block = &ys[i];
+
+            let x_dec_lo = decode_q2b1_16(&x_block.qs[0..4]);
+            let x_dec_hi = decode_q2b1_16(&x_block.qs[4..8]);
+
+            let y_lo = vld1q_s8(y_block.qs[0..16].as_ptr());
+            let y_hi = vld1q_s8(y_block.qs[16..32].as_ptr());
+
+            let mut acc0 = vdupq_n_s32(0);
+            let mut acc1 = vdupq_n_s32(0);
+
+            acc0 = vaddq_s32(acc0, vdotq_s32(x_dec_lo, y_lo));
+            acc1 = vaddq_s32(acc1, vdotq_s32(x_dec_hi, y_hi));
+
+            let sum0 = vaddvq_s32(acc0);
+            let sum1 = vaddvq_s32(acc1);
+
+            total_sum += sum0 + sum1;
+        }
+    }
+
+    Ok(total_sum as f32)
 }
 
 #[inline(always)]
