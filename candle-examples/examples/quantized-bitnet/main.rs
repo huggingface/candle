@@ -157,35 +157,35 @@ impl Args {
                 let (repo, filename) = match self.which {
                     Which::Falcon3_1bInstruct1_58 => (
                         "nebuxcloud/Falcon3-1B-Instruct-1.58bit-GGUF",
-                        "Falcon3-1B-Instruct-1.58bit-q2b0.gguf",
+                        "Falcon3-1B-Instruct-1.58bit-q2b1.gguf",
                     ),
                     Which::Falcon3_3bInstruct1_58 => (
                         "nebuxcloud/Falcon3-3B-Instruct-1.58bit-GGUF",
-                        "Falcon3-3B-Instruct-1.58bit-q2b0.gguf",
+                        "Falcon3-3B-Instruct-1.58bit-q2b1.gguf",
                     ),
                     Which::Falcon3_3b1_58 => (
                         "nebuxcloud/Falcon3-3B-Base-1.58bit-GGUF",
-                        "Falcon3-3B-Base-1.58bit-q2b0.gguf",
+                        "Falcon3-3B-Base-1.58bit-q2b1.gguf",
                     ),
                     Which::Falcon3_7bInstruct1_58 => (
                         "nebuxcloud/Falcon3-7B-Instruct-1.58bit-GGUF",
-                        "Falcon3-7B-Instruct-1.58bit-q2b0.gguf",
+                        "Falcon3-7B-Instruct-1.58bit-q2b1.gguf",
                     ),
                     Which::Falcon3_7b1_58 => (
                         "nebuxcloud/Falcon3-7B-Base-1.58bit-GGUF",
-                        "Falcon3-7B-Base-1.58bit-q2b0.gguf",
+                        "Falcon3-7B-Base-1.58bit-q2b1.gguf",
                     ),
                     Which::Falcon3_10b1_58 => (
                         "nebuxcloud/Falcon3-10B-Base-1.58bit-GGUF",
-                        "Falcon3-10B-Base-1.58bit-q2b0.gguf",
+                        "Falcon3-10B-Base-1.58bit-q2b1.gguf",
                     ),
                     Which::Falcon3_10bInstruct1_58 => (
                         "nebuxcloud/Falcon3-10B-Instruct-1.58bit-GGUF",
-                        "Falcon3-10B-Instruct-1.58bit-q2b0.gguf",
+                        "Falcon3-10B-Instruct-1.58bit-q2b1.gguf",
                     ),
                     Which::Llama3_8b1_58 => (
                         "nebuxcloud/Llama3-8B-1.58-100B-tokens-GGUF",
-                        "Llama3-8B-1.58-100B-tokens-q2b0.gguf",
+                        "Llama3-8B-1.58-100B-tokens-q2b1.gguf",
                     ),
                 };
                 let revision = "main";
