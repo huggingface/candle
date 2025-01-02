@@ -15,7 +15,7 @@
 //!
 
 use crate::models::with_tracing::{conv2d, linear, Conv2d, Linear};
-use candle::{Module, ModuleT, Result, Tensor, D};
+use candle::{Context, Module, ModuleT, Result, Tensor, D};
 use candle_nn::{conv2d_no_bias, layer_norm, Activation, Conv2dConfig, VarBuilder};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -633,7 +633,7 @@ impl ImageClassificationModel {
 impl Module for ImageClassificationModel {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let all_hidden_states = self.segformer.forward(x)?;
-        let hidden_states = all_hidden_states.last().unwrap();
+        let hidden_states = all_hidden_states.last().context("no last")?;
         let hidden_states = hidden_states.flatten_from(2)?.permute((0, 2, 1))?;
         let mean = hidden_states.mean(1)?;
         self.classifier.forward(&mean)

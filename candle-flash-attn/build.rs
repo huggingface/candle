@@ -54,6 +54,7 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=kernels/kernel_traits.h");
     println!("cargo:rerun-if-changed=kernels/block_info.h");
     println!("cargo:rerun-if-changed=kernels/static_switch.h");
+    println!("cargo:rerun-if-changed=kernels/hardware_info.h");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").context("OUT_DIR not set")?);
     let build_dir = match std::env::var("CANDLE_FLASH_ATTN_BUILD_DIR") {
         Err(_) =>

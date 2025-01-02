@@ -6,7 +6,7 @@
 //! https://github.com/openai/CLIP
 //! https://github.com/huggingface/transformers/tree/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip
 
-use candle::{IndexOp, Result, Shape, Tensor, D};
+use candle::{Context, IndexOp, Result, Shape, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
 use nn::Conv2dConfig;
@@ -149,7 +149,7 @@ impl ClipVisionTransformer {
             .apply(&self.embeddings)?
             .apply(&self.pre_layer_norm)?;
         let mut result = self.encoder.output_hidden_states(&hidden_states, None)?;
-        let encoder_outputs = result.last().unwrap();
+        let encoder_outputs = result.last().context("no last")?;
         let pooled_output = encoder_outputs.i((.., 0, ..))?;
         result.push(self.final_layer_norm.forward(&pooled_output)?.clone());
         Ok(result)

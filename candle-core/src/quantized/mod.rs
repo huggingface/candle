@@ -1,5 +1,5 @@
 //! Code for GGML and GGUF files
-use crate::{CpuStorage, DType, Device, Error, Result, Shape, Storage, Tensor};
+use crate::{Context, CpuStorage, DType, Device, Error, Result, Shape, Storage, Tensor};
 use k_quants::*;
 use std::borrow::Cow;
 
@@ -482,7 +482,7 @@ impl crate::CustomOp1 for QTensor {
             crate::bail!("input tensor has only one dimension {layout:?}")
         }
         let mut dst_shape = src_shape.dims().to_vec();
-        let last_k = dst_shape.pop().unwrap();
+        let last_k = dst_shape.pop().context("empty dst_shape")?;
         if last_k != k {
             crate::bail!("input tensor {layout:?} incompatible with {:?}", self.shape)
         }

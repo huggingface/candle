@@ -3,7 +3,7 @@
 //! Functionality for modeling sampling strategies and logits processing in text generation
 //! with support for temperature-based sampling, top-k filtering, nucleus sampling (top-p),
 //! and combinations thereof.
-use candle::{DType, Error, Result, Tensor};
+use candle::{Context, DType, Error, Result, Tensor};
 use rand::{distributions::Distribution, SeedableRng};
 
 #[derive(Clone, PartialEq, Debug)]
@@ -47,7 +47,7 @@ impl LogitsProcessor {
             .enumerate()
             .max_by(|(_, u), (_, v)| u.total_cmp(v))
             .map(|(i, _)| i as u32)
-            .unwrap();
+            .context("empty logits")?;
         Ok(next_token)
     }
 

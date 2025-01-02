@@ -477,7 +477,7 @@ fn run(args: Args) -> Result<()> {
         ),
     };
 
-    let scheduler = sd_config.build_scheduler(n_steps)?;
+    let mut scheduler = sd_config.build_scheduler(n_steps)?;
     let device = candle_examples::device(cpu)?;
     if let Some(seed) = seed {
         device.set_seed(seed)?;
@@ -539,7 +539,7 @@ fn run(args: Args) -> Result<()> {
     };
 
     for idx in 0..num_samples {
-        let timesteps = scheduler.timesteps();
+        let timesteps = scheduler.timesteps().to_vec();
         let latents = match &init_latent_dist {
             Some(init_latent_dist) => {
                 let latents = (init_latent_dist.sample()? * vae_scale)?.to_device(&device)?;
