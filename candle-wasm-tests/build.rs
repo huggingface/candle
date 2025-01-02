@@ -33,7 +33,7 @@ fn copy_test_folders(source_dir: &str, crate_replace: &str) -> io::Result<Vec<(S
             let path_str = path
                 .to_str()
                 .expect("expected path to be convertible to str");
-            if path_str.contains("pth_tests") || path_str.contains("serialization_tests") {
+            if path_str.contains("pth_tests") || path_str.contains("serialization_tests")  || path_str.contains("quantized_tests") {
                 continue;
             }
             println!("cargo::rerun-if-changed={}", path.to_str().expect(""));
