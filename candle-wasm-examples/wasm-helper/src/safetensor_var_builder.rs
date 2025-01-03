@@ -55,7 +55,7 @@ impl MmapedSafetensors {
     }
 
     pub fn tensors(&self) -> impl Iterator<Item=(&String, &TensorView)> {
-        return self.data.iter();
+        self.data.iter()
     }
 
     pub fn get(&self, name: &str) -> GenericResult<&TensorView> {

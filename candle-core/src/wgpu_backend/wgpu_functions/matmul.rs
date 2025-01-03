@@ -87,8 +87,8 @@ mod transpose {
             meta,
             pipeline,
             bind_group,
-            (width + tile_w - 1) / tile_w,
-            (height + tile_h - 1) / tile_h,
+            width.div_ceil(tile_w),
+            height.div_ceil(tile_h),
             batch,
             (width * height * batch) as usize,
         );
@@ -207,7 +207,7 @@ mod sgemm {
         if n == 0 {
             panic!("Divisor cannot be zero");
         }
-        (num + n - 1) / n * n
+        num.div_ceil(n) * n
     }
 
     #[derive(Debug)]
@@ -621,8 +621,8 @@ mod sgemm {
         let lx;
         let ly;
         if NON_PADDED {
-            lx = (new_n + n_tile - 1) / n_tile;
-            ly = (new_m + m_tile - 1) / m_tile;
+            lx = new_n.div_ceil(n_tile);
+            ly = new_m.div_ceil(m_tile);
         } else {
             lx = (new_n) / n_tile;
             ly = (new_m) / m_tile;
@@ -1014,9 +1014,9 @@ pub fn queue_matmul_buffer_best(
 
             let no_padding_needed = no_padding_tiled && no_padding_stride;
 
-            let lm = (m as u32 + s.m_tile - 1) / s.m_tile;
-            let ln = (n as u32 + s.n_tile - 1) / s.n_tile;
-            let new_k = (((k as u32 + s.k_tile - 1) / s.k_tile) * s.k_tile) as usize;
+            let lm = (m as u32).div_ceil(s.m_tile);
+            let ln = (n as u32).div_ceil(s.n_tile);
+            let new_k = ((k as u32).div_ceil(s.k_tile) * s.k_tile) as usize;
             let new_m = (lm * s.m_tile) as usize;
             let new_n = (ln * s.n_tile) as usize;
             let wgs = lm * ln;

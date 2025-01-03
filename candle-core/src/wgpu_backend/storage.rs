@@ -199,7 +199,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn to_cpu_storage(&self) -> crate::Result<crate::CpuStorage> {
-        return pollster::block_on(self.to_cpu_storage_async());
+        pollster::block_on(self.to_cpu_storage_async())
     }
 
     fn affine(&self, layout: &crate::Layout, mul: f64, add: f64) -> crate::Result<Self> {

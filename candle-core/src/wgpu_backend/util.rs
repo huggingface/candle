@@ -205,7 +205,7 @@ impl<const TSIZE: usize, T: std::marker::Copy + std::default::Default> FixedArra
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
-        return self.data[0..self.len].iter();
+        self.data[0..self.len].iter()
     }
 
     pub fn from_vec(vec: &[T]) -> Self {
@@ -374,9 +374,6 @@ pub trait StorageTrait<T, TREF> {
 
     //returns the Reference at the i-th index in this storage
     fn get_reference(&self, i: u32) -> Option<(TREF, &T)>;
-    fn iter<'a>(&'a self) -> impl Iterator<Item = &T>
-    where
-        T: 'a;
     fn retain(&mut self, keep: impl Fn((&TREF, &T)) -> bool);
     fn retain_mut(&mut self, keep: impl FnMut((&TREF, &T)) -> bool);
     fn len(&self) -> usize;
@@ -452,15 +449,6 @@ where
             }
         }
         None
-    }
-
-    fn iter<'a>(&'a self) -> impl Iterator<Item = &T>
-    where
-        T: 'a,
-    {
-        self.data
-            .iter()
-            .filter_map(|c| if !c.is_used { None } else { c.value.as_ref() })
     }
 
     #[instrument(skip(self, keep))]
@@ -614,13 +602,6 @@ where
             }
         }
         None
-    }
-
-    fn iter<'a>(&'a self) -> impl Iterator<Item = &T>
-    where
-        T: 'a,
-    {
-        self.data.iter().filter(|c| !c.is_used).map(|c| &c.value)
     }
 
     fn retain(&mut self, keep: impl Fn((&TREF, &T)) -> bool) {

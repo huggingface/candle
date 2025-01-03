@@ -284,7 +284,7 @@ pub fn queue_conv2d_matmul(
 
     // Dispatch the convolution kernel
     let workgroup_size = 256; // Assumed workgroup size, adjust based on hardware
-    let num_workgroups = (dst_numel + workgroup_size - 1) / workgroup_size;
+    let num_workgroups = dst_numel.div_ceil(workgroup_size);
 
     let b = params.b_size;
     let n = o_h * o_w;

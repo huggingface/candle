@@ -233,21 +233,21 @@ impl ShaderLoaderCache {
     pub fn get_shader(&self, shader: impl Into<ShaderIndex>) -> &str {
         let shader: ShaderIndex = shader.into();
         let loader: LoaderIndex = shader.into();
-        return self.loader[loader.0 as usize]
+        self.loader[loader.0 as usize]
             .as_ref()
             .expect("expected loader to be added")
             .shader_loader
-            .load(shader);
+            .load(shader)
     }
 
     pub fn get_entry_point(&self, shader: impl Into<PipelineIndex>) -> &str {
         let shader: PipelineIndex = shader.into();
         let loader: LoaderIndex = shader.into();
-        return self.loader[loader.0 as usize]
+        self.loader[loader.0 as usize]
             .as_ref()
             .expect("expected loader to be added")
             .shader_loader
-            .get_entry_point(shader);
+            .get_entry_point(shader)
     }
 }
 

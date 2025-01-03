@@ -374,7 +374,7 @@ impl ModelCache {
                 let _enter1 = span1.enter();
 
                 let check_buffer = |buffer_reference| {
-                    return self.buffers.get_buffer(buffer_reference).is_some();
+                    self.buffers.get_buffer(buffer_reference).is_some()
                 };
 
                 let is_valid = check_buffer(bindgroup.buffer().get_dest())

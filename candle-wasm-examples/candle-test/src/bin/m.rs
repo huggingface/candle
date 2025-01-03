@@ -200,6 +200,6 @@ where   F: Fn() -> Result<(), candle::Error>,
             device.synchronize_async().await.unwrap();
         }, Duration::from_secs_f32(10.0), 10, count as usize).await;
 
-        let m = MeasurementInfo{ name : name.to_owned(), result: res, device: device_name.to_owned(), size: 0, count : total_counts};
+        let m = MeasurementInfo::new(res, name.to_owned(), device_name.to_owned(), 0, total_counts);
         measures.push(m);
 }

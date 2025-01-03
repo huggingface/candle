@@ -392,7 +392,7 @@ fn get_command_buffer(
                             cpass.write_timestamp(query_set, debug_index + 1);
                             dev.debug.insert_info(
                                 global_index + debug_index * 8,
-                                ShaderDebugInfo{
+                                crate::wgpu_backend::debug_info::ShaderDebugInfo{
                                     pipeline: format!(
                                         "Pipeline: {:?}, {}",
                                         q.pipeline.0,
@@ -1084,7 +1084,7 @@ pub fn enqueue_extra(
         command_queue,
         pipeline,
         bind_group,
-        (length + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE,
+        length.div_ceil(WORKGROUP_SIZE),
         1,
         1,
         workload_size,
@@ -1116,7 +1116,7 @@ pub fn enqueue_big_extra(
     length: u32,
     #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
 ) {
-    let id = (length + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+    let id = length.div_ceil(WORKGROUP_SIZE);
     let x = id.min(65535);
     let y = (id + 65534) / 65535;
     enqueue_workgroups_extra(

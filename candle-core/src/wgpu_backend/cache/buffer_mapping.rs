@@ -50,7 +50,7 @@ impl BufferMappingCache {
     }
 
     pub(crate) fn get_current_mapping(&mut self) -> &mut CachedBufferMappings {
-        return self.current_buffer_mapping.as_mut().unwrap();
+        self.current_buffer_mapping.as_mut().unwrap()
     }
 
     ///Stores, that at the provided buffer was used

@@ -234,7 +234,7 @@ impl candle::CustomOp1 for Sigmoid {
         use candle::backend::BackendStorage;
 
         let s = _storage.unary_impl::<Self>(_layout)?;
-        return Ok((s, _layout.shape().clone()));
+        Ok((s, _layout.shape().clone()))
     }
 }
 
