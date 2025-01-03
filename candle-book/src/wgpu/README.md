@@ -19,6 +19,12 @@ let device = Device::new_webgpu_config(0, config).await?
 let device = Device::new_webgpu_config_sync(0, config)?
 ```
 
+## GPU Storage Query Limitation in WGPU
+
+Currently, WGPU does not provide a way to query the available storage of a GPU device. As a result, the Candle implementation for WGPU cannot determine the number of buffers that can be cached or when existing buffers should be deleted.
+
+To address this limitation, the `buffer_cached_max_allowed_size` property is included in the device creation configuration. This property allows users to specify the maximum amount of memory, in bytes, that Candle is permitted to allocate for buffers. By default, this value is set to 8 GB.
+
 ## Feature Support Table
 
 | Feature                     | Support Status                                  | Notes                                                              |

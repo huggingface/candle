@@ -370,7 +370,7 @@ fn run(args: Args) -> Result<()> {
             num_samples
         );
         let image = vqgan.decode(&(&latents * 0.3764)?)?;
-        let image = (image.clamp(0f32, 1f32)? * 255.)?
+        let image = (image.clamp(0f32, 1f32)? * 255.)?.to_device(&Device::Cpu)?
             .to_dtype(DType::U8)?
             .i(0)?;
         let image_filename = output_filename(&final_image, idx + 1, num_samples, None);

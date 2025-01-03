@@ -462,7 +462,7 @@ impl WgpuDevice {
                 compatible_surface: None,
             })
             .await
-            .unwrap();
+            .expect("no adapter could be requested");
 
         let mut limits = wgpu::Limits::downlevel_defaults();
 
