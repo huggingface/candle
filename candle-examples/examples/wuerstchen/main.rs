@@ -4,6 +4,8 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+use std::time::Instant;
+
 use candle_transformers::models::stable_diffusion;
 use candle_transformers::models::wuerstchen;
 
@@ -230,6 +232,7 @@ fn run(args: Args) -> Result<()> {
     };
 
     let device = candle_examples::device(cpu)?;
+    let start = Instant::now();
     let height = height.unwrap_or(1024);
     let width = width.unwrap_or(1024);
 
@@ -376,6 +379,7 @@ fn run(args: Args) -> Result<()> {
         let image_filename = output_filename(&final_image, idx + 1, num_samples, None);
         candle_examples::save_image(&image, image_filename)?
     }
+    println!("Total Duration: {:?}", Instant::now().duration_since(start));
     Ok(())
 }
 

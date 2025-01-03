@@ -4,6 +4,8 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
+use std::time::Instant;
+
 use anyhow::Error as E;
 use clap::Parser;
 
@@ -80,6 +82,7 @@ pub fn main() -> anyhow::Result<()> {
     let tokenizer = get_tokenizer(args.tokenizer)?;
     let config = clip::ClipConfig::vit_base_patch32();
     let device = candle_examples::device(args.cpu)?;
+    let start = Instant::now();
     let vec_imgs = match args.images {
         Some(imgs) => imgs,
         None => vec![
@@ -110,6 +113,7 @@ pub fn main() -> anyhow::Result<()> {
             println!("Probability: {:.4}% Text: {} ", p, vec_seq[i]);
         }
     }
+    println!("Total Duration: {:?}", Instant::now().duration_since(start));
     Ok(())
 }
 
