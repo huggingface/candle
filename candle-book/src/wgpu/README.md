@@ -1,22 +1,22 @@
 # Wgpu Installation
 To use the wgpu backend, you must enable the wgpu feature.
-In the code, use the new_webgpu function to create a new wgpu device.
+In the code, use the `new_wgpu` function to create a new wgpu device.
 ```rust
 //on the browser, the async method must be used.
-let device = Device::new_webgpu_async(0).await?
+let device = Device::new_wgpu_async(0).await?
 
 //or
 
-let device = Device::new_webgpu(0)?
+let device = Device::new_wgpu(0)?
 
 //or
 
 //Pass additional configuration, e.g. the wgpu backend to be used (vulkan, dx12 or metal).
-let device = Device::new_webgpu_config_async(0, config).await? 
+let device = Device::new_wgpu_config_async(0, config).await? 
 
 //or
 
-let device = Device::new_webgpu_config(0, config)?
+let device = Device::new_wgpu_config(0, config)?
 ```
 
 ## GPU Storage Query Limitation in WGPU
@@ -70,7 +70,7 @@ The following code demonstrates how to use wgpu in the browser:
 use candle_core::{Device, Tensor};
 
 //use the await method to create a device, this must be asynchronous
-let device = Device::new_webgpu_async(0, config).await? 
+let device = Device::new_wgpu_async(0, config).await? 
 
 let a = Tensor::randn(0f32, 1., (2, 3), &device)?;
 let b = Tensor::randn(0f32, 1., (3, 4), &device)?;
