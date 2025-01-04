@@ -168,35 +168,35 @@ impl Device {
         Ok(Self::Metal(crate::MetalDevice::new(ordinal)?))
     }
 
-    pub async fn new_wgpu(ordinal: usize) -> Result<Self> {
+    pub async fn new_wgpu_async(ordinal: usize) -> Result<Self> {
         Ok(Self::Wgpu(crate::WgpuDevice::create(ordinal, crate::WgpuDeviceConfig::default()).await?))
     }
 
-    pub async fn new_wgpu_config(ordinal: usize, configuration : crate::WgpuDeviceConfig) -> Result<Self> {
+    pub async fn new_wgpu_config_async(ordinal: usize, configuration : crate::WgpuDeviceConfig) -> Result<Self> {
         Ok(Self::Wgpu(crate::WgpuDevice::create(ordinal, configuration).await?))
     }
 
     ///creates a new wgpu device synchronously. 
     ///If you are targeting wasm32, use the async functions to create a new device.
     #[cfg(all(feature="wgpu", not(target_arch = "wasm32")))]
-    pub fn new_wgpu_sync(ordinal: usize) -> Result<Self> {
-        pollster::block_on(Device::new_wgpu(ordinal))
+    pub fn new_wgpu(ordinal: usize) -> Result<Self> {
+        pollster::block_on(Device::new_wgpu_async(ordinal))
     }
 
     ///creates a new wgpu device synchronously. 
     ///If you are targeting wasm32, use the async functions to create a new device.
     #[cfg(all(feature="wgpu", not(target_arch = "wasm32")))]
-    pub fn new_wgpu_sync_config(ordinal: usize, configuration : crate::WgpuDeviceConfig) -> Result<Self> {
-        pollster::block_on(Device::new_wgpu_config(ordinal, configuration))
+    pub fn new_wgpu_config(ordinal: usize, configuration : crate::WgpuDeviceConfig) -> Result<Self> {
+        pollster::block_on(Device::new_wgpu_config_async(ordinal, configuration))
     }
 
     #[cfg(not(feature="wgpu"))]
-    pub fn new_wgpu_sync(_: usize) -> Result<Self> {
+    pub fn new_wgpu(_: usize) -> Result<Self> {
         Err(crate::Error::NotCompiledWithWgpuSupport)
     }
 
     #[cfg(not(feature="wgpu"))]
-    pub fn new_wgpu_sync_config(_: usize, _ : crate::WgpuDeviceConfig) -> Result<Self> {
+    pub fn new_wgpu_config(_: usize, _ : crate::WgpuDeviceConfig) -> Result<Self> {
         Err(crate::Error::NotCompiledWithWgpuSupport)
     }
 

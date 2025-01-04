@@ -67,7 +67,7 @@ fn format_bytes(bytes: f64) -> String {
 }
 
 async fn test_matmul() -> Result<(), Box<dyn std::error::Error>>{
-    let device = candle::Device::new_wgpu(0).await?;
+    let device = candle::Device::new_wgpu_async(0).await?;
 
     let b = 1;
     let m = 2048;
@@ -138,7 +138,7 @@ fn create_buffers(device : &Device) -> Result<[WgpuStorage;4], Box<dyn std::erro
 }
 
 pub async fn performance_test() -> Result<(), Box<dyn std::error::Error>>{
-    let device = candle::Device::new_wgpu(0).await?;
+    let device = candle::Device::new_wgpu_async(0).await?;
 
     load_recording_consts(&device)?;
     let buffers = create_buffers(&device)?;

@@ -151,7 +151,7 @@ fn test_matmul_kernels_wgpu()-> Result<()> {
         MatmulAlgorithm::Matmul24_48B
     ];
 
-    let device = Device::new_wgpu_sync(0)?;
+    let device = Device::new_wgpu(0)?;
 
     if let Device::Wgpu(wgpu) = &device{
         for alg in algs{

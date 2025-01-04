@@ -312,7 +312,7 @@ impl Decoder {
         let tokenizer = Tokenizer::from_bytes(&md.tokenizer).map_err(E::msg)?;
 
         let device = match md.use_wgpu{
-            true => Device::new_wgpu(0).await?,
+            true => Device::new_wgpu_async(0).await?,
             false => Device::Cpu,
         };
 

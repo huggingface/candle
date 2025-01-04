@@ -108,7 +108,7 @@ impl Model {
             ))?,
         };
         let device = match use_wgpu{
-            true => Device::new_wgpu(0).await?,
+            true => Device::new_wgpu_async(0).await?,
             false => Device::Cpu,
         };
 
@@ -193,7 +193,7 @@ impl ModelPose {
         };
         
         let device = match use_wgpu{
-            true => Device::new_wgpu(0).await?,
+            true => Device::new_wgpu_async(0).await?,
             false => Device::Cpu,
         };
         let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, &device)?;

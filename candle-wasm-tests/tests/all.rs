@@ -2286,7 +2286,7 @@ async fn test_matmul_kernels_wgpu() -> Result<()> {
         MatmulAlgorithm::Matmul24_48, MatmulAlgorithm::Matmul24_24B,
         MatmulAlgorithm::Matmul24_48B
     ];
-    let device = Device::new_wgpu(0).await?;
+    let device = Device::new_wgpu_async(0).await?;
     if let Device::Wgpu(wgpu) = &device {
         for alg in algs {
             (*wgpu.matmul_alg.lock().unwrap()) = alg.clone();

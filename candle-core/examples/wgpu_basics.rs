@@ -44,7 +44,7 @@ fn main2() {
 }
 
 fn main() -> Result<()> {
-    let device = &Device::new_wgpu_sync(0)?;
+    let device = &Device::new_wgpu(0)?;
 
     match &device {
         Device::Wgpu(wgpu_device) => {

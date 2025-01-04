@@ -328,7 +328,7 @@ impl yew_agent::Worker for Worker {
                 let future = async move{
                     let use_wgpu = true;
                     let dev = match use_wgpu{
-                        true => Device::new_wgpu(0).await.unwrap(),
+                        true => Device::new_wgpu_async(0).await.unwrap(),
                         false => Device::Cpu,
                     };
                 

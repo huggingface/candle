@@ -25,7 +25,7 @@ macro_rules! test_device {
         #[cfg(feature = "wgpu")]
         #[test]
         async fn $test_wgpu() -> Result<()> {
-            let device = Device::new_wgpu(0).await?;
+            let device = Device::new_wgpu_async(0).await?;
             $fn_name(&device).await
         }
     };

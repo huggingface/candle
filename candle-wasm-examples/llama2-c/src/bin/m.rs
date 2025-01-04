@@ -49,7 +49,7 @@ impl Model {
     pub async fn new(weights: Vec<u8>, tokenizer: Vec<u8>, use_wgpu : bool) -> Result<Model, JsError> {
         log::info!("create Model, wgpu: {use_wgpu}");
         let device = match use_wgpu{
-            true => Device::new_wgpu(0).await?,
+            true => Device::new_wgpu_async(0).await?,
             false => Device::Cpu,
         };
 

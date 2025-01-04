@@ -69,7 +69,7 @@ impl BenchDeviceHandler {
         } else if cfg!(feature = "cuda") {
             devices.push(Device::new_cuda(0)?);
         }else if cfg!(feature = "wgpu") {
-            devices.push(Device::new_wgpu_sync(0)?);
+            devices.push(Device::new_wgpu(0)?);
         }
         devices.push(Device::Cpu);
         Ok(Self { devices })

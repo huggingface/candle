@@ -63,7 +63,7 @@ impl BenchDeviceHandler {
         }
 
         if cfg!(feature = "wgpu") {
-            devices.push(Device::new_wgpu_sync(0)?);
+            devices.push(Device::new_wgpu(0)?);
         }
 
         devices.push(Device::Cpu);

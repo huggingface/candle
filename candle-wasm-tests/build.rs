@@ -142,7 +142,7 @@ use candle_wasm_tests::{to_vec0_round_async, to_vec1_round_async, to_vec2_round_
     };
 
     transformed_content =
-        make_fn_async_base(&transformed_content, "new_wgpu_sync", "new_wgpu").to_string();
+        make_fn_async_base(&transformed_content, "new_wgpu", "new_wgpu_async").to_string();
 
     transformed_content = make_fn_async(&transformed_content, "to_vec0").to_string();
     transformed_content = make_fn_async(&transformed_content, "to_vec1").to_string();
