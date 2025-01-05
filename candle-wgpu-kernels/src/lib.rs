@@ -1,7 +1,7 @@
-#[allow(clippy::all)]
 mod generated {
-    include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+   include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 }
+
 use std::sync::Arc;
 
 use candle_wgpu_kernels_macro::create_loader_internal;

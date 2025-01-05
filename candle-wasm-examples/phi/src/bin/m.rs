@@ -159,7 +159,6 @@ impl Model {
                 "".to_string()
             }
         };
-        // console_log!("token: {:?}: {:?}", token, next_token);
         Ok(token)
     }
 }

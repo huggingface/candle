@@ -641,8 +641,6 @@ mod sgemm {
         );
 
         if need_different_output_buffer && USE_DIFFERENT_PADDED_OUTPUT {
-            //let res : Vec<f32> = pollster::block_on(read_data_from_gpu_async(dev, buffer_dest_padded.clone()));
-            //println!("res: {:?}", res);
             let dest_padding_layout = crate::Layout::contiguous(Shape::from((
                 params.b as usize,
                 new_m as usize,

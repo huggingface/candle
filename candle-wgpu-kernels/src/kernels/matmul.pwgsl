@@ -108,121 +108,14 @@ fn matmul1_16(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 
-@compute
-@workgroup_size(16,16,1)
-fn matmul1_end(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let x = global_id.x;
-    let y = global_id.y;
-    let b = global_id.z;
-
-    if(x >= op_matmul_n || y >= op_matmul_m || (global_id.x < op_matmul_gx_offset && global_id.y < op_matmul_gy_offset)){
-        return;
-    }
-
-    let output_size_of_one_batch = select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u);  
-
-    let input1_offset = op_matmul_input1_offset;
-    let input2_offset = op_matmul_input2_offset;
-
-    let input1_stride_b = select(op_matmul_use_batch, op_matmul_input1_stride_b, 0u); 
-    let input2_stride_b = select(op_matmul_use_batch, op_matmul_input2_stride_b, 0u); 
-    
-    let m_input1_offset = input1_offset + op_matmul_input1_stride_m * y + b * input1_stride_b;
-    let m_input2_offset = input2_offset + op_matmul_input2_stride_n * x + b * input2_stride_b;
-
-    var sum = ZERO;
-    for (var i = 0u; i < op_matmul_k; i++){
-        sum +=  v_input1[op_matmul_input1_stride_k * i + m_input1_offset] 
-                * v_input2[op_matmul_input2_stride_k * i + m_input2_offset];
-    }
-    
-    v_dest[b * output_size_of_one_batch + y * op_matmul_n + x] = sum;
-}
-
-
-var<workgroup> Asub: array<array<DTYPE, TS1>, TS1>;
-var<workgroup> Bsub: array<array<DTYPE, TS1>, TS1>;
+var<workgroup> Asub2: array<array<DTYPE, TS1>, TS1>;
+var<workgroup> Bsub2: array<array<DTYPE, TS1>, TS1>;
 
 #define WPT1 8u
 #define RTRS 2u
 @compute @workgroup_size(RTRS, TS1, 1)
 //MxK * KxN = MxN
-fn matmul5(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {
-    let lx = local_id.x * WPT1;
-    let ly = local_id.y;
-
-    let gx = TS1*group_id.x + lx;
-    let gy = TS1*group_id.y + ly;
-   
-    let batch = group_id.z;
-
-    let output_size_of_one_batch = select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u); 
-
-    let input1_offset = op_matmul_input1_offset;
-    let input2_offset = op_matmul_input2_offset;
-
-    let input1_stride_b = select(op_matmul_use_batch, op_matmul_input1_stride_b, 0u); 
-    let input2_stride_b = select(op_matmul_use_batch, op_matmul_input2_stride_b, 0u); 
-
-    let m_input1_offset = input1_offset + op_matmul_input1_stride_m * gy + batch * input1_stride_b + lx * op_matmul_input1_stride_k;
-    let m_input2_offset = input2_offset + op_matmul_input2_stride_n * gx + batch * input2_stride_b + ly * op_matmul_input2_stride_k;
-
-    let max_k = op_matmul_k;
-
-    var acc = array<DTYPE, WPT1>();
-    var t = 0u;
-    for(; t < max_k; t+=TS1){
-        let t_offset1 = m_input1_offset +  t * op_matmul_input1_stride_k;
-        let t_offset2 = m_input2_offset +  t * op_matmul_input2_stride_k;
-        for(var w = 0u; w < WPT1; w++){
-            Asub[lx + w][ly] = v_input1[t_offset1 + w * op_matmul_input1_stride_k];
-            Bsub[ly][lx + w] = v_input2[t_offset2 + w * op_matmul_input2_stride_n];
-        }
-        workgroupBarrier();
-        
-        for(var k = 0u; k < TS1; k++){
-            let a = Asub[k][ly];
-            for(var w = 0u; w < WPT1; w++){
-                acc[w] += a*Bsub[k][lx + w];
-            }
-        }
-        workgroupBarrier();
-    }
-
-    let dest_index = batch * output_size_of_one_batch + gy * op_matmul_n + gx;
-    for(var w = 0u; w < WPT1; w++){
-        v_dest[dest_index + w] = acc[w];
-    }
-
-    let is_in_gy = gy < op_matmul_m;
-    let is_in_gx = gx < op_matmul_n;
-    var wcount = select(is_in_gx, min(op_matmul_n - gx, WPT1), 0u);
-    let is_output_pixel = is_in_gy && is_in_gx;
-
-    if(is_output_pixel){
-        switch(wcount){
-            case WPT1{
-                for(var w = 0u; w < WPT1; w++){
-                    v_dest[dest_index + w] = acc[w];
-                }
-            }
-            default{
-                for(var w = 0u; w < wcount; w++){
-                    v_dest[dest_index + w] = acc[w];
-                }
-            }
-        }
-    }
-
-}
-
-
-var<workgroup> Asub2: array<array<DTYPE, TS1>, TS1>;
-var<workgroup> Bsub2: array<array<DTYPE, TS1>, TS1>;
-
-@compute @workgroup_size(RTRS, TS1, 1)
-//MxK * KxN = MxN
-//matmul 7 = matmul 5 but with logic supporting edge cases
+//matmul 7 with logic supporting edge cases
 fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {    
     let lx = local_id.x * WPT1;
     let ly = local_id.y;

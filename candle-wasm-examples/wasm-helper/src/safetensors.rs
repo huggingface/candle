@@ -101,8 +101,6 @@ impl SafeTensors {
     pub async fn tensors(&self) -> GenericResult<Vec<(String, TensorView)>> {
         let mut tensors = Vec::with_capacity(self.metadata.index_map.len());
         for (name, &index) in &self.metadata.index_map {
-            //log::info!("loading tensor: {:?}, index: {:?}, data_offset: {}", name, index, self.data_offset);
-
             let info = &self.metadata.tensors[index];
             let tensorview = TensorView {
                 dtype: info.dtype,

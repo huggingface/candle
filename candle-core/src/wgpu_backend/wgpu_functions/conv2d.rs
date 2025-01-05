@@ -54,7 +54,7 @@ pub fn queue_conv2d(
         return Ok(());
     }
 
-    //kernel is contiues in k_h, k_w, c_in -> we might use im2col:
+    //kernel is contiguous in k_h, k_w, c_in -> we might use im2col:
     //this is way faster, but also needs way more memory:
     if kernel_stride[2] == params.k_w && kernel_stride[1] == params.k_h * params.k_w {
         let mem_needed = 4
@@ -165,7 +165,6 @@ pub fn queue_conv2d(
     meta.add(params.stride);
     meta.add(params.c_out);
 
-    //let mut use_channels2 = false;
     let pipeline_function = if is_continues_in_c_in && params.c_in >= 64 {
         if padding == 0 {
             Functions::Conv2dLongchannelNopadding
@@ -192,21 +191,6 @@ pub fn queue_conv2d(
     let bind_group =
         create_bind_group_input2(buffer_dest, input_buffer, kernel.buffer(), dtype.into());
 
-    // if use_channels2
-    // {
-    //     enqueue_workgroups_extra(
-    //         meta,
-    //         pipeline,
-    //         bind_group,
-    //         ((params.c_in + 63) / 64) as u32,
-    //         (params.out_w() * params.out_h()) as u32,
-    //         ((params.c_out * params.b_size) as u32 + 3)/ 4,
-    //         params.out_w() * params.out_h() * params.c_out * params.b_size * kernel.layout().shape().elem_count(),
-    //         #[cfg(feature="wgpu_debug")]
-    //         Some(format!("{:?}, input1: ({:?}, {:?}), kernel: ({:?}, {:?})", params, input.layout().shape(), input.layout().stride(), kernel.layout().shape(), kernel.layout().stride()))
-    //     );
-    // }
-    // else{
     enqueue_workgroups_extra(
         meta,
         pipeline,
@@ -229,7 +213,6 @@ pub fn queue_conv2d(
             kernel.layout().stride()
         )),
     );
-    //}
 
     Ok(())
 }

@@ -180,7 +180,6 @@ pub fn queue_copy2d(
     let (buffer_input, input_stride1, input_offset) = input;
     let (buffer_dest, dest_stride1, dest_offset) = dest;
 
-    //if buffer_dest.size > 0 && buffer_input.size > 0{
     if d1 == 1 || (input_stride1 == d2 && input_stride1 == dest_stride1) {
         return queue_copy(
             dev,
@@ -245,7 +244,6 @@ pub fn queue_copy2d(
             (d1 * d2) as usize,
         );
     }
-    //}
     Ok(())
 }
 
@@ -419,11 +417,9 @@ pub fn queue_copy4d_padded(
     buffer_input: BufferReferenceId,
     dtype: crate::DType,
     input_layout: &crate::Layout,
-    //input_shape : (usize, usize, usize, usize), //b, cin, i_h, i_w
     padding: usize,
     dest_layout: &crate::Layout,
 ) -> crate::Result<()> {
-    //if buffer_dest.size > 0 && buffer_input.size > 0{
     let input1_stride = input_layout.stride();
     let dest_stride = dest_layout.stride();
     let input_shape = input_layout.shape().dims4()?;
@@ -467,12 +463,6 @@ pub fn queue_copy4d_padded(
 
     let pipeline = Functions::Copy4dPadded;
 
-    // let pipeline = if input_shape.0 == 1{
-    //     Functions::Copy4dPaddedNobatch
-    // }
-    // else{
-    //     Functions::Copy4dPadded
-    // };
     let pipeline = meta.get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, pipeline), const_vec);
     enqueue_workgroups(
         meta,
@@ -483,6 +473,5 @@ pub fn queue_copy4d_padded(
         (input_shape.0 * input_shape.1) as u32,
         input_layout.shape().elem_count(),
     );
-    //}
     Ok(())
 }

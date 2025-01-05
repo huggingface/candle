@@ -244,21 +244,21 @@ shader_content.push_str(
     &format!("
 
 
-impl Into<ShaderIndex> for Shaders
+impl From<Shaders> for ShaderIndex
 {{
-    fn into(self) -> ShaderIndex{{
-        match self{{
+    fn from(val : Shaders) -> Self{{
+        match val{{
             {}
         }}
     }}
 }}
 
     
-impl Into<Shaders> for ShaderIndex
+impl From<ShaderIndex> for Shaders
 {{
-    fn into(self) -> Shaders{{
-        let typ = self.get_index() % DTYPE_COUNT;
-        let shader_index  = self.get_index() / DTYPE_COUNT;
+    fn from(val : ShaderIndex) -> Self{{
+        let typ = val.get_index() % DTYPE_COUNT;
+        let shader_index  = val.get_index() / DTYPE_COUNT;
         match shader_index{{
             {}
             _ => {{todo!()}}
@@ -268,11 +268,11 @@ impl Into<Shaders> for ShaderIndex
 
 
 
-impl Into<PipelineIndex> for Pipelines
+impl From<Pipelines> for PipelineIndex
 {{
-    fn into(self) -> PipelineIndex{{
-        let shader = self.get_shader();
-        match self{{
+    fn from(val : Pipelines ) -> Self{{
+        let shader = val.get_shader();
+        match val{{
             {}
         }}
     }}
@@ -280,10 +280,10 @@ impl Into<PipelineIndex> for Pipelines
 
 
 
-impl Into<Pipelines> for PipelineIndex
+impl From<PipelineIndex> for Pipelines
 {{
-    fn into(self) -> Pipelines{{
-        let shader = self.get_shader();
+    fn from(val : PipelineIndex) -> Self{{
+        let shader = val.get_shader();
         let typ = shader.get_index() % DTYPE_COUNT;
         let shader_index  = shader.get_index() / DTYPE_COUNT;
         match shader_index{{
@@ -293,9 +293,10 @@ impl Into<Pipelines> for PipelineIndex
     }}
 }}
     ",
-modules.iter().enumerate().map(|(i, (m, _, _))| format!("\t\t\tShaders::{}(typ) => {{
-        ShaderIndex::new(DefaultWgpuShader::LOADER_INDEX, {i}*DTYPE_COUNT + typ.get_index())
-    }}", to_upper_camel_case(m))).collect::<Vec<String>>().join(",\n"),
+modules.iter().enumerate().map(|(i, (m, _, _))| 
+    format!("\t\t\tShaders::{}(typ) => {{
+        ShaderIndex::new(DefaultWgpuShader::LOADER_INDEX, {} typ.get_index())
+    }}", to_upper_camel_case(m), {if i == 0 {"".to_owned()} else if i == 1{"DTYPE_COUNT + ".to_owned()} else {format!("{i}*DTYPE_COUNT +")}})).collect::<Vec<String>>().join(",\n"),
 
 modules.iter().enumerate().map(|(i, (m, _, _))| format!("\t\t\t{i} => Shaders::{}(DType::from_index(typ)),", to_upper_camel_case(m))).collect::<Vec<String>>().join("\n"),
 
@@ -304,7 +305,7 @@ modules.iter().map(|(m, _, _)| format!("\t\t\tPipelines::{}(_, functions) => {{
         let shader_index : ShaderIndex = shader.into();
         functions.get_index(shader_index)
     }}", to_upper_camel_case(m))).collect::<Vec<String>>().join(",\n"),
-modules.iter().enumerate().map(|(i, (m, path, _))| format!("\t\t\t{i} => Pipelines::{}(DType::from_index(typ), {}{}::Functions::from_index(self.get_index())),", to_upper_camel_case(m), change_path(path), m)).collect::<Vec<String>>().join("\n"),
+modules.iter().enumerate().map(|(i, (m, path, _))| format!("\t\t\t{i} => Pipelines::{}(DType::from_index(typ), {}{}::Functions::from_index(val.get_index())),", to_upper_camel_case(m), change_path(path), m)).collect::<Vec<String>>().join("\n"),
 ));
 
 shader_content.push_str(
@@ -330,10 +331,11 @@ modules.iter().map(|(m, path, _)| format!("\t\tShaders::{}(typ) => {}{}::load_sh
 
 shader_content.push_str(
     &format!("
-#[derive(Debug, Clone, PartialEq, Eq, Hash, std::marker::Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, std::marker::Copy,Default)]
 pub enum Constants {{
+    #[default]
     None,
-{}
+    {}
 }}
 
 impl crate::EntryPoint for Constants{{
@@ -343,12 +345,6 @@ impl crate::EntryPoint for Constants{{
             Constants::None => panic!(\"not expected\")
         }}
     }} 
-}}
-
-impl Default for Constants {{
-    fn default() -> Self {{
-        Constants::None
-    }}
 }}
 ",
 shader_info.global_overrides.keys().map(|k| format!("\t{}", to_upper_camel_case(k))).collect::<Vec<String>>().join(",\n"),

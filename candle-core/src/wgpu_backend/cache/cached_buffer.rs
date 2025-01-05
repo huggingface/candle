@@ -159,13 +159,12 @@ impl BufferCacheStorage {
                 buffer.is_free = false;
                 buffer.last_used_counter = command_id;
                 self.buffer_reuse_counter += 1;
-                //println!("use_buffer, remove buffer from free buffers");
                 self.buffer_memory_free -= buffer.buffer.size()
             }
         }
     }
 
-    // //will save the currentl free buffers and not free buffers
+    // //will save the currently free buffers and not free buffers
     // pub fn store_usage(&mut self){
     //     for b in self.storage.iter_mut_option(){
     //         b.stored_free  = b.is_free;
@@ -207,7 +206,6 @@ impl BufferCacheStorage {
         command_id: u32,
         duration: u32,
     ) -> CachedBufferId {
-        //println!("search buffer: size: {size}");
         let max_size =
             BufferCacheStorage::max_cached_size(minimum_size, duration).max(optimal_size);
 
@@ -227,7 +225,6 @@ impl BufferCacheStorage {
             //remove this buffer from free memory:
             if let Some(buffer_found) = buffer_found {
                 if let Some((reference, _)) = self.storage.get_reference(buffer_found.index) {
-                    //println!("search buffer: found free buffer, using: {:?}, size: {:?}", reference, buffer.buffer.size());
                     self.use_buffer(&reference, command_id);
                     return reference;
                 }

@@ -70,7 +70,6 @@ async fn encode_prompt(
 ) -> GenericResult<Tensor> {
     log::info!("Encode Prompt");
     let data = read_file(tokenizer).await?;
-    //log::info!("data : {:?}", data);
     let tokenizer = Tokenizer::from_bytes(&data).map_err(E::msg)?;
     let pad_id = match &clip_config.pad_with {
         Some(padding) => *tokenizer.get_vocab(true).get(padding.as_str()).unwrap(),
@@ -433,7 +432,6 @@ impl Model {
         };
         device.synchronize_async().await?;
         let idx = 0;
-        //for idx in 0..num_samples {
         // https://huggingface.co/warp-ai/wuerstchen/blob/main/model_index.json
         let latent_height = (image_embeddings.dim(2)? as f64 * LATENT_DIM_SCALE) as usize;
         let latent_width = (image_embeddings.dim(3)? as f64 * LATENT_DIM_SCALE) as usize;
@@ -485,7 +483,6 @@ impl Model {
 
         log::info!("Image saved");
         Ok(js_sys::Uint8Array::from(&image_png[..]).into())
-        //}
     }
 }
 
