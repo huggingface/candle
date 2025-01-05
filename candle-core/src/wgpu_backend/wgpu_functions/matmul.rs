@@ -768,6 +768,20 @@ fn get_matmul_setting(alg: &MatmulAlgorithm) -> GenericMatmulSettings {
             StrideOptimization::StrideK(true),
             StrideOptimization::StrideK(true),
         ),
+        MatmulAlgorithm::Matmul1_64_32B => GenericMatmulSettings::new(
+            1,
+            64,
+            32,
+            StrideOptimization::StrideK(true),
+            StrideOptimization::StrideK(true),
+        ),
+        MatmulAlgorithm::Matmul1_32_32B => GenericMatmulSettings::new(
+            1,
+            32,
+            32,
+            StrideOptimization::StrideK(true),
+            StrideOptimization::StrideK(true),
+        ),
         MatmulAlgorithm::Matmul24_24 => GenericMatmulSettings::new(
             24,
             24,
@@ -891,6 +905,12 @@ pub fn queue_matmul_buffer_alg(
         MatmulAlgorithm::Matmul1_64B => {
             Pipelines::Matmul1x64b(dtype, sgemm::matmul1x64b::Functions::Matmul)
         }
+        MatmulAlgorithm::Matmul1_64_32B => {
+            Pipelines::Matmul1x6432b(dtype, sgemm::matmul1x64_32b::Functions::Matmul)
+        }
+        MatmulAlgorithm::Matmul1_32_32B => {
+            Pipelines::Matmul1x3232b(dtype, sgemm::matmul1x32_32b::Functions::Matmul)
+        }
         MatmulAlgorithm::Matmul24_24 => {
             Pipelines::Matmul24x24(dtype, sgemm::matmul24x24::Functions::Matmul)
         }
@@ -968,8 +988,12 @@ pub fn queue_matmul_buffer_best(
     let alg;
     if m <= 2 || n <= 2 {
         if m <= 2 {
-            if k % 64 == 0 && n % 128 == 0 && input2_stride_k == 1 {
+            if k % 64 == 0 && n % 128 == 0 && input2_stride_k == 1  && input1_stride_k == 1 {
                 alg = MatmulAlgorithm::Matmul1_64B;
+            } else if k % 32 == 0 && n % 64 == 0 && input2_stride_k == 1 && input1_stride_k == 1 {
+                alg = MatmulAlgorithm::Matmul1_64_32B;
+            } else if k % 32 == 0 && n % 32== 0 && input2_stride_k == 1 && input1_stride_k == 1 {
+                alg = MatmulAlgorithm::Matmul1_32_32B;
             } else if k % 64 == 0 && n % 64 == 0 && input2_stride_n == 1 {
                 alg = MatmulAlgorithm::Matmul1_64;
             } else {

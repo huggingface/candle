@@ -1,12 +1,14 @@
 #define TSM 1u                     // The tile-size in dimension M
-#define TSN 64u                     // The tile-size in dimension N
-#define TSK 128u                     // The tile-size in dimension K
-#define THREADS_PER_K 32u
+#define TSN 32u                     // The tile-size in dimension N
+#define TSK 32u                     // The tile-size in dimension K
+#define THREADS_PER_K 8u
 #define WPTK 4u
 #define WPTM 1u                     // The work-per-thread in dimension M
-#define WPTN 32u                     // The work-per-thread in dimension N
+#define WPTN 8u                     // The work-per-thread in dimension N
 
 #include "matmulHelperTiledSmall.pwgsl"
+
+// e.g. (1x288) * (288*288) with input1.k_stride == 1 and input2.k_stride == 1
 
 @compute @workgroup_size(RTSN, RTSM, 1)
 //MxK * KxN = MxN

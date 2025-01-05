@@ -117,8 +117,9 @@ async fn test_matmul_kernels_wgpu() -> Result<()> {
     use candle::wgpu::MatmulAlgorithm;
     let algs = vec![
         MatmulAlgorithm::Matmul32_64, MatmulAlgorithm::Matmul32_64B,
-        MatmulAlgorithm::Matmul1_64B, MatmulAlgorithm::Matmul7, MatmulAlgorithm::Matmul1,
-        MatmulAlgorithm::MatmulX, MatmulAlgorithm::Matmul16_16,
+        MatmulAlgorithm::Matmul1_64B, MatmulAlgorithm::Matmul1_64_32B,
+        MatmulAlgorithm::Matmul1_32_32B, MatmulAlgorithm::Matmul7,
+        MatmulAlgorithm::Matmul1, MatmulAlgorithm::MatmulX, MatmulAlgorithm::Matmul16_16,
         MatmulAlgorithm::Matmul32_32, MatmulAlgorithm::Matmul64_64,
         MatmulAlgorithm::Matmul64_64_8_8, MatmulAlgorithm::Matmul24_24,
         MatmulAlgorithm::Matmul24_48, MatmulAlgorithm::Matmul24_24B,

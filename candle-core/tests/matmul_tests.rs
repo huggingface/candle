@@ -138,6 +138,8 @@ fn test_matmul_kernels_wgpu()-> Result<()> {
         MatmulAlgorithm::Matmul32_64,
         MatmulAlgorithm::Matmul32_64B,
         MatmulAlgorithm::Matmul1_64B,
+        MatmulAlgorithm::Matmul1_64_32B,
+        MatmulAlgorithm::Matmul1_32_32B,
         MatmulAlgorithm::Matmul7,
         MatmulAlgorithm::Matmul1,
         MatmulAlgorithm::MatmulX,
@@ -156,7 +158,7 @@ fn test_matmul_kernels_wgpu()-> Result<()> {
     if let Device::Wgpu(wgpu) = &device{
         for alg in algs{
             (*wgpu.matmul_alg.lock().unwrap()) = alg.clone();
-
+            
             for tpa in [true, false]{
                 for tpb in [true, false]{
                     for use_start_offset in [true, false]{

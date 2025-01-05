@@ -68,12 +68,12 @@ impl OpIsInplaceable {
 )]
 pub struct PipelineType(
     pub candle_wgpu_kernels::PipelineIndex,
-    pub(crate) usize,
+    pub usize,
     #[cfg_attr(
         any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
         serde(skip)
     )]
-    pub(crate) OpIsInplaceable,
+    pub OpIsInplaceable,
 );
 
 pub(crate) type BindGroupReference = crate::wgpu_backend::cache::BindgroupReferenceFull;
@@ -318,12 +318,12 @@ impl QueueBuffer {
     derive(serde::Serialize, serde::Deserialize)
 )]
 pub struct DebugPipelineRecording {
-    pub(crate) x: u32,
-    pub(crate) y: u32,
-    pub(crate) z: u32,
+    pub x: u32,
+    pub y: u32,
+    pub z: u32,
     pub pipeline: super::device::PipelineType,
-    pub(crate) meta: Vec<u32>,
-    pub(crate) bindgroup: BindGroupReference,
+    pub meta: Vec<u32>,
+    pub bindgroup: BindGroupReference,
     pub count: u32,
 }
 
@@ -342,6 +342,8 @@ pub enum MatmulAlgorithm {
     Matmul64_64_4_8,
     Matmul1_64,
     Matmul1_64B,
+    Matmul1_64_32B,
+    Matmul1_32_32B,
     Matmul24_24,
     Matmul24_48,
     Matmul24_24B,
@@ -355,19 +357,21 @@ impl fmt::Debug for MatmulAlgorithm {
             Self::Matmul7 => write!(f, "Matmul7"),
             Self::Matmul1 => write!(f, "Matmul1"),
             Self::Matmul1_4 => write!(f, "Matmul1_4"),
-            Self::Matmul16_16 => write!(f, "Matmul5_16_16"),
-            Self::Matmul32_64 => write!(f, "Matmul5_32_64"),
-            Self::Matmul32_64B => write!(f, "Matmul5_32_64B"),
-            Self::Matmul32_32 => write!(f, "Matmul5_32_32"),
-            Self::Matmul64_64 => write!(f, "Matuml5_64_64"),
-            Self::Matmul64_64_8_8 => write!(f, "Matmul5_64_64_8_8"),
-            Self::Matmul64_64_4_8 => write!(f, "Matmul5_64_64_4_8"),
-            Self::Matmul1_64 => write!(f, "Matmul5_1_64"),
-            Self::Matmul1_64B => write!(f, "Matmul5_1_64B"),
-            Self::Matmul24_24 => write!(f, "Matmul5_24_24"),
-            Self::Matmul24_48 => write!(f, "Matmul5_24_48"),
-            Self::Matmul24_24B => write!(f, "Matmul5_24_24B"),
-            Self::Matmul24_48B => write!(f, "Matmul5_24_48B"),
+            Self::Matmul16_16 => write!(f, "Matmul_16_16"),
+            Self::Matmul32_64 => write!(f, "Matmul_32_64"),
+            Self::Matmul32_64B => write!(f, "Matmul_32_64B"),
+            Self::Matmul32_32 => write!(f, "Matmul_32_32"),
+            Self::Matmul64_64 => write!(f, "Matuml_64_64"),
+            Self::Matmul64_64_8_8 => write!(f, "Matmul_64_64_8_8"),
+            Self::Matmul64_64_4_8 => write!(f, "Matmul_64_64_4_8"),
+            Self::Matmul1_64 => write!(f, "Matmul_1_64"),
+            Self::Matmul1_64B => write!(f, "Matmul_1_64B"),
+            Self::Matmul1_64_32B => write!(f, "Matmul_1_64_32B"),
+            Self::Matmul1_32_32B => write!(f, "Matmul_1_32_32B"),
+            Self::Matmul24_24 => write!(f, "Matmul_24_24"),
+            Self::Matmul24_48 => write!(f, "Matmul_24_48"),
+            Self::Matmul24_24B => write!(f, "Matmul_24_24B"),
+            Self::Matmul24_48B => write!(f, "Matmul_24_48B"),
         }
     }
 }
