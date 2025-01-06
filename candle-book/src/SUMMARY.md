@@ -21,6 +21,7 @@
 - [Wgpu Usage](wgpu/readme.md)
     - [Custom Wgpu Shader](wgpu/custom_shader.md)
     - [Wgpu Implementatin Detail](wgpu/implementation_detail.md)
+    - [Benchmark Performance](wgpu/debug_performance.md)
 - [Advanced Cuda usage]()
     - [Writing a custom kernel]()
     - [Porting a custom kernel]()
