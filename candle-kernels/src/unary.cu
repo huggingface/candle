@@ -124,7 +124,18 @@ UNARY_OP(__nv_bfloat16, usign_bf16, sign_(x))
 UNARY_OP(__nv_bfloat16, usigmoid_bf16, sigmoid_fwd(x))
 #endif
 
-#if __CUDA_ARCH__ >= 530
+#if __CUDA_ARCH__ >= 530    
+#include "cuda_bf16.h"
+template <typename T>
+__device__ __forceinline__ T silu_fwd_fallback(T x) {
+    const T one = T(1.0f);
+    const T neg_x = -x;
+    const T exp_neg_x = expg(neg_x);
+    return x / (one + exp_neg_x);
+}
+
+UNARY_OP(__nv_bfloat16, ucopy_bf16, x)
+UNARY_OP(__nv_bfloat16, usilu_bf16,  silu_fwd_fallback(x))
 UNARY_OP(__half, ucopy_f16, x)
 UNARY_OP(__half, uneg_f16, -x)
 UNARY_OP(__half, urecip_f16, recipg(x))

@@ -17,6 +17,9 @@ BINARY_OP_OUT(__nv_bfloat16, uint8_t, ge_bf16, x >= y)
 #endif
 
 #if __CUDA_ARCH__ >= 530
+#include "cuda_bf16.h"
+BINARY_OP(__nv_bfloat16, bmul_bf16, x * y)
+BINARY_OP(__nv_bfloat16, badd_bf16, x + y)
 BINARY_OP(__half, badd_f16, x + y)
 BINARY_OP(__half, bdiv_f16, x / y)
 BINARY_OP(__half, bmul_f16, x * y)
