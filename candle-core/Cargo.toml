@@ -43,7 +43,7 @@ criterion = { workspace = true }
 
 [features]
 default = []
-cuda = ["cudarc", "dep:candle-kernels", "float8/cuda", "dep:ug-cuda"]
+cuda = ["cudarc", "dep:candle-kernels", "float8/cuda", "float8/mistralrs_cudarc_fork", "dep:ug-cuda"]
 cudnn = ["cuda", "cudarc/cudnn"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
