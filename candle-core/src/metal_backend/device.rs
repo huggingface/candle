@@ -146,28 +146,6 @@ impl MetalDevice {
         self.use_mlx_mm = use_mlx_mm
     }
 
-    pub fn compile(
-        &self,
-        func_name: &'static str,
-        kernel: ug::lang::ssa::Kernel,
-    ) -> Result<metal::ComputePipelineState> {
-        let mut buf = vec![];
-        ug_metal::code_gen::gen(&mut buf, func_name, &kernel)?;
-        let metal_code = String::from_utf8(buf)?;
-        let lib = self
-            .device
-            .new_library_with_source(&metal_code, &metal::CompileOptions::new())
-            .map_err(MetalError::from)?;
-        let func = lib
-            .get_function(func_name, None)
-            .map_err(MetalError::from)?;
-        let pl = self
-            .device
-            .new_compute_pipeline_state_with_function(&func)
-            .map_err(MetalError::from)?;
-        Ok(pl)
-    }
-
     pub fn id(&self) -> DeviceId {
         self.id
     }

@@ -143,39 +143,3 @@ fn inplace_op1() -> Result<()> {
     );
     Ok(())
 }
-
-#[cfg(any(feature = "cuda", feature = "metal"))]
-#[allow(clippy::approx_constant)]
-#[test]
-fn ug_op() -> Result<()> {
-    let kernel = {
-        use ug::lang::op;
-
-        let layout = ug::Layout::from_shape(&[12]);
-        let ptr = op::Arg::ptr(ug::DType::F32);
-        let src = op::load(ptr.id(), layout.clone(), ug::DType::F32)?;
-        let src = op::unary(op::UnaryOp::Exp, src)?;
-        let st = op::store(ptr.id(), layout, src)?;
-        let kernel = op::Kernel::new("exp".to_string(), vec![ptr], vec![st]);
-        let opts: ug::lower_op::Opts = Default::default();
-        kernel.lower(&opts.with_global(0, 12))?
-    };
-    let device = if candle_core::utils::cuda_is_available() {
-        Device::new_cuda(0)?
-    } else if candle_core::utils::metal_is_available() {
-        Device::new_metal(0)?
-    } else {
-        candle_core::bail!("metal/cuda is mandatory for this test")
-    };
-    let op = candle_core::UgIOp1::new("test", kernel, &device)?;
-    let t = Tensor::arange(0u32, 12u32, &device)?.to_dtype(DType::F32)?;
-    t.inplace_op1(&op)?;
-    assert_eq!(
-        to_vec1_round(&t, 2)?,
-        &[
-            1.0, 2.72, 7.39, 20.09, 54.6, 148.41, 403.43, 1096.63, 2980.96, 8103.08, 22026.47,
-            59874.13
-        ]
-    );
-    Ok(())
-}

@@ -187,9 +187,6 @@ pub enum Error {
     Metal(#[from] MetalError),
 
     #[error(transparent)]
-    Ug(#[from] ug::Error),
-
-    #[error(transparent)]
     TryFromIntError(#[from] core::num::TryFromIntError),
 
     #[error("npy/npz error {0}")]
