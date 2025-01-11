@@ -640,6 +640,102 @@ impl candle::InplaceOp2 for AttnSoftmaxLastDim {
 
         Ok(())
     }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        a_s: &mut candle::CudaStorage,
+        a_l: &Layout,
+        mask_s: &candle::CudaStorage,
+        mask_l: &Layout,
+    ) -> Result<()> {
+        use candle::backend::BackendStorage;
+
+        use candle::cuda::Map2InPlace;
+        use candle::cuda_backend::cudarc::driver::{
+            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+        };
+        use candle::cuda_backend::{kernel_name, kernels, WrapErr};
+        use candle::{CudaDevice, WithDType};
+
+        if !a_l.is_contiguous() {
+            candle::bail!("Non contiguous xs for attn-softmax-last-dim is not implemented");
+        }
+        if !mask_l.is_contiguous() {
+            candle::bail!("Non contiguous mask for attn-softmax-last-dim is not implemented");
+        }
+
+        if a_l.dims().len() != 4 {
+            candle::bail!("attn-softmax-last-dim expects xs of rank 2");
+        }
+        if mask_l.dims().len() != 2 {
+            candle::bail!("attn-softmax-last-dim expects mask of rank 2");
+        }
+        if mask_l.dim(D::Minus1)? != a_l.dim(D::Minus1)?
+            || mask_l.dim(D::Minus2)? != a_l.dim(D::Minus2)?
+        {
+            candle::bail!("attn-softmax-last-dim expects last 2 dims to match xs last 2 dims");
+        }
+
+        struct S<'a> {
+            scale: f32,
+            a_l: &'a Layout,
+        }
+        impl Map2InPlace for S<'_> {
+            fn f<T: DeviceRepr + WithDType>(
+                &self,
+                a_s: &mut CudaSlice<T>,
+                _a_shape: &Shape,
+                mask_s: &CudaSlice<T>,
+                mask_l: &Layout,
+                dev: &CudaDevice,
+            ) -> Result<()> {
+                let a = match self.a_l.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => a_s.slice(o1..o2),
+                };
+                let mask = match mask_l.contiguous_offsets() {
+                    None => candle::bail!("mask has to be contiguous"),
+                    Some((o1, o2)) => mask_s.slice(o1..o2),
+                };
+
+                let el = self.a_l.shape().elem_count();
+                let dims = self.a_l.shape().dims();
+                let dim_m1 = dims[dims.len() - 1];
+                let nrows_y = dims[dims.len() - 2];
+                let (nrows_x, ncols_x) = (el / dim_m1, dim_m1);
+
+                const WARP_SIZE: usize = 32;
+                const CUDA_SOFT_MAX_BLOCK_SIZE: usize = 1024;
+                let mut nth = WARP_SIZE;
+                while nth < ncols_x && nth < CUDA_SOFT_MAX_BLOCK_SIZE {
+                    nth *= 2;
+                }
+
+                let cfg = LaunchConfig {
+                    grid_dim: (nrows_x as u32, 1, 1),
+                    block_dim: (nth as u32, 1, 1),
+                    shared_mem_bytes: (WARP_SIZE * std::mem::size_of::<f32>()) as u32,
+                };
+                let func =
+                    dev.get_or_load_func(&kernel_name::<T>("attn_soft_max"), kernels::REDUCE)?;
+                let params = (&a, &mask, &a, ncols_x as i32, nrows_y as i32, self.scale);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }.w()?;
+
+                Ok(())
+            }
+        }
+
+        let dev = a_s.device().clone();
+        S {
+            scale: self.scale,
+            a_l,
+        }
+        .map(&mut a_s.slice, a_l.shape(), &mask_s.slice, mask_l, &dev)?;
+
+        Ok(())
+    }
 }
 
 impl candle::CustomOp2 for AttnSoftmaxLastDim {
@@ -716,6 +812,103 @@ impl candle::CustomOp2 for AttnSoftmaxLastDim {
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, a_s.dtype());
         Ok((newstorage, a_l.shape().clone()))
     }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        a_s: &candle::CudaStorage,
+        a_l: &Layout,
+        mask_s: &candle::CudaStorage,
+        mask_l: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        use candle::backend::BackendStorage;
+
+        use candle::cuda::Map2;
+        use candle::cuda_backend::cudarc::driver::{
+            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+        };
+        use candle::cuda_backend::{kernel_name, kernels, WrapErr};
+        use candle::{CudaDevice, WithDType};
+
+        if !a_l.is_contiguous() {
+            candle::bail!("Non contiguous xs for attn-softmax-last-dim is not implemented");
+        }
+        if !mask_l.is_contiguous() {
+            candle::bail!("Non contiguous mask for attn-softmax-last-dim is not implemented");
+        }
+
+        if a_l.dims().len() != 4 {
+            candle::bail!("attn-softmax-last-dim expects xs of rank 2");
+        }
+        if mask_l.dims().len() != 2 {
+            candle::bail!("attn-softmax-last-dim expects mask of rank 2");
+        }
+        if mask_l.dim(D::Minus1)? != a_l.dim(D::Minus1)?
+            || mask_l.dim(D::Minus2)? != a_l.dim(D::Minus2)?
+        {
+            candle::bail!("attn-softmax-last-dim expects last 2 dims to match xs last 2 dims");
+        }
+
+        struct S {
+            scale: f32,
+        }
+        impl Map2 for S {
+            fn f<T: DeviceRepr + WithDType>(
+                &self,
+                a_s: &CudaSlice<T>,
+                a_l: &Layout,
+                mask_s: &CudaSlice<T>,
+                mask_l: &Layout,
+                dev: &CudaDevice,
+            ) -> Result<CudaSlice<T>> {
+                let a = match a_l.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => a_s.slice(o1..o2),
+                };
+                let mask = match mask_l.contiguous_offsets() {
+                    None => candle::bail!("mask has to be contiguous"),
+                    Some((o1, o2)) => mask_s.slice(o1..o2),
+                };
+
+                let el = a_l.shape().elem_count();
+                let dims = a_l.shape().dims();
+                let dim_m1 = dims[dims.len() - 1];
+                let nrows_y = dims[dims.len() - 2];
+                let (nrows_x, ncols_x) = (el / dim_m1, dim_m1);
+
+                const WARP_SIZE: usize = 32;
+                const CUDA_SOFT_MAX_BLOCK_SIZE: usize = 1024;
+                let mut nth = WARP_SIZE;
+                while nth < ncols_x && nth < CUDA_SOFT_MAX_BLOCK_SIZE {
+                    nth *= 2;
+                }
+
+                let cfg = LaunchConfig {
+                    grid_dim: (nrows_x as u32, 1, 1),
+                    block_dim: (nth as u32, 1, 1),
+                    shared_mem_bytes: (WARP_SIZE * std::mem::size_of::<f32>()) as u32,
+                };
+                let func =
+                    dev.get_or_load_func(&kernel_name::<T>("attn_soft_max"), kernels::REDUCE)?;
+                // SAFETY: Set later by running the kernel.
+                let dst = unsafe { dev.alloc::<T>(el) }.w()?;
+                let params = (&a, &mask, &dst, ncols_x as i32, nrows_y as i32, self.scale);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }.w()?;
+
+                Ok(dst)
+            }
+        }
+
+        let dev = a_s.device().clone();
+        let slice = S { scale: self.scale }.map(&a_s.slice, a_l, &mask_s.slice, mask_l, &dev)?;
+
+        let dst = candle::cuda_backend::CudaStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, a_l.shape().clone()))
+    }
 }
 
 /// Softmax with fused broadcast addition of a mask and scale.
@@ -729,7 +922,7 @@ impl candle::CustomOp2 for AttnSoftmaxLastDim {
 ///
 /// Note: if the last dim of `xs` is a multiple of 4, a vectorized implementation will be used.
 pub fn attn_softmax_last_dim(xs: &Tensor, mask: &Tensor, scale: f32) -> Result<Tensor> {
-    if xs.device().is_metal() {
+    if xs.device().is_metal() || xs.device().is_cuda() {
         xs.apply_op2_no_bwd(mask, &AttnSoftmaxLastDim { scale })
     } else {
         softmax_last_dim(&(xs.broadcast_add(mask)? * scale as f64)?)
@@ -738,7 +931,7 @@ pub fn attn_softmax_last_dim(xs: &Tensor, mask: &Tensor, scale: f32) -> Result<T
 
 /// Inplace equivalent of `attn_softmax_last_dim`
 pub fn inplace_attn_softmax_last_dim(xs: &mut Tensor, mask: &Tensor, scale: f32) -> Result<()> {
-    if xs.device().is_metal() {
+    if xs.device().is_metal() || xs.device().is_cuda() {
         xs.inplace_op2(mask, &AttnSoftmaxLastDim { scale })?;
     } else {
         *xs = softmax_last_dim(&(xs.broadcast_add(mask)? * scale as f64)?)?;
