@@ -381,7 +381,7 @@ impl SimpleBackend for candle::npy::NpzTensors {
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
-        self.get(name).map_or(false, |v| v.is_some())
+        self.get(name).is_ok_and(|v| v.is_some())
     }
 }
 
@@ -414,7 +414,7 @@ impl SimpleBackend for candle::pickle::PthTensors {
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
-        self.get(name).map_or(false, |v| v.is_some())
+        self.get(name).is_ok_and(|v| v.is_some())
     }
 }
 
