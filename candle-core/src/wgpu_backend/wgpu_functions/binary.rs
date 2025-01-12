@@ -22,7 +22,7 @@ pub fn queue_binary_buffer_from_buffer(
     op: BinaryOperation,
     dtype: crate::DType,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(dev);
+    let mut meta = dev.get_queue();
     let pipeline = if input1.layout().is_contiguous() && input2.layout().is_contiguous() {
         let const_vec = vec![
             op as usize,
@@ -69,7 +69,7 @@ pub fn queue_binary_buffer_from_buffer(
     let bind_group =
         create_bind_group_input2(buffer_dest, input1.buffer(), input2.buffer(), dtype.into());
 
-    enqueue_big_extra(
+    enqueue_64_big_extra(
         meta,
         pipeline,
         bind_group,

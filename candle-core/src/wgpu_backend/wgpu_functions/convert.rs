@@ -10,13 +10,13 @@ pub fn queue_convert_u8_to_f32(
     buffer_input: BufferReferenceId,
     input_layout: &crate::Layout,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     meta.add_layout1(input_layout);
 
     let pipeline = meta.get_pipeline(Pipelines::Convert(DType::U8, Functions::ConvertU8ToF32));
     let bind_group =
         create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned4);
-    enqueue(
+    enqueue_64(
         meta,
         pipeline,
         bind_group,
@@ -33,7 +33,7 @@ pub fn queue_convert_u32_to_u8(
     start_offset: u32,
     size: u32,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     meta.add(start_offset);
     meta.add(size);
 
@@ -41,7 +41,7 @@ pub fn queue_convert_u32_to_u8(
 
     let bind_group =
         create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned4);
-    enqueue(meta, pipeline, bind_group, (size + 3) / 4, size as usize);
+    enqueue_64(meta, pipeline, bind_group, (size + 3) / 4, size as usize);
     Ok(())
 }
 
@@ -52,7 +52,7 @@ pub fn queue_convert_f32_to_u8(
     start_offset: u32,
     size: u32,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     meta.add(start_offset);
     meta.add(size);
 
@@ -60,7 +60,7 @@ pub fn queue_convert_f32_to_u8(
 
     let bind_group =
         create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned4);
-    enqueue(meta, pipeline, bind_group, (size + 3) / 4, size as usize);
+    enqueue_64(meta, pipeline, bind_group, (size + 3) / 4, size as usize);
     Ok(())
 }
 
@@ -72,7 +72,7 @@ pub fn queue_convert(
     dest_dtype: crate::DType,
     input_dtype: crate::DType,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     meta.add_layout1(input_layout);
 
     let pipeline = match dest_dtype {
@@ -97,7 +97,7 @@ pub fn queue_convert(
         BindgroupAlignmentLayout::Bindgroup1(dest_dtype.into(), input_dtype.into()),
     );
 
-    enqueue(
+    enqueue_64(
         meta,
         pipeline,
         bind_group,

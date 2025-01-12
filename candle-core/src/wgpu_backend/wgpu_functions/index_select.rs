@@ -24,7 +24,7 @@ pub fn queue_index_select(
         .iter()
         .fold(1, |prev, c| prev * *c) as u32; //Mul Strides Left of dim
 
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
 
     meta.add(input_stride_x);
     meta.add(input_stride_y);

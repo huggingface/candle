@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use std::sync::{Arc, Mutex};
+use std::ops::{Deref, DerefMut};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use std::hash::Hash;
 
@@ -19,30 +20,12 @@ use super::debug_info::{DebugInfo, MInfo, Measurements, ShaderInfo};
 use super::cache::{BindgroupLayouts, CachedBindgroupId, CachedBufferId, ModelCache};
 use super::storage::{create_wgpu_storage, create_wgpu_storage_init};
 use super::util::{ObjectToIdMapper, ToF64, ToU32};
-use super::wgpu_functions::{self, unary::UnaryOperation, MetaArray};
-use super::wgpu_functions::{ConstArray, KernelParameterMeta};
+use super::wgpu_functions::{self, unary::UnaryOperation, MetaArray, ConstArray, ToKernelParameterMeta};
 use super::WgpuStorage;
 
 #[derive(Debug)]
 pub(crate) enum MlQueue {
     Dispatch(MlQueueDispatch),
-}
-
-#[derive(Debug, Copy, Clone)]
-pub struct OrderedFloat(pub f64);
-
-impl PartialEq for OrderedFloat {
-    fn eq(&self, other: &OrderedFloat) -> bool {
-        self.0.to_bits() == other.0.to_bits()
-    }
-}
-
-impl Eq for OrderedFloat {}
-
-impl Hash for OrderedFloat {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.to_bits().hash(state);
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
@@ -95,7 +78,7 @@ pub(crate) struct MlQueueDispatch {
 
 //a struct, where all operations are chunked
 #[derive(Debug)]
-pub struct QueueBuffer {
+pub struct QueueBufferInner {
     pub(crate) command_queue: Vec<MlQueue>,
     meta_array: MetaArray,
     const_array: ConstArray,
@@ -106,7 +89,7 @@ pub struct QueueBuffer {
     pub(crate) last_buffer: Option<CachedBufferId>, //will be used to wait for the last command queue
 }
 
-impl QueueBuffer {
+impl QueueBufferInner {
     pub fn new(size: u32) -> Self {
         Self {
             command_queue: vec![],
@@ -295,7 +278,7 @@ impl QueueBuffer {
         PipelineType(pipeline.into(), index, inplaceable)
     }
 
-    pub fn add<T: KernelParameterMeta>(&mut self, value: T) {
+    pub fn add<T: ToKernelParameterMeta>(&mut self, value: T) {
         self.meta_array.add(value);
     }
 
@@ -309,6 +292,28 @@ impl QueueBuffer {
 
     pub fn set_global_command_index(&mut self, global_command_index: u32) {
         self.global_command_index = global_command_index;
+    }
+}
+
+pub struct QueueBuffer<'a>(MutexGuard<'a, QueueBufferInner>);
+
+impl<'a> QueueBuffer<'a> {
+    pub fn new(inner: MutexGuard<'a, QueueBufferInner>) -> Self {
+        QueueBuffer(inner)
+    }
+}
+
+impl Deref for QueueBuffer<'_> {
+    type Target = QueueBufferInner;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+
+impl DerefMut for QueueBuffer<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.deref_mut()
     }
 }
 
@@ -329,7 +334,7 @@ pub struct DebugPipelineRecording {
 
 #[derive(Clone)]
 pub enum MatmulAlgorithm {
-    MatmulX,
+    MatmulX, //select best fitting kernel automatically
     Matmul7,
     Matmul1,
     Matmul1_4,
@@ -389,7 +394,7 @@ pub struct WgpuDeviceInner {
     pub queue: wgpu::Queue,
     pub(crate) rand_state: Mutex<rand::rngs::StdRng>,
 
-    pub(crate) command_queue: Mutex<QueueBuffer>,
+    pub(crate) command_queue: Mutex<QueueBufferInner>,
     pub(crate) meta_buffer: wgpu::Buffer, //buffer for storing meta information
 
     pub(crate) bindgroup_layouts: BindgroupLayouts,
@@ -403,7 +408,7 @@ pub struct WgpuDeviceInner {
 
     pub configuration: crate::WgpuDeviceConfig,
 
-    pub matmul_alg: Mutex<MatmulAlgorithm>,
+    pub matmul_alg: Mutex<MatmulAlgorithm>, //MatMul algorithm override, used for testing and benchmarking.
 }
 
 #[derive(Debug, Clone)]
@@ -553,7 +558,7 @@ impl WgpuDevice {
                 rand_state: Mutex::new(rand::rngs::StdRng::from_entropy()),
                 #[cfg(feature = "wgpu_debug")]
                 debug: debug_info,
-                command_queue: Mutex::new(QueueBuffer::new(configuration.meta_buffer_size)),
+                command_queue: Mutex::new(QueueBufferInner::new(configuration.meta_buffer_size)),
                 meta_buffer,
                 cache: Mutex::new(ModelCache::new(
                     configuration.buffer_mapping_size,
@@ -681,7 +686,7 @@ impl WgpuDevice {
         input2_buffer: &WgpuStorage,
         input3_buffer: &WgpuStorage,
     ) {
-        let mut command_queue = wgpu_functions::get_meta(self);
+        let mut command_queue = wgpu_functions::get_queue(self);
         command_queue
             .get_meta_mut()
             .append(&mut command.meta.clone());

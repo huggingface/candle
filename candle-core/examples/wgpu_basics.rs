@@ -51,7 +51,7 @@ fn main() -> Result<()> {
             wgpu_device.add_wgpu_shader_loader(MyCustomLoader::LOADER_INDEX, || MyCustomLoader {});
 
             //2. add optional data to the meta - structure
-            let mut meta = candle_core::wgpu::wgpu_functions::get_meta(wgpu_device);
+            let mut meta = candle_core::wgpu::wgpu_functions::get_queue(wgpu_device);
             meta.add(42);
 
             //3. define the pipeline to use:
@@ -73,7 +73,7 @@ fn main() -> Result<()> {
             );
 
             //5. add the command to the queue:
-            candle_core::wgpu::wgpu_functions::enqueue(meta, pipeline, bind_group, 1, 1);
+            candle_core::wgpu::wgpu_functions::enqueue_64(meta, pipeline, bind_group, 1, 1);
 
             let cpu_storage_data = output_buffer.to_cpu_storage()?;
 
@@ -121,7 +121,7 @@ impl CustomOp1 for CustomExampleOp {
             .add_wgpu_shader_loader(MyCustomLoader::LOADER_INDEX, || MyCustomLoader {});
 
         //2. add optional data to the meta - structure
-        let mut meta = candle_core::wgpu::wgpu_functions::get_meta(storage.device());
+        let mut meta = candle_core::wgpu::wgpu_functions::get_queue(storage.device());
         meta.add(42);
 
         //3. define the pipeline to use:
@@ -144,7 +144,7 @@ impl CustomOp1 for CustomExampleOp {
         );
 
         //5. queue the command to the queue:
-        candle_core::wgpu::wgpu_functions::enqueue(meta, pipeline, bind_group, 1, 1);
+        candle_core::wgpu::wgpu_functions::enqueue_64(meta, pipeline, bind_group, 1, 1);
 
         Ok((output_buffer, ().into()))
     }

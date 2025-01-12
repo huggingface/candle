@@ -40,7 +40,7 @@ pub fn queue_copy_strided(
             }
         }
 
-        let mut meta = get_meta(dev);
+        let mut meta = get_queue(dev);
         meta.add(dst_offset);
         meta.add_layout1(input_layout);
 
@@ -52,7 +52,7 @@ pub fn queue_copy_strided(
             meta.get_pipeline(Pipelines::Copy(get_dtype(dtype)?, Functions::CopyStrided));
 
         let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
-        enqueue_big_extra(
+        enqueue_64_big_extra(
             meta,
             pipeline,
             bind_group,
@@ -121,7 +121,7 @@ pub fn queue_copy(
             (destination_offset == 0) as u32,
         ];
 
-        let mut meta = get_meta(dev);
+        let mut meta = get_queue(dev);
 
         let inplaceble = OpIsInplaceable {
             input1_inplaceable: destination_offset == source_offset,
@@ -148,7 +148,7 @@ pub fn queue_copy(
             );
             let bind_group =
                 create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned16);
-            enqueue_big(meta, pipeline, bind_group, (copy_size / 4) as u32);
+            enqueue_64_big(meta, pipeline, bind_group, (copy_size / 4) as u32);
         } else {
             meta.add(copy_size);
             meta.add(destination_offset);
@@ -163,7 +163,7 @@ pub fn queue_copy(
             );
 
             let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
-            enqueue_big(meta, pipeline, bind_group, copy_size as u32);
+            enqueue_64_big(meta, pipeline, bind_group, copy_size as u32);
         }
     }
     Ok(())
@@ -193,7 +193,7 @@ pub fn queue_copy2d(
     }
     let const_vec = vec![input_offset == 0, dest_offset == 0];
 
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     meta.add(d1);
     meta.add(d2);
     meta.add(input_stride1);
@@ -277,7 +277,7 @@ pub fn queue_copy3d(
         (input1_stride_3 != 1),
     ];
 
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     meta.add(input_shape.2);
     meta.add(input_shape.1);
     meta.add(dest_stride_1);
@@ -340,7 +340,7 @@ pub fn queue_copy3d_padded(
         input1_stride_3 != 1,
     ];
 
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     meta.add(input_shape.2);
     meta.add(input_shape.1);
     meta.add(dest_stride_1);
@@ -386,7 +386,7 @@ pub fn queue_transpose3d(
     batch_stride: usize,
 ) -> crate::Result<()> {
     let (batch, width, height) = input_shape;
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     meta.add(width);
     meta.add(height);
     meta.add(start_offset);
@@ -438,7 +438,7 @@ pub fn queue_copy4d_padded(
         input_shape.1, //channels
     ];
 
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     meta.add(input_shape.3 + padding);
     meta.add(input_shape.2 + padding);
     meta.add(padding);

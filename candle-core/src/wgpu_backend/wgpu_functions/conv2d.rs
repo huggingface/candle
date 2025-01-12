@@ -132,7 +132,7 @@ pub fn queue_conv2d(
     let input_stride = input_layout.stride();
     let kernel_stride = kernel.layout().stride();
 
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
 
     let const_vec = vec![
         kernel_stride[3], //kernel_x_stride
@@ -252,7 +252,7 @@ pub fn queue_conv2d_matmul(
         (input.layout().start_offset() == 0) as usize,
     ];
 
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     meta.add(dst_numel); // op_conv2d_dst_numel
     meta.add(o_h); // op_conv2d_h_out
     meta.add(o_w); // op_conv2d_w_out
@@ -338,7 +338,7 @@ pub fn queue_conv2d_transpose(
     let input_stride = input.layout().stride();
     let kernel_stride = kernel.layout().stride();
 
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
 
     let const_vec = vec![
         kernel_stride[3], //kernel_x_stride
@@ -415,7 +415,7 @@ pub fn queue_conv1d(
         params.b_size,
         params.c_in,
     ];
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
 
     meta.add(kernel_stride[1]); //kernel_c_stride
     meta.add(kernel_stride[0]); //kernel_b_stride
@@ -469,7 +469,7 @@ pub fn queue_conv1d_transpose(
         params.b_size,
         params.c_in,
     ];
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     meta.add(kernel_stride[0]); //kernel_c_stride
     meta.add(kernel_stride[1]); //kernel_b_stride
     meta.add(kernel.layout().start_offset());

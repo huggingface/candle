@@ -13,7 +13,7 @@ pub fn queue_softmax(
 ) -> crate::Result<()> {
     let const_vec = vec![input1_offset];
 
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     meta.add(reduction_length);
     meta.add(dest_size);
 

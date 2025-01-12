@@ -39,7 +39,7 @@ pub fn queue_reduce_from_buffer_op(
         stride_reduction,
     } = params;
 
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
 
     let const_vec = vec![op as u32, stride_reduction];
 

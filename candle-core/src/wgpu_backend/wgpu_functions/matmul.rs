@@ -73,7 +73,7 @@ mod transpose {
 
         let const_vec = vec![batch > 1, start_offset == 0];
 
-        let mut meta = get_meta(dev);
+        let mut meta = get_queue(dev);
 
         meta.add(width);
         meta.add(height);
@@ -145,7 +145,7 @@ mod sgemm {
             (params.b != 1) as usize,
         ];
 
-        let mut meta = get_meta(dev);
+        let mut meta = get_queue(dev);
         meta.add(params.b);
         meta.add(params.m);
         meta.add(params.k);
@@ -568,7 +568,7 @@ mod sgemm {
             use_batch as usize,
         ];
 
-        let mut meta = get_meta(dev);
+        let mut meta = get_queue(dev);
         meta.add(params.b);
         meta.add(if USE_DIFFERENT_PADDED_OUTPUT {
             new_m

@@ -17,29 +17,27 @@ pub mod where_cond;
 use rustc_hash::FxHasher;
 use std::{
     hash::{Hash, Hasher},
-    num::NonZeroU64,
-    sync::MutexGuard,
+    num::NonZeroU64
 };
 
 use super::{
     cache::{
-        BindgroupAlignmentLayout, BindgroupInputBase, BindgroupReferenceFull, CachedBindgroupFull,
-        CachedBindgroupInput, CachedBufferId, ModelCache,
-    }, device::{BindGroupReference, MlQueue, OpIsInplaceable, PipelineType, QueueBuffer}, util::{FixedArray, ToU32}
+        BindgroupAlignmentLayout, BindgroupInputBase, BindgroupReferenceFull, BindgroupReferenceInput, BufferReferenceId, CachedBindgroupFull, CachedBindgroupInput, CachedBufferId, ModelCache
+    }, 
+    device::{BindGroupReference, MlQueue, OpIsInplaceable, PipelineType, QueueBuffer, QueueBufferInner}, 
+    util::{FixedArray, ToU32}, 
+    WgpuDevice
 };
 use crate::wgpu_backend::{cache::BindgroupAlignment, util::ReferenceTrait};
 use tracing::{instrument, span, Level};
 
-pub use crate::wgpu::cache::BufferReferenceId;
-pub use crate::wgpu::WgpuDevice;
 pub use candle_wgpu_kernels::DType;
 pub use candle_wgpu_kernels::Pipelines;
 
-use crate::{wgpu_backend::cache::BindgroupReferenceInput, Layout, WgpuError};
+use crate::{Layout, WgpuError};
 use std::borrow::Cow;
 
-use wgpu::ShaderModule;
-
+/**************** FUNCTIONS ****************/ 
 pub use binary::queue_binary_buffer_from_buffer;
 pub use cmp::queue_cmp_buffer_from_buffer;
 pub use conv2d::{queue_conv1d, queue_conv1d_transpose, queue_conv2d, queue_conv2d_transpose};
@@ -58,6 +56,8 @@ pub use softmax::queue_softmax;
 pub use unary::{queue_unary_from_buffer_op, queue_unary_inplace_op};
 pub use upsample::{queue_upsample1d, queue_upsample2d};
 pub use where_cond::queue_where_cond;
+
+/**************** VIRTUAL COMPUTE GRAPH ****************/ 
 
 pub const MAX_DISPATCH_SIZE: u32 = 65535;
 
@@ -82,32 +82,34 @@ impl<'a> WgpuTensor<'a> {
 }
 
 ///Helper Type MetaArray, for constructing the MetaBuffer
+///The MetaBuffer is used to pass Parameters to the Kernel. 
+///Paramerters for multiple Commands will are grouped together in this MetaArray.
 #[derive(Debug)]
 pub struct MetaArray(pub Vec<u32>);
 
+
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+///Helper Array to Construct Kernel Constants. 
+///Kernel Constants are compiled into the kernel. 
 pub struct ConstArray(pub FixedArray<(candle_wgpu_kernels::Constants, u32), 32>);
 
-pub trait KernelParameterMeta {
+//Allows objects to be added to the Meta Parameter Array
+pub trait ToKernelParameterMeta {
     fn write_meta(&self, meta: &mut MetaArray);
 }
-
-pub trait KernelParameterConsts {
-    fn write_consts(&self, _consts: &mut ConstArray) {}
-}
-pub trait KernelParameter: KernelParameterMeta + KernelParameterConsts {}
 
 impl MetaArray {
     pub fn new(capacity: u32) -> Self {
         MetaArray(Vec::with_capacity(capacity as usize))
     }
 
-    pub fn add<T: KernelParameterMeta>(&mut self, value: T) {
+    pub fn add<T: ToKernelParameterMeta>(&mut self, value: T) {
         value.write_meta(self);
     }
 }
 
-impl<T: ToU32 + Copy> KernelParameterMeta for T {
+impl<T: ToU32 + Copy> ToKernelParameterMeta for T {
     fn write_meta(&self, meta: &mut MetaArray) {
         meta.0.push((*self).to_u32());
     }
@@ -116,10 +118,6 @@ impl<T: ToU32 + Copy> KernelParameterMeta for T {
 impl ConstArray {
     pub fn new() -> Self {
         ConstArray(FixedArray::new())
-    }
-
-    pub fn add<T: KernelParameterConsts>(&mut self, value: T) {
-        value.write_consts(self);
     }
 
     pub fn insert<T: ToU32>(&mut self, key: candle_wgpu_kernels::Constants, value: T) {
@@ -133,7 +131,6 @@ impl Default for ConstArray {
     }
 }
 
-const WORKGROUP_SIZE: u32 = 64;
 
 pub fn get_dtype(dtype: crate::DType) -> crate::Result<DType> {
     match dtype {
@@ -149,17 +146,136 @@ pub fn get_dtype(dtype: crate::DType) -> crate::Result<DType> {
     }
 }
 
-#[instrument(skip(device, shader))]
-pub fn get_shader(device: &wgpu::Device, shader: &str) -> ShaderModule {
-    let cs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: None,
-        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader)),
-    });
-    return cs_module;
+
+fn next_divisible_by_n<T: num_traits::Num + Clone>(value: T, n: T) -> T {
+    if n.is_zero() {
+        panic!("n must be a non-zero integer");
+    }
+
+    if (value.clone() % n.clone()).is_zero() {
+        value
+    } else {
+        value.clone() + (n.clone() - value % n)
+    }
 }
 
+impl WgpuDevice{
+    ///Returns the Meta Array. 
+    pub fn get_queue(&self) -> QueueBuffer {
+        let mut command_queue = self
+            .command_queue
+            .lock()
+            .expect("could not get meta command_queue lock");
+        let meta_array_length = command_queue.get_meta().len() as i32;
+        let meta_offset = next_divisible_by_n(
+            meta_array_length,
+            self.device_limits.min_storage_buffer_offset_alignment as i32 / 4,
+        );
+        command_queue.current_meta = meta_offset as u32;
+        command_queue
+            .get_meta_mut()
+            .extend(std::iter::repeat(0).take((meta_offset - meta_array_length) as usize));
+
+        QueueBuffer::new(command_queue)
+    }
+}
+
+pub fn get_queue(dev : &WgpuDevice) -> QueueBuffer {
+    dev.get_queue()
+}
+
+
+
+/**************** Enqueue Helper: ****************/ 
+///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
+pub fn enqueue_64(
+    command_queue: QueueBuffer,
+    pipeline: PipelineType,
+    bind_group: BindGroupReference,
+    length: u32,
+    workload_size: usize,
+) {
+    enqueue_64_extra(
+        command_queue,
+        pipeline,
+        bind_group,
+        length,
+        workload_size,
+        #[cfg(feature = "wgpu_debug")]
+        None,
+    )
+}
+
+///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
+///With extra debug Info when `wgpu_debug` is enabled 
+pub fn enqueue_64_extra(
+    command_queue: QueueBuffer,
+    pipeline: PipelineType,
+    bind_group: BindGroupReference,
+    length: u32,
+    workload_size: usize,
+    #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
+) {
+    enqueue_workgroups_extra(
+        command_queue,
+        pipeline,
+        bind_group,
+        length.div_ceil(64),
+        1,
+        1,
+        workload_size,
+        #[cfg(feature = "wgpu_debug")]
+        _debug,
+    )
+}
+
+///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
+///If the length is greater than 65535, more elements will be enqueued in the Y dimension.
+pub fn enqueue_64_big(
+    command_queue: QueueBuffer,
+    pipeline: PipelineType,
+    bind_group: BindGroupReference,
+    length: u32,
+) {
+    enqueue_64_big_extra(
+        command_queue,
+        pipeline,
+        bind_group,
+        length,
+        #[cfg(feature = "wgpu_debug")]
+        None,
+    )
+}
+
+///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
+///If the length is greater than 65535, more elements will be enqueued in the Y dimension.
+///With extra debug Info when `wgpu_debug` is enabled 
+pub fn enqueue_64_big_extra(
+    command_queue: QueueBuffer,
+    pipeline: PipelineType,
+    bind_group: BindGroupReference,
+    length: u32,
+    #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
+) {
+    let id = length.div_ceil(64);
+    let x = id.min(65535);
+    let y = (id + 65534) / 65535;
+    enqueue_workgroups_extra(
+        command_queue,
+        pipeline,
+        bind_group,
+        x,
+        y,
+        1,
+        length as usize,
+        #[cfg(feature = "wgpu_debug")]
+        _debug,
+    )
+}
+
+///Enqueues a command with x, y and z dimension.
 fn enqueue_workgroups(
-    command_queue: MutexGuard<QueueBuffer>,
+    command_queue: QueueBuffer,
     pipeline: PipelineType,
     bind_group: BindGroupReference,
     x: u32,
@@ -181,8 +297,10 @@ fn enqueue_workgroups(
 }
 
 #[allow(clippy::too_many_arguments)]
+///Enqueues a command with x, y and z dimension.
+///With extra debug Info when `wgpu_debug` is enabled 
 fn enqueue_workgroups_extra(
-    mut command_queue: MutexGuard<QueueBuffer>,
+    mut command_queue: QueueBuffer,
     pipeline: PipelineType,
     bind_group: BindGroupReference,
     x: u32,
@@ -213,68 +331,180 @@ fn enqueue_workgroups_extra(
     command_queue.command_queue.push(q);
 }
 
-fn next_divisible_by_n<T: num_traits::Num + Clone>(value: T, n: T) -> T {
-    if n.is_zero() {
-        panic!("n must be a non-zero integer");
-    }
 
-    if (value.clone() % n.clone()).is_zero() {
-        value
-    } else {
-        value.clone() + (n.clone() - value % n)
+/**************** Virtual Bindgroups: ****************/ 
+pub fn create_bind_group_input0(
+    buffer_dest: BufferReferenceId,
+    alignment: BindgroupAlignment,
+) -> BindGroupReference {
+    let alignment = BindgroupAlignmentLayout::Bindgroup0(alignment);
+    alignment.validate();
+    BindGroupReference::new(buffer_dest, BindgroupInputBase::Bindgroup0(alignment))
+}
+
+pub fn create_bind_group_input1(
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
+    alignment: BindgroupAlignment,
+) -> BindGroupReference {
+    create_bind_group_input1_with_alignment(
+        buffer_dest,
+        buffer_input1,
+        BindgroupAlignmentLayout::Bindgroup1(alignment, alignment),
+    )
+}
+
+pub fn create_bind_group_input1_with_alignment(
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
+    alignment: BindgroupAlignmentLayout,
+) -> BindGroupReference {
+    alignment.validate();
+    BindGroupReference::new(
+        buffer_dest,
+        BindgroupInputBase::Bindgroup1(buffer_input1, alignment),
+    )
+}
+
+pub fn create_bind_group_input2(
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
+    buffer_input2: BufferReferenceId,
+    alignment: BindgroupAlignment,
+) -> BindGroupReference {
+    create_bind_group_input2_with_alignment(
+        buffer_dest,
+        buffer_input1,
+        buffer_input2,
+        BindgroupAlignmentLayout::Bindgroup2(alignment, alignment, alignment),
+    )
+}
+
+pub fn create_bind_group_input2_with_alignment(
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
+    buffer_input2: BufferReferenceId,
+    alignment: BindgroupAlignmentLayout,
+) -> BindGroupReference {
+    alignment.validate();
+    BindGroupReference::new(
+        buffer_dest,
+        BindgroupInputBase::Bindgroup2(buffer_input1, buffer_input2, alignment),
+    )
+}
+
+pub fn create_bind_group_input3(
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
+    buffer_input2: BufferReferenceId,
+    buffer_input3: BufferReferenceId,
+    alignment: BindgroupAlignment,
+) -> BindGroupReference {
+    create_bind_group_input3_with_alignment(
+        buffer_dest,
+        buffer_input1,
+        buffer_input2,
+        buffer_input3,
+        BindgroupAlignmentLayout::Bindgroup3(alignment, alignment, alignment,alignment),
+    )
+}
+
+pub fn create_bind_group_input3_with_alignment(
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
+    buffer_input2: BufferReferenceId,
+    buffer_input3: BufferReferenceId,
+    alignment: BindgroupAlignmentLayout,
+) -> BindGroupReference {
+    alignment.validate();
+    BindGroupReference::new(
+        buffer_dest,
+        BindgroupInputBase::Bindgroup3(buffer_input1, buffer_input2, buffer_input3, alignment),
+    )
+}
+
+
+/**************** FLUSH COMMANDS TO GPU: ****************/ 
+#[instrument(skip(dev, queue_buffer, cache))]
+///Prepares Buffers
+fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBufferInner, cache: &mut ModelCache) {
+    let global_index = queue_buffer.global_command_index();
+
+    let queue = &mut queue_buffer.command_queue;
+    {
+        let mut hasher = FxHasher::default();
+        for q in queue.iter() {
+            match q {
+                MlQueue::Dispatch(q) => {
+                    q.pipeline.hash(&mut hasher);
+                }
+            }
+        }
+
+        let current_hash = hasher.finish();
+
+        tracing::info!("current hash: {current_hash}");
+
+        cache.mappings.set_current_buffer_mapping(current_hash);
+        let deleted_entries = cache.buffer_reference.get_deletion_entries();
+
+        for entry in deleted_entries.iter() {
+            if let Some(buffer_reference) = cache.buffer_reference.get_mut(entry) {
+                buffer_reference.set_referenced_by_candle_storage(false);
+                buffer_reference.set_last_used(0); //if this buffer will not be used in this queue, we can delete the queue and free the used buffer.
+            }
+        }
+
+        for (index, q) in queue.iter().enumerate() {
+            let command_index = global_index + index as u32;
+
+            let mut check_buffer = |buffer_reference| {
+                if let Some(buffer) = cache.buffer_reference.get_mut(&buffer_reference) {
+                    if buffer.first_used() == 0 {
+                        //not alreaedy set:
+                        buffer.set_first_used(command_index);
+                    }
+                    if buffer.last_used() < command_index {
+                        buffer.set_last_used(command_index);
+                    }
+                }
+            };
+            match q {
+                MlQueue::Dispatch(q) => {
+                    let dest = q.bindgroup.get_dest();
+                    let input = q.bindgroup.get_input();
+
+                    check_buffer(*dest);
+
+                    input.fold_owned(|v| {
+                        check_buffer(v);
+                    });
+                }
+            }
+        }
+
+        for entry in deleted_entries.iter() {
+            if let Some(buffer_reference) = cache.buffer_reference.get_mut(entry) {
+                if buffer_reference.last_used() == 0 {
+                    //This buffer was not used in the queue -> we can remove it!
+                    let buffer_cached_id = *buffer_reference.cached_buffer_id();
+                    if buffer_reference.cached_buffer_id().is_valid() {
+                        cache.buffers.free_buffer(&buffer_cached_id);
+                    }
+                    cache.buffer_reference.delete(entry);
+                }
+            }
+        }
+
+        cache
+            .buffers
+            .set_max_memory_allowed(dev.configuration.buffer_cached_max_allowed_size);
     }
 }
 
-pub fn get_meta(dev: &WgpuDevice) -> MutexGuard<QueueBuffer> {
-    let mut command_queue = dev
-        .command_queue
-        .lock()
-        .expect("could not get meta command_queue lock");
-    let meta_array_length = command_queue.get_meta().len() as i32;
-    let meta_offset = next_divisible_by_n(
-        meta_array_length,
-        dev.device_limits.min_storage_buffer_offset_alignment as i32 / 4,
-    );
-    command_queue.current_meta = meta_offset as u32;
-    command_queue
-        .get_meta_mut()
-        .extend(std::iter::repeat(0).take((meta_offset - meta_array_length) as usize));
-
-    command_queue
-}
-
-#[cfg(feature = "wgpu_debug")]
-fn end_debug_queue(
-    dev: &WgpuDevice,
-    length: u32,
-    global_index: u32,
-    encoder: &mut wgpu::CommandEncoder,
-    query_set: &wgpu::QuerySet,
-) {
-    if global_index % 256 != 0 {
-        panic!("global_index was:{global_index}")
-    }
-
-    encoder.resolve_query_set(
-        query_set,
-        0..length,
-        &dev.debug.query_set_buffer,
-        global_index as u64,
-    );
-    let global_index = global_index + (length * 8);
-
-    let remainder = global_index % 256;
-    let global_index = if remainder == 0 {
-        global_index
-    } else {
-        global_index + (256 - remainder)
-    };
-    dev.debug
-        .counter
-        .store(global_index, std::sync::atomic::Ordering::Relaxed);
-}
 
 #[instrument(skip(dev, cache, command_queue, waiting_buffer, current_meta, meta_array))]
+///Builds Command Buffer and writes meta_array to the gpu 
 fn get_command_buffer(
     dev: &WgpuDevice,
     meta_array: &[u32],
@@ -441,87 +671,12 @@ fn get_command_buffer(
     return result;
 }
 
-#[instrument(skip(dev, queue_buffer, cache))]
-fn prepare(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer, cache: &mut ModelCache) {
-    let global_index = queue_buffer.global_command_index();
-
-    let queue = &mut queue_buffer.command_queue;
-    {
-       
-        let mut hasher = FxHasher::default();
-        for q in queue.iter() {
-            match q {
-                MlQueue::Dispatch(q) => {
-                    q.pipeline.hash(&mut hasher);
-                }
-            }
-        }
-
-        let current_hash = hasher.finish();
-
-        tracing::info!("current hash: {current_hash}");
-
-        cache.mappings.set_current_buffer_mapping(current_hash);
-        let deleted_entries = cache.buffer_reference.get_deletion_entries();
-
-        for entry in deleted_entries.iter() {
-            if let Some(buffer_reference) = cache.buffer_reference.get_mut(entry) {
-                buffer_reference.set_referenced_by_candle_storage(false);
-                buffer_reference.set_last_used(0); //if this buffer will not be used in this queue, we can delete the queue and free the used buffer.
-            }
-        }
-
-        for (index, q) in queue.iter().enumerate() {
-            let command_index = global_index + index as u32;
-
-            let mut check_buffer = |buffer_reference| {
-                if let Some(buffer) = cache.buffer_reference.get_mut(&buffer_reference) {
-                    if buffer.first_used() == 0 {
-                        //not alreaedy set:
-                        buffer.set_first_used(command_index);
-                    }
-                    if buffer.last_used() < command_index {
-                        buffer.set_last_used(command_index);
-                    }
-                }
-            };
-            match q {
-                MlQueue::Dispatch(q) => {
-                    let dest = q.bindgroup.get_dest();
-                    let input = q.bindgroup.get_input();
-
-                    check_buffer(*dest);
-
-                    input.fold_owned(|v| {
-                        check_buffer(v);
-                    });
-                }
-            }
-        }
-
-        for entry in deleted_entries.iter() {
-            if let Some(buffer_reference) = cache.buffer_reference.get_mut(entry) {
-                if buffer_reference.last_used() == 0 {
-                    //This buffer was not used in the queue -> we can remove it!
-                    let buffer_cached_id = *buffer_reference.cached_buffer_id();
-                    if buffer_reference.cached_buffer_id().is_valid() {
-                        cache.buffers.free_buffer(&buffer_cached_id);
-                    }
-                    cache.buffer_reference.delete(entry);
-                }
-            }
-        }
-
-        cache
-            .buffers
-            .set_max_memory_allowed(dev.configuration.buffer_cached_max_allowed_size);
-    }
-}
 
 #[instrument(skip(dev, command_buffer, cache, index, last_meta, current_meta))]
+///Maps Virtual Compute Graph Buffers to actual wgpu Buffers
 fn set_buffers(
     dev: &WgpuDevice,
-    command_buffer: &mut QueueBuffer,
+    command_buffer: &mut QueueBufferInner,
     index: &mut usize,
     current_meta: usize,
     last_meta: &mut usize,
@@ -814,90 +969,11 @@ fn set_buffers(
     return Ok((cache_limit, total_workload));
 }
 
-fn finish_commands(command_buffer: &mut QueueBuffer, index: usize, _cache: &mut ModelCache) {
-    let global_index = command_buffer.global_command_index();
-    command_buffer.set_global_command_index(global_index + index as u32);
-
-    #[cfg(feature = "wgpu_debug")]
-    {
-        for i in 0..command_buffer.command_queue.len() {
-            let current = &command_buffer.command_queue[i];
-            let next = &command_buffer.command_queue.get(i + 1);
-            match current {
-                MlQueue::Dispatch(q) => {
-                    let mut next_meta = command_buffer.get_meta().len();
-                    if let Some(next) = next {
-                        match next {
-                            MlQueue::Dispatch(q) => {
-                                next_meta = q.meta as usize;
-                            }
-                        }
-                    }
-
-                    let new_bindgroup = BindgroupReferenceFull::new(
-                        Default::default(),
-                        match q.bindgroup.get_input() {
-                            BindgroupInputBase::Bindgroup0(alginment) => BindgroupInputBase::Bindgroup0(*alginment),
-                            BindgroupInputBase::Bindgroup1(_, alginment) => {
-                                BindgroupInputBase::Bindgroup1(Default::default(), *alginment)
-                            }
-                            BindgroupInputBase::Bindgroup2(_, _, alginment) => {
-                                BindgroupInputBase::Bindgroup2(
-                                    Default::default(),
-                                    Default::default(),
-                                    *alginment,
-                                )
-                            }
-                            BindgroupInputBase::Bindgroup3(_, _, _, alginment) => {
-                                BindgroupInputBase::Bindgroup3(
-                                    Default::default(),
-                                    Default::default(),
-                                    Default::default(),
-                                    *alginment
-                                )
-                            }
-                        },
-                    );
-
-                    let mut meta: Vec<u32> =
-                        command_buffer.get_meta()[q.meta as usize..next_meta].into();
-
-                    //the scalar and randstate on unary should have no performance effect:
-                    if let Pipelines::Unary(_, candle_wgpu_kernels::unary::Functions::RandInplaceContiguous) = q.pipeline.0.into() {
-                        meta[1] = f32::to_bits(1.0);
-                        meta[2] = f32::to_bits(1.0);
-                        meta[3] = 0; //rand state
-                    }
-                    else if let Pipelines::Unary(_, _) = q.pipeline.0.into() {
-                        meta[1] = f32::to_bits(1.0);
-                        meta[2] = f32::to_bits(1.0);
-                    }
-
-                    let debug_info = crate::wgpu_backend::device::DebugPipelineRecording {
-                        x: q.x,
-                        y: q.y,
-                        z: q.z,
-                        pipeline: q.pipeline.clone(),
-                        meta,
-                        bindgroup: new_bindgroup,
-                        count: 1,
-                    };
-
-                    if let Some(debug) = _cache.debug.get_mut(&debug_info) {
-                        debug.count += 1;
-                    } else {
-                        _cache.debug.insert(debug_info.clone(), debug_info);
-                    }
-                }
-            }
-        }
-    }
-}
-
 #[instrument(skip(dev, queue_buffer))]
+///Send queued commands to the GPU
 pub(crate) fn flush_gpu_command(
     dev: &WgpuDevice,
-    queue_buffer: &mut QueueBuffer,
+    queue_buffer: &mut QueueBufferInner,
 ) -> crate::Result<()> {
     if !queue_buffer.command_queue.is_empty() {
         let mut cache = dev
@@ -977,9 +1053,10 @@ pub(crate) fn flush_gpu_command(
 }
 
 #[instrument(skip(dev, queue_buffer))]
+///Send queued commands to the GPU, waits asynchronously
 pub(crate) async fn flush_gpu_command_async(
     dev: &WgpuDevice,
-    queue_buffer: &mut QueueBuffer,
+    queue_buffer: &mut QueueBufferInner,
 ) -> crate::Result<()> {
     if !queue_buffer.command_queue.is_empty() {
         log::debug!("flush_gpu_command_async");
@@ -1054,85 +1131,134 @@ pub(crate) async fn flush_gpu_command_async(
     Ok(())
 }
 
-pub fn enqueue(
-    command_queue: MutexGuard<QueueBuffer>,
-    pipeline: PipelineType,
-    bind_group: BindGroupReference,
-    length: u32,
-    workload_size: usize,
-) {
-    enqueue_extra(
-        command_queue,
-        pipeline,
-        bind_group,
-        length,
-        workload_size,
-        #[cfg(feature = "wgpu_debug")]
-        None,
-    )
+
+fn finish_commands(command_buffer: &mut QueueBufferInner, index: usize, _cache: &mut ModelCache) {
+    let global_index = command_buffer.global_command_index();
+    command_buffer.set_global_command_index(global_index + index as u32);
+
+    #[cfg(feature = "wgpu_debug")]
+    {
+        for i in 0..command_buffer.command_queue.len() {
+            let current = &command_buffer.command_queue[i];
+            let next = &command_buffer.command_queue.get(i + 1);
+            match current {
+                MlQueue::Dispatch(q) => {
+                    let mut next_meta = command_buffer.get_meta().len();
+                    if let Some(next) = next {
+                        match next {
+                            MlQueue::Dispatch(q) => {
+                                next_meta = q.meta as usize;
+                            }
+                        }
+                    }
+
+                    let new_bindgroup = BindgroupReferenceFull::new(
+                        Default::default(),
+                        match q.bindgroup.get_input() {
+                            BindgroupInputBase::Bindgroup0(alginment) => BindgroupInputBase::Bindgroup0(*alginment),
+                            BindgroupInputBase::Bindgroup1(_, alginment) => {
+                                BindgroupInputBase::Bindgroup1(Default::default(), *alginment)
+                            }
+                            BindgroupInputBase::Bindgroup2(_, _, alginment) => {
+                                BindgroupInputBase::Bindgroup2(
+                                    Default::default(),
+                                    Default::default(),
+                                    *alginment,
+                                )
+                            }
+                            BindgroupInputBase::Bindgroup3(_, _, _, alginment) => {
+                                BindgroupInputBase::Bindgroup3(
+                                    Default::default(),
+                                    Default::default(),
+                                    Default::default(),
+                                    *alginment
+                                )
+                            }
+                        },
+                    );
+
+                    let mut meta: Vec<u32> =
+                        command_buffer.get_meta()[q.meta as usize..next_meta].into();
+
+                    //the scalar and randstate on unary should have no performance effect:
+                    if let Pipelines::Unary(_, candle_wgpu_kernels::unary::Functions::RandInplaceContiguous) = q.pipeline.0.into() {
+                        meta[1] = f32::to_bits(1.0);
+                        meta[2] = f32::to_bits(1.0);
+                        meta[3] = 0; //rand state
+                    }
+                    else if let Pipelines::Unary(_, _) = q.pipeline.0.into() {
+                        meta[1] = f32::to_bits(1.0);
+                        meta[2] = f32::to_bits(1.0);
+                    }
+
+                    let debug_info = crate::wgpu_backend::device::DebugPipelineRecording {
+                        x: q.x,
+                        y: q.y,
+                        z: q.z,
+                        pipeline: q.pipeline.clone(),
+                        meta,
+                        bindgroup: new_bindgroup,
+                        count: 1,
+                    };
+
+                    if let Some(debug) = _cache.debug.get_mut(&debug_info) {
+                        debug.count += 1;
+                    } else {
+                        _cache.debug.insert(debug_info.clone(), debug_info);
+                    }
+                }
+            }
+        }
+    }
 }
 
-pub fn enqueue_extra(
-    command_queue: MutexGuard<QueueBuffer>,
-    pipeline: PipelineType,
-    bind_group: BindGroupReference,
+#[cfg(feature = "wgpu_debug")]
+fn end_debug_queue(
+    dev: &WgpuDevice,
     length: u32,
-    workload_size: usize,
-    #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
+    global_index: u32,
+    encoder: &mut wgpu::CommandEncoder,
+    query_set: &wgpu::QuerySet,
 ) {
-    enqueue_workgroups_extra(
-        command_queue,
-        pipeline,
-        bind_group,
-        length.div_ceil(WORKGROUP_SIZE),
-        1,
-        1,
-        workload_size,
-        #[cfg(feature = "wgpu_debug")]
-        _debug,
-    )
+    if global_index % 256 != 0 {
+        panic!("global_index was:{global_index}")
+    }
+
+    encoder.resolve_query_set(
+        query_set,
+        0..length,
+        &dev.debug.query_set_buffer,
+        global_index as u64,
+    );
+    let global_index = global_index + (length * 8);
+
+    let remainder = global_index % 256;
+    let global_index = if remainder == 0 {
+        global_index
+    } else {
+        global_index + (256 - remainder)
+    };
+    dev.debug
+        .counter
+        .store(global_index, std::sync::atomic::Ordering::Relaxed);
 }
 
-pub fn enqueue_big(
-    command_queue: MutexGuard<QueueBuffer>,
-    pipeline: PipelineType,
-    bind_group: BindGroupReference,
-    length: u32,
-) {
-    enqueue_big_extra(
-        command_queue,
-        pipeline,
-        bind_group,
-        length,
-        #[cfg(feature = "wgpu_debug")]
-        None,
-    )
+
+/**************** WGPU FUNCTIONS: ****************/ 
+
+#[instrument(skip(device, shader))]
+///Creates a wgpu shaderModule
+pub fn get_shader(device: &wgpu::Device, shader: &str) -> wgpu::ShaderModule {
+    let cs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader)),
+    });
+    return cs_module;
 }
 
-pub fn enqueue_big_extra(
-    command_queue: MutexGuard<QueueBuffer>,
-    pipeline: PipelineType,
-    bind_group: BindGroupReference,
-    length: u32,
-    #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
-) {
-    let id = length.div_ceil(WORKGROUP_SIZE);
-    let x = id.min(65535);
-    let y = (id + 65534) / 65535;
-    enqueue_workgroups_extra(
-        command_queue,
-        pipeline,
-        bind_group,
-        x,
-        y,
-        1,
-        length as usize,
-        #[cfg(feature = "wgpu_debug")]
-        _debug,
-    )
-}
 
 #[instrument(skip(dev, size))]
+///Creates a wgpu buffer
 pub fn create_buffer(dev: &WgpuDevice, size: u64) -> wgpu::Buffer {
     dev.device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
@@ -1145,6 +1271,7 @@ pub fn create_buffer(dev: &WgpuDevice, size: u64) -> wgpu::Buffer {
 }
 
 #[instrument(skip(dev, cache, bindgroup))]
+///Creates a wgpu bindgroup
 pub fn create_bindgroup(
     dev: &WgpuDevice,
     bindgroup: CachedBindgroupFull,
@@ -1180,13 +1307,27 @@ pub fn create_bindgroup(
         .buffer()
         .as_entire_binding();
 
+    let dest_buffer_bingdgroup_entry = wgpu::BindGroupEntry {
+        binding: 0,
+        resource: buffer_resource,
+    };
+
+    let create_buffer_entry = |binding: u32, buffer_id: &CachedBufferId| -> wgpu::BindGroupEntry {
+        wgpu::BindGroupEntry {
+            binding,
+            resource: cache
+                .buffers
+                .get_buffer(buffer_id)
+                .unwrap_or_else(|| panic!("Buffer with ID {:?} could not be found", buffer_id))
+                .buffer()
+                .as_entire_binding(),
+        }
+    };
+
     match bindgroup.get_input() {
         CachedBindgroupInput::Bindgroup0(_) => {
             let entries = &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffer_resource,
-                },
+                dest_buffer_bingdgroup_entry,
                 meta_entry,
             ];
             dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1196,28 +1337,10 @@ pub fn create_bindgroup(
             })
         }
         CachedBindgroupInput::Bindgroup1(buffer_input1, _) => {
-            if cache.buffers.get_buffer(buffer_input1).is_none() {
-                panic!(
-                    "buffer_input_1 : {:?} could not be found(in {:?})",
-                    buffer_input1, bindgroup
-                );
-            }
-
             let entries = &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffer_resource,
-                },
+                dest_buffer_bingdgroup_entry,
                 meta_entry,
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: cache
-                        .buffers
-                        .get_buffer(buffer_input1)
-                        .expect("buffer_input1 could not be found")
-                        .buffer()
-                        .as_entire_binding(),
-                },
+                create_buffer_entry(2, buffer_input1)
             ];
             dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
@@ -1227,29 +1350,10 @@ pub fn create_bindgroup(
         }
         CachedBindgroupInput::Bindgroup2(buffer_input1, buffer_input2, _) => {
             let entries = &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffer_resource,
-                },
+                dest_buffer_bingdgroup_entry,
                 meta_entry,
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: cache
-                        .buffers
-                        .get_buffer(buffer_input1)
-                        .expect("buffer_input1 could not be found")
-                        .buffer()
-                        .as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: cache
-                        .buffers
-                        .get_buffer(buffer_input2)
-                        .expect("buffer_input2 could not be found")
-                        .buffer()
-                        .as_entire_binding(),
-                },
+                create_buffer_entry(2, buffer_input1),
+                create_buffer_entry(3, buffer_input2)
             ];
             dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
@@ -1259,38 +1363,11 @@ pub fn create_bindgroup(
         }
         CachedBindgroupInput::Bindgroup3(buffer_input1, buffer_input2, buffer_input3, _) => {
             let entries = &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffer_resource,
-                },
+                dest_buffer_bingdgroup_entry,
                 meta_entry,
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: cache
-                        .buffers
-                        .get_buffer(buffer_input1)
-                        .expect("buffer_input1 could not be found")
-                        .buffer()
-                        .as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: cache
-                        .buffers
-                        .get_buffer(buffer_input2)
-                        .expect("buffer_input2 could not be found")
-                        .buffer()
-                        .as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: cache
-                        .buffers
-                        .get_buffer(buffer_input3)
-                        .expect("buffer_input3 could not be found")
-                        .buffer()
-                        .as_entire_binding(),
-                },
+                create_buffer_entry(2, buffer_input1),
+                create_buffer_entry(3, buffer_input2),
+                create_buffer_entry(4, buffer_input3)
             ];
             dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
@@ -1299,96 +1376,6 @@ pub fn create_bindgroup(
             })
         }
     }
-}
-
-pub fn create_bind_group_input0(
-    buffer_dest: BufferReferenceId,
-    alignment: BindgroupAlignment,
-) -> BindGroupReference {
-    let alignment = BindgroupAlignmentLayout::Bindgroup0(alignment);
-    alignment.validate();
-    BindGroupReference::new(buffer_dest, BindgroupInputBase::Bindgroup0(alignment))
-}
-
-pub fn create_bind_group_input1(
-    buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    alignment: BindgroupAlignment,
-) -> BindGroupReference {
-    create_bind_group_input1_with_alignment(
-        buffer_dest,
-        buffer_input1,
-        BindgroupAlignmentLayout::Bindgroup1(alignment, alignment),
-    )
-}
-
-pub fn create_bind_group_input1_with_alignment(
-    buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    alignment: BindgroupAlignmentLayout,
-) -> BindGroupReference {
-    alignment.validate();
-    BindGroupReference::new(
-        buffer_dest,
-        BindgroupInputBase::Bindgroup1(buffer_input1, alignment),
-    )
-}
-
-pub fn create_bind_group_input2(
-    buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    buffer_input2: BufferReferenceId,
-    alignment: BindgroupAlignment,
-) -> BindGroupReference {
-    create_bind_group_input2_with_alignment(
-        buffer_dest,
-        buffer_input1,
-        buffer_input2,
-        BindgroupAlignmentLayout::Bindgroup2(alignment, alignment, alignment),
-    )
-}
-
-pub fn create_bind_group_input2_with_alignment(
-    buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    buffer_input2: BufferReferenceId,
-    alignment: BindgroupAlignmentLayout,
-) -> BindGroupReference {
-    alignment.validate();
-    BindGroupReference::new(
-        buffer_dest,
-        BindgroupInputBase::Bindgroup2(buffer_input1, buffer_input2, alignment),
-    )
-}
-
-pub fn create_bind_group_input3(
-    buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    buffer_input2: BufferReferenceId,
-    buffer_input3: BufferReferenceId,
-    alignment: BindgroupAlignment,
-) -> BindGroupReference {
-    create_bind_group_input3_with_alignment(
-        buffer_dest,
-        buffer_input1,
-        buffer_input2,
-        buffer_input3,
-        BindgroupAlignmentLayout::Bindgroup3(alignment, alignment, alignment,alignment),
-    )
-}
-
-pub fn create_bind_group_input3_with_alignment(
-    buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    buffer_input2: BufferReferenceId,
-    buffer_input3: BufferReferenceId,
-    alignment: BindgroupAlignmentLayout,
-) -> BindGroupReference {
-    alignment.validate();
-    BindGroupReference::new(
-        buffer_dest,
-        BindgroupInputBase::Bindgroup3(buffer_input1, buffer_input2, buffer_input3, alignment),
-    )
 }
 
 #[instrument(skip(dev))]
@@ -1430,6 +1417,8 @@ async fn synchronize_device(dev: &WgpuDevice) -> crate::Result<()> {
 }
 
 
+///Copies 4 bytes of the buffer to a staging buffer
+///This is used as a workaround to wait, until all calculation for the buffer has been finished.  
 pub fn copy_to_staging_probe(dev: &WgpuDevice, buffer: &wgpu::Buffer) {
     let mut encoder = dev
         .device

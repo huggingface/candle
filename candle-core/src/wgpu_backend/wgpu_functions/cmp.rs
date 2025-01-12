@@ -20,7 +20,7 @@ pub fn queue_cmp_buffer_from_buffer(
     op: CmpOperation,
     dtype: crate::DType,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     meta.add(op as u32);
     meta.add_layout1(input1.layout());
     meta.add_layout2(input2.layout());
@@ -32,7 +32,7 @@ pub fn queue_cmp_buffer_from_buffer(
 
     let bind_group =
         create_bind_group_input2(buffer_dest, input1.buffer(), input2.buffer(), dtype.into());
-    enqueue(
+    enqueue_64(
         meta,
         pipeline,
         bind_group,

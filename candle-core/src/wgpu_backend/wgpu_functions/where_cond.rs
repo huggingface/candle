@@ -11,7 +11,7 @@ pub fn queue_where_cond(
     cond_type: crate::DType,
     dtype: crate::DType,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     meta.add_layout1(input.layout());
     meta.add_layout2(tensor_true.layout());
     meta.add_layout3(tensor_false.layout());
@@ -57,7 +57,7 @@ pub fn queue_where_cond(
             dtype.into(),
         ),
     );
-    enqueue(
+    enqueue_64(
         meta,
         pipeline,
         bind_group,

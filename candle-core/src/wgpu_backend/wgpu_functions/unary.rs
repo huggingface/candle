@@ -75,7 +75,7 @@ pub fn queue_unary_inplace_op(
     if layout.is_contiguous() {
         let const_vec = vec![op as u32, (layout.start_offset() == 0) as u32];
 
-        let mut meta = get_meta(dev);
+        let mut meta = get_queue(dev);
         meta.add(scalar1);
         meta.add(scalar2);
         meta.add(layout.shape().elem_count()); //length
@@ -126,7 +126,7 @@ pub fn queue_unary_inplace_op(
             },
         );
 
-        enqueue_big_extra(
+        enqueue_64_big_extra(
             meta,
             pipeline,
             bind_group,
@@ -149,7 +149,7 @@ pub fn queue_unary_from_buffer_op(
     scalar2: f32,
     dtype: crate::DType,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
     let pipeline = if input.layout().is_contiguous() {
         let const_vec = vec![op as u32, (input.layout().start_offset() == 0) as u32];
 
@@ -199,7 +199,7 @@ pub fn queue_unary_from_buffer_op(
     };
 
     let bind_group = create_bind_group_input1(buffer_dest, input.buffer(), dtype.into());
-    enqueue_big_extra(
+    enqueue_64_big_extra(
         meta,
         pipeline,
         bind_group,

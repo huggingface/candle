@@ -19,7 +19,7 @@ pub fn queue_rms_norm(
     let workgroup_count = u32::min(64, reduction_length / 10 + 1);
     let workgroup_size = reduction_length / workgroup_count + 1;
 
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
 
     meta.add(workgroup_count);
     meta.add(workgroup_size);
@@ -63,7 +63,7 @@ pub fn queue_layer_norm(
     let workgroup_count = u32::min(64, reduction_length / 10 + 1);
     let workgroup_size = reduction_length / workgroup_count + 1;
 
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
 
     meta.add(workgroup_count);
     meta.add(workgroup_size);

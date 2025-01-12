@@ -18,7 +18,7 @@ pub fn queue_max_pool2d(
 
     let input_stride = layout.stride();
 
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
 
     meta.add(b);
     meta.add(c);
@@ -69,7 +69,7 @@ pub fn queue_avg_pool2d(
 
     let input_stride = layout.stride();
 
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
 
     meta.add(b);
     meta.add(c);

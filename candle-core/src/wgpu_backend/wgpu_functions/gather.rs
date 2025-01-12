@@ -9,7 +9,7 @@ pub fn queue_gather(
     dtype: crate::DType,
     dim: usize,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
 
     meta.add(dim);
     meta.add_layout1_non_contiguous(input.layout());
@@ -40,7 +40,7 @@ pub fn queue_scatter_add_inplace(
     lay_input: &crate::Layout,
     dim: usize,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
 
     let selected_index_length = index.layout().shape().dims()[dim];
 
@@ -77,7 +77,7 @@ pub fn queue_index_add_inplace(
     lay_input: &crate::Layout,
     dim: usize,
 ) -> crate::Result<()> {
-    let mut meta = get_meta(dev);
+    let mut meta = get_queue(dev);
 
     let selected_index_length = index.layout().shape().elem_count();
 
