@@ -8,6 +8,8 @@
 
 #include "matmulHelperTiledSmall.pwgsl"
 
+// e.g. (1x288) * (288*32000) with input1.k_stride == 1 and input2.k_stride == 1
+
 @compute @workgroup_size(RTSN, RTSM, 1)
 //MxK * KxN = MxN
 fn matmul(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {

@@ -838,7 +838,7 @@ test_device!(
     conv1d_small_metal,
     conv1d_small_wgpu
 );
-test_device!(conv2d, conv2d_cpu, conv2d_gpu, conv2d_metal,conv2d_wgpu);
+test_device!(conv2d, conv2d_cpu, conv2d_gpu, conv2d_metal, conv2d_wgpu);
 test_device!(
     conv2d_non_square,
     conv2d_non_square_cpu,

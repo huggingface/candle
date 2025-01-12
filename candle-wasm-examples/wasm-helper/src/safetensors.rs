@@ -5,7 +5,6 @@ use safetensors::{tensor::TensorInfo, Dtype, SafeTensorError, View};
 use serde::{ser::SerializeMap, Deserialize, Serialize};
 use serde::{Deserializer, Serializer};
 
-
 use crate::{generic_error::GenericResult, opfs::Blob};
 
 const MAX_HEADER_SIZE: usize = 100_000_000;
@@ -16,16 +15,13 @@ const MAX_HEADER_SIZE: usize = 100_000_000;
 pub struct SafeTensors {
     metadata: Metadata,
     data: Blob,
-    data_offset : usize,
+    data_offset: usize,
 }
 
 impl SafeTensors {
     /// Given a byte-buffer representing a chunk of the byte array
     /// parses the header, and returns the size of the header + the parsed data.
-    pub async fn read_metadata(
-        buffer: &Blob,
-    ) -> GenericResult<(usize, Metadata)>
-    {
+    pub async fn read_metadata(buffer: &Blob) -> GenericResult<(usize, Metadata)> {
         let buffer_len: usize = buffer.len();
         if buffer_len < 8 {
             return Err(SafeTensorError::HeaderTooSmall.into());
@@ -52,9 +48,8 @@ impl SafeTensors {
         }
 
         let data = buffer.get_bytes(8, n).await?;
-        
-        let string =
-            std::str::from_utf8(&data).map_err(|_| SafeTensorError::InvalidHeader)?;
+
+        let string = std::str::from_utf8(&data).map_err(|_| SafeTensorError::InvalidHeader)?;
 
         // Assert the string starts with {
         // NOTE: Add when we move to 0.4.0
@@ -88,11 +83,14 @@ impl SafeTensors {
     ///         .tensor("test")
     ///         .unwrap();
     /// ```
-    pub async fn deserialize(buffer: Blob) -> GenericResult<Self>
-    {
+    pub async fn deserialize(buffer: Blob) -> GenericResult<Self> {
         //let mut stream = buffer.get_stream()?;
         let (n, metadata) = SafeTensors::read_metadata(&buffer).await?;
-        Ok(Self { metadata, data : buffer, data_offset : n + 8})
+        Ok(Self {
+            metadata,
+            data: buffer,
+            data_offset: n + 8,
+        })
     }
 
     /// Allow the user to iterate over tensors within the SafeTensors.
@@ -105,7 +103,13 @@ impl SafeTensors {
             let tensorview = TensorView {
                 dtype: info.dtype,
                 shape: info.shape.clone(),
-                data: self.data.get_bytes(self.data_offset + info.data_offsets.0, info.data_offsets.1-info.data_offsets.0).await?,
+                data: self
+                    .data
+                    .get_bytes(
+                        self.data_offset + info.data_offsets.0,
+                        info.data_offsets.1 - info.data_offsets.0,
+                    )
+                    .await?,
             };
             tensors.push((name.to_string(), tensorview));
         }
@@ -121,7 +125,13 @@ impl SafeTensors {
                 Ok(TensorView {
                     dtype: info.dtype,
                     shape: info.shape.clone(),
-                    data: self.data.get_bytes(self.data_offset + info.data_offsets.0,info.data_offsets.1-info.data_offsets.0).await?,
+                    data: self
+                        .data
+                        .get_bytes(
+                            self.data_offset + info.data_offsets.0,
+                            info.data_offsets.1 - info.data_offsets.0,
+                        )
+                        .await?,
                 })
             } else {
                 Err(SafeTensorError::TensorNotFound(tensor_name.to_string()).into())
@@ -150,8 +160,6 @@ impl SafeTensors {
         self.metadata.tensors.is_empty()
     }
 }
-
-
 
 /// The stuct representing the header of safetensor files which allow
 /// indexing into the raw byte-buffer array and how to interpret it.
@@ -285,8 +293,6 @@ impl Metadata {
     }
 }
 
-
-
 /// A view of a Tensor within the file.
 /// Contains references to data within the full byte-buffer
 /// And is thus a readable view of a single tensor
@@ -335,11 +341,7 @@ impl View for TensorView {
 
 impl TensorView {
     /// Create new tensor view
-    pub fn new(
-        dtype: Dtype,
-        shape: Vec<usize>,
-        data: Vec<u8>,
-    ) -> Result<Self, SafeTensorError> {
+    pub fn new(dtype: Dtype, shape: Vec<usize>, data: Vec<u8>) -> Result<Self, SafeTensorError> {
         let n = data.len();
         let n_elements: usize = shape.iter().product();
         if n != n_elements * dtype.size() {

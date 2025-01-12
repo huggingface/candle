@@ -988,11 +988,11 @@ pub fn queue_matmul_buffer_best(
     let alg;
     if m <= 2 || n <= 2 {
         if m <= 2 {
-            if k % 64 == 0 && n % 128 == 0 && input2_stride_k == 1  && input1_stride_k == 1 {
+            if k % 64 == 0 && n % 128 == 0 && input2_stride_k == 1 && input1_stride_k == 1 {
                 alg = MatmulAlgorithm::Matmul1_64B;
             } else if k % 32 == 0 && n % 64 == 0 && input2_stride_k == 1 && input1_stride_k == 1 {
                 alg = MatmulAlgorithm::Matmul1_64_32B;
-            } else if k % 32 == 0 && n % 32== 0 && input2_stride_k == 1 && input1_stride_k == 1 {
+            } else if k % 32 == 0 && n % 32 == 0 && input2_stride_k == 1 && input1_stride_k == 1 {
                 alg = MatmulAlgorithm::Matmul1_32_32B;
             } else if k % 64 == 0 && n % 64 == 0 && input2_stride_n == 1 {
                 alg = MatmulAlgorithm::Matmul1_64;

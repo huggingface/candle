@@ -4,14 +4,12 @@ use safetensors::SafeTensorError;
 use thiserror::Error;
 use wasm_bindgen::{JsError, JsValue};
 
-
 #[derive(Debug, Error)]
 /// All errors the API can throw
 pub enum GenericError {
     // /// The value cannot be used as a header during request header construction
     // #[error("Invalid header value {0}")]
     // InvalidHeaderValue(#[from] InvalidHeaderValue),
-
     /// Error parsing some range value
     #[error("Cannot parse int")]
     ParseIntError(#[from] ParseIntError),
@@ -40,37 +38,35 @@ pub enum GenericError {
     SafetensorError(#[from] SafeTensorError),
 }
 
-impl From<JsError> for GenericError{
+impl From<JsError> for GenericError {
     fn from(value: JsError) -> Self {
         GenericError::JsError(value.into())
     }
 }
 
-impl From<String> for GenericError{
+impl From<String> for GenericError {
     fn from(value: String) -> Self {
         GenericError::JsError(value.into())
     }
 }
 
-impl From<JsValue> for GenericError{
+impl From<JsValue> for GenericError {
     fn from(value: JsValue) -> Self {
         GenericError::JsValue(value)
     }
 }
 
-
-impl From<GenericError> for JsValue{
+impl From<GenericError> for JsValue {
     fn from(value: GenericError) -> Self {
-       match value{
-        GenericError::JsError(val) => val,
-        GenericError::JsValue(val) => val,
-        e => JsValue::from_str(&e.to_string()),
-    }
+        match value {
+            GenericError::JsError(val) => val,
+            GenericError::JsValue(val) => val,
+            e => JsValue::from_str(&e.to_string()),
+        }
     }
 }
 
-
-impl From<&'static str> for GenericError{
+impl From<&'static str> for GenericError {
     fn from(value: &'static str) -> Self {
         GenericError::Anyhow(anyhow::Error::msg(value))
     }

@@ -602,7 +602,9 @@ impl Model {
             let timesteps = scheduler.timesteps().to_vec();
             let latents = match &init_latent_dist {
                 Some(init_latent_dist) => {
-                    let latents = (init_latent_dist.sample()? * vae_scale)?.to_device_async(device).await?;
+                    let latents = (init_latent_dist.sample()? * vae_scale)?
+                        .to_device_async(device)
+                        .await?;
                     if t_start < timesteps.len() {
                         let noise = latents.randn_like(0f64, 1f64)?;
                         scheduler.add_noise(&latents, noise, timesteps[t_start])?

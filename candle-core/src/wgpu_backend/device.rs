@@ -380,7 +380,7 @@ static DEVICE_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU
 
 #[derive(Debug)]
 pub struct WgpuDeviceInner {
-    pub device_id : u32,
+    pub device_id: u32,
     pub device: wgpu::Device,
     pub backend: wgpu::Backend,
     pub device_limits: wgpu::Limits, //we cache the limits here, because device.limit() was relatively slow on the browser
@@ -420,13 +420,13 @@ impl std::ops::Deref for WgpuDevice {
 }
 
 #[cfg(feature = "wgpu_debug")]
-    pub struct WgpuDebugInfo{
-        pub duration : u64,
-        pub output_size : u64,
-        pub x : u32, 
-        pub y : u32, 
-        pub z : u32,
-    }
+pub struct WgpuDebugInfo {
+    pub duration: u64,
+    pub output_size: u64,
+    pub x: u32,
+    pub y: u32,
+    pub z: u32,
+}
 
 impl WgpuDevice {
     #[instrument]
@@ -544,7 +544,7 @@ impl WgpuDevice {
 
         Ok(WgpuDevice {
             inner: Arc::new(WgpuDeviceInner {
-                device_id : DEVICE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                device_id: DEVICE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
                 device,
                 device_limits,
                 device_features: features,
@@ -731,7 +731,8 @@ impl WgpuDevice {
         use super::wgpu_functions::synchronize_async;
         synchronize_async(self).await?;
         let data =
-            wgpu_functions::read_from_buffer_async::<u64>(self, &self.debug.query_set_buffer).await?;
+            wgpu_functions::read_from_buffer_async::<u64>(self, &self.debug.query_set_buffer)
+                .await?;
 
         let period = self.queue.get_timestamp_period();
         let mut result = Measurements::new(period);
@@ -788,11 +789,11 @@ impl WgpuDevice {
             map.entry(item.label.clone())
                 .or_default()
                 .push(WgpuDebugInfo {
-                    duration :  item.end_time - item.start_time,
-                    output_size :  item.output_size,
-                    x : item.x,
-                    y : item.y,
-                    z : item.z
+                    duration: item.end_time - item.start_time,
+                    output_size: item.output_size,
+                    x: item.x,
+                    y: item.y,
+                    z: item.z,
                 });
         }
         Ok(map)
@@ -815,11 +816,9 @@ impl WgpuDevice {
                     name: format!("{:?}", k).to_owned(),
                     pipelines: pipelines
                         .iter()
-                        .map(|(pk, _)| {
-                            debug_info::PipelineInfo {
-                                name: format!("{:?}", pk.0).to_owned(),
-                                consts: queue.id_to_const_array[pk.1].clone(),
-                            }
+                        .map(|(pk, _)| debug_info::PipelineInfo {
+                            name: format!("{:?}", pk.0).to_owned(),
+                            consts: queue.id_to_const_array[pk.1].clone(),
                         })
                         .collect(),
                 };

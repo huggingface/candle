@@ -373,9 +373,8 @@ impl ModelCache {
                 let span1 = span!(tracing::Level::INFO, "Calc sould keep bindgroup");
                 let _enter1 = span1.enter();
 
-                let check_buffer = |buffer_reference| {
-                    self.buffers.get_buffer(buffer_reference).is_some()
-                };
+                let check_buffer =
+                    |buffer_reference| self.buffers.get_buffer(buffer_reference).is_some();
 
                 let is_valid = check_buffer(bindgroup.buffer().get_dest())
                     && match &bindgroup.buffer().get_input() {

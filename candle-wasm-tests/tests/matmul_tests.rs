@@ -123,7 +123,7 @@ async fn test_matmul_kernels_wgpu() -> Result<()> {
         MatmulAlgorithm::Matmul32_32, MatmulAlgorithm::Matmul64_64,
         MatmulAlgorithm::Matmul64_64_8_8, MatmulAlgorithm::Matmul24_24,
         MatmulAlgorithm::Matmul24_48, MatmulAlgorithm::Matmul24_24B,
-        MatmulAlgorithm::Matmul24_48B
+        MatmulAlgorithm::Matmul24_48B,
     ];
     let device = Device::new_wgpu_async(0).await?;
     if let Device::Wgpu(wgpu) = &device {

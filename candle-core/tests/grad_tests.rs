@@ -512,7 +512,13 @@ test_device!(
     simple_grad_metal,
     simple_grad_wgpu
 );
-test_device!(sum_grad, sum_grad_cpu, sum_grad_gpu, sum_grad_metal,sum_grad_wgpu);
+test_device!(
+    sum_grad,
+    sum_grad_cpu,
+    sum_grad_gpu,
+    sum_grad_metal,
+    sum_grad_wgpu
+);
 test_device!(
     matmul_grad,
     matmul_grad_cpu,
@@ -527,7 +533,13 @@ test_device!(
     grad_descent_metal,
     grad_descent_wgpu
 );
-test_device!(unary_grad, unary_grad_cpu, unary_grad_gpu, unary_grad_metal,unary_grad_wgpu);
+test_device!(
+    unary_grad,
+    unary_grad_cpu,
+    unary_grad_gpu,
+    unary_grad_metal,
+    unary_grad_wgpu
+);
 test_device!(
     binary_grad,
     binary_grad_cpu,

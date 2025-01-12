@@ -41,7 +41,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     for device in handler.devices {
         for dtype in [DType::F32, DType::BF16, DType::F16] {
             let name = format!("copy_{:?}", dtype);
-            if device.is_dtype_available(dtype){
+            if device.is_dtype_available(dtype) {
                 run_copy_benchmark(c, &device, dtype, &name);
             }
         }

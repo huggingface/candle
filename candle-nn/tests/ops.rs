@@ -252,9 +252,33 @@ fn sigmoid(device: &Device) -> Result<()> {
 test_device!(ropei, ropei_cpu, ropei_gpu, ropei_metal);
 test_device!(rope, rope_cpu, rope_gpu, rope_metal);
 test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal);
-test_device!(softmax, softmax_cpu, softmax_gpu, softmax_metal,softmax_wgpu);
-test_device!(rms_norm, rms_norm_cpu, rms_norm_gpu, rms_norm_metal,rms_norm_wgpu);
-test_device!(rms_norml, rms_norml_cpu, rms_norml_gpu, rms_norml_metal, rms_norml_wgpu);
+test_device!(
+    softmax,
+    softmax_cpu,
+    softmax_gpu,
+    softmax_metal,
+    softmax_wgpu
+);
+test_device!(
+    rms_norm,
+    rms_norm_cpu,
+    rms_norm_gpu,
+    rms_norm_metal,
+    rms_norm_wgpu
+);
+test_device!(
+    rms_norml,
+    rms_norml_cpu,
+    rms_norml_gpu,
+    rms_norml_metal,
+    rms_norml_wgpu
+);
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_meta, ln_wgpu);
 test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal, lnl_wgpu);
-test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal,sigmoid_wgpu);
+test_device!(
+    sigmoid,
+    sigmoid_cpu,
+    sigmoid_gpu,
+    sigmoid_metal,
+    sigmoid_wgpu
+);

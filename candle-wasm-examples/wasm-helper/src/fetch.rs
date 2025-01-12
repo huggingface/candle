@@ -1,12 +1,12 @@
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request, RequestInit, RequestMode, Response};
 
-use wasm_bindgen::JsCast;
 use crate::generic_error::GenericResult;
+use wasm_bindgen::JsCast;
 
-pub async fn download_file(url : &str) -> GenericResult<web_sys::Blob> {
+pub async fn download_file(url: &str) -> GenericResult<web_sys::Blob> {
     log::info!("download file: {url}");
-    
+
     let opts = RequestInit::new();
     opts.set_method("GET");
     opts.set_mode(RequestMode::Cors);
@@ -27,18 +27,17 @@ pub async fn download_file(url : &str) -> GenericResult<web_sys::Blob> {
     let resp: Response = resp_value.dyn_into().unwrap();
 
     log::info!("resp: {resp:?}");
-    
+
     let status = resp.status();
 
     log::info!("status: {status:?}");
 
     let status_text = resp.status_text();
 
-
     log::info!("status_text: {status_text:?}");
     log::info!("trying to create blob");
-    
-    let blob : web_sys::Blob = JsFuture::from(resp.blob()?).await?.into();
+
+    let blob: web_sys::Blob = JsFuture::from(resp.blob()?).await?.into();
 
     log::info!("blob created");
 

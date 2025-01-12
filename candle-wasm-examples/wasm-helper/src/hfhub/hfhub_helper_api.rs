@@ -1,5 +1,8 @@
-
-use crate::{fetch::download_file, generic_error::GenericError, opfs::{create_file, write_file_blob}};
+use crate::{
+    fetch::download_file,
+    generic_error::GenericError,
+    opfs::{create_file, write_file_blob},
+};
 
 use std::path::PathBuf;
 
@@ -50,7 +53,6 @@ impl ApiBuilder {
         self
     }
 
-
     /// Consumes the builder and buids the final [`Api`]
     pub fn build(self) -> Result<Api, GenericError> {
         Ok(Api {
@@ -68,9 +70,8 @@ impl ApiBuilder {
 pub struct Api {
     endpoint: String,
     url_template: String,
-    cache: Cache
+    cache: Cache,
 }
-
 
 impl Api {
     /// Creates a default Api, for Api options See [`ApiBuilder`]
@@ -179,12 +180,8 @@ impl ApiRepo {
     /// ```
     pub async fn download(&self, filename: &str) -> Result<PathBuf, GenericError> {
         let url = self.url(filename);
-       
-        let mut pointer_path = self
-            .api
-            .cache
-            .repo(self.repo.clone())
-            .path();
+
+        let mut pointer_path = self.api.cache.repo(self.repo.clone()).path();
         pointer_path.push(filename);
 
         log::info!("download file: {filename} to {:?}", pointer_path);

@@ -7,8 +7,8 @@ use tokio::test as test;
 use candle_wasm_tests::{
     to_vec0_round_async, to_vec1_round_async, to_vec2_round_async, to_vec3_round_async,
 };
-use candle::{test_device, Device, Tensor};
 use anyhow::{Ok, Result};
+use candle::{test_device, Device, Tensor};
 async fn convert(device: &Device) -> Result<()> {
     let vf32 = Tensor::arange(0f32, 4f32, device)?;
     let vf32_u32: Vec<u32> = vf32.to_dtype(candle::DType::U32)?.to_vec1_async().await?;

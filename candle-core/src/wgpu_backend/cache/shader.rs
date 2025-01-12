@@ -94,7 +94,7 @@ fn load_pipeline(
     } else {
         wgpu::PipelineCompilationOptions {
             constants: consts,
-            zero_initialize_workgroup_memory: true
+            zero_initialize_workgroup_memory: true,
         }
     };
     return device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

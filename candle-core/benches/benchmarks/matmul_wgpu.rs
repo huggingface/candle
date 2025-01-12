@@ -15,35 +15,33 @@ fn run(a: &Tensor, b: &Tensor) {
 fn test_matmul(
     device: &Device,
     group: &mut criterion::BenchmarkGroup<criterion::measurement::WallTime>,
-    bmnk : (usize,usize,usize,usize),
+    bmnk: (usize, usize, usize, usize),
     _is_small_line: bool,
     size: usize,
     multiple_sizes: bool,
-    tp : (bool, bool)
+    tp: (bool, bool),
 ) {
     let (b, m, n, k) = bmnk;
     let (tpa, tpb) = tp;
     let dtype = DType::F32;
 
-    let lhs = 
-        if tpa {
-            Tensor::zeros((b, k, m), dtype, device)
-                .unwrap()
-                .transpose(D::Minus1, D::Minus2)
-                .unwrap()
-        } else {
-            Tensor::zeros((b, m, k), dtype, device).unwrap()
-        };
+    let lhs = if tpa {
+        Tensor::zeros((b, k, m), dtype, device)
+            .unwrap()
+            .transpose(D::Minus1, D::Minus2)
+            .unwrap()
+    } else {
+        Tensor::zeros((b, m, k), dtype, device).unwrap()
+    };
 
-    let rhs = 
-        if tpb {
-            Tensor::zeros((b, n, k), dtype, device)
-                .unwrap()
-                .transpose(D::Minus1, D::Minus2)
-                .unwrap()
-        } else {
-            Tensor::zeros((b, k, n), dtype, device).unwrap()
-        };
+    let rhs = if tpb {
+        Tensor::zeros((b, n, k), dtype, device)
+            .unwrap()
+            .transpose(D::Minus1, D::Minus2)
+            .unwrap()
+    } else {
+        Tensor::zeros((b, k, n), dtype, device).unwrap()
+    };
 
     let flops = b * m * n * k;
     group.throughput(Throughput::Bytes(flops as u64));
@@ -52,7 +50,7 @@ fn test_matmul(
     group.warm_up_time(Duration::from_secs_f32(0.25));
     if device.is_wgpu() {
         #[cfg(feature = "wgpu")]
-            if let Device::Wgpu(wgpu) = device {
+        if let Device::Wgpu(wgpu) = device {
             {
                 let mut algs;
                 algs = vec![
@@ -149,7 +147,6 @@ fn test_matmul(
     }
 }
 
-
 #[allow(dead_code)]
 fn test_functions(
     device: &Device,
@@ -161,12 +158,11 @@ fn test_functions(
         test_matmul(
             device,
             group,
-            (1,fm(size),size,size),
+            (1, fm(size), size, size),
             fm(2) == 1,
             size,
             true,
-            (false,
-            false,)
+            (false, false),
         );
     }
     #[cfg(feature = "wgpu")]
@@ -192,11 +188,27 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("matmul_(2048x2048 * 2048x2048)");
     for device in handler.devices.iter() {
-        test_matmul(device, &mut group, (1, 2048, 2048, 2048), false, 1, false, (false, false));
-        test_matmul(device, &mut group, (1, 2048, 2048, 2048), false, 1, false, (true, false));
+        test_matmul(
+            device,
+            &mut group,
+            (1, 2048, 2048, 2048),
+            false,
+            1,
+            false,
+            (false, false),
+        );
+        test_matmul(
+            device,
+            &mut group,
+            (1, 2048, 2048, 2048),
+            false,
+            1,
+            false,
+            (true, false),
+        );
         // test_matmul(device, &mut group, (1, 2048, 2048, 2048), false, 1, false, (false, true));
         // test_matmul(device, &mut group, (1, 2048, 2048, 2048), false, 1, false, (true, true));
-     }
+    }
     group.finish();
 
     // let mut group = c.benchmark_group("matmul_(2050x2050 * 2050x2050)");
@@ -213,7 +225,6 @@ fn criterion_benchmark(c: &mut Criterion) {
     //     test_matmul(device, &mut group, (2, 1, 576, 9), true, 1, false, (false, false));
     // }
     // group.finish();
-
 
     // let mut group = c.benchmark_group("matmul_(32x2304 * 2304x5120)");
     // for device in handler.devices.iter() {

@@ -7,8 +7,8 @@ use tokio::test as test;
 use candle_wasm_tests::{
     to_vec0_round_async, to_vec1_round_async, to_vec2_round_async, to_vec3_round_async,
 };
-use candle::{test_device, Device, Tensor};
 use anyhow::{Ok, Result};
+use candle::{test_device, Device, Tensor};
 async fn convert(device: &Device) -> Result<()> {
     let vf32 = Tensor::arange(0f32, 4f32, device)?;
     let vf32_u32: Vec<u32> = vf32.to_dtype(candle::DType::U32)?.to_vec1_async().await?;
@@ -2285,7 +2285,7 @@ async fn test_matmul_kernels_wgpu() -> Result<()> {
         MatmulAlgorithm::Matmul32_32, MatmulAlgorithm::Matmul64_64,
         MatmulAlgorithm::Matmul64_64_8_8, MatmulAlgorithm::Matmul24_24,
         MatmulAlgorithm::Matmul24_48, MatmulAlgorithm::Matmul24_24B,
-        MatmulAlgorithm::Matmul24_48B
+        MatmulAlgorithm::Matmul24_48B,
     ];
     let device = Device::new_wgpu_async(0).await?;
     if let Device::Wgpu(wgpu) = &device {

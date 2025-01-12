@@ -86,7 +86,7 @@ impl CacheRepo {
     pub async fn get(&self, filename: &str) -> Option<PathBuf> {
         let mut pointer_path = self.path();
         pointer_path.push(filename);
-        if exist_file(&pointer_path).await{
+        if exist_file(&pointer_path).await {
             Some(pointer_path)
         } else {
             None

@@ -1,14 +1,14 @@
 pub(crate) mod affine;
-pub(crate) mod conv_transpose2d;
+pub(crate) mod binary;
 pub(crate) mod conv2d;
+pub(crate) mod conv_transpose2d;
+pub(crate) mod copy;
 pub(crate) mod matmul;
-pub(crate) mod qmatmul;
 pub(crate) mod matmul_wgpu;
+pub(crate) mod qmatmul;
 pub(crate) mod random;
 pub(crate) mod unary;
-pub(crate) mod binary;
 pub(crate) mod where_cond;
-pub(crate) mod copy;
 
 use candle_core::{backend::BackendDevice, Device, Result};
 
@@ -34,7 +34,7 @@ impl BenchDevice for Device {
                 #[cfg(not(feature = "metal"))]
                 panic!("Metal device without metal feature enabled: {:?}", device)
             }
-            Device::Wgpu(device) => Ok(device.synchronize()?)
+            Device::Wgpu(device) => Ok(device.synchronize()?),
         }
     }
 
@@ -52,7 +52,7 @@ impl BenchDevice for Device {
             }
             Device::Cuda(_) => format!("cuda_{}", name.into()),
             Device::Metal(_) => format!("metal_{}", name.into()),
-            Device::Wgpu(_) => format!("wgpu_{}", name.into())
+            Device::Wgpu(_) => format!("wgpu_{}", name.into()),
         }
     }
 }
@@ -68,7 +68,7 @@ impl BenchDeviceHandler {
             devices.push(Device::new_metal(0)?);
         } else if cfg!(feature = "cuda") {
             devices.push(Device::new_cuda(0)?);
-        }else if cfg!(feature = "wgpu") {
+        } else if cfg!(feature = "wgpu") {
             devices.push(Device::new_wgpu(0)?);
         }
         devices.push(Device::Cpu);
