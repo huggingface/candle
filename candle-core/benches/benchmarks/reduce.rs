@@ -12,7 +12,7 @@ fn run_arg_min(a: &Tensor) {
     a.argmin_keepdim(2).unwrap();
 }
 
-// TODO: Remove before merging. Softmax impls live in candle-nn, so this is a temporary workaround.
+// NOTE: Should this be removed? Softmax impls live in candle-nn.
 fn softmax(a: &Tensor) -> candle_core::Result<()> {
     use candle_core::{backend::BackendStorage, DType};
     let (storage, layout) = a.storage_and_layout();
@@ -121,7 +121,6 @@ fn run_reduce<T: candle_core::FloatDType>(
     strided: bool,
 ) {
     let b = 1;
-
     let m = 1024;
     let k = 1024;
 

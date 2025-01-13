@@ -561,27 +561,31 @@ pub fn call_reduce_contiguous(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     kernel_name: &'static str,
-    length: usize,
+    shape: &[usize],
     out_length: usize,
     input: BufferOffset,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
+    let length = shape.iter().product::<usize>();
+    let num_dims = shape.len();
     let work_per_threadgroup = length / out_length;
-
-    let (name, granularity) = if work_per_threadgroup % 4 == 0 {
-        (format!("{kernel_name}x4").leak(), 4)
-    } else if work_per_threadgroup % 2 == 0 {
-        (format!("{kernel_name}x2").leak(), 2)
-    } else {
-        (format!("{kernel_name}").leak(), 1)
-    };
-    let pipeline = kernels.load_pipeline(device, Source::Candle, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (length, work_per_threadgroup, &input, output));
+    set_params!(
+        encoder,
+        (
+            length,
+            num_dims,
+            shape,
+            work_per_threadgroup,
+            &input,
+            output
+        )
+    );
 
     let thread_group_count = MTLSize {
         width: out_length as u64,
@@ -589,7 +593,7 @@ pub fn call_reduce_contiguous(
         depth: 1,
     };
 
-    let work_split = work_per_threadgroup / (2 * granularity);
+    let work_split = work_per_threadgroup / 2;
     let mut w = 2;
     while w < work_split {
         w *= 2;
@@ -605,6 +609,7 @@ pub fn call_reduce_contiguous(
         height: 1,
         depth: 1,
     };
+
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -624,6 +629,7 @@ pub fn call_reduce_strided(
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let length: usize = shape.iter().product();
+    let num_dims = shape.len();
     let work_per_threadgroup = length / out_length;
     let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
 
@@ -634,7 +640,8 @@ pub fn call_reduce_strided(
     set_params!(
         encoder,
         (
-            shape.len(),
+            length,
+            num_dims,
             shape,
             strides,
             work_per_threadgroup,
@@ -684,15 +691,8 @@ pub fn call_last_softmax(
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let work_per_threadgroup = elements;
-    let (name, granularity) = if work_per_threadgroup % 4 == 0 {
-        (format!("{kernel_name}x4").leak(), 4)
-    } else if work_per_threadgroup % 2 == 0 {
-        (format!("{kernel_name}x2").leak(), 2)
-    } else {
-        (format!("{kernel_name}").leak(), 1)
-    };
 
-    let pipeline = kernels.load_pipeline(device, Source::Candle, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -710,12 +710,11 @@ pub fn call_last_softmax(
         depth: 1,
     };
 
-    let work_split = work_per_threadgroup / (2 * granularity);
+    let work_split = work_per_threadgroup / 2;
     let mut w = 2;
     while w < work_split {
         w *= 2;
     }
-    w *= 2;
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),

@@ -278,7 +278,14 @@ impl BackendStorage for MetalStorage {
             }
         }
 
-        if layout.is_contiguous() {
+        for &dim_idx in sum_dims.iter() {
+            dims.push(src_dims[dim_idx]);
+            stride.push(src_stride[dim_idx]);
+        }
+
+        let reduction_shape = Shape::from(dims.clone());
+
+        if layout.is_contiguous() && reduction_shape.is_contiguous(&stride) {
             let (name, check_empty, return_index) = match (op, self.dtype) {
                 (ReduceOp::Sum, DType::F32) => ("fast_sum_f32", false, false),
                 (ReduceOp::Min, DType::F32) => ("fast_min_f32", true, false),
@@ -326,7 +333,7 @@ impl BackendStorage for MetalStorage {
                 &command_buffer,
                 &device.kernels,
                 name,
-                layout.shape().elem_count(),
+                &src_dims,
                 dst_el,
                 src,
                 &buffer,
@@ -334,11 +341,6 @@ impl BackendStorage for MetalStorage {
             .map_err(MetalError::from)?;
 
             return Ok(Self::new(buffer, device, dst_el, dtype));
-        }
-
-        for &dim_idx in sum_dims.iter() {
-            dims.push(src_dims[dim_idx]);
-            stride.push(src_stride[dim_idx]);
         }
 
         let (name, check_empty, return_index) = match (op, self.dtype) {

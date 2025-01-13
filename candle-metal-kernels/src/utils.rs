@@ -183,7 +183,8 @@ impl<'a> AsRef<metal::ComputeCommandEncoderRef> for WrappedEncoder<'a> {
 }
 
 impl EncoderProvider for &metal::CommandBuffer {
-    type Encoder<'a> = WrappedEncoder<'a>
+    type Encoder<'a>
+        = WrappedEncoder<'a>
     where
         Self: 'a;
     fn encoder<'a>(&'a self) -> Self::Encoder<'a> {
@@ -192,7 +193,8 @@ impl EncoderProvider for &metal::CommandBuffer {
 }
 
 impl EncoderProvider for &metal::CommandBufferRef {
-    type Encoder<'a> = WrappedEncoder<'a>
+    type Encoder<'a>
+        = WrappedEncoder<'a>
     where
         Self: 'a;
     fn encoder<'a>(&'a self) -> Self::Encoder<'a> {

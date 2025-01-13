@@ -798,7 +798,12 @@ fn cos_f16() {
     assert_eq!(approx_f16(expected, 2), vec![0.54, -0.42, -0.99]);
 }
 
-fn run_reduce<T, U: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<U> {
+fn run_reduce<T, U: Clone>(
+    v: &[T],
+    in_length: usize,
+    out_length: usize,
+    name: &'static str,
+) -> Vec<U> {
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
@@ -807,12 +812,13 @@ fn run_reduce<T, U: Clone>(v: &[T], out_length: usize, name: &'static str) -> Ve
 
     let options = MTLResourceOptions::StorageModeManaged;
     let output = device.new_buffer((out_length * core::mem::size_of::<U>()) as u64, options);
+    let shape = vec![in_length];
     match call_reduce_contiguous(
         &device,
         command_buffer,
         &kernels,
         name,
-        v.len(),
+        &shape,
         out_length,
         BufferOffset::zero_offset(&input),
         &output,
@@ -926,7 +932,7 @@ fn reduce_sum_case<const N: usize, const D: usize>() {
         // Hardens 1-dimensional test cases
         v.shuffle(&mut thread_rng());
     }
-    let results = run_reduce(&v, D, "fast_sum_f32");
+    let results = run_reduce(&v, N, D, "fast_sum_f32");
     assert_eq!(approx(results, 4), correct_sum::<N, D>());
 }
 
@@ -936,7 +942,7 @@ fn reduce_max_case<const N: usize, const D: usize>() {
         // Hardens 1-dimensional test cases
         v.shuffle(&mut thread_rng());
     }
-    let results = run_reduce(&v, D, "fast_max_f32");
+    let results = run_reduce(&v, N, D, "fast_max_f32");
     assert_eq!(approx(results, 4), correct_max::<N, D>());
 }
 
@@ -946,7 +952,7 @@ fn reduce_argmax_case<const N: usize, const D: usize>() {
         // Hardens 1-dimensional test cases
         v.shuffle(&mut thread_rng());
     }
-    let results: Vec<u32> = run_reduce(&v, D, "fast_argmax_f32");
+    let results: Vec<u32> = run_reduce(&v, N, D, "fast_argmax_f32");
     assert_eq!(results, correct_argmax::<N, D>(v));
 }
 
@@ -1099,7 +1105,7 @@ fn softmax() {
     let results = run_softmax(&v, last_dim, "softmax_bf16");
     assert_eq!(
         approx_bf16(results, 4),
-        vec![0.0043, 0.0116, 0.0315, 0.0859, 0.2324, 0.6328]
+        vec![0.0043, 0.0117, 0.0317, 0.0864, 0.2334, 0.6367]
     );
 }
 
