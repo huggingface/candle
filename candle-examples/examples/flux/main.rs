@@ -23,6 +23,10 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
+    /// Use the quantized model.
+    #[arg(long)]
+    quantized: bool,
+
     /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
     tracing: bool,
@@ -40,6 +44,14 @@ struct Args {
 
     #[arg(long, value_enum, default_value = "schnell")]
     model: Model,
+
+    /// Use the slower kernels.
+    #[arg(long)]
+    use_dmmv: bool,
+
+    /// The seed to use when generating random samples.
+    #[arg(long)]
+    seed: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
@@ -60,6 +72,8 @@ fn run(args: Args) -> Result<()> {
         tracing,
         decode_only,
         model,
+        quantized,
+        ..
     } = args;
     let width = width.unwrap_or(1360);
     let height = height.unwrap_or(768);
@@ -81,6 +95,9 @@ fn run(args: Args) -> Result<()> {
         api.repo(hf_hub::Repo::model(name.to_string()))
     };
     let device = candle_examples::device(cpu)?;
+    if let Some(seed) = args.seed {
+        device.set_seed(seed)?;
+    }
     let dtype = device.bf16_default_to_f32();
     let img = match decode_only {
         None => {
@@ -146,38 +163,71 @@ fn run(args: Args) -> Result<()> {
             };
             println!("CLIP\n{clip_emb}");
             let img = {
-                let model_file = match model {
-                    Model::Schnell => bf_repo.get("flux1-schnell.safetensors")?,
-                    Model::Dev => bf_repo.get("flux1-dev.safetensors")?,
-                };
-                let vb =
-                    unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)? };
                 let cfg = match model {
                     Model::Dev => flux::model::Config::dev(),
                     Model::Schnell => flux::model::Config::schnell(),
                 };
                 let img = flux::sampling::get_noise(1, height, width, &device)?.to_dtype(dtype)?;
-                let state = flux::sampling::State::new(&t5_emb, &clip_emb, &img)?;
+                let state = if quantized {
+                    flux::sampling::State::new(
+                        &t5_emb.to_dtype(candle::DType::F32)?,
+                        &clip_emb.to_dtype(candle::DType::F32)?,
+                        &img.to_dtype(candle::DType::F32)?,
+                    )?
+                } else {
+                    flux::sampling::State::new(&t5_emb, &clip_emb, &img)?
+                };
                 let timesteps = match model {
                     Model::Dev => {
                         flux::sampling::get_schedule(50, Some((state.img.dim(1)?, 0.5, 1.15)))
                     }
                     Model::Schnell => flux::sampling::get_schedule(4, None),
                 };
-                let model = flux::model::Flux::new(&cfg, vb)?;
-
                 println!("{state:?}");
                 println!("{timesteps:?}");
-                flux::sampling::denoise(
-                    &model,
-                    &state.img,
-                    &state.img_ids,
-                    &state.txt,
-                    &state.txt_ids,
-                    &state.vec,
-                    &timesteps,
-                    4.,
-                )?
+                if quantized {
+                    let model_file = match model {
+                        Model::Schnell => api
+                            .repo(hf_hub::Repo::model("lmz/candle-flux".to_string()))
+                            .get("flux1-schnell.gguf")?,
+                        Model::Dev => todo!(),
+                    };
+                    let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
+                        model_file, &device,
+                    )?;
+
+                    let model = flux::quantized_model::Flux::new(&cfg, vb)?;
+                    flux::sampling::denoise(
+                        &model,
+                        &state.img,
+                        &state.img_ids,
+                        &state.txt,
+                        &state.txt_ids,
+                        &state.vec,
+                        &timesteps,
+                        4.,
+                    )?
+                    .to_dtype(dtype)?
+                } else {
+                    let model_file = match model {
+                        Model::Schnell => bf_repo.get("flux1-schnell.safetensors")?,
+                        Model::Dev => bf_repo.get("flux1-dev.safetensors")?,
+                    };
+                    let vb = unsafe {
+                        VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)?
+                    };
+                    let model = flux::model::Flux::new(&cfg, vb)?;
+                    flux::sampling::denoise(
+                        &model,
+                        &state.img,
+                        &state.img_ids,
+                        &state.txt,
+                        &state.txt_ids,
+                        &state.vec,
+                        &timesteps,
+                        4.,
+                    )?
+                }
             };
             flux::sampling::unpack(&img, height, width)?
         }
@@ -200,11 +250,17 @@ fn run(args: Args) -> Result<()> {
     };
     println!("img\n{img}");
     let img = ((img.clamp(-1f32, 1f32)? + 1.0)? * 127.5)?.to_dtype(candle::DType::U8)?;
-    candle_examples::save_image(&img.i(0)?, "out.jpg")?;
+    let filename = match args.seed {
+        None => "out.jpg".to_string(),
+        Some(s) => format!("out-{s}.jpg"),
+    };
+    candle_examples::save_image(&img.i(0)?, filename)?;
     Ok(())
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    #[cfg(feature = "cuda")]
+    candle::quantized::cuda::set_force_dmmv(args.use_dmmv);
     run(args)
 }

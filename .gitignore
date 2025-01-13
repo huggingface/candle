@@ -43,3 +43,6 @@ candle-wasm-examples/**/config*.json
 __pycache__
 out.safetensors
 out.wav
+bria.mp3
+bria.safetensors
+bria.wav

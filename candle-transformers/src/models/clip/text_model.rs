@@ -3,8 +3,8 @@
 //! Contrastive Language-Image Pre-Training (CLIP) is an architecture trained on
 //! pairs of images with related texts.
 //!
-//! https://github.com/openai/CLIP
-//! https://github.com/huggingface/transformers/tree/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip
+//! - [GH](https://github.com/openai/CLIP)
+//! - [Code](https://github.com/huggingface/transformers/tree/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip)
 
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn as nn;
@@ -77,7 +77,7 @@ impl ClipTextEmbeddings {
         )?;
         let position_ids =
             Tensor::arange(0u32, c.max_position_embeddings as u32, vs.device())?.unsqueeze(0)?;
-        Ok(ClipTextEmbeddings {
+        Ok(Self {
             token_embedding,
             position_embedding,
             position_ids,
@@ -298,7 +298,7 @@ impl ClipTextTransformer {
         })
     }
 
-    // TODO: rewrrite to newer version
+    // TODO: rewrite to newer version
     fn build_causal_attention_mask(
         bsz: usize,
         seq_len: usize,

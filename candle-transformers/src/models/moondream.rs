@@ -1,3 +1,40 @@
+//! MoonDream Model vision-to-text
+//!
+//!
+//! Moondream is a computer-vision model that can answer real-world questions about images.
+//! It's lightweight with only 1.6B parameters, enabling it to run on mobile phones and edge devices.
+//! [MoonDream Original Implementation](https://github.com/vikhyat/moondream)
+//!
+//! The model consists of:
+//! - Vision encoder using a ViT-style architecture
+//! - Text decoder based on Microsoft's Phi model
+//! - Vision projection module to align vision and text embeddings
+//!
+//! # Examples
+//!
+//! <img src="https://raw.githubusercontent.com/vikhyat/moondream/main/assets/demo-1.jpg" width="200">
+//!
+//! ```bash
+//! # download an example image
+//! wget https://raw.githubusercontent.com/vikhyat/moondream/main/assets/demo-1.jpg
+//!
+//! # Now you can run Moondream from the `candle-examples` crate:
+//! cargo run --example moondream \
+//!   --release -- \
+//!   --prompt "What is the girl eating?"
+//!   --image "./demo-1.jpg"
+//!
+//! > avavx: false, neon: true, simd128: false, f16c: false
+//! > temp: 0.00 repeat-penalty: 1.00 repeat-last-n: 64
+//! > retrieved the files in 3.395583ms
+//! > Running on CPU, to run on GPU(metal), build this example with `--features metal`
+//! > loaded the model in 5.485493792s
+//! > loaded and encoded the image Tensor[dims 3, 378, 378; f32] in 4.801396417s
+//! > starting the inference loop
+//! > The girl is eating a hamburger.<
+//! > 9 tokens generated (0.68 token/s)
+//! ```
+
 use crate::models::mixformer::{Config as PhiConfig, MixFormerSequentialForCausalLM as PhiModel};
 use crate::models::with_tracing::{layer_norm, linear_b, LayerNorm, Linear};
 use candle::{IndexOp, Module, Result, Tensor, D};
@@ -167,7 +204,7 @@ impl VisionTransformer {
         let blocks = (0..cfg.num_blocks)
             .map(|i| {
                 VitBlock::new(
-                    vb.pp(&format!("blocks.{}", i)),
+                    vb.pp(format!("blocks.{}", i)),
                     cfg.embed_dim,
                     cfg.num_heads,
                     cfg,

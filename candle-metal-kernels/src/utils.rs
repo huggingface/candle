@@ -8,7 +8,7 @@ use std::ffi::c_void;
 pub(crate) fn linear_split(pipeline: &ComputePipelineState, length: usize) -> (MTLSize, MTLSize) {
     let size = length as u64;
     let width = std::cmp::min(pipeline.max_total_threads_per_threadgroup(), size);
-    let count = (size + width - 1) / width;
+    let count = size.div_ceil(width);
     let thread_group_count = MTLSize {
         width: count,
         height: 1,
@@ -24,7 +24,7 @@ pub(crate) fn linear_split(pipeline: &ComputePipelineState, length: usize) -> (M
 }
 
 // https://github.com/ml-explore/mlx/blob/bddf23f175726a57f0e443cd45518c0757daa166/mlx/backend/metal/utils.h#L96
-pub(crate) fn get_block_dims(dim0: u64, dim1: u64, dim2: u64) -> MTLSize {
+pub fn get_block_dims(dim0: u64, dim1: u64, dim2: u64) -> MTLSize {
     let mut pows0 = 0u64;
     let mut pows1 = 0u64;
     let mut pows2 = 0u64;
@@ -61,18 +61,14 @@ pub(crate) fn get_block_dims(dim0: u64, dim1: u64, dim2: u64) -> MTLSize {
     }
 }
 
-pub(crate) fn set_param<P: EncoderParam>(
-    encoder: &ComputeCommandEncoderRef,
-    position: u64,
-    data: P,
-) {
+pub fn set_param<P: EncoderParam>(encoder: &ComputeCommandEncoderRef, position: u64, data: P) {
     <P as EncoderParam>::set_param(encoder, position, data)
 }
 
 /// Helper functions to create the various objects on the compute command encoder
 /// on a single line.
 /// Prevents getting wrong some arguments number and mixing length and size in bytes.
-pub(crate) trait EncoderParam {
+pub trait EncoderParam {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self);
 }
 macro_rules! primitive {
@@ -132,7 +128,7 @@ impl EncoderParam for (&Buffer, usize) {
     }
 }
 
-impl<'a> EncoderParam for &BufferOffset<'a> {
+impl EncoderParam for &BufferOffset<'_> {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
         encoder.set_buffer(position, Some(data.buffer), data.offset_in_bytes as u64);
     }
@@ -165,20 +161,25 @@ pub trait EncoderProvider {
     type Encoder<'a>: AsRef<metal::ComputeCommandEncoderRef>
     where
         Self: 'a;
-    fn encoder<'a>(&'a self) -> Self::Encoder<'a>;
+    fn encoder(&self) -> Self::Encoder<'_>;
 }
 
-pub struct WrappedEncoder<'a>(&'a ComputeCommandEncoderRef);
+pub struct WrappedEncoder<'a> {
+    inner: &'a ComputeCommandEncoderRef,
+    end_encoding_on_drop: bool,
+}
 
-impl<'a> Drop for WrappedEncoder<'a> {
+impl Drop for WrappedEncoder<'_> {
     fn drop(&mut self) {
-        self.0.end_encoding()
+        if self.end_encoding_on_drop {
+            self.inner.end_encoding()
+        }
     }
 }
 
-impl<'a> AsRef<metal::ComputeCommandEncoderRef> for WrappedEncoder<'a> {
+impl AsRef<metal::ComputeCommandEncoderRef> for WrappedEncoder<'_> {
     fn as_ref(&self) -> &metal::ComputeCommandEncoderRef {
-        &self.0
+        self.inner
     }
 }
 
@@ -187,8 +188,11 @@ impl EncoderProvider for &metal::CommandBuffer {
         = WrappedEncoder<'a>
     where
         Self: 'a;
-    fn encoder<'a>(&'a self) -> Self::Encoder<'a> {
-        WrappedEncoder(self.new_compute_command_encoder())
+    fn encoder(&self) -> Self::Encoder<'_> {
+        WrappedEncoder {
+            inner: self.new_compute_command_encoder(),
+            end_encoding_on_drop: true,
+        }
     }
 }
 
@@ -197,7 +201,23 @@ impl EncoderProvider for &metal::CommandBufferRef {
         = WrappedEncoder<'a>
     where
         Self: 'a;
-    fn encoder<'a>(&'a self) -> Self::Encoder<'a> {
-        WrappedEncoder(self.new_compute_command_encoder())
+    fn encoder(&self) -> Self::Encoder<'_> {
+        WrappedEncoder {
+            inner: self.new_compute_command_encoder(),
+            end_encoding_on_drop: true,
+        }
+    }
+}
+
+impl EncoderProvider for &ComputeCommandEncoderRef {
+    type Encoder<'a>
+        = WrappedEncoder<'a>
+    where
+        Self: 'a;
+    fn encoder(&self) -> Self::Encoder<'_> {
+        WrappedEncoder {
+            inner: self,
+            end_encoding_on_drop: false,
+        }
     }
 }

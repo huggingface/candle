@@ -242,7 +242,7 @@ impl Tensor {
         Self::zeros_impl(shape, dtype, device, false)
     }
 
-    /// Creates a new tensor filled with ones with same shape, dtype, and device as the other
+    /// Creates a new tensor filled with zeros with same shape, dtype, and device as the other
     /// tensor.
     ///
     /// ```rust
@@ -1520,14 +1520,15 @@ impl Tensor {
     /// # Arguments
     ///
     /// * `self` - The input tensor.
-    /// * `indexes` - The indices of elements to gather, this should have the same shape as `self`
-    ///   but can have a different number of elements on the target dimension.
+    /// * `indexes` - The indices of elements to gather, this should have same number of dimensions as `self`
+    ///   and indexes.dims()[d] <= self.dims()[d] for all dimensions d != dim
     /// * `dim` - the target dimension.
     ///
     /// The resulting tensor has the same shape as `indexes` and use values from `self` indexed on
     /// dimension `dim` by the values in `indexes`.
     pub fn gather<D: Dim>(&self, indexes: &Self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "gather")?;
+
         let self_dims = self.dims();
         let indexes_dims = indexes.dims();
         let mismatch = if indexes_dims.len() != self_dims.len() {
@@ -1535,7 +1536,7 @@ impl Tensor {
         } else {
             let mut mismatch = false;
             for (i, (&d1, &d2)) in self_dims.iter().zip(indexes_dims.iter()).enumerate() {
-                if i != dim && d1 != d2 {
+                if i != dim && d1 < d2 {
                     mismatch = true;
                     break;
                 }
@@ -1757,6 +1758,42 @@ impl Tensor {
 
     pub(crate) fn op(&self) -> &Option<Op> {
         &self.op
+    }
+
+    /// Computes the max of all the elements in this tensor and returns a tensor holding this
+    /// scalar with zero dimensions.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let tensor = tensor.max_all()?;
+    /// assert_eq!(tensor.to_scalar::<f32>()?, 5.);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn max_all(&self) -> Result<Tensor> {
+        if self.rank() == 0 {
+            Ok(self.clone())
+        } else {
+            self.flatten_all()?.max(0)
+        }
+    }
+
+    /// Computes the min of all the elements in this tensor and returns a tensor holding this
+    /// scalar with zero dimensions.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let tensor = tensor.min_all()?;
+    /// assert_eq!(tensor.to_scalar::<f32>()?, 0.);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn min_all(&self) -> Result<Tensor> {
+        if self.rank() == 0 {
+            Ok(self.clone())
+        } else {
+            self.flatten_all()?.min(0)
+        }
     }
 
     /// Computes the sum of all the elements in this tensor and returns a tensor holding this
@@ -2025,7 +2062,11 @@ impl Tensor {
                 }
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
                 _ => {
-                    bail!("not implemented yet")
+                    bail!(
+                        "not implemented yet, self.device: {:?}, device: {:?}",
+                        self.device(),
+                        device
+                    )
                 }
             };
             let op = BackpropOp::new1(self, Op::ToDevice);

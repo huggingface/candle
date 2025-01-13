@@ -1,3 +1,9 @@
+//! # JinaBERT inference implementation
+//!
+//! Based on implementation from huggingface for Jina BERT and its variants
+//!
+//! See: [Jina Embeddings on HuggingFace](https://huggingface.co/jinaai/jina-embeddings-v2-base-en)
+
 use super::with_tracing::{linear, linear_no_bias, Embedding, Linear};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Module, VarBuilder};
@@ -344,7 +350,7 @@ impl BertEncoder {
             candle::bail!("only alibi is supported as a position-embedding-type")
         }
         let layers = (0..cfg.num_hidden_layers)
-            .map(|index| BertLayer::new(vb.pp(&format!("layer.{index}")), cfg))
+            .map(|index| BertLayer::new(vb.pp(format!("layer.{index}")), cfg))
             .collect::<Result<Vec<_>>>()?;
         let span = tracing::span!(tracing::Level::TRACE, "encoder");
         let alibi = build_alibi_bias(cfg)?.to_device(vb.device())?;

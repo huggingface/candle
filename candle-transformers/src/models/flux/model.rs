@@ -109,14 +109,14 @@ fn apply_rope(x: &Tensor, freq_cis: &Tensor) -> Result<Tensor> {
     (fr0.broadcast_mul(&x0)? + fr1.broadcast_mul(&x1)?)?.reshape(dims.to_vec())
 }
 
-fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> {
+pub(crate) fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> {
     let q = apply_rope(q, pe)?.contiguous()?;
     let k = apply_rope(k, pe)?.contiguous()?;
     let x = scaled_dot_product_attention(&q, &k, v)?;
     x.transpose(1, 2)?.flatten_from(2)
 }
 
-fn timestep_embedding(t: &Tensor, dim: usize, dtype: DType) -> Result<Tensor> {
+pub(crate) fn timestep_embedding(t: &Tensor, dim: usize, dtype: DType) -> Result<Tensor> {
     const TIME_FACTOR: f64 = 1000.;
     const MAX_PERIOD: f64 = 10000.;
     if dim % 2 == 1 {
@@ -144,7 +144,7 @@ pub struct EmbedNd {
 }
 
 impl EmbedNd {
-    fn new(dim: usize, theta: usize, axes_dim: Vec<usize>) -> Self {
+    pub fn new(dim: usize, theta: usize, axes_dim: Vec<usize>) -> Self {
         Self {
             dim,
             theta,
@@ -575,9 +575,11 @@ impl Flux {
             final_layer,
         })
     }
+}
 
+impl super::WithForward for Flux {
     #[allow(clippy::too_many_arguments)]
-    pub fn forward(
+    fn forward(
         &self,
         img: &Tensor,
         img_ids: &Tensor,

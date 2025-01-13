@@ -1,3 +1,18 @@
+//! Phi3 model implementation with quantization support.
+//!
+//! Phi3 is a language model intended for research purposes.
+//! This implementation provides quantization for reduced memory usage.
+//!
+//! Key characteristics:
+//! - Multi-head attention
+//! - RMSNorm for layer normalization
+//! - Rotary positional embeddings (RoPE)
+//! - Support for quantization
+//!
+//! References:
+//! - [Model Card](https://huggingface.co/microsoft/phi-3)
+//!
+
 use std::collections::HashMap;
 
 use candle::quantized::gguf_file;
@@ -112,7 +127,7 @@ impl LayerWeights {
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
             .transpose(1, 2)?;
         let k = k
-            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?;
         let v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?

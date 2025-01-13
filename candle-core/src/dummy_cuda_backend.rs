@@ -1,3 +1,5 @@
+//! Implementation of the Cuda backend when Cuda support has not been compiled in.
+//!
 #![allow(dead_code)]
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
@@ -12,6 +14,12 @@ macro_rules! fail {
     () => {
         unimplemented!("cuda support has not been enabled, add `cuda` feature to enable.")
     };
+}
+
+impl CudaDevice {
+    pub fn new_with_stream(_: usize) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
 }
 
 impl crate::backend::BackendStorage for CudaStorage {

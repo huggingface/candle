@@ -1,3 +1,9 @@
+//! Gemma LLM architecture (Google) inference implementation.
+//!
+//! See ["Gemma: Open Models Based on Gemini Technology"](https://blog.google/technology/developers/gemma-open-models/)
+//!
+//! Based on implementations from Google and OpenLLM
+
 use std::sync::Arc;
 
 use candle::{DType, Device, Module, Result, Tensor, D};

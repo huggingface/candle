@@ -1,7 +1,7 @@
-// Just enough pickle support to be able to read PyTorch checkpoints.
+//! Just enough pickle support to be able to read PyTorch checkpoints.
 // This hardcodes objects that are required for tensor reading, we may want to make this a bit more
 // composable/tensor agnostic at some point.
-use crate::{DType, Error as E, Layout, Result, Tensor};
+use crate::{Context, DType, Error as E, Layout, Result, Tensor};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -537,7 +537,7 @@ impl Stack {
                         crate::bail!("setitems: not an even number of objects")
                     }
                     while let Some(value) = objs.pop() {
-                        let key = objs.pop().unwrap();
+                        let key = objs.pop().context("empty objs")?;
                         d.push((key, value))
                     }
                 } else {
@@ -557,7 +557,7 @@ impl Stack {
                     crate::bail!("setitems: not an even number of objects")
                 }
                 while let Some(value) = objs.pop() {
-                    let key = objs.pop().unwrap();
+                    let key = objs.pop().context("empty objs")?;
                     pydict.push((key, value))
                 }
                 self.push(Object::Dict(pydict))
@@ -661,7 +661,7 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
         if !file_name.ends_with("data.pkl") {
             continue;
         }
-        let dir_name = std::path::PathBuf::from(file_name.strip_suffix(".pkl").unwrap());
+        let dir_name = std::path::PathBuf::from(file_name.strip_suffix(".pkl").context("no .pkl")?);
         let reader = zip.by_name(file_name)?;
         let mut reader = std::io::BufReader::new(reader);
         let mut stack = Stack::empty();

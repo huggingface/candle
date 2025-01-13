@@ -1,8 +1,14 @@
+//! Marian Neural Machine Translation
+//!
+//! See "Marian: Fast Neural Machine Translation in C++" Junczys-Dowmunt et al. 2018
+//! - [ACL Anthology](https://aclanthology.org/P18-4020/)
+//! - [Github](https://github.com/marian-nmt/marian)
+//!
 use super::with_tracing::{linear, Embedding, Linear};
 use candle::{Result, Tensor};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     pub vocab_size: usize,
     pub decoder_vocab_size: Option<usize>,

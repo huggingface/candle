@@ -51,6 +51,27 @@ impl CudaDevice {
         self.device.clone()
     }
 
+    pub fn compile(
+        &self,
+        func_name: &'static str,
+        kernel: ug::lang::ssa::Kernel,
+    ) -> Result<CudaFunction> {
+        let mut buf = vec![];
+        ug_cuda::code_gen::gen(&mut buf, func_name, &kernel)?;
+        let cuda_code = String::from_utf8(buf)?;
+        let opts = cudarc::nvrtc::CompileOptions {
+            use_fast_math: Some(true),
+            ..Default::default()
+        };
+        let ptx = cudarc::nvrtc::safe::compile_ptx_with_opts(cuda_code, opts).w()?;
+        self.device.load_ptx(ptx, "ug", &[func_name]).w()?;
+        let func = match self.device.get_func("ug", func_name) {
+            Some(func) => func,
+            None => crate::bail!("unknown function ug::{func_name}"),
+        };
+        Ok(func)
+    }
+
     pub fn id(&self) -> DeviceId {
         self.id
     }
@@ -141,6 +162,20 @@ impl CudaDevice {
                 module_name: module_name.to_string(),
             })
             .w()
+    }
+}
+
+impl CudaDevice {
+    pub fn new_with_stream(ordinal: usize) -> Result<Self> {
+        let device = cudarc::driver::CudaDevice::new_with_stream(ordinal).w()?;
+        let blas = cudarc::cublas::CudaBlas::new(device.clone()).w()?;
+        let curand = cudarc::curand::CudaRng::new(299792458, device.clone()).w()?;
+        Ok(Self {
+            id: DeviceId::new(),
+            device,
+            blas: Arc::new(blas),
+            curand: Arc::new(Mutex::new(CudaRng(curand))),
+        })
     }
 }
 

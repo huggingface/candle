@@ -1,3 +1,9 @@
+//! Falcon language model inference implementation
+//!
+//! See ["Falcon: a new approach to large language models"](https://huggingface.co/blog/falcon)
+//!
+//! Based on implementation from [Huggingface Transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/falcon)
+
 use candle::{DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, linear_b as linear, Embedding, LayerNorm, Linear, Module, VarBuilder};
 use serde::Deserialize;
@@ -448,7 +454,7 @@ impl Falcon {
             vb.pp("transformer.word_embeddings"),
         )?;
         let blocks = (0..cfg.num_hidden_layers)
-            .map(|i| FalconDecoderLayer::load(vb.pp(&format!("transformer.h.{i}")), &cfg))
+            .map(|i| FalconDecoderLayer::load(vb.pp(format!("transformer.h.{i}")), &cfg))
             .collect::<Result<Vec<_>>>()?;
         let ln_f = layer_norm(
             cfg.hidden_size,

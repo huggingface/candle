@@ -1,5 +1,21 @@
+//! Segformer model implementation for semantic segmentation and image classification.
+//!
+//! Segformer is a transformer-based model designed for vision tasks. It uses a hierarchical
+//! structure that progressively generates features at different scales.
+//!
+//! Key characteristics:
+//! - Efficient self-attention with sequence reduction
+//! - Hierarchical feature generation
+//! - Mix-FFN for local and global feature interaction
+//! - Lightweight all-MLP decode head
+//!
+//! References:
+//! - [SegFormer Paper](https://arxiv.org/abs/2105.15203)
+//! - [Model Card](https://huggingface.co/nvidia/mit-b0)
+//!
+
 use crate::models::with_tracing::{conv2d, linear, Conv2d, Linear};
-use candle::{Module, ModuleT, Result, Tensor, D};
+use candle::{Context, Module, ModuleT, Result, Tensor, D};
 use candle_nn::{conv2d_no_bias, layer_norm, Activation, Conv2dConfig, VarBuilder};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -404,7 +420,7 @@ impl SegformerEncoder {
                 stride,
                 num_channels,
                 hidden_size,
-                vb.pp(&format!("patch_embeddings.{}", i)),
+                vb.pp(format!("patch_embeddings.{}", i)),
             )?);
             let mut layers = Vec::with_capacity(config.depths[i]);
             for j in 0..config.depths[i] {
@@ -417,14 +433,14 @@ impl SegformerEncoder {
                     num_attention_heads,
                     sequence_reduction_ratio,
                     mlp_ratio,
-                    vb.pp(&format!("block.{}.{}", i, j)),
+                    vb.pp(format!("block.{}.{}", i, j)),
                 )?);
             }
             blocks.push(layers);
             layer_norms.push(layer_norm(
                 hidden_size,
                 config.layer_norm_eps,
-                vb.pp(&format!("layer_norm.{}", i)),
+                vb.pp(format!("layer_norm.{}", i)),
             )?);
         }
         Ok(Self {
@@ -507,7 +523,7 @@ impl SegformerDecodeHead {
             linear_c.push(SegformerMLP::new(
                 config,
                 hidden_size,
-                vb.pp(&format!("linear_c.{}", i)),
+                vb.pp(format!("linear_c.{}", i)),
             )?);
         }
         let linear_fuse = conv2d_no_bias(
@@ -617,7 +633,7 @@ impl ImageClassificationModel {
 impl Module for ImageClassificationModel {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let all_hidden_states = self.segformer.forward(x)?;
-        let hidden_states = all_hidden_states.last().unwrap();
+        let hidden_states = all_hidden_states.last().context("no last")?;
         let hidden_states = hidden_states.flatten_from(2)?.permute((0, 2, 1))?;
         let mean = hidden_states.mean(1)?;
         self.classifier.forward(&mean)

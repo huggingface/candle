@@ -1,3 +1,5 @@
+//! Implementation of Backend traits for Metal
+//!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
@@ -472,17 +474,42 @@ impl BackendStorage for MetalStorage {
             .map_err(MetalError::from)?;
         } else {
             let kernel_name = match (self.dtype, dtype) {
+                (DType::BF16, DType::F16) => "cast_bf16_f16_strided",
+                (DType::BF16, DType::F32) => "cast_bf16_f32_strided",
+                (DType::BF16, DType::I64) => "cast_bf16_i64_strided",
+                (DType::BF16, DType::U32) => "cast_bf16_u32_strided",
+                (DType::BF16, DType::U8) => "cast_bf16_u8_strided",
+
+                (DType::F16, DType::BF16) => "cast_f16_bf16_strided",
+                (DType::F16, DType::F32) => "cast_f16_f32_strided",
+                (DType::F16, DType::I64) => "cast_f16_i64_strided",
+                (DType::F16, DType::U32) => "cast_f16_u32_strided",
+                (DType::F16, DType::U8) => "cast_f16_u8_strided",
+
+                (DType::F32, DType::BF16) => "cast_f32_bf16_strided",
+                (DType::F32, DType::F16) => "cast_f32_f16_strided",
+                (DType::F32, DType::I64) => "cast_f32_i64_strided",
+                (DType::F32, DType::U32) => "cast_f32_u32_strided",
+                (DType::F32, DType::U8) => "cast_f32_u8_strided",
+
+                (DType::I64, DType::F32) => "cast_i64_f32_strided",
+                (DType::I64, DType::BF16) => "cast_i64_bf16_strided",
+                (DType::I64, DType::F16) => "cast_i64_f16_strided",
+                (DType::I64, DType::U32) => "cast_i64_u32_strided",
+                (DType::I64, DType::U8) => "cast_i64_u8_strided",
+
+                (DType::U32, DType::BF16) => "cast_u32_bf16_strided",
+                (DType::U32, DType::F16) => "cast_u32_f16_strided",
                 (DType::U32, DType::F32) => "cast_u32_f32_strided",
-                (DType::U32, DType::U8) => "cast_u32_u8_strided",
                 (DType::U32, DType::I64) => "cast_u32_i64_strided",
-                (DType::U8, DType::U32) => "cast_u8_u32_strided",
+                (DType::U32, DType::U8) => "cast_u32_u8_strided",
+
+                (DType::U8, DType::BF16) => "cast_u8_bf16_strided",
+                (DType::U8, DType::F16) => "cast_u8_f16_strided",
                 (DType::U8, DType::F32) => "cast_u8_f32_strided",
                 (DType::U8, DType::I64) => "cast_u8_i64_strided",
-                (DType::F32, DType::F16) => "cast_f32_f16_strided",
-                (DType::F16, DType::F32) => "cast_f16_f32_strided",
-                (DType::I64, DType::F32) => "cast_i64_f32_strided",
-                (DType::F32, DType::BF16) => "cast_f32_bf16_strided",
-                (DType::BF16, DType::F32) => "cast_bf16_f32_strided",
+                (DType::U8, DType::U32) => "cast_u8_u32_strided",
+
                 (left, right) => {
                     crate::bail!("Metal strided to_dtype {left:?} {right:?} not implemented")
                 }
@@ -1272,11 +1299,12 @@ impl BackendStorage for MetalStorage {
         let dst_el = ids_l.shape().elem_count();
         let dtype = self.dtype;
         let device = self.device();
-        let buffer = device.new_buffer(dst_el, dtype, "index_select")?;
+        let buffer = device.new_buffer(dst_el, dtype, "gather")?;
         let name = match (ids.dtype, self.dtype) {
             (DType::U32, DType::F32) => "gather_u32_f32",
             (DType::U32, DType::F16) => "gather_u32_f16",
             (DType::U32, DType::BF16) => "gather_u32_bf16",
+            (DType::U32, DType::U32) => "gather_u32_u32",
             (left, right) => crate::bail!("Metal gather {left:?} {right:?} not implemented"),
         };
         let command_buffer = self.device.command_buffer()?;
@@ -1316,6 +1344,7 @@ impl BackendStorage for MetalStorage {
             (DType::U8, DType::F32) => "sa_u8_f32",
             (DType::U8, DType::F16) => "sa_u8_f16",
             (DType::U8, DType::BF16) => "sa_u8_bf16",
+            (DType::U32, DType::U32) => "sa_u32_u32",
             (DType::U32, DType::F32) => "sa_u32_f32",
             (DType::U32, DType::F16) => "sa_u32_f16",
             (DType::U32, DType::BF16) => "sa_u32_bf16",
@@ -1359,14 +1388,23 @@ impl BackendStorage for MetalStorage {
         let device = self.device();
         let buffer = device.new_buffer(dst_el, dtype, "index_select")?;
         let name = match (ids.dtype, self.dtype) {
+            (DType::U8, DType::U8) => "is_u8_u8",
+            (DType::U8, DType::U32) => "is_u8_u32",
+            (DType::U8, DType::I64) => "is_u8_i64",
             (DType::U8, DType::BF16) => "is_u8_bf16",
             (DType::U8, DType::F32) => "is_u8_f32",
             (DType::U8, DType::F16) => "is_u8_f16",
 
+            (DType::U32, DType::U8) => "is_u32_u8",
+            (DType::U32, DType::U32) => "is_u32_u32",
+            (DType::U32, DType::I64) => "is_u32_i64",
             (DType::U32, DType::F32) => "is_u32_f32",
             (DType::U32, DType::F16) => "is_u32_f16",
             (DType::U32, DType::BF16) => "is_u32_bf16",
 
+            (DType::I64, DType::U8) => "is_i64_u8",
+            (DType::I64, DType::U32) => "is_i64_u32",
+            (DType::I64, DType::I64) => "is_i64_i64",
             (DType::I64, DType::F32) => "is_i64_f32",
             (DType::I64, DType::F16) => "is_i64_f16",
             (DType::I64, DType::BF16) => "is_i64_bf16",
@@ -1458,6 +1496,7 @@ impl BackendStorage for MetalStorage {
         .map_err(MetalError::from)?;
         Ok(acc)
     }
+
     fn matmul(
         &self,
         rhs: &Self,
@@ -1466,32 +1505,78 @@ impl BackendStorage for MetalStorage {
         rhs_l: &Layout,
     ) -> Result<Self> {
         let buffer = self.device.new_buffer(b * m * n, self.dtype, "matmul")?;
-        let name = match self.dtype {
-            DType::F32 => "sgemm",
-            DType::F16 => "hgemm",
-            DType::BF16 => "bgemm",
-            dtype => {
-                return Err(MetalError::Message(format!("matmul doesn't support {dtype:?}")).into())
-            }
-        };
-
         let command_buffer = self.device.command_buffer()?;
         command_buffer.set_label("matmul");
-        candle_metal_kernels::call_gemm(
-            &self.device.device,
-            &command_buffer,
-            &self.device.kernels,
-            name,
-            (b, m, n, k),
-            lhs_l.stride(),
-            lhs_l.start_offset() * self.dtype.size_in_bytes(),
-            &self.buffer,
-            rhs_l.stride(),
-            rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
-            &rhs.buffer,
-            &buffer,
-        )
-        .map_err(MetalError::from)?;
+        if self.dtype == DType::BF16 {
+            candle_metal_kernels::call_mlx_gemm(
+                &self.device.device,
+                &command_buffer,
+                &self.device.kernels,
+                candle_metal_kernels::GemmDType::BF16,
+                (b, m, n, k),
+                lhs_l.stride(),
+                lhs_l.start_offset() * self.dtype.size_in_bytes(),
+                &self.buffer,
+                rhs_l.stride(),
+                rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
+                &rhs.buffer,
+                &buffer,
+            )
+            .map_err(MetalError::from)?;
+        } else if self.device.use_mlx_mm {
+            let dtype = match self.dtype {
+                DType::F32 => candle_metal_kernels::GemmDType::F32,
+                DType::F16 => candle_metal_kernels::GemmDType::F16,
+                DType::BF16 => candle_metal_kernels::GemmDType::BF16,
+                dtype => {
+                    return Err(MetalError::Message(format!(
+                        "mlx matmul doesn't support {dtype:?}"
+                    ))
+                    .into())
+                }
+            };
+            candle_metal_kernels::call_mlx_gemm(
+                &self.device.device,
+                &command_buffer,
+                &self.device.kernels,
+                dtype,
+                (b, m, n, k),
+                lhs_l.stride(),
+                lhs_l.start_offset() * self.dtype.size_in_bytes(),
+                &self.buffer,
+                rhs_l.stride(),
+                rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
+                &rhs.buffer,
+                &buffer,
+            )
+            .map_err(MetalError::from)?;
+        } else {
+            let name = match self.dtype {
+                DType::F32 => "sgemm",
+                DType::F16 => "hgemm",
+                dtype => {
+                    return Err(
+                        MetalError::Message(format!("matmul doesn't support {dtype:?}")).into(),
+                    )
+                }
+            };
+
+            candle_metal_kernels::call_gemm(
+                &self.device.device,
+                &command_buffer,
+                &self.device.kernels,
+                name,
+                (b, m, n, k),
+                lhs_l.stride(),
+                lhs_l.start_offset() * self.dtype.size_in_bytes(),
+                &self.buffer,
+                rhs_l.stride(),
+                rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
+                &rhs.buffer,
+                &buffer,
+            )
+            .map_err(MetalError::from)?;
+        }
         Ok(Self::new(
             buffer,
             self.device.clone(),
@@ -1852,31 +1937,25 @@ impl BackendDevice for MetalDevice {
     fn new(ordinal: usize) -> Result<Self> {
         let device = metal::Device::all().swap_remove(ordinal);
         let command_queue = device.new_command_queue();
-        let command_buffer = command_queue.new_command_buffer().to_owned();
-        command_buffer.enqueue();
-        let command_buffer = Arc::new(RwLock::new(command_buffer));
-        let command_buffer_index = Arc::new(RwLock::new(0));
         let kernels = Arc::new(Kernels::new());
-        let buffers = Arc::new(RwLock::new(HashMap::new()));
-        let compute_per_buffer = match std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER") {
-            Ok(val) => val.parse()?,
-            _ => 50,
+        let use_mlx_mm = match std::env::var("CANDLE_USE_MFA_MM").as_deref() {
+            Ok("false") | Ok("False") | Ok("FALSE") | Ok("0") | Err(_) => true,
+            Ok(_) => false,
         };
         let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
             [299792458].as_ptr() as *const c_void,
             4,
             MTLResourceOptions::StorageModeManaged,
         )));
+        let commands = device::Commands::new(command_queue)?;
         Ok(Self {
             id: DeviceId::new(),
             device,
-            command_queue,
-            command_buffer,
-            command_buffer_index,
-            compute_per_buffer,
-            buffers,
+            commands: Arc::new(RwLock::new(commands)),
+            buffers: Arc::new(RwLock::new(HashMap::new())),
             kernels,
             seed,
+            use_mlx_mm,
         })
     }
 
@@ -1911,10 +1990,38 @@ impl BackendDevice for MetalDevice {
         ))
     }
 
-    fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
-        // TODO Is there a faster way ?
-        let cpu_storage = crate::cpu_backend::CpuDevice.ones_impl(shape, dtype)?;
-        self.storage_from_cpu_storage(&cpu_storage)
+    fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
+        let name = match dtype {
+            DType::U8 => "fill_u8",
+            DType::U32 => "fill_u32",
+            DType::I64 => "fill_i64",
+            DType::F16 => "fill_f16",
+            DType::BF16 => "fill_bf16",
+            DType::F32 => "fill_f32",
+            DType::F64 => {
+                let cpu_storage = crate::cpu_backend::CpuDevice.ones_impl(shape, dtype)?;
+                return self.storage_from_cpu_storage(&cpu_storage);
+            }
+        };
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "alloc-ones")?;
+        let command_buffer = self.command_buffer()?;
+        candle_metal_kernels::call_const_fill(
+            &self.device,
+            &command_buffer,
+            &self.kernels,
+            name,
+            shape.elem_count(),
+            &buffer,
+            1.,
+        )
+        .map_err(MetalError::from)?;
+
+        Ok(MetalStorage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
     }
 
     fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {

@@ -1,3 +1,11 @@
+//! Llama2 inference implementation.
+//!
+//! See ["LLaMA 2: Open Foundation and Fine-Tuned Chat Models"](https://arxiv.org/abs/2307.09288)
+//!
+//! - ⚡ [Interactive Wasm Example](https://huggingface.co/spaces/lmz/candle-llama2)
+//! - 💻 llama2.c [GH Link](https://github.com/karpathy/llama2.c)
+//!
+
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::linear_no_bias as linear;
 use candle_nn::{embedding, rms_norm, Embedding, Linear, Module, RmsNorm, VarBuilder};
@@ -354,7 +362,7 @@ impl Llama {
         let lm_head = linear(cfg.dim, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = rms_norm(cfg.dim, cfg.norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.n_layers)
-            .map(|i| Block::load(vb.pp(&format!("model.layers.{i}")), &cfg).unwrap())
+            .map(|i| Block::load(vb.pp(format!("model.layers.{i}")), &cfg).unwrap())
             .collect();
         Ok(Self {
             wte,
