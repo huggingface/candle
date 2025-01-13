@@ -60,6 +60,7 @@ pub mod mmdit;
 pub mod mobileclip;
 pub mod mobilenetv4;
 pub mod mobileone;
+pub mod modernbert;
 pub mod moondream;
 pub mod mpt;
 pub mod nvembed_v2;
