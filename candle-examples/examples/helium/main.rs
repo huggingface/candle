@@ -229,7 +229,7 @@ fn main() -> Result<()> {
         Some(model_id) => model_id,
         None => {
             let name = match args.which {
-                Which::V1Preview => "kyutai/helium-1-preview",
+                Which::V1Preview => "kyutai/helium-1-preview-2b",
             };
             name.to_string()
         }
