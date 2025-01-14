@@ -827,6 +827,7 @@ kernel void attn_soft_max(
         constant   int64_t & ne00,
         constant   int64_t & ne01,
         constant   int64_t & ne02,
+        constant   int64_t & elem_per_batch,
         constant     float & scale,
         threadgroup  float * buf [[threadgroup(0)]],
         uint  tgpig[[threadgroup_position_in_grid]],
@@ -838,9 +839,12 @@ kernel void attn_soft_max(
     const int64_t i02 = (tgpig - i03*ne02*ne01) / ne01;
     const int64_t i01 = (tgpig - i03*ne02*ne01 - i02*ne01);
 
-    device const T * psrc0 =                (device const T *) src0 + (i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00);
-    device const T * pmask = src1 != src0 ? (device const T *) src1 + i01*ne00 : nullptr;
-    device       T * pdst  =                (device       T *) dst  + (i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00);
+    const int64_t src_offset = i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00;
+    const int64_t b_idx = elem_per_batch > 0 ? src_offset / elem_per_batch : 0;
+    const int64_t mask_offset = b_idx * (ne00*ne01) + i01*ne00;
+    device const T * psrc0 =                (device const T *) src0 + src_offset;
+    device const T * pmask = src1 != src0 ? (device const T *) src1 + mask_offset : nullptr;
+    device       T * pdst  =                (device       T *) dst  + src_offset;
 
     float slope = 1.0f;
 
@@ -916,6 +920,7 @@ kernel void attn_soft_max_4(
         constant   int64_t & ne00,
         constant   int64_t & ne01,
         constant   int64_t & ne02,
+        constant   int64_t & elem_per_batch,
         constant     float & scale,
         threadgroup  float * buf [[threadgroup(0)]],
         uint  tgpig[[threadgroup_position_in_grid]],
@@ -927,9 +932,12 @@ kernel void attn_soft_max_4(
     const int64_t i02 = (tgpig - i03*ne02*ne01) / ne01;
     const int64_t i01 = (tgpig - i03*ne02*ne01 - i02*ne01);
 
-    device const T * psrc4 =                (device const T *) src0 + (i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00)/4;
-    device const T * pmask = src1 != src0 ? (device const T *) src1 + i01*ne00/4 : nullptr;
-    device       T * pdst4 =                (device       T *) dst  + (i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00)/4;
+    const int64_t src_offset = i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00;
+    const int64_t b_idx = elem_per_batch > 0 ? src_offset / elem_per_batch : 0;
+    const int64_t mask_offset = b_idx * (ne00*ne01) + i01*ne00;
+    device const T * psrc4 =                (device const T *) src0 + src_offset / 4;
+    device const T * pmask = src1 != src0 ? (device const T *) src1 + mask_offset / 4 : nullptr;
+    device       T * pdst4  =                (device       T *) dst  + src_offset / 4;
 
     float slope = 1.0f;
 

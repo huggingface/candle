@@ -738,6 +738,7 @@ pub fn call_last_attn_softmax(
     mask: &Buffer,
     mask_offset: usize,
     input_shape: &[usize],
+    mask_shape: &[usize],
     scale: f32,
     ty: SdpaDType,
     output: &Buffer,
@@ -748,6 +749,14 @@ pub fn call_last_attn_softmax(
     let ne01 = input_shape[input_shape.len() - 2] as i64;
     let ne02 = input_shape[input_shape.len() - 3] as i64;
     let ne03 = input_shape[input_shape.len() - 4] as i64;
+
+    let elem_per_batch = if mask_shape.len() == 2 {
+        0
+    } else {
+        let bs = input_shape[0];
+        let el: usize = input_shape.iter().product();
+        el / bs
+    };
 
     let mut nth = 32; // SIMD width
     let name = if ne00 % 4 == 0 {
@@ -784,6 +793,7 @@ pub fn call_last_attn_softmax(
             ne00,
             ne01,
             ne02,
+            elem_per_batch as i64,
             scale
         )
     );

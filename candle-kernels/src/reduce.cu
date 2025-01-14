@@ -227,7 +227,7 @@ __device__ void softmax(const T * x, T * dst, const int ncols) {
 }
 
 template <typename T>
-__device__ void attn_soft_max(const T * x, const T * mask, T * dst, const int ncols, const int nrows_y, const float scale) {
+__device__ void attn_soft_max(const T * x, const T * mask, T * dst, const int ncols, const int nrows_y, const int elem_per_batch, const float scale) {
     const int tid  = threadIdx.x;
     const int rowx = blockIdx.x;
     const int rowy = rowx % nrows_y; // broadcast the mask in the row dimension
@@ -253,7 +253,9 @@ __device__ void attn_soft_max(const T * x, const T * mask, T * dst, const int nc
         }
 
         const int64_t ix = (int64_t)rowx*ncols + col;
-        const int64_t iy = (int64_t)rowy*ncols + col;
+
+        const int64_t b_idx = elem_per_batch > 0 ? ix / elem_per_batch : 0;
+        const int64_t iy = (int64_t)b_idx * (ncols*nrows_y) + rowy*ncols + col;
 
         const float val = float(x[ix]) * scale + (mask ? float(mask[iy]) : 0.0f);
 
@@ -640,10 +642,11 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
       TYPENAME * dst,                                                          \
       const int ncols,                                                         \
       const int nrows_y,                                                       \
+      const int elem_per_batch,                                                       \
       const float scale                                                       \
   ) {                                                                          \
-    attn_soft_max<TYPENAME>(x, mask, dst, ncols, nrows_y, scale);               \
-  }                                                                            \
+    attn_soft_max<TYPENAME>(x, mask, dst, ncols, nrows_y, elem_per_batch, scale);               \
+  }                                                                                \
 
 #define RMSNORM_OP(TYPENAME, FN_NAME) \
   extern "C" __global__ void FN_NAME(                                          \

@@ -613,13 +613,16 @@ impl candle::InplaceOp2 for AttnSoftmaxLastDim {
         if a_l.dims().len() != 4 {
             candle::bail!("attn-softmax-last-dim expects xs of rank 2");
         }
-        if mask_l.dims().len() != 2 {
-            candle::bail!("attn-softmax-last-dim expects mask of rank 2");
+        if mask_l.dims().len() != 2 && mask_l.dims().len() != 3 {
+            candle::bail!("attn-softmax-last-dim expects mask of rank 2 or 3");
         }
         if mask_l.dim(D::Minus1)? != a_l.dim(D::Minus1)?
             || mask_l.dim(D::Minus2)? != a_l.dim(D::Minus2)?
         {
             candle::bail!("attn-softmax-last-dim expects last 2 dims to match xs last 2 dims");
+        }
+        if mask_l.dims().len() == 3 && mask_l.dim(0)? != a_l.dim(0)? {
+            candle::bail!("attn-softmax-last-dim expects rank-3 mask bs to match xs bs");
         }
 
         candle_metal_kernels::call_last_attn_softmax(
@@ -631,6 +634,7 @@ impl candle::InplaceOp2 for AttnSoftmaxLastDim {
             mask_s.buffer(),
             mask_l.start_offset() * mask_s.dtype().size_in_bytes(),
             a_l.dims(),
+            mask_l.dims(),
             self.scale,
             ty,
             &a_s.buffer(),
@@ -668,13 +672,16 @@ impl candle::InplaceOp2 for AttnSoftmaxLastDim {
         if a_l.dims().len() != 4 {
             candle::bail!("attn-softmax-last-dim expects xs of rank 2");
         }
-        if mask_l.dims().len() != 2 {
-            candle::bail!("attn-softmax-last-dim expects mask of rank 2");
+        if mask_l.dims().len() != 2 && mask_l.dims().len() != 3 {
+            candle::bail!("attn-softmax-last-dim expects mask of rank 2 or 3");
         }
         if mask_l.dim(D::Minus1)? != a_l.dim(D::Minus1)?
             || mask_l.dim(D::Minus2)? != a_l.dim(D::Minus2)?
         {
             candle::bail!("attn-softmax-last-dim expects last 2 dims to match xs last 2 dims");
+        }
+        if mask_l.dims().len() == 3 && mask_l.dim(0)? != a_l.dim(0)? {
+            candle::bail!("attn-softmax-last-dim expects rank-3 mask bs to match xs bs");
         }
 
         struct S<'a> {
@@ -703,6 +710,13 @@ impl candle::InplaceOp2 for AttnSoftmaxLastDim {
                 let dims = self.a_l.shape().dims();
                 let dim_m1 = dims[dims.len() - 1];
                 let nrows_y = dims[dims.len() - 2];
+                let elem_per_batch = if mask_l.dims().len() == 2 {
+                    0
+                } else {
+                    let bs = dims[0];
+                    el / bs
+                };
+
                 let (nrows_x, ncols_x) = (el / dim_m1, dim_m1);
 
                 const WARP_SIZE: usize = 32;
@@ -719,7 +733,15 @@ impl candle::InplaceOp2 for AttnSoftmaxLastDim {
                 };
                 let func =
                     dev.get_or_load_func(&kernel_name::<T>("attn_soft_max"), kernels::REDUCE)?;
-                let params = (&a, &mask, &a, ncols_x as i32, nrows_y as i32, self.scale);
+                let params = (
+                    &a,
+                    &mask,
+                    &a,
+                    ncols_x as i32,
+                    nrows_y as i32,
+                    elem_per_batch as i32,
+                    self.scale,
+                );
                 // SAFETY: ffi.
                 unsafe { func.launch(cfg, params) }.w()?;
 
@@ -783,13 +805,16 @@ impl candle::CustomOp2 for AttnSoftmaxLastDim {
         if a_l.dims().len() != 4 {
             candle::bail!("attn-softmax-last-dim expects xs of rank 2");
         }
-        if mask_l.dims().len() != 2 {
-            candle::bail!("attn-softmax-last-dim expects mask of rank 2");
+        if mask_l.dims().len() != 2 && mask_l.dims().len() != 3 {
+            candle::bail!("attn-softmax-last-dim expects mask of rank 2 or 3");
         }
         if mask_l.dim(D::Minus1)? != a_l.dim(D::Minus1)?
             || mask_l.dim(D::Minus2)? != a_l.dim(D::Minus2)?
         {
             candle::bail!("attn-softmax-last-dim expects last 2 dims to match xs last 2 dims");
+        }
+        if mask_l.dims().len() == 3 && mask_l.dim(0)? != a_l.dim(0)? {
+            candle::bail!("attn-softmax-last-dim expects rank-3 mask bs to match xs bs");
         }
 
         let elem_count = a_l.shape().elem_count();
@@ -803,6 +828,7 @@ impl candle::CustomOp2 for AttnSoftmaxLastDim {
             mask_s.buffer(),
             mask_l.start_offset() * mask_s.dtype().size_in_bytes(),
             a_l.dims(),
+            mask_l.dims(),
             self.scale,
             ty,
             &output,
@@ -840,13 +866,16 @@ impl candle::CustomOp2 for AttnSoftmaxLastDim {
         if a_l.dims().len() != 4 {
             candle::bail!("attn-softmax-last-dim expects xs of rank 2");
         }
-        if mask_l.dims().len() != 2 {
-            candle::bail!("attn-softmax-last-dim expects mask of rank 2");
+        if mask_l.dims().len() != 2 && mask_l.dims().len() != 3 {
+            candle::bail!("attn-softmax-last-dim expects mask of rank 2 or 3");
         }
         if mask_l.dim(D::Minus1)? != a_l.dim(D::Minus1)?
             || mask_l.dim(D::Minus2)? != a_l.dim(D::Minus2)?
         {
             candle::bail!("attn-softmax-last-dim expects last 2 dims to match xs last 2 dims");
+        }
+        if mask_l.dims().len() == 3 && mask_l.dim(0)? != a_l.dim(0)? {
+            candle::bail!("attn-softmax-last-dim expects rank-3 mask bs to match xs bs");
         }
 
         struct S {
@@ -874,6 +903,12 @@ impl candle::CustomOp2 for AttnSoftmaxLastDim {
                 let dims = a_l.shape().dims();
                 let dim_m1 = dims[dims.len() - 1];
                 let nrows_y = dims[dims.len() - 2];
+                let elem_per_batch = if mask_l.dims().len() == 2 {
+                    0
+                } else {
+                    let bs = dims[0];
+                    el / bs
+                };
                 let (nrows_x, ncols_x) = (el / dim_m1, dim_m1);
 
                 const WARP_SIZE: usize = 32;
@@ -892,7 +927,15 @@ impl candle::CustomOp2 for AttnSoftmaxLastDim {
                     dev.get_or_load_func(&kernel_name::<T>("attn_soft_max"), kernels::REDUCE)?;
                 // SAFETY: Set later by running the kernel.
                 let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-                let params = (&a, &mask, &dst, ncols_x as i32, nrows_y as i32, self.scale);
+                let params = (
+                    &a,
+                    &mask,
+                    &dst,
+                    ncols_x as i32,
+                    nrows_y as i32,
+                    elem_per_batch as i32,
+                    self.scale,
+                );
                 // SAFETY: ffi.
                 unsafe { func.launch(cfg, params) }.w()?;
 
@@ -917,7 +960,7 @@ impl candle::CustomOp2 for AttnSoftmaxLastDim {
 /// candle_nn::ops::softmax_last_dim(&(xs.broadcast_add(&mask)? * scale as f64)?)?
 /// ```
 /// - `xs` must be a rank-4 tensor
-/// - `mask` must be a rank-2 matrix
+/// - `mask` must be a rank-2 matrix or a rank 3 matrix
 /// - The last 2 dimensions of `xs` must match the dimensions of `mask`.
 ///
 /// Note: if the last dim of `xs` is a multiple of 4, a vectorized implementation will be used.
