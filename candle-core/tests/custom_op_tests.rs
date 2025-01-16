@@ -158,7 +158,7 @@ fn ug_op() -> Result<()> {
         let st = op::store(ptr.id(), layout, src)?;
         let kernel = op::Kernel::new("exp".to_string(), vec![ptr], vec![st]);
         let opts: ug::lower_op::Opts = Default::default();
-        kernel.lower(&opts.with_global(0, 12))?
+        kernel.lower(&opts)?
     };
     let device = if candle_core::utils::cuda_is_available() {
         Device::new_cuda(0)?
