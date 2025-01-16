@@ -33,10 +33,16 @@ struct MultiHeadAttention {
     softmax_span: tracing::Span,
     matmul_span: tracing::Span,
     kv_cache: Option<(Tensor, Tensor)>,
+    use_self_attention_kv_cache: bool,
 }
 
 impl MultiHeadAttention {
-    fn load(n_state: usize, n_head: usize, vb: VarBuilder) -> Result<Self> {
+    fn load(
+        n_state: usize,
+        n_head: usize,
+        use_self_attention_kv_cache: bool,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "multi-head-attn");
         let softmax_span = tracing::span!(tracing::Level::TRACE, "multi-head-attn-softmax");
         let matmul_span = tracing::span!(tracing::Level::TRACE, "multi-head-attn-matmul");
@@ -54,6 +60,7 @@ impl MultiHeadAttention {
             softmax_span,
             matmul_span,
             kv_cache: None,
+            use_self_attention_kv_cache,
         })
     }
 
@@ -67,6 +74,21 @@ impl MultiHeadAttention {
         let _enter = self.span.enter();
         let q = self.query.forward(x)?;
         let (k, v) = match xa {
+            None if self.use_self_attention_kv_cache => {
+                if flush_cache {
+                    self.kv_cache = None;
+                }
+
+                let mut k = self.key.forward(x)?;
+                let mut v = self.value.forward(x)?;
+                if let Some((ks, vs)) = self.kv_cache.take() {
+                    k = Tensor::cat(&[k, ks], 1)?;
+                    v = Tensor::cat(&[v, vs], 1)?;
+                }
+                self.kv_cache = Some((k.clone(), v.clone()));
+
+                (k, v)
+            }
             None => {
                 let k = self.key.forward(x)?;
                 let v = self.value.forward(x)?;
@@ -148,12 +170,28 @@ struct ResidualAttentionBlock {
 }
 
 impl ResidualAttentionBlock {
-    fn load(n_state: usize, n_head: usize, ca: bool, vb: VarBuilder) -> Result<Self> {
+    fn load(
+        n_state: usize,
+        n_head: usize,
+        ca: bool,
+        use_self_attention_kv_cache: bool,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "residual-attn");
-        let attn = MultiHeadAttention::load(n_state, n_head, vb.pp("self_attn"))?;
+        let attn = MultiHeadAttention::load(
+            n_state,
+            n_head,
+            use_self_attention_kv_cache,
+            vb.pp("self_attn"),
+        )?;
         let attn_ln = layer_norm(n_state, vb.pp("self_attn_layer_norm"))?;
         let cross_attn = if ca {
-            let cross_attn = MultiHeadAttention::load(n_state, n_head, vb.pp("encoder_attn"))?;
+            let cross_attn = MultiHeadAttention::load(
+                n_state,
+                n_head,
+                use_self_attention_kv_cache,
+                vb.pp("encoder_attn"),
+            )?;
             let cross_attn_ln = layer_norm(n_state, vb.pp("encoder_attn_layer_norm"))?;
             Some((cross_attn, cross_attn_ln))
         } else {
@@ -260,7 +298,13 @@ impl AudioEncoder {
         let positional_embedding = sinusoids(n_ctx, n_state, vb.device())?;
         let blocks = (0..cfg.encoder_layers)
             .map(|i| {
-                ResidualAttentionBlock::load(n_state, n_head, false, vb.pp(format!("layers.{i}")))
+                ResidualAttentionBlock::load(
+                    n_state,
+                    n_head,
+                    false,
+                    false,
+                    vb.pp(format!("layers.{i}")),
+                )
             })
             .collect::<Result<Vec<_>>>()?;
         let ln_post = layer_norm(n_state, vb.pp("layer_norm"))?;
@@ -321,7 +365,13 @@ impl TextDecoder {
         let positional_embedding = vb.get((n_ctx, n_state), "embed_positions.weight")?;
         let blocks = (0..cfg.decoder_layers)
             .map(|i| {
-                ResidualAttentionBlock::load(n_state, n_head, true, vb.pp(format!("layers.{i}")))
+                ResidualAttentionBlock::load(
+                    n_state,
+                    n_head,
+                    true,
+                    cfg.use_self_attention_kv_cache,
+                    vb.pp(format!("layers.{i}")),
+                )
             })
             .collect::<Result<Vec<_>>>()?;
         let ln = layer_norm(n_state, vb.pp("layer_norm"))?;
@@ -342,10 +392,24 @@ impl TextDecoder {
 
     pub fn forward(&mut self, x: &Tensor, xa: &Tensor, flush_kv_cache: bool) -> Result<Tensor> {
         let _enter = self.span.enter();
+        let offset = self
+            .blocks
+            .first()
+            .and_then(|b| b.attn.kv_cache.as_ref())
+            .and_then(|(k, _)| k.dim(1).ok())
+            .unwrap_or_default();
+
+        let x = if offset > 0 {
+            x.narrow(1, offset, 1)?
+        } else {
+            x.clone()
+        };
+
         let last = x.dim(D::Minus1)?;
-        let token_embedding = self.token_embedding.forward(x)?;
-        let positional_embedding = self.positional_embedding.narrow(0, 0, last)?;
+        let token_embedding = self.token_embedding.forward(&x)?;
+        let positional_embedding = self.positional_embedding.narrow(0, offset, last)?;
         let mut x = token_embedding.broadcast_add(&positional_embedding)?;
+
         for block in self.blocks.iter_mut() {
             x = block.forward(&x, Some(xa), Some(&self.mask), flush_kv_cache)?;
         }

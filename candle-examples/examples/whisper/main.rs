@@ -468,6 +468,10 @@ struct Args {
     #[arg(long)]
     timestamps: bool,
 
+    /// Enable kv-cache on the decoder self attention layers
+    #[arg(long)]
+    cache: bool,
+
     /// Print the full DecodingResult structure rather than just the text.
     #[arg(long)]
     verbose: bool,
@@ -533,8 +537,12 @@ fn main() -> Result<()> {
         };
         (config, tokenizer, model, sample)
     };
-    let config: Config = serde_json::from_str(&std::fs::read_to_string(config_filename)?)?;
+    let mut config: Config = serde_json::from_str(&std::fs::read_to_string(config_filename)?)?;
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
+
+    if args.cache {
+        config.use_self_attention_kv_cache = true;
+    }
 
     let mel_bytes = match config.num_mel_bins {
         80 => include_bytes!("melfilters.bytes").as_slice(),

@@ -32,6 +32,8 @@ pub struct Config {
     pub decoder_layers: usize,          // n_text_layer
     #[serde(default)]
     pub suppress_tokens: Vec<u32>,
+    #[serde(default)]
+    pub use_self_attention_kv_cache: bool,
 }
 
 pub const DTYPE: candle::DType = candle::DType::F32;
