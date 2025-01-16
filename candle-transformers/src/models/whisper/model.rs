@@ -360,7 +360,13 @@ impl TextDecoder {
         let positional_embedding = vb.get((n_ctx, n_state), "embed_positions.weight")?;
         let blocks = (0..cfg.decoder_layers)
             .map(|i| {
-                ResidualAttentionBlock::load(n_state, n_head, true, vb.pp(format!("layers.{i}")))
+                ResidualAttentionBlock::load(
+                    n_state,
+                    n_head,
+                    true,
+                    vb.pp(format!("layers.{i}")),
+                    cfg.use_flash_attn,
+                )
             })
             .collect::<Result<Vec<_>>>()?;
         let ln = layer_norm(n_state, vb.pp("layer_norm"))?;
