@@ -1,12 +1,11 @@
-use candle_transformers::models::glm4::*;
-use clap::Parser;
-
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::models::glm4::*;
+use clap::Parser;
 use hf_hub::{Repo, RepoType};
+use std::path::Path;
 use tokenizers::Tokenizer;
-
 struct TextGeneration {
     model: Model,
     device: Device,
@@ -19,7 +18,12 @@ struct TextGeneration {
 impl TextGeneration {
     #[allow(clippy::too_many_arguments)]
     fn new(model: Model, tokenizer: Tokenizer, args: Args, device: &Device, dtype: DType) -> Self {
-        let logits_processor = LogitsProcessor::new(args.seed, args.temperature, args.top_p);
+        //default sampling parameter for glm4
+        let (temperature, top_p) = (
+            Some(args.temperature.unwrap_or(0.8)),
+            Some(args.top_p.unwrap_or(0.8)),
+        );
+        let logits_processor = LogitsProcessor::new(args.seed, temperature, top_p);
         Self {
             model,
             tokenizer,
@@ -147,7 +151,7 @@ struct Args {
     revision: Option<String>,
 
     #[arg(long)]
-    weight_file: Option<String>,
+    weight_path: Option<String>,
 
     #[arg(long)]
     tokenizer: Option<String>,
@@ -203,15 +207,23 @@ fn main() -> anyhow::Result<()> {
             .get("tokenizer.json")
             .map_err(anyhow::Error::msg)?,
     };
-    let filenames = match args.weight_file.as_ref() {
-        Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+    let config_filename = match &args.weight_path {
+        Some(path) => Path::new(path).join("config.json"),
+        _ => repo.get("config.json")?,
     };
+
+    let filenames = match &args.weight_path {
+        Some(path) => {
+            candle_examples::hub_load_local_safetensors(path, "model.safetensors.index.json")?
+        }
+        _ => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+    };
+
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).expect("Tokenizer Error");
 
     let start = std::time::Instant::now();
-    let config = Config::glm4();
+    let config: Config = serde_json::from_slice(&std::fs::read(config_filename)?)?;
     let device = candle_examples::device(args.cpu)?;
     let dtype = if device.is_cuda() {
         DType::BF16

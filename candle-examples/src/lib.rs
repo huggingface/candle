@@ -4,9 +4,9 @@ pub mod coco_classes;
 pub mod imagenet;
 pub mod token_output_stream;
 pub mod wav;
-
 use candle::utils::{cuda_is_available, metal_is_available};
 use candle::{Device, Result, Tensor};
+use std::path::Path;
 
 pub fn device(cpu: bool) -> Result<Device> {
     if cpu {
@@ -145,5 +145,25 @@ pub fn hub_load_safetensors(
         .iter()
         .map(|v| repo.get(v).map_err(candle::Error::wrap))
         .collect::<Result<Vec<_>>>()?;
+    Ok(safetensors_files)
+}
+
+pub fn hub_load_local_safetensors(
+    path: &String,
+    json_file: &str,
+) -> Result<Vec<std::path::PathBuf>> {
+    let jsfile = std::fs::File::open(Path::new(&path).join(json_file))?;
+    let json: serde_json::Value = serde_json::from_reader(&jsfile).map_err(candle::Error::wrap)?;
+    let weight_map = match json.get("weight_map") {
+        None => candle::bail!("no weight map in {json_file:?}"),
+        Some(serde_json::Value::Object(map)) => map,
+        Some(_) => candle::bail!("weight map in {json_file:?} is not a map"),
+    };
+    let mut safetensors_files = Vec::<std::path::PathBuf>::new();
+    for value in weight_map.values() {
+        if let Some(file) = value.as_str() {
+            safetensors_files.insert(0, Path::new(&path).join(file));
+        }
+    }
     Ok(safetensors_files)
 }
