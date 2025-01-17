@@ -9,6 +9,8 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+use std::num::NonZeroUsize;
+
 use anyhow::{Error as E, Result};
 use candle::{Device, IndexOp, Tensor};
 use candle_nn::{ops::softmax, VarBuilder};
@@ -20,7 +22,11 @@ use tokenizers::Tokenizer;
 mod multilingual;
 mod pcm_decode;
 
-use candle_transformers::models::whisper::{self as m, audio, Config};
+use candle_transformers::models::whisper::{
+    self as m, audio,
+    timestamps::{self, AlignmentHeads},
+    Config,
+};
 
 pub enum Model {
     Normal(m::model::Whisper),
@@ -61,6 +67,34 @@ impl Model {
             Self::Quantized(m) => m.decoder.final_linear(x),
         }
     }
+
+    pub fn dtw_timestamps(
+        &mut self,
+        alignment_heads: AlignmentHeads,
+        filter_width: NonZeroUsize,
+        n_samples: usize,
+        n_start_tokens: usize,
+    ) -> candle::Result<Vec<timestamps::Raw>> {
+        match self {
+            Self::Normal(m) => {
+                m.dtw_timestamps(alignment_heads, filter_width, n_samples, n_start_tokens)
+            }
+            Self::Quantized(m) => {
+                m.dtw_timestamps(alignment_heads, filter_width, n_samples, n_start_tokens)
+            }
+        }
+    }
+
+    pub fn clear_attention_outputs(&mut self) {
+        match self {
+            Self::Normal(m) => {
+                m.clear_attention_outputs();
+            }
+            Self::Quantized(m) => {
+                m.clear_attention_outputs();
+            }
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -97,6 +131,8 @@ struct Decoder {
     no_speech_token: u32,
     no_timestamps_token: u32,
     language_token: Option<u32>,
+    dtw_timestamps: bool,
+    which_model: WhichModel,
 }
 
 impl Decoder {
@@ -109,6 +145,8 @@ impl Decoder {
         language_token: Option<u32>,
         task: Option<Task>,
         timestamps: bool,
+        dtw_timestamps: bool,
+        which_model: WhichModel,
         verbose: bool,
     ) -> Result<Self> {
         let no_timestamps_token = token_id(&tokenizer, m::NO_TIMESTAMPS_TOKEN)?;
@@ -152,6 +190,8 @@ impl Decoder {
             no_speech_token,
             language_token,
             no_timestamps_token,
+            dtw_timestamps,
+            which_model,
         })
     }
 
@@ -264,11 +304,20 @@ impl Decoder {
         unreachable!()
     }
 
-    fn run(&mut self, mel: &Tensor) -> Result<Vec<Segment>> {
+    #[allow(unused)]
+    fn reset_kv_cache(&mut self) {
+        match &mut self.model {
+            Model::Normal(m) => m.reset_kv_cache(),
+            Model::Quantized(m) => m.reset_kv_cache(),
+        }
+    }
+
+    fn run(&mut self, mel: &Tensor, n_samples: usize) -> Result<Vec<Segment>> {
         let (_, _, content_frames) = mel.dims3()?;
         let mut seek = 0;
         let mut segments = vec![];
         while seek < content_frames {
+            self.reset_kv_cache();
             let start = std::time::Instant::now();
             let time_offset = (seek * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
             let segment_size = usize::min(content_frames - seek, m::N_FRAMES);
@@ -331,12 +380,59 @@ impl Decoder {
                     segment.dr.text,
                 )
             }
+            if self.dtw_timestamps {
+                let n_start_tokens = segment
+                    .dr
+                    .tokens
+                    .iter()
+                    .take_while(|t| {
+                        [
+                            self.sot_token,
+                            self.no_timestamps_token,
+                            self.language_token.unwrap_or(self.sot_token),
+                        ]
+                        .contains(t)
+                    })
+                    .count();
+
+                let timestamps = self
+                    .model
+                    .dtw_timestamps(
+                        self.which_model.alignment_heads(),
+                        NonZeroUsize::new(7).unwrap(),
+                        n_samples,
+                        n_start_tokens,
+                    )?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| candle::Error::msg("missing dtw timestamps"))?;
+
+                let words = <Self as timestamps::PostProcessor>::label(
+                    self,
+                    &timestamps,
+                    &segment.dr.tokens,
+                )?;
+
+                println!("dtw timestamps: {:?}", timestamps);
+                for word in words {
+                    println!("{word:?}")
+                }
+            }
             if self.verbose {
                 println!("{seek}: {segment:?}, in {:?}", start.elapsed());
             }
             segments.push(segment)
         }
         Ok(segments)
+    }
+}
+
+impl timestamps::PostProcessor for Decoder {
+    type Error = candle::Error;
+    fn decode(&self, tokens: &[u32]) -> candle::Result<String> {
+        self.tokenizer
+            .decode(tokens, true)
+            .map_err(candle::Error::msg)
     }
 }
 
@@ -417,6 +513,24 @@ impl WhichModel {
             Self::DistilLargeV3 => ("distil-whisper/distil-large-v3", "main"),
         }
     }
+
+    fn alignment_heads(&self) -> AlignmentHeads {
+        match self {
+            Self::Tiny => AlignmentHeads::tiny(),
+            Self::TinyEn => AlignmentHeads::tiny_en(),
+            Self::Base => AlignmentHeads::base(),
+            Self::BaseEn => AlignmentHeads::base_en(),
+            Self::Small => AlignmentHeads::small(),
+            Self::SmallEn => AlignmentHeads::small_en(),
+            Self::Medium => AlignmentHeads::medium(),
+            Self::MediumEn => AlignmentHeads::medium_en(),
+            Self::Large => AlignmentHeads::large_v1(),
+            Self::LargeV2 => AlignmentHeads::large_v2(),
+            Self::LargeV3 => AlignmentHeads::large_v3(),
+            Self::LargeV3Turbo => AlignmentHeads::large_v3_turbo(),
+            _ => Default::default(),
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -471,6 +585,10 @@ struct Args {
     /// Enable kv-cache on the decoder self attention layers
     #[arg(long)]
     cache: bool,
+
+    /// Enable dtw timestamps (self attention kv-cache will also be enabled)
+    #[arg(long)]
+    dtw_timestamps: bool,
 
     /// Print the full DecodingResult structure rather than just the text.
     #[arg(long)]
@@ -544,6 +662,10 @@ fn main() -> Result<()> {
         config.use_self_attention_kv_cache = true;
     }
 
+    if args.dtw_timestamps {
+        config.dtw_timestamps = true;
+    }
+
     let mel_bytes = match config.num_mel_bins {
         80 => include_bytes!("melfilters.bytes").as_slice(),
         128 => include_bytes!("melfilters128.bytes").as_slice(),
@@ -597,8 +719,10 @@ fn main() -> Result<()> {
         language_token,
         args.task,
         args.timestamps,
+        args.dtw_timestamps,
+        args.model,
         args.verbose,
     )?;
-    dc.run(&mel)?;
+    dc.run(&mel, pcm_data.len())?;
     Ok(())
 }

@@ -13,6 +13,7 @@
 pub mod audio;
 pub mod model;
 pub mod quantized_model;
+pub mod timestamps;
 
 use serde::Deserialize;
 
@@ -34,6 +35,14 @@ pub struct Config {
     pub suppress_tokens: Vec<u32>,
     #[serde(default)]
     pub use_self_attention_kv_cache: bool,
+    #[serde(default)]
+    pub dtw_timestamps: bool,
+}
+
+#[derive(Debug, Clone)]
+enum AttentionOutput {
+    Disabled,
+    Enabled(Vec<candle::Tensor>),
 }
 
 pub const DTYPE: candle::DType = candle::DType::F32;

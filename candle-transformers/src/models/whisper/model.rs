@@ -1,4 +1,7 @@
-use super::Config;
+use std::num::NonZeroUsize;
+
+use super::AttentionOutput;
+use super::{timestamps, Config};
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};
 use candle::{Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Conv1d, Conv1dConfig, Embedding, LayerNorm, Module, VarBuilder};
@@ -34,6 +37,7 @@ struct MultiHeadAttention {
     matmul_span: tracing::Span,
     kv_cache: Option<(Tensor, Tensor)>,
     use_self_attention_kv_cache: bool,
+    output_attentions: AttentionOutput,
 }
 
 impl MultiHeadAttention {
@@ -41,6 +45,7 @@ impl MultiHeadAttention {
         n_state: usize,
         n_head: usize,
         use_self_attention_kv_cache: bool,
+        output_attentions: AttentionOutput,
         vb: VarBuilder,
     ) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "multi-head-attn");
@@ -61,6 +66,7 @@ impl MultiHeadAttention {
             matmul_span,
             kv_cache: None,
             use_self_attention_kv_cache,
+            output_attentions,
         })
     }
 
@@ -108,8 +114,11 @@ impl MultiHeadAttention {
                 }
             }
         };
+        std::mem::drop(_enter);
         let wv = self.qkv_attention(&q, &k, &v, mask)?;
+        let _enter = self.span.enter();
         let out = self.out.forward(&wv)?;
+
         Ok(out)
     }
 
@@ -120,12 +129,13 @@ impl MultiHeadAttention {
     }
 
     fn qkv_attention(
-        &self,
+        &mut self,
         q: &Tensor,
         k: &Tensor,
         v: &Tensor,
         mask: Option<&Tensor>,
     ) -> Result<Tensor> {
+        let _ = self.span.enter();
         let (_, n_ctx, n_state) = q.dims3()?;
         let scale = ((n_state / self.n_head) as f64).powf(-0.25);
         let q = (self.reshape_head(q)? * scale)?;
@@ -143,6 +153,9 @@ impl MultiHeadAttention {
             let _enter = self.softmax_span.enter();
             candle_nn::ops::softmax_last_dim(&qk)?
         };
+        if let AttentionOutput::Enabled(attentions) = &mut self.output_attentions {
+            attentions.push(w.clone());
+        }
         let wv = {
             let _enter = self.matmul_span.enter();
             w.matmul(&v)?
@@ -175,6 +188,7 @@ impl ResidualAttentionBlock {
         n_head: usize,
         ca: bool,
         use_self_attention_kv_cache: bool,
+        output_attentions: AttentionOutput,
         vb: VarBuilder,
     ) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "residual-attn");
@@ -182,6 +196,7 @@ impl ResidualAttentionBlock {
             n_state,
             n_head,
             use_self_attention_kv_cache,
+            AttentionOutput::Disabled,
             vb.pp("self_attn"),
         )?;
         let attn_ln = layer_norm(n_state, vb.pp("self_attn_layer_norm"))?;
@@ -189,7 +204,8 @@ impl ResidualAttentionBlock {
             let cross_attn = MultiHeadAttention::load(
                 n_state,
                 n_head,
-                use_self_attention_kv_cache,
+                false,
+                output_attentions,
                 vb.pp("encoder_attn"),
             )?;
             let cross_attn_ln = layer_norm(n_state, vb.pp("encoder_attn_layer_norm"))?;
@@ -225,7 +241,7 @@ impl ResidualAttentionBlock {
             .forward(&self.attn_ln.forward(x)?, None, mask, flush_kv_cache)?;
         let mut x = (x + attn)?;
         if let Some((attn, ln)) = &mut self.cross_attn {
-            x = (&x + attn.forward(&ln.forward(&x)?, xa, None, flush_kv_cache)?)?;
+            x = (&x + attn.forward(&ln.forward(&x)?, xa, None, false)?)?;
         }
         let mlp = self.mlp_linear2.forward(
             &self
@@ -303,6 +319,7 @@ impl AudioEncoder {
                     n_head,
                     false,
                     false,
+                    AttentionOutput::Disabled,
                     vb.pp(format!("layers.{i}")),
                 )
             })
@@ -369,7 +386,12 @@ impl TextDecoder {
                     n_state,
                     n_head,
                     true,
-                    cfg.use_self_attention_kv_cache,
+                    cfg.use_self_attention_kv_cache || cfg.dtw_timestamps,
+                    if cfg.dtw_timestamps {
+                        AttentionOutput::Enabled(vec![])
+                    } else {
+                        AttentionOutput::Disabled
+                    },
                     vb.pp(format!("layers.{i}")),
                 )
             })
@@ -392,24 +414,25 @@ impl TextDecoder {
 
     pub fn forward(&mut self, x: &Tensor, xa: &Tensor, flush_kv_cache: bool) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let offset = self
-            .blocks
-            .first()
-            .and_then(|b| b.attn.kv_cache.as_ref())
-            .and_then(|(k, _)| k.dim(1).ok())
+        let offset = flush_kv_cache
+            .then_some(0)
+            .or(self
+                .blocks
+                .first()
+                .and_then(|b| b.attn.kv_cache.as_ref())
+                .and_then(|(k, _)| k.dim(1).ok()))
             .unwrap_or_default();
 
         let x = if offset > 0 {
-            x.narrow(1, offset, 1)?
+            &x.narrow(1, offset, 1)?
         } else {
-            x.clone()
+            x
         };
 
         let last = x.dim(D::Minus1)?;
-        let token_embedding = self.token_embedding.forward(&x)?;
+        let token_embedding = self.token_embedding.forward(x)?;
         let positional_embedding = self.positional_embedding.narrow(0, offset, last)?;
         let mut x = token_embedding.broadcast_add(&positional_embedding)?;
-
         for block in self.blocks.iter_mut() {
             x = block.forward(&x, Some(xa), Some(&self.mask), flush_kv_cache)?;
         }
@@ -458,5 +481,46 @@ impl Whisper {
             .iter_mut()
             .for_each(|b| b.reset_kv_cache());
         self.decoder.reset_kv_cache();
+    }
+
+    pub fn dtw_timestamps(
+        &mut self,
+        alignment_heads: timestamps::AlignmentHeads,
+        filter_width: NonZeroUsize,
+        n_samples: usize,
+        n_start_tokens: usize,
+    ) -> Result<Vec<timestamps::Raw>> {
+        if !self.config.dtw_timestamps {
+            return Err(candle::Error::msg(
+                "DTW timestamps are only available if `Config::dtw_timestamps` is set to `true`",
+            ));
+        }
+
+        self.reset_kv_cache();
+        alignment_heads.extract_timestamps(
+            &self.take_attention_outputs(),
+            filter_width,
+            n_samples,
+            n_start_tokens,
+        )
+    }
+
+    pub fn clear_attention_outputs(&mut self) {
+        let _ = self.take_attention_outputs();
+    }
+
+    fn take_attention_outputs(&mut self) -> Vec<Tensor> {
+        self.decoder
+            .blocks
+            .iter_mut()
+            .flat_map(|layer| layer.cross_attn.as_mut())
+            .filter_map(|(attn, _)| match &mut attn.output_attentions {
+                AttentionOutput::Enabled(attns) if !attns.is_empty() => {
+                    let attns = std::mem::take(attns);
+                    Tensor::cat(&attns, 2).ok()
+                }
+                _ => None,
+            })
+            .collect()
     }
 }

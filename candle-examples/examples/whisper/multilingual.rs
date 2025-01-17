@@ -135,5 +135,7 @@ pub fn detect_language(
         println!("{language}: {p}")
     }
     let language = crate::token_id(tokenizer, &format!("<|{}|>", probs[0].0 .0))?;
+    model.clear_attention_outputs();
+
     Ok(language)
 }
