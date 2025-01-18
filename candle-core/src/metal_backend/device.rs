@@ -6,7 +6,7 @@ use std::ffi::c_void;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
-use super::MetalError;
+use super::{MetalError, METAL_SHARED_BUFFER_STORAGE_MODE};
 
 /// Unique identifier for cuda devices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -201,7 +201,7 @@ impl MetalDevice {
         name: &str,
     ) -> Result<Arc<Buffer>> {
         let size = (element_count * dtype.size_in_bytes()) as NSUInteger;
-        self.allocate_buffer(size, MTLResourceOptions::StorageModeShared, name)
+        self.allocate_buffer(size, METAL_SHARED_BUFFER_STORAGE_MODE, name)
     }
 
     /// Creates a new buffer (not necessarily zeroed).
@@ -210,7 +210,7 @@ impl MetalDevice {
     /// synchronization when the CPU memory is modified
     /// Used as a bridge to gather data back from the GPU
     pub fn new_buffer_managed(&self, size: NSUInteger) -> Result<Arc<Buffer>> {
-        self.allocate_buffer(size, MTLResourceOptions::StorageModeShared, "managed")
+        self.allocate_buffer(size, METAL_SHARED_BUFFER_STORAGE_MODE, "managed")
     }
 
     /// Creates a new buffer from data.
@@ -223,12 +223,12 @@ impl MetalDevice {
         let new_buffer = self.device.new_buffer_with_data(
             data.as_ptr() as *const c_void,
             size,
-            MTLResourceOptions::StorageModeShared,
+            METAL_SHARED_BUFFER_STORAGE_MODE,
         );
         let mut buffers = self.buffers.write().map_err(MetalError::from)?;
 
         let subbuffers = buffers
-            .entry((size, MTLResourceOptions::StorageModeShared))
+            .entry((size, METAL_SHARED_BUFFER_STORAGE_MODE))
             .or_insert(vec![]);
 
         let new_buffer = Arc::new(new_buffer);
@@ -239,7 +239,7 @@ impl MetalDevice {
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
         let buffer = self.allocate_buffer(
             size_in_bytes as NSUInteger,
-            MTLResourceOptions::StorageModeShared,
+            METAL_SHARED_BUFFER_STORAGE_MODE,
             "allocate_zeros",
         )?;
         let command_buffer = self.command_buffer()?;

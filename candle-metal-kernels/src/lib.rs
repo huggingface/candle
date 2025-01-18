@@ -17,7 +17,11 @@ const CONV: &str = include_str!("conv.metal");
 const FILL: &str = include_str!("fill.metal");
 const INDEXING: &str = include_str!("indexing.metal");
 // Current source: https://github.com/ivarflakstad/metal-flash-attention/tree/candle
+#[cfg(not(target_os = "ios"))]
 const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
+// Current source: https://github.com/philipturner/metal-flash-attention/releases/tag/v1.0.1
+#[cfg(target_os = "ios")]
+const MFA: &[u8] = include_bytes!("libMetalFlashAttention.ios.metallib");
 const MLX_GEMM: &str = include_str!("mlx_gemm.metal");
 const QUANTIZED: &str = include_str!("quantized.metal");
 const RANDOM: &str = include_str!("random.metal");

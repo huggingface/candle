@@ -78,7 +78,7 @@ impl From<f64> for LayerNormConfig {
 #[derive(Clone, Debug)]
 pub struct LayerNorm {
     weight: Tensor,
-    bias: Tensor,
+    bias: Option<Tensor>,
     remove_mean: bool,
     eps: f64,
 }
@@ -87,7 +87,7 @@ impl LayerNorm {
     pub fn new(weight: Tensor, bias: Tensor, eps: f64) -> Self {
         Self {
             weight,
-            bias,
+            bias: Some(bias),
             remove_mean: true,
             eps,
         }
@@ -96,7 +96,7 @@ impl LayerNorm {
     pub fn new_no_bias(weight: Tensor, eps: f64) -> Self {
         Self {
             weight: weight.clone(),
-            bias: Tensor::zeros_like(&weight).unwrap(),
+            bias: None,
             remove_mean: true,
             eps,
         }
@@ -105,7 +105,7 @@ impl LayerNorm {
     pub fn rms_norm(weight: Tensor, eps: f64) -> Self {
         Self {
             weight: weight.clone(),
-            bias: Tensor::zeros_like(&weight).unwrap(),
+            bias: None,
             remove_mean: false,
             eps,
         }
@@ -115,15 +115,17 @@ impl LayerNorm {
         &self.weight
     }
 
-    pub fn bias(&self) -> &Tensor {
-        &self.bias
+    pub fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
     }
 }
 
 impl Module for LayerNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         if x.is_contiguous() && self.remove_mean {
-            return crate::ops::layer_norm(x, &self.weight, &self.bias, self.eps as f32);
+            if let Some(bias) = self.bias.as_ref() {
+                return crate::ops::layer_norm(x, &self.weight, bias, self.eps as f32);
+            }
         }
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
@@ -141,7 +143,10 @@ impl Module for LayerNorm {
         let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
         let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
         let x = x_normed.to_dtype(x_dtype)?.broadcast_mul(&self.weight)?;
-        x.broadcast_add(&self.bias)
+        match &self.bias {
+            None => Ok(x),
+            Some(bias) => x.broadcast_add(bias),
+        }
     }
 }
 
@@ -159,7 +164,7 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
     };
     Ok(LayerNorm {
         weight: weight.clone(),
-        bias: bias.unwrap_or(Tensor::zeros_like(&weight)?),
+        bias,
         remove_mean: config.remove_mean,
         eps: config.eps,
     })
