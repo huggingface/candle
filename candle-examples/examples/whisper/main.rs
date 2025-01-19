@@ -528,6 +528,7 @@ impl WhichModel {
             Self::LargeV2 => AlignmentHeads::large_v2(),
             Self::LargeV3 => AlignmentHeads::large_v3(),
             Self::LargeV3Turbo => AlignmentHeads::large_v3_turbo(),
+            Self::DistilLargeV3 => AlignmentHeads::distil_large_v3(),
             _ => Default::default(),
         }
     }

@@ -110,7 +110,7 @@ impl AlignmentHeads {
             weights.dim(D::Minus2)? - n_start_tokens,
         )?;
 
-        // Do the timewarp for each batch
+        // Do the timewarp
         let timestamps = Tensor::stack(
             &((0..weights.dim(0)?).map(|batch_idx| {
                 let (text_indices, time_indices) = dynamic_time_warp(
@@ -141,7 +141,6 @@ impl AlignmentHeads {
             0,
         )?;
 
-        // batch * timestamps
         Ok(timestamps.to_vec2::<f32>()?.into_iter().map(Raw).collect())
     }
 }
@@ -298,6 +297,14 @@ impl AlignmentHeads {
     pub fn large_v3_turbo() -> Self {
         TURBO.iter().copied().collect()
     }
+
+    pub fn distil_small_en() -> Self {
+        DISTIL_SMALL_EN.iter().copied().collect()
+    }
+
+    pub fn distil_large_v3() -> Self {
+        DISTIL_LARGE_V3.iter().copied().collect()
+    }
 }
 
 const TINY: &[[usize; 2]] = &[[2, 2], [3, 0], [3, 2], [3, 3], [3, 4], [3, 5]];
@@ -413,3 +420,46 @@ const LARGE_V2_V3: &[[usize; 2]] = &[
     [27, 15],
 ];
 const TURBO: &[[usize; 2]] = &[[2, 4], [2, 11], [3, 3], [3, 6], [3, 11], [3, 14]];
+const DISTIL_SMALL_EN: &[[usize; 2]] = &[
+    [6, 6],
+    [7, 0],
+    [7, 3],
+    [7, 8],
+    [8, 2],
+    [8, 5],
+    [8, 7],
+    [9, 0],
+    [9, 4],
+    [9, 8],
+    [9, 10],
+    [10, 0],
+    [10, 1],
+    [10, 2],
+    [10, 3],
+    [10, 6],
+    [10, 11],
+    [11, 2],
+    [11, 4],
+];
+const DISTIL_LARGE_V3: &[[usize; 2]] = &[
+    [1, 0],
+    [1, 1],
+    [1, 2],
+    [1, 3],
+    [1, 4],
+    [1, 5],
+    [1, 6],
+    [1, 7],
+    [1, 8],
+    [1, 9],
+    [1, 10],
+    [1, 11],
+    [1, 12],
+    [1, 13],
+    [1, 14],
+    [1, 15],
+    [1, 16],
+    [1, 17],
+    [1, 18],
+    [1, 19],
+];
