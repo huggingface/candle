@@ -31,17 +31,31 @@ pub trait PostProcessor {
 
     fn decode(&mut self, tokens: &[u32]) -> Result<Vec<String>, Self::Error>;
     fn label(&mut self, Raw(timestamps): &Raw, tokens: &[u32]) -> Result<Vec<Word>, Self::Error> {
-        let segments = self.decode(tokens)?;
-        Ok(segments
+        const PUNCTUATION: &str = "\"'“¿([{-\"'.。,，!！?？:：”)]}、";
+        let words = self
+            .decode(tokens)?
             .into_iter()
             .zip(timestamps.iter().copied())
             .zip(timestamps.iter().copied().skip(1))
-            .map(|((text, start), end)| Word {
-                text: text.trim().to_lowercase(),
-                start,
-                end,
-            })
-            .collect())
+            .map(|((text, start), end)| Word { text, start, end })
+            .filter(|Word { text, .. }| !PUNCTUATION.contains(text))
+            .fold(Vec::<Word>::new(), |mut v, w| {
+                if !w.text.starts_with(' ') {
+                    if let Some(item) = v.last_mut() {
+                        item.text = format!("{}{}", item.text, w.text.to_lowercase());
+                        item.end = w.end;
+                        return v;
+                    }
+                }
+
+                v.push(Word {
+                    text: w.text.trim().to_lowercase(),
+                    ..w
+                });
+                v
+            });
+
+        Ok(words)
     }
 }
 
