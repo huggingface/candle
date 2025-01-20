@@ -13,6 +13,7 @@ pub struct Word {
     pub text: String,
     pub start: f32,
     pub end: f32,
+    pub tokens: Vec<u32>,
 }
 
 impl Word {
@@ -35,21 +36,28 @@ pub trait PostProcessor {
         let words = self
             .decode(tokens)?
             .into_iter()
+            .zip(tokens)
             .zip(timestamps.iter().copied())
             .zip(timestamps.iter().copied().skip(1))
-            .map(|((text, start), end)| Word { text, start, end })
-            .filter(|Word { text, .. }| !PUNCTUATION.contains(text))
+            .map(|(((text, token), start), end)| Word {
+                text,
+                start,
+                end,
+                tokens: vec![*token],
+            })
+            .filter(|Word { text, .. }| !PUNCTUATION.contains(text) && !text.trim().is_empty())
             .fold(Vec::<Word>::new(), |mut v, w| {
                 if !w.text.starts_with(' ') {
                     if let Some(item) = v.last_mut() {
-                        item.text = format!("{}{}", item.text, w.text.to_lowercase());
+                        item.text = format!("{}{}", item.text, w.text);
                         item.end = w.end;
+                        item.tokens.extend(w.tokens);
                         return v;
                     }
                 }
 
                 v.push(Word {
-                    text: w.text.trim().to_lowercase(),
+                    text: w.text.trim().to_string(),
                     ..w
                 });
                 v
