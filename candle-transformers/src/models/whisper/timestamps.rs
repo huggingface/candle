@@ -15,25 +15,32 @@ pub struct Word {
     pub end: f32,
 }
 
-/// Helper trait for processing timestamps.
+impl Word {
+    pub fn offset_start(self, duration: std::time::Duration) -> Self {
+        Self {
+            start: self.start + duration.as_secs_f32(),
+            end: self.end + duration.as_secs_f32(),
+            ..self
+        }
+    }
+}
+
+/// Helper trait for processing dtw timestamps.
 pub trait PostProcessor {
     type Error: std::error::Error;
 
-    fn decode(&self, tokens: &[u32]) -> Result<String, Self::Error>;
-    fn segment(&self, s: String) -> Vec<String> {
-        s.split(" ")
-            .filter(|s| !s.is_empty())
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-    }
-    fn label(&self, Raw(timestamps): &Raw, tokens: &[u32]) -> Result<Vec<Word>, Self::Error> {
-        let text = self.decode(tokens)?;
-        let words = self.segment(text);
-        Ok(words
+    fn decode(&mut self, tokens: &[u32]) -> Result<Vec<String>, Self::Error>;
+    fn label(&mut self, Raw(timestamps): &Raw, tokens: &[u32]) -> Result<Vec<Word>, Self::Error> {
+        let segments = self.decode(tokens)?;
+        Ok(segments
             .into_iter()
             .zip(timestamps.iter().copied())
             .zip(timestamps.iter().copied().skip(1))
-            .map(|((text, start), end)| Word { text, start, end })
+            .map(|((text, start), end)| Word {
+                text: text.trim().to_lowercase(),
+                start,
+                end,
+            })
             .collect())
     }
 }
@@ -60,7 +67,7 @@ impl AlignmentHeads {
         &self,
         cross_attentions: &[Tensor],
         filter_width: NonZeroUsize,
-        n_samples: usize,
+        n_frames: usize,
         n_start_tokens: usize,
     ) -> candle::Result<Vec<Raw>> {
         // Select relevant cross-attention heads
@@ -85,29 +92,24 @@ impl AlignmentHeads {
             )?
             .permute((1, 0, 2, 3))?,
         }
-        .narrow(
-            3,
-            0,
-            (n_samples / super::HOP_LENGTH).min(super::N_FRAMES) / 2,
+        .narrow(3, 0, n_frames.min(super::N_FRAMES) / 2)?;
+
+        // Normalize
+        let weights = softmax_last_dim(&weights.contiguous()?)?;
+
+        // Smooth
+        let weights = &median_filter(
+            filter_width,
+            weights
+                .broadcast_sub(&weights.mean_keepdim(D::Minus2)?)?
+                .broadcast_div(&weights.var_keepdim(D::Minus2)?.sqrt()?)?,
         )?;
 
-        // Smooth and normalize
-        let weights = softmax_last_dim(
-            &median_filter(
-                filter_width,
-                weights
-                    .broadcast_sub(&weights.mean_keepdim(D::Minus2)?)?
-                    .broadcast_div(&weights.var_keepdim(D::Minus2)?.sqr()?)?,
-            )?
-            .contiguous()?,
-        )?
-        .mean(1)?;
-
         // Exclude start tokens
-        let cost = weights.narrow(
+        let cost = weights.mean(1)?.narrow(
             D::Minus2,
             n_start_tokens,
-            weights.dim(D::Minus2)? - n_start_tokens,
+            weights.dim(D::Minus2)? - n_start_tokens - 1,
         )?;
 
         // Do the timewarp
@@ -116,22 +118,27 @@ impl AlignmentHeads {
                 let (text_indices, time_indices) = dynamic_time_warp(
                     cost.neg()?
                         .i(batch_idx)?
-                        .to_dtype(candle::DType::F64)?
-                        .to_vec2::<f64>()?,
+                        .to_dtype(candle::DType::F32)?
+                        .to_vec2::<f32>()?,
                 )?;
 
-                let jumps = text_indices
-                    .iter()
-                    .copied()
-                    .zip(std::iter::once(0.).chain(text_indices.iter().copied()))
-                    .map(|(a, b)| (a - b) as usize)
+                let jumps = std::iter::once(1)
+                    .chain(
+                        text_indices
+                            .iter()
+                            .skip(1)
+                            .copied()
+                            .zip(&text_indices)
+                            .map(|(a, b)| (a - b) as usize),
+                    )
                     .collect::<Vec<_>>();
+
                 let times = jumps
                     .into_iter()
                     .enumerate()
                     .filter(|(_, n)| *n == 1)
                     .map(|(i, _)| {
-                        time_indices[i] / (super::SAMPLE_RATE / (super::HOP_LENGTH * 2)) as f64
+                        time_indices[i] / (super::SAMPLE_RATE / (super::HOP_LENGTH * 2)) as f32
                     })
                     .collect::<Vec<_>>();
 
@@ -146,7 +153,7 @@ impl AlignmentHeads {
 }
 
 /// Computes the lowest cost warping path through the provided cost matrix
-fn dynamic_time_warp(matrix: Vec<Vec<f64>>) -> candle::Result<(Vec<f64>, Vec<f64>)> {
+fn dynamic_time_warp(matrix: Vec<Vec<f32>>) -> candle::Result<(Vec<f32>, Vec<f32>)> {
     let [n, m] = [matrix.len(), matrix[0].len()];
     let (mut cost, mut trace) = (vec![vec![1.; m + 1]; n + 1], vec![vec![1.; m + 1]; n + 1]);
 
@@ -173,8 +180,8 @@ fn dynamic_time_warp(matrix: Vec<Vec<f64>>) -> candle::Result<(Vec<f64>, Vec<f64
 
     let (mut xs, mut ys) = (vec![], vec![]);
     while i > 0 || j > 0 {
-        xs.push(i.saturating_sub(1) as f64);
-        ys.push(j.saturating_sub(1) as f64);
+        xs.push(i.saturating_sub(1) as f32);
+        ys.push(j.saturating_sub(1) as f32);
         match trace[i as usize][j as usize] as i32 {
             0 => {
                 i = i.saturating_sub(1);

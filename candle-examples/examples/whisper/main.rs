@@ -72,15 +72,15 @@ impl Model {
         &mut self,
         alignment_heads: AlignmentHeads,
         filter_width: NonZeroUsize,
-        n_samples: usize,
+        n_frames: usize,
         n_start_tokens: usize,
     ) -> candle::Result<Vec<timestamps::Raw>> {
         match self {
             Self::Normal(m) => {
-                m.dtw_timestamps(alignment_heads, filter_width, n_samples, n_start_tokens)
+                m.dtw_timestamps(alignment_heads, filter_width, n_frames, n_start_tokens)
             }
             Self::Quantized(m) => {
-                m.dtw_timestamps(alignment_heads, filter_width, n_samples, n_start_tokens)
+                m.dtw_timestamps(alignment_heads, filter_width, n_frames, n_start_tokens)
             }
         }
     }
@@ -106,6 +106,7 @@ struct DecodingResult {
     no_speech_prob: f64,
     temperature: f64,
     compression_ratio: f64,
+    n_start_tokens: usize,
 }
 
 #[allow(dead_code)]
@@ -195,7 +196,7 @@ impl Decoder {
         })
     }
 
-    fn decode(&mut self, mel: &Tensor, t: f64) -> Result<DecodingResult> {
+    fn decode(&mut self, mel: &Tensor, t: f64, n_frames: usize) -> Result<DecodingResult> {
         let model = &mut self.model;
         let audio_features = model.encoder_forward(mel, true)?;
         if self.verbose {
@@ -212,11 +213,35 @@ impl Decoder {
             None | Some(Task::Transcribe) => tokens.push(self.transcribe_token),
             Some(Task::Translate) => tokens.push(self.translate_token),
         }
-        if !self.timestamps {
+        if !self.dtw_timestamps && !self.timestamps {
             tokens.push(self.no_timestamps_token);
         }
+        let n_start_tokens = tokens.len();
         for i in 0..sample_len {
-            let tokens_t = Tensor::new(tokens.as_slice(), mel.device())?;
+            let tokens_t = if tokens.last() == Some(&self.eot_token) {
+                let nearest_second = n_frames * m::HOP_LENGTH / m::SAMPLE_RATE;
+                Tensor::new(
+                    tokens
+                        .iter()
+                        .map(|t| {
+                            (*t == self.eot_token)
+                                .then(|| {
+                                    self.tokenizer
+                                        .token_to_id(&format!("<|{}.00|>", nearest_second))
+                                })
+                                .flatten()
+                                .unwrap_or(*t)
+                        })
+                        .collect::<Vec<_>>(),
+                    mel.device(),
+                )?
+            } else if i == 1 && self.dtw_timestamps {
+                let _ = tokens.pop();
+                tokens.push(self.no_timestamps_token);
+                Tensor::new(tokens.as_slice(), mel.device())?
+            } else {
+                Tensor::new(tokens.as_slice(), mel.device())?
+            };
 
             // The model expects a batch dim but this inference loop does not handle
             // it so we add it at this point.
@@ -259,11 +284,20 @@ impl Decoder {
                     .map(|(i, _)| i as u32)
                     .unwrap()
             };
+            if self.dtw_timestamps
+                && (tokens.last() == Some(&self.eot_token)
+                    || tokens.len() > model.config().max_target_positions)
+            {
+                break;
+            }
             tokens.push(next_token);
             let prob = softmax(&logits, candle::D::Minus1)?
                 .i(next_token as usize)?
                 .to_scalar::<f32>()? as f64;
-            if next_token == self.eot_token || tokens.len() > model.config().max_target_positions {
+            if !self.dtw_timestamps
+                && (next_token == self.eot_token
+                    || tokens.len() > model.config().max_target_positions)
+            {
                 break;
             }
             sum_logprob += prob.ln();
@@ -278,12 +312,17 @@ impl Decoder {
             no_speech_prob,
             temperature: t,
             compression_ratio: f64::NAN,
+            n_start_tokens,
         })
     }
 
-    fn decode_with_fallback(&mut self, segment: &Tensor) -> Result<DecodingResult> {
+    fn decode_with_fallback(
+        &mut self,
+        segment: &Tensor,
+        n_frames: usize,
+    ) -> Result<DecodingResult> {
         for (i, &t) in m::TEMPERATURES.iter().enumerate() {
-            let dr: Result<DecodingResult> = self.decode(segment, t);
+            let dr: Result<DecodingResult> = self.decode(segment, t, n_frames);
             if i == m::TEMPERATURES.len() - 1 {
                 return dr;
             }
@@ -312,7 +351,7 @@ impl Decoder {
         }
     }
 
-    fn run(&mut self, mel: &Tensor, n_samples: usize) -> Result<Vec<Segment>> {
+    fn run(&mut self, mel: &Tensor, total_frames: usize) -> Result<Vec<Segment>> {
         let (_, _, content_frames) = mel.dims3()?;
         let mut seek = 0;
         let mut segments = vec![];
@@ -321,9 +360,18 @@ impl Decoder {
             let start = std::time::Instant::now();
             let time_offset = (seek * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
             let segment_size = usize::min(content_frames - seek, m::N_FRAMES);
+            let n_frames = segment_size.min(
+                total_frames
+                    .checked_sub(seek)
+                    .or_else(|| {
+                        seek.checked_sub(m::N_FRAMES)
+                            .and_then(|seek| total_frames.checked_sub(seek))
+                    })
+                    .unwrap_or_default(),
+            );
             let mel_segment = mel.narrow(2, seek, segment_size)?;
             let segment_duration = (segment_size * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
-            let dr = self.decode_with_fallback(&mel_segment)?;
+            let dr = self.decode_with_fallback(&mel_segment, n_frames)?;
             seek += segment_size;
             if dr.no_speech_prob > m::NO_SPEECH_THRESHOLD && dr.avg_logprob < m::LOGPROB_THRESHOLD {
                 println!("no speech detected, skipping {seek} {dr:?}");
@@ -381,27 +429,13 @@ impl Decoder {
                 )
             }
             if self.dtw_timestamps {
-                let n_start_tokens = segment
-                    .dr
-                    .tokens
-                    .iter()
-                    .take_while(|t| {
-                        [
-                            self.sot_token,
-                            self.no_timestamps_token,
-                            self.language_token.unwrap_or(self.sot_token),
-                        ]
-                        .contains(t)
-                    })
-                    .count();
-
                 let timestamps = self
                     .model
                     .dtw_timestamps(
                         self.which_model.alignment_heads(),
                         NonZeroUsize::new(7).unwrap(),
-                        n_samples,
-                        n_start_tokens,
+                        n_frames,
+                        segment.dr.n_start_tokens,
                     )?
                     .into_iter()
                     .next()
@@ -411,11 +445,13 @@ impl Decoder {
                     self,
                     &timestamps,
                     &segment.dr.tokens,
-                )?;
+                )?
+                .into_iter()
+                .map(|word| word.offset_start(std::time::Duration::from_secs_f64(segment.start)));
 
                 println!("dtw timestamps: {:?}", timestamps);
                 for word in words {
-                    println!("{word:?}")
+                    println!("{word:?}");
                 }
             }
             if self.verbose {
@@ -429,10 +465,12 @@ impl Decoder {
 
 impl timestamps::PostProcessor for Decoder {
     type Error = candle::Error;
-    fn decode(&self, tokens: &[u32]) -> candle::Result<String> {
-        self.tokenizer
-            .decode(tokens, true)
-            .map_err(candle::Error::msg)
+    fn decode(&mut self, tokens: &[u32]) -> candle::Result<Vec<String>> {
+        Ok(tokens
+            .iter()
+            .filter_map(|token| self.tokenizer.decode(&[*token], true).ok())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>())
     }
 }
 
@@ -680,6 +718,7 @@ fn main() -> Result<()> {
         anyhow::bail!("input file must have a {} sampling rate", m::SAMPLE_RATE)
     }
     println!("pcm data loaded {}", pcm_data.len());
+    let total_frames = (pcm_data.len() as f64 / m::HOP_LENGTH as f64).round() as usize;
     let mel = audio::pcm_to_mel(&config, &pcm_data, &mel_filters);
     let mel_len = mel.len();
     let mel = Tensor::from_vec(
@@ -724,6 +763,6 @@ fn main() -> Result<()> {
         args.model,
         args.verbose,
     )?;
-    dc.run(&mel, pcm_data.len())?;
+    dc.run(&mel, total_frames)?;
     Ok(())
 }

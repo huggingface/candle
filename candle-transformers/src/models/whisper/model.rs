@@ -149,13 +149,13 @@ impl MultiHeadAttention {
             let mask = mask.i((0..n_ctx, 0..n_ctx))?;
             qk = qk.broadcast_add(&mask)?
         }
+        if let AttentionOutput::Enabled(attentions) = &mut self.output_attentions {
+            attentions.push(qk.clone());
+        }
         let w = {
             let _enter = self.softmax_span.enter();
             candle_nn::ops::softmax_last_dim(&qk)?
         };
-        if let AttentionOutput::Enabled(attentions) = &mut self.output_attentions {
-            attentions.push(w.clone());
-        }
         let wv = {
             let _enter = self.matmul_span.enter();
             w.matmul(&v)?
@@ -487,7 +487,7 @@ impl Whisper {
         &mut self,
         alignment_heads: timestamps::AlignmentHeads,
         filter_width: NonZeroUsize,
-        n_samples: usize,
+        n_frames: usize,
         n_start_tokens: usize,
     ) -> Result<Vec<timestamps::Raw>> {
         if !self.config.dtw_timestamps {
@@ -500,7 +500,7 @@ impl Whisper {
         alignment_heads.extract_timestamps(
             &self.take_attention_outputs(),
             filter_width,
-            n_samples,
+            n_frames,
             n_start_tokens,
         )
     }
@@ -516,8 +516,7 @@ impl Whisper {
             .flat_map(|layer| layer.cross_attn.as_mut())
             .filter_map(|(attn, _)| match &mut attn.output_attentions {
                 AttentionOutput::Enabled(attns) if !attns.is_empty() => {
-                    let attns = std::mem::take(attns);
-                    Tensor::cat(&attns, 2).ok()
+                    Tensor::cat(&std::mem::take(attns), 2).ok()
                 }
                 _ => None,
             })
