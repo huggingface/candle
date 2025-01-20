@@ -4,7 +4,6 @@ use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::glm4::*;
 use clap::Parser;
 use hf_hub::{Repo, RepoType};
-use std::path::Path;
 use tokenizers::Tokenizer;
 struct TextGeneration {
     model: Model,
@@ -18,12 +17,8 @@ struct TextGeneration {
 impl TextGeneration {
     #[allow(clippy::too_many_arguments)]
     fn new(model: Model, tokenizer: Tokenizer, args: Args, device: &Device, dtype: DType) -> Self {
-        //default sampling parameter for glm4
-        let (temperature, top_p) = (
-            Some(args.temperature.unwrap_or(0.8)),
-            Some(args.top_p.unwrap_or(0.8)),
-        );
-        let logits_processor = LogitsProcessor::new(args.seed, temperature, top_p);
+        let logits_processor =
+            LogitsProcessor::new(args.seed, Some(args.temperature), Some(args.top_p));
         Self {
             model,
             tokenizer,
@@ -129,12 +124,12 @@ struct Args {
     verbose: bool,
 
     /// The temperature used to generate samples.
-    #[arg(long)]
-    temperature: Option<f64>,
+    #[arg(long, default_value_t = 0.8)]
+    temperature: f64,
 
     /// Nucleus sampling probability cutoff.
-    #[arg(long)]
-    top_p: Option<f64>,
+    #[arg(long, default_value_t = 0.8)]
+    top_p: f64,
 
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
@@ -176,9 +171,7 @@ fn main() -> anyhow::Result<()> {
     );
     println!(
         "temp: {:.2} repeat-penalty: {:.2} repeat-last-n: {}",
-        args.temperature.unwrap_or(0.6),
-        args.repeat_penalty,
-        args.repeat_last_n
+        args.temperature, args.repeat_penalty, args.repeat_last_n
     );
 
     let start = std::time::Instant::now();
@@ -208,7 +201,7 @@ fn main() -> anyhow::Result<()> {
             .map_err(anyhow::Error::msg)?,
     };
     let config_filename = match &args.weight_path {
-        Some(path) => Path::new(path).join("config.json"),
+        Some(path) => std::path::Path::new(path).join("config.json"),
         _ => repo.get("config.json")?,
     };
 
