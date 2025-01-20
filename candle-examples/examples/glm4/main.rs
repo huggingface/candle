@@ -1,12 +1,10 @@
-use candle_transformers::models::glm4::*;
-use clap::Parser;
-
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::models::glm4::*;
+use clap::Parser;
 use hf_hub::{Repo, RepoType};
 use tokenizers::Tokenizer;
-
 struct TextGeneration {
     model: Model,
     device: Device,
@@ -19,7 +17,8 @@ struct TextGeneration {
 impl TextGeneration {
     #[allow(clippy::too_many_arguments)]
     fn new(model: Model, tokenizer: Tokenizer, args: Args, device: &Device, dtype: DType) -> Self {
-        let logits_processor = LogitsProcessor::new(args.seed, args.temperature, args.top_p);
+        let logits_processor =
+            LogitsProcessor::new(args.seed, Some(args.temperature), Some(args.top_p));
         Self {
             model,
             tokenizer,
@@ -125,12 +124,12 @@ struct Args {
     verbose: bool,
 
     /// The temperature used to generate samples.
-    #[arg(long)]
-    temperature: Option<f64>,
+    #[arg(long, default_value_t = 0.8)]
+    temperature: f64,
 
     /// Nucleus sampling probability cutoff.
-    #[arg(long)]
-    top_p: Option<f64>,
+    #[arg(long, default_value_t = 0.8)]
+    top_p: f64,
 
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
@@ -147,7 +146,7 @@ struct Args {
     revision: Option<String>,
 
     #[arg(long)]
-    weight_file: Option<String>,
+    weight_path: Option<String>,
 
     #[arg(long)]
     tokenizer: Option<String>,
@@ -172,9 +171,7 @@ fn main() -> anyhow::Result<()> {
     );
     println!(
         "temp: {:.2} repeat-penalty: {:.2} repeat-last-n: {}",
-        args.temperature.unwrap_or(0.6),
-        args.repeat_penalty,
-        args.repeat_last_n
+        args.temperature, args.repeat_penalty, args.repeat_last_n
     );
 
     let start = std::time::Instant::now();
@@ -203,15 +200,23 @@ fn main() -> anyhow::Result<()> {
             .get("tokenizer.json")
             .map_err(anyhow::Error::msg)?,
     };
-    let filenames = match args.weight_file.as_ref() {
-        Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+    let config_filename = match &args.weight_path {
+        Some(path) => std::path::Path::new(path).join("config.json"),
+        _ => repo.get("config.json")?,
     };
+
+    let filenames = match &args.weight_path {
+        Some(path) => {
+            candle_examples::hub_load_local_safetensors(path, "model.safetensors.index.json")?
+        }
+        _ => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+    };
+
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).expect("Tokenizer Error");
 
     let start = std::time::Instant::now();
-    let config = Config::glm4();
+    let config: Config = serde_json::from_slice(&std::fs::read(config_filename)?)?;
     let device = candle_examples::device(args.cpu)?;
     let dtype = if device.is_cuda() {
         DType::BF16
