@@ -149,8 +149,12 @@ impl MultiHeadAttention {
             let mask = mask.i((0..n_ctx, 0..n_ctx))?;
             qk = qk.broadcast_add(&mask)?
         }
-        if let AttentionOutput::Enabled(attentions) = &mut self.output_attentions {
-            attentions.push(qk.clone());
+        if let AttentionOutput::Enabled(out) = &mut self.output_attentions {
+            if let Some(attn) = out.take() {
+                *out = Some(Tensor::cat(&[attn, qk.clone()], 2)?)
+            } else {
+                *out = Some(qk.clone());
+            };
         }
         let w = {
             let _enter = self.softmax_span.enter();
@@ -388,7 +392,7 @@ impl TextDecoder {
                     true,
                     cfg.use_self_attention_kv_cache || cfg.dtw_timestamps,
                     if cfg.dtw_timestamps {
-                        AttentionOutput::Enabled(vec![])
+                        AttentionOutput::Enabled(None)
                     } else {
                         AttentionOutput::Disabled
                     },
@@ -515,9 +519,7 @@ impl Whisper {
             .iter_mut()
             .flat_map(|layer| layer.cross_attn.as_mut())
             .filter_map(|(attn, _)| match &mut attn.output_attentions {
-                AttentionOutput::Enabled(attns) if !attns.is_empty() => {
-                    Tensor::cat(&std::mem::take(attns), 2).ok()
-                }
+                AttentionOutput::Enabled(attns) => attns.take(),
                 _ => None,
             })
             .collect()

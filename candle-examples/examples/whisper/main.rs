@@ -429,7 +429,7 @@ impl Decoder {
                 )
             }
             if self.dtw_timestamps {
-                let timestamps = self
+                if let Some(timestamps) = self
                     .model
                     .dtw_timestamps(
                         self.which_model.alignment_heads(),
@@ -439,19 +439,21 @@ impl Decoder {
                     )?
                     .into_iter()
                     .next()
-                    .ok_or_else(|| candle::Error::msg("missing dtw timestamps"))?;
+                {
+                    let words = <Self as timestamps::PostProcessor>::label(
+                        self,
+                        &timestamps,
+                        &segment.dr.tokens,
+                    )?
+                    .into_iter()
+                    .map(|word| {
+                        word.offset_start(std::time::Duration::from_secs_f64(segment.start))
+                    });
 
-                let words = <Self as timestamps::PostProcessor>::label(
-                    self,
-                    &timestamps,
-                    &segment.dr.tokens,
-                )?
-                .into_iter()
-                .map(|word| word.offset_start(std::time::Duration::from_secs_f64(segment.start)));
-
-                println!("dtw timestamps: {:?}", timestamps);
-                for word in words {
-                    println!("{word:?}");
+                    println!("dtw timestamps: {:?}", timestamps);
+                    for word in words {
+                        println!("{word:?}");
+                    }
                 }
             }
             if self.verbose {

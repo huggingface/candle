@@ -42,7 +42,7 @@ pub struct Config {
 #[derive(Debug, Clone)]
 enum AttentionOutput {
     Disabled,
-    Enabled(Vec<candle::Tensor>),
+    Enabled(Option<candle::Tensor>),
 }
 
 pub const DTYPE: candle::DType = candle::DType::F32;

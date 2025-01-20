@@ -112,6 +112,11 @@ impl AlignmentHeads {
             weights.dim(D::Minus2)? - n_start_tokens - 1,
         )?;
 
+        if cost.dim(D::Minus2)? == 0 {
+            // No tokens to be aligned
+            return Ok(Default::default());
+        }
+
         // Do the timewarp
         let timestamps = Tensor::stack(
             &((0..weights.dim(0)?).map(|batch_idx| {
