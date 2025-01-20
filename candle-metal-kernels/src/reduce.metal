@@ -741,7 +741,7 @@ impl_arg_reduce_strided(OP, NAME, T)                    \
 template <typename T>
 struct MD {
     T m;
-    T d;
+    float d;
 
     constexpr MD<T>() = default;
     constexpr MD<T>() threadgroup = default;
@@ -807,9 +807,9 @@ struct finalize_softmax {
         const uint thread_id,
         const uint stop_idx
     ) {
-        const T d_total_inverse = fast_divide(static_cast<T>(1.0), md_total.d);
+        const float d_total_inverse = fast_divide(1.0, md_total.d);
         for (uint idx = thread_id; idx < stop_idx; idx += BLOCKSIZE) {
-            dst[idx] = fast_exp(src[idx] - md_total.m) * d_total_inverse;
+            dst[idx] = static_cast<T>(fast_exp(src[idx] - md_total.m) * d_total_inverse);
         }
     }
 };
