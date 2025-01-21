@@ -171,9 +171,8 @@ impl Tensor {
         for node in &sorted_nodes {
             filtered_node_ids.insert(node.id());
         }
-        let is_tensor_grad_needed = |tensor: &Tensor| -> bool {
-            filtered_node_ids.contains(&tensor.id())
-        };
+        let is_tensor_grad_needed =
+            |tensor: &Tensor| -> bool { filtered_node_ids.contains(&tensor.id()) };
         let mut grads = GradStore::new();
         grads.insert(self, self.ones_like()?.contiguous()?);
         for node in sorted_nodes.iter() {
@@ -223,7 +222,6 @@ impl Tensor {
                             let rhs_sum_grad = grads.or_insert(rhs)?;
                             *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
                         }
-
                     }
                     Op::Binary(lhs, rhs, BinaryOp::Div) => {
                         if is_tensor_grad_needed(lhs) {
@@ -232,10 +230,10 @@ impl Tensor {
                             *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?;
                         }
                         if is_tensor_grad_needed(rhs) {
-                        let rhs_grad = grad.mul(lhs)?.div(&rhs.sqr()?)?;
-                        let rhs_sum_grad = grads.or_insert(rhs)?;
-                        *rhs_sum_grad = rhs_sum_grad.sub(&rhs_grad)?;
-                            }
+                            let rhs_grad = grad.mul(lhs)?.div(&rhs.sqr()?)?;
+                            let rhs_sum_grad = grads.or_insert(rhs)?;
+                            *rhs_sum_grad = rhs_sum_grad.sub(&rhs_grad)?;
+                        }
                     }
                     Op::Binary(lhs, rhs, BinaryOp::Minimum)
                     | Op::Binary(lhs, rhs, BinaryOp::Maximum) => {
@@ -257,7 +255,6 @@ impl Tensor {
                         }
                     }
                     Op::WhereCond(pred, t, f) => {
-
                         let zeros = grad.zeros_like()?;
                         if is_tensor_grad_needed(t) {
                             let t_sum_grad = grads.or_insert(t)?;
@@ -269,7 +266,6 @@ impl Tensor {
                             let f_grad = pred.where_cond(&zeros, &grad)?;
                             *f_sum_grad = f_sum_grad.add(&f_grad)?;
                         }
-
                     }
                     Op::Conv1D {
                         arg,
@@ -283,8 +279,8 @@ impl Tensor {
                             // (l_in - 1) * stride - 2 * padding + dilation * (k_size - 1) + out_padding + 1
                             let grad_l_in = grad.dim(2)?;
                             let k_size = kernel.dim(2)?;
-                            let out_size =
-                                (grad_l_in - 1) * stride + dilation * (k_size - 1) + 1 - 2 * padding;
+                            let out_size = (grad_l_in - 1) * stride + dilation * (k_size - 1) + 1
+                                - 2 * padding;
                             let out_padding = arg.dim(2)? - out_size;
                             let grad_arg = grad.conv_transpose1d(
                                 kernel,
@@ -516,7 +512,6 @@ impl Tensor {
                             let rhs_sum_grad = grads.or_insert(rhs)?;
                             *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
                         }
-
                     }
                     Op::QMatmul(rhs, lhs) => {
                         let rhs = rhs.dequantize(self.device())?.t()?;

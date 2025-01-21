@@ -1,11 +1,11 @@
 //! Tensor Opertion Enums and Traits
 //!
 #![allow(clippy::redundant_closure_call)]
-use std::sync::Arc;
+use crate::quantized::QTensor;
 use crate::Tensor;
 use half::{bf16, f16};
 use num_traits::float::Float;
-use crate::quantized::QTensor;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CmpOp {

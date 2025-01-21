@@ -1282,7 +1282,12 @@ impl Tensor {
 
     pub fn qmatmul(&self, rhs: &Arc<QTensor>) -> Result<Tensor> {
         let (storage, shape) = self.storage().apply_op1(self.layout(), rhs.as_ref())?;
-        Ok(from_storage(storage, shape, BackpropOp::new_qmatmul(rhs, self), false))
+        Ok(from_storage(
+            storage,
+            shape,
+            BackpropOp::new_qmatmul(rhs, self),
+            false
+        ))
     }
 
     /// Matrix-multiplication with broadcasting support.
