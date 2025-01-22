@@ -19,13 +19,41 @@ pub trait Map1 {
         let out = match s {
             S::U8(s) => S::U8(self.f(s, d, l)?),
             S::U32(s) => S::U32(self.f(s, d, l)?),
+            S::I16(s) => S::I16(self.f(s, d, l)?),
+            S::I32(s) => S::I32(self.f(s, d, l)?),
             S::I64(s) => S::I64(self.f(s, d, l)?),
             S::BF16(s) => S::BF16(self.f(s, d, l)?),
             S::F16(s) => S::F16(self.f(s, d, l)?),
             S::F32(s) => S::F32(self.f(s, d, l)?),
             S::F64(s) => S::F64(self.f(s, d, l)?),
+            S::F8E4M3(s) => S::F8E4M3(self.f(s, d, l)?),
         };
         Ok(out)
+    }
+}
+
+pub trait Map1InPlace {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        src: &mut CudaSlice<T>,
+        dev: &CudaDevice,
+        layout: &Layout,
+    ) -> Result<()>;
+
+    fn map(&self, s: &mut S, d: &CudaDevice, l: &Layout) -> Result<()> {
+        match s {
+            S::U8(s) => self.f(s, d, l)?,
+            S::U32(s) => self.f(s, d, l)?,
+            S::I16(s) => self.f(s, d, l)?,
+            S::I32(s) => self.f(s, d, l)?,
+            S::I64(s) => self.f(s, d, l)?,
+            S::BF16(s) => self.f(s, d, l)?,
+            S::F16(s) => self.f(s, d, l)?,
+            S::F32(s) => self.f(s, d, l)?,
+            S::F64(s) => self.f(s, d, l)?,
+            S::F8E4M3(s) => self.f(s, d, l)?,
+        };
+        Ok(())
     }
 }
 
@@ -48,6 +76,7 @@ pub trait Map2 {
             (S::F16(s1), S::F16(s2)) => S::F16(self.f(s1, l1, s2, l2, d)?),
             (S::F32(s1), S::F32(s2)) => S::F32(self.f(s1, l1, s2, l2, d)?),
             (S::F64(s1), S::F64(s2)) => S::F64(self.f(s1, l1, s2, l2, d)?),
+            (S::F8E4M3(s1), S::F8E4M3(s2)) => S::F8E4M3(self.f(s1, l1, s2, l2, d)?),
             _ => Err(CudaError::InternalError("dtype mismatch in binary op"))?,
         };
         Ok(out)
@@ -86,6 +115,9 @@ pub trait Map3 {
             (S::F16(s1), S::F16(s2), S::F16(s3)) => S::F16(self.f(s1, l1, s2, l2, s3, l3, d)?),
             (S::F32(s1), S::F32(s2), S::F32(s3)) => S::F32(self.f(s1, l1, s2, l2, s3, l3, d)?),
             (S::F64(s1), S::F64(s2), S::F64(s3)) => S::F64(self.f(s1, l1, s2, l2, s3, l3, d)?),
+            (S::F8E4M3(s1), S::F8E4M3(s2), S::F8E4M3(s3)) => {
+                S::F8E4M3(self.f(s1, l1, s2, l2, s3, l3, d)?)
+            }
             _ => Err(CudaError::InternalError("dtype mismatch in ternary op"))?,
         };
         Ok(out)
@@ -118,6 +150,7 @@ pub trait Map2InPlace {
             (S::F16(dst), S::F16(src)) => self.f(dst, dst_s, src, src_l, d),
             (S::F32(dst), S::F32(src)) => self.f(dst, dst_s, src, src_l, d),
             (S::F64(dst), S::F64(src)) => self.f(dst, dst_s, src, src_l, d),
+            (S::F8E4M3(dst), S::F8E4M3(src)) => self.f(dst, dst_s, src, src_l, d),
             _ => Err(CudaError::InternalError("dtype mismatch in binary op"))?,
         }
     }
@@ -136,11 +169,14 @@ pub trait Map1Any {
         let out = match s {
             S::U8(s) => self.f(s, d, l, S::U8)?,
             S::U32(s) => self.f(s, d, l, S::U32)?,
+            S::I16(s) => self.f(s, d, l, S::I16)?,
+            S::I32(s) => self.f(s, d, l, S::I32)?,
             S::I64(s) => self.f(s, d, l, S::I64)?,
             S::BF16(s) => self.f(s, d, l, S::BF16)?,
             S::F16(s) => self.f(s, d, l, S::F16)?,
             S::F32(s) => self.f(s, d, l, S::F32)?,
             S::F64(s) => self.f(s, d, l, S::F64)?,
+            S::F8E4M3(s) => self.f(s, d, l, S::F8E4M3)?,
         };
         Ok(out)
     }
@@ -165,6 +201,7 @@ pub trait Map2Any {
             (S::F16(s1), S::F16(s2)) => self.f(s1, l1, s2, l2, d)?,
             (S::F32(s1), S::F32(s2)) => self.f(s1, l1, s2, l2, d)?,
             (S::F64(s1), S::F64(s2)) => self.f(s1, l1, s2, l2, d)?,
+            (S::F8E4M3(s1), S::F8E4M3(s2)) => self.f(s1, l1, s2, l2, d)?,
             _ => Err(CudaError::InternalError("dtype mismatch in binary op")).w()?,
         };
         Ok(out)

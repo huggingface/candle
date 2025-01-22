@@ -89,9 +89,23 @@ pub trait BackendStorage: Sized {
         _: usize,
     ) -> Result<Self>;
 
-    fn matmul(
+    #[allow(clippy::too_many_arguments)]
+    fn matmul_with_alpha_beta(
         &self,
         _: &Self,
+        _: &mut Self,
+        _: Option<f64>,
+        _: (usize, usize, usize, usize),
+        _: &Layout,
+        _: &Layout,
+        _: &Layout,
+    ) -> Result<()>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn matmul_with_alpha(
+        &self,
+        _: &Self,
+        _: Option<f64>,
         _: (usize, usize, usize, usize),
         _: &Layout,
         _: &Layout,
@@ -144,6 +158,7 @@ pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
     fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage>;
 
     fn set_seed(&self, _: u64) -> Result<()>;
+    fn get_current_seed(&self) -> Result<u64>;
 
     /// Synchronize should block until all the operations on the device are completed.
     fn synchronize(&self) -> Result<()>;

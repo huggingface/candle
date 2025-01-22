@@ -1,4 +1,5 @@
 use crate::{DType, Device, Error, Result, Tensor, WithDType};
+use float8::F8E4M3;
 use safetensors::tensor as st;
 use safetensors::tensor::SafeTensors;
 use std::borrow::Cow;
@@ -11,10 +12,13 @@ impl From<DType> for st::Dtype {
             DType::U8 => st::Dtype::U8,
             DType::U32 => st::Dtype::U32,
             DType::I64 => st::Dtype::I64,
+            DType::I16 => st::Dtype::I16,
+            DType::I32 => st::Dtype::I32,
             DType::BF16 => st::Dtype::BF16,
             DType::F16 => st::Dtype::F16,
             DType::F32 => st::Dtype::F32,
             DType::F64 => st::Dtype::F64,
+            DType::F8E4M3 => st::Dtype::F8_E4M3,
         }
     }
 }
@@ -30,6 +34,7 @@ impl TryFrom<st::Dtype> for DType {
             st::Dtype::F16 => Ok(DType::F16),
             st::Dtype::F32 => Ok(DType::F32),
             st::Dtype::F64 => Ok(DType::F64),
+            st::Dtype::F8_E4M3 => Ok(DType::F8E4M3),
             dtype => Err(Error::UnsupportedSafeTensorDtype(dtype)),
         }
     }
@@ -171,7 +176,7 @@ pub trait Load {
     fn load(&self, device: &Device) -> Result<Tensor>;
 }
 
-impl<'a> Load for st::TensorView<'a> {
+impl Load for st::TensorView<'_> {
     fn load(&self, device: &Device) -> Result<Tensor> {
         convert(self, device)
     }
@@ -187,11 +192,14 @@ impl Tensor {
         match dtype {
             DType::U8 => convert_slice::<u8>(data, shape, device),
             DType::U32 => convert_slice::<u32>(data, shape, device),
+            DType::I16 => convert_slice::<i16>(data, shape, device),
+            DType::I32 => convert_slice::<i32>(data, shape, device),
             DType::I64 => convert_slice::<i64>(data, shape, device),
             DType::BF16 => convert_slice::<half::bf16>(data, shape, device),
             DType::F16 => convert_slice::<half::f16>(data, shape, device),
             DType::F32 => convert_slice::<f32>(data, shape, device),
             DType::F64 => convert_slice::<f64>(data, shape, device),
+            DType::F8E4M3 => convert_slice::<F8E4M3>(data, shape, device),
         }
     }
 }
@@ -204,10 +212,8 @@ fn convert(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
             convert_with_cast_::<u16, u32, _>(view, device, conv)
         }
         st::Dtype::U32 => convert_::<u32>(view, device),
-        st::Dtype::I32 => {
-            let conv = |x| Ok(i64::from(x));
-            convert_with_cast_::<i32, i64, _>(view, device, conv)
-        }
+        st::Dtype::I16 => convert_::<i16>(view, device),
+        st::Dtype::I32 => convert_::<i32>(view, device),
         st::Dtype::I64 => convert_::<i64>(view, device),
         st::Dtype::BF16 => convert_::<half::bf16>(view, device),
         st::Dtype::F16 => convert_::<half::f16>(view, device),
@@ -223,11 +229,14 @@ fn convert_back(tensor: &Tensor) -> Result<Vec<u8>> {
     match tensor.dtype() {
         DType::U8 => Ok(convert_back_::<u8>(tensor.to_vec1()?)),
         DType::U32 => Ok(convert_back_::<u32>(tensor.to_vec1()?)),
+        DType::I16 => Ok(convert_back_::<i16>(tensor.to_vec1()?)),
+        DType::I32 => Ok(convert_back_::<i32>(tensor.to_vec1()?)),
         DType::I64 => Ok(convert_back_::<i64>(tensor.to_vec1()?)),
         DType::F16 => Ok(convert_back_::<half::f16>(tensor.to_vec1()?)),
         DType::BF16 => Ok(convert_back_::<half::bf16>(tensor.to_vec1()?)),
         DType::F32 => Ok(convert_back_::<f32>(tensor.to_vec1()?)),
         DType::F64 => Ok(convert_back_::<f64>(tensor.to_vec1()?)),
+        DType::F8E4M3 => Ok(convert_back_::<F8E4M3>(tensor.to_vec1()?)),
     }
 }
 

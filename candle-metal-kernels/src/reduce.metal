@@ -1,8 +1,265 @@
 #include <metal_stdlib>
+
 using namespace metal;
+
+#if defined(__HAVE_BFLOAT__)
+
+typedef bfloat bfloat16_t;
+
+#else
+
+/////////////////////////////////////////////////////////////////////////////
+// Helpers
+/////////////////////////////////////////////////////////////////////////////
+
+constexpr METAL_FUNC uint16_t float_to_bfloat_bits(float x) {
+  // Check for nan
+  if ((as_type<uint32_t>(x) & ~_fp_encoding_traits<float>::sign_mask) >
+      _fp_encoding_traits<float>::inf_mask) {
+    return uint16_t(as_type<uint32_t>(0x7FC0));
+  }
+  // Take bits
+  uint32_t float_bits = as_type<uint32_t>(x);
+
+  // Round to nearest even
+  float_bits += ((float_bits >> 16) & 1) + as_type<uint32_t>(0x7FFF);
+
+  // Take upper 16 bits
+  return float_bits >> 16;
+}
+
+constexpr METAL_FUNC float bfloat_bits_to_float(uint16_t x) {
+  // Upper 16 bits are the data and lower 16 bits are 0s
+  return as_type<float>((uint32_t)x << 16);
+}
+
+struct _MLX_BFloat16;
+
+template <typename T>
+static constexpr constant bool can_convert_to_bfloat =
+    !is_same_v<T, _MLX_BFloat16> && is_convertible_v<T, float>;
+
+template <typename T>
+static constexpr constant bool can_convert_from_bfloat =
+    !is_same_v<T, _MLX_BFloat16> && is_convertible_v<float, T>;
+
+/////////////////////////////////////////////////////////////////////////////
+// Bfloat struct
+/////////////////////////////////////////////////////////////////////////////
+
+struct _MLX_BFloat16 {
+  /////////////////////////////////////////////////////////////////////////////
+  // Constructors
+  uint16_t bits_;
+  _MLX_BFloat16() thread = default;
+  _MLX_BFloat16() threadgroup = default;
+  _MLX_BFloat16() device = default;
+  _MLX_BFloat16() constant = default;
+
+  struct bits_to_bfloat_struct {};
+  static constexpr METAL_FUNC bits_to_bfloat_struct bits_to_bfloat() {
+    return bits_to_bfloat_struct();
+  }
+  constexpr METAL_FUNC _MLX_BFloat16(uint16_t bits, bits_to_bfloat_struct)
+      : bits_(bits) {}
+
+  /////////////////////////////////////////////////////////////////////////////
+  // Conversions to bfloat
+
+  template <
+      typename T,
+      typename = typename enable_if<can_convert_to_bfloat<T>>::type>
+  constexpr METAL_FUNC _MLX_BFloat16(T x) thread
+      : bits_(float_to_bfloat_bits(static_cast<float>(x))) {}
+
+  template <
+      typename T,
+      typename = typename enable_if<can_convert_to_bfloat<T>>::type>
+  constexpr METAL_FUNC _MLX_BFloat16(T x) threadgroup
+      : bits_(float_to_bfloat_bits(static_cast<float>(x))) {}
+
+  template <
+      typename T,
+      typename = typename enable_if<can_convert_to_bfloat<T>>::type>
+  constexpr METAL_FUNC _MLX_BFloat16(T x) device
+      : bits_(float_to_bfloat_bits(static_cast<float>(x))) {}
+
+  template <
+      typename T,
+      typename = typename enable_if<can_convert_to_bfloat<T>>::type>
+  constexpr METAL_FUNC _MLX_BFloat16(T x) constant
+      : bits_(float_to_bfloat_bits(static_cast<float>(x))) {}
+
+  /////////////////////////////////////////////////////////////////////////////
+  // Conversions from bfloat
+
+  template <
+      typename T,
+      typename = typename enable_if<can_convert_from_bfloat<T>>::type>
+  constexpr METAL_FUNC operator T() const thread {
+    return static_cast<T>(bfloat_bits_to_float(bits_));
+  }
+
+  template <
+      typename T,
+      typename = typename enable_if<can_convert_from_bfloat<T>>::type>
+  constexpr METAL_FUNC operator T() const threadgroup {
+    return static_cast<T>(bfloat_bits_to_float(bits_));
+  }
+
+  template <
+      typename T,
+      typename = typename enable_if<can_convert_from_bfloat<T>>::type>
+  constexpr METAL_FUNC operator T() const device {
+    return static_cast<T>(bfloat_bits_to_float(bits_));
+  }
+
+  template <
+      typename T,
+      typename = typename enable_if<can_convert_from_bfloat<T>>::type>
+  constexpr METAL_FUNC operator T() const constant {
+    return static_cast<T>(bfloat_bits_to_float(bits_));
+  }
+};
+
+/////////////////////////////////////////////////////////////////////////////
+// Bfloat operators
+/////////////////////////////////////////////////////////////////////////////
+
+/////////////////////////////////////////////////////////////////////////////
+// Unary ops
+constexpr METAL_FUNC _MLX_BFloat16 operator-(_MLX_BFloat16 x) {
+  return -static_cast<float>(x);
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// Binary operators
+#define bfloat_binop_base(__op__, __operator__, otype, atype, btype, ctype) \
+  constexpr METAL_FUNC otype __operator__(atype lhs, btype rhs) {           \
+    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);          \
+  }
+
+#define bfloat_binop_helper(__op__, __operator__, otype, itype, ctype)    \
+  constexpr METAL_FUNC otype __operator__(_MLX_BFloat16 lhs, itype rhs) { \
+    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);        \
+  }                                                                       \
+  constexpr METAL_FUNC otype __operator__(itype lhs, _MLX_BFloat16 rhs) { \
+    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);        \
+  }
+
+/////////////////////////////////////////////////////////////////////////////
+// Arithmetic Operators
+#define bfloat_binop(_op_, _operator_)                                       \
+  bfloat_binop_base(                                                         \
+      _op_, _operator_, _MLX_BFloat16, _MLX_BFloat16, _MLX_BFloat16, float); \
+  bfloat_binop_helper(_op_, _operator_, float, float, float);                \
+  bfloat_binop_helper(_op_, _operator_, float, half, float);                 \
+  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, int32_t, float);      \
+  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, uint32_t, float);     \
+  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, int64_t, float);      \
+  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, uint64_t, float);
+
+bfloat_binop(+, operator+);
+bfloat_binop(-, operator-);
+bfloat_binop(*, operator*);
+bfloat_binop(/, operator/);
+
+/////////////////////////////////////////////////////////////////////////////
+// Comparison ops
+#define bfloat_compop(__op__, __operator__)                             \
+  bfloat_binop_base(                                                    \
+      __op__, __operator__, bool, _MLX_BFloat16, _MLX_BFloat16, float); \
+  bfloat_binop_helper(__op__, __operator__, bool, float, float);        \
+  bfloat_binop_helper(__op__, __operator__, bool, half, float);         \
+  bfloat_binop_helper(__op__, __operator__, bool, int32_t, float);      \
+  bfloat_binop_helper(__op__, __operator__, bool, uint32_t, float);     \
+  bfloat_binop_helper(__op__, __operator__, bool, int64_t, float);      \
+  bfloat_binop_helper(__op__, __operator__, bool, uint64_t, float);
+
+bfloat_compop(>, operator>);
+bfloat_compop(<, operator<);
+bfloat_compop(>=, operator>=);
+bfloat_compop(<=, operator<=);
+bfloat_compop(==, operator==);
+bfloat_compop(!=, operator!=);
+
+#undef bfloat_compop
+#undef bfloat_binop_base
+#undef bfloat_binop_helper
+#undef bfloat_binop
+
+/////////////////////////////////////////////////////////////////////////////
+// Inplace Operators
+#define bfloat_inplace_op_helper(__op__, __operator__, itype, addr_space) \
+  constexpr METAL_FUNC addr_space _MLX_BFloat16& __operator__(            \
+      addr_space _MLX_BFloat16& lhs, itype rhs) {                         \
+    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);         \
+    return lhs;                                                           \
+  }                                                                       \
+  constexpr METAL_FUNC addr_space itype& __operator__(                    \
+      addr_space itype& lhs, _MLX_BFloat16 rhs) {                         \
+    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);         \
+    return lhs;                                                           \
+  }
+
+#define bfloat_inplace_op_addr_space_helper(__op__, __operator__, itype) \
+  bfloat_inplace_op_helper(__op__, __operator__, itype, device);         \
+  bfloat_inplace_op_helper(__op__, __operator__, itype, thread);         \
+  bfloat_inplace_op_helper(__op__, __operator__, itype, threadgroup);
+
+#define bfloat_inplace_op(itype)                             \
+  bfloat_inplace_op_addr_space_helper(+, operator+=, itype); \
+  bfloat_inplace_op_addr_space_helper(-, operator-=, itype); \
+  bfloat_inplace_op_addr_space_helper(*, operator*=, itype); \
+  bfloat_inplace_op_addr_space_helper(/, operator/=, itype);
+
+bfloat_inplace_op(float);
+bfloat_inplace_op(half);
+bfloat_inplace_op(int16_t);
+bfloat_inplace_op(int32_t);
+bfloat_inplace_op(int64_t);
+bfloat_inplace_op(uint16_t);
+bfloat_inplace_op(uint32_t);
+bfloat_inplace_op(uint64_t);
+
+#undef bfloat_inplace_op_helper
+#undef bfloat_inplace_op_addr_space_helper
+#undef bfloat_inplace_op
+
+#define bfloat_inplace_op_helper(__op__, __operator__, addr_space) \
+  constexpr METAL_FUNC addr_space _MLX_BFloat16& __operator__(     \
+      addr_space _MLX_BFloat16& lhs, _MLX_BFloat16 rhs) {          \
+    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);  \
+    return lhs;                                                    \
+  }
+
+#define bfloat_inplace_op_addr_space_helper(__op__, __operator__) \
+  bfloat_inplace_op_helper(__op__, __operator__, device);         \
+  bfloat_inplace_op_helper(__op__, __operator__, thread);         \
+  bfloat_inplace_op_helper(__op__, __operator__, threadgroup);
+
+bfloat_inplace_op_addr_space_helper(+, operator+=);
+bfloat_inplace_op_addr_space_helper(-, operator-=);
+bfloat_inplace_op_addr_space_helper(*, operator*=);
+bfloat_inplace_op_addr_space_helper(/, operator/=);
+
+#undef bfloat_inplace_op_helper
+#undef bfloat_inplace_op_addr_space_helper
+
+/////////////////////////////////////////////////////////////////////////////
+// Bfloat typedef
+/////////////////////////////////////////////////////////////////////////////
+
+typedef struct _MLX_BFloat16 bfloat16_t;
+
+#define HUGE_VALBF _MLX_BFloat16(0x7F80, _MLX_BFloat16::bits_to_bfloat())
+
+#endif
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
+
+#define N_SIMDWIDTH 32 // assuming SIMD group size is 32
 
 METAL_FUNC uint get_strided_index(
     uint idx,
@@ -561,6 +818,189 @@ kernel void FN_NAME_THD( \
     rope_thd<TYPENAME>(b, t, h, d, src, cos, sin, dst, idx); \
 }\
 
+
+template<typename T>
+kernel void attn_soft_max(
+        device const  char * src0,
+        device const  char * src1,
+        device        char * dst,
+        constant   int64_t & ne00,
+        constant   int64_t & ne01,
+        constant   int64_t & ne02,
+        constant     float & scale,
+        threadgroup  float * buf [[threadgroup(0)]],
+        uint  tgpig[[threadgroup_position_in_grid]],
+        uint  tpitg[[thread_position_in_threadgroup]],
+        uint  sgitg[[simdgroup_index_in_threadgroup]],
+        uint  tiisg[[thread_index_in_simdgroup]],
+        uint    ntg[[threads_per_threadgroup]]) {
+    const int64_t i03 = (tgpig) / (ne02*ne01);
+    const int64_t i02 = (tgpig - i03*ne02*ne01) / ne01;
+    const int64_t i01 = (tgpig - i03*ne02*ne01 - i02*ne01);
+
+    device const T * psrc0 =                (device const T *) src0 + (i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00);
+    device const T * pmask = src1 != src0 ? (device const T *) src1 + i01*ne00 : nullptr;
+    device       T * pdst  =                (device       T *) dst  + (i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00);
+
+    float slope = 1.0f;
+
+    // parallel max
+    float lmax = -INFINITY;
+
+    for (int i00 = tpitg; i00 < ne00; i00 += ntg) {
+        lmax = MAX(lmax, ((float)psrc0[i00])*scale + (pmask ? slope*((float)pmask[i00]) : 0.0f));
+    }
+
+    // find the max value in the block
+    float max_val = simd_max(lmax);
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = -INFINITY;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = max_val;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        max_val = buf[tiisg];
+        max_val = simd_max(max_val);
+    }
+
+    // parallel sum
+    float lsum = 0.0f;
+    for (int i00 = tpitg; i00 < ne00; i00 += ntg) {
+        const float exp_psrc0 = exp((((float)psrc0[i00])*scale + (pmask ? slope*((float)pmask[i00]) : 0.0f)) - max_val);
+        lsum += exp_psrc0;
+        pdst[i00] = static_cast<T>(exp_psrc0);
+    }
+
+    // This barrier fixes a failing test
+    // ref: https://github.com/ggerganov/ggml/pull/621#discussion_r1425156335
+    threadgroup_barrier(mem_flags::mem_none);
+
+    float sum = simd_sum(lsum);
+
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = 0.0f;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = sum;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        sum = buf[tiisg];
+        sum = simd_sum(sum);
+    }
+
+    const float inv_sum = 1.0f/sum;
+
+    for (int i00 = tpitg; i00 < ne00; i00 += ntg) {
+        pdst[i00] *= static_cast<T>(inv_sum);
+    }
+}
+
+template<typename T, typename S>
+kernel void attn_soft_max_4(
+        device const  char * src0,
+        device const  char * src1,
+        device        char * dst,
+        constant   int64_t & ne00,
+        constant   int64_t & ne01,
+        constant   int64_t & ne02,
+        constant     float & scale,
+        threadgroup  float * buf [[threadgroup(0)]],
+        uint  tgpig[[threadgroup_position_in_grid]],
+        uint  tpitg[[thread_position_in_threadgroup]],
+        uint  sgitg[[simdgroup_index_in_threadgroup]],
+        uint  tiisg[[thread_index_in_simdgroup]],
+        uint    ntg[[threads_per_threadgroup]]) {
+    const int64_t i03 = (tgpig) / (ne02*ne01);
+    const int64_t i02 = (tgpig - i03*ne02*ne01) / ne01;
+    const int64_t i01 = (tgpig - i03*ne02*ne01 - i02*ne01);
+
+    device const T * psrc4 =                (device const T *) src0 + (i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00)/4;
+    device const T * pmask = src1 != src0 ? (device const T *) src1 + i01*ne00/4 : nullptr;
+    device       T * pdst4 =                (device       T *) dst  + (i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00)/4;
+
+    float slope = 1.0f;
+
+    // parallel max
+    float4 lmax4 = -INFINITY;
+
+    for (int i00 = tpitg; i00 < ne00/4; i00 += ntg) {
+        lmax4 = fmax(lmax4, ((float4)psrc4[i00])*scale + (float4)((pmask ? slope*((float4)pmask[i00]) : 0.0f)));
+    }
+
+    const float lmax = MAX(MAX(lmax4[0], lmax4[1]), MAX(lmax4[2], lmax4[3]));
+
+    float max_val = simd_max(lmax);
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = -INFINITY;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = max_val;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        max_val = buf[tiisg];
+        max_val = simd_max(max_val);
+    }
+
+    // parallel sum
+    float4 lsum4 = 0.0f;
+    for (int i00 = tpitg; i00 < ne00/4; i00 += ntg) {
+        const float4 exp_psrc4 = exp((((float4)psrc4[i00])*scale + (float4)((pmask ? slope*((float4)pmask[i00]) : 0.0f))) - max_val);
+        lsum4 += exp_psrc4;
+        pdst4[i00] = static_cast<T>(exp_psrc4);
+    }
+
+    const float lsum = lsum4[0] + lsum4[1] + lsum4[2] + lsum4[3];
+
+    // This barrier fixes a failing test
+    // ref: https://github.com/ggerganov/ggml/pull/621#discussion_r1425156335
+    threadgroup_barrier(mem_flags::mem_none);
+
+    float sum = simd_sum(lsum);
+
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = 0.0f;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = sum;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        sum = buf[tiisg];
+        sum = simd_sum(sum);
+    }
+
+    const float inv_sum = 1.0f/sum;
+
+    for (int i00 = tpitg; i00 < ne00/4; i00 += ntg) {
+        pdst4[i00] = pdst4[i00] * static_cast<T>((S)inv_sum);
+    }
+}
+
+
 REDUCE(x + y, fast_sum_f32_strided, float, 0)
 REDUCE(x + y, fast_sum_u32_strided, uint, 0)
 REDUCE(x + y, fast_sum_f16_strided, half, 0)
@@ -587,6 +1027,13 @@ ARGMAX(fast_argmax_u8_strided, uint8_t, 0)
 
 SOFTMAX(softmax_f32, float)
 SOFTMAX(softmax_f16, half)
+// Softmax for attention
+typedef decltype(attn_soft_max<float>)    attn_soft_max_t;
+typedef decltype(attn_soft_max_4<float4, float>) attn_soft_max_4_t;
+template [[host_name("attn_soft_max_f16")]]   kernel attn_soft_max_t   attn_soft_max<half>;
+template [[host_name("attn_soft_max_f32")]]   kernel attn_soft_max_t   attn_soft_max<float>;
+template [[host_name("attn_soft_max_f16_4")]] kernel attn_soft_max_4_t attn_soft_max_4<half4, half>;
+template [[host_name("attn_soft_max_f32_4")]] kernel attn_soft_max_4_t attn_soft_max_4<float4, float>;
 RMSNORM(rmsnorm_f32, float)
 RMSNORM(rmsnorm_f16, half)
 LAYERNORM(layernorm_f32, float)
@@ -602,19 +1049,34 @@ ARGMIN(fast_argmin_i64_strided, int64_t, INT_MAX)
 ARGMAX(fast_argmax_i64_strided, int64_t, INT_MIN)
 #endif
 
-#if defined(__HAVE_BFLOAT__)
-REDUCE(x + y, fast_sum_bf16, bfloat, 0)
+REDUCE(x + y, fast_sum_i32_strided, int32_t, 0)
+REDUCE(MIN(x, y), fast_min_i32_strided, int32_t, INT_MAX)
+REDUCE(MAX(x, y), fast_max_i32_strided, int32_t, INT_MIN)
+ARGMIN(fast_argmin_i32_strided, int32_t, INT_MAX)
+ARGMAX(fast_argmax_i32_strided, int32_t, INT_MIN)
+
+REDUCE(x + y, fast_sum_i16_strided, int16_t, 0)
+REDUCE(MIN(x, y), fast_min_i16_strided, int16_t, INT_MAX)
+REDUCE(MAX(x, y), fast_max_i16_strided, int16_t, INT_MIN)
+ARGMIN(fast_argmin_i16_strided, int16_t, INT_MAX)
+ARGMAX(fast_argmax_i16_strided, int16_t, INT_MIN)
+
+REDUCE(x + y, fast_sum_bf16, bfloat16_t, 0)
 REDUCE(x + y, fast_sum_bf16_strided, half, 0)
-REDUCE(x * y, fast_mul_bf16, bfloat, 1)
-REDUCE(x * y, fast_mul_bf16_strided, bfloat, 1)
-REDUCE(MAX(x, y), fast_max_bf16, bfloat, -HUGE_VALBF)
-REDUCE(MAX(x, y), fast_max_bf16_strided, bfloat, -HUGE_VALBF)
-REDUCE(MIN(x, y), fast_min_bf16, bfloat, HUGE_VALBF)
-REDUCE(MIN(x, y), fast_min_bf16_strided, bfloat, HUGE_VALBF)
-ARGMIN(fast_argmin_bf16, bfloat, HUGE_VALBF)
-ARGMAX(fast_argmax_bf16, bfloat, -HUGE_VALBF)
-SOFTMAX(softmax_bf16, bfloat)
-RMSNORM(rmsnorm_bf16, bfloat)
-LAYERNORM(layernorm_bf16, bfloat)
-ROPE(rope_bf16, rope_i_bf16, rope_thd_bf16, bfloat)
+REDUCE(x * y, fast_mul_bf16, bfloat16_t, 1)
+REDUCE(x * y, fast_mul_bf16_strided, bfloat16_t, 1)
+REDUCE(MAX(x, y), fast_max_bf16, bfloat16_t, -HUGE_VALBF)
+REDUCE(MAX(x, y), fast_max_bf16_strided, bfloat16_t, -HUGE_VALBF)
+REDUCE(MIN(x, y), fast_min_bf16, bfloat16_t, HUGE_VALBF)
+REDUCE(MIN(x, y), fast_min_bf16_strided, bfloat16_t, HUGE_VALBF)
+ARGMIN(fast_argmin_bf16, bfloat16_t, HUGE_VALBF)
+ARGMAX(fast_argmax_bf16, bfloat16_t, -HUGE_VALBF)
+SOFTMAX(softmax_bf16, bfloat16_t)
+// // Softmax for attention
+template [[host_name("attn_soft_max_bf16")]]   kernel attn_soft_max_t   attn_soft_max<bfloat16_t>;
+#if defined(__HAVE_BFLOAT__)
+template [[host_name("attn_soft_max_bf16_4")]] kernel attn_soft_max_4_t attn_soft_max_4<bfloat4, bfloat16_t>;
 #endif
+RMSNORM(rmsnorm_bf16, bfloat16_t)
+LAYERNORM(layernorm_bf16, bfloat16_t)
+ROPE(rope_bf16, rope_i_bf16, rope_thd_bf16, bfloat16_t)

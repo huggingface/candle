@@ -45,6 +45,7 @@ extern "C" void run_mha(
     uint32_t d,
     uint32_t d_rounded,
     float softmax_scale,
+    float softcap,
 
     uint32_t seqlen_q,
     uint32_t seqlen_k,
@@ -99,8 +100,16 @@ extern "C" void run_mha(
     params.d_rounded = d_rounded;
 
     // Set the different scale values.
-    params.scale_softmax = softmax_scale;
-    params.scale_softmax_log2 = softmax_scale * M_LOG2E;
+    if (softcap > 0.0) {
+        params.softcap = softmax_scale / softcap;
+        params.scale_softmax =  softcap;
+        params.scale_softmax_log2 = softcap * M_LOG2E;
+    }else{
+        // Remove potential NaN
+        params.softcap = 0.0;
+        params.scale_softmax = softmax_scale;
+        params.scale_softmax_log2 = softmax_scale * M_LOG2E;
+    }
 
     params.p_dropout = 1.; // probability to keep
     params.p_dropout_in_uint8_t = uint8_t(std::floor(params.p_dropout * 255.0));

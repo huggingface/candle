@@ -8,9 +8,7 @@ use candle::{
 
 #[cfg(feature = "cuda")]
 use candle::cuda_backend::{
-    cudarc::driver::{
-        CudaFunction, CudaStream, DeviceRepr, DriverError, LaunchAsync, LaunchConfig,
-    },
+    cudarc::driver::{DeviceRepr, LaunchAsync, LaunchConfig},
     kernel_name, kernels, CudaDType,
 };
 

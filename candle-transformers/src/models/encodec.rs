@@ -84,7 +84,7 @@ impl Config {
 
     fn frame_rate(&self) -> usize {
         let hop_length: usize = self.upsampling_ratios.iter().product();
-        (self.sampling_rate + hop_length - 1) / hop_length
+        self.sampling_rate.div_ceil(hop_length)
     }
 
     fn num_quantizers(&self) -> usize {
@@ -136,7 +136,7 @@ pub fn conv1d_weight_norm(
     Ok(Conv1d::new(weight, Some(bias), config))
 }
 
-fn conv_transpose1d_weight_norm(
+pub fn conv_transpose1d_weight_norm(
     in_c: usize,
     out_c: usize,
     kernel_size: usize,

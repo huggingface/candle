@@ -7,6 +7,7 @@ use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
 use cudarc::driver::{
     CudaSlice, DevicePtr, DeviceRepr, DeviceSlice, LaunchAsync, LaunchConfig, ValidAsZeroBits,
 };
+use float8::F8E4M3;
 use half::{bf16, f16};
 
 #[cfg(feature = "cudnn")]
@@ -16,7 +17,7 @@ mod error;
 mod utils;
 pub use device::{CudaDevice, DeviceId};
 pub use error::{CudaError, WrapErr};
-pub use utils::{Map1, Map1Any, Map2, Map2Any, Map2InPlace, Map3, S};
+pub use utils::{Map1, Map1Any, Map1InPlace, Map2, Map2Any, Map2InPlace, Map3, S};
 
 pub enum SlicePtrOrNull<T> {
     Ptr(CudaSlice<T>),
@@ -47,11 +48,14 @@ impl SlicePtrOrNull<usize> {
 pub enum CudaStorageSlice {
     U8(CudaSlice<u8>),
     U32(CudaSlice<u32>),
+    I16(CudaSlice<i16>),
+    I32(CudaSlice<i32>),
     I64(CudaSlice<i64>),
     BF16(CudaSlice<bf16>),
     F16(CudaSlice<f16>),
     F32(CudaSlice<f32>),
     F64(CudaSlice<f64>),
+    F8E4M3(CudaSlice<F8E4M3>),
 }
 
 struct Clone;
@@ -174,6 +178,7 @@ impl Map1 for Im2Col1D {
     }
 }
 
+#[allow(unused)]
 struct Im2Col {
     h_k: usize,
     w_k: usize,
@@ -183,6 +188,7 @@ struct Im2Col {
 }
 
 impl Im2Col {
+    #[allow(unused)]
     fn hw_out(&self, h: usize, w: usize) -> (usize, usize) {
         let h_out = (h + 2 * self.padding - self.dilation * (self.h_k - 1) - 1) / self.stride + 1;
         let w_out = (w + 2 * self.padding - self.dilation * (self.w_k - 1) - 1) / self.stride + 1;
@@ -361,11 +367,17 @@ impl<'a> Map1 for IndexSelect<'a> {
             CudaStorageSlice::U8(slice) => {
                 ("is_u8", *slice.slice(ids_l.start_offset()..).device_ptr())
             }
+            CudaStorageSlice::I16(slice) => {
+                ("is_i16", *slice.slice(ids_l.start_offset()..).device_ptr())
+            }
+            CudaStorageSlice::I32(slice) => {
+                ("is_i32", *slice.slice(ids_l.start_offset()..).device_ptr())
+            }
             CudaStorageSlice::I64(slice) => {
                 ("is_i64", *slice.slice(ids_l.start_offset()..).device_ptr())
             }
             _ => Err(CudaError::UnexpectedDType {
-                msg: "index_select ids should be u8 or u32",
+                msg: "index_select ids should be u8/u32/i16/i32/i64",
                 expected: DType::U32,
                 got: self.0.dtype(),
             })
@@ -425,11 +437,17 @@ impl<'a> Map1 for Gather<'a> {
                 ("gather_u32", *slice.slice(ids_o1..ids_o2).device_ptr())
             }
             CudaStorageSlice::U8(slice) => ("gather_u8", *slice.slice(ids_o1..ids_o2).device_ptr()),
+            CudaStorageSlice::I16(slice) => {
+                ("gather_i16", *slice.slice(ids_o1..ids_o2).device_ptr())
+            }
+            CudaStorageSlice::I32(slice) => {
+                ("gather_i32", *slice.slice(ids_o1..ids_o2).device_ptr())
+            }
             CudaStorageSlice::I64(slice) => {
                 ("gather_i64", *slice.slice(ids_o1..ids_o2).device_ptr())
             }
             _ => Err(CudaError::UnexpectedDType {
-                msg: "gather ids should be u8/u32/i64",
+                msg: "gather ids should be u8/u32/i16/i32/i64",
                 expected: DType::U32,
                 got: ids.dtype(),
             })?,
@@ -475,10 +493,12 @@ impl<'a> Map2InPlace for IndexAdd<'a> {
         };
         let (name, ids) = match &ids.slice {
             CudaStorageSlice::U32(slice) => ("ia_u32", *slice.slice(ids_o1..ids_o2).device_ptr()),
+            CudaStorageSlice::I16(slice) => ("ia_i16", *slice.slice(ids_o1..ids_o2).device_ptr()),
+            CudaStorageSlice::I32(slice) => ("ia_i32", *slice.slice(ids_o1..ids_o2).device_ptr()),
             CudaStorageSlice::I64(slice) => ("ia_i64", *slice.slice(ids_o1..ids_o2).device_ptr()),
             CudaStorageSlice::U8(slice) => ("ia_u8", *slice.slice(ids_o1..ids_o2).device_ptr()),
             _ => Err(CudaError::UnexpectedDType {
-                msg: "index-add ids should be u8/u32/i64",
+                msg: "index-add ids should be u8/u32/i16/i32/i64",
                 expected: DType::U32,
                 got: ids.dtype(),
             })?,
@@ -523,10 +543,12 @@ impl<'a> Map2InPlace for ScatterAdd<'a> {
         };
         let (name, ids) = match &ids.slice {
             CudaStorageSlice::U32(slice) => ("sa_u32", *slice.slice(ids_o1..ids_o2).device_ptr()),
+            CudaStorageSlice::I16(slice) => ("sa_i16", *slice.slice(ids_o1..ids_o2).device_ptr()),
+            CudaStorageSlice::I32(slice) => ("sa_i32", *slice.slice(ids_o1..ids_o2).device_ptr()),
             CudaStorageSlice::I64(slice) => ("sa_i64", *slice.slice(ids_o1..ids_o2).device_ptr()),
             CudaStorageSlice::U8(slice) => ("sa_u8", *slice.slice(ids_o1..ids_o2).device_ptr()),
             _ => Err(CudaError::UnexpectedDType {
-                msg: "scatter-add ids should be u8/u32/i64",
+                msg: "scatter-add ids should be u8/u32/i16/i32/i64",
                 expected: DType::U32,
                 got: ids.dtype(),
             })?,
@@ -865,12 +887,20 @@ impl<'a> Map2 for WhereCond<'a> {
                 let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
                 (ptr, "where_u32")
             }
+            CudaStorageSlice::I16(slice) => {
+                let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
+                (ptr, "where_i16")
+            }
+            CudaStorageSlice::I32(slice) => {
+                let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
+                (ptr, "where_i32")
+            }
             CudaStorageSlice::I64(slice) => {
                 let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
                 (ptr, "where_i64")
             }
             _ => Err(CudaError::UnexpectedDType {
-                msg: "where conditions should be u8/u32/i64",
+                msg: "where conditions should be u8/u32/i16/i32/i64",
                 expected: DType::U32,
                 got: self.0.dtype(),
             })
@@ -1024,11 +1054,14 @@ macro_rules! cuda_dtype {
 }
 cuda_dtype!(u8, U8);
 cuda_dtype!(u32, U32);
+cuda_dtype!(i16, I16);
+cuda_dtype!(i32, I32);
 cuda_dtype!(i64, I64);
 cuda_dtype!(f16, F16);
 cuda_dtype!(bf16, BF16);
 cuda_dtype!(f32, F32);
 cuda_dtype!(f64, F64);
+cuda_dtype!(F8E4M3, F8E4M3);
 
 impl CudaStorage {
     pub fn wrap_cuda_slice<T: CudaDType>(slice: CudaSlice<T>, device: CudaDevice) -> CudaStorage {
@@ -1146,11 +1179,14 @@ impl BackendStorage for CudaStorage {
         match self.slice {
             CudaStorageSlice::U8(_) => DType::U8,
             CudaStorageSlice::U32(_) => DType::U32,
+            CudaStorageSlice::I16(_) => DType::I16,
+            CudaStorageSlice::I32(_) => DType::I32,
             CudaStorageSlice::I64(_) => DType::I64,
             CudaStorageSlice::BF16(_) => DType::BF16,
             CudaStorageSlice::F16(_) => DType::F16,
             CudaStorageSlice::F32(_) => DType::F32,
             CudaStorageSlice::F64(_) => DType::F64,
+            CudaStorageSlice::F8E4M3(_) => DType::F8E4M3,
         }
     }
 
@@ -1172,11 +1208,14 @@ impl BackendStorage for CudaStorage {
         let inp = match &self.slice {
             CudaStorageSlice::U8(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::U32(inp) => *inp.slice(start_o..).device_ptr(),
+            CudaStorageSlice::I16(inp) => *inp.slice(start_o..).device_ptr(),
+            CudaStorageSlice::I32(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::I64(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::BF16(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::F16(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::F32(inp) => *inp.slice(start_o..).device_ptr(),
             CudaStorageSlice::F64(inp) => *inp.slice(start_o..).device_ptr(),
+            CudaStorageSlice::F8E4M3(inp) => *inp.slice(start_o..).device_ptr(),
         };
         let inp = &inp;
 
@@ -1194,6 +1233,18 @@ impl BackendStorage for CudaStorage {
                 let params = (el, dims.len(), &ds, *inp, &out);
                 unsafe { func.launch(cfg, params) }.w()?;
                 CudaStorageSlice::U32(out)
+            }
+            DType::I16 => {
+                let out = unsafe { dev.alloc::<i16>(el) }.w()?;
+                let params = (el, dims.len(), &ds, *inp, &out);
+                unsafe { func.launch(cfg, params) }.w()?;
+                CudaStorageSlice::I16(out)
+            }
+            DType::I32 => {
+                let out = unsafe { dev.alloc::<i32>(el) }.w()?;
+                let params = (el, dims.len(), &ds, *inp, &out);
+                unsafe { func.launch(cfg, params) }.w()?;
+                CudaStorageSlice::I32(out)
             }
             DType::I64 => {
                 let out = unsafe { dev.alloc::<i64>(el) }.w()?;
@@ -1224,6 +1275,12 @@ impl BackendStorage for CudaStorage {
                 let params = (el, dims.len(), &ds, *inp, &out);
                 unsafe { func.launch(cfg, params) }.w()?;
                 CudaStorageSlice::F64(out)
+            }
+            DType::F8E4M3 => {
+                let out = unsafe { dev.alloc::<F8E4M3>(el) }.w()?;
+                let params = (el, dims.len(), &ds, *inp, &out);
+                unsafe { func.launch(cfg, params) }.w()?;
+                CudaStorageSlice::F8E4M3(out)
             }
         };
         Ok(Self {
@@ -1291,6 +1348,16 @@ impl BackendStorage for CudaStorage {
                 let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
                 Ok(CpuStorage::U32(cpu_storage))
             }
+            CudaStorageSlice::I16(slice) => {
+                let dev = slice.device();
+                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                Ok(CpuStorage::I16(cpu_storage))
+            }
+            CudaStorageSlice::I32(slice) => {
+                let dev = slice.device();
+                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                Ok(CpuStorage::I32(cpu_storage))
+            }
             CudaStorageSlice::I64(slice) => {
                 let dev = slice.device();
                 let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
@@ -1315,6 +1382,11 @@ impl BackendStorage for CudaStorage {
                 let dev = slice.device();
                 let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
                 Ok(CpuStorage::F64(cpu_storage))
+            }
+            CudaStorageSlice::F8E4M3(slice) => {
+                let dev = slice.device();
+                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                Ok(CpuStorage::F8E4M3(cpu_storage))
             }
         }
     }
@@ -1365,7 +1437,7 @@ impl BackendStorage for CudaStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
             let mut kernel_c = unsafe {
@@ -1376,7 +1448,7 @@ impl BackendStorage for CudaStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, l_out, n)).transpose(1, 2)?;
         let mut res_t = unsafe { self.device().alloc_uninit(res_l.shape(), res.dtype())? };
@@ -1420,8 +1492,9 @@ impl BackendStorage for CudaStorage {
                     vec![0, k_size * c_out, 1],
                     kernel_l.start_offset(),
                 );
-                self.matmul(
+                self.matmul_with_alpha(
                     kernel,
+                    None,
                     (
                         b_size,
                         /* m */ l_in,
@@ -1479,7 +1552,7 @@ impl BackendStorage for CudaStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
             let mut kernel_c = unsafe {
@@ -1490,7 +1563,7 @@ impl BackendStorage for CudaStorage {
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
                 .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
+            col.matmul_with_alpha(kernel, None, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, h_out, w_out, n))
             .transpose(1, 2)?
@@ -1520,7 +1593,7 @@ impl BackendStorage for CudaStorage {
                 let inp = &inp.slice(inp_l.start_offset()..);
                 let k = &k.slice(kernel_l.start_offset()..);
                 let mut out = unsafe { device.alloc::<u8>(dst_el) }.w()?;
-                crate::cudnn::launch_conv2d::<u8>(inp, inp_l, k, &mut out, params, &device)
+                crate::cudnn::launch_conv2d::<u8, u8>(inp, inp_l, k, &mut out, params, &device)
                     .map_err(crate::Error::wrap)?;
                 S::U8(out)
             }
@@ -1528,7 +1601,10 @@ impl BackendStorage for CudaStorage {
                 let inp = &inp.slice(inp_l.start_offset()..);
                 let k = &k.slice(kernel_l.start_offset()..);
                 let mut out = unsafe { device.alloc::<bf16>(dst_el) }.w()?;
-                crate::cudnn::launch_conv2d::<bf16>(inp, inp_l, k, &mut out, params, &device)
+                // Only PSEUDO_BFLOAT16_CONFIG is supported in cudnn, there is no "true bfloat16"
+                // version.
+                // https://docs.nvidia.com/deeplearning/cudnn/latest/api/cudnn-cnn-library.html#id88
+                crate::cudnn::launch_conv2d::<bf16, f32>(inp, inp_l, k, &mut out, params, &device)
                     .map_err(crate::Error::wrap)?;
                 S::BF16(out)
             }
@@ -1536,7 +1612,7 @@ impl BackendStorage for CudaStorage {
                 let inp = &inp.slice(inp_l.start_offset()..);
                 let k = &k.slice(kernel_l.start_offset()..);
                 let mut out = unsafe { device.alloc::<f16>(dst_el) }.w()?;
-                crate::cudnn::launch_conv2d::<f16>(inp, inp_l, k, &mut out, params, &device)
+                crate::cudnn::launch_conv2d::<f16, f16>(inp, inp_l, k, &mut out, params, &device)
                     .map_err(crate::Error::wrap)?;
                 S::F16(out)
             }
@@ -1544,7 +1620,7 @@ impl BackendStorage for CudaStorage {
                 let inp = &inp.slice(inp_l.start_offset()..);
                 let k = &k.slice(kernel_l.start_offset()..);
                 let mut out = unsafe { device.alloc::<f32>(dst_el) }.w()?;
-                crate::cudnn::launch_conv2d::<f32>(inp, inp_l, k, &mut out, params, &device)
+                crate::cudnn::launch_conv2d::<f32, f32>(inp, inp_l, k, &mut out, params, &device)
                     .map_err(crate::Error::wrap)?;
                 S::F32(out)
             }
@@ -1552,11 +1628,13 @@ impl BackendStorage for CudaStorage {
                 let inp = &inp.slice(inp_l.start_offset()..);
                 let k = &k.slice(kernel_l.start_offset()..);
                 let mut out = unsafe { device.alloc::<f64>(dst_el) }.w()?;
-                crate::cudnn::launch_conv2d::<f64>(inp, inp_l, k, &mut out, params, &device)
+                crate::cudnn::launch_conv2d::<f64, f64>(inp, inp_l, k, &mut out, params, &device)
                     .map_err(crate::Error::wrap)?;
                 S::F64(out)
             }
             (S::U32(_), S::U32(_)) => Err(CudaError::InternalError("conv2d does not support u32"))?,
+            (S::I16(_), S::I16(_)) => Err(CudaError::InternalError("conv2d does not support i16"))?,
+            (S::I32(_), S::I32(_)) => Err(CudaError::InternalError("conv2d does not support i32"))?,
             (S::I64(_), S::I64(_)) => Err(CudaError::InternalError("conv2d does not support i64"))?,
             _ => Err(CudaError::InternalError("dtype mismatch in conv2d"))?,
         };
@@ -1653,9 +1731,80 @@ impl BackendStorage for CudaStorage {
         Ok(acc)
     }
 
-    fn matmul(
+    fn matmul_with_alpha_beta(
         &self,
         rhs: &Self,
+        c: &mut Self,
+        s: Option<f64>,
+        (b, m, n, k): (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        c_l: &Layout,
+    ) -> Result<()> {
+        let elem_count = b * m * n;
+
+        match c_l.contiguous_offsets() {
+            Some((o1, o2)) => {
+                if o1 != 0 {
+                    crate::bail!("`c` start offset must be 0");
+                }
+                if o2 != elem_count {
+                    crate::bail!("`c` end offset must be {}", elem_count)
+                }
+            }
+            None => crate::bail!("`c` has to be contiguous"),
+        };
+
+        match (&self.slice, &rhs.slice, &mut c.slice) {
+            (
+                CudaStorageSlice::BF16(lhs),
+                CudaStorageSlice::BF16(rhs),
+                CudaStorageSlice::BF16(c),
+            ) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(
+                    bf16::from_f64(s.unwrap_or(1.0)),
+                    bf16::ONE,
+                    (b, m, n, k),
+                    lhs_l,
+                    rhs_l,
+                )?;
+                unsafe { gemm_strided_batched_bf16(&self.device.blas, cfg, rhs, lhs, c) }.w()?;
+            }
+            (CudaStorageSlice::F16(lhs), CudaStorageSlice::F16(rhs), CudaStorageSlice::F16(c)) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(
+                    f16::from_f64(s.unwrap_or(1.0)),
+                    f16::ONE,
+                    (b, m, n, k),
+                    lhs_l,
+                    rhs_l,
+                )?;
+                unsafe { gemm_strided_batched_f16(&self.device.blas, cfg, rhs, lhs, c) }.w()?;
+            }
+            (CudaStorageSlice::F32(lhs), CudaStorageSlice::F32(rhs), CudaStorageSlice::F32(c)) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(s.unwrap_or(1.0) as f32, 1., (b, m, n, k), lhs_l, rhs_l)?;
+                unsafe { gemm_strided_batched_f32(&self.device.blas, cfg, rhs, lhs, c) }.w()?;
+            }
+            (CudaStorageSlice::F64(lhs), CudaStorageSlice::F64(rhs), CudaStorageSlice::F64(c)) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(s.unwrap_or(1.0), 1., (b, m, n, k), lhs_l, rhs_l)?;
+                unsafe { self.device.blas.gemm_strided_batched(cfg, rhs, lhs, c) }.w()?;
+            }
+            _ => Err(CudaError::InternalError("dtype mismatch in matmul op"))?,
+        };
+        Ok(())
+    }
+
+    fn matmul_with_alpha(
+        &self,
+        rhs: &Self,
+        scale: Option<f64>,
         (b, m, n, k): (usize, usize, usize, usize),
         lhs_l: &Layout,
         rhs_l: &Layout,
@@ -1666,7 +1815,13 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::BF16(lhs), CudaStorageSlice::BF16(rhs)) => {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
-                let cfg = gemm_config(bf16::ONE, bf16::ZERO, (b, m, n, k), lhs_l, rhs_l)?;
+                let cfg = gemm_config(
+                    bf16::from_f64(scale.unwrap_or(1.)),
+                    bf16::ZERO,
+                    (b, m, n, k),
+                    lhs_l,
+                    rhs_l,
+                )?;
                 let mut out = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
                 unsafe { gemm_strided_batched_bf16(&self.device.blas, cfg, rhs, lhs, &mut out) }
                     .w()?;
@@ -1675,7 +1830,13 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F16(lhs), CudaStorageSlice::F16(rhs)) => {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
-                let cfg = gemm_config(f16::ONE, f16::ZERO, (b, m, n, k), lhs_l, rhs_l)?;
+                let cfg = gemm_config(
+                    f16::from_f64(scale.unwrap_or(1.)),
+                    f16::ZERO,
+                    (b, m, n, k),
+                    lhs_l,
+                    rhs_l,
+                )?;
                 let mut out = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
                 unsafe { gemm_strided_batched_f16(&self.device.blas, cfg, rhs, lhs, &mut out) }
                     .w()?;
@@ -1684,7 +1845,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F32(lhs), CudaStorageSlice::F32(rhs)) => {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
-                let cfg = gemm_config(1., 0., (b, m, n, k), lhs_l, rhs_l)?;
+                let cfg = gemm_config(scale.unwrap_or(1.) as f32, 0., (b, m, n, k), lhs_l, rhs_l)?;
                 let mut out = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
                 unsafe { gemm_strided_batched_f32(&self.device.blas, cfg, rhs, lhs, &mut out) }
                     .w()?;
@@ -1693,7 +1854,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F64(lhs), CudaStorageSlice::F64(rhs)) => {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
-                let cfg = gemm_config(1., 0., (b, m, n, k), lhs_l, rhs_l)?;
+                let cfg = gemm_config(scale.unwrap_or(1.), 0., (b, m, n, k), lhs_l, rhs_l)?;
                 let mut out = unsafe { dev.alloc::<f64>(elem_count) }.w()?;
                 unsafe {
                     self.device
@@ -1740,6 +1901,16 @@ impl BackendStorage for CudaStorage {
                 *d.slice(dst_o..).device_ptr(),
                 "copy2d_u32",
             ),
+            (S::I16(s), S::I16(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_i16",
+            ),
+            (S::I32(s), S::I32(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_i32",
+            ),
             (S::I64(s), S::I64(d)) => (
                 *s.slice(src_o..).device_ptr(),
                 *d.slice(dst_o..).device_ptr(),
@@ -1764,6 +1935,11 @@ impl BackendStorage for CudaStorage {
                 *s.slice(src_o..).device_ptr(),
                 *d.slice(dst_o..).device_ptr(),
                 "copy2d_f64",
+            ),
+            (S::F8E4M3(s), S::F8E4M3(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_f8_e4m3",
             ),
             _ => Err(CudaError::InternalError("dtype mismatch in copy2d"))?,
         };
@@ -1822,6 +1998,18 @@ impl BackendStorage for CudaStorage {
                     unsafe { func.launch(cfg, params) }.w()?
                 }
             }
+            (CudaStorageSlice::F8E4M3(src), CudaStorageSlice::F8E4M3(dst)) => {
+                let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
+                if src_l.is_contiguous() {
+                    dev.dtod_copy(&src, &mut dst).w()?
+                } else {
+                    let func = dev.get_or_load_func("ucopy_f8_e4m3", kernels::UNARY)?;
+                    // SAFETY: Set later by running the kernel.
+                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    // SAFETY: ffi.
+                    unsafe { func.launch(cfg, params) }.w()?
+                }
+            }
             (CudaStorageSlice::U8(src), CudaStorageSlice::U8(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
@@ -1840,6 +2028,30 @@ impl BackendStorage for CudaStorage {
                     dev.dtod_copy(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_u32", kernels::UNARY)?;
+                    // SAFETY: Set later by running the kernel.
+                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    // SAFETY: ffi.
+                    unsafe { func.launch(cfg, params) }.w()?
+                }
+            }
+            (CudaStorageSlice::I16(src), CudaStorageSlice::I16(dst)) => {
+                let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
+                if src_l.is_contiguous() {
+                    dev.dtod_copy(&src, &mut dst).w()?
+                } else {
+                    let func = dev.get_or_load_func("ucopy_i16", kernels::UNARY)?;
+                    // SAFETY: Set later by running the kernel.
+                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    // SAFETY: ffi.
+                    unsafe { func.launch(cfg, params) }.w()?
+                }
+            }
+            (CudaStorageSlice::I32(src), CudaStorageSlice::I32(dst)) => {
+                let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
+                if src_l.is_contiguous() {
+                    dev.dtod_copy(&src, &mut dst).w()?
+                } else {
+                    let func = dev.get_or_load_func("ucopy_i32", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
@@ -2196,6 +2408,22 @@ impl crate::CustomOp2 for KVConcat {
                 );
                 unsafe { func.launch(cfg, params) }.w()?;
                 CudaStorageSlice::F64(out)
+            }
+            (CudaStorageSlice::F8E4M3(left_), CudaStorageSlice::F8E4M3(right_)) => {
+                let out = unsafe { dev.alloc::<F8E4M3>(elem_count).w()? };
+                let func = dev.get_or_load_func("kvconcat_f8_e4m3", kernels::KVCONCAT)?;
+                let params = (
+                    left_,
+                    right_,
+                    &out,
+                    self.concat_dim,
+                    chunk_l,
+                    chunk_r,
+                    lstride,
+                    rstride,
+                );
+                unsafe { func.launch(cfg, params) }.w()?;
+                CudaStorageSlice::F8E4M3(out)
             }
             (CudaStorageSlice::U8(left_), CudaStorageSlice::U8(right_)) => {
                 let out = unsafe { dev.alloc::<u8>(elem_count).w()? };

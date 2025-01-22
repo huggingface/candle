@@ -3,7 +3,6 @@ pub const BINARY: &str = include_str!(concat!(env!("OUT_DIR"), "/binary.ptx"));
 pub const CAST: &str = include_str!(concat!(env!("OUT_DIR"), "/cast.ptx"));
 pub const CONV: &str = include_str!(concat!(env!("OUT_DIR"), "/conv.ptx"));
 pub const FILL: &str = include_str!(concat!(env!("OUT_DIR"), "/fill.ptx"));
-pub const FUSED_LAYER_NORM: &str = include_str!(concat!(env!("OUT_DIR"), "/fused_layer_norm.ptx"));
 pub const FUSED_RMS_NORM: &str = include_str!(concat!(env!("OUT_DIR"), "/fused_rms_norm.ptx"));
 pub const FUSED_ROPE: &str = include_str!(concat!(env!("OUT_DIR"), "/fused_rope.ptx"));
 pub const INDEXING: &str = include_str!(concat!(env!("OUT_DIR"), "/indexing.ptx"));

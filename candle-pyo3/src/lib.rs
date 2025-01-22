@@ -1,4 +1,5 @@
 #![allow(clippy::redundant_closure_call)]
+use float8::F8E4M3;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::CompareOp;
@@ -6,7 +7,6 @@ use pyo3::types::{IntoPyDict, PyDict, PyTuple};
 use pyo3::ToPyObject;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::os::raw::c_long;
 use std::sync::Arc;
 
 use half::{bf16, f16};
@@ -115,7 +115,7 @@ impl PyDevice {
 }
 
 impl<'source> FromPyObject<'source> for PyDevice {
-    fn extract(ob: &'source PyAny) -> PyResult<Self> {
+    fn extract_bound(ob: &Bound<'source, PyAny>) -> PyResult<Self> {
         let device: String = ob.extract()?;
         let device = match device.as_str() {
             "cpu" => PyDevice::Cpu,
@@ -151,6 +151,8 @@ macro_rules! pydtype {
     };
 }
 
+pydtype!(i16, |v| v);
+pydtype!(i32, |v| v);
 pydtype!(i64, |v| v);
 pydtype!(u8, |v| v);
 pydtype!(u32, |v| v);
@@ -158,6 +160,7 @@ pydtype!(f16, f32::from);
 pydtype!(bf16, f32::from);
 pydtype!(f32, |v| v);
 pydtype!(f64, |v| v);
+pydtype!(F8E4M3, f32::from);
 
 fn actual_index(t: &Tensor, dim: usize, index: i64) -> ::candle::Result<usize> {
     let dim = t.dim(dim)?;
@@ -200,11 +203,14 @@ trait MapDType {
         match t.dtype() {
             DType::U8 => self.f::<u8>(t),
             DType::U32 => self.f::<u32>(t),
+            DType::I16 => self.f::<i16>(t),
+            DType::I32 => self.f::<i32>(t),
             DType::I64 => self.f::<i64>(t),
             DType::BF16 => self.f::<bf16>(t),
             DType::F16 => self.f::<f16>(t),
             DType::F32 => self.f::<f32>(t),
             DType::F64 => self.f::<f64>(t),
+            DType::F8E4M3 => self.f::<F8E4M3>(t),
         }
     }
 }
@@ -217,11 +223,11 @@ enum Indexer {
     IndexSelect(Tensor),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct TorchTensor(PyObject);
 
 impl<'source> pyo3::FromPyObject<'source> for TorchTensor {
-    fn extract(ob: &'source PyAny) -> PyResult<Self> {
+    fn extract_bound(ob: &Bound<'source, PyAny>) -> PyResult<Self> {
         let numpy_value: PyObject = ob.getattr("numpy")?.call0()?.extract()?;
         Ok(TorchTensor(numpy_value))
     }
@@ -277,7 +283,7 @@ impl PyTensor {
     /// &RETURNS&: _ArrayLike
     fn values(&self, py: Python<'_>) -> PyResult<PyObject> {
         struct M<'a>(Python<'a>);
-        impl<'a> MapDType for M<'a> {
+        impl MapDType for M<'_> {
             type Output = PyObject;
             fn f<T: PyWithDType>(&self, t: &Tensor) -> PyResult<Self::Output> {
                 match t.rank() {
@@ -540,7 +546,7 @@ impl PyTensor {
                 ))
             } else if let Ok(slice) = py_indexer.downcast::<pyo3::types::PySlice>() {
                 // Handle a single slice e.g. tensor[0:1] or tensor[0:-1]
-                let index = slice.indices(dims[current_dim] as c_long)?;
+                let index = slice.indices(dims[current_dim] as isize)?;
                 Ok((
                     Indexer::Slice(index.start as usize, index.stop as usize),
                     current_dim + 1,
@@ -1284,7 +1290,7 @@ fn save_safetensors(
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(path:Union[str,PathLike], device: Optional[Device] = None)")]
+#[pyo3(signature = (path, device = None))]
 /// Load a GGML file. Returns a tuple of three objects: a dictionary mapping tensor names to tensors,
 /// a dictionary mapping hyperparameter names to hyperparameter values, and a vocabulary.
 /// &RETURNS&: Tuple[Dict[str,QTensor], Dict[str,Any], List[str]]
@@ -1325,7 +1331,7 @@ fn load_ggml(
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(path:Union[str,PathLike], device: Optional[Device] = None)")]
+#[pyo3(signature = (path, device = None))]
 /// Loads a GGUF file. Returns a tuple of two dictionaries: the first maps tensor names to tensors,
 /// and the second maps metadata keys to metadata values.
 /// &RETURNS&: Tuple[Dict[str,QTensor], Dict[str,Any]]
@@ -1384,7 +1390,7 @@ fn load_gguf(
 
 #[pyfunction]
 #[pyo3(
-    text_signature = "(path:Union[str,PathLike], tensors:Dict[str,QTensor], metadata:Dict[str,Any])"
+    signature = (path, tensors, metadata)
 )]
 /// Save quanitzed tensors and metadata to a GGUF file.
 fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) -> PyResult<()> {
@@ -1430,7 +1436,7 @@ fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) 
         Ok(v)
     }
     let tensors = tensors
-        .extract::<&PyDict>(py)
+        .downcast_bound::<PyDict>(py)
         .map_err(|_| PyErr::new::<PyValueError, _>("expected a dict"))?
         .iter()
         .map(|(key, value)| {
@@ -1443,7 +1449,7 @@ fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) 
         .collect::<PyResult<Vec<_>>>()?;
 
     let metadata = metadata
-        .extract::<&PyDict>(py)
+        .downcast_bound::<PyDict>(py)
         .map_err(|_| PyErr::new::<PyValueError, _>("expected a dict"))?
         .iter()
         .map(|(key, value)| {

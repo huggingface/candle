@@ -11,8 +11,8 @@ Then let's start by downloading the [model file](https://huggingface.co/bert-bas
 
 ```rust
 # extern crate candle_core;
-# extern crate hf_hub;
-use hf_hub::api::sync::Api;
+# extern crate candle_hf_hub;
+use candle_hf_hub::api::sync::Api;
 use candle_core::Device;
 
 let api = Api::new().unwrap();
@@ -50,8 +50,8 @@ Now that we have our weights, we can use them in our bert architecture:
 ```rust
 # extern crate candle_core;
 # extern crate candle_nn;
-# extern crate hf_hub;
-# use hf_hub::api::sync::Api;
+# extern crate candle_hf_hub;
+# use candle_hf_hub::api::sync::Api;
 # 
 # let api = Api::new().unwrap();
 # let repo = api.model("bert-base-uncased".to_string());

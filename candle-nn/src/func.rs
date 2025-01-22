@@ -9,7 +9,7 @@ pub struct Func<'a> {
     f: Arc<dyn 'a + Fn(&Tensor) -> Result<Tensor> + Send + Sync>,
 }
 
-impl<'a> std::fmt::Debug for Func<'a> {
+impl std::fmt::Debug for Func<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "func")
     }
@@ -22,7 +22,7 @@ where
     Func { f: Arc::new(f) }
 }
 
-impl<'a> super::Module for Func<'a> {
+impl super::Module for Func<'_> {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         (*self.f)(xs)
     }
@@ -44,7 +44,7 @@ pub struct FuncT<'a> {
     f: Arc<dyn 'a + Fn(&Tensor, bool) -> Result<Tensor> + Send + Sync>,
 }
 
-impl<'a> std::fmt::Debug for FuncT<'a> {
+impl std::fmt::Debug for FuncT<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "func")
     }
@@ -57,7 +57,7 @@ where
     FuncT { f: Arc::new(f) }
 }
 
-impl<'a> super::ModuleT for FuncT<'a> {
+impl super::ModuleT for FuncT<'_> {
     fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
         (*self.f)(xs, train)
     }

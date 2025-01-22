@@ -1,5 +1,6 @@
 //! Implement conversion traits for tensors
 use crate::{DType, Device, Error, Tensor, WithDType};
+use float8::F8E4M3;
 use half::{bf16, f16, slice::HalfFloatSliceExt};
 use std::convert::TryFrom;
 
@@ -130,6 +131,16 @@ impl Tensor {
                     f.write_u32::<LittleEndian>(v)?
                 }
             }
+            DType::I16 => {
+                for v in vs.to_vec1::<i16>()? {
+                    f.write_i16::<LittleEndian>(v)?
+                }
+            }
+            DType::I32 => {
+                for v in vs.to_vec1::<i32>()? {
+                    f.write_i32::<LittleEndian>(v)?
+                }
+            }
             DType::I64 => {
                 for v in vs.to_vec1::<i64>()? {
                     f.write_i64::<LittleEndian>(v)?
@@ -138,6 +149,11 @@ impl Tensor {
             DType::U8 => {
                 let vs = vs.to_vec1::<u8>()?;
                 f.write_all(&vs)?;
+            }
+            DType::F8E4M3 => {
+                for v in vs.to_vec1::<F8E4M3>()? {
+                    f.write_u8(v.to_bits())?
+                }
             }
         }
         Ok(())

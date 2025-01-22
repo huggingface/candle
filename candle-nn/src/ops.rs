@@ -1,3 +1,6 @@
+//! Tensor ops.
+//!
+
 use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
@@ -285,6 +288,129 @@ impl candle::ModuleT for Dropout {
 
 struct SoftmaxLastDim;
 
+impl candle::InplaceOp1 for SoftmaxLastDim {
+    fn name(&self) -> &'static str {
+        "softmax-last-dim"
+    }
+
+    fn cpu_fwd(&self, storage: &mut CpuStorage, layout: &Layout) -> Result<()> {
+        fn softmax<T: candle::WithDType + num_traits::Float>(
+            src: &mut [T],
+            layout: &Layout,
+        ) -> Result<()> {
+            let src = match layout.contiguous_offsets() {
+                None => candle::bail!("input has to be contiguous"),
+                Some((o1, o2)) => &mut src[o1..o2],
+            };
+            let dims = layout.shape().dims();
+            let dim_m1 = dims[dims.len() - 1];
+            src.par_chunks_mut(dim_m1).for_each(|src| {
+                let mut max = T::neg_infinity();
+                unsafe { T::vec_reduce_max(src.as_ptr(), &mut max, dim_m1) };
+                for s in src.iter_mut() {
+                    *s = (*s - max).exp();
+                }
+                let mut sum_exp = T::zero();
+                unsafe { T::vec_reduce_sum(src.as_ptr(), &mut sum_exp, dim_m1) };
+                for d in src.iter_mut() {
+                    *d /= sum_exp
+                }
+            });
+            Ok(())
+        }
+
+        match storage {
+            CpuStorage::BF16(slice) => softmax::<half::bf16>(slice, layout),
+            CpuStorage::F16(slice) => softmax::<half::f16>(slice, layout),
+            CpuStorage::F32(slice) => softmax::<f32>(slice, layout),
+            CpuStorage::F64(slice) => softmax::<f64>(slice, layout),
+            _ => candle::bail!("unsupported dtype for softmax {:?}", storage),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(&self, storage: &mut candle::CudaStorage, layout: &Layout) -> Result<()> {
+        use candle::cuda_backend::cudarc::driver::{
+            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+        };
+        use candle::cuda_backend::{kernel_name, kernels, Map1InPlace, WrapErr};
+        use candle::{CudaDevice, WithDType};
+
+        struct S;
+        impl Map1InPlace for S {
+            fn f<T: DeviceRepr + WithDType>(
+                &self,
+                src: &mut CudaSlice<T>,
+                dev: &CudaDevice,
+                layout: &Layout,
+            ) -> Result<()> {
+                let src = match layout.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => src.slice(o1..o2),
+                };
+                let el = layout.shape().elem_count();
+                let dims = layout.shape().dims();
+                let dim_m1 = dims[dims.len() - 1];
+                let (n_rows, n_cols) = (el / dim_m1, dim_m1);
+
+                let func = dev.get_or_load_func(&kernel_name::<T>("softmax"), kernels::REDUCE)?;
+                let cfg = LaunchConfig {
+                    grid_dim: (n_rows as u32, 1, 1),
+                    block_dim: (1, 32, 1),
+                    shared_mem_bytes: 0,
+                };
+                let params = (&src, &src, n_cols as i32);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }.w()?;
+                Ok(())
+            }
+        }
+
+        use candle::backend::BackendStorage;
+        let dev = storage.device().clone();
+
+        S.map(&mut storage.slice, &dev, layout)?;
+
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(&self, storage: &mut candle::MetalStorage, layout: &Layout) -> Result<()> {
+        use candle::backend::BackendStorage;
+        let device = storage.device();
+        let command_buffer = device.command_buffer()?;
+        let kernels = device.kernels();
+        let name = match storage.dtype() {
+            DType::F32 => "softmax_f32",
+            DType::F16 => "softmax_f16",
+            DType::BF16 => "softmax_bf16",
+            dtype => candle::bail!("softmax-last-dim is not implemented for {dtype:?}"),
+        };
+
+        let n = layout.stride().len();
+        if !(layout.is_contiguous() && layout.stride()[n - 1] == 1) {
+            candle::bail!("Non contiguous softmax-last-dim is not implemented");
+        }
+
+        let last_dim = layout.dims()[layout.shape().rank() - 1];
+        let elem_count = layout.shape().elem_count();
+        candle_metal_kernels::call_last_softmax(
+            device.metal_device(),
+            &command_buffer,
+            kernels,
+            name,
+            elem_count,
+            last_dim,
+            storage.buffer(),
+            layout.start_offset() * storage.dtype().size_in_bytes(),
+            &storage.buffer(),
+            layout.start_offset() * storage.dtype().size_in_bytes(),
+        )
+        .map_err(candle::Error::wrap)?;
+        Ok(())
+    }
+}
+
 impl candle::CustomOp1 for SoftmaxLastDim {
     fn name(&self) -> &'static str {
         "softmax-last-dim"
@@ -419,6 +545,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             storage.buffer(),
             layout.start_offset() * storage.dtype().size_in_bytes(),
             &output,
+            0,
         )
         .map_err(candle::Error::wrap)?;
         let newstorage =
@@ -429,6 +556,194 @@ impl candle::CustomOp1 for SoftmaxLastDim {
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
     xs.apply_op1_no_bwd(&SoftmaxLastDim)
+}
+
+pub fn inplace_softmax_last_dim(xs: &mut Tensor) -> Result<()> {
+    xs.inplace_op1(&SoftmaxLastDim)
+}
+
+// TODO: need cpu and cuda impls
+#[allow(dead_code)]
+struct AttnSoftmaxLastDim {
+    scale: f32,
+}
+
+impl candle::InplaceOp2 for AttnSoftmaxLastDim {
+    fn name(&self) -> &'static str {
+        "attn-softmax-last-dim"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _a_s: &mut CpuStorage,
+        _a_l: &Layout,
+        _mask_s: &CpuStorage,
+        _mask_l: &Layout,
+    ) -> Result<()> {
+        candle::bail!("cpu attn-softmax-last-dim is not implemented");
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        a_s: &mut candle::MetalStorage,
+        a_l: &Layout,
+        mask_s: &candle::MetalStorage,
+        mask_l: &Layout,
+    ) -> Result<()> {
+        use candle::backend::BackendStorage;
+        let device = a_s.device();
+        let command_buffer = device.command_buffer()?;
+        let kernels = device.kernels();
+
+        let ty = match a_s.dtype() {
+            DType::F32 => candle_metal_kernels::SdpaDType::F32,
+            DType::F16 => candle_metal_kernels::SdpaDType::F16,
+            DType::BF16 => candle_metal_kernels::SdpaDType::BF16,
+            dtype => candle::bail!("attn-softmax-last-dim is not implemented for {dtype:?}"),
+        };
+
+        if !a_l.is_contiguous() {
+            candle::bail!("Non contiguous xs for attn-softmax-last-dim is not implemented");
+        }
+        if !mask_l.is_contiguous() {
+            candle::bail!("Non contiguous mask for attn-softmax-last-dim is not implemented");
+        }
+
+        if a_l.dims().len() != 4 {
+            candle::bail!("attn-softmax-last-dim expects xs of rank 2");
+        }
+        if mask_l.dims().len() != 2 {
+            candle::bail!("attn-softmax-last-dim expects mask of rank 2");
+        }
+        if mask_l.dim(D::Minus1)? != a_l.dim(D::Minus1)?
+            || mask_l.dim(D::Minus2)? != a_l.dim(D::Minus2)?
+        {
+            candle::bail!("attn-softmax-last-dim expects last 2 dims to match xs last 2 dims");
+        }
+
+        candle_metal_kernels::call_last_attn_softmax(
+            device.metal_device(),
+            &command_buffer,
+            kernels,
+            a_s.buffer(),
+            a_l.start_offset() * a_s.dtype().size_in_bytes(),
+            mask_s.buffer(),
+            mask_l.start_offset() * mask_s.dtype().size_in_bytes(),
+            a_l.dims(),
+            self.scale,
+            ty,
+            &a_s.buffer(),
+            0,
+        )
+        .map_err(candle::Error::wrap)?;
+
+        Ok(())
+    }
+}
+
+impl candle::CustomOp2 for AttnSoftmaxLastDim {
+    fn name(&self) -> &'static str {
+        "attn-softmax-last-dim"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _a_s: &CpuStorage,
+        _a_l: &Layout,
+        _mask_s: &CpuStorage,
+        _mask_l: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        candle::bail!("cpu attn-softmax-last-dim is not implemented");
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        a_s: &candle::MetalStorage,
+        a_l: &Layout,
+        mask_s: &candle::MetalStorage,
+        mask_l: &Layout,
+    ) -> Result<(candle::MetalStorage, Shape)> {
+        use candle::backend::BackendStorage;
+        let device = a_s.device();
+        let command_buffer = device.command_buffer()?;
+        let kernels = device.kernels();
+
+        let ty = match a_s.dtype() {
+            DType::F32 => candle_metal_kernels::SdpaDType::F32,
+            DType::F16 => candle_metal_kernels::SdpaDType::F16,
+            DType::BF16 => candle_metal_kernels::SdpaDType::BF16,
+            dtype => candle::bail!("attn-softmax-last-dim is not implemented for {dtype:?}"),
+        };
+
+        if !a_l.is_contiguous() {
+            candle::bail!("Non contiguous xs for attn-softmax-last-dim is not implemented");
+        }
+        if !mask_l.is_contiguous() {
+            candle::bail!("Non contiguous mask for attn-softmax-last-dim is not implemented");
+        }
+
+        if a_l.dims().len() != 4 {
+            candle::bail!("attn-softmax-last-dim expects xs of rank 2");
+        }
+        if mask_l.dims().len() != 2 {
+            candle::bail!("attn-softmax-last-dim expects mask of rank 2");
+        }
+        if mask_l.dim(D::Minus1)? != a_l.dim(D::Minus1)?
+            || mask_l.dim(D::Minus2)? != a_l.dim(D::Minus2)?
+        {
+            candle::bail!("attn-softmax-last-dim expects last 2 dims to match xs last 2 dims");
+        }
+
+        let elem_count = a_l.shape().elem_count();
+        let output = device.new_buffer(elem_count, a_s.dtype(), "attn-softmax")?;
+        candle_metal_kernels::call_last_attn_softmax(
+            device.metal_device(),
+            &command_buffer,
+            kernels,
+            a_s.buffer(),
+            a_l.start_offset() * a_s.dtype().size_in_bytes(),
+            mask_s.buffer(),
+            mask_l.start_offset() * mask_s.dtype().size_in_bytes(),
+            a_l.dims(),
+            self.scale,
+            ty,
+            &output,
+            a_l.start_offset() * a_s.dtype().size_in_bytes(),
+        )
+        .map_err(candle::Error::wrap)?;
+        let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, a_s.dtype());
+        Ok((newstorage, a_l.shape().clone()))
+    }
+}
+
+/// Softmax with fused broadcast addition of a mask and scale.
+/// Equivalent to:
+/// ```ignore
+/// candle_nn::ops::softmax_last_dim(&(xs.broadcast_add(&mask)? * scale as f64)?)?
+/// ```
+/// - `xs` must be a rank-4 tensor
+/// - `mask` must be a rank-2 matrix
+/// - The last 2 dimensions of `xs` must match the dimensions of `mask`.
+///
+/// Note: if the last dim of `xs` is a multiple of 4, a vectorized implementation will be used.
+pub fn attn_softmax_last_dim(xs: &Tensor, mask: &Tensor, scale: f32) -> Result<Tensor> {
+    if xs.device().is_metal() {
+        xs.apply_op2_no_bwd(mask, &AttnSoftmaxLastDim { scale })
+    } else {
+        softmax_last_dim(&(xs.broadcast_add(mask)? * scale as f64)?)
+    }
+}
+
+/// Inplace equivalent of `attn_softmax_last_dim`
+pub fn inplace_attn_softmax_last_dim(xs: &mut Tensor, mask: &Tensor, scale: f32) -> Result<()> {
+    if xs.device().is_metal() {
+        xs.inplace_op2(mask, &AttnSoftmaxLastDim { scale })?;
+    } else {
+        *xs = softmax_last_dim(&(xs.broadcast_add(mask)? * scale as f64)?)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -543,15 +858,23 @@ impl candle::CustomOp2 for RmsNorm {
                 let dim_m1 = dims[dims.len() - 1];
                 let (n_rows, n_cols) = (el / dim_m1, dim_m1);
 
+                let block_size = if n_cols < 1024 { 32 } else { 1024 };
                 let cfg = LaunchConfig {
                     grid_dim: (n_rows as u32, 1, 1),
-                    block_dim: (1024, 1, 1),
+                    block_dim: (block_size, 1, 1),
                     shared_mem_bytes: 0,
                 };
                 let func = dev.get_or_load_func(&kernel_name::<T>("rmsnorm"), kernels::REDUCE)?;
                 // SAFETY: Set later by running the kernel.
                 let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-                let params = (&src, &dst, &alpha, n_cols as i32, self.eps);
+                let params = (
+                    &src,
+                    &dst,
+                    &alpha,
+                    n_cols as i32,
+                    block_size as i32,
+                    self.eps,
+                );
                 // SAFETY: ffi.
                 unsafe { func.launch(cfg, params) }.w()?;
                 Ok(dst)
@@ -776,15 +1099,24 @@ impl candle::CustomOp3 for LayerNorm {
                 let dim_m1 = dims[dims.len() - 1];
                 let (n_rows, n_cols) = (el / dim_m1, dim_m1);
 
+                let block_size = if n_cols < 1024 { 32 } else { 1024 };
                 let cfg = LaunchConfig {
                     grid_dim: (n_rows as u32, 1, 1),
-                    block_dim: (1024, 1, 1),
+                    block_dim: (block_size, 1, 1),
                     shared_mem_bytes: 0,
                 };
                 let func = dev.get_or_load_func(&kernel_name::<T>("layernorm"), kernels::REDUCE)?;
                 // SAFETY: Set later by running the kernel.
                 let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-                let params = (&src, &dst, &alpha, &beta, n_cols as i32, self.eps);
+                let params = (
+                    &src,
+                    &dst,
+                    &alpha,
+                    &beta,
+                    n_cols as i32,
+                    block_size as i32,
+                    self.eps,
+                );
                 // SAFETY: ffi.
                 unsafe { func.launch(cfg, params) }.w()?;
                 Ok(dst)
@@ -973,4 +1305,247 @@ impl Module for Identity {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         Ok(xs.clone())
     }
+}
+
+#[allow(dead_code)]
+struct Sdpa {
+    scale: f32,
+    softcapping: f32,
+}
+
+impl candle::CustomOp3 for Sdpa {
+    fn name(&self) -> &'static str {
+        "metal-sdpa"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _s1: &CpuStorage,
+        _l1: &Layout,
+        _s2: &CpuStorage,
+        _l2: &Layout,
+        _s3: &CpuStorage,
+        _l3: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        candle::bail!("SDPA has no cpu impl")
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        q: &candle::MetalStorage,
+        q_l: &Layout,
+        k: &candle::MetalStorage,
+        k_l: &Layout,
+        v: &candle::MetalStorage,
+        v_l: &Layout,
+    ) -> Result<(candle::MetalStorage, Shape)> {
+        use candle::backend::BackendStorage;
+        use candle_metal_kernels::SdpaDType;
+
+        let device = q.device();
+
+        let out_dims = vec![q_l.dim(0)?, q_l.dim(1)?, q_l.dim(2)?, v_l.dim(3)?];
+        let elem_count: usize = out_dims.iter().product();
+
+        let output = device.new_buffer(elem_count, q.dtype(), "sdpa_o")?;
+
+        // q,k must have matching emb dim
+        if q_l.dim(D::Minus1)? != k_l.dim(D::Minus1)? {
+            candle::bail!("`q` and `k` last dims must match");
+        }
+
+        // k,v must have matching n kv heads
+        if v_l.dim(D::Minus(3))? != k_l.dim(D::Minus(3))? {
+            candle::bail!("`k` and `v` head dims must match");
+        }
+
+        // n_heads % n_kv_heads == 0; n_heads >= 1, n_kv_heads >= 1.
+        if q_l.dim(D::Minus(3))? % k_l.dim(D::Minus(3))? != 0 {
+            candle::bail!("query `n_heads` must be a multiple of `n_kv_heads`");
+        }
+
+        let k_head = k_l.dim(D::Minus1)?;
+        let q_head = q_l.dim(D::Minus1)?;
+        let q_seq = q_l.dim(2)?;
+
+        let mut implementation_supports_use_case = q_head == k_head;
+        let supported_head_dim =
+            q_head == 32 || q_head == 64 || q_head == 96 || q_head == 128 || q_head == 256;
+
+        const SDPA_FULL_THRESHOLD: usize = 2;
+
+        let supports_sdpa_full =
+            q_seq >= SDPA_FULL_THRESHOLD && supported_head_dim && q_head == k_head;
+        let supports_sdpa_vector = q_seq == 1 && supported_head_dim;
+
+        implementation_supports_use_case &= supports_sdpa_full || supports_sdpa_vector;
+
+        if !supported_head_dim {
+            candle::bail!(
+                "Meta SDPA does not support q head dim {q_head}: q dims {:?}, k dims {:?}, v dims {:?}.",
+                q_l.dims(),
+                k_l.dims(),
+                v_l.dims()
+            );
+        }
+        if !implementation_supports_use_case {
+            candle::bail!(
+                "Meta SDPA does not support q dims {:?}, k dims {:?}, v dims {:?}.",
+                q_l.dims(),
+                k_l.dims(),
+                v_l.dims()
+            );
+        }
+
+        for t in [k.dtype(), v.dtype()] {
+            if q.dtype() != t {
+                candle::bail!("all q, k, v dtypes must match.");
+            }
+        }
+
+        let itype = match q.dtype() {
+            DType::BF16 => SdpaDType::BF16,
+            DType::F16 => SdpaDType::F16,
+            DType::F32 => SdpaDType::F32,
+            other => candle::bail!("unsupported sdpa type {other:?}"),
+        };
+
+        let command_buffer = q.device().command_buffer()?;
+        if supports_sdpa_vector {
+            // Route to the 2 pass fused attention if the k seqlen is large.
+            // https://github.com/ml-explore/mlx/pull/1597
+            const TWO_PASS_K_THRESHOLD: usize = 1024;
+            if k_l.dim(2)? >= TWO_PASS_K_THRESHOLD {
+                let mut intermediate_shape = [
+                    &out_dims[0..out_dims.len() - 2],
+                    &[candle_metal_kernels::SDPA_2PASS_BLOCKS],
+                    &[out_dims[out_dims.len() - 1]],
+                ]
+                .concat();
+                let intermediate = device.new_buffer(
+                    intermediate_shape.iter().product::<usize>(),
+                    DType::F32,
+                    "sdpa_2pass_intermediate",
+                )?;
+                let _ = intermediate_shape.pop().unwrap();
+                let sums = device.new_buffer(
+                    intermediate_shape.iter().product::<usize>(),
+                    DType::F32,
+                    "sdpa_2pass_sums",
+                )?;
+                let maxs = device.new_buffer(
+                    intermediate_shape.iter().product::<usize>(),
+                    DType::F32,
+                    "sdpa_2pass_maxs",
+                )?;
+
+                command_buffer.set_label("vector_attention");
+                candle_metal_kernels::call_sdpa_vector_2pass(
+                    q.device().device(),
+                    &command_buffer,
+                    q.device().kernels(),
+                    q_l.start_offset(),
+                    q_l.dims(),
+                    q.buffer(),
+                    k_l.start_offset(),
+                    k_l.dims(),
+                    k_l.stride(),
+                    k.buffer(),
+                    v_l.start_offset(),
+                    v_l.stride(),
+                    v.buffer(),
+                    &output,
+                    &intermediate,
+                    &sums,
+                    &maxs,
+                    self.scale,
+                    self.softcapping,
+                    itype,
+                )
+                .map_err(candle::Error::wrap)?;
+            } else {
+                command_buffer.set_label("vector_attention");
+                candle_metal_kernels::call_sdpa_vector(
+                    q.device().device(),
+                    &command_buffer,
+                    q.device().kernels(),
+                    q_l.start_offset(),
+                    q_l.dims(),
+                    q.buffer(),
+                    k_l.start_offset(),
+                    k_l.dims(),
+                    k_l.stride(),
+                    k.buffer(),
+                    v_l.start_offset(),
+                    v_l.stride(),
+                    v.buffer(),
+                    &output,
+                    self.scale,
+                    self.softcapping,
+                    itype,
+                )
+                .map_err(candle::Error::wrap)?;
+            }
+        } else if supports_sdpa_full {
+            if q_l.dim(2)? != k_l.dim(2)? {
+                candle::bail!(
+                    "query and key sequence length must be equal if using full metal sdpa"
+                )
+            }
+
+            command_buffer.set_label("full_attention");
+            candle_metal_kernels::call_sdpa_full(
+                q.device().device(),
+                &command_buffer,
+                q.device().kernels(),
+                q_l.start_offset(),
+                q_l.dims(),
+                q.buffer(),
+                k_l.start_offset(),
+                k.buffer(),
+                v_l.start_offset(),
+                v.buffer(),
+                &output,
+                self.scale,
+                self.softcapping,
+                itype,
+            )
+            .map_err(candle::Error::wrap)?;
+        } else {
+            candle::bail!("must be vector or full sdpa kernel");
+        }
+
+        let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, q.dtype());
+        Ok((newstorage, Shape::from_dims(&out_dims)))
+    }
+}
+
+/// Scaled dot product attention with a fused kernel.
+///
+/// Computes softmax(qk^T*scale)v.
+///
+/// **Inputs shapes:**
+/// - `q`: (bs, qhead, seq, hidden)
+/// - `k`: (bs, kv_head, kv_seq, hidden)
+/// - `k`: (bs, kv_head, kv_seq, v_hidden)
+/// - `scale` is applied before softmax.
+/// - If `softcapping` != 1.0:
+///      - Computation is: softmax(tanh(qk^T*scale/cap)*cap)v
+///
+/// **Output shape:** (bs, qhead, seq, v_hidden)
+///
+/// **Supported head dims:** 32, 64, 96, 128, 256.
+///
+/// ## On Metal:
+/// - If `seq` == 1:
+///     - Use a vectorized kernel
+///     - Supports `seq` != `kv_seq` (cross attn. support)
+///     - Supports GQA when `qhead` is a multiple of `kv_head`
+/// - Otherwise:
+///     - Use an alternate kernel
+///     - Requires `seq` == `kv_seq`
+///     - GQA is not supported (requires `qhead` == `kv_head`)
+pub fn sdpa(q: &Tensor, k: &Tensor, v: &Tensor, scale: f32, softcapping: f32) -> Result<Tensor> {
+    q.apply_op3_no_bwd(k, v, &Sdpa { scale, softcapping })
 }

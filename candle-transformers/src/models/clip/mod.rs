@@ -92,28 +92,23 @@ impl ClipConfig {
 impl ClipModel {
     pub fn new(vs: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
         let text_model = ClipTextTransformer::new(vs.pp("text_model"), &c.text_config)?;
-
         let vision_model = ClipVisionTransformer::new(vs.pp("vision_model"), &c.vision_config)?;
-
         let visual_projection = candle_nn::linear_no_bias(
             c.vision_config.embed_dim,
             c.vision_config.projection_dim,
             vs.pp("visual_projection"),
         )?;
-
         let text_projection = candle_nn::linear_no_bias(
             c.text_config.embed_dim,
             c.text_config.projection_dim,
             vs.pp("text_projection"),
         )?;
-
         // originally nn.Parameter
         let logit_scale = if vs.contains_tensor("logit_scale") {
             vs.get(&[], "logit_scale")?
         } else {
             Tensor::new(&[c.logit_scale_init_value], vs.device())?
         };
-
         Ok(Self {
             text_model,
             vision_model,

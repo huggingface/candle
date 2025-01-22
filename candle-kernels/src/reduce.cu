@@ -70,10 +70,9 @@ static __device__ __forceinline__ float warp_reduce_sum(float x) {
 // LayerNorm implementation adapted from ggml, accumulation is made using f32.
 // https://github.com/ggerganov/llama.cpp/blob/d59bd97065cd7ded6c4ecab54b1d5e0b1b11e318/ggml-cuda.cu#L477
 template <typename T>
-__device__ void layernorm(const T * x, T * dst, const T * alpha, const T * beta, const int ncols, const float eps) {
+__device__ void layernorm(const T * x, T * dst, const T * alpha, const T * beta, const int ncols, const int block_size, const float eps) {
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
     const int tid = threadIdx.x;
-    const int block_size = blockDim.x;
 
     float2 mean_var = make_float2(0.f, 0.f);
 
@@ -134,10 +133,9 @@ __device__ void layernorm(const T * x, T * dst, const T * alpha, const T * beta,
 // RmsNorm implementation adapted from ggml, accumulation is made using f32.
 // https://github.com/ggerganov/llama.cpp/blob/d59bd97065cd7ded6c4ecab54b1d5e0b1b11e318/ggml-cuda.cu#L523
 template <typename T>
-__device__ void rmsnorm(const T * x, T * dst, const T * alpha, const int ncols, const float eps) {
+__device__ void rmsnorm(const T * x, T * dst, const T * alpha, const int ncols, const int block_size, const float eps) {
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
     const int tid = threadIdx.x;
-    const int block_size = blockDim.x;
 
     float tmp = 0.0f; // partial sum for thread in warp
 
@@ -530,15 +528,15 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
 #define RMSNORM_OP(TYPENAME, FN_NAME) \
   extern "C" __global__ void FN_NAME(                                          \
       const TYPENAME *src, TYPENAME *dst, const TYPENAME *alpha,               \
-      const int n_cols, const float eps) {                                     \
-    rmsnorm<TYPENAME>(src, dst, alpha, n_cols, eps);                           \
+      const int n_cols, const int block_size, const float eps) {               \
+    rmsnorm<TYPENAME>(src, dst, alpha, n_cols, block_size, eps);               \
   }                                                                            \
 
 #define LAYERNORM_OP(TYPENAME, FN_NAME) \
   extern "C" __global__ void FN_NAME(                                          \
       const TYPENAME *src, TYPENAME *dst, const TYPENAME *alpha,               \
-      const TYPENAME *beta, const int n_cols, const float eps) {               \
-    layernorm<TYPENAME>(src, dst, alpha, beta, n_cols, eps);                   \
+      const TYPENAME *beta, const int n_cols, const int block_size, const float eps) { \
+    layernorm<TYPENAME>(src, dst, alpha, beta, n_cols, block_size, eps);       \
   }                                                                            \
 
 #define ROPE_OP(TYPENAME, FN_NAME, FN_NAME_I, FN_NAME_THD) \
@@ -574,12 +572,21 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
   } \
 
 #if __CUDA_ARCH__ >= 800
+#include "cuda_bf16.h"
 SOFTMAX_OP(__nv_bfloat16, float, softmax_bf16)
 RMSNORM_OP(__nv_bfloat16, rmsnorm_bf16)
 LAYERNORM_OP(__nv_bfloat16, layernorm_bf16)
 ROPE_OP(__nv_bfloat16, rope_bf16, rope_i_bf16, rope_thd_bf16)
 SUM_OP(__nv_bfloat16, sum_bf16)
 FAST_OP(__nv_bfloat16, fast_min_bf16, fast_max_bf16, fast_argmin_bf16, fast_argmax_bf16, fast_sum_bf16)
+
+// NOTE: No reduce ops for f8
+// SUM_OP(__nv_fp8_e4m3, sum_fp8_e4m3)
+// SOFTMAX_OP(__nv_fp8_e4m3, float, softmax_fp8_e4m3)
+// RMSNORM_OP(__nv_fp8_e4m3, rmsnorm_fp8_e4m3)
+// LAYERNORM_OP(__nv_fp8_e4m3, layernorm_fp8_e4m3)
+// ROPE_OP(__nv_fp8_e4m3, rope_fp8_e4m3, rope_i_fp8_e4m3, rope_thd_fp8_e4m3)
+// FAST_OP(__nv_fp8_e4m3, fast_min_fp8_e4m3, fast_max_fp8_e4m3, fast_argmin_fp8_e4m3, fast_argmax_fp8_e4m3, fast_sum_fp8_e4m3)
 #endif
 
 #if __CUDA_ARCH__ >= 530
@@ -606,5 +613,7 @@ ROPE_OP(double, rope_f64, rope_i_f64, rope_thd_f64)
 FAST_OP(float, fast_min_f32, fast_max_f32, fast_argmin_f32, fast_argmax_f32, fast_sum_f32)
 FAST_OP(double, fast_min_f64, fast_max_f64, fast_argmin_f64, fast_argmax_f64, fast_sum_f64)
 FAST_OP(uint32_t, fast_min_u32, fast_max_u32, fast_argmin_u32, fast_argmax_u32, fast_sum_u32)
+FAST_OP(int16_t, fast_min_i16, fast_max_i16, fast_argmin_i16, fast_argmax_i16, fast_sum_i16)
+FAST_OP(int32_t, fast_min_i32, fast_max_i32, fast_argmin_i32, fast_argmax_i32, fast_sum_i32)
 FAST_OP(int64_t, fast_min_i64, fast_max_i64, fast_argmin_i64, fast_argmax_i64, fast_sum_i64)
 FAST_OP(uint8_t, fast_min_u8, fast_max_u8, fast_argmin_u8, fast_argmax_u8, fast_sum_u8)

@@ -130,6 +130,26 @@ impl Device {
         Ok(Self::Cuda(crate::CudaDevice::new(ordinal)?))
     }
 
+    pub fn as_cuda_device(&self) -> Result<&crate::CudaDevice> {
+        match self {
+            Self::Cuda(d) => Ok(d),
+            Self::Cpu => crate::bail!("expected a cuda device, got cpu"),
+            Self::Metal(_) => crate::bail!("expected a cuda device, got Metal"),
+        }
+    }
+
+    pub fn as_metal_device(&self) -> Result<&crate::MetalDevice> {
+        match self {
+            Self::Cuda(_) => crate::bail!("expected a metal device, got cuda"),
+            Self::Cpu => crate::bail!("expected a metal device, got cpu"),
+            Self::Metal(d) => Ok(d),
+        }
+    }
+
+    pub fn new_cuda_with_stream(ordinal: usize) -> Result<Self> {
+        Ok(Self::Cuda(crate::CudaDevice::new_with_stream(ordinal)?))
+    }
+
     pub fn new_metal(ordinal: usize) -> Result<Self> {
         Ok(Self::Metal(crate::MetalDevice::new(ordinal)?))
     }
@@ -139,6 +159,15 @@ impl Device {
             Self::Cpu => CpuDevice.set_seed(seed),
             Self::Cuda(c) => c.set_seed(seed),
             Self::Metal(m) => m.set_seed(seed),
+        }
+    }
+
+    /// Get the current seed for the device RNG.
+    pub fn get_current_seed(&self) -> Result<u64> {
+        match self {
+            Self::Cpu => CpuDevice.get_current_seed(),
+            Self::Cuda(c) => c.get_current_seed(),
+            Self::Metal(m) => m.get_current_seed(),
         }
     }
 
@@ -169,6 +198,22 @@ impl Device {
 
     pub fn is_metal(&self) -> bool {
         matches!(self, Self::Metal(_))
+    }
+
+    pub fn supports_bf16(&self) -> bool {
+        match self {
+            Self::Cuda(_) | Self::Metal(_) => true,
+            Self::Cpu => false,
+        }
+    }
+
+    /// Return `BF16` for devices that support it, otherwise default to `F32`.
+    pub fn bf16_default_to_f32(&self) -> DType {
+        if self.supports_bf16() {
+            DType::BF16
+        } else {
+            DType::F32
+        }
     }
 
     pub fn cuda_if_available(ordinal: usize) -> Result<Self> {

@@ -65,11 +65,14 @@ impl crate::CustomOp1 for ArgSort {
         let sort_indexes = match storage {
             crate::CpuStorage::U8(vs) => self.asort(vs, layout),
             crate::CpuStorage::U32(vs) => self.asort(vs, layout),
+            crate::CpuStorage::I16(vs) => self.asort(vs, layout),
+            crate::CpuStorage::I32(vs) => self.asort(vs, layout),
             crate::CpuStorage::I64(vs) => self.asort(vs, layout),
             crate::CpuStorage::BF16(vs) => self.asort(vs, layout),
             crate::CpuStorage::F16(vs) => self.asort(vs, layout),
             crate::CpuStorage::F32(vs) => self.asort(vs, layout),
             crate::CpuStorage::F64(vs) => self.asort(vs, layout),
+            crate::CpuStorage::F8E4M3(vs) => self.asort(vs, layout),
         };
         let sort_indexes = crate::CpuStorage::U32(sort_indexes);
         Ok((sort_indexes, layout.shape().into()))
@@ -149,6 +152,9 @@ impl crate::CustomOp1 for ArgSort {
                     DType::U8 => "asort_asc_u8",
                     DType::U32 => "asort_asc_u32",
                     DType::I64 => "asort_asc_i64",
+                    DType::I32 => "asort_asc_i32",
+                    DType::I16 => "asort_asc_i16",
+                    DType::F8E4M3 => crate::bail!("Metal device does not yet support F8E4M3."),
                 }
             } else {
                 match storage.dtype() {
@@ -159,6 +165,9 @@ impl crate::CustomOp1 for ArgSort {
                     DType::U8 => "asort_desc_u8",
                     DType::U32 => "asort_desc_u32",
                     DType::I64 => "asort_desc_i64",
+                    DType::I32 => "asort_desc_i32",
+                    DType::I16 => "asort_desc_i16",
+                    DType::F8E4M3 => crate::bail!("Metal device does not yet support F8E4M3."),
                 }
             }
         };

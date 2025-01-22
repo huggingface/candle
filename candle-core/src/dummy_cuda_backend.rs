@@ -14,6 +14,12 @@ macro_rules! fail {
     };
 }
 
+impl CudaDevice {
+    pub fn new_with_stream(_: usize) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+}
+
 impl crate::backend::BackendStorage for CudaStorage {
     type Device = CudaDevice;
 
@@ -140,9 +146,23 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn matmul(
+    fn matmul_with_alpha_beta(
         &self,
         _: &Self,
+        _: &mut Self,
+        _: Option<f64>,
+        _: (usize, usize, usize, usize),
+        _: &Layout,
+        _: &Layout,
+        _: &Layout,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn matmul_with_alpha(
+        &self,
+        _: &Self,
+        _: Option<f64>,
         _: (usize, usize, usize, usize),
         _: &Layout,
         _: &Layout,
@@ -191,6 +211,10 @@ impl crate::backend::BackendDevice for CudaDevice {
     }
 
     fn set_seed(&self, _: u64) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn get_current_seed(&self) -> Result<u64> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 

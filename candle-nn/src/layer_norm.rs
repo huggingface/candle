@@ -30,15 +30,10 @@
 //! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
 
 use std::marker::PhantomData;
-#[cfg(feature = "cuda")]
-use std::{
-    mem,
-    sync::{Arc, Mutex},
-};
 
 #[cfg(feature = "cuda")]
 use candle::cuda_backend::{
-    cudarc::driver::{sys, DeviceRepr, LaunchAsync, LaunchConfig},
+    cudarc::driver::{DeviceRepr, LaunchAsync, LaunchConfig},
     kernel_name, kernels, CudaDType, WrapErr,
 };
 
@@ -49,9 +44,6 @@ use candle::{
 };
 
 use candle::{DType, Module, Result, Tensor, D};
-
-#[cfg(feature = "cuda")]
-static MAX_GRID_Y: Mutex<Option<u32>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerNormConfig {

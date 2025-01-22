@@ -9,7 +9,8 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
-    runs-on: [single-gpu, nvidia-gpu, t4, ci]
+    runs-on:
+      group: aws-g4dn-2xlarge
     container:
       image: nvidia/cuda:12.3.1-devel-ubuntu22.04
       options: --gpus 0 

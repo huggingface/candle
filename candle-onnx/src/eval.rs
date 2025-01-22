@@ -2,7 +2,7 @@ use crate::onnx::attribute_proto::AttributeType;
 use crate::onnx::tensor_proto::DataType;
 use crate::onnx::{self, GraphProto};
 use candle::{bail, DType, Device, Result, Tensor};
-use std::{collections::HashMap, usize};
+use std::collections::{HashMap, HashSet};
 
 pub type Value = Tensor;
 
@@ -63,6 +63,18 @@ impl Attr for GraphProto {
         attr.g
             .as_ref()
             .ok_or_else(|| candle::Error::Msg("attribute does not contain graph".to_string()))
+    }
+}
+
+impl AttrOwned for Vec<String> {
+    const TYPE: AttributeType = AttributeType::Strings;
+    fn get(attr: &onnx::AttributeProto) -> Result<Self> {
+        let mut ret = vec![];
+        for bytes in attr.strings.iter() {
+            let s = String::from_utf8(bytes.clone()).map_err(candle::Error::wrap)?;
+            ret.push(s);
+        }
+        Ok(ret)
     }
 }
 
@@ -309,8 +321,15 @@ fn simple_eval_(
     for node in graph.node.iter() {
         let get = |input_name: &str| match values.get(input_name) {
             Some(value) => Ok(value),
-            None => bail!("cannot find {input_name} for op {}", node.name),
+            None => bail!("cannot find {input_name} for op '{}'", node.name),
         };
+        let get_opt = |i: usize| {
+            node.input
+                .get(i)
+                .filter(|s: &&String| !s.is_empty())
+                .map(|s| get(s))
+        };
+
         // TODO: Validate node.input for each operator.
         match node.op_type.as_str() {
             "Add" => {
@@ -340,8 +359,15 @@ fn simple_eval_(
             "Pow" => {
                 let input0 = get(&node.input[0])?;
                 let input1 = get(&node.input[1])?;
-                let output = input0.broadcast_pow(input1)?;
-                values.insert(node.output[0].clone(), output);
+                // HACK: current implementation of broadcast_pow cannot handle negative base,
+                // so we use powf where we can, which *does* correctly handle negative base.
+                if let Ok(exp) = (|| input1.to_dtype(DType::F64)?.to_scalar::<f64>())() {
+                    let output = input0.powf(exp as f64)?;
+                    values.insert(node.output[0].clone(), output);
+                } else {
+                    let output = input0.broadcast_pow(input1)?;
+                    values.insert(node.output[0].clone(), output);
+                }
             }
             "Exp" => {
                 let xs = get(&node.input[0])?;
@@ -589,15 +615,13 @@ fn simple_eval_(
             }
             "Clip" => {
                 let xs = get(&node.input[0])?;
-                let xs = if node.input.len() >= 2 {
-                    let mins = get(&node.input[1])?;
-                    xs.broadcast_maximum(mins)?
+                let xs = if let Some(mins) = get_opt(1) {
+                    xs.broadcast_maximum(mins?)?
                 } else {
                     xs.clone()
                 };
-                let xs = if node.input.len() >= 3 {
-                    let maxs = get(&node.input[2])?;
-                    xs.broadcast_minimum(maxs)?
+                let xs = if let Some(maxs) = get_opt(2) {
+                    xs.broadcast_minimum(maxs?)?
                 } else {
                     xs.clone()
                 };
@@ -609,6 +633,18 @@ fn simple_eval_(
                 let indices = get(&node.input[1])?;
                 let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(0);
                 let axis = xs.normalize_axis(axis)?;
+
+                // index_select does not support negative indices, so normalize them
+                // to positive indices.
+                let indices = &{
+                    let zeros = Tensor::zeros(indices.shape(), indices.dtype(), indices.device())?;
+                    let max = Tensor::new(xs.dims()[axis] as i64, indices.device())?
+                        .to_dtype(indices.dtype())?;
+                    let mask = indices.lt(&zeros)?;
+                    mask.to_dtype(indices.dtype())?
+                        .broadcast_mul(&max)?
+                        .add(&indices)?
+                };
 
                 // In Pytorch or Numpy this can be done by indexing the xs tensor using the indices
                 // tensor directly, but candle does not support tensor indexing at the moment, so
@@ -633,6 +669,49 @@ fn simple_eval_(
                     }
                 };
                 values.insert(node.output[0].clone(), xs);
+            }
+            // https://onnx.ai/onnx/operators/onnx__GatherElements.html#gatherelements
+            // A Note to fellow lurkers:
+            // The numpy based `gather_elements` implementation in `onnx` tests [here](https://github.com/onnx/onnx/blob/main/onnx/backend/test/case/node/gatherelements.py)
+            // and examples is incorrect.
+            // Use `torch.gather` for the validating/ verifying against the proper behaviour
+            "GatherElements" => {
+                let data = get(&node.input[0])?;
+                let indices = get(&node.input[1])?;
+
+                let rank = data.rank();
+                if rank != indices.rank() {
+                    bail!("indices must have same rank as input data. Data rank [{}] != indices rank [{}]", data.rank(), indices.rank());
+                }
+
+                let axis = {
+                    let axis_i64 = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(0);
+                    let axis = data.normalize_axis(axis_i64)?;
+
+                    if axis >= rank {
+                        bail!(
+                            "axis ({}) out of accepted range [-rank, rank-1] which was [-{rank}, {}]",
+                            axis_i64,
+                            rank - 1
+                        )
+                    }
+
+                    axis
+                };
+
+                // index_select does not support negative indices, so normalize them
+                // to positive indices.
+                let indices = &{
+                    let zeros = Tensor::zeros(indices.shape(), indices.dtype(), indices.device())?;
+                    let max = Tensor::new(data.dims()[axis] as i64, indices.device())?
+                        .to_dtype(indices.dtype())?;
+                    let mask = indices.lt(&zeros)?;
+                    mask.to_dtype(indices.dtype())?
+                        .broadcast_mul(&max)?
+                        .add(indices)?
+                };
+
+                values.insert(node.output[0].clone(), data.gather(indices, axis)?);
             }
             "Shape" => {
                 // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Shape
@@ -681,6 +760,8 @@ fn simple_eval_(
                 let output = match start.dtype() {
                     DType::U8 => arange_step!(u8),
                     DType::U32 => arange_step!(u32),
+                    DType::I16 => arange_step!(i16),
+                    DType::I32 => arange_step!(i32),
                     DType::I64 => arange_step!(i64),
                     DType::BF16 => arange_step!(f32),
                     DType::F16 => arange_step!(f32),
@@ -728,7 +809,14 @@ fn simple_eval_(
                 let cond = get(&node.input[0])?;
                 let a = get(&node.input[1])?;
                 let b = get(&node.input[2])?;
-                let output = cond.where_cond(a, b)?;
+
+                // where_cond requires that all inputs are the same shape.
+                // In contrast, the Where op in ONNX only requires that they are broadcastable.
+                let shape = broadcast_shape_from_many(&[cond.dims(), a.dims(), b.dims()])?;
+                let cond = cond.broadcast_as(shape.clone())?;
+                let a = a.broadcast_as(shape.clone())?;
+                let b = b.broadcast_as(shape)?;
+                let output = cond.where_cond(&a, &b)?;
                 values.insert(node.output[0].clone(), output);
             }
             "Conv" => {
@@ -931,6 +1019,7 @@ fn simple_eval_(
                     }
                     rtype => bail!("unsupported 'value' type {rtype:?} for {}", node.name),
                 };
+
                 values.insert(node.output[0].clone(), output);
             }
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Cast
@@ -1145,6 +1234,92 @@ fn simple_eval_(
                 }
                 values.insert(node.output[0].clone(), out);
             }
+            // https://onnx.ai/onnx/operators/onnx__ReduceMax.html#reducemax
+            "ReduceMax" => {
+                let input = get(&node.input[0])?;
+                let axes = get_opt(1);
+                let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1) == 1;
+
+                let axes = if let Some(Ok(axes)) = axes {
+                    // Satisfies version 18+
+                    axes.to_vec1::<i64>().ok()
+                } else if let Ok(Some(axes)) = get_attr_opt::<[i64]>(node, "axes") {
+                    // Backward compatiblity with version 13 and below
+                    Some(axes.to_vec())
+                } else {
+                    None
+                };
+
+                let axes = if let Some(axes) = axes {
+                    let rank = input.rank();
+                    let mut axes_set = HashSet::new();
+
+                    let mut axes = axes
+                        .iter()
+                        .map(|a| {
+                            let axis = if *a < 0 {
+                                (rank as i64 + *a) as usize
+                            } else {
+                                *a as usize
+                            };
+
+                            axes_set.insert(axis);
+                            axis
+                        })
+                        .collect::<Vec<_>>();
+
+                    if axes_set.len() < axes.len() {
+                        bail!("Duplicate value in 'axes'");
+                    }
+
+                    if axes.len() > 1 {
+                        axes.sort();
+                    }
+
+                    Some(axes)
+                } else {
+                    None
+                };
+
+                // TODO: Handle empty set
+                // Definition:
+                // "Reduction over an empty set of values yields minus infinity (if supported by the datatype) or the minimum value of the data type otherwise"
+                // For now, this will throw an error
+                if input.elem_count() == 0 {
+                    bail!("reduction over zero-size tensor not supported");
+                }
+
+                let output = if let Some(axes) = axes {
+                    let mut result = input.clone();
+                    for &axis in axes.iter().rev() {
+                        result = if keepdims {
+                            result.max_keepdim(axis)?
+                        } else {
+                            result.max(axis)?
+                        }
+                    }
+
+                    result
+                } else {
+                    // If `axes` is empty and `noop_with_empty_axes` is set to `true (1)`
+                    // ""input tensor will not be reduced,and the output tensor would be equivalent to input tensor.""
+                    if get_attr_opt::<i64>(node, "noop_with_empty_axes")?.copied() == Some(1) {
+                        input.clone()
+                    } else {
+                        let mut result = input.flatten_all()?;
+                        if keepdims {
+                            result = result.max_keepdim(0)?;
+                            // If keepdims is true, reshape to match input dimensions
+                            let shape = vec![1; input.rank()];
+                            result.reshape(shape)?
+                        } else {
+                            result.max(0)?
+                        }
+                    }
+                };
+
+                values.insert(node.output[0].clone(), output);
+            }
             // https://onnx.ai/onnx/operators/onnx__ReduceMean.html#reducemean-13
             // TODO: This version is only compatible with ReduceMean V13 and below.
             "ReduceMean" => {
@@ -1166,6 +1341,237 @@ fn simple_eval_(
                 } else {
                     input.mean(axes)?
                 };
+                values.insert(node.output[0].clone(), output);
+            }
+            // https://onnx.ai/onnx/operators/onnx__ReduceMin.html#reducemin
+            "ReduceMin" => {
+                let input = get(&node.input[0])?;
+                let axes = get_opt(1);
+                let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1) == 1;
+
+                let axes = if let Some(Ok(axes)) = axes {
+                    // Satisfies version 18+
+                    axes.to_vec1::<i64>().ok()
+                } else if let Ok(Some(axes)) = get_attr_opt::<[i64]>(node, "axes") {
+                    // Backward compatiblity with version 13 and below
+                    Some(axes.to_vec())
+                } else {
+                    None
+                };
+
+                let axes = if let Some(axes) = axes {
+                    let rank = input.rank();
+                    let mut axes_set = HashSet::new();
+
+                    let mut axes = axes
+                        .iter()
+                        .map(|a| {
+                            let axis = if *a < 0 {
+                                (rank as i64 + *a) as usize
+                            } else {
+                                *a as usize
+                            };
+
+                            axes_set.insert(axis);
+                            axis
+                        })
+                        .collect::<Vec<_>>();
+
+                    if axes_set.len() < axes.len() {
+                        bail!("Duplicate value in 'axes'");
+                    }
+
+                    if axes.len() > 1 {
+                        axes.sort();
+                    }
+
+                    Some(axes)
+                } else {
+                    None
+                };
+
+                // TODO: Handle empty set
+                // Definition:
+                // "Reduction over an empty set of values yields positive infinity (if supported by the datatype) or the max value of the data type otherwise"
+                // For now, this will throw an error
+                if input.elem_count() == 0 {
+                    bail!("reduction over zero-size tensor not supported");
+                }
+
+                let output = if let Some(axes) = axes {
+                    let mut result = input.clone();
+                    for &axis in axes.iter().rev() {
+                        result = if keepdims {
+                            result.min_keepdim(axis)?
+                        } else {
+                            result.min(axis)?
+                        }
+                    }
+
+                    result
+                } else {
+                    // If `axes` is empty and `noop_with_empty_axes` is set to `true (1)`
+                    // ""input tensor will not be reduced,and the output tensor would be equivalent to input tensor.""
+                    if get_attr_opt::<i64>(node, "noop_with_empty_axes")?.copied() == Some(1) {
+                        input.clone()
+                    } else {
+                        let mut result = input.flatten_all()?;
+                        if keepdims {
+                            result = result.min_keepdim(0)?;
+                            // If keepdims is true, reshape to match input dimensions
+                            let shape = vec![1; input.rank()];
+                            result.reshape(shape)?
+                        } else {
+                            result.min(0)?
+                        }
+                    }
+                };
+
+                values.insert(node.output[0].clone(), output);
+            }
+            //https://github.com/onnx/onnx/blob/main/docs/Operators.md#Split
+            // Version 18 impl
+            "Split" => {
+                let input_tensor = get(&node.input[0])?;
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(0);
+                let axis = input_tensor.normalize_axis(axis)?;
+
+                // Determine split sizes
+                let splits = if node.input.len() > 1 {
+                    // If the split tensor is provided, use it to determine sizes
+                    let split_tensor = get(&node.input[1])?.to_vec1::<i64>()?;
+                    split_tensor.iter().map(|&x| x as usize).collect::<Vec<_>>()
+                } else {
+                    let num_outputs = if let Some(&num_outputs_attrib) =
+                        get_attr_opt::<i64>(node, "num_outputs")?
+                    {
+                        num_outputs_attrib as usize
+                    } else {
+                        node.output.len()
+                    };
+
+                    let input_dim = input_tensor.dim(axis)?;
+
+                    let mut split_sizes =
+                        vec![input_dim / num_outputs as usize; num_outputs as usize];
+                    let remainder = input_dim % num_outputs as usize;
+                    if remainder > 0 {
+                        // If there's a remainder, add it to the last split size
+                        split_sizes[num_outputs as usize - 1] += remainder;
+                    }
+
+                    split_sizes
+                };
+
+                // Perform the split operation
+                let mut outputs = vec![];
+                let mut start = 0;
+                for &size in &splits {
+                    let end = start + size;
+                    let slice = input_tensor.narrow(axis, start, size)?;
+                    outputs.push(slice);
+                    start = end;
+                }
+
+                // Insert the split outputs into the values map
+                for (output, slice) in node.output.iter().zip(outputs.into_iter()) {
+                    values.insert(output.clone(), slice);
+                }
+            }
+            //https://github.com/onnx/onnx/blob/main/docs/Operators.md#Expand
+            // Version 13 impl
+            "Expand" => {
+                // unlike broadcast_to, expand allows for the output shape to
+                // be different from the specified shape.
+                let input_tensor = get(&node.input[0])?;
+                let input_shape = get(&node.input[1])?;
+
+                // Check that the shape tensor is 1D
+                if input_shape.rank() != 1 {
+                    bail!(
+                        "Expand expects 'shape' input to be 1D tensor: {:?}",
+                        input_shape
+                    );
+                }
+                let input_tensor_dims = input_tensor.dims();
+                let input_shape_dims = input_shape
+                    .to_vec1::<i64>()?
+                    .into_iter()
+                    .map(|x| x as usize)
+                    .collect::<Vec<_>>();
+
+                let target_shape = broadcast_shape(input_tensor_dims, input_shape_dims.as_slice())?;
+
+                let expanded_tensor = input_tensor.broadcast_as(target_shape)?;
+
+                values.insert(node.output[0].clone(), expanded_tensor);
+            }
+            //https://github.com/onnx/onnx/blob/main/docs/Operators.md#ReduceSum
+            // Version 13 impl
+            "ReduceSum" => {
+                let input = get(&node.input[0])?;
+                let axes = get_opt(1);
+                let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1);
+                let noop_with_empty_axes = get_attr_opt::<i64>(node, "noop_with_empty_axes")?
+                    .copied()
+                    .unwrap_or(0);
+
+                let axes = match axes {
+                    Some(Ok(axes)) => axes
+                        .to_vec1::<i64>()?
+                        .into_iter()
+                        .map(|x| x as usize)
+                        .collect::<Vec<_>>(),
+                    Some(Err(_)) | None => {
+                        if noop_with_empty_axes == 1 {
+                            vec![]
+                        } else {
+                            (0..input.rank()).collect()
+                        }
+                    }
+                };
+
+                let output = if keepdims == 1 {
+                    input.sum_keepdim(axes)?
+                } else {
+                    input.sum(axes)?
+                };
+
+                values.insert(node.output[0].clone(), output);
+            }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#ReduceL2
+            // Version 18 impl
+            "ReduceL2" => {
+                let input = get(&node.input[0])?;
+                let axes = get_opt(1);
+                let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1);
+                let noop_with_empty_axes = get_attr_opt::<i64>(node, "noop_with_empty_axes")?
+                    .copied()
+                    .unwrap_or(0);
+
+                let input_sq = input.sqr()?;
+
+                let axes = match axes {
+                    Some(axes) => axes?
+                        .to_vec1::<i64>()?
+                        .into_iter()
+                        .map(|x| x as usize)
+                        .collect::<Vec<_>>(),
+                    None => {
+                        if noop_with_empty_axes == 1 {
+                            vec![]
+                        } else {
+                            (0..input_sq.rank()).collect()
+                        }
+                    }
+                };
+
+                let output = if keepdims == 1 {
+                    input_sq.sum_keepdim(axes)?.sqrt()?
+                } else {
+                    input_sq.sum(axes)?.sqrt()?
+                };
+
                 values.insert(node.output[0].clone(), output);
             }
             random_type @ ("RandomUniform" | "RandomNormal") => {
@@ -1274,7 +1680,7 @@ fn simple_eval_(
                 let input = get(&node.input[0])?;
                 let dt = input.dtype();
                 match dt {
-                    DType::U8 | DType::U32 | DType::I64 => {
+                    DType::U8 | DType::U32 | DType::I64 | DType::I16 | DType::I32 => {
                         bail!(
                             "unsupported dtype {}, only float types are allowed for LeakyRelu",
                             dt.as_str()
@@ -1310,6 +1716,236 @@ fn simple_eval_(
                     .broadcast_add(&c.broadcast_mul(&beta)?)?;
                 values.insert(node.output[0].clone(), output);
             }
+            "LSTM" => {
+                let direction = get_attr_opt(node, "direction")?.unwrap_or("forward");
+                if direction != "forward" {
+                    bail!("LSTM currently only supports direction == \"forward\"");
+                }
+                let num_directions = if direction == "bidirectional" { 2 } else { 1 };
+                let hidden_size: i64 = get_attr(node, "hidden_size").copied()?;
+                let input_forget = get_attr_opt(node, "input_forget")?.copied().unwrap_or(0);
+                if input_forget != 0 {
+                    bail!("LSTM currently only supports input_forget == 0");
+                }
+                let activations_default = vec![
+                    "Sigmoid".to_string(),
+                    "Tanh".to_string(),
+                    "Tanh".to_string(),
+                ];
+                let activations = get_attr_opt_owned::<Vec<String>>(node, "activations")?
+                    .unwrap_or(activations_default.clone());
+                if activations != activations_default {
+                    bail!("LSTM currently only supports default activations ({activations_default:?})");
+                }
+                // activation_alpha and activation_beta don't apply to (Sigmoid, Tanh, Tanh) so ignoring them is okay
+                if get_attr_opt::<f32>(node, "clip")?.is_some() {
+                    bail!("LSTM does not currently support clip attribute");
+                }
+
+                // The shape format of inputs X, initial_h and outputs Y, Y_h.
+                // If 0, the following shapes are expected:
+                //     X.shape = [seq_length, batch_size, input_size],
+                //     Y.shape = [seq_length, num_directions, batch_size, hidden_size],
+                //     initial_h.shape = Y_h.shape = [num_directions, batch_size, hidden_size].
+                // If 1, the following shapes are expected:
+                //     X.shape = [batch_size, seq_length, input_size],
+                //     Y.shape = [batch_size, seq_length, num_directions, hidden_size],
+                //     initial_h.shape = Y_h.shape = [batch_size, num_directions, hidden_size].
+                let layout = get_attr_opt(node, "layout")?.copied().unwrap_or(0);
+                if layout != 0 {
+                    bail!("LSTM currently only supports layout == 0");
+                }
+
+                // The input sequences packed (and potentially padded) into one 3-D tensor
+                // with the shape of `[seq_length, batch_size, input_size]`.
+                let x = get(&node.input[0])?;
+                // XXX: depends on layout
+                let (seq_length, batch_size, input_size) = x.dims3()?;
+                // The weight tensor for the gates.
+                // Concatenation of `W[iofc]` and `WB[iofc]` (if bidirectional) along dimension 0.
+                // The tensor has shape `[num_directions, 4*hidden_size, input_size]`.
+                let w = get(&node.input[1])?;
+                // The recurrence weight tensor.
+                // Concatenation of `R[iofc]` and `RB[iofc]` (if bidirectional) along dimension 0.
+                // This tensor has shape `[num_directions, 4*hidden_size, hidden_size]`.
+                let r = get(&node.input[2])?;
+
+                // The bias tensor for input gate.
+                // Concatenation of `[Wb[iofc], Rb[iofc]]`, and `[WBb[iofc], RBb[iofc]]` (if bidirectional) along dimension 0.
+                // This tensor has shape `[num_directions, 8*hidden_size]`.
+                // Optional: If not specified - assumed to be 0.
+                let b_default: Tensor;
+                let b = match get_opt(3) {
+                    Some(n) => n?,
+                    None => {
+                        b_default = Tensor::zeros(
+                            (num_directions, 8 * hidden_size as usize),
+                            DType::F32,
+                            x.device(),
+                        )?;
+                        &b_default
+                    }
+                };
+
+                // Optional tensor specifying lengths of the sequences in a batch.
+                // If not specified - assumed all sequences in the batch to have length `seq_length`.
+                // It has shape `[batch_size]`.
+                let seq_lens_default: Tensor;
+                let seq_lens = match get_opt(4) {
+                    Some(n) => n?,
+                    None => {
+                        seq_lens_default =
+                            Tensor::full(seq_length as i64, (batch_size,), x.device())?;
+                        &seq_lens_default
+                    }
+                };
+                let seq_lens_is_default =
+                    (seq_lens.to_vec1::<i64>()?.iter()).all(|e| *e as usize == seq_length);
+                if !seq_lens_is_default {
+                    bail!("LSTM currently only supports default value of seq_lens");
+                }
+
+                // Optional initial value of the hidden. If not specified - assumed to be 0.
+                // It has shape `[num_directions, batch_size, hidden_size]`.
+                let initial_h_default: Tensor;
+                let initial_h = match get_opt(5) {
+                    Some(n) => n?,
+                    _ => {
+                        initial_h_default = Tensor::zeros(
+                            (num_directions, batch_size, hidden_size as usize),
+                            DType::F32,
+                            x.device(),
+                        )?;
+                        &initial_h_default
+                    }
+                };
+
+                // Optional initial value of the cell.
+                // If not specified - assumed to be 0.
+                // It has shape `[num_directions, batch_size, hidden_size]`.
+                let initial_c_default: Tensor;
+                let initial_c = match node.input.get(6) {
+                    Some(n) if !n.is_empty() => get(n)?,
+                    _ => {
+                        initial_c_default = Tensor::zeros(
+                            (num_directions, batch_size, hidden_size as usize),
+                            DType::F32,
+                            x.device(),
+                        )?;
+                        &initial_c_default
+                    }
+                };
+
+                // The weight tensor for peepholes.
+                // Concatenation of `P[iof]` and `PB[iof]` (if bidirectional) along dimension 0.
+                // It has shape `[num_directions, 3*hidde_size]`. Optional: If not specified - assumed to be 0.
+                let p_default = Tensor::zeros(
+                    (num_directions, 3 * hidden_size as usize),
+                    DType::F32,
+                    x.device(),
+                )?;
+                let p = get_opt(7).unwrap_or(Ok(&p_default))?;
+                let p_is_zeros = (p.to_vec2::<f32>()?.iter()).all(|v| v.iter().all(|e| *e == 0.0));
+                if !p_is_zeros {
+                    bail!(
+                        "LSTM currently only supports default value of p (a Tensor of all zeroes)"
+                    );
+                }
+
+                // these all have [num_directions, ...] shapes
+                let w = w.get(0)?; // w[iofc] has shape [4*hidden_size, input_size]
+                let r = r.get(0)?; // r[iofc] has shape [4*hidden_size, hidden_size]
+                let b = b.get(0)?; // concat of [wb[iofc],rb[iofc]] has shape [8*hidden_size]
+                let idx_wb = Tensor::arange(0, 4 * hidden_size, x.device())?;
+                let idx_rb = Tensor::arange(4 * hidden_size, 8 * hidden_size, x.device())?;
+                let wb = b.index_select(&idx_wb, 0)?;
+                let rb = b.index_select(&idx_rb, 0)?;
+                let c = initial_c.get(0)?;
+                let h = initial_h.get(0)?;
+
+                // w, r, wb, rb are all iofc but lstm expects ifco
+                // so we need to move some stuff around
+                let idx_i = Tensor::arange(0, hidden_size, x.device())?;
+                let idx_o = Tensor::arange(hidden_size, 2 * hidden_size, x.device())?;
+                let idx_f = Tensor::arange(2 * hidden_size, 3 * hidden_size, x.device())?;
+                let idx_c = Tensor::arange(3 * hidden_size, 4 * hidden_size, x.device())?;
+                let idx_ifco = Tensor::cat(&[&idx_i, &idx_f, &idx_c, &idx_o], 0)?;
+                let w = w.index_select(&idx_ifco, 0)?;
+                let r = r.index_select(&idx_ifco, 0)?;
+                let wb = wb.index_select(&idx_ifco, 0)?;
+                let rb = rb.index_select(&idx_ifco, 0)?;
+                let vmap = candle_nn::VarMap::new();
+                vmap.data().lock().unwrap().extend([
+                    ("weight_ih_l0".to_string(), candle::Var::from_tensor(&w)?),
+                    ("weight_hh_l0".to_string(), candle::Var::from_tensor(&r)?),
+                    ("bias_ih_l0".to_string(), candle::Var::from_tensor(&wb)?),
+                    ("bias_hh_l0".to_string(), candle::Var::from_tensor(&rb)?),
+                ]);
+                use candle_nn::rnn::RNN as _;
+                let lstm = candle_nn::rnn::lstm(
+                    input_size,
+                    hidden_size as usize,
+                    candle_nn::rnn::LSTMConfig::default(),
+                    candle_nn::VarBuilder::from_varmap(&vmap, w.dtype(), w.device()),
+                )?;
+
+                let mut lstm_state = candle_nn::rnn::LSTMState::new(h, c);
+                let mut h_acc = if node.output.first().map(String::as_str).unwrap_or("") != "" {
+                    Some(vec![])
+                } else {
+                    None
+                };
+                for t in 0..seq_length {
+                    let x = x.get(t)?;
+                    lstm_state = lstm.step(&x, &lstm_state)?;
+                    if let Some(h_acc) = &mut h_acc {
+                        h_acc.push(lstm_state.clone());
+                    }
+                }
+
+                assert_eq!(num_directions, 1, "if support for bidirectional is ever added, outputs will have to be concatenated, not simply reshaped");
+                if let Some(name) = node.output.first() {
+                    let h_acc = h_acc.as_ref().unwrap();
+                    let h_acc = lstm.states_to_tensor(h_acc)?;
+                    let h_acc = h_acc.reshape((
+                        seq_length,
+                        num_directions,
+                        batch_size,
+                        hidden_size as usize,
+                    ))?;
+                    values.insert(name.clone(), h_acc);
+                }
+                if let Some(name) = node.output.get(1) {
+                    values.insert(
+                        name.clone(),
+                        lstm_state.h().reshape((
+                            num_directions,
+                            batch_size,
+                            hidden_size as usize,
+                        ))?,
+                    );
+                }
+                if let Some(name) = node.output.get(2) {
+                    values.insert(
+                        name.clone(),
+                        lstm_state.c().reshape((
+                            num_directions,
+                            batch_size,
+                            hidden_size as usize,
+                        ))?,
+                    );
+                }
+            }
+            // https://onnx.ai/onnx/operators/onnx__Xor.html
+            "Xor" => {
+                // Since we don't have a `DType::Bool` yet, this ensures that we are working with `0`(False) & `1`(True)
+                let a = get(&node.input[0])?.gt(0_u8)?;
+                let b = get(&node.input[1])?.gt(0_u8)?;
+
+                let out = a.broadcast_add(&b)?.eq(1_u8)?;
+
+                values.insert(node.output[0].clone(), out);
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
@@ -1321,4 +1957,37 @@ fn simple_eval_(
             Some(value) => Ok((output.name.clone(), value)),
         })
         .collect()
+}
+
+fn broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Result<Vec<usize>> {
+    let (longest, shortest) = if shape_a.len() > shape_b.len() {
+        (shape_a, shape_b)
+    } else {
+        (shape_b, shape_a)
+    };
+    let diff = longest.len() - shortest.len();
+    let mut target_shape = longest[0..diff].to_vec();
+    for (dim1, dim2) in longest[diff..].iter().zip(shortest.iter()) {
+        if *dim1 == *dim2 || *dim2 == 1 || *dim1 == 1 {
+            target_shape.push(usize::max(*dim1, *dim2));
+        } else {
+            bail!(
+                "Expand: incompatible shapes for broadcast, {:?} and {:?}",
+                shape_a,
+                shape_b
+            );
+        }
+    }
+    Ok(target_shape)
+}
+
+fn broadcast_shape_from_many(shapes: &[&[usize]]) -> Result<Vec<usize>> {
+    if shapes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut shape_out = shapes[0].to_vec();
+    for shape in shapes[1..].iter() {
+        shape_out = broadcast_shape(&shape_out, shape)?;
+    }
+    Ok(shape_out)
 }

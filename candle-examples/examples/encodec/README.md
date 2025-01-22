@@ -7,7 +7,7 @@ quantization.
 ## Running one example
 
 ```bash
-cargo run --example encodec --features symphonia --release -- code-to-audio \
+cargo run --example encodec --features encodec --release -- code-to-audio \
     candle-examples/examples/encodec/jfk-codes.safetensors \
     jfk.wav
 ```

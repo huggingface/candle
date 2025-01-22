@@ -230,10 +230,8 @@ impl BertSelfAttention {
         let xs = xs.reshape(new_x_shape.as_slice())?.transpose(1, 2)?;
         xs.contiguous()
     }
-}
 
-impl Module for BertSelfAttention {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let query_layer = self.query.forward(hidden_states)?;
         let key_layer = self.key.forward(hidden_states)?;
@@ -245,6 +243,7 @@ impl Module for BertSelfAttention {
 
         let attention_scores = query_layer.matmul(&key_layer.t()?)?;
         let attention_scores = (attention_scores / (self.attention_head_size as f64).sqrt())?;
+        let attention_scores = attention_scores.broadcast_add(attention_mask)?;
         let attention_probs = {
             let _enter_sm = self.span_softmax.enter();
             candle_nn::ops::softmax(&attention_scores, candle::D::Minus1)?
@@ -307,12 +306,10 @@ impl BertAttention {
             span: tracing::span!(tracing::Level::TRACE, "attn"),
         })
     }
-}
 
-impl Module for BertAttention {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let self_outputs = self.self_attention.forward(hidden_states)?;
+        let self_outputs = self.self_attention.forward(hidden_states, attention_mask)?;
         let attention_output = self.self_output.forward(&self_outputs, hidden_states)?;
         Ok(attention_output)
     }
@@ -398,12 +395,10 @@ impl BertLayer {
             span: tracing::span!(tracing::Level::TRACE, "layer"),
         })
     }
-}
 
-impl Module for BertLayer {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let attention_output = self.attention.forward(hidden_states)?;
+        let attention_output = self.attention.forward(hidden_states, attention_mask)?;
         // TODO: Support cross-attention?
         // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L523
         // TODO: Support something similar to `apply_chunking_to_forward`?
@@ -424,20 +419,18 @@ struct BertEncoder {
 impl BertEncoder {
     fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let layers = (0..config.num_hidden_layers)
-            .map(|index| BertLayer::load(vb.pp(&format!("layer.{index}")), config))
+            .map(|index| BertLayer::load(vb.pp(format!("layer.{index}")), config))
             .collect::<Result<Vec<_>>>()?;
         let span = tracing::span!(tracing::Level::TRACE, "encoder");
         Ok(BertEncoder { layers, span })
     }
-}
 
-impl Module for BertEncoder {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let mut hidden_states = hidden_states.clone();
         // Use a loop rather than a fold as it's easier to modify when adding debug/...
         for layer in self.layers.iter() {
-            hidden_states = layer.forward(&hidden_states)?
+            hidden_states = layer.forward(&hidden_states, attention_mask)?
         }
         Ok(hidden_states)
     }
@@ -461,8 +454,8 @@ impl BertModel {
             (Err(err), _) | (_, Err(err)) => {
                 if let Some(model_type) = &config.model_type {
                     if let (Ok(embeddings), Ok(encoder)) = (
-                        BertEmbeddings::load(vb.pp(&format!("{model_type}.embeddings")), config),
-                        BertEncoder::load(vb.pp(&format!("{model_type}.encoder")), config),
+                        BertEmbeddings::load(vb.pp(format!("{model_type}.embeddings")), config),
+                        BertEncoder::load(vb.pp(format!("{model_type}.encoder")), config),
                     ) {
                         (embeddings, encoder)
                     } else {
@@ -481,10 +474,130 @@ impl BertModel {
         })
     }
 
-    pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        token_type_ids: &Tensor,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let embedding_output = self.embeddings.forward(input_ids, token_type_ids)?;
-        let sequence_output = self.encoder.forward(&embedding_output)?;
+        let attention_mask = match attention_mask {
+            Some(attention_mask) => attention_mask.clone(),
+            None => input_ids.ones_like()?,
+        };
+        // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L995
+        let attention_mask = get_extended_attention_mask(&attention_mask, DType::F32)?;
+        let sequence_output = self.encoder.forward(&embedding_output, &attention_mask)?;
         Ok(sequence_output)
+    }
+}
+
+fn get_extended_attention_mask(attention_mask: &Tensor, dtype: DType) -> Result<Tensor> {
+    let attention_mask = match attention_mask.rank() {
+        3 => attention_mask.unsqueeze(1)?,
+        2 => attention_mask.unsqueeze(1)?.unsqueeze(1)?,
+        _ => candle::bail!("Wrong shape for input_ids or attention_mask"),
+    };
+    let attention_mask = attention_mask.to_dtype(dtype)?;
+    // torch.finfo(dtype).min
+    (attention_mask.ones_like()? - &attention_mask)?
+        .broadcast_mul(&Tensor::try_from(f32::MIN)?.to_device(attention_mask.device())?)
+}
+
+//https://github.com/huggingface/transformers/blob/1bd604d11c405dfb8b78bda4062d88fc75c17de0/src/transformers/models/bert/modeling_bert.py#L752-L766
+struct BertPredictionHeadTransform {
+    dense: Linear,
+    activation: HiddenActLayer,
+    layer_norm: LayerNorm,
+}
+
+impl BertPredictionHeadTransform {
+    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+        let dense = linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?;
+        let activation = HiddenActLayer::new(config.hidden_act);
+        let layer_norm = layer_norm(
+            config.hidden_size,
+            config.layer_norm_eps,
+            vb.pp("LayerNorm"),
+        )?;
+        Ok(Self {
+            dense,
+            activation,
+            layer_norm,
+        })
+    }
+}
+
+impl Module for BertPredictionHeadTransform {
+    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        let hidden_states = self
+            .activation
+            .forward(&self.dense.forward(hidden_states)?)?;
+        self.layer_norm.forward(&hidden_states)
+    }
+}
+
+// https://github.com/huggingface/transformers/blob/1bd604d11c405dfb8b78bda4062d88fc75c17de0/src/transformers/models/bert/modeling_bert.py#L769C1-L790C1
+pub struct BertLMPredictionHead {
+    transform: BertPredictionHeadTransform,
+    decoder: Linear,
+}
+
+impl BertLMPredictionHead {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+        let transform = BertPredictionHeadTransform::load(vb.pp("transform"), config)?;
+        let decoder = linear(config.hidden_size, config.vocab_size, vb.pp("decoder"))?;
+        Ok(Self { transform, decoder })
+    }
+}
+
+impl Module for BertLMPredictionHead {
+    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        self.decoder
+            .forward(&self.transform.forward(hidden_states)?)
+    }
+}
+
+// https://github.com/huggingface/transformers/blob/1bd604d11c405dfb8b78bda4062d88fc75c17de0/src/transformers/models/bert/modeling_bert.py#L792
+pub struct BertOnlyMLMHead {
+    predictions: BertLMPredictionHead,
+}
+
+impl BertOnlyMLMHead {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+        let predictions = BertLMPredictionHead::load(vb.pp("predictions"), config)?;
+        Ok(Self { predictions })
+    }
+}
+
+impl Module for BertOnlyMLMHead {
+    fn forward(&self, sequence_output: &Tensor) -> Result<Tensor> {
+        self.predictions.forward(sequence_output)
+    }
+}
+
+pub struct BertForMaskedLM {
+    bert: BertModel,
+    cls: BertOnlyMLMHead,
+}
+
+impl BertForMaskedLM {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+        let bert = BertModel::load(vb.pp("bert"), config)?;
+        let cls = BertOnlyMLMHead::load(vb.pp("cls"), config)?;
+        Ok(Self { bert, cls })
+    }
+
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        token_type_ids: &Tensor,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let sequence_output = self
+            .bert
+            .forward(input_ids, token_type_ids, attention_mask)?;
+        self.cls.forward(&sequence_output)
     }
 }

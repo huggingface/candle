@@ -1,4 +1,22 @@
+//! candle-nn
+//!
+//! ## Other Crates
+//!
+//! Candle consists of a number of crates. This crate holds structs and functions
+//! that allow you to build and train neural nets. You may wish
+//! to look at the docs for the other crates which can be found here:
+//!
+//! - [candle-core](https://docs.rs/candle-core/). Core Datastructures and DataTypes.
+//! - [candle-nn](https://docs.rs/candle-nn/). Building blocks for Neural Nets.
+//! - [candle-datasets](https://docs.rs/candle-datasets/). Rust access to commonly used Datasets like MNIST.
+//! - [candle-examples](https://docs.rs/candle-examples/). Examples of Candle in Use.
+//! - [candle-onnx](https://docs.rs/candle-onnx/). Loading and using ONNX models.
+//! - [candle-pyo3](https://docs.rs/candle-pyo3/). Access to Candle from Python.
+//! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implemntation of many published transformer models.
+//!
+
 pub mod activation;
+pub mod attention;
 pub mod batch_norm;
 pub mod conv;
 pub mod embedding;
@@ -20,6 +38,7 @@ pub mod var_builder;
 pub mod var_map;
 
 pub use activation::{prelu, Activation, PReLU};
+pub use attention::scaled_dot_product_attention;
 pub use batch_norm::{batch_norm, BatchNorm, BatchNormConfig};
 pub use conv::{
     conv1d, conv1d_no_bias, conv2d, conv2d_no_bias, conv_transpose1d, conv_transpose1d_no_bias,
