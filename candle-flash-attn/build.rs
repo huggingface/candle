@@ -88,6 +88,12 @@ fn main() -> Result<()> {
         .arg("--use_fast_math")
         .arg("--verbose");
 
+    if let Ok(target) = std::env::var("TARGET") {
+        if target.contains("msvc") {
+            builder = builder.arg("-D_USE_MATH_DEFINES");
+        }
+    }
+
     let out_file = build_dir.join("libflashattention.a");
     builder.build_lib(out_file);
 
