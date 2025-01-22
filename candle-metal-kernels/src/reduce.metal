@@ -328,10 +328,10 @@ struct loader<T, R, OP, BLOCKSIZE, false, typename metal::enable_if_t<not_indexe
     METAL_FUNC R operator()(
         R value,
         constant uint &src_numel,
-        constant ushort &el_per_block,
+        constant uint &el_per_block,
         device const T *src,
         const uint offset,
-        const ushort tid
+        const uint tid
     ) {
         uint idx = tid + offset;
         const uint stop_idx = min(el_per_block + offset, src_numel);
@@ -349,10 +349,10 @@ struct loader<T, R, OP, BLOCKSIZE, false, typename metal::enable_if_t<not_indexe
         constant uint &num_dims,
         constant size_t *dims,
         constant size_t *strides,
-        constant ushort &el_per_block,
+        constant uint &el_per_block,
         device const T *src,
         const uint offset,
-        const ushort tid
+        const uint tid
     ) {
         return this->operator()(value, src_numel, el_per_block, src, offset, tid);
     }
@@ -375,10 +375,10 @@ struct loader<T, R, OP, BLOCKSIZE, true, typename metal::enable_if_t<not_indexed
         constant uint &num_dims,
         constant size_t *dims,
         constant size_t *strides,
-        constant ushort &el_per_block,
+        constant uint &el_per_block,
         device const T *src,
         const uint offset,
-        const ushort tid
+        const uint tid
     ) {
         const uint idx = tid + offset;
         const uint stop_idx = min(el_per_block + offset, src_numel);
@@ -407,10 +407,10 @@ struct loader<T, R, OP, BLOCKSIZE, false, typename metal::enable_if_t<is_indexed
         constant uint &num_dims,
         constant size_t *dims,
         constant size_t *strides,
-        constant ushort &el_per_block,
+        constant uint &el_per_block,
         device const T *src,
         const uint offset,
-        const ushort tid
+        const uint tid
     ) {
         const uint thread_id = tid + offset;
         const uint stop_idx = min(el_per_block + offset, src_numel);
@@ -439,10 +439,10 @@ struct loader<T, R, OP, BLOCKSIZE, true, typename metal::enable_if_t<is_indexed_
         constant uint &num_dims,
         constant size_t *dims,
         constant size_t *strides,
-        constant ushort &el_per_block,
+        constant uint &el_per_block,
         device const T *src,
         const uint offset,
-        const ushort tid
+        const uint tid
     ) {
         const uint thread_id = tid + offset;
         const uint stop_idx = min(el_per_block + offset, src_numel);
@@ -496,7 +496,7 @@ struct block_reducer {
         this->shared = shared;
     }
 
-    METAL_FUNC T operator()(T value, const ushort tid) {
+    METAL_FUNC T operator()(T value, const uint tid) {
         if (BLOCKSIZE >= 64) {
             // Only store in threadgroup shared memory if needed.
             shared[tid] = value;
@@ -535,7 +535,7 @@ METAL_FUNC void reduce(
     constant uint &num_dims,
     constant size_t *dims,
     constant size_t *strides,
-    constant ushort &el_per_block,
+    constant uint &el_per_block,
     device const T *src,
     device R *dst,
     threadgroup R shared[BLOCKSIZE],
@@ -590,12 +590,12 @@ kernel void NAME(                                       \
     constant uint &src_numel,                           \
     constant uint &num_dims,                            \
     constant size_t *dims,                              \
-    constant ushort &el_per_block,                      \
+    constant uint &el_per_block,                        \
     device const T *src,                                \
     device T *dst,                                      \
-    ushort tid [[ thread_index_in_threadgroup ]],       \
-    ushort dst_id [[ threadgroup_position_in_grid ]],   \
-    ushort block_dim [[ threads_per_threadgroup ]]      \
+    uint tid [[ thread_index_in_threadgroup ]],         \
+    uint dst_id [[ threadgroup_position_in_grid ]],     \
+    uint block_dim [[ threads_per_threadgroup ]]        \
 ) {                                                     \
     constant size_t *strides = {};                      \
     const bool STRIDED = false;                         \
@@ -622,12 +622,12 @@ kernel void NAME##_strided(                             \
     constant uint &num_dims,                            \
     constant size_t *dims,                              \
     constant size_t *strides,                           \
-    constant ushort &el_per_block,                      \
+    constant uint &el_per_block,                        \
     device const T *src,                                \
     device T *dst,                                      \
-    ushort tid [[ thread_index_in_threadgroup ]],       \
-    ushort dst_id [[ threadgroup_position_in_grid ]],   \
-    ushort block_dim [[ threads_per_threadgroup ]]      \
+    uint tid [[ thread_index_in_threadgroup ]],         \
+    uint dst_id [[ threadgroup_position_in_grid ]],     \
+    uint block_dim [[ threads_per_threadgroup ]]        \
 ) {                                                     \
     const bool STRIDED = true;                          \
     switch (max_shared_mem<T>(block_dim)) {             \
@@ -661,12 +661,12 @@ METAL_FUNC void reduce(
     constant uint &num_dims,
     constant size_t *dims,
     constant size_t *strides,
-    constant ushort &el_per_block,
+    constant uint &el_per_block,
     device const T *src,
     device uint *dst,
     threadgroup indexed<T> shared[BLOCKSIZE],
-    ushort tid [[ thread_index_in_threadgroup ]],
-    ushort dst_id [[ threadgroup_position_in_grid ]]
+    uint tid [[ thread_index_in_threadgroup ]],
+    uint dst_id [[ threadgroup_position_in_grid ]]
 ) {
     using I = indexed<T>;
     loader<T, indexed<T>, ReductionOp, BLOCKSIZE, STRIDED> load;
@@ -718,12 +718,12 @@ kernel void NAME(                                       \
     constant uint &src_numel,                           \
     constant uint &num_dims,                            \
     constant size_t *dims,                              \
-    constant ushort &el_per_block,                      \
+    constant uint &el_per_block,                        \
     device const T *src,                                \
     device uint *dst,                                   \
-    ushort tid [[ thread_index_in_threadgroup ]],       \
-    ushort dst_id [[ threadgroup_position_in_grid ]],   \
-    ushort block_dim [[ threads_per_threadgroup ]]      \
+    uint tid [[ thread_index_in_threadgroup ]],         \
+    uint dst_id [[ threadgroup_position_in_grid ]],     \
+    uint block_dim [[ threads_per_threadgroup ]]        \
 ) {                                                     \
     constant size_t *strides = {};                      \
     const bool STRIDED = false;                         \
@@ -749,12 +749,12 @@ kernel void NAME##_strided(                             \
     constant uint &num_dims,                            \
     constant size_t *dims,                              \
     constant size_t *strides,                           \
-    constant ushort &el_per_block,                      \
+    constant uint &el_per_block,                        \
     device const T *src,                                \
     device uint *dst,                                   \
-    ushort tid [[ thread_index_in_threadgroup ]],       \
-    ushort dst_id [[ threadgroup_position_in_grid ]],   \
-    ushort block_dim [[ threads_per_threadgroup ]]      \
+    uint tid [[ thread_index_in_threadgroup ]],         \
+    uint dst_id [[ threadgroup_position_in_grid ]],     \
+    uint block_dim [[ threads_per_threadgroup ]]        \
 ) {                                                     \
     const bool STRIDED = true;                          \
     const bool INDEXED = true;                          \
@@ -831,7 +831,7 @@ struct MDReduceOp {
         MD<T> bigger_m = a_bigger ? a : b;
         MD<T> smaller_m = a_bigger ? b : a;
         MD<T> res;
-        res.d = bigger_m.d + smaller_m.d * fast_exp(smaller_m.m - bigger_m.m);
+        res.d = bigger_m.d + smaller_m.d * exp(smaller_m.m - bigger_m.m);
         res.m = bigger_m.m;
         return res;
     }
@@ -862,14 +862,14 @@ struct finalize_softmax {
 template<typename T, ushort BLOCKSIZE>
 METAL_FUNC void softmax(
     constant uint &src_numel,
-    constant ushort &el_per_block,
+    constant uint &el_per_block,
     device const T *src,
     device T *dst,
     threadgroup MD<T> shared[BLOCKSIZE],
     threadgroup MD<T> &md_total,
 
-    ushort tid [[ thread_index_in_threadgroup ]],
-    ushort dst_id [[ threadgroup_position_in_grid ]]
+    uint tid [[ thread_index_in_threadgroup ]],
+    uint dst_id [[ threadgroup_position_in_grid ]]
 ) {
     using MDReduceOp = MDReduceOp<T>;
 
@@ -922,12 +922,12 @@ case N: {                                               \
 #define impl_softmax_inner(NAME, T)                     \
 kernel void NAME(                                       \
     constant uint &src_numel,                           \
-    constant ushort &el_per_block,                      \
+    constant uint &el_per_block,                        \
     device const T *src,                                \
     device T *dst,                                      \
-    ushort tid [[ thread_index_in_threadgroup ]],       \
-    ushort dst_id [[ threadgroup_position_in_grid ]],   \
-    ushort block_dim [[ threads_per_threadgroup ]]      \
+    uint tid [[ thread_index_in_threadgroup ]],         \
+    uint dst_id [[ threadgroup_position_in_grid ]],     \
+    uint block_dim [[ threads_per_threadgroup ]]        \
 ) {                                                     \
     switch (max_shared_mem<T>(block_dim)) {             \
         softmax_case(T, 1024);                          \
