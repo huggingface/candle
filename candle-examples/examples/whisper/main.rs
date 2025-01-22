@@ -219,16 +219,21 @@ impl Decoder {
         let n_start_tokens = tokens.len();
         for i in 0..sample_len {
             let tokens_t = if tokens.last() == Some(&self.eot_token) {
+                // When configured to output word-level timestamps, the OpenAI inference
+                // implementation passes a timestamp token with the nearest second in the
+                // last pass. While the predicted token from this pass is not included in the
+                // output transcript, it impacts the word/token-level timestamps.
                 let nearest_second = n_frames * m::HOP_LENGTH / m::SAMPLE_RATE;
+                let timestamp_token = self
+                    .tokenizer
+                    .token_to_id(&format!("<|{}.00|>", nearest_second));
+
                 Tensor::new(
                     tokens
                         .iter()
                         .map(|t| {
                             (*t == self.eot_token)
-                                .then(|| {
-                                    self.tokenizer
-                                        .token_to_id(&format!("<|{}.00|>", nearest_second))
-                                })
+                                .then(|| timestamp_token)
                                 .flatten()
                                 .unwrap_or(*t)
                         })
@@ -236,8 +241,13 @@ impl Decoder {
                     mel.device(),
                 )?
             } else if i == 1 && self.dtw_timestamps {
-                let _ = tokens.pop();
-                tokens.push(self.no_timestamps_token);
+                // The OpenAI inference implementation does not include the no_timestamps
+                // token in the initial pass. Instead, it is given in the second pass. This
+                // has no apparent impact on the transcript, but results in slightly different
+                // word/token-level timestamps.
+                if let Some(token) = tokens.last_mut() {
+                    *token = self.no_timestamps_token;
+                }
                 Tensor::new(tokens.as_slice(), mel.device())?
             } else {
                 Tensor::new(tokens.as_slice(), mel.device())?
@@ -284,6 +294,9 @@ impl Decoder {
                     .map(|(i, _)| i as u32)
                     .unwrap()
             };
+            // For word-level timestamps, the OpenAI inference implementation does not
+            // terminate on prediction of the end-of-transcript token, instead performing
+            // a final pass using a timestamp token for the nearest second of the segment.
             if self.dtw_timestamps
                 && (tokens.last() == Some(&self.eot_token)
                     || tokens.len() > model.config().max_target_positions)
