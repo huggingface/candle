@@ -248,6 +248,9 @@ impl Tensor {
         if !self.is_contiguous() || !src.is_contiguous() {
             Err(Error::RequiresContiguous { op: "slice-set" }.bt())?
         }
+        if self.same_storage(src) {
+            crate::bail!("cannot use slice_set when self and src share their storage")
+        }
         if self.dtype() != src.dtype() {
             Err(Error::DTypeMismatchBinaryOp {
                 lhs: self.dtype(),
