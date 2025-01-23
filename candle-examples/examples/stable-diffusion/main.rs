@@ -476,6 +476,7 @@ fn mask_preprocess<T: AsRef<std::path::Path>>(path: T) -> anyhow::Result<Tensor>
 
 /// Generates the mask latents, scaled mask and mask_4 for inpainting. Returns a tuple of None if inpainting is not
 /// being used.
+#[allow(clippy::too_many_arguments)]
 fn inpainting_tensors(
     sd_version: StableDiffusionVersion,
     mask_path: Option<String>,
@@ -493,12 +494,10 @@ fn inpainting_tensors(
             let inpaint_mask = mask_path.ok_or_else(|| {
                 anyhow::anyhow!("An inpainting model was requested but mask-path is not provided.")
             })?;
-
             // Get the mask image with shape [1, 1, 128, 128]
             let mask = mask_preprocess(inpaint_mask)?
-                .to_device(&device)?
+                .to_device(device)?
                 .to_dtype(dtype)?;
-
             // Generate the masked image from the image and the mask with shape [1, 3, 1024, 1024]
             let xmask = mask.le(0.5)?.repeat(&[1, 3, 1, 1])?.to_dtype(dtype)?;
             let image = &image
@@ -506,18 +505,15 @@ fn inpainting_tensors(
                     "An inpainting model was requested but img2img which is used as the input image is not provided."
                 ))?;
             let masked_img = (image * xmask)?;
-
             // Scale down the mask
             let shape = masked_img.shape();
             let (w, h) = (shape.dims()[3] / 8, shape.dims()[2] / 8);
             let mask = mask.interpolate2d(w, h)?;
-
             // shape: [1, 4, 128, 128]
             let mask_latents = vae.encode(&masked_img)?;
-            let mask_latents = (mask_latents.sample()? * vae_scale)?.to_device(&device)?;
+            let mask_latents = (mask_latents.sample()? * vae_scale)?.to_device(device)?;
 
             let mask_4 = mask.as_ref().repeat(&[1, 4, 1, 1])?;
-
             let (mask_latents, mask) = if use_guide_scale {
                 (
                     Tensor::cat(&[&mask_latents, &mask_latents], 0)?,
@@ -526,7 +522,6 @@ fn inpainting_tensors(
             } else {
                 (mask_latents, mask)
             };
-
             Ok((Some(mask_latents), Some(mask), Some(mask_4)))
         }
         _ => Ok((None, None, None)),
