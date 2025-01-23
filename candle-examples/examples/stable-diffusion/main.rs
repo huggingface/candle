@@ -4,8 +4,8 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
-use std::ops::Div;
 use candle_transformers::models::stable_diffusion;
+use std::ops::Div;
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, IndexOp, Module, Tensor, D};
@@ -158,7 +158,13 @@ impl StableDiffusionVersion {
 
     fn unet_file(&self, use_f16: bool) -> &'static str {
         match self {
-            Self::V1_5 | Self::V1_5Inpaint | Self::V2_1 | Self::V2Inpaint | Self::Xl | Self::XlInpaint | Self::Turbo => {
+            Self::V1_5
+            | Self::V1_5Inpaint
+            | Self::V2_1
+            | Self::V2Inpaint
+            | Self::Xl
+            | Self::XlInpaint
+            | Self::Turbo => {
                 if use_f16 {
                     "unet/diffusion_pytorch_model.fp16.safetensors"
                 } else {
@@ -170,7 +176,13 @@ impl StableDiffusionVersion {
 
     fn vae_file(&self, use_f16: bool) -> &'static str {
         match self {
-            Self::V1_5 | Self::V1_5Inpaint | Self::V2_1 | Self::V2Inpaint | Self::Xl | Self::XlInpaint | Self::Turbo => {
+            Self::V1_5
+            | Self::V1_5Inpaint
+            | Self::V2_1
+            | Self::V2Inpaint
+            | Self::Xl
+            | Self::XlInpaint
+            | Self::Turbo => {
                 if use_f16 {
                     "vae/diffusion_pytorch_model.fp16.safetensors"
                 } else {
@@ -182,7 +194,13 @@ impl StableDiffusionVersion {
 
     fn clip_file(&self, use_f16: bool) -> &'static str {
         match self {
-            Self::V1_5 | Self::V1_5Inpaint | Self::V2_1 | Self::V2Inpaint | Self::Xl | Self::XlInpaint | Self::Turbo => {
+            Self::V1_5
+            | Self::V1_5Inpaint
+            | Self::V2_1
+            | Self::V2Inpaint
+            | Self::Xl
+            | Self::XlInpaint
+            | Self::Turbo => {
                 if use_f16 {
                     "text_encoder/model.fp16.safetensors"
                 } else {
@@ -194,7 +212,13 @@ impl StableDiffusionVersion {
 
     fn clip2_file(&self, use_f16: bool) -> &'static str {
         match self {
-            Self::V1_5 | Self::V1_5Inpaint | Self::V2_1 | Self::V2Inpaint | Self::Xl | Self::XlInpaint | Self::Turbo => {
+            Self::V1_5
+            | Self::V1_5Inpaint
+            | Self::V2_1
+            | Self::V2Inpaint
+            | Self::Xl
+            | Self::XlInpaint
+            | Self::Turbo => {
                 if use_f16 {
                     "text_encoder_2/model.fp16.safetensors"
                 } else {
@@ -219,11 +243,13 @@ impl ModelFile {
                 let (repo, path) = match self {
                     Self::Tokenizer => {
                         let tokenizer_repo = match version {
-                            StableDiffusionVersion::V1_5 | StableDiffusionVersion::V2_1 |
-                            StableDiffusionVersion::V1_5Inpaint | StableDiffusionVersion::V2Inpaint => {
-                                "openai/clip-vit-base-patch32"
-                            }
-                            StableDiffusionVersion::Xl | StableDiffusionVersion::XlInpaint | StableDiffusionVersion::Turbo => {
+                            StableDiffusionVersion::V1_5
+                            | StableDiffusionVersion::V2_1
+                            | StableDiffusionVersion::V1_5Inpaint
+                            | StableDiffusionVersion::V2Inpaint => "openai/clip-vit-base-patch32",
+                            StableDiffusionVersion::Xl
+                            | StableDiffusionVersion::XlInpaint
+                            | StableDiffusionVersion::Turbo => {
                                 // This seems similar to the patch32 version except some very small
                                 // difference in the split regex.
                                 "openai/clip-vit-large-patch14"
@@ -438,7 +464,8 @@ fn mask_preprocess<T: AsRef<std::path::Path>>(path: T) -> anyhow::Result<Tensor>
         new_width,
         new_height,
         image::imageops::FilterType::CatmullRom,
-    ).into_raw();
+    )
+    .into_raw();
     let mask = Tensor::from_vec(img, (new_height as usize, new_width as usize), &Device::Cpu)?
         .unsqueeze(0)?
         .to_dtype(DType::F32)?
@@ -457,17 +484,20 @@ fn inpainting_tensors(
     use_guide_scale: bool,
     vae: &AutoEncoderKL,
     image: Option<Tensor>,
-    vae_scale: f64
+    vae_scale: f64,
 ) -> Result<(Option<Tensor>, Option<Tensor>, Option<Tensor>)> {
     match sd_version {
-        StableDiffusionVersion::XlInpaint | StableDiffusionVersion::V2Inpaint | StableDiffusionVersion::V1_5Inpaint => {
-            let inpaint_mask = mask_path
-                .ok_or_else(|| anyhow::anyhow!(
-                    "An inpainting model was requested but mask-path is not provided."
-                ))?;
+        StableDiffusionVersion::XlInpaint
+        | StableDiffusionVersion::V2Inpaint
+        | StableDiffusionVersion::V1_5Inpaint => {
+            let inpaint_mask = mask_path.ok_or_else(|| {
+                anyhow::anyhow!("An inpainting model was requested but mask-path is not provided.")
+            })?;
 
             // Get the mask image with shape [1, 1, 128, 128]
-            let mask = mask_preprocess(inpaint_mask)?.to_device(&device)?.to_dtype(dtype)?;
+            let mask = mask_preprocess(inpaint_mask)?
+                .to_device(&device)?
+                .to_dtype(dtype)?;
 
             // Generate the masked image from the image and the mask with shape [1, 3, 1024, 1024]
             let xmask = mask.le(0.5)?.repeat(&[1, 3, 1, 1])?.to_dtype(dtype)?;
@@ -489,14 +519,17 @@ fn inpainting_tensors(
             let mask_4 = mask.as_ref().repeat(&[1, 4, 1, 1])?;
 
             let (mask_latents, mask) = if use_guide_scale {
-                (Tensor::cat(&[&mask_latents, &mask_latents], 0)?, Tensor::cat(&[&mask, &mask], 0)?)
+                (
+                    Tensor::cat(&[&mask_latents, &mask_latents], 0)?,
+                    Tensor::cat(&[&mask, &mask], 0)?,
+                )
             } else {
                 (mask_latents, mask)
             };
 
             Ok((Some(mask_latents), Some(mask), Some(mask_4)))
-        },
-        _ => Ok((None, None, None))
+        }
+        _ => Ok((None, None, None)),
     }
 }
 
@@ -595,7 +628,9 @@ fn run(args: Args) -> Result<()> {
     let use_guide_scale = guidance_scale > 1.0;
 
     let which = match sd_version {
-        StableDiffusionVersion::Xl | StableDiffusionVersion::XlInpaint | StableDiffusionVersion::Turbo => vec![true, false],
+        StableDiffusionVersion::Xl
+        | StableDiffusionVersion::XlInpaint
+        | StableDiffusionVersion::Turbo => vec![true, false],
         _ => vec![true],
     };
     let text_embeddings = which
@@ -629,7 +664,9 @@ fn run(args: Args) -> Result<()> {
     let (image, init_latent_dist) = match &img2img {
         None => (None, None),
         Some(image) => {
-            let image = image_preprocess(image)?.to_device(&device)?.to_dtype(dtype)?;
+            let image = image_preprocess(image)?
+                .to_device(&device)?
+                .to_dtype(dtype)?;
             (Some(image.clone()), Some(vae.encode(&image)?))
         }
     };
@@ -637,8 +674,10 @@ fn run(args: Args) -> Result<()> {
     println!("Building the unet.");
     let unet_weights = ModelFile::Unet.get(unet_weights, sd_version, use_f16)?;
     let in_channels = match sd_version {
-        StableDiffusionVersion::XlInpaint | StableDiffusionVersion::V2Inpaint | StableDiffusionVersion::V1_5Inpaint => 9,
-        _ => 4
+        StableDiffusionVersion::XlInpaint
+        | StableDiffusionVersion::V2Inpaint
+        | StableDiffusionVersion::V1_5Inpaint => 9,
+        _ => 4,
     };
     let unet = sd_config.build_unet(unet_weights, &device, in_channels, use_flash_attn, dtype)?;
 
@@ -658,8 +697,16 @@ fn run(args: Args) -> Result<()> {
         StableDiffusionVersion::Turbo => 0.13025,
     };
 
-    let (mask_latents, mask, mask_4) =
-        inpainting_tensors(sd_version, mask_path, dtype, &device, use_guide_scale, &vae, image, vae_scale)?;
+    let (mask_latents, mask, mask_4) = inpainting_tensors(
+        sd_version,
+        mask_path,
+        dtype,
+        &device,
+        use_guide_scale,
+        &vae,
+        image,
+        vae_scale,
+    )?;
 
     for idx in 0..num_samples {
         let timesteps = scheduler.timesteps().to_vec();
@@ -700,13 +747,20 @@ fn run(args: Args) -> Result<()> {
 
             let latent_model_input = scheduler.scale_model_input(latent_model_input, timestep)?;
 
-            let latent_model_input =
-                match sd_version {
-                    StableDiffusionVersion::XlInpaint | StableDiffusionVersion::V2Inpaint | StableDiffusionVersion::V1_5Inpaint => {
-                        Tensor::cat(&[&latent_model_input, mask.as_ref().unwrap(), mask_latents.as_ref().unwrap()], 1)?
-                    },
-                    _ => latent_model_input
-                }.to_device(&device)?;
+            let latent_model_input = match sd_version {
+                StableDiffusionVersion::XlInpaint
+                | StableDiffusionVersion::V2Inpaint
+                | StableDiffusionVersion::V1_5Inpaint => Tensor::cat(
+                    &[
+                        &latent_model_input,
+                        mask.as_ref().unwrap(),
+                        mask_latents.as_ref().unwrap(),
+                    ],
+                    1,
+                )?,
+                _ => latent_model_input,
+            }
+            .to_device(&device)?;
 
             let noise_pred =
                 unet.forward(&latent_model_input, timestep as f64, &text_embeddings)?;
@@ -731,7 +785,7 @@ fn run(args: Args) -> Result<()> {
                     .as_ref()
                     .unwrap()
                     .get_on_dim(0, 0)? // shape: [4, H, W]
-                    .unsqueeze(0)?;   // shape: [1, 4, H, W]
+                    .unsqueeze(0)?; // shape: [1, 4, H, W]
 
                 latents = ((&latents * mask)? + &latent_to_keep * (1.0 - mask))?;
             }
