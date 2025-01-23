@@ -28,12 +28,11 @@ extern "C" __global__ void FN_NAME(  \
     } \
 } \
 
-#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ >= 800 || (__CUDA_ARCH__ >= 530 && __CUDA_ARCH__ < 800)
 AFFINE_OP(__nv_bfloat16, affine_bf16)
 #endif
 
 #if __CUDA_ARCH__ >= 530
-AFFINE_OP(__nv_bfloat16, affine_bf16)
 AFFINE_OP(__half, affine_f16)
 #endif
 

@@ -61,68 +61,8 @@ __device__ __forceinline__ T silu_fwd(T x) {
 }
 
 template<typename T>
-__device__ __forceinline__ T sigmoid_fwd(T x);
-
-__device__ __forceinline__ __nv_bfloat16 exp_bf16(__nv_bfloat16 x) {
-    // Convert to double for maximum mantissa precision
-    double x_double = static_cast<double>(__bfloat162float(x));
-    
-    // Compute exp in double precision to preserve mantissa bits
-    double exp_result = exp(x_double);
-    
-    // Careful conversion back to preserve significant bits
-    return __float2bfloat16(static_cast<float>(exp_result));
-}
-
-__device__ __forceinline__ __half exp_halft(__half x) {
-    // Convert to double for maximum mantissa precision
-    double x_double = static_cast<double>(__half2float(x));
-    
-    // Compute exp in double precision to preserve mantissa bits
-    double exp_result = exp(x_double);
-    
-    // Careful conversion back to half
-    return __float2half(static_cast<float>(exp_result));
-}
-
-template<>
-__device__ __forceinline__ __nv_bfloat16 sigmoid_fwd<__nv_bfloat16>(__nv_bfloat16 x) {
-#if __CUDA_ARCH__ >= 800
-    return x / (static_cast<T>(1) + expg(-x));
-#elif __CUDA_ARCH__ >= 530
-    __nv_bfloat16 exp_neg_x = exp_bf16(__nv_bfloat16(-x));
-    __nv_bfloat16 one = __float2bfloat16(1.0f);
-    return recipg(one + exp_neg_x);
-#else
-    // Fallback using float computation
-    float x_float = __bfloat162float(x);
-    float result = 1.0f / (1.0f + expf(-x_float));
-    return __float2bfloat16(result);
-#endif
-}
-
-template<>
-__device__ __forceinline__ __half sigmoid_fwd<__half>(__half x) {
-#if __CUDA_ARCH__ >= 530
-      __half exp_neg_x = exp_halft(__hneg(x));
-      __half one = __float2half(1.0f);
-      return recipg(one + exp_neg_x);
-#else
-    // Fallback using float computation
-    float x_float = __half2float(x);
-    float result = 1.0f / (1.0f + expf(-x_float));
-    return __float2half(result);
-#endif
-}
-
-template<>
-__device__ __forceinline__ float sigmoid_fwd<float>(float x) {
-    return 1.0f / (1.0f + expf(-x));
-}
-
-template<>
-__device__ __forceinline__ double sigmoid_fwd<double>(double x) {
-    return 1.0 / (1.0 + exp(-x));
+__device__ __forceinline__ T sigmoid_fwd(T x) {
+    return recipg(static_cast<T>(1) + expg(-x));
 }
 
 #define UNARY_OP1(TYPENAME, FN_NAME, FUNC) \
@@ -156,104 +96,12 @@ __device__ T sign_(T t) {
   return static_cast<T>(t > static_cast<T>(0)) - static_cast<T>(t < static_cast<T>(0));
 }
 
-
-#if __CUDA_ARCH__ >= 800
-UNARY_OP(__nv_bfloat16, usilu_bf16, silu_fwd(x))
-UNARY_OP(__nv_bfloat16, ugelu_bf16, gelu_fwd(x))
-UNARY_OP(__nv_bfloat16, ugelu_erf_bf16, gelu_erf_fwd(x))
-UNARY_OP(__nv_bfloat16, urelu_bf16, relu_fwd(x))
-UNARY_OP1(__nv_bfloat16, uelu_bf16, elu_fwd(x, param))
-UNARY_OP(__nv_bfloat16, usigmoid_bf16, sigmoid_fwd(x))
-UNARY_OP(__nv_bfloat16, ulog_bf16, logg(x))
-
- 
-#elif __CUDA_ARCH__ >= 530
-template <typename T>
-__device__ __forceinline__ T silu_fwd_fallback(T x) {
-    float x_float = __bfloat162float(x);
-    float exp_neg_x = expf(-x_float);
-
-    float sigmoid = 1.0f / (1.0f + exp_neg_x);
-    float result = x_float * sigmoid;
-}
-
-__device__ __nv_bfloat16 gelu_fwd_fallback(__nv_bfloat16 x) {
-    __nv_bfloat16 half = __float2bfloat16(0.5f);
-    __nv_bfloat16 one = __float2bfloat16(1.0f);
-    __nv_bfloat16 tanh_val = tanhg(x);
-    return half * x * (one + tanh_val);
-}
-
-__device__ __nv_bfloat16 gelu_erf_fwd_fallback(__nv_bfloat16 x) {
-    // Convert to float for computation on older architectures
-    float x_float = __bfloat162float(x);
-    float result = x_float * normcdfg(x_float);
-    return __float2bfloat16(result);
-}
-
-__device__ __forceinline__ __nv_bfloat16 sigmoid_fwd_fallback(__nv_bfloat16 x) {
-    // Fallback using float32 computation
-    float x_float = __bfloat162float(x);
-    float result = 1.0f / (1.0f + expf(-x_float));
-    return __float2bfloat16(result);
-}
-
-__device__ __forceinline__ __nv_bfloat16 elu_fwd_fallback(__nv_bfloat16 x, __nv_bfloat16 alpha) {
-    // Fallback implementation using float32
-    float x_float = __bfloat162float(x);
-    float alpha_float = __bfloat162float(alpha);
-    
-    if (x_float > 0.0f) {
-        return x;
-    }
-    
-    float result = alpha_float * (expf(x_float) - 1.0f);
-    return __float2bfloat16(result);
-}
-
-__device__ __forceinline__ __nv_bfloat16 logg_fallback(__nv_bfloat16 x) {
-    float x_float = __bfloat162float(x);
-    float result = logf(fabsf(x_float)); 
-    return __float2bfloat16(result);
-}
-
-__device__ __forceinline__ __nv_bfloat16 negate_bfloat16(__nv_bfloat16 x) {
-    union {
-        __nv_bfloat16 bf16_val;
-        unsigned short bits;
-    } u;
-    u.bf16_val = x;
-    // Flip the sign bit
-    u.bits ^= 0x8000;
-    return u.bf16_val;
-}
-
-__device__ __forceinline__ __nv_bfloat16 abs_bfloat16(__nv_bfloat16 x) {
-    union {
-        __nv_bfloat16 bf16_val;
-        unsigned short bits;
-    } u;
-    u.bf16_val = x;
-    // Clear the sign bit (most significant bit)
-    u.bits &= 0x7FFF;
-    return u.bf16_val;
-}
-
-__device__ __forceinline__ __nv_bfloat16 sqrt_bfloat16_fallback(__nv_bfloat16 x) {
-    float x_float = __bfloat162float(x);
-    
-    // Take absolute value before computing square root
-    float abs_x = fabsf(x_float);
-    float result = sqrtf(abs_x);
-    
-    return __float2bfloat16(result);
-}
-
+#if __CUDA_ARCH__ >= 800 || (__CUDA_ARCH__ >= 530 && __CUDA_ARCH__ < 800)
 UNARY_OP(__nv_bfloat16, ucopy_bf16, x)
 UNARY_OP(__nv_bfloat16, uneg_bf16, -x)
 UNARY_OP(__nv_bfloat16, urecip_bf16, recipg(x))
 UNARY_OP(__nv_bfloat16, uexp_bf16, expg(x))
-UNARY_OP(__nv_bfloat16, ulog_bf16, logg_fallback(x)) ///
+UNARY_OP(__nv_bfloat16, ulog_bf16, logg(x))
 UNARY_OP(__nv_bfloat16, usin_bf16, sing(x))
 UNARY_OP(__nv_bfloat16, ucos_bf16, cosg(x))
 UNARY_OP(__nv_bfloat16, utanh_bf16, tanhg(x))
@@ -264,16 +112,18 @@ UNARY_OP(__nv_bfloat16, uround_bf16, roundg(x))
 UNARY_OP(__nv_bfloat16, unormcdf_bf16, normcdfg(x))
 UNARY_OP(__nv_bfloat16, uabs_bf16, absg(x))
 UNARY_OP(__nv_bfloat16, usqr_bf16, x*x)
-UNARY_OP(__nv_bfloat16, usqrt_bf16, sqrt_bfloat16_fallback(x))
-UNARY_OP(__nv_bfloat16, ugelu_bf16, gelu_fwd_fallback(x))
-UNARY_OP(__nv_bfloat16, ugelu_erf_bf16, gelu_erf_fwd_fallback(x))
-UNARY_OP(__nv_bfloat16, urelu_bf16, __float2bfloat16(relu_fwd(__bfloat162float(x))))
-UNARY_OP1(__nv_bfloat16, uelu_bf16, elu_fwd_fallback(x, param))
-UNARY_OP(__nv_bfloat16, usilu_bf16,  silu_fwd_fallback(x))
+UNARY_OP(__nv_bfloat16, usqrt_bf16, sqrtg(x))
+UNARY_OP(__nv_bfloat16, ugelu_bf16, gelu_fwd(x))
+UNARY_OP(__nv_bfloat16, ugelu_erf_bf16, gelu_erf_fwd(x))
+UNARY_OP(__nv_bfloat16, urelu_bf16, relu_fwd(x))
+UNARY_OP1(__nv_bfloat16, uelu_bf16, elu_fwd(x, param))
+UNARY_OP(__nv_bfloat16, usilu_bf16, silu_fwd(x))
 UNARY_OP1(__nv_bfloat16, upowf_bf16, powg(x, param))
 UNARY_OP(__nv_bfloat16, usign_bf16, sign_(x))
 UNARY_OP(__nv_bfloat16, usigmoid_bf16, sigmoid_fwd(x))
+#endif
 
+#if __CUDA_ARCH__ >= 530
 UNARY_OP(__half, ucopy_f16, x)
 UNARY_OP(__half, uneg_f16, -x)
 UNARY_OP(__half, urecip_f16, recipg(x))

@@ -37,13 +37,11 @@ COPY2D_OP(uint32_t, copy2d_u32)
 COPY2D_OP(int64_t, copy2d_i64)
 
 #if __CUDA_ARCH__ >= 530
-#include <cuda_bf16.h>
 extern "C" __global__ void fill_f16(__half *buf, __half value, const size_t numel) { fill_with(buf, value, numel); }
 COPY2D_OP(__half, copy2d_f16)
-COPY2D_OP(__nv_bfloat16, copy2d_bf16)
 #endif
 
-#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ >= 800 || (__CUDA_ARCH__ >= 530 && __CUDA_ARCH__ < 800)
 #include <cuda_bf16.h>
 extern "C" __global__ void fill_bf16(__nv_bfloat16 *buf, __nv_bfloat16 value, const size_t numel) { fill_with(buf, value, numel); }
 COPY2D_OP(__nv_bfloat16, copy2d_bf16)
