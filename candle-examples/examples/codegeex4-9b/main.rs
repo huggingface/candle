@@ -1,9 +1,8 @@
-use candle_transformers::models::codegeex4_9b::*;
-use clap::Parser;
-
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::models::codegeex4_9b::*;
+use clap::Parser;
 use hf_hub::{Repo, RepoType};
 use tokenizers::Tokenizer;
 
@@ -32,7 +31,8 @@ impl TextGeneration {
         device: &Device,
         dtype: DType,
     ) -> Self {
-        let logits_processor = LogitsProcessor::new(seed, temp, top_p);
+        let logits_processor =
+            LogitsProcessor::new(args.seed, Some(args.temperature), Some(args.top_p));
         Self {
             model,
             tokenizer,
@@ -126,34 +126,35 @@ impl TextGeneration {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Run on CPU rather than on GPU.
-    #[arg(name = "cache", short, long, default_value = ".")]
-    cache_path: String,
+    #[arg(name = "cache", short)]
+    cache_path: Option<String>,
 
+    /// Run on CPU rather than on GPU.
     #[arg(long)]
     cpu: bool,
 
     /// Display the token for the specified prompt.
     #[arg(long)]
-    verbose_prompt: bool,
-
-    #[arg(long)]
     prompt: String,
 
-    /// The temperature used to generate samples.
+    /// Display the tokens for the specified prompt and outputs.
     #[arg(long)]
-    temperature: Option<f64>,
+    verbose: bool,
+
+    /// The temperature used to generate samples.
+    #[arg(long, default_value_t = 0.95)]
+    temperature: f64,
 
     /// Nucleus sampling probability cutoff.
-    #[arg(long)]
-    top_p: Option<f64>,
+    #[arg(long, default_value_t = 0.8)]
+    top_p: f64,
 
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
     seed: u64,
 
     /// The length of the sample to generate (in tokens).
-    #[arg(long, short = 'n', default_value_t = 5000)]
+    #[arg(long, short = 'n', default_value_t = 8192)]
     sample_len: usize,
 
     #[arg(long)]
@@ -163,20 +164,19 @@ struct Args {
     revision: Option<String>,
 
     #[arg(long)]
-    weight_file: Option<String>,
+    weight_path: Option<String>,
 
     #[arg(long)]
     tokenizer: Option<String>,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
-    #[arg(long, default_value_t = 1.1)]
+    #[arg(long, default_value_t = 1.2)]
     repeat_penalty: f32,
 
     /// The context size to consider for the repeat penalty.
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
 }
-
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     println!(
@@ -188,9 +188,7 @@ fn main() -> anyhow::Result<()> {
     );
     println!(
         "temp: {:.2} repeat-penalty: {:.2} repeat-last-n: {}",
-        args.temperature.unwrap_or(0.95),
-        args.repeat_penalty,
-        args.repeat_last_n
+        args.temperature, args.repeat_penalty, args.repeat_last_n
     );
 
     let start = std::time::Instant::now();
@@ -215,15 +213,22 @@ fn main() -> anyhow::Result<()> {
             .get("tokenizer.json")
             .map_err(anyhow::Error::msg)?,
     };
-    let filenames = match args.weight_file {
-        Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+    let config_filename = match &args.weight_path {
+        Some(path) => std::path::Path::new(path).join("config.json"),
+        _ => repo.get("config.json")?,
+    };
+
+    let filenames = match &args.weight_path {
+        Some(path) => {
+            candle_examples::hub_load_local_safetensors(path, "model.safetensors.index.json")?
+        }
+        _ => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).expect("Tokenizer Error");
 
     let start = std::time::Instant::now();
-    let config = Config::codegeex4();
+    let config: Config = serde_json::from_slice(&std::fs::read(config_filename)?)?;
     let device = candle_examples::device(args.cpu)?;
     let dtype = if device.is_cuda() {
         DType::BF16
