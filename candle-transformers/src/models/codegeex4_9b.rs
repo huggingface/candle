@@ -10,6 +10,10 @@ use crate::models::with_tracing::{linear_b as linear, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
+fn default_one() -> usize {
+    1
+}
+
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct Config {
     pub num_layers: usize,
@@ -31,6 +35,7 @@ pub struct Config {
     pub apply_query_key_layer_scaling: bool,
     pub attention_softmax_in_fp32: bool,
     pub fp32_residual_connection: bool,
+    #[serde(default = "default_one")]
     pub rope_ratio: usize,
 }
 
