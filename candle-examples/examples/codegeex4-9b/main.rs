@@ -13,7 +13,7 @@ struct TextGeneration {
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
-    verbose_prompt: bool,
+    verbose: bool,
     dtype: DType,
 }
 
@@ -23,23 +23,22 @@ impl TextGeneration {
         model: Model,
         tokenizer: Tokenizer,
         seed: u64,
-        temp: Option<f64>,
-        top_p: Option<f64>,
+        temp: f64,
+        top_p: f64,
         repeat_penalty: f32,
         repeat_last_n: usize,
-        verbose_prompt: bool,
+        verbose: bool,
         device: &Device,
         dtype: DType,
     ) -> Self {
-        let logits_processor =
-            LogitsProcessor::new(args.seed, Some(args.temperature), Some(args.top_p));
+        let logits_processor = LogitsProcessor::new(seed, Some(temp), Some(top_p));
         Self {
             model,
             tokenizer,
             logits_processor,
             repeat_penalty,
             repeat_last_n,
-            verbose_prompt,
+            verbose,
             device: device.clone(),
             dtype,
         }
@@ -52,7 +51,7 @@ impl TextGeneration {
         if tokens.is_empty() {
             panic!("Empty prompts are not supported in the chatglm model.")
         }
-        if self.verbose_prompt {
+        if self.verbose {
             for (token, id) in tokens.get_tokens().iter().zip(tokens.get_ids().iter()) {
                 let token = token.replace('▁', " ").replace("<0x0A>", "\n");
                 println!("{id:7} -> '{token}'");
@@ -101,7 +100,7 @@ impl TextGeneration {
                 .tokenizer
                 .decode(&[next_token], true)
                 .expect("Token error");
-            if self.verbose_prompt {
+            if self.verbose {
                 println!(
                     "[Count: {}] [Raw Token: {}] [Decode Token: {}]",
                     count, next_token, token
@@ -192,11 +191,14 @@ fn main() -> anyhow::Result<()> {
     );
 
     let start = std::time::Instant::now();
-    println!("cache path {}", args.cache_path);
-    let api = hf_hub::api::sync::ApiBuilder::from_cache(hf_hub::Cache::new(args.cache_path.into()))
-        .build()
-        .map_err(anyhow::Error::msg)?;
-
+    let api = match args.cache_path.as_ref() {
+        None => hf_hub::api::sync::Api::new()?,
+        Some(path) => {
+            hf_hub::api::sync::ApiBuilder::from_cache(hf_hub::Cache::new(path.to_string().into()))
+                .build()
+                .map_err(anyhow::Error::msg)?
+        }
+    };
     let model_id = match args.model_id {
         Some(model_id) => model_id.to_string(),
         None => "THUDM/codegeex4-all-9b".to_string(),
@@ -215,7 +217,7 @@ fn main() -> anyhow::Result<()> {
     };
     let config_filename = match &args.weight_path {
         Some(path) => std::path::Path::new(path).join("config.json"),
-        _ => repo.get("config.json")?,
+        None => repo.get("config.json")?,
     };
 
     let filenames = match &args.weight_path {
@@ -248,7 +250,7 @@ fn main() -> anyhow::Result<()> {
         args.top_p,
         args.repeat_penalty,
         args.repeat_last_n,
-        args.verbose_prompt,
+        args.verbose,
         &device,
         dtype,
     );
