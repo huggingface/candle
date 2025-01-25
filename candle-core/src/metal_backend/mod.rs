@@ -1245,6 +1245,12 @@ impl BackendStorage for MetalStorage {
             (DType::U32, DType::F16) => "gather_u32_f16",
             (DType::U32, DType::BF16) => "gather_u32_bf16",
             (DType::U32, DType::U32) => "gather_u32_u32",
+            (DType::U32, DType::I64) => "gather_u32_i64",
+            (DType::I64, DType::F32) => "gather_i64_f32",
+            (DType::I64, DType::F16) => "gather_i64_f16",
+            (DType::I64, DType::BF16) => "gather_i64_bf16",
+            (DType::I64, DType::U32) => "gather_i64_u32",
+            (DType::I64, DType::I64) => "gather_i64_i64",
             (left, right) => crate::bail!("Metal gather {left:?} {right:?} not implemented"),
         };
         let command_buffer = self.device.command_buffer()?;
