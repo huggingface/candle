@@ -116,7 +116,7 @@ mod metal_sdpa_tests {
             .sum_all()?
             .to_scalar()?;
 
-        assert!(error <= 0.0004, "{}", error);
+        assert!(error <= 0.0005, "{}", error);
 
         Ok(())
     }

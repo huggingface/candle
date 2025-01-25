@@ -209,12 +209,18 @@ INDEX_OP(is_u8_f16, uint8_t, half)
 INDEX_OP(is_u8_bf16, uint8_t, bfloat)
 #endif
 
+GATHER_OP(gather_i64_f32, int64_t, float)
+GATHER_OP(gather_i64_f16, int64_t, half)
 GATHER_OP(gather_u32_f32, uint, float)
 GATHER_OP(gather_u32_f16, uint, half)
 #if defined(__HAVE_BFLOAT__)
+GATHER_OP(gather_i64_bf16, int64_t, bfloat)
 GATHER_OP(gather_u32_bf16, uint, bfloat)
 #endif
+GATHER_OP(gather_i64_u32, int64_t, uint)
 GATHER_OP(gather_u32_u32, uint, uint)
+GATHER_OP(gather_i64_i64, int64_t, int64_t)
+GATHER_OP(gather_u32_i64, uint, int64_t)
 
 SCATTER_ADD_OP(sa_u32_f32, uint32_t, float)
 SCATTER_ADD_OP(sa_u8_f32, uint8_t, float)
