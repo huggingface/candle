@@ -605,6 +605,44 @@ fn affine_strided() {
     assert_eq!(result, vec![2.6, 5.6, 8.6, 11.6]);
 }
 
+fn run_mlx_sort<T: Clone>(v: &[T], ncols: usize) -> Vec<u32> {
+    let nrows = v.len() / ncols;
+    let device = device();
+    let kernels = Kernels::new();
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+
+    let input = new_buffer(&device, v);
+    let indexes = vec![0u32; v.len()];
+    let output = new_buffer(&device, &indexes);
+
+    call_mlx_arg_sort(
+        &device,
+        command_buffer,
+        &kernels,
+        "carg_block_sort_float32_uint32_bn128_tn8",
+        128,
+        nrows,
+        ncols,
+        BufferOffset::zero_offset(&input),
+        &output,
+    )
+    .unwrap();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+    read_to_vec(&output, v.len())
+}
+
+#[test]
+fn mlx_sort() {
+    let input: Vec<_> = (0..8).map(|v| v as f32).collect();
+    let result = run_mlx_sort(&input, 4);
+    assert_eq!(result, [0, 1, 2, 3, 0, 1, 2, 3]);
+    let input: Vec<_> = (0..8).rev().map(|v| v as f32).collect();
+    let result = run_mlx_sort(&input, 4);
+    assert_eq!(result, [3, 2, 1, 0, 3, 2, 1, 0]);
+}
+
 #[test]
 fn index_select() {
     let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];

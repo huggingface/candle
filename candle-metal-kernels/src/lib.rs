@@ -17,6 +17,7 @@ const CONV: &str = include_str!("conv.metal");
 const FILL: &str = include_str!("fill.metal");
 const INDEXING: &str = include_str!("indexing.metal");
 const MLX_GEMM: &str = include_str!("mlx_gemm.metal");
+const MLX_SORT: &str = include_str!("mlx_sort.metal");
 const QUANTIZED: &str = include_str!("quantized.metal");
 const RANDOM: &str = include_str!("random.metal");
 const REDUCE: &str = include_str!("reduce.metal");
@@ -34,6 +35,7 @@ pub enum Source {
     Fill,
     Gemm,
     Indexing,
+    MlxSort,
     Quantized,
     Random,
     Reduce,
@@ -211,6 +213,7 @@ impl Kernels {
             Source::Fill => FILL,
             Source::Gemm => MLX_GEMM,
             Source::Indexing => INDEXING,
+            Source::MlxSort => MLX_SORT,
             Source::Quantized => QUANTIZED,
             Source::Random => RANDOM,
             Source::Reduce => REDUCE,
@@ -2503,6 +2506,53 @@ pub fn call_arg_sort(
     encoder.use_resource(src.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(dst, metal::MTLResourceUsage::Write);
     encoder.set_threadgroup_memory_length(0, (ncols_pad * 4).max(16) as u64);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_mlx_arg_sort(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    name: &'static str,
+    bn: usize,
+    nrows: usize,
+    ncols: usize,
+    src: BufferOffset,
+    dst: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::MlxSort, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            &src,
+            dst,
+            ncols as i32,
+            1i32,
+            1i32,
+            ncols as i32,
+            ncols as i32
+        )
+    );
+
+    let thread_group_count = MTLSize {
+        width: 1,
+        height: nrows as u64,
+        depth: 1,
+    };
+    let thread_group_size = MTLSize {
+        width: bn as u64,
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.use_resource(src.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(dst, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
