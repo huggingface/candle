@@ -1,0 +1,115 @@
+default-mode:
+  add:
+  remove: [pull_request_target, issues]
+labels:
+# skips and removes
+- name: skip all
+  content:
+  regexes: '[Ss]kip (?:[Aa]ll |)[Ll]abels?'
+- name: remove all
+  content:
+  regexes: '[Rr]emove (?:[Aa]ll |)[Ll]abels?'
+- name: skip ambiguous
+  content:
+  regexes: '[Ss]kip (?:[Ll]abels? |)(?:`|)ambiguous(?:`|)'
+- name: remove ambiguous
+  content:
+  regexes: '[Rr]emove (?:[Ll]abels? |)(?:`|)ambiguous(?:`|)'
+# `feature`
+
+
+- name: enhance
+  content: enhancement
+  regexes: '[Ff]eat(?:\([^)]*\))?[\:\.\,]'
+  skip-if:
+  - skip all
+  remove-if:
+  - remove all
+# `Bug fix`
+- name: bug-fix
+  content: Bug fix
+  regexes: '[Ff]ix(?:\([^)]*\))?[\:\.\,]'
+  skip-if:
+  - skip all
+  remove-if:
+  - remove all
+# `document`
+- name: doc
+  content: documentation
+  regexes: '[Dd]ocs(?:\([^)]*\))?[\:\.\,]'
+  skip-if:
+  - skip all
+  remove-if:
+  - remove all
+# `test`
+- name: test
+  content: test
+  regexes: '[Tt]est(?:\([^)]*\))?[\:\.\,]'
+  skip-if:
+  - skip all
+  remove-if:
+  - remove all
+# 工具链等修改
+- name: build
+  content: build
+  regexes: '[Bb]uild(?:\([^)]*\))?[\:\.\,]'
+  skip-if:
+  - skip all
+  remove-if:
+  - remove all  
+
+# ci持续集成修改
+- name: ci
+  content: ci
+  regexes: '[Cc]i(?:\([^)]*\))?[\:\.\,]'
+  skip-if:
+  - skip all
+  remove-if:
+  - remove all  
+
+  
+# 代码样式缩进等
+- name: style
+  content: style
+  regexes: '[Ss]tyle(?:\([^)]*\))?[\:\.\,]'
+  skip-if:
+  - skip all
+  remove-if:
+  - remove all  
+
+# 重构代码结构
+- name: refactor
+  content: refactor
+  regexes: '[rR]factor(?:\([^)]*\))?[\:\.\,]'
+  skip-if:
+  - skip all
+  remove-if:
+  - remove all  
+  
+# 性能优化
+- name: perf
+  content: perf
+  regexes: '[pP]erf(?:\([^)]*\))?[\:\.\,]'
+  skip-if:
+  - skip all
+  remove-if:
+  - remove all  
+
+  
+# `ambiguous`
+- name: pr-ambiguous
+  # 不符合 commitizen 的 PR
+  content: ambiguous
+  regexes: '^(?!(?:build|chore|ci|docs?|feat|fix|perf|refactor|rft|style|test)(?:\([a-zA-Z]*\))?[\:\.\(\,]|[Rr]evert|[Rr]elease)'
+
+
+
+  
+  mode:
+    pull_request_target:
+  skip-if:
+  - skip all
+  - skip ambiguous
+  remove-if:
+  - remove all
+  - remove ambiguous
