@@ -641,6 +641,14 @@ fn mlx_sort() {
     let input: Vec<_> = (0..8).rev().map(|v| v as f32).collect();
     let result = run_mlx_sort(&input, 4);
     assert_eq!(result, [3, 2, 1, 0, 3, 2, 1, 0]);
+    let input: Vec<_> = (0..1000).rev().map(|v| v as f32).collect();
+    let result = run_mlx_sort(&input, 200);
+    let out: Vec<_> = (0..200).rev().collect();
+    assert_eq!(&result[..200], out);
+    assert_eq!(&result[200..400], out);
+    assert_eq!(&result[400..600], out);
+    assert_eq!(&result[600..800], out);
+    assert_eq!(&result[800..], out);
 }
 
 #[test]
