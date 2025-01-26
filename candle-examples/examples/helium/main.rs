@@ -263,11 +263,7 @@ fn main() -> Result<()> {
     };
     let device = candle_examples::device(args.cpu)?;
     let (model, device) = {
-        let dtype = if device.is_cuda() {
-            DType::BF16
-        } else {
-            DType::F32
-        };
+        let dtype = device.bf16_default_to_f32();
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
         let model = Model::new(&config, vb)?;
         (model, device)
