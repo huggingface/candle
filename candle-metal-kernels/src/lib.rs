@@ -2561,7 +2561,7 @@ pub fn block_sort(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
-    name: &'static str,
+    name: String,
     bn: usize,
     nrows: usize,
     ncols: usize,
@@ -2612,18 +2612,18 @@ pub fn call_mlx_arg_sort(
     dst: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let tn = 8;
-    let bn = match (ncols + tn - 1) / tn {
+    let bn = match ncols.div_ceil(tn) {
         257.. if size_of_dtype <= 4 => 512,
         129.. => 256,
         0..129 => 128,
     };
     let n_per_block = bn * tn;
-    let n_blocks = (ncols + n_per_block - 1) / n_per_block;
+    let n_blocks = ncols.div_ceil(n_per_block);
     if n_blocks > 1 {
         todo!()
     } else {
         let name = format!("carg_block_sort_float32_uint32_bn{bn}_tn{tn}");
-        block_sort(device, ep, kernels, &name, bn, nrows, ncols, src, dst)?
+        block_sort(device, ep, kernels, name, bn, nrows, ncols, src, dst)?
     }
     Ok(())
 }
