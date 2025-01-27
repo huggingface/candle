@@ -1,3 +1,4 @@
+// The implementation below comes from MLX.
 // https://github.com/ml-explore/mlx/blob/0cea88bcc5e98e81a24d92eed8870a6976999f05/mlx/backend/metal/kernels/sort.h
 // Copyright © 2023-2024 Apple Inc.
 

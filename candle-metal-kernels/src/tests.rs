@@ -620,10 +620,9 @@ fn run_mlx_sort<T: Clone>(v: &[T], ncols: usize) -> Vec<u32> {
         &device,
         command_buffer,
         &kernels,
-        "carg_block_sort_float32_uint32_bn128_tn8",
-        128,
         nrows,
         ncols,
+        4,
         BufferOffset::zero_offset(&input),
         &output,
     )

@@ -2511,7 +2511,7 @@ pub fn call_arg_sort(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn call_mlx_arg_sort(
+pub fn block_sort(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
@@ -2526,7 +2526,6 @@ pub fn call_mlx_arg_sort(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
-
     set_params!(
         encoder,
         (
@@ -2539,7 +2538,6 @@ pub fn call_mlx_arg_sort(
             ncols as i32
         )
     );
-
     let thread_group_count = MTLSize {
         width: 1,
         height: nrows as u64,
@@ -2550,10 +2548,37 @@ pub fn call_mlx_arg_sort(
         height: 1,
         depth: 1,
     };
-
     encoder.use_resource(src.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(dst, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_mlx_arg_sort(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    nrows: usize,
+    ncols: usize,
+    size_of_dtype: usize,
+    src: BufferOffset,
+    dst: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let tn = 8;
+    let bn = match (ncols + tn - 1) / tn {
+        257.. if size_of_dtype <= 4 => 512,
+        129.. => 256,
+        0..129 => 128,
+    };
+    let n_per_block = bn * tn;
+    let n_blocks = (ncols + n_per_block - 1) / n_per_block;
+    if n_blocks > 1 {
+        todo!()
+    } else {
+        let name = format!("carg_block_sort_float32_uint32_bn{bn}_tn{tn}");
+        block_sort(device, ep, kernels, &name, bn, nrows, ncols, src, dst)?
+    }
     Ok(())
 }
 
