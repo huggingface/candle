@@ -3,8 +3,8 @@
 use std::{f32::consts::PI, str::FromStr, sync::Arc};
 
 use candle::{
-    shape::Dim, CpuStorage, CustomOp1, DType, Device, Error, IndexOp, Layout, Result, Shape,
-    Tensor, WithDType, D,
+    quantized::GgmlDType, shape::Dim, CpuStorage, CustomOp1, DType, Device, Error, IndexOp, Layout,
+    Result, Shape, Tensor, WithDType, D,
 };
 use candle_nn::{embedding, rms_norm, Activation, Embedding, Module, RmsNorm, VarBuilder};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -555,6 +555,7 @@ impl Attention {
         rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
         cfg: &DeepSeekV2Config,
         vb: VarBuilder,
+        quant: Option<GgmlDType>,
     ) -> Result<Self> {
         let q_head_dim = cfg.q_head_dim();
         let q = match cfg.q_lora_rank {
@@ -564,7 +565,7 @@ impl Attention {
                     lora_rank,
                     &cfg.quantization_config,
                     cfg.attention_bias,
-                    None,
+                    quant,
                     vb.pp("q_a_proj"),
                 )?;
                 let norm = rms_norm(lora_rank, cfg.rms_norm_eps, vb.pp("q_a_layernorm"))?;
@@ -573,7 +574,7 @@ impl Attention {
                     cfg.num_attention_heads * q_head_dim,
                     &cfg.quantization_config,
                     false,
-                    None,
+                    quant,
                     vb.pp("q_b_proj"),
                 )?;
                 QProj::Lora { a, norm, b }
@@ -583,7 +584,7 @@ impl Attention {
                 cfg.num_attention_heads * q_head_dim,
                 &cfg.quantization_config,
                 false,
-                None,
+                quant,
                 vb.pp("q_proj"),
             )?),
         };
@@ -593,7 +594,7 @@ impl Attention {
             cfg.kv_lora_rank + cfg.qk_rope_head_dim,
             &cfg.quantization_config,
             cfg.attention_bias,
-            None,
+            quant,
             vb.pp("kv_a_proj_with_mqa"),
         )?;
         let kv_a_layernorm = rms_norm(cfg.kv_lora_rank, cfg.rms_norm_eps, vb.pp("kv_a_layernorm"))?;
@@ -602,7 +603,7 @@ impl Attention {
             cfg.num_attention_heads * (q_head_dim - cfg.qk_rope_head_dim + cfg.v_head_dim),
             &cfg.quantization_config,
             false,
-            None,
+            quant,
             vb.pp("kv_b_proj"),
         )?;
 
@@ -611,7 +612,7 @@ impl Attention {
             cfg.hidden_size,
             &cfg.quantization_config,
             cfg.attention_bias,
-            None,
+            quant,
             vb.pp("o_proj"),
         )?;
 
@@ -759,6 +760,7 @@ impl Mlp {
         vb: VarBuilder,
         hidden_size: Option<usize>,
         intermediate_size: Option<usize>,
+        quant: Option<GgmlDType>,
     ) -> Result<Self> {
         let hidden_size = hidden_size.unwrap_or(cfg.hidden_size);
         let intermediate_size = intermediate_size.unwrap_or(cfg.intermediate_size);
@@ -769,7 +771,7 @@ impl Mlp {
                 intermediate_size,
                 &cfg.quantization_config,
                 false,
-                None,
+                quant,
                 vb.pp("gate_proj"),
             )?,
             up: quant::blockwise_fp8_linear_b(
@@ -777,7 +779,7 @@ impl Mlp {
                 intermediate_size,
                 &cfg.quantization_config,
                 false,
-                None,
+                quant,
                 vb.pp("up_proj"),
             )?,
             down: quant::blockwise_fp8_linear_b(
@@ -785,7 +787,7 @@ impl Mlp {
                 hidden_size,
                 &cfg.quantization_config,
                 false,
-                None,
+                quant,
                 vb.pp("down_proj"),
             )?,
             act: cfg.hidden_act,
@@ -937,14 +939,20 @@ impl Moe {
     fn new(
         cfg: &DeepSeekV2Config,
         vb: VarBuilder,
-
         n_shared_experts: Option<usize>,
         n_routed_experts: usize,
+        quant: Option<GgmlDType>,
     ) -> Result<Self> {
         let mut experts = Vec::with_capacity(n_routed_experts);
         for i in 0..n_routed_experts {
             let vb_e = vb.pp("experts").pp(i);
-            experts.push(Mlp::new(cfg, vb_e, None, Some(cfg.moe_intermediate_size))?);
+            experts.push(Mlp::new(
+                cfg,
+                vb_e,
+                None,
+                Some(cfg.moe_intermediate_size),
+                quant,
+            )?);
         }
         let shared_experts = if let Some(n_shared_experts) = n_shared_experts {
             let intermediate_size = cfg.moe_intermediate_size * n_shared_experts;
@@ -953,6 +961,7 @@ impl Moe {
                 vb.pp("shared_experts"),
                 None,
                 Some(intermediate_size),
+                quant,
             )?)
         } else {
             None
@@ -1038,8 +1047,9 @@ impl DecoderLayer {
         cfg: &DeepSeekV2Config,
         vb: VarBuilder,
         layer_idx: usize,
+        quant: Option<GgmlDType>,
     ) -> Result<Self> {
-        let attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
+        let attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), quant)?;
         let input_layernorm =
             rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let post_attention_layernorm = rms_norm(
@@ -1056,9 +1066,10 @@ impl DecoderLayer {
                 vb.pp("mlp"),
                 cfg.n_shared_experts,
                 cfg.n_routed_experts.unwrap(),
+                quant,
             )?)
         } else {
-            MoeOrMlp::Mlp(Mlp::new(cfg, vb.pp("mlp"), None, None)?)
+            MoeOrMlp::Mlp(Mlp::new(cfg, vb.pp("mlp"), None, None, quant)?)
         };
 
         Ok(Self {
@@ -1097,7 +1108,7 @@ pub struct DeepSeekV2 {
 }
 
 impl DeepSeekV2 {
-    pub fn new(cfg: &DeepSeekV2Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &DeepSeekV2Config, vb: VarBuilder, quant: Option<GgmlDType>) -> Result<Self> {
         let vb_m = vb.pp("model");
 
         let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -1123,7 +1134,13 @@ impl DeepSeekV2 {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx), layer_idx)?;
+            let layer = DecoderLayer::new(
+                rotary_emb.clone(),
+                cfg,
+                vb_l.pp(layer_idx),
+                layer_idx,
+                quant,
+            )?;
             layers.push(layer)
         }
 
