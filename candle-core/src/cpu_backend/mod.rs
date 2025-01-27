@@ -1789,10 +1789,6 @@ impl BackendStorage for CpuStorage {
                 let data = unary_map(storage, layout, |v| v.to_f32() as u8);
                 Ok(Self::U8(data))
             }
-            (Self::F8E4M3(storage), DType::U8) => {
-                let data = unary_map(storage, layout, |v| v.to_f32() as u8);
-                Ok(Self::U8(data))
-            }
             (Self::U8(storage), DType::U32) => {
                 let data = unary_map(storage, layout, |v| v as u32);
                 Ok(Self::U32(data))
