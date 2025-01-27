@@ -6,9 +6,11 @@ use candle::{
     shape::Dim, CpuStorage, CustomOp1, DType, Device, Error, IndexOp, Layout, Result, Shape,
     Tensor, WithDType, D,
 };
-use candle_nn::{embedding, rms_norm, Activation, Embedding, Linear, Module, RmsNorm, VarBuilder};
+use candle_nn::{embedding, rms_norm, Activation, Embedding, Module, RmsNorm, VarBuilder};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
+
+use super::quant::{self, BlockwiseFP8Linear, QuantizedConfig};
 
 struct NonZero {}
 
@@ -272,6 +274,7 @@ pub struct DeepSeekV2Config {
     pub(crate) qk_nope_head_dim: usize,
     pub(crate) n_group: usize,
     pub(crate) topk_group: usize,
+    pub(crate) quantization_config: Option<QuantizedConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -285,7 +288,7 @@ pub enum ScaledRopeType {
     #[serde(alias = "dynamic")]
     Dynamic,
     #[serde(alias = "linear")]
-    Linear,
+    BlockwiseFP8Linear,
 }
 
 impl FromStr for ScaledRopeType {
@@ -294,7 +297,7 @@ impl FromStr for ScaledRopeType {
         match s {
             "su" | "longrope" => Ok(Self::Su),
             "yarn" => Ok(Self::Yarn),
-            "linear" => Ok(Self::Linear),
+            "linear" => Ok(Self::BlockwiseFP8Linear),
             "dynamic" => Ok(Self::Dynamic),
             _ => Err(candle::Error::Msg(
                 "Expected either `su` or `yarn` scaled RoPE type.".to_string(),
@@ -322,7 +325,7 @@ pub enum DeepSeekV2RopeScaling {
         #[serde(rename = "type")]
         scaling_type: ScaledRopeType,
     },
-    LinearOrDynamic {
+    BlockwiseFP8LinearOrDynamic {
         #[serde(rename = "type")]
         scaling_type: ScaledRopeType,
         factor: f64,
@@ -452,7 +455,7 @@ impl DeepSeekV2RotaryEmbedding {
 
     pub fn new(cfg: &DeepSeekV2RopeConfig, dtype: DType, dev: &Device) -> Result<Self> {
         match &cfg.rope_scaling {
-            Some(DeepSeekV2RopeScaling::LinearOrDynamic {
+            Some(DeepSeekV2RopeScaling::BlockwiseFP8LinearOrDynamic {
                 scaling_type: _,
                 factor: _,
             }) => candle::bail!("linear and dynamic rope are not implemented yet!"),
@@ -518,8 +521,12 @@ impl DeepSeekV2Config {
 }
 
 enum QProj {
-    Plain(Linear),
-    Lora { a: Linear, norm: RmsNorm, b: Linear },
+    Plain(BlockwiseFP8Linear),
+    Lora {
+        a: BlockwiseFP8Linear,
+        norm: RmsNorm,
+        b: BlockwiseFP8Linear,
+    },
 }
 
 impl QProj {
@@ -533,10 +540,10 @@ impl QProj {
 
 struct Attention {
     q: QProj,
-    kv_a_proj_with_mqa: Linear,
+    kv_a_proj_with_mqa: BlockwiseFP8Linear,
     kv_a_layernorm: RmsNorm,
-    kv_b_proj: Linear,
-    o_proj: Linear,
+    kv_b_proj: BlockwiseFP8Linear,
+    o_proj: BlockwiseFP8Linear,
     rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
     cfg: DeepSeekV2Config,
     q_head_dim: usize,
@@ -552,44 +559,59 @@ impl Attention {
         let q_head_dim = cfg.q_head_dim();
         let q = match cfg.q_lora_rank {
             Some(lora_rank) => {
-                let a = candle_nn::linear_b(
+                let a = quant::blockwise_fp8_linear_b(
                     cfg.hidden_size,
                     lora_rank,
+                    &cfg.quantization_config,
                     cfg.attention_bias,
+                    None,
                     vb.pp("q_a_proj"),
                 )?;
                 let norm = rms_norm(lora_rank, cfg.rms_norm_eps, vb.pp("q_a_layernorm"))?;
-                let b = candle_nn::linear_no_bias(
+                let b = quant::blockwise_fp8_linear_b(
                     lora_rank,
                     cfg.num_attention_heads * q_head_dim,
+                    &cfg.quantization_config,
+                    false,
+                    None,
                     vb.pp("q_b_proj"),
                 )?;
                 QProj::Lora { a, norm, b }
             }
-            None => QProj::Plain(candle_nn::linear_no_bias(
+            None => QProj::Plain(quant::blockwise_fp8_linear_b(
                 cfg.hidden_size,
                 cfg.num_attention_heads * q_head_dim,
+                &cfg.quantization_config,
+                false,
+                None,
                 vb.pp("q_proj"),
             )?),
         };
 
-        let kv_a_proj_with_mqa = candle_nn::linear_b(
+        let kv_a_proj_with_mqa = quant::blockwise_fp8_linear_b(
             cfg.hidden_size,
             cfg.kv_lora_rank + cfg.qk_rope_head_dim,
+            &cfg.quantization_config,
             cfg.attention_bias,
+            None,
             vb.pp("kv_a_proj_with_mqa"),
         )?;
         let kv_a_layernorm = rms_norm(cfg.kv_lora_rank, cfg.rms_norm_eps, vb.pp("kv_a_layernorm"))?;
-        let kv_b_proj = candle_nn::linear_no_bias(
+        let kv_b_proj = quant::blockwise_fp8_linear_b(
             cfg.kv_lora_rank,
             cfg.num_attention_heads * (q_head_dim - cfg.qk_rope_head_dim + cfg.v_head_dim),
+            &cfg.quantization_config,
+            false,
+            None,
             vb.pp("kv_b_proj"),
         )?;
 
-        let o_proj = candle_nn::linear_b(
+        let o_proj = quant::blockwise_fp8_linear_b(
             cfg.num_attention_heads * cfg.v_head_dim,
             cfg.hidden_size,
+            &cfg.quantization_config,
             cfg.attention_bias,
+            None,
             vb.pp("o_proj"),
         )?;
 
@@ -725,9 +747,9 @@ impl Attention {
 }
 
 struct Mlp {
-    gate: Linear,
-    up: Linear,
-    down: Linear,
+    gate: BlockwiseFP8Linear,
+    up: BlockwiseFP8Linear,
+    down: BlockwiseFP8Linear,
     act: Activation,
 }
 
@@ -742,9 +764,30 @@ impl Mlp {
         let intermediate_size = intermediate_size.unwrap_or(cfg.intermediate_size);
 
         Ok(Self {
-            gate: candle_nn::linear_no_bias(hidden_size, intermediate_size, vb.pp("gate_proj"))?,
-            up: candle_nn::linear_no_bias(hidden_size, intermediate_size, vb.pp("up_proj"))?,
-            down: candle_nn::linear_no_bias(intermediate_size, hidden_size, vb.pp("down_proj"))?,
+            gate: quant::blockwise_fp8_linear_b(
+                hidden_size,
+                intermediate_size,
+                &cfg.quantization_config,
+                false,
+                None,
+                vb.pp("gate_proj"),
+            )?,
+            up: quant::blockwise_fp8_linear_b(
+                hidden_size,
+                intermediate_size,
+                &cfg.quantization_config,
+                false,
+                None,
+                vb.pp("up_proj"),
+            )?,
+            down: quant::blockwise_fp8_linear_b(
+                intermediate_size,
+                hidden_size,
+                &cfg.quantization_config,
+                false,
+                None,
+                vb.pp("down_proj"),
+            )?,
             act: cfg.hidden_act,
         })
     }
@@ -1045,7 +1088,7 @@ impl DecoderLayer {
 }
 
 pub struct DeepSeekV2 {
-    lm_head: Linear,
+    lm_head: candle_nn::Linear,
     embed_tokens: Embedding,
     norm: RmsNorm,
     layers: Vec<DecoderLayer>,

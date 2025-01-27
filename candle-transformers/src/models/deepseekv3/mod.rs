@@ -1,2 +1,3 @@
-mod ops;
 pub mod model;
+mod ops;
+mod quant;

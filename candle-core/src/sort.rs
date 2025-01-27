@@ -52,32 +52,6 @@ impl ArgSort {
     }
 }
 
-impl crate::CustomOp1 for ArgSort {
-    fn name(&self) -> &'static str {
-        "argsort"
-    }
-
-    fn cpu_fwd(
-        &self,
-        storage: &crate::CpuStorage,
-        layout: &crate::Layout,
-    ) -> Result<(crate::CpuStorage, crate::Shape)> {
-        let sort_indexes = match storage {
-            crate::CpuStorage::U8(vs) => self.asort(vs, layout),
-            crate::CpuStorage::U32(vs) => self.asort(vs, layout),
-            crate::CpuStorage::I16(vs) => self.asort(vs, layout),
-            crate::CpuStorage::I32(vs) => self.asort(vs, layout),
-            crate::CpuStorage::I64(vs) => self.asort(vs, layout),
-            crate::CpuStorage::BF16(vs) => self.asort(vs, layout),
-            crate::CpuStorage::F16(vs) => self.asort(vs, layout),
-            crate::CpuStorage::F32(vs) => self.asort(vs, layout),
-            crate::CpuStorage::F64(vs) => self.asort(vs, layout),
-            crate::CpuStorage::F8E4M3(vs) => self.asort(vs, layout),
-        };
-        let sort_indexes = crate::CpuStorage::U32(sort_indexes);
-        Ok((sort_indexes, layout.shape().into()))
-    }
-
 #[cfg(feature = "cuda")]
 mod cuda {
     use super::*;
@@ -139,6 +113,7 @@ impl crate::CustomOp1 for ArgSort {
             crate::CpuStorage::F16(vs) => self.asort(vs, layout),
             crate::CpuStorage::F32(vs) => self.asort(vs, layout),
             crate::CpuStorage::F64(vs) => self.asort(vs, layout),
+            crate::CpuStorage::F8E4M3(vs) => self.asort(vs, layout),
         };
         let sort_indexes = crate::CpuStorage::U32(sort_indexes);
         Ok((sort_indexes, layout.shape().into()))
@@ -222,15 +197,6 @@ impl crate::CustomOp1 for ArgSort {
         let dst = crate::MetalStorage::new(dst, device.clone(), el, DType::U32);
         Ok((dst, layout.shape().clone()))
     }
-}
-
-#[allow(unused)]
-fn next_power_of_2(x: usize) -> usize {
-    let mut n = 1;
-    while n < x {
-        n *= 2
-    }
-    n
 }
 
 impl Tensor {
