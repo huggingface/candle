@@ -531,8 +531,8 @@ impl DeepSeekV2RotaryEmbedding {
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
 
-        let q_embed = candle_nn::rotary_emb::rope_i(q, &cos, &sin)?;
-        let k_embed = candle_nn::rotary_emb::rope_i(k, &cos, &sin)?;
+        let q_embed = candle_nn::rotary_emb::rope_i(&q.contiguous()?, &cos, &sin)?;
+        let k_embed = candle_nn::rotary_emb::rope_i(&k.contiguous()?, &cos, &sin)?;
 
         Ok((q_embed, k_embed))
     }
