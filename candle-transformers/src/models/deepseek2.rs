@@ -637,60 +637,8 @@ impl Attention {
 
         (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offset)?;
 
-        let q = {
-            let mut q = Tensor::zeros(
-                (bs, self.cfg.num_attention_heads, seq_len, self.q_head_dim),
-                q_pe.dtype(),
-                q_pe.device(),
-            )?;
-            q = q.slice_assign(
-                &[
-                    0..q.dim(0)?,
-                    0..q.dim(1)?,
-                    0..q.dim(2)?,
-                    0..self.cfg.qk_nope_head_dim,
-                ],
-                &q_nope,
-            )?;
-            q = q.slice_assign(
-                &[
-                    0..q.dim(0)?,
-                    0..q.dim(1)?,
-                    0..q.dim(2)?,
-                    self.cfg.qk_nope_head_dim..q.dim(3)?,
-                ],
-                &q_pe,
-            )?;
-            q
-        };
-
-        let mut k = {
-            let mut k = Tensor::zeros(
-                (bs, self.cfg.num_attention_heads, seq_len, self.q_head_dim),
-                k_pe.dtype(),
-                k_pe.device(),
-            )?;
-            k = k.slice_assign(
-                &[
-                    0..k.dim(0)?,
-                    0..k.dim(1)?,
-                    0..k.dim(2)?,
-                    0..self.cfg.qk_nope_head_dim,
-                ],
-                &k_nope,
-            )?;
-            let k_pe = k_pe.repeat((1, k.dim(1)?, 1, 1))?;
-            k = k.slice_assign(
-                &[
-                    0..k.dim(0)?,
-                    0..k.dim(1)?,
-                    0..k.dim(2)?,
-                    self.cfg.qk_nope_head_dim..k.dim(3)?,
-                ],
-                &k_pe,
-            )?;
-            k
-        };
+        let q = Tensor::cat(&[q_nope, q_pe], D::Minus1)?;
+        let mut k = Tensor::cat(&[k_nope, k_pe], D::Minus1)?;
 
         (k, v) = match &self.kv_cache {
             None => (k, v),
@@ -829,8 +777,8 @@ impl MoeGate {
         };
 
         if self.top_k > 1 && self.cfg.norm_topk_prob {
-            let denmoninator = (topk_weight.sum_keepdim(D::Minus1)? + 1e-20)?;
-            topk_weight = (topk_weight / denmoninator)?;
+            let denominator = (topk_weight.sum_keepdim(D::Minus1)? + 1e-20)?;
+            topk_weight = (topk_weight / denominator)?;
         } else {
             topk_weight = (topk_weight * self.cfg.routed_scaling_factor)?;
         }
