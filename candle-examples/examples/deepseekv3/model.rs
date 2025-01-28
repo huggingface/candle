@@ -558,6 +558,7 @@ struct Attention {
     cfg: DeepSeekV3Config,
     q_head_dim: usize,
     softmax_scale: f64,
+    kv_cache: Option<(Tensor, Tensor)>,
 }
 
 impl Attention {
@@ -641,11 +642,12 @@ impl Attention {
             cfg: cfg.clone(),
             q_head_dim,
             softmax_scale: cfg.softmax_scale() as f64,
+            kv_cache: None,
         })
     }
 
     fn forward(
-        &self,
+        &mut self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offset: usize,
@@ -687,7 +689,7 @@ impl Attention {
 
         let kv_split = kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
         let k_nope = kv_split[0].clone();
-        let v = kv_split[1].clone();
+        let mut v = kv_split[1].clone();
 
         (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offset)?;
 
@@ -740,6 +742,16 @@ impl Attention {
             &k_pe,
         )?;
 
+        (k, v) = match &self.kv_cache {
+            None => (k, v),
+            Some((prev_k, prev_v)) => {
+                let key_states = Tensor::cat(&[prev_k, &k], 2)?;
+                let value_states = Tensor::cat(&[prev_v, &v], 2)?;
+                (key_states, value_states)
+            }
+        };
+        self.kv_cache = Some((k.clone(), v.clone()));
+
         let mut attn_out = {
             let att = (q.matmul(&k.t()?)? * self.softmax_scale)?;
             let att = match attention_mask {
@@ -759,6 +771,10 @@ impl Attention {
         };
 
         self.o_proj.forward(&attn_out)
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.kv_cache = None;
     }
 }
 
@@ -1105,7 +1121,7 @@ impl DecoderLayer {
     }
 
     fn forward(
-        &self,
+        &mut self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offset: usize,
@@ -1119,6 +1135,10 @@ impl DecoderLayer {
             .moe_or_mlp
             .forward(&xs.apply(&self.post_attention_layernorm)?)?;
         residual + xs
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.attn.clear_kv_cache();
     }
 }
 
@@ -1214,7 +1234,7 @@ impl DeepSeekV3 {
             .to_dtype(self.dtype)
     }
 
-    pub fn forward(&self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (bs, seq_len) = input_ids.dims2()?;
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let attention_mask = if seq_len == 1 {
@@ -1223,7 +1243,7 @@ impl DeepSeekV3 {
             let mask = self.prepare_decoder_attention_mask(bs, seq_len, seqlen_offset)?;
             Some(mask)
         };
-        for layer in &self.layers {
+        for layer in &mut self.layers {
             xs = layer.forward(
                 &xs,
                 attention_mask
@@ -1237,5 +1257,12 @@ impl DeepSeekV3 {
         let xs = xs.i((.., seq_len - 1, ..))?.contiguous()?;
         let logits = self.lm_head.forward(&xs)?;
         logits.to_dtype(DType::F32)
+    }
+
+    #[allow(unused)]
+    pub fn clear_kv_cache(&mut self) {
+        for layer in &mut self.layers {
+            layer.clear_kv_cache();
+        }
     }
 }

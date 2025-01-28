@@ -10,6 +10,7 @@
 extern crate intel_mkl_src;
 
 use anyhow::{bail, Error as E, Result};
+use candle::quantized::GgmlDType;
 use clap::{Parser, ValueEnum};
 
 use candle::{DType, Device, Tensor};
@@ -74,6 +75,10 @@ struct Args {
 
     #[arg(long)]
     dtype: Option<String>,
+
+    /// Quantization to apply to the model for faster inference. Defaults to q4k. One of: q2k,q3k,q4k,q5k,q8_0
+    #[arg(long)]
+    quant: Option<String>,
 
     #[arg(long, default_value = "r1")]
     which: Which,
@@ -171,11 +176,25 @@ fn main() -> Result<()> {
 
     let device = Device::new_cuda(rank)?;
 
+    let quant = match args.quant {
+        Some(x) => match x.to_lowercase().as_str() {
+            "q2k" => GgmlDType::Q2K,
+            "q3k" => GgmlDType::Q3K,
+            "q4k" => GgmlDType::Q4K,
+            "q5k" => GgmlDType::Q5K,
+            "q8_0" => GgmlDType::Q8_0,
+            other => {
+                anyhow::bail!("Quantization {other} is not supported, try q2k,q3k,q4k,q5k,q8_0")
+            }
+        },
+        None => GgmlDType::Q4K,
+    };
+
     println!("building the model");
     let vb = unsafe {
         candle_nn::var_builder::ShardedSafeTensors::var_builder(&filenames, dtype, &device)?
     };
-    let llama = DeepSeekV3::new(&config, vb, None, comm)?;
+    let mut model = DeepSeekV3::new(&config, vb, Some(quant), comm)?;
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let prompt = args.prompt.as_ref().map_or(DEFAULT_PROMPT, |p| p.as_str());
@@ -205,7 +224,7 @@ fn main() -> Result<()> {
         let context_size = if index > 0 { 1 } else { tokens.len() };
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
         let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
-        let logits = llama.forward(&input, index_pos)?;
+        let logits = model.forward(&input, index_pos)?;
         let logits = logits.squeeze(0)?;
         index_pos += ctxt.len();
 
