@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{f32::consts::PI, str::FromStr, sync::Arc};
+use std::{f32::consts::PI, sync::Arc};
 
 use candle::{
     shape::Dim, CpuStorage, CustomOp1, DType, Device, Error, IndexOp, Layout, Result, Shape,
@@ -280,21 +280,6 @@ pub enum ScaledRopeType {
     Dynamic,
     #[serde(alias = "linear")]
     Linear,
-}
-
-impl FromStr for ScaledRopeType {
-    type Err = candle::Error;
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "su" | "longrope" => Ok(Self::Su),
-            "yarn" => Ok(Self::Yarn),
-            "linear" => Ok(Self::Linear),
-            "dynamic" => Ok(Self::Dynamic),
-            _ => Err(candle::Error::Msg(
-                "Expected either `su` or `yarn` scaled RoPE type.".to_string(),
-            )),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
