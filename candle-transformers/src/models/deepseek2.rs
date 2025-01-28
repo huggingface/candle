@@ -595,10 +595,11 @@ impl Attention {
     ) -> Result<Tensor> {
         let (bs, seq_len, _) = xs.dims3()?;
 
-        let mut q = self.q.forward(xs)?;
-        q = q
-            .reshape((bs, seq_len, self.cfg.num_attention_heads, self.q_head_dim))?
-            .transpose(1, 2)?;
+        let q = {
+            let q = self.q.forward(xs)?;
+            q.reshape((bs, seq_len, self.cfg.num_attention_heads, self.q_head_dim))?
+                .transpose(1, 2)?
+        };
         let q_split = q.split(
             &[self.cfg.qk_nope_head_dim, self.cfg.qk_rope_head_dim],
             D::Minus1,
@@ -612,21 +613,23 @@ impl Attention {
             D::Minus1,
         )?;
         compressed_kv = ckv_split[0].clone();
-        let mut k_pe = ckv_split[1].clone();
-        k_pe = k_pe
-            .reshape((bs, seq_len, 1, self.cfg.qk_rope_head_dim))?
-            .transpose(1, 2)?;
-        let mut kv = self
-            .kv_b_proj
-            .forward(&self.kv_a_layernorm.forward(&compressed_kv)?)?;
-        kv = kv
-            .reshape((
+        let mut k_pe = {
+            let k_pe = ckv_split[1].clone();
+            k_pe.reshape((bs, seq_len, 1, self.cfg.qk_rope_head_dim))?
+                .transpose(1, 2)?
+        };
+        let kv = {
+            let kv = self
+                .kv_b_proj
+                .forward(&self.kv_a_layernorm.forward(&compressed_kv)?)?;
+            kv.reshape((
                 bs,
                 seq_len,
                 self.cfg.num_attention_heads,
                 self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
             ))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+        };
 
         let kv_split = kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
         let k_nope = kv_split[0].clone();
@@ -634,54 +637,60 @@ impl Attention {
 
         (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offset)?;
 
-        let mut q = Tensor::zeros(
-            (bs, self.cfg.num_attention_heads, seq_len, self.q_head_dim),
-            q_pe.dtype(),
-            q_pe.device(),
-        )?;
-        q = q.slice_assign(
-            &[
-                0..q.dim(0)?,
-                0..q.dim(1)?,
-                0..q.dim(2)?,
-                0..self.cfg.qk_nope_head_dim,
-            ],
-            &q_nope,
-        )?;
-        q = q.slice_assign(
-            &[
-                0..q.dim(0)?,
-                0..q.dim(1)?,
-                0..q.dim(2)?,
-                self.cfg.qk_nope_head_dim..q.dim(3)?,
-            ],
-            &q_pe,
-        )?;
+        let q = {
+            let mut q = Tensor::zeros(
+                (bs, self.cfg.num_attention_heads, seq_len, self.q_head_dim),
+                q_pe.dtype(),
+                q_pe.device(),
+            )?;
+            q = q.slice_assign(
+                &[
+                    0..q.dim(0)?,
+                    0..q.dim(1)?,
+                    0..q.dim(2)?,
+                    0..self.cfg.qk_nope_head_dim,
+                ],
+                &q_nope,
+            )?;
+            q = q.slice_assign(
+                &[
+                    0..q.dim(0)?,
+                    0..q.dim(1)?,
+                    0..q.dim(2)?,
+                    self.cfg.qk_nope_head_dim..q.dim(3)?,
+                ],
+                &q_pe,
+            )?;
+            q
+        };
 
-        let mut k = Tensor::zeros(
-            (bs, self.cfg.num_attention_heads, seq_len, self.q_head_dim),
-            k_pe.dtype(),
-            k_pe.device(),
-        )?;
-        k = k.slice_assign(
-            &[
-                0..k.dim(0)?,
-                0..k.dim(1)?,
-                0..k.dim(2)?,
-                0..self.cfg.qk_nope_head_dim,
-            ],
-            &k_nope,
-        )?;
-        let k_pe = k_pe.repeat((1, k.dim(1)?, 1, 1))?;
-        k = k.slice_assign(
-            &[
-                0..k.dim(0)?,
-                0..k.dim(1)?,
-                0..k.dim(2)?,
-                self.cfg.qk_nope_head_dim..k.dim(3)?,
-            ],
-            &k_pe,
-        )?;
+        let mut k = {
+            let mut k = Tensor::zeros(
+                (bs, self.cfg.num_attention_heads, seq_len, self.q_head_dim),
+                k_pe.dtype(),
+                k_pe.device(),
+            )?;
+            k = k.slice_assign(
+                &[
+                    0..k.dim(0)?,
+                    0..k.dim(1)?,
+                    0..k.dim(2)?,
+                    0..self.cfg.qk_nope_head_dim,
+                ],
+                &k_nope,
+            )?;
+            let k_pe = k_pe.repeat((1, k.dim(1)?, 1, 1))?;
+            k = k.slice_assign(
+                &[
+                    0..k.dim(0)?,
+                    0..k.dim(1)?,
+                    0..k.dim(2)?,
+                    self.cfg.qk_nope_head_dim..k.dim(3)?,
+                ],
+                &k_pe,
+            )?;
+            k
+        };
 
         (k, v) = match &self.kv_cache {
             None => (k, v),
