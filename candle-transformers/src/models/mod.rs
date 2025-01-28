@@ -28,7 +28,6 @@ pub mod colpali;
 pub mod convmixer;
 pub mod convnext;
 pub mod dac;
-pub mod deepseekv3;
 pub mod depth_anything_v2;
 pub mod dinov2;
 pub mod dinov2reg4;

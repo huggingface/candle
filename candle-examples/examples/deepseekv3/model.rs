@@ -1,16 +1,21 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{f32::consts::PI, str::FromStr, sync::Arc};
+use std::{f32::consts::PI, rc::Rc, str::FromStr, sync::Arc};
 
 use candle::{
     quantized::GgmlDType, shape::Dim, CpuStorage, CustomOp1, DType, Device, Error, IndexOp, Layout,
     Result, Shape, Tensor, WithDType, D,
 };
-use candle_nn::{embedding, rms_norm, Activation, Embedding, Module, RmsNorm, VarBuilder};
+use candle_nn::{var_builder::ShardedVarBuilder, Activation, Embedding, Linear, Module, RmsNorm};
+use cudarc::nccl::Comm;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 
-use super::quant::{self, BlockwiseFP8Linear, QuantizedConfig};
+use crate::quant::BlockwiseFP8ReplicatedLinear;
+
+use super::quant::{
+    self, BlockwiseFP8ParallelColumnLinear, BlockwiseFP8ParallelRowLinear, QuantizedConfig,
+};
 
 struct NonZero {}
 
@@ -199,8 +204,6 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
     Ok(m)
 }
 
-#[doc(hidden)]
-#[macro_export]
 macro_rules! serde_default_fn {
     ($t:ty, $name:ident, $v:expr) => {
         fn $name() -> $t {
@@ -235,7 +238,7 @@ enum ScoringFunc {
 }
 
 #[derive(Deserialize, Clone, Debug)]
-pub struct DeepSeekV2Config {
+pub struct DeepSeekV3Config {
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
     pub(crate) intermediate_size: usize,
@@ -265,7 +268,7 @@ pub struct DeepSeekV2Config {
     #[serde(default = "tie_word_embeddings")]
     pub(crate) tie_word_embeddings: bool,
     pub(crate) rope_theta: f32,
-    pub(crate) rope_scaling: Option<DeepSeekV2RopeScaling>,
+    pub(crate) rope_scaling: Option<DeepSeekV3RopeScaling>,
     pub(crate) attention_bias: bool,
     pub(crate) q_lora_rank: Option<usize>,
     pub(crate) qk_rope_head_dim: usize,
@@ -275,6 +278,7 @@ pub struct DeepSeekV2Config {
     pub(crate) n_group: usize,
     pub(crate) topk_group: usize,
     pub(crate) quantization_config: Option<QuantizedConfig>,
+    pub(crate) eos_token_id: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -307,14 +311,14 @@ impl FromStr for ScaledRopeType {
 }
 
 #[derive(Debug, Clone)]
-pub struct DeepSeekV2RotaryEmbedding {
+pub struct DeepSeekV3RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
-pub enum DeepSeekV2RopeScaling {
+pub enum DeepSeekV3RopeScaling {
     Yarn {
         original_max_position_embeddings: usize,
         beta_fast: f32,
@@ -322,25 +326,18 @@ pub enum DeepSeekV2RopeScaling {
         mscale: f32,
         mscale_all_dim: f32,
         factor: f32,
-        #[serde(rename = "type")]
-        scaling_type: ScaledRopeType,
-    },
-    BlockwiseFP8LinearOrDynamic {
-        #[serde(rename = "type")]
-        scaling_type: ScaledRopeType,
-        factor: f64,
     },
 }
 
-pub struct DeepSeekV2RopeConfig {
-    pub rope_scaling: Option<DeepSeekV2RopeScaling>,
+pub struct DeepSeekV3RopeConfig {
+    pub rope_scaling: Option<DeepSeekV3RopeScaling>,
     pub max_position_embeddings: usize,
     pub rope_theta: f32,
     pub qk_rope_head_dim: usize,
 }
 
-impl DeepSeekV2RotaryEmbedding {
-    fn new_unscaled(cfg: &DeepSeekV2RopeConfig, dtype: DType, dev: &Device) -> Result<Self> {
+impl DeepSeekV3RotaryEmbedding {
+    fn new_unscaled(cfg: &DeepSeekV3RopeConfig, dtype: DType, dev: &Device) -> Result<Self> {
         let max_seq_len = cfg.max_position_embeddings;
         let dim = cfg.qk_rope_head_dim;
 
@@ -404,7 +401,7 @@ impl DeepSeekV2RotaryEmbedding {
 
     #[allow(clippy::too_many_arguments)]
     fn new_yarn(
-        cfg: &DeepSeekV2RopeConfig,
+        cfg: &DeepSeekV3RopeConfig,
         dtype: DType,
         dev: &Device,
         original_max_position_embeddings: usize,
@@ -453,20 +450,15 @@ impl DeepSeekV2RotaryEmbedding {
         Ok(Self { sin, cos })
     }
 
-    pub fn new(cfg: &DeepSeekV2RopeConfig, dtype: DType, dev: &Device) -> Result<Self> {
+    pub fn new(cfg: &DeepSeekV3RopeConfig, dtype: DType, dev: &Device) -> Result<Self> {
         match &cfg.rope_scaling {
-            Some(DeepSeekV2RopeScaling::BlockwiseFP8LinearOrDynamic {
-                scaling_type: _,
-                factor: _,
-            }) => candle::bail!("linear and dynamic rope are not implemented yet!"),
-            Some(DeepSeekV2RopeScaling::Yarn {
+            Some(DeepSeekV3RopeScaling::Yarn {
                 original_max_position_embeddings,
                 beta_fast,
                 beta_slow,
                 factor,
                 mscale,
                 mscale_all_dim,
-                scaling_type: _,
             }) => Self::new_yarn(
                 cfg,
                 dtype,
@@ -500,32 +492,50 @@ impl DeepSeekV2RotaryEmbedding {
     }
 }
 
-impl DeepSeekV2Config {
+impl DeepSeekV3Config {
     pub(crate) fn q_head_dim(&self) -> usize {
         self.qk_rope_head_dim + self.qk_nope_head_dim
     }
 
     fn softmax_scale(&self) -> f32 {
         let mut softmax_scale = 1.0 / (self.q_head_dim() as f32).sqrt();
-        if let Some(DeepSeekV2RopeScaling::Yarn {
+        if let Some(DeepSeekV3RopeScaling::Yarn {
             mscale_all_dim,
             factor,
             ..
         }) = self.rope_scaling
         {
-            let mscale = DeepSeekV2RotaryEmbedding::yarn_get_mscale(factor, mscale_all_dim);
+            let mscale = DeepSeekV3RotaryEmbedding::yarn_get_mscale(factor, mscale_all_dim);
             softmax_scale = softmax_scale * mscale * mscale;
         }
         softmax_scale
     }
 }
 
+fn shard(dim: usize, rank: usize, world_size: usize) -> candle_nn::var_builder::Shard {
+    candle_nn::var_builder::Shard {
+        dim,
+        rank,
+        world_size,
+    }
+}
+
+fn rms_norm(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<RmsNorm> {
+    let weight = vb.get_with_hints(size, "weight", shard(0, 0, 1))?;
+    Ok(RmsNorm::new(weight, eps))
+}
+
+fn embedding(in_size: usize, out_size: usize, vb: ShardedVarBuilder) -> Result<Embedding> {
+    let embeddings = vb.get((in_size, out_size), "weight")?;
+    Ok(Embedding::new(embeddings, out_size))
+}
+
 enum QProj {
-    Plain(BlockwiseFP8Linear),
+    Plain(BlockwiseFP8ParallelColumnLinear),
     Lora {
-        a: BlockwiseFP8Linear,
+        a: BlockwiseFP8ReplicatedLinear,
         norm: RmsNorm,
-        b: BlockwiseFP8Linear,
+        b: BlockwiseFP8ParallelColumnLinear,
     },
 }
 
@@ -540,27 +550,28 @@ impl QProj {
 
 struct Attention {
     q: QProj,
-    kv_a_proj_with_mqa: BlockwiseFP8Linear,
+    kv_a_proj_with_mqa: BlockwiseFP8ReplicatedLinear,
     kv_a_layernorm: RmsNorm,
-    kv_b_proj: BlockwiseFP8Linear,
-    o_proj: BlockwiseFP8Linear,
-    rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
-    cfg: DeepSeekV2Config,
+    kv_b_proj: BlockwiseFP8ParallelColumnLinear,
+    o_proj: BlockwiseFP8ParallelRowLinear,
+    rotary_emb: Arc<DeepSeekV3RotaryEmbedding>,
+    cfg: DeepSeekV3Config,
     q_head_dim: usize,
     softmax_scale: f64,
 }
 
 impl Attention {
     fn new(
-        rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
-        cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        rotary_emb: Arc<DeepSeekV3RotaryEmbedding>,
+        cfg: &DeepSeekV3Config,
+        vb: ShardedVarBuilder,
         quant: Option<GgmlDType>,
+        comm: Rc<Comm>,
     ) -> Result<Self> {
         let q_head_dim = cfg.q_head_dim();
         let q = match cfg.q_lora_rank {
             Some(lora_rank) => {
-                let a = quant::blockwise_fp8_linear_b(
+                let a = quant::blockwise_fp8_linear_b_replicated(
                     cfg.hidden_size,
                     lora_rank,
                     &cfg.quantization_config,
@@ -569,27 +580,29 @@ impl Attention {
                     vb.pp("q_a_proj"),
                 )?;
                 let norm = rms_norm(lora_rank, cfg.rms_norm_eps, vb.pp("q_a_layernorm"))?;
-                let b = quant::blockwise_fp8_linear_b(
+                let b = quant::blockwise_fp8_linear_b_parallel_column(
                     lora_rank,
                     cfg.num_attention_heads * q_head_dim,
                     &cfg.quantization_config,
                     false,
                     quant,
+                    comm.clone(),
                     vb.pp("q_b_proj"),
                 )?;
                 QProj::Lora { a, norm, b }
             }
-            None => QProj::Plain(quant::blockwise_fp8_linear_b(
+            None => QProj::Plain(quant::blockwise_fp8_linear_b_parallel_column(
                 cfg.hidden_size,
                 cfg.num_attention_heads * q_head_dim,
                 &cfg.quantization_config,
                 false,
                 quant,
+                comm.clone(),
                 vb.pp("q_proj"),
             )?),
         };
 
-        let kv_a_proj_with_mqa = quant::blockwise_fp8_linear_b(
+        let kv_a_proj_with_mqa = quant::blockwise_fp8_linear_b_replicated(
             cfg.hidden_size,
             cfg.kv_lora_rank + cfg.qk_rope_head_dim,
             &cfg.quantization_config,
@@ -598,21 +611,23 @@ impl Attention {
             vb.pp("kv_a_proj_with_mqa"),
         )?;
         let kv_a_layernorm = rms_norm(cfg.kv_lora_rank, cfg.rms_norm_eps, vb.pp("kv_a_layernorm"))?;
-        let kv_b_proj = quant::blockwise_fp8_linear_b(
+        let kv_b_proj = quant::blockwise_fp8_linear_b_parallel_column(
             cfg.kv_lora_rank,
             cfg.num_attention_heads * (q_head_dim - cfg.qk_rope_head_dim + cfg.v_head_dim),
             &cfg.quantization_config,
             false,
             quant,
+            comm.clone(),
             vb.pp("kv_b_proj"),
         )?;
 
-        let o_proj = quant::blockwise_fp8_linear_b(
+        let o_proj = quant::blockwise_fp8_linear_b_parallel_row(
             cfg.num_attention_heads * cfg.v_head_dim,
             cfg.hidden_size,
             &cfg.quantization_config,
             cfg.attention_bias,
             quant,
+            comm,
             vb.pp("o_proj"),
         )?;
 
@@ -748,46 +763,50 @@ impl Attention {
 }
 
 struct Mlp {
-    gate: BlockwiseFP8Linear,
-    up: BlockwiseFP8Linear,
-    down: BlockwiseFP8Linear,
+    gate: BlockwiseFP8ParallelColumnLinear,
+    up: BlockwiseFP8ParallelColumnLinear,
+    down: BlockwiseFP8ParallelRowLinear,
     act: Activation,
 }
 
 impl Mlp {
     fn new(
-        cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        cfg: &DeepSeekV3Config,
+        vb: ShardedVarBuilder,
         hidden_size: Option<usize>,
         intermediate_size: Option<usize>,
         quant: Option<GgmlDType>,
+        comm: Rc<Comm>,
     ) -> Result<Self> {
         let hidden_size = hidden_size.unwrap_or(cfg.hidden_size);
         let intermediate_size = intermediate_size.unwrap_or(cfg.intermediate_size);
 
         Ok(Self {
-            gate: quant::blockwise_fp8_linear_b(
+            gate: quant::blockwise_fp8_linear_b_parallel_column(
                 hidden_size,
                 intermediate_size,
                 &cfg.quantization_config,
                 false,
                 quant,
+                comm.clone(),
                 vb.pp("gate_proj"),
             )?,
-            up: quant::blockwise_fp8_linear_b(
+            up: quant::blockwise_fp8_linear_b_parallel_column(
                 hidden_size,
                 intermediate_size,
                 &cfg.quantization_config,
                 false,
                 quant,
+                comm.clone(),
                 vb.pp("up_proj"),
             )?,
-            down: quant::blockwise_fp8_linear_b(
+            down: quant::blockwise_fp8_linear_b_parallel_row(
                 intermediate_size,
                 hidden_size,
                 &cfg.quantization_config,
                 false,
                 quant,
+                comm.clone(),
                 vb.pp("down_proj"),
             )?,
             act: cfg.hidden_act,
@@ -803,14 +822,14 @@ impl Mlp {
 
 struct MoeGate {
     weight: Tensor,
-    cfg: DeepSeekV2Config,
+    cfg: DeepSeekV3Config,
     top_k: usize,
     n_routed_experts: usize,
     e_score_correction_bias: Option<Tensor>,
 }
 
 impl MoeGate {
-    fn new(cfg: &DeepSeekV2Config, vb: VarBuilder, n_routed_experts: usize) -> Result<Self> {
+    fn new(cfg: &DeepSeekV3Config, vb: ShardedVarBuilder, n_routed_experts: usize) -> Result<Self> {
         let weight = vb.get((n_routed_experts, cfg.hidden_size), "weight")?;
         let e_score_correction_bias = if matches!(cfg.topk_method, TopkMethod::NoAuxTc) {
             Some(vb.get_with_hints_dtype(
@@ -937,11 +956,12 @@ struct Moe {
 
 impl Moe {
     fn new(
-        cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        cfg: &DeepSeekV3Config,
+        vb: ShardedVarBuilder,
         n_shared_experts: Option<usize>,
         n_routed_experts: usize,
         quant: Option<GgmlDType>,
+        comm: Rc<Comm>,
     ) -> Result<Self> {
         let mut experts = Vec::with_capacity(n_routed_experts);
         for i in 0..n_routed_experts {
@@ -952,6 +972,7 @@ impl Moe {
                 None,
                 Some(cfg.moe_intermediate_size),
                 quant,
+                comm.clone(),
             )?);
         }
         let shared_experts = if let Some(n_shared_experts) = n_shared_experts {
@@ -962,6 +983,7 @@ impl Moe {
                 None,
                 Some(intermediate_size),
                 quant,
+                comm,
             )?)
         } else {
             None
@@ -1043,13 +1065,14 @@ struct DecoderLayer {
 
 impl DecoderLayer {
     fn new(
-        rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
-        cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        rotary_emb: Arc<DeepSeekV3RotaryEmbedding>,
+        cfg: &DeepSeekV3Config,
+        vb: ShardedVarBuilder,
         layer_idx: usize,
         quant: Option<GgmlDType>,
+        comm: Rc<Comm>,
     ) -> Result<Self> {
-        let attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), quant)?;
+        let attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), quant, comm.clone())?;
         let input_layernorm =
             rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let post_attention_layernorm = rms_norm(
@@ -1067,9 +1090,10 @@ impl DecoderLayer {
                 cfg.n_shared_experts,
                 cfg.n_routed_experts.unwrap(),
                 quant,
+                comm,
             )?)
         } else {
-            MoeOrMlp::Mlp(Mlp::new(cfg, vb.pp("mlp"), None, None, quant)?)
+            MoeOrMlp::Mlp(Mlp::new(cfg, vb.pp("mlp"), None, None, quant, comm)?)
         };
 
         Ok(Self {
@@ -1098,8 +1122,8 @@ impl DecoderLayer {
     }
 }
 
-pub struct DeepSeekV2 {
-    lm_head: candle_nn::Linear,
+pub struct DeepSeekV3 {
+    lm_head: BlockwiseFP8ReplicatedLinear,
     embed_tokens: Embedding,
     norm: RmsNorm,
     layers: Vec<DecoderLayer>,
@@ -1107,25 +1131,40 @@ pub struct DeepSeekV2 {
     device: Device,
 }
 
-impl DeepSeekV2 {
-    pub fn new(cfg: &DeepSeekV2Config, vb: VarBuilder, quant: Option<GgmlDType>) -> Result<Self> {
+impl DeepSeekV3 {
+    pub fn new(
+        cfg: &DeepSeekV3Config,
+        vb: ShardedVarBuilder,
+        quant: Option<GgmlDType>,
+        comm: Rc<Comm>,
+    ) -> Result<Self> {
         let vb_m = vb.pp("model");
 
         let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
         let lm_head = if !cfg.tie_word_embeddings {
-            candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
+            quant::blockwise_fp8_linear_b_replicated(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                &cfg.quantization_config,
+                false,
+                None,
+                vb.pp("lm_head"),
+            )?
         } else {
-            candle_nn::Linear::new(embed_tokens.embeddings().clone(), None)
+            BlockwiseFP8ReplicatedLinear::Unquantized(Linear::new(
+                embed_tokens.embeddings().clone(),
+                None,
+            ))
         };
         let norm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
 
-        let rope_cfg = DeepSeekV2RopeConfig {
+        let rope_cfg = DeepSeekV3RopeConfig {
             rope_scaling: cfg.rope_scaling.clone(),
             max_position_embeddings: cfg.max_position_embeddings,
             rope_theta: cfg.rope_theta,
             qk_rope_head_dim: cfg.qk_rope_head_dim,
         };
-        let rotary_emb = Arc::new(DeepSeekV2RotaryEmbedding::new(
+        let rotary_emb = Arc::new(DeepSeekV3RotaryEmbedding::new(
             &rope_cfg,
             vb.dtype(),
             vb.device(),
@@ -1140,6 +1179,7 @@ impl DeepSeekV2 {
                 vb_l.pp(layer_idx),
                 layer_idx,
                 quant,
+                comm.clone(),
             )?;
             layers.push(layer)
         }

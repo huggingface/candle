@@ -61,6 +61,15 @@ mod cuda {
     use crate::cuda_backend::{kernel_name, kernels, CudaStorageSlice as S, WrapErr};
     use crate::{CudaDevice, WithDType};
 
+    #[allow(unused)]
+    fn next_power_of_2(x: usize) -> usize {
+        let mut n = 1;
+        while n < x {
+            n *= 2
+        }
+        n
+    }
+
     impl crate::cuda_backend::Map1Any for ArgSort {
         fn f<T: DeviceRepr + WithDType + ValidAsZeroBits, W: Fn(CudaSlice<T>) -> S>(
             &self,

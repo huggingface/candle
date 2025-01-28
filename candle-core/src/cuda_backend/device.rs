@@ -313,17 +313,13 @@ impl BackendDevice for CudaDevice {
             elem_count
         };
         let slice = match dtype {
-            DType::U8
-            | DType::U32
-            | DType::I16
-            | DType::I32
-            | DType::I64
-            | DType::F16
-            | DType::BF16 => Err(CudaError::UnsupportedDtype {
-                dtype,
-                op: "rand_normal",
-            })
-            .w()?,
+            DType::U8 | DType::U32 | DType::I64 | DType::F16 | DType::BF16 | DType::F8E4M3 => {
+                Err(CudaError::UnsupportedDtype {
+                    dtype,
+                    op: "rand_normal",
+                })
+                .w()?
+            }
             DType::F32 => {
                 let mut data = unsafe { self.alloc::<f32>(elem_count_round) }.w()?;
                 curand
