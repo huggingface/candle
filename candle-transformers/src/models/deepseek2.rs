@@ -113,10 +113,7 @@ impl TopKLastDimOp for Tensor {
 
         // Reorder the indices ascending
         let reorder_indices = topk_indices_sorted.arg_sort_last_dim(true)?;
-        let topk_indices_unsorted = topk_indices_sorted
-            .to_dtype(DType::F32)?
-            .gather(&reorder_indices, D::Minus1)?
-            .to_dtype(DType::U32)?;
+        let topk_indices_unsorted = topk_indices_sorted.gather(&reorder_indices, D::Minus1)?;
         let topk_values_unsorted = topk_values_sorted.gather(&reorder_indices, D::Minus1)?;
         Ok(TopKOutput {
             values: topk_values_unsorted,
