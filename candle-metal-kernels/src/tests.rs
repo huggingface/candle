@@ -620,9 +620,9 @@ fn run_mlx_sort<T: Clone>(v: &[T], ncols: usize) -> Vec<u32> {
         &device,
         command_buffer,
         &kernels,
+        DType::F32,
         nrows,
         ncols,
-        4,
         BufferOffset::zero_offset(&input),
         &output,
     )

@@ -32,6 +32,29 @@ const UNARY: &str = include_str!("unary.metal");
 const SDPA: &str = include_str!("scaled_dot_product_attention.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DType {
+    BF16,
+    F16,
+    F32,
+    I64,
+    U32,
+    U8,
+}
+
+impl DType {
+    fn size_in_bytes(&self) -> usize {
+        match self {
+            Self::U8 => 1,
+            Self::U32 => 4,
+            Self::I64 => 8,
+            Self::BF16 => 2,
+            Self::F16 => 2,
+            Self::F32 => 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     Affine,
     Binary,
