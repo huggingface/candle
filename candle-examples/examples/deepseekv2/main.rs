@@ -254,10 +254,10 @@ fn main() -> Result<()> {
     };
     let device = candle_examples::device(args.cpu)?;
     let (model, device) = {
-        let dtype = if device.is_cuda() {
-            DType::BF16
-        } else {
+        let dtype = if device.is_cpu() {
             DType::F16
+        } else {
+            DType::BF16
         };
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
         let model = DeepSeekV2::new(&config, vb)?;
