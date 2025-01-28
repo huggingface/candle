@@ -1656,7 +1656,7 @@ instantiate_fast_inference_self_attention_kernel(half, half, 16, 16, 256, 2, 2);
       const constant size_t& v_stride,                                       \
       const constant float& scale,                                           \
       const constant float& softcapping,                                     \
-      const device bool* mask [[function_constant(sdpa_vector_has_mask)]],,              \
+      const device bool* mask [[function_constant(sdpa_vector_has_mask)]],              \
       const constant int& mask_seq_stride [[function_constant(sdpa_vector_has_mask)]],   \
       const constant int& mask_head_stride [[function_constant(sdpa_vector_has_mask)]],  \
       uint3 tid [[threadgroup_position_in_grid]],                            \
@@ -1676,7 +1676,7 @@ instantiate_fast_inference_self_attention_kernel(half, half, 16, 16, 256, 2, 2);
       const constant size_t& v_stride,                                       \
       const constant float& scale,                                           \
       const constant float& softcapping,                                     \
-      const device bool* mask [[function_constant(sdpa_vector_has_mask)]],,              \
+      const device bool* mask [[function_constant(sdpa_vector_has_mask)]],              \
       const constant int& mask_seq_stride [[function_constant(sdpa_vector_has_mask)]],   \
       const constant int& mask_head_stride [[function_constant(sdpa_vector_has_mask)]],  \
       uint3 tid [[threadgroup_position_in_grid]],                            \
