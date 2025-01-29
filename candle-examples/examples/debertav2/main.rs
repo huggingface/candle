@@ -7,7 +7,7 @@ extern crate accelerate_src;
 use std::fmt::Display;
 use std::path::PathBuf;
 
-use anyhow::{ensure, Error};
+use anyhow::bail;
 use anyhow::{Error as E, Result};
 use candle::{Device, Tensor};
 use candle_nn::ops::softmax;
@@ -100,13 +100,9 @@ impl Args {
         let (config_filename, tokenizer_filename, weights_filename) = {
             match &self.model_path {
                 Some(base_path) => {
-                    ensure!(
-                        base_path.is_dir(),
-                        std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("Model path {} is not a directory.", base_path.display()),
-                        )
-                    );
+                    if !base_path.is_dir() {
+                        bail!("Model path {} is not a directory.", base_path.display())
+                    }
 
                     let config = base_path.join("config.json");
                     let tokenizer = base_path.join("tokenizer.json");
@@ -146,9 +142,7 @@ impl Args {
         } else if let Some(id2label) = &config.id2label {
             id2label.clone()
         } else {
-            return Err(Error::msg(
-                "Id2Label not found in the model configuration nor was it specified as a parameter",
-            ));
+            bail!("Id2Label not found in the model configuration nor specified as a parameter")
         };
 
         let mut tokenizer = Tokenizer::from_file(tokenizer_filename)
@@ -217,11 +211,6 @@ fn main() -> Result<()> {
     use tracing_subscriber::prelude::*;
 
     let args = Args::parse();
-
-    if args.model_id.is_some() && args.model_path.is_some() {
-        eprintln!("Error: Cannot specify both --model_id and --model_path.");
-        std::process::exit(1);
-    }
 
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();

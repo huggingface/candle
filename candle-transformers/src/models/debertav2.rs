@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use candle::{DType, Device, Module, Tensor, D};
+use candle::{bail, Context, DType, Device, Module, Tensor, D};
 use candle_nn::{
     conv1d, embedding, layer_norm, Conv1d, Conv1dConfig, Embedding, LayerNorm, VarBuilder,
 };
@@ -141,39 +141,39 @@ impl DebertaV2Embeddings {
         let device = vb.device().clone();
         let config = config.clone();
 
-        let embedding_size = match config.embedding_size {
-            Some(es) => es,
-            None => config.hidden_size,
-        };
+        let embedding_size = config.embedding_size.unwrap_or(config.hidden_size);
 
         let word_embeddings =
             embedding(config.vocab_size, embedding_size, vb.pp("word_embeddings"))?;
 
-        let position_embeddings = match config.position_biased_input {
-            true => Some(embedding(
+        let position_embeddings = if config.position_biased_input {
+            Some(embedding(
                 config.max_position_embeddings,
                 embedding_size,
                 vb.pp("position_embeddings"),
-            )?),
-            false => None,
+            )?)
+        } else {
+            None
         };
 
-        let token_type_embeddings: Option<Embedding> = match config.type_vocab_size > 0 {
-            true => Some(candle_nn::embedding(
+        let token_type_embeddings: Option<Embedding> = if config.type_vocab_size > 0 {
+            Some(candle_nn::embedding(
                 config.type_vocab_size,
                 config.hidden_size,
                 vb.pp("token_type_embeddings"),
-            )?),
-            false => None,
+            )?)
+        } else {
+            None
         };
 
-        let embed_proj: Option<candle_nn::Linear> = match embedding_size != config.hidden_size {
-            true => Some(candle_nn::linear_no_bias(
+        let embed_proj: Option<candle_nn::Linear> = if embedding_size != config.hidden_size {
+            Some(candle_nn::linear_no_bias(
                 embedding_size,
                 config.hidden_size,
                 vb.pp("embed_proj"),
-            )?),
-            false => None,
+            )?)
+        } else {
+            None
         };
 
         let layer_norm = layer_norm(
@@ -213,33 +213,31 @@ impl DebertaV2Embeddings {
             (Some(inputids), None) => inputids.dims(),
             (None, Some(inputsembeds)) => inputsembeds.dims(),
             (None, None) => {
-                return Err(candle::Error::Msg(
-                    "Must specify either input_ids or inputs_embeds".to_string(),
-                ))
+                bail!("Must specify either input_ids or inputs_embeds")
             }
             (Some(_), Some(_)) => {
-                return Err(candle::Error::Msg(
-                    "Can't specify both input_ids and inputs_embeds".to_string(),
-                ))
+                bail!("Can't specify both input_ids and inputs_embeds")
             }
         };
 
-        let seq_length = input_shape.last().unwrap().to_owned();
+        let seq_length = input_shape
+            .last()
+            .context("DebertaV2Embeddings invalid input shape")?
+            .to_owned();
 
-        let position_ids = match position_ids {
-            Some(p) => p.to_owned(),
-            None => self.position_ids.narrow(1, 0, seq_length)?,
-        };
+        let position_ids = position_ids
+            .cloned()
+            .unwrap_or(self.position_ids.narrow(1, 0, seq_length)?);
 
-        let token_type_ids = match token_type_ids {
-            Some(t) => t.to_owned(),
-            None => Tensor::zeros(input_shape, DType::U32, &self.device)?,
-        };
+        let token_type_ids = token_type_ids.cloned().unwrap_or(Tensor::zeros(
+            input_shape,
+            DType::U32,
+            &self.device,
+        )?);
 
-        let input_embeds = match inputs_embeds {
-            Some(e) => e.to_owned(),
-            None => self.word_embeddings.forward(input_ids.unwrap())?,
-        };
+        let input_embeds = inputs_embeds
+            .cloned()
+            .unwrap_or(self.word_embeddings.forward(input_ids.unwrap())?);
 
         let position_embeddings = match &self.position_embeddings {
             Some(emb) => emb.forward(&position_ids)?,
@@ -253,13 +251,20 @@ impl DebertaV2Embeddings {
         }
 
         if self.config.type_vocab_size > 0 {
-            let token_type_embeddings = self.token_type_embeddings.as_ref().unwrap();
-            let token_type_embeddings = token_type_embeddings.forward(&token_type_ids)?;
-            embeddings = embeddings.add(&token_type_embeddings)?;
+            embeddings = self.token_type_embeddings.as_ref().map_or_else(
+                || bail!("token_type_embeddings must be set when type_vocab_size > 0"),
+                |token_type_embeddings| {
+                    embeddings.add(&token_type_embeddings.forward(&token_type_ids)?)
+                },
+            )?;
         }
 
         if self.embedding_size != self.config.hidden_size {
-            embeddings = self.embed_proj.as_ref().unwrap().forward(&embeddings)?;
+            embeddings = if let Some(embed_proj) = &self.embed_proj {
+                embed_proj.forward(&embeddings)?
+            } else {
+                bail!("embed_proj must exist if embedding_size != config.hidden_size");
+            }
         }
 
         embeddings = self.layer_norm.forward(&embeddings)?;
@@ -277,9 +282,9 @@ impl DebertaV2Embeddings {
             embeddings = embeddings.broadcast_mul(&mask)?;
         }
 
-        embeddings = self.dropout.forward(Some(&embeddings))?.unwrap();
-
-        Ok(embeddings)
+        self.dropout
+            .forward(Some(&embeddings))?
+            .context("Dropout forward returned None")
     }
 }
 
@@ -372,14 +377,14 @@ impl DebertaV2DisentangledSelfAttention {
             pos_dropout = Some(StableDropout::new(config.hidden_dropout_prob));
 
             if !share_att_key {
-                if config.pos_att_type.contains(&"c2p".to_string()) {
+                if config.pos_att_type.iter().any(|s| s == "c2p") {
                     pos_key_proj = Some(candle_nn::linear(
                         config.hidden_size,
                         all_head_size,
                         vb.pp("pos_key_proj"),
                     )?);
                 }
-                if config.pos_att_type.contains(&"p2c".to_string()) {
+                if config.pos_att_type.iter().any(|s| s == "p2c") {
                     pos_query_proj = Some(candle_nn::linear(
                         config.hidden_size,
                         all_head_size,
@@ -432,21 +437,21 @@ impl DebertaV2DisentangledSelfAttention {
 
         let mut scale_factor: usize = 1;
 
-        if self.config.pos_att_type.contains(&"c2p".to_string()) {
+        if self.config.pos_att_type.iter().any(|s| s == "c2p") {
             scale_factor += 1;
         }
 
-        if self.config.pos_att_type.contains(&"p2c".to_string()) {
+        if self.config.pos_att_type.iter().any(|s| s == "p2c") {
             scale_factor += 1;
         }
 
         let scale = {
-            let q_size = query_layer.dims().last().unwrap();
+            let q_size = query_layer.dim(D::Minus1)?;
             Tensor::new(&[(q_size * scale_factor) as f32], &self.device)?.sqrt()?
         };
 
         let mut attention_scores: Tensor = {
-            let key_layer_transposed = key_layer.transpose(D::Minus1, D::Minus2)?;
+            let key_layer_transposed = key_layer.t()?;
             let div = key_layer_transposed
                 .broadcast_div(scale.to_dtype(query_layer.dtype())?.as_ref())?;
             query_layer.matmul(&div)?
@@ -456,11 +461,9 @@ impl DebertaV2DisentangledSelfAttention {
             let rel_embeddings = self
                 .pos_dropout
                 .as_ref()
-                .ok_or(candle::Error::Msg(
-                    "relative_attention requires pos_dropout".to_string(),
-                ))?
+                .context("relative_attention requires pos_dropout")?
                 .forward(rel_embeddings)?
-                .unwrap();
+                .context("Error forwarding rel_embeddings")?;
 
             rel_att = Some(self.disentangled_attention_bias(
                 query_layer,
@@ -471,8 +474,8 @@ impl DebertaV2DisentangledSelfAttention {
             )?);
         }
 
-        if rel_att.is_some() {
-            attention_scores = attention_scores.broadcast_add(&rel_att.unwrap())?;
+        if let Some(rel_att) = rel_att {
+            attention_scores = attention_scores.broadcast_add(&rel_att)?;
         }
 
         attention_scores = attention_scores.reshape((
@@ -485,12 +488,10 @@ impl DebertaV2DisentangledSelfAttention {
         let mut attention_probs =
             XSoftmax::apply(&attention_scores, attention_mask, D::Minus1, &self.device)?;
 
-        attention_probs =
-            self.dropout
-                .forward(Some(&attention_probs))?
-                .ok_or(candle::Error::Msg(
-                    "Dropout did not return a value".to_string(),
-                ))?;
+        attention_probs = self
+            .dropout
+            .forward(Some(&attention_probs))?
+            .context("Dropout did not return a value")?;
 
         let mut context_layer = attention_probs
             .reshape((
@@ -518,10 +519,10 @@ impl DebertaV2DisentangledSelfAttention {
             4 => context_layer.reshape((dims[0], dims[1], ()))?,
             5 => context_layer.reshape((dims[0], dims[1], dims[2], ()))?,
             _ => {
-                return Err(candle::Error::Msg(format!(
+                bail!(
                     "Invalid shape for DisentabgledSelfAttention context layer: {:?}",
                     dims
-                )))
+                )
             }
         };
 
@@ -530,24 +531,20 @@ impl DebertaV2DisentangledSelfAttention {
 
     fn transpose_for_scores(&self, xs: &Tensor) -> candle::Result<Tensor> {
         let dims = xs.dims().to_vec();
-        let result = match dims.len() {
+        match dims.len() {
             3 => {
                 let reshaped = xs.reshape((dims[0], dims[1], self.num_attention_heads, ()))?;
 
-                let new_dims = reshaped.dims();
-
                 reshaped.transpose(1, 2)?.contiguous()?.reshape((
                     (),
-                    new_dims[1],
-                    *new_dims.last().unwrap(),
+                    reshaped.dim(1)?,
+                    reshaped.dim(D::Minus1)?,
                 ))
             }
-            shape => Err(candle::Error::Msg(format!(
-                "Invalid shape for transpose_for_scores. Expected 3 dimensions, got {shape}"
-            ))),
-        };
-
-        result
+            shape => {
+                bail!("Invalid shape for transpose_for_scores. Expected 3 dimensions, got {shape}")
+            }
+        }
     }
 
     fn disentangled_attention_bias(
@@ -558,26 +555,22 @@ impl DebertaV2DisentangledSelfAttention {
         rel_embeddings: Tensor,
         scale_factor: usize,
     ) -> candle::Result<Tensor> {
-        let mut relative_pos: Tensor = if relative_pos.is_none() {
-            let q = query_layer.dim(D::Minus2)?;
+        let mut relative_pos = relative_pos.map_or(
             build_relative_position(
-                q,
-                key_layer.dim(D::Minus2).unwrap(),
+                query_layer.dim(D::Minus2)?,
+                key_layer.dim(D::Minus2)?,
                 &self.device,
                 Some(self.position_buckets),
                 Some(self.max_relative_positions),
-            )?
-        } else {
-            relative_pos.cloned().unwrap()
-        };
+            )?,
+            |pos| pos.clone(),
+        );
 
         relative_pos = match relative_pos.dims().len() {
             2 => relative_pos.unsqueeze(0)?.unsqueeze(0)?,
             3 => relative_pos.unsqueeze(1)?,
             other => {
-                return Err(candle::Error::Msg(format!(
-                    "Relative position ids must be of dim 2 or 3 or 4. Got dim of size {other}"
-                )))
+                bail!("Relative position ids must be of dim 2 or 3 or 4. Got dim of size {other}")
             }
         };
 
@@ -602,39 +595,33 @@ impl DebertaV2DisentangledSelfAttention {
                     .repeat(repeat_with)?,
             )
         } else {
-            if self.config.pos_att_type.contains(&"c2p".to_string()) {
+            if self.config.pos_att_type.iter().any(|s| s == "c2p") {
                 pos_key_layer = Some(
                     self.transpose_for_scores(
                         &self
                             .pos_key_proj
                             .as_ref()
-                            .ok_or(candle::Error::Msg(
-                                "Need a pos_key_proj when share_att_key is false or not specified"
-                                    .to_string(),
-                            ))?
+                            .context(
+                                "Need pos_key_proj when share_att_key is false or not specified",
+                            )?
                             .forward(&rel_embeddings)?,
                     )?
                     .repeat(repeat_with)?,
                 )
             }
-            if self.config.pos_att_type.contains(&"p2c".to_string()) {
+            if self.config.pos_att_type.iter().any(|s| s == "p2c") {
                 pos_query_layer = Some(self.transpose_for_scores(&self
                     .pos_query_proj
                     .as_ref()
-                    .ok_or(candle::Error::Msg(
-                        "Need a pos_query_proj when share_att_key is false or not specified"
-                            .to_string(),
-                    ))?
+                    .context("Need a pos_query_proj when share_att_key is false or not specified")?
                     .forward(&rel_embeddings)?)?.repeat(repeat_with)?)
             }
         }
 
         let mut score = Tensor::new(&[0 as f32], &self.device)?;
 
-        if self.config.pos_att_type.contains(&"c2p".to_string()) {
-            let pos_key_layer = pos_key_layer.ok_or(candle::Error::Msg(
-                "content to position without pos_key_layer".to_string(),
-            ))?;
+        if self.config.pos_att_type.iter().any(|s| s == "c2p") {
+            let pos_key_layer = pos_key_layer.context("c2p without pos_key_layer")?;
 
             let scale = Tensor::new(
                 &[(pos_key_layer.dim(D::Minus1)? * scale_factor) as f32],
@@ -642,8 +629,7 @@ impl DebertaV2DisentangledSelfAttention {
             )?
             .sqrt()?;
 
-            let mut c2p_att =
-                query_layer.matmul(&pos_key_layer.transpose(D::Minus1, D::Minus2)?)?;
+            let mut c2p_att = query_layer.matmul(&pos_key_layer.t()?)?;
 
             let c2p_pos = relative_pos
                 .broadcast_add(&Tensor::new(&[att_span as i64], &self.device)?)?
@@ -666,10 +652,8 @@ impl DebertaV2DisentangledSelfAttention {
             )?;
         }
 
-        if self.config.pos_att_type.contains(&"p2c".to_string()) {
-            let pos_query_layer = pos_query_layer.ok_or(candle::Error::Msg(
-                "content to position without pos_key_layer".to_string(),
-            ))?;
+        if self.config.pos_att_type.iter().any(|s| s == "p2c") {
+            let pos_query_layer = pos_query_layer.context("p2c without pos_key_layer")?;
 
             let scale = Tensor::new(
                 &[(pos_query_layer.dim(D::Minus1)? * scale_factor) as f32],
@@ -699,7 +683,7 @@ impl DebertaV2DisentangledSelfAttention {
                 .clamp(0f32, (att_span * 2 - 1) as f32)?;
 
             let p2c_att = key_layer
-                .matmul(&pos_query_layer.transpose(D::Minus1, D::Minus2)?)?
+                .matmul(&pos_query_layer.t()?)?
                 .gather(
                     &p2c_pos
                         .squeeze(0)?
@@ -712,7 +696,7 @@ impl DebertaV2DisentangledSelfAttention {
                         .to_dtype(DType::U32)?,
                     D::Minus1,
                 )?
-                .transpose(D::Minus1, D::Minus2)?;
+                .t()?;
 
             score =
                 score.broadcast_add(&p2c_att.broadcast_div(&scale.to_dtype(p2c_att.dtype())?)?)?;
@@ -751,12 +735,8 @@ impl DebertaV2Attention {
             rel_embeddings,
         )?;
 
-        let mut query_states = query_states;
-        if query_states.is_none() {
-            query_states = Some(hidden_states)
-        }
-
-        self.output.forward(&self_output, query_states.unwrap())
+        self.output
+            .forward(&self_output, query_states.unwrap_or(hidden_states))
     }
 }
 
@@ -785,12 +765,10 @@ impl DebertaV2SelfOutput {
 
     pub fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> candle::Result<Tensor> {
         let mut hidden_states = self.dense.forward(hidden_states)?;
-        hidden_states =
-            self.dropout
-                .forward(Some(&hidden_states))?
-                .ok_or(candle::error::Error::Msg(
-                    "DebertaV2SelfOuput dropout did not return a Tensor".to_string(),
-                ))?;
+        hidden_states = self
+            .dropout
+            .forward(Some(&hidden_states))?
+            .context("DebertaV2SelfOuput dropout did not return a Tensor")?;
 
         self.layer_norm
             .forward(&hidden_states.broadcast_add(input_tensor)?)
@@ -852,12 +830,10 @@ impl DebertaV2Output {
 
     pub fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> candle::Result<Tensor> {
         let mut hidden_states = self.dense.forward(hidden_states)?;
-        hidden_states =
-            self.dropout
-                .forward(Some(&hidden_states))?
-                .ok_or(candle::error::Error::Msg(
-                    "DebertaV2Ouptut did not receive a Tensor after dropout".to_string(),
-                ))?;
+        hidden_states = self
+            .dropout
+            .forward(Some(&hidden_states))?
+            .context("DebertaV2Ouptut did not receive a Tensor after dropout")?;
         hidden_states = {
             let to_norm = hidden_states.broadcast_add(input_tensor)?;
             self.layer_norm.forward(&to_norm)?
@@ -1020,18 +996,20 @@ impl DebertaV2Encoder {
             None => "none".to_string(),
         };
 
-        let layer_norm: Option<LayerNorm> = match norm_rel_ebd == "layer_norm" {
-            true => Some(layer_norm(
+        let layer_norm: Option<LayerNorm> = if norm_rel_ebd == "layer_norm" {
+            Some(layer_norm(
                 config.hidden_size,
                 config.layer_norm_eps,
                 vb.pp("LayerNorm"),
-            )?),
-            false => None,
+            )?)
+        } else {
+            None
         };
 
-        let conv: Option<ConvLayer> = match config.conv_kernel_size.unwrap_or(0) > 0 {
-            true => Some(ConvLayer::load(vb.pp("conv"), config)?),
-            false => None,
+        let conv: Option<ConvLayer> = if config.conv_kernel_size.unwrap_or(0) > 0 {
+            Some(ConvLayer::load(vb.pp("conv"), config)?)
+        } else {
+            None
         };
 
         Ok(Self {
@@ -1069,7 +1047,6 @@ impl DebertaV2Encoder {
         let mut next_kv: Tensor = hidden_states.clone();
         let rel_embeddings = self.get_rel_embedding()?;
         let mut output_states = next_kv.to_owned();
-
         let mut query_states: Option<Tensor> = query_states.cloned();
 
         for (i, layer_module) in self.layer.iter().enumerate() {
@@ -1085,12 +1062,10 @@ impl DebertaV2Encoder {
                 rel_embeddings.as_ref(),
             )?;
 
-            if i == 0 && self.conv.is_some() {
-                output_states = self.conv.as_ref().unwrap().forward(
-                    hidden_states,
-                    &output_states,
-                    &input_mask,
-                )?;
+            if i == 0 {
+                if let Some(conv) = &self.conv {
+                    output_states = conv.forward(hidden_states, &output_states, &input_mask)?;
+                }
             }
 
             if query_states.is_some() {
@@ -1104,15 +1079,17 @@ impl DebertaV2Encoder {
     }
 
     fn get_attention_mask(&self, mut attention_mask: Tensor) -> candle::Result<Tensor> {
-        if attention_mask.dims().len() <= 2 {
-            let extended_attention_mask = attention_mask.unsqueeze(1)?.unsqueeze(2)?;
-            attention_mask = extended_attention_mask.broadcast_mul(
-                &extended_attention_mask
-                    .squeeze(D::Minus2)?
-                    .unsqueeze(D::Minus1)?,
-            )?;
-        } else if attention_mask.dims().len() == 3 {
-            attention_mask = attention_mask.unsqueeze(1)?;
+        match attention_mask.dims().len() {
+            0..=2 => {
+                let extended_attention_mask = attention_mask.unsqueeze(1)?.unsqueeze(2)?;
+                attention_mask = extended_attention_mask.broadcast_mul(
+                    &extended_attention_mask
+                        .squeeze(D::Minus2)?
+                        .unsqueeze(D::Minus1)?,
+                )?;
+            }
+            3 => attention_mask = attention_mask.unsqueeze(1)?,
+            len => bail!("Unsupported attentiom mask size length: {len}"),
         }
 
         Ok(attention_mask)
@@ -1147,24 +1124,28 @@ impl DebertaV2Encoder {
         }
     }
     fn get_rel_embedding(&self) -> candle::Result<Option<Tensor>> {
-        let mut rel_embeddings: Option<Tensor>;
+        if !self.relative_attention {
+            return Ok(None);
+        }
 
-        rel_embeddings = if self.relative_attention {
-            Some(self.rel_embeddings.as_ref().unwrap().embeddings().clone())
-        } else {
-            None
-        };
+        let rel_embeddings = self
+            .rel_embeddings
+            .as_ref()
+            .context("self.rel_embeddings not present when using relative_attention")?
+            .embeddings()
+            .clone();
 
-        if rel_embeddings.is_some() && self.norm_rel_ebd.contains("layer_norm") {
-            rel_embeddings = Some(
-                self.layer_norm
-                    .as_ref()
-                    .unwrap()
-                    .forward(&rel_embeddings.unwrap())?,
-            );
-        };
+        if !self.norm_rel_ebd.contains("layer_norm") {
+            return Ok(Some(rel_embeddings));
+        }
 
-        Ok(rel_embeddings)
+        let layer_normed_embeddings = self
+            .layer_norm
+            .as_ref()
+            .context("DebertaV2Encoder layer_norm is None when norm_rel_ebd contains layer_norm")?
+            .forward(&rel_embeddings)?;
+
+        Ok(Some(layer_normed_embeddings))
     }
 }
 
@@ -1222,7 +1203,7 @@ impl DebertaV2Model {
                 .forward(&embedding_output, &attention_mask, None, None)?;
 
         if self.z_steps > 1 {
-            todo!("Copmlete DebertaV2Model forward() when z_steps > 1")
+            todo!("Complete DebertaV2Model forward() when z_steps > 1 -- Needs a model to test this situation.")
         }
 
         Ok(encoder_output)
@@ -1252,24 +1233,29 @@ pub struct DebertaV2NERModel {
     classifier: candle_nn::Linear,
 }
 
+fn id2label_len(config: &Config, id2label: Option<HashMap<u32, String>>) -> candle::Result<usize> {
+    let id2label_len = match (&config.id2label, id2label) {
+        (None, None) => bail!("Id2Label is either not present in the model configuration or not passed into DebertaV2NERModel::load as a parameter"),
+        (None, Some(id2label_p)) => id2label_p.len(),
+        (Some(id2label_c), None) => id2label_c.len(),
+        (Some(id2label_c), Some(id2label_p)) => {
+          if *id2label_c == id2label_p {
+            id2label_c.len()
+          } else {
+            bail!("Id2Label is both present in the model configuration and provided as a parameter, and they are different.")
+          }
+        }
+    };
+    Ok(id2label_len)
+}
+
 impl DebertaV2NERModel {
     pub fn load(
         vb: VarBuilder,
         config: &Config,
         id2label: Option<Id2Label>,
     ) -> candle::Result<Self> {
-        let id2label_len = match (&config.id2label, id2label) {
-            (None, None) => return Err(candle::error::Error::Msg("Id2Label is either not present in the model configuration or not passed into DebertaV2NERModel::load as a parameter".to_string())),
-            (None, Some(id2label_p)) => id2label_p.len(),
-            (Some(id2label_c), None) => id2label_c.len(),
-            (Some(id2label_c), Some(id2label_p)) => {
-              if *id2label_c == id2label_p {
-                id2label_c.len()
-              } else {
-                return Err(candle::error::Error::Msg("Id2Label is both present in the model configuration and provided as a parameter, and they are different.".to_string()))
-              }
-            }
-        };
+        let id2label_len = id2label_len(config, id2label)?;
 
         let deberta = DebertaV2Model::load(vb.clone(), config)?;
         let dropout = candle_nn::Dropout::new(config.hidden_dropout_prob as f32);
@@ -1315,19 +1301,7 @@ impl DebertaV2SeqClassificationModel {
         config: &Config,
         id2label: Option<Id2Label>,
     ) -> candle::Result<Self> {
-        let id2label_len = match (&config.id2label, id2label) {
-            (None, None) => return Err(candle::error::Error::Msg("Id2Label is either not present in the model configuration or not passed into DebertaV2NERModel::load as a parameter".to_string())),
-            (None, Some(id2label_p)) => id2label_p.len(),
-            (Some(id2label_c), None) => id2label_c.len(),
-            (Some(id2label_c), Some(id2label_p)) => {
-              if *id2label_c == id2label_p {
-                id2label_c.len()
-              } else {
-                return Err(candle::error::Error::Msg("Id2Label is both present in the model configuration and provided as a parameter, and they are different.".to_string()))
-              }
-            }
-        };
-
+        let id2label_len = id2label_len(config, id2label)?;
         let deberta = DebertaV2Model::load(vb.clone(), config)?;
         let pooler = DebertaV2ContextPooler::load(vb.clone(), config)?;
         let output_dim = pooler.output_dim()?;
@@ -1370,18 +1344,13 @@ pub struct DebertaV2ContextPooler {
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L49
 impl DebertaV2ContextPooler {
     pub fn load(vb: VarBuilder, config: &Config) -> candle::Result<Self> {
-        let pooler_hidden_size =
-            config
-                .pooler_hidden_size
-                .ok_or(candle::Error::Msg(String::from(
-                    "config.pooler_hidden_size is required for DebertaV2ContextPooler",
-                )))?;
+        let pooler_hidden_size = config
+            .pooler_hidden_size
+            .context("config.pooler_hidden_size is required for DebertaV2ContextPooler")?;
 
         let pooler_dropout = config
             .pooler_dropout
-            .ok_or(candle::Error::Msg(String::from(
-                "config.pooler_dropout is required for DebertaV2ContextPooler",
-            )))?;
+            .context("config.pooler_dropout is required for DebertaV2ContextPooler")?;
 
         let dense = candle_nn::linear(
             pooler_hidden_size,
@@ -1403,15 +1372,16 @@ impl DebertaV2ContextPooler {
         let context_token = self.dropout.forward(Some(&context_token))?;
 
         let pooled_output = self.dense.forward(&context_token.unwrap().contiguous()?)?;
-        let pooler_hidden_act =
-            HiddenActLayer::new(self.config.pooler_hidden_act.ok_or(candle::Error::Msg(
-                String::from("Could not obtain pooler hidden act from config"),
-            ))?);
-        pooler_hidden_act.forward(&pooled_output)
+        let pooler_hidden_act = self
+            .config
+            .pooler_hidden_act
+            .context("Could not obtain pooler hidden act from config")?;
+
+        HiddenActLayer::new(pooler_hidden_act).forward(&pooled_output)
     }
 
     pub fn output_dim(&self) -> candle::Result<usize> {
-        self.config.pooler_hidden_size.ok_or(candle::Error::Msg(String::from("DebertaV2ContextPooler cannot return output_dim (pooler_hidden_size) since it is not specified in the model config")))
+        self.config.pooler_hidden_size.context("DebertaV2ContextPooler cannot return output_dim (pooler_hidden_size) since it is not specified in the model config")
     }
 }
 
