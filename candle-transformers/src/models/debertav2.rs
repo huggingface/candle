@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use candle::{bail, Context, DType, Device, Module, Tensor, D};
+use candle::{bail, Context, DType, Device, Module, Result, Tensor, D};
 use candle_nn::{
     conv1d, embedding, layer_norm, Conv1d, Conv1dConfig, Embedding, LayerNorm, VarBuilder,
 };
@@ -28,7 +28,7 @@ impl HiddenActLayer {
         Self { act, span }
     }
 
-    fn forward(&self, xs: &Tensor) -> candle::Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         match self.act {
             // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/activations.py#L213
@@ -85,7 +85,7 @@ pub struct Config {
     pub cls_dropout: Option<f64>,
 }
 
-fn deserialize_pos_att_type<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+fn deserialize_pos_att_type<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -117,8 +117,8 @@ impl StableDropout {
         }
     }
 
-    pub fn forward(&self, x: Option<&Tensor>) -> candle::Result<Option<Tensor>> {
-        Ok(x.cloned())
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        Ok(x.clone())
     }
 }
 
@@ -137,7 +137,7 @@ pub struct DebertaV2Embeddings {
 }
 
 impl DebertaV2Embeddings {
-    pub fn load(vb: VarBuilder, config: &Config) -> candle::Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let device = vb.device().clone();
         let config = config.clone();
 
@@ -208,10 +208,13 @@ impl DebertaV2Embeddings {
         position_ids: Option<&Tensor>,
         mask: Option<&Tensor>,
         inputs_embeds: Option<&Tensor>,
-    ) -> candle::Result<Tensor> {
-        let input_shape = match (input_ids, inputs_embeds) {
-            (Some(inputids), None) => inputids.dims(),
-            (None, Some(inputsembeds)) => inputsembeds.dims(),
+    ) -> Result<Tensor> {
+        let (input_shape, input_embeds) = match (input_ids, inputs_embeds) {
+            (Some(ids), None) => {
+                let embs = self.word_embeddings.forward(ids)?;
+                (ids.dims(), embs)
+            }
+            (None, Some(e)) => (e.dims(), e.clone()),
             (None, None) => {
                 bail!("Must specify either input_ids or inputs_embeds")
             }
@@ -220,24 +223,20 @@ impl DebertaV2Embeddings {
             }
         };
 
-        let seq_length = input_shape
-            .last()
-            .context("DebertaV2Embeddings invalid input shape")?
-            .to_owned();
+        let seq_length = match input_shape.last() {
+            Some(v) => *v,
+            None => bail!("DebertaV2Embeddings invalid input shape"),
+        };
 
-        let position_ids = position_ids
-            .cloned()
-            .unwrap_or(self.position_ids.narrow(1, 0, seq_length)?);
+        let position_ids = match position_ids {
+            Some(v) => v.clone(),
+            None => self.position_ids.narrow(1, 0, seq_length)?,
+        };
 
-        let token_type_ids = token_type_ids.cloned().unwrap_or(Tensor::zeros(
-            input_shape,
-            DType::U32,
-            &self.device,
-        )?);
-
-        let input_embeds = inputs_embeds
-            .cloned()
-            .unwrap_or(self.word_embeddings.forward(input_ids.unwrap())?);
+        let token_type_ids = match token_type_ids {
+            Some(ids) => ids.clone(),
+            None => Tensor::zeros(input_shape, DType::U32, &self.device)?,
+        };
 
         let position_embeddings = match &self.position_embeddings {
             Some(emb) => emb.forward(&position_ids)?,
@@ -282,9 +281,7 @@ impl DebertaV2Embeddings {
             embeddings = embeddings.broadcast_mul(&mask)?;
         }
 
-        self.dropout
-            .forward(Some(&embeddings))?
-            .context("Dropout forward returned None")
+        self.dropout.forward(&embeddings)
     }
 }
 
@@ -292,7 +289,7 @@ impl DebertaV2Embeddings {
 struct XSoftmax {}
 
 impl XSoftmax {
-    pub fn apply(input: &Tensor, mask: &Tensor, dim: D, device: &Device) -> candle::Result<Tensor> {
+    pub fn apply(input: &Tensor, mask: &Tensor, dim: D, device: &Device) -> Result<Tensor> {
         // NOTE: At the time of this writing, candle does not have a logical-not operator.
         let mut rmask = mask.broadcast_as(input.shape())?.to_dtype(DType::F32)?;
 
@@ -332,7 +329,7 @@ pub struct DebertaV2DisentangledSelfAttention {
 }
 
 impl DebertaV2DisentangledSelfAttention {
-    pub fn load(vb: VarBuilder, config: &Config) -> candle::Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let config = config.clone();
         let vb = vb.clone();
 
@@ -423,7 +420,7 @@ impl DebertaV2DisentangledSelfAttention {
         query_states: Option<&Tensor>,
         relative_pos: Option<&Tensor>,
         rel_embeddings: Option<&Tensor>,
-    ) -> candle::Result<Tensor> {
+    ) -> Result<Tensor> {
         let query_states = match query_states {
             Some(qs) => qs,
             None => hidden_states,
@@ -458,20 +455,20 @@ impl DebertaV2DisentangledSelfAttention {
         };
 
         if self.relative_attention {
-            let rel_embeddings = self
-                .pos_dropout
-                .as_ref()
-                .context("relative_attention requires pos_dropout")?
-                .forward(rel_embeddings)?
-                .context("Error forwarding rel_embeddings")?;
-
-            rel_att = Some(self.disentangled_attention_bias(
-                query_layer,
-                key_layer,
-                relative_pos,
-                rel_embeddings,
-                scale_factor,
-            )?);
+            if let Some(rel_embeddings) = rel_embeddings {
+                let rel_embeddings = self
+                    .pos_dropout
+                    .as_ref()
+                    .context("relative_attention requires pos_dropout")?
+                    .forward(rel_embeddings)?;
+                rel_att = Some(self.disentangled_attention_bias(
+                    query_layer,
+                    key_layer,
+                    relative_pos,
+                    rel_embeddings,
+                    scale_factor,
+                )?);
+            }
         }
 
         if let Some(rel_att) = rel_att {
@@ -488,10 +485,7 @@ impl DebertaV2DisentangledSelfAttention {
         let mut attention_probs =
             XSoftmax::apply(&attention_scores, attention_mask, D::Minus1, &self.device)?;
 
-        attention_probs = self
-            .dropout
-            .forward(Some(&attention_probs))?
-            .context("Dropout did not return a value")?;
+        attention_probs = self.dropout.forward(&attention_probs)?;
 
         let mut context_layer = attention_probs
             .reshape((
@@ -529,7 +523,7 @@ impl DebertaV2DisentangledSelfAttention {
         Ok(context_layer)
     }
 
-    fn transpose_for_scores(&self, xs: &Tensor) -> candle::Result<Tensor> {
+    fn transpose_for_scores(&self, xs: &Tensor) -> Result<Tensor> {
         let dims = xs.dims().to_vec();
         match dims.len() {
             3 => {
@@ -554,7 +548,7 @@ impl DebertaV2DisentangledSelfAttention {
         relative_pos: Option<&Tensor>,
         rel_embeddings: Tensor,
         scale_factor: usize,
-    ) -> candle::Result<Tensor> {
+    ) -> Result<Tensor> {
         let mut relative_pos = relative_pos.map_or(
             build_relative_position(
                 query_layer.dim(D::Minus2)?,
@@ -713,7 +707,7 @@ pub struct DebertaV2Attention {
 }
 
 impl DebertaV2Attention {
-    pub fn load(vb: VarBuilder, config: &Config) -> candle::Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let dsa = DebertaV2DisentangledSelfAttention::load(vb.pp("attention.self"), config)?;
         let output = DebertaV2SelfOutput::load(vb.pp("attention.output"), config)?;
         Ok(Self { dsa, output })
@@ -726,7 +720,7 @@ impl DebertaV2Attention {
         query_states: Option<&Tensor>,
         relative_pos: Option<&Tensor>,
         rel_embeddings: Option<&Tensor>,
-    ) -> candle::Result<Tensor> {
+    ) -> Result<Tensor> {
         let self_output = self.dsa.forward(
             hidden_states,
             attention_mask,
@@ -748,7 +742,7 @@ pub struct DebertaV2SelfOutput {
 }
 
 impl DebertaV2SelfOutput {
-    pub fn load(vb: VarBuilder, config: &Config) -> candle::Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let dense = candle_nn::linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?;
         let layer_norm = candle_nn::layer_norm(
             config.hidden_size,
@@ -763,13 +757,9 @@ impl DebertaV2SelfOutput {
         })
     }
 
-    pub fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> candle::Result<Tensor> {
+    pub fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
         let mut hidden_states = self.dense.forward(hidden_states)?;
-        hidden_states = self
-            .dropout
-            .forward(Some(&hidden_states))?
-            .context("DebertaV2SelfOuput dropout did not return a Tensor")?;
-
+        hidden_states = self.dropout.forward(&hidden_states)?;
         self.layer_norm
             .forward(&hidden_states.broadcast_add(input_tensor)?)
     }
@@ -782,7 +772,7 @@ pub struct DebertaV2Intermediate {
 }
 
 impl DebertaV2Intermediate {
-    pub fn load(vb: VarBuilder, config: &Config) -> candle::Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let dense = candle_nn::linear(
             config.hidden_size,
             config.intermediate_size,
@@ -795,7 +785,7 @@ impl DebertaV2Intermediate {
         })
     }
 
-    pub fn forward(&self, hidden_states: &Tensor) -> candle::Result<Tensor> {
+    pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         self.intermediate_act
             .forward(&self.dense.forward(hidden_states)?)
     }
@@ -809,7 +799,7 @@ pub struct DebertaV2Output {
 }
 
 impl DebertaV2Output {
-    pub fn load(vb: VarBuilder, config: &Config) -> candle::Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let dense = candle_nn::linear(
             config.intermediate_size,
             config.hidden_size,
@@ -828,12 +818,9 @@ impl DebertaV2Output {
         })
     }
 
-    pub fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> candle::Result<Tensor> {
+    pub fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
         let mut hidden_states = self.dense.forward(hidden_states)?;
-        hidden_states = self
-            .dropout
-            .forward(Some(&hidden_states))?
-            .context("DebertaV2Ouptut did not receive a Tensor after dropout")?;
+        hidden_states = self.dropout.forward(&hidden_states)?;
         hidden_states = {
             let to_norm = hidden_states.broadcast_add(input_tensor)?;
             self.layer_norm.forward(&to_norm)?
@@ -850,7 +837,7 @@ pub struct DebertaV2Layer {
 }
 
 impl DebertaV2Layer {
-    pub fn load(vb: VarBuilder, config: &Config) -> candle::Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let attention = DebertaV2Attention::load(vb.clone(), config)?;
         let intermediate = DebertaV2Intermediate::load(vb.clone(), config)?;
         let output = DebertaV2Output::load(vb.clone(), config)?;
@@ -868,7 +855,7 @@ impl DebertaV2Layer {
         query_states: Option<&Tensor>,
         relative_pos: Option<&Tensor>,
         rel_embeddings: Option<&Tensor>,
-    ) -> candle::Result<Tensor> {
+    ) -> Result<Tensor> {
         let attention_output = self.attention.forward(
             hidden_states,
             attention_mask,
@@ -898,7 +885,7 @@ pub struct ConvLayer {
 }
 
 impl ConvLayer {
-    pub fn load(vb: VarBuilder, config: &Config) -> candle::Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let config = config.clone();
         let kernel_size = config.conv_kernel_size.unwrap_or(3);
         let groups = config.conv_groups.unwrap_or(1);
@@ -940,7 +927,7 @@ impl ConvLayer {
         _hidden_states: &Tensor,
         _residual_states: &Tensor,
         _input_mask: &Tensor,
-    ) -> candle::Result<Tensor> {
+    ) -> Result<Tensor> {
         todo!("Need a model that contains a conv layer to test against.")
     }
 }
@@ -959,10 +946,10 @@ pub struct DebertaV2Encoder {
 }
 
 impl DebertaV2Encoder {
-    pub fn load(vb: VarBuilder, config: &Config) -> candle::Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let layer = (0..config.num_hidden_layers)
             .map(|index| DebertaV2Layer::load(vb.pp(format!("layer.{index}")), config))
-            .collect::<candle::Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         let relative_attention = config.relative_attention;
         let mut max_relative_positions = config.max_relative_positions;
@@ -1031,7 +1018,7 @@ impl DebertaV2Encoder {
         attention_mask: &Tensor,
         query_states: Option<&Tensor>,
         relative_pos: Option<&Tensor>,
-    ) -> candle::Result<Tensor> {
+    ) -> Result<Tensor> {
         let input_mask = if attention_mask.dims().len() <= 2 {
             attention_mask.clone()
         } else {
@@ -1078,7 +1065,7 @@ impl DebertaV2Encoder {
         Ok(output_states)
     }
 
-    fn get_attention_mask(&self, mut attention_mask: Tensor) -> candle::Result<Tensor> {
+    fn get_attention_mask(&self, mut attention_mask: Tensor) -> Result<Tensor> {
         match attention_mask.dims().len() {
             0..=2 => {
                 let extended_attention_mask = attention_mask.unsqueeze(1)?.unsqueeze(2)?;
@@ -1100,7 +1087,7 @@ impl DebertaV2Encoder {
         hidden_states: &Tensor,
         query_states: Option<&Tensor>,
         relative_pos: Option<&Tensor>,
-    ) -> candle::Result<Option<Tensor>> {
+    ) -> Result<Option<Tensor>> {
         if self.relative_attention && relative_pos.is_none() {
             let q = if let Some(query_states) = query_states {
                 query_states.dim(D::Minus2)?
@@ -1123,7 +1110,7 @@ impl DebertaV2Encoder {
             Ok(None)
         }
     }
-    fn get_rel_embedding(&self) -> candle::Result<Option<Tensor>> {
+    fn get_rel_embedding(&self) -> Result<Option<Tensor>> {
         if !self.relative_attention {
             return Ok(None);
         }
@@ -1158,7 +1145,7 @@ pub struct DebertaV2Model {
 }
 
 impl DebertaV2Model {
-    pub fn load(vb: VarBuilder, config: &Config) -> candle::Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let vb = vb.clone();
         let embeddings = DebertaV2Embeddings::load(vb.pp("embeddings"), config)?;
         let encoder = DebertaV2Encoder::load(vb.pp("encoder"), config)?;
@@ -1177,7 +1164,7 @@ impl DebertaV2Model {
         input_ids: &Tensor,
         token_type_ids: Option<Tensor>,
         attention_mask: Option<Tensor>,
-    ) -> candle::Result<Tensor> {
+    ) -> Result<Tensor> {
         let input_ids_shape = input_ids.shape();
 
         let attention_mask = match attention_mask {
@@ -1233,7 +1220,7 @@ pub struct DebertaV2NERModel {
     classifier: candle_nn::Linear,
 }
 
-fn id2label_len(config: &Config, id2label: Option<HashMap<u32, String>>) -> candle::Result<usize> {
+fn id2label_len(config: &Config, id2label: Option<HashMap<u32, String>>) -> Result<usize> {
     let id2label_len = match (&config.id2label, id2label) {
         (None, None) => bail!("Id2Label is either not present in the model configuration or not passed into DebertaV2NERModel::load as a parameter"),
         (None, Some(id2label_p)) => id2label_p.len(),
@@ -1250,11 +1237,7 @@ fn id2label_len(config: &Config, id2label: Option<HashMap<u32, String>>) -> cand
 }
 
 impl DebertaV2NERModel {
-    pub fn load(
-        vb: VarBuilder,
-        config: &Config,
-        id2label: Option<Id2Label>,
-    ) -> candle::Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config, id2label: Option<Id2Label>) -> Result<Self> {
         let id2label_len = id2label_len(config, id2label)?;
 
         let deberta = DebertaV2Model::load(vb.clone(), config)?;
@@ -1278,7 +1261,7 @@ impl DebertaV2NERModel {
         input_ids: &Tensor,
         token_type_ids: Option<Tensor>,
         attention_mask: Option<Tensor>,
-    ) -> candle::Result<Tensor> {
+    ) -> Result<Tensor> {
         let output = self
             .deberta
             .forward(input_ids, token_type_ids, attention_mask)?;
@@ -1296,11 +1279,7 @@ pub struct DebertaV2SeqClassificationModel {
 }
 
 impl DebertaV2SeqClassificationModel {
-    pub fn load(
-        vb: VarBuilder,
-        config: &Config,
-        id2label: Option<Id2Label>,
-    ) -> candle::Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config, id2label: Option<Id2Label>) -> Result<Self> {
         let id2label_len = id2label_len(config, id2label)?;
         let deberta = DebertaV2Model::load(vb.clone(), config)?;
         let pooler = DebertaV2ContextPooler::load(vb.clone(), config)?;
@@ -1325,12 +1304,12 @@ impl DebertaV2SeqClassificationModel {
         input_ids: &Tensor,
         token_type_ids: Option<Tensor>,
         attention_mask: Option<Tensor>,
-    ) -> candle::Result<Tensor> {
+    ) -> Result<Tensor> {
         let encoder_layer = self
             .deberta
             .forward(input_ids, token_type_ids, attention_mask)?;
         let pooled_output = self.pooler.forward(&encoder_layer)?;
-        let pooled_output = self.dropout.forward(Some(&pooled_output))?.unwrap();
+        let pooled_output = self.dropout.forward(&pooled_output)?;
         self.classifier.forward(&pooled_output)
     }
 }
@@ -1343,7 +1322,7 @@ pub struct DebertaV2ContextPooler {
 
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L49
 impl DebertaV2ContextPooler {
-    pub fn load(vb: VarBuilder, config: &Config) -> candle::Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let pooler_hidden_size = config
             .pooler_hidden_size
             .context("config.pooler_hidden_size is required for DebertaV2ContextPooler")?;
@@ -1367,11 +1346,11 @@ impl DebertaV2ContextPooler {
         })
     }
 
-    pub fn forward(&self, hidden_states: &Tensor) -> candle::Result<Tensor> {
+    pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let context_token = hidden_states.narrow(1, 0, 1)?.squeeze(1)?;
-        let context_token = self.dropout.forward(Some(&context_token))?;
+        let context_token = self.dropout.forward(&context_token)?;
 
-        let pooled_output = self.dense.forward(&context_token.unwrap().contiguous()?)?;
+        let pooled_output = self.dense.forward(&context_token.contiguous()?)?;
         let pooler_hidden_act = self
             .config
             .pooler_hidden_act
@@ -1380,7 +1359,7 @@ impl DebertaV2ContextPooler {
         HiddenActLayer::new(pooler_hidden_act).forward(&pooled_output)
     }
 
-    pub fn output_dim(&self) -> candle::Result<usize> {
+    pub fn output_dim(&self) -> Result<usize> {
         self.config.pooler_hidden_size.context("DebertaV2ContextPooler cannot return output_dim (pooler_hidden_size) since it is not specified in the model config")
     }
 }
@@ -1392,7 +1371,7 @@ pub(crate) fn build_relative_position(
     device: &Device,
     bucket_size: Option<isize>,
     max_position: Option<isize>,
-) -> candle::Result<Tensor> {
+) -> Result<Tensor> {
     let q_ids = Tensor::arange(0, query_size as i64, device)?.unsqueeze(0)?;
     let k_ids: Tensor = Tensor::arange(0, key_size as i64, device)?.unsqueeze(D::Minus1)?;
     let mut rel_pos_ids = k_ids.broadcast_sub(&q_ids)?;
@@ -1414,7 +1393,7 @@ pub(crate) fn make_log_bucket_position(
     bucket_size: isize,
     max_position: isize,
     device: &Device,
-) -> candle::Result<Tensor> {
+) -> Result<Tensor> {
     let sign = relative_pos.to_dtype(DType::F32)?.sign()?;
 
     let mid = bucket_size / 2;
