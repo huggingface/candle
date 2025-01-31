@@ -7,12 +7,15 @@ use candle_transformers::models::modernbert;
 use clap::{Parser, ValueEnum};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{PaddingParams, Tokenizer};
+use candle_nn::ops::softmax;
+use candle_transformers::models::modernbert::NERItem;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Model {
     ModernBertBase,
     ModernBertLarge,
 }
+
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -123,7 +126,7 @@ fn main() -> Result<()> {
             "The capital of France is [MASK].",
         ],
     };
-    let model = modernbert::ModernBertForMaskedLM::load(vb, &config)?;
+    let model = modernbert::ModernBertForMaskedLM::load(vb.clone(), &config)?;
 
     let input_ids = tokenize_batch(&tokenizer, prompt.clone(), &device)?;
     let attention_mask = get_attention_mask(&tokenizer, prompt.clone(), &device)?;
@@ -140,6 +143,93 @@ fn main() -> Result<()> {
     for (i, sentence) in decoded.iter().enumerate() {
         println!("Sentence: {} : {}", i + 1, sentence);
     }
+
+    // Token Classification
+
+
+    let weights_filename = "/Users/scampion/src/HF/piiranha/model.safetensors";
+    let config_filename = "/Users/scampion/src/HF/piiranha/config.json";
+    let text = "My email is john.doe@example.com and my phone number is 555-123-4567.";
+    let texts = vec![text];
+    // create the vector
+    let config = std::fs::read_to_string(config_filename)?;
+    let config: modernbert::Config = serde_json::from_str(&config)?;
+    let vb = if weights_filename.ends_with("model.safetensors") {
+        unsafe {
+            VarBuilder::from_mmaped_safetensors(&[weights_filename], candle::DType::F32, &device)
+                .unwrap()
+        }
+    } else {
+        println!("Loading weights from pytorch_model.bin");
+        VarBuilder::from_pth(&weights_filename, candle::DType::F32, &device).unwrap()
+    };
+    let input_ids = tokenize_batch(&tokenizer, texts.clone(), &device)?;
+    let tokenizer_encodings = tokenizer.encode_batch(texts.clone(), true).unwrap();
+    let attention_mask = get_attention_mask(&tokenizer, texts.clone(), &device)?;
+    let model = modernbert::ModernBertForTokenClassification::load(vb, &config)?;
+    let output = model.forward(&input_ids, &attention_mask)?;
+    let logits = output.get(0)?;
+    println!("Logits: {:?}", logits);
+
+    let logits_2d: Vec<Vec<f32>> = logits.to_vec2::<f32>()?;
+
+    // Print the 2D vector
+    for row in logits_2d {
+        for val in row {
+            print!("{:.4} ", val); // Print each value with 4 decimal places
+        }
+        println!(); // Newline after each row
+    }
+
+    //let max_scores_vec = softmax(&logits, 2)?.max(2)?.to_vec2::<f32>()?;
+    // print
+
+    let max_scores_vec = softmax(&logits, 0)?.max(1)?.to_vec2::<f32>()?;
+    let max_indices_vec: Vec<Vec<u32>> = logits.argmax(2)?.to_vec2()?;
+    let input_ids = input_ids.to_vec2::<u32>()?;
+    let mut results: Vec<Vec<NERItem>> = Default::default();
+
+    let id2label = config.id2label;
+
+    for (input_row_idx, input_id_row) in input_ids.iter().enumerate() {
+        let mut current_row_result: Vec<NERItem> = Default::default();
+        let current_row_encoding = tokenizer_encodings.get(input_row_idx).unwrap();
+        let current_row_tokens = current_row_encoding.get_tokens();
+        let current_row_max_scores = max_scores_vec.get(input_row_idx).unwrap();
+
+        for (input_id_idx, _input_id) in input_id_row.iter().enumerate() {
+            // Do not include special characters in output
+            if current_row_encoding.get_special_tokens_mask()[input_id_idx] == 1 {
+                continue;
+            }
+
+            let max_label_idx = max_indices_vec
+                .get(input_row_idx)
+                .unwrap()
+                .get(input_id_idx)
+                .unwrap();
+
+            let label = id2label.clone().unwrap().get(max_label_idx).unwrap().clone();
+
+            // Do not include those labeled as "O" ("Other")
+            if label == "O" {
+                continue;
+            }
+
+            current_row_result.push(NERItem {
+                entity: label,
+                word: current_row_tokens[input_id_idx].clone(),
+                score: current_row_max_scores[input_id_idx],
+                start: current_row_encoding.get_offsets()[input_id_idx].0,
+                end: current_row_encoding.get_offsets()[input_id_idx].1,
+                index: input_id_idx,
+            });
+        }
+
+        results.push(current_row_result);
+    }
+
+    println!("\n{:?}", results);
 
     Ok(())
 }
