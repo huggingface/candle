@@ -18,6 +18,7 @@ use candle_transformers::models::llama::LlamaEosToks;
 use cudarc::driver::safe::CudaDevice;
 use cudarc::nccl::safe::{Comm, Id};
 use hf_hub::{api::sync::Api, Repo, RepoType};
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use std::io::Write;
 use std::rc::Rc;
 
@@ -40,9 +41,6 @@ enum Which {
 struct Args {
     #[arg(long)]
     num_shards: usize,
-
-    #[arg(long)]
-    rank: Option<usize>,
 
     /// The temperature used to generate samples.
     #[arg(long, default_value_t = 0.8)]
@@ -79,9 +77,6 @@ struct Args {
 
     #[arg(long, default_value = "v3-8b")]
     which: Which,
-
-    #[arg(long, default_value = "nccl_id.txt")]
-    comm_file: String,
 }
 
 fn main() -> Result<()> {
@@ -123,67 +118,41 @@ fn main() -> Result<()> {
     let tokenizer_filename = api.get("tokenizer.json")?;
     let filenames = candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?;
 
-    let rank = match args.rank {
-        None => {
-            println!("creating {} child processes", args.num_shards);
-            let children: Vec<_> = (0..args.num_shards)
-                .map(|rank| {
-                    let mut args: std::collections::VecDeque<_> = std::env::args().collect();
-                    args.push_back("--rank".to_string());
-                    args.push_back(format!("{rank}"));
-                    let name = args.pop_front().unwrap();
-                    std::process::Command::new(name).args(args).spawn().unwrap()
-                })
-                .collect();
-            for mut child in children {
-                child.wait()?;
-            }
-            return Ok(());
-        }
-        Some(rank) => rank,
-    };
-
     let num_shards = args.num_shards;
-    // Primitive IPC
-    let id = if rank == 0 {
-        let id = Id::new().unwrap();
-        let tmp_file = comm_file.with_extension(".comm.tgz");
-        std::fs::File::create(&tmp_file)?
-            .write_all(&id.internal().iter().map(|&i| i as u8).collect::<Vec<_>>())?;
-        std::fs::rename(&tmp_file, &comm_file)?;
-        id
-    } else {
-        while !comm_file.exists() {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-        }
-        let data = std::fs::read(&comm_file)?;
-        let internal: [i8; 128] = data
-            .into_iter()
-            .map(|i| i as i8)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        let id: Id = Id::uninit(internal);
-        id
-    };
-    let device = CudaDevice::new(rank)?;
-    let comm = match Comm::from_rank(device, rank, num_shards, id) {
-        Ok(comm) => Rc::new(comm),
-        Err(err) => anyhow::bail!("nccl error {:?}", err.0),
-    };
-    if rank == 0 {
-        std::fs::remove_file(comm_file)?;
-    }
-    println!("Rank {rank:?} spawned");
+    let devices = (0..num_shards)
+        .into_iter()
+        .map(|rank| Device::new_cuda(rank))
+        .collect::<candle::Result<Vec<_>>>()?;
 
-    let device = Device::new_cuda(rank)?;
-    let cache = model::Cache::new(dtype, &config, &device)?;
+    let id = Id::new().unwrap();
+    let comms = devices
+        .par_iter()
+        .enumerate()
+        .map(|(rank, device)| {
+            use cudarc::driver::result;
+            unsafe { result::ctx::set_current(*device.as_cuda_device()?.cu_primary_ctx()) }
+                .unwrap();
 
-    println!("building the model");
-    let vb = unsafe {
-        candle_nn::var_builder::ShardedSafeTensors::var_builder(&filenames, dtype, &device)?
-    };
-    let llama = Llama::load(vb, &cache, &config, comm)?;
+            Ok(Comm::from_rank(device.as_cuda_device()?, rank, num_shards, id).unwrap())
+        })
+        .collect::<candle::Result<Vec<_>>>()?;
+
+    let mut models = devices
+        .par_iter()
+        .zip(comms)
+        .map(|(device, comm)| {
+            use cudarc::driver::result;
+            unsafe { result::ctx::set_current(*device.as_cuda_device()?.cu_primary_ctx()) }
+                .unwrap();
+
+            let cache = model::Cache::new(dtype, &config, &device)?;
+
+            let vb = unsafe {
+                candle_nn::var_builder::ShardedSafeTensors::var_builder(&filenames, dtype, &device)?
+            };
+            Llama::load(vb, &cache, &config, comm)
+        })
+        .collect::<candle::Result<Vec<_>>>()?;
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let prompt = args.prompt.as_ref().map_or(DEFAULT_PROMPT, |p| p.as_str());
@@ -212,9 +181,20 @@ fn main() -> Result<()> {
         };
         let context_size = if index > 0 { 1 } else { tokens.len() };
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-        let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
-        let logits = llama.forward(&input, index_pos)?;
-        let logits = logits.squeeze(0)?;
+        let logits_vec = models
+            .par_iter()
+            .zip(&devices)
+            .map(|(model, device)| {
+                use cudarc::driver::result;
+                unsafe { result::ctx::set_current(*device.as_cuda_device()?.cu_primary_ctx()) }
+                    .unwrap();
+
+                let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
+                let logits = model.forward(&input, index_pos)?;
+                logits.squeeze(0)
+            })
+            .collect::<candle::Result<Vec<_>>>()?;
+        let logits = logits_vec[0].clone();
         index_pos += ctxt.len();
 
         let next_token = logits_processor.sample(&logits)?;
