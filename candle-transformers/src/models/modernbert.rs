@@ -6,7 +6,7 @@
 //! - See modernbert in [candle-examples](https://github.com/huggingface/candle/tree/main/candle-examples/) for runnable code
 //!
 
-use candle::{bail, DType, Device, Result, Tensor, D};
+use candle::{DType, Device, Result, Tensor, D};
 use candle_nn::{
     embedding, layer_norm_no_bias, linear_no_bias, ops::softmax, Embedding, LayerNorm, Linear, Dropout,
     Module, VarBuilder,
@@ -436,18 +436,12 @@ impl ModernBertForTokenClassification {
         let model = ModernBert::load(vb.clone(), config)?;
         let classifier_dropout = config.classifier_dropout;
         let drop = Dropout::new(classifier_dropout);
-        // len of config.id2label
-        println!("config.id2label: {:?}", config.id2label);
         let num_labels = config.id2label.clone().unwrap().len();
-        println!("num_labels: {}", num_labels);
         let classifier: candle_nn::Linear = candle_nn::linear_no_bias(
             config.hidden_size,
             num_labels.try_into().unwrap(),
             vb.root().pp("classifier"),
         )?;
-        println!("classifier: {:?}", classifier);
-        //let classifier = linear_no_bias(config.hidden_size, num_labels.try_into().unwrap(), vb.pp("classifier"))?;
-        //Linear::new(config.hidden_size, config.num_labels);
 
         Ok(Self {
             model,
@@ -467,34 +461,6 @@ impl ModernBertForTokenClassification {
         let output = self.drop.forward(&output, false)?;
         self.classifier.forward(&output)
     }
-    //
-    // pub fn forward(
-    //     &self,
-    //     input_ids: &Tensor,
-    //     attention_mask: &Tensor,
-    //     labels: Option<&Tensor>,
-    // ) -> Result<Tensor> {
-    //
-    //     let outputs = self.model.forward(input_ids,attention_mask)?;
-    //
-    //     let last_hidden_state = outputs.get(0)?;
-    //     let last_hidden_state = self.model.head.forward(&last_hidden_state)?;
-    //     let last_hidden_state = self.drop.forward(&last_hidden_state, true)?;
-    //     let logits = self.classifier.forward(&last_hidden_state)?;
-    //
-    //     let loss = if let Some(labels) = labels {
-    //         Some(candle_nn::loss::cross_entropy(&logits.flatten_to(1)?, &labels.flatten_to(1)?))
-    //     } else {
-    //         None
-    //     };
-    //     let output = logits + outputs.narrow(0, 1, outputs.dim(0)? - 1)?;
-    //
-    //     let loss_tensor = loss.unwrap();
-    //     let output_tensor = output?;
-    //     let result = loss_tensor + output_tensor;
-    //     Ok(result?)
-    //
-    // }
 }
 
 
