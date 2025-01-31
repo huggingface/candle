@@ -138,6 +138,7 @@ impl std::ops::Deref for MetalDevice {
 }
 
 impl MetalDevice {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn compile(
         &self,
         func_name: &'static str,
