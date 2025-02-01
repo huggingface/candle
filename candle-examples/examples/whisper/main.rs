@@ -480,12 +480,26 @@ impl Decoder {
 
 impl timestamps::PostProcessor for Decoder {
     type Error = candle::Error;
-    fn decode(&mut self, tokens: &[u32]) -> candle::Result<Vec<String>> {
-        Ok(tokens
+    fn decode(
+        &mut self,
+        tokens: &[u32],
+    ) -> candle::Result<Vec<candle_transformers::models::whisper::timestamps::Segment>> {
+        let full_decode = self
+            .tokenizer
+            .decode(tokens, true)
+            .map_err(candle::Error::msg)?;
+        let decoded_tokens = tokens
             .iter()
-            .filter_map(|token| self.tokenizer.decode(&[*token], true).ok())
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>())
+            .filter(|&&n| n < 50_000)
+            .copied()
+            .map(|n| self.tokenizer.decode(&[n], true))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(candle::Error::msg)?;
+
+        candle_transformers::models::whisper::timestamps::unicode_segments(
+            full_decode,
+            decoded_tokens,
+        )
     }
 }
 

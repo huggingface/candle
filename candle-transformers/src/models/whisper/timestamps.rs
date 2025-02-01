@@ -8,7 +8,7 @@ use candle_nn::ops::softmax_last_dim;
 pub struct Raw(pub Vec<f32>);
 
 /// Word-level timestamp
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Word {
     pub text: String,
     pub start: f32,
@@ -26,45 +26,103 @@ impl Word {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Segment {
+    pub text: String,
+    pub token_indices: Vec<usize>,
+}
+
 /// Helper trait for processing dtw timestamps.
 pub trait PostProcessor {
     type Error: std::error::Error;
 
-    fn decode(&mut self, tokens: &[u32]) -> Result<Vec<String>, Self::Error>;
+    fn decode(&mut self, tokens: &[u32]) -> Result<Vec<Segment>, Self::Error>;
     fn label(&mut self, Raw(timestamps): &Raw, tokens: &[u32]) -> Result<Vec<Word>, Self::Error> {
         const PUNCTUATION: &str = "\"'“¿([{-\"'.。,，!！?？:：”)]}、";
-        let words = self
-            .decode(tokens)?
+        let segments = self.decode(tokens)?;
+
+        let non_special_tokens = tokens
+            .iter()
+            .filter(|&&n| n < 50_000)
+            .copied()
+            .collect::<Vec<_>>();
+        let stamped_tokens = timestamps
+            .iter()
+            .copied()
+            .chain(std::iter::repeat(timestamps[timestamps.len() - 1]))
+            .zip(
+                timestamps
+                    .iter()
+                    .copied()
+                    .skip(1)
+                    .chain(std::iter::repeat(timestamps[timestamps.len() - 1])),
+            )
+            .zip(non_special_tokens.iter().copied())
+            .collect::<Vec<_>>();
+
+        let (mut start, mut end) = (0.0, 0.0);
+        Ok(segments
             .into_iter()
-            .zip(tokens)
-            .zip(timestamps.iter().copied())
-            .zip(timestamps.iter().copied().skip(1))
-            .map(|(((text, token), start), end)| Word {
-                text,
-                start,
-                end,
-                tokens: vec![*token],
-            })
-            .filter(|Word { text, .. }| !PUNCTUATION.contains(text) && !text.trim().is_empty())
-            .fold(Vec::<Word>::new(), |mut v, w| {
-                if !w.text.starts_with(' ') {
-                    if let Some(item) = v.last_mut() {
-                        item.text = format!("{}{}", item.text, w.text);
-                        item.end = w.end;
-                        item.tokens.extend(w.tokens);
-                        return v;
+            .filter(|Segment { text, .. }| !PUNCTUATION.contains(text))
+            .map(
+                |Segment {
+                     text,
+                     token_indices,
+                 }| {
+                    start = token_indices
+                        .first()
+                        .map(|&i| stamped_tokens[i].0 .0)
+                        .unwrap_or(end);
+                    end = token_indices
+                        .last()
+                        .map(|&i| stamped_tokens[i].0 .1)
+                        .unwrap_or(start + 0.2);
+
+                    Word {
+                        text: text.trim().to_string(),
+                        start,
+                        end,
+                        tokens: token_indices
+                            .into_iter()
+                            .map(|i| stamped_tokens[i].1)
+                            .collect(),
                     }
-                }
-
-                v.push(Word {
-                    text: w.text.trim().to_string(),
-                    ..w
-                });
-                v
-            });
-
-        Ok(words)
+                },
+            )
+            .collect())
     }
+}
+
+pub fn unicode_segments(
+    full_decode: String,
+    decoded_tokens: impl IntoIterator<Item = String>,
+) -> candle::Result<Vec<Segment>> {
+    const RC: char = std::char::REPLACEMENT_CHARACTER;
+
+    let mut buf = vec![0; 3];
+    let rc = RC.encode_utf8(&mut buf).as_bytes();
+    let bytes = full_decode.bytes().collect::<Vec<_>>();
+    let (mut segs, mut seg_tokens, mut current_tokens) = (vec![], vec![], vec![]);
+    let mut unicode_offset = 0;
+    for (i, decoded) in decoded_tokens.into_iter().enumerate() {
+        current_tokens.push(i);
+
+        let rc_idx = unicode_offset + decoded.find(RC).unwrap_or_default();
+        if (!decoded.contains(RC)) || &bytes[rc_idx..(rc_idx + rc.len()).min(bytes.len())] == rc {
+            unicode_offset += decoded.len();
+            segs.push(decoded);
+            seg_tokens.push(std::mem::take(&mut current_tokens));
+        }
+    }
+
+    Ok(segs
+        .into_iter()
+        .zip(seg_tokens)
+        .map(|(text, token_indices)| Segment {
+            text,
+            token_indices,
+        })
+        .collect())
 }
 
 /// A specific cross-attention head to use for timestamp determination
@@ -75,7 +133,7 @@ pub struct AlignmentHead {
 }
 
 /// The collection of cross-attention heads to use for timestamp determination
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AlignmentHeads {
     /// Uses all heads from the top layers up to the specified maximum
     TopLayerHeads { max_layers: usize },
