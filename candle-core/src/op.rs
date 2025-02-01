@@ -321,7 +321,7 @@ macro_rules! bin_op {
                 crate::accelerate::$f64_vec(xs1, xs2, ys)
             }
 
-            #[cfg(all(not(feature = "mkl"), not(feature = "accelerate")))]
+            #[cfg(not(any(feature = "mkl", feature = "accelerate")))]
             #[inline(always)]
             fn f32_vec(xs1: &[f32], xs2: &[f32], ys: &mut [f32]) {
                 crate::mathfun::$f32_vec(xs1, xs2, ys)
@@ -448,7 +448,7 @@ macro_rules! unary_op {
                 crate::accelerate::$f64_vec(xs, ys)
             }
 
-            #[cfg(all(not(feature = "mkl"), not(feature = "accelerate")))]
+            #[cfg(not(any(feature = "mkl", feature = "accelerate")))]
             #[inline(always)]
             fn f32_vec(xs: &[f32], ys: &mut [f32]) {
                 crate::mathfun::$f32_vec(xs, ys)
@@ -556,7 +556,7 @@ impl UnaryOpT for Gelu {
         crate::accelerate::vd_gelu(xs, ys)
     }
 
-    #[cfg(all(not(feature = "mkl"), not(feature = "accelerate")))]
+    #[cfg(not(any(feature = "mkl", feature = "accelerate")))]
     #[inline(always)]
     fn f32_vec(xs: &[f32], ys: &mut [f32]) {
         crate::mathfun::vs_gelu(xs, ys)
@@ -665,7 +665,7 @@ impl UnaryOpT for Silu {
         crate::accelerate::vd_silu(xs, ys)
     }
 
-    #[cfg(all(not(feature = "mkl"), not(feature = "accelerate")))]
+    #[cfg(not(any(feature = "mkl", feature = "accelerate")))]
     #[inline(always)]
     fn f32_vec(xs: &[f32], ys: &mut [f32]) {
         crate::mathfun::vs_silu(xs, ys)
