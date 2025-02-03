@@ -831,7 +831,7 @@ struct MDReduceOp {
         MD<T> bigger_m = a_bigger ? a : b;
         MD<T> smaller_m = a_bigger ? b : a;
         MD<T> res;
-        res.d = bigger_m.d + smaller_m.d * exp(smaller_m.m - bigger_m.m);
+        res.d = bigger_m.d + smaller_m.d * fast_exp(smaller_m.m - bigger_m.m);
         res.m = bigger_m.m;
         return res;
     }
