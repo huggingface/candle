@@ -729,6 +729,8 @@ fn slice_set(device: &Device) -> Result<()> {
         .sum_all()?
         .to_vec0::<f32>()?;
     assert_eq!(diff, 0.);
+    // This used to create a deadlock rather than returning an actual error.
+    assert!(cache.slice_set(&cache, 0, 0).is_err());
     Ok(())
 }
 

@@ -26,6 +26,7 @@ candle-metal-kernels = { workspace = true, optional = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 rand = { workspace = true }
+rand_distr = { workspace = true }
 criterion = { workspace = true }
 
 [features]
