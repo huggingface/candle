@@ -919,7 +919,7 @@ case N: {                                               \
     break;                                              \
 }
 
-#define impl_softmax_inner(NAME, T)                     \
+#define impl_softmax(NAME, T)                           \
 kernel void NAME(                                       \
     constant uint &src_numel,                           \
     constant uint &el_per_block,                        \
@@ -943,9 +943,6 @@ kernel void NAME(                                       \
         softmax_case(T,    1);                          \
     }                                                   \
 }
-
-#define impl_softmax(NAME, T)                           \
-impl_softmax_inner(NAME, T)                             \
 
 
 template<typename T>
