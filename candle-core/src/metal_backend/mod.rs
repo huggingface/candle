@@ -335,7 +335,7 @@ impl BackendStorage for MetalStorage {
                 &command_buffer,
                 &device.kernels,
                 name,
-                &src_dims,
+                src_dims,
                 dst_el,
                 src,
                 &buffer,
