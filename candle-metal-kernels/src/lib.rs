@@ -5,14 +5,12 @@ use metal::{
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::RwLock;
-
 pub mod mlx_gemm;
 pub mod sort;
 pub mod utils;
-pub use utils::BufferOffset;
-
 pub use mlx_gemm::{call_mlx_gemm, GemmDType};
 pub use sort::{call_arg_sort, call_mlx_arg_sort};
+pub use utils::BufferOffset;
 use utils::{get_block_dims, linear_split, EncoderParam, EncoderProvider};
 
 const AFFINE: &str = include_str!("affine.metal");
@@ -176,7 +174,7 @@ pub enum MetalKernelError {
     LockError(String),
     #[error("Error while loading library: {0}")]
     LoadLibraryError(String),
-    #[error("Error while loading function: {0:?}")]
+    #[error("Error while loading function: {0}")]
     LoadFunctionError(String),
     #[error("Failed to create compute function")]
     FailedToCreateComputeFunction,
@@ -635,19 +633,31 @@ pub fn call_reduce_contiguous(
     ep: impl EncoderProvider,
     kernels: &Kernels,
     kernel_name: &'static str,
-    length: usize,
+    shape: &[usize],
     out_length: usize,
     input: BufferOffset,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
+    let length = shape.iter().product::<usize>();
+    let num_dims = shape.len();
+    let work_per_threadgroup = length / out_length;
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
-    let elements_to_sum = length / out_length;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (length, elements_to_sum, &input, output));
+    set_params!(
+        encoder,
+        (
+            length,
+            num_dims,
+            shape,
+            work_per_threadgroup,
+            &input,
+            output
+        )
+    );
 
     let thread_group_count = MTLSize {
         width: out_length as u64,
@@ -657,9 +667,8 @@ pub fn call_reduce_contiguous(
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        (elements_to_sum as u64).div_ceil(2),
-    )
-    .next_power_of_two();
+        (work_per_threadgroup / 2).next_power_of_two() as NSUInteger,
+    );
 
     let thread_group_size = MTLSize {
         width,
@@ -686,8 +695,9 @@ pub fn call_reduce_strided(
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let length: usize = shape.iter().product();
+    let num_dims = shape.len();
+    let work_per_threadgroup = length / out_length;
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
-    let elements_to_sum = length / out_length;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -695,7 +705,15 @@ pub fn call_reduce_strided(
 
     set_params!(
         encoder,
-        (shape.len(), shape, strides, elements_to_sum, &input, output)
+        (
+            length,
+            num_dims,
+            shape,
+            strides,
+            work_per_threadgroup,
+            &input,
+            output
+        )
     );
 
     let thread_group_count = MTLSize {
@@ -706,16 +724,14 @@ pub fn call_reduce_strided(
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        elements_to_sum as u64,
-    )
-    .next_power_of_two();
+        (work_per_threadgroup / 2).next_power_of_two() as NSUInteger,
+    );
 
     let thread_group_size = MTLSize {
         width,
         height: 1,
         depth: 1,
     };
-
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -729,11 +745,13 @@ pub fn call_last_softmax(
     kernels: &Kernels,
     kernel_name: &'static str,
     length: usize,
-    elements_to_sum: usize,
+    elements: usize,
     input: &Buffer,
     input_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
+    let work_per_threadgroup = elements;
+
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -741,29 +759,27 @@ pub fn call_last_softmax(
 
     set_params!(
         encoder,
-        (length, elements_to_sum, (input, input_offset), output)
+        (length, work_per_threadgroup, (input, input_offset), output)
     );
 
-    let out_length = length / elements_to_sum;
+    let out_length = length / work_per_threadgroup;
 
     let thread_group_count = MTLSize {
-        width: out_length as u64,
+        width: out_length as NSUInteger,
         height: 1,
         depth: 1,
     };
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        elements_to_sum as u64,
-    )
-    .next_power_of_two();
+        (work_per_threadgroup / 2).next_power_of_two() as NSUInteger,
+    );
 
     let thread_group_size = MTLSize {
         width,
         height: 1,
         depth: 1,
     };
-
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
