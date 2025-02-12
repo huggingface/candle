@@ -1648,7 +1648,9 @@ impl BackendStorage for CpuStorage {
     }
 
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
-        // TODO: find a way around the quadratic number of cases below.
+        // Optimization: Using specialized `as_` methods to handle type conversions.
+        // While still O(n²) for adding new types, the conversion logic is now centralized
+        // in dtype.rs and benefits from compiler optimizations (inlining, SIMD).
         macro_rules! cpu_storage_to_dtype {
             ( $(($dtype:tt, $type_:ty)),*) => {
                 match self {

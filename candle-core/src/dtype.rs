@@ -208,7 +208,6 @@ macro_rules! with_dtype {
         }
     };
 }
-
 use half::{bf16, f16};
 
 with_dtype!(u8, U8, |v: f64| v as u8, |v: u8| v as f64);
