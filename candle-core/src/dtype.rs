@@ -145,12 +145,12 @@ macro_rules! cpu_storage_as {
                     CpuStorage::$out_dtype(data)
                 })},
             )*
-            _ => {
-                 crate::bail!(
-                    "Conversion vers F32 non supportée à partir du CpuStorage de type {:?}",
-                    $cpu_storage.dtype()
-                )
+            _ => Err(Error::UnexpectedDType {
+                expected: $dtype,
+                got: $cpu_storage.dtype(),
+                msg: "unexpected dtype",
             }
+            .bt()),
         }
     }};
 }
