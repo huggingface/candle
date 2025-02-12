@@ -1543,6 +1543,10 @@ impl CpuStorage {
         D::cpu_storage_as_slice(self)
     }
 
+    pub fn as_<D: WithDType>(&self, layout: &Layout, dtype: DType) -> Result<CpuStorage> {
+        D::cpu_storage_as(self, layout, dtype)
+    }
+
     pub fn concat(storages: &[CpuStorage]) -> Result<CpuStorage> {
         let storage0 = &storages[0];
         let s = match storage0 {
@@ -1645,204 +1649,26 @@ impl BackendStorage for CpuStorage {
 
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
         // TODO: find a way around the quadratic number of cases below.
-        match (self, dtype) {
-            (Self::U8(storage), DType::BF16) => {
-                let data = unary_map(storage, layout, |v| bf16::from_f32(v as f32));
-                Ok(Self::BF16(data))
-            }
-            (Self::U32(storage), DType::BF16) => {
-                let data = unary_map(storage, layout, |v| bf16::from_f32(v as f32));
-                Ok(Self::BF16(data))
-            }
-            (Self::I64(storage), DType::BF16) => {
-                let data = unary_map(storage, layout, |v| bf16::from_f32(v as f32));
-                Ok(Self::BF16(data))
-            }
-            (Self::BF16(storage), DType::BF16) => {
-                let data = unary_map(storage, layout, |v| v);
-                Ok(Self::BF16(data))
-            }
-            (Self::F16(storage), DType::BF16) => {
-                let data = unary_map(storage, layout, |v| bf16::from_f32(v.to_f32()));
-                Ok(Self::BF16(data))
-            }
-            (Self::F32(storage), DType::BF16) => {
-                let data = unary_map(storage, layout, bf16::from_f32);
-                Ok(Self::BF16(data))
-            }
-            (Self::F64(storage), DType::BF16) => {
-                let data = unary_map(storage, layout, bf16::from_f64);
-                Ok(Self::BF16(data))
-            }
-            (Self::U8(storage), DType::F16) => {
-                let data = unary_map(storage, layout, |v| f16::from_f32(v as f32));
-                Ok(Self::F16(data))
-            }
-            (Self::U32(storage), DType::F16) => {
-                let data = unary_map(storage, layout, |v| f16::from_f32(v as f32));
-                Ok(Self::F16(data))
-            }
-            (Self::I64(storage), DType::F16) => {
-                let data = unary_map(storage, layout, |v| f16::from_f32(v as f32));
-                Ok(Self::F16(data))
-            }
-            (Self::BF16(storage), DType::F16) => {
-                let data = unary_map(storage, layout, |v| f16::from_f32(v.to_f32()));
-                Ok(Self::F16(data))
-            }
-            (Self::F16(storage), DType::F16) => {
-                let data = unary_map(storage, layout, |v| v);
-                Ok(Self::F16(data))
-            }
-            (Self::F32(storage), DType::F16) => {
-                let data = unary_map(storage, layout, f16::from_f32);
-                Ok(Self::F16(data))
-            }
-            (Self::F64(storage), DType::F16) => {
-                let data = unary_map(storage, layout, f16::from_f64);
-                Ok(Self::F16(data))
-            }
-            (Self::U8(storage), DType::F32) => {
-                let data = unary_map(storage, layout, |v| v as f32);
-                Ok(Self::F32(data))
-            }
-            (Self::U32(storage), DType::F32) => {
-                let data = unary_map(storage, layout, |v| v as f32);
-                Ok(Self::F32(data))
-            }
-            (Self::I64(storage), DType::F32) => {
-                let data = unary_map(storage, layout, |v| v as f32);
-                Ok(Self::F32(data))
-            }
-            (Self::BF16(storage), DType::F32) => {
-                let data = unary_map(storage, layout, |v| v.to_f32());
-                Ok(Self::F32(data))
-            }
-            (Self::F16(storage), DType::F32) => {
-                let data = unary_map(storage, layout, |v| v.to_f32());
-                Ok(Self::F32(data))
-            }
-            (Self::F32(storage), DType::F32) => {
-                let data = unary_map(storage, layout, |v| v);
-                Ok(Self::F32(data))
-            }
-            (Self::F64(storage), DType::F32) => {
-                let data = unary_map(storage, layout, |v| v as f32);
-                Ok(Self::F32(data))
-            }
-            (Self::U8(storage), DType::U8) => {
-                let data = unary_map(storage, layout, |v| v);
-                Ok(Self::U8(data))
-            }
-            (Self::BF16(storage), DType::U8) => {
-                let data = unary_map(storage, layout, |v| v.to_f32() as u8);
-                Ok(Self::U8(data))
-            }
-            (Self::F16(storage), DType::U8) => {
-                let data = unary_map(storage, layout, |v| v.to_f32() as u8);
-                Ok(Self::U8(data))
-            }
-            (Self::F32(storage), DType::U8) => {
-                let data = unary_map(storage, layout, |v| v as u8);
-                Ok(Self::U8(data))
-            }
-            (Self::F64(storage), DType::U8) => {
-                let data = unary_map(storage, layout, |v| v as u8);
-                Ok(Self::U8(data))
-            }
-            (Self::U32(storage), DType::U8) => {
-                let data = unary_map(storage, layout, |v| v as u8);
-                Ok(Self::U8(data))
-            }
-            (Self::I64(storage), DType::U8) => {
-                let data = unary_map(storage, layout, |v| v as u8);
-                Ok(Self::U8(data))
-            }
-            (Self::U8(storage), DType::U32) => {
-                let data = unary_map(storage, layout, |v| v as u32);
-                Ok(Self::U32(data))
-            }
-            (Self::U32(storage), DType::U32) => {
-                let data = unary_map(storage, layout, |v| v);
-                Ok(Self::U32(data))
-            }
-            (Self::I64(storage), DType::U32) => {
-                let data = unary_map(storage, layout, |v| v as u32);
-                Ok(Self::U32(data))
-            }
-            (Self::BF16(storage), DType::U32) => {
-                let data = unary_map(storage, layout, |v| v.to_f32() as u32);
-                Ok(Self::U32(data))
-            }
-            (Self::F16(storage), DType::U32) => {
-                let data = unary_map(storage, layout, |v| v.to_f32() as u32);
-                Ok(Self::U32(data))
-            }
-            (Self::F32(storage), DType::U32) => {
-                let data = unary_map(storage, layout, |v| v as u32);
-                Ok(Self::U32(data))
-            }
-            (Self::F64(storage), DType::U32) => {
-                let data = unary_map(storage, layout, |v| v as u32);
-                Ok(Self::U32(data))
-            }
-            (Self::U8(storage), DType::I64) => {
-                let data = unary_map(storage, layout, |v| v as i64);
-                Ok(Self::I64(data))
-            }
-            (Self::U32(storage), DType::I64) => {
-                let data = unary_map(storage, layout, |v| v as i64);
-                Ok(Self::I64(data))
-            }
-            (Self::I64(storage), DType::I64) => {
-                let data = unary_map(storage, layout, |v| v);
-                Ok(Self::I64(data))
-            }
-            (Self::BF16(storage), DType::I64) => {
-                let data = unary_map(storage, layout, |v| v.to_f32() as i64);
-                Ok(Self::I64(data))
-            }
-            (Self::F16(storage), DType::I64) => {
-                let data = unary_map(storage, layout, |v| v.to_f32() as i64);
-                Ok(Self::I64(data))
-            }
-            (Self::F32(storage), DType::I64) => {
-                let data = unary_map(storage, layout, |v| v as i64);
-                Ok(Self::I64(data))
-            }
-            (Self::F64(storage), DType::I64) => {
-                let data = unary_map(storage, layout, |v| v as i64);
-                Ok(Self::I64(data))
-            }
-            (Self::U8(storage), DType::F64) => {
-                let data = unary_map(storage, layout, |v| v as f64);
-                Ok(Self::F64(data))
-            }
-            (Self::U32(storage), DType::F64) => {
-                let data = unary_map(storage, layout, |v| v as f64);
-                Ok(Self::F64(data))
-            }
-            (Self::I64(storage), DType::F64) => {
-                let data = unary_map(storage, layout, |v| v as f64);
-                Ok(Self::F64(data))
-            }
-            (Self::BF16(storage), DType::F64) => {
-                let data = unary_map(storage, layout, |v| v.to_f64());
-                Ok(Self::F64(data))
-            }
-            (Self::F16(storage), DType::F64) => {
-                let data = unary_map(storage, layout, |v| v.to_f64());
-                Ok(Self::F64(data))
-            }
-            (Self::F32(storage), DType::F64) => {
-                let data = unary_map(storage, layout, |v| v as f64);
-                Ok(Self::F64(data))
-            }
-            (Self::F64(storage), DType::F64) => {
-                let data = unary_map(storage, layout, |v| v);
-                Ok(Self::F64(data))
-            }
+        macro_rules! cpu_storage_to_dtype {
+            ( $(($dtype:tt, $type_:ty)),*) => {
+                match self {
+                    $(
+                        CpuStorage::$dtype(_) => {
+                            self.as_::<$type_>(layout, dtype)
+                        }
+                    )*
+                }
+            };
         }
+        cpu_storage_to_dtype!(
+            (U8, u8),
+            (U32, u32),
+            (I64, i64),
+            (BF16, bf16),
+            (F16, f16),
+            (F32, f32),
+            (F64, f64)
+        )
     }
 
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, reduce_dims: &[usize]) -> Result<Self> {
