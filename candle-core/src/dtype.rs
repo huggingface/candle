@@ -141,7 +141,7 @@ macro_rules! cpu_storage_as {
             $(
                 (CpuStorage::$in_dtype(storage), DType::$out_dtype) => {
                     Ok({ let data = crate::cpu_backend::unary_map(&storage, $layout,
-                        |v| as_!($in_dtype , $out_dtype, v));
+                        |v| as_!($in_dtype, $out_dtype, v));
                     CpuStorage::$out_dtype(data)
                 })},
             )*
