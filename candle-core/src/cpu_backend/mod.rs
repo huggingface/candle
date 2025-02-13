@@ -1651,26 +1651,15 @@ impl BackendStorage for CpuStorage {
         // Optimization: Using specialized `as_` methods to handle type conversions.
         // While still O(n²) for adding new types, the conversion logic is now centralized
         // in dtype.rs and benefits from compiler optimizations (inlining, SIMD).
-        macro_rules! cpu_storage_to_dtype {
-            ( $(($dtype:tt, $type_:ty)),*) => {
-                match self {
-                    $(
-                        CpuStorage::$dtype(_) => {
-                            self.as_::<$type_>(layout, dtype)
-                        }
-                    )*
-                }
-            };
+        match self {
+            CpuStorage::U8(_) => self.as_::<u8>(layout, dtype),
+            CpuStorage::U32(_) => self.as_::<u32>(layout, dtype),
+            CpuStorage::I64(_) => self.as_::<i64>(layout, dtype),
+            CpuStorage::BF16(_) => self.as_::<bf16>(layout, dtype),
+            CpuStorage::F16(_) => self.as_::<f16>(layout, dtype),
+            CpuStorage::F32(_) => self.as_::<f32>(layout, dtype),
+            CpuStorage::F64(_) => self.as_::<f64>(layout, dtype),
         }
-        cpu_storage_to_dtype!(
-            (U8, u8),
-            (U32, u32),
-            (I64, i64),
-            (BF16, bf16),
-            (F16, f16),
-            (F32, f32),
-            (F64, f64)
-        )
     }
 
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, reduce_dims: &[usize]) -> Result<Self> {
