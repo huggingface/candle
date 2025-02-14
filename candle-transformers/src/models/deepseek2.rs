@@ -605,15 +605,15 @@ impl Attention {
             D::Minus1,
         )?;
         let q_nope = q_split[0].clone();
-        let mut q_pe = q_split[1].clone();
+        let q_pe = q_split[1].clone();
 
-        let mut compressed_kv = self.kv_a_proj_with_mqa.forward(xs)?;
+        let compressed_kv = self.kv_a_proj_with_mqa.forward(xs)?;
         let ckv_split = compressed_kv.split(
             &[self.cfg.kv_lora_rank, self.cfg.qk_rope_head_dim],
             D::Minus1,
         )?;
-        compressed_kv = ckv_split[0].clone();
-        let mut k_pe = {
+        let compressed_kv = ckv_split[0].clone();
+        let k_pe = {
             let k_pe = ckv_split[1].clone();
             k_pe.reshape((bs, seq_len, 1, self.cfg.qk_rope_head_dim))?
                 .transpose(1, 2)?
@@ -633,14 +633,14 @@ impl Attention {
 
         let kv_split = kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
         let k_nope = kv_split[0].clone();
-        let mut v = kv_split[1].clone();
+        let v = kv_split[1].clone();
 
-        (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offset)?;
+        let (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offset)?;
 
         let q = Tensor::cat(&[q_nope, q_pe], D::Minus1)?;
-        let mut k = Tensor::cat(&[k_nope, k_pe.repeat((1, q.dim(1)?, 1, 1))?], D::Minus1)?;
+        let k = Tensor::cat(&[k_nope, k_pe.repeat((1, q.dim(1)?, 1, 1))?], D::Minus1)?;
 
-        (k, v) = match &self.kv_cache {
+        let (k, v) = match &self.kv_cache {
             None => (k, v),
             Some((prev_k, prev_v)) => {
                 let key_states = Tensor::cat(&[prev_k, &k], 2)?;
@@ -650,7 +650,7 @@ impl Attention {
         };
         self.kv_cache = Some((k.clone(), v.clone()));
 
-        let mut attn_out = {
+        let attn_out = {
             let att = (q.matmul(&k.t()?)? * self.softmax_scale)?;
             let att = match attention_mask {
                 Some(mask) => att.broadcast_add(mask)?,
@@ -662,7 +662,7 @@ impl Attention {
             att.matmul(&v.contiguous()?)?
         };
 
-        attn_out = if attention_mask.is_some() {
+        let attn_out = if attention_mask.is_some() {
             attn_out.transpose(1, 2)?.reshape((bs, seq_len, ()))?
         } else {
             attn_out.reshape((bs, seq_len, ()))?
