@@ -638,7 +638,7 @@ impl Attention {
         (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offset)?;
 
         let q = Tensor::cat(&[q_nope, q_pe], D::Minus1)?;
-        let mut k = Tensor::cat(&[k_nope, k_pe], D::Minus1)?;
+        let mut k = Tensor::cat(&[k_nope, k_pe.repeat((1, q.dim(1)?, 1, 1))?], D::Minus1)?;
 
         (k, v) = match &self.kv_cache {
             None => (k, v),
