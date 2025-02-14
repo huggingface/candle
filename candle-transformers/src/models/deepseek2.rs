@@ -651,7 +651,7 @@ impl Attention {
         self.kv_cache = Some((k.clone(), v.clone()));
 
         let attn_out = {
-            let att = (q.matmul(&k.t()?)? * self.softmax_scale)?;
+            let att = (q.contiguous()?.matmul(&k.t()?.contiguous()?)? * self.softmax_scale)?;
             let att = match attention_mask {
                 Some(mask) => att.broadcast_add(mask)?,
                 None => att,

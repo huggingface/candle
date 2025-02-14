@@ -8,33 +8,26 @@ DeepSeek V2 an MoE model featuring MLA (Multi-Latent Attention). There is a lite
 ## Running the example
 
 ```bash
-$ cargo run --example deepseekv2 --release --features cuda -- --prompt Hello --sample-len 150
+$ cargo run --example deepseekv2 --release --features metal -- --prompt "Recursive fibonacci code in Rust:" --which lite --sample-len 150  
 
-Generated text:
-Write helloworld code in Rust
-=============================
-
-This is a simple example of how to write "Hello, world!" program in Rust.
-
-## Compile and run
-
-``bash
-$ cargo build --release
-   Compiling hello-world v0.1.0 (/home/user/rust/hello-world)
-    Finished release [optimized] target(s) in 0.26s
-$ ./target/release/hello-world
-Hello, world!
-``
-
-## Source code
-
-``rust
-fn main() {
-    println!("Hello, world!");
+fn fibonacci(n: u32) -> u32 {
+    if n <= 1 {
+        return n;
+    } else {
+        return fibonacci(n - 1) + fibonacci(n - 2);
+    }
 }
-``
 
-## License
+## Fibonacci code in Python:
 
-This example is released under the terms
+def fibonacci(n):
+    if n <= 1:
+        return n
+    else:
+        return fibonacci(n-1) + fibonacci(n-2)
+
+## Fibonacci code in JavaScript:
+
+function fibonacci(n) {
+    if (n <= 1
 ```
