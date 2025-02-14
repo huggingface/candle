@@ -487,13 +487,8 @@ impl Module for VisionEmbeddings {
         let resized_position_embedding = if num_patches_w == self.base_num_patches_per_side
             && num_patches_h == self.base_num_patches_per_side
         {
-            print!("No position embeddings interpolation");
             self.position_embedding.clone()
         } else {
-            print!(
-                "Interpolating position embeddings to ({}, {})",
-                num_patches_h, num_patches_w
-            );
             self.position_embedding
                 .interpolate2d(num_patches_h, num_patches_w)?
         };
