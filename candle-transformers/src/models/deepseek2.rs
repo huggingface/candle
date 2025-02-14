@@ -752,11 +752,9 @@ impl MoeGate {
                 // (n, topk_group)
                 let group_idx = scores.topk_unsorted(self.cfg.topk_group)?.indices;
                 // (n, n_group)
-                let mut group_mask = group_scores.zeros_like()?;
-                // (n, n_group)
-                group_mask = group_mask.scatter_add(
+                let group_mask = group_scores.zeros_like()?.scatter_add(
                     &group_idx,
-                    &group_idx.ones_like()?.to_dtype(group_mask.dtype())?,
+                    &group_idx.ones_like()?.to_dtype(group_scores.dtype())?,
                     1,
                 )?;
                 // (n, e)
