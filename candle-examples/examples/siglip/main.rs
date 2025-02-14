@@ -29,6 +29,9 @@ struct Args {
 
     #[arg(long, use_value_delimiter = true)]
     sequences: Option<Vec<String>>,
+
+    #[arg(short, long)]
+    image_size: Option<usize>,
 }
 
 fn load_image<T: AsRef<std::path::Path>>(path: T, image_size: usize) -> anyhow::Result<Tensor> {
@@ -81,7 +84,11 @@ pub fn main() -> anyhow::Result<()> {
             "candle-examples/examples/yolo-v8/assets/bike.jpg".to_string(),
         ],
     };
-    let images = load_images(&vec_imgs, config.vision_config.image_size)?.to_device(&device)?;
+    let images = load_images(
+        &vec_imgs,
+        args.image_size.unwrap_or(config.vision_config.image_size),
+    )?
+    .to_device(&device)?;
     let vb =
         unsafe { VarBuilder::from_mmaped_safetensors(&[model_file.clone()], DType::F32, &device)? };
     let model = siglip::Model::new(&config, vb)?;
