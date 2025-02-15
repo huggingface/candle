@@ -7,6 +7,7 @@ pub const FUSED_RMS_NORM: &str = include_str!(concat!(env!("OUT_DIR"), "/fused_r
 pub const FUSED_ROPE: &str = include_str!(concat!(env!("OUT_DIR"), "/fused_rope.ptx"));
 pub const INDEXING: &str = include_str!(concat!(env!("OUT_DIR"), "/indexing.ptx"));
 pub const KVCONCAT: &str = include_str!(concat!(env!("OUT_DIR"), "/kvconcat.ptx"));
+pub const MUL_AND_ACT: &str = include_str!(concat!(env!("OUT_DIR"), "/mul_and_act.ptx"));
 pub const QUANTIZED: &str = include_str!(concat!(env!("OUT_DIR"), "/quantized.ptx"));
 pub const REDUCE: &str = include_str!(concat!(env!("OUT_DIR"), "/reduce.ptx"));
 pub const SORT: &str = include_str!(concat!(env!("OUT_DIR"), "/sort.ptx"));

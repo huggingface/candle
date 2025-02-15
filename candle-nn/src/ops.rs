@@ -4,6 +4,8 @@
 use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
+use crate::Activation;
+
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
 /// a slice of fixed index on dimension `dim` are between 0 and 1 and sum to 1.
 ///
@@ -1784,4 +1786,205 @@ impl candle::CustomOp3 for Sdpa {
 ///     - GQA is not supported (requires `qhead` == `kv_head`)
 pub fn sdpa(q: &Tensor, k: &Tensor, v: &Tensor, scale: f32, softcapping: f32) -> Result<Tensor> {
     q.apply_op3_no_bwd(k, v, &Sdpa { scale, softcapping })
+}
+
+struct MulAndAct {
+    act: Activation,
+}
+
+impl candle::CustomOp2 for MulAndAct {
+    fn name(&self) -> &'static str {
+        "mul-and-act"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _a_s: &CpuStorage,
+        _a_l: &Layout,
+        _mask_s: &CpuStorage,
+        _mask_l: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        candle::bail!("cpu mul-and-act is not implemented");
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        a_s: &candle::MetalStorage,
+        a_l: &Layout,
+        b_s: &candle::MetalStorage,
+        b_l: &Layout,
+    ) -> Result<(candle::MetalStorage, Shape)> {
+        use candle::backend::BackendStorage;
+        use candle_metal_kernels::BufferOffset;
+        let device = a_s.device();
+        let command_buffer = device.command_buffer()?;
+        let kernels = device.kernels();
+
+        let elem_count = a_l.shape().elem_count();
+        if a_l.shape() != b_l.shape() {
+            candle::bail!(
+                "a and b shapes must match: {:?} vs {:?}",
+                a_l.dims(),
+                b_l.dims()
+            );
+        }
+        if a_s.dtype() != b_s.dtype() {
+            candle::bail!(
+                "a and b dtypes must match: {:?} vs {:?}",
+                a_s.dtype(),
+                b_s.dtype()
+            );
+        }
+
+        let output = device.new_buffer(elem_count, a_s.dtype(), "mul-and-act")?;
+        if a_l.is_contiguous() && b_l.is_contiguous() {
+            let name = match (a_s.dtype(), self.act) {
+                (DType::F32, Activation::Gelu) => "mul_act_f32_gelu",
+                (DType::F32, Activation::Relu) => "mul_act_f32_relu",
+                (DType::F32, Activation::Silu) => "mul_act_f32_silu",
+                (DType::F16, Activation::Gelu) => "mul_act_f16_gelu",
+                (DType::F16, Activation::Relu) => "mul_act_f16_relu",
+                (DType::F16, Activation::Silu) => "mul_act_f16_silu",
+                (DType::BF16, Activation::Gelu) => "mul_act_bf16_gelu",
+                (DType::BF16, Activation::Relu) => "mul_act_bf16_relu",
+                (DType::BF16, Activation::Silu) => "mul_act_bf16_silu",
+                (dtype, act) => candle::bail!("Expected dtype one of f32/f16/bf16 ({dtype:?}), activation one of gelu/relu/silu ({act:?}"),
+            };
+            candle_metal_kernels::call_mul_and_act_contiguous(
+                device.metal_device(),
+                &command_buffer,
+                kernels,
+                name,
+                elem_count,
+                BufferOffset {
+                    buffer: a_s.buffer(),
+                    offset_in_bytes: a_l.start_offset() * a_s.dtype().size_in_bytes(),
+                },
+                BufferOffset {
+                    buffer: b_s.buffer(),
+                    offset_in_bytes: b_l.start_offset() * b_s.dtype().size_in_bytes(),
+                },
+                &output,
+            )
+            .map_err(candle::Error::wrap)?;
+        } else {
+            let name = match (a_s.dtype(), self.act) {
+                (DType::F32, Activation::Gelu) => "mul_act_f32_strided_gelu",
+                (DType::F32, Activation::Relu) => "mul_act_f32_strided_relu",
+                (DType::F32, Activation::Silu) => "mul_act_f32_strided_silu",
+                (DType::F16, Activation::Gelu) => "mul_act_f16_strided_gelu",
+                (DType::F16, Activation::Relu) => "mul_act_f16_strided_relu",
+                (DType::F16, Activation::Silu) => "mul_act_f16_strided_silu",
+                (DType::BF16, Activation::Gelu) => "mul_act_bf16_strided_gelu",
+                (DType::BF16, Activation::Relu) => "mul_act_bf16_strided_relu",
+                (DType::BF16, Activation::Silu) => "mul_act_bf16_strided_silu",
+                (dtype, act) => candle::bail!("Expected dtype one of f32/f16/bf16 ({dtype:?}), activation one of gelu/relu/silu ({act:?}"),
+            };
+            candle_metal_kernels::call_mul_and_act_strided(
+                device.metal_device(),
+                &command_buffer,
+                kernels,
+                name,
+                a_l.dims(),
+                BufferOffset {
+                    buffer: a_s.buffer(),
+                    offset_in_bytes: a_l.start_offset() * a_s.dtype().size_in_bytes(),
+                },
+                a_l.stride(),
+                BufferOffset {
+                    buffer: b_s.buffer(),
+                    offset_in_bytes: b_l.start_offset() * b_s.dtype().size_in_bytes(),
+                },
+                b_l.stride(),
+                &output,
+            )
+            .map_err(candle::Error::wrap)?;
+        }
+
+        let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, a_s.dtype());
+        Ok((newstorage, a_l.shape().clone()))
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        a_s: &candle::CudaStorage,
+        a_l: &Layout,
+        b_s: &candle::CudaStorage,
+        b_l: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        use candle::cuda::SlicePtrOrNull;
+        use candle::cuda_backend::cudarc::driver::{
+            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+        };
+        use candle::cuda_backend::{kernel_name, kernels, Map2, WrapErr};
+        use candle::{CudaDevice, WithDType};
+
+        struct S {
+            act: Activation,
+        }
+        impl Map2 for S {
+            fn f<T: DeviceRepr + WithDType>(
+                &self,
+                lhs: &CudaSlice<T>,
+                lhs_l: &Layout,
+                rhs: &CudaSlice<T>,
+                rhs_l: &Layout,
+                dev: &CudaDevice,
+            ) -> Result<CudaSlice<T>> {
+                let shape = lhs_l.shape();
+                let dims = shape.dims();
+                let elem_count = shape.elem_count();
+                let cfg = LaunchConfig::for_num_elems(elem_count as u32);
+                let dims_and_strides = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
+                    SlicePtrOrNull::Null
+                } else {
+                    SlicePtrOrNull::Ptr(
+                        dev.htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())
+                            .w()?,
+                    )
+                };
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let name = match self.act {
+                    Activation::Gelu => "mul_act_gelu",
+                    Activation::Silu => "mul_act_silu",
+                    Activation::Relu => "mul_act_relu",
+                    act => candle::bail!("Expected activation one of gelu/relu/silu ({act:?}"),
+                };
+                let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::MUL_AND_ACT)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
+                let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
+                // SAFETY: ffi
+                unsafe { func.launch(cfg, params) }.w()?;
+                Ok(out)
+            }
+        }
+
+        use candle::backend::BackendStorage;
+        let dev = a_s.device();
+        let slice = S { act: self.act }.map(&a_s.slice, a_l, &b_s.slice, b_l, dev)?;
+        let dst = candle::cuda_backend::CudaStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, a_l.shape().clone()))
+    }
+}
+
+/// Elementwise multiply and activation. The following activations are supported:
+/// - `gelu`
+/// - `silu`
+/// - `relu`
+///
+/// This is equivalent to:
+/// `act(a) * b`
+pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
+    if a.device().is_cpu() || b.device().is_cpu() {
+        a.apply(&act)? * b
+    } else {
+        a.apply_op2(b, MulAndAct { act })
+    }
 }
