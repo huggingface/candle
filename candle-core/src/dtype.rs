@@ -120,11 +120,7 @@ pub trait WithDType:
 }
 
 macro_rules! cpu_storage_as {
-    (@inner $in_dtype:ident, ($($out_ty:ident),+)) => {
-        $(($in_dtype, $out_ty)),+
-    };
-
-    (match:($cpu_storage:expr, $dtype:ident), $layout:ident, $in_dtype:ident, ($($out_ty:ident),+)) => {{
+    (match:($cpu_storage: expr, $match_dtype: ident), $layout: ident, $with_dtype: ident, ($($dtype: ident),+)) => {{
         macro_rules! as_ {
             (U8,   U8,   $v:expr) => {$v};
             (U32,  U32,  $v:expr) => {$v};
@@ -142,14 +138,14 @@ macro_rules! cpu_storage_as {
             ($in:expr, F16,  $v:expr) => { num_traits::AsPrimitive::<f16>::as_($v)};
         }
 
-        match ($cpu_storage, $dtype) {
-            $((CpuStorage::$in_dtype(storage), DType::$out_ty) => {
+        match ($cpu_storage, $match_dtype) {
+            $((CpuStorage::$with_dtype(storage), DType::$dtype) => {
                 Ok({ let data = crate::cpu_backend::unary_map(&storage, $layout,
-                    |v| as_!($in_dtype, $out_ty, v));
-                CpuStorage::$out_ty(data)
+                    |v| as_!($with_dtype, $dtype, v));
+                CpuStorage::$dtype(data)
             })}),+,
             _ => Err(Error::UnexpectedDType {
-                expected: $dtype,
+                expected: DType::$with_dtype,
                 got: $cpu_storage.dtype(),
                 msg: "unexpected dtype",
             }
