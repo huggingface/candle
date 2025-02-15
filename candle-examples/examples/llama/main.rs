@@ -39,7 +39,6 @@ enum Which {
     V32_1bInstruct,
     V32_3b,
     V32_3bInstruct,
-    V32_11bVision,
     #[value(name = "solar-10.7b")]
     Solar10_7B,
     #[value(name = "tiny-llama-1.1b-chat")]
@@ -159,7 +158,6 @@ fn main() -> Result<()> {
                 Which::V32_1bInstruct => "meta-llama/Llama-3.2-1B-Instruct",
                 Which::V32_3b => "meta-llama/Llama-3.2-3B",
                 Which::V32_3bInstruct => "meta-llama/Llama-3.2-3B-Instruct",
-                Which::V32_11bVision => "meta-llama/Llama-3.2-11B-Vision",
                 Which::Solar10_7B => "upstage/SOLAR-10.7B-v1.0",
                 Which::TinyLlama1_1BChat => "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
                 Which::SmolLM2_135M => "HuggingFaceTB/SmolLM2-135M",
@@ -189,7 +187,6 @@ fn main() -> Result<()> {
             | Which::V31Instruct
             | Which::V32_3b
             | Which::V32_3bInstruct
-            | Which::V32_11bVision
             | Which::Solar10_7B => {
                 candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?
             }
