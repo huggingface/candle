@@ -141,7 +141,7 @@ impl CudaDevice {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<F8E4M3>(elem_count) }.w()?;
                 let func = self.get_or_load_func("fill_f8_e4m3", kernels::FILL)?;
-                let params = (&data, v, elem_count);
+                let params = (&data, F8E4M3::from_f64(v), elem_count);
                 unsafe { func.launch(cfg, params) }.w()?;
                 CudaStorageSlice::F8E4M3(data)
             }
