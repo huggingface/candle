@@ -138,7 +138,6 @@ impl GgmlType for BlockQ4_0 {
     const DTYPE: GgmlDType = GgmlDType::Q4_0;
     const BLCK_SIZE: usize = QK4_0;
     type VecDotType = BlockQ8_0;
-    const SUPPORTS_I8MM: bool = true;
 
     // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L1525
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
@@ -239,7 +238,6 @@ impl GgmlType for BlockQ4_1 {
     const DTYPE: GgmlDType = GgmlDType::Q4_1;
     const BLCK_SIZE: usize = QK4_1;
     type VecDotType = BlockQ8_1;
-    const SUPPORTS_I8MM: bool = false;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         Self::vec_dot_unopt(n, xs, ys)
@@ -335,7 +333,6 @@ impl GgmlType for BlockQ5_0 {
     const DTYPE: GgmlDType = GgmlDType::Q5_0;
     const BLCK_SIZE: usize = QK5_0;
     type VecDotType = BlockQ8_0;
-    const SUPPORTS_I8MM: bool = false;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         let qk = Self::BLCK_SIZE;
@@ -438,7 +435,6 @@ impl GgmlType for BlockQ5_1 {
     const DTYPE: GgmlDType = GgmlDType::Q5_1;
     const BLCK_SIZE: usize = QK5_1;
     type VecDotType = BlockQ8_1;
-    const SUPPORTS_I8MM: bool = false;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         Self::vec_dot_unopt(n, xs, ys)
@@ -547,7 +543,6 @@ impl GgmlType for BlockQ8_0 {
     const DTYPE: GgmlDType = GgmlDType::Q8_0;
     const BLCK_SIZE: usize = QK8_0;
     type VecDotType = BlockQ8_0;
-    const SUPPORTS_I8MM: bool = true;
 
     // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L1619
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
@@ -638,7 +633,6 @@ impl GgmlType for BlockQ8_1 {
     const DTYPE: GgmlDType = GgmlDType::Q8_1;
     const BLCK_SIZE: usize = QK8_1;
     type VecDotType = BlockQ8_1;
-    const SUPPORTS_I8MM: bool = false;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         Self::vec_dot_unopt(n, xs, ys)
@@ -685,7 +679,6 @@ impl GgmlType for BlockQ2K {
     const DTYPE: GgmlDType = GgmlDType::Q2K;
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
-    const SUPPORTS_I8MM: bool = true;
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -863,7 +856,6 @@ impl GgmlType for BlockQ3K {
     const DTYPE: GgmlDType = GgmlDType::Q3K;
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
-    const SUPPORTS_I8MM: bool = false;
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -1142,7 +1134,6 @@ impl GgmlType for BlockQ4K {
     const DTYPE: GgmlDType = GgmlDType::Q4K;
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
-    const SUPPORTS_I8MM: bool = true;
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -1337,7 +1328,6 @@ impl GgmlType for BlockQ5K {
     const DTYPE: GgmlDType = GgmlDType::Q5K;
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
-    const SUPPORTS_I8MM: bool = true;
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -1559,7 +1549,6 @@ impl GgmlType for BlockQ6K {
     const DTYPE: GgmlDType = GgmlDType::Q6K;
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
-    const SUPPORTS_I8MM: bool = true;
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -1744,7 +1733,6 @@ impl GgmlType for BlockQ8K {
     const DTYPE: GgmlDType = GgmlDType::Q8K;
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
-    const SUPPORTS_I8MM: bool = false;
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {

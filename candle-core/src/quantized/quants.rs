@@ -7,7 +7,6 @@ pub trait GgmlType: Sized + Clone + Send + Sync {
     const DTYPE: GgmlDType;
     const BLCK_SIZE: usize;
     type VecDotType: GgmlType;
-    const SUPPORTS_I8MM: bool;
 
     // This is only safe for types that include immediate values such as float/int/...
     fn zeros() -> Self {
@@ -28,7 +27,6 @@ impl GgmlType for f32 {
     const DTYPE: GgmlDType = GgmlDType::F32;
     const BLCK_SIZE: usize = 1;
     type VecDotType = f32;
-    const SUPPORTS_I8MM: bool = false;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         Self::vec_dot_unopt(n, xs, ys)
@@ -67,7 +65,6 @@ impl GgmlType for f16 {
     const DTYPE: GgmlDType = GgmlDType::F16;
     const BLCK_SIZE: usize = 1;
     type VecDotType = f16;
-    const SUPPORTS_I8MM: bool = false;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         Self::vec_dot_unopt(n, xs, ys)

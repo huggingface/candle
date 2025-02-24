@@ -32,7 +32,6 @@ impl GgmlType for BlockIQ4xs {
     const DTYPE: GgmlDType = GgmlDType::Iq4Xs;
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
-    const SUPPORTS_I8MM: bool = false;
 
     fn to_float(xs: &[Self], mut ys: &mut [f32]) -> Result<()> {
         let k = ys.len();
@@ -179,7 +178,6 @@ impl GgmlType for BlockIQ4nl {
     const DTYPE: GgmlDType = GgmlDType::Iq4Nl;
     const BLCK_SIZE: usize = QK4_NL;
     type VecDotType = BlockQ8_0;
-    const SUPPORTS_I8MM: bool = false;
 
     fn to_float(xs: &[Self], mut ys: &mut [f32]) -> Result<()> {
         let k = ys.len();
