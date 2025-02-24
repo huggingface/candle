@@ -1,6 +1,6 @@
 use candle_core::{
     bail,
-    quantized::{self, GgmlDType},
+    quantized::{self, quants, GgmlDType},
     test_device,
     test_utils::to_vec2_round,
     DType, Device, IndexOp, Module, Result, Tensor,
@@ -54,7 +54,7 @@ fn quantized_matmul(device: &Device) -> Result<()> {
     let mut rhs_t = vec![k_quants::BlockQ4_0::zeros(); 8];
     let rhs = (0..(k * n)).map(|v| v as f32).collect::<Vec<_>>();
     k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t)?;
-    k_quants::matmul((m, k, n), &lhs_s, &rhs_t, &mut dst)?;
+    quants::matmul((m, k, n), &lhs_s, &rhs_t, &mut dst)?;
     assert_eq!(
         dst.iter().map(|x| x.round()).collect::<Vec<_>>(),
         &[
@@ -119,7 +119,7 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
         .collect::<Vec<_>>();
     let tensor_rhs = Tensor::from_slice(&rhs, (n, k), device)?.t()?;
     k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t)?;
-    k_quants::matmul((m, k, n), &lhs_s, &rhs_t, &mut dst)?;
+    quants::matmul((m, k, n), &lhs_s, &rhs_t, &mut dst)?;
     assert_eq!(
         dst.iter().map(|x| x.round()).collect::<Vec<_>>(),
         &[

@@ -1,5 +1,9 @@
-use super::k_quants::{
-    BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K,
+use super::{
+    iq_quants::{BlockIQ4nl, BlockIQ4xs, KVALUES_IQ4NL, QK4_NL},
+    k_quants::{
+        BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0,
+        QK_K,
+    },
 };
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
@@ -610,4 +614,108 @@ unsafe fn multiply_accum_with_scale(
     let p1 = vdotq_s32(q2bytes.0, q8bytes.0);
     let p2 = vdotq_s32(q2bytes.1, q8bytes.1);
     vaddvq_s32(p1) * aux[is + index] as i32 + vaddvq_s32(p2) * aux[is + 1 + index] as i32
+}
+
+#[inline(always)]
+pub(crate) fn vec_dot_iq4_xs_q8k(n: usize, xs: &[BlockIQ4xs], ys: &[BlockQ8K]) -> Result<f32> {
+    if n % QK_K != 0 {
+        crate::bail!("vec_dot_iq4_xs_q8k: {n} is not divisible by {QK_K}")
+    }
+
+    unsafe {
+        let values = vld1q_s8(KVALUES_IQ4NL.as_ptr());
+        let m4b = vdupq_n_u8(0x0f);
+
+        let mut q4b = int8x16x4_t(vdupq_n_s8(0), vdupq_n_s8(0), vdupq_n_s8(0), vdupq_n_s8(0));
+
+        let mut sumf = 0f32;
+
+        let nb = n / QK_K;
+        for ibl in 0..nb {
+            let y_block = &ys[ibl];
+            let x_block = &xs[ibl];
+            let mut q8 = y_block.qs.as_ptr();
+            let mut q4 = x_block.qs.as_ptr();
+            let mut h = x_block.scales_h;
+
+            let mut sumi1 = 0;
+            let mut sumi2 = 0;
+            for ib in 0..(QK_K / 64) {
+                let q4bits = vld1q_u8_x2(q4);
+                q4 = q4.add(32);
+                let q8b = vld1q_s8_x4(q8);
+                q8 = q8.add(64);
+
+                q4b.0 = vqtbl1q_s8(values, vandq_u8(q4bits.0, m4b));
+                q4b.1 = vqtbl1q_s8(values, vshrq_n_u8(q4bits.0, 4));
+                q4b.2 = vqtbl1q_s8(values, vandq_u8(q4bits.1, m4b));
+                q4b.3 = vqtbl1q_s8(values, vshrq_n_u8(q4bits.1, 4));
+
+                let prod1 =
+                    vdotq_s32_local(vdotq_s32_local(vdupq_n_s32(0), q4b.0, q8b.0), q4b.1, q8b.1);
+                let prod2 =
+                    vdotq_s32_local(vdotq_s32_local(vdupq_n_s32(0), q4b.2, q8b.2), q4b.3, q8b.3);
+
+                let ls1 = (x_block.scales_l[ib] & 0xf) as i32 | ((h << 4) & 0x30) as i32 - 32;
+                let ls2 = (x_block.scales_l[ib] >> 4) as i32 | ((h << 2) & 0x30) as i32 - 32;
+                h >>= 4;
+
+                sumi1 += vaddvq_s32(prod1) * ls1;
+                sumi2 += vaddvq_s32(prod2) * ls2;
+            }
+
+            sumf += xs[ibl].d.to_f32() * ys[ibl].d * (sumi1 + sumi2) as f32;
+        }
+
+        Ok(sumf)
+    }
+}
+
+#[inline(always)]
+pub(crate) fn vec_dot_iq4_nl_q8k(n: usize, xs: &[BlockIQ4nl], ys: &[BlockQ8_0]) -> Result<f32> {
+    if n % QK4_NL != 0 {
+        crate::bail!("vec_dot_iq4_nl_q8k: {n} is not divisible by {QK4_NL}")
+    }
+
+    unsafe {
+        let values = vld1q_s8(KVALUES_IQ4NL.as_ptr());
+        let m4b = vdupq_n_u8(0x0f);
+
+        let mut q4b = int8x16x4_t(vdupq_n_s8(0), vdupq_n_s8(0), vdupq_n_s8(0), vdupq_n_s8(0));
+        let mut q8b = int8x16x4_t(vdupq_n_s8(0), vdupq_n_s8(0), vdupq_n_s8(0), vdupq_n_s8(0));
+        let mut q4bits = uint8x16x2_t(vdupq_n_u8(0), vdupq_n_u8(0));
+
+        let mut sumf = 0f32;
+
+        let nb = n / QK4_NL;
+        for ib in (0..nb - 1).step_by(2) {
+            q4bits.0 = vld1q_u8(xs[ib].qs.as_ptr());
+            q4bits.1 = vld1q_u8(xs[ib + 1].qs.as_ptr());
+            q8b.0 = vld1q_s8(ys[ib].qs.as_ptr());
+            q8b.1 = vld1q_s8(ys[ib].qs.as_ptr().add(16));
+            q8b.2 = vld1q_s8(ys[ib + 1].qs.as_ptr());
+            q8b.3 = vld1q_s8(ys[ib + 1].qs.as_ptr().add(16));
+
+            q4b.0 = vqtbl1q_s8(values, vandq_u8(q4bits.0, m4b));
+            q4b.1 = vqtbl1q_s8(values, vshrq_n_u8(q4bits.0, 4));
+            q4b.2 = vqtbl1q_s8(values, vandq_u8(q4bits.1, m4b));
+            q4b.3 = vqtbl1q_s8(values, vshrq_n_u8(q4bits.1, 4));
+
+            let prod1 =
+                vdotq_s32_local(vdotq_s32_local(vdupq_n_s32(0), q4b.0, q8b.0), q4b.1, q8b.1);
+            let prod2 =
+                vdotq_s32_local(vdotq_s32_local(vdupq_n_s32(0), q4b.2, q8b.2), q4b.3, q8b.3);
+
+            sumf += xs[ib].d.to_f32() * ys[ib].d.to_f32() * vaddvq_s32(prod1) as f32
+                + xs[ib + 1].d.to_f32() * ys[ib + 1].d.to_f32() * vaddvq_s32(prod2) as f32;
+        }
+
+        Ok(sumf)
+    }
+}
+
+unsafe fn vdotq_s32_local(vz: int32x4_t, a: int8x16_t, b: int8x16_t) -> int32x4_t {
+    let p0 = vmull_s8(vget_low_s8(a), vget_low_s8(b));
+    let p1 = vmull_s8(vget_high_s8(a), vget_high_s8(b));
+    vaddq_s32(vz, vaddq_s32(vpaddlq_s16(p0), vpaddlq_s16(p1)))
 }

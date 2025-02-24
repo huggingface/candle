@@ -1,12 +1,12 @@
-use super::utils::{
+mod utils;
+use super::k_quants::utils::{
     get_scale_min_k4, group_for_dequantization, group_for_quantization, make_q3_quants,
     make_qkx1_quants, make_qx_quants, nearest_int,
 };
-use super::GgmlDType;
+use super::{GgmlDType, GgmlType};
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use half::f16;
-use rayon::prelude::*;
 
 // Default to QK_K 256 rather than 64.
 pub const QK_K: usize = 256;
@@ -18,26 +18,6 @@ pub const QK5_0: usize = 32;
 pub const QK5_1: usize = 32;
 pub const QK8_0: usize = 32;
 pub const QK8_1: usize = 32;
-
-pub trait GgmlType: Sized + Clone + Send + Sync {
-    const DTYPE: GgmlDType;
-    const BLCK_SIZE: usize;
-    type VecDotType: GgmlType;
-
-    // This is only safe for types that include immediate values such as float/int/...
-    fn zeros() -> Self {
-        unsafe { std::mem::MaybeUninit::zeroed().assume_init() }
-    }
-    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()>;
-    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()>;
-
-    /// Dot product used as a building block for quantized mat-mul.
-    /// n is the number of elements to be considered.
-    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32>;
-
-    /// Generic implementation of the dot product without simd optimizations.
-    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32>;
-}
 
 #[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
@@ -158,6 +138,7 @@ impl GgmlType for BlockQ4_0 {
     const DTYPE: GgmlDType = GgmlDType::Q4_0;
     const BLCK_SIZE: usize = QK4_0;
     type VecDotType = BlockQ8_0;
+    const SUPPORTS_I8MM: bool = true;
 
     // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L1525
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
@@ -258,6 +239,7 @@ impl GgmlType for BlockQ4_1 {
     const DTYPE: GgmlDType = GgmlDType::Q4_1;
     const BLCK_SIZE: usize = QK4_1;
     type VecDotType = BlockQ8_1;
+    const SUPPORTS_I8MM: bool = false;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         Self::vec_dot_unopt(n, xs, ys)
@@ -353,6 +335,7 @@ impl GgmlType for BlockQ5_0 {
     const DTYPE: GgmlDType = GgmlDType::Q5_0;
     const BLCK_SIZE: usize = QK5_0;
     type VecDotType = BlockQ8_0;
+    const SUPPORTS_I8MM: bool = false;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         let qk = Self::BLCK_SIZE;
@@ -455,6 +438,7 @@ impl GgmlType for BlockQ5_1 {
     const DTYPE: GgmlDType = GgmlDType::Q5_1;
     const BLCK_SIZE: usize = QK5_1;
     type VecDotType = BlockQ8_1;
+    const SUPPORTS_I8MM: bool = false;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         Self::vec_dot_unopt(n, xs, ys)
@@ -563,6 +547,7 @@ impl GgmlType for BlockQ8_0 {
     const DTYPE: GgmlDType = GgmlDType::Q8_0;
     const BLCK_SIZE: usize = QK8_0;
     type VecDotType = BlockQ8_0;
+    const SUPPORTS_I8MM: bool = true;
 
     // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L1619
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
@@ -653,6 +638,7 @@ impl GgmlType for BlockQ8_1 {
     const DTYPE: GgmlDType = GgmlDType::Q8_1;
     const BLCK_SIZE: usize = QK8_1;
     type VecDotType = BlockQ8_1;
+    const SUPPORTS_I8MM: bool = false;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         Self::vec_dot_unopt(n, xs, ys)
@@ -699,6 +685,7 @@ impl GgmlType for BlockQ2K {
     const DTYPE: GgmlDType = GgmlDType::Q2K;
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
+    const SUPPORTS_I8MM: bool = true;
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -830,6 +817,7 @@ impl GgmlType for BlockQ2K {
         }
         Ok(())
     }
+
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L354
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
         for (block, y) in group_for_dequantization(xs, ys)? {
@@ -875,6 +863,7 @@ impl GgmlType for BlockQ3K {
     const DTYPE: GgmlDType = GgmlDType::Q3K;
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
+    const SUPPORTS_I8MM: bool = false;
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -1153,6 +1142,7 @@ impl GgmlType for BlockQ4K {
     const DTYPE: GgmlDType = GgmlDType::Q4K;
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
+    const SUPPORTS_I8MM: bool = true;
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -1309,6 +1299,7 @@ impl GgmlType for BlockQ4K {
         }
         Ok(())
     }
+
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L735
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
         for (block, y) in group_for_dequantization(xs, ys)? {
@@ -1346,6 +1337,7 @@ impl GgmlType for BlockQ5K {
     const DTYPE: GgmlDType = GgmlDType::Q5K;
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
+    const SUPPORTS_I8MM: bool = true;
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -1567,6 +1559,7 @@ impl GgmlType for BlockQ6K {
     const DTYPE: GgmlDType = GgmlDType::Q6K;
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
+    const SUPPORTS_I8MM: bool = true;
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -1658,7 +1651,8 @@ impl GgmlType for BlockQ6K {
                 let mut max_scale = 0f32;
                 let mut max_abs_scale = 0f32;
                 for (ib, scale_) in scales.iter_mut().enumerate() {
-                    let scale = make_qx_quants(16, 32, x.add(16 * ib), l.add(16 * ib), 1);
+                    let scale =
+                        make_qx_quants(16, 32, x.add(16 * ib), l.add(16 * ib), 1, std::ptr::null());
                     *scale_ = scale;
                     let abs_scale = scale.abs();
                     if abs_scale > max_abs_scale {
@@ -1750,6 +1744,7 @@ impl GgmlType for BlockQ8K {
     const DTYPE: GgmlDType = GgmlDType::Q8K;
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
+    const SUPPORTS_I8MM: bool = false;
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -1833,132 +1828,6 @@ impl GgmlType for BlockQ8K {
             for (j, &q) in x.qs.iter().enumerate() {
                 ys[i * QK_K + j] = x.d * q as f32
             }
-        }
-        Ok(())
-    }
-}
-
-// https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L10605
-pub fn matmul<T: GgmlType>(
-    mkn: (usize, usize, usize),
-    lhs: &[f32],
-    rhs_t: &[T],
-    dst: &mut [f32],
-) -> Result<()> {
-    let (m, k, n) = mkn;
-    if m * k != lhs.len() {
-        crate::bail!("unexpected lhs length {} {mkn:?}", lhs.len());
-    }
-
-    let k_in_lhs_blocks = k.div_ceil(T::BLCK_SIZE);
-    let k_in_rhs_blocks = k.div_ceil(T::VecDotType::BLCK_SIZE);
-    // TODO: Do not make this copy if the DotType is f32.
-    // TODO: Pre-allocate this.
-    let mut lhs_b = vec![T::VecDotType::zeros(); m * k_in_lhs_blocks];
-    for row_idx in 0..m {
-        let lhs_b = &mut lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
-        let lhs = &lhs[row_idx * k..(row_idx + 1) * k];
-        T::VecDotType::from_float(lhs, lhs_b)?
-    }
-    let lhs_b = lhs_b.as_slice();
-
-    for row_idx in 0..m {
-        let lhs_row = &lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
-        let dst_row = &mut dst[row_idx * n..(row_idx + 1) * n];
-
-        let result: Result<Vec<_>> = dst_row
-            .into_par_iter()
-            .enumerate()
-            .with_min_len(128)
-            .with_max_len(512)
-            .map(|(col_idx, dst)| {
-                let rhs_col = &rhs_t[col_idx * k_in_rhs_blocks..(col_idx + 1) * k_in_rhs_blocks];
-                T::vec_dot(k, rhs_col, lhs_row).map(|value| *dst = value)
-            })
-            .collect();
-
-        result?;
-    }
-    Ok(())
-}
-
-impl GgmlType for f32 {
-    const DTYPE: GgmlDType = GgmlDType::F32;
-    const BLCK_SIZE: usize = 1;
-    type VecDotType = f32;
-
-    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        Self::vec_dot_unopt(n, xs, ys)
-    }
-
-    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        if xs.len() < n {
-            crate::bail!("size mismatch {} < {n}", xs.len())
-        }
-        if ys.len() < n {
-            crate::bail!("size mismatch {} < {n}", ys.len())
-        }
-        let mut res = 0f32;
-        unsafe { crate::cpu::vec_dot_f32(xs.as_ptr(), ys.as_ptr(), &mut res, n) };
-        Ok(res)
-    }
-
-    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
-        if xs.len() != ys.len() {
-            crate::bail!("size mismatch {} {}", xs.len(), ys.len());
-        }
-        ys.copy_from_slice(xs);
-        Ok(())
-    }
-
-    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
-        if xs.len() != ys.len() {
-            crate::bail!("size mismatch {} {}", xs.len(), ys.len());
-        }
-        ys.copy_from_slice(xs);
-        Ok(())
-    }
-}
-
-impl GgmlType for f16 {
-    const DTYPE: GgmlDType = GgmlDType::F16;
-    const BLCK_SIZE: usize = 1;
-    type VecDotType = f16;
-
-    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        Self::vec_dot_unopt(n, xs, ys)
-    }
-
-    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        if xs.len() < n {
-            crate::bail!("size mismatch {} < {n}", xs.len())
-        }
-        if ys.len() < n {
-            crate::bail!("size mismatch {} < {n}", ys.len())
-        }
-        let mut res = 0f32;
-        unsafe { crate::cpu::vec_dot_f16(xs.as_ptr(), ys.as_ptr(), &mut res, n) };
-        Ok(res)
-    }
-
-    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
-        if xs.len() != ys.len() {
-            crate::bail!("size mismatch {} {}", xs.len(), ys.len());
-        }
-        // TODO: vectorize
-        for (x, y) in xs.iter().zip(ys.iter_mut()) {
-            *y = f16::from_f32(*x)
-        }
-        Ok(())
-    }
-
-    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
-        if xs.len() != ys.len() {
-            crate::bail!("size mismatch {} {}", xs.len(), ys.len());
-        }
-        // TODO: vectorize
-        for (x, y) in xs.iter().zip(ys.iter_mut()) {
-            *y = x.to_f32()
         }
         Ok(())
     }
