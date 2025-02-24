@@ -1,6 +1,6 @@
 #![allow(unused)]
 use candle::{
-    quantized::{self, k_quants, GgmlDType, GgmlType},
+    quantized::{self, k_quants, quants, GgmlDType, GgmlType},
     test_utils::to_vec2_round,
     Device, Module, Result, Tensor,
 };
@@ -23,7 +23,7 @@ fn quantized_matmul_neg() -> Result<()> {
         .collect::<Vec<_>>();
     let tensor_rhs = Tensor::from_slice(&rhs, (n, k), cpu)?.t()?;
     k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t)?;
-    k_quants::matmul((m, k, n), &lhs, &rhs_t, &mut dst)?;
+    quants::matmul((m, k, n), &lhs, &rhs_t, &mut dst)?;
     assert_eq!(
         dst.iter().map(|x| x.round()).collect::<Vec<_>>(),
         &[
