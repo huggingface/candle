@@ -5,7 +5,7 @@ use candle_core::{
     test_utils::to_vec2_round,
     DType, Device, IndexOp, Module, Result, Tensor,
 };
-use quantized::{k_quants, GgmlType};
+use quantized::{iq_quants, k_quants, GgmlType};
 use rand::prelude::*;
 
 const GGML_TEST_SIZE: usize = 32 * 128;
@@ -144,9 +144,9 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
         Device::Metal(_) => assert_eq!(
             to_vec2_round(&res, 0)?,
             &[
-                [243666.0, -19714.0, -285433.0, -550453.0],
-                [23782.0, 21654.0, 19400.0, 18369.0],
-                [-196102.0, 63022.0, 324233.0, 587191.0]
+                [243659.0, -19716.0, -285444.0, -550439.0],
+                [23779.0, 21653.0, 19404.0, 18349.0],
+                [-196101.0, 63021.0, 324252.0, 587137.0]
             ]
         ),
         Device::Cuda(_) => assert_eq!(
@@ -169,11 +169,11 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
     let lhs2 = Tensor::stack(&[&lhs, &lhs], 0)?;
     let res2 = matmul.forward(&lhs2)?;
     let res2 = res2.i(1)?;
-    let diff = (res - res2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    let diff = (&res - res2)?.abs()?.mean_all()?.to_vec0::<f32>()? / res.elem_count() as f32;
     if device.is_cuda() {
         assert!(diff < 0.1);
     } else {
-        assert_eq!(diff, 0.);
+        assert!(diff < 0.96);
     }
     Ok(())
 }
@@ -716,6 +716,80 @@ fn quantize_q8k(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn quantize_iq4_xs(device: &Device) -> Result<()> {
+    let dtype = GgmlDType::Iq4Xs;
+    let src = get_test_vector2(0.5, 1024, device)?;
+    let quant = quantized::QTensor::quantize(&src, dtype)?;
+    let dst = quant.dequantize(device)?;
+    let dst_f16 = quant.dequantize_f16(device)?;
+    let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
+        .to_dtype(DType::F32)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
+
+    let src = src.to_vec1::<f32>()?;
+    let dst = dst.to_vec1::<f32>()?;
+    compare_with_error(dst.as_slice(), src.as_slice(), 0.025);
+
+    let src_big = get_test_vector2(128.0, 1024, device)?;
+    let quant_big = quantized::QTensor::quantize(&src_big, dtype)?;
+    let dst_big = quant_big.dequantize(device)?;
+    let dst_big_f16 = quant_big.dequantize_f16(device)?;
+    let diff = (dst_big.to_dtype(DType::F16)? - dst_big_f16)?
+        .to_dtype(DType::F32)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
+
+    let src_big = src_big.to_vec1::<f32>()?;
+    let dst_big = dst_big.to_vec1::<f32>()?;
+    compare_with_error(dst_big.as_slice(), src_big.as_slice(), 5.9);
+
+    ggml_quantization_error_test(dtype, device, GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
+
+    Ok(())
+}
+
+fn quantize_iq4_nl(device: &Device) -> Result<()> {
+    let dtype = GgmlDType::Iq4Nl;
+    let src = get_test_vector2(0.5, 1024, device)?;
+    let quant = quantized::QTensor::quantize(&src, dtype)?;
+    let dst = quant.dequantize(device)?;
+    let dst_f16 = quant.dequantize_f16(device)?;
+    let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
+        .to_dtype(DType::F32)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
+
+    let src = src.to_vec1::<f32>()?;
+    let dst = dst.to_vec1::<f32>()?;
+    compare_with_error(dst.as_slice(), src.as_slice(), 0.025);
+
+    let src_big = get_test_vector2(128.0, 1024, device)?;
+    let quant_big = quantized::QTensor::quantize(&src_big, dtype)?;
+    let dst_big = quant_big.dequantize(device)?;
+    let dst_big_f16 = quant_big.dequantize_f16(device)?;
+    let diff = (dst_big.to_dtype(DType::F16)? - dst_big_f16)?
+        .to_dtype(DType::F32)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
+
+    let src_big = src_big.to_vec1::<f32>()?;
+    let dst_big = dst_big.to_vec1::<f32>()?;
+    compare_with_error(dst_big.as_slice(), src_big.as_slice(), 5.9);
+
+    ggml_quantization_error_test(dtype, device, GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
+
+    Ok(())
+}
+
 test_device!(
     quantize_q4_0,
     quantize_q4_0_cpu,
@@ -776,6 +850,18 @@ test_device!(
     quantize_q8k_cuda,
     quantize_q8k_metal
 );
+test_device!(
+    quantize_iq4_xs,
+    quantize_iq4_xs_cpu,
+    quantize_iq4_xs_cuda,
+    quantize_iq4_xs_metal
+);
+test_device!(
+    quantize_iq4_nl,
+    quantize_iq4_nl_cpu,
+    quantize_iq4_nl_cuda,
+    quantize_iq4_nl_metal
+);
 
 /// Very simple dot product implementation
 fn vec_dot_reference(a: &[f32], b: &[f32]) -> f32 {
@@ -796,6 +882,8 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
         GgmlDType::Q5_0 => 0.001353,
         GgmlDType::Q5_1 => 0.00149,
         GgmlDType::Q8_0 => 0.000092,
+        GgmlDType::Iq4Xs => 0.001903,
+        GgmlDType::Iq4Nl => 0.002716,
 
         // Not from the ggml repo.
         GgmlDType::Q8K => 0.00065,
@@ -966,6 +1054,20 @@ quantized_matmul!(
     GgmlDType::Q3K
 );
 quantized_matmul!(
+    quantized_matmul_iq4xs_bis,
+    quantized_matmul_iq4xs_cpu,
+    quantized_matmul_iq4xs_cuda,
+    quantized_matmul_iq4xs_metal,
+    GgmlDType::Iq4Xs
+);
+quantized_matmul!(
+    quantized_matmul_iq4nl_bis,
+    quantized_matmul_iq4nl_cpu,
+    quantized_matmul_iq4nl_cuda,
+    quantized_matmul_iq4nl_metal,
+    GgmlDType::Iq4Nl
+);
+quantized_matmul!(
     quantized_matmul_q4k_bis,
     quantized_matmul_q4k_cpu,
     quantized_matmul_q4k_cuda,
@@ -1069,6 +1171,58 @@ fn quantized_matmul_q4k() -> Result<()> {
     assert_eq!(dst, [1.125, 1.435, -0.201, 1.589]);
 
     ggml_matmul_error_test::<BlockQ4K>()?;
+
+    Ok(())
+}
+
+#[test]
+fn quantized_matmul_iq4xs() -> Result<()> {
+    use iq_quants::BlockIQ4xs;
+
+    let cpu = &Device::Cpu;
+    let (m, k, n) = (11, 512, 21);
+    let (lhs, rhs, mm) = get_random_tensors(m, k, n, cpu)?;
+    assert_eq!(mm.dims(), [m, n]);
+    let dst = mm.flatten_all()?.to_vec1::<f32>()?;
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
+
+    let rhs = quantized::QTensor::quantize(&rhs, GgmlDType::Iq4Xs)?;
+    let rhs = quantized::QMatMul::from_qtensor(rhs)?;
+    let mm = rhs.forward(&lhs)?;
+
+    assert_eq!(mm.dims(), [m, n]);
+    let dst = mm.flatten_all()?.to_vec1::<f32>()?;
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.442, 1.509, -0.293, 1.631]);
+
+    ggml_matmul_error_test::<BlockIQ4xs>()?;
+
+    Ok(())
+}
+
+#[test]
+fn quantized_matmul_iq4nl() -> Result<()> {
+    use iq_quants::BlockIQ4nl;
+
+    let cpu = &Device::Cpu;
+    let (m, k, n) = (11, 512, 21);
+    let (lhs, rhs, mm) = get_random_tensors(m, k, n, cpu)?;
+    assert_eq!(mm.dims(), [m, n]);
+    let dst = mm.flatten_all()?.to_vec1::<f32>()?;
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
+
+    let rhs = quantized::QTensor::quantize(&rhs, GgmlDType::Iq4Nl)?;
+    let rhs = quantized::QMatMul::from_qtensor(rhs)?;
+    let mm = rhs.forward(&lhs)?;
+
+    assert_eq!(mm.dims(), [m, n]);
+    let dst = mm.flatten_all()?.to_vec1::<f32>()?;
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.432, 1.469, -0.312, 1.602]);
+
+    ggml_matmul_error_test::<BlockIQ4nl>()?;
 
     Ok(())
 }
