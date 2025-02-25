@@ -208,7 +208,93 @@ macro_rules! with_dtype {
 }
 use half::{bf16, f16};
 
-with_dtype!(u8, U8, |v: f64| v as u8, |v: u8| v as f64);
+impl WithDType for u8 {
+    const DTYPE:DType = DType::U8;
+    fn from_f64(v:f64) -> Self {
+        (|v:f64|v as u8)(v)
+    }
+    fn to_f64(self) -> f64 {
+        (|v:u8|v as f64)(self)
+    }
+    fn cpu_storage_ref(data: &[Self]) -> CpuStorageRef<'_>{
+        CpuStorageRef::U8(data)
+    }
+    fn to_cpu_storage_owned(data:Vec<Self>) -> CpuStorage {
+        CpuStorage::U8(data)
+    }
+    fn cpu_storage_data(s:CpuStorage) -> Result<Vec<Self>>{
+        match s {
+            CpuStorage::U8(data) => Ok(data),
+            _ => Err(Error::UnexpectedDType {
+                expected:DType::U8,got:s.dtype(),msg:"unexpected dtype",
+            }.bt()),
+        
+            }
+    }
+    fn cpu_storage_as_slice(s: &CpuStorage) -> Result<&[Self]>{
+        match s {
+            CpuStorage::U8(data) => Ok(data),
+            _ => Err(Error::UnexpectedDType {
+                expected:DType::U8,got:s.dtype(),msg:"unexpected dtype",
+            }.bt()),
+        
+            }
+    }
+    #[inline]
+    fn cpu_storage_as(s: &CpuStorage,layout: &crate::Layout,dtype:DType) -> Result<CpuStorage>{
+        {
+    match(s,dtype){
+        (CpuStorage::U8(storage),DType::U8) => {
+            Ok({
+                let data = crate::cpu_backend::unary_map(&storage,layout, |v|as_!(U8,U8,v));
+                CpuStorage::U8(data)
+            })
+        },
+        (CpuStorage::U8(storage),DType::U32) => {
+            Ok({
+                let data = crate::cpu_backend::unary_map(&storage,layout, |v|as_!(U8,U32,v));
+                CpuStorage::U32(data)
+            })
+        },
+        (CpuStorage::U8(storage),DType::I64) => {
+            Ok({
+                let data = crate::cpu_backend::unary_map(&storage,layout, |v|as_!(U8,I64,v));
+                CpuStorage::I64(data)
+            })
+        },
+        (CpuStorage::U8(storage),DType::F16) => {
+            Ok({
+                let data = crate::cpu_backend::unary_map(&storage,layout, |v|as_!(U8,F16,v));
+                CpuStorage::F16(data)
+            })
+        },
+        (CpuStorage::U8(storage),DType::BF16) => {
+            Ok({
+                let data = crate::cpu_backend::unary_map(&storage,layout, |v|as_!(U8,BF16,v));
+                CpuStorage::BF16(data)
+            })
+        },
+        (CpuStorage::U8(storage),DType::F32) => {
+            Ok({
+                let data = crate::cpu_backend::unary_map(&storage,layout, |v|as_!(U8,F32,v));
+                CpuStorage::F32(data)
+            })
+        },
+        (CpuStorage::U8(storage),DType::F64) => {
+            Ok({
+                let data = crate::cpu_backend::unary_map(&storage,layout, |v|as_!(U8,F64,v));
+                CpuStorage::F64(data)
+            })
+        },
+        _ => Err(Error::UnexpectedDType {
+            expected:DType::U8,got:s.dtype(),msg:"unexpected dtype",
+        }.bt()),
+    
+        }
+}
+    }
+
+    }
 with_dtype!(u32, U32, |v: f64| v as u32, |v: u32| v as f64);
 with_dtype!(i64, I64, |v: f64| v as i64, |v: i64| v as f64);
 with_dtype!(f16, F16, f16::from_f64, f16::to_f64);

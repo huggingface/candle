@@ -1649,8 +1649,8 @@ impl BackendStorage for CpuStorage {
 
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
         // Optimization: Using specialized `as_` methods to handle type conversions.
-        // While still O(n²) for adding new types, the conversion logic is now centralized
-        // in dtype.rs and benefits from compiler optimizations (inlining, SIMD).
+        // With linear O(n) complexity for adding new types, the conversion logic is centralized
+        // in dtype.rs and leverages compiler optimizations (inlining, SIMD) for better performance.
         match self {
             CpuStorage::U8(_) => self.as_::<u8>(layout, dtype),
             CpuStorage::U32(_) => self.as_::<u32>(layout, dtype),
