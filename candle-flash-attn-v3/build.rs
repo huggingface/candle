@@ -212,8 +212,8 @@ fn main() -> Result<()> {
 
                 // https://github.com/EricLBuehler/mistral.rs/issues/286
                 if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
-                    command = command.arg("--compiler-options");
-                    command = command.arg(cuda_nvcc_flags_env);
+                    command.arg("--compiler-options");
+                    command.arg(cuda_nvcc_flags_env);
                 }
 
                 let output = command
