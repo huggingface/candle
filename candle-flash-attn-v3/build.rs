@@ -4,6 +4,8 @@ use rayon::prelude::*;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
+
 const KERNEL_FILES: &[&str] = &[
     "flash_api.cu",
     "flash_fwd_hdim64_fp16_sm90.cu",
@@ -207,6 +209,12 @@ fn main() -> Result<()> {
 
                 // Add the source file
                 command.arg(input);
+
+                // https://github.com/EricLBuehler/mistral.rs/issues/286
+                if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
+                    command = command.arg("--compiler-options");
+                    command = command.arg(cuda_nvcc_flags_env);
+                }
 
                 let output = command
                     .spawn()
