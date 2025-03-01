@@ -530,6 +530,43 @@ template <typename T, int D>
       mask += BN * blocks * mask_seq_stride;
     }
   }
+
+  // Each thread has a partial part of the output so we need to combine them.
+
+  // First let's communicate the max and sum_exp
+  if (simd_lid == 0) {
+    max_scores[simd_gid] = max_score;
+    sum_exp_scores[simd_gid] = sum_exp_score;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  max_score = (simd_lid < BN) ? max_scores[simd_lid] : -1e9;
+  U new_max = simd_max(max_score);
+  U factor = fast::exp(max_score - new_max);
+  sum_exp_score = (simd_lid < BN) ? sum_exp_scores[simd_lid] : 0;
+  sum_exp_score = simd_sum(sum_exp_score * factor);
+
+  // Write the sum and new max
+  if (simd_gid == 0) {
+    sums[0] = sum_exp_score;
+    maxs[0] = new_max;
+  }
+
+  // Now we need to aggregate all the outputs
+  for (int i = 0; i < elem_per_thread; i++) {
+    outputs[simd_lid * BN + simd_gid] =
+        o[i] * fast::exp(max_scores[simd_gid] - new_max);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // And write the output
+    if (simd_gid == 0) {
+      U output = outputs[simd_lid * BN];
+      for (int j = 1; j < BN; j++) {
+        output += outputs[simd_lid * BN + j];
+      }
+      out[i] = static_cast<T>(output);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
 }
 
 template <typename T, int D>
