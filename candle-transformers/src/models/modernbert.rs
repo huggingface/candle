@@ -315,7 +315,7 @@ pub struct ModernBert {
 }
 
 impl ModernBert {
-    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let word_embeddings = embedding(
             config.vocab_size,
             config.hidden_size,
@@ -371,7 +371,7 @@ impl ModernBert {
         })
     }
 
-    fn forward(&self, xs: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor, mask: &Tensor) -> Result<Tensor> {
         let seq_len = xs.shape().dims()[1];
         let global_attention_mask =
             prepare_4d_attention_mask(mask, DType::F32, None)?.to_device(xs.device())?;
