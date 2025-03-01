@@ -456,11 +456,17 @@ impl WgpuDevice {
             backend.insert(Backends::BROWSER_WEBGPU);
         }
 
-        let instance = wgpu::Instance::new(InstanceDescriptor {
+        let instance = wgpu::Instance::new(&InstanceDescriptor {
             backends: backend,
             flags: InstanceFlags::default(),
-            dx12_shader_compiler: wgpu::Dx12Compiler::Fxc,
-            gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
+            backend_options: wgpu::BackendOptions{
+                dx12: wgpu::Dx12BackendOptions {
+                    shader_compiler: wgpu::Dx12Compiler::Fxc,
+                },
+                gl: wgpu::GlBackendOptions {
+                    gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
+                },
+            }
         });
 
         // `request_adapter` instantiates the general connection to the GPU
