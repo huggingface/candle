@@ -173,7 +173,7 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
     if device.is_cuda() {
         assert!(diff < 0.1);
     } else {
-        assert!(diff < 0.96);
+        assert_eq!(diff, 0.);
     }
     Ok(())
 }
