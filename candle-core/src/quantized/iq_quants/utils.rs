@@ -38,7 +38,7 @@ pub(super) fn quantize_row_iq4_nl_impl(
     for qi in q4.iter_mut() {
         *qi = 0;
     }
-    *dh = f16::from_f32(0.0);
+    *dh = f16::ZERO;
 
     // Track the max absolute scale across sub-blocks
     let mut max_scale = 0.0_f32;
