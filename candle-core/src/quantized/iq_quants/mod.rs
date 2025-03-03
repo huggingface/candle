@@ -79,8 +79,8 @@ impl GgmlType for BlockIQ4xs {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        // #[cfg(target_feature = "avx")]
-        // todo!();
+        #[cfg(target_feature = "avx")]
+        return super::avx::vec_dot_iq4_xs_q8k(n, xs, ys);
 
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_iq4_xs_q8k(n, xs, ys);
@@ -212,8 +212,8 @@ impl GgmlType for BlockIQ4nl {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        // #[cfg(target_feature = "avx")]
-        // todo!();
+        #[cfg(target_feature = "avx")]
+        return super::avx::vec_dot_iq4_nl_q8_0(n, xs, ys);
 
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_iq4_nl_q8k(n, xs, ys);
