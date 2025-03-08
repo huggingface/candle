@@ -435,6 +435,9 @@ impl QCudaStorage {
             GgmlDType::Q5K => deq::<crate::quantized::BlockQ5K>(&buffer, block_len, &mut out)?,
             GgmlDType::Q6K => deq::<crate::quantized::BlockQ6K>(&buffer, block_len, &mut out)?,
             GgmlDType::Q8K => deq::<crate::quantized::BlockQ8K>(&buffer, block_len, &mut out)?,
+            GgmlDType::Iq4Xs | GgmlDType::Iq4Nl => {
+                todo!("CUDA does not support Iq4Xs or Iq4Nl yet.")
+            }
         }
 
         self.device
