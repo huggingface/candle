@@ -13,6 +13,14 @@ use candle_transformers::models::siglip;
 
 use tokenizers::Tokenizer;
 
+#[derive(Clone, Copy, Debug, clap::ValueEnum, PartialEq, Eq)]
+enum Which {
+    #[value(name = "v1-base-patch16-224")]
+    V1BasePatch16_224,
+    #[value(name = "v2-base-patch16-224")]
+    V2BasePatch16_224,
+}
+
 #[derive(Parser)]
 struct Args {
     #[arg(long)]
@@ -21,8 +29,11 @@ struct Args {
     #[arg(long)]
     config: Option<String>,
 
-    #[arg(long, default_value = "google/siglip-base-patch16-224")]
-    hf_repo: String,
+    #[arg(long)]
+    hf_repo: Option<String>,
+
+    #[arg(long, default_value = "v1-base-patch16-224")]
+    which: Which,
 
     #[arg(long)]
     tokenizer: Option<String>,
@@ -72,10 +83,17 @@ fn load_images<T: AsRef<std::path::Path>>(
 
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    let hf_repo = match args.hf_repo.as_ref() {
+        Some(hf_repo) => hf_repo,
+        None => match args.which {
+            Which::V1BasePatch16_224 => "google/siglip-base-patch16-224",
+            Which::V2BasePatch16_224 => "google/siglip2-base-patch16-224",
+        },
+    };
     let model_file = match args.model {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model(args.hf_repo.to_string());
+            let api = api.model(hf_repo.to_string());
             api.get("model.safetensors")?
         }
         Some(model) => model.into(),
@@ -83,12 +101,12 @@ pub fn main() -> anyhow::Result<()> {
     let config_file = match args.config {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model(args.hf_repo.to_string());
+            let api = api.model(hf_repo.to_string());
             api.get("config.json")?
         }
         Some(config) => config.into(),
     };
-    let tokenizer = get_tokenizer(&args.hf_repo, args.tokenizer)?;
+    let tokenizer = get_tokenizer(hf_repo, args.tokenizer)?;
     let config: siglip::Config = serde_json::from_slice(&std::fs::read(config_file)?)?;
     let device = candle_examples::device(args.cpu)?;
     let vec_imgs = match args.images {
