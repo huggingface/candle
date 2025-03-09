@@ -19,6 +19,12 @@ struct Args {
     model: Option<String>,
 
     #[arg(long)]
+    config: Option<String>,
+
+    #[arg(long, default_value = "google/siglip-base-patch16-224")]
+    hf_repo: String,
+
+    #[arg(long)]
     tokenizer: Option<String>,
 
     #[arg(long, use_value_delimiter = true)]
@@ -69,13 +75,21 @@ pub fn main() -> anyhow::Result<()> {
     let model_file = match args.model {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("google/siglip-base-patch16-224".to_string());
+            let api = api.model(args.hf_repo.to_string());
             api.get("model.safetensors")?
         }
         Some(model) => model.into(),
     };
-    let tokenizer = get_tokenizer(args.tokenizer)?;
-    let config = siglip::Config::base_patch16_224();
+    let config_file = match args.config {
+        None => {
+            let api = hf_hub::api::sync::Api::new()?;
+            let api = api.model(args.hf_repo.to_string());
+            api.get("config.json")?
+        }
+        Some(config) => config.into(),
+    };
+    let tokenizer = get_tokenizer(&args.hf_repo, args.tokenizer)?;
+    let config: siglip::Config = serde_json::from_slice(&std::fs::read(config_file)?)?;
     let device = candle_examples::device(args.cpu)?;
     let vec_imgs = match args.images {
         Some(imgs) => imgs,
@@ -114,11 +128,11 @@ pub fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn get_tokenizer(tokenizer: Option<String>) -> anyhow::Result<Tokenizer> {
+pub fn get_tokenizer(hf_repo: &str, tokenizer: Option<String>) -> anyhow::Result<Tokenizer> {
     let tokenizer = match tokenizer {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("google/siglip-base-patch16-224".to_string());
+            let api = api.model(hf_repo.to_string());
             api.get("tokenizer.json")?
         }
         Some(file) => file.into(),
