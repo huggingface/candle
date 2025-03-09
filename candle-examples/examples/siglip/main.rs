@@ -19,6 +19,18 @@ enum Which {
     V1BasePatch16_224,
     #[value(name = "v2-base-patch16-224")]
     V2BasePatch16_224,
+    #[value(name = "v2-base-patch16-256")]
+    V2BasePatch16_256,
+    #[value(name = "v2-base-patch16-384")]
+    V2BasePatch16_384,
+    #[value(name = "v2-base-patch16-512")]
+    V2BasePatch16_512,
+    #[value(name = "v2-large-patch16-256")]
+    V2LargePatch16_256,
+    #[value(name = "v2-large-patch16-384")]
+    V2LargePatch16_384,
+    #[value(name = "v2-large-patch16-512")]
+    V2LargePatch16_512,
 }
 
 #[derive(Parser)]
@@ -88,6 +100,12 @@ pub fn main() -> anyhow::Result<()> {
         None => match args.which {
             Which::V1BasePatch16_224 => "google/siglip-base-patch16-224",
             Which::V2BasePatch16_224 => "google/siglip2-base-patch16-224",
+            Which::V2BasePatch16_256 => "google/siglip2-base-patch16-256",
+            Which::V2BasePatch16_384 => "google/siglip2-base-patch16-384",
+            Which::V2BasePatch16_512 => "google/siglip2-base-patch16-512",
+            Which::V2LargePatch16_256 => "google/siglip2-large-patch16-256",
+            Which::V2LargePatch16_384 => "google/siglip2-large-patch16-384",
+            Which::V2LargePatch16_512 => "google/siglip2-large-patch16-512",
         },
     };
     let model_file = match args.model {
