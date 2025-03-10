@@ -5,6 +5,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use candle::{test_device, test_utils::to_vec3_round, Device, Result, Tensor};
+use candle_nn::Activation;
 
 fn softmax(device: &Device) -> Result<()> {
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
@@ -265,6 +266,26 @@ fn sigmoid(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn mul_and_act(device: &Device) -> Result<()> {
+    let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
+    let cpu = Tensor::new(data, &Device::Cpu)?;
+    let x = Tensor::new(data, device)?;
+
+    for act in [Activation::Gelu, Activation::Relu, Activation::Silu] {
+        let truth = candle_nn::ops::mul_and_act(&cpu, &cpu, act)?;
+        let test = candle_nn::ops::mul_and_act(&x, &x, act)?.to_device(&Device::Cpu)?;
+
+        let sum_diff = (truth - test)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+        if device.is_cpu() {
+            assert_eq!(sum_diff, 0., "act = {act:?}");
+        } else {
+            assert!(sum_diff < 3e-3, "act = {act:?}");
+        }
+    }
+
+    Ok(())
+}
+
 test_device!(ropei, ropei_cpu, ropei_gpu, ropei_metal);
 test_device!(rope, rope_cpu, rope_gpu, rope_metal);
 test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal);
@@ -280,3 +301,9 @@ test_device!(rms_norml, rms_norml_cpu, rms_norml_gpu, rms_norml_metal);
 test_device!(layer_norm, ln_cpu, ln_gpu, ln_metal);
 test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal);
 test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);
+test_device!(
+    mul_and_act,
+    mul_and_act_cpu,
+    mul_and_act_gpu,
+    mul_and_act_metal
+);

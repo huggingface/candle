@@ -8,6 +8,14 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
 
+#[cfg(target_os = "ios")]
+pub const METAL_SHARED_BUFFER_STORAGE_MODE: MTLResourceOptions =
+    MTLResourceOptions::StorageModeShared;
+
+#[cfg(not(target_os = "ios"))]
+pub const METAL_SHARED_BUFFER_STORAGE_MODE: MTLResourceOptions =
+    MTLResourceOptions::StorageModeManaged;
+
 mod device;
 pub use device::{DeviceId, MetalDevice};
 
@@ -2088,7 +2096,7 @@ impl BackendDevice for MetalDevice {
         let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
             [299792458].as_ptr() as *const c_void,
             4,
-            MTLResourceOptions::StorageModeShared,
+            METAL_SHARED_BUFFER_STORAGE_MODE,
         )));
         let commands = device::Commands::new(command_queue)?;
         Ok(Self {
