@@ -43,6 +43,7 @@ pub mod fastvit;
 pub mod flux;
 pub mod gemma;
 pub mod gemma2;
+pub mod gemma3;
 pub mod glm4;
 pub mod granite;
 pub mod helium;

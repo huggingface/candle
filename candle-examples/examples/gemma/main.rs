@@ -9,6 +9,7 @@ use clap::Parser;
 
 use candle_transformers::models::gemma::{Config as Config1, Model as Model1};
 use candle_transformers::models::gemma2::{Config as Config2, Model as Model2};
+use candle_transformers::models::gemma3::{Config as Config3, Model as Model3};
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -47,29 +48,14 @@ enum Which {
     BaseV2_9B,
     #[value(name = "2-9b-it")]
     InstructV2_9B,
-}
-
-impl Which {
-    fn is_v1(&self) -> bool {
-        match self {
-            Self::Base2B
-            | Self::Base7B
-            | Self::Instruct2B
-            | Self::Instruct7B
-            | Self::InstructV1_1_2B
-            | Self::InstructV1_1_7B
-            | Self::CodeBase2B
-            | Self::CodeBase7B
-            | Self::CodeInstruct2B
-            | Self::CodeInstruct7B => true,
-            Self::BaseV2_2B | Self::InstructV2_2B | Self::BaseV2_9B | Self::InstructV2_9B => false,
-        }
-    }
+    #[value(name = "3-1b")]
+    BaseV3_1B,
 }
 
 enum Model {
     V1(Model1),
     V2(Model2),
+    V3(Model3),
 }
 
 impl Model {
@@ -77,6 +63,7 @@ impl Model {
         match self {
             Self::V1(m) => m.forward(input_ids, pos),
             Self::V2(m) => m.forward(input_ids, pos),
+            Self::V3(m) => m.forward(input_ids, pos),
         }
     }
 }
@@ -284,6 +271,7 @@ fn main() -> Result<()> {
             Which::InstructV2_2B => "google/gemma-2-2b-it".to_string(),
             Which::BaseV2_9B => "google/gemma-2-9b".to_string(),
             Which::InstructV2_9B => "google/gemma-2-9b-it".to_string(),
+            Which::BaseV3_1B => "google/gemma-3-1b-pt".to_string(),
         },
     };
     let repo = api.repo(Repo::with_revision(
@@ -304,7 +292,13 @@ fn main() -> Result<()> {
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+        None => {
+            if args.which == Which::BaseV3_1B {
+                vec![repo.get("model.safetensors")?]
+            } else {
+                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
+            }
+        }
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
@@ -317,14 +311,31 @@ fn main() -> Result<()> {
         DType::F32
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-    let model = if args.which.is_v1() {
-        let config: Config1 = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
-        let model = Model1::new(args.use_flash_attn, &config, vb)?;
-        Model::V1(model)
-    } else {
-        let config: Config2 = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
-        let model = Model2::new(args.use_flash_attn, &config, vb)?;
-        Model::V2(model)
+    let model = match args.which {
+        Which::Base2B
+        | Which::Base7B
+        | Which::Instruct2B
+        | Which::Instruct7B
+        | Which::InstructV1_1_2B
+        | Which::InstructV1_1_7B
+        | Which::CodeBase2B
+        | Which::CodeBase7B
+        | Which::CodeInstruct2B
+        | Which::CodeInstruct7B => {
+            let config: Config1 = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
+            let model = Model1::new(args.use_flash_attn, &config, vb)?;
+            Model::V1(model)
+        }
+        Which::BaseV2_2B | Which::InstructV2_2B | Which::BaseV2_9B | Which::InstructV2_9B => {
+            let config: Config2 = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
+            let model = Model2::new(args.use_flash_attn, &config, vb)?;
+            Model::V2(model)
+        }
+        Which::BaseV3_1B => {
+            let config: Config3 = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
+            let model = Model3::new(args.use_flash_attn, &config, vb)?;
+            Model::V3(model)
+        }
     };
 
     println!("loaded the model in {:?}", start.elapsed());
