@@ -406,7 +406,12 @@ mod metal_sdpa_tests {
                 // Using cat is faster than a broadcast as it avoids going through a potentially
                 // strided copy.
                 // https://github.com/huggingface/candle/pull/2043
-                Tensor::cat(&vec![&xs; n_rep], 2)?.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
+                Tensor::cat(&vec![&xs; n_rep], 2)?.reshape((
+                    b_sz,
+                    n_kv_head * n_rep,
+                    seq_len,
+                    head_dim,
+                ))
             }
         }
 
