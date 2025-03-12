@@ -135,6 +135,12 @@ impl Module for MLP {
 }
 
 #[derive(Debug, Clone)]
+enum KvCache {
+    Normal(candle_nn::kv_cache::KvCache),
+    Rotating(candle_nn::kv_cache::RotatingKvCache),
+}
+
+#[derive(Debug, Clone)]
 struct Attention {
     q_proj: Linear,
     k_proj: Linear,
@@ -148,7 +154,7 @@ struct Attention {
     head_dim: usize,
     attn_logit_softcapping: Option<f64>,
     rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: KvCache,
     use_flash_attn: bool,
 }
 
@@ -156,6 +162,7 @@ impl Attention {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         use_flash_attn: bool,
+        is_sliding: bool,
         cfg: &Config,
         vb: VarBuilder,
     ) -> Result<Self> {
@@ -171,6 +178,14 @@ impl Attention {
         let o_proj = linear(num_heads * head_dim, hidden_sz, bias, vb.pp("o_proj"))?;
         let q_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
         let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
+        let kv_cache = if is_sliding {
+            KvCache::Rotating(candle_nn::kv_cache::RotatingKvCache::new(
+                2,
+                cfg.sliding_window,
+            ))
+        } else {
+            KvCache::Normal(candle_nn::kv_cache::KvCache::new(2, cfg.sliding_window))
+        };
         Ok(Self {
             q_proj,
             k_proj,
@@ -184,7 +199,7 @@ impl Attention {
             head_dim,
             attn_logit_softcapping: cfg.attn_logit_softcapping,
             rotary_emb,
-            kv_cache: None,
+            kv_cache,
             use_flash_attn,
         })
     }
@@ -217,15 +232,10 @@ impl Attention {
             self.rotary_emb
                 .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
 
-        let (key_states, value_states) = match &self.kv_cache {
-            None => (key_states, value_states),
-            Some((prev_k, prev_v)) => {
-                let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
-                let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
-                (key_states, value_states)
-            }
+        let (key_states, value_states) = match &mut self.kv_cache {
+            KvCache::Normal(cache) => cache.append(&key_states, &value_states)?,
+            KvCache::Rotating(cache) => cache.append(&key_states, &value_states)?,
         };
-        self.kv_cache = Some((key_states.clone(), value_states.clone()));
 
         let key_states = crate::utils::repeat_kv(key_states, self.num_kv_groups)?.contiguous()?;
         let value_states =
@@ -261,7 +271,10 @@ impl Attention {
     }
 
     fn clear_kv_cache(&mut self) {
-        self.kv_cache = None
+        match &mut self.kv_cache {
+            KvCache::Normal(c) => c.reset(),
+            KvCache::Rotating(c) => c.reset(),
+        }
     }
 }
 
@@ -295,10 +308,17 @@ impl DecoderLayer {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         use_flash_attn: bool,
+        is_sliding: bool,
         cfg: &Config,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let self_attn = Attention::new(rotary_emb, use_flash_attn, cfg, vb.pp("self_attn"))?;
+        let self_attn = Attention::new(
+            rotary_emb,
+            use_flash_attn,
+            is_sliding,
+            cfg,
+            vb.pp("self_attn"),
+        )?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
@@ -361,7 +381,6 @@ pub struct Model {
     dtype: DType,
     hidden_size: usize,
     sliding_window: usize,
-    sliding_window_pattern: usize,
 }
 
 impl Model {
@@ -373,8 +392,14 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer =
-                DecoderLayer::new(rotary_emb.clone(), use_flash_attn, cfg, vb_l.pp(layer_idx))?;
+            let is_sliding = (layer_idx + 1) % cfg.sliding_window_pattern > 0;
+            let layer = DecoderLayer::new(
+                rotary_emb.clone(),
+                use_flash_attn,
+                is_sliding,
+                cfg,
+                vb_l.pp(layer_idx),
+            )?;
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
@@ -389,7 +414,6 @@ impl Model {
             dtype: vb.dtype(),
             hidden_size: cfg.hidden_size,
             sliding_window: cfg.sliding_window,
-            sliding_window_pattern: cfg.sliding_window_pattern,
         })
     }
 
