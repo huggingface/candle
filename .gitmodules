@@ -4,3 +4,6 @@
 [submodule "candle-flash-attn-v3/cutlass"]
 	url = https://github.com/NVIDIA/cutlass.git
 	path = candle-flash-attn-v3/cutlass
+[submodule "candle-flash-mla/cutlass"]
+	path = candle-flash-mla/cutlass
+	url = https://github.com/NVIDIA/cutlass
