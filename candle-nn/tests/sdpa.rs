@@ -390,4 +390,55 @@ mod metal_sdpa_tests {
 
         Ok(())
     }
+
+    #[test]
+    fn sdpa_vector_gqa_2pass_no_mask() -> candle::Result<()> {
+        use candle::{DType, Device, Tensor};
+        // GQA && Increase seq_len to 1024 in order to cover 2-pass code branch
+
+        /// Repeats a key or value tensor for grouped query attention
+        /// The input tensor should have a shape `(batch, num_kv_heads, seq_len, head_dim)`,
+        fn repeat_kv(xs: Tensor, n_rep: usize) -> candle::Result<Tensor> {
+            if n_rep == 1 {
+                Ok(xs)
+            } else {
+                let (b_sz, n_kv_head, seq_len, head_dim) = xs.dims4()?;
+                // Using cat is faster than a broadcast as it avoids going through a potentially
+                // strided copy.
+                // https://github.com/huggingface/candle/pull/2043
+                Tensor::cat(&vec![&xs; n_rep], 2)?.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
+            }
+        }
+
+        const BS: usize = 4;
+        const R: usize = 1;
+        const L: usize = 1024;
+        const DK: usize = 128;
+        const HQ: usize = 28;
+        const HKV: usize = 4;
+
+        let scale: f64 = f64::from(DK as u32).sqrt().recip();
+        let device = Device::new_metal(0)?;
+        let q = Tensor::randn(0f32, 1f32, (BS, HQ, R, DK), &device)?;
+        let k = Tensor::randn(0f32, 1f32, (BS, HKV, L, DK), &device)?;
+        let v = Tensor::randn(0f32, 1f32, (BS, HKV, L, DK), &device)?;
+
+        let k_aligned = repeat_kv(k.copy().unwrap(), HQ / HKV)?;
+        let v_aligned = repeat_kv(v.copy().unwrap(), HQ / HKV)?;
+
+        let ground_truth = {
+            let att = (q.clone() * scale)?.matmul(&k_aligned.clone().t()?)?;
+            let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
+                .to_dtype(q.dtype())?;
+            att.matmul(&v_aligned.clone())?
+        };
+        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        assert_eq!(ground_truth.shape(), sdpa_output.shape());
+        let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
+            .sum_all()?
+            .to_scalar()?;
+        println!("{error}");
+        assert!(error <= 0.06, "{}", error);
+        Ok(())
+    }
 }

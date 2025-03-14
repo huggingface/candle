@@ -1,5 +1,6 @@
 #include "cuda_utils.cuh"
 #include<stdint.h>
+#include "dummy_bf16.cuh"
 
 template <typename S, typename T>
 __device__ void cast_(
@@ -96,6 +97,28 @@ __device__ void cast_through(
     }
 }
 
+template <typename T>
+__device__ void cast_bf16_dummy(
+    const size_t numel,
+    const size_t num_dims,
+    const size_t *info,
+    const uint16_t *inp,
+    T *out
+) {
+    const size_t *dims = info;
+    const size_t *strides = info + num_dims;
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) {
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+            out[i] = static_cast<T>(bf16_to_f32(inp[i]));
+        }
+    }
+    else {
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+            unsigned strided_i = get_strided_index(i, num_dims, dims, strides);
+            out[i] = static_cast<T>(bf16_to_f32(inp[strided_i]));
+        }
+    }
+}
 
 #define CAST_OP(SRC_TYPENAME, DST_TYPENAME, FN_NAME) \
 extern "C" __global__ void FN_NAME( \
@@ -141,6 +164,17 @@ extern "C" __global__ void FN_NAME( \
     DST_TYPENAME *out \
 ) { \
     cast_through<SRC_TYPENAME, DST_TYPENAME, INT_TYPENAME>(numel, num_dims, info, inp, out); \
+} \
+
+#define CAST_BF16_FALLBACK_OP(DST_TYPENAME, FN_NAME) \
+extern "C" __global__ void FN_NAME( \
+    const size_t numel, \
+    const size_t num_dims, \
+    const size_t *info, \
+    const uint16_t *inp, \
+    DST_TYPENAME *out \
+) { \
+    cast_bf16_dummy<DST_TYPENAME>(numel, num_dims, info, inp, out); \
 } \
 
 #if __CUDA_ARCH__ >= 800
@@ -189,6 +223,14 @@ CAST_OP(float,    __half, cast_f32_f16)
 CAST_OP(double,   __half, cast_f64_f16)
 CAST_OP(int32_t,  __half, cast_i32_f16 )
 CAST_THROUGH_OP(__half, int32_t,  float, cast_f16_i32)
+
+#if __CUDA_ARCH__ < 800
+CAST_BF16_FALLBACK_OP(uint32_t, cast_bf16_u32)
+CAST_BF16_FALLBACK_OP(float, cast_bf16_f32)
+CAST_BF16_FALLBACK_OP(double, cast_bf16_f64)
+CAST_BF16_FALLBACK_OP(__half, cast_bf16_f16)
+CAST_BF16_FALLBACK_OP(int32_t, cast_bf16_i32)
+#endif
 #endif
 
 CAST_OP(uint32_t, uint32_t, cast_u32_u32)

@@ -17,7 +17,11 @@ const CONV: &str = include_str!("conv.metal");
 const FILL: &str = include_str!("fill.metal");
 const INDEXING: &str = include_str!("indexing.metal");
 // Current source: https://github.com/ivarflakstad/metal-flash-attention/tree/candle
+#[cfg(not(target_os = "ios"))]
 const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
+// Current source: https://github.com/philipturner/metal-flash-attention/releases/tag/v1.0.1
+#[cfg(target_os = "ios")]
+const MFA: &[u8] = include_bytes!("libMetalFlashAttention.ios.metallib");
 const MLX_GEMM: &str = include_str!("mlx_gemm.metal");
 const QUANTIZED: &str = include_str!("quantized.metal");
 const RANDOM: &str = include_str!("random.metal");
@@ -26,6 +30,7 @@ const SORT: &str = include_str!("sort.metal");
 const TERNARY: &str = include_str!("ternary.metal");
 const UNARY: &str = include_str!("unary.metal");
 const SDPA: &str = include_str!("scaled_dot_product_attention.metal");
+const MUL_AND_ACT: &str = include_str!("mul_and_act.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
@@ -44,6 +49,7 @@ pub enum Source {
     Ternary,
     Unary,
     Sdpa,
+    MulAndAct,
 }
 
 pub mod copy2d {
@@ -235,6 +241,7 @@ impl Kernels {
             Source::Ternary => TERNARY,
             Source::Unary => UNARY,
             Source::Sdpa => SDPA,
+            Source::MulAndAct => MUL_AND_ACT,
             Source::Mfa => panic!("Invalid lib"),
         }
     }
@@ -738,6 +745,7 @@ pub fn call_last_attn_softmax(
     mask: &Buffer,
     mask_offset: usize,
     input_shape: &[usize],
+    mask_shape: &[usize],
     scale: f32,
     ty: SdpaDType,
     output: &Buffer,
@@ -748,6 +756,14 @@ pub fn call_last_attn_softmax(
     let ne01 = input_shape[input_shape.len() - 2] as i64;
     let ne02 = input_shape[input_shape.len() - 3] as i64;
     let ne03 = input_shape[input_shape.len() - 4] as i64;
+
+    let elem_per_batch = if mask_shape.len() == 2 {
+        0
+    } else {
+        let bs = input_shape[0];
+        let el: usize = input_shape.iter().product();
+        el / bs
+    };
 
     let mut nth = 32; // SIMD width
     let name = if ne00 % 4 == 0 {
@@ -784,6 +800,7 @@ pub fn call_last_attn_softmax(
             ne00,
             ne01,
             ne02,
+            elem_per_batch as i64,
             scale
         )
     );
@@ -2003,7 +2020,12 @@ pub fn call_sdpa_vector(
         alpha
     };
 
-    let pipeline = kernels.load_pipeline(device, Source::Sdpa, &name)?;
+    let constants = Some(ConstantValues::new(vec![(
+        20,
+        Value::Bool(/* sdpa_vector_has_mask */ false),
+    )]));
+
+    let pipeline = kernels.load_pipeline_with_constants(device, Source::Sdpa, &name, constants)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -2115,7 +2137,13 @@ pub fn call_sdpa_vector_2pass(
             alpha
         };
 
-        let pipeline = kernels.load_pipeline(device, Source::Sdpa, &name_pass1)?;
+        let constants = Some(ConstantValues::new(vec![(
+            20,
+            Value::Bool(/* sdpa_vector_has_mask */ false),
+        )]));
+
+        let pipeline =
+            kernels.load_pipeline_with_constants(device, Source::Sdpa, &name_pass1, constants)?;
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
@@ -3287,6 +3315,78 @@ pub fn call_const_fill(
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_mul_and_act_contiguous(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    name: &'static str,
+    length: usize,
+    left: BufferOffset,
+    right: BufferOffset,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::MulAndAct, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (length, &left, &right, output));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+
+    encoder.use_resource(left.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(right.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_mul_and_act_strided(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    name: &'static str,
+    shape: &[usize],
+    left_input: BufferOffset,
+    left_strides: &[usize],
+    right_input: BufferOffset,
+    right_strides: &[usize],
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::MulAndAct, name)?;
+
+    let num_dims: usize = shape.len();
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let width: usize = shape.iter().product();
+    let length: usize = shape.iter().product();
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
+
+    encoder.set_compute_pipeline_state(&pipeline);
+    set_params!(
+        encoder,
+        (
+            length,
+            num_dims,
+            shape,
+            left_strides,
+            right_strides,
+            &left_input,
+            &right_input,
+            output
+        )
+    );
+    encoder.use_resource(left_input.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(right_input.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+
     Ok(())
 }
 
