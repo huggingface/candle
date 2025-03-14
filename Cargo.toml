@@ -64,7 +64,7 @@ num_cpus = "1.15.0"
 num-traits = "0.2.15"
 parquet = { version = "51.0.0" }
 rand = "0.9.0"
-rand_distr = "0.4.3"
+rand_distr = "0.5"
 rayon = "1.7.0"
 safetensors = "0.4.1"
 serde = { version = "1.0.171", features = ["derive"] }
