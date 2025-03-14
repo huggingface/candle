@@ -52,7 +52,7 @@ fancy-regex = "0.13.0"
 gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
 hf-hub = { version = "0.3.3", package = "candle-hf-hub" }
 half = { version = "2.3.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }
-float8 = { version = "0.1.2", features = ["num-traits", "rand_distr"] }
+float8 = { version = "0.2.0", features = ["num-traits", "rand_distr"] }
 hound = "3.5.1"
 image = { version = "0.25.2", default-features = false, features = ["jpeg", "png"] }
 imageproc = { version = "0.24.0", default-features = false }
@@ -63,7 +63,7 @@ memmap2 = { version = "0.9.3", features = ["stable_deref_trait"] }
 num_cpus = "1.15.0"
 num-traits = "0.2.15"
 parquet = { version = "51.0.0" }
-rand = "0.8.5"
+rand = "0.9.0"
 rand_distr = "0.4.3"
 rayon = "1.7.0"
 safetensors = "0.4.1"
