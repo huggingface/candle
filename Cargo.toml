@@ -47,7 +47,7 @@ cudarc = { version = "0.13.5", features = ["std", "cublas", "cublaslt", "curand"
 fancy-regex = "0.13.0"
 gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
 hf-hub = "0.4.1"
-half = { version = "2.3.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }
+half = { version = "2.5.0", features = ["num-traits", "use-intrinsics", "rand_distr"] }
 hound = "3.5.1"
 image = { version = "0.25.2", default-features = false, features = ["jpeg", "png"] }
 imageproc = { version = "0.24.0", default-features = false }
@@ -58,8 +58,8 @@ memmap2 = { version = "0.9.3", features = ["stable_deref_trait"] }
 num_cpus = "1.15.0"
 num-traits = "0.2.15"
 parquet = { version = "51.0.0" }
-rand = "0.8.5"
-rand_distr = "0.4.3"
+rand = "0.9.0"
+rand_distr = "0.5.1"
 rayon = "1.7.0"
 safetensors = "0.4.1"
 serde = { version = "1.0.171", features = ["derive"] }

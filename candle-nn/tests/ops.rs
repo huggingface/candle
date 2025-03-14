@@ -83,7 +83,7 @@ fn rms_norml(device: &Device) -> Result<()> {
     let (b_size, seq_len, head_dim) = (24, 70, 64);
     let el_count = b_size * seq_len * head_dim;
     let mut rng = StdRng::seed_from_u64(299792458);
-    let src: Vec<f32> = (0..el_count).map(|_| rng.gen::<f32>()).collect();
+    let src: Vec<f32> = (0..el_count).map(|_| rng.random::<f32>()).collect();
     let tensor = Tensor::new(src, device)?.reshape((b_size, seq_len, head_dim))?;
     let alpha = Tensor::ones(head_dim, candle::DType::F32, device)?;
     let t = candle_nn::ops::rms_norm(&tensor, &alpha, 1e-5)?;
@@ -130,7 +130,7 @@ fn layer_norml(device: &Device) -> Result<()> {
     let (b_size, seq_len, head_dim) = (24, 70, 64);
     let el_count = b_size * seq_len * head_dim;
     let mut rng = StdRng::seed_from_u64(299792458);
-    let src: Vec<f32> = (0..el_count).map(|_| rng.gen::<f32>()).collect();
+    let src: Vec<f32> = (0..el_count).map(|_| rng.random::<f32>()).collect();
     let tensor = Tensor::new(src, device)?.reshape((b_size, seq_len, head_dim))?;
     let alpha = Tensor::ones(head_dim, candle::DType::F32, device)?;
     let beta = Tensor::zeros(head_dim, candle::DType::F32, device)?;
@@ -161,12 +161,12 @@ fn ropei(device: &Device) -> Result<()> {
     let (b_size, num_head, seq_len, head_dim) = (2, 5, 10, 16);
     let el_count = b_size * num_head * seq_len * head_dim;
     let mut rng = StdRng::seed_from_u64(299792458);
-    let src: Vec<f32> = (0..el_count).map(|_| rng.gen::<f32>()).collect();
+    let src: Vec<f32> = (0..el_count).map(|_| rng.random::<f32>()).collect();
     let cos: Vec<f32> = (0..seq_len * head_dim / 2)
-        .map(|_| rng.gen::<f32>())
+        .map(|_| rng.random::<f32>())
         .collect();
     let sin: Vec<f32> = (0..seq_len * head_dim / 2)
-        .map(|_| rng.gen::<f32>())
+        .map(|_| rng.random::<f32>())
         .collect();
     let src = Tensor::from_vec(src, (b_size, num_head, seq_len, head_dim), device)?;
     let cos = Tensor::from_vec(cos, (seq_len, head_dim / 2), device)?;
@@ -188,12 +188,12 @@ fn rope(device: &Device) -> Result<()> {
     let (b_size, num_head, seq_len, head_dim) = (2, 5, 10, 16);
     let el_count = b_size * num_head * seq_len * head_dim;
     let mut rng = StdRng::seed_from_u64(299792458);
-    let src: Vec<f32> = (0..el_count).map(|_| rng.gen::<f32>()).collect();
+    let src: Vec<f32> = (0..el_count).map(|_| rng.random::<f32>()).collect();
     let cos: Vec<f32> = (0..seq_len * head_dim / 2)
-        .map(|_| rng.gen::<f32>())
+        .map(|_| rng.random::<f32>())
         .collect();
     let sin: Vec<f32> = (0..seq_len * head_dim / 2)
-        .map(|_| rng.gen::<f32>())
+        .map(|_| rng.random::<f32>())
         .collect();
     let src = Tensor::from_vec(src, (b_size, num_head, seq_len, head_dim), device)?;
     let cos = Tensor::from_vec(cos, (seq_len, head_dim / 2), device)?;
@@ -215,12 +215,12 @@ fn rope_thd(device: &Device) -> Result<()> {
     let (b_size, num_head, seq_len, head_dim) = (2, 5, 10, 16);
     let el_count = b_size * num_head * seq_len * head_dim;
     let mut rng = StdRng::seed_from_u64(299792458);
-    let src: Vec<f32> = (0..el_count).map(|_| rng.gen::<f32>()).collect();
+    let src: Vec<f32> = (0..el_count).map(|_| rng.random::<f32>()).collect();
     let cos: Vec<f32> = (0..seq_len * head_dim / 2)
-        .map(|_| rng.gen::<f32>())
+        .map(|_| rng.random::<f32>())
         .collect();
     let sin: Vec<f32> = (0..seq_len * head_dim / 2)
-        .map(|_| rng.gen::<f32>())
+        .map(|_| rng.random::<f32>())
         .collect();
     let src = Tensor::from_vec(src, (b_size, num_head, seq_len, head_dim), device)?;
     let cos = Tensor::from_vec(cos, (seq_len, head_dim / 2), device)?;
