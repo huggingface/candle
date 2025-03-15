@@ -203,7 +203,7 @@ fn main() -> Result<()> {
                 command.arg("-DNDEBUG");
 
                 // https://github.com/EricLBuehler/mistral.rs/issues/941
-                command.arg("-D_USE_MATH_DEFINES")
+                command.arg("-D_USE_MATH_DEFINES");
 
                 if let Some(ccbin_path) = &ccbin_env {
                     command.arg("-allow-unsupported-compiler");
