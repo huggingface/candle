@@ -16,7 +16,7 @@ use candle::Device;
 use hf_hub::api::tokio::Api;
 
 let api = Api::new().unwrap();
-let repo = api.model("bert-base-uncased".to_string());
+let repo = api.model("google-bert/bert-base-uncased".to_string());
 
 let weights_filename = repo.get("model.safetensors").await.unwrap();
 
@@ -36,7 +36,7 @@ use memmap2::Mmap;
 use std::fs;
 
 let api = Api::new().unwrap();
-let repo = api.model("bert-base-uncased".to_string());
+let repo = api.model("google-bert/bert-base-uncased".to_string());
 let weights_filename = repo.get("model.safetensors").unwrap();
 
 let file = fs::File::open(weights_filename).unwrap();
@@ -59,7 +59,7 @@ use safetensors::SafeTensors;
 use std::fs;
 
 let api = Api::new().unwrap();
-let repo = api.model("bert-base-uncased".to_string());
+let repo = api.model("google-bert/bert-base-uncased".to_string());
 let weights_filename = repo.get("model.safetensors").unwrap();
 
 let file = fs::File::open(weights_filename).unwrap();

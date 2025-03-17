@@ -6,7 +6,7 @@ Install the [`hf-hub`](https://github.com/huggingface/hf-hub) crate:
 cargo add hf-hub
 ```
 
-Then let's start by downloading the [model file](https://huggingface.co/bert-base-uncased/tree/main).
+Then let's start by downloading the [model file](https://huggingface.co/google-bert/bert-base-uncased/tree/main).
 
 
 ```rust
@@ -16,16 +16,16 @@ use hf_hub::api::sync::Api;
 use candle_core::Device;
 
 let api = Api::new().unwrap();
-let repo = api.model("bert-base-uncased".to_string());
+let repo = api.model("google-bert/bert-base-uncased".to_string());
 
 let weights = repo.get("model.safetensors").unwrap();
 
 let weights = candle_core::safetensors::load(weights, &Device::Cpu);
 ```
 
-We now have access to all the [tensors](https://huggingface.co/bert-base-uncased?show_tensors=true) within the file.
+We now have access to all the [tensors](https://huggingface.co/google-bert/bert-base-uncased?show_tensors=true) within the file.
 
-You can check all the names of the tensors [here](https://huggingface.co/bert-base-uncased?show_tensors=true)
+You can check all the names of the tensors [here](https://huggingface.co/google-bert/bert-base-uncased?show_tensors=true)
 
 
 ## Using async 
@@ -54,7 +54,7 @@ Now that we have our weights, we can use them in our bert architecture:
 # use hf_hub::api::sync::Api;
 # 
 # let api = Api::new().unwrap();
-# let repo = api.model("bert-base-uncased".to_string());
+# let repo = api.model("google-bert/bert-base-uncased".to_string());
 # 
 # let weights = repo.get("model.safetensors").unwrap();
 use candle_core::{Device, Tensor, DType};

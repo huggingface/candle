@@ -50,7 +50,7 @@ struct Args {
 impl Args {
     fn build_model_and_tokenizer(&self) -> Result<(DistilBertModel, Tokenizer)> {
         let device = candle_examples::device(self.cpu)?;
-        let default_model = "distilbert-base-uncased".to_string();
+        let default_model = "distilgoogle-bert/bert-base-uncased".to_string();
         let default_revision = "main".to_string();
         let (model_id, revision) = match (self.model_id.to_owned(), self.revision.to_owned()) {
             (Some(model_id), Some(revision)) => (model_id, revision),
