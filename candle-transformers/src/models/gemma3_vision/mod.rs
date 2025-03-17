@@ -1,7 +1,4 @@
-use candle::{
-    Context, CpuStorage, CustomOp1, DType, Error, Layout, Module, Result, Shape, Tensor, WithDType,
-    D,
-};
+use candle::{Context, DType, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 use config::Gemma3Config;
 use mmproj::Gemma3MultiModalProjector;
@@ -11,72 +8,7 @@ mod mmproj;
 
 use crate::models::siglip;
 
-use super::gemma3;
-
-struct NonZero {}
-
-impl NonZero {
-    // Sequential version
-    fn nonzero<T: WithDType>(&self, vs: &[T], layout: &Layout) -> Vec<u32> {
-        let n = layout.dims().len();
-        let mut result = Vec::new();
-        let mut indices = vec![0u32; n];
-        for (i, v) in vs.iter().enumerate() {
-            if !v.is_zero() {
-                let mut idx = i;
-                for (dim_index, dim) in layout.dims().iter().enumerate().rev() {
-                    let d = idx % dim;
-                    indices[dim_index] = u32::try_from(d).unwrap();
-                    idx /= dim;
-                }
-                result.extend_from_slice(&indices);
-            }
-        }
-        result
-    }
-}
-
-impl CustomOp1 for NonZero {
-    fn name(&self) -> &'static str {
-        "nonzero"
-    }
-
-    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
-        if !layout.is_contiguous() {
-            return Err(Error::RequiresContiguous { op: "nonzero" });
-        }
-        let result = match storage {
-            candle::CpuStorage::U8(vs) => self.nonzero(vs, layout),
-            candle::CpuStorage::U32(vs) => self.nonzero(vs, layout),
-            candle::CpuStorage::I64(vs) => self.nonzero(vs, layout),
-            candle::CpuStorage::BF16(vs) => self.nonzero(vs, layout),
-            candle::CpuStorage::F16(vs) => self.nonzero(vs, layout),
-            candle::CpuStorage::F32(vs) => self.nonzero(vs, layout),
-            candle::CpuStorage::F64(vs) => self.nonzero(vs, layout),
-        };
-        let index_len = layout.dims().len();
-        let result_len = result.len() / index_len;
-        let result = CpuStorage::U32(result);
-        let shape = Shape::from_dims(&[result_len, index_len]);
-        Ok((result, shape))
-    }
-}
-
-pub trait NonZeroOp {
-    fn nonzero(&self) -> Result<Tensor>;
-}
-
-impl NonZeroOp for Tensor {
-    fn nonzero(&self) -> Result<Tensor> {
-        if !self.is_contiguous() {
-            return Err(candle::Error::RequiresContiguous { op: "nonzero" });
-        }
-        let original_device = self.device();
-        self.to_device(&candle::Device::Cpu)?
-            .apply_op1_no_bwd(&NonZero {})?
-            .to_device(original_device)
-    }
-}
+use super::{deepseek2::NonZeroOp, gemma3};
 
 pub struct Gemma3Model {
     language_model: gemma3::Model,
