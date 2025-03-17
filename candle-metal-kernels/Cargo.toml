@@ -1,6 +1,6 @@
 [package]
 name = "candle-metal-kernels"
-version = "0.8.3"
+version = "0.8.4"
 edition = "2021"
 
 description = "Metal kernels for Candle"
