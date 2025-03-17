@@ -125,7 +125,7 @@ impl Gemma3Model {
         }
     }
 
-    fn forward(
+    pub fn forward(
         &mut self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
