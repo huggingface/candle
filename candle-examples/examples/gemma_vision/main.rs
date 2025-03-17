@@ -14,7 +14,12 @@ use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
+use inputs_processing::{
+    Gemma3ImageProcessor, Gemma3Processor, PreProcessorConfig, ProcessorConfig,
+};
 use tokenizers::Tokenizer;
+
+mod inputs_processing;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum Which {
@@ -171,6 +176,12 @@ struct Args {
     config_file: Option<String>,
 
     #[arg(long)]
+    preprocessor_config_file: Option<String>,
+
+    #[arg(long)]
+    processor_config_file: Option<String>,
+
+    #[arg(long)]
     weight_files: Option<String>,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
@@ -184,6 +195,9 @@ struct Args {
     /// The model to use.
     #[arg(long, default_value = "2-2b")]
     which: Which,
+
+    #[arg(long)]
+    image: String,
 
     #[arg(long)]
     use_flash_attn: bool,
@@ -238,6 +252,14 @@ fn main() -> Result<()> {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.get("config.json")?,
     };
+    let preprocessor_config_filename = match args.preprocessor_config_file {
+        Some(file) => std::path::PathBuf::from(file),
+        None => repo.get("preprocessor_config.json")?,
+    };
+    let processor_config_filename = match args.processor_config_file {
+        Some(file) => std::path::PathBuf::from(file),
+        None => repo.get("processor_config.json")?,
+    };
     let filenames = match args.weight_files {
         Some(files) => files
             .split(',')
@@ -273,8 +295,31 @@ fn main() -> Result<()> {
         args.repeat_last_n,
         &device,
     );
-    // TODO
-    let pixel_values = None;
-    pipeline.run(&args.prompt, pixel_values, args.sample_len)?;
+
+    // Prepare prompt & image here:
+    let (pixel_values, prompt) = {
+        let processor_config: ProcessorConfig =
+            serde_json::from_reader(std::fs::File::open(processor_config_filename)?)?;
+        let preprocessor_config: PreProcessorConfig =
+            serde_json::from_reader(std::fs::File::open(preprocessor_config_filename)?)?;
+        let processor = Gemma3Processor::new(processor_config);
+
+        let img = image::ImageReader::open(&args.image)?
+            .decode()
+            .map_err(candle::Error::wrap)?;
+
+        let (image, num_crops) =
+            Gemma3ImageProcessor.preprocess_image(img, &preprocessor_config, &device)?;
+
+        let mut prompt = format!(
+            "<bos><start_of_turn>user\n<start_of_image>{}<end_of_turn>\n<start_of_turn>model\n",
+            args.prompt
+        );
+        prompt = processor.process_prompt(prompt, &image, num_crops)?;
+
+        (image, prompt)
+    };
+
+    pipeline.run(&prompt, Some(pixel_values), args.sample_len)?;
     Ok(())
 }
