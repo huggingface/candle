@@ -128,7 +128,7 @@ pub fn create_loader(input: TokenStream) -> TokenStream {
         }
     };
 
-    file.unlock().expect("Unable to unlock indices file.");
+    FileExt::unlock(&file).expect("Unable to unlock indices file.");
 
     TokenStream::from(expanded)
 }
@@ -186,7 +186,7 @@ pub fn create_loader_internal(input: TokenStream) -> TokenStream {
         }
     };
 
-    file.unlock().expect("Unable to unlock indices file.");
+    FileExt::unlock(&file).expect("Unable to unlock indices file.");
 
     TokenStream::from(expanded)
 }
