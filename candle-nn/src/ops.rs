@@ -972,6 +972,8 @@ impl Module for Identity {
 struct Sdpa {
     scale: f32,
     softcapping: f32,
+    mask: Option<Tensor>,
+    do_causal: bool,
 }
 
 impl candle::CustomOp3 for Sdpa {
@@ -1008,6 +1010,8 @@ impl candle::CustomOp3 for Sdpa {
 
         let out_dims = vec![q_l.dim(0)?, q_l.dim(1)?, q_l.dim(2)?, v_l.dim(3)?];
         let elem_count: usize = out_dims.iter().product();
+        let out_shape = Shape::from_dims(&out_dims);
+        let out_layout = Layout::contiguous(out_shape.clone());
 
         let output = device.new_buffer(elem_count, q.dtype(), "sdpa_o")?;
 
@@ -1031,18 +1035,16 @@ impl candle::CustomOp3 for Sdpa {
         let q_seq = q_l.dim(2)?;
 
         let mut implementation_supports_use_case = q_head == k_head;
-        let supported_head_dim =
+        let supported_full_head_dim = q_head == 64 || q_head == 80 || q_head == 128;
+        let supported_vector_head_dim =
             q_head == 32 || q_head == 64 || q_head == 96 || q_head == 128 || q_head == 256;
 
-        const SDPA_FULL_THRESHOLD: usize = 2;
-
-        let supports_sdpa_full =
-            q_seq >= SDPA_FULL_THRESHOLD && supported_head_dim && q_head == k_head;
-        let supports_sdpa_vector = q_seq == 1 && supported_head_dim;
+        let supports_sdpa_full = supported_full_head_dim;
+        let supports_sdpa_vector = q_seq == 1 && supported_vector_head_dim;
 
         implementation_supports_use_case &= supports_sdpa_full || supports_sdpa_vector;
 
-        if !supported_head_dim {
+        if !(supported_vector_head_dim || supported_full_head_dim) {
             candle::bail!(
                 "Meta SDPA does not support q head dim {q_head}: q dims {:?}, k dims {:?}, v dims {:?}.",
                 q_l.dims(),
@@ -1149,27 +1151,62 @@ impl candle::CustomOp3 for Sdpa {
                 .map_err(candle::Error::wrap)?;
             }
         } else if supports_sdpa_full {
-            if q_l.dim(2)? != k_l.dim(2)? {
-                candle::bail!(
-                    "query and key sequence length must be equal if using full metal sdpa"
-                )
+            command_buffer.set_label("full_attention");
+            if self.softcapping != 1. {
+                candle::bail!("SDPA full requires softcapping to be disabled (1.0)");
             }
 
-            command_buffer.set_label("full_attention");
+            let mask_s_l = self.mask.as_ref().map(|m| m.storage_and_layout());
+
+            let (mask_type, mask_buffer, mask_strides) = if let Some(mask) = &self.mask {
+                let (mask_s, mask_l) = mask_s_l.as_ref().unwrap();
+
+                let mask_buffer = match &**mask_s {
+                    candle::Storage::Metal(m) => m.buffer(),
+                    _ => candle::bail!("Expected metal device for mask"),
+                };
+
+                let mask_type = match mask.dtype() {
+                    DType::BF16 => SdpaDType::BF16,
+                    DType::F16 => SdpaDType::F16,
+                    DType::F32 => SdpaDType::F32,
+                    other => candle::bail!("unsupported sdpa type {other:?}"),
+                };
+                if mask_type != itype {
+                    candle::bail!("Mask type {mask_type:?} must match q type {itype:?}");
+                }
+
+                (
+                    Some(mask_type),
+                    Some(mask_buffer),
+                    Some(mask_l.stride().to_vec()),
+                )
+            } else {
+                (None, None, None)
+            };
+
             candle_metal_kernels::call_sdpa_full(
                 q.device().device(),
                 &command_buffer,
                 q.device().kernels(),
                 q_l.start_offset(),
                 q_l.dims(),
+                q_l.stride(),
                 q.buffer(),
                 k_l.start_offset(),
+                k_l.dims(),
+                k_l.stride(),
                 k.buffer(),
                 v_l.start_offset(),
                 v.buffer(),
+                v_l.stride(),
+                mask_type,
+                mask_buffer,
+                mask_strides.as_deref(),
                 &output,
+                out_layout.stride(),
                 self.scale,
-                self.softcapping,
+                self.do_causal,
                 itype,
             )
             .map_err(candle::Error::wrap)?;
@@ -1178,7 +1215,7 @@ impl candle::CustomOp3 for Sdpa {
         }
 
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, q.dtype());
-        Ok((newstorage, Shape::from_dims(&out_dims)))
+        Ok((newstorage, out_shape))
     }
 }
 
@@ -1190,13 +1227,15 @@ impl candle::CustomOp3 for Sdpa {
 /// - `q`: (bs, qhead, seq, hidden)
 /// - `k`: (bs, kv_head, kv_seq, hidden)
 /// - `k`: (bs, kv_head, kv_seq, v_hidden)
+/// - `mask`: Broadcastable to (bs, qhead, seq, kv_seq)
+/// - `do_causal`: Apply causal masking. If this is true, the mask does not need to be provided.
 /// - `scale` is applied before softmax.
 /// - If `softcapping` != 1.0:
 ///      - Computation is: softmax(tanh(qk^T*scale/cap)*cap)v
 ///
 /// **Output shape:** (bs, qhead, seq, v_hidden)
 ///
-/// **Supported head dims:** 32, 64, 96, 128, 256.
+/// Note: For Grouped Query Attention and Multi-Query Attention, the k and v inputs should not be pre-tiled to match q.
 ///
 /// ## On Metal:
 /// - If `seq` == 1:
@@ -1204,9 +1243,27 @@ impl candle::CustomOp3 for Sdpa {
 ///     - Supports `seq` != `kv_seq` (cross attn. support)
 ///     - Supports GQA when `qhead` is a multiple of `kv_head`
 /// - Otherwise:
-///     - Use an alternate kernel
-///     - Requires `seq` == `kv_seq`
-///     - GQA is not supported (requires `qhead` == `kv_head`)
-pub fn sdpa(q: &Tensor, k: &Tensor, v: &Tensor, scale: f32, softcapping: f32) -> Result<Tensor> {
-    q.apply_op3_no_bwd(k, v, &Sdpa { scale, softcapping })
+///     - Masking is supported
+///     - Supports `seq` != `kv_seq` (cross attn. support)
+///     - Supports GQA when `qhead` is a multiple of `kv_head`
+///     - Softcapping is not supported.
+pub fn sdpa(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    mask: Option<&Tensor>,
+    do_causal: bool,
+    scale: f32,
+    softcapping: f32,
+) -> Result<Tensor> {
+    q.apply_op3_no_bwd(
+        k,
+        v,
+        &Sdpa {
+            scale,
+            softcapping,
+            mask: mask.cloned(),
+            do_causal,
+        },
+    )
 }
