@@ -1753,6 +1753,14 @@ impl candle::CustomOp3 for Sdpa {
                     candle::bail!("Mask type {mask_type:?} must match q type {itype:?}");
                 }
 
+                if mask_l.dims() != [q_l.dim(0)?, q_l.dim(1)?, q_l.dim(2)?, k_l.dim(2)?] {
+                    candle::bail!(
+                        "Mask shape must be {:?} (bs, qheads, qseq, kseq), got {:?}",
+                        [q_l.dim(0)?, q_head, q_l.dim(2)?, k_l.dim(2)?],
+                        mask_l.dims()
+                    );
+                }
+
                 (
                     Some(mask_type),
                     Some(mask_buffer),
@@ -1804,7 +1812,7 @@ impl candle::CustomOp3 for Sdpa {
 /// - `q`: (bs, qhead, seq, hidden)
 /// - `k`: (bs, kv_head, kv_seq, hidden)
 /// - `k`: (bs, kv_head, kv_seq, v_hidden)
-/// - `mask`: Broadcastable to (bs, qhead, seq, kv_seq)
+/// - `mask`: (bs, qhead, seq, kv_seq)
 /// - `do_causal`: Apply causal masking. If this is true, the mask does not need to be provided.
 /// - `scale` is applied before softmax.
 /// - If `softcapping` != 1.0:
