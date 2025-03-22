@@ -88,8 +88,10 @@ fn main() -> Result<()> {
         .arg("--use_fast_math")
         .arg("--verbose");
 
+    let mut is_target_msvc = false;
     if let Ok(target) = std::env::var("TARGET") {
         if target.contains("msvc") {
+            is_target_msvc = true;
             builder = builder.arg("-D_USE_MATH_DEFINES");
         }
     }
@@ -100,12 +102,7 @@ fn main() -> Result<()> {
     println!("cargo:rustc-link-search={}", build_dir.display());
     println!("cargo:rustc-link-lib=flashattention");
     println!("cargo:rustc-link-lib=dylib=cudart");
-
-    if let Ok(target) = std::env::var("TARGET") {
-        if !target.contains("msvc") {
-            println!("cargo:rustc-link-lib=dylib=stdc++");
-        }
-    } else {
+    if !is_target_msvc {
         println!("cargo:rustc-link-lib=dylib=stdc++");
     }
     Ok(())
