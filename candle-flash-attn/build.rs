@@ -100,7 +100,13 @@ fn main() -> Result<()> {
     println!("cargo:rustc-link-search={}", build_dir.display());
     println!("cargo:rustc-link-lib=flashattention");
     println!("cargo:rustc-link-lib=dylib=cudart");
-    println!("cargo:rustc-link-lib=dylib=stdc++");
 
+    if let Ok(target) = std::env::var("TARGET") {
+        if !target.contains("msvc") {
+            println!("cargo:rustc-link-lib=dylib=stdc++");
+        }
+    } else {
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+    }
     Ok(())
 }
