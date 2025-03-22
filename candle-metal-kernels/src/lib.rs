@@ -323,7 +323,6 @@ impl Kernels {
         device: &Device,
         source: Source,
         name: &str,
-        name: &str,
         constants: Option<FunctionConstantValues>,
     ) -> Result<Function, MetalKernelError> {
         let func = self
@@ -358,7 +357,7 @@ impl Kernels {
             let pipeline = device
                 .new_compute_pipeline_state_with_function(&func)
                 .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
-            pipelines.insert((name.to_string(), constants), pipeline.clone());
+            pipelines.insert((name, constants), pipeline.clone());
 
             Ok(pipeline)
         }
@@ -1658,7 +1657,7 @@ pub fn call_sdpa_full(
         (301, Value::Bool(/* do_causal */ do_causal)),
     ]));
 
-    let pipeline = kernels.load_pipeline_with_constants(device, Source::Sdpa, &name, constants)?;
+    let pipeline = kernels.load_pipeline_with_constants(device, Source::Sdpa, name, constants)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
