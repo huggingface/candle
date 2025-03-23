@@ -644,7 +644,11 @@ fn rebuild_args(args: Object) -> Result<(Layout, DType, String, usize)> {
             crate::bail!("unsupported storage type {other}")
         }
     };
-    let layout = Layout::new(crate::Shape::from(size), stride, offset*dtype.size_in_bytes());
+    let layout = Layout::new(
+        crate::Shape::from(size),
+        stride,
+        offset * dtype.size_in_bytes(),
+    );
     Ok((layout, dtype, path, storage_size))
 }
 
