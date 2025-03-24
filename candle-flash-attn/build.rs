@@ -73,7 +73,7 @@ fn main() -> Result<()> {
     };
 
     let kernels = KERNEL_FILES.iter().collect();
-    let builder = bindgen_cuda::Builder::default()
+    let mut builder = bindgen_cuda::Builder::default()
         .kernel_paths(kernels)
         .out_dir(build_dir.clone())
         .arg("-std=c++17")
@@ -87,6 +87,12 @@ fn main() -> Result<()> {
         .arg("--expt-extended-lambda")
         .arg("--use_fast_math")
         .arg("--verbose");
+
+    if let Ok(target) = std::env::var("TARGET") {
+        if target.contains("msvc") {
+            builder = builder.arg("-D_USE_MATH_DEFINES");
+        }
+    }
 
     let out_file = build_dir.join("libflashattention.a");
     builder.build_lib(out_file);

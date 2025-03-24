@@ -1,4 +1,5 @@
 #![allow(clippy::redundant_closure_call)]
+#![allow(clippy::useless_conversion)]
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::CompareOp;

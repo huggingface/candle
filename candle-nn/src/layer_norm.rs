@@ -155,6 +155,15 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
     })
 }
 
+pub fn layer_norm_no_bias(size: usize, eps: f64, vb: crate::VarBuilder) -> Result<LayerNorm> {
+    let config = LayerNormConfig {
+        eps,
+        remove_mean: true,
+        affine: false,
+    };
+    layer_norm(size, config, vb)
+}
+
 /// RmsNorm is a specialized version of the LayerNorm module.
 #[derive(Clone, Debug)]
 pub struct RmsNorm(LayerNorm);

@@ -259,8 +259,8 @@ async fn main() -> anyhow::Result<()> {
                 ("santiagomed/candle-moondream".to_string(), None)
             } else {
                 (
-                    "vikhyatk/moondream2".to_string(),
-                    Some("30c7cdf3fa6914f50bee3956694374143f5cc884"),
+                    "vikhyatk/moondream1".to_string(),
+                    Some("f6e9da68e8f1b78b8f3ee10905d56826db7a5802"),
                 )
             }
         }

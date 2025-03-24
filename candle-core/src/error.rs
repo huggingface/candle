@@ -175,6 +175,7 @@ pub enum Error {
     #[error("Metal error {0}")]
     Metal(#[from] MetalError),
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[error(transparent)]
     Ug(#[from] ug::Error),
 

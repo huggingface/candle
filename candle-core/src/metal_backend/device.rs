@@ -2,7 +2,6 @@ use crate::{DType, Result};
 use candle_metal_kernels::Kernels;
 use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger};
 use std::collections::HashMap;
-use std::ffi::c_void;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -121,8 +120,6 @@ pub struct MetalDevice {
     pub(crate) kernels: Arc<Kernels>,
     /// Seed for random number generation.
     pub(crate) seed: Arc<Mutex<Buffer>>,
-    /// Whether to use the MLX matmul kernels instead of the MFA ones.
-    pub(crate) use_mlx_mm: bool,
 }
 
 impl std::fmt::Debug for MetalDevice {
@@ -140,10 +137,7 @@ impl std::ops::Deref for MetalDevice {
 }
 
 impl MetalDevice {
-    pub fn set_use_mlx_mm(&mut self, use_mlx_mm: bool) {
-        self.use_mlx_mm = use_mlx_mm
-    }
-
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn compile(
         &self,
         func_name: &'static str,
@@ -241,7 +235,7 @@ impl MetalDevice {
     pub fn new_buffer_with_data<T>(&self, data: &[T]) -> Result<Arc<Buffer>> {
         let size = core::mem::size_of_val(data) as NSUInteger;
         let new_buffer = self.device.new_buffer_with_data(
-            data.as_ptr() as *const c_void,
+            data.as_ptr().cast(),
             size,
             MTLResourceOptions::StorageModeManaged,
         );
