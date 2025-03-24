@@ -11,10 +11,10 @@ pub fn queue_where_cond(
     cond_type: crate::DType,
     dtype: crate::DType,
 ) -> crate::Result<()> {
-    let mut meta = get_queue(dev);
-    meta.add_layout1(input.layout());
-    meta.add_layout2(tensor_true.layout());
-    meta.add_layout3(tensor_false.layout());
+    let mut queue = dev.get_queue();
+    queue.add_layout1(input.layout());
+    queue.add_layout2(tensor_true.layout());
+    queue.add_layout3(tensor_false.layout());
 
     let (pipeline, cond_alignment) = match cond_type {
         crate::DType::U32 => (
@@ -43,9 +43,9 @@ pub fn queue_where_cond(
             cond_type
         )),
     };
-    let pipeline = meta.get_pipeline(pipeline);
+    let pipeline = queue.get_pipeline(pipeline);
 
-    let bind_group = create_bind_group_input3_with_alignment(
+    let bind_group = dev.create_bind_group_input3_with_alignment(
         dest_buffer,
         input.buffer(),
         tensor_true.buffer(),
@@ -57,8 +57,7 @@ pub fn queue_where_cond(
             dtype.into(),
         ),
     );
-    enqueue_64(
-        meta,
+    queue.enqueue_64(
         pipeline,
         bind_group,
         input.layout().shape().elem_count() as u32,

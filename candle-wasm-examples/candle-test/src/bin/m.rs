@@ -1,4 +1,4 @@
-use candle::{backend::BackendDevice, wgpu::{wgpu_functions::Pipelines, MatmulAlgorithm}, Device, Shape, Tensor, WgpuStorage};
+use candle::{backend::BackendDevice, wgpu::{wgpu_functions::{ConstArray, Pipelines}, MatmulAlgorithm}, Device, Shape, Tensor, WgpuStorage};
 
 mod utils;
 
@@ -46,7 +46,7 @@ async fn test() -> Result<(), Box<dyn std::error::Error>>{
 }
 
 fn load_recording_consts(device : &Device) -> Result<(), Box<dyn std::error::Error>>{
-    let debug_recordings_consts :  Vec<std::collections::HashMap<String, f64>> = serde_json::from_str(DEBUG_E)?;
+    let debug_recordings_consts :  Vec<ConstArray> = serde_json::from_str(DEBUG_E)?;
     match &device{
         Device::Wgpu(wgpu) => {
             wgpu.load_debug_info(debug_recordings_consts);

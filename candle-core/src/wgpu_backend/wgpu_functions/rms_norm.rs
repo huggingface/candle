@@ -19,21 +19,20 @@ pub fn queue_rms_norm(
     let workgroup_count = u32::min(64, reduction_length / 10 + 1);
     let workgroup_size = reduction_length / workgroup_count + 1;
 
-    let mut meta = get_queue(dev);
+    let mut queue = dev.get_queue();
 
-    meta.add(workgroup_count);
-    meta.add(workgroup_size);
-    meta.add(reduction_length);
-    meta.add(input1_offset);
-    meta.add(alpha_offset);
-    meta.add(eps);
+    queue.add(workgroup_count);
+    queue.add(workgroup_size);
+    queue.add(reduction_length);
+    queue.add(input1_offset);
+    queue.add(alpha_offset);
+    queue.add(eps);
 
-    let pipeline = meta.get_pipeline(Pipelines::RmsNorm(get_dtype(dtype)?, Functions::RmsNorm));
+    let pipeline = queue.get_pipeline(Pipelines::RmsNorm(get_dtype(dtype)?, Functions::RmsNorm));
 
     let bind_group =
-        create_bind_group_input2(buffer_dest, buffer_input1, buffer_alpha, dtype.into());
-    enqueue_workgroups(
-        meta,
+        dev.create_bind_group_input2(buffer_dest, buffer_input1, buffer_alpha, dtype.into());
+    queue.enqueue_workgroups(
         pipeline,
         bind_group,
         1,
@@ -63,27 +62,26 @@ pub fn queue_layer_norm(
     let workgroup_count = u32::min(64, reduction_length / 10 + 1);
     let workgroup_size = reduction_length / workgroup_count + 1;
 
-    let mut meta = get_queue(dev);
+    let mut queue = dev.get_queue();
 
-    meta.add(workgroup_count);
-    meta.add(workgroup_size);
-    meta.add(reduction_length);
-    meta.add(input1_offset);
-    meta.add(alpha_offset);
-    meta.add(eps);
-    meta.add(beta_offset);
+    queue.add(workgroup_count);
+    queue.add(workgroup_size);
+    queue.add(reduction_length);
+    queue.add(input1_offset);
+    queue.add(alpha_offset);
+    queue.add(eps);
+    queue.add(beta_offset);
 
-    let pipeline = meta.get_pipeline(Pipelines::RmsNorm(get_dtype(dtype)?, Functions::LayerNorm));
+    let pipeline = queue.get_pipeline(Pipelines::RmsNorm(get_dtype(dtype)?, Functions::LayerNorm));
 
-    let bind_group = create_bind_group_input3(
+    let bind_group = dev.create_bind_group_input3(
         buffer_dest,
         buffer_input1,
         buffer_alpha,
         buffer_beta,
         dtype.into(),
     );
-    enqueue_workgroups(
-        meta,
+    queue.enqueue_workgroups(
         pipeline,
         bind_group,
         1,

@@ -20,20 +20,19 @@ pub fn queue_cmp_buffer_from_buffer(
     op: CmpOperation,
     dtype: crate::DType,
 ) -> crate::Result<()> {
-    let mut meta = get_queue(dev);
-    meta.add(op as u32);
-    meta.add_layout1(input1.layout());
-    meta.add_layout2(input2.layout());
+    let mut queue = dev.get_queue();
+    queue.add(op as u32);
+    queue.add_layout1(input1.layout());
+    queue.add_layout2(input2.layout());
 
-    let pipeline = meta.get_pipeline(Pipelines::Cmp(
+    let pipeline = queue.get_pipeline(Pipelines::Cmp(
         get_dtype(dtype)?,
         Functions::CmpBufferFromBuffer,
     ));
 
     let bind_group =
-        create_bind_group_input2(buffer_dest, input1.buffer(), input2.buffer(), dtype.into());
-    enqueue_64(
-        meta,
+        dev.create_bind_group_input2(buffer_dest, input1.buffer(), input2.buffer(), dtype.into());
+    queue.enqueue_64(
         pipeline,
         bind_group,
         ((input1.layout().shape().elem_count() + 3) / 4) as u32,

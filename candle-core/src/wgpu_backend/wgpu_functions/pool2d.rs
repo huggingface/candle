@@ -18,32 +18,31 @@ pub fn queue_max_pool2d(
 
     let input_stride = layout.stride();
 
-    let mut meta = get_queue(dev);
+    let mut queue = dev.get_queue();
 
-    meta.add(b);
-    meta.add(c);
-    meta.add(kernel_size.1);
-    meta.add(kernel_size.0);
-    meta.add(w); //size_in_x
-    meta.add(h); //size_in_y
-    meta.add(w_out * h_out * c); //Stride_batch_out
-    meta.add(w_out * h_out); //stride_c_out
-    meta.add(w_out); //stride_y_out
-    meta.add(h_out); //size_y_out
+    queue.add(b);
+    queue.add(c);
+    queue.add(kernel_size.1);
+    queue.add(kernel_size.0);
+    queue.add(w); //size_in_x
+    queue.add(h); //size_in_y
+    queue.add(w_out * h_out * c); //Stride_batch_out
+    queue.add(w_out * h_out); //stride_c_out
+    queue.add(w_out); //stride_y_out
+    queue.add(h_out); //size_y_out
 
-    meta.add(input_stride[0]); //stride_batch_input
-    meta.add(input_stride[1]); //stride_c_in
-    meta.add(input_stride[2]); //stride_y_in
-    meta.add(input_stride[3]); //stride_x_in
-    meta.add(stride.1);
-    meta.add(stride.0);
-    meta.add(layout.start_offset());
+    queue.add(input_stride[0]); //stride_batch_input
+    queue.add(input_stride[1]); //stride_c_in
+    queue.add(input_stride[2]); //stride_y_in
+    queue.add(input_stride[3]); //stride_x_in
+    queue.add(stride.1);
+    queue.add(stride.0);
+    queue.add(layout.start_offset());
 
-    let pipeline = meta.get_pipeline(Pipelines::Pool2d(get_dtype(dtype)?, Functions::MaxPool2d));
+    let pipeline = queue.get_pipeline(Pipelines::Pool2d(get_dtype(dtype)?, Functions::MaxPool2d));
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
-    enqueue_workgroups(
-        meta,
+    let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
+    queue.enqueue_workgroups(
         pipeline,
         bind_group,
         (w_out as u32 + 7) / 8,
@@ -69,32 +68,31 @@ pub fn queue_avg_pool2d(
 
     let input_stride = layout.stride();
 
-    let mut meta = get_queue(dev);
+    let mut queue = dev.get_queue();
 
-    meta.add(b);
-    meta.add(c);
-    meta.add(kernel_size.1);
-    meta.add(kernel_size.0);
-    meta.add(w); //size_in_x
-    meta.add(h); //size_in_y
-    meta.add(w_out * h_out * c); //Stride_batch_out
-    meta.add(w_out * h_out); //stride_c_out
-    meta.add(w_out); //stride_y_out
-    meta.add(h_out); //size_y_out
+    queue.add(b);
+    queue.add(c);
+    queue.add(kernel_size.1);
+    queue.add(kernel_size.0);
+    queue.add(w); //size_in_x
+    queue.add(h); //size_in_y
+    queue.add(w_out * h_out * c); //Stride_batch_out
+    queue.add(w_out * h_out); //stride_c_out
+    queue.add(w_out); //stride_y_out
+    queue.add(h_out); //size_y_out
 
-    meta.add(input_stride[0]); //stride_batch_input
-    meta.add(input_stride[1]); //stride_c_in
-    meta.add(input_stride[2]); //stride_y_in
-    meta.add(input_stride[3]); //stride_x_in
-    meta.add(stride.1);
-    meta.add(stride.0);
-    meta.add(layout.start_offset());
+    queue.add(input_stride[0]); //stride_batch_input
+    queue.add(input_stride[1]); //stride_c_in
+    queue.add(input_stride[2]); //stride_y_in
+    queue.add(input_stride[3]); //stride_x_in
+    queue.add(stride.1);
+    queue.add(stride.0);
+    queue.add(layout.start_offset());
 
-    let pipeline = meta.get_pipeline(Pipelines::Pool2d(get_dtype(dtype)?, Functions::AvgPool2d));
+    let pipeline = queue.get_pipeline(Pipelines::Pool2d(get_dtype(dtype)?, Functions::AvgPool2d));
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
-    enqueue_workgroups(
-        meta,
+    let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
+    queue.enqueue_workgroups(
         pipeline,
         bind_group,
         (w_out as u32 + 7) / 8,

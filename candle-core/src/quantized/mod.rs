@@ -1,5 +1,5 @@
 //! Code for GGML and GGUF files
-use crate::{Context, CpuStorage, DType, Device, Error, Result, Shape, Storage, Tensor};
+use crate::{Context, CpuStorage, DType, Device, Result, Shape, Storage, Tensor};
 use k_quants::*;
 use std::borrow::Cow;
 
@@ -7,6 +7,7 @@ use std::borrow::Cow;
 pub mod avx;
 mod dummy_cuda;
 mod dummy_metal;
+mod dummy_wgpu;
 pub mod ggml_file;
 pub mod gguf_file;
 pub mod k_quants;
@@ -21,6 +22,13 @@ pub mod cuda;
 #[cfg(not(feature = "cuda"))]
 mod cuda {
     pub use super::dummy_cuda::*;
+}
+
+#[cfg(feature = "wgpu")]
+pub mod wgpu;
+#[cfg(not(feature = "wgpu"))]
+mod wgpu {
+    pub use super::dummy_wgpu::*;
 }
 
 #[cfg(target_feature = "neon")]
@@ -52,7 +60,10 @@ impl Device {
                 let storage = cuda::QCudaStorage::zeros(cuda, elem_count, dtype)?;
                 Ok(QStorage::Cuda(storage))
             }
-            Device::Wgpu(_) => Err(Error::Wgpu("no wgpu implementation for QTensor".to_string().into()))
+            Device::Wgpu(wgpu) => {
+                let storage = wgpu::QWgpuStorage::zeros(wgpu, elem_count, dtype)?;
+                Ok(QStorage::Wgpu(storage))
+            }
         }
     }
 }
@@ -61,6 +72,7 @@ pub enum QStorage {
     Cpu(Box<dyn QuantizedType>),
     Metal(metal::QMetalStorage),
     Cuda(cuda::QCudaStorage),
+    Wgpu(wgpu::QWgpuStorage),
 }
 
 impl QStorage {
@@ -69,6 +81,7 @@ impl QStorage {
             QStorage::Cpu(storage) => storage.block_size(),
             QStorage::Metal(storage) => storage.dtype().block_size(),
             QStorage::Cuda(storage) => storage.dtype().block_size(),
+            QStorage::Wgpu(storage) => storage.dtype().block_size(),
         }
     }
 
@@ -77,6 +90,7 @@ impl QStorage {
             QStorage::Cpu(storage) => storage.dtype(),
             QStorage::Metal(storage) => storage.dtype(),
             QStorage::Cuda(storage) => storage.dtype(),
+            QStorage::Wgpu(storage) => storage.dtype(),
         }
     }
 
@@ -85,6 +99,7 @@ impl QStorage {
             QStorage::Cpu(_storage) => Device::Cpu,
             QStorage::Metal(storage) => Device::Metal(storage.device().clone()),
             QStorage::Cuda(storage) => Device::Cuda(storage.device().clone()),
+            QStorage::Wgpu(storage) => Device::Wgpu(storage.device().clone()),
         }
     }
 
@@ -93,6 +108,7 @@ impl QStorage {
             QStorage::Cpu(storage) => storage.storage_size_in_bytes(),
             QStorage::Metal(storage) => storage.storage_size_in_bytes(),
             QStorage::Cuda(storage) => storage.storage_size_in_bytes(),
+            QStorage::Wgpu(storage) => storage.storage_size_in_bytes(),
         }
     }
 
@@ -103,6 +119,7 @@ impl QStorage {
             }
             (QStorage::Metal(storage), Storage::Metal(src)) => storage.quantize(src)?,
             (QStorage::Cuda(storage), Storage::Cuda(src)) => storage.quantize(src)?,
+            (QStorage::Wgpu(storage), Storage::Wgpu(src)) => storage.quantize(src)?,
             _ => crate::bail!("Invalid dequantize storage locations do not match"),
         }
         Ok(())
@@ -113,6 +130,7 @@ impl QStorage {
             QStorage::Cpu(storage) => Ok(Storage::Cpu(storage.dequantize(elem_count)?)),
             QStorage::Metal(storage) => Ok(Storage::Metal(storage.dequantize(elem_count)?)),
             QStorage::Cuda(storage) => Ok(Storage::Cuda(storage.dequantize(elem_count)?)),
+            QStorage::Wgpu(storage) => Ok(Storage::Wgpu(storage.dequantize(elem_count)?)),
         }
     }
 
@@ -124,7 +142,7 @@ impl QStorage {
                 let data = unsafe { std::slice::from_raw_parts(data_ptr, size_in_bytes) };
                 Ok(Cow::from(data))
             }
-            QStorage::Metal(_) | QStorage::Cuda(_) => {
+            QStorage::Metal(_) | QStorage::Cuda(_) | QStorage::Wgpu(_) => {
                 crate::bail!("not implemented");
             }
         }
@@ -491,7 +509,7 @@ impl crate::CustomOp1 for QTensor {
         #[allow(clippy::infallible_destructuring_match)]
         let self_storage = match &self.storage {
             QStorage::Cpu(storage) => storage,
-            QStorage::Metal(_) | QStorage::Cuda(_) => crate::bail!("Invalid storage"),
+            QStorage::Metal(_) | QStorage::Cuda(_) | QStorage::Wgpu(_) => crate::bail!("Invalid storage"),
         };
         let slice = storage.as_slice::<f32>()?;
         let slice = &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
@@ -520,6 +538,18 @@ impl crate::CustomOp1 for QTensor {
         let self_storage = match &self.storage {
             QStorage::Cuda(cuda) => cuda,
             _ => unreachable!("Cannot call cuda matmul on non cuda QTensor"),
+        };
+        self_storage.fwd(&self.shape, storage, layout)
+    }
+
+    fn wgpu_fwd(
+        &self,
+        storage: &crate::WgpuStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::WgpuStorage, Shape)> {
+        let self_storage = match &self.storage {
+            QStorage::Wgpu(wgpu) => wgpu,
+            _ => unreachable!("Cannot call wgpu matmul on non wgpu QTensor"),
         };
         self_storage.fwd(&self.shape, storage, layout)
     }

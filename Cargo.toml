@@ -63,6 +63,8 @@ num-traits = "0.2.15"
 parquet = { version = "51.0.0" }
 rand = "0.8.5"
 rand_distr = "0.4.3"
+#rand = "0.9.0"
+#rand_distr = "0.5.1"
 rayon = "1.7.0"
 safetensors = "0.4.1"
 serde = { version = "1.0.171", features = ["derive"] }
@@ -81,7 +83,8 @@ zip = { version = "1.1.1", default-features = false }
 metal = { version = "0.27.0", features = ["mps"]}
 
 #wgpu dependencies:
-wgpu = {version="24.0.1", features=["fragile-send-sync-non-atomic-wasm"]}
+#wgpu = { git = "https://github.com/gfx-rs/wgpu.git" , features=["fragile-send-sync-non-atomic-wasm"]}
+wgpu = { version = "24.0.1", features=["fragile-send-sync-non-atomic-wasm"]}
 bytemuck = { version = "1.15", features = [ "derive" ] }
 pollster = "0.3.0"
 flume = "0.11.0"

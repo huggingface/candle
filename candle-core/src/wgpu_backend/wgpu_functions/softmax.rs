@@ -13,24 +13,23 @@ pub fn queue_softmax(
 ) -> crate::Result<()> {
     let const_vec = vec![input1_offset];
 
-    let mut meta = get_queue(dev);
-    meta.add(reduction_length);
-    meta.add(dest_size);
+    let mut queue = dev.get_queue();
+    queue.add(reduction_length);
+    queue.add(dest_size);
 
     let id: u32 = dest_size;
     if id > 65535 {
-        meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+        queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
     }
 
-    let pipeline = meta.get_pipeline_const(
+    let pipeline = queue.get_pipeline_const(
         Pipelines::Softmax(get_dtype(dtype)?, Functions::Softmax),
         const_vec,
     );
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
+    let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
 
-    enqueue_workgroups_extra(
-        meta,
+    queue.enqueue_workgroups_extra(
         pipeline,
         bind_group,
         1,

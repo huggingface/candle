@@ -18,6 +18,11 @@
 #define DTYPE f64
 #endif
 
+#ifdef f16
+enable f16;
+#define DTYPE f16
+#endif
+
 
 @group(0) @binding(0)
 var<storage, read_write> v_dest: array<DTYPE>;
@@ -104,6 +109,11 @@ const MAXVALUE : i64 =  9223372036854775807;
 const MINVALUE : f64 = -1.7976931348623157E+308;
 const MAXVALUE : f64 = 1.7976931348623157E+308;
 #define TODTYPE f64
+
+#elifdef f16
+const MINVALUE : f16 = -65504;
+const MAXVALUE : f16 = 65504;
+#define TODTYPE f16
 
 #elifdef u8
 

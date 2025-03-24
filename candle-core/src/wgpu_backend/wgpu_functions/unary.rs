@@ -75,18 +75,18 @@ pub fn queue_unary_inplace_op(
     if layout.is_contiguous() {
         let const_vec = vec![op as u32, (layout.start_offset() == 0) as u32];
 
-        let mut meta = get_queue(dev);
-        meta.add(scalar1);
-        meta.add(scalar2);
-        meta.add(layout.shape().elem_count()); //length
+        let mut queue = dev.get_queue();
+        queue.add(scalar1);
+        queue.add(scalar2);
+        queue.add(layout.shape().elem_count()); //length
         if layout.start_offset() != 0
             || op == UnaryOperation::RandNormal
             || op == UnaryOperation::RandUniform
         {
-            meta.add(layout.start_offset());
+            queue.add(layout.start_offset());
         }
         if op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
-            meta.add(dev.rand_state.lock().unwrap().next_u32());
+            queue.add(dev.rand_state.lock().unwrap().next_u32());
         }
 
         let mut is_contiguous4 = false;
@@ -112,12 +112,12 @@ pub fn queue_unary_inplace_op(
         };
 
         if length > 65535 * 64 {
-            meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+            queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
         }
 
-        let pipeline = meta.get_pipeline_const(pipeline, const_vec);
+        let pipeline = queue.get_pipeline_const(pipeline, const_vec);
 
-        let bind_group = create_bind_group_input0(
+        let bind_group = dev.create_bind_group_input0(
             buffer,
             if is_contiguous4 {
                 BindgroupAlignment::Aligned16
@@ -126,8 +126,7 @@ pub fn queue_unary_inplace_op(
             },
         );
 
-        enqueue_64_big_extra(
-            meta,
+        queue.enqueue_64_big_extra(
             pipeline,
             bind_group,
             length,
@@ -149,22 +148,22 @@ pub fn queue_unary_from_buffer_op(
     scalar2: f32,
     dtype: crate::DType,
 ) -> crate::Result<()> {
-    let mut meta = get_queue(dev);
+    let mut queue = dev.get_queue();
     let pipeline = if input.layout().is_contiguous() {
         let const_vec = vec![op as u32, (input.layout().start_offset() == 0) as u32];
 
-        meta.add(scalar1);
-        meta.add(scalar2);
-        meta.add(input.layout().shape().elem_count()); //length
+        queue.add(scalar1);
+        queue.add(scalar2);
+        queue.add(input.layout().shape().elem_count()); //length
 
         if input.layout().start_offset() != 0
             || op == UnaryOperation::RandNormal
             || op == UnaryOperation::RandUniform
         {
-            meta.add(input.layout().start_offset());
+            queue.add(input.layout().start_offset());
         }
         if op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
-            meta.add(dev.rand_state.lock().unwrap().next_u32());
+            queue.add(dev.rand_state.lock().unwrap().next_u32());
         }
 
         let inplaceable = OpIsInplaceable {
@@ -173,10 +172,10 @@ pub fn queue_unary_from_buffer_op(
         };
 
         if input.layout().shape().elem_count() > 65535 * 64 {
-            meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+            queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
         }
 
-        meta.get_pipeline_const_inplace(
+        queue.get_pipeline_const_inplace(
             Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryFromBufferContiguous),
             const_vec,
             inplaceable,
@@ -184,23 +183,22 @@ pub fn queue_unary_from_buffer_op(
     } else {
         let const_vec = vec![op as u32];
 
-        meta.add(scalar1);
-        meta.add(scalar2);
-        meta.add_layout1(input.layout());
+        queue.add(scalar1);
+        queue.add(scalar2);
+        queue.add_layout1(input.layout());
 
         if input.layout().shape().elem_count() > 65535 * 64 {
-            meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+            queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
         }
 
-        meta.get_pipeline_const(
+        queue.get_pipeline_const(
             Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryFromBuffer),
             const_vec,
         )
     };
 
-    let bind_group = create_bind_group_input1(buffer_dest, input.buffer(), dtype.into());
-    enqueue_64_big_extra(
-        meta,
+    let bind_group = dev.create_bind_group_input1(buffer_dest, input.buffer(), dtype.into());
+    queue.enqueue_64_big_extra(
         pipeline,
         bind_group,
         input.layout().shape().elem_count() as u32,

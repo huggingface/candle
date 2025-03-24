@@ -1,0 +1,11 @@
+#define BLOCK_SIZE 32
+#define BIT_SIZE 5
+
+#define D_OFFSET 0
+#define M_OFFSET 2
+#define QH_OFFSET 4
+#define QS_OFFSET 8
+
+#define TS 1
+#define WGS 1
+#include "quantHelper.pwgsl"

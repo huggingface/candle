@@ -1,8 +1,7 @@
-use crate::wgpu_backend::{device::PipelineType, util::FixedSizeQueue};
+use crate::wgpu_backend::util::FixedSizeQueue;
+use super::{PipelineType, CachedBufferId};
 
-use super::CachedBufferId;
-
-///Cache, that stores previously Flushed Gpu Commands, we try to use the same buffers as the last time
+///Cache, that stores previously flushed Gpu Commands, we try to use the same buffers as the last time
 #[derive(Debug)]
 pub(crate) struct BufferMappingCache {
     pub(crate) last_buffer_mappings: FixedSizeQueue<CachedBufferMappings>,
