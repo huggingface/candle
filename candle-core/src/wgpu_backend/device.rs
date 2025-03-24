@@ -561,7 +561,7 @@ impl WgpuDevice {
                 device_features: features,
                 backend: adapter.get_info().backend,
                 queue,
-                rand_state: Mutex::new(rand::rngs::StdRng::from_entropy()),
+                rand_state: Mutex::new(rand::rngs::StdRng::from_os_rng()),
                 #[cfg(feature = "wgpu_debug")]
                 debug: debug_info,
                 command_queue: Mutex::new(QueueBufferInner::new(configuration.meta_buffer_size)),
