@@ -621,6 +621,7 @@ async fn slice_set(device: &Device) -> Result<()> {
         .to_vec0_async::<f32>()
         .await?;
     assert_eq!(diff, 0.);
+    assert!(cache.slice_set(& cache, 0, 0).is_err());
     Ok(())
 }
 async fn cat(device: &Device) -> Result<()> {
