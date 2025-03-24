@@ -18,7 +18,7 @@ num-traits = { workspace = true }
 # App crates.
 anyhow = { workspace = true }
 byteorder = { workspace = true }
-getrandom = { version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 image = { workspace = true }
 log = { workspace = true }
 safetensors = { workspace = true }

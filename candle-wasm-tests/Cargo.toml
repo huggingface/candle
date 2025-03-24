@@ -11,7 +11,7 @@ candle = { workspace = true }
 candle-nn = { workspace = true , features = ["wgpu"]}
 candle-transformers = { workspace = true , features = ["wgpu"]}
 rand = { workspace = true }
-getrandom = { version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 anyhow = { workspace = true }
 num-traits = { workspace = true }
 half = { workspace = true }
