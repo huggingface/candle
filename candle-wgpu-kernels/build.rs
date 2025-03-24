@@ -872,11 +872,10 @@ mod shader_loader{
                         }
                     }
                     else if w == "ifdef" || w == "elifdef" || w == "ifndef" || w == "elifndef"{
-                        
-                        if w == "elifdef" || w == "elifndef"{
-                            if let Some(last) = if_blocks.pop(){
-                                if last{ //the last if was already true, so skip this:
-                                    if_blocks.push(false);
+                        let is_new_block = w == "ifdef" || w == "ifndef";
+                        if !is_new_block{ //"elifdef" or "elifndef"
+                            if let Some(last) = if_blocks.last(){
+                                if *last{ //the last if was already true, so skip this:
                                     crate::shader_loader::shader_tokeniser::skip_until_endifdef(tokens);
                                     match_preprocessor(tokens, result, defines, path, if_blocks, global_defines);
                                     return;
@@ -887,21 +886,27 @@ mod shader_loader{
                         match_whitespace(tokens);     
                         if let Some(word) = expect_word(tokens){
                             if (defines.contains_key(word) || global_defines.contains(&word)) ^ w.contains("n"){ //n for ndef
-                                if_blocks.push(true);
+                                if is_new_block{
+                                    if_blocks.push(true);
+                                }
+                                else{
+                                    *if_blocks.last_mut().unwrap() = true;
+                                }
                             } else {
-                                if_blocks.push(false);
+                                if is_new_block{
+                                    if_blocks.push(false);
+                                }
                                 crate::shader_loader::shader_tokeniser::skip_until_endifdef(tokens);
                                 match_preprocessor(tokens, result, defines, path, if_blocks, global_defines);
                             }
                         }
                     }
                     else if w == "if" || w == "elif"{
-
+                        let is_new_block = w == "if";
                         //check if prev condition was true:
                         if w == "elif"{
-                            if let Some(last) = if_blocks.pop(){
-                                if last{ //the last if was already true, so skip this:
-                                    if_blocks.push(false);
+                            if let Some(last) = if_blocks.last(){
+                                if *last{ //the last if was already true, so skip this:
                                     crate::shader_loader::shader_tokeniser::skip_until_endifdef(tokens);
                                     match_preprocessor(tokens, result, defines, path, if_blocks, global_defines);
                                     return;
@@ -919,16 +924,25 @@ mod shader_loader{
                         let result_exp = eval(&condition_parsed).unwrap();
                         if let Value::Boolean(result_exp) = result_exp{
                             if result_exp{
-                                if_blocks.push(true);
+                                if is_new_block{
+                                    if_blocks.push(true);
+                                }
+                                else{
+                                    *if_blocks.last_mut().unwrap() = true;
+                                }
                             }
                             else{
-                                if_blocks.push(false);
+                                if is_new_block{
+                                    if_blocks.push(false);
+                                }
                                 crate::shader_loader::shader_tokeniser::skip_until_endifdef(tokens);
                                 match_preprocessor(tokens, result, defines, path, if_blocks, global_defines);
                             }
                         }
                         else {
-                            if_blocks.push(false);
+                            if is_new_block{
+                                if_blocks.push(false);
+                            }
                             crate::shader_loader::shader_tokeniser::skip_until_endifdef(tokens);
                             match_preprocessor(tokens, result, defines, path, if_blocks, global_defines);
                         }
@@ -954,14 +968,13 @@ mod shader_loader{
 
                     }
                     else if w == "else"{
-                        if let Some(last) = if_blocks.pop(){
-                            if !last{
-                                if_blocks.push(true);
-                            }
-                            else {
-                                if_blocks.push(false);
+                        if let Some(last) = if_blocks.last(){
+                            if *last{ //skip if tast if was true
                                 crate::shader_loader::shader_tokeniser::skip_until_endifdef(tokens);
                                 match_preprocessor(tokens, result, defines, path, if_blocks, global_defines);
+                            }
+                            else{
+                                *if_blocks.last_mut().unwrap() = true;
                             }
                         }
                     }
