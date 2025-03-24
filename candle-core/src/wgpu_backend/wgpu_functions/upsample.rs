@@ -13,29 +13,28 @@ pub fn queue_upsample1d(
 
     let strides = layout.stride();
 
-    let mut meta = get_queue(dev);
+    let mut queue = dev.get_queue();
 
-    meta.add(target_size);
-    meta.add(b);
-    meta.add(c);
-    meta.add(l);
-    meta.add(layout.start_offset());
+    queue.add(target_size);
+    queue.add(b);
+    queue.add(c);
+    queue.add(l);
+    queue.add(layout.start_offset());
 
-    meta.add(strides[0]);
-    meta.add(strides[1]);
-    meta.add(strides[2]);
+    queue.add(strides[0]);
+    queue.add(strides[1]);
+    queue.add(strides[2]);
 
-    meta.add(c * target_size);
-    meta.add(target_size);
+    queue.add(c * target_size);
+    queue.add(target_size);
 
-    let pipeline = meta.get_pipeline(Pipelines::Upsample(
+    let pipeline = queue.get_pipeline(Pipelines::Upsample(
         get_dtype(dtype)?,
         Functions::Upsample1d,
     ));
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
-    enqueue_workgroups(
-        meta,
+    let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
+    queue.enqueue_workgroups(
         pipeline,
         bind_group,
         (target_size as u32 + 63) / 63,
@@ -58,33 +57,32 @@ pub fn queue_upsample2d(
 
     let strides = layout.stride();
 
-    let mut meta = get_queue(dev);
+    let mut queue = dev.get_queue();
 
-    meta.add(target_size.0);
-    meta.add(target_size.1);
-    meta.add(b);
-    meta.add(c);
-    meta.add(h);
-    meta.add(w);
-    meta.add(layout.start_offset());
+    queue.add(target_size.0);
+    queue.add(target_size.1);
+    queue.add(b);
+    queue.add(c);
+    queue.add(h);
+    queue.add(w);
+    queue.add(layout.start_offset());
 
-    meta.add(strides[0]);
-    meta.add(strides[1]);
-    meta.add(strides[2]);
-    meta.add(strides[3]);
+    queue.add(strides[0]);
+    queue.add(strides[1]);
+    queue.add(strides[2]);
+    queue.add(strides[3]);
 
-    meta.add(c * target_size.0 * target_size.1);
-    meta.add(target_size.0 * target_size.1);
-    meta.add(target_size.1);
+    queue.add(c * target_size.0 * target_size.1);
+    queue.add(target_size.0 * target_size.1);
+    queue.add(target_size.1);
 
-    let pipeline = meta.get_pipeline(Pipelines::Upsample(
+    let pipeline = queue.get_pipeline(Pipelines::Upsample(
         get_dtype(dtype)?,
         Functions::Upsample2d,
     ));
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
-    enqueue_workgroups(
-        meta,
+    let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_input1, dtype.into());
+    queue.enqueue_workgroups(
         pipeline,
         bind_group,
         (target_size.1 as u32 + 7) / 8,

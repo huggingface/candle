@@ -39,8 +39,9 @@ pub enum DType {
     U8,
     I64,
     F64,
+    F16
 }
-const DTYPE_COUNT: u16 = 5;
+const DTYPE_COUNT: u16 = 6;
 
 impl DType {
     pub fn get_index(&self) -> u16 {
@@ -50,6 +51,7 @@ impl DType {
             DType::U8 => 2,
             DType::I64 => 3,
             DType::F64 => 4,
+            DType::F16 => 5,
         }
     }
 
@@ -60,6 +62,7 @@ impl DType {
             2 => DType::U8,
             3 => DType::I64,
             4 => DType::F64,
+            5 => DType::F16,
             _ => {
                 todo!()
             }

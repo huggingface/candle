@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::{env, fs};
 use std::path::{Path, PathBuf};
 
-const SHORTEN_NORMAL_VARIABLES : bool = true;
-const SHORTEN_GLOBAL_FUNCTIONS : bool = true;
-const SHORTEN_OVERRIDES : bool = true;
+const SHORTEN_NORMAL_VARIABLES : bool = false;
+const SHORTEN_GLOBAL_FUNCTIONS : bool = false;
+const SHORTEN_OVERRIDES : bool = false;
 const REMOVE_UNUSED : bool = true;
-const REMOVE_SPACES : bool = true;
-const REMOVE_NEW_LINES : bool = true;
+const REMOVE_SPACES : bool = false;
+const REMOVE_NEW_LINES : bool = false;
 
 fn get_all_wgsl_files<P: AsRef<Path>>(dir: P) -> Vec<PathBuf> {
     let mut files = Vec::new();
@@ -57,7 +57,7 @@ fn main() {
     
     let mut modules : Vec<(String, String, String)> = Vec::new(); //name, path, content
 
-    let mut shader_info = shader_loader::shader_shortener::ShaderInfo::new();
+    let mut shader_info: shader_loader::shader_shortener::ShaderInfo = shader_loader::shader_shortener::ShaderInfo::new();
 
     for file in get_all_wgsl_files(shader_dir.clone()){
         let original_file_name = file.file_name().unwrap().to_str().unwrap();
@@ -85,45 +85,28 @@ fn main() {
         let generated_dir = parent_dir.join("generated");
         fs::create_dir_all(&generated_dir).unwrap();
    
-       
+        let mut create_shader_file = |global_defines : &Vec<&'static str>, file_name_ending : &str|{
+            let shader_content = shader_loader::load_shader(&file,global_defines, &mut shader_info);
+            let new_file_path = generated_dir.join(format!("{}{file_name_ending}", original_file_name));
+            if !shader_info.global_functions.is_empty() && !shader_content.is_empty(){
+                fs::write(new_file_path, shader_content).expect("Failed to write shader file");
+                return true;
+            }
+            else if fs::exists(&new_file_path).expect("Failed to check shader file"){
+                fs::remove_file(new_file_path).expect("Failed to remove shader file");
+            }
+            false
+        };
 
         //create the File:
-        let shader_content = shader_loader::load_shader(&file,&vec!["f32"], &mut shader_info);
-        if !shader_info.global_functions.is_empty(){
-            let new_file_name = format!("{}_generated_f32.wgsl", original_file_name);
-            let new_file_path = generated_dir.join(new_file_name);
-            fs::write(new_file_path, shader_content).expect("Failed to write shader file");
+        let mut available_types = Vec::new();
+        const TYPES : [&str;6] = ["f32", "u32", "i64", "f64", "f16", "u8"];
+        for dtype in TYPES{
+            if create_shader_file(&vec![dtype], &format!("_generated_{dtype}.wgsl")){
+                available_types.push(dtype);
+            }
         }
-
-        let shader_content = shader_loader::load_shader(&file,&vec!["u32"], &mut shader_info);
-        if !shader_info.global_functions.is_empty(){
-            let new_file_name = format!("{}_generated_u32.wgsl", original_file_name);
-            let new_file_path = generated_dir.join(new_file_name);
-            fs::write(new_file_path, shader_content).expect("Failed to write shader file");
-        }
-
-        let shader_content = shader_loader::load_shader(&file,&vec!["u8"], &mut shader_info);
-        if !shader_info.global_functions.is_empty(){
-            let new_file_name = format!("{}_generated_u8.wgsl", original_file_name);
-            let new_file_path = generated_dir.join(new_file_name);
-            fs::write(new_file_path, shader_content).expect("Failed to write shader file");
-        }
-
-        let shader_content = shader_loader::load_shader(&file,&vec!["i64"], &mut shader_info);
-        if !shader_info.global_functions.is_empty(){
-            let new_file_name = format!("{}_generated_i64.wgsl", original_file_name);
-            let new_file_path = generated_dir.join(new_file_name);
-            fs::write(new_file_path, shader_content).expect("Failed to write shader file");
-        }
-
-        let shader_content = shader_loader::load_shader(&file,&vec!["f64"], &mut shader_info);
-        if !shader_info.global_functions.is_empty(){
-            let new_file_name = format!("{}_generated_f64.wgsl", original_file_name);
-            let new_file_path = generated_dir.join(new_file_name);
-            fs::write(new_file_path, shader_content).expect("Failed to write shader file");
-        }
-
-
+        
 
         let global_functions = shader_info.global_functions;
         shader_info.global_functions = HashMap::new();
@@ -134,8 +117,15 @@ fn main() {
 
             let functions_match : Vec<String> = global_functions.iter().map(|(key, value)| format!("Functions::{} => \"{}\"", to_upper_camel_case(key), value)).collect();
             
+            let mut include_code = available_types.iter().map(|available_type|{
+                format!("crate::DType::{} => include_str!(\"{absolute_path}/generated/{parent_name}.pwgsl_generated_{available_type}.wgsl\")", available_type.to_uppercase())
+            }).collect::<Vec<_>>().join(",");
+            if available_types.len() != TYPES.len(){
+                include_code += ",\n\t\t_=> todo!(\"the type {typ:?} is not implemented for \")";
+            }
+
             let content =  
-            format!("pub mod {} {{
+            format!("pub mod {parent_name} {{
         #[derive(Debug, Clone, PartialEq, Eq, Hash)]
         #[cfg_attr(feature=\"wgpu_debug_serialize\", derive(serde::Serialize, serde::Deserialize))]
         pub enum Functions{{{}}}
@@ -163,15 +153,11 @@ fn main() {
 
         pub fn load_shader(typ : crate::DType) -> &'static str {{
             match typ{{
-                crate::DType::F32 => include_str!(\"{absolute_path}/generated/{parent_name}.pwgsl_generated_f32.wgsl\"),
-                crate::DType::U32 => include_str!(\"{absolute_path}/generated/{parent_name}.pwgsl_generated_u32.wgsl\"),
-                crate::DType::U8 => include_str!(\"{absolute_path}/generated/{parent_name}.pwgsl_generated_u8.wgsl\"),
-                crate::DType::I64 => include_str!(\"{absolute_path}/generated/{parent_name}.pwgsl_generated_i64.wgsl\"),
-                crate::DType::F64 => include_str!(\"{absolute_path}/generated/{parent_name}.pwgsl_generated_f64.wgsl\"),
+                {include_code}
             }}
         }}
     }}
-        ",parent_name, functions.join(","), functions_match.join(","), 
+        ", functions.join(","), functions_match.join(","), 
         global_functions.iter().enumerate().map(|(index, (key, _))| format!("\t\tFunctions::{} => crate::PipelineIndex::new(shader, {index}),", to_upper_camel_case(key))).collect::<Vec<String>>().join("\n"),
         global_functions.iter().enumerate().map(|(index, (key, _))| format!("\t\t{index} => Functions::{},", to_upper_camel_case(key))).collect::<Vec<String>>().join("\n")
     );
@@ -677,17 +663,33 @@ mod shader_loader{
         }
     }
 
+
+    pub type DefinesDefinitions = HashMap<String, DefineDefinition>;
+    pub struct DefineDefinition{
+        params : Vec<String>,
+        content : String
+    }
+    
+    impl DefineDefinition{
+        pub fn new_func(params: Vec<String>, content: String) -> Self {
+            Self { params, content }
+        }
+        pub fn new(content: String) -> Self {
+            Self { params : Vec::new(), content }
+        }
+    }
+
     pub mod shader_defines{
-        use std::{collections::HashMap, fs, iter::Peekable, path::PathBuf};
+        use std::{fs, iter::Peekable, path::PathBuf};
         use evalexpr::*;
         use fancy_regex::Regex;
 
-        use crate::shader_loader::shader_tokeniser::{expect_word, match_string, match_until_char, peek_char};
+        use crate::shader_loader::{shader_tokeniser::{expect_word, match_string, match_until_char, peek_char}, DefineDefinition};
 
-        use super::shader_tokeniser::{match_whitespace, Token, Tokenizer};
+        use super::{shader_tokeniser::{match_whitespace, Token, Tokenizer}, DefinesDefinitions};
 
-
-        pub fn load_shader(path: &PathBuf, defines :  &mut HashMap<String,String>, global_defines : &Vec<&'static str>) -> String {
+       
+        pub fn load_shader(path: &PathBuf, defines :  &mut DefinesDefinitions, global_defines : &Vec<&'static str>) -> String {
             let shader_code = fs::read_to_string(path).expect("Failed to read WGSL file");
             
             let shader_code = Regex::new(r"//.*\n", ).unwrap().replace_all(&shader_code, "\n"); //remove coments
@@ -697,29 +699,90 @@ mod shader_loader{
             let mut result = String::new();
 
             let mut if_blocks : Vec<bool> = vec![];
+            
+            fn apply_defines_word<'a>(tokens: &mut Peekable<impl Iterator<Item=Token<'a>>>, word : &str, result :&mut String, defines: &mut DefinesDefinitions){
+                if let Some(define) = defines.get(word) {
+                    if !define.params.is_empty() {
+                        // Function-like macro detected, ensure '(' follows
+                        if let Some(Token::Symbol('(')) = tokens.peek() {
+                            tokens.next(); // Consume '('
 
-            fn apply_defines(code : &str, defines :  &mut HashMap<String,String>) -> String{
-                let tokenizer = Tokenizer::new(code);
-                let tokens = tokenizer.peekable();
+                            let mut args = Vec::new();
+                            let mut current_arg = String::new();
+                            let mut paren_level = 1; // Track nested parentheses
+
+                            for t in tokens.by_ref() {
+                                match t {
+                                    Token::Symbol(')') => {
+                                        paren_level -= 1;
+                                        if paren_level == 0 {
+                                            args.push(current_arg.trim().to_string());
+                                            break;
+                                        } else {
+                                            current_arg.push(')');
+                                        }
+                                    }
+                                    Token::Symbol('(') => {
+                                        paren_level += 1;
+                                        current_arg.push('(');
+                                    }
+                                    Token::Symbol(',') if paren_level == 1 => {
+                                        args.push(current_arg.trim().to_string());
+                                        current_arg.clear();
+                                    }
+                                    Token::Symbol(c) => {
+                                        current_arg.push(c);
+                                    }
+                                    Token::Word(w) => {
+                                        current_arg.push_str(w);
+                                    }
+                                }
+                            }
+
+                            // Substitute parameters in macro content
+                            let mut expanded = define.content.clone();
+                            for (param, arg) in define.params.iter().zip(args.iter()) {
+                                expanded = expanded.replace(param, arg);
+                            }
+
+                            // Recursively process the expanded content
+                            let expanded_result = apply_defines(&expanded, defines);
+                            result.push_str(&expanded_result);
+                        } else {
+                            // If not followed by '(', treat it as a normal word
+                            result.push_str(word);
+                        }
+                    } else {
+                        // Normal macro replacement
+                        result.push_str(&define.content);
+                    }
+                } else {
+                    result.push_str(word);
+                }
+            }
+            
+            fn apply_defines_tokens<'a>(tokens: &mut Peekable<impl Iterator<Item=Token<'a>>>, defines: &mut DefinesDefinitions) -> String {
                 let mut result = String::new();
-
-                for token in tokens {
+            
+                while let Some(token) = tokens.next() {
                     match token {
                         Token::Word(word) => {
-                            if let Some(value) = defines.get(word){
-                                result.push_str(value);
-                            }    
-                            else{
-                                result.push_str(word);
-                            }
-                        },
+                            apply_defines_word(tokens, word, &mut result, defines);
+                        }
                         Token::Symbol(c) => result.push(c),
                     }
                 }
                 result
             }
 
-            fn match_preprocessor<'a>(tokens : &mut Peekable<impl Iterator<Item=Token<'a>>>, result : &mut String, defines :  &mut HashMap<String,String>, path: &PathBuf, if_blocks : &mut Vec<bool>, global_defines : &Vec<&'static str>){
+            fn apply_defines(code: &str, defines: &mut DefinesDefinitions) -> String {
+                let tokenizer = Tokenizer::new(code);
+                let mut tokens = tokenizer.peekable();
+                apply_defines_tokens(&mut tokens, defines)
+            }
+            
+
+            fn match_preprocessor<'a>(tokens : &mut Peekable<impl Iterator<Item=Token<'a>>>, result : &mut String, defines :  &mut DefinesDefinitions, path: &PathBuf, if_blocks : &mut Vec<bool>, global_defines : &Vec<&'static str>){
                 if match_whitespace(tokens){
                     result.push(' ');
                 }
@@ -738,27 +801,53 @@ mod shader_loader{
                       
                         match_whitespace(tokens);     
                         if let Some(key) = expect_word(tokens){
-                            let mut value = String::new();
-                            match_until_char(tokens, '\n', &mut value);
-                           
-                            let tokenizer = Tokenizer::new(&value);
-                            let tokens_condition = tokenizer.peekable();
-                            let mut condition_parsed = String::new();
+                            
+                            let mut params = Vec::new();
+                             // Check if this is a function-like macro (next token is '(')
+                            if let Some(Token::Symbol('(')) = tokens.peek(){
+                                tokens.next(); // Consume '('
+                                
+                                // Read parameter names until ')'
+                                while let Some(Token::Word(param)) = tokens.peek() {
+                                    params.push(param.to_string());
+                                    tokens.next(); // Consume parameter
+                    
+                                    if let Some(Token::Symbol(',')) = tokens.peek() {
+                                        tokens.next(); // Consume ','
+                                    } else {
+                                        break;
+                                    }
+                                }
 
-                            for token in tokens_condition {
-                                match token {
-                                    Token::Word(word) => {
-                                        if let Some(value) = defines.get(word){
-                                            condition_parsed.push_str(value);
-                                        }    
-                                        else{
-                                            condition_parsed.push_str(word);
-                                        }
-                                    },
-                                    Token::Symbol(c) => condition_parsed.push(c),
+                                // Consume closing ')'
+                                if let Some(Token::Symbol(')')) = tokens.next() {
+                                    // Successfully parsed parameter list
+                                } else {
+                                    panic!("Expected closing ')' in macro definition");
                                 }
                             }
-                            defines.insert(key.to_string(), condition_parsed.trim().to_string());
+
+                            let mut value = String::new();
+                            match_until_char(tokens, '\n', &mut value);
+                            let condition_parsed = apply_defines(&value, defines);
+                            // let tokenizer = Tokenizer::new(&value);
+                            // let tokens_condition = tokenizer.peekable();
+                            // let mut condition_parsed = String::new();
+
+                            // for token in tokens_condition {
+                            //     match token {
+                            //         Token::Word(word) => {
+                            //             if let Some(value) = defines.get(word){
+                            //                 condition_parsed.push_str(value);
+                            //             }    
+                            //             else{
+                            //                 condition_parsed.push_str(word);
+                            //             }
+                            //         },
+                            //         Token::Symbol(c) => condition_parsed.push(c),
+                            //     }
+                            // }
+                            defines.insert(key.to_string(), DefineDefinition::new_func(params, condition_parsed.trim().to_string()));
                         }
                     }
                     else if w == "definec"{
@@ -768,23 +857,7 @@ mod shader_loader{
                             let mut value = String::new();
                             match_until_char(tokens, '\n', &mut value);
                            
-                            let tokenizer = Tokenizer::new(&value);
-                            let tokens_condition = tokenizer.peekable();
-                            let mut condition_parsed = String::new();
-
-                            for token in tokens_condition {
-                                match token {
-                                    Token::Word(word) => {
-                                        if let Some(value) = defines.get(word){
-                                            condition_parsed.push_str(value);
-                                        }    
-                                        else{
-                                            condition_parsed.push_str(word);
-                                        }
-                                    },
-                                    Token::Symbol(c) => condition_parsed.push(c),
-                                }
-                            }
+                            let condition_parsed = apply_defines(&value, defines);
                             let condition_parsed = condition_parsed.trim().replace("u", "");
 
                             let result_exp = eval(&condition_parsed).unwrap();
@@ -794,7 +867,7 @@ mod shader_loader{
                                 Value::Boolean(bool) =>format!("{bool}"),
                                 _ => panic!("could not match expression")
                             };
-                            defines.insert(key.to_string(), exp);
+                            defines.insert(key.to_string(), DefineDefinition::new(exp));
                             //defines.insert(key.to_string(), condition_parsed.trim().to_string());
                         }
                     }
@@ -898,7 +971,7 @@ mod shader_loader{
                 }
             }
 
-            fn analyse_preprocessor<'a>(tokens : &mut Peekable<impl Iterator<Item=Token<'a>>>, result : &mut String, defines :  &mut HashMap<String,String>, path: &PathBuf, if_blocks : &mut Vec<bool>, global_defines : &Vec<&'static str>){
+            fn analyse_preprocessor<'a>(tokens : &mut Peekable<impl Iterator<Item=Token<'a>>>, result : &mut String, defines :  &mut DefinesDefinitions, path: &PathBuf, if_blocks : &mut Vec<bool>, global_defines : &Vec<&'static str>){
                 if match_whitespace(tokens){
                     result.push(' ');
                 }
@@ -906,12 +979,7 @@ mod shader_loader{
                 if let Some(token) = tokens.next(){
                     match token{
                         Token::Word(w) => {
-                            if let Some(value) = defines.get(w){
-                                result.push_str(value);
-                            }    
-                            else{
-                                result.push_str(w)
-                            }
+                            apply_defines_word(tokens, w, result, defines);
                         },
                         Token::Symbol(c2) => 
                         {
@@ -944,12 +1012,7 @@ mod shader_loader{
             while let Some(token) = tokens.next() {
                 match token {
                     Token::Word(word) => {
-                        if let Some(value) = defines.get(word){
-                            result.push_str(value);
-                        }    
-                        else{
-                            result.push_str(word);
-                        }
+                        apply_defines_word(&mut tokens, word, &mut result, defines);
                     },
                     Token::Symbol(c) => {
                         if c == '\n'{

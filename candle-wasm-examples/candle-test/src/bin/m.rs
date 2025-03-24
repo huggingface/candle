@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use candle::{backend::BackendDevice, wgpu::{wgpu_functions::Pipelines, MatmulAlgorithm}, Device, Shape, Tensor, WgpuStorage};
 
 mod utils;
@@ -5,8 +7,10 @@ mod utils;
 use utils::{bench_function_max_time_async, MeasurementInfo};
 use web_time::Duration;
 
-const DEBUG_D : &str = include_str!("wgpu_llama2c_test_5.0_d.json");
-const DEBUG_E : &str = include_str!("wgpu_llama2c_test_5.0_e.json");
+//const DEBUG_D : &str = include_str!("wgpu_llama2c_test_5.0_d.json");
+//const DEBUG_E : &str = include_str!("wgpu_llama2c_test_5.0_e.json");
+const DEBUG_D : &str = "";
+const DEBUG_E : &str = "";
 const PERFORMANCE_OUTPUT_FILE : &str = "performance_llama2c_5.json";
 
 const TEST_MATMUL : bool = false;
@@ -46,7 +50,7 @@ async fn test() -> Result<(), Box<dyn std::error::Error>>{
 }
 
 fn load_recording_consts(device : &Device) -> Result<(), Box<dyn std::error::Error>>{
-    let debug_recordings_consts :  Vec<std::collections::HashMap<String, f64>> = serde_json::from_str(DEBUG_E)?;
+    let debug_recordings_consts :  Vec<HashMap<String, f64>> = serde_json::from_str(DEBUG_E)?;
     match &device{
         Device::Wgpu(wgpu) => {
             wgpu.load_debug_info(debug_recordings_consts);
@@ -228,7 +232,7 @@ pub async fn performance_test() -> Result<(), Box<dyn std::error::Error>>{
     Ok(())
 }
 
-async fn test_func<'a,F>(device : &Device, count: u32, func : F, name : &str, measures : &mut Vec<MeasurementInfo>, total_counts : u32)
+async fn test_func<F>(device : &Device, count: u32, func : F, name : &str, measures : &mut Vec<MeasurementInfo>, total_counts : u32)
 where   F: Fn() -> Result<(), candle::Error>,
 {
         let device_name = match device{

@@ -22,7 +22,7 @@ pub fn queue_binary_buffer_from_buffer(
     op: BinaryOperation,
     dtype: crate::DType,
 ) -> crate::Result<()> {
-    let mut meta = dev.get_queue();
+    let mut queue = dev.get_queue();
     let pipeline = if input1.layout().is_contiguous() && input2.layout().is_contiguous() {
         let const_vec = vec![
             op as usize,
@@ -30,9 +30,9 @@ pub fn queue_binary_buffer_from_buffer(
             (input2.layout().start_offset() == 0) as usize,
         ];
 
-        meta.add(input1.layout().shape().elem_count()); //input1_length
-        meta.add(input1.layout().start_offset());
-        meta.add(input2.layout().start_offset());
+        queue.add(input1.layout().shape().elem_count()); //input1_length
+        queue.add(input1.layout().start_offset());
+        queue.add(input2.layout().start_offset());
 
         let inplaceable = OpIsInplaceable {
             input1_inplaceable: input1.layout().start_offset() == 0,
@@ -40,10 +40,10 @@ pub fn queue_binary_buffer_from_buffer(
         };
 
         if input1.layout().shape().elem_count() > 65535 * 64 {
-            meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+            queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
         }
 
-        meta.get_pipeline_const_inplace(
+        queue.get_pipeline_const_inplace(
             Pipelines::Binary(
                 get_dtype(dtype)?,
                 Functions::BinaryBufferFromBufferContiguousBoth,
@@ -53,24 +53,24 @@ pub fn queue_binary_buffer_from_buffer(
         )
     } else {
         let const_vec = vec![op as usize];
-        meta.add_layout1(input1.layout());
-        meta.add_layout2(input2.layout());
+        queue.add_layout1(input1.layout());
+        queue.add_layout2(input2.layout());
 
         if input1.layout().shape().elem_count() > 65535 * 64 {
-            meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+            queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
         }
 
-        meta.get_pipeline_const(
+        queue.get_pipeline_const(
             Pipelines::Binary(get_dtype(dtype)?, Functions::BinaryBufferFromBuffer),
             const_vec,
         )
     };
 
     let bind_group =
-        create_bind_group_input2(buffer_dest, input1.buffer(), input2.buffer(), dtype.into());
+        dev.create_bind_group_input2(buffer_dest, input1.buffer(), input2.buffer(), dtype.into());
 
-    enqueue_64_big_extra(
-        meta,
+
+    queue.enqueue_64_big_extra(
         pipeline,
         bind_group,
         input1.layout().shape().elem_count() as u32,

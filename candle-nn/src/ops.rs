@@ -478,7 +478,6 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             storage: &WgpuStorage,
             layout: &Layout,
         ) -> Result<(WgpuStorage, Shape)> {
-            use candle::wgpu::create_wgpu_storage;
             use candle::wgpu::wgpu_functions;
         
             if !(layout.is_contiguous()){
@@ -491,7 +490,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
 
             let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
 
-            let output_buffer = create_wgpu_storage(storage.device(), storage.dtype(),  el_count * storage.dtype().size_in_bytes());
+            let output_buffer = storage.device().alloc_uninit_size(storage.dtype(),  el_count);
 
             wgpu_functions::queue_softmax(
                 storage.device(),
@@ -710,7 +709,6 @@ impl candle::CustomOp2 for RmsNorm {
         alpha_layout: &Layout,
     ) -> Result<(WgpuStorage, Shape)> {
         //start offset and length:
-        use candle::wgpu::create_wgpu_storage;
         use candle::wgpu::wgpu_functions;
 
         if !(layout.is_contiguous()){
@@ -726,7 +724,7 @@ impl candle::CustomOp2 for RmsNorm {
 
         let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
 
-        let output_buffer = create_wgpu_storage(src.device(), src.dtype(),  el_count * src.dtype().size_in_bytes());
+        let output_buffer = src.device().alloc_uninit_size(src.dtype(),  el_count);
 
         wgpu_functions::queue_rms_norm(
             src.device(),
@@ -1000,7 +998,6 @@ impl candle::CustomOp3 for LayerNorm {
         beta_layout: &Layout,
     ) -> Result<(WgpuStorage, Shape)> {
         //start offset and length:
-        use candle::wgpu::create_wgpu_storage;
         use candle::wgpu::wgpu_functions;
 
         if !(layout.is_contiguous()){
@@ -1019,7 +1016,7 @@ impl candle::CustomOp3 for LayerNorm {
 
         let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
 
-        let output_buffer = create_wgpu_storage(src.device(), src.dtype(),  el_count * src.dtype().size_in_bytes());
+        let output_buffer = src.device().alloc_uninit_size(src.dtype(),  el_count);
 
         wgpu_functions::queue_layer_norm(
             src.device(),

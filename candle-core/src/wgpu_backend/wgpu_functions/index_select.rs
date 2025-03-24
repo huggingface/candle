@@ -24,15 +24,15 @@ pub fn queue_index_select(
         .iter()
         .fold(1, |prev, c| prev * *c) as u32; //Mul Strides Left of dim
 
-    let mut meta = get_queue(dev);
+    let mut queue = dev.get_queue();
 
-    meta.add(input_stride_x);
-    meta.add(input_stride_y);
-    meta.add(output_stride_x);
-    meta.add(output_stride_y);
-    meta.add(length);
-    meta.add_layout1(input.layout());
-    meta.add_layout2(index.layout());
+    queue.add(input_stride_x);
+    queue.add(input_stride_y);
+    queue.add(output_stride_x);
+    queue.add(output_stride_y);
+    queue.add(length);
+    queue.add_layout1(input.layout());
+    queue.add_layout2(index.layout());
 
     let pipeline = match index_dtype {
         crate::DType::U32 => Pipelines::IndexSelect(
@@ -48,16 +48,15 @@ pub fn queue_index_select(
             index_dtype
         )),
     };
-    let pipeline = meta.get_pipeline(pipeline);
+    let pipeline = queue.get_pipeline(pipeline);
 
-    let bind_group = create_bind_group_input2_with_alignment(
+    let bind_group = dev.create_bind_group_input2_with_alignment(
         buffer_dest,
         index.buffer(),
         input.buffer(),
         BindgroupAlignmentLayout::Bindgroup2(dtype.into(), index_dtype.into(), dtype.into()),
     );
-    enqueue_workgroups(
-        meta,
+    queue.enqueue_workgroups(
         pipeline,
         bind_group,
         (length + 7) / 8,

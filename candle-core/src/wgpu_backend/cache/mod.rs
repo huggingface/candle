@@ -14,7 +14,8 @@ pub use shader::*;
 
 use tracing::{instrument, span};
 
-use super::{device::PipelineType, wgpu_functions};
+use super::queue_buffer::PipelineReference;
+use super::wgpu_functions;
 use super::{
     util::{Reference, ReferenceTrait, ToU64},
     WgpuDevice,
@@ -280,26 +281,35 @@ impl ModelCache {
         referenced_by_candle_storage: bool,
     ) -> BufferReferenceId {
         let data = bytemuck::cast_slice(data);
+        let length = ((data.len() + 3) / 4) * 4;
 
-        if data.len() as u64 > self.max_memory_size {
+        if length as u64 > self.max_memory_size {
             panic!(
                 "tried to create_init too large a buffer: {}, max: {}",
-                data.len(),
-                self.max_memory_size
+                length, self.max_memory_size
             );
         }
 
-        let buffer =
-            self.buffers
-                .search_buffer(dev, data.len() as u64, data.len() as u64, 0, u32::MAX - 1); //TODO use exact size?
-        dev.queue
-            .write_buffer(self.buffers.get_buffer(&buffer).unwrap().buffer(), 0, data);
+        let buffer = self
+            .buffers
+            .search_buffer(dev, length as u64, length as u64, 0, u32::MAX - 1); //TODO use exact size?
 
-        let buffer_reference = BufferReference::new_with_storage(
-            data.len() as u64,
-            buffer,
-            referenced_by_candle_storage,
-        );
+        if data.len() % 4 == 0 {
+            dev.queue
+                .write_buffer(self.buffers.get_buffer(&buffer).unwrap().buffer(), 0, data);
+        } else {
+            let mut padded = Vec::with_capacity(length);
+            padded.extend_from_slice(data); // Copy original data
+            padded.resize(length, 0); // Fill the rest with zeros
+            dev.queue.write_buffer(
+                self.buffers.get_buffer(&buffer).unwrap().buffer(),
+                0,
+                &padded,
+            );
+        }
+
+        let buffer_reference =
+            BufferReference::new_with_storage(length as u64, buffer, referenced_by_candle_storage);
         return self.buffer_reference.insert(buffer_reference);
     }
 
@@ -404,13 +414,13 @@ impl ModelCache {
         &mut self,
         dev: &WgpuDevice,
         bindgroup_reference: &BindgroupReferenceFull,
-        pipeline: PipelineType,
+        pipeline: PipelineReference,
         command_id: u32,
     ) -> CachedBindgroupId {
         fn check_buffer_reference(
             cache: &mut ModelCache,
             bindgroup_reference: &BindgroupReferenceFull,
-            pipeline: PipelineType,
+            pipeline: PipelineReference,
         ) {
             let check_buffer = |buffer_reference_id| {
                 if let Some(buffer_reference) = cache.buffer_reference.get(&buffer_reference_id) {

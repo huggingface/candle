@@ -2,12 +2,12 @@ use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 use tracing::instrument;
 
-use crate::wgpu_backend::{device::PipelineType, wgpu_functions};
-
+use super::PipelineReference;
+use crate::wgpu_backend::wgpu_functions;
 #[derive(Debug)]
 pub struct ShaderModuleComputePipelines {
     pub(crate) shader: Arc<wgpu::ShaderModule>,
-    pub(crate) pipelines: HashMap<PipelineType, Arc<wgpu::ComputePipeline>>,
+    pub(crate) pipelines: HashMap<PipelineReference, Arc<wgpu::ComputePipeline>>,
 }
 
 #[derive(Debug)]
@@ -42,7 +42,7 @@ impl ShaderCache {
     pub(crate) fn get_pipeline(
         &mut self,
         device: &wgpu::Device,
-        pipeline: &PipelineType,
+        pipeline: &PipelineReference,
         pipeline_layout: &wgpu::PipelineLayout,
         consts: &std::collections::HashMap<String, f64>,
     ) -> crate::Result<Arc<wgpu::ComputePipeline>> {
@@ -85,7 +85,7 @@ fn load_pipeline(
     device: &wgpu::Device,
     shader: Arc<wgpu::ShaderModule>,
     entry_point: &str,
-    pipeline: &PipelineType,
+    pipeline: &PipelineReference,
     pipeline_layout: &wgpu::PipelineLayout,
     consts: &std::collections::HashMap<String, f64>,
 ) -> wgpu::ComputePipeline {

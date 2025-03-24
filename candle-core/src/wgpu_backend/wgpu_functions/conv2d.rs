@@ -132,7 +132,7 @@ pub fn queue_conv2d(
     let input_stride = input_layout.stride();
     let kernel_stride = kernel.layout().stride();
 
-    let mut meta = get_queue(dev);
+    let mut queue = dev.get_queue();
 
     let const_vec = vec![
         kernel_stride[3], //kernel_x_stride
@@ -146,24 +146,24 @@ pub fn queue_conv2d(
         params.i_h,
     ];
 
-    meta.add(input_layout.start_offset());
-    meta.add(kernel_stride[2]); //kernel_y_stride
-    meta.add(kernel_stride[1]); //kernel_c_stride
-    meta.add(kernel_stride[0]); //kernel_b_stride
-    meta.add(kernel.layout().start_offset());
-    meta.add(params.i_w); //size_in_x
-    meta.add(params.i_h); //size_in_y
-    meta.add(params.out_w() * params.out_h() * params.c_out); //Stride_batch_out
-    meta.add(params.out_w() * params.out_h()); //stride_c_out
-    meta.add(params.out_w()); //stride_y_out
-    meta.add(params.out_h()); //size_y_out
+    queue.add(input_layout.start_offset());
+    queue.add(kernel_stride[2]); //kernel_y_stride
+    queue.add(kernel_stride[1]); //kernel_c_stride
+    queue.add(kernel_stride[0]); //kernel_b_stride
+    queue.add(kernel.layout().start_offset());
+    queue.add(params.i_w); //size_in_x
+    queue.add(params.i_h); //size_in_y
+    queue.add(params.out_w() * params.out_h() * params.c_out); //Stride_batch_out
+    queue.add(params.out_w() * params.out_h()); //stride_c_out
+    queue.add(params.out_w()); //stride_y_out
+    queue.add(params.out_h()); //size_y_out
 
-    meta.add(input_stride[0]); //stride_batch_input
-    meta.add(input_stride[1]); //stride_c_in
-    meta.add(input_stride[2]); //stride_y_in
-    meta.add(padding);
-    meta.add(params.stride);
-    meta.add(params.c_out);
+    queue.add(input_stride[0]); //stride_batch_input
+    queue.add(input_stride[1]); //stride_c_in
+    queue.add(input_stride[2]); //stride_y_in
+    queue.add(padding);
+    queue.add(params.stride);
+    queue.add(params.c_out);
 
     let pipeline_function = if is_continues_in_c_in && params.c_in >= 64 {
         if padding == 0 {
@@ -183,16 +183,15 @@ pub fn queue_conv2d(
         Functions::Conv2d
     };
 
-    let pipeline = meta.get_pipeline_const(
+    let pipeline = queue.get_pipeline_const(
         Pipelines::Conv2d(get_dtype(dtype)?, pipeline_function),
         const_vec,
     );
 
     let bind_group =
-        create_bind_group_input2(buffer_dest, input_buffer, kernel.buffer(), dtype.into());
+        dev.create_bind_group_input2(buffer_dest, input_buffer, kernel.buffer(), dtype.into());
 
-    enqueue_workgroups_extra(
-        meta,
+    queue.enqueue_workgroups_extra(
         pipeline,
         bind_group,
         (params.out_w() as u32 + 15) / 16,
@@ -252,18 +251,18 @@ pub fn queue_conv2d_matmul(
         (input.layout().start_offset() == 0) as usize,
     ];
 
-    let mut meta = get_queue(dev);
-    meta.add(dst_numel); // op_conv2d_dst_numel
-    meta.add(o_h); // op_conv2d_h_out
-    meta.add(o_w); // op_conv2d_w_out
-    meta.add(params.c_in); // op_conv2d_c_in
-    meta.add(params.i_h); // op_conv2d_h_in
-    meta.add(params.i_w); // op_conv2d_w_in
-    meta.add(src_stride[0] as u32); // op_conv2d_src_s0 (batch stride)
-    meta.add(src_stride[1] as u32); // op_conv2d_src_s1 (channel stride)
-    meta.add(src_stride[2] as u32); // op_conv2d_src_s2 (height stride)
-    meta.add(src_stride[3] as u32); // op_conv2d_src_s3 (width stride)
-    meta.add(input.layout().start_offset()); // op_conv2d_src_s3 (width stride)
+    let mut queue = dev.get_queue();
+    queue.add(dst_numel); // op_conv2d_dst_numel
+    queue.add(o_h); // op_conv2d_h_out
+    queue.add(o_w); // op_conv2d_w_out
+    queue.add(params.c_in); // op_conv2d_c_in
+    queue.add(params.i_h); // op_conv2d_h_in
+    queue.add(params.i_w); // op_conv2d_w_in
+    queue.add(src_stride[0] as u32); // op_conv2d_src_s0 (batch stride)
+    queue.add(src_stride[1] as u32); // op_conv2d_src_s1 (channel stride)
+    queue.add(src_stride[2] as u32); // op_conv2d_src_s2 (height stride)
+    queue.add(src_stride[3] as u32); // op_conv2d_src_s3 (width stride)
+    queue.add(input.layout().start_offset()); // op_conv2d_src_s3 (width stride)
 
     // Dispatch the convolution kernel
     let workgroup_size = 256; // Assumed workgroup size, adjust based on hardware
@@ -276,7 +275,7 @@ pub fn queue_conv2d_matmul(
     let im2col_layout = Layout::new(Shape::from_dims(&[b, k, n]), vec![k * n, n, 1], 0);
 
     let im2col_buffer;
-    let pipeline = meta.get_pipeline_const(
+    let pipeline = queue.get_pipeline_const(
         Pipelines::Conv2d(get_dtype(dtype)?, Functions::Im2col),
         const_vec,
     );
@@ -285,13 +284,12 @@ pub fn queue_conv2d_matmul(
 
         im2col_buffer = cache.create_buffer_reference(n * k * b * dtype.size_in_bytes(), false);
 
-        let bind_group = create_bind_group_input1(im2col_buffer, input.buffer(), dtype.into());
+        let bind_group = dev.create_bind_group_input1(im2col_buffer, input.buffer(), dtype.into());
 
         let x = num_workgroups.min(65535);
         let y = (num_workgroups + 65534) / 65535;
 
-        enqueue_workgroups_extra(
-            meta,
+        queue.enqueue_workgroups_extra(
             pipeline,
             bind_group,
             x as u32,
@@ -338,7 +336,7 @@ pub fn queue_conv2d_transpose(
     let input_stride = input.layout().stride();
     let kernel_stride = kernel.layout().stride();
 
-    let mut meta = get_queue(dev);
+    let mut queue = dev.get_queue();
 
     let const_vec = vec![
         kernel_stride[3], //kernel_x_stride
@@ -352,33 +350,32 @@ pub fn queue_conv2d_transpose(
         params.i_h,
     ];
 
-    meta.add(input.layout().start_offset());
-    meta.add(kernel_stride[2]); //kernel_y_stride
-    meta.add(kernel_stride[0]); //kernel_c_stride
-    meta.add(kernel_stride[1]); //kernel_b_stride
-    meta.add(kernel.layout().start_offset());
-    meta.add(params.i_w); //size_in_x
-    meta.add(params.i_h); //size_in_y
-    meta.add(params.out_w() * params.out_h() * params.c_out); //Stride_batch_out
-    meta.add(params.out_w() * params.out_h()); //stride_c_out
-    meta.add(params.out_w()); //stride_y_out
-    meta.add(params.out_h()); //size_y_out
+    queue.add(input.layout().start_offset());
+    queue.add(kernel_stride[2]); //kernel_y_stride
+    queue.add(kernel_stride[0]); //kernel_c_stride
+    queue.add(kernel_stride[1]); //kernel_b_stride
+    queue.add(kernel.layout().start_offset());
+    queue.add(params.i_w); //size_in_x
+    queue.add(params.i_h); //size_in_y
+    queue.add(params.out_w() * params.out_h() * params.c_out); //Stride_batch_out
+    queue.add(params.out_w() * params.out_h()); //stride_c_out
+    queue.add(params.out_w()); //stride_y_out
+    queue.add(params.out_h()); //size_y_out
 
-    meta.add(input_stride[0]); //stride_batch_input
-    meta.add(input_stride[1]); //stride_c_in
-    meta.add(input_stride[2]); //stride_y_in
+    queue.add(input_stride[0]); //stride_batch_input
+    queue.add(input_stride[1]); //stride_c_in
+    queue.add(input_stride[2]); //stride_y_in
 
-    meta.add(params.padding);
-    meta.add(params.stride);
+    queue.add(params.padding);
+    queue.add(params.stride);
 
-    let pipeline = meta.get_pipeline_const(
+    let pipeline = queue.get_pipeline_const(
         Pipelines::Conv2d(get_dtype(dtype)?, Functions::Conv2dTranspose),
         const_vec,
     );
     let bind_group =
-        create_bind_group_input2(buffer_dest, input.buffer(), kernel.buffer(), dtype.into());
-    enqueue_workgroups(
-        meta,
+        dev.create_bind_group_input2(buffer_dest, input.buffer(), kernel.buffer(), dtype.into());
+    queue.enqueue_workgroups(
         pipeline,
         bind_group,
         ((params.out_w() - params.output_padding) as u32 + 15) / 16,
@@ -415,28 +412,27 @@ pub fn queue_conv1d(
         params.b_size,
         params.c_in,
     ];
-    let mut meta = get_queue(dev);
+    let mut queue = dev.get_queue();
 
-    meta.add(kernel_stride[1]); //kernel_c_stride
-    meta.add(kernel_stride[0]); //kernel_b_stride
-    meta.add(kernel.layout().start_offset());
-    meta.add(params.l_in); //size_in_x
-    meta.add(params.l_out() * params.c_out); //Stride_batch_out
-    meta.add(params.l_out()); //stride_c_out
-    meta.add(params.l_out()); //size_y_out
+    queue.add(kernel_stride[1]); //kernel_c_stride
+    queue.add(kernel_stride[0]); //kernel_b_stride
+    queue.add(kernel.layout().start_offset());
+    queue.add(params.l_in); //size_in_x
+    queue.add(params.l_out() * params.c_out); //Stride_batch_out
+    queue.add(params.l_out()); //stride_c_out
+    queue.add(params.l_out()); //size_y_out
 
-    meta.add(input_stride[0]); //stride_batch_input
-    meta.add(input_stride[1]); //stride_c_in
+    queue.add(input_stride[0]); //stride_batch_input
+    queue.add(input_stride[1]); //stride_c_in
 
-    let pipeline = meta.get_pipeline_const(
+    let pipeline = queue.get_pipeline_const(
         Pipelines::Conv1d(get_dtype(dtype)?, Functions1d::Conv1d),
         const_vec,
     );
 
     let bind_group =
-        create_bind_group_input2(buffer_dest, input.buffer(), kernel.buffer(), dtype.into());
-    enqueue_workgroups(
-        meta,
+        dev.create_bind_group_input2(buffer_dest, input.buffer(), kernel.buffer(), dtype.into());
+    queue.enqueue_workgroups(
         pipeline,
         bind_group,
         (params.l_out() as u32 + 63) / 64,
@@ -469,26 +465,25 @@ pub fn queue_conv1d_transpose(
         params.b_size,
         params.c_in,
     ];
-    let mut meta = get_queue(dev);
-    meta.add(kernel_stride[0]); //kernel_c_stride
-    meta.add(kernel_stride[1]); //kernel_b_stride
-    meta.add(kernel.layout().start_offset());
-    meta.add(params.l_in); //size_in_x
-    meta.add(params.l_out() * params.c_out); //Stride_batch_out
-    meta.add(params.l_out()); //stride_c_out
-    meta.add(params.l_out()); //size_y_out
+    let mut queue = dev.get_queue();
+    queue.add(kernel_stride[0]); //kernel_c_stride
+    queue.add(kernel_stride[1]); //kernel_b_stride
+    queue.add(kernel.layout().start_offset());
+    queue.add(params.l_in); //size_in_x
+    queue.add(params.l_out() * params.c_out); //Stride_batch_out
+    queue.add(params.l_out()); //stride_c_out
+    queue.add(params.l_out()); //size_y_out
 
-    meta.add(input_stride[0]); //stride_batch_input
-    meta.add(input_stride[1]); //stride_c_in
+    queue.add(input_stride[0]); //stride_batch_input
+    queue.add(input_stride[1]); //stride_c_in
 
-    let pipeline = meta.get_pipeline_const(
+    let pipeline = queue.get_pipeline_const(
         Pipelines::Conv1d(get_dtype(dtype)?, Functions1d::Conv1dTranspose),
         const_vec,
     );
     let bind_group =
-        create_bind_group_input2(buffer_dest, input.buffer(), kernel.buffer(), dtype.into());
-    enqueue_workgroups(
-        meta,
+        dev.create_bind_group_input2(buffer_dest, input.buffer(), kernel.buffer(), dtype.into());
+    queue.enqueue_workgroups(
         pipeline,
         bind_group,
         ((params.l_out() - params.output_padding) as u32 + 63) / 64,

@@ -268,10 +268,15 @@ impl Device {
                 #[cfg(not(feature="wgpu"))]
                 return false;
             },
+            (Device::Wgpu(_dev), DType::F16) =>  
+            {
+                #[cfg(feature="wgpu")]
+                return _dev.device_features.contains(wgpu::Features::SHADER_F16);
+                #[cfg(not(feature="wgpu"))]
+                return false;
+            },
 
-            (Device::Wgpu(_), DType::BF16) => false,
-            (Device::Wgpu(_), DType::F16) => false,
-           
+            (Device::Wgpu(_), DType::BF16) => false,   
         }
     }
 

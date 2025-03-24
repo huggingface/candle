@@ -73,18 +73,17 @@ mod transpose {
 
         let const_vec = vec![batch > 1, start_offset == 0];
 
-        let mut meta = get_queue(dev);
+        let mut queue = dev.get_queue();
 
-        meta.add(width);
-        meta.add(height);
-        meta.add(start_offset);
-        meta.add(batch_stride);
+        queue.add(width);
+        queue.add(height);
+        queue.add(start_offset);
+        queue.add(batch_stride);
 
-        let pipeline = meta.get_pipeline_const(pipeline, const_vec);
+        let pipeline = queue.get_pipeline_const(pipeline, const_vec);
 
-        let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
-        enqueue_workgroups(
-            meta,
+        let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
+        queue.enqueue_workgroups(
             pipeline,
             bind_group,
             width.div_ceil(tile_w),
@@ -145,28 +144,28 @@ mod sgemm {
             (params.b != 1) as usize,
         ];
 
-        let mut meta = get_queue(dev);
-        meta.add(params.b);
-        meta.add(params.m);
-        meta.add(params.k);
-        meta.add(params.n);
+        let mut queue = dev.get_queue();
+        queue.add(params.b);
+        queue.add(params.m);
+        queue.add(params.k);
+        queue.add(params.n);
 
-        meta.add(input1_stride_b); //input1_stride_b
-        meta.add(input1.layout().start_offset()); //input1_offset
+        queue.add(input1_stride_b); //input1_stride_b
+        queue.add(input1.layout().start_offset()); //input1_offset
 
-        meta.add(input2_stride_b); //input2_stride_b
-        meta.add(input2.layout().start_offset()); //input2_offset
+        queue.add(input2_stride_b); //input2_stride_b
+        queue.add(input2.layout().start_offset()); //input2_offset
 
-        meta.add(input1_stride_k);
-        meta.add(input1_stride_m);
-        meta.add(input2_stride_n);
-        meta.add(input2_stride_k);
+        queue.add(input1_stride_k);
+        queue.add(input1_stride_m);
+        queue.add(input2_stride_n);
+        queue.add(input2_stride_k);
 
-        let pipeline = meta.get_pipeline_const(pipeline, const_vec.clone());
+        let pipeline = queue.get_pipeline_const(pipeline, const_vec.clone());
 
         let input_alignment: BindgroupAlignment = dtype.into();
         let bind_group = if input_alignment == BindgroupAlignment::Aligned4 && is_16bytes_aligned {
-            create_bind_group_input2_with_alignment(
+            dev.create_bind_group_input2_with_alignment(
                 buffer_dest,
                 input1.buffer(),
                 input2.buffer(),
@@ -177,7 +176,7 @@ mod sgemm {
                 ),
             )
         } else {
-            create_bind_group_input2_with_alignment(
+            dev.create_bind_group_input2_with_alignment(
                 buffer_dest,
                 input1.buffer(),
                 input2.buffer(),
@@ -189,8 +188,7 @@ mod sgemm {
             )
         };
 
-        enqueue_workgroups_extra(
-            meta,
+        queue.enqueue_workgroups_extra(
             pipeline,
             bind_group,
             (params.n + 15) / 16,
@@ -568,46 +566,46 @@ mod sgemm {
             use_batch as usize,
         ];
 
-        let mut meta = get_queue(dev);
-        meta.add(params.b);
-        meta.add(if USE_DIFFERENT_PADDED_OUTPUT {
+        let mut queue = dev.get_queue();
+        queue.add(params.b);
+        queue.add(if USE_DIFFERENT_PADDED_OUTPUT {
             new_m
         } else {
             params.m
         });
-        meta.add(if USE_DIFFERENT_PADDED_OUTPUT {
+        queue.add(if USE_DIFFERENT_PADDED_OUTPUT {
             new_k
         } else {
             params.k
         });
-        meta.add(if USE_DIFFERENT_PADDED_OUTPUT {
+        queue.add(if USE_DIFFERENT_PADDED_OUTPUT {
             new_n
         } else {
             params.n
         });
 
-        meta.add(input1_stride_b); //input1_stride_b
-        meta.add(layout_input1_padded.start_offset()); //input1_offset
+        queue.add(input1_stride_b); //input1_stride_b
+        queue.add(layout_input1_padded.start_offset()); //input1_offset
 
-        meta.add(input2_stride_b); //input2_stride_b
-        meta.add(layout_input2_padded.start_offset()); //input2_offset
+        queue.add(input2_stride_b); //input2_stride_b
+        queue.add(layout_input2_padded.start_offset()); //input2_offset
 
-        meta.add(input1_stride_k);
-        meta.add(input1_stride_m);
-        meta.add(input2_stride_n);
-        meta.add(input2_stride_k);
+        queue.add(input1_stride_k);
+        queue.add(input1_stride_m);
+        queue.add(input2_stride_n);
+        queue.add(input2_stride_k);
 
         if need_different_output_buffer && !USE_DIFFERENT_PADDED_OUTPUT {
-            meta.add_const(candle_wgpu_kernels::Constants::Isoutputpadded, true);
+            queue.add_const(candle_wgpu_kernels::Constants::Isoutputpadded, true);
         }
 
-        let pipeline = meta.get_pipeline_const(pipeline, const_vec.clone());
+        let pipeline = queue.get_pipeline_const(pipeline, const_vec.clone());
         let input_alignment: BindgroupAlignment = dtype.into();
         if input_alignment != BindgroupAlignment::Aligned4 {
             panic!("matmul can only be performed with f32 and i32");
         }
 
-        let bind_group = create_bind_group_input2_with_alignment(
+        let bind_group = dev.create_bind_group_input2_with_alignment(
             buffer_dest_padded,
             buffer_input1_padded,
             buffer_input2_padded,
@@ -628,8 +626,7 @@ mod sgemm {
             ly = (new_m) / m_tile;
         }
 
-        enqueue_workgroups_extra(
-            meta,
+        queue.enqueue_workgroups_extra(
             pipeline,
             bind_group,
             lx,

@@ -38,7 +38,7 @@ impl DebugInfo {
         });
 
         let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
-            count: 4096 * 2, // We need 2 queries: one for start and one for end
+            count: wgpu::QUERY_SET_MAX_QUERIES,
             ty: wgpu::QueryType::Timestamp,
             label: None,
         });

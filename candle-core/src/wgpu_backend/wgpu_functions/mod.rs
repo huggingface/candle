@@ -16,16 +16,15 @@ pub mod where_cond;
 
 use rustc_hash::FxHasher;
 use std::{
-    hash::{Hash, Hasher},
-    num::NonZeroU64
+    collections::HashMap, hash::{Hash, Hasher}, num::NonZeroU64
 };
 
 use super::{
     cache::{
         BindgroupAlignmentLayout, BindgroupInputBase, BindgroupReferenceFull, BindgroupReferenceInput, BufferReferenceId, CachedBindgroupFull, CachedBindgroupInput, CachedBufferId, ModelCache
     }, 
-    device::{BindGroupReference, MlQueue, OpIsInplaceable, PipelineType, QueueBuffer, QueueBufferInner}, 
-    util::{FixedArray, ToU32}, 
+    queue_buffer::{BindGroupReference, MlQueue, OpIsInplaceable, QueueBuffer, QueueBufferInner}, 
+    util::{FixedArray, ToU32, ToF64}, 
     WgpuDevice
 };
 use crate::wgpu_backend::{cache::BindgroupAlignment, util::ReferenceTrait};
@@ -33,6 +32,7 @@ use tracing::{instrument, span, Level};
 
 pub use candle_wgpu_kernels::DType;
 pub use candle_wgpu_kernels::Pipelines;
+use candle_wgpu_kernels::EntryPoint;
 
 use crate::{Layout, WgpuError};
 use std::borrow::Cow;
@@ -56,10 +56,6 @@ pub use softmax::queue_softmax;
 pub use unary::{queue_unary_from_buffer_op, queue_unary_inplace_op};
 pub use upsample::{queue_upsample1d, queue_upsample2d};
 pub use where_cond::queue_where_cond;
-
-/**************** VIRTUAL COMPUTE GRAPH ****************/ 
-
-pub const MAX_DISPATCH_SIZE: u32 = 65535;
 
 #[derive(Debug, Copy, Clone)]
 pub struct WgpuTensor<'a>{
@@ -93,6 +89,17 @@ pub struct MetaArray(pub Vec<u32>);
 ///Helper Array to Construct Kernel Constants. 
 ///Kernel Constants are compiled into the kernel. 
 pub struct ConstArray(pub FixedArray<(candle_wgpu_kernels::Constants, u32), 32>);
+
+impl ConstArray {
+    pub fn to_hashmap(&self) -> HashMap<String, f64> {
+        HashMap::from_iter(
+            self
+                .0
+                .iter()
+                .map(|(k, v)| (k.get_entry_point().to_owned(), v.to_f64())),
+        )
+    }
+}
 
 //Allows objects to be added to the Meta Parameter Array
 pub trait ToKernelParameterMeta {
@@ -178,249 +185,6 @@ impl WgpuDevice{
 
         QueueBuffer::new(command_queue)
     }
-}
-
-pub fn get_queue(dev : &WgpuDevice) -> QueueBuffer {
-    dev.get_queue()
-}
-
-
-
-/**************** Enqueue Helper: ****************/ 
-///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
-pub fn enqueue_64(
-    command_queue: QueueBuffer,
-    pipeline: PipelineType,
-    bind_group: BindGroupReference,
-    length: u32,
-    workload_size: usize,
-) {
-    enqueue_64_extra(
-        command_queue,
-        pipeline,
-        bind_group,
-        length,
-        workload_size,
-        #[cfg(feature = "wgpu_debug")]
-        None,
-    )
-}
-
-///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
-///With extra debug Info when `wgpu_debug` is enabled 
-pub fn enqueue_64_extra(
-    command_queue: QueueBuffer,
-    pipeline: PipelineType,
-    bind_group: BindGroupReference,
-    length: u32,
-    workload_size: usize,
-    #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
-) {
-    enqueue_workgroups_extra(
-        command_queue,
-        pipeline,
-        bind_group,
-        length.div_ceil(64),
-        1,
-        1,
-        workload_size,
-        #[cfg(feature = "wgpu_debug")]
-        _debug,
-    )
-}
-
-///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
-///If the length is greater than 65535, more elements will be enqueued in the Y dimension.
-pub fn enqueue_64_big(
-    command_queue: QueueBuffer,
-    pipeline: PipelineType,
-    bind_group: BindGroupReference,
-    length: u32,
-) {
-    enqueue_64_big_extra(
-        command_queue,
-        pipeline,
-        bind_group,
-        length,
-        #[cfg(feature = "wgpu_debug")]
-        None,
-    )
-}
-
-///Enqueues a command with a WorkgroupSize of 64 on the X dimension.
-///If the length is greater than 65535, more elements will be enqueued in the Y dimension.
-///With extra debug Info when `wgpu_debug` is enabled 
-pub fn enqueue_64_big_extra(
-    command_queue: QueueBuffer,
-    pipeline: PipelineType,
-    bind_group: BindGroupReference,
-    length: u32,
-    #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
-) {
-    let id = length.div_ceil(64);
-    let x = id.min(65535);
-    let y = (id + 65534) / 65535;
-    enqueue_workgroups_extra(
-        command_queue,
-        pipeline,
-        bind_group,
-        x,
-        y,
-        1,
-        length as usize,
-        #[cfg(feature = "wgpu_debug")]
-        _debug,
-    )
-}
-
-///Enqueues a command with x, y and z dimension.
-fn enqueue_workgroups(
-    command_queue: QueueBuffer,
-    pipeline: PipelineType,
-    bind_group: BindGroupReference,
-    x: u32,
-    y: u32,
-    z: u32,
-    workload_size: usize,
-) {
-    enqueue_workgroups_extra(
-        command_queue,
-        pipeline,
-        bind_group,
-        x,
-        y,
-        z,
-        workload_size,
-        #[cfg(feature = "wgpu_debug")]
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-///Enqueues a command with x, y and z dimension.
-///With extra debug Info when `wgpu_debug` is enabled 
-fn enqueue_workgroups_extra(
-    mut command_queue: QueueBuffer,
-    pipeline: PipelineType,
-    bind_group: BindGroupReference,
-    x: u32,
-    y: u32,
-    z: u32,
-    workload_size: usize,
-    #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
-) {
-    if y > MAX_DISPATCH_SIZE || z > MAX_DISPATCH_SIZE || x > MAX_DISPATCH_SIZE {
-        panic!(
-            "can not queue y or z higher than 65535 x:{x}, y:{y}, z:{z}, pipeline: {:?}",
-            pipeline
-        );
-    }
-    let q = MlQueue::Dispatch(super::device::MlQueueDispatch {
-        x,
-        y,
-        z,
-        pipeline: pipeline.clone(),
-        pipeline_cached: None,
-        bindgroup: bind_group,
-        bindgroup_cached: None,
-        meta: command_queue.current_meta,
-        workload_size,
-        #[cfg(feature = "wgpu_debug")]
-        debug: _debug,
-    });
-    command_queue.command_queue.push(q);
-}
-
-
-/**************** Virtual Bindgroups: ****************/ 
-pub fn create_bind_group_input0(
-    buffer_dest: BufferReferenceId,
-    alignment: BindgroupAlignment,
-) -> BindGroupReference {
-    let alignment = BindgroupAlignmentLayout::Bindgroup0(alignment);
-    alignment.validate();
-    BindGroupReference::new(buffer_dest, BindgroupInputBase::Bindgroup0(alignment))
-}
-
-pub fn create_bind_group_input1(
-    buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    alignment: BindgroupAlignment,
-) -> BindGroupReference {
-    create_bind_group_input1_with_alignment(
-        buffer_dest,
-        buffer_input1,
-        BindgroupAlignmentLayout::Bindgroup1(alignment, alignment),
-    )
-}
-
-pub fn create_bind_group_input1_with_alignment(
-    buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    alignment: BindgroupAlignmentLayout,
-) -> BindGroupReference {
-    alignment.validate();
-    BindGroupReference::new(
-        buffer_dest,
-        BindgroupInputBase::Bindgroup1(buffer_input1, alignment),
-    )
-}
-
-pub fn create_bind_group_input2(
-    buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    buffer_input2: BufferReferenceId,
-    alignment: BindgroupAlignment,
-) -> BindGroupReference {
-    create_bind_group_input2_with_alignment(
-        buffer_dest,
-        buffer_input1,
-        buffer_input2,
-        BindgroupAlignmentLayout::Bindgroup2(alignment, alignment, alignment),
-    )
-}
-
-pub fn create_bind_group_input2_with_alignment(
-    buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    buffer_input2: BufferReferenceId,
-    alignment: BindgroupAlignmentLayout,
-) -> BindGroupReference {
-    alignment.validate();
-    BindGroupReference::new(
-        buffer_dest,
-        BindgroupInputBase::Bindgroup2(buffer_input1, buffer_input2, alignment),
-    )
-}
-
-pub fn create_bind_group_input3(
-    buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    buffer_input2: BufferReferenceId,
-    buffer_input3: BufferReferenceId,
-    alignment: BindgroupAlignment,
-) -> BindGroupReference {
-    create_bind_group_input3_with_alignment(
-        buffer_dest,
-        buffer_input1,
-        buffer_input2,
-        buffer_input3,
-        BindgroupAlignmentLayout::Bindgroup3(alignment, alignment, alignment,alignment),
-    )
-}
-
-pub fn create_bind_group_input3_with_alignment(
-    buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    buffer_input2: BufferReferenceId,
-    buffer_input3: BufferReferenceId,
-    alignment: BindgroupAlignmentLayout,
-) -> BindGroupReference {
-    alignment.validate();
-    BindGroupReference::new(
-        buffer_dest,
-        BindgroupInputBase::Bindgroup3(buffer_input1, buffer_input2, buffer_input3, alignment),
-    )
 }
 
 
@@ -692,7 +456,7 @@ fn set_buffers(
         #[cfg(feature = "wgpu_debug")]
         {
             let ele_size = *index - start_index;
-            if ele_size >= 4095 {
+            if ele_size >= wgpu::QUERY_SET_MAX_QUERIES / 2 - 1{
                 break;
             }
         }

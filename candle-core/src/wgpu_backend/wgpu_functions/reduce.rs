@@ -39,21 +39,21 @@ pub fn queue_reduce_from_buffer_op(
         stride_reduction,
     } = params;
 
-    let mut meta = get_queue(dev);
+    let mut queue = dev.get_queue();
 
     let const_vec = vec![op as u32, stride_reduction];
 
-    meta.add(reduction_length);
-    meta.add(output_to_start_stride1);
-    meta.add(output_to_start_shape_stride2);
-    meta.add(output_to_start_stride2);
-    meta.add(dest_size);
-    meta.add_layout1(layout_input1);
+    queue.add(reduction_length);
+    queue.add(output_to_start_stride1);
+    queue.add(output_to_start_shape_stride2);
+    queue.add(output_to_start_stride2);
+    queue.add(dest_size);
+    queue.add_layout1(layout_input1);
 
     let use_small_reduce = reduction_length < 16 || stride_reduction != 1;
 
     if (!use_small_reduce && dest_size > 65535) || (use_small_reduce && dest_size > 65535 * 64) {
-        meta.add_const(candle_wgpu_kernels::Constants::UseZ, true);
+        queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
     }
 
     let pipeline_type = if use_small_reduce {
@@ -72,12 +72,12 @@ pub fn queue_reduce_from_buffer_op(
         }
     };
 
-    let pipeline = meta.get_pipeline_const(
+    let pipeline = queue.get_pipeline_const(
         Pipelines::Reduce(get_dtype(dtype)?, pipeline_type),
         const_vec,
     );
 
-    let bind_group = create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
+    let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
 
     let y;
     let z;
@@ -90,8 +90,7 @@ pub fn queue_reduce_from_buffer_op(
         z = (dest_size + 65534) / 65535;
     }
 
-    enqueue_workgroups_extra(
-        meta,
+    queue.enqueue_workgroups_extra(
         pipeline,
         bind_group,
         1,

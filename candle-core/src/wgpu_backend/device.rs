@@ -1,321 +1,24 @@
-use std::collections::HashMap;
 use std::fmt;
-
-use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 use std::hash::Hash;
 
-use candle_wgpu_kernels::{Constants, EntryPoint};
 use rand::SeedableRng;
 use tracing::instrument;
 use wgpu::{Backends, InstanceDescriptor, InstanceFlags};
 
-use crate::backend::BackendStorage;
+use crate::backend::{BackendDevice, BackendStorage};
 use crate::{notImplemented, wrongType, DType, Layout};
 
 #[cfg(feature = "wgpu_debug")]
 use super::debug_info::{DebugInfo, MInfo, Measurements, ShaderInfo};
 
-use super::cache::{BindgroupLayouts, CachedBindgroupId, CachedBufferId, ModelCache};
-use super::storage::{create_wgpu_storage, create_wgpu_storage_init};
-use super::util::{ObjectToIdMapper, ToF64, ToU32};
-use super::wgpu_functions::{self, unary::UnaryOperation, MetaArray, ConstArray, ToKernelParameterMeta};
+use super::cache::{BindgroupAlignment, BindgroupAlignmentLayout, BindgroupInputBase, BindgroupLayouts, BufferReferenceId, ModelCache};
+use super::queue_buffer::{BindGroupReference, MlQueue, MlQueueDispatch, PipelineReference};
+use super::util::ToU64;
+use super::wgpu_functions::{self, unary::UnaryOperation};
 use super::WgpuStorage;
-
-#[derive(Debug)]
-pub(crate) enum MlQueue {
-    Dispatch(MlQueueDispatch),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "wgpu_debug", derive(serde::Serialize, serde::Deserialize))]
-pub struct OpIsInplaceable {
-    pub input1_inplaceable: bool,
-    pub input2_inplaceable: bool,
-}
-
-impl OpIsInplaceable {
-    pub fn new() -> Self {
-        Self {
-            input1_inplaceable: false,
-            input2_inplaceable: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(
-    any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
-    derive(serde::Serialize, serde::Deserialize)
-)]
-pub struct PipelineType(
-    pub candle_wgpu_kernels::PipelineIndex,
-    pub usize,
-    #[cfg_attr(
-        any(feature = "wgpu_debug_serialize", feature = "wgpu_debug"),
-        serde(skip)
-    )]
-    pub OpIsInplaceable,
-);
-
-pub(crate) type BindGroupReference = crate::wgpu_backend::cache::BindgroupReferenceFull;
-
-#[derive(Debug)]
-pub(crate) struct MlQueueDispatch {
-    pub(crate) x: u32,
-    pub(crate) y: u32,
-    pub(crate) z: u32,
-    pub(crate) pipeline: PipelineType,
-    pub(crate) pipeline_cached: Option<Arc<wgpu::ComputePipeline>>,
-    pub(crate) bindgroup: BindGroupReference,
-    pub(crate) bindgroup_cached: Option<CachedBindgroupId>,
-    pub(crate) meta: u32,
-    pub(crate) workload_size: usize, //the total size needed to calculate. Needed so we do not queue to many operations at once.
-    #[cfg(feature = "wgpu_debug")]
-    pub(crate) debug: Option<String>,
-}
-
-//a struct, where all operations are chunked
-#[derive(Debug)]
-pub struct QueueBufferInner {
-    pub(crate) command_queue: Vec<MlQueue>,
-    meta_array: MetaArray,
-    const_array: ConstArray,
-    const_id_map: ObjectToIdMapper<ConstArray>,
-    global_command_index: u32,
-    pub(crate) id_to_const_array: Vec<HashMap<String, f64>>,
-    pub(crate) current_meta: u32,
-    pub(crate) last_buffer: Option<CachedBufferId>, //will be used to wait for the last command queue
-}
-
-impl QueueBufferInner {
-    pub fn new(size: u32) -> Self {
-        Self {
-            command_queue: vec![],
-            meta_array: MetaArray::new(size),
-            current_meta: 0,
-            const_array: ConstArray::new(),
-            const_id_map: ObjectToIdMapper::new(),
-            id_to_const_array: Vec::new(),
-            last_buffer: None,
-            global_command_index: 1,
-        }
-    }
-
-    pub fn init(&mut self) {
-        self.const_array.0.clear();
-    }
-
-    pub fn clear(&mut self) {
-        self.command_queue.clear();
-        self.meta_array.0.clear();
-        self.init();
-        self.current_meta = 0;
-    }
-
-    pub fn get_meta(&self) -> &Vec<u32> {
-        &self.meta_array.0
-    }
-
-    pub fn get_meta_mut(&mut self) -> &mut Vec<u32> {
-        &mut self.meta_array.0
-    }
-
-    pub fn add_layout(
-        &mut self,
-        layout: &Layout,
-        is_contiguous: bool,
-        constant_dims: Constants,
-        constant_is_startofsset_zero: Constants,
-        constant_is_contiguous: Constants,
-    ) {
-        let shape = layout.shape().dims();
-        let stride = layout.stride();
-
-        self.add_const(constant_dims, shape.len());
-        if layout.start_offset() != 0 {
-            self.add_const(constant_is_startofsset_zero, false);
-            self.add(layout.start_offset());
-        }
-
-        if is_contiguous {
-            self.add(layout.shape().elem_count());
-        } else {
-            self.add_const(constant_is_contiguous, false);
-
-            self.get_meta_mut().extend(shape.iter().map(|&x| x as u32));
-            self.get_meta_mut().extend(stride.iter().map(|&x| x as u32));
-        }
-    }
-
-    pub fn add_layout1(&mut self, layout: &Layout) {
-        self.add_layout(
-            layout,
-            layout.is_contiguous(),
-            Constants::ConstDims1,
-            Constants::ConstIsStartoffsetZero1,
-            Constants::ConstIsContiguous1,
-        );
-    }
-
-    pub fn add_layout2(&mut self, layout: &Layout) {
-        self.add_layout(
-            layout,
-            layout.is_contiguous(),
-            Constants::ConstDims2,
-            Constants::ConstIsStartoffsetZero2,
-            Constants::ConstIsContiguous2,
-        );
-    }
-
-    pub fn add_layout3(&mut self, layout: &Layout) {
-        self.add_layout(
-            layout,
-            layout.is_contiguous(),
-            Constants::ConstDims3,
-            Constants::ConstIsStartoffsetZero3,
-            Constants::ConstIsContiguous3,
-        );
-    }
-
-    //forces to write the shapes and strides
-    pub fn add_layout1_non_contiguous(&mut self, layout: &Layout) {
-        self.add_layout(
-            layout,
-            false,
-            Constants::ConstDims1,
-            Constants::ConstIsStartoffsetZero1,
-            Constants::ConstIsContiguous1,
-        );
-    }
-
-    pub fn add_layout2_non_contiguous(&mut self, layout: &Layout) {
-        self.add_layout(
-            layout,
-            false,
-            Constants::ConstDims2,
-            Constants::ConstIsStartoffsetZero2,
-            Constants::ConstIsContiguous2,
-        );
-    }
-
-    pub fn add_layout3_non_contiguous(&mut self, layout: &Layout) {
-        self.add_layout(
-            layout,
-            false,
-            Constants::ConstDims3,
-            Constants::ConstIsStartoffsetZero3,
-            Constants::ConstIsContiguous3,
-        );
-    }
-
-    pub fn get_pipeline(
-        &mut self,
-        pipeline: impl Into<candle_wgpu_kernels::PipelineIndex>,
-    ) -> PipelineType {
-        let (index, is_new) = self.const_id_map.get_or_insert(&self.const_array);
-        if is_new {
-            let hmap = HashMap::from_iter(
-                self.const_array
-                    .0
-                    .iter()
-                    .map(|(k, v)| (k.get_entry_point().to_owned(), v.to_f64())),
-            );
-            self.id_to_const_array.push(hmap)
-        }
-        self.init();
-        PipelineType(pipeline.into(), index, OpIsInplaceable::new())
-    }
-
-    pub fn get_pipeline_const<T: ToU32>(
-        &mut self,
-        pipeline: impl Into<candle_wgpu_kernels::PipelineIndex>,
-        const_vec: Vec<T>,
-    ) -> PipelineType {
-        for (index, v) in const_vec.into_iter().enumerate() {
-            self.const_array
-                .0
-                .push((candle_wgpu_kernels::Constants::get_const(index), v.to_u32()));
-        }
-
-        let (index, is_new) = self.const_id_map.get_or_insert(&self.const_array);
-        if is_new {
-            let hmap = HashMap::from_iter(
-                self.const_array
-                    .0
-                    .iter()
-                    .map(|(k, v)| (k.get_entry_point().to_owned(), v.to_f64())),
-            );
-            self.id_to_const_array.push(hmap)
-        }
-        self.init();
-        PipelineType(pipeline.into(), index, OpIsInplaceable::new())
-    }
-    pub fn get_pipeline_const_inplace<T: ToU32>(
-        &mut self,
-        pipeline: impl Into<candle_wgpu_kernels::PipelineIndex>,
-        const_vec: Vec<T>,
-        inplaceable: OpIsInplaceable,
-    ) -> PipelineType {
-        for (index, v) in const_vec.into_iter().enumerate() {
-            self.const_array
-                .0
-                .push((candle_wgpu_kernels::Constants::get_const(index), v.to_u32()));
-        }
-
-        let (index, is_new) = self.const_id_map.get_or_insert(&self.const_array);
-        if is_new {
-            let hmap = HashMap::from_iter(
-                self.const_array
-                    .0
-                    .iter()
-                    .map(|(k, v)| (k.get_entry_point().to_owned(), v.to_f64())),
-            );
-            self.id_to_const_array.push(hmap)
-        }
-        self.init();
-        PipelineType(pipeline.into(), index, inplaceable)
-    }
-
-    pub fn add<T: ToKernelParameterMeta>(&mut self, value: T) {
-        self.meta_array.add(value);
-    }
-
-    pub fn add_const<T: ToU32>(&mut self, key: candle_wgpu_kernels::Constants, value: T) {
-        self.const_array.insert(key, value);
-    }
-
-    pub fn global_command_index(&self) -> u32 {
-        self.global_command_index
-    }
-
-    pub fn set_global_command_index(&mut self, global_command_index: u32) {
-        self.global_command_index = global_command_index;
-    }
-}
-
-pub struct QueueBuffer<'a>(MutexGuard<'a, QueueBufferInner>);
-
-impl<'a> QueueBuffer<'a> {
-    pub fn new(inner: MutexGuard<'a, QueueBufferInner>) -> Self {
-        QueueBuffer(inner)
-    }
-}
-
-impl Deref for QueueBuffer<'_> {
-    type Target = QueueBufferInner;
-
-    fn deref(&self) -> &Self::Target {
-        self.0.deref()
-    }
-}
-
-impl DerefMut for QueueBuffer<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.deref_mut()
-    }
-}
+use crate::wgpu_backend::queue_buffer::QueueBufferInner;
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
 #[cfg_attr(
@@ -326,7 +29,7 @@ pub struct DebugPipelineRecording {
     pub x: u32,
     pub y: u32,
     pub z: u32,
-    pub pipeline: super::device::PipelineType,
+    pub pipeline: PipelineReference,
     pub meta: Vec<u32>,
     pub bindgroup: BindGroupReference,
     pub count: u32,
@@ -463,9 +166,7 @@ impl WgpuDevice {
                 dx12: wgpu::Dx12BackendOptions {
                     shader_compiler: wgpu::Dx12Compiler::Fxc,
                 },
-                gl: wgpu::GlBackendOptions {
-                    gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
-                },
+                ..Default::default()
             }
         });
 
@@ -496,7 +197,6 @@ impl WgpuDevice {
         limits.max_storage_buffers_per_shader_stage = 5;
         limits.max_storage_buffer_binding_size = adatper_limits.max_storage_buffer_binding_size; //use as much as possible
         limits.max_buffer_size = adatper_limits.max_buffer_size; //use as much as possible
-
         if adapter_features.contains(wgpu::Features::SHADER_INT64) {
             features.insert(wgpu::Features::SHADER_INT64);
         }
@@ -677,11 +377,9 @@ impl WgpuDevice {
     }
 
     //allows to load const debug info(for simulating calls)
-    pub fn load_debug_info(&self, consts: Vec<HashMap<String, f64>>) {
+    pub fn load_debug_info(&self, consts: Vec<std::collections::HashMap<String, f64>>) {
         let mut queue = self.command_queue.lock().unwrap();
-        queue.id_to_const_array = consts;
-
-        queue.const_id_map.next_id = queue.id_to_const_array.len();
+        queue.load_debug_info(consts);
     }
 
     pub fn simulate_command(
@@ -692,7 +390,7 @@ impl WgpuDevice {
         input2_buffer: &WgpuStorage,
         input3_buffer: &WgpuStorage,
     ) {
-        let mut command_queue = wgpu_functions::get_queue(self);
+        let mut command_queue = self.get_queue();
         command_queue
             .get_meta_mut()
             .append(&mut command.meta.clone());
@@ -721,7 +419,7 @@ impl WgpuDevice {
             }
         };
 
-        let q = MlQueue::Dispatch(super::device::MlQueueDispatch {
+        let q = MlQueue::Dispatch(MlQueueDispatch {
             x: command.x,
             y: command.y,
             z: command.z,
@@ -842,18 +540,162 @@ impl WgpuDevice {
         wgpu_functions::synchronize_async(self).await
     }
 
-    pub(crate) fn is_dtype_available(&self, dtype: DType) -> bool {
+    pub fn is_dtype_available(&self, dtype: DType) -> bool {
         match dtype {
             DType::U32 => true,
             DType::F32 => true,
             DType::U8 => false,
             DType::I64 => self.device_features.contains(wgpu::Features::SHADER_INT64),
             DType::F64 => self.device_features.contains(wgpu::Features::SHADER_F64),
-
+            DType::F16 => self.device_features.contains(wgpu::Features::SHADER_F16),
             DType::BF16 => false,
-            DType::F16 => false,
         }
     }
+
+
+    
+    #[instrument(skip(self, size))]
+    pub fn alloc_uninit_size<T: ToU64>(
+        &self,
+        dtype: crate::DType,
+        size: T,
+    ) -> WgpuStorage {
+        let size = size.to_u64() * dtype.size_in_bytes() as u64;
+        let buffer;
+        {
+            let mut cache = self.cache.lock().unwrap();
+            buffer = cache.create_buffer_reference(size, true);
+        }
+        return WgpuStorage::new(buffer, self.clone(), dtype, size);
+    }
+
+    
+    #[instrument(skip(self, data))]
+    pub fn alloc_from_slice<T: bytemuck::Pod>(
+        &self,
+        dtype: crate::DType,
+        data: &[T],
+    ) -> crate::Result<WgpuStorage> {
+        let data: &[u8] = bytemuck::cast_slice(data);
+        let size = data.len();
+        let buffer;
+        {
+            if self.configuration.flush_gpu_before_buffer_init {
+                self.flush_gpu_command()?;
+            }
+            let mut cache = self.cache.lock().unwrap();
+            buffer = cache.create_buffer_reference_init(self, data, true);
+        }
+        return Ok(WgpuStorage::new(buffer, self.clone(), dtype, size as u64));
+    }
+
+
+    pub fn allocate_zeros(&self, size_in_bytes : u32) -> crate::Result<WgpuStorage>{
+        self.zeros_impl(&((size_in_bytes/4) as usize,).into(), DType::U32)
+    }
+
+
+
+    
+    /**************** Virtual Bindgroups: ****************/ 
+    pub fn create_bind_group_input0(
+        &self,
+        buffer_dest: BufferReferenceId,
+        alignment: BindgroupAlignment,
+    ) -> BindGroupReference {
+        let alignment = BindgroupAlignmentLayout::Bindgroup0(alignment);
+        alignment.validate();
+        BindGroupReference::new(buffer_dest, BindgroupInputBase::Bindgroup0(alignment))
+    }
+
+    pub fn create_bind_group_input1(
+        &self,
+        buffer_dest: BufferReferenceId,
+        buffer_input1: BufferReferenceId,
+        alignment: BindgroupAlignment,
+    ) -> BindGroupReference {
+        self.create_bind_group_input1_with_alignment(
+            buffer_dest,
+            buffer_input1,
+            BindgroupAlignmentLayout::Bindgroup1(alignment, alignment),
+        )
+    }
+
+    pub fn create_bind_group_input1_with_alignment(
+        &self,
+        buffer_dest: BufferReferenceId,
+        buffer_input1: BufferReferenceId,
+        alignment: BindgroupAlignmentLayout,
+    ) -> BindGroupReference {
+        alignment.validate();
+        BindGroupReference::new(
+            buffer_dest,
+            BindgroupInputBase::Bindgroup1(buffer_input1, alignment),
+        )
+    }
+
+    pub fn create_bind_group_input2(
+        &self,
+        buffer_dest: BufferReferenceId,
+        buffer_input1: BufferReferenceId,
+        buffer_input2: BufferReferenceId,
+        alignment: BindgroupAlignment,
+    ) -> BindGroupReference {
+        self.create_bind_group_input2_with_alignment(
+            buffer_dest,
+            buffer_input1,
+            buffer_input2,
+            BindgroupAlignmentLayout::Bindgroup2(alignment, alignment, alignment),
+        )
+    }
+
+    pub fn create_bind_group_input2_with_alignment(
+        &self,
+        buffer_dest: BufferReferenceId,
+        buffer_input1: BufferReferenceId,
+        buffer_input2: BufferReferenceId,
+        alignment: BindgroupAlignmentLayout,
+    ) -> BindGroupReference {
+        alignment.validate();
+        BindGroupReference::new(
+            buffer_dest,
+            BindgroupInputBase::Bindgroup2(buffer_input1, buffer_input2, alignment),
+        )
+    }
+
+    pub fn create_bind_group_input3(
+        &self,
+        buffer_dest: BufferReferenceId,
+        buffer_input1: BufferReferenceId,
+        buffer_input2: BufferReferenceId,
+        buffer_input3: BufferReferenceId,
+        alignment: BindgroupAlignment,
+    ) -> BindGroupReference {
+        self.create_bind_group_input3_with_alignment(
+            buffer_dest,
+            buffer_input1,
+            buffer_input2,
+            buffer_input3,
+            BindgroupAlignmentLayout::Bindgroup3(alignment, alignment, alignment,alignment),
+        )
+    }
+
+    pub fn create_bind_group_input3_with_alignment(
+        &self,
+        buffer_dest: BufferReferenceId,
+        buffer_input1: BufferReferenceId,
+        buffer_input2: BufferReferenceId,
+        buffer_input3: BufferReferenceId,
+        alignment: BindgroupAlignmentLayout,
+    ) -> BindGroupReference {
+        alignment.validate();
+        BindGroupReference::new(
+            buffer_dest,
+            BindgroupInputBase::Bindgroup3(buffer_input1, buffer_input2, buffer_input3, alignment),
+        )
+    }
+
+    
 }
 
 impl crate::backend::BackendDevice for WgpuDevice {
@@ -880,7 +722,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
         shape: &crate::Shape,
         dtype: crate::DType,
     ) -> crate::Result<Self::Storage> {
-        let buffer = create_wgpu_storage(self, dtype, shape.elem_count() * dtype.size_in_bytes());
+        let buffer = self.alloc_uninit_size(dtype, shape.elem_count());
         if shape.elem_count() > 0 {
             wgpu_functions::queue_unary_inplace_op(
                 self,
@@ -897,7 +739,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
     }
 
     fn ones_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
-        let buffer = create_wgpu_storage(self, dtype, shape.elem_count() * dtype.size_in_bytes());
+        let buffer = self.alloc_uninit_size(dtype, shape.elem_count());
 
         if shape.elem_count() > 0 {
             wgpu_functions::queue_unary_inplace_op(
@@ -919,11 +761,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
         dtype: crate::DType,
     ) -> crate::Result<Self::Storage> {
         if self.is_dtype_available(dtype) {
-            Ok(create_wgpu_storage(
-                self,
-                dtype,
-                shape.elem_count() * dtype.size_in_bytes(),
-            ))
+            Ok(self.alloc_uninit_size(dtype, shape.elem_count()))
         } else {
             wrongType!(alloc_uninit, dtype);
         }
@@ -934,11 +772,11 @@ impl crate::backend::BackendDevice for WgpuDevice {
         if T::DTYPE == crate::DType::F32 {
             let data =
                 unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, data.len()) };
-            buffer = create_wgpu_storage_init(self, T::DTYPE, data)?;
+            buffer = self.alloc_from_slice(T::DTYPE, data)?;
         } else if T::DTYPE == crate::DType::U32 {
             let data =
                 unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u32, data.len()) };
-            buffer = create_wgpu_storage_init(self, T::DTYPE, data)?;
+            buffer = self.alloc_from_slice(T::DTYPE, data)?;
         } else {
             // Panic if T is not f32 or u32
             wrongType!(storage_from_slice, T::DTYPE);
@@ -951,8 +789,8 @@ impl crate::backend::BackendDevice for WgpuDevice {
         storage: &crate::CpuStorage,
     ) -> crate::Result<Self::Storage> {
         match storage {
-            crate::CpuStorage::F32(data) => create_wgpu_storage_init(self, crate::DType::F32, data),
-            crate::CpuStorage::U32(data) => create_wgpu_storage_init(self, crate::DType::U32, data),
+            crate::CpuStorage::F32(data) => self.alloc_from_slice(crate::DType::F32, data),
+            crate::CpuStorage::U32(data) => self.alloc_from_slice(crate::DType::U32, data),
             _ => wrongType!(storage_from_cpu_storage, storage.dtype()),
         }
     }
@@ -963,16 +801,16 @@ impl crate::backend::BackendDevice for WgpuDevice {
     ) -> crate::Result<Self::Storage> {
         match storage {
             crate::CpuStorage::F32(data) => {
-                create_wgpu_storage_init(self, crate::DType::F32, &data)
+                self.alloc_from_slice(crate::DType::F32, &data)
             }
             crate::CpuStorage::U32(data) => {
-                create_wgpu_storage_init(self, crate::DType::U32, &data)
+                self.alloc_from_slice(crate::DType::U32, &data)
             }
             crate::CpuStorage::I64(data) => {
-                create_wgpu_storage_init(self, crate::DType::I64, &data)
+                self.alloc_from_slice(crate::DType::I64, &data)
             }
             crate::CpuStorage::F64(data) => {
-                create_wgpu_storage_init(self, crate::DType::F64, &data)
+                self.alloc_from_slice(crate::DType::F64, &data)
             }
             _ => wrongType!(storage_from_cpu_storage_owned, storage.dtype()),
         }
@@ -985,7 +823,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
         lo: f64,
         up: f64,
     ) -> crate::Result<Self::Storage> {
-        let buffer = create_wgpu_storage(self, dtype, shape.elem_count() * dtype.size_in_bytes());
+        let buffer = self.alloc_uninit_size(dtype, shape.elem_count());
         wgpu_functions::queue_unary_inplace_op(
             self,
             *buffer.buffer(),
@@ -1005,7 +843,7 @@ impl crate::backend::BackendDevice for WgpuDevice {
         mean: f64,
         std: f64,
     ) -> crate::Result<Self::Storage> {
-        let buffer = create_wgpu_storage(self, dtype, shape.elem_count() * dtype.size_in_bytes());
+        let buffer = self.alloc_uninit_size(dtype, shape.elem_count());
         wgpu_functions::queue_unary_inplace_op(
             self,
             *buffer.buffer(),

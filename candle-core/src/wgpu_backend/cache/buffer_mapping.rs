@@ -1,8 +1,7 @@
-use crate::wgpu_backend::{device::PipelineType, util::FixedSizeQueue};
+use super::{CachedBufferId, PipelineReference};
+use crate::wgpu_backend::util::FixedSizeQueue;
 
-use super::CachedBufferId;
-
-///Cache, that stores previously Flushed Gpu Commands, we try to use the same buffers as the last time
+///Cache, that stores previously flushed Gpu Commands, we try to use the same buffers as the last time
 #[derive(Debug)]
 pub(crate) struct BufferMappingCache {
     pub(crate) last_buffer_mappings: FixedSizeQueue<CachedBufferMappings>,
@@ -57,7 +56,7 @@ impl BufferMappingCache {
     pub(crate) fn add_new_buffer(
         &mut self,
         buffer: CachedBufferId,
-        pipeline: PipelineType,
+        pipeline: PipelineReference,
         last_size: u64,
     ) {
         if let Some(mapping) = &mut self.current_buffer_mapping {
@@ -88,13 +87,13 @@ impl BufferMappingCache {
 
 #[derive(Debug)]
 pub(crate) struct CachedBufferMapping {
-    pub(crate) pipeline: PipelineType,
+    pub(crate) pipeline: PipelineReference,
     pub(crate) used_buffer: CachedBufferId, //index in cachedBUfferMappings
     pub(crate) last_size: u64, //size of the buffer at the last run(used to determine if this buffer is growing)
 }
 
 impl CachedBufferMapping {
-    fn new(pipeline: PipelineType, used_buffer: CachedBufferId, last_size: u64) -> Self {
+    fn new(pipeline: PipelineReference, used_buffer: CachedBufferId, last_size: u64) -> Self {
         Self {
             pipeline,
             used_buffer,
@@ -123,7 +122,7 @@ impl CachedBufferMappings {
     fn add_new(
         &mut self,
         buffer: CachedBufferId,
-        pipeline: PipelineType,
+        pipeline: PipelineReference,
         last_size: u64,
         index: u32,
     ) {
@@ -144,7 +143,7 @@ impl CachedBufferMappings {
 
     pub(crate) fn get_buffer_mapping(
         &self,
-        pipeline: &PipelineType,
+        pipeline: &PipelineReference,
         index: u32,
     ) -> Option<&CachedBufferMapping> {
         if let Some(mapping) = &self.data.get(index as usize) {
