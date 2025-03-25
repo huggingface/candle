@@ -45,7 +45,7 @@ pub fn queue_binary_buffer_from_buffer(
 
         queue.get_pipeline_const_inplace(
             Pipelines::Binary(
-                get_dtype(dtype)?,
+                dev.get_dtype(dtype)?,
                 Functions::BinaryBufferFromBufferContiguousBoth,
             ),
             const_vec,
@@ -61,7 +61,7 @@ pub fn queue_binary_buffer_from_buffer(
         }
 
         queue.get_pipeline_const(
-            Pipelines::Binary(get_dtype(dtype)?, Functions::BinaryBufferFromBuffer),
+            Pipelines::Binary(dev.get_dtype(dtype)?, Functions::BinaryBufferFromBuffer),
             const_vec,
         )
     };

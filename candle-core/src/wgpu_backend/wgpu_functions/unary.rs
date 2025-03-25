@@ -94,15 +94,15 @@ pub fn queue_unary_inplace_op(
             UnaryOperation::SetZero | UnaryOperation::SetOne => {
                 if layout.shape().elem_count() % 4 == 0 && dtype.size_in_bytes() == 4 {
                     is_contiguous4 = true;
-                    Pipelines::Unary(get_dtype(dtype)?, Functions::ConstInplaceContiguous4)
+                    Pipelines::Unary(dev.get_dtype(dtype)?, Functions::ConstInplaceContiguous4)
                 } else {
-                    Pipelines::Unary(get_dtype(dtype)?, Functions::ConstInplaceContiguous)
+                    Pipelines::Unary(dev.get_dtype(dtype)?, Functions::ConstInplaceContiguous)
                 }
             }
             UnaryOperation::RandNormal | UnaryOperation::RandUniform => {
-                Pipelines::Unary(get_dtype(dtype)?, Functions::RandInplaceContiguous)
+                Pipelines::Unary(dev.get_dtype(dtype)?, Functions::RandInplaceContiguous)
             }
-            _ => Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryInplaceContiguous),
+            _ => Pipelines::Unary(dev.get_dtype(dtype)?, Functions::UnaryInplaceContiguous),
         };
 
         let length = if is_contiguous4 {
@@ -176,7 +176,7 @@ pub fn queue_unary_from_buffer_op(
         }
 
         queue.get_pipeline_const_inplace(
-            Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryFromBufferContiguous),
+            Pipelines::Unary(dev.get_dtype(dtype)?, Functions::UnaryFromBufferContiguous),
             const_vec,
             inplaceable,
         )
@@ -192,7 +192,7 @@ pub fn queue_unary_from_buffer_op(
         }
 
         queue.get_pipeline_const(
-            Pipelines::Unary(get_dtype(dtype)?, Functions::UnaryFromBuffer),
+            Pipelines::Unary(dev.get_dtype(dtype)?, Functions::UnaryFromBuffer),
             const_vec,
         )
     };

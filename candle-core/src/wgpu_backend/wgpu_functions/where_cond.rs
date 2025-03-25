@@ -19,21 +19,21 @@ pub fn queue_where_cond(
     let (pipeline, cond_alignment) = match cond_type {
         crate::DType::U32 => (
             Pipelines::WhereCond(
-                get_dtype(dtype)?,
+                dev.get_dtype(dtype)?,
                 candle_wgpu_kernels::where_cond::Functions::WhereCondIndexU32,
             ),
             cond_type.into(),
         ),
         crate::DType::I64 => (
             Pipelines::WhereCondi64(
-                get_dtype(dtype)?,
+                dev.get_dtype(dtype)?,
                 candle_wgpu_kernels::where_condi64::Functions::WhereCondIndexI64,
             ),
             cond_type.into(),
         ),
         crate::DType::U8 => (
             Pipelines::WhereCond(
-                get_dtype(dtype)?,
+                dev.get_dtype(dtype)?,
                 candle_wgpu_kernels::where_cond::Functions::WhereCondIndexU8,
             ),
             crate::DType::U32.into(),

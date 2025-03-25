@@ -92,7 +92,7 @@ impl BindgroupAlignmentLayout {
             Bindgroup3(Aligned16, Aligned16, Aligned16, Aligned16) => 20,
             Bindgroup3(Aligned4, Aligned8, Aligned4, Aligned4) => 21,
             Bindgroup3(Aligned8, Aligned4, Aligned8, Aligned8) => 22,
-            _ => todo!(),
+            _ => todo!("Bindgroup {:?} not yet implemented", self),
         }
     }
 }

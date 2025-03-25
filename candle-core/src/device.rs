@@ -249,34 +249,12 @@ impl Device {
             (Device::Cpu, _) => true,
             (Device::Cuda(_), _) => true,
             (Device::Metal(_), _) => true,
-            (Device::Wgpu(_), DType::U32) => true,
-            (Device::Wgpu(_), DType::F32) => true,
-
-            (Device::Wgpu(_), DType::U8) => false,
-           
-            (Device::Wgpu(_dev), DType::I64) => 
-            {
+            (Device::Wgpu(_dev), dtype) => {
                 #[cfg(feature="wgpu")]
-                return _dev.device_features.contains(wgpu::Features::SHADER_INT64);
+                return _dev.is_dtype_available(dtype);
                 #[cfg(not(feature="wgpu"))]
                 return false;
-            }
-            (Device::Wgpu(_dev), DType::F64) =>  
-            {
-                #[cfg(feature="wgpu")]
-                return _dev.device_features.contains(wgpu::Features::SHADER_F64);
-                #[cfg(not(feature="wgpu"))]
-                return false;
-            },
-            (Device::Wgpu(_dev), DType::F16) =>  
-            {
-                #[cfg(feature="wgpu")]
-                return _dev.device_features.contains(wgpu::Features::SHADER_F16);
-                #[cfg(not(feature="wgpu"))]
-                return false;
-            },
-
-            (Device::Wgpu(_), DType::BF16) => false,   
+            }, 
         }
     }
 

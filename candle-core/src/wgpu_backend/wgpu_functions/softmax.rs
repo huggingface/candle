@@ -23,7 +23,7 @@ pub fn queue_softmax(
     }
 
     let pipeline = queue.get_pipeline_const(
-        Pipelines::Softmax(get_dtype(dtype)?, Functions::Softmax),
+        Pipelines::Softmax(dev.get_dtype(dtype)?, Functions::Softmax),
         const_vec,
     );
 

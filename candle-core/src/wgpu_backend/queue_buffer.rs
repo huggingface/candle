@@ -321,6 +321,7 @@ impl<'a> QueueBuffer<'a> {
         pipeline: PipelineReference,
         bind_group: BindGroupReference,
         length: u32,
+        //workload_size is the total size needed to calculate. Needed so we do not queue to many operations at once.
         workload_size: usize,
     ) {
         self.enqueue_64_extra(
@@ -340,6 +341,7 @@ impl<'a> QueueBuffer<'a> {
         pipeline: PipelineReference,
         bind_group: BindGroupReference,
         length: u32,
+        //workload_size is the total size needed to calculate. Needed so we do not queue to many operations at once.
         workload_size: usize,
         #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
     ) {
@@ -405,6 +407,7 @@ impl<'a> QueueBuffer<'a> {
         x: u32,
         y: u32,
         z: u32,
+        //workload_size is the total size needed to calculate. Needed so we do not queue to many operations at once.
         workload_size: usize,
     ) {
         self.enqueue_workgroups_extra(
@@ -429,6 +432,7 @@ impl<'a> QueueBuffer<'a> {
         x: u32,
         y: u32,
         z: u32,
+        //workload_size is the total size needed to calculate. Needed so we do not queue to many operations at once.
         workload_size: usize,
         #[cfg(feature = "wgpu_debug")] _debug: Option<String>,
     ) {

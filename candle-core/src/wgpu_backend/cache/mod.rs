@@ -104,8 +104,8 @@ impl From<crate::DType> for BindgroupAlignment {
             crate::DType::U8 => panic!("alignment not supported"),
             crate::DType::U32 => BindgroupAlignment::Aligned4,
             crate::DType::I64 => BindgroupAlignment::Aligned8,
-            crate::DType::BF16 => BindgroupAlignment::Aligned2,
-            crate::DType::F16 => BindgroupAlignment::Aligned2,
+            crate::DType::BF16 => BindgroupAlignment::Aligned4,
+            crate::DType::F16 => BindgroupAlignment::Aligned4,
             crate::DType::F32 => BindgroupAlignment::Aligned4,
             crate::DType::F64 => BindgroupAlignment::Aligned8,
         }

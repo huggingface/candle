@@ -29,7 +29,7 @@ pub fn queue_upsample1d(
     queue.add(target_size);
 
     let pipeline = queue.get_pipeline(Pipelines::Upsample(
-        get_dtype(dtype)?,
+        dev.get_dtype(dtype)?,
         Functions::Upsample1d,
     ));
 
@@ -77,7 +77,7 @@ pub fn queue_upsample2d(
     queue.add(target_size.1);
 
     let pipeline = queue.get_pipeline(Pipelines::Upsample(
-        get_dtype(dtype)?,
+        dev.get_dtype(dtype)?,
         Functions::Upsample2d,
     ));
 

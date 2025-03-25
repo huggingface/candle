@@ -75,6 +75,9 @@ impl WgpuStorage {
             crate::DType::F64 => Ok(crate::CpuStorage::F64(
                 read_from_buffer_reference_async(&self.wgpu_device, self.buffer).await?,
             )),
+            crate::DType::F16 => Ok(crate::CpuStorage::F16(
+                read_from_buffer_reference_async(&self.wgpu_device, self.buffer).await?,
+            )),
             _ => todo!(),
         }
     }
@@ -449,6 +452,42 @@ impl crate::backend::BackendStorage for WgpuStorage {
                 let buffer_dest =
                     self.device().alloc_uninit_size(DType::U8, layout.shape().elem_count() * 4);
                 wgpu_functions::queue_convert_f32_to_u8(
+                    self.device(),
+                    buffer_dest.buffer,
+                    self.buffer,
+                    layout.start_offset() as u32,
+                    layout.shape().elem_count() as u32,
+                )?;
+                Ok(buffer_dest)
+            }
+            (DType::F32, DType::F16) => {
+                if !layout.is_contiguous() {
+                    panic!(
+                        "conversion from {:?} to {:?} not suported for non contiguous matrix",
+                        self.dtype, dtype
+                    );
+                }
+                let buffer_dest =
+                    self.device().alloc_uninit_size(DType::F16, layout.shape().elem_count());
+                wgpu_functions::queue_convert_f32_to_f16(
+                    self.device(),
+                    buffer_dest.buffer,
+                    self.buffer,
+                    layout.start_offset() as u32,
+                    layout.shape().elem_count() as u32,
+                )?;
+                Ok(buffer_dest)
+            }
+            (DType::F16, DType::F32) => {
+                if !layout.is_contiguous() {
+                    panic!(
+                        "conversion from {:?} to {:?} not suported for non contiguous matrix",
+                        self.dtype, dtype
+                    );
+                }
+                let buffer_dest =
+                    self.device().alloc_uninit_size(DType::F32, layout.shape().elem_count());
+                wgpu_functions::queue_convert_f16_to_f32(
                     self.device(),
                     buffer_dest.buffer,
                     self.buffer,

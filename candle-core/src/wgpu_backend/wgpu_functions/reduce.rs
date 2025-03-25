@@ -73,7 +73,7 @@ pub fn queue_reduce_from_buffer_op(
     };
 
     let pipeline = queue.get_pipeline_const(
-        Pipelines::Reduce(get_dtype(dtype)?, pipeline_type),
+        Pipelines::Reduce(dev.get_dtype(dtype)?, pipeline_type),
         const_vec,
     );
 

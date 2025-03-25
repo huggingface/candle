@@ -40,21 +40,21 @@ mod transpose {
         let tile_h;
         if width % 32 == 0 && height % 32 == 0 {
             pipeline = Pipelines::Tranpose3232(
-                get_dtype(dtype)?,
+                dev.get_dtype(dtype)?,
                 candle_wgpu_kernels::sgemm::tranpose32_32::Functions::TransposeBatched,
             );
             tile_w = 32;
             tile_h = 32;
         } else if width % 24 == 0 && height % 24 == 0 {
             pipeline = Pipelines::Tranpose2424(
-                get_dtype(dtype)?,
+                dev.get_dtype(dtype)?,
                 candle_wgpu_kernels::sgemm::tranpose24_24::Functions::TransposeBatched,
             );
             tile_w = 24;
             tile_h = 24;
         } else if width % 16 == 0 && height % 16 == 0 {
             pipeline = Pipelines::Tranpose1616(
-                get_dtype(dtype)?,
+                dev.get_dtype(dtype)?,
                 candle_wgpu_kernels::sgemm::tranpose16_16::Functions::TransposeBatched,
             );
             tile_w = 16;
@@ -822,7 +822,7 @@ pub fn queue_matmul_buffer_alg(
     cdtype: crate::DType,
     alg: MatmulAlgorithm,
 ) -> crate::Result<()> {
-    let dtype = get_dtype(cdtype)?;
+    let dtype = dev.get_dtype(cdtype)?;
     match alg {
         MatmulAlgorithm::MatmulX => {
             return queue_matmul_buffer_best(dev, buffer_dest, input1, input2, params, cdtype)

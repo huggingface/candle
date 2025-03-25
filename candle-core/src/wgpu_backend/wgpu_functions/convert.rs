@@ -63,6 +63,45 @@ pub fn queue_convert_f32_to_u8(
     Ok(())
 }
 
+pub fn queue_convert_f32_to_f16(
+    dev: &WgpuDevice,
+    buffer_dest: BufferReferenceId,
+    buffer_input: BufferReferenceId,
+    start_offset: u32,
+    size: u32,
+) -> crate::Result<()> {
+    let mut queue = dev.get_queue();
+    queue.add(start_offset);
+    queue.add(size);
+
+    let pipeline = queue.get_pipeline(Pipelines::Convert(DType::F32, Functions::ConvertF32ToF16));
+
+    let bind_group =
+        dev.create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned4);
+    queue.enqueue_64(pipeline, bind_group, (size + 1) / 2, size as usize);
+    Ok(())
+}
+
+pub fn queue_convert_f16_to_f32(
+    dev: &WgpuDevice,
+    buffer_dest: BufferReferenceId,
+    buffer_input: BufferReferenceId,
+    start_offset: u32,
+    size: u32,
+) -> crate::Result<()> {
+    let mut queue = dev.get_queue();
+    queue.add(start_offset);
+    queue.add(size);
+
+    let pipeline = queue.get_pipeline(Pipelines::Convert(DType::F32, Functions::ConvertF16ToF32));
+
+    let bind_group =
+        dev.create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned4);
+    queue.enqueue_64(pipeline, bind_group, (size + 1) / 2, size as usize);
+    Ok(())
+}
+
+
 pub fn queue_convert(
     dev: &WgpuDevice,
     buffer_dest: BufferReferenceId,
@@ -75,14 +114,14 @@ pub fn queue_convert(
     queue.add_layout1(input_layout);
 
     let pipeline = match dest_dtype {
-        crate::DType::U32 => Pipelines::Convert(get_dtype(input_dtype)?, Functions::ConvertToU32),
-        crate::DType::F32 => Pipelines::Convert(get_dtype(input_dtype)?, Functions::ConvertToF32),
+        crate::DType::U32 => Pipelines::Convert(dev.get_dtype(input_dtype)?, Functions::ConvertToU32),
+        crate::DType::F32 => Pipelines::Convert(dev.get_dtype(input_dtype)?, Functions::ConvertToF32),
         crate::DType::I64 => Pipelines::ConvertToI64(
-            get_dtype(input_dtype)?,
+            dev.get_dtype(input_dtype)?,
             candle_wgpu_kernels::convert_to_i64::Functions::ConvertToI64,
         ),
         crate::DType::F64 => Pipelines::ConvertToF64(
-            get_dtype(input_dtype)?,
+            dev.get_dtype(input_dtype)?,
             candle_wgpu_kernels::convert_to_f64::Functions::ConvertToF64,
         ),
         _ => wgpuError!(format!("to dtype: {:?} cannot be converted ", dest_dtype)),

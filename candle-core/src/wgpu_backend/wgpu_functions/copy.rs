@@ -49,7 +49,7 @@ pub fn queue_copy_strided(
         }
 
         let pipeline =
-            queue.get_pipeline(Pipelines::Copy(get_dtype(dtype)?, Functions::CopyStrided));
+            queue.get_pipeline(Pipelines::Copy(dev.get_dtype(dtype)?, Functions::CopyStrided));
 
         let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
         queue.enqueue_64_big_extra(
@@ -103,7 +103,7 @@ pub fn queue_copy(
             }
 
             let pipeline = queue.get_pipeline_const_inplace(
-                Pipelines::Copy(get_dtype(dtype)?, Functions::Copy4),
+                Pipelines::Copy(dev.get_dtype(dtype)?, Functions::Copy4),
                 const_vec,
                 inplaceble,
             );
@@ -121,7 +121,7 @@ pub fn queue_copy(
                 queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
             }
             let pipeline = queue.get_pipeline_const_inplace(
-                Pipelines::Copy(get_dtype(dtype)?, Functions::Copy),
+                Pipelines::Copy(dev.get_dtype(dtype)?, Functions::Copy),
                 const_vec,
                 inplaceble,
             );
@@ -178,7 +178,7 @@ pub fn queue_copy2d(
         queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
 
         let pipeline = queue.get_pipeline_const(
-            Pipelines::Copy(get_dtype(dtype)?, Functions::Copy2dTranspose),
+            Pipelines::Copy(dev.get_dtype(dtype)?, Functions::Copy2dTranspose),
             const_vec,
         );
         queue.enqueue_workgroups(
@@ -194,7 +194,7 @@ pub fn queue_copy2d(
             queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
         }
         let pipeline = queue.get_pipeline_const(
-            Pipelines::Copy(get_dtype(dtype)?, Functions::Copy2d),
+            Pipelines::Copy(dev.get_dtype(dtype)?, Functions::Copy2d),
             const_vec,
         );
         queue.enqueue_workgroups(
@@ -255,7 +255,7 @@ pub fn queue_copy3d(
     let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
 
     let pipeline = queue.get_pipeline_const(
-        Pipelines::Copy(get_dtype(dtype)?, Functions::Copy3d),
+        Pipelines::Copy(dev.get_dtype(dtype)?, Functions::Copy3d),
         const_vec,
     );
     queue.enqueue_workgroups(
@@ -323,7 +323,7 @@ pub fn queue_copy3d_padded(
         Functions::Copy3dPadded
     };
     let pipeline =
-        queue.get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, pipeline), const_vec);
+        queue.get_pipeline_const(Pipelines::Copy(dev.get_dtype(dtype)?, pipeline), const_vec);
     queue.enqueue_workgroups_extra(
         pipeline,
         bind_group,
@@ -359,7 +359,7 @@ pub fn queue_transpose3d(
     let pipeline = Functions::TransposeBatched;
 
     let pipeline =
-        queue.get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, pipeline), const_vec);
+        queue.get_pipeline_const(Pipelines::Copy(dev.get_dtype(dtype)?, pipeline), const_vec);
 
     queue.enqueue_workgroups(
         pipeline,
@@ -425,7 +425,7 @@ pub fn queue_copy4d_padded(
     let pipeline = Functions::Copy4dPadded;
 
     let pipeline =
-        queue.get_pipeline_const(Pipelines::Copy(get_dtype(dtype)?, pipeline), const_vec);
+        queue.get_pipeline_const(Pipelines::Copy(dev.get_dtype(dtype)?, pipeline), const_vec);
     queue.enqueue_workgroups(
         pipeline,
         bind_group,

@@ -184,7 +184,7 @@ pub fn queue_conv2d(
     };
 
     let pipeline = queue.get_pipeline_const(
-        Pipelines::Conv2d(get_dtype(dtype)?, pipeline_function),
+        Pipelines::Conv2d(dev.get_dtype(dtype)?, pipeline_function),
         const_vec,
     );
 
@@ -276,7 +276,7 @@ pub fn queue_conv2d_matmul(
 
     let im2col_buffer;
     let pipeline = queue.get_pipeline_const(
-        Pipelines::Conv2d(get_dtype(dtype)?, Functions::Im2col),
+        Pipelines::Conv2d(dev.get_dtype(dtype)?, Functions::Im2col),
         const_vec,
     );
     {
@@ -370,7 +370,7 @@ pub fn queue_conv2d_transpose(
     queue.add(params.stride);
 
     let pipeline = queue.get_pipeline_const(
-        Pipelines::Conv2d(get_dtype(dtype)?, Functions::Conv2dTranspose),
+        Pipelines::Conv2d(dev.get_dtype(dtype)?, Functions::Conv2dTranspose),
         const_vec,
     );
     let bind_group =
@@ -426,7 +426,7 @@ pub fn queue_conv1d(
     queue.add(input_stride[1]); //stride_c_in
 
     let pipeline = queue.get_pipeline_const(
-        Pipelines::Conv1d(get_dtype(dtype)?, Functions1d::Conv1d),
+        Pipelines::Conv1d(dev.get_dtype(dtype)?, Functions1d::Conv1d),
         const_vec,
     );
 
@@ -478,7 +478,7 @@ pub fn queue_conv1d_transpose(
     queue.add(input_stride[1]); //stride_c_in
 
     let pipeline = queue.get_pipeline_const(
-        Pipelines::Conv1d(get_dtype(dtype)?, Functions1d::Conv1dTranspose),
+        Pipelines::Conv1d(dev.get_dtype(dtype)?, Functions1d::Conv1dTranspose),
         const_vec,
     );
     let bind_group =

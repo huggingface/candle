@@ -29,17 +29,6 @@ fn convert_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
 #endif
 
 
-
-
-
-
-
-
-
-
-
-
-
 #ifdef u8
 
 @compute
@@ -133,5 +122,41 @@ fn convert_f32_to_u8(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     v_dest_u32[id_dest] = (x4 << 24) | (x3 << 16) | (x2 << 8) | x1;
 }
+
+
+#ifdef f32
+@compute
+@workgroup_size(64,1,1)
+fn convert_f32_to_f16(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x * 2;
+    if (id >= convert_size ){
+        return;
+    }
+    var x1 : u32 = 0;
+    var x2 : u32 = 0;
+    if (id + 0 < convert_size){
+       x1 = float_to_half(v_input1[id]);
+    }
+    if (id + 1 < convert_size){
+       x2 = float_to_half(v_input1[id + 1]);
+    }
+    v_dest_u32[global_id.x] = (x2 << 16) | (x1);
+}
+
+@compute
+@workgroup_size(64,1,1)
+fn convert_f16_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x * 2;
+    if (id >= convert_size){
+        return;
+    }
+    let x = v_input1_u32[id / 2];
+    let x1 = half_to_float(x & 0xFFFF);
+    let x2 = half_to_float(x >> 16);
+    v_dest[id] = x1;
+    v_dest[id + 1] = x2;
+}
+
+
 
 #endif

@@ -26,7 +26,7 @@ pub fn queue_cmp_buffer_from_buffer(
     queue.add_layout2(input2.layout());
 
     let pipeline = queue.get_pipeline(Pipelines::Cmp(
-        get_dtype(dtype)?,
+        dev.get_dtype(dtype)?,
         Functions::CmpBufferFromBuffer,
     ));
 

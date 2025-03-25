@@ -44,6 +44,7 @@ pub use conv2d::{queue_conv1d, queue_conv1d_transpose, queue_conv2d, queue_conv2
 pub use convert::{
     queue_convert, queue_convert_f32_to_u8,
     queue_convert_u32_to_u8, queue_convert_u8_to_f32,
+    queue_convert_f32_to_f16, queue_convert_f16_to_f32
 };
 pub use copy::{queue_copy, queue_copy2d, queue_copy3d, queue_copy3d_padded, queue_copy_strided, queue_transpose3d};
 pub use gather::{queue_gather, queue_index_add_inplace, queue_scatter_add_inplace};
@@ -139,21 +140,6 @@ impl Default for ConstArray {
 }
 
 
-pub fn get_dtype(dtype: crate::DType) -> crate::Result<DType> {
-    match dtype {
-        crate::DType::U8 => Ok(DType::U8),
-        crate::DType::U32 => Ok(DType::U32),
-        crate::DType::F32 => Ok(DType::F32),
-        crate::DType::I64 => Ok(DType::I64),
-        crate::DType::F64 => Ok(DType::F64),
-        _ => Err(crate::Error::Wgpu(WgpuError::from(format!(
-            "Dtype {:?} not supported on wgpu",
-            dtype
-        )))),
-    }
-}
-
-
 fn next_divisible_by_n<T: num_traits::Num + Clone>(value: T, n: T) -> T {
     if n.is_zero() {
         panic!("n must be a non-zero integer");
@@ -185,6 +171,27 @@ impl WgpuDevice{
 
         QueueBuffer::new(command_queue)
     }
+
+    ///Returns the candle-wgpu-kernels::DType for the given dtype if available on this device.
+    pub fn get_dtype(&self, dtype: crate::DType) -> crate::Result<DType> {
+        match (dtype, self.is_dtype_available(dtype)) {
+            (crate::DType::U8, true) => Ok(DType::U8),
+            (crate::DType::U32, true) => Ok(DType::U32),
+            (crate::DType::F32, true) => Ok(DType::F32),
+            (crate::DType::I64, true) => Ok(DType::I64),
+            (crate::DType::F64, true) => Ok(DType::F64),
+            (crate::DType::F16, true) => Ok(DType::F16),
+            (crate::DType::BF16, _) | (crate::DType::U8, _) => Err(crate::Error::Wgpu(WgpuError::from(format!(
+                "Dtype {:?} not supported on wgpu",
+                dtype
+            )))),
+            (_, false) => Err(crate::Error::Wgpu(WgpuError::from(format!(
+                "Dtype {:?} not supported on this wgpu device",
+                dtype
+            )))),
+        }
+    }
+    
 }
 
 

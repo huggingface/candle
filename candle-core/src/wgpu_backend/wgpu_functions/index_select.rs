@@ -36,11 +36,11 @@ pub fn queue_index_select(
 
     let pipeline = match index_dtype {
         crate::DType::U32 => Pipelines::IndexSelect(
-            get_dtype(dtype)?,
+            dev.get_dtype(dtype)?,
             candle_wgpu_kernels::index_select::Functions::IndexSelectU32,
         ),
         crate::DType::I64 => Pipelines::IndexSelecti64(
-            get_dtype(dtype)?,
+            dev.get_dtype(dtype)?,
             candle_wgpu_kernels::index_selecti64::Functions::IndexSelectI64,
         ),
         _ => wgpuError!(format!(

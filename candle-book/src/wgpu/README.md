@@ -35,7 +35,7 @@ To address this limitation, the `buffer_cached_max_allowed_size` property is inc
 | u8                          | ⚠️ Only Output of Cmp                            | *Only f32, I32 and U32 are available in a webGpu shader            |
 | i64                         | ⚠️ Supported Native                              |                                                                    |
 | f64                         | ⚠️ Supported Native                              |                                                                    |
-| f16                         | ❌ Not Supported                                 |                                                                    |
+| f16                         | ⚠️ Only in Quantized Matrices                    |                                                                    |
 | bf16                        | ❌ Not Supported                                 |                                                                    |
 | **<span style="color:#1E90FF">Operations</span>**              |                                                 |   All operations support non-contiguous arrays                                                                   |
 | Unary Operations            | ✅ Supported                                     |                                                   |
@@ -54,10 +54,9 @@ To address this limitation, the `buffer_cached_max_allowed_size` property is inc
 | Gather                      | ✅ Supported                               |                                                                    |
 | Scatter_add                 | ✅ Supported                               |                                                                    |
 | Index_add                   | ✅ Supported                              |                                                                    |
+| Quantized Matrices          | ✅ Supported                                  |                                                                    |
 | **<span style="color:#1E90FF">Not Implemented</span>**        |                                                 |                                                                    |
 | ArgSort                     | ❌ Not Implemented                               |                                                                    |
-| Quantized Matrices          | ❌ Not Supported?                                 |                                                                    |
-
 
 
 # Usage in the Browser

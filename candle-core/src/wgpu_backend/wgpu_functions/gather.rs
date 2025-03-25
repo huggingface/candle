@@ -15,7 +15,7 @@ pub fn queue_gather(
     queue.add_layout1_non_contiguous(input.layout());
     queue.add_layout2_non_contiguous(index.layout());
 
-    let pipeline = queue.get_pipeline(Pipelines::Gather(get_dtype(dtype)?, Functions::Gather));
+    let pipeline = queue.get_pipeline(Pipelines::Gather(dev.get_dtype(dtype)?, Functions::Gather));
 
     let bind_group =
         dev.create_bind_group_input2(buffer_dest, input.buffer(), index.buffer(), dtype.into());
@@ -49,7 +49,7 @@ pub fn queue_scatter_add_inplace(
     queue.add_layout3_non_contiguous(src.layout());
 
     let pipeline = queue.get_pipeline(Pipelines::Gather(
-        get_dtype(dtype)?,
+        dev.get_dtype(dtype)?,
         Functions::ScatterAddInplace,
     ));
 
@@ -85,7 +85,7 @@ pub fn queue_index_add_inplace(
     queue.add_layout3_non_contiguous(src.layout());
 
     let pipeline = queue.get_pipeline(Pipelines::Gather(
-        get_dtype(dtype)?,
+        dev.get_dtype(dtype)?,
         Functions::IndexAddInplace,
     ));
 
