@@ -2,7 +2,7 @@
 
 Uses `THUDM/chatglm3-6b` to generate chinese text. Will not generate text for english (usually).
  
-## Sentence embeddings
+## Text Generation
 
 ```bash
 cargo run --example chatglm --release  -- --prompt "部署门槛较低等众多优秀特 "
