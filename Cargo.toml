@@ -44,28 +44,28 @@ candle-transformers = { path = "./candle-transformers", version = "0.8.4" }
 clap = { version = "4.2.4", features = ["derive"] }
 criterion = { version = "0.5.1", default-features=false }
 cudarc = { version = "0.13.5", features = ["std", "cublas", "cublaslt", "curand", "driver", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-linking"], default-features=false }
-fancy-regex = "0.13.0"
-gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
+fancy-regex = "0.14.0"
+gemm = { version = "0.18.2", features = ["wasm-simd128-enable"] }
 hf-hub = "0.4.1"
 half = { version = "2.5.0", features = ["num-traits", "use-intrinsics", "rand_distr"] }
 hound = "3.5.1"
 image = { version = "0.25.2", default-features = false, features = ["jpeg", "png"] }
-imageproc = { version = "0.24.0", default-features = false }
+imageproc = { version = "0.25.0", default-features = false }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
 libc = { version = "0.2.147" }
 log = "0.4"
 memmap2 = { version = "0.9.3", features = ["stable_deref_trait"] }
 num_cpus = "1.15.0"
 num-traits = "0.2.15"
-parquet = { version = "51.0.0" }
+parquet = { version = "54.3.0" }
 rand = "0.9.0"
 rand_distr = "0.5.1"
 rayon = "1.7.0"
-safetensors = "0.4.1"
+safetensors = "0.5.3"
 serde = { version = "1.0.171", features = ["derive"] }
 serde_plain = "1.0.2"
 serde_json = "1.0.99"
-thiserror = "1"
+thiserror = "2.0.12"
 tokenizers = { version = "0.21.0", default-features = false }
 tracing = "0.1.37"
 tracing-chrome = "0.7.1"
@@ -73,9 +73,9 @@ tracing-subscriber = "0.3.7"
 ug = "0.1.0"
 ug-cuda = "0.1.0"
 ug-metal = "0.1.0"
-yoke = { version = "0.7.2", features = ["derive"] }
-zip = { version = "1.1.1", default-features = false }
-metal = { version = "0.27.0", features = ["mps"]}
+yoke = { version = "0.8.0", features = ["derive"] }
+zip = { version = "2.5.0", default-features = false }
+metal = { version = "0.32.0", features = ["mps"]}
 
 [profile.release-with-debug]
 inherits = "release"
