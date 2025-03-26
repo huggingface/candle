@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
-use rand::distributions::Uniform;
-use rand::{thread_rng, Rng};
+use rand::distr::Uniform;
+use rand::{rng, Rng};
 
 use candle::{DType, Device, Module, Result, Tensor};
 use candle_nn::loss::mse;
@@ -65,8 +65,8 @@ pub fn run() -> Result<()> {
         // fed to the model so that it performs a backward pass.
         if memory.len() > BATCH_SIZE {
             // Sample randomly from the memory.
-            let batch = thread_rng()
-                .sample_iter(Uniform::from(0..memory.len()))
+            let batch = rng()
+                .sample_iter(Uniform::try_from(0..memory.len()).unwrap())
                 .take(BATCH_SIZE)
                 .map(|i| memory.get(i).unwrap().clone())
                 .collect::<Vec<_>>();
