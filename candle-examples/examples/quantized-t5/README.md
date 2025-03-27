@@ -1,5 +1,7 @@
 # candle-quantized-t5
 
+Candle implemenation for quantizing and running T5 translation models.
+
 ## Seq2Seq example
 
 This example uses a quantized version of the t5 model.

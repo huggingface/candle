@@ -1,5 +1,7 @@
 # candle-yi
 
+Candle implentations of the Yi family of bilingual(English, Chinese) LLMs.
+
 ## Running an example
 
 ```bash

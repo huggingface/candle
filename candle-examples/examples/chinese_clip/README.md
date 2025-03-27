@@ -1,5 +1,8 @@
 # candle-chinese-clip
 
+Contrastive Language-Image Pre-Training (CLIP) is an architecture trained on
+pairs of images with related texts. This one is trained using in chinese instead of english.
+
 ## Running on cpu
 
 ```bash

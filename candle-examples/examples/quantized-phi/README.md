@@ -1,5 +1,7 @@
 # candle-quantized-phi
 
+Candle implementation of various quantized Phi models.
+
 ## Running an example
 
 ```bash

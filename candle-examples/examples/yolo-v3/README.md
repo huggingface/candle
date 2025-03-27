@@ -1,9 +1,11 @@
-# candle-yolo-v8:
+# candle-yolo-v3:
+
+Candle implementation of Yolo-V3 for object detection.
 
 ## Running an example
 
 ```bash
-$ cargo run --example yolo-v8 --release -- candle-examples/examples/yolo-v8/assets/bike.jpg
+$ cargo run --example yolo-v3 --release -- candle-examples/examples/yolo-v8/assets/bike.jpg
 
 > generated predictions Tensor[dims 10647, 85; f32]
 > person: Bbox { xmin: 46.362198, ymin: 72.177, xmax: 135.92522, ymax: 339.8356, confidence: 0.99705493, data: () }

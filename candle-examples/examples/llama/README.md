@@ -1,5 +1,7 @@
 # candle-llama
 
+Candle implementations of various Llama based architectures.
+
 ## Running an example
 
 ```bash

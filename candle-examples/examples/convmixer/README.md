@@ -1,5 +1,9 @@
 # candle-convmixer
 
+A lightweight CNN architecture that processes image patches similar to a vision transformer, with separate spatial and channel convolutions.
+
+ConvMixer from [Patches Are All You Need?](https://arxiv.org/pdf/2201.09792) and [ConvMixer](https://github.com/locuslab/convmixer). 
+
 ## Running an example
 
 ```bash

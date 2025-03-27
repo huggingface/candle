@@ -1,5 +1,7 @@
 # candle-mnist-training
 
+Training a 2 layer MLP on mnist in Candle.
+
 ## Running an example
 
 ```bash

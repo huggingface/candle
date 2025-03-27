@@ -1,5 +1,7 @@
 # candle-whisper-microphone
 
+Whisper implementation using microphone as input.
+
 ## Running an example
 
 ```bash

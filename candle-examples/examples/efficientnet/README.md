@@ -1,5 +1,7 @@
 # candle-efficientnet
 
+Demonstrates a Candle implementation of EfficientNet for image classification based on ImageNet classes.
+
 ## Running an example
 
 ```bash
