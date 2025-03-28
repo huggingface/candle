@@ -113,10 +113,6 @@ impl Args {
         Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)
     }
 
-    fn is_deepseek(&self) -> bool {
-        matches!(&self.which, Which::DeepseekR1Qwen7B)
-    }
-
     fn model(&self) -> anyhow::Result<std::path::PathBuf> {
         let model_path = match &self.model {
             Some(config) => std::path::PathBuf::from(config),
@@ -227,13 +223,10 @@ fn main() -> anyhow::Result<()> {
         .prompt
         .clone()
         .unwrap_or_else(|| DEFAULT_PROMPT.to_string());
-    let prompt_str = if args.is_deepseek() {
-        format!("<｜User｜>{}<｜Assistant｜>", prompt_str)
-    } else {
-        format!(
-            "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-            prompt_str
-        )
+
+    let prompt_str = match args.which {
+        Which::DeepseekR1Qwen7B => format!("<｜User｜>{prompt_str}<｜Assistant｜>"),
+        _ => format!("<|im_start|>user\n{prompt_str}<|im_end|>\n<|im_start|>assistant\n"),
     };
     print!("formatted instruct prompt: {}", &prompt_str);
     let tokens = tos
