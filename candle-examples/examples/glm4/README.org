@@ -12,7 +12,7 @@ GLM-4-9B is the open-source version of the latest generation of pre-trained mode
 
 ** Running with ~cpu~
 #+begin_src shell
-  cargo run --example glm4 --release -- --cpu--prompt "Hello world"
+  cargo run --example glm4 --release -- --cpu --prompt "Hello world"
 #+end_src
 
 ** Output Example

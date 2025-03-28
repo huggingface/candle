@@ -12,7 +12,7 @@ $ wget https://raw.githubusercontent.com/vikhyat/moondream/main/assets/demo-1.jp
 
 Now you can run Moondream from the `candle-examples` crate:
 ```bash
-$ cargo run --example moondream --release -- --prompt "What is the girl eating?" --image "./demo-1.jpg"
+$ cargo run --example moondream --release -- --prompt "Describe the people behind the bikers?" --image "candle-examples/examples/yolo-v8/assets/bike.jpg"
 
 avavx: false, neon: true, simd128: false, f16c: false
 temp: 0.00 repeat-penalty: 1.00 repeat-last-n: 64
