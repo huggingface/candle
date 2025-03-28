@@ -1,7 +1,7 @@
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-#[cfg(feature = "mkl")]
+#[cfg(feature = "_mkl")]
 extern crate intel_mkl_src;
 
 use anyhow::Result;
