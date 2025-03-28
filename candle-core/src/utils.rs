@@ -17,7 +17,7 @@ pub fn has_accelerate() -> bool {
 }
 
 pub fn has_mkl() -> bool {
-    cfg!(feature = "mkl")
+    cfg!(feature = "_mkl")
 }
 
 pub fn cuda_is_available() -> bool {
