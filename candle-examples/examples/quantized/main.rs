@@ -76,7 +76,7 @@ enum Which {
     #[value(name = "SmoLM2-1.7B-Instruct")]
     SmolLM2_1BInstruct,
     #[value(name = "deepseekr1-llama8b")]
-    DeepseekR1Llama8b
+    DeepseekR1Llama8b,
 }
 
 impl Which {
@@ -96,7 +96,7 @@ impl Which {
             | Self::L8b
             | Self::Phi3
             | Self::SmolLM2_1BInstruct
-            | Self::SmolLM2_360MInstruct 
+            | Self::SmolLM2_360MInstruct
             | Self::DeepseekR1Llama8b => false,
             // Zephyr and OpenChat are fine tuned versions of mistral and should be treated in the
             // same way. Starling is a fine tuned version of OpenChat.
@@ -135,7 +135,7 @@ impl Which {
             | Self::L8b
             | Self::SmolLM2_1BInstruct
             | Self::SmolLM2_360MInstruct
-            | Self::Phi3 
+            | Self::Phi3
             | Self::DeepseekR1Llama8b => false,
             Self::Zephyr7bAlpha | Self::Zephyr7bBeta => true,
         }
@@ -225,7 +225,7 @@ impl Which {
             Self::Phi3 => "microsoft/Phi-3-mini-4k-instruct",
             Self::SmolLM2_360MInstruct => "HuggingFaceTB/SmolLM2-360M-Instruct",
             Self::SmolLM2_1BInstruct => "HuggingFaceTB/SmolLM2-1.7B-Instruct",
-            Self::DeepseekR1Llama8b => "deepseek-ai/DeepSeek-R1-Distill-Llama-8B"
+            Self::DeepseekR1Llama8b => "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
         }
     }
 }
@@ -400,8 +400,8 @@ impl Args {
                     ),
                     Which::DeepseekR1Llama8b => (
                         "unsloth/DeepSeek-R1-Distill-Llama-8B-GGUF",
-                        "DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf"
-                    )
+                        "DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf",
+                    ),
                 };
                 let revision = if self.which == Which::Phi3 {
                     "5eef2ce24766d31909c0b269fe90c817a8f263fb"
@@ -645,7 +645,6 @@ fn main() -> anyhow::Result<()> {
                 false => "</s>",
             },
         };
-
 
         let eos_token = *tos.tokenizer().get_vocab(true).get(eos_token).unwrap();
         let start_post_prompt = std::time::Instant::now();
