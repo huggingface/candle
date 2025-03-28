@@ -7,7 +7,7 @@ The VGG models are defined in `candle-transformers/src/models/vgg.rs`. The main 
 You can run the example with the following command:
 
 ```bash
-cargo run --example vgg --release -- --image ../yolo-v8/assets/bike.jpg --which vgg13
+cargo run --example vgg --release -- --image candle-examples/examples/yolo-v8/assets/bike.jpg --which vgg13
 ```
 
 In the command above, `--image` specifies the path to the image file and `--which` specifies the VGG model to use (vgg13, vgg16, or vgg19).
