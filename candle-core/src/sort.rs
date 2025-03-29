@@ -52,7 +52,7 @@ impl ArgSort {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(feature = "_cuda")]
 mod cuda {
     use super::*;
     use crate::cuda_backend::cudarc::driver::{
@@ -118,7 +118,7 @@ impl crate::CustomOp1 for ArgSort {
         Ok((sort_indexes, layout.shape().into()))
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(feature = "_cuda")]
     fn cuda_fwd(
         &self,
         storage: &crate::CudaStorage,

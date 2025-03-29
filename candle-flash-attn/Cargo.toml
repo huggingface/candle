@@ -11,7 +11,7 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-candle = { path = "../candle-core", features = ["cuda"], package = "candle-core", version = "0.8.4" }
+candle = { path = "../candle-core", features = ["_cuda"], package = "candle-core", version = "0.8.4" }
 half = { version = "2.3.1", features = ["num-traits"] }
 
 [build-dependencies]
@@ -21,4 +21,4 @@ anyhow = { version = "1", features = ["backtrace"] }
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
-candle-nn = { path = "../candle-nn", features = ["cuda"] }
+candle-nn = { path = "../candle-nn", features = ["_cuda"] }

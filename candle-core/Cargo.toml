@@ -15,7 +15,7 @@ byteorder = { workspace = true }
 candle-kernels = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
 metal = { workspace = true, optional = true }
-cudarc = { workspace = true, optional = true }
+cudarc = { workspace = true, optional = true}
 gemm = { workspace = true }
 half = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
@@ -43,8 +43,9 @@ criterion = { workspace = true }
 
 [features]
 default = []
-cuda = ["cudarc", "dep:candle-kernels", "dep:ug-cuda"]
-cudnn = ["cuda", "cudarc/cudnn"]
+_cuda = ["dep:cudarc", "dep:candle-kernels", "dep:ug-cuda"]
+# cuda = ["_cuda", "cudarc?/cuda-version-from-build-system", "cudarc?/dynamic-linking"]
+cudnn = ["_cuda", "cudarc?/cudnn"]
 _mkl = ["dep:libc", "dep:intel-mkl-src"]
 mkl = ["_mkl", "intel-mkl-src?/mkl-static-lp64-iomp"] 
 accelerate = ["dep:libc", "dep:accelerate-src"]

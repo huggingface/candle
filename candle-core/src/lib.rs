@@ -55,7 +55,7 @@ pub mod conv;
 mod convert;
 pub mod cpu;
 pub mod cpu_backend;
-#[cfg(feature = "cuda")]
+#[cfg(feature = "_cuda")]
 pub mod cuda_backend;
 mod custom_op;
 mod device;
@@ -104,10 +104,10 @@ pub use strided_index::{StridedBlocks, StridedIndex};
 pub use tensor::{Tensor, TensorId};
 pub use variable::Var;
 
-#[cfg(feature = "cuda")]
+#[cfg(feature = "_cuda")]
 pub use cuda_backend as cuda;
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(feature = "_cuda"))]
 pub use dummy_cuda_backend as cuda;
 
 pub use cuda::{CudaDevice, CudaStorage};

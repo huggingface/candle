@@ -21,7 +21,7 @@ pub fn has_mkl() -> bool {
 }
 
 pub fn cuda_is_available() -> bool {
-    cfg!(feature = "cuda")
+    cfg!(feature = "_cuda")
 }
 
 pub fn metal_is_available() -> bool {

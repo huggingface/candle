@@ -32,6 +32,7 @@ criterion = { workspace = true }
 [features]
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
+_cuda = ["candle/_cuda"]
 cuda = ["candle/cuda"]
 _mkl = ["dep:intel-mkl-src", "candle/_mkl"]
 mkl = ["candle/mkl"]

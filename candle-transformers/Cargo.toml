@@ -28,6 +28,7 @@ tracing = { workspace = true }
 [features]
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate"]
+_cuda = ["candle/_cuda", "candle-nn/_cuda"]
 cuda = ["candle/cuda", "candle-nn/cuda"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl"]

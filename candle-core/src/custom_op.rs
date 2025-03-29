@@ -378,7 +378,7 @@ impl Tensor {
 
 pub struct UgIOp1 {
     name: &'static str,
-    #[cfg(feature = "cuda")]
+    #[cfg(feature = "_cuda")]
     func: cudarc::driver::CudaFunction,
     #[cfg(feature = "metal")]
     func: metal::ComputePipelineState,
@@ -392,7 +392,7 @@ impl UgIOp1 {
         kernel: ug::lang::ssa::Kernel,
         device: &crate::Device,
     ) -> Result<Self> {
-        #[cfg(feature = "cuda")]
+        #[cfg(feature = "_cuda")]
         {
             let device = device.as_cuda_device()?;
             let func = device.compile(name, kernel)?;
@@ -404,7 +404,7 @@ impl UgIOp1 {
             let func = device.compile(name, kernel)?;
             Ok(Self { name, func })
         }
-        #[cfg(not(any(feature = "cuda", feature = "metal")))]
+        #[cfg(not(any(feature = "_cuda", feature = "metal")))]
         {
             Ok(Self { name })
         }
@@ -456,7 +456,7 @@ impl InplaceOp1 for UgIOp1 {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(feature = "_cuda")]
     fn cuda_fwd(&self, sto: &mut CudaStorage, layout: &Layout) -> Result<()> {
         use crate::cuda_backend::WrapErr;
         use cudarc::driver::LaunchAsync;

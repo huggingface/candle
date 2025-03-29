@@ -10,7 +10,7 @@ macro_rules! test_device {
             $fn_name(&Device::Cpu)
         }
 
-        #[cfg(feature = "cuda")]
+        #[cfg(feature = "_cuda")]
         #[test]
         fn $test_cuda() -> Result<()> {
             $fn_name(&Device::new_cuda(0)?)

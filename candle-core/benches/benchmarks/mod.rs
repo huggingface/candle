@@ -20,9 +20,9 @@ impl BenchDevice for Device {
         match self {
             Device::Cpu => Ok(()),
             Device::Cuda(device) => {
-                #[cfg(feature = "cuda")]
+                #[cfg(feature = "_cuda")]
                 return Ok(device.synchronize()?);
-                #[cfg(not(feature = "cuda"))]
+                #[cfg(not(feature = "_cuda"))]
                 panic!("Cuda device without cuda feature enabled: {:?}", device)
             }
             Device::Metal(device) => {
@@ -61,7 +61,7 @@ impl BenchDeviceHandler {
         let mut devices = Vec::new();
         if cfg!(feature = "metal") {
             devices.push(Device::new_metal(0)?);
-        } else if cfg!(feature = "cuda") {
+        } else if cfg!(feature = "_cuda") {
             devices.push(Device::new_cuda(0)?);
         }
         devices.push(Device::Cpu);
