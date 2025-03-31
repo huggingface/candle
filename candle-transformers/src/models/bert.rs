@@ -8,9 +8,10 @@
 //! - See bert in [candle-examples](https://github.com/huggingface/candle/tree/main/candle-examples/) for runnable code
 //!
 use super::with_tracing::{layer_norm, linear, LayerNorm, Linear};
-use candle::{DType, Device, Result, Tensor};
+use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use serde::Deserialize;
+use std::collections::HashMap;
 
 pub const DTYPE: DType = DType::F32;
 
@@ -73,6 +74,8 @@ pub struct Config {
     pub use_cache: bool,
     pub classifier_dropout: Option<f64>,
     pub model_type: Option<String>,
+    #[serde(flatten)]
+    pub classifier_config: Option<ClassifierConfig>,
 }
 
 impl Default for Config {
@@ -83,7 +86,7 @@ impl Default for Config {
             num_hidden_layers: 12,
             num_attention_heads: 12,
             intermediate_size: 3072,
-            hidden_act: HiddenAct::Gelu,
+            hidden_act: HiddenAct::GeluApproximate,
             hidden_dropout_prob: 0.1,
             max_position_embeddings: 512,
             type_vocab_size: 2,
@@ -94,6 +97,7 @@ impl Default for Config {
             use_cache: true,
             classifier_dropout: None,
             model_type: Some("bert".to_string()),
+            classifier_config: None,
         }
     }
 }
@@ -118,6 +122,7 @@ impl Config {
             use_cache: true,
             classifier_dropout: None,
             model_type: Some("bert".to_string()),
+            classifier_config: None,
         }
     }
 }
@@ -617,5 +622,137 @@ impl BertForMaskedLM {
             .bert
             .forward(input_ids, token_type_ids, attention_mask)?;
         self.cls.forward(&sequence_output)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ClassifierConfig {
+    pub id2label: HashMap<String, String>,
+    pub label2id: HashMap<String, u32>,
+}
+
+#[derive(Clone, Debug)]
+struct Tanh;
+
+impl Tanh {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+impl Module for Tanh {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.tanh()
+    }
+}
+
+#[derive(Clone)]
+pub struct BertPooled {
+    dense: Linear,
+    activation: Tanh,
+}
+
+impl BertPooled {
+    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+        let dense = linear(
+            config.hidden_size,
+            config.hidden_size,
+            vb.pp("pooler.dense"),
+        )?;
+        let activation = Tanh::new();
+        Ok(Self { dense, activation })
+    }
+
+    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        // https://github.com/huggingface/transformers/blob/a22a4378d97d06b7a1d9abad6e0086d30fdea199/src/transformers/models/bert/modeling_bert.py#L746
+        let cls_token = hidden_states.i((.., 0))?;
+
+        let o = self.dense.forward(&cls_token)?;
+        self.activation.forward(&o)
+    }
+}
+
+#[derive(Clone)]
+pub struct BertClassifier {
+    classifier: Linear,
+}
+
+impl BertClassifier {
+    fn load(vb: VarBuilder, config: &Config, num_labels: Option<usize>) -> Result<Self> {
+        let n_labels = match num_labels {
+            Some(n) => n,
+            None => {
+                let classifier_config = match &config.classifier_config {
+                    Some(cc) => cc,
+                    None => candle::bail!(
+                        "num_labels must be provided if classifier_config is not present in Config"
+                    ),
+                };
+                // Infer num_labels from id2label or label2id (they should have the same length)
+                let num_labels = classifier_config.id2label.len();
+                if num_labels != classifier_config.label2id.len() {
+                    candle::bail!(
+                        "Mismatch between id2label ({}) and label2id ({}) lengths",
+                        num_labels,
+                        classifier_config.label2id.len()
+                    );
+                }
+                if num_labels == 0 {
+                    candle::bail!("Classifier config contains no labels");
+                }
+                num_labels
+            }
+        };
+        let classifier = linear(config.hidden_size, n_labels, vb.pp("classifier"))?;
+        Ok(Self { classifier })
+    }
+
+    fn forward(&self, pooled_output: &Tensor) -> Result<Tensor> {
+        self.classifier.forward(pooled_output)
+    }
+}
+
+pub struct BertForSequenceClassification {
+    bert: BertModel,
+    pooled: BertPooled,
+    dropout: Dropout,
+    classifier: BertClassifier,
+}
+
+impl BertForSequenceClassification {
+    pub fn load(vb: VarBuilder, config: &Config, num_labels: Option<usize>) -> Result<Self> {
+        let bert_builder = vb.pp("bert");
+        let bert = BertModel::load(bert_builder.clone(), config)?;
+        let pooled = BertPooled::load(bert_builder.clone(), config)?;
+        let classifier = BertClassifier::load(vb, config, num_labels)?;
+        let dropout = Dropout::new(
+            config
+                .classifier_dropout
+                .unwrap_or(config.hidden_dropout_prob),
+        );
+        Ok(Self {
+            bert,
+            pooled,
+            dropout,
+            classifier,
+        })
+    }
+
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        token_type_ids: &Tensor,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let bert_output = self
+            .bert
+            .forward(input_ids, token_type_ids, attention_mask)?;
+
+        let pooled_output = self.pooled.forward(&bert_output)?;
+
+        let pooled_output = self.dropout.forward(&pooled_output)?;
+
+        let logits = self.classifier.forward(&pooled_output)?;
+
+        Ok(logits)
     }
 }
