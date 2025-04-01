@@ -206,12 +206,6 @@ impl CudaDevice {
             curand: Arc::new(Mutex::new(CudaRng(curand))),
         })
     }
-
-    pub(crate) fn htod_copy<T: DeviceRepr>(&self, data: Vec<T>) -> Result<CudaSlice<T>> {
-        let mut dst = unsafe { self.alloc::<T>(data.len()).w()? };
-        self.memcpy_htod(&data, &mut dst).w()?;
-        Ok(dst)
-    }
 }
 
 impl BackendDevice for CudaDevice {

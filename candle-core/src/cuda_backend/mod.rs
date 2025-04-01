@@ -39,7 +39,7 @@ impl SlicePtrOrNull<usize> {
         let ds = if l.is_contiguous() {
             SlicePtrOrNull::Null
         } else {
-            SlicePtrOrNull::Ptr(dev.htod_copy([l.dims(), l.stride()].concat()).w()?)
+            SlicePtrOrNull::Ptr(dev.memcpy_stod(&[l.dims(), l.stride()].concat()).w()?)
         };
         Ok(ds)
     }
@@ -154,7 +154,7 @@ impl Map1 for Im2Col1D {
         let l_out = self.l_out(dims[2]);
         let dst_el = dims[0] * l_out * dims[1] * self.l_k;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
+        let ds = dev.memcpy_stod(&[dims, layout.stride()].concat()).w()?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("im2col1d"), kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
@@ -206,7 +206,7 @@ impl Map1 for Im2Col {
         let (h_out, w_out) = self.hw_out(dims[2], dims[3]);
         let dst_el = dims[0] * h_out * w_out * dims[1] * self.h_k * self.w_k;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
+        let ds = dev.memcpy_stod(&[dims, layout.stride()].concat()).w()?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("im2col"), kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
@@ -294,7 +294,7 @@ impl Map1Any for FastReduce<'_> {
             shared_mem_bytes: 0,
         };
         let ds = dev
-            .htod_copy([dims.as_slice(), stride.as_slice()].concat())
+            .memcpy_stod(&[dims.as_slice(), stride.as_slice()].concat())
             .w()?;
         let src = &src.slice(layout.start_offset()..);
         let (name, check_empty, return_index) = match self.1 {
@@ -377,7 +377,7 @@ impl Map1 for IndexSelect<'_> {
         };
         let ids_shape = ids_l.shape();
         let ids_dims = ids_shape.dims();
-        let ds = dev.htod_copy([ids_dims, ids_l.stride()].concat()).w()?;
+        let ds = dev.memcpy_stod(&[ids_dims, ids_l.stride()].concat()).w()?;
         let src = match src_l.contiguous_offsets() {
             Some((o1, o2)) => src.slice(o1..o2),
             None => Err(crate::Error::RequiresContiguous { op: "index-select" }.bt())?,
@@ -584,7 +584,7 @@ impl Map2 for Conv1D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv1d {dims:?}")
         };
-        let ds = dev.htod_copy(ds).w()?;
+        let ds = dev.memcpy_stod(&ds).w()?;
         let params = (
             el, l_out, p.stride, p.padding, p.dilation, &ds, inp, k, &out,
         );
@@ -624,7 +624,7 @@ impl Map2 for Conv2D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv2d {dims:?}")
         };
-        let ds = dev.htod_copy(ds).w()?;
+        let ds = dev.memcpy_stod(&ds).w()?;
         let params = (
             el, out_w, out_h, p.stride, p.padding, p.dilation, &ds, inp, k, &out,
         );
@@ -689,7 +689,7 @@ impl Map2 for ConvTranspose1D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv_transpose1d {dims:?}")
         };
-        let ds = dev.htod_copy(ds).w()?;
+        let ds = dev.memcpy_stod(&ds).w()?;
         let params = (
             el,
             l_out,
@@ -738,7 +738,7 @@ impl Map2 for ConvTranspose2D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv_transpose2d {dims:?}")
         };
-        let ds = dev.htod_copy(ds).w()?;
+        let ds = dev.memcpy_stod(&ds).w()?;
         let params = (
             el,
             out_w,
@@ -799,7 +799,7 @@ impl Map1 for Pool2D {
         let func = dev.get_or_load_func(&kernel_name::<T>(kname), kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
-        let ds = dev.htod_copy(ds).w()?;
+        let ds = dev.memcpy_stod(&ds).w()?;
         let params = (
             el,
             self.w_k,
@@ -839,7 +839,7 @@ impl Map1 for UpsampleNearest2D {
         let func = dev.get_or_load_func(&kernel_name::<T>("upsample_nearest2d"), kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
-        let ds = dev.htod_copy(ds).w()?;
+        let ds = dev.memcpy_stod(&ds).w()?;
         let scale_w = dims[2] as f64 / out_w as f64;
         let scale_h = dims[3] as f64 / out_h as f64;
         let params = (out_w, out_h, scale_w, scale_h, &ds, inp, &out);
@@ -885,7 +885,7 @@ impl Map2 for WhereCond<'_> {
         let el = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let ds = dev
-            .htod_copy([dims, ids_l.stride(), layout_t.stride(), layout_f.stride()].concat())
+            .memcpy_stod(&[dims, ids_l.stride(), layout_t.stride(), layout_f.stride()].concat())
             .w()?;
         let t = &t.slice(layout_t.start_offset()..);
         let f = &f.slice(layout_f.start_offset()..);
@@ -916,7 +916,7 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
             SlicePtrOrNull::Null
         } else {
             SlicePtrOrNull::Ptr(
-                dev.htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())
+                dev.memcpy_stod(&[dims, lhs_l.stride(), rhs_l.stride()].concat())
                     .w()?,
             )
         };
@@ -950,7 +950,7 @@ impl Map2Any for Cmp {
             SlicePtrOrNull::Null
         } else {
             SlicePtrOrNull::Ptr(
-                dev.htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())
+                dev.memcpy_stod(&[dims, lhs_l.stride(), rhs_l.stride()].concat())
                     .w()?,
             )
         };
