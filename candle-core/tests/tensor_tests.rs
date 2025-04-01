@@ -1682,3 +1682,54 @@ fn pow() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn test_flip_1d() -> Result<()> {
+    // 1D: [0, 1, 2, 3, 4]
+    let t = Tensor::arange(0.0, 5.0, &Device::Cpu)?.reshape((5,))?;
+    let flipped = t.flip(&[0])?;
+    // Expected: [4, 3, 2, 1, 0]
+    let expected = Tensor::from_vec(vec![4.0, 3.0, 2.0, 1.0, 0.0], (5,), &Device::Cpu)?;
+    candle_core::test_utils::assert_tensor_eq(&flipped, &expected)?;
+    Ok(())
+}
+
+#[test]
+fn test_flip_2d() -> Result<()> {
+    // 2D:
+    // [[0, 1, 2],
+    //  [3, 4, 5]]
+    let t = Tensor::arange(0.0, 6.0, &Device::Cpu)?.reshape((2, 3))?;
+    let flipped = t.flip(&[0, 1])?;
+    // Expected:
+    // [[5, 4, 3],
+    //  [2, 1, 0]]
+    let expected = Tensor::from_vec(vec![5.0, 4.0, 3.0, 2.0, 1.0, 0.0], (2, 3), &Device::Cpu)?;
+    candle_core::test_utils::assert_tensor_eq(&flipped, &expected)?;
+    Ok(())
+}
+
+#[test]
+fn test_flip_3d_channels() -> Result<()> {
+    // 3D:
+    // [[[0,1,2],
+    //   [3,4,5]],
+    //
+    //  [[6,7,8],
+    //   [9,10,11]]]
+    let t = Tensor::arange(0.0, 12.0, &Device::Cpu)?.reshape((2, 2, 3))?;
+    let flipped = t.flip(&[2])?;
+    // Expected:
+    // [[[2,1,0],
+    //   [5,4,3]],
+    //
+    //  [[8,7,6],
+    //   [11,10,9]]]
+    let expected = Tensor::from_vec(
+        vec![2.0, 1.0, 0.0, 5.0, 4.0, 3.0, 8.0, 7.0, 6.0, 11.0, 10.0, 9.0],
+        (2, 2, 3),
+        &Device::Cpu,
+    )?;
+    candle_core::test_utils::assert_tensor_eq(&flipped, &expected)?;
+    Ok(())
+}
