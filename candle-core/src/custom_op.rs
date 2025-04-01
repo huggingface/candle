@@ -459,15 +459,16 @@ impl InplaceOp1 for UgIOp1 {
     #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, sto: &mut CudaStorage, layout: &Layout) -> Result<()> {
         use crate::cuda_backend::WrapErr;
+        use cudarc::driver::PushKernelArg;
 
         let elem_count = layout.shape().elem_count();
+        let stream = sto.device.cuda_stream();
         // TODO: support more dtypes.
         let sto = sto.as_cuda_slice::<f32>()?;
         let sto = match layout.contiguous_offsets() {
             None => crate::bail!("input has to be contiguous"),
             Some((o1, o2)) => sto.slice(o1..o2),
         };
-        let params = (&sto,);
         let (g, b) = if elem_count % 32 == 0 {
             (elem_count / 32, 32)
         } else {
@@ -478,7 +479,9 @@ impl InplaceOp1 for UgIOp1 {
             block_dim: (b as u32, 1, 1),
             shared_mem_bytes: 0,
         };
-        unsafe { self.func.clone().launch(cfg, params) }.w()?;
+        let mut builder = stream.launch_builder(&self.func);
+        builder.arg(&sto);
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(())
     }
 }
