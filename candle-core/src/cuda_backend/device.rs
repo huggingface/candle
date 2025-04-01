@@ -24,10 +24,15 @@ impl DeviceId {
 struct CudaRng(cudarc::curand::CudaRng);
 unsafe impl Send for CudaRng {}
 
+pub struct ModuleStore {
+    mdls: [Option<Arc<cudarc::driver::CudaModule>>; kernels::ALL_IDS.len()],
+}
+
 #[derive(Clone)]
 pub struct CudaDevice {
     id: DeviceId,
     context: Arc<cudarc::driver::CudaContext>,
+    modules: Arc<std::sync::RwLock<ModuleStore>>,
     stream: Arc<cudarc::driver::CudaStream>,
     pub(crate) blas: Arc<cudarc::cublas::CudaBlas>,
     curand: Arc<Mutex<CudaRng>>,
@@ -169,31 +174,28 @@ impl CudaDevice {
         })
     }
 
-    pub fn get_or_load_func(&self, fn_name: &str, mdl: &kernels::Module) -> Result<CudaFunction> {
-        todo!()
-    }
-    /*
-        if !self.has_func(module_name, module_name) {
-            // Leaking the string here is a bit sad but we need a &'static str and this is only
-            // done once per kernel name.
-            let static_module_name = Box::leak(module_name.to_string().into_boxed_str());
-            self.context
-                .load_module(ptx.into(), module_name, &[static_module_name])
-                .map_err(|cuda| CudaError::Load {
-                    cuda,
-                    module_name: module_name.to_string(),
-                })
-                .w()?;
+    pub fn get_or_load_func(
+        &self,
+        fn_name: &str,
+        mdl: &kernels::Module,
+    ) -> Result<cudarc::driver::CudaFunction> {
+        let ms = self.modules.read().unwrap();
+        if let Some(mdl) = ms.mdls[mdl.index()].as_ref() {
+            return mdl.load_function(fn_name).w();
         }
-        self.get_func(module_name, module_name)
-            // Clippy recommends this `ok_or` rather than `ok_or_else` so hopefully the compiler is
-            // able to only build the error value if needed.
-            .ok_or(CudaError::MissingKernel {
-                module_name: module_name.to_string(),
+        drop(ms);
+        let mut ms = self.modules.write().unwrap();
+        let cuda_module = self.context.load_module(mdl.ptx().into()).w()?;
+        ms.mdls[mdl.index()] = Some(cuda_module);
+        if let Some(mdl) = ms.mdls[mdl.index()].as_ref() {
+            return mdl.load_function(fn_name).w();
+        } else {
+            Err(CudaError::MissingKernel {
+                module_name: fn_name.to_string(),
             })
             .w()
+        }
     }
-    */
 }
 
 impl CudaDevice {
@@ -202,12 +204,16 @@ impl CudaDevice {
         let stream = context.new_stream().w()?;
         let blas = cudarc::cublas::CudaBlas::new(stream.clone()).w()?;
         let curand = cudarc::curand::CudaRng::new(299792458, stream.clone()).w()?;
+        let module_store = ModuleStore {
+            mdls: [const { None }; kernels::ALL_IDS.len()],
+        };
         Ok(Self {
             id: DeviceId::new(),
             context,
             stream,
             blas: Arc::new(blas),
             curand: Arc::new(Mutex::new(CudaRng(curand))),
+            modules: Arc::new(std::sync::RwLock::new(module_store)),
         })
     }
 }
@@ -220,12 +226,16 @@ impl BackendDevice for CudaDevice {
         let stream = context.default_stream();
         let blas = cudarc::cublas::CudaBlas::new(stream.clone()).w()?;
         let curand = cudarc::curand::CudaRng::new(299792458, stream.clone()).w()?;
+        let module_store = ModuleStore {
+            mdls: [const { None }; kernels::ALL_IDS.len()],
+        };
         Ok(Self {
             id: DeviceId::new(),
             context,
             stream,
             blas: Arc::new(blas),
             curand: Arc::new(Mutex::new(CudaRng(curand))),
+            modules: Arc::new(std::sync::RwLock::new(module_store)),
         })
     }
 
