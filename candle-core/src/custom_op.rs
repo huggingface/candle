@@ -459,7 +459,6 @@ impl InplaceOp1 for UgIOp1 {
     #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, sto: &mut CudaStorage, layout: &Layout) -> Result<()> {
         use crate::cuda_backend::WrapErr;
-        use cudarc::driver::LaunchAsync;
 
         let elem_count = layout.shape().elem_count();
         // TODO: support more dtypes.

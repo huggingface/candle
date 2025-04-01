@@ -50,8 +50,6 @@ fn quantize_q8_1(
     ky: usize,
     dev: &CudaDevice,
 ) -> Result<()> {
-    use cudarc::driver::LaunchAsync;
-
     let kx = elem_count;
     let kx_padded = pad(kx, MATRIX_ROW_PADDING);
     let num_blocks = ceil_div(kx_padded, CUDA_QUANTIZE_BLOCK_SIZE);
@@ -72,8 +70,6 @@ fn dequantize_f32(
     elem_count: usize,
     dev: &CudaDevice,
 ) -> Result<CudaStorage> {
-    use cudarc::driver::LaunchAsync;
-
     let nb = (elem_count + 255) / 256;
     let (kernel_name, is_k, block_dim, num_blocks) = match dtype {
         GgmlDType::Q4_0 => ("dequantize_block_q4_0_f32", false, 32, nb),
@@ -129,8 +125,6 @@ fn dequantize_f16(
     elem_count: usize,
     dev: &CudaDevice,
 ) -> Result<CudaStorage> {
-    use cudarc::driver::LaunchAsync;
-
     let nb = (elem_count + 255) / 256;
     let (kernel_name, is_k, block_dim, num_blocks) = match dtype {
         GgmlDType::Q4_0 => ("dequantize_block_q4_0_f16", false, 32, nb),
@@ -188,8 +182,6 @@ fn dequantize_mul_mat_vec(
     nrows: usize,
     dev: &CudaDevice,
 ) -> Result<CudaStorage> {
-    use cudarc::driver::LaunchAsync;
-
     let data_elems = data.len / dtype.type_size() * dtype.block_size();
     if data_elems < ncols * nrows {
         crate::bail!("unexpected data size {}, ncols {ncols} {nrows}", data_elems)
@@ -233,8 +225,6 @@ fn mul_mat_vec_via_q8_1(
     b_size: usize,
     dev: &CudaDevice,
 ) -> Result<CudaStorage> {
-    use cudarc::driver::LaunchAsync;
-
     let data_elems = data.len / dtype.type_size() * dtype.block_size();
     if data_elems < ncols * nrows {
         crate::bail!("unexpected data size {}, ncols {ncols} {nrows}", data_elems)
@@ -305,8 +295,6 @@ fn mul_mat_via_q8_1(
     y_cols: usize,
     dev: &CudaDevice,
 ) -> Result<CudaStorage> {
-    use cudarc::driver::LaunchAsync;
-
     let data_elems = data.len / dtype.type_size() * dtype.block_size();
     if data_elems < x_rows * x_cols {
         crate::bail!("unexpected lhs size {}, {x_rows} {x_cols}", data_elems)

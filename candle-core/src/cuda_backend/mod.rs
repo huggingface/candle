@@ -7,7 +7,7 @@ pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
 use cudarc::driver::{
-    CudaSlice, DevicePtr, DeviceRepr, DeviceSlice, LaunchAsync, LaunchConfig, ValidAsZeroBits,
+    CudaSlice, DevicePtr, DeviceRepr, DeviceSlice, LaunchConfig, ValidAsZeroBits,
 };
 use half::{bf16, f16};
 

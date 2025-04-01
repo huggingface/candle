@@ -2,7 +2,7 @@ use crate::backend::BackendDevice;
 use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 pub use candle_kernels as kernels;
 pub use cudarc;
-use cudarc::driver::{CudaFunction, LaunchAsync, LaunchConfig};
+use cudarc::driver::{CudaFunction, LaunchConfig, PushKernelArg};
 use half::{bf16, f16};
 use std::sync::{Arc, Mutex};
 
@@ -27,7 +27,8 @@ unsafe impl Send for CudaRng {}
 #[derive(Clone)]
 pub struct CudaDevice {
     id: DeviceId,
-    device: Arc<cudarc::driver::CudaDevice>,
+    context: Arc<cudarc::driver::CudaContext>,
+    stream: Arc<cudarc::driver::CudaStream>,
     pub(crate) blas: Arc<cudarc::cublas::CudaBlas>,
     curand: Arc<Mutex<CudaRng>>,
 }
@@ -39,16 +40,16 @@ impl std::fmt::Debug for CudaDevice {
 }
 
 impl std::ops::Deref for CudaDevice {
-    type Target = Arc<cudarc::driver::CudaDevice>;
+    type Target = Arc<cudarc::driver::CudaStream>;
 
     fn deref(&self) -> &Self::Target {
-        &self.device
+        &self.stream
     }
 }
 
 impl CudaDevice {
-    pub fn cuda_device(&self) -> Arc<cudarc::driver::CudaDevice> {
-        self.device.clone()
+    pub fn cuda_stream(&self) -> Arc<cudarc::driver::CudaStream> {
+        self.stream.clone()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -65,11 +66,8 @@ impl CudaDevice {
             ..Default::default()
         };
         let ptx = cudarc::nvrtc::safe::compile_ptx_with_opts(cuda_code, opts).w()?;
-        self.device.load_ptx(ptx, "ug", &[func_name]).w()?;
-        let func = match self.device.get_func("ug", func_name) {
-            Some(func) => func,
-            None => crate::bail!("unknown function ug::{func_name}"),
-        };
+        let module = self.context.load_module(ptx).w()?;
+        let func = module.load_function(func_name).w()?;
         Ok(func)
     }
 
@@ -85,56 +83,77 @@ impl CudaDevice {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<u8>(elem_count) }.w()?;
                 let func = self.get_or_load_func("fill_u8", kernels::FILL)?;
-                let params = (&data, v as u8, elem_count);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = self.stream.launch_builder(&func);
+                builder.arg(&data);
+                builder.arg(&(v as u8));
+                builder.arg(&elem_count);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::U8(data)
             }
             DType::U32 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<u32>(elem_count) }.w()?;
                 let func = self.get_or_load_func("fill_u32", kernels::FILL)?;
-                let params = (&data, v as u32, elem_count);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = self.stream.launch_builder(&func);
+                builder.arg(&data);
+                builder.arg(&(v as u32));
+                builder.arg(&elem_count);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::U32(data)
             }
             DType::I64 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<i64>(elem_count) }.w()?;
                 let func = self.get_or_load_func("fill_i64", kernels::FILL)?;
-                let params = (&data, v as i64, elem_count);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = self.stream.launch_builder(&func);
+                builder.arg(&data);
+                builder.arg(&(v as i64));
+                builder.arg(&elem_count);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::I64(data)
             }
             DType::BF16 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<bf16>(elem_count) }.w()?;
                 let func = self.get_or_load_func("fill_bf16", kernels::FILL)?;
-                let params = (&data, bf16::from_f64(v), elem_count);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = self.stream.launch_builder(&func);
+                builder.arg(&data);
+                builder.arg(&bf16::from_f64(v));
+                builder.arg(&elem_count);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::BF16(data)
             }
             DType::F16 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<f16>(elem_count) }.w()?;
                 let func = self.get_or_load_func("fill_f16", kernels::FILL)?;
-                let params = (&data, f16::from_f64(v), elem_count);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = self.stream.launch_builder(&func);
+                builder.arg(&data);
+                builder.arg(&f16::from_f64(v));
+                builder.arg(&elem_count);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::F16(data)
             }
             DType::F32 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<f32>(elem_count) }.w()?;
                 let func = self.get_or_load_func("fill_f32", kernels::FILL)?;
-                let params = (&data, v as f32, elem_count);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = self.stream.launch_builder(&func);
+                builder.arg(&data);
+                builder.arg(&(v as f32));
+                builder.arg(&elem_count);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::F32(data)
             }
             DType::F64 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<f64>(elem_count) }.w()?;
                 let func = self.get_or_load_func("fill_f64", kernels::FILL)?;
-                let params = (&data, v, elem_count);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = self.stream.launch_builder(&func);
+                builder.arg(&data);
+                builder.arg(&v);
+                builder.arg(&elem_count);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::F64(data)
             }
         };
@@ -149,7 +168,8 @@ impl CudaDevice {
             // Leaking the string here is a bit sad but we need a &'static str and this is only
             // done once per kernel name.
             let static_module_name = Box::leak(module_name.to_string().into_boxed_str());
-            self.load_ptx(ptx.into(), module_name, &[static_module_name])
+            self.context
+                .load_module(ptx.into(), module_name, &[static_module_name])
                 .map_err(|cuda| CudaError::Load {
                     cuda,
                     module_name: module_name.to_string(),
@@ -168,12 +188,14 @@ impl CudaDevice {
 
 impl CudaDevice {
     pub fn new_with_stream(ordinal: usize) -> Result<Self> {
-        let device = cudarc::driver::CudaDevice::new_with_stream(ordinal).w()?;
-        let blas = cudarc::cublas::CudaBlas::new(device.clone()).w()?;
-        let curand = cudarc::curand::CudaRng::new(299792458, device.clone()).w()?;
+        let context = cudarc::driver::CudaContext::new(ordinal).w()?;
+        let stream = context.new_stream().w()?;
+        let blas = cudarc::cublas::CudaBlas::new(stream.clone()).w()?;
+        let curand = cudarc::curand::CudaRng::new(299792458, stream.clone()).w()?;
         Ok(Self {
             id: DeviceId::new(),
-            device,
+            context,
+            stream,
             blas: Arc::new(blas),
             curand: Arc::new(Mutex::new(CudaRng(curand))),
         })
@@ -184,12 +206,14 @@ impl BackendDevice for CudaDevice {
     type Storage = CudaStorage;
 
     fn new(ordinal: usize) -> Result<Self> {
-        let device = cudarc::driver::CudaDevice::new(ordinal).w()?;
-        let blas = cudarc::cublas::CudaBlas::new(device.clone()).w()?;
-        let curand = cudarc::curand::CudaRng::new(299792458, device.clone()).w()?;
+        let context = cudarc::driver::CudaContext::new(ordinal).w()?;
+        let stream = context.default_stream();
+        let blas = cudarc::cublas::CudaBlas::new(stream.clone()).w()?;
+        let curand = cudarc::curand::CudaRng::new(299792458, stream.clone()).w()?;
         Ok(Self {
             id: DeviceId::new(),
-            device,
+            context,
+            stream,
             blas: Arc::new(blas),
             curand: Arc::new(Mutex::new(CudaRng(curand))),
         })
@@ -199,13 +223,13 @@ impl BackendDevice for CudaDevice {
         // We do not call set_seed but instead create a new curand object. This ensures that the
         // state will be identical and the same random numbers will be generated.
         let mut curand = self.curand.lock().unwrap();
-        curand.0 = cudarc::curand::CudaRng::new(seed, self.device.clone()).w()?;
+        curand.0 = cudarc::curand::CudaRng::new(seed, self.stream.clone()).w()?;
         Ok(())
     }
 
     fn location(&self) -> crate::DeviceLocation {
         crate::DeviceLocation::Cuda {
-            gpu_id: self.device.ordinal(),
+            gpu_id: self.context.ordinal(),
         }
     }
 
@@ -482,7 +506,7 @@ impl BackendDevice for CudaDevice {
     }
 
     fn synchronize(&self) -> Result<()> {
-        self.device.synchronize().map_err(crate::Error::wrap)?;
+        self.stream.synchronize().map_err(crate::Error::wrap)?;
         Ok(())
     }
 }
