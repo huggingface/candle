@@ -94,21 +94,26 @@ pub fn main() -> anyhow::Result<()> {
                     (Which::Big, LanguagePair::FrEn) => {
                         ("lmz/candle-marian", "tokenizer-marian-fr.json")
                     }
-                    (Which::Base, LanguagePair::EnZh) => {
-                        ("KeighBee/candle-marian", "tokenizer-marian-base-en-zh-en.json")
-                    }
-                    (Which::Base, LanguagePair::EnHi) => {
-                        ("KeighBee/candle-marian", "tokenizer-marian-base-en-hi-en.json")
-                    }
-                    (Which::Base, LanguagePair::EnEs) => {
-                        ("KeighBee/candle-marian", "tokenizer-marian-base-en-es-en.json")
-                    }
-                    (Which::Base, LanguagePair::EnFr) => {
-                        ("KeighBee/candle-marian", "tokenizer-marian-base-en-fr-en.json")
-                    }
-                    (Which::Base, LanguagePair::EnRu) => {
-                        ("KeighBee/candle-marian", "tokenizer-marian-base-en-ru-en.json")
-                    }
+                    (Which::Base, LanguagePair::EnZh) => (
+                        "KeighBee/candle-marian",
+                        "tokenizer-marian-base-en-zh-en.json",
+                    ),
+                    (Which::Base, LanguagePair::EnHi) => (
+                        "KeighBee/candle-marian",
+                        "tokenizer-marian-base-en-hi-en.json",
+                    ),
+                    (Which::Base, LanguagePair::EnEs) => (
+                        "KeighBee/candle-marian",
+                        "tokenizer-marian-base-en-es-en.json",
+                    ),
+                    (Which::Base, LanguagePair::EnFr) => (
+                        "KeighBee/candle-marian",
+                        "tokenizer-marian-base-en-fr-en.json",
+                    ),
+                    (Which::Base, LanguagePair::EnRu) => (
+                        "KeighBee/candle-marian",
+                        "tokenizer-marian-base-en-ru-en.json",
+                    ),
                     (Which::Big, _) => panic!("Model language pair not supported."),
                 };
                 Api::new()?.model(model_id.to_string()).get(filename)?
@@ -128,21 +133,26 @@ pub fn main() -> anyhow::Result<()> {
                     (Which::Big, LanguagePair::FrEn) => {
                         ("lmz/candle-marian", "tokenizer-marian-en.json")
                     }
-                    (Which::Base, LanguagePair::EnZh) => {
-                        ("KeighBee/candle-marian", "tokenizer-marian-base-en-zh-zh.json")
-                    }
-                    (Which::Base, LanguagePair::EnHi) => {
-                        ("KeighBee/candle-marian", "tokenizer-marian-base-en-hi-hi.json")
-                    }
-                    (Which::Base, LanguagePair::EnEs) => {
-                        ("KeighBee/candle-marian", "tokenizer-marian-base-en-es-es.json")
-                    }
-                    (Which::Base, LanguagePair::EnFr) => {
-                        ("KeighBee/candle-marian", "tokenizer-marian-base-en-fr-fr.json")
-                    }
-                    (Which::Base, LanguagePair::EnRu) => {
-                        ("KeighBee/candle-marian", "tokenizer-marian-base-en-ru-ru.json")
-                    }
+                    (Which::Base, LanguagePair::EnZh) => (
+                        "KeighBee/candle-marian",
+                        "tokenizer-marian-base-en-zh-zh.json",
+                    ),
+                    (Which::Base, LanguagePair::EnHi) => (
+                        "KeighBee/candle-marian",
+                        "tokenizer-marian-base-en-hi-hi.json",
+                    ),
+                    (Which::Base, LanguagePair::EnEs) => (
+                        "KeighBee/candle-marian",
+                        "tokenizer-marian-base-en-es-es.json",
+                    ),
+                    (Which::Base, LanguagePair::EnFr) => (
+                        "KeighBee/candle-marian",
+                        "tokenizer-marian-base-en-fr-fr.json",
+                    ),
+                    (Which::Base, LanguagePair::EnRu) => (
+                        "KeighBee/candle-marian",
+                        "tokenizer-marian-base-en-ru-ru.json",
+                    ),
                     (Which::Big, _) => panic!("Model language pair not supported."),
                 };
                 Api::new()?.model(model_id.to_string()).get(filename)?
@@ -165,8 +175,8 @@ pub fn main() -> anyhow::Result<()> {
                     ))
                     .get("model.safetensors")?,
                 (Which::Big, LanguagePair::FrEn) => Api::new()?
-                        .model("Helsinki-NLP/opus-mt-tc-big-fr-en".to_string())
-                        .get("model.safetensors")?,
+                    .model("Helsinki-NLP/opus-mt-tc-big-fr-en".to_string())
+                    .get("model.safetensors")?,
                 (Which::Base, LanguagePair::EnZh) => Api::new()?
                     .repo(hf_hub::Repo::with_revision(
                         "Helsinki-NLP/opus-mt-en-zh".to_string(),

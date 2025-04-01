@@ -106,7 +106,6 @@ impl Config {
         }
     }
 
-
     pub fn opus_mt_en_hi() -> Self {
         Self {
             activation_function: candle_nn::Activation::Swish,
