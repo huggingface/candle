@@ -56,7 +56,7 @@ impl ArgSort {
 mod cuda {
     use super::*;
     use crate::cuda_backend::cudarc::driver::{
-        CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig, ValidAsZeroBits,
+        CudaSlice, DeviceRepr, LaunchConfig, ValidAsZeroBits,
     };
     use crate::cuda_backend::{kernel_name, kernels, CudaStorageSlice as S, WrapErr};
     use crate::{CudaDevice, WithDType};
@@ -76,9 +76,9 @@ mod cuda {
             let elem_count = layout.shape().elem_count();
             let dst = unsafe { dev.alloc::<u32>(elem_count) }.w()?;
             let func = if self.asc {
-                dev.get_or_load_func(&kernel_name::<T>("asort_asc"), kernels::SORT)?
+                dev.get_or_load_func(&kernel_name::<T>("asort_asc"), &kernels::SORT)?
             } else {
-                dev.get_or_load_func(&kernel_name::<T>("asort_desc"), kernels::SORT)?
+                dev.get_or_load_func(&kernel_name::<T>("asort_desc"), &kernels::SORT)?
             };
             let ncols = self.last_dim;
             let nrows = elem_count / ncols;

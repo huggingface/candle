@@ -82,7 +82,7 @@ impl CudaDevice {
             DType::U8 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<u8>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_u8", kernels::FILL)?;
+                let func = self.get_or_load_func("fill_u8", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
                 let v = v as u8;
                 builder.arg(&data);
@@ -94,7 +94,7 @@ impl CudaDevice {
             DType::U32 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<u32>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_u32", kernels::FILL)?;
+                let func = self.get_or_load_func("fill_u32", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
                 let v = v as u32;
                 builder.arg(&data);
@@ -106,7 +106,7 @@ impl CudaDevice {
             DType::I64 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<i64>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_i64", kernels::FILL)?;
+                let func = self.get_or_load_func("fill_i64", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
                 let v = v as i64;
                 builder.arg(&data);
@@ -118,7 +118,7 @@ impl CudaDevice {
             DType::BF16 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<bf16>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_bf16", kernels::FILL)?;
+                let func = self.get_or_load_func("fill_bf16", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
                 let v = bf16::from_f64(v);
                 builder.arg(&data);
@@ -130,7 +130,7 @@ impl CudaDevice {
             DType::F16 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<f16>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_f16", kernels::FILL)?;
+                let func = self.get_or_load_func("fill_f16", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
                 let v = f16::from_f64(v);
                 builder.arg(&data);
@@ -142,7 +142,7 @@ impl CudaDevice {
             DType::F32 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<f32>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_f32", kernels::FILL)?;
+                let func = self.get_or_load_func("fill_f32", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
                 let v = v as f32;
                 builder.arg(&data);
@@ -154,7 +154,7 @@ impl CudaDevice {
             DType::F64 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<f64>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_f64", kernels::FILL)?;
+                let func = self.get_or_load_func("fill_f64", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
                 builder.arg(&data);
                 builder.arg(&v);
@@ -169,7 +169,10 @@ impl CudaDevice {
         })
     }
 
-    pub fn get_or_load_func(&self, module_name: &str, ptx: &'static str) -> Result<CudaFunction> {
+    pub fn get_or_load_func(&self, fn_name: &str, mdl: &kernels::Module) -> Result<CudaFunction> {
+        todo!()
+    }
+    /*
         if !self.has_func(module_name, module_name) {
             // Leaking the string here is a bit sad but we need a &'static str and this is only
             // done once per kernel name.
@@ -190,6 +193,7 @@ impl CudaDevice {
             })
             .w()
     }
+    */
 }
 
 impl CudaDevice {

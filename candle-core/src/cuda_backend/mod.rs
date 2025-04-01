@@ -85,7 +85,7 @@ impl Map1 for Affine {
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("affine"), kernels::AFFINE)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("affine"), &kernels::AFFINE)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
         let params = (
@@ -117,7 +117,7 @@ impl Map1 for Elu {
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("uelu"), kernels::UNARY)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("uelu"), &kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
         let params = (el, dims.len(), &ds, T::from_f64(self.0), src, &out);
@@ -154,7 +154,7 @@ impl Map1 for Im2Col1D {
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let ds = dev.memcpy_stod(&[dims, layout.stride()].concat()).w()?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("im2col1d"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("im2col1d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let dst = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let params = (
@@ -206,7 +206,7 @@ impl Map1 for Im2Col {
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let ds = dev.memcpy_stod(&[dims, layout.stride()].concat()).w()?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("im2col"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("im2col"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let dst = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let params = (
@@ -242,7 +242,7 @@ impl Map1 for Powf {
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("upowf"), kernels::UNARY)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("upowf"), &kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
         let params = (el, dims.len(), &ds, T::from_f64(self.0), src, &out);
@@ -305,7 +305,7 @@ impl Map1Any for FastReduce<'_> {
         if check_empty && layout.shape().elem_count() == 0 {
             Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
         }
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::REDUCE)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::REDUCE)?;
         if return_index {
             // SAFETY: filled in by the follow up kernel.
             let out = unsafe { dev.alloc::<u32>(dst_el) }.w()?;
@@ -337,7 +337,7 @@ impl<U: UnaryOpT> Map1 for U {
         let cfg = LaunchConfig::for_num_elems(el_count as u32);
         let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), kernels::UNARY)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), &kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el_count) }.w()?;
         let params = (el_count, dims.len(), &ds, src, &out);
@@ -388,7 +388,7 @@ impl Map1 for IndexSelect<'_> {
         let ids_dim_size = ids_shape.elem_count();
         let dst_el = ids_shape.elem_count() * left_size * right_size;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let params = (
@@ -450,7 +450,7 @@ impl Map1 for Gather<'_> {
         let right_sz: usize = src_l.dims()[dim + 1..].iter().product();
         let src_dim_sz = src_l.dims()[dim];
         let ids_dim_sz = ids_l.dims()[dim];
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
         let params = (
@@ -499,7 +499,7 @@ impl Map2InPlace for IndexAdd<'_> {
         let dst_dim_sz = dst_shape.dims()[dim];
         let ids_dim_sz = ids_l.dims()[0];
         let cfg = LaunchConfig::for_num_elems((left_sz * right_sz) as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let params = (
             ids, ids_dim_sz, &src, dst, left_sz, src_dim_sz, dst_dim_sz, right_sz,
@@ -546,7 +546,7 @@ impl Map2InPlace for ScatterAdd<'_> {
         let src_dim_sz = src_l.dims()[dim];
         let dst_dim_sz = dst_shape.dims()[dim];
         let cfg = LaunchConfig::for_num_elems((left_sz * right_sz) as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let params = (ids, &src, dst, left_sz, src_dim_sz, dst_dim_sz, right_sz);
         // SAFETY: ffi.
@@ -576,7 +576,7 @@ impl Map2 for Conv1D<'_> {
         let l_out = p.l_out();
         let dst_el = p.c_out * l_out * p.b_size;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("conv1d"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv1d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let ds = if dims.len() == 3 {
@@ -620,7 +620,7 @@ impl Map2 for Conv2D<'_> {
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("conv2d"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv2d"), &kernels::CONV)?;
         let ds = if dims.len() == 4 {
             [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
         } else {
@@ -655,7 +655,7 @@ impl Map1 for Col2Im1D {
 
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let params = (dst_el, l_out, l_in, c_out, k_size, stride, col, &mut im);
-        let func = dev.get_or_load_func(&kernel_name::<T>("col2im1d"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("col2im1d"), &kernels::CONV)?;
         unsafe { func.launch(cfg, params) }.w()?;
         Ok(im)
     }
@@ -685,7 +685,7 @@ impl Map2 for ConvTranspose1D<'_> {
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose1d"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose1d"), &kernels::CONV)?;
         let ds = if dims.len() == 3 {
             [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
         } else {
@@ -734,7 +734,7 @@ impl Map2 for ConvTranspose2D<'_> {
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose2d"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose2d"), &kernels::CONV)?;
         let ds = if dims.len() == 4 {
             [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
         } else {
@@ -798,7 +798,7 @@ impl Map1 for Pool2D {
             PoolOp::Max => "max_pool2d",
             PoolOp::Avg => "avg_pool2d",
         };
-        let func = dev.get_or_load_func(&kernel_name::<T>(kname), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(kname), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let ds = dev.memcpy_stod(&ds).w()?;
@@ -838,7 +838,7 @@ impl Map1 for UpsampleNearest2D {
         let (out_w, out_h) = (self.0, self.1);
         let dst_el = out_w * out_h * dims[0] * dims[1];
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("upsample_nearest2d"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("upsample_nearest2d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let ds = dev.memcpy_stod(&ds).w()?;
@@ -891,7 +891,7 @@ impl Map2 for WhereCond<'_> {
             .w()?;
         let t = &t.slice(layout_t.start_offset()..);
         let f = &f.slice(layout_f.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::TERNARY)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::TERNARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
         let params = (el, dims.len(), &ds, ids, t, f, &out);
@@ -924,7 +924,7 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
         };
         let lhs = &lhs.slice(lhs_l.start_offset()..);
         let rhs = &rhs.slice(rhs_l.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), kernels::BINARY)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), &kernels::BINARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
         let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
@@ -966,7 +966,7 @@ impl Map2Any for Cmp {
             CmpOp::Gt => "gt",
             CmpOp::Ge => "ge",
         };
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::BINARY)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::BINARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<u8>(elem_count) }.w()?;
         let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
@@ -1187,7 +1187,7 @@ impl BackendStorage for CudaStorage {
         let inp = &inp;
 
         let kernel_name = format!("cast_{}_{}", self.dtype().as_str(), dtype.as_str());
-        let func = dev.get_or_load_func(&kernel_name, kernels::CAST)?;
+        let func = dev.get_or_load_func(&kernel_name, &kernels::CAST)?;
         let slice = match dtype {
             DType::U8 => {
                 let out = unsafe { dev.alloc::<u8>(el) }.w()?;
@@ -1769,7 +1769,7 @@ impl BackendStorage for CudaStorage {
             ),
             _ => Err(CudaError::InternalError("dtype mismatch in copy2d"))?,
         };
-        let func = dev.get_or_load_func(kname, kernels::FILL)?;
+        let func = dev.get_or_load_func(kname, &kernels::FILL)?;
         let cfg = LaunchConfig::for_num_elems(d1 * d2);
         let params = (src, dst, d1, d2, src_s, dst_s);
         // SAFETY: ffi.
@@ -1793,7 +1793,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_bf16", kernels::UNARY)?;
+                    let func = dev.get_or_load_func("ucopy_bf16", &kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
@@ -1805,7 +1805,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_f16", kernels::UNARY)?;
+                    let func = dev.get_or_load_func("ucopy_f16", &kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
@@ -1817,7 +1817,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_f32", kernels::UNARY)?;
+                    let func = dev.get_or_load_func("ucopy_f32", &kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
@@ -1829,7 +1829,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_u8", kernels::UNARY)?;
+                    let func = dev.get_or_load_func("ucopy_u8", &kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
@@ -1841,7 +1841,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_u32", kernels::UNARY)?;
+                    let func = dev.get_or_load_func("ucopy_u32", &kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
@@ -1853,7 +1853,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_i64", kernels::UNARY)?;
+                    let func = dev.get_or_load_func("ucopy_i64", &kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
@@ -1865,7 +1865,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_f64", kernels::UNARY)?;
+                    let func = dev.get_or_load_func("ucopy_f64", &kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
