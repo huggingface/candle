@@ -356,16 +356,18 @@ impl Map1 for IndexSelect<'_> {
         src_l: &Layout,
     ) -> Result<CudaSlice<T>> {
         let ids_l = &self.1;
-        let (name, ids) = match &self.0.slice {
-            CudaStorageSlice::U32(slice) => {
-                ("is_u32", *slice.slice(ids_l.start_offset()..).device_ptr())
-            }
+        let (name, (ids, _guard)) = match &self.0.slice {
+            CudaStorageSlice::U32(slice) => (
+                "is_u32",
+                slice.slice(ids_l.start_offset()..).device_ptr(dev),
+            ),
             CudaStorageSlice::U8(slice) => {
-                ("is_u8", *slice.slice(ids_l.start_offset()..).device_ptr())
+                ("is_u8", slice.slice(ids_l.start_offset()..).device_ptr(dev))
             }
-            CudaStorageSlice::I64(slice) => {
-                ("is_i64", *slice.slice(ids_l.start_offset()..).device_ptr())
-            }
+            CudaStorageSlice::I64(slice) => (
+                "is_i64",
+                slice.slice(ids_l.start_offset()..).device_ptr(dev),
+            ),
             _ => Err(CudaError::UnexpectedDType {
                 msg: "index_select ids should be u8 or u32",
                 expected: DType::U32,
@@ -422,13 +424,15 @@ impl Map1 for Gather<'_> {
             Some(o12) => o12,
             None => Err(crate::Error::RequiresContiguous { op: "gather" }.bt())?,
         };
-        let (name, ids) = match &ids.slice {
+        let (name, (ids, _guard)) = match &ids.slice {
             CudaStorageSlice::U32(slice) => {
-                ("gather_u32", *slice.slice(ids_o1..ids_o2).device_ptr())
+                ("gather_u32", slice.slice(ids_o1..ids_o2).device_ptr(dev))
             }
-            CudaStorageSlice::U8(slice) => ("gather_u8", *slice.slice(ids_o1..ids_o2).device_ptr()),
+            CudaStorageSlice::U8(slice) => {
+                ("gather_u8", slice.slice(ids_o1..ids_o2).device_ptr(dev))
+            }
             CudaStorageSlice::I64(slice) => {
-                ("gather_i64", *slice.slice(ids_o1..ids_o2).device_ptr())
+                ("gather_i64", slice.slice(ids_o1..ids_o2).device_ptr(dev))
             }
             _ => Err(CudaError::UnexpectedDType {
                 msg: "gather ids should be u8/u32/i64",
@@ -475,10 +479,10 @@ impl Map2InPlace for IndexAdd<'_> {
             Some(o12) => o12,
             None => Err(crate::Error::RequiresContiguous { op: "index-add" }.bt())?,
         };
-        let (name, ids) = match &ids.slice {
-            CudaStorageSlice::U32(slice) => ("ia_u32", *slice.slice(ids_o1..ids_o2).device_ptr()),
-            CudaStorageSlice::I64(slice) => ("ia_i64", *slice.slice(ids_o1..ids_o2).device_ptr()),
-            CudaStorageSlice::U8(slice) => ("ia_u8", *slice.slice(ids_o1..ids_o2).device_ptr()),
+        let (name, (ids, _guard)) = match &ids.slice {
+            CudaStorageSlice::U32(slice) => ("ia_u32", slice.slice(ids_o1..ids_o2).device_ptr(dev)),
+            CudaStorageSlice::I64(slice) => ("ia_i64", slice.slice(ids_o1..ids_o2).device_ptr(dev)),
+            CudaStorageSlice::U8(slice) => ("ia_u8", slice.slice(ids_o1..ids_o2).device_ptr(dev)),
             _ => Err(CudaError::UnexpectedDType {
                 msg: "index-add ids should be u8/u32/i64",
                 expected: DType::U32,
@@ -523,10 +527,10 @@ impl Map2InPlace for ScatterAdd<'_> {
             Some(o12) => o12,
             None => Err(crate::Error::RequiresContiguous { op: "scatter-add" }.bt())?,
         };
-        let (name, ids) = match &ids.slice {
-            CudaStorageSlice::U32(slice) => ("sa_u32", *slice.slice(ids_o1..ids_o2).device_ptr()),
-            CudaStorageSlice::I64(slice) => ("sa_i64", *slice.slice(ids_o1..ids_o2).device_ptr()),
-            CudaStorageSlice::U8(slice) => ("sa_u8", *slice.slice(ids_o1..ids_o2).device_ptr()),
+        let (name, (ids, _guard)) = match &ids.slice {
+            CudaStorageSlice::U32(slice) => ("sa_u32", slice.slice(ids_o1..ids_o2).device_ptr(dev)),
+            CudaStorageSlice::I64(slice) => ("sa_i64", slice.slice(ids_o1..ids_o2).device_ptr(dev)),
+            CudaStorageSlice::U8(slice) => ("sa_u8", slice.slice(ids_o1..ids_o2).device_ptr(dev)),
             _ => Err(CudaError::UnexpectedDType {
                 msg: "scatter-add ids should be u8/u32/i64",
                 expected: DType::U32,
@@ -858,17 +862,17 @@ impl Map2 for WhereCond<'_> {
         dev: &CudaDevice,
     ) -> Result<CudaSlice<T>> {
         let ids_l = &self.1;
-        let (ids, name) = match &self.0.slice {
+        let ((ids, _guard), name) = match &self.0.slice {
             CudaStorageSlice::U8(slice) => {
-                let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
+                let ptr = slice.slice(ids_l.start_offset()..).device_ptr(dev);
                 (ptr, "where_u8")
             }
             CudaStorageSlice::U32(slice) => {
-                let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
+                let ptr = slice.slice(ids_l.start_offset()..).device_ptr(dev);
                 (ptr, "where_u32")
             }
             CudaStorageSlice::I64(slice) => {
-                let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
+                let ptr = slice.slice(ids_l.start_offset()..).device_ptr(dev);
                 (ptr, "where_i64")
             }
             _ => Err(CudaError::UnexpectedDType {
@@ -1171,14 +1175,14 @@ impl BackendStorage for CudaStorage {
         // This returns an i64 rather than a &i64, this is useful to get around some temporary
         // lifetime issue and is safe as long as self.slice does not go out of scope before inp
         // is used.
-        let inp = match &self.slice {
-            CudaStorageSlice::U8(inp) => *inp.slice(start_o..).device_ptr(),
-            CudaStorageSlice::U32(inp) => *inp.slice(start_o..).device_ptr(),
-            CudaStorageSlice::I64(inp) => *inp.slice(start_o..).device_ptr(),
-            CudaStorageSlice::BF16(inp) => *inp.slice(start_o..).device_ptr(),
-            CudaStorageSlice::F16(inp) => *inp.slice(start_o..).device_ptr(),
-            CudaStorageSlice::F32(inp) => *inp.slice(start_o..).device_ptr(),
-            CudaStorageSlice::F64(inp) => *inp.slice(start_o..).device_ptr(),
+        let (inp, _guard) = match &self.slice {
+            CudaStorageSlice::U8(inp) => inp.slice(start_o..).device_ptr(dev),
+            CudaStorageSlice::U32(inp) => inp.slice(start_o..).device_ptr(dev),
+            CudaStorageSlice::I64(inp) => inp.slice(start_o..).device_ptr(dev),
+            CudaStorageSlice::BF16(inp) => inp.slice(start_o..).device_ptr(dev),
+            CudaStorageSlice::F16(inp) => inp.slice(start_o..).device_ptr(dev),
+            CudaStorageSlice::F32(inp) => inp.slice(start_o..).device_ptr(dev),
+            CudaStorageSlice::F64(inp) => inp.slice(start_o..).device_ptr(dev),
         };
         let inp = &inp;
 
@@ -1727,40 +1731,40 @@ impl BackendStorage for CudaStorage {
         }
         let dst_s = dst_s as u32;
         let src_s = src_s as u32;
-        let (src, dst, kname) = match (&self.slice, &mut dst.slice) {
+        let ((src, _guard_src), (dst, _guard_dst), kname) = match (&self.slice, &mut dst.slice) {
             (S::U8(s), S::U8(d)) => (
-                *s.slice(src_o..).device_ptr(),
-                *d.slice(dst_o..).device_ptr(),
+                s.slice(src_o..).device_ptr(dev),
+                d.slice(dst_o..).device_ptr(dev),
                 "copy2d_u8",
             ),
             (S::U32(s), S::U32(d)) => (
-                *s.slice(src_o..).device_ptr(),
-                *d.slice(dst_o..).device_ptr(),
+                s.slice(src_o..).device_ptr(dev),
+                d.slice(dst_o..).device_ptr(dev),
                 "copy2d_u32",
             ),
             (S::I64(s), S::I64(d)) => (
-                *s.slice(src_o..).device_ptr(),
-                *d.slice(dst_o..).device_ptr(),
+                s.slice(src_o..).device_ptr(dev),
+                d.slice(dst_o..).device_ptr(dev),
                 "copy2d_i64",
             ),
             (S::BF16(s), S::BF16(d)) => (
-                *s.slice(src_o..).device_ptr(),
-                *d.slice(dst_o..).device_ptr(),
+                s.slice(src_o..).device_ptr(dev),
+                d.slice(dst_o..).device_ptr(dev),
                 "copy2d_bf16",
             ),
             (S::F16(s), S::F16(d)) => (
-                *s.slice(src_o..).device_ptr(),
-                *d.slice(dst_o..).device_ptr(),
+                s.slice(src_o..).device_ptr(dev),
+                d.slice(dst_o..).device_ptr(dev),
                 "copy2d_f16",
             ),
             (S::F32(s), S::F32(d)) => (
-                *s.slice(src_o..).device_ptr(),
-                *d.slice(dst_o..).device_ptr(),
+                s.slice(src_o..).device_ptr(dev),
+                d.slice(dst_o..).device_ptr(dev),
                 "copy2d_f32",
             ),
             (S::F64(s), S::F64(d)) => (
-                *s.slice(src_o..).device_ptr(),
-                *d.slice(dst_o..).device_ptr(),
+                s.slice(src_o..).device_ptr(dev),
+                d.slice(dst_o..).device_ptr(dev),
                 "copy2d_f64",
             ),
             _ => Err(CudaError::InternalError("dtype mismatch in copy2d"))?,
@@ -1939,6 +1943,11 @@ unsafe fn gemm_strided_batched_f32(
     let alpha = &cfg.gemm.alpha as *const f32 as *const _;
     let beta = &cfg.gemm.beta as *const f32 as *const _;
 
+    let stream = c.stream().clone();
+    let (a, _guard_a) = a.device_ptr(&stream);
+    let (b, _guard_b) = b.device_ptr(&stream);
+    let (c, _guard_c) = c.device_ptr_mut(&stream);
+
     cudarc::cublas::result::gemm_strided_batched_ex(
         *cublas.handle(),
         cfg.gemm.transa,
@@ -1947,16 +1956,16 @@ unsafe fn gemm_strided_batched_f32(
         cfg.gemm.n,
         cfg.gemm.k,
         alpha,
-        *a.device_ptr() as *const _,
+        a as *const _,
         sys::cudaDataType_t::CUDA_R_32F,
         cfg.gemm.lda,
         cfg.stride_a,
-        *b.device_ptr() as *const _,
+        b as *const _,
         sys::cudaDataType_t::CUDA_R_32F,
         cfg.gemm.ldb,
         cfg.stride_b,
         beta,
-        *c.device_ptr_mut() as *mut _,
+        c as *mut _,
         sys::cudaDataType_t::CUDA_R_32F,
         cfg.gemm.ldc,
         cfg.stride_c,
@@ -1994,6 +2003,10 @@ unsafe fn gemm_strided_batched_f16(
         )
     };
 
+    let stream = c.stream().clone();
+    let (a, _guard_a) = a.device_ptr(&stream);
+    let (b, _guard_b) = b.device_ptr(&stream);
+    let (c, _guard_c) = c.device_ptr_mut(&stream);
     cudarc::cublas::result::gemm_strided_batched_ex(
         *cublas.handle(),
         cfg.gemm.transa,
@@ -2002,16 +2015,16 @@ unsafe fn gemm_strided_batched_f16(
         cfg.gemm.n,
         cfg.gemm.k,
         alpha,
-        *a.device_ptr() as *const _,
+        a as *const _,
         sys::cudaDataType_t::CUDA_R_16F,
         cfg.gemm.lda,
         cfg.stride_a,
-        *b.device_ptr() as *const _,
+        b as *const _,
         sys::cudaDataType_t::CUDA_R_16F,
         cfg.gemm.ldb,
         cfg.stride_b,
         beta,
-        *c.device_ptr_mut() as *mut _,
+        c as *mut _,
         sys::cudaDataType_t::CUDA_R_16F,
         cfg.gemm.ldc,
         cfg.stride_c,
@@ -2049,6 +2062,10 @@ unsafe fn gemm_strided_batched_bf16(
         )
     };
 
+    let stream = c.stream().clone();
+    let (a, _guard_a) = a.device_ptr(&stream);
+    let (b, _guard_b) = b.device_ptr(&stream);
+    let (c, _guard_c) = c.device_ptr_mut(&stream);
     cudarc::cublas::result::gemm_strided_batched_ex(
         *cublas.handle(),
         cfg.gemm.transa,
@@ -2057,16 +2074,16 @@ unsafe fn gemm_strided_batched_bf16(
         cfg.gemm.n,
         cfg.gemm.k,
         alpha,
-        *a.device_ptr() as *const _,
+        a as *const _,
         sys::cudaDataType_t::CUDA_R_16BF,
         cfg.gemm.lda,
         cfg.stride_a,
-        *b.device_ptr() as *const _,
+        b as *const _,
         sys::cudaDataType_t::CUDA_R_16BF,
         cfg.gemm.ldb,
         cfg.stride_b,
         beta,
-        *c.device_ptr_mut() as *mut _,
+        c as *mut _,
         sys::cudaDataType_t::CUDA_R_16BF,
         cfg.gemm.ldc,
         cfg.stride_c,
