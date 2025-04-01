@@ -4,7 +4,7 @@ use crate::{backend::BackendDevice, cuda_backend::WrapErr};
 use crate::{CudaDevice, CudaStorage, Result};
 use half::f16;
 
-use cudarc::driver::{CudaSlice, CudaView, DeviceSlice};
+use cudarc::driver::{CudaSlice, CudaView};
 
 #[derive(Clone, Debug)]
 struct PaddedCudaSlice {
@@ -450,7 +450,7 @@ impl QCudaStorage {
             data.len() + MATRIX_ROW_PADDING * self.dtype.type_size() / self.dtype.block_size();
         let mut inner = unsafe { self.device.alloc::<u8>(padded_len).w()? };
         self.device
-            .htod_sync_copy_into(data.as_ref(), &mut inner.slice_mut(..data.len()))
+            .memcpy_htod(data.as_ref(), &mut inner.slice_mut(..data.len()))
             .w()?;
         self.data = PaddedCudaSlice {
             inner,
@@ -587,7 +587,7 @@ pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
     let padded_len = data.len() + MATRIX_ROW_PADDING * dtype.type_size() / dtype.block_size();
     let mut inner = unsafe { device.alloc::<u8>(padded_len).w()? };
     device
-        .htod_sync_copy_into(data, &mut inner.slice_mut(..data.len()))
+        .memcpy_htod(data, &mut inner.slice_mut(..data.len()))
         .w()?;
     Ok(QStorage::Cuda(QCudaStorage {
         data: PaddedCudaSlice {

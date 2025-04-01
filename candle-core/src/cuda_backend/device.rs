@@ -2,7 +2,7 @@ use crate::backend::BackendDevice;
 use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 pub use candle_kernels as kernels;
 pub use cudarc;
-use cudarc::driver::{CudaFunction, CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg};
+use cudarc::driver::{CudaFunction, LaunchConfig, PushKernelArg};
 use half::{bf16, f16};
 use std::sync::{Arc, Mutex};
 

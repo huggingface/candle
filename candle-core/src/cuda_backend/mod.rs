@@ -6,9 +6,7 @@ use crate::{CpuStorage, DType, Layout, Result, Shape, WithDType};
 pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
-use cudarc::driver::{
-    CudaSlice, DevicePtr, DeviceRepr, DeviceSlice, LaunchConfig, ValidAsZeroBits,
-};
+use cudarc::driver::{CudaSlice, DevicePtr, DeviceRepr, LaunchConfig, ValidAsZeroBits};
 use half::{bf16, f16};
 
 #[cfg(feature = "cudnn")]
@@ -1286,38 +1284,31 @@ impl BackendStorage for CudaStorage {
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         match &self.slice {
             CudaStorageSlice::U8(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::U8(cpu_storage))
             }
             CudaStorageSlice::U32(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::U32(cpu_storage))
             }
             CudaStorageSlice::I64(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::I64(cpu_storage))
             }
             CudaStorageSlice::BF16(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::BF16(cpu_storage))
             }
             CudaStorageSlice::F16(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::F16(cpu_storage))
             }
             CudaStorageSlice::F32(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::F32(cpu_storage))
             }
             CudaStorageSlice::F64(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::F64(cpu_storage))
             }
         }
@@ -1796,7 +1787,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::BF16(src), CudaStorageSlice::BF16(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_bf16", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
@@ -1808,7 +1799,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F16(src), CudaStorageSlice::F16(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_f16", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
@@ -1820,7 +1811,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F32(src), CudaStorageSlice::F32(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_f32", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
@@ -1832,7 +1823,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::U8(src), CudaStorageSlice::U8(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_u8", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
@@ -1844,7 +1835,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::U32(src), CudaStorageSlice::U32(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_u32", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
@@ -1856,7 +1847,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::I64(src), CudaStorageSlice::I64(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_i64", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
@@ -1868,7 +1859,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F64(src), CudaStorageSlice::F64(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_f64", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
