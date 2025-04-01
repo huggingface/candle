@@ -687,7 +687,6 @@ impl BertClassifier {
                         "num_labels must be provided if classifier_config is not present in Config"
                     ),
                 };
-                // Infer num_labels from id2label or label2id (they should have the same length)
                 let num_labels = classifier_config.id2label.len();
                 if num_labels != classifier_config.label2id.len() {
                     candle::bail!(

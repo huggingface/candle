@@ -14,8 +14,8 @@ function elementNotFound(id) {
 
 const modelSelectEl = document.querySelector("#model");
 const searchExampleEl = document.querySelector("#search-example");
-const formExampleEl = document.querySelector("#form-example")
-const textInput = document.getElementById("textInput")
+const formExampleEl = document.querySelector("#form-example");
+const textInput = document.getElementById("textInput");
 
 async function getWikiText(article) {
     // thanks to wikipedia for the API
@@ -38,7 +38,6 @@ async function getWikiText(article) {
         })
         .catch((error) => console.error("Error:", error));
 }
-
 
 formExampleEl?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -96,7 +95,6 @@ worker.onmessage = (event) => {
     if (modelSelectEl === null) {
         throw new Error("Did not find element by query selector #model");
     }
-
 
     switch (type) {
         case "initialized":

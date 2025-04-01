@@ -2,10 +2,7 @@
  * @typedef {Uint8Array} U8Array
  * @description An array of unsigned 8-bit integers (0-255).
  */
-import init, {
-    BertPredictor,
-    ModernBertPredictor,
-} from "./build/m.js";
+import init, { BertPredictor, ModernBertPredictor } from "./build/m.js";
 
 /**
  * Fetches an array buffer from a URL, with caching support and progress callback.
@@ -174,7 +171,7 @@ class Model {
     }
 
     /**
-       * Initializes and loads the BERT model.
+       * Initializes and loads the BERT/ModernBert model.
           * @param {string} modelName
        * @returns {Promise<BertPredictor>} - The loaded model instance.
       
@@ -187,6 +184,7 @@ class Model {
             await this.loadFiles(files);
             if (modelName.toLowerCase().includes("modernbert")) {
                 Model.loadedModel = new ModernBertPredictor(
+                    // @ts-ignore
                     this.config,
                     this.model,
                     this.vocab,
@@ -200,6 +198,7 @@ class Model {
                 }
 
                 Model.loadedModel = new BertPredictor(
+                    // @ts-ignore
                     this.config,
                     this.model,
                     this.vocab,
@@ -233,8 +232,7 @@ class Model {
     }
 
     /**
-     * Handles messages from the main thread.
-     * @param {MessageEvent} event - The message event from the main thread.
+     * @param {MessageEvent} event - The message event
      */
     async handleMessage(event) {
         const { type, data } = event.data;
@@ -254,12 +252,14 @@ class Model {
                 try {
                     const result = Model.loadedModel.predict(data.text);
                     let rawMap = result.to_json();
-                    const id2label = rawMap.get("id2label")
+                    const id2label = rawMap.get("id2label");
                     self.postMessage({
                         type: "result",
                         message: {
                             probs: rawMap.get("probs"),
-                            labels: id2label ? [...id2label.values()] : rawMap.get("labels"),
+                            labels: id2label
+                                ? [...id2label.values()]
+                                : rawMap.get("labels"),
                         },
                     });
                 } catch (error) {
@@ -285,7 +285,7 @@ class Model {
 
 /**
  * @param {string} modelName
- * @typedef {{configURL: string, modelURL: string, vocabURL: string}} modelFiles
+ * @typedef {{configURL: string, modelURL: string, vocabURL: string, tokenizerConfigURL: string, specialTokensMapURL: string}} modelFiles
  * @returns {modelFiles}
  */
 function getModel(modelName) {
@@ -345,6 +345,9 @@ function getModel(modelName) {
 (async () => {
     try {
         const modelInstance = new Model();
+        /**
+         * @param {MessageEvent} event - The message event
+         */
         self.onmessage = (event) => modelInstance.handleMessage(event);
 
         self.postMessage({
