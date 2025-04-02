@@ -4,6 +4,7 @@ pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::driver::{CudaFunction, LaunchConfig, PushKernelArg};
 use half::{bf16, f16};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use super::{CudaError, CudaStorage, CudaStorageSlice, WrapErr};
@@ -33,6 +34,7 @@ pub struct CudaDevice {
     id: DeviceId,
     context: Arc<cudarc::driver::CudaContext>,
     modules: Arc<std::sync::RwLock<ModuleStore>>,
+    custom_modules: Arc<std::sync::RwLock<HashMap<String, Arc<cudarc::driver::CudaModule>>>>,
     stream: Arc<cudarc::driver::CudaStream>,
     pub(crate) blas: Arc<cudarc::cublas::CudaBlas>,
     curand: Arc<Mutex<CudaRng>>,
@@ -212,6 +214,31 @@ impl CudaDevice {
         })
     }
 
+    pub fn get_or_load_custom_func(
+        &self,
+        fn_name: &str,
+        module_name: &str,
+        ptx: &str,
+    ) -> Result<CudaFunc> {
+        let ms = self.custom_modules.read().unwrap();
+        if let Some(mdl) = ms.get(module_name).as_ref() {
+            let func = mdl.load_function(fn_name).w()?;
+            return Ok(CudaFunc {
+                func,
+                stream: self.stream.clone(),
+            });
+        }
+        drop(ms);
+        let mut ms = self.custom_modules.write().unwrap();
+        let cuda_module = self.context.load_module(ptx.into()).w()?;
+        ms.insert(module_name.to_string(), cuda_module.clone());
+        let func = cuda_module.load_function(fn_name).w()?;
+        Ok(CudaFunc {
+            func,
+            stream: self.stream.clone(),
+        })
+    }
+
     pub fn get_or_load_func(&self, fn_name: &str, mdl: &kernels::Module) -> Result<CudaFunc> {
         let ms = self.modules.read().unwrap();
         if let Some(mdl) = ms.mdls[mdl.index()].as_ref() {
@@ -224,19 +251,12 @@ impl CudaDevice {
         drop(ms);
         let mut ms = self.modules.write().unwrap();
         let cuda_module = self.context.load_module(mdl.ptx().into()).w()?;
-        ms.mdls[mdl.index()] = Some(cuda_module);
-        if let Some(mdl) = ms.mdls[mdl.index()].as_ref() {
-            let func = mdl.load_function(fn_name).w()?;
-            Ok(CudaFunc {
-                func,
-                stream: self.stream.clone(),
-            })
-        } else {
-            Err(CudaError::MissingKernel {
-                module_name: fn_name.to_string(),
-            })
-            .w()
-        }
+        ms.mdls[mdl.index()] = Some(cuda_module.clone());
+        let func = cuda_module.load_function(fn_name).w()?;
+        Ok(CudaFunc {
+            func,
+            stream: self.stream.clone(),
+        })
     }
 }
 
@@ -256,6 +276,7 @@ impl CudaDevice {
             blas: Arc::new(blas),
             curand: Arc::new(Mutex::new(CudaRng(curand))),
             modules: Arc::new(std::sync::RwLock::new(module_store)),
+            custom_modules: Arc::new(std::sync::RwLock::new(HashMap::new())),
         })
     }
 }
@@ -278,6 +299,7 @@ impl BackendDevice for CudaDevice {
             blas: Arc::new(blas),
             curand: Arc::new(Mutex::new(CudaRng(curand))),
             modules: Arc::new(std::sync::RwLock::new(module_store)),
+            custom_modules: Arc::new(std::sync::RwLock::new(HashMap::new())),
         })
     }
 
