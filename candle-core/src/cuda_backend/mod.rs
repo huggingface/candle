@@ -29,7 +29,7 @@ impl<T: DeviceRepr> SlicePtrOrNull<T> {
     fn builder_arg<'a, 'b: 'a>(&'b self, builder: &mut cudarc::driver::LaunchArgs<'a>) {
         match self {
             SlicePtrOrNull::Ptr(slice) => builder.arg(slice),
-            SlicePtrOrNull::Null => builder.arg(&0),
+            SlicePtrOrNull::Null => builder.arg(&0usize),
         };
     }
 }
@@ -362,13 +362,13 @@ impl<U: UnaryOpT> Map1 for U {
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), &kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(el_count) }.w()?;
+        let mut out = unsafe { dev.alloc::<T>(el_count) }.w()?;
         let mut builder = func.builder();
         barg!(builder, el_count);
         barg!(builder, dims.len());
         ds.builder_arg(&mut builder);
         builder.arg(src);
-        builder.arg(&out);
+        builder.arg(&mut out);
         // SAFETY: ffi.
         unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
