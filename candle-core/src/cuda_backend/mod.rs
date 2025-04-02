@@ -990,9 +990,15 @@ impl Map2Any for Cmp {
         let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::BINARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<u8>(elem_count) }.w()?;
-        let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
+        let mut builder = func.builder();
+        barg!(builder, elem_count);
+        barg!(builder, dims.len());
+        dims_and_strides.builder_arg(&mut builder);
+        builder.arg(lhs);
+        builder.arg(rhs);
+        builder.arg(&out);
         // SAFETY: ffi
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(S::U8(out))
     }
 }
@@ -1224,32 +1230,57 @@ impl BackendStorage for CudaStorage {
             }
             DType::I64 => {
                 let out = unsafe { dev.alloc::<i64>(el) }.w()?;
-                let params = (el, dims.len(), &ds, *inp, &out);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::I64(out)
             }
             DType::BF16 => {
                 let out = unsafe { dev.alloc::<bf16>(el) }.w()?;
-                let params = (el, dims.len(), &ds, *inp, &out);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::BF16(out)
             }
             DType::F16 => {
                 let out = unsafe { dev.alloc::<f16>(el) }.w()?;
-                let params = (el, dims.len(), &ds, *inp, &out);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::F16(out)
             }
             DType::F32 => {
                 let out = unsafe { dev.alloc::<f32>(el) }.w()?;
-                let params = (el, dims.len(), &ds, *inp, &out);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::F32(out)
             }
             DType::F64 => {
                 let out = unsafe { dev.alloc::<f64>(el) }.w()?;
-                let params = (el, dims.len(), &ds, *inp, &out);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::F64(out)
             }
         };
@@ -1815,10 +1846,14 @@ impl BackendStorage for CudaStorage {
                     dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_bf16", &kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             (CudaStorageSlice::F16(src), CudaStorageSlice::F16(dst)) => {
@@ -1827,10 +1862,14 @@ impl BackendStorage for CudaStorage {
                     dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_f16", &kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             (CudaStorageSlice::F32(src), CudaStorageSlice::F32(dst)) => {
@@ -1839,10 +1878,14 @@ impl BackendStorage for CudaStorage {
                     dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_f32", &kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             (CudaStorageSlice::U8(src), CudaStorageSlice::U8(dst)) => {
@@ -1851,10 +1894,14 @@ impl BackendStorage for CudaStorage {
                     dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_u8", &kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             (CudaStorageSlice::U32(src), CudaStorageSlice::U32(dst)) => {
@@ -1863,10 +1910,14 @@ impl BackendStorage for CudaStorage {
                     dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_u32", &kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             (CudaStorageSlice::I64(src), CudaStorageSlice::I64(dst)) => {
@@ -1875,10 +1926,14 @@ impl BackendStorage for CudaStorage {
                     dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_i64", &kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             (CudaStorageSlice::F64(src), CudaStorageSlice::F64(dst)) => {
@@ -1887,10 +1942,14 @@ impl BackendStorage for CudaStorage {
                     dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
                     let func = dev.get_or_load_func("ucopy_f64", &kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?;
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             _ => Err(CudaError::InternalError(
