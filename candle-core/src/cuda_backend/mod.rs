@@ -1065,6 +1065,7 @@ pub struct CudaStorage {
 
 pub trait CudaDType: Sized {
     fn as_cuda_slice(s: &CudaStorage) -> Result<&CudaSlice<Self>>;
+    fn as_cuda_slice_mut(s: &mut CudaStorage) -> Result<&mut CudaSlice<Self>>;
     fn wrap_cuda_slice(s: CudaSlice<Self>, dev: CudaDevice) -> CudaStorage;
 }
 
@@ -1074,6 +1075,18 @@ macro_rules! cuda_dtype {
             fn as_cuda_slice(s: &CudaStorage) -> Result<&CudaSlice<Self>> {
                 match &s.slice {
                     CudaStorageSlice::$dtype(data) => Ok(&data),
+                    _ => Err(crate::Error::UnexpectedDType {
+                        expected: DType::$dtype,
+                        got: s.dtype(),
+                        msg: "unexpected dtype",
+                    }
+                    .bt()),
+                }
+            }
+
+            fn as_cuda_slice_mut(s: &mut CudaStorage) -> Result<&mut CudaSlice<Self>> {
+                match s.slice {
+                    CudaStorageSlice::$dtype(ref mut data) => Ok(data),
                     _ => Err(crate::Error::UnexpectedDType {
                         expected: DType::$dtype,
                         got: s.dtype(),
@@ -1105,6 +1118,10 @@ impl CudaStorage {
 
     pub fn as_cuda_slice<T: CudaDType>(&self) -> Result<&CudaSlice<T>> {
         T::as_cuda_slice(self)
+    }
+
+    pub fn as_cuda_slice_mut<T: CudaDType>(&mut self) -> Result<&mut CudaSlice<T>> {
+        T::as_cuda_slice_mut(self)
     }
 }
 
