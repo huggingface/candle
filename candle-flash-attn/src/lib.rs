@@ -580,6 +580,7 @@ impl FlashAttnVarLen {
 
             let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
 
+            // Dropping the guard here doesn't seem very safe.
             let (ptr, _guard) = alibi_slopes.device_ptr(&stream);
             ptr as *const core::ffi::c_void
         } else {
