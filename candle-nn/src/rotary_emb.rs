@@ -88,7 +88,7 @@ impl candle::CustomOp3 for RotaryEmbI {
         l3: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg,
         };
         use candle::cuda_backend::{kernel_name, kernels, WrapErr};
         use candle::{CudaDevice, WithDType};
@@ -117,12 +117,17 @@ impl candle::CustomOp3 for RotaryEmbI {
             let (b, h, t, d) = l_src.shape().dims4()?;
             let el = b * h * t * d;
             let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
-            let func = dev.get_or_load_func(&kernel_name::<T>("rope_i"), kernels::REDUCE)?;
+            let func = dev.get_or_load_func(&kernel_name::<T>("rope_i"), &kernels::REDUCE)?;
             // SAFETY: Set later by running the kernel.
             let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-            let params = (&src, &cos, &sin, &dst, (b * h) as u32, (t * d) as u32);
+            let mut builder = func.builder();
+            builder.arg(&src);
+            builder.arg(&cos);
+            builder.arg(&sin);
+            builder.arg(&dst);
+            candle::builder_arg!(builder, (b * h) as u32, (t * d) as u32);
             // SAFETY: ffi.
-            unsafe { func.launch(cfg, params) }.w()?;
+            unsafe { builder.launch(cfg) }.w()?;
             Ok(dst)
         }
 
@@ -333,7 +338,7 @@ impl candle::CustomOp3 for RotaryEmb {
         l3: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg,
         };
         use candle::cuda_backend::{kernel_name, kernels, WrapErr};
         use candle::{CudaDevice, WithDType};
@@ -362,20 +367,17 @@ impl candle::CustomOp3 for RotaryEmb {
             let (b, h, t, d) = l_src.shape().dims4()?;
             let el = b * h * t * d;
             let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
-            let func = dev.get_or_load_func(&kernel_name::<T>("rope"), kernels::REDUCE)?;
+            let func = dev.get_or_load_func(&kernel_name::<T>("rope"), &kernels::REDUCE)?;
             // SAFETY: Set later by running the kernel.
             let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-            let params = (
-                &src,
-                &cos,
-                &sin,
-                &dst,
-                (b * h) as u32,
-                (t * d) as u32,
-                d as u32,
-            );
+            let mut builder = func.builder();
+            builder.arg(&src);
+            builder.arg(&cos);
+            builder.arg(&sin);
+            builder.arg(&dst);
+            candle::builder_arg!(builder, (b * h) as u32, (t * d) as u32, d as u32);
             // SAFETY: ffi.
-            unsafe { func.launch(cfg, params) }.w()?;
+            unsafe { builder.launch(cfg) }.w()?;
             Ok(dst)
         }
 
@@ -587,7 +589,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
         l3: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg,
         };
         use candle::cuda_backend::{kernel_name, kernels, WrapErr};
         use candle::{CudaDevice, WithDType};
@@ -616,14 +618,17 @@ impl candle::CustomOp3 for RotaryEmbThd {
             let (b, t, h, d) = l_src.shape().dims4()?;
             let el = b * h * t * d;
             let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
-            let func = dev.get_or_load_func(&kernel_name::<T>("rope_thd"), kernels::REDUCE)?;
+            let func = dev.get_or_load_func(&kernel_name::<T>("rope_thd"), &kernels::REDUCE)?;
             // SAFETY: Set later by running the kernel.
             let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-            let params = (
-                &src, &cos, &sin, &dst, b as u32, t as u32, h as u32, d as u32,
-            );
+            let mut builder = func.builder();
+            builder.arg(&src);
+            builder.arg(&cos);
+            builder.arg(&sin);
+            builder.arg(&dst);
+            candle::builder_arg!(builder, b as u32, t as u32, h as u32, d as u32);
             // SAFETY: ffi.
-            unsafe { func.launch(cfg, params) }.w()?;
+            unsafe { builder.launch(cfg) }.w()?;
             Ok(dst)
         }
 

@@ -26,7 +26,7 @@ pub enum SlicePtrOrNull<T> {
 }
 
 impl<T: DeviceRepr> SlicePtrOrNull<T> {
-    fn builder_arg<'a, 'b: 'a>(&'b self, builder: &mut cudarc::driver::LaunchArgs<'a>) {
+    pub fn builder_arg<'a, 'b: 'a>(&'b self, builder: &mut cudarc::driver::LaunchArgs<'a>) {
         match self {
             SlicePtrOrNull::Ptr(slice) => builder.arg(slice),
             SlicePtrOrNull::Null => builder.arg(&0usize),
