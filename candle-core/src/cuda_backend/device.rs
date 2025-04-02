@@ -65,6 +65,12 @@ impl std::ops::Deref for CudaFunc {
     }
 }
 
+impl CudaFunc {
+    pub fn into_cuda_function(self) -> CudaFunction {
+        self.func
+    }
+}
+
 #[macro_export]
 macro_rules! builder_arg {
     ($b:ident, $($arg:expr),*) => {

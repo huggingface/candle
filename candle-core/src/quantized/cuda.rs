@@ -1,10 +1,10 @@
 use super::{GgmlDType, QStorage};
 use crate::quantized::k_quants::GgmlType;
 use crate::{backend::BackendDevice, cuda_backend::WrapErr};
-use crate::{CudaDevice, CudaStorage, Result};
+use crate::{builder_arg as barg, CudaDevice, CudaStorage, Result};
 use half::f16;
 
-use cudarc::driver::{CudaSlice, CudaView};
+use cudarc::driver::{CudaSlice, CudaView, PushKernelArg};
 
 #[derive(Clone, Debug)]
 struct PaddedCudaSlice {
@@ -59,8 +59,11 @@ fn quantize_q8_1(
         block_dim: (CUDA_QUANTIZE_BLOCK_SIZE as u32, 1, 1),
         shared_mem_bytes: 0,
     };
-    let params = (src, dst, kx as i32, kx_padded as i32);
-    unsafe { func.launch(cfg, params) }.w()?;
+    let mut builder = func.builder();
+    builder.arg(src);
+    builder.arg(dst);
+    barg!(builder, kx as i32, kx_padded as i32);
+    unsafe { builder.launch(cfg) }.w()?;
     Ok(())
 }
 
@@ -106,15 +109,20 @@ fn dequantize_f32(
     };
 
     if is_k {
-        let params = (&data.inner, &dst);
-        unsafe { func.launch(cfg, params) }.w()?;
+        let mut builder = func.builder();
+        builder.arg(&data.inner);
+        builder.arg(&dst);
+        unsafe { builder.launch(cfg) }.w()?;
     } else {
         let nb32 = match dtype {
             GgmlDType::Q5_0 | GgmlDType::Q5_1 => elem_count,
             _ => elem_count / 32,
         };
-        let params = (&data.inner, &dst, nb32 as i32);
-        unsafe { func.launch(cfg, params) }.w()?;
+        let mut builder = func.builder();
+        builder.arg(&data.inner);
+        builder.arg(&dst);
+        barg!(builder, nb32 as i32);
+        unsafe { builder.launch(cfg) }.w()?;
     }
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
@@ -161,15 +169,20 @@ fn dequantize_f16(
     };
 
     if is_k {
-        let params = (&data.inner, &dst);
-        unsafe { func.launch(cfg, params) }.w()?;
+        let mut builder = func.builder();
+        builder.arg(&data.inner);
+        builder.arg(&dst);
+        unsafe { builder.launch(cfg) }.w()?;
     } else {
         let nb32 = match dtype {
             GgmlDType::Q5_0 | GgmlDType::Q5_1 => elem_count,
             _ => elem_count / 32,
         };
-        let params = (&data.inner, &dst, nb32 as i32);
-        unsafe { func.launch(cfg, params) }.w()?;
+        let mut builder = func.builder();
+        builder.arg(&data.inner);
+        builder.arg(&dst);
+        barg!(builder, nb32 as i32);
+        unsafe { builder.launch(cfg) }.w()?;
     }
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
@@ -211,8 +224,12 @@ fn dequantize_mul_mat_vec(
         shared_mem_bytes: 0,
     };
 
-    let params = (&data.inner, y, &dst, ncols as i32, nrows as i32);
-    unsafe { func.launch(cfg, params) }.w()?;
+    let mut builder = func.builder();
+    builder.arg(&data.inner);
+    builder.arg(y);
+    builder.arg(&dst);
+    barg!(builder, ncols as i32, nrows as i32);
+    unsafe { builder.launch(cfg) }.w()?;
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 
@@ -271,16 +288,18 @@ fn mul_mat_vec_via_q8_1(
         shared_mem_bytes: 0,
     };
 
-    let params = (
-        &data.inner,
-        &y_q8_1,
-        &dst,
+    let mut builder = func.builder();
+    builder.arg(&data.inner);
+    builder.arg(&y_q8_1);
+    builder.arg(&dst);
+    barg!(
+        builder,
         /* ncols_x */ ncols as i32,
         /* nrows_x */ nrows as i32,
         /* nrows_y */ ncols_padded as i32,
-        /* nrows_dst */ nrows as i32,
+        /* nrows_dst */ nrows as i32
     );
-    unsafe { func.launch(cfg, params) }.w()?;
+    unsafe { builder.launch(cfg) }.w()?;
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 
@@ -338,17 +357,19 @@ fn mul_mat_via_q8_1(
         shared_mem_bytes: 0,
     };
 
-    let params = (
-        /* vx */ &data.inner,
-        /* vy */ &y_q8_1,
-        /* dst */ &dst,
+    let mut builder = func.builder();
+    builder.arg(/* vx */ &data.inner);
+    builder.arg(/* vy */ &y_q8_1);
+    builder.arg(/* dst */ &dst);
+    barg!(
+        builder,
         /* ncols_x */ x_cols as i32,
         /* nrows_x */ x_rows as i32,
         /* ncols_y */ y_cols as i32,
         /* nrows_y */ k_padded as i32,
-        /* nrows_dst */ x_rows as i32,
+        /* nrows_dst */ x_rows as i32
     );
-    unsafe { func.launch(cfg, params) }.w()?;
+    unsafe { builder.launch(cfg) }.w()?;
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 

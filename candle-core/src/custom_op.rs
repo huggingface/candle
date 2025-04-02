@@ -396,7 +396,10 @@ impl UgIOp1 {
         {
             let device = device.as_cuda_device()?;
             let func = device.compile(name, kernel)?;
-            Ok(Self { name, func })
+            Ok(Self {
+                name,
+                func: func.into_cuda_function(),
+            })
         }
         #[cfg(feature = "metal")]
         {

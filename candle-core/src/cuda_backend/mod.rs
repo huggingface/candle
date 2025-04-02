@@ -375,6 +375,12 @@ impl<U: UnaryOpT> Map1 for U {
     }
 }
 
+fn slice_ptr<T: DeviceRepr>(v: &CudaSlice<T>, lo: usize) -> (u64, cudarc::driver::SyncOnDrop<'_>) {
+    let (_, guard) = v.device_ptr(v.stream());
+    let (ptr, _) = v.slice(lo..).device_ptr(v.stream());
+    (ptr, guard)
+}
+
 struct IndexSelect<'a>(&'a CudaStorage, &'a Layout, usize);
 impl Map1 for IndexSelect<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
@@ -385,17 +391,9 @@ impl Map1 for IndexSelect<'_> {
     ) -> Result<CudaSlice<T>> {
         let ids_l = &self.1;
         let (name, (ids, _guard)) = match &self.0.slice {
-            CudaStorageSlice::U32(slice) => (
-                "is_u32",
-                slice.slice(ids_l.start_offset()..).device_ptr(dev),
-            ),
-            CudaStorageSlice::U8(slice) => {
-                ("is_u8", slice.slice(ids_l.start_offset()..).device_ptr(dev))
-            }
-            CudaStorageSlice::I64(slice) => (
-                "is_i64",
-                slice.slice(ids_l.start_offset()..).device_ptr(dev),
-            ),
+            CudaStorageSlice::U32(slice) => ("is_u32", slice_ptr(slice, ids_l.start_offset())),
+            CudaStorageSlice::U8(slice) => ("is_u8", slice_ptr(slice, ids_l.start_offset())),
+            CudaStorageSlice::I64(slice) => ("is_i64", slice_ptr(slice, ids_l.start_offset())),
             _ => Err(CudaError::UnexpectedDType {
                 msg: "index_select ids should be u8 or u32",
                 expected: DType::U32,
@@ -447,20 +445,14 @@ impl Map1 for Gather<'_> {
         let ids = &self.0;
         let ids_l = &self.1;
         let dim = self.2;
-        let (ids_o1, ids_o2) = match ids_l.contiguous_offsets() {
+        let (ids_o1, _) = match ids_l.contiguous_offsets() {
             Some(o12) => o12,
             None => Err(crate::Error::RequiresContiguous { op: "gather" }.bt())?,
         };
         let (name, (ids, _guard)) = match &ids.slice {
-            CudaStorageSlice::U32(slice) => {
-                ("gather_u32", slice.slice(ids_o1..ids_o2).device_ptr(dev))
-            }
-            CudaStorageSlice::U8(slice) => {
-                ("gather_u8", slice.slice(ids_o1..ids_o2).device_ptr(dev))
-            }
-            CudaStorageSlice::I64(slice) => {
-                ("gather_i64", slice.slice(ids_o1..ids_o2).device_ptr(dev))
-            }
+            CudaStorageSlice::U32(slice) => ("gather_u32", slice_ptr(slice, ids_o1)),
+            CudaStorageSlice::U8(slice) => ("gather_u8", slice_ptr(slice, ids_o1)),
+            CudaStorageSlice::I64(slice) => ("gather_i64", slice_ptr(slice, ids_o1)),
             _ => Err(CudaError::UnexpectedDType {
                 msg: "gather ids should be u8/u32/i64",
                 expected: DType::U32,
@@ -508,14 +500,14 @@ impl Map2InPlace for IndexAdd<'_> {
         let ids = &self.0;
         let ids_l = &self.1;
         let dim = self.2;
-        let (ids_o1, ids_o2) = match ids_l.contiguous_offsets() {
+        let (ids_o1, _) = match ids_l.contiguous_offsets() {
             Some(o12) => o12,
             None => Err(crate::Error::RequiresContiguous { op: "index-add" }.bt())?,
         };
         let (name, (ids, _guard)) = match &ids.slice {
-            CudaStorageSlice::U32(slice) => ("ia_u32", slice.slice(ids_o1..ids_o2).device_ptr(dev)),
-            CudaStorageSlice::I64(slice) => ("ia_i64", slice.slice(ids_o1..ids_o2).device_ptr(dev)),
-            CudaStorageSlice::U8(slice) => ("ia_u8", slice.slice(ids_o1..ids_o2).device_ptr(dev)),
+            CudaStorageSlice::U32(slice) => ("ia_u32", slice_ptr(slice, ids_o1)),
+            CudaStorageSlice::I64(slice) => ("ia_i64", slice_ptr(slice, ids_o1)),
+            CudaStorageSlice::U8(slice) => ("ia_u8", slice_ptr(slice, ids_o1)),
             _ => Err(CudaError::UnexpectedDType {
                 msg: "index-add ids should be u8/u32/i64",
                 expected: DType::U32,
@@ -558,14 +550,14 @@ impl Map2InPlace for ScatterAdd<'_> {
         let ids = &self.0;
         let ids_l = &self.1;
         let dim = self.2;
-        let (ids_o1, ids_o2) = match ids_l.contiguous_offsets() {
+        let (ids_o1, _) = match ids_l.contiguous_offsets() {
             Some(o12) => o12,
             None => Err(crate::Error::RequiresContiguous { op: "scatter-add" }.bt())?,
         };
         let (name, (ids, _guard)) = match &ids.slice {
-            CudaStorageSlice::U32(slice) => ("sa_u32", slice.slice(ids_o1..ids_o2).device_ptr(dev)),
-            CudaStorageSlice::I64(slice) => ("sa_i64", slice.slice(ids_o1..ids_o2).device_ptr(dev)),
-            CudaStorageSlice::U8(slice) => ("sa_u8", slice.slice(ids_o1..ids_o2).device_ptr(dev)),
+            CudaStorageSlice::U32(slice) => ("sa_u32", slice_ptr(slice, ids_o1)),
+            CudaStorageSlice::I64(slice) => ("sa_i64", slice_ptr(slice, ids_o1)),
+            CudaStorageSlice::U8(slice) => ("sa_u8", slice_ptr(slice, ids_o1)),
             _ => Err(CudaError::UnexpectedDType {
                 msg: "scatter-add ids should be u8/u32/i64",
                 expected: DType::U32,
@@ -915,15 +907,15 @@ impl Map2 for WhereCond<'_> {
         let ids_l = &self.1;
         let ((ids, _guard), name) = match &self.0.slice {
             CudaStorageSlice::U8(slice) => {
-                let ptr = slice.slice(ids_l.start_offset()..).device_ptr(dev);
+                let ptr = slice_ptr(slice, ids_l.start_offset());
                 (ptr, "where_u8")
             }
             CudaStorageSlice::U32(slice) => {
-                let ptr = slice.slice(ids_l.start_offset()..).device_ptr(dev);
+                let ptr = slice_ptr(slice, ids_l.start_offset());
                 (ptr, "where_u32")
             }
             CudaStorageSlice::I64(slice) => {
-                let ptr = slice.slice(ids_l.start_offset()..).device_ptr(dev);
+                let ptr = slice_ptr(slice, ids_l.start_offset());
                 (ptr, "where_i64")
             }
             _ => Err(CudaError::UnexpectedDType {
@@ -1246,13 +1238,13 @@ impl BackendStorage for CudaStorage {
         // lifetime issue and is safe as long as self.slice does not go out of scope before inp
         // is used.
         let (inp, _guard) = match &self.slice {
-            CudaStorageSlice::U8(inp) => inp.slice(start_o..).device_ptr(dev),
-            CudaStorageSlice::U32(inp) => inp.slice(start_o..).device_ptr(dev),
-            CudaStorageSlice::I64(inp) => inp.slice(start_o..).device_ptr(dev),
-            CudaStorageSlice::BF16(inp) => inp.slice(start_o..).device_ptr(dev),
-            CudaStorageSlice::F16(inp) => inp.slice(start_o..).device_ptr(dev),
-            CudaStorageSlice::F32(inp) => inp.slice(start_o..).device_ptr(dev),
-            CudaStorageSlice::F64(inp) => inp.slice(start_o..).device_ptr(dev),
+            CudaStorageSlice::U8(inp) => slice_ptr(inp, start_o),
+            CudaStorageSlice::U32(inp) => slice_ptr(inp, start_o),
+            CudaStorageSlice::I64(inp) => slice_ptr(inp, start_o),
+            CudaStorageSlice::BF16(inp) => slice_ptr(inp, start_o),
+            CudaStorageSlice::F16(inp) => slice_ptr(inp, start_o),
+            CudaStorageSlice::F32(inp) => slice_ptr(inp, start_o),
+            CudaStorageSlice::F64(inp) => slice_ptr(inp, start_o),
         };
         let inp = &inp;
 
@@ -1837,41 +1829,13 @@ impl BackendStorage for CudaStorage {
         let dst_s = dst_s as u32;
         let src_s = src_s as u32;
         let ((src, _guard_src), (dst, _guard_dst), kname) = match (&self.slice, &mut dst.slice) {
-            (S::U8(s), S::U8(d)) => (
-                s.slice(src_o..).device_ptr(dev),
-                d.slice(dst_o..).device_ptr(dev),
-                "copy2d_u8",
-            ),
-            (S::U32(s), S::U32(d)) => (
-                s.slice(src_o..).device_ptr(dev),
-                d.slice(dst_o..).device_ptr(dev),
-                "copy2d_u32",
-            ),
-            (S::I64(s), S::I64(d)) => (
-                s.slice(src_o..).device_ptr(dev),
-                d.slice(dst_o..).device_ptr(dev),
-                "copy2d_i64",
-            ),
-            (S::BF16(s), S::BF16(d)) => (
-                s.slice(src_o..).device_ptr(dev),
-                d.slice(dst_o..).device_ptr(dev),
-                "copy2d_bf16",
-            ),
-            (S::F16(s), S::F16(d)) => (
-                s.slice(src_o..).device_ptr(dev),
-                d.slice(dst_o..).device_ptr(dev),
-                "copy2d_f16",
-            ),
-            (S::F32(s), S::F32(d)) => (
-                s.slice(src_o..).device_ptr(dev),
-                d.slice(dst_o..).device_ptr(dev),
-                "copy2d_f32",
-            ),
-            (S::F64(s), S::F64(d)) => (
-                s.slice(src_o..).device_ptr(dev),
-                d.slice(dst_o..).device_ptr(dev),
-                "copy2d_f64",
-            ),
+            (S::U8(s), S::U8(d)) => (slice_ptr(s, src_o), slice_ptr(d, dst_o), "copy2d_u8"),
+            (S::U32(s), S::U32(d)) => (slice_ptr(s, src_o), slice_ptr(d, dst_o), "copy2d_u32"),
+            (S::I64(s), S::I64(d)) => (slice_ptr(s, src_o), slice_ptr(d, dst_o), "copy2d_i64"),
+            (S::BF16(s), S::BF16(d)) => (slice_ptr(s, src_o), slice_ptr(d, dst_o), "copy2d_bf16"),
+            (S::F16(s), S::F16(d)) => (slice_ptr(s, src_o), slice_ptr(d, dst_o), "copy2d_f16"),
+            (S::F32(s), S::F32(d)) => (slice_ptr(s, src_o), slice_ptr(d, dst_o), "copy2d_f32"),
+            (S::F64(s), S::F64(d)) => (slice_ptr(s, src_o), slice_ptr(d, dst_o), "copy2d_f64"),
             _ => Err(CudaError::InternalError("dtype mismatch in copy2d"))?,
         };
         let func = dev.get_or_load_func(kname, &kernels::FILL)?;
