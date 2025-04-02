@@ -81,42 +81,35 @@ pub fn main() -> anyhow::Result<()> {
         (Which::Base, LanguagePair::EnEs) => marian::Config::opus_mt_en_es(),
         (Which::Base, LanguagePair::EnFr) => marian::Config::opus_mt_fr_en(),
         (Which::Base, LanguagePair::EnRu) => marian::Config::opus_mt_en_ru(),
-        (Which::Big, _) => panic!("model language pair not supported."),
+        (Which::Big, lp) => anyhow::bail!("big is not supported for language pair {lp:?}"),
+    };
+    let tokenizer_default_repo = match args.language_pair {
+        LanguagePair::FrEn => "lmz/candle-marian",
+        LanguagePair::EnZh
+        | LanguagePair::EnHi
+        | LanguagePair::EnEs
+        | LanguagePair::EnFr
+        | LanguagePair::EnRu => "KeighBee/candle-marian",
     };
     let tokenizer = {
         let tokenizer = match args.tokenizer {
             Some(tokenizer) => std::path::PathBuf::from(tokenizer),
             None => {
-                let (model_id, filename) = match (args.which, args.language_pair) {
-                    (Which::Base, LanguagePair::FrEn) => {
-                        ("lmz/candle-marian", "tokenizer-marian-base-fr.json")
+                let filename = match (args.which, args.language_pair) {
+                    (Which::Base, LanguagePair::FrEn) => "tokenizer-marian-base-fr.json",
+                    (Which::Big, LanguagePair::FrEn) => "tokenizer-marian-fr.json",
+                    (Which::Base, LanguagePair::EnZh) => "tokenizer-marian-base-en-zh-en.json",
+                    (Which::Base, LanguagePair::EnHi) => "tokenizer-marian-base-en-hi-en.json",
+                    (Which::Base, LanguagePair::EnEs) => "tokenizer-marian-base-en-es-en.json",
+                    (Which::Base, LanguagePair::EnFr) => "tokenizer-marian-base-en-fr-en.json",
+                    (Which::Base, LanguagePair::EnRu) => "tokenizer-marian-base-en-ru-en.json",
+                    (Which::Big, lp) => {
+                        anyhow::bail!("big is not supported for language pair {lp:?}")
                     }
-                    (Which::Big, LanguagePair::FrEn) => {
-                        ("lmz/candle-marian", "tokenizer-marian-fr.json")
-                    }
-                    (Which::Base, LanguagePair::EnZh) => (
-                        "KeighBee/candle-marian",
-                        "tokenizer-marian-base-en-zh-en.json",
-                    ),
-                    (Which::Base, LanguagePair::EnHi) => (
-                        "KeighBee/candle-marian",
-                        "tokenizer-marian-base-en-hi-en.json",
-                    ),
-                    (Which::Base, LanguagePair::EnEs) => (
-                        "KeighBee/candle-marian",
-                        "tokenizer-marian-base-en-es-en.json",
-                    ),
-                    (Which::Base, LanguagePair::EnFr) => (
-                        "KeighBee/candle-marian",
-                        "tokenizer-marian-base-en-fr-en.json",
-                    ),
-                    (Which::Base, LanguagePair::EnRu) => (
-                        "KeighBee/candle-marian",
-                        "tokenizer-marian-base-en-ru-en.json",
-                    ),
-                    (Which::Big, _) => panic!("Model language pair not supported."),
                 };
-                Api::new()?.model(model_id.to_string()).get(filename)?
+                Api::new()?
+                    .model(tokenizer_default_repo.to_string())
+                    .get(filename)?
             }
         };
         Tokenizer::from_file(&tokenizer).map_err(E::msg)?
@@ -126,36 +119,21 @@ pub fn main() -> anyhow::Result<()> {
         let tokenizer = match args.tokenizer_dec {
             Some(tokenizer) => std::path::PathBuf::from(tokenizer),
             None => {
-                let (model_id, filename) = match (args.which, args.language_pair) {
-                    (Which::Base, LanguagePair::FrEn) => {
-                        ("lmz/candle-marian", "tokenizer-marian-base-en.json")
+                let filename = match (args.which, args.language_pair) {
+                    (Which::Base, LanguagePair::FrEn) => "tokenizer-marian-base-en.json",
+                    (Which::Big, LanguagePair::FrEn) => "tokenizer-marian-en.json",
+                    (Which::Base, LanguagePair::EnZh) => "tokenizer-marian-base-en-zh-zh.json",
+                    (Which::Base, LanguagePair::EnHi) => "tokenizer-marian-base-en-hi-hi.json",
+                    (Which::Base, LanguagePair::EnEs) => "tokenizer-marian-base-en-es-es.json",
+                    (Which::Base, LanguagePair::EnFr) => "tokenizer-marian-base-en-fr-fr.json",
+                    (Which::Base, LanguagePair::EnRu) => "tokenizer-marian-base-en-ru-ru.json",
+                    (Which::Big, lp) => {
+                        anyhow::bail!("big is not supported for language pair {lp:?}")
                     }
-                    (Which::Big, LanguagePair::FrEn) => {
-                        ("lmz/candle-marian", "tokenizer-marian-en.json")
-                    }
-                    (Which::Base, LanguagePair::EnZh) => (
-                        "KeighBee/candle-marian",
-                        "tokenizer-marian-base-en-zh-zh.json",
-                    ),
-                    (Which::Base, LanguagePair::EnHi) => (
-                        "KeighBee/candle-marian",
-                        "tokenizer-marian-base-en-hi-hi.json",
-                    ),
-                    (Which::Base, LanguagePair::EnEs) => (
-                        "KeighBee/candle-marian",
-                        "tokenizer-marian-base-en-es-es.json",
-                    ),
-                    (Which::Base, LanguagePair::EnFr) => (
-                        "KeighBee/candle-marian",
-                        "tokenizer-marian-base-en-fr-fr.json",
-                    ),
-                    (Which::Base, LanguagePair::EnRu) => (
-                        "KeighBee/candle-marian",
-                        "tokenizer-marian-base-en-ru-ru.json",
-                    ),
-                    (Which::Big, _) => panic!("Model language pair not supported."),
                 };
-                Api::new()?.model(model_id.to_string()).get(filename)?
+                Api::new()?
+                    .model(tokenizer_default_repo.to_string())
+                    .get(filename)?
             }
         };
         Tokenizer::from_file(&tokenizer).map_err(E::msg)?
@@ -166,54 +144,48 @@ pub fn main() -> anyhow::Result<()> {
     let vb = {
         let model = match args.model {
             Some(model) => std::path::PathBuf::from(model),
-            None => match (args.which, args.language_pair) {
-                (Which::Base, LanguagePair::FrEn) => Api::new()?
-                    .repo(hf_hub::Repo::with_revision(
+            None => {
+                let api = Api::new()?;
+                let api = match (args.which, args.language_pair) {
+                    (Which::Base, LanguagePair::FrEn) => api.repo(hf_hub::Repo::with_revision(
                         "Helsinki-NLP/opus-mt-fr-en".to_string(),
                         hf_hub::RepoType::Model,
                         "refs/pr/4".to_string(),
-                    ))
-                    .get("model.safetensors")?,
-                (Which::Big, LanguagePair::FrEn) => Api::new()?
-                    .model("Helsinki-NLP/opus-mt-tc-big-fr-en".to_string())
-                    .get("model.safetensors")?,
-                (Which::Base, LanguagePair::EnZh) => Api::new()?
-                    .repo(hf_hub::Repo::with_revision(
+                    )),
+                    (Which::Big, LanguagePair::FrEn) => {
+                        api.model("Helsinki-NLP/opus-mt-tc-big-fr-en".to_string())
+                    }
+                    (Which::Base, LanguagePair::EnZh) => api.repo(hf_hub::Repo::with_revision(
                         "Helsinki-NLP/opus-mt-en-zh".to_string(),
                         hf_hub::RepoType::Model,
                         "refs/pr/13".to_string(),
-                    ))
-                    .get("model.safetensors")?,
-                (Which::Base, LanguagePair::EnHi) => Api::new()?
-                    .repo(hf_hub::Repo::with_revision(
+                    )),
+                    (Which::Base, LanguagePair::EnHi) => api.repo(hf_hub::Repo::with_revision(
                         "Helsinki-NLP/opus-mt-en-hi".to_string(),
                         hf_hub::RepoType::Model,
                         "refs/pr/3".to_string(),
-                    ))
-                    .get("model.safetensors")?,
-                (Which::Base, LanguagePair::EnEs) => Api::new()?
-                    .repo(hf_hub::Repo::with_revision(
+                    )),
+                    (Which::Base, LanguagePair::EnEs) => api.repo(hf_hub::Repo::with_revision(
                         "Helsinki-NLP/opus-mt-en-es".to_string(),
                         hf_hub::RepoType::Model,
                         "refs/pr/4".to_string(),
-                    ))
-                    .get("model.safetensors")?,
-                (Which::Base, LanguagePair::EnFr) => Api::new()?
-                    .repo(hf_hub::Repo::with_revision(
+                    )),
+                    (Which::Base, LanguagePair::EnFr) => api.repo(hf_hub::Repo::with_revision(
                         "Helsinki-NLP/opus-mt-en-fr".to_string(),
                         hf_hub::RepoType::Model,
                         "refs/pr/9".to_string(),
-                    ))
-                    .get("model.safetensors")?,
-                (Which::Base, LanguagePair::EnRu) => Api::new()?
-                    .repo(hf_hub::Repo::with_revision(
+                    )),
+                    (Which::Base, LanguagePair::EnRu) => api.repo(hf_hub::Repo::with_revision(
                         "Helsinki-NLP/opus-mt-en-ru".to_string(),
                         hf_hub::RepoType::Model,
                         "refs/pr/7".to_string(),
-                    ))
-                    .get("model.safetensors")?,
-                (Which::Big, _) => panic!("Model language pair not supported."),
-            },
+                    )),
+                    (Which::Big, lp) => {
+                        anyhow::bail!("big is not supported for language pair {lp:?}")
+                    }
+                };
+                api.get("model.safetensors")?
+            }
         };
         unsafe { VarBuilder::from_mmaped_safetensors(&[&model], DType::F32, &device)? }
     };
