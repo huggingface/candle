@@ -52,6 +52,35 @@ impl std::ops::Deref for CudaDevice {
     }
 }
 
+pub struct CudaFunc {
+    func: CudaFunction,
+    stream: Arc<cudarc::driver::CudaStream>,
+}
+
+impl std::ops::Deref for CudaFunc {
+    type Target = CudaFunction;
+
+    fn deref(&self) -> &Self::Target {
+        &self.func
+    }
+}
+
+#[macro_export]
+macro_rules! builder_arg {
+    ($b:ident, $($arg:expr),*) => {
+        $(
+            let __arg = $arg;
+            $b.arg(&__arg);
+        )*
+    };
+}
+
+impl CudaFunc {
+    pub fn builder(&self) -> cudarc::driver::LaunchArgs<'_> {
+        self.stream.launch_builder(&self.func)
+    }
+}
+
 impl CudaDevice {
     pub fn cuda_stream(&self) -> Arc<cudarc::driver::CudaStream> {
         self.stream.clone()
@@ -62,7 +91,7 @@ impl CudaDevice {
         &self,
         func_name: &'static str,
         kernel: ug::lang::ssa::Kernel,
-    ) -> Result<CudaFunction> {
+    ) -> Result<CudaFunc> {
         let mut buf = vec![];
         ug_cuda::code_gen::gen(&mut buf, func_name, &kernel)?;
         let cuda_code = String::from_utf8(buf)?;
@@ -73,7 +102,10 @@ impl CudaDevice {
         let ptx = cudarc::nvrtc::safe::compile_ptx_with_opts(cuda_code, opts).w()?;
         let module = self.context.load_module(ptx).w()?;
         let func = module.load_function(func_name).w()?;
-        Ok(func)
+        Ok(CudaFunc {
+            func,
+            stream: self.stream.clone(),
+        })
     }
 
     pub fn id(&self) -> DeviceId {
@@ -174,21 +206,25 @@ impl CudaDevice {
         })
     }
 
-    pub fn get_or_load_func(
-        &self,
-        fn_name: &str,
-        mdl: &kernels::Module,
-    ) -> Result<cudarc::driver::CudaFunction> {
+    pub fn get_or_load_func(&self, fn_name: &str, mdl: &kernels::Module) -> Result<CudaFunc> {
         let ms = self.modules.read().unwrap();
         if let Some(mdl) = ms.mdls[mdl.index()].as_ref() {
-            return mdl.load_function(fn_name).w();
+            let func = mdl.load_function(fn_name).w()?;
+            return Ok(CudaFunc {
+                func,
+                stream: self.stream.clone(),
+            });
         }
         drop(ms);
         let mut ms = self.modules.write().unwrap();
         let cuda_module = self.context.load_module(mdl.ptx().into()).w()?;
         ms.mdls[mdl.index()] = Some(cuda_module);
         if let Some(mdl) = ms.mdls[mdl.index()].as_ref() {
-            return mdl.load_function(fn_name).w();
+            let func = mdl.load_function(fn_name).w()?;
+            Ok(CudaFunc {
+                func,
+                stream: self.stream.clone(),
+            })
         } else {
             Err(CudaError::MissingKernel {
                 module_name: fn_name.to_string(),

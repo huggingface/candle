@@ -2,11 +2,13 @@
 //!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, DType, Layout, Result, Shape, WithDType};
+use crate::{builder_arg as barg, CpuStorage, DType, Layout, Result, Shape, WithDType};
 pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
-use cudarc::driver::{CudaSlice, DevicePtr, DeviceRepr, LaunchConfig, ValidAsZeroBits};
+use cudarc::driver::{
+    CudaSlice, DevicePtr, DeviceRepr, LaunchConfig, PushKernelArg, ValidAsZeroBits,
+};
 use half::{bf16, f16};
 
 #[cfg(feature = "cudnn")]
@@ -23,12 +25,12 @@ pub enum SlicePtrOrNull<T> {
     Null,
 }
 
-unsafe impl<T: DeviceRepr> DeviceRepr for &SlicePtrOrNull<T> {
-    fn as_kernel_param(&self) -> *mut std::ffi::c_void {
+impl<T: DeviceRepr> SlicePtrOrNull<T> {
+    fn builder_arg<'a, 'b: 'a>(&'b self, builder: &mut cudarc::driver::LaunchArgs<'a>) {
         match self {
-            SlicePtrOrNull::Ptr(slice) => slice.as_kernel_param(),
-            SlicePtrOrNull::Null => 0usize.as_kernel_param(),
-        }
+            SlicePtrOrNull::Ptr(slice) => builder.arg(slice),
+            SlicePtrOrNull::Null => builder.arg(&0),
+        };
     }
 }
 
@@ -88,17 +90,16 @@ impl Map1 for Affine {
         let func = dev.get_or_load_func(&kernel_name::<T>("affine"), &kernels::AFFINE)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
-        let params = (
-            el,
-            dims.len(),
-            &ds,
-            src,
-            &out,
-            T::from_f64(self.0),
-            T::from_f64(self.1),
-        );
+        let mut builder = func.builder();
+        barg!(builder, el);
+        barg!(builder, dims.len());
+        ds.builder_arg(&mut builder);
+        builder.arg(src);
+        builder.arg(&out);
+        barg!(builder, T::from_f64(self.0));
+        barg!(builder, T::from_f64(self.1));
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg).w() }?;
         Ok(out)
     }
 }
@@ -157,19 +158,18 @@ impl Map1 for Im2Col1D {
         let func = dev.get_or_load_func(&kernel_name::<T>("im2col1d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let dst = unsafe { dev.alloc::<T>(dst_el) }.w()?;
-        let params = (
-            dst_el,
-            l_out,
-            self.l_k,
-            self.stride,
-            self.padding,
-            self.dilation,
-            &ds,
-            src,
-            &dst,
-        );
+        let mut builder = func.builder();
+        barg!(builder, dst_el);
+        barg!(builder, l_out);
+        barg!(builder, self.l_k);
+        barg!(builder, self.stride);
+        barg!(builder, self.padding);
+        barg!(builder, self.dilation);
+        builder.arg(&ds);
+        builder.arg(src);
+        builder.arg(&dst);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(dst)
     }
 }
@@ -209,21 +209,20 @@ impl Map1 for Im2Col {
         let func = dev.get_or_load_func(&kernel_name::<T>("im2col"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let dst = unsafe { dev.alloc::<T>(dst_el) }.w()?;
-        let params = (
-            dst_el,
-            h_out,
-            w_out,
-            self.h_k,
-            self.w_k,
-            self.stride,
-            self.padding,
-            self.dilation,
-            &ds,
-            src,
-            &dst,
-        );
+        let mut builder = func.builder();
+        barg!(builder, dst_el);
+        barg!(builder, h_out);
+        barg!(builder, w_out);
+        barg!(builder, self.h_k);
+        barg!(builder, self.w_k);
+        barg!(builder, self.stride);
+        barg!(builder, self.padding);
+        barg!(builder, self.dilation);
+        builder.arg(&ds);
+        builder.arg(src);
+        builder.arg(&dst);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(dst)
     }
 }
@@ -340,9 +339,14 @@ impl<U: UnaryOpT> Map1 for U {
         let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), &kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el_count) }.w()?;
-        let params = (el_count, dims.len(), &ds, src, &out);
+        let mut builder = func.builder();
+        barg!(builder, el_count);
+        barg!(builder, dims.len());
+        ds.builder_arg(&mut builder);
+        builder.arg(src);
+        builder.arg(&out);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
@@ -453,9 +457,7 @@ impl Map1 for Gather<'_> {
         let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
-        let params = (
-            el, ids, &src, &out, left_sz, src_dim_sz, ids_dim_sz, right_sz,
-        );
+        let params = (el, ids, src, out, left_sz, src_dim_sz, ids_dim_sz, right_sz);
         // SAFETY: ffi.
         unsafe { func.launch(cfg, params) }.w()?;
         Ok(out)
@@ -802,18 +804,17 @@ impl Map1 for Pool2D {
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let ds = dev.memcpy_stod(&ds).w()?;
-        let params = (
-            el,
-            self.w_k,
-            self.h_k,
-            self.w_stride,
-            self.h_stride,
-            &ds,
-            inp,
-            &out,
-        );
+        let mut builder = func.builder();
+        barg!(builder, el);
+        barg!(builder, self.w_k);
+        barg!(builder, self.h_k);
+        barg!(builder, self.w_stride);
+        barg!(builder, self.h_stride);
+        builder.arg(&ds);
+        builder.arg(inp);
+        builder.arg(&out);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
@@ -844,9 +845,16 @@ impl Map1 for UpsampleNearest2D {
         let ds = dev.memcpy_stod(&ds).w()?;
         let scale_w = dims[2] as f64 / out_w as f64;
         let scale_h = dims[3] as f64 / out_h as f64;
-        let params = (out_w, out_h, scale_w, scale_h, &ds, inp, &out);
+        let mut builder = func.builder();
+        barg!(builder, out_w);
+        barg!(builder, out_h);
+        barg!(builder, scale_w);
+        barg!(builder, scale_h);
+        builder.arg(&ds);
+        builder.arg(inp);
+        builder.arg(&out);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
@@ -894,9 +902,16 @@ impl Map2 for WhereCond<'_> {
         let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::TERNARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
-        let params = (el, dims.len(), &ds, ids, t, f, &out);
+        let mut builder = func.builder();
+        barg!(builder, el);
+        barg!(builder, dims.len());
+        builder.arg(&ds);
+        barg!(builder, ids);
+        builder.arg(t);
+        builder.arg(f);
+        builder.arg(&out);
         // SAFETY: ffi
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
@@ -927,9 +942,15 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
         let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), &kernels::BINARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
-        let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
+        let mut builder = func.builder();
+        barg!(builder, elem_count);
+        barg!(builder, dims.len());
+        dims_and_strides.builder_arg(&mut builder);
+        builder.arg(lhs);
+        builder.arg(rhs);
+        builder.arg(&out);
         // SAFETY: ffi
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
