@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use anyhow::Result;
+use anyhow::{Error as E, Result};
 use clap::Parser;
 
 use candle_transformers::models::csm::{Config, Model};
@@ -12,6 +12,7 @@ use candle_transformers::models::csm::{Config, Model};
 use candle::DType;
 use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Repo, RepoType};
+use tokenizers::Tokenizer;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum Which {
@@ -132,7 +133,15 @@ fn main() -> Result<()> {
             .collect::<Vec<_>>(),
         None => vec![repo.get("model.safetensors")?],
     };
+    let tokenizer_filename = match args.tokenizer {
+        Some(file) => std::path::PathBuf::from(file),
+        None => api
+            .model("meta-llama/Llama-3.2-1B".to_string())
+            .get("tokenizer.json")?,
+    };
+
     println!("retrieved the files in {:?}", start.elapsed());
+    let _tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
     let config: Config = match args.config {
