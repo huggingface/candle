@@ -1,6 +1,6 @@
 # candle-quantized-t5
 
-Candle implemenation for quantizing and running T5 translation models.
+Candle implementation for quantizing and running T5 translation models.
 
 ## Seq2Seq example
 
