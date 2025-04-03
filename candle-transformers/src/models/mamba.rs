@@ -27,7 +27,7 @@ impl Config {
     }
 
     fn dt_rank(&self) -> usize {
-        (self.d_model + 15) / 16
+        self.d_model.div_ceil(16)
     }
 
     fn d_inner(&self) -> usize {
