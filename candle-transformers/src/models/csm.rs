@@ -9,7 +9,7 @@
 ///
 use crate::models::encodec;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{embedding, linear_b, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
+use candle_nn::{embedding, linear_b, Embedding, Linear, RmsNorm, VarBuilder};
 use std::sync::Arc;
 
 #[derive(serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,13 +114,17 @@ impl RotaryEmbedding {
         Ok((q_embed, k_embed))
     }
 }
+fn rms_norm(hidden_size: usize, eps: f64, vb: VarBuilder) -> Result<RmsNorm> {
+    let weight = vb.get((hidden_size,), "scale")?;
+    Ok(RmsNorm::new(weight, eps))
+}
 
 #[derive(Debug, Clone)]
 struct Attention {
     q_proj: Linear,
     k_proj: Linear,
     v_proj: Linear,
-    output_proj: Linear,
+    o_proj: Linear,
     rotary_emb: Arc<RotaryEmbedding>,
     kv_cache: Option<(Tensor, Tensor)>,
     num_heads: usize,
@@ -131,21 +135,24 @@ struct Attention {
 
 impl Attention {
     fn new(cfg: &LlamaConfig, rotary_emb: Arc<RotaryEmbedding>, vb: VarBuilder) -> Result<Self> {
+        let head_dim = cfg.embed_dim / cfg.num_heads;
+        let kv_dim = cfg.num_kv_heads * head_dim;
+
         let q_proj = linear_b(cfg.embed_dim, cfg.embed_dim, false, vb.pp("q_proj"))?;
-        let k_proj = linear_b(cfg.embed_dim, cfg.embed_dim, false, vb.pp("k_proj"))?;
-        let v_proj = linear_b(cfg.embed_dim, cfg.embed_dim, false, vb.pp("v_proj"))?;
-        let output_proj = linear_b(cfg.embed_dim, cfg.embed_dim, false, vb.pp("out_proj"))?;
+        let k_proj = linear_b(cfg.embed_dim, kv_dim, false, vb.pp("k_proj"))?;
+        let v_proj = linear_b(cfg.embed_dim, kv_dim, false, vb.pp("v_proj"))?;
+        let o_proj = linear_b(cfg.embed_dim, cfg.embed_dim, false, vb.pp("output_proj"))?;
         Ok(Self {
             q_proj,
             k_proj,
             v_proj,
-            output_proj,
+            o_proj,
             rotary_emb,
             kv_cache: None,
             num_heads: cfg.num_heads,
             num_kv_heads: cfg.num_kv_heads,
             num_kv_groups: cfg.num_heads / cfg.num_kv_heads,
-            head_dim: cfg.embed_dim / cfg.num_heads,
+            head_dim,
         })
     }
 
@@ -205,7 +212,7 @@ impl Attention {
         attn_output
             .transpose(1, 2)?
             .reshape((b_sz, q_len, self.num_heads * self.head_dim))?
-            .apply(&self.output_proj)
+            .apply(&self.o_proj)
     }
 
     fn clear_kv_cache(&mut self) {
