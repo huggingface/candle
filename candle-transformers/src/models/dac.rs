@@ -104,7 +104,7 @@ impl EncoderBlock {
         let snake1 = Snake1d::new(dim / 2, vb.pp(3))?;
         let cfg1 = Conv1dConfig {
             stride,
-            padding: (stride + 1) / 2,
+            padding: stride.div_ceil(2),
             ..Default::default()
         };
         let conv1 = encodec::conv1d_weight_norm(dim / 2, dim, 2 * stride, cfg1, vb.pp(4))?;
@@ -196,7 +196,7 @@ impl DecoderBlock {
         let snake1 = Snake1d::new(in_dim, vb.pp(0))?;
         let cfg = ConvTranspose1dConfig {
             stride,
-            padding: (stride + 1) / 2,
+            padding: stride.div_ceil(2),
             ..Default::default()
         };
         let conv_tr1 = encodec::conv_transpose1d_weight_norm(

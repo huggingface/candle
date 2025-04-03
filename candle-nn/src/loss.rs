@@ -7,7 +7,7 @@ use candle::{Result, Tensor};
 /// Arguments
 ///
 /// * [inp]: The input tensor of dimensions `N, C` where `N` is the batch size and `C` the number
-///          of categories. This is expected to contain log probabilities.
+///   of categories. This is expected to contain log probabilities.
 /// * [target]: The ground truth labels as a tensor of u32 of dimension `N`.
 ///
 /// The resulting tensor is a scalar containing the average value over the batch.
@@ -34,7 +34,7 @@ pub fn nll(inp: &Tensor, target: &Tensor) -> Result<Tensor> {
 /// Arguments
 ///
 /// * [inp]: The input tensor of dimensions `N, C` where `N` is the batch size and `C` the number
-///          of categories. This is expected to raw logits.
+///   of categories. This is expected to raw logits.
 /// * [target]: The ground truth labels as a tensor of u32 of dimension `N`.
 ///
 /// The resulting tensor is a scalar containing the average value over the batch.
@@ -56,9 +56,9 @@ pub fn mse(inp: &Tensor, target: &Tensor) -> Result<Tensor> {
 /// Arguments
 ///
 /// * [inp]: The input tensor of dimensions `N, C` where `N` is the batch size and `C` the number
-///          of categories. This is expected to raw logits.
+///   of categories. This is expected to raw logits.
 /// * [target]: The ground truth labels as a tensor of u32 of dimension `N, C` where `N` is the batch size and `C` the number
-///          of categories.
+///   of categories.
 ///
 /// The resulting tensor is a scalar containing the average value over the batch.
 pub fn binary_cross_entropy_with_logit(inp: &Tensor, target: &Tensor) -> Result<Tensor> {

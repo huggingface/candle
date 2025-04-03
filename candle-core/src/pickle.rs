@@ -816,7 +816,7 @@ impl PthTensors {
 /// # Arguments
 /// * `path` - Path to the pth file.
 /// * `key` - Optional key to retrieve `state_dict` from the pth file. Sometimes the pth file
-///           contains multiple objects and the state_dict is the one we are interested in.
+///   contains multiple objects and the state_dict is the one we are interested in.
 pub fn read_all_with_key<P: AsRef<std::path::Path>>(
     path: P,
     key: Option<&str>,
