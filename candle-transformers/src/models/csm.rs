@@ -480,13 +480,19 @@ impl Model {
         let mut curr_h = Tensor::cat(&[h, c0_embed], 1)?;
 
         self.decoder.clear_kv_cache();
-        for i in 0..(self.config.audio_num_codebooks - 1) {
+        let mut decoder_pos = 0;
+        for i in 1..self.config.audio_num_codebooks {
             let proj_h = curr_h.apply(&self.projection)?;
-            let decoder_h = self.decoder.forward(&proj_h, i)?;
-            let ci_logits = decoder_h.broadcast_matmul(&self.audio_head.get(i)?)?;
+            let decoder_h = self.decoder.forward(&proj_h, decoder_pos)?;
+            decoder_pos += curr_h.dim(1)?;
+            let ci_logits = decoder_h.broadcast_matmul(&self.audio_head.get(i - 1)?)?;
             let ci_sample = lp.sample(&ci_logits.i((0, 0))?)?;
             all_samples.push(ci_sample);
-            let ci_sample = Tensor::from_slice(&[ci_sample], (1, 1), &self.decoder.device)?;
+            let ci_sample = Tensor::from_slice(
+                &[ci_sample + (i * self.config.audio_vocab_size) as u32],
+                (1, 1),
+                &self.decoder.device,
+            )?;
             let ci_embed = self.audio_embeddings.forward(&ci_sample)?;
             curr_h = ci_embed
         }
