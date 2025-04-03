@@ -27,6 +27,7 @@ pub mod codegeex4_9b;
 pub mod colpali;
 pub mod convmixer;
 pub mod convnext;
+pub mod csm;
 pub mod dac;
 pub mod debertav2;
 pub mod deepseek2;
