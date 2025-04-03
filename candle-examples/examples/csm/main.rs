@@ -9,7 +9,7 @@ use clap::Parser;
 
 use candle_transformers::models::csm::{Config, Model};
 
-use candle::{DType, IndexOp, Tensor};
+use candle::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
@@ -34,12 +34,17 @@ struct Args {
     #[arg(long)]
     use_flash_attn: bool,
 
-    #[arg(long, default_value = "[0]Hey how are you doing today?")]
+    /// The prompt to be used for the generation, use a | to separate the speakers.
+    #[arg(long, default_value = "Hey how are you doing today?")]
     prompt: String,
 
     /// The voices to be used, in safetensors format.
     #[arg(long)]
     voices: String,
+
+    /// The output file using the wav format.
+    #[arg(long, default_value = "out.wav")]
+    out_file: String,
 
     /// The temperature used to generate samples.
     #[arg(long, default_value_t = 0.7)]
@@ -166,7 +171,7 @@ fn main() -> Result<()> {
     };
     let device = candle_examples::device(args.cpu)?;
     let (mut model, device) = {
-        let dtype = DType::F32;
+        let dtype = device.bf16_default_to_f32();
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
         let model = Model::new(&config, vb)?;
         (model, device)
@@ -181,62 +186,81 @@ fn main() -> Result<()> {
     let cb = config.audio_num_codebooks;
 
     println!("loaded the model in {:?}", start.elapsed());
-    let prompt = tokenizer
-        .encode(format!("{}<|end_of_text|>", args.prompt), true)
-        .map_err(E::msg)?;
-    println!("{prompt:?}");
 
     let voices = candle::safetensors::load(args.voices, &device)?;
+    let mut lp = candle_transformers::generation::LogitsProcessor::new(
+        args.seed,
+        Some(args.temperature),
+        None,
+    );
     let tokens = voices
         .get("tokens")
         .expect("no tokens in prompt")
         .to_dtype(DType::U32)?;
     let mask = voices.get("mask").expect("no mask in prompt").clone();
-
-    let mut tokens = vec![tokens];
-    let mut mask = vec![mask];
-    for &v in prompt.get_ids() {
-        let mut token = vec![0; cb];
-        token.push(v);
-        let token = Tensor::from_vec(token, (1, 1, cb + 1), &device)?;
-        tokens.push(token);
-        let mut m = vec![0u8; cb];
-        m.push(1);
-        let m = Tensor::from_vec(m, (1, 1, cb + 1), &device)?;
-        mask.push(m);
-    }
-    let mut tokens = Tensor::cat(&tokens, 1)?;
-    let mut mask = Tensor::cat(&mask, 1)?;
-    println!("tokens:\n{tokens:?}");
-    println!("mask:\n{mask:?}");
-
-    let mut lp =
-        candle_transformers::generation::LogitsProcessor::new(42, Some(args.temperature), None);
     let mut const_mask = vec![1u8; cb];
     const_mask.push(0);
     let const_mask = Tensor::from_vec(const_mask, (1, 1, cb + 1), &device)?;
+
     let mut pos = 0;
-    let mut all_tokens = vec![];
-    for i in 0.. {
-        let mut frame = model.generate_frame(&tokens, &mask, pos, &mut lp)?;
-        pos += tokens.dim(1)?;
-        frame.push(0);
-        if frame.iter().all(|&x| x == 0) {
-            break;
+    let _frame = model.generate_frame(&tokens, &mask, pos, &mut lp)?;
+    pos += tokens.dim(1)?;
+
+    let mut all_pcms = vec![];
+    for (turn_idx, prompt) in args.prompt.split('|').enumerate() {
+        println!("{prompt:?}");
+        let speaker_idx = turn_idx % 2;
+        let prompt = format!("[{speaker_idx}]{}<|end_of_text|>", args.prompt);
+        let prompt = tokenizer.encode(prompt, true).map_err(E::msg)?;
+
+        let (mut tokens, mut mask) = text_tokens_and_mask(cb, prompt.get_ids(), &device)?;
+
+        let mut generated_tokens = vec![];
+        loop {
+            let mut frame = model.generate_frame(&tokens, &mask, pos, &mut lp)?;
+            pos += tokens.dim(1)?;
+            frame.push(0);
+            let is_done = frame.iter().all(|&x| x == 0);
+            print!("\rframe {pos}");
+            tokens = Tensor::from_vec(frame, (1, 1, cb + 1), &device)?;
+            mask = const_mask.clone();
+            if is_done {
+                let _frame = model.generate_frame(&tokens, &mask, pos, &mut lp)?;
+                pos += tokens.dim(1)?;
+                break;
+            }
+            generated_tokens.push(tokens.clone());
         }
-        println!("frame {i} {pos}:\n{frame:?}");
-        tokens = Tensor::from_vec(frame, (1, 1, cb + 1), &device)?;
-        all_tokens.push(tokens.clone());
-        mask = const_mask.clone();
+        println!();
+        let generated_tokens = Tensor::cat(&generated_tokens, 1)?.narrow(2, 0, cb)?.t()?;
+        let pcm = mimi_model.decode(&generated_tokens)?;
+        let pcm = pcm.i(0)?.i(0)?.to_dtype(DType::F32)?;
+        let pcm = candle_examples::audio::normalize_loudness(&pcm, 24_000, true)?;
+        all_pcms.push(pcm);
     }
-    let all_tokens = Tensor::cat(&all_tokens, 1)?.narrow(2, 0, cb)?.t()?;
-    println!("all_tokens:\n{all_tokens:?}");
-    let pcm = mimi_model.decode(&all_tokens)?;
-    let pcm = pcm.i(0)?.i(0)?.to_dtype(DType::F32)?;
-    let pcm = candle_examples::audio::normalize_loudness(&pcm, 24_000, true)?;
+    let pcm = Tensor::cat(&all_pcms, 0)?;
     let pcm = pcm.to_vec1::<f32>()?;
-    let mut output = std::fs::File::create("out.wav")?;
+    println!("writing output file {}", args.out_file);
+    let mut output = std::fs::File::create(args.out_file)?;
     candle_examples::wav::write_pcm_as_wav(&mut output, &pcm, 24_000)?;
 
     Ok(())
+}
+
+fn text_tokens_and_mask(cb: usize, ids: &[u32], device: &Device) -> Result<(Tensor, Tensor)> {
+    let mut tokens = vec![];
+    let mut mask = vec![];
+    for &v in ids.iter() {
+        let mut token = vec![0; cb];
+        token.push(v);
+        let token = Tensor::from_vec(token, (1, 1, cb + 1), device)?;
+        tokens.push(token);
+        let mut m = vec![0u8; cb];
+        m.push(1);
+        let m = Tensor::from_vec(m, (1, 1, cb + 1), device)?;
+        mask.push(m);
+    }
+    let tokens = Tensor::cat(&tokens, 1)?;
+    let mask = Tensor::cat(&mask, 1)?;
+    Ok((tokens, mask))
 }
