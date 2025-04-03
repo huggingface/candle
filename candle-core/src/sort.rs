@@ -56,7 +56,7 @@ impl ArgSort {
 mod cuda {
     use super::*;
     use crate::cuda_backend::cudarc::driver::{
-        CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig, ValidAsZeroBits,
+        CudaSlice, DeviceRepr, LaunchConfig, ValidAsZeroBits,
     };
     use crate::cuda_backend::{kernel_name, kernels, CudaStorageSlice as S, WrapErr};
     use crate::{CudaDevice, WithDType};
@@ -69,6 +69,8 @@ mod cuda {
             layout: &crate::Layout,
             _wrap: W,
         ) -> Result<S> {
+            use cudarc::driver::PushKernelArg;
+
             let slice = match layout.contiguous_offsets() {
                 None => crate::bail!("input has to be contiguous"),
                 Some((o1, o2)) => src.slice(o1..o2),
@@ -76,20 +78,24 @@ mod cuda {
             let elem_count = layout.shape().elem_count();
             let dst = unsafe { dev.alloc::<u32>(elem_count) }.w()?;
             let func = if self.asc {
-                dev.get_or_load_func(&kernel_name::<T>("asort_asc"), kernels::SORT)?
+                dev.get_or_load_func(&kernel_name::<T>("asort_asc"), &kernels::SORT)?
             } else {
-                dev.get_or_load_func(&kernel_name::<T>("asort_desc"), kernels::SORT)?
+                dev.get_or_load_func(&kernel_name::<T>("asort_desc"), &kernels::SORT)?
             };
             let ncols = self.last_dim;
             let nrows = elem_count / ncols;
             let ncols_pad = next_power_of_2(ncols);
-            let params = (&slice, &dst, ncols as i32, ncols_pad as i32);
             let cfg = LaunchConfig {
                 grid_dim: (1, nrows as u32, 1),
                 block_dim: (ncols_pad as u32, 1, 1),
                 shared_mem_bytes: (ncols_pad * std::mem::size_of::<u32>()) as u32,
             };
-            unsafe { func.launch(cfg, params) }.w()?;
+            let stream = dev.cuda_stream();
+            let mut builder = stream.launch_builder(&func);
+            let ncols = ncols as i32;
+            let ncols_pad = ncols_pad as i32;
+            builder.arg(&slice).arg(&dst).arg(&ncols).arg(&ncols_pad);
+            unsafe { builder.launch(cfg) }.w()?;
             Ok(S::U32(dst))
         }
     }

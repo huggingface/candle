@@ -43,7 +43,7 @@ pub(crate) fn launch_conv2d<
         if let Some(cudnn) = cudnn.borrow().get(&device_id) {
             return Ok(cudnn.clone());
         }
-        let c = Cudnn::new(dev.cuda_device());
+        let c = Cudnn::new(dev.cuda_stream());
         if let Ok(c) = &c {
             cudnn.borrow_mut().insert(device_id, c.clone());
         }
@@ -109,7 +109,7 @@ pub(crate) fn launch_conv2d<
         Some(CandleAlgo::Count) => A::CUDNN_CONVOLUTION_FWD_ALGO_COUNT,
     };
     let workspace_size = conv2d.get_workspace_size(alg)?;
-    let mut workspace = dev.cuda_device().alloc_zeros::<u8>(workspace_size)?;
+    let mut workspace = dev.cuda_stream().alloc_zeros::<u8>(workspace_size)?;
     unsafe {
         conv2d.launch::<CudaSlice<u8>, _, _, _>(
             alg,
