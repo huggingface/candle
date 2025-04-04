@@ -210,7 +210,7 @@ fn main() -> Result<()> {
     for (turn_idx, prompt) in args.prompt.split('|').enumerate() {
         println!("{prompt:?}");
         let speaker_idx = turn_idx % 2;
-        let prompt = format!("[{speaker_idx}]{}<|end_of_text|>", args.prompt);
+        let prompt = format!("[{speaker_idx}]{}<|end_of_text|>", prompt);
         let prompt = tokenizer.encode(prompt, true).map_err(E::msg)?;
 
         let (mut tokens, mut mask) = text_tokens_and_mask(cb, prompt.get_ids(), &device)?;
