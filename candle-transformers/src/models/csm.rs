@@ -498,4 +498,36 @@ impl Model {
         }
         Ok(all_samples)
     }
+
+    pub fn audio_tokens_and_mask(&self, mut frame: Vec<u32>) -> Result<(Tensor, Tensor)> {
+        let cb = self.config.audio_num_codebooks;
+        let device = &self.backbone.device;
+        let mut mask = vec![1u8; cb];
+        mask.push(0);
+        let mask = Tensor::from_vec(mask, (1, 1, cb + 1), device)?;
+
+        frame.push(0);
+        let tokens = Tensor::from_vec(frame, (1, 1, cb + 1), device)?;
+        Ok((tokens, mask))
+    }
+
+    pub fn text_tokens_and_mask(&self, ids: &[u32]) -> Result<(Tensor, Tensor)> {
+        let cb = self.config.audio_num_codebooks;
+        let device = &self.backbone.device;
+        let mut tokens = vec![];
+        let mut mask = vec![];
+        for &v in ids.iter() {
+            let mut token = vec![0; cb];
+            token.push(v);
+            let token = Tensor::from_vec(token, (1, 1, cb + 1), device)?;
+            tokens.push(token);
+            let mut m = vec![0u8; cb];
+            m.push(1);
+            let m = Tensor::from_vec(m, (1, 1, cb + 1), device)?;
+            mask.push(m);
+        }
+        let tokens = Tensor::cat(&tokens, 1)?;
+        let mask = Tensor::cat(&mask, 1)?;
+        Ok((tokens, mask))
+    }
 }

@@ -9,7 +9,7 @@ use clap::Parser;
 
 use candle_transformers::models::csm::{Config, Model};
 
-use candle::{DType, Device, IndexOp, Tensor};
+use candle::{DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
@@ -198,9 +198,6 @@ fn main() -> Result<()> {
         .expect("no tokens in prompt")
         .to_dtype(DType::U32)?;
     let mask = voices.get("mask").expect("no mask in prompt").clone();
-    let mut const_mask = vec![1u8; cb];
-    const_mask.push(0);
-    let const_mask = Tensor::from_vec(const_mask, (1, 1, cb + 1), &device)?;
 
     let mut pos = 0;
     let _frame = model.generate_frame(&tokens, &mask, pos, &mut lp)?;
@@ -213,17 +210,15 @@ fn main() -> Result<()> {
         let prompt = format!("[{speaker_idx}]{}<|end_of_text|>", prompt);
         let prompt = tokenizer.encode(prompt, true).map_err(E::msg)?;
 
-        let (mut tokens, mut mask) = text_tokens_and_mask(cb, prompt.get_ids(), &device)?;
+        let (mut tokens, mut mask) = model.text_tokens_and_mask(prompt.get_ids())?;
 
         let mut generated_tokens = vec![];
         loop {
-            let mut frame = model.generate_frame(&tokens, &mask, pos, &mut lp)?;
+            let frame = model.generate_frame(&tokens, &mask, pos, &mut lp)?;
             pos += tokens.dim(1)?;
-            frame.push(0);
             let is_done = frame.iter().all(|&x| x == 0);
+            (tokens, mask) = model.audio_tokens_and_mask(frame)?;
             print!("\rframe {pos}");
-            tokens = Tensor::from_vec(frame, (1, 1, cb + 1), &device)?;
-            mask = const_mask.clone();
             if is_done {
                 let _frame = model.generate_frame(&tokens, &mask, pos, &mut lp)?;
                 pos += tokens.dim(1)?;
@@ -245,22 +240,4 @@ fn main() -> Result<()> {
     candle_examples::wav::write_pcm_as_wav(&mut output, &pcm, 24_000)?;
 
     Ok(())
-}
-
-fn text_tokens_and_mask(cb: usize, ids: &[u32], device: &Device) -> Result<(Tensor, Tensor)> {
-    let mut tokens = vec![];
-    let mut mask = vec![];
-    for &v in ids.iter() {
-        let mut token = vec![0; cb];
-        token.push(v);
-        let token = Tensor::from_vec(token, (1, 1, cb + 1), device)?;
-        tokens.push(token);
-        let mut m = vec![0u8; cb];
-        m.push(1);
-        let m = Tensor::from_vec(m, (1, 1, cb + 1), device)?;
-        mask.push(m);
-    }
-    let tokens = Tensor::cat(&tokens, 1)?;
-    let mask = Tensor::cat(&mask, 1)?;
-    Ok((tokens, mask))
 }
