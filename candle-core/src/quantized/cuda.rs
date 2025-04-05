@@ -73,7 +73,7 @@ fn dequantize_f32(
     elem_count: usize,
     dev: &CudaDevice,
 ) -> Result<CudaStorage> {
-    let nb = (elem_count + 255) / 256;
+    let nb = elem_count.div_ceil(256);
     let (kernel_name, is_k, block_dim, num_blocks) = match dtype {
         GgmlDType::Q4_0 => ("dequantize_block_q4_0_f32", false, 32, nb),
         GgmlDType::Q4_1 => ("dequantize_block_q4_1_f32", false, 32, nb),
@@ -133,7 +133,7 @@ fn dequantize_f16(
     elem_count: usize,
     dev: &CudaDevice,
 ) -> Result<CudaStorage> {
-    let nb = (elem_count + 255) / 256;
+    let nb = elem_count.div_ceil(256);
     let (kernel_name, is_k, block_dim, num_blocks) = match dtype {
         GgmlDType::Q4_0 => ("dequantize_block_q4_0_f16", false, 32, nb),
         GgmlDType::Q4_1 => ("dequantize_block_q4_1_f16", false, 32, nb),
@@ -278,8 +278,8 @@ fn mul_mat_vec_via_q8_1(
     // https://github.com/ggerganov/llama.cpp/blob/facb8b56f8fd3bb10a693bf0943ae9d69d0828ef/ggml-cuda/mmvq.cu#L98
     let (nblocks, nwarps) = match b_size {
         1 => (nrows as u32, 4),
-        2..=4 => ((nrows as u32 + 1) / 2, 4),
-        5..=8 => ((nrows as u32 + 1) / 2, 2),
+        2..=4 => ((nrows as u32).div_ceil(2), 4),
+        5..=8 => ((nrows as u32).div_ceil(2), 2),
         _ => crate::bail!("unexpected bsize {b_size}"),
     };
     let cfg = cudarc::driver::LaunchConfig {
