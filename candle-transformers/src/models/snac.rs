@@ -6,7 +6,6 @@
 /// Multi-Scale Neural Audio Codec (SNAC) compresses audio into discrete codes at a low bitrate.
 /// For more information, read the paper: https://arxiv.org/abs/2410.14411
 ///
-use crate::models::encodec;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{
     linear_b, Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, LayerNorm, Linear,
@@ -26,6 +25,70 @@ pub struct Config {
     pub vq_strides: Vec<usize>,
     pub noise: bool,
     pub depthwise: bool,
+}
+
+pub fn conv1d_weight_norm(
+    in_c: usize,
+    out_c: usize,
+    kernel_size: usize,
+    config: candle_nn::Conv1dConfig,
+    vb: VarBuilder,
+) -> Result<Conv1d> {
+    let weight_g = vb.get((out_c, 1, 1), "parametrizations.weight.original0")?;
+    let weight_v = {
+        let name = "parametrizations.weight.original1";
+        match vb.get((out_c, in_c, kernel_size), name) {
+            Ok(v) => v,
+            Err(_) => vb.get((out_c, 1, kernel_size), name)?,
+        }
+    };
+    let norm_v = weight_v.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
+    let weight = weight_v.broadcast_mul(&weight_g)?.broadcast_div(&norm_v)?;
+    let bias = vb.get(out_c, "bias")?;
+    Ok(Conv1d::new(weight, Some(bias), config))
+}
+
+pub fn conv1d_weight_norm_no_bias(
+    in_c: usize,
+    out_c: usize,
+    kernel_size: usize,
+    config: candle_nn::Conv1dConfig,
+    vb: VarBuilder,
+) -> Result<Conv1d> {
+    let weight_g = vb.get((out_c, 1, 1), "parametrizations.weight.original0")?;
+    let weight_v = {
+        let name = "parametrizations.weight.original1";
+        match vb.get((out_c, in_c, kernel_size), name) {
+            Ok(v) => v,
+            Err(_) => vb.get((out_c, 1, kernel_size), name)?,
+        }
+    };
+    let norm_v = weight_v.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
+    let weight = weight_v.broadcast_mul(&weight_g)?.broadcast_div(&norm_v)?;
+    Ok(Conv1d::new(weight, None, config))
+}
+
+pub fn conv_transpose1d_weight_norm(
+    in_c: usize,
+    out_c: usize,
+    kernel_size: usize,
+    bias: bool,
+    config: candle_nn::ConvTranspose1dConfig,
+    vb: VarBuilder,
+) -> Result<ConvTranspose1d> {
+    let weight_g = vb.get((in_c, 1, 1), "parametrizations.weight.original0")?;
+    let weight_v = vb.get(
+        (in_c, out_c, kernel_size),
+        "parametrizations.weight.original1",
+    )?;
+    let norm_v = weight_v.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
+    let weight = weight_v.broadcast_mul(&weight_g)?.broadcast_div(&norm_v)?;
+    let bias = if bias {
+        Some(vb.get(out_c, "bias")?)
+    } else {
+        None
+    };
+    Ok(ConvTranspose1d::new(weight, bias, config))
 }
 
 // https://github.com/hubertsiuzdak/snac/blob/main/snac/attention.py
@@ -187,9 +250,9 @@ impl ResidualUnit {
             groups,
             ..Default::default()
         };
-        let conv1 = encodec::conv1d_weight_norm(dim, dim, 7, cfg1, vb.pp(1))?;
+        let conv1 = conv1d_weight_norm(dim, dim, 7, cfg1, vb.pp(1))?;
         let snake2 = Snake1d::new(dim, vb.pp(2))?;
-        let conv2 = encodec::conv1d_weight_norm(dim, dim, 1, Default::default(), vb.pp(3))?;
+        let conv2 = conv1d_weight_norm(dim, dim, 1, Default::default(), vb.pp(3))?;
         Ok(Self {
             snake1,
             conv1,
@@ -222,8 +285,7 @@ struct NoiseBlock {
 
 impl NoiseBlock {
     fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
-        let linear =
-            encodec::conv1d_weight_norm_no_bias(dim, dim, 1, Default::default(), vb.pp("linear"))?;
+        let linear = conv1d_weight_norm_no_bias(dim, dim, 1, Default::default(), vb.pp("linear"))?;
         Ok(Self { linear })
     }
 }
@@ -266,14 +328,8 @@ impl DecoderBlock {
             output_padding: stride % 2,
             ..Default::default()
         };
-        let conv_tr1 = encodec::conv_transpose1d_weight_norm(
-            in_dim,
-            out_dim,
-            2 * stride,
-            true,
-            cfg,
-            vb.pp(1),
-        )?;
+        let conv_tr1 =
+            conv_transpose1d_weight_norm(in_dim, out_dim, 2 * stride, true, cfg, vb.pp(1))?;
         let (n, noise) = if noise {
             let noise = NoiseBlock::new(out_dim, vb.pp(2))?;
             (1, Some(noise))
@@ -333,7 +389,7 @@ impl EncoderBlock {
             padding: stride.div_ceil(2),
             ..Default::default()
         };
-        let conv1 = encodec::conv1d_weight_norm(in_dim, out_dim, 2 * stride, cfg1, vb.pp(4))?;
+        let conv1 = conv1d_weight_norm(in_dim, out_dim, 2 * stride, cfg1, vb.pp(4))?;
         Ok(Self {
             res1,
             res2,
@@ -381,20 +437,27 @@ impl Encoder {
         vb: VarBuilder,
     ) -> Result<Self> {
         let vb = vb.pp("block");
+        let mut idx = 0;
         let cfg1 = Conv1dConfig {
             padding: 3,
             ..Default::default()
         };
         let groups = if depthwise { d_model / 2 } else { 1 };
-        let conv1 = encodec::conv1d_weight_norm(1, d_model, 7, cfg1, vb.pp(0))?;
+        let conv1 = conv1d_weight_norm(1, d_model, 7, cfg1, vb.pp(idx))?;
+        idx += 1;
         let mut blocks = Vec::with_capacity(strides.len());
-        for (block_idx, &stride) in strides.iter().enumerate() {
+        for &stride in strides.iter() {
             d_model *= 2;
-            let block = EncoderBlock::new(d_model, None, stride, groups, vb.pp(block_idx + 1))?;
+            let block = EncoderBlock::new(d_model, None, stride, groups, vb.pp(idx))?;
+            idx += 1;
             blocks.push(block)
         }
         let local_mha = match attn_window_size {
-            Some(w) => Some(LocalMHA::new(d_model, w, 64, true, vb.pp(42))?),
+            Some(w) => {
+                let mha = LocalMHA::new(d_model, w, 64, true, vb.pp(idx))?;
+                idx += 1;
+                Some(mha)
+            }
             None => None,
         };
         let cfg2 = Conv1dConfig {
@@ -402,8 +465,8 @@ impl Encoder {
             groups,
             ..Default::default()
         };
-        let conv2 =
-            encodec::conv1d_weight_norm(d_model, d_model, 7, cfg2, vb.pp(strides.len() + 2))?;
+        let conv2 = conv1d_weight_norm(d_model, d_model, 7, cfg2, vb.pp(idx))?;
+        idx += 1;
         Ok(Self {
             conv1,
             blocks,
@@ -414,8 +477,14 @@ impl Encoder {
 }
 
 #[derive(Debug, Clone)]
+enum ConvInit {
+    Depthwise(Conv1d, Conv1d),
+    Standard(Conv1d),
+}
+
+#[derive(Debug, Clone)]
 pub struct Decoder {
-    conv1: Conv1d,
+    conv1: ConvInit,
     local_mha: Option<LocalMHA>,
     blocks: Vec<DecoderBlock>,
     snake1: Snake1d,
@@ -435,31 +504,43 @@ impl Decoder {
         vb: VarBuilder,
     ) -> Result<Self> {
         let vb = vb.pp("model");
+        let mut idx = 0;
         let cfg1 = Conv1dConfig {
             padding: 3,
             ..Default::default()
         };
-        let conv1 = encodec::conv1d_weight_norm(in_c, channels, 7, cfg1, vb.pp(0))?;
+        let conv1 = if depthwise {
+            let conv1 = conv1d_weight_norm(in_c, in_c, 7, cfg1, vb.pp(idx))?;
+            idx += 1;
+            let conv2 = conv1d_weight_norm(in_c, channels, 1, Default::default(), vb.pp(idx))?;
+            idx += 1;
+            ConvInit::Depthwise(conv1, conv2)
+        } else {
+            let conv1 = conv1d_weight_norm(in_c, channels, 7, cfg1, vb.pp(idx))?;
+            idx += 1;
+            ConvInit::Standard(conv1)
+        };
         let mut blocks = Vec::with_capacity(rates.len());
         let local_mha = match attn_window_size {
-            Some(w) => Some(LocalMHA::new(channels, w, 64, true, vb.pp(42))?),
+            Some(w) => {
+                let mha = LocalMHA::new(channels, w, 64, true, vb.pp(idx))?;
+                idx += 1;
+                Some(mha)
+            }
             None => None,
         };
-        for (idx, stride) in rates.iter().enumerate() {
+        for stride in rates.iter() {
             let groups = if depthwise { channels / 2 } else { 1 };
-            let block = DecoderBlock::new(
-                channels,
-                channels / 2,
-                *stride,
-                noise,
-                groups,
-                vb.pp(idx + 1),
-            )?;
+            let block =
+                DecoderBlock::new(channels, channels / 2, *stride, noise, groups, vb.pp(idx))?;
+            idx += 1;
             channels /= 2;
             blocks.push(block)
         }
-        let snake1 = Snake1d::new(channels, vb.pp(rates.len() + 1))?;
-        let conv2 = encodec::conv1d_weight_norm(channels, d_out, 7, cfg1, vb.pp(rates.len() + 2))?;
+        let snake1 = Snake1d::new(channels, vb.pp(idx))?;
+        idx += 1;
+        let conv2 = conv1d_weight_norm(channels, d_out, 7, cfg1, vb.pp(idx))?;
+        idx += 1;
         Ok(Self {
             conv1,
             local_mha,
@@ -472,7 +553,10 @@ impl Decoder {
 
 impl candle::Module for Decoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut xs = xs.apply(&self.conv1)?;
+        let mut xs = match &self.conv1 {
+            ConvInit::Standard(c) => xs.apply(c)?,
+            ConvInit::Depthwise(c1, c2) => xs.apply(c1)?.apply(c2)?,
+        };
         for block in self.blocks.iter() {
             xs = xs.apply(block)?
         }
@@ -498,10 +582,9 @@ impl VectorQuantizer {
         stride: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let in_proj =
-            encodec::conv1d_weight_norm(in_dim, cb_dim, 1, Default::default(), vb.pp("in_proj"))?;
+        let in_proj = conv1d_weight_norm(in_dim, cb_dim, 1, Default::default(), vb.pp("in_proj"))?;
         let out_proj =
-            encodec::conv1d_weight_norm(cb_dim, in_dim, 1, Default::default(), vb.pp("out_proj"))?;
+            conv1d_weight_norm(cb_dim, in_dim, 1, Default::default(), vb.pp("out_proj"))?;
         let codebook = candle_nn::embedding(cb_size, cb_dim, vb.pp("codebook"))?;
         Ok(Self {
             in_proj,

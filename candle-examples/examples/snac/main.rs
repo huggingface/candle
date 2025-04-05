@@ -52,7 +52,7 @@ fn main() -> Result<()> {
         Some(c) => std::path::PathBuf::from(c),
         None => Api::new()?
             .model("hubertsiuzdak/snac_24khz".to_string())
-            .get("model.safetensors")?,
+            .get("config.json")?,
     };
     let config: Config = serde_json::from_slice(&std::fs::read(config)?)?;
     let model = match args.model {
