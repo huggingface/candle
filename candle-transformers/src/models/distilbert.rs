@@ -19,7 +19,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum HiddenAct {
+pub enum HiddenAct {
     Gelu,
     Relu,
 }
@@ -49,15 +49,15 @@ impl Module for HiddenActLayer {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
-enum PositionEmbeddingType {
+pub enum PositionEmbeddingType {
     #[default]
     Absolute,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
-    vocab_size: usize,
-    dim: usize,
+    pub vocab_size: usize,
+    pub dim: usize,
     n_layers: usize,
     n_heads: usize,
     hidden_dim: usize,
