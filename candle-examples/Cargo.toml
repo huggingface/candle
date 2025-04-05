@@ -69,6 +69,7 @@ metal = ["candle/metal", "candle-nn/metal"]
 microphone = ["cpal", "rubato"]
 encodec = ["cpal", "symphonia", "rubato"]
 mimi = ["cpal", "symphonia", "rubato"]
+snac = ["cpal", "symphonia", "rubato"]
 depth_anything_v2 = ["palette", "enterpolation"]
 
 [[example]]
@@ -106,6 +107,10 @@ required-features = ["candle-datasets"]
 [[example]]
 name = "mimi"
 required-features = ["mimi"]
+
+[[example]]
+name = "snac"
+required-features = ["snac"]
 
 [[example]]
 name = "encodec"
