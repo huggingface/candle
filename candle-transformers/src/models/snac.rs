@@ -1,3 +1,4 @@
+#![allow(unused)]
 //! Implementation of the Multi-Scale Neural Audio Codec (SNAC)
 //!
 //! See: [SNAC](https://github.com/hubertsiuzdak/snac)
@@ -8,7 +9,8 @@
 use crate::models::encodec;
 use candle::{IndexOp, Module, Result, Tensor, D};
 use candle_nn::{
-    Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, LayerNorm, Linear, VarBuilder,
+    linear_b, Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, LayerNorm, Linear,
+    VarBuilder,
 };
 
 #[derive(serde::Deserialize, Debug, Clone)]
@@ -26,10 +28,15 @@ pub struct Config {
     pub depthwise: bool,
 }
 
+// https://github.com/hubertsiuzdak/snac/blob/main/snac/attention.py
 #[allow(unused)]
 #[derive(Debug, Clone)]
-struct SinusoidalEmbeddings {
-    inv_freq: Tensor,
+struct SinusoidalEmbeddings {}
+
+impl SinusoidalEmbeddings {
+    fn new(_dim: usize, _scale_base: Option<usize>, _use_xpos: bool) -> Result<Self> {
+        Ok(Self {})
+    }
 }
 
 #[allow(unused)]
@@ -37,7 +44,34 @@ struct SinusoidalEmbeddings {
 struct LocalMHA {
     norm: LayerNorm,
     to_qkv: Linear,
+    to_out: Linear,
     rel_pos: Option<SinusoidalEmbeddings>,
+}
+
+impl LocalMHA {
+    fn new(
+        dim: usize,
+        window_size: usize,
+        dim_head: usize,
+        use_rotary_pos_emb: bool,
+        vb: VarBuilder,
+    ) -> Result<Self> {
+        let norm = candle_nn::layer_norm(dim, 1e-5, vb.pp("norm"))?;
+        let to_qkv = linear_b(dim, dim * 3, false, vb.pp("to_qkv"))?;
+        let to_out = linear_b(dim, dim, false, vb.pp("to_out"))?;
+        let rel_pos = if use_rotary_pos_emb {
+            let rel_pos = SinusoidalEmbeddings::new(dim_head, Some(window_size / 2), false)?;
+            Some(rel_pos)
+        } else {
+            None
+        };
+        Ok(Self {
+            norm,
+            to_qkv,
+            to_out,
+            rel_pos,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -258,6 +292,7 @@ impl candle::Module for EncoderBlock {
 pub struct Encoder {
     conv1: Conv1d,
     blocks: Vec<EncoderBlock>,
+    local_mha: Option<LocalMHA>,
     conv2: Conv1d,
 }
 
@@ -292,9 +327,10 @@ impl Encoder {
             let block = EncoderBlock::new(d_model, None, stride, groups, vb.pp(block_idx + 1))?;
             blocks.push(block)
         }
-        if let Some(_) = attn_window_size {
-            todo!()
-        }
+        let local_mha = match attn_window_size {
+            Some(w) => Some(LocalMHA::new(d_model, w, 64, true, vb.pp(42))?),
+            None => None,
+        };
         let cfg2 = Conv1dConfig {
             padding: 3,
             groups,
@@ -305,6 +341,7 @@ impl Encoder {
         Ok(Self {
             conv1,
             blocks,
+            local_mha,
             conv2,
         })
     }
@@ -313,19 +350,21 @@ impl Encoder {
 #[derive(Debug, Clone)]
 pub struct Decoder {
     conv1: Conv1d,
+    local_mha: Option<LocalMHA>,
     blocks: Vec<DecoderBlock>,
     snake1: Snake1d,
     conv2: Conv1d,
 }
 
 impl Decoder {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         in_c: usize,
         mut channels: usize,
         rates: &[usize],
         noise: bool,
         depthwise: bool,
-        attn_window: Option<usize>,
+        attn_window_size: Option<usize>,
         d_out: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
@@ -336,9 +375,10 @@ impl Decoder {
         };
         let conv1 = encodec::conv1d_weight_norm(in_c, channels, 7, cfg1, vb.pp(0))?;
         let mut blocks = Vec::with_capacity(rates.len());
-        if let Some(_) = attn_window {
-            todo!()
-        }
+        let local_mha = match attn_window_size {
+            Some(w) => Some(LocalMHA::new(channels, w, 64, true, vb.pp(42))?),
+            None => None,
+        };
         for (idx, stride) in rates.iter().enumerate() {
             let groups = if depthwise { channels / 2 } else { 1 };
             let block = DecoderBlock::new(
@@ -356,6 +396,7 @@ impl Decoder {
         let conv2 = encodec::conv1d_weight_norm(channels, d_out, 7, cfg1, vb.pp(rates.len() + 2))?;
         Ok(Self {
             conv1,
+            local_mha,
             blocks,
             snake1,
             conv2,
