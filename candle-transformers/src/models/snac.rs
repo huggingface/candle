@@ -7,7 +7,7 @@
 /// For more information, read the paper: https://arxiv.org/abs/2410.14411
 ///
 use crate::models::encodec;
-use candle::{IndexOp, Module, Result, Tensor, D};
+use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{
     linear_b, Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, LayerNorm, Linear,
     VarBuilder,
@@ -31,11 +31,32 @@ pub struct Config {
 // https://github.com/hubertsiuzdak/snac/blob/main/snac/attention.py
 #[allow(unused)]
 #[derive(Debug, Clone)]
-struct SinusoidalEmbeddings {}
+struct SinusoidalEmbeddings {
+    inv_freq: Tensor,
+    scale: Tensor,
+    scale_base: f32,
+    use_xpos: bool,
+}
 
 impl SinusoidalEmbeddings {
-    fn new(_dim: usize, _scale_base: Option<usize>, _use_xpos: bool) -> Result<Self> {
-        Ok(Self {})
+    fn new(dim: usize, scale_base: f32, use_xpos: bool, dev: &Device) -> Result<Self> {
+        let inv_freq: Vec<_> = (0..dim)
+            .step_by(2)
+            .map(|i| 1f32 / 10_000f32.powf(i as f32 / dim as f32))
+            .collect();
+        let len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, len, dev)?.to_dtype(DType::F32)?;
+        let scale: Vec<_> = (0..dim)
+            .step_by(2)
+            .map(|i| (i as f32 + 0.4 * dim as f32) / (1.4 * dim as f32))
+            .collect();
+        let scale = Tensor::from_vec(scale, len, dev)?.to_dtype(DType::F32)?;
+        Ok(Self {
+            inv_freq,
+            scale,
+            scale_base,
+            use_xpos,
+        })
     }
 }
 
@@ -45,6 +66,8 @@ struct LocalMHA {
     norm: LayerNorm,
     to_qkv: Linear,
     to_out: Linear,
+    num_heads: usize,
+    head_dim: usize,
     rel_pos: Option<SinusoidalEmbeddings>,
 }
 
@@ -60,7 +83,8 @@ impl LocalMHA {
         let to_qkv = linear_b(dim, dim * 3, false, vb.pp("to_qkv"))?;
         let to_out = linear_b(dim, dim, false, vb.pp("to_out"))?;
         let rel_pos = if use_rotary_pos_emb {
-            let rel_pos = SinusoidalEmbeddings::new(dim_head, Some(window_size / 2), false)?;
+            let rel_pos =
+                SinusoidalEmbeddings::new(dim_head, window_size as f32 / 2.0, false, vb.device())?;
             Some(rel_pos)
         } else {
             None
@@ -70,7 +94,49 @@ impl LocalMHA {
             to_qkv,
             to_out,
             rel_pos,
+            num_heads: dim / dim_head,
+            head_dim: dim_head,
         })
+    }
+}
+
+impl Module for LocalMHA {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (b, c, t) = xs.dims3()?;
+        let residual = xs.clone();
+        let xs = xs.transpose(1, 2)?.apply(&self.norm)?;
+        let qkv = xs.apply(&self.to_qkv)?;
+        let q = qkv.narrow(D::Minus1, 0, c)?;
+        let k = qkv.narrow(D::Minus1, c, c)?;
+        let v = qkv.narrow(D::Minus1, 2 * c, c)?;
+        let q = q
+            .reshape((b, t, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let k = k
+            .reshape((b, t, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let v = v
+            .reshape((b, t, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        let (q, k) = match self.rel_pos {
+            Some(_) => todo!(),
+            None => (q, k),
+        };
+        let out = {
+            let scale = 1f64 / f64::sqrt(self.head_dim as f64);
+            let attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+            // Non-causal attention
+            let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+            attn_weights.matmul(&v)?
+        };
+        let out = out
+            .transpose(1, 2)?
+            .reshape((b, t, self.num_heads * self.head_dim))?
+            .apply(&self.to_out)?;
+        out.transpose(1, 2)? + residual
     }
 }
 
@@ -156,8 +222,8 @@ struct NoiseBlock {
 
 impl NoiseBlock {
     fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
-        // TODO: remove bias
-        let linear = encodec::conv1d_weight_norm(dim, dim, 1, Default::default(), vb.pp("linear"))?;
+        let linear =
+            encodec::conv1d_weight_norm_no_bias(dim, dim, 1, Default::default(), vb.pp("linear"))?;
         Ok(Self { linear })
     }
 }
