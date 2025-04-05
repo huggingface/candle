@@ -1,5 +1,5 @@
 /// This example contains some simple benchmarks so that it's easy to run them in perf etc.
-#[cfg(feature = "mkl")]
+#[cfg(feature = "_mkl")]
 extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
