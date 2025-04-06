@@ -66,8 +66,9 @@ fn main() -> Result<()> {
 
     let codes = match args.action {
         Action::CodeToAudio => {
-            let codes = candle::safetensors::load(args.in_file, &device)?;
-            codes.get("codes").expect("no codes in input file").clone()
+            let _codes = candle::safetensors::load(args.in_file, &device)?;
+            // codes.get("codes").expect("no codes in input file").clone()
+            todo!()
         }
         Action::AudioToCode | Action::AudioToAudio => {
             let pcm = if args.in_file == "-" {
@@ -103,13 +104,17 @@ fn main() -> Result<()> {
             model.encode(&pcm)?
         }
     };
-    println!("codes shape: {:?}", codes.shape());
+    for codes in codes.iter() {
+        println!("codes shape: {:?}", codes.shape());
+    }
 
     match args.action {
         Action::AudioToCode => {
-            codes.save_safetensors("codes", &args.out_file)?;
+            // codes.save_safetensors("codes", &args.out_file)?;
+            todo!()
         }
         Action::AudioToAudio | Action::CodeToAudio => {
+            let codes = codes.iter().collect::<Vec<_>>();
             let pcm = model.decode(&codes)?;
             println!("output pcm shape: {:?}", pcm.shape());
             let pcm = pcm.i(0)?.i(0)?;

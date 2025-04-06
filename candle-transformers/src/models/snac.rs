@@ -27,6 +27,22 @@ pub struct Config {
     pub depthwise: bool,
 }
 
+// Equivalent to torch.repeat_interleave
+pub fn repeat_interleave<D: candle::shape::Dim>(
+    img: &Tensor,
+    repeats: usize,
+    dim: D,
+) -> Result<Tensor> {
+    if repeats == 1 {
+        return Ok(img.clone());
+    }
+    let dim = dim.to_index(img.shape(), "chunk")?;
+    let img = img.unsqueeze(dim + 1)?;
+    let mut dims = img.dims().to_vec();
+    dims[dim + 1] = repeats;
+    img.broadcast_as(dims)?.flatten(dim, dim + 1)
+}
+
 pub fn conv1d_weight_norm(
     in_c: usize,
     out_c: usize,
@@ -506,18 +522,23 @@ impl Decoder {
     ) -> Result<Self> {
         let vb = vb.pp("model");
         let mut idx = 0;
-        let cfg1 = Conv1dConfig {
+        let pad3 = Conv1dConfig {
             padding: 3,
             ..Default::default()
         };
         let conv1 = if depthwise {
+            let cfg1 = Conv1dConfig {
+                padding: 3,
+                groups: in_c,
+                ..Default::default()
+            };
             let conv1 = conv1d_weight_norm(in_c, in_c, 7, cfg1, vb.pp(idx))?;
             idx += 1;
             let conv2 = conv1d_weight_norm(in_c, channels, 1, Default::default(), vb.pp(idx))?;
             idx += 1;
             ConvInit::Depthwise(conv1, conv2)
         } else {
-            let conv1 = conv1d_weight_norm(in_c, channels, 7, cfg1, vb.pp(idx))?;
+            let conv1 = conv1d_weight_norm(in_c, channels, 7, pad3, vb.pp(idx))?;
             idx += 1;
             ConvInit::Standard(conv1)
         };
@@ -540,7 +561,7 @@ impl Decoder {
         }
         let snake1 = Snake1d::new(channels, vb.pp(idx))?;
         idx += 1;
-        let conv2 = conv1d_weight_norm(channels, d_out, 7, cfg1, vb.pp(idx))?;
+        let conv2 = conv1d_weight_norm(channels, d_out, 7, pad3, vb.pp(idx))?;
         idx += 1;
         Ok(Self {
             conv1,
@@ -604,19 +625,34 @@ impl VectorQuantizer {
         let encodings = latents.transpose(1, 2)?.reshape((b * t, d))?;
         let encodings = normalize(&encodings)?;
         let codebook = normalize(self.codebook.embeddings())?;
-        let dist = ((encodings.sqr()?.sum_keepdim(1)? - encodings.matmul(&codebook.t()?)? * 2.0)?
-            + codebook.sqr()?.sum_keepdim(1)?.t())?;
+        let dist = (encodings
+            .sqr()?
+            .sum_keepdim(1)?
+            .broadcast_sub(&encodings.matmul(&codebook.t()?)?)?
+            * 2.0)?
+            .broadcast_add(&codebook.sqr()?.sum_keepdim(1)?.t()?)?;
         let indices = dist.argmin(1)?.reshape((b, ()))?;
         let z_q = self.decode_code(&indices)?;
         Ok((z_q, indices))
     }
 
     fn encode(&self, z: &Tensor) -> Result<(Tensor, Tensor)> {
-        let z = if self.stride > 1 { todo!() } else { z.clone() };
+        let z = if self.stride > 1 {
+            let (b, c, t) = z.dims3()?;
+            z.reshape((b, c, 1, t))?
+                .avg_pool2d((1, self.stride))?
+                .squeeze(2)?
+        } else {
+            z.clone()
+        };
         let z_e = z.apply(&self.in_proj)?;
         let (z_q, indices) = self.decode_latents(&z_e)?;
         let z_q = z_q.apply(&self.out_proj)?;
-        let z_q = if self.stride > 1 { todo!() } else { z_q };
+        let z_q = if self.stride > 1 {
+            repeat_interleave(&z_q, self.stride, D::Minus1)?
+        } else {
+            z_q
+        };
         Ok((z_q, indices))
     }
 
@@ -651,7 +687,7 @@ impl ResidualVectorQuantizer {
         Ok(Self { quantizers })
     }
 
-    fn encode(&self, z: &Tensor) -> Result<(Tensor, Tensor)> {
+    fn encode(&self, z: &Tensor) -> Result<(Tensor, Vec<Tensor>)> {
         let mut residual = z.clone();
         let mut z_q = z.zeros_like()?;
         let mut codes = Vec::with_capacity(self.quantizers.len());
@@ -661,15 +697,15 @@ impl ResidualVectorQuantizer {
             residual = (residual - &z_q_i)?;
             codes.push(indices_i)
         }
-        let codes = Tensor::stack(&codes, 0)?;
         Ok((z_q, codes))
     }
 
-    fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+    fn from_codes(&self, codes: &[&Tensor]) -> Result<Tensor> {
         let mut sum = None;
-        for (idx, quantizer) in self.quantizers.iter().enumerate() {
-            let z_p_i = quantizer.decode_code(&codes.i((.., idx))?)?;
+        for (quantizer, codes) in self.quantizers.iter().zip(codes.iter()) {
+            let z_p_i = quantizer.decode_code(codes)?;
             let z_q_i = z_p_i.apply(&quantizer.out_proj)?;
+            let z_q_i = repeat_interleave(&z_q_i, quantizer.stride, D::Minus1)?;
             let s = match sum {
                 None => z_q_i,
                 Some(s) => (s + z_q_i)?,
@@ -755,15 +791,15 @@ impl Model {
         Ok(audio_data)
     }
 
-    pub fn encode(&self, audio_data: &Tensor) -> Result<Tensor> {
+    pub fn encode(&self, audio_data: &Tensor) -> Result<Vec<Tensor>> {
         let audio_data = self.preprocess(audio_data)?;
         let z = self.encoder.forward(&audio_data)?;
         let (_, codes) = self.quantizer.encode(&z)?;
         Ok(codes)
     }
 
-    pub fn decode(&self, audio_codes: &Tensor) -> Result<Tensor> {
-        let audio_values = self.quantizer.decode(audio_codes)?;
+    pub fn decode(&self, audio_codes: &[&Tensor]) -> Result<Tensor> {
+        let audio_values = self.quantizer.from_codes(audio_codes)?;
         audio_values.apply(&self.decoder)
     }
 }
