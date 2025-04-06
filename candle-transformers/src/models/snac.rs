@@ -442,12 +442,12 @@ impl Encoder {
             padding: 3,
             ..Default::default()
         };
-        let groups = if depthwise { d_model / 2 } else { 1 };
         let conv1 = conv1d_weight_norm(1, d_model, 7, cfg1, vb.pp(idx))?;
         idx += 1;
         let mut blocks = Vec::with_capacity(strides.len());
         for &stride in strides.iter() {
             d_model *= 2;
+            let groups = if depthwise { d_model / 2 } else { 1 };
             let block = EncoderBlock::new(d_model, None, stride, groups, vb.pp(idx))?;
             idx += 1;
             blocks.push(block)
@@ -460,6 +460,7 @@ impl Encoder {
             }
             None => None,
         };
+        let groups = if depthwise { d_model } else { 1 };
         let cfg2 = Conv1dConfig {
             padding: 3,
             groups,

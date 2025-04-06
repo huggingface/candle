@@ -100,8 +100,7 @@ fn main() -> Result<()> {
             let pcm_len = pcm.len();
             let pcm = Tensor::from_vec(pcm, (1, 1, pcm_len), &device)?;
             println!("input pcm shape: {:?}", pcm.shape());
-            // model.encode(&pcm)?
-            pcm
+            model.encode(&pcm)?
         }
     };
     println!("codes shape: {:?}", codes.shape());
