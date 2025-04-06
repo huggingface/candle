@@ -700,6 +700,7 @@ impl ResidualVectorQuantizer {
         Ok((z_q, codes))
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_codes(&self, codes: &[&Tensor]) -> Result<Tensor> {
         let mut sum = None;
         for (quantizer, codes) in self.quantizers.iter().zip(codes.iter()) {
