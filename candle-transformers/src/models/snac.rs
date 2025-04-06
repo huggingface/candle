@@ -564,6 +564,10 @@ impl candle::Module for Decoder {
     }
 }
 
+fn normalize(v: &Tensor) -> Result<Tensor> {
+    v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?)
+}
+
 // https://github.com/hubertsiuzdak/snac/blob/main/snac/vq.py
 #[allow(unused)]
 #[derive(Clone, Debug)]
@@ -592,6 +596,27 @@ impl VectorQuantizer {
             codebook,
             stride,
         })
+    }
+
+    fn decode_latents(&self, latents: &Tensor) -> Result<(Tensor, Tensor)> {
+        let (b, d, t) = latents.dims3()?;
+        let encodings = latents.transpose(1, 2)?.reshape((b * t, d))?;
+        let encodings = normalize(&encodings)?;
+        let codebook = normalize(self.codebook.embeddings())?;
+        let dist = ((encodings.sqr()?.sum_keepdim(1)? - encodings.matmul(&codebook.t()?)? * 2.0)?
+            + codebook.sqr()?.sum_keepdim(1)?.t())?;
+        let indices = dist.argmin(1)?.reshape((b, ()))?;
+        let z_q = self.decode_code(&indices)?;
+        Ok((z_q, indices))
+    }
+
+    fn encode(&self, z: &Tensor) -> Result<(Tensor, Tensor)> {
+        let z = if self.stride > 1 { todo!() } else { z.clone() };
+        let z_e = z.apply(&self.in_proj)?;
+        let (z_q, indices) = self.decode_latents(&z_e)?;
+        let z_q = z_q.apply(&self.out_proj)?;
+        let z_q = if self.stride > 1 { todo!() } else { z_q };
+        Ok((z_q, indices))
     }
 
     fn embed_code(&self, embed_id: &Tensor) -> Result<Tensor> {
@@ -625,8 +650,21 @@ impl ResidualVectorQuantizer {
         Ok(Self { quantizers })
     }
 
-    #[allow(clippy::wrong_self_convention)]
-    fn from_codes(&self, codes: &Tensor) -> Result<Tensor> {
+    fn encode(&self, z: &Tensor) -> Result<(Tensor, Tensor)> {
+        let mut residual = z.clone();
+        let mut z_q = z.zeros_like()?;
+        let mut codes = Vec::with_capacity(self.quantizers.len());
+        for quantizer in self.quantizers.iter() {
+            let (z_q_i, indices_i) = quantizer.encode(&residual)?;
+            z_q = (z_q + &z_q_i)?;
+            residual = (residual - &z_q_i)?;
+            codes.push(indices_i)
+        }
+        let codes = Tensor::stack(&codes, 0)?;
+        Ok((z_q, codes))
+    }
+
+    fn decode(&self, codes: &Tensor) -> Result<Tensor> {
         let mut sum = None;
         for (idx, quantizer) in self.quantizers.iter().enumerate() {
             let z_p_i = quantizer.decode_code(&codes.i((.., idx))?)?;
@@ -644,12 +682,27 @@ impl ResidualVectorQuantizer {
     }
 }
 
+fn gcd(mut a: usize, mut b: usize) -> usize {
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
+}
+
+fn lcm(a: usize, b: usize) -> usize {
+    a / gcd(a, b) * b
+}
+
 // https://github.com/hubertsiuzdak/snac/blob/main/snac/snac.py
 #[derive(Debug, Clone)]
 pub struct Model {
     pub encoder: Encoder,
     pub quantizer: ResidualVectorQuantizer,
     pub decoder: Decoder,
+    pub hop_length: usize,
+    pub config: Config,
 }
 
 impl Model {
@@ -679,15 +732,37 @@ impl Model {
             /* d_out */ 1,
             vb.pp("decoder"),
         )?;
+        let hop_length = cfg.encoder_rates.iter().product::<usize>();
         Ok(Self {
             encoder,
             decoder,
             quantizer,
+            config: cfg.clone(),
+            hop_length,
         })
     }
 
-    pub fn decode_codes(&self, audio_codes: &Tensor) -> Result<Tensor> {
-        let audio_values = self.quantizer.from_codes(audio_codes)?;
+    fn preprocess(&self, audio_data: &Tensor) -> Result<Tensor> {
+        let len = audio_data.dim(D::Minus1)?;
+        let lcm = lcm(
+            self.config.vq_strides[0],
+            self.config.attn_window_size.unwrap_or(1),
+        );
+        let pad_to = self.hop_length * lcm;
+        let right_pad = len.div_ceil(pad_to) * pad_to - len;
+        let audio_data = audio_data.pad_with_zeros(D::Minus1, 0, right_pad)?;
+        Ok(audio_data)
+    }
+
+    pub fn encode(&self, audio_data: &Tensor) -> Result<Tensor> {
+        let audio_data = self.preprocess(audio_data)?;
+        let z = self.encoder.forward(&audio_data)?;
+        let (_, codes) = self.quantizer.encode(&z)?;
+        Ok(codes)
+    }
+
+    pub fn decode(&self, audio_codes: &Tensor) -> Result<Tensor> {
+        let audio_values = self.quantizer.decode(audio_codes)?;
         audio_values.apply(&self.decoder)
     }
 }

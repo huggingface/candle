@@ -111,7 +111,7 @@ fn main() -> Result<()> {
             codes.save_safetensors("codes", &args.out_file)?;
         }
         Action::AudioToAudio | Action::CodeToAudio => {
-            let pcm = model.decode_codes(&codes)?;
+            let pcm = model.decode(&codes)?;
             println!("output pcm shape: {:?}", pcm.shape());
             let pcm = pcm.i(0)?.i(0)?;
             let pcm = candle_examples::audio::normalize_loudness(&pcm, 24_000, true)?;
