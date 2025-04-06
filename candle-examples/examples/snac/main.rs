@@ -66,9 +66,16 @@ fn main() -> Result<()> {
 
     let codes = match args.action {
         Action::CodeToAudio => {
-            let _codes = candle::safetensors::load(args.in_file, &device)?;
-            // codes.get("codes").expect("no codes in input file").clone()
-            todo!()
+            let codes = candle::safetensors::load(args.in_file, &device)?;
+            let num_codebooks = model.num_codebooks();
+            (0..num_codebooks)
+                .map(|i| {
+                    codes
+                        .get(&format!("codes-{i}"))
+                        .expect("no codes in input file")
+                        .clone()
+                })
+                .collect::<Vec<_>>()
         }
         Action::AudioToCode | Action::AudioToAudio => {
             let pcm = if args.in_file == "-" {
@@ -110,8 +117,11 @@ fn main() -> Result<()> {
 
     match args.action {
         Action::AudioToCode => {
-            // codes.save_safetensors("codes", &args.out_file)?;
-            todo!()
+            let mut tensors = std::collections::HashMap::new();
+            for (i, codes) in codes.iter().enumerate() {
+                tensors.insert(format!("codes-{i}"), codes.clone());
+            }
+            candle::safetensors::save(&tensors, "codes.safetensors")?;
         }
         Action::AudioToAudio | Action::CodeToAudio => {
             let codes = codes.iter().collect::<Vec<_>>();

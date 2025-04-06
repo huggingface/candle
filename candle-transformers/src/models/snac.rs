@@ -802,4 +802,12 @@ impl Model {
         let audio_values = self.quantizer.from_codes(audio_codes)?;
         audio_values.apply(&self.decoder)
     }
+
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    pub fn num_codebooks(&self) -> usize {
+        self.quantizer.quantizers.len()
+    }
 }
