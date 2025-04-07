@@ -7,7 +7,7 @@ use std::ops::Sub;
 
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::models::distilbert::{Config, DTYPE};
-use candle_transformers::models::distilbertformaskedlm::DistilBertForMaskedLM;
+use candle_transformers::models::distilbert::DistilBertForMaskedLM;
 
 use anyhow::{Error as E, Result};
 use candle::{Device, Tensor};
@@ -111,7 +111,7 @@ fn main() -> Result<()> {
         None
     };
     let (model, mut tokenizer) = args.build_model_and_tokenizer()?;
-    let device = &model.distilbert.device;
+    let device = &model.bert.device;
 
     let tokenizer = tokenizer
         .with_padding(None)
@@ -145,7 +145,7 @@ fn main() -> Result<()> {
 
     let masked_lm_positions = Tensor::from_vec(masked_positions.clone(), (masked_positions.len(),), device)?;
 
-    let logits = model.forward(&token_ids, &attention_mask, Some(&masked_lm_positions))?;
+    let logits = model.forward(&token_ids, &attention_mask)?;
     println!("{}", logits);
 
     let mut logits_processor = LogitsProcessor::from_sampling(
@@ -168,7 +168,7 @@ fn main() -> Result<()> {
             .unwrap_or_else(|| format!("UNKNOWN_{}", next_token_id));
         println!(
             "Predictions for masked token at position {}: token={} prob={}",
-            prob, token, prob
+            pos, token, prob
         );
     }
 

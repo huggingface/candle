@@ -35,7 +35,6 @@ pub mod depth_anything_v2;
 pub mod dinov2;
 pub mod dinov2reg4;
 pub mod distilbert;
-pub mod distilbertformaskedlm;
 pub mod efficientnet;
 pub mod efficientvit;
 pub mod encodec;
