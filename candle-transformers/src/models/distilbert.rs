@@ -64,7 +64,7 @@ pub struct Config {
     activation: HiddenAct,
     max_position_embeddings: usize,
     initializer_range: f64,
-    pad_token_id: usize,
+    pub pad_token_id: usize,
     #[serde(default)]
     position_embedding_type: PositionEmbeddingType,
     #[serde(default)]
