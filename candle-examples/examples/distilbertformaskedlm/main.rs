@@ -9,7 +9,7 @@ use candle_transformers::models::distilbert::Config;
 use candle_transformers::models::distilbert::DistilBertForMaskedLM;
 
 use anyhow::{Error as E, Result};
-use candle::{Device, Tensor};
+use candle::{Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use hf_hub::{api::sync::Api, Repo, RepoType};
@@ -47,6 +47,10 @@ struct Args {
     /// When set, compute embeddings for this prompt.
     #[arg(long)]
     prompt: Option<String>,
+
+    /// Number of top predictions to show for each mask
+    #[arg(long, default_value = "5")]
+    top_k: usize,
 }
 
 fn main() -> Result<()> {
@@ -117,25 +121,72 @@ fn main() -> Result<()> {
     };
     let model = DistilBertForMaskedLM::load(vb, &config)?;
 
-    let input_ids = tokenize_batch(&tokenizer, prompt.clone(), &device)?;
-    let attention_mask = get_proper_attention_mask(&tokenizer, prompt.clone(), &device)?;
+    let mask_token_id = tokenizer
+        .token_to_id("[MASK]")
+        .ok_or(anyhow::anyhow!("No mask token found"))?;
 
-    println!("{:?}", attention_mask.get(0)?.get(0)?.to_vec2::<u8>()?);
-    let output = model
+    let input_ids = tokenize_batch(&tokenizer, prompt.clone(), &device)?;
+
+    let attention_mask = attention_mask(&tokenizer, prompt.clone(), &device)?;
+
+    let logits = model
         .forward(&input_ids, &attention_mask)?
         .to_dtype(candle::DType::F32)?;
+    let input_ids_vec = input_ids.to_vec2::<u32>()?;
 
-    let max_outs = output.argmax(2)?;
-    let max_out = max_outs.to_vec2::<u32>()?;
-    println!("Sample predicted token IDs: {:?}", &max_out[0][..10]); //All zeros
+    for (seq_idx, seq) in input_ids_vec.iter().enumerate() {
+        let seq_text = prompt[seq_idx];
+        println!("\nInput: {}", seq_text);
 
-    let max_out_refs: Vec<&[u32]> = max_out.iter().map(|v| v.as_slice()).collect();
-    let decoded = tokenizer.decode_batch(&max_out_refs, true).unwrap();
-    for (i, sentence) in decoded.iter().enumerate() {
-        println!("Sentence: {} : {}", i + 1, sentence);
+        for (token_idx, &token_id) in seq.iter().enumerate() {
+            if token_id == mask_token_id {
+                println!("Predictions for [MASK] at position {}:", token_idx);
+
+                let pos_logits = logits.i((seq_idx, token_idx))?;
+
+                let probs = candle_nn::ops::softmax(&pos_logits, 0)?;
+
+                let (top_values, top_indices) = get_top_k(&probs, args.top_k)?;
+
+                let values = top_values.to_vec1::<f32>()?;
+                let indices = top_indices.to_vec1::<u32>()?;
+
+                for (i, (&token_id, &prob)) in indices.iter().zip(values.iter()).enumerate() {
+                    let token = tokenizer.decode(&[token_id], false).map_err(E::msg)?;
+                    println!("  {}: {:15} (probability: {:.4})", i + 1, token, prob);
+                }
+            }
+        }
     }
 
     Ok(())
+}
+
+fn get_top_k(tensor: &Tensor, k: usize) -> Result<(Tensor, Tensor)> {
+    let n = tensor.dims().iter().product::<usize>();
+    let k = std::cmp::min(k, n);
+
+    let values = tensor.to_vec1::<f32>()?;
+    let mut value_indices: Vec<(f32, usize)> = values
+        .into_iter()
+        .enumerate()
+        .map(|(idx, val)| (val, idx))
+        .collect();
+
+    value_indices.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let top_k_values: Vec<f32> = value_indices.iter().take(k).map(|(val, _)| *val).collect();
+    let top_k_indices: Vec<u32> = value_indices
+        .iter()
+        .take(k)
+        .map(|(_, idx)| *idx as u32)
+        .collect();
+
+    let device = tensor.device();
+    let top_values = Tensor::from_vec(top_k_values, (k,), device)?;
+    let top_indices = Tensor::from_vec(top_k_indices, (k,), device)?;
+
+    Ok((top_values, top_indices))
 }
 
 pub fn tokenize_batch(
@@ -156,7 +207,7 @@ pub fn tokenize_batch(
     Ok(Tensor::stack(&token_ids, 0)?)
 }
 
-fn get_proper_attention_mask(
+fn attention_mask(
     tokenizer: &Tokenizer,
     input: Vec<&str>,
     device: &Device,
@@ -165,7 +216,6 @@ fn get_proper_attention_mask(
     let batch_size = tokens.len();
     let seq_len = tokens.first().unwrap().get_attention_mask().to_vec().len();
 
-    // Get the mask token ID
     let mask_token_id = tokenizer
         .token_to_id("[MASK]")
         .ok_or(anyhow::anyhow!("No mask token found"))?;
@@ -174,7 +224,6 @@ fn get_proper_attention_mask(
 
     for token_encoding in tokens.iter() {
         let ids = token_encoding.get_ids();
-        // let attention_mask = token_encoding.get_attention_mask();
 
         for _ in 0..seq_len {
             for id in ids.iter() {
