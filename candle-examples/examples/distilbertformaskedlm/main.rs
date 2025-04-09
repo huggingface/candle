@@ -153,7 +153,7 @@ fn main() -> Result<()> {
 
                 for (i, (&token_id, &prob)) in indices.iter().zip(values.iter()).enumerate() {
                     let token = tokenizer.decode(&[token_id], false).map_err(E::msg)?;
-                    println!("  {}: {:15} (probability: {:.4})", i + 1, token, prob);
+                    println!("  {}: {:15} (probability: {:.2}%)", i + 1, token, prob * 100.0);
                 }
             }
         }
