@@ -1,7 +1,7 @@
 use crate::onnx::attribute_proto::AttributeType;
 use crate::onnx::tensor_proto::DataType;
 use crate::onnx::{self, GraphProto};
-use candle::{bail, DType, Device, Result, Tensor};
+use candle::{bail, DType, Device, IntDType, Result, Tensor};
 use std::collections::{HashMap, HashSet};
 
 pub type Value = Tensor;
@@ -548,6 +548,28 @@ fn simple_eval_(
                 let bias = bias.reshape(target_shape)?;
                 let xs = xs.broadcast_mul(&weight)?.broadcast_add(&bias)?;
                 values.insert(node.output[0].clone(), xs);
+            }
+            "LayerNormalization" => {
+                let xs = get(&node.input[0])?;
+                let weight = get(&node.input[1])?;
+                let bias = get(&node.input[2])?;
+                let axis = match get_attr_opt::<[i64]>(node, "axis")? {
+                    None => xs.rank() - 1,
+                    Some(axis) => {
+                        if axis.len() != 1 {
+                            bail!("only single axis is supported for LayerNormalization")
+                        }
+                        let axis = axis[0];
+                        if axis < 0 {
+                            xs.rank() + axis.as_usize()
+                        } else {
+                            axis.as_usize()
+                        }
+                    }
+                };
+                let eps = get_attr_opt::<f32>(node, "epsilon")?
+                    .copied()
+                    .unwrap_or(1e-5);
             }
             "Squeeze" => {
                 let xs = get(&node.input[0])?;
