@@ -3,7 +3,9 @@ extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
-use candle_transformers::models::{distilbert::{Config, DistilBertForMaskedLM, DistilBertModel, DTYPE}};
+use candle_transformers::models::distilbert::{
+    Config, DistilBertForMaskedLM, DistilBertModel, DTYPE,
+};
 
 use anyhow::{Error as E, Result};
 use candle::{Device, IndexOp, Tensor};
@@ -14,21 +16,21 @@ use tokenizers::Tokenizer;
 
 enum ModelType {
     Masked(DistilBertForMaskedLM),
-    UnMasked(DistilBertModel)
+    UnMasked(DistilBertModel),
 }
 
 impl ModelType {
     fn device(&self) -> &Device {
         match self {
             ModelType::Masked(model) => &model.bert.device,
-            ModelType::UnMasked(model) => &model.device
+            ModelType::UnMasked(model) => &model.device,
         }
     }
 
     fn forward(&self, input_ids: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         match self {
             ModelType::Masked(model) => Ok(model.forward(input_ids, attention_mask)?),
-            ModelType::UnMasked(model) => Ok(model.forward(input_ids, attention_mask)?)
+            ModelType::UnMasked(model) => Ok(model.forward(input_ids, attention_mask)?),
         }
     }
 }
@@ -106,7 +108,7 @@ impl Args {
         } else {
             unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, &device)? }
         };
-        let model = if self.prompt.contains("[MASK]"){
+        let model = if self.prompt.contains("[MASK]") {
             ModelType::Masked(DistilBertForMaskedLM::load(vb, &config)?)
         } else {
             ModelType::UnMasked(DistilBertModel::load(vb, &config)?)
@@ -146,7 +148,7 @@ fn main() -> Result<()> {
 
     let mask = match model {
         ModelType::UnMasked(_) => attention_mask(tokens.len(), device),
-        ModelType::Masked(_) => attention_mask_maskedlm(&tokenizer, &args.prompt.clone(), device)?
+        ModelType::Masked(_) => attention_mask_maskedlm(&tokenizer, &args.prompt.clone(), device)?,
     };
     println!("token_ids: {:?}", token_ids.to_vec2::<u32>());
     // println!("mask: {:?}", mask.to_vec2::<u8>());
@@ -157,7 +159,7 @@ fn main() -> Result<()> {
         ModelType::UnMasked(_) => {
             println!("embeddings");
             println!("{output}");
-        },
+        }
         ModelType::Masked(_) => {
             let input_ids_vec = token_ids.to_vec2::<u32>()?;
 
@@ -193,14 +195,13 @@ fn main() -> Result<()> {
             }
         }
     };
-    
+
     Ok(())
 }
 
 pub fn normalize_l2(v: &Tensor) -> Result<Tensor> {
     Ok(v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?)?)
 }
-
 
 fn get_top_k(tensor: &Tensor, k: usize) -> Result<(Tensor, Tensor)> {
     let n = tensor.dims().iter().product::<usize>();
