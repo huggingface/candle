@@ -356,11 +356,7 @@ impl DistilBertPredictionHeadTransform {
     fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let dense = linear(config.dim, config.dim, vb.pp("vocab_transform"))?;
         let activation = HiddenActLayer::new(config.activation);
-        let layer_norm = layer_norm(
-            config.dim, 
-            1e-12,
-            vb.pp("vocab_layer_norm"),
-        )?;
+        let layer_norm = layer_norm(config.dim, 1e-12, vb.pp("vocab_layer_norm"))?;
         Ok(Self {
             dense,
             activation,
@@ -391,7 +387,11 @@ impl DistilBertLMPredictionHead {
         // distil_bert_uncased uses the word embeddings for the vocab projector weight, but has a seperate vocab_projector bias
         let vocab_projector_weight_vb = vb.pp("distilbert.embeddings.word_embeddings");
         let init_ws = candle_nn::init::DEFAULT_KAIMING_NORMAL;
-        let ws = vocab_projector_weight_vb.get_with_hints((config.vocab_size, config.dim), "weight", init_ws)?;
+        let ws = vocab_projector_weight_vb.get_with_hints(
+            (config.vocab_size, config.dim),
+            "weight",
+            init_ws,
+        )?;
         let bound = 1. / (config.dim as f64).sqrt();
         let init_bs = candle_nn::Init::Uniform {
             lo: -bound,
@@ -444,14 +444,8 @@ impl DistilBertForMaskedLM {
         Ok(Self { bert, cls })
     }
 
-    pub fn forward(
-        &self,
-        input_ids: &Tensor,
-        attention_mask: &Tensor,
-    ) -> Result<Tensor> {
-        let sequence_output = self
-            .bert
-            .forward(input_ids, attention_mask)?;
+    pub fn forward(&self, input_ids: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+        let sequence_output = self.bert.forward(input_ids, attention_mask)?;
         self.cls.forward(&sequence_output)
     }
 }
