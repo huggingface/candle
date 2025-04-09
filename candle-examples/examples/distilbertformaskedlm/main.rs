@@ -26,8 +26,8 @@ struct Args {
     #[arg(long)]
     tracing: bool,
 
-    #[arg(long)]
-    model_id: Option<String>,
+    #[arg(long, default_value = "distilbert/distilbert-base-uncased")]
+    model_id: String,
 
     #[arg(long, default_value = "main")]
     revision: String,
@@ -56,9 +56,8 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
     let api = Api::new()?;
-    let model_id = "distilbert/distilbert-base-uncased".to_string();
     let repo = api.repo(Repo::with_revision(
-        model_id,
+        args.model_id,
         RepoType::Model,
         args.revision,
     ));
@@ -153,7 +152,12 @@ fn main() -> Result<()> {
 
                 for (i, (&token_id, &prob)) in indices.iter().zip(values.iter()).enumerate() {
                     let token = tokenizer.decode(&[token_id], false).map_err(E::msg)?;
-                    println!("  {}: {:15} (probability: {:.2}%)", i + 1, token, prob * 100.0);
+                    println!(
+                        "  {}: {:15} (probability: {:.2}%)",
+                        i + 1,
+                        token,
+                        prob * 100.0
+                    );
                 }
             }
         }
