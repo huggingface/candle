@@ -1934,6 +1934,49 @@ fn simple_eval_(
                     );
                 }
             }
+            "RNN" => {
+                /*
+                    X,
+                    W,
+                    R,
+                    B=None,
+                    sequence_lens=None,
+                    initial_h=None,
+                    activation_alpha=None,  # noqa: ARG002
+                    activation_beta=None,  # noqa: ARG002
+                    activations=None,  # noqa: ARG002
+                    clip=None,  # noqa: ARG002
+                    direction=None,  # noqa: ARG002
+                    hidden_size=None,
+                    layout=None,
+                 */
+                let x = get(&node.input[0])?;
+                let w = get(&node.input[1])?;
+                let r = get(&node.input[2])?;
+                let b_default: Tensor;
+                let b = match get_opt(3) {
+                    Some(n) => n?,
+                    None => {
+                        b_default = Tensor::zeros(
+                            (1, 2 * x.shape()[1] as usize),
+                            DType::F32,
+                            x.device(),
+                        )?;
+                        &b_default
+                    }
+                };
+                let seq_lens_default: Tensor;
+                let seq_lens = match get_opt(4) {
+                    Some(n) => n?,
+                    None => {
+                        seq_lens_default =
+                            Tensor::full(x.shape()[0] as i64, (x.shape()[1],), x.device())?;
+                        &seq_lens_default
+                    }
+                };
+                let seq_lens_is_default =
+                    (seq_lens.to_vec1::<i64>()?.iter()).all(|e| *e as usize == x.shape()[0]);
+            }
             // https://onnx.ai/onnx/operators/onnx__Xor.html
             "Xor" => {
                 // Since we don't have a `DType::Bool` yet, this ensures that we are working with `0`(False) & `1`(True)
