@@ -120,20 +120,18 @@ fn main() -> Result<()> {
     let model = DistilBertForMaskedLM::load(vb, &config)?;
 
     let input_ids = tokenize_batch(&tokenizer, prompt.clone(), &device)?;
-    let attention_mask = get_attention_mask(&tokenizer, prompt.clone(), &device)?;
-    let attention_mask = attention_mask
-        .unsqueeze(1)?  // Shape becomes [4, 1, 10]
-        .unsqueeze(3)?;  // Shape becomes [4, 1, 10, 1]
-
-    println!("{:?}", attention_mask.shape());
+    let attention_mask = create_triangular_mask(&tokenizer, prompt.clone(), &device)?;
 
     let output = model
         .forward(&input_ids, &attention_mask)?
         .to_dtype(candle::DType::F32)?;
 
+    println!("{:?}", output.get(0)?.get(6)?.to_vec1::<f32>()?);
+    println!("{:?}", output.shape());
     let max_outs = output.argmax(2)?;
-
     let max_out = max_outs.to_vec2::<u32>()?;
+    println!("Sample predicted token IDs: {:?}", &max_out[0][..10]); //All zeros
+
     let max_out_refs: Vec<&[u32]> = max_out.iter().map(|v| v.as_slice()).collect();
     let decoded = tokenizer.decode_batch(&max_out_refs, true).unwrap();
     for (i, sentence) in decoded.iter().enumerate() {
@@ -178,6 +176,31 @@ pub fn get_attention_mask(
     Ok(Tensor::stack(&attention_mask, 0)?)
 }
 
+pub fn create_triangular_mask(
+    tokenizer: &Tokenizer,
+    input: Vec<&str>,
+    device: &Device,
+) -> anyhow::Result<Tensor> {
+    let tokens = tokenizer.encode_batch(input, true).map_err(E::msg)?;
+    let batch_size = tokens.len();
+    let seq_len = tokens.get(0).unwrap().get_attention_mask().to_vec().len();
+    println!("{} {}", batch_size, seq_len);
+    let mut mask_vec = Vec::with_capacity(batch_size * seq_len * seq_len);
+    
+    for _ in 0..batch_size  {
+        for i in 0..seq_len {
+            for j in 0..seq_len {
+                let mask_value = if j > i { 1u8 } else { 0u8 };
+                mask_vec.push(mask_value);
+            }
+        }
+    }
+
+    let shape = (batch_size, 1, seq_len, seq_len);
+    let mask = Tensor::from_vec(mask_vec, shape, device)?;
+    
+    Ok(mask)
+}
 
 // #[derive(Parser, Debug)]
 // #[command(author, version, about, long_about = None)]
