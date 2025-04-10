@@ -8,10 +8,11 @@ use candle_transformers::models::distilbert::{
 };
 
 use anyhow::{Error as E, Result};
-use candle::{Device, IndexOp, Tensor};
+use candle::{Device, Tensor};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use hf_hub::{api::sync::Api, Repo, RepoType};
+use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
 enum ModelType {
@@ -50,6 +51,7 @@ struct Args {
     #[arg(long)]
     model_id: Option<String>,
 
+    /// Revision or branch
     #[arg(long)]
     revision: Option<String>,
 
@@ -65,7 +67,7 @@ struct Args {
     #[arg(long, default_value = "1")]
     n: usize,
 
-    /// L2 normalization for embeddings.
+    /// L2 normalization for embeddings. (Not Implemented)
     #[arg(long, default_value = "true")]
     normalize_embeddings: bool,
 
@@ -77,124 +79,180 @@ struct Args {
 impl Args {
     fn build_model_and_tokenizer(&self) -> Result<(ModelType, Tokenizer)> {
         let device = candle_examples::device(self.cpu)?;
+
+        let (model_id, revision) = self.resolve_model_and_revision();
+        let (config_path, tokenizer_path, weights_path) =
+            self.download_model_files(&model_id, &revision)?;
+
+        let config = std::fs::read_to_string(config_path)?;
+        let config: Config = serde_json::from_str(&config)?;
+        let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(E::msg)?;
+
+        let vb = self.load_variables(&weights_path, &device)?;
+        let model = self.create_model(&config, vb)?;
+
+        Ok((model, tokenizer))
+    }
+
+    fn resolve_model_and_revision(&self) -> (String, String) {
         let default_model = "distilbert-base-uncased".to_string();
         let default_revision = "main".to_string();
-        let (model_id, revision) = match (self.model_id.to_owned(), self.revision.to_owned()) {
+
+        match (self.model_id.clone(), self.revision.clone()) {
             (Some(model_id), Some(revision)) => (model_id, revision),
-            (Some(model_id), None) => (model_id, "main".to_string()),
+            (Some(model_id), None) => (model_id, default_revision),
             (None, Some(revision)) => (default_model, revision),
             (None, None) => (default_model, default_revision),
+        }
+    }
+
+    fn download_model_files(
+        &self,
+        model_id: &str,
+        revision: &str,
+    ) -> Result<(PathBuf, PathBuf, PathBuf)> {
+        let repo = Repo::with_revision(model_id.to_string(), RepoType::Model, revision.to_string());
+        let api = Api::new()?;
+        let api = api.repo(repo);
+
+        let config = api.get("config.json")?;
+        let tokenizer = api.get("tokenizer.json")?;
+        let weights = if self.use_pth {
+            api.get("pytorch_model.bin")?
+        } else {
+            api.get("model.safetensors")?
         };
 
-        let repo = Repo::with_revision(model_id, RepoType::Model, revision);
-        let (config_filename, tokenizer_filename, weights_filename) = {
-            let api = Api::new()?;
-            let api = api.repo(repo);
-            let config = api.get("config.json")?;
-            let tokenizer = api.get("tokenizer.json")?;
-            let weights = if self.use_pth {
-                api.get("pytorch_model.bin")?
-            } else {
-                api.get("model.safetensors")?
-            };
-            (config, tokenizer, weights)
-        };
-        let config = std::fs::read_to_string(config_filename)?;
-        let config: Config = serde_json::from_str(&config)?;
-        let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
+        Ok((config, tokenizer, weights))
+    }
 
-        let vb = if self.use_pth {
-            VarBuilder::from_pth(&weights_filename, DTYPE, &device)?
+    fn load_variables(&self, weights_path: &PathBuf, device: &Device) -> Result<VarBuilder> {
+        if self.use_pth {
+            Ok(VarBuilder::from_pth(&weights_path, DTYPE, device)?)
         } else {
-            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, &device)? }
-        };
-        let model = if self.prompt.contains("[MASK]") {
-            ModelType::Masked(DistilBertForMaskedLM::load(vb, &config)?)
+            Ok(unsafe { VarBuilder::from_mmaped_safetensors(&[weights_path], DTYPE, device)? })
+        }
+    }
+
+    fn create_model(&self, config: &Config, vb: VarBuilder) -> Result<ModelType> {
+        if self.prompt.contains("[MASK]") {
+            Ok(ModelType::Masked(DistilBertForMaskedLM::load(vb, config)?))
         } else {
-            ModelType::UnMasked(DistilBertModel::load(vb, &config)?)
-        };
-        Ok((model, tokenizer))
+            Ok(ModelType::UnMasked(DistilBertModel::load(vb, config)?))
+        }
     }
 }
 
 fn main() -> Result<()> {
-    use tracing_chrome::ChromeLayerBuilder;
-    use tracing_subscriber::prelude::*;
-
     let args = Args::parse();
-    let _guard = if args.tracing {
+    let _guard = setup_tracing(&args);
+
+    let (model, tokenizer) = args.build_model_and_tokenizer()?;
+    let device = model.device();
+
+    let (token_ids, mask) = prepare_inputs(&args, &tokenizer, device)?;
+    let output = model.forward(&token_ids, &mask)?;
+
+    process_output(&model, &output, &token_ids, &tokenizer, &args)?;
+
+    Ok(())
+}
+
+fn setup_tracing(args: &Args) -> Option<impl Drop> {
+    if args.tracing {
+        use tracing_chrome::ChromeLayerBuilder;
+        use tracing_subscriber::prelude::*;
+
         println!("tracing...");
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
         Some(guard)
     } else {
         None
-    };
-    let (model, mut tokenizer) = args.build_model_and_tokenizer()?;
-    let device = model.device();
+    }
+}
 
-    let mut tokenizer_intermediate = tokenizer.clone();
-
-    let tokenizer_padding_trunc = tokenizer_intermediate
+fn prepare_inputs(args: &Args, tokenizer: &Tokenizer, device: &Device) -> Result<(Tensor, Tensor)> {
+    let mut binding = tokenizer.clone();
+    let tokenizer_configured = binding
         .with_padding(None)
         .with_truncation(None)
         .map_err(E::msg)?;
-    let tokens = tokenizer_padding_trunc
+
+    let tokens = tokenizer_configured
         .encode(args.prompt.clone(), true)
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
+
     let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
 
-    let mask = match model {
-        ModelType::UnMasked(_) => attention_mask(tokens.len(), device),
-        ModelType::Masked(_) => attention_mask_maskedlm(&tokenizer, &args.prompt.clone(), device)?,
+    let mask = if args.prompt.contains("[MASK]") {
+        attention_mask_maskedlm(&tokenizer, &args.prompt, device)?
+    } else {
+        attention_mask(tokens.len(), device)?
     };
-    println!("token_ids: {:?}", token_ids.to_vec2::<u32>());
-    // println!("mask: {:?}", mask.to_vec2::<u8>());
 
-    let output = model.forward(&token_ids, &mask)?;
+    println!("token_ids: {:?}", token_ids.to_vec2::<u32>()?);
 
+    Ok((token_ids, mask))
+}
+
+fn process_output(
+    model: &ModelType,
+    output: &Tensor,
+    token_ids: &Tensor,
+    tokenizer: &Tokenizer,
+    args: &Args,
+) -> Result<()> {
     match model {
         ModelType::UnMasked(_) => {
             println!("embeddings");
             println!("{output}");
         }
         ModelType::Masked(_) => {
-            let input_ids_vec = token_ids.to_vec2::<u32>()?;
+            process_masked_output(output, token_ids, tokenizer, args)?;
+        }
+    }
 
-            let mask_token_id = tokenizer
-                .token_to_id("[MASK]")
-                .ok_or(anyhow::anyhow!("No mask token found"))?;
-            let seq_text = args.prompt;
-            println!("\nInput: {}", seq_text);
+    Ok(())
+}
 
-            for (token_idx, &token_id) in input_ids_vec[0].iter().enumerate() {
-                if token_id == mask_token_id {
-                    println!("Predictions for [MASK] at position {}:", token_idx);
+fn process_masked_output(
+    output: &Tensor,
+    token_ids: &Tensor,
+    tokenizer: &Tokenizer,
+    args: &Args,
+) -> Result<()> {
+    let input_ids_vec = token_ids.to_vec2::<u32>()?;
+    let mask_token_id = tokenizer
+        .token_to_id("[MASK]")
+        .ok_or(anyhow::anyhow!("No mask token found"))?;
 
-                    let pos_logits = output.get(0)?.get(token_idx)?;
+    println!("\nInput: {}", args.prompt);
 
-                    let probs = candle_nn::ops::softmax(&pos_logits, 0)?;
+    for (token_idx, &token_id) in input_ids_vec[0].iter().enumerate() {
+        if token_id == mask_token_id {
+            println!("Predictions for [MASK] at position {}:", token_idx);
 
-                    let (top_values, top_indices) = get_top_k(&probs, args.top_k)?;
+            let pos_logits = output.get(0)?.get(token_idx)?;
+            let probs = candle_nn::ops::softmax(&pos_logits, 0)?;
+            let (top_values, top_indices) = get_top_k(&probs, args.top_k)?;
 
-                    let values = top_values.to_vec1::<f32>()?;
-                    let indices = top_indices.to_vec1::<u32>()?;
+            let values = top_values.to_vec1::<f32>()?;
+            let indices = top_indices.to_vec1::<u32>()?;
 
-                    for (i, (&token_id, &prob)) in indices.iter().zip(values.iter()).enumerate() {
-                        let token = tokenizer.decode(&[token_id], false).map_err(E::msg)?;
-                        println!(
-                            "  {}: {:15} (probability: {:.2}%)",
-                            i + 1,
-                            token,
-                            prob * 100.0
-                        );
-                    }
-                }
+            for (i, (&token_id, &prob)) in indices.iter().zip(values.iter()).enumerate() {
+                let token = tokenizer.decode(&[token_id], false).map_err(E::msg)?;
+                println!(
+                    "  {}: {:15} (probability: {:.2}%)",
+                    i + 1,
+                    token,
+                    prob * 100.0
+                );
             }
         }
-    };
+    }
 
     Ok(())
 }
@@ -230,18 +288,14 @@ fn get_top_k(tensor: &Tensor, k: usize) -> Result<(Tensor, Tensor)> {
     Ok((top_values, top_indices))
 }
 
-fn attention_mask(size: usize, device: &Device) -> Tensor {
+fn attention_mask(size: usize, device: &Device) -> Result<Tensor> {
     let mask: Vec<_> = (0..size)
         .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
         .collect();
-    Tensor::from_slice(&mask, (size, size), device).unwrap()
+    Ok(Tensor::from_slice(&mask, (size, size), device)?)
 }
 
-fn attention_mask_maskedlm(
-    tokenizer: &Tokenizer,
-    input: &str,
-    device: &Device,
-) -> anyhow::Result<Tensor> {
+fn attention_mask_maskedlm(tokenizer: &Tokenizer, input: &str, device: &Device) -> Result<Tensor> {
     let tokens = tokenizer.encode(input, true).map_err(E::msg)?;
     let seq_len = tokens.get_attention_mask().to_vec().len();
 
