@@ -10,7 +10,7 @@ use candle_transformers::models::distilbert::{
 use anyhow::{Error as E, Result};
 use candle::{Device, Tensor};
 use candle_nn::VarBuilder;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
@@ -36,6 +36,15 @@ impl ModelType {
     }
 }
 
+#[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
+enum Which {
+    #[value(name = "distilbert")]
+    DistilBert,
+    
+    #[value(name = "distilbertformaskedlm")]
+    DistilbertForMaskedLM
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -46,6 +55,9 @@ struct Args {
     /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
     tracing: bool,
+
+    #[arg(long, default_value = "distilbert")]
+    model: Which,
 
     /// The model to use, check out available models: https://huggingface.co/models?library=sentence-transformers&sort=trending
     #[arg(long)]
@@ -131,10 +143,9 @@ impl Args {
     }
 
     fn create_model(&self, config: &Config, vb: VarBuilder) -> Result<ModelType> {
-        if self.prompt.contains("[MASK]") {
-            Ok(ModelType::Masked(DistilBertForMaskedLM::load(vb, config)?))
-        } else {
-            Ok(ModelType::UnMasked(DistilBertModel::load(vb, config)?))
+        match self.model {
+            Which::DistilbertForMaskedLM => Ok(ModelType::Masked(DistilBertForMaskedLM::load(vb, config)?)),
+            Which::DistilBert => Ok(ModelType::UnMasked(DistilBertModel::load(vb, config)?))
         }
     }
 }
@@ -183,10 +194,9 @@ fn prepare_inputs(args: &Args, tokenizer: &Tokenizer, device: &Device) -> Result
 
     let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
 
-    let mask = if args.prompt.contains("[MASK]") {
-        attention_mask_maskedlm(tokenizer, &args.prompt, device)?
-    } else {
-        attention_mask(tokens.len(), device)?
+    let mask = match args.model {
+        Which::DistilbertForMaskedLM => attention_mask_maskedlm(tokenizer, &args.prompt, device)?,
+        Which::DistilBert => attention_mask(tokens.len(), device)?
     };
 
     println!("token_ids: {:?}", token_ids.to_vec2::<u32>()?);
