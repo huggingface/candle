@@ -128,7 +128,7 @@ impl Args {
 
     fn load_variables(&self, weights_path: &PathBuf, device: &Device) -> Result<VarBuilder> {
         if self.use_pth {
-            Ok(VarBuilder::from_pth(&weights_path, DTYPE, device)?)
+            Ok(VarBuilder::from_pth(weights_path, DTYPE, device)?)
         } else {
             Ok(unsafe { VarBuilder::from_mmaped_safetensors(&[weights_path], DTYPE, device)? })
         }
@@ -188,7 +188,7 @@ fn prepare_inputs(args: &Args, tokenizer: &Tokenizer, device: &Device) -> Result
     let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
 
     let mask = if args.prompt.contains("[MASK]") {
-        attention_mask_maskedlm(&tokenizer, &args.prompt, device)?
+        attention_mask_maskedlm(tokenizer, &args.prompt, device)?
     } else {
         attention_mask(tokens.len(), device)?
     };
