@@ -235,7 +235,7 @@ fn process_masked_output(
     let input_ids_vec = token_ids.to_vec2::<u32>()?;
     let mask_token_id = tokenizer
         .token_to_id("[MASK]")
-        .context("No mask token found")?;
+        .context("Mask token, \"[MASK]\", not found in tokenizer.")?;
 
     println!("\nInput: {}", args.prompt);
 
@@ -305,7 +305,7 @@ fn attention_mask_maskedlm(tokenizer: &Tokenizer, input: &str, device: &Device) 
 
     let mask_token_id = tokenizer
         .token_to_id("[MASK]")
-        .context("No mask token found")?;
+        .context("Mask token, \"[MASK]\", not found in tokenizer.")?;
 
     let mut attention_mask_vec = Vec::with_capacity(seq_len * seq_len);
 
