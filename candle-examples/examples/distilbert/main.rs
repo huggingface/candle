@@ -40,9 +40,9 @@ impl ModelType {
 enum Which {
     #[value(name = "distilbert")]
     DistilBert,
-    
+
     #[value(name = "distilbertformaskedlm")]
-    DistilbertForMaskedLM
+    DistilbertForMaskedLM,
 }
 
 #[derive(Parser, Debug)]
@@ -144,8 +144,10 @@ impl Args {
 
     fn create_model(&self, config: &Config, vb: VarBuilder) -> Result<ModelType> {
         match self.model {
-            Which::DistilbertForMaskedLM => Ok(ModelType::Masked(DistilBertForMaskedLM::load(vb, config)?)),
-            Which::DistilBert => Ok(ModelType::UnMasked(DistilBertModel::load(vb, config)?))
+            Which::DistilbertForMaskedLM => {
+                Ok(ModelType::Masked(DistilBertForMaskedLM::load(vb, config)?))
+            }
+            Which::DistilBert => Ok(ModelType::UnMasked(DistilBertModel::load(vb, config)?)),
         }
     }
 }
@@ -196,7 +198,7 @@ fn prepare_inputs(args: &Args, tokenizer: &Tokenizer, device: &Device) -> Result
 
     let mask = match args.model {
         Which::DistilbertForMaskedLM => attention_mask_maskedlm(tokenizer, &args.prompt, device)?,
-        Which::DistilBert => attention_mask(tokens.len(), device)?
+        Which::DistilBert => attention_mask(tokens.len(), device)?,
     };
 
     println!("token_ids: {:?}", token_ids.to_vec2::<u32>()?);
