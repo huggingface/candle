@@ -67,10 +67,6 @@ struct Args {
     #[arg(long, default_value = "1")]
     n: usize,
 
-    /// L2 normalization for embeddings. (Not Implemented)
-    #[arg(long, default_value = "true")]
-    normalize_embeddings: bool,
-
     /// Number of top predictions to show for each mask
     #[arg(long, default_value = "5")]
     top_k: usize,
@@ -255,10 +251,6 @@ fn process_masked_output(
     }
 
     Ok(())
-}
-
-pub fn normalize_l2(v: &Tensor) -> Result<Tensor> {
-    Ok(v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?)?)
 }
 
 fn get_top_k(tensor: &Tensor, k: usize) -> Result<(Tensor, Tensor)> {
