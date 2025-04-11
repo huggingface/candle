@@ -569,7 +569,21 @@ pub struct BertLMPredictionHead {
 impl BertLMPredictionHead {
     pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let transform = BertPredictionHeadTransform::load(vb.pp("transform"), config)?;
-        let decoder = linear(config.hidden_size, config.vocab_size, vb.pp("decoder"))?;
+
+        let decoder_weight = if vb.contains_tensor("decoder.weight") {
+            vb.get((config.vocab_size, config.hidden_size), "decoder.weight")?
+        } else {
+            vb.root().get(
+                (config.vocab_size, config.hidden_size),
+                "bert.embeddings.word_embeddings.weight",
+            )?
+        };
+        let decoder_bias = if vb.contains_tensor("decoder.bias") {
+            vb.get(config.vocab_size, "decoder.bias")?
+        } else {
+            vb.get(config.vocab_size, "bias")?
+        };
+        let decoder = Linear::from_weights(decoder_weight, Some(decoder_bias));
         Ok(Self { transform, decoder })
     }
 }
