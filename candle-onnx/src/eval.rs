@@ -2,6 +2,8 @@ use crate::onnx::attribute_proto::AttributeType;
 use crate::onnx::tensor_proto::DataType;
 use crate::onnx::{self, GraphProto};
 use candle::{bail, DType, Device, Result, Tensor};
+use candle_nn::activation::PReLU;
+use candle::Module;
 use std::collections::{HashMap, HashSet};
 
 pub type Value = Tensor;
@@ -989,6 +991,14 @@ fn simple_eval_(
             "Relu" => {
                 let input = get(&node.input[0])?;
                 let output = input.relu()?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "PRelu" => {
+                // https://onnx.ai/onnx/operators/onnx__PRelu.html
+                let input = get(&node.input[0])?;
+                let slope = get(&node.input[1])?;
+
+                let output = PReLU::new(slope.clone(), false).forward(input)?;
                 values.insert(node.output[0].clone(), output);
             }
             "Ceil" => {
