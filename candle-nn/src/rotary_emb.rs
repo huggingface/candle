@@ -119,7 +119,7 @@ impl candle::CustomOp3 for RotaryEmbI {
             let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
             let func = dev.get_or_load_func(&kernel_name::<T>("rope_i"), &kernels::REDUCE)?;
             // SAFETY: Set later by running the kernel.
-            let dst = unsafe { dev.alloc::<T>(el) }.w()?;
+            let dst = unsafe { dev.alloc::<T>(el)? };
             let mut builder = func.builder();
             builder.arg(&src);
             builder.arg(&cos);
@@ -369,7 +369,7 @@ impl candle::CustomOp3 for RotaryEmb {
             let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
             let func = dev.get_or_load_func(&kernel_name::<T>("rope"), &kernels::REDUCE)?;
             // SAFETY: Set later by running the kernel.
-            let dst = unsafe { dev.alloc::<T>(el) }.w()?;
+            let dst = unsafe { dev.alloc::<T>(el)? };
             let mut builder = func.builder();
             builder.arg(&src);
             builder.arg(&cos);
@@ -620,7 +620,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
             let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
             let func = dev.get_or_load_func(&kernel_name::<T>("rope_thd"), &kernels::REDUCE)?;
             // SAFETY: Set later by running the kernel.
-            let dst = unsafe { dev.alloc::<T>(el) }.w()?;
+            let dst = unsafe { dev.alloc::<T>(el)? };
             let mut builder = func.builder();
             builder.arg(&src);
             builder.arg(&cos);
