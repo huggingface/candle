@@ -46,11 +46,61 @@ impl std::fmt::Debug for CudaDevice {
     }
 }
 
-impl std::ops::Deref for CudaDevice {
-    type Target = Arc<cudarc::driver::CudaStream>;
+impl CudaDevice {
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe fn alloc<T: cudarc::driver::DeviceRepr>(
+        &self,
+        len: usize,
+    ) -> Result<cudarc::driver::CudaSlice<T>> {
+        self.stream.alloc::<T>(len).w()
+    }
 
-    fn deref(&self) -> &Self::Target {
-        &self.stream
+    pub fn alloc_zeros<T: cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits>(
+        &self,
+        len: usize,
+    ) -> Result<cudarc::driver::CudaSlice<T>> {
+        self.stream.alloc_zeros::<T>(len).w()
+    }
+
+    pub fn memcpy_htod<
+        T: cudarc::driver::DeviceRepr,
+        Src: cudarc::driver::HostSlice<T> + ?Sized,
+        Dst: cudarc::driver::DevicePtrMut<T>,
+    >(
+        &self,
+        src: &Src,
+        dst: &mut Dst,
+    ) -> Result<()> {
+        self.stream.memcpy_htod(src, dst).w()
+    }
+
+    pub fn memcpy_dtov<T: cudarc::driver::DeviceRepr, Src: cudarc::driver::DevicePtr<T>>(
+        &self,
+        src: &Src,
+    ) -> Result<Vec<T>> {
+        self.stream.memcpy_dtov(src).w()
+    }
+
+    pub fn memcpy_dtod<
+        T,
+        Src: cudarc::driver::DevicePtr<T>,
+        Dst: cudarc::driver::DevicePtrMut<T>,
+    >(
+        &self,
+        src: &Src,
+        dst: &mut Dst,
+    ) -> Result<()> {
+        self.stream.memcpy_dtod(src, dst).w()
+    }
+
+    pub fn memcpy_stod<
+        T: cudarc::driver::DeviceRepr,
+        Src: cudarc::driver::HostSlice<T> + ?Sized,
+    >(
+        &self,
+        src: &Src,
+    ) -> Result<cudarc::driver::CudaSlice<T>> {
+        self.stream.memcpy_stod(src).w()
     }
 }
 
@@ -126,7 +176,7 @@ impl CudaDevice {
         let slice = match dtype {
             DType::U8 => {
                 // SAFETY: Set later by running the fill kernel.
-                let data = unsafe { self.alloc::<u8>(elem_count) }.w()?;
+                let data = unsafe { self.alloc::<u8>(elem_count)? };
                 let func = self.get_or_load_func("fill_u8", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
                 let v = v as u8;
@@ -138,7 +188,7 @@ impl CudaDevice {
             }
             DType::U32 => {
                 // SAFETY: Set later by running the fill kernel.
-                let data = unsafe { self.alloc::<u32>(elem_count) }.w()?;
+                let data = unsafe { self.alloc::<u32>(elem_count)? };
                 let func = self.get_or_load_func("fill_u32", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
                 let v = v as u32;
@@ -150,7 +200,7 @@ impl CudaDevice {
             }
             DType::I64 => {
                 // SAFETY: Set later by running the fill kernel.
-                let data = unsafe { self.alloc::<i64>(elem_count) }.w()?;
+                let data = unsafe { self.alloc::<i64>(elem_count)? };
                 let func = self.get_or_load_func("fill_i64", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
                 let v = v as i64;
@@ -162,7 +212,7 @@ impl CudaDevice {
             }
             DType::BF16 => {
                 // SAFETY: Set later by running the fill kernel.
-                let data = unsafe { self.alloc::<bf16>(elem_count) }.w()?;
+                let data = unsafe { self.alloc::<bf16>(elem_count)? };
                 let func = self.get_or_load_func("fill_bf16", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
                 let v = bf16::from_f64(v);
@@ -174,7 +224,7 @@ impl CudaDevice {
             }
             DType::F16 => {
                 // SAFETY: Set later by running the fill kernel.
-                let data = unsafe { self.alloc::<f16>(elem_count) }.w()?;
+                let data = unsafe { self.alloc::<f16>(elem_count)? };
                 let func = self.get_or_load_func("fill_f16", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
                 let v = f16::from_f64(v);
@@ -186,7 +236,7 @@ impl CudaDevice {
             }
             DType::F32 => {
                 // SAFETY: Set later by running the fill kernel.
-                let data = unsafe { self.alloc::<f32>(elem_count) }.w()?;
+                let data = unsafe { self.alloc::<f32>(elem_count)? };
                 let func = self.get_or_load_func("fill_f32", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
                 let v = v as f32;
@@ -198,7 +248,7 @@ impl CudaDevice {
             }
             DType::F64 => {
                 // SAFETY: Set later by running the fill kernel.
-                let data = unsafe { self.alloc::<f64>(elem_count) }.w()?;
+                let data = unsafe { self.alloc::<f64>(elem_count) }?;
                 let func = self.get_or_load_func("fill_f64", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
                 builder.arg(&data);
@@ -325,31 +375,31 @@ impl BackendDevice for CudaDevice {
         let elem_count = shape.elem_count();
         let slice = match dtype {
             DType::U8 => {
-                let data = self.alloc_zeros::<u8>(elem_count).w()?;
+                let data = self.alloc_zeros::<u8>(elem_count)?;
                 CudaStorageSlice::U8(data)
             }
             DType::U32 => {
-                let data = self.alloc_zeros::<u32>(elem_count).w()?;
+                let data = self.alloc_zeros::<u32>(elem_count)?;
                 CudaStorageSlice::U32(data)
             }
             DType::I64 => {
-                let data = self.alloc_zeros::<i64>(elem_count).w()?;
+                let data = self.alloc_zeros::<i64>(elem_count)?;
                 CudaStorageSlice::I64(data)
             }
             DType::BF16 => {
-                let data = self.alloc_zeros::<bf16>(elem_count).w()?;
+                let data = self.alloc_zeros::<bf16>(elem_count)?;
                 CudaStorageSlice::BF16(data)
             }
             DType::F16 => {
-                let data = self.alloc_zeros::<f16>(elem_count).w()?;
+                let data = self.alloc_zeros::<f16>(elem_count)?;
                 CudaStorageSlice::F16(data)
             }
             DType::F32 => {
-                let data = self.alloc_zeros::<f32>(elem_count).w()?;
+                let data = self.alloc_zeros::<f32>(elem_count)?;
                 CudaStorageSlice::F32(data)
             }
             DType::F64 => {
-                let data = self.alloc_zeros::<f64>(elem_count).w()?;
+                let data = self.alloc_zeros::<f64>(elem_count)?;
                 CudaStorageSlice::F64(data)
             }
         };
@@ -373,12 +423,12 @@ impl BackendDevice for CudaDevice {
                 .w()?
             }
             DType::F32 => {
-                let mut data = unsafe { self.alloc::<f32>(elem_count) }.w()?;
+                let mut data = unsafe { self.alloc::<f32>(elem_count)? };
                 curand.0.fill_with_uniform(&mut data).w()?;
                 CudaStorageSlice::F32(data)
             }
             DType::F64 => {
-                let mut data = unsafe { self.alloc::<f64>(elem_count) }.w()?;
+                let mut data = unsafe { self.alloc::<f64>(elem_count)? };
                 curand.0.fill_with_uniform(&mut data).w()?;
                 CudaStorageSlice::F64(data)
             }
@@ -417,7 +467,7 @@ impl BackendDevice for CudaDevice {
                 .w()?
             }
             DType::F32 => {
-                let mut data = unsafe { self.alloc::<f32>(elem_count_round) }.w()?;
+                let mut data = unsafe { self.alloc::<f32>(elem_count_round)? };
                 curand
                     .0
                     .fill_with_normal(&mut data, mean as f32, std as f32)
@@ -425,7 +475,7 @@ impl BackendDevice for CudaDevice {
                 CudaStorageSlice::F32(data)
             }
             DType::F64 => {
-                let mut data = unsafe { self.alloc::<f64>(elem_count_round) }.w()?;
+                let mut data = unsafe { self.alloc::<f64>(elem_count_round)? };
                 curand.0.fill_with_normal(&mut data, mean, std).w()?;
                 CudaStorageSlice::F64(data)
             }
@@ -444,31 +494,31 @@ impl BackendDevice for CudaDevice {
         let elem_count = shape.elem_count();
         let slice = match dtype {
             DType::U8 => {
-                let data = self.alloc::<u8>(elem_count).w()?;
+                let data = self.alloc::<u8>(elem_count)?;
                 CudaStorageSlice::U8(data)
             }
             DType::U32 => {
-                let data = self.alloc::<u32>(elem_count).w()?;
+                let data = self.alloc::<u32>(elem_count)?;
                 CudaStorageSlice::U32(data)
             }
             DType::I64 => {
-                let data = self.alloc::<i64>(elem_count).w()?;
+                let data = self.alloc::<i64>(elem_count)?;
                 CudaStorageSlice::I64(data)
             }
             DType::BF16 => {
-                let data = self.alloc::<bf16>(elem_count).w()?;
+                let data = self.alloc::<bf16>(elem_count)?;
                 CudaStorageSlice::BF16(data)
             }
             DType::F16 => {
-                let data = self.alloc::<f16>(elem_count).w()?;
+                let data = self.alloc::<f16>(elem_count)?;
                 CudaStorageSlice::F16(data)
             }
             DType::F32 => {
-                let data = self.alloc::<f32>(elem_count).w()?;
+                let data = self.alloc::<f32>(elem_count)?;
                 CudaStorageSlice::F32(data)
             }
             DType::F64 => {
-                let data = self.alloc::<f64>(elem_count).w()?;
+                let data = self.alloc::<f64>(elem_count)?;
                 CudaStorageSlice::F64(data)
             }
         };
@@ -481,31 +531,31 @@ impl BackendDevice for CudaDevice {
     fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {
         let slice = match T::cpu_storage_ref(s) {
             CpuStorageRef::U8(storage) => {
-                let data = self.memcpy_stod(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::U8(data)
             }
             CpuStorageRef::U32(storage) => {
-                let data = self.memcpy_stod(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::U32(data)
             }
             CpuStorageRef::I64(storage) => {
-                let data = self.memcpy_stod(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::I64(data)
             }
             CpuStorageRef::BF16(storage) => {
-                let data = self.memcpy_stod(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::BF16(data)
             }
             CpuStorageRef::F16(storage) => {
-                let data = self.memcpy_stod(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::F16(data)
             }
             CpuStorageRef::F32(storage) => {
-                let data = self.memcpy_stod(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::F32(data)
             }
             CpuStorageRef::F64(storage) => {
-                let data = self.memcpy_stod(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::F64(data)
             }
         };
@@ -518,31 +568,31 @@ impl BackendDevice for CudaDevice {
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<CudaStorage> {
         let slice = match storage {
             CpuStorage::U8(storage) => {
-                let data = self.memcpy_stod(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::U8(data)
             }
             CpuStorage::U32(storage) => {
-                let data = self.memcpy_stod(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::U32(data)
             }
             CpuStorage::I64(storage) => {
-                let data = self.memcpy_stod(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::I64(data)
             }
             CpuStorage::BF16(storage) => {
-                let data = self.memcpy_stod(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::BF16(data)
             }
             CpuStorage::F16(storage) => {
-                let data = self.memcpy_stod(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::F16(data)
             }
             CpuStorage::F32(storage) => {
-                let data = self.memcpy_stod(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::F32(data)
             }
             CpuStorage::F64(storage) => {
-                let data = self.memcpy_stod(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::F64(data)
             }
         };
@@ -555,31 +605,31 @@ impl BackendDevice for CudaDevice {
     fn storage_from_cpu_storage_owned(&self, storage: CpuStorage) -> Result<CudaStorage> {
         let slice = match storage {
             CpuStorage::U8(storage) => {
-                let data = self.memcpy_stod(&storage).w()?;
+                let data = self.memcpy_stod(&storage)?;
                 CudaStorageSlice::U8(data)
             }
             CpuStorage::U32(storage) => {
-                let data = self.memcpy_stod(&storage).w()?;
+                let data = self.memcpy_stod(&storage)?;
                 CudaStorageSlice::U32(data)
             }
             CpuStorage::I64(storage) => {
-                let data = self.memcpy_stod(&storage).w()?;
+                let data = self.memcpy_stod(&storage)?;
                 CudaStorageSlice::I64(data)
             }
             CpuStorage::BF16(storage) => {
-                let data = self.memcpy_stod(&storage).w()?;
+                let data = self.memcpy_stod(&storage)?;
                 CudaStorageSlice::BF16(data)
             }
             CpuStorage::F16(storage) => {
-                let data = self.memcpy_stod(&storage).w()?;
+                let data = self.memcpy_stod(&storage)?;
                 CudaStorageSlice::F16(data)
             }
             CpuStorage::F32(storage) => {
-                let data = self.memcpy_stod(&storage).w()?;
+                let data = self.memcpy_stod(&storage)?;
                 CudaStorageSlice::F32(data)
             }
             CpuStorage::F64(storage) => {
-                let data = self.memcpy_stod(&storage).w()?;
+                let data = self.memcpy_stod(&storage)?;
                 CudaStorageSlice::F64(data)
             }
         };

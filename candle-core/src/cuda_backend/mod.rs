@@ -39,7 +39,7 @@ impl SlicePtrOrNull<usize> {
         let ds = if l.is_contiguous() {
             SlicePtrOrNull::Null
         } else {
-            SlicePtrOrNull::Ptr(dev.memcpy_stod(&[l.dims(), l.stride()].concat()).w()?)
+            SlicePtrOrNull::Ptr(dev.memcpy_stod(&[l.dims(), l.stride()].concat())?)
         };
         Ok(ds)
     }
@@ -89,7 +89,7 @@ impl Map1 for Affine {
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("affine"), &kernels::AFFINE)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(el) }.w()?;
+        let out = unsafe { dev.alloc::<T>(el)? };
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, dims.len());
@@ -120,7 +120,7 @@ impl Map1 for Elu {
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("uelu"), &kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(el) }.w()?;
+        let out = unsafe { dev.alloc::<T>(el)? };
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, dims.len());
@@ -159,11 +159,11 @@ impl Map1 for Im2Col1D {
         let l_out = self.l_out(dims[2]);
         let dst_el = dims[0] * l_out * dims[1] * self.l_k;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let ds = dev.memcpy_stod(&[dims, layout.stride()].concat()).w()?;
+        let ds = dev.memcpy_stod(&[dims, layout.stride()].concat())?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("im2col1d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
-        let dst = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+        let dst = unsafe { dev.alloc::<T>(dst_el)? };
         let mut builder = func.builder();
         barg!(builder, dst_el);
         barg!(builder, l_out);
@@ -210,11 +210,11 @@ impl Map1 for Im2Col {
         let (h_out, w_out) = self.hw_out(dims[2], dims[3]);
         let dst_el = dims[0] * h_out * w_out * dims[1] * self.h_k * self.w_k;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let ds = dev.memcpy_stod(&[dims, layout.stride()].concat()).w()?;
+        let ds = dev.memcpy_stod(&[dims, layout.stride()].concat())?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("im2col"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
-        let dst = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+        let dst = unsafe { dev.alloc::<T>(dst_el)? };
         let mut builder = func.builder();
         barg!(builder, dst_el);
         barg!(builder, h_out);
@@ -249,7 +249,7 @@ impl Map1 for Powf {
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("upowf"), &kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(el) }.w()?;
+        let out = unsafe { dev.alloc::<T>(el)? };
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, dims.len());
@@ -302,9 +302,7 @@ impl Map1Any for FastReduce<'_> {
             block_dim: (block_dim as u32, 1, 1),
             shared_mem_bytes: 0,
         };
-        let ds = dev
-            .memcpy_stod(&[dims.as_slice(), stride.as_slice()].concat())
-            .w()?;
+        let ds = dev.memcpy_stod(&[dims.as_slice(), stride.as_slice()].concat())?;
         let src = &src.slice(layout.start_offset()..);
         let (name, check_empty, return_index) = match self.1 {
             ReduceOp::Sum => ("fast_sum", false, false),
@@ -319,7 +317,7 @@ impl Map1Any for FastReduce<'_> {
         let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::REDUCE)?;
         if return_index {
             // SAFETY: filled in by the follow up kernel.
-            let out = unsafe { dev.alloc::<u32>(dst_el) }.w()?;
+            let out = unsafe { dev.alloc::<u32>(dst_el)? };
             let mut builder = func.builder();
             barg!(builder, src_el);
             barg!(builder, el_to_sum_per_block);
@@ -332,7 +330,7 @@ impl Map1Any for FastReduce<'_> {
             Ok(S::U32(out))
         } else {
             // SAFETY: filled in by the follow up kernel.
-            let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+            let out = unsafe { dev.alloc::<T>(dst_el)? };
             let mut builder = func.builder();
             barg!(builder, src_el);
             barg!(builder, el_to_sum_per_block);
@@ -362,7 +360,7 @@ impl<U: UnaryOpT> Map1 for U {
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), &kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
-        let mut out = unsafe { dev.alloc::<T>(el_count) }.w()?;
+        let mut out = unsafe { dev.alloc::<T>(el_count)? };
         let mut builder = func.builder();
         barg!(builder, el_count);
         barg!(builder, dims.len());
@@ -403,7 +401,7 @@ impl Map1 for IndexSelect<'_> {
         };
         let ids_shape = ids_l.shape();
         let ids_dims = ids_shape.dims();
-        let ds = dev.memcpy_stod(&[ids_dims, ids_l.stride()].concat()).w()?;
+        let ds = dev.memcpy_stod(&[ids_dims, ids_l.stride()].concat())?;
         let src = match src_l.contiguous_offsets() {
             Some((o1, o2)) => src.slice(o1..o2),
             None => Err(crate::Error::RequiresContiguous { op: "index-select" }.bt())?,
@@ -416,7 +414,7 @@ impl Map1 for IndexSelect<'_> {
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+        let out = unsafe { dev.alloc::<T>(dst_el)? };
         let mut builder = func.builder();
         barg!(builder, dst_el);
         barg!(builder, ids_dims.len());
@@ -471,7 +469,7 @@ impl Map1 for Gather<'_> {
         let ids_dim_sz = ids_l.dims()[dim];
         let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(el) }.w()?;
+        let out = unsafe { dev.alloc::<T>(el)? };
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, ids);
@@ -608,7 +606,7 @@ impl Map2 for Conv1D<'_> {
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let func = dev.get_or_load_func(&kernel_name::<T>("conv1d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+        let out = unsafe { dev.alloc::<T>(dst_el)? };
         let ds = if dims.len() == 3 {
             [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
         } else if dims.len() == 2 {
@@ -616,7 +614,7 @@ impl Map2 for Conv1D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv1d {dims:?}")
         };
-        let ds = dev.memcpy_stod(&ds).w()?;
+        let ds = dev.memcpy_stod(&ds)?;
         let mut builder = func.builder();
         barg!(builder, el, l_out, p.stride, p.padding, p.dilation);
         builder.arg(&ds);
@@ -651,7 +649,7 @@ impl Map2 for Conv2D<'_> {
         let el = shape.elem_count();
 
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+        let out = unsafe { dev.alloc::<T>(dst_el)? };
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let func = dev.get_or_load_func(&kernel_name::<T>("conv2d"), &kernels::CONV)?;
         let ds = if dims.len() == 4 {
@@ -659,7 +657,7 @@ impl Map2 for Conv2D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv2d {dims:?}")
         };
-        let ds = dev.memcpy_stod(&ds).w()?;
+        let ds = dev.memcpy_stod(&ds)?;
         let mut builder = func.builder();
         barg!(builder, el, out_w, out_h, p.stride, p.padding, p.dilation);
         builder.arg(&ds);
@@ -687,7 +685,7 @@ impl Map1 for Col2Im1D {
         let stride = self.stride;
         let l_out = (l_in - 1) * stride + k_size;
         let dst_el = b_size * c_out * l_out;
-        let mut im = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+        let mut im = unsafe { dev.alloc::<T>(dst_el)? };
 
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let func = dev.get_or_load_func(&kernel_name::<T>("col2im1d"), &kernels::CONV)?;
@@ -722,7 +720,7 @@ impl Map2 for ConvTranspose1D<'_> {
         let el = shape.elem_count();
 
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+        let out = unsafe { dev.alloc::<T>(dst_el)? };
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose1d"), &kernels::CONV)?;
         let ds = if dims.len() == 3 {
@@ -730,7 +728,7 @@ impl Map2 for ConvTranspose1D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv_transpose1d {dims:?}")
         };
-        let ds = dev.memcpy_stod(&ds).w()?;
+        let ds = dev.memcpy_stod(&ds)?;
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, l_out);
@@ -770,7 +768,7 @@ impl Map2 for ConvTranspose2D<'_> {
         let el = shape.elem_count();
 
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+        let out = unsafe { dev.alloc::<T>(dst_el)? };
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose2d"), &kernels::CONV)?;
         let ds = if dims.len() == 4 {
@@ -778,7 +776,7 @@ impl Map2 for ConvTranspose2D<'_> {
         } else {
             crate::bail!("unexpected input shape for conv_transpose2d {dims:?}")
         };
-        let ds = dev.memcpy_stod(&ds).w()?;
+        let ds = dev.memcpy_stod(&ds)?;
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, out_w);
@@ -837,8 +835,8 @@ impl Map1 for Pool2D {
         };
         let func = dev.get_or_load_func(&kernel_name::<T>(kname), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
-        let ds = dev.memcpy_stod(&ds).w()?;
+        let out = unsafe { dev.alloc::<T>(dst_el)? };
+        let ds = dev.memcpy_stod(&ds)?;
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, self.w_k);
@@ -876,8 +874,8 @@ impl Map1 for UpsampleNearest2D {
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let func = dev.get_or_load_func(&kernel_name::<T>("upsample_nearest2d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
-        let ds = dev.memcpy_stod(&ds).w()?;
+        let out = unsafe { dev.alloc::<T>(dst_el)? };
+        let ds = dev.memcpy_stod(&ds)?;
         let scale_w = dims[2] as f64 / out_w as f64;
         let scale_h = dims[3] as f64 / out_h as f64;
         let mut builder = func.builder();
@@ -930,13 +928,12 @@ impl Map2 for WhereCond<'_> {
         let el = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let ds = dev
-            .memcpy_stod(&[dims, ids_l.stride(), layout_t.stride(), layout_f.stride()].concat())
-            .w()?;
+            .memcpy_stod(&[dims, ids_l.stride(), layout_t.stride(), layout_f.stride()].concat())?;
         let t = &t.slice(layout_t.start_offset()..);
         let f = &f.slice(layout_f.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::TERNARY)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(el) }.w()?;
+        let out = unsafe { dev.alloc::<T>(el)? };
         let mut builder = func.builder();
         barg!(builder, el);
         barg!(builder, dims.len());
@@ -967,16 +964,13 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
         let dims_and_strides = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
             SlicePtrOrNull::Null
         } else {
-            SlicePtrOrNull::Ptr(
-                dev.memcpy_stod(&[dims, lhs_l.stride(), rhs_l.stride()].concat())
-                    .w()?,
-            )
+            SlicePtrOrNull::Ptr(dev.memcpy_stod(&[dims, lhs_l.stride(), rhs_l.stride()].concat())?)
         };
         let lhs = &lhs.slice(lhs_l.start_offset()..);
         let rhs = &rhs.slice(rhs_l.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), &kernels::BINARY)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
+        let out = unsafe { dev.alloc::<T>(elem_count)? };
         let mut builder = func.builder();
         barg!(builder, elem_count);
         barg!(builder, dims.len());
@@ -1007,10 +1001,7 @@ impl Map2Any for Cmp {
         let dims_and_strides = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
             SlicePtrOrNull::Null
         } else {
-            SlicePtrOrNull::Ptr(
-                dev.memcpy_stod(&[dims, lhs_l.stride(), rhs_l.stride()].concat())
-                    .w()?,
-            )
+            SlicePtrOrNull::Ptr(dev.memcpy_stod(&[dims, lhs_l.stride(), rhs_l.stride()].concat())?)
         };
         let lhs = &lhs.slice(lhs_l.start_offset()..);
         let rhs = &rhs.slice(rhs_l.start_offset()..);
@@ -1024,7 +1015,7 @@ impl Map2Any for Cmp {
         };
         let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::BINARY)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<u8>(elem_count) }.w()?;
+        let out = unsafe { dev.alloc::<u8>(elem_count)? };
         let mut builder = func.builder();
         barg!(builder, elem_count);
         barg!(builder, dims.len());
@@ -1269,7 +1260,7 @@ impl BackendStorage for CudaStorage {
         let func = dev.get_or_load_func(&kernel_name, &kernels::CAST)?;
         let slice = match dtype {
             DType::U8 => {
-                let out = unsafe { dev.alloc::<u8>(el) }.w()?;
+                let out = unsafe { dev.alloc::<u8>(el)? };
                 let mut builder = func.builder();
                 barg!(builder, el);
                 barg!(builder, dims.len());
@@ -1280,7 +1271,7 @@ impl BackendStorage for CudaStorage {
                 CudaStorageSlice::U8(out)
             }
             DType::U32 => {
-                let out = unsafe { dev.alloc::<u32>(el) }.w()?;
+                let out = unsafe { dev.alloc::<u32>(el)? };
                 let mut builder = func.builder();
                 barg!(builder, el);
                 barg!(builder, dims.len());
@@ -1291,7 +1282,7 @@ impl BackendStorage for CudaStorage {
                 CudaStorageSlice::U32(out)
             }
             DType::I64 => {
-                let out = unsafe { dev.alloc::<i64>(el) }.w()?;
+                let out = unsafe { dev.alloc::<i64>(el)? };
                 let mut builder = func.builder();
                 barg!(builder, el);
                 barg!(builder, dims.len());
@@ -1302,7 +1293,7 @@ impl BackendStorage for CudaStorage {
                 CudaStorageSlice::I64(out)
             }
             DType::BF16 => {
-                let out = unsafe { dev.alloc::<bf16>(el) }.w()?;
+                let out = unsafe { dev.alloc::<bf16>(el)? };
                 let mut builder = func.builder();
                 barg!(builder, el);
                 barg!(builder, dims.len());
@@ -1313,7 +1304,7 @@ impl BackendStorage for CudaStorage {
                 CudaStorageSlice::BF16(out)
             }
             DType::F16 => {
-                let out = unsafe { dev.alloc::<f16>(el) }.w()?;
+                let out = unsafe { dev.alloc::<f16>(el)? };
                 let mut builder = func.builder();
                 barg!(builder, el);
                 barg!(builder, dims.len());
@@ -1324,7 +1315,7 @@ impl BackendStorage for CudaStorage {
                 CudaStorageSlice::F16(out)
             }
             DType::F32 => {
-                let out = unsafe { dev.alloc::<f32>(el) }.w()?;
+                let out = unsafe { dev.alloc::<f32>(el)? };
                 let mut builder = func.builder();
                 barg!(builder, el);
                 barg!(builder, dims.len());
@@ -1335,7 +1326,7 @@ impl BackendStorage for CudaStorage {
                 CudaStorageSlice::F32(out)
             }
             DType::F64 => {
-                let out = unsafe { dev.alloc::<f64>(el) }.w()?;
+                let out = unsafe { dev.alloc::<f64>(el)? };
                 let mut builder = func.builder();
                 barg!(builder, el);
                 barg!(builder, dims.len());
@@ -1632,7 +1623,7 @@ impl BackendStorage for CudaStorage {
             (S::U8(inp), S::U8(k)) => {
                 let inp = &inp.slice(inp_l.start_offset()..);
                 let k = &k.slice(kernel_l.start_offset()..);
-                let mut out = unsafe { device.alloc::<u8>(dst_el) }.w()?;
+                let mut out = unsafe { device.alloc::<u8>(dst_el)? };
                 crate::cudnn::launch_conv2d::<u8, u8>(inp, inp_l, k, &mut out, params, &device)
                     .map_err(crate::Error::wrap)?;
                 S::U8(out)
@@ -1640,7 +1631,7 @@ impl BackendStorage for CudaStorage {
             (S::BF16(inp), S::BF16(k)) => {
                 let inp = &inp.slice(inp_l.start_offset()..);
                 let k = &k.slice(kernel_l.start_offset()..);
-                let mut out = unsafe { device.alloc::<bf16>(dst_el) }.w()?;
+                let mut out = unsafe { device.alloc::<bf16>(dst_el)? };
                 // Only PSEUDO_BFLOAT16_CONFIG is supported in cudnn, there is no "true bfloat16"
                 // version.
                 // https://docs.nvidia.com/deeplearning/cudnn/latest/api/cudnn-cnn-library.html#id88
@@ -1651,7 +1642,7 @@ impl BackendStorage for CudaStorage {
             (S::F16(inp), S::F16(k)) => {
                 let inp = &inp.slice(inp_l.start_offset()..);
                 let k = &k.slice(kernel_l.start_offset()..);
-                let mut out = unsafe { device.alloc::<f16>(dst_el) }.w()?;
+                let mut out = unsafe { device.alloc::<f16>(dst_el)? };
                 crate::cudnn::launch_conv2d::<f16, f16>(inp, inp_l, k, &mut out, params, &device)
                     .map_err(crate::Error::wrap)?;
                 S::F16(out)
@@ -1659,7 +1650,7 @@ impl BackendStorage for CudaStorage {
             (S::F32(inp), S::F32(k)) => {
                 let inp = &inp.slice(inp_l.start_offset()..);
                 let k = &k.slice(kernel_l.start_offset()..);
-                let mut out = unsafe { device.alloc::<f32>(dst_el) }.w()?;
+                let mut out = unsafe { device.alloc::<f32>(dst_el)? };
                 crate::cudnn::launch_conv2d::<f32, f32>(inp, inp_l, k, &mut out, params, &device)
                     .map_err(crate::Error::wrap)?;
                 S::F32(out)
@@ -1667,7 +1658,7 @@ impl BackendStorage for CudaStorage {
             (S::F64(inp), S::F64(k)) => {
                 let inp = &inp.slice(inp_l.start_offset()..);
                 let k = &k.slice(kernel_l.start_offset()..);
-                let mut out = unsafe { device.alloc::<f64>(dst_el) }.w()?;
+                let mut out = unsafe { device.alloc::<f64>(dst_el)? };
                 crate::cudnn::launch_conv2d::<f64, f64>(inp, inp_l, k, &mut out, params, &device)
                     .map_err(crate::Error::wrap)?;
                 S::F64(out)
@@ -1783,7 +1774,7 @@ impl BackendStorage for CudaStorage {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
                 let cfg = gemm_config(bf16::ONE, bf16::ZERO, (b, m, n, k), lhs_l, rhs_l)?;
-                let mut out = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
+                let mut out = unsafe { dev.alloc::<bf16>(elem_count)? };
                 unsafe { gemm_strided_batched_bf16(&self.device.blas, cfg, rhs, lhs, &mut out) }
                     .w()?;
                 CudaStorageSlice::BF16(out)
@@ -1792,7 +1783,7 @@ impl BackendStorage for CudaStorage {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
                 let cfg = gemm_config(f16::ONE, f16::ZERO, (b, m, n, k), lhs_l, rhs_l)?;
-                let mut out = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
+                let mut out = unsafe { dev.alloc::<f16>(elem_count)? };
                 unsafe { gemm_strided_batched_f16(&self.device.blas, cfg, rhs, lhs, &mut out) }
                     .w()?;
                 CudaStorageSlice::F16(out)
@@ -1801,7 +1792,7 @@ impl BackendStorage for CudaStorage {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
                 let cfg = gemm_config(1., 0., (b, m, n, k), lhs_l, rhs_l)?;
-                let mut out = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
+                let mut out = unsafe { dev.alloc::<f32>(elem_count)? };
                 unsafe { gemm_strided_batched_f32(&self.device.blas, cfg, rhs, lhs, &mut out) }
                     .w()?;
                 CudaStorageSlice::F32(out)
@@ -1810,7 +1801,7 @@ impl BackendStorage for CudaStorage {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
                 let cfg = gemm_config(1., 0., (b, m, n, k), lhs_l, rhs_l)?;
-                let mut out = unsafe { dev.alloc::<f64>(elem_count) }.w()?;
+                let mut out = unsafe { dev.alloc::<f64>(elem_count)? };
                 unsafe {
                     self.device
                         .blas
@@ -1883,7 +1874,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::BF16(src), CudaStorageSlice::BF16(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.memcpy_dtod(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst)?
                 } else {
                     let func = dev.get_or_load_func("ucopy_bf16", &kernels::UNARY)?;
                     let mut builder = func.builder();
@@ -1899,7 +1890,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F16(src), CudaStorageSlice::F16(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.memcpy_dtod(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst)?
                 } else {
                     let func = dev.get_or_load_func("ucopy_f16", &kernels::UNARY)?;
                     let mut builder = func.builder();
@@ -1915,7 +1906,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F32(src), CudaStorageSlice::F32(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.memcpy_dtod(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst)?
                 } else {
                     let func = dev.get_or_load_func("ucopy_f32", &kernels::UNARY)?;
                     let mut builder = func.builder();
@@ -1931,7 +1922,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::U8(src), CudaStorageSlice::U8(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.memcpy_dtod(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst)?
                 } else {
                     let func = dev.get_or_load_func("ucopy_u8", &kernels::UNARY)?;
                     let mut builder = func.builder();
@@ -1947,7 +1938,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::U32(src), CudaStorageSlice::U32(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.memcpy_dtod(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst)?
                 } else {
                     let func = dev.get_or_load_func("ucopy_u32", &kernels::UNARY)?;
                     let mut builder = func.builder();
@@ -1963,7 +1954,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::I64(src), CudaStorageSlice::I64(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.memcpy_dtod(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst)?
                 } else {
                     let func = dev.get_or_load_func("ucopy_i64", &kernels::UNARY)?;
                     let mut builder = func.builder();
@@ -1979,7 +1970,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F64(src), CudaStorageSlice::F64(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.memcpy_dtod(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst)?
                 } else {
                     let func = dev.get_or_load_func("ucopy_f64", &kernels::UNARY)?;
                     let mut builder = func.builder();

@@ -99,7 +99,7 @@ fn dequantize_f32(
         _ => crate::bail!("unsupported dtype for dequantize {dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
-    let dst = unsafe { dev.alloc::<f32>(elem_count).w()? };
+    let dst = unsafe { dev.alloc::<f32>(elem_count)? };
     // See e.g.
     // https://github.com/ggerganov/llama.cpp/blob/cbbd1efa06f8c09f9dff58ff9d9af509cc4c152b/ggml-cuda.cu#L7270
     let cfg = cudarc::driver::LaunchConfig {
@@ -159,7 +159,7 @@ fn dequantize_f16(
         _ => crate::bail!("unsupported dtype for dequantize {dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
-    let dst = unsafe { dev.alloc::<f16>(elem_count).w()? };
+    let dst = unsafe { dev.alloc::<f16>(elem_count)? };
     // See e.g.
     // https://github.com/ggerganov/llama.cpp/blob/cbbd1efa06f8c09f9dff58ff9d9af509cc4c152b/ggml-cuda.cu#L7270
     let cfg = cudarc::driver::LaunchConfig {
@@ -216,7 +216,7 @@ fn dequantize_mul_mat_vec(
         _ => crate::bail!("unsupported dtype for quantized matmul {dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
-    let dst = unsafe { dev.alloc::<f32>(nrows).w()? };
+    let dst = unsafe { dev.alloc::<f32>(nrows)? };
     let block_num_y = ceil_div(nrows, GGML_CUDA_MMV_Y);
     let cfg = cudarc::driver::LaunchConfig {
         grid_dim: (block_num_y as u32, 1, 1),
@@ -256,7 +256,7 @@ fn mul_mat_vec_via_q8_1(
     let ncols_padded = pad(ncols, MATRIX_ROW_PADDING);
     let y_size_in_bytes =
         b_size * ncols_padded * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
-    let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes).w()? };
+    let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
     quantize_q8_1(y, &mut y_q8_1, ncols, b_size, dev)?;
 
     let kernel_name = match dtype {
@@ -274,7 +274,7 @@ fn mul_mat_vec_via_q8_1(
     };
     let kernel_name = format!("{kernel_name}{b_size}");
     let func = dev.get_or_load_func(&kernel_name, &candle_kernels::QUANTIZED)?;
-    let dst = unsafe { dev.alloc::<f32>(nrows * b_size).w()? };
+    let dst = unsafe { dev.alloc::<f32>(nrows * b_size)? };
     // https://github.com/ggerganov/llama.cpp/blob/facb8b56f8fd3bb10a693bf0943ae9d69d0828ef/ggml-cuda/mmvq.cu#L98
     let (nblocks, nwarps) = match b_size {
         1 => (nrows as u32, 4),
@@ -329,7 +329,7 @@ fn mul_mat_via_q8_1(
     let k_padded = pad(k, MATRIX_ROW_PADDING);
     let y_size_in_bytes =
         k_padded * y_cols * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
-    let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes).w()? };
+    let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
     quantize_q8_1(y, &mut y_q8_1, k, y_cols, dev)?;
 
     let (kernel_name, mmq_x, mmq_y) = match dtype {
@@ -346,7 +346,7 @@ fn mul_mat_via_q8_1(
         _ => crate::bail!("unsupported dtype for quantized matmul {dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, &candle_kernels::QUANTIZED)?;
-    let dst = unsafe { dev.alloc::<f32>(x_rows * y_cols).w()? };
+    let dst = unsafe { dev.alloc::<f32>(x_rows * y_cols)? };
     let cfg = cudarc::driver::LaunchConfig {
         grid_dim: (
             ceil_div(x_rows, mmq_y) as u32,
@@ -378,7 +378,7 @@ impl QCudaStorage {
         let size_in_bytes = ceil_div(el_count, dtype.block_size()) * dtype.type_size();
         let padded_size_in_bytes =
             ceil_div(el_count + MATRIX_ROW_PADDING, dtype.block_size()) * dtype.type_size();
-        let inner = device.alloc_zeros::<u8>(padded_size_in_bytes).w()?;
+        let inner = device.alloc_zeros::<u8>(padded_size_in_bytes)?;
         Ok(QCudaStorage {
             data: PaddedCudaSlice {
                 inner,
@@ -425,8 +425,7 @@ impl QCudaStorage {
 
         let buffer = self
             .device
-            .memcpy_dtov(&self.data.inner.slice(..self.data.len))
-            .w()?;
+            .memcpy_dtov(&self.data.inner.slice(..self.data.len))?;
         let mut out = vec![0.0; elem_count];
         let block_len = elem_count / self.dtype.block_size();
         match self.dtype {
@@ -457,9 +456,7 @@ impl QCudaStorage {
     pub fn quantize(&mut self, src: &CudaStorage) -> Result<()> {
         // Run the quantization on cpu.
         let src = match &src.slice {
-            crate::cuda_backend::CudaStorageSlice::F32(data) => {
-                self.device.memcpy_dtov(data).w()?
-            }
+            crate::cuda_backend::CudaStorageSlice::F32(data) => self.device.memcpy_dtov(data)?,
             _ => crate::bail!("only f32 can be quantized"),
         };
         let src_len = src.len();
@@ -469,10 +466,9 @@ impl QCudaStorage {
         let data = qcpu_storage.data()?;
         let padded_len =
             data.len() + MATRIX_ROW_PADDING * self.dtype.type_size() / self.dtype.block_size();
-        let mut inner = unsafe { self.device.alloc::<u8>(padded_len).w()? };
+        let mut inner = unsafe { self.device.alloc::<u8>(padded_len)? };
         self.device
-            .memcpy_htod(data.as_ref(), &mut inner.slice_mut(..data.len()))
-            .w()?;
+            .memcpy_htod(data.as_ref(), &mut inner.slice_mut(..data.len()))?;
         self.data = PaddedCudaSlice {
             inner,
             len: data.len(),
@@ -606,10 +602,8 @@ pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
     };
     let dtype = T::DTYPE;
     let padded_len = data.len() + MATRIX_ROW_PADDING * dtype.type_size() / dtype.block_size();
-    let mut inner = unsafe { device.alloc::<u8>(padded_len).w()? };
-    device
-        .memcpy_htod(data, &mut inner.slice_mut(..data.len()))
-        .w()?;
+    let mut inner = unsafe { device.alloc::<u8>(padded_len)? };
+    device.memcpy_htod(data, &mut inner.slice_mut(..data.len()))?;
     Ok(QStorage::Cuda(QCudaStorage {
         data: PaddedCudaSlice {
             inner,
@@ -631,9 +625,9 @@ mod test {
         let el_padded = pad(el, MATRIX_ROW_PADDING);
         let y_size_in_bytes =
             el_padded * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
-        let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes).w()? };
+        let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
         let vs: Vec<f32> = (0..el).map(|v| v as f32).collect();
-        let y = dev.memcpy_stod(&vs).w()?;
+        let y = dev.memcpy_stod(&vs)?;
         quantize_q8_1(&y.slice(..), &mut y_q8_1, el, 1, &dev)?;
         Ok(())
     }
@@ -643,7 +637,7 @@ mod test {
         let dev = CudaDevice::new(0)?;
         let ncols = 256;
         let vs: Vec<f32> = (0..ncols).map(|v| v as f32).collect();
-        let y = dev.memcpy_stod(&vs).w()?;
+        let y = dev.memcpy_stod(&vs)?;
         let mut xs = QCudaStorage::zeros(&dev, ncols, GgmlDType::Q4_0)?;
         xs.quantize(&CudaStorage::wrap_cuda_slice(y.clone(), dev.clone()))?;
         let cuda_storage = mul_mat_vec_via_q8_1(
@@ -656,7 +650,7 @@ mod test {
             &dev,
         )?;
         let vs = cuda_storage.as_cuda_slice::<f32>()?;
-        let vs = dev.memcpy_dtov(&vs.slice(..)).unwrap();
+        let vs = dev.memcpy_dtov(&vs.slice(..))?;
         assert_eq!(vs.len(), 1);
         // for n = 255, n.(n+1).(2n+1) / 6 = 5559680
         // Q8 means 1/256 precision.
@@ -671,7 +665,7 @@ mod test {
             &dev,
         )?;
         let vs = cuda_storage.as_cuda_slice::<f32>()?;
-        let vs = dev.memcpy_dtov(&vs.slice(..)).unwrap();
+        let vs = dev.memcpy_dtov(&vs.slice(..))?;
         assert_eq!(vs.len(), 1);
         assert_eq!(vs[0], 5561851.0);
         Ok(())
@@ -682,7 +676,7 @@ mod test {
         let dev = CudaDevice::new(0)?;
         let ncols = 256;
         let vs: Vec<f32> = (0..ncols * 4).map(|v| v as f32 / 4.).collect();
-        let y = dev.memcpy_stod(&vs).w()?;
+        let y = dev.memcpy_stod(&vs)?;
         let mut xs = QCudaStorage::zeros(&dev, ncols * 4, GgmlDType::Q4_0)?;
         xs.quantize(&CudaStorage::wrap_cuda_slice(y.clone(), dev.clone()))?;
         let cuda_storage = mul_mat_via_q8_1(
@@ -696,7 +690,7 @@ mod test {
             &dev,
         )?;
         let vs = cuda_storage.as_cuda_slice::<f32>()?;
-        let vs = dev.memcpy_dtov(&vs.slice(..)).unwrap();
+        let vs = dev.memcpy_dtov(&vs.slice(..))?;
 
         /*
            x = torch.tensor([float(v) for v in range(1024)]).reshape(4, 256)
@@ -723,7 +717,7 @@ mod test {
         let dev = CudaDevice::new(0)?;
         let (x_rows, ncols, y_cols) = (4, 16, 2048);
         let vs: Vec<f32> = (0..ncols * y_cols).map(|v| v as f32 / 256.).collect();
-        let y = dev.memcpy_stod(&vs).w()?;
+        let y = dev.memcpy_stod(&vs)?;
         let mut xs = QCudaStorage::zeros(&dev, ncols * x_rows, GgmlDType::Q4_0)?;
         xs.quantize(&CudaStorage::wrap_cuda_slice(y.clone(), dev.clone()))?;
         let cuda_storage = mul_mat_via_q8_1(
@@ -737,7 +731,7 @@ mod test {
             &dev,
         )?;
         let vs = cuda_storage.as_cuda_slice::<f32>()?;
-        let _vs = dev.memcpy_dtov(&vs.slice(..)).unwrap();
+        let _vs = dev.memcpy_dtov(&vs.slice(..))?;
         Ok(())
     }
 }

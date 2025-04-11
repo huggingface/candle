@@ -76,7 +76,7 @@ mod cuda {
                 Some((o1, o2)) => src.slice(o1..o2),
             };
             let elem_count = layout.shape().elem_count();
-            let dst = unsafe { dev.alloc::<u32>(elem_count) }.w()?;
+            let dst = unsafe { dev.alloc::<u32>(elem_count)? };
             let func = if self.asc {
                 dev.get_or_load_func(&kernel_name::<T>("asort_asc"), &kernels::SORT)?
             } else {
