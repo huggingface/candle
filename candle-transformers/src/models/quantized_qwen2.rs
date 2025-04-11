@@ -1,3 +1,18 @@
+//! Qwen2 model implementation with quantization support.
+//!
+//! Qwen2 is a chat-optimized language model that supports 8-bit quantization
+//! for reduced memory usage and faster inference.
+//!
+//! Key characteristics:
+//! - Group Query Attention (GQA)
+//! - RMSNorm for layer normalization
+//! - Rotary positional embeddings (RoPE)
+//! - Support for 8-bit quantization
+//!
+//! References:
+//! - [Model Card](https://huggingface.co/Qwen/Qwen2)
+//!
+
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::{
     quantized::{gguf_file, QMatMul},

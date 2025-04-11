@@ -1,7 +1,8 @@
+//! Activation Functions
+//!
 use candle::{Result, Tensor};
-use serde::Deserialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Activation {
     #[default]

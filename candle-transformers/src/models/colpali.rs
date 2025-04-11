@@ -1,3 +1,8 @@
+//! Colpali Model for text/image similarity scoring.
+//!
+//! Colpali combines a vision encoder with an efficient LM for retrieving content.
+//!
+
 use candle::{Module, Result, Tensor};
 use candle_nn::VarBuilder;
 

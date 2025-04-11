@@ -11,6 +11,7 @@ pub enum DeviceLocation {
     Metal { gpu_id: usize },
 }
 
+/// Cpu, Cuda, or Metal
 #[derive(Debug, Clone)]
 pub enum Device {
     Cpu,
@@ -128,6 +129,22 @@ impl<S: NdArray> NdArray for Vec<S> {
 impl Device {
     pub fn new_cuda(ordinal: usize) -> Result<Self> {
         Ok(Self::Cuda(crate::CudaDevice::new(ordinal)?))
+    }
+
+    pub fn as_cuda_device(&self) -> Result<&crate::CudaDevice> {
+        match self {
+            Self::Cuda(d) => Ok(d),
+            Self::Cpu => crate::bail!("expected a cuda device, got cpu"),
+            Self::Metal(_) => crate::bail!("expected a cuda device, got Metal"),
+        }
+    }
+
+    pub fn as_metal_device(&self) -> Result<&crate::MetalDevice> {
+        match self {
+            Self::Cuda(_) => crate::bail!("expected a metal device, got cuda"),
+            Self::Cpu => crate::bail!("expected a metal device, got cpu"),
+            Self::Metal(d) => Ok(d),
+        }
     }
 
     pub fn new_cuda_with_stream(ordinal: usize) -> Result<Self> {

@@ -2,7 +2,7 @@ use crate::onnx::attribute_proto::AttributeType;
 use crate::onnx::tensor_proto::DataType;
 use crate::onnx::{self, GraphProto};
 use candle::{bail, DType, Device, Result, Tensor};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub type Value = Tensor;
 
@@ -670,6 +670,49 @@ fn simple_eval_(
                 };
                 values.insert(node.output[0].clone(), xs);
             }
+            // https://onnx.ai/onnx/operators/onnx__GatherElements.html#gatherelements
+            // A Note to fellow lurkers:
+            // The numpy based `gather_elements` implementation in `onnx` tests [here](https://github.com/onnx/onnx/blob/main/onnx/backend/test/case/node/gatherelements.py)
+            // and examples is incorrect.
+            // Use `torch.gather` for the validating/ verifying against the proper behaviour
+            "GatherElements" => {
+                let data = get(&node.input[0])?;
+                let indices = get(&node.input[1])?;
+
+                let rank = data.rank();
+                if rank != indices.rank() {
+                    bail!("indices must have same rank as input data. Data rank [{}] != indices rank [{}]", data.rank(), indices.rank());
+                }
+
+                let axis = {
+                    let axis_i64 = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(0);
+                    let axis = data.normalize_axis(axis_i64)?;
+
+                    if axis >= rank {
+                        bail!(
+                            "axis ({}) out of accepted range [-rank, rank-1] which was [-{rank}, {}]",
+                            axis_i64,
+                            rank - 1
+                        )
+                    }
+
+                    axis
+                };
+
+                // index_select does not support negative indices, so normalize them
+                // to positive indices.
+                let indices = &{
+                    let zeros = Tensor::zeros(indices.shape(), indices.dtype(), indices.device())?;
+                    let max = Tensor::new(data.dims()[axis] as i64, indices.device())?
+                        .to_dtype(indices.dtype())?;
+                    let mask = indices.lt(&zeros)?;
+                    mask.to_dtype(indices.dtype())?
+                        .broadcast_mul(&max)?
+                        .add(indices)?
+                };
+
+                values.insert(node.output[0].clone(), data.gather(indices, axis)?);
+            }
             "Shape" => {
                 // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Shape
                 let xs = get(&node.input[0])?;
@@ -1189,6 +1232,92 @@ fn simple_eval_(
                 }
                 values.insert(node.output[0].clone(), out);
             }
+            // https://onnx.ai/onnx/operators/onnx__ReduceMax.html#reducemax
+            "ReduceMax" => {
+                let input = get(&node.input[0])?;
+                let axes = get_opt(1);
+                let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1) == 1;
+
+                let axes = if let Some(Ok(axes)) = axes {
+                    // Satisfies version 18+
+                    axes.to_vec1::<i64>().ok()
+                } else if let Ok(Some(axes)) = get_attr_opt::<[i64]>(node, "axes") {
+                    // Backward compatiblity with version 13 and below
+                    Some(axes.to_vec())
+                } else {
+                    None
+                };
+
+                let axes = if let Some(axes) = axes {
+                    let rank = input.rank();
+                    let mut axes_set = HashSet::new();
+
+                    let mut axes = axes
+                        .iter()
+                        .map(|a| {
+                            let axis = if *a < 0 {
+                                (rank as i64 + *a) as usize
+                            } else {
+                                *a as usize
+                            };
+
+                            axes_set.insert(axis);
+                            axis
+                        })
+                        .collect::<Vec<_>>();
+
+                    if axes_set.len() < axes.len() {
+                        bail!("Duplicate value in 'axes'");
+                    }
+
+                    if axes.len() > 1 {
+                        axes.sort();
+                    }
+
+                    Some(axes)
+                } else {
+                    None
+                };
+
+                // TODO: Handle empty set
+                // Definition:
+                // "Reduction over an empty set of values yields minus infinity (if supported by the datatype) or the minimum value of the data type otherwise"
+                // For now, this will throw an error
+                if input.elem_count() == 0 {
+                    bail!("reduction over zero-size tensor not supported");
+                }
+
+                let output = if let Some(axes) = axes {
+                    let mut result = input.clone();
+                    for &axis in axes.iter().rev() {
+                        result = if keepdims {
+                            result.max_keepdim(axis)?
+                        } else {
+                            result.max(axis)?
+                        }
+                    }
+
+                    result
+                } else {
+                    // If `axes` is empty and `noop_with_empty_axes` is set to `true (1)`
+                    // ""input tensor will not be reduced,and the output tensor would be equivalent to input tensor.""
+                    if get_attr_opt::<i64>(node, "noop_with_empty_axes")?.copied() == Some(1) {
+                        input.clone()
+                    } else {
+                        let mut result = input.flatten_all()?;
+                        if keepdims {
+                            result = result.max_keepdim(0)?;
+                            // If keepdims is true, reshape to match input dimensions
+                            let shape = vec![1; input.rank()];
+                            result.reshape(shape)?
+                        } else {
+                            result.max(0)?
+                        }
+                    }
+                };
+
+                values.insert(node.output[0].clone(), output);
+            }
             // https://onnx.ai/onnx/operators/onnx__ReduceMean.html#reducemean-13
             // TODO: This version is only compatible with ReduceMean V13 and below.
             "ReduceMean" => {
@@ -1210,6 +1339,92 @@ fn simple_eval_(
                 } else {
                     input.mean(axes)?
                 };
+                values.insert(node.output[0].clone(), output);
+            }
+            // https://onnx.ai/onnx/operators/onnx__ReduceMin.html#reducemin
+            "ReduceMin" => {
+                let input = get(&node.input[0])?;
+                let axes = get_opt(1);
+                let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(1) == 1;
+
+                let axes = if let Some(Ok(axes)) = axes {
+                    // Satisfies version 18+
+                    axes.to_vec1::<i64>().ok()
+                } else if let Ok(Some(axes)) = get_attr_opt::<[i64]>(node, "axes") {
+                    // Backward compatiblity with version 13 and below
+                    Some(axes.to_vec())
+                } else {
+                    None
+                };
+
+                let axes = if let Some(axes) = axes {
+                    let rank = input.rank();
+                    let mut axes_set = HashSet::new();
+
+                    let mut axes = axes
+                        .iter()
+                        .map(|a| {
+                            let axis = if *a < 0 {
+                                (rank as i64 + *a) as usize
+                            } else {
+                                *a as usize
+                            };
+
+                            axes_set.insert(axis);
+                            axis
+                        })
+                        .collect::<Vec<_>>();
+
+                    if axes_set.len() < axes.len() {
+                        bail!("Duplicate value in 'axes'");
+                    }
+
+                    if axes.len() > 1 {
+                        axes.sort();
+                    }
+
+                    Some(axes)
+                } else {
+                    None
+                };
+
+                // TODO: Handle empty set
+                // Definition:
+                // "Reduction over an empty set of values yields positive infinity (if supported by the datatype) or the max value of the data type otherwise"
+                // For now, this will throw an error
+                if input.elem_count() == 0 {
+                    bail!("reduction over zero-size tensor not supported");
+                }
+
+                let output = if let Some(axes) = axes {
+                    let mut result = input.clone();
+                    for &axis in axes.iter().rev() {
+                        result = if keepdims {
+                            result.min_keepdim(axis)?
+                        } else {
+                            result.min(axis)?
+                        }
+                    }
+
+                    result
+                } else {
+                    // If `axes` is empty and `noop_with_empty_axes` is set to `true (1)`
+                    // ""input tensor will not be reduced,and the output tensor would be equivalent to input tensor.""
+                    if get_attr_opt::<i64>(node, "noop_with_empty_axes")?.copied() == Some(1) {
+                        input.clone()
+                    } else {
+                        let mut result = input.flatten_all()?;
+                        if keepdims {
+                            result = result.min_keepdim(0)?;
+                            // If keepdims is true, reshape to match input dimensions
+                            let shape = vec![1; input.rank()];
+                            result.reshape(shape)?
+                        } else {
+                            result.min(0)?
+                        }
+                    }
+                };
+
                 values.insert(node.output[0].clone(), output);
             }
             //https://github.com/onnx/onnx/blob/main/docs/Operators.md#Split
@@ -1718,6 +1933,22 @@ fn simple_eval_(
                         ))?,
                     );
                 }
+            }
+            // https://onnx.ai/onnx/operators/onnx__Xor.html
+            "Xor" => {
+                // Since we don't have a `DType::Bool` yet, this ensures that we are working with `0`(False) & `1`(True)
+                let a = get(&node.input[0])?.gt(0_u8)?;
+                let b = get(&node.input[1])?.gt(0_u8)?;
+
+                let out = a.broadcast_add(&b)?.eq(1_u8)?;
+
+                values.insert(node.output[0].clone(), out);
+            }
+            // https://onnx.ai/onnx/operators/onnx__Sign.html
+            "Sign" => {
+                let input = get(&node.input[0])?;
+                let output = input.sign()?;
+                values.insert(node.output[0].clone(), output);
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }

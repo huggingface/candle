@@ -9,7 +9,7 @@ use candle::{Device, IndexOp, Tensor};
 use candle_nn::{ops::softmax, VarBuilder};
 use clap::{Parser, ValueEnum};
 use hf_hub::{api::sync::Api, Repo, RepoType};
-use rand::{distributions::Distribution, SeedableRng};
+use rand::{distr::Distribution, SeedableRng};
 use tokenizers::Tokenizer;
 
 mod multilingual;
@@ -204,7 +204,7 @@ impl Decoder {
             let next_token = if t > 0f64 {
                 let prs = softmax(&(&logits / t)?, 0)?;
                 let logits_v: Vec<f32> = prs.to_vec1()?;
-                let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
+                let distr = rand::distr::weighted::WeightedIndex::new(&logits_v)?;
                 distr.sample(&mut self.rng) as u32
             } else {
                 let logits_v: Vec<f32> = logits.to_vec1()?;
@@ -624,13 +624,27 @@ pub fn main() -> Result<()> {
             continue;
         }
         let mut resampled_pcm = vec![];
-        for buffered_pcm in buffered_pcm.chunks(1024) {
+        // resample the audio, one chunk of 1024 samples at a time.
+        // in case the audio input failed to produce an exact multiple of 1024 samples,
+        // process the remainder on the next iteration of the loop.
+        let full_chunks = buffered_pcm.len() / 1024;
+        let remainder = buffered_pcm.len() % 1024;
+        for chunk in 0..full_chunks {
+            let buffered_pcm = &buffered_pcm[chunk * 1024..(chunk + 1) * 1024];
             let pcm = resampler.process(&[&buffered_pcm], None)?;
-            resampled_pcm.extend_from_slice(&pcm[0])
+            resampled_pcm.extend_from_slice(&pcm[0]);
         }
         let pcm = resampled_pcm;
         println!("{} {}", buffered_pcm.len(), pcm.len());
-        buffered_pcm.clear();
+        if remainder == 0 {
+            buffered_pcm.clear();
+        } else {
+            // efficiently copy the remainder to the beginning of the `buffered_pcm` buffer and
+            // truncate it.  That's more efficient then allocating a new vector and copying into it
+            println!("audio device produced partial chunk with {remainder} samples; processing the remainder on the next iteration of the loop");
+            buffered_pcm.copy_within(full_chunks * 1024.., 0);
+            buffered_pcm.truncate(remainder);
+        }
         let mel = audio::pcm_to_mel(&config, &pcm, &mel_filters);
         let mel_len = mel.len();
         let mel = Tensor::from_vec(

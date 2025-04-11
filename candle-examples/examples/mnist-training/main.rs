@@ -7,6 +7,7 @@ extern crate accelerate_src;
 
 use clap::{Parser, ValueEnum};
 use rand::prelude::*;
+use rand::rng;
 
 use candle::{DType, Result, Tensor, D};
 use candle_nn::{loss, ops, Conv2d, Linear, Module, ModuleT, Optimizer, VarBuilder, VarMap};
@@ -138,7 +139,7 @@ fn training_loop_cnn(
     let mut batch_idxs = (0..n_batches).collect::<Vec<usize>>();
     for epoch in 1..args.epochs {
         let mut sum_loss = 0f32;
-        batch_idxs.shuffle(&mut thread_rng());
+        batch_idxs.shuffle(&mut rng());
         for batch_idx in batch_idxs.iter() {
             let train_images = train_images.narrow(0, batch_idx * BSIZE, BSIZE)?;
             let train_labels = train_labels.narrow(0, batch_idx * BSIZE, BSIZE)?;

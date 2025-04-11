@@ -1,6 +1,11 @@
-#![allow(unused)]
+//! EnCodec neural audio codec based on the Encodec implementation.
+//!
+//! See ["High Fidelity Neural Audio Compression"](https://arxiv.org/abs/2210.13438)
+//!
+//! Based on implementation from [huggingface/transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/encodec/modeling_encodec.py)
+
 use candle::{DType, IndexOp, Layout, Module, Result, Shape, Tensor, D};
-use candle_nn::{conv1d, Conv1d, Conv1dConfig, ConvTranspose1d, VarBuilder};
+use candle_nn::{conv1d, Conv1d, ConvTranspose1d, VarBuilder};
 
 // Encodec Model
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/encodec/modeling_encodec.py
@@ -84,7 +89,7 @@ impl Config {
 
     fn frame_rate(&self) -> usize {
         let hop_length: usize = self.upsampling_ratios.iter().product();
-        (self.sampling_rate + hop_length - 1) / hop_length
+        self.sampling_rate.div_ceil(hop_length)
     }
 
     fn num_quantizers(&self) -> usize {
@@ -134,6 +139,20 @@ pub fn conv1d_weight_norm(
     let weight = weight_v.broadcast_mul(&weight_g)?.broadcast_div(&norm_v)?;
     let bias = vb.get(out_c, "bias")?;
     Ok(Conv1d::new(weight, Some(bias), config))
+}
+
+pub fn conv1d_weight_norm_no_bias(
+    in_c: usize,
+    out_c: usize,
+    kernel_size: usize,
+    config: candle_nn::Conv1dConfig,
+    vb: VarBuilder,
+) -> Result<Conv1d> {
+    let weight_g = vb.get((out_c, 1, 1), "weight_g")?;
+    let weight_v = vb.get((out_c, in_c, kernel_size), "weight_v")?;
+    let norm_v = weight_v.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
+    let weight = weight_v.broadcast_mul(&weight_g)?.broadcast_div(&norm_v)?;
+    Ok(Conv1d::new(weight, None, config))
 }
 
 pub fn conv_transpose1d_weight_norm(
@@ -220,6 +239,7 @@ impl candle::CustomOp2 for CodebookEncode {
 }
 
 // https://github.com/huggingface/transformers/blob/abaca9f9432a84cfaa95531de4c72334f38a42f2/src/transformers/models/encodec/modeling_encodec.py#L340
+#[allow(unused)]
 #[derive(Clone, Debug)]
 pub struct EuclideanCodebook {
     inited: Tensor,

@@ -242,7 +242,7 @@ impl Tensor {
         Self::zeros_impl(shape, dtype, device, false)
     }
 
-    /// Creates a new tensor filled with ones with same shape, dtype, and device as the other
+    /// Creates a new tensor filled with zeros with same shape, dtype, and device as the other
     /// tensor.
     ///
     /// ```rust
@@ -1520,14 +1520,15 @@ impl Tensor {
     /// # Arguments
     ///
     /// * `self` - The input tensor.
-    /// * `indexes` - The indices of elements to gather, this should have the same shape as `self`
-    ///   but can have a different number of elements on the target dimension.
+    /// * `indexes` - The indices of elements to gather, this should have same number of dimensions as `self`
+    ///   and indexes.dims()[d] <= self.dims()[d] for all dimensions d != dim
     /// * `dim` - the target dimension.
     ///
     /// The resulting tensor has the same shape as `indexes` and use values from `self` indexed on
     /// dimension `dim` by the values in `indexes`.
     pub fn gather<D: Dim>(&self, indexes: &Self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "gather")?;
+
         let self_dims = self.dims();
         let indexes_dims = indexes.dims();
         let mismatch = if indexes_dims.len() != self_dims.len() {
@@ -1535,7 +1536,7 @@ impl Tensor {
         } else {
             let mut mismatch = false;
             for (i, (&d1, &d2)) in self_dims.iter().zip(indexes_dims.iter()).enumerate() {
-                if i != dim && d1 != d2 {
+                if i != dim && d1 < d2 {
                     mismatch = true;
                     break;
                 }
@@ -1757,6 +1758,42 @@ impl Tensor {
 
     pub(crate) fn op(&self) -> &Option<Op> {
         &self.op
+    }
+
+    /// Computes the max of all the elements in this tensor and returns a tensor holding this
+    /// scalar with zero dimensions.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let tensor = tensor.max_all()?;
+    /// assert_eq!(tensor.to_scalar::<f32>()?, 5.);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn max_all(&self) -> Result<Tensor> {
+        if self.rank() == 0 {
+            Ok(self.clone())
+        } else {
+            self.flatten_all()?.max(0)
+        }
+    }
+
+    /// Computes the min of all the elements in this tensor and returns a tensor holding this
+    /// scalar with zero dimensions.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let tensor = tensor.min_all()?;
+    /// assert_eq!(tensor.to_scalar::<f32>()?, 0.);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn min_all(&self) -> Result<Tensor> {
+        if self.rank() == 0 {
+            Ok(self.clone())
+        } else {
+            self.flatten_all()?.min(0)
+        }
     }
 
     /// Computes the sum of all the elements in this tensor and returns a tensor holding this
@@ -2542,6 +2579,28 @@ impl Tensor {
     /// Broadcasting version of `pow`.
     pub fn broadcast_pow(&self, rhs: &Tensor) -> Result<Self> {
         rhs.broadcast_mul(&self.log()?)?.exp()
+    }
+
+    /// Returns a new tensor with the order of elements reversed along the specified dimensions.
+    /// This function makes a copy of the tensor’s data.
+    ///
+    /// ```rust
+    /// # use candle_core::{Tensor, Device};
+    /// let t = Tensor::arange(0., 6., &Device::Cpu)?.reshape((2, 3))?;
+    /// assert_eq!(t.to_vec2::<f64>()?, &[[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]);
+    /// let t_flipped = t.flip(&[0])?;
+    /// assert_eq!(t_flipped.to_vec2::<f64>()?, &[[3.0, 4.0, 5.0], [0.0, 1.0, 2.0]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn flip(&self, dims: &[usize]) -> Result<Tensor> {
+        let mut result = self.clone();
+        for &dim in dims.iter() {
+            let size = result.dim(dim)?;
+            let indices: Vec<i64> = (0..size).rev().map(|x| x as i64).collect();
+            let indices_tensor = Tensor::from_vec(indices, (size,), result.device())?;
+            result = result.index_select(&indices_tensor, dim)?;
+        }
+        Ok(result)
     }
 }
 

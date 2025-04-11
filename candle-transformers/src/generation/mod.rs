@@ -1,5 +1,10 @@
-use candle::{DType, Error, Result, Tensor};
-use rand::{distributions::Distribution, SeedableRng};
+//! Logit Processing and Sampling
+//!
+//! Functionality for modeling sampling strategies and logits processing in text generation
+//! with support for temperature-based sampling, top-k filtering, nucleus sampling (top-p),
+//! and combinations thereof.
+use candle::{Context, DType, Error, Result, Tensor};
+use rand::{distr::Distribution, SeedableRng};
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Sampling {
@@ -40,12 +45,12 @@ impl LogitsProcessor {
             .enumerate()
             .max_by(|(_, u), (_, v)| u.total_cmp(v))
             .map(|(i, _)| i as u32)
-            .unwrap();
+            .context("empty logits")?;
         Ok(next_token)
     }
 
     fn sample_multinomial(&mut self, prs: &Vec<f32>) -> Result<u32> {
-        let distr = rand::distributions::WeightedIndex::new(prs).map_err(Error::wrap)?;
+        let distr = rand::distr::weighted::WeightedIndex::new(prs).map_err(Error::wrap)?;
         let next_token = distr.sample(&mut self.rng) as u32;
         Ok(next_token)
     }

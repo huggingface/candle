@@ -1,11 +1,13 @@
+//! Implementation of Backend traits for CUDA device
+//!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, DType, Layout, Result, Shape, WithDType};
+use crate::{builder_arg as barg, CpuStorage, DType, Layout, Result, Shape, WithDType};
 pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
 use cudarc::driver::{
-    CudaSlice, DevicePtr, DeviceRepr, DeviceSlice, LaunchAsync, LaunchConfig, ValidAsZeroBits,
+    CudaSlice, DevicePtr, DeviceRepr, LaunchConfig, PushKernelArg, ValidAsZeroBits,
 };
 use half::{bf16, f16};
 
@@ -23,12 +25,12 @@ pub enum SlicePtrOrNull<T> {
     Null,
 }
 
-unsafe impl<T: DeviceRepr> DeviceRepr for &SlicePtrOrNull<T> {
-    fn as_kernel_param(&self) -> *mut std::ffi::c_void {
+impl<T: DeviceRepr> SlicePtrOrNull<T> {
+    pub fn builder_arg<'a, 'b: 'a>(&'b self, builder: &mut cudarc::driver::LaunchArgs<'a>) {
         match self {
-            SlicePtrOrNull::Ptr(slice) => slice.as_kernel_param(),
-            SlicePtrOrNull::Null => 0usize.as_kernel_param(),
-        }
+            SlicePtrOrNull::Ptr(slice) => builder.arg(slice),
+            SlicePtrOrNull::Null => builder.arg(&0usize),
+        };
     }
 }
 
@@ -37,7 +39,7 @@ impl SlicePtrOrNull<usize> {
         let ds = if l.is_contiguous() {
             SlicePtrOrNull::Null
         } else {
-            SlicePtrOrNull::Ptr(dev.htod_copy([l.dims(), l.stride()].concat()).w()?)
+            SlicePtrOrNull::Ptr(dev.memcpy_stod(&[l.dims(), l.stride()].concat()).w()?)
         };
         Ok(ds)
     }
@@ -85,20 +87,19 @@ impl Map1 for Affine {
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("affine"), kernels::AFFINE)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("affine"), &kernels::AFFINE)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
-        let params = (
-            el,
-            dims.len(),
-            &ds,
-            src,
-            &out,
-            T::from_f64(self.0),
-            T::from_f64(self.1),
-        );
+        let mut builder = func.builder();
+        barg!(builder, el);
+        barg!(builder, dims.len());
+        ds.builder_arg(&mut builder);
+        builder.arg(src);
+        builder.arg(&out);
+        barg!(builder, T::from_f64(self.0));
+        barg!(builder, T::from_f64(self.1));
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg).w() }?;
         Ok(out)
     }
 }
@@ -117,12 +118,18 @@ impl Map1 for Elu {
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("uelu"), kernels::UNARY)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("uelu"), &kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
-        let params = (el, dims.len(), &ds, T::from_f64(self.0), src, &out);
+        let mut builder = func.builder();
+        barg!(builder, el);
+        barg!(builder, dims.len());
+        ds.builder_arg(&mut builder);
+        barg!(builder, T::from_f64(self.0));
+        builder.arg(src);
+        builder.arg(&out);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
@@ -152,24 +159,23 @@ impl Map1 for Im2Col1D {
         let l_out = self.l_out(dims[2]);
         let dst_el = dims[0] * l_out * dims[1] * self.l_k;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
+        let ds = dev.memcpy_stod(&[dims, layout.stride()].concat()).w()?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("im2col1d"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("im2col1d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let dst = unsafe { dev.alloc::<T>(dst_el) }.w()?;
-        let params = (
-            dst_el,
-            l_out,
-            self.l_k,
-            self.stride,
-            self.padding,
-            self.dilation,
-            &ds,
-            src,
-            &dst,
-        );
+        let mut builder = func.builder();
+        barg!(builder, dst_el);
+        barg!(builder, l_out);
+        barg!(builder, self.l_k);
+        barg!(builder, self.stride);
+        barg!(builder, self.padding);
+        barg!(builder, self.dilation);
+        builder.arg(&ds);
+        builder.arg(src);
+        builder.arg(&dst);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(dst)
     }
 }
@@ -204,26 +210,25 @@ impl Map1 for Im2Col {
         let (h_out, w_out) = self.hw_out(dims[2], dims[3]);
         let dst_el = dims[0] * h_out * w_out * dims[1] * self.h_k * self.w_k;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
+        let ds = dev.memcpy_stod(&[dims, layout.stride()].concat()).w()?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("im2col"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("im2col"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let dst = unsafe { dev.alloc::<T>(dst_el) }.w()?;
-        let params = (
-            dst_el,
-            h_out,
-            w_out,
-            self.h_k,
-            self.w_k,
-            self.stride,
-            self.padding,
-            self.dilation,
-            &ds,
-            src,
-            &dst,
-        );
+        let mut builder = func.builder();
+        barg!(builder, dst_el);
+        barg!(builder, h_out);
+        barg!(builder, w_out);
+        barg!(builder, self.h_k);
+        barg!(builder, self.w_k);
+        barg!(builder, self.stride);
+        barg!(builder, self.padding);
+        barg!(builder, self.dilation);
+        builder.arg(&ds);
+        builder.arg(src);
+        builder.arg(&dst);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(dst)
     }
 }
@@ -242,18 +247,24 @@ impl Map1 for Powf {
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("upowf"), kernels::UNARY)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("upowf"), &kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
-        let params = (el, dims.len(), &ds, T::from_f64(self.0), src, &out);
+        let mut builder = func.builder();
+        barg!(builder, el);
+        barg!(builder, dims.len());
+        ds.builder_arg(&mut builder);
+        barg!(builder, T::from_f64(self.0));
+        builder.arg(src);
+        builder.arg(&out);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
 
 struct FastReduce<'a>(&'a [usize], ReduceOp);
-impl<'a> Map1Any for FastReduce<'a> {
+impl Map1Any for FastReduce<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits, W: Fn(CudaSlice<T>) -> S>(
         &self,
         src: &CudaSlice<T>,
@@ -292,7 +303,7 @@ impl<'a> Map1Any for FastReduce<'a> {
             shared_mem_bytes: 0,
         };
         let ds = dev
-            .htod_copy([dims.as_slice(), stride.as_slice()].concat())
+            .memcpy_stod(&[dims.as_slice(), stride.as_slice()].concat())
             .w()?;
         let src = &src.slice(layout.start_offset()..);
         let (name, check_empty, return_index) = match self.1 {
@@ -305,20 +316,32 @@ impl<'a> Map1Any for FastReduce<'a> {
         if check_empty && layout.shape().elem_count() == 0 {
             Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
         }
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::REDUCE)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::REDUCE)?;
         if return_index {
             // SAFETY: filled in by the follow up kernel.
             let out = unsafe { dev.alloc::<u32>(dst_el) }.w()?;
-            let params = (src_el, el_to_sum_per_block, src_dims.len(), &ds, src, &out);
+            let mut builder = func.builder();
+            barg!(builder, src_el);
+            barg!(builder, el_to_sum_per_block);
+            barg!(builder, src_dims.len());
+            builder.arg(&ds);
+            builder.arg(src);
+            builder.arg(&out);
             // SAFETY: ffi.
-            unsafe { func.launch(cfg, params) }.w()?;
+            unsafe { builder.launch(cfg) }.w()?;
             Ok(S::U32(out))
         } else {
             // SAFETY: filled in by the follow up kernel.
             let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
-            let params = (src_el, el_to_sum_per_block, src_dims.len(), &ds, src, &out);
+            let mut builder = func.builder();
+            barg!(builder, src_el);
+            barg!(builder, el_to_sum_per_block);
+            barg!(builder, src_dims.len());
+            builder.arg(&ds);
+            builder.arg(src);
+            builder.arg(&out);
             // SAFETY: ffi.
-            unsafe { func.launch(cfg, params) }.w()?;
+            unsafe { builder.launch(cfg) }.w()?;
             Ok(wrap(out))
         }
     }
@@ -337,18 +360,29 @@ impl<U: UnaryOpT> Map1 for U {
         let cfg = LaunchConfig::for_num_elems(el_count as u32);
         let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), kernels::UNARY)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), &kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(el_count) }.w()?;
-        let params = (el_count, dims.len(), &ds, src, &out);
+        let mut out = unsafe { dev.alloc::<T>(el_count) }.w()?;
+        let mut builder = func.builder();
+        barg!(builder, el_count);
+        barg!(builder, dims.len());
+        ds.builder_arg(&mut builder);
+        builder.arg(src);
+        builder.arg(&mut out);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
 
+fn slice_ptr<T: DeviceRepr>(v: &CudaSlice<T>, lo: usize) -> (u64, cudarc::driver::SyncOnDrop<'_>) {
+    let (_, guard) = v.device_ptr(v.stream());
+    let (ptr, _) = v.slice(lo..).device_ptr(v.stream());
+    (ptr, guard)
+}
+
 struct IndexSelect<'a>(&'a CudaStorage, &'a Layout, usize);
-impl<'a> Map1 for IndexSelect<'a> {
+impl Map1 for IndexSelect<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         src: &CudaSlice<T>,
@@ -356,16 +390,10 @@ impl<'a> Map1 for IndexSelect<'a> {
         src_l: &Layout,
     ) -> Result<CudaSlice<T>> {
         let ids_l = &self.1;
-        let (name, ids) = match &self.0.slice {
-            CudaStorageSlice::U32(slice) => {
-                ("is_u32", *slice.slice(ids_l.start_offset()..).device_ptr())
-            }
-            CudaStorageSlice::U8(slice) => {
-                ("is_u8", *slice.slice(ids_l.start_offset()..).device_ptr())
-            }
-            CudaStorageSlice::I64(slice) => {
-                ("is_i64", *slice.slice(ids_l.start_offset()..).device_ptr())
-            }
+        let (name, (ids, _guard)) = match &self.0.slice {
+            CudaStorageSlice::U32(slice) => ("is_u32", slice_ptr(slice, ids_l.start_offset())),
+            CudaStorageSlice::U8(slice) => ("is_u8", slice_ptr(slice, ids_l.start_offset())),
+            CudaStorageSlice::I64(slice) => ("is_i64", slice_ptr(slice, ids_l.start_offset())),
             _ => Err(CudaError::UnexpectedDType {
                 msg: "index_select ids should be u8 or u32",
                 expected: DType::U32,
@@ -375,7 +403,7 @@ impl<'a> Map1 for IndexSelect<'a> {
         };
         let ids_shape = ids_l.shape();
         let ids_dims = ids_shape.dims();
-        let ds = dev.htod_copy([ids_dims, ids_l.stride()].concat()).w()?;
+        let ds = dev.memcpy_stod(&[ids_dims, ids_l.stride()].concat()).w()?;
         let src = match src_l.contiguous_offsets() {
             Some((o1, o2)) => src.slice(o1..o2),
             None => Err(crate::Error::RequiresContiguous { op: "index-select" }.bt())?,
@@ -386,29 +414,28 @@ impl<'a> Map1 for IndexSelect<'a> {
         let ids_dim_size = ids_shape.elem_count();
         let dst_el = ids_shape.elem_count() * left_size * right_size;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
-        let params = (
-            dst_el,
-            ids_dims.len(),
-            &ds,
-            ids,
-            &src,
-            &out,
-            left_size,
-            src_dim_size,
-            ids_dim_size,
-            right_size,
-        );
+        let mut builder = func.builder();
+        barg!(builder, dst_el);
+        barg!(builder, ids_dims.len());
+        builder.arg(&ds);
+        barg!(builder, ids);
+        builder.arg(&src);
+        builder.arg(&out);
+        barg!(builder, left_size);
+        barg!(builder, src_dim_size);
+        barg!(builder, ids_dim_size);
+        barg!(builder, right_size);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
 
 struct Gather<'a>(&'a CudaStorage, &'a Layout, usize);
-impl<'a> Map1 for Gather<'a> {
+impl Map1 for Gather<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         src: &CudaSlice<T>,
@@ -418,18 +445,14 @@ impl<'a> Map1 for Gather<'a> {
         let ids = &self.0;
         let ids_l = &self.1;
         let dim = self.2;
-        let (ids_o1, ids_o2) = match ids_l.contiguous_offsets() {
+        let (ids_o1, _) = match ids_l.contiguous_offsets() {
             Some(o12) => o12,
             None => Err(crate::Error::RequiresContiguous { op: "gather" }.bt())?,
         };
-        let (name, ids) = match &ids.slice {
-            CudaStorageSlice::U32(slice) => {
-                ("gather_u32", *slice.slice(ids_o1..ids_o2).device_ptr())
-            }
-            CudaStorageSlice::U8(slice) => ("gather_u8", *slice.slice(ids_o1..ids_o2).device_ptr()),
-            CudaStorageSlice::I64(slice) => {
-                ("gather_i64", *slice.slice(ids_o1..ids_o2).device_ptr())
-            }
+        let (name, (ids, _guard)) = match &ids.slice {
+            CudaStorageSlice::U32(slice) => ("gather_u32", slice_ptr(slice, ids_o1)),
+            CudaStorageSlice::U8(slice) => ("gather_u8", slice_ptr(slice, ids_o1)),
+            CudaStorageSlice::I64(slice) => ("gather_i64", slice_ptr(slice, ids_o1)),
             _ => Err(CudaError::UnexpectedDType {
                 msg: "gather ids should be u8/u32/i64",
                 expected: DType::U32,
@@ -446,20 +469,26 @@ impl<'a> Map1 for Gather<'a> {
         let right_sz: usize = src_l.dims()[dim + 1..].iter().product();
         let src_dim_sz = src_l.dims()[dim];
         let ids_dim_sz = ids_l.dims()[dim];
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
-        let params = (
-            el, ids, &src, &out, left_sz, src_dim_sz, ids_dim_sz, right_sz,
-        );
+        let mut builder = func.builder();
+        barg!(builder, el);
+        barg!(builder, ids);
+        builder.arg(&src);
+        builder.arg(&out);
+        barg!(builder, left_sz);
+        barg!(builder, src_dim_sz);
+        barg!(builder, ids_dim_sz);
+        barg!(builder, right_sz);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
 
 struct IndexAdd<'a>(&'a CudaStorage, &'a Layout, usize);
-impl<'a> Map2InPlace for IndexAdd<'a> {
+impl Map2InPlace for IndexAdd<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         dst: &mut CudaSlice<T>,
@@ -471,14 +500,14 @@ impl<'a> Map2InPlace for IndexAdd<'a> {
         let ids = &self.0;
         let ids_l = &self.1;
         let dim = self.2;
-        let (ids_o1, ids_o2) = match ids_l.contiguous_offsets() {
+        let (ids_o1, _) = match ids_l.contiguous_offsets() {
             Some(o12) => o12,
             None => Err(crate::Error::RequiresContiguous { op: "index-add" }.bt())?,
         };
-        let (name, ids) = match &ids.slice {
-            CudaStorageSlice::U32(slice) => ("ia_u32", *slice.slice(ids_o1..ids_o2).device_ptr()),
-            CudaStorageSlice::I64(slice) => ("ia_i64", *slice.slice(ids_o1..ids_o2).device_ptr()),
-            CudaStorageSlice::U8(slice) => ("ia_u8", *slice.slice(ids_o1..ids_o2).device_ptr()),
+        let (name, (ids, _guard)) = match &ids.slice {
+            CudaStorageSlice::U32(slice) => ("ia_u32", slice_ptr(slice, ids_o1)),
+            CudaStorageSlice::I64(slice) => ("ia_i64", slice_ptr(slice, ids_o1)),
+            CudaStorageSlice::U8(slice) => ("ia_u8", slice_ptr(slice, ids_o1)),
             _ => Err(CudaError::UnexpectedDType {
                 msg: "index-add ids should be u8/u32/i64",
                 expected: DType::U32,
@@ -495,19 +524,21 @@ impl<'a> Map2InPlace for IndexAdd<'a> {
         let dst_dim_sz = dst_shape.dims()[dim];
         let ids_dim_sz = ids_l.dims()[0];
         let cfg = LaunchConfig::for_num_elems((left_sz * right_sz) as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
-        // SAFETY: Set later by running the kernel.
-        let params = (
-            ids, ids_dim_sz, &src, dst, left_sz, src_dim_sz, dst_dim_sz, right_sz,
-        );
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
+        let mut builder = func.builder();
+        barg!(builder, ids);
+        barg!(builder, ids_dim_sz);
+        builder.arg(&src);
+        builder.arg(dst);
+        barg!(builder, left_sz, src_dim_sz, dst_dim_sz, right_sz);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(())
     }
 }
 
 struct ScatterAdd<'a>(&'a CudaStorage, &'a Layout, usize);
-impl<'a> Map2InPlace for ScatterAdd<'a> {
+impl Map2InPlace for ScatterAdd<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         dst: &mut CudaSlice<T>,
@@ -519,14 +550,14 @@ impl<'a> Map2InPlace for ScatterAdd<'a> {
         let ids = &self.0;
         let ids_l = &self.1;
         let dim = self.2;
-        let (ids_o1, ids_o2) = match ids_l.contiguous_offsets() {
+        let (ids_o1, _) = match ids_l.contiguous_offsets() {
             Some(o12) => o12,
             None => Err(crate::Error::RequiresContiguous { op: "scatter-add" }.bt())?,
         };
-        let (name, ids) = match &ids.slice {
-            CudaStorageSlice::U32(slice) => ("sa_u32", *slice.slice(ids_o1..ids_o2).device_ptr()),
-            CudaStorageSlice::I64(slice) => ("sa_i64", *slice.slice(ids_o1..ids_o2).device_ptr()),
-            CudaStorageSlice::U8(slice) => ("sa_u8", *slice.slice(ids_o1..ids_o2).device_ptr()),
+        let (name, (ids, _guard)) = match &ids.slice {
+            CudaStorageSlice::U32(slice) => ("sa_u32", slice_ptr(slice, ids_o1)),
+            CudaStorageSlice::I64(slice) => ("sa_i64", slice_ptr(slice, ids_o1)),
+            CudaStorageSlice::U8(slice) => ("sa_u8", slice_ptr(slice, ids_o1)),
             _ => Err(CudaError::UnexpectedDType {
                 msg: "scatter-add ids should be u8/u32/i64",
                 expected: DType::U32,
@@ -542,17 +573,20 @@ impl<'a> Map2InPlace for ScatterAdd<'a> {
         let src_dim_sz = src_l.dims()[dim];
         let dst_dim_sz = dst_shape.dims()[dim];
         let cfg = LaunchConfig::for_num_elems((left_sz * right_sz) as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
-        // SAFETY: Set later by running the kernel.
-        let params = (ids, &src, dst, left_sz, src_dim_sz, dst_dim_sz, right_sz);
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::INDEXING)?;
+        let mut builder = func.builder();
+        barg!(builder, ids);
+        builder.arg(&src);
+        builder.arg(dst);
+        barg!(builder, left_sz, src_dim_sz, dst_dim_sz, right_sz);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(())
     }
 }
 
 struct Conv1D<'a>(&'a crate::conv::ParamsConv1D);
-impl<'a> Map2 for Conv1D<'a> {
+impl Map2 for Conv1D<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         inp: &CudaSlice<T>,
@@ -572,7 +606,7 @@ impl<'a> Map2 for Conv1D<'a> {
         let l_out = p.l_out();
         let dst_el = p.c_out * l_out * p.b_size;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("conv1d"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv1d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let ds = if dims.len() == 3 {
@@ -582,18 +616,21 @@ impl<'a> Map2 for Conv1D<'a> {
         } else {
             crate::bail!("unexpected input shape for conv1d {dims:?}")
         };
-        let ds = dev.htod_copy(ds).w()?;
-        let params = (
-            el, l_out, p.stride, p.padding, p.dilation, &ds, inp, k, &out,
-        );
+        let ds = dev.memcpy_stod(&ds).w()?;
+        let mut builder = func.builder();
+        barg!(builder, el, l_out, p.stride, p.padding, p.dilation);
+        builder.arg(&ds);
+        builder.arg(inp);
+        builder.arg(k);
+        builder.arg(&out);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
 
 struct Conv2D<'a>(&'a crate::conv::ParamsConv2D);
-impl<'a> Map2 for Conv2D<'a> {
+impl Map2 for Conv2D<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         inp: &CudaSlice<T>,
@@ -616,18 +653,21 @@ impl<'a> Map2 for Conv2D<'a> {
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("conv2d"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv2d"), &kernels::CONV)?;
         let ds = if dims.len() == 4 {
             [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
         } else {
             crate::bail!("unexpected input shape for conv2d {dims:?}")
         };
-        let ds = dev.htod_copy(ds).w()?;
-        let params = (
-            el, out_w, out_h, p.stride, p.padding, p.dilation, &ds, inp, k, &out,
-        );
+        let ds = dev.memcpy_stod(&ds).w()?;
+        let mut builder = func.builder();
+        barg!(builder, el, out_w, out_h, p.stride, p.padding, p.dilation);
+        builder.arg(&ds);
+        builder.arg(inp);
+        builder.arg(k);
+        builder.arg(&out);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
@@ -650,15 +690,18 @@ impl Map1 for Col2Im1D {
         let mut im = unsafe { dev.alloc::<T>(dst_el) }.w()?;
 
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let params = (dst_el, l_out, l_in, c_out, k_size, stride, col, &mut im);
-        let func = dev.get_or_load_func(&kernel_name::<T>("col2im1d"), kernels::CONV)?;
-        unsafe { func.launch(cfg, params) }.w()?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("col2im1d"), &kernels::CONV)?;
+        let mut builder = func.builder();
+        barg!(builder, dst_el, l_out, l_in, c_out, k_size, stride);
+        builder.arg(col);
+        builder.arg(&mut im);
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(im)
     }
 }
 
 struct ConvTranspose1D<'a>(&'a crate::conv::ParamsConvTranspose1D);
-impl<'a> Map2 for ConvTranspose1D<'a> {
+impl Map2 for ConvTranspose1D<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         inp: &CudaSlice<T>,
@@ -681,33 +724,32 @@ impl<'a> Map2 for ConvTranspose1D<'a> {
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose1d"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose1d"), &kernels::CONV)?;
         let ds = if dims.len() == 3 {
             [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
         } else {
             crate::bail!("unexpected input shape for conv_transpose1d {dims:?}")
         };
-        let ds = dev.htod_copy(ds).w()?;
-        let params = (
-            el,
-            l_out,
-            p.stride,
-            p.padding,
-            p.output_padding,
-            p.dilation,
-            &ds,
-            inp,
-            k,
-            &out,
-        );
+        let ds = dev.memcpy_stod(&ds).w()?;
+        let mut builder = func.builder();
+        barg!(builder, el);
+        barg!(builder, l_out);
+        barg!(builder, p.stride);
+        barg!(builder, p.padding);
+        barg!(builder, p.output_padding);
+        barg!(builder, p.dilation);
+        builder.arg(&ds);
+        builder.arg(inp);
+        builder.arg(k);
+        builder.arg(&out);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
 
 struct ConvTranspose2D<'a>(&'a crate::conv::ParamsConvTranspose2D);
-impl<'a> Map2 for ConvTranspose2D<'a> {
+impl Map2 for ConvTranspose2D<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         inp: &CudaSlice<T>,
@@ -730,28 +772,27 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose2d"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose2d"), &kernels::CONV)?;
         let ds = if dims.len() == 4 {
             [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
         } else {
             crate::bail!("unexpected input shape for conv_transpose2d {dims:?}")
         };
-        let ds = dev.htod_copy(ds).w()?;
-        let params = (
-            el,
-            out_w,
-            out_h,
-            p.stride,
-            p.padding,
-            p.output_padding,
-            p.dilation,
-            &ds,
-            inp,
-            k,
-            &out,
-        );
+        let ds = dev.memcpy_stod(&ds).w()?;
+        let mut builder = func.builder();
+        barg!(builder, el);
+        barg!(builder, out_w);
+        barg!(builder, out_h);
+        barg!(builder, p.stride);
+        barg!(builder, p.padding);
+        barg!(builder, p.output_padding);
+        barg!(builder, p.dilation);
+        builder.arg(&ds);
+        builder.arg(inp);
+        builder.arg(k);
+        builder.arg(&out);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
@@ -794,22 +835,21 @@ impl Map1 for Pool2D {
             PoolOp::Max => "max_pool2d",
             PoolOp::Avg => "avg_pool2d",
         };
-        let func = dev.get_or_load_func(&kernel_name::<T>(kname), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(kname), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
-        let ds = dev.htod_copy(ds).w()?;
-        let params = (
-            el,
-            self.w_k,
-            self.h_k,
-            self.w_stride,
-            self.h_stride,
-            &ds,
-            inp,
-            &out,
-        );
+        let ds = dev.memcpy_stod(&ds).w()?;
+        let mut builder = func.builder();
+        barg!(builder, el);
+        barg!(builder, self.w_k);
+        barg!(builder, self.h_k);
+        barg!(builder, self.w_stride);
+        barg!(builder, self.h_stride);
+        builder.arg(&ds);
+        builder.arg(inp);
+        builder.arg(&out);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
@@ -834,21 +874,28 @@ impl Map1 for UpsampleNearest2D {
         let (out_w, out_h) = (self.0, self.1);
         let dst_el = out_w * out_h * dims[0] * dims[1];
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("upsample_nearest2d"), kernels::CONV)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("upsample_nearest2d"), &kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
-        let ds = dev.htod_copy(ds).w()?;
+        let ds = dev.memcpy_stod(&ds).w()?;
         let scale_w = dims[2] as f64 / out_w as f64;
         let scale_h = dims[3] as f64 / out_h as f64;
-        let params = (out_w, out_h, scale_w, scale_h, &ds, inp, &out);
+        let mut builder = func.builder();
+        barg!(builder, out_w);
+        barg!(builder, out_h);
+        barg!(builder, scale_w);
+        barg!(builder, scale_h);
+        builder.arg(&ds);
+        builder.arg(inp);
+        builder.arg(&out);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
 
 struct WhereCond<'a>(&'a CudaStorage, &'a Layout);
-impl<'a> Map2 for WhereCond<'a> {
+impl Map2 for WhereCond<'_> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         t: &CudaSlice<T>,
@@ -858,17 +905,17 @@ impl<'a> Map2 for WhereCond<'a> {
         dev: &CudaDevice,
     ) -> Result<CudaSlice<T>> {
         let ids_l = &self.1;
-        let (ids, name) = match &self.0.slice {
+        let ((ids, _guard), name) = match &self.0.slice {
             CudaStorageSlice::U8(slice) => {
-                let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
+                let ptr = slice_ptr(slice, ids_l.start_offset());
                 (ptr, "where_u8")
             }
             CudaStorageSlice::U32(slice) => {
-                let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
+                let ptr = slice_ptr(slice, ids_l.start_offset());
                 (ptr, "where_u32")
             }
             CudaStorageSlice::I64(slice) => {
-                let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
+                let ptr = slice_ptr(slice, ids_l.start_offset());
                 (ptr, "where_i64")
             }
             _ => Err(CudaError::UnexpectedDType {
@@ -883,16 +930,23 @@ impl<'a> Map2 for WhereCond<'a> {
         let el = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let ds = dev
-            .htod_copy([dims, ids_l.stride(), layout_t.stride(), layout_f.stride()].concat())
+            .memcpy_stod(&[dims, ids_l.stride(), layout_t.stride(), layout_f.stride()].concat())
             .w()?;
         let t = &t.slice(layout_t.start_offset()..);
         let f = &f.slice(layout_f.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::TERNARY)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::TERNARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
-        let params = (el, dims.len(), &ds, ids, t, f, &out);
+        let mut builder = func.builder();
+        barg!(builder, el);
+        barg!(builder, dims.len());
+        builder.arg(&ds);
+        barg!(builder, ids);
+        builder.arg(t);
+        builder.arg(f);
+        builder.arg(&out);
         // SAFETY: ffi
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
@@ -914,18 +968,24 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
             SlicePtrOrNull::Null
         } else {
             SlicePtrOrNull::Ptr(
-                dev.htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())
+                dev.memcpy_stod(&[dims, lhs_l.stride(), rhs_l.stride()].concat())
                     .w()?,
             )
         };
         let lhs = &lhs.slice(lhs_l.start_offset()..);
         let rhs = &rhs.slice(rhs_l.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), kernels::BINARY)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), &kernels::BINARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
-        let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
+        let mut builder = func.builder();
+        barg!(builder, elem_count);
+        barg!(builder, dims.len());
+        dims_and_strides.builder_arg(&mut builder);
+        builder.arg(lhs);
+        builder.arg(rhs);
+        builder.arg(&out);
         // SAFETY: ffi
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(out)
     }
 }
@@ -948,7 +1008,7 @@ impl Map2Any for Cmp {
             SlicePtrOrNull::Null
         } else {
             SlicePtrOrNull::Ptr(
-                dev.htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())
+                dev.memcpy_stod(&[dims, lhs_l.stride(), rhs_l.stride()].concat())
                     .w()?,
             )
         };
@@ -962,12 +1022,18 @@ impl Map2Any for Cmp {
             CmpOp::Gt => "gt",
             CmpOp::Ge => "ge",
         };
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::BINARY)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), &kernels::BINARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<u8>(elem_count) }.w()?;
-        let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
+        let mut builder = func.builder();
+        barg!(builder, elem_count);
+        barg!(builder, dims.len());
+        dims_and_strides.builder_arg(&mut builder);
+        builder.arg(lhs);
+        builder.arg(rhs);
+        builder.arg(&out);
         // SAFETY: ffi
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(S::U8(out))
     }
 }
@@ -999,6 +1065,7 @@ pub struct CudaStorage {
 
 pub trait CudaDType: Sized {
     fn as_cuda_slice(s: &CudaStorage) -> Result<&CudaSlice<Self>>;
+    fn as_cuda_slice_mut(s: &mut CudaStorage) -> Result<&mut CudaSlice<Self>>;
     fn wrap_cuda_slice(s: CudaSlice<Self>, dev: CudaDevice) -> CudaStorage;
 }
 
@@ -1008,6 +1075,18 @@ macro_rules! cuda_dtype {
             fn as_cuda_slice(s: &CudaStorage) -> Result<&CudaSlice<Self>> {
                 match &s.slice {
                     CudaStorageSlice::$dtype(data) => Ok(&data),
+                    _ => Err(crate::Error::UnexpectedDType {
+                        expected: DType::$dtype,
+                        got: s.dtype(),
+                        msg: "unexpected dtype",
+                    }
+                    .bt()),
+                }
+            }
+
+            fn as_cuda_slice_mut(s: &mut CudaStorage) -> Result<&mut CudaSlice<Self>> {
+                match s.slice {
+                    CudaStorageSlice::$dtype(ref mut data) => Ok(data),
                     _ => Err(crate::Error::UnexpectedDType {
                         expected: DType::$dtype,
                         got: s.dtype(),
@@ -1039,6 +1118,10 @@ impl CudaStorage {
 
     pub fn as_cuda_slice<T: CudaDType>(&self) -> Result<&CudaSlice<T>> {
         T::as_cuda_slice(self)
+    }
+
+    pub fn as_cuda_slice_mut<T: CudaDType>(&mut self) -> Result<&mut CudaSlice<T>> {
+        T::as_cuda_slice_mut(self)
     }
 }
 
@@ -1171,60 +1254,95 @@ impl BackendStorage for CudaStorage {
         // This returns an i64 rather than a &i64, this is useful to get around some temporary
         // lifetime issue and is safe as long as self.slice does not go out of scope before inp
         // is used.
-        let inp = match &self.slice {
-            CudaStorageSlice::U8(inp) => *inp.slice(start_o..).device_ptr(),
-            CudaStorageSlice::U32(inp) => *inp.slice(start_o..).device_ptr(),
-            CudaStorageSlice::I64(inp) => *inp.slice(start_o..).device_ptr(),
-            CudaStorageSlice::BF16(inp) => *inp.slice(start_o..).device_ptr(),
-            CudaStorageSlice::F16(inp) => *inp.slice(start_o..).device_ptr(),
-            CudaStorageSlice::F32(inp) => *inp.slice(start_o..).device_ptr(),
-            CudaStorageSlice::F64(inp) => *inp.slice(start_o..).device_ptr(),
+        let (inp, _guard) = match &self.slice {
+            CudaStorageSlice::U8(inp) => slice_ptr(inp, start_o),
+            CudaStorageSlice::U32(inp) => slice_ptr(inp, start_o),
+            CudaStorageSlice::I64(inp) => slice_ptr(inp, start_o),
+            CudaStorageSlice::BF16(inp) => slice_ptr(inp, start_o),
+            CudaStorageSlice::F16(inp) => slice_ptr(inp, start_o),
+            CudaStorageSlice::F32(inp) => slice_ptr(inp, start_o),
+            CudaStorageSlice::F64(inp) => slice_ptr(inp, start_o),
         };
         let inp = &inp;
 
         let kernel_name = format!("cast_{}_{}", self.dtype().as_str(), dtype.as_str());
-        let func = dev.get_or_load_func(&kernel_name, kernels::CAST)?;
+        let func = dev.get_or_load_func(&kernel_name, &kernels::CAST)?;
         let slice = match dtype {
             DType::U8 => {
                 let out = unsafe { dev.alloc::<u8>(el) }.w()?;
-                let params = (el, dims.len(), &ds, *inp, &out);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::U8(out)
             }
             DType::U32 => {
                 let out = unsafe { dev.alloc::<u32>(el) }.w()?;
-                let params = (el, dims.len(), &ds, *inp, &out);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::U32(out)
             }
             DType::I64 => {
                 let out = unsafe { dev.alloc::<i64>(el) }.w()?;
-                let params = (el, dims.len(), &ds, *inp, &out);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::I64(out)
             }
             DType::BF16 => {
                 let out = unsafe { dev.alloc::<bf16>(el) }.w()?;
-                let params = (el, dims.len(), &ds, *inp, &out);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::BF16(out)
             }
             DType::F16 => {
                 let out = unsafe { dev.alloc::<f16>(el) }.w()?;
-                let params = (el, dims.len(), &ds, *inp, &out);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::F16(out)
             }
             DType::F32 => {
                 let out = unsafe { dev.alloc::<f32>(el) }.w()?;
-                let params = (el, dims.len(), &ds, *inp, &out);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::F32(out)
             }
             DType::F64 => {
                 let out = unsafe { dev.alloc::<f64>(el) }.w()?;
-                let params = (el, dims.len(), &ds, *inp, &out);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::F64(out)
             }
         };
@@ -1284,38 +1402,31 @@ impl BackendStorage for CudaStorage {
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         match &self.slice {
             CudaStorageSlice::U8(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::U8(cpu_storage))
             }
             CudaStorageSlice::U32(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::U32(cpu_storage))
             }
             CudaStorageSlice::I64(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::I64(cpu_storage))
             }
             CudaStorageSlice::BF16(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::BF16(cpu_storage))
             }
             CudaStorageSlice::F16(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::F16(cpu_storage))
             }
             CudaStorageSlice::F32(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::F32(cpu_storage))
             }
             CudaStorageSlice::F64(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::F64(cpu_storage))
             }
         }
@@ -1734,49 +1845,27 @@ impl BackendStorage for CudaStorage {
         }
         let dst_s = dst_s as u32;
         let src_s = src_s as u32;
-        let (src, dst, kname) = match (&self.slice, &mut dst.slice) {
-            (S::U8(s), S::U8(d)) => (
-                *s.slice(src_o..).device_ptr(),
-                *d.slice(dst_o..).device_ptr(),
-                "copy2d_u8",
-            ),
-            (S::U32(s), S::U32(d)) => (
-                *s.slice(src_o..).device_ptr(),
-                *d.slice(dst_o..).device_ptr(),
-                "copy2d_u32",
-            ),
-            (S::I64(s), S::I64(d)) => (
-                *s.slice(src_o..).device_ptr(),
-                *d.slice(dst_o..).device_ptr(),
-                "copy2d_i64",
-            ),
-            (S::BF16(s), S::BF16(d)) => (
-                *s.slice(src_o..).device_ptr(),
-                *d.slice(dst_o..).device_ptr(),
-                "copy2d_bf16",
-            ),
-            (S::F16(s), S::F16(d)) => (
-                *s.slice(src_o..).device_ptr(),
-                *d.slice(dst_o..).device_ptr(),
-                "copy2d_f16",
-            ),
-            (S::F32(s), S::F32(d)) => (
-                *s.slice(src_o..).device_ptr(),
-                *d.slice(dst_o..).device_ptr(),
-                "copy2d_f32",
-            ),
-            (S::F64(s), S::F64(d)) => (
-                *s.slice(src_o..).device_ptr(),
-                *d.slice(dst_o..).device_ptr(),
-                "copy2d_f64",
-            ),
+        let ((src, _guard_src), (dst, _guard_dst), kname) = match (&self.slice, &mut dst.slice) {
+            (S::U8(s), S::U8(d)) => (slice_ptr(s, src_o), slice_ptr(d, dst_o), "copy2d_u8"),
+            (S::U32(s), S::U32(d)) => (slice_ptr(s, src_o), slice_ptr(d, dst_o), "copy2d_u32"),
+            (S::I64(s), S::I64(d)) => (slice_ptr(s, src_o), slice_ptr(d, dst_o), "copy2d_i64"),
+            (S::BF16(s), S::BF16(d)) => (slice_ptr(s, src_o), slice_ptr(d, dst_o), "copy2d_bf16"),
+            (S::F16(s), S::F16(d)) => (slice_ptr(s, src_o), slice_ptr(d, dst_o), "copy2d_f16"),
+            (S::F32(s), S::F32(d)) => (slice_ptr(s, src_o), slice_ptr(d, dst_o), "copy2d_f32"),
+            (S::F64(s), S::F64(d)) => (slice_ptr(s, src_o), slice_ptr(d, dst_o), "copy2d_f64"),
             _ => Err(CudaError::InternalError("dtype mismatch in copy2d"))?,
         };
-        let func = dev.get_or_load_func(kname, kernels::FILL)?;
+        let func = dev.get_or_load_func(kname, &kernels::FILL)?;
         let cfg = LaunchConfig::for_num_elems(d1 * d2);
-        let params = (src, dst, d1, d2, src_s, dst_s);
+        let mut builder = func.builder();
+        barg!(builder, src);
+        barg!(builder, dst);
+        barg!(builder, d1);
+        barg!(builder, d2);
+        builder.arg(&src_s);
+        builder.arg(&dst_s);
         // SAFETY: ffi.
-        unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(())
     }
 
@@ -1794,85 +1883,113 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::BF16(src), CudaStorageSlice::BF16(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_bf16", kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let func = dev.get_or_load_func("ucopy_bf16", &kernels::UNARY)?;
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             (CudaStorageSlice::F16(src), CudaStorageSlice::F16(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_f16", kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let func = dev.get_or_load_func("ucopy_f16", &kernels::UNARY)?;
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             (CudaStorageSlice::F32(src), CudaStorageSlice::F32(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_f32", kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let func = dev.get_or_load_func("ucopy_f32", &kernels::UNARY)?;
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             (CudaStorageSlice::U8(src), CudaStorageSlice::U8(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_u8", kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let func = dev.get_or_load_func("ucopy_u8", &kernels::UNARY)?;
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             (CudaStorageSlice::U32(src), CudaStorageSlice::U32(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_u32", kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let func = dev.get_or_load_func("ucopy_u32", &kernels::UNARY)?;
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             (CudaStorageSlice::I64(src), CudaStorageSlice::I64(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_i64", kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let func = dev.get_or_load_func("ucopy_i64", &kernels::UNARY)?;
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             (CudaStorageSlice::F64(src), CudaStorageSlice::F64(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_f64", kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let func = dev.get_or_load_func("ucopy_f64", &kernels::UNARY)?;
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?;
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             _ => Err(CudaError::InternalError(
@@ -1946,6 +2063,11 @@ unsafe fn gemm_strided_batched_f32(
     let alpha = &cfg.gemm.alpha as *const f32 as *const _;
     let beta = &cfg.gemm.beta as *const f32 as *const _;
 
+    let stream = c.stream().clone();
+    let (a, _guard_a) = a.device_ptr(&stream);
+    let (b, _guard_b) = b.device_ptr(&stream);
+    let (c, _guard_c) = c.device_ptr_mut(&stream);
+
     cudarc::cublas::result::gemm_strided_batched_ex(
         *cublas.handle(),
         cfg.gemm.transa,
@@ -1954,16 +2076,16 @@ unsafe fn gemm_strided_batched_f32(
         cfg.gemm.n,
         cfg.gemm.k,
         alpha,
-        *a.device_ptr() as *const _,
+        a as *const _,
         sys::cudaDataType_t::CUDA_R_32F,
         cfg.gemm.lda,
         cfg.stride_a,
-        *b.device_ptr() as *const _,
+        b as *const _,
         sys::cudaDataType_t::CUDA_R_32F,
         cfg.gemm.ldb,
         cfg.stride_b,
         beta,
-        *c.device_ptr_mut() as *mut _,
+        c as *mut _,
         sys::cudaDataType_t::CUDA_R_32F,
         cfg.gemm.ldc,
         cfg.stride_c,
@@ -2001,6 +2123,10 @@ unsafe fn gemm_strided_batched_f16(
         )
     };
 
+    let stream = c.stream().clone();
+    let (a, _guard_a) = a.device_ptr(&stream);
+    let (b, _guard_b) = b.device_ptr(&stream);
+    let (c, _guard_c) = c.device_ptr_mut(&stream);
     cudarc::cublas::result::gemm_strided_batched_ex(
         *cublas.handle(),
         cfg.gemm.transa,
@@ -2009,16 +2135,16 @@ unsafe fn gemm_strided_batched_f16(
         cfg.gemm.n,
         cfg.gemm.k,
         alpha,
-        *a.device_ptr() as *const _,
+        a as *const _,
         sys::cudaDataType_t::CUDA_R_16F,
         cfg.gemm.lda,
         cfg.stride_a,
-        *b.device_ptr() as *const _,
+        b as *const _,
         sys::cudaDataType_t::CUDA_R_16F,
         cfg.gemm.ldb,
         cfg.stride_b,
         beta,
-        *c.device_ptr_mut() as *mut _,
+        c as *mut _,
         sys::cudaDataType_t::CUDA_R_16F,
         cfg.gemm.ldc,
         cfg.stride_c,
@@ -2056,6 +2182,10 @@ unsafe fn gemm_strided_batched_bf16(
         )
     };
 
+    let stream = c.stream().clone();
+    let (a, _guard_a) = a.device_ptr(&stream);
+    let (b, _guard_b) = b.device_ptr(&stream);
+    let (c, _guard_c) = c.device_ptr_mut(&stream);
     cudarc::cublas::result::gemm_strided_batched_ex(
         *cublas.handle(),
         cfg.gemm.transa,
@@ -2064,16 +2194,16 @@ unsafe fn gemm_strided_batched_bf16(
         cfg.gemm.n,
         cfg.gemm.k,
         alpha,
-        *a.device_ptr() as *const _,
+        a as *const _,
         sys::cudaDataType_t::CUDA_R_16BF,
         cfg.gemm.lda,
         cfg.stride_a,
-        *b.device_ptr() as *const _,
+        b as *const _,
         sys::cudaDataType_t::CUDA_R_16BF,
         cfg.gemm.ldb,
         cfg.stride_b,
         beta,
-        *c.device_ptr_mut() as *mut _,
+        c as *mut _,
         sys::cudaDataType_t::CUDA_R_16BF,
         cfg.gemm.ldc,
         cfg.stride_c,

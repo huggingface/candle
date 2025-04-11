@@ -16,6 +16,9 @@ jobs:
         rust: [stable]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -34,7 +37,13 @@ jobs:
         os: [ubuntu-latest, windows-latest, macOS-latest]
         rust: [stable]
     steps:
+      - name: Delete huge unnecessary tools folder
+        if: runner.os == 'Linux'
+        run: rm -rf /opt/hostedtoolcache
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal

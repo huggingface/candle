@@ -1,6 +1,8 @@
 use super::*;
 use half::{bf16, f16};
-use metal::MTLResourceOptions;
+use metal::{Buffer, Device, MTLResourceOptions};
+use rand::prelude::SliceRandom;
+use rand::thread_rng;
 use rand::Rng;
 
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
@@ -605,6 +607,69 @@ fn affine_strided() {
     assert_eq!(result, vec![2.6, 5.6, 8.6, 11.6]);
 }
 
+fn run_mlx_sort<T: Clone>(v: &[T], ncols: usize) -> Vec<u32> {
+    let nrows = v.len() / ncols;
+    let device = device();
+    let kernels = Kernels::new();
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+
+    let input = new_buffer(&device, v);
+    let indexes = vec![0u32; v.len()];
+    let output = new_buffer(&device, &indexes);
+
+    call_mlx_arg_sort(
+        &device,
+        command_buffer,
+        &kernels,
+        DType::F32,
+        nrows,
+        ncols,
+        BufferOffset::zero_offset(&input),
+        &output,
+    )
+    .unwrap();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+    read_to_vec(&output, v.len())
+}
+
+#[test]
+fn mlx_sort() {
+    use rand::SeedableRng;
+    use rand_distr::Distribution;
+
+    let input: Vec<_> = (0..8).map(|v| v as f32).collect();
+    let result = run_mlx_sort(&input, 4);
+    assert_eq!(result, [0, 1, 2, 3, 0, 1, 2, 3]);
+    let input: Vec<_> = (0..8).rev().map(|v| v as f32).collect();
+    let result = run_mlx_sort(&input, 4);
+    assert_eq!(result, [3, 2, 1, 0, 3, 2, 1, 0]);
+    let input: Vec<_> = (0..1000).rev().map(|v| v as f32).collect();
+    let result = run_mlx_sort(&input, 200);
+    let out: Vec<_> = (0..200).rev().collect();
+    assert_eq!(&result[..200], out);
+    assert_eq!(&result[200..400], out);
+    assert_eq!(&result[400..600], out);
+    assert_eq!(&result[600..800], out);
+    assert_eq!(&result[800..], out);
+
+    // Multi-block test
+    let ncols = 16000;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(299792458);
+    let normal = rand_distr::Normal::new(0.0, 1.0).unwrap();
+    let input: Vec<f32> = (0..ncols * 16).map(|_| normal.sample(&mut rng)).collect();
+    let result = run_mlx_sort(&input, ncols);
+    for start in 0..16 {
+        let slice = &input[start * ncols..(start + 1) * ncols];
+        let result = &result[start * ncols..(start + 1) * ncols];
+        let mut perm: Vec<usize> = (0..ncols).collect();
+        perm.sort_by(|i1, i2| slice[*i1].total_cmp(&slice[*i2]));
+        let perm: Vec<_> = perm.into_iter().map(|v| v as u32).collect();
+        assert_eq!(perm, result);
+    }
+}
+
 #[test]
 fn index_select() {
     let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
@@ -797,7 +862,12 @@ fn cos_f16() {
     assert_eq!(approx_f16(expected, 2), vec![0.54, -0.42, -0.99]);
 }
 
-fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T> {
+fn run_reduce<T, U: Clone>(
+    v: &[T],
+    in_length: usize,
+    out_length: usize,
+    name: &'static str,
+) -> Vec<U> {
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
@@ -805,21 +875,24 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
     let input = new_buffer(&device, v);
 
     let options = MTLResourceOptions::StorageModeManaged;
-    let output = device.new_buffer((out_length * core::mem::size_of::<T>()) as u64, options);
-    let dims = vec![v.len()];
-    let strides = vec![1];
-    call_reduce_strided(
+    let output = device.new_buffer((out_length * core::mem::size_of::<U>()) as u64, options);
+    let shape = vec![in_length];
+    match call_reduce_contiguous(
         &device,
         command_buffer,
         &kernels,
         name,
-        &dims,
-        &strides,
+        &shape,
         out_length,
         BufferOffset::zero_offset(&input),
         &output,
-    )
-    .unwrap();
+    ) {
+        Ok(_) => {}
+        Err(e) => {
+            println!("{e}");
+            panic!();
+        }
+    }
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
@@ -851,22 +924,187 @@ fn run_softmax<T: Clone + std::fmt::Debug>(v: &[T], last_dim: usize, name: &'sta
     read_to_vec(&output, v.len())
 }
 
-#[test]
-fn reduce_sum() {
-    let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let out_length = 1;
+const fn create_array<const N: usize>() -> [f32; N] {
+    let mut array: [f32; N] = [0.0; N];
+    let mut i = 1;
+    while i <= N {
+        array[i - 1] = i as f32;
+        i += 1;
+    }
+    array
+}
 
-    let results = run_reduce(&v, out_length, "fast_sum_f32_strided");
-    assert_eq!(approx(results, 4), vec![21.0]);
+const fn correct_sum<const N: usize, const D: usize>() -> [f32; D] {
+    let mut sum = 0;
+    let mut results: [f32; D] = [0.0; D];
+    let mut i = 1;
+    let mut j = 1;
+    while i <= N {
+        sum += i;
+        i += 1;
+        if i > j * N / D {
+            results[j - 1] = sum as f32;
+            j += 1;
+            sum = 0;
+        }
+    }
+    results
+}
+
+const fn correct_max<const N: usize, const D: usize>() -> [f32; D] {
+    let mut results: [f32; D] = [0.0; D];
+    let mut i = 1;
+    let mut j = 1;
+    while i <= N {
+        i += 1;
+        if i > j * (N / D) {
+            results[j - 1] = (i - 1) as f32;
+            j += 1;
+        }
+    }
+    results
+}
+
+fn correct_argmax<const N: usize, const D: usize>(arr: [f32; N]) -> [u32; D] {
+    let mut max = 0.0;
+    let mut max_index: u32 = 0;
+    let mut results: [u32; D] = [0; D];
+    let mut i = 0;
+    let mut j = 1;
+    while i <= N {
+        if i >= (j * N / D) {
+            results[j - 1] = max_index;
+            max = 0.0;
+            max_index = 0;
+            j += 1;
+        }
+        if i == N {
+            break;
+        }
+        if arr[i] > max {
+            max = arr[i];
+            max_index = i as u32;
+        }
+        i += 1;
+    }
+    results
+}
+
+fn reduce_sum_case<const N: usize, const D: usize>() {
+    let mut v = create_array::<N>();
+    if D == 1 {
+        // Hardens 1-dimensional test cases
+        v.shuffle(&mut thread_rng());
+    }
+    let results = run_reduce(&v, N, D, "fast_sum_f32");
+    assert_eq!(approx(results, 4), correct_sum::<N, D>());
+}
+
+fn reduce_max_case<const N: usize, const D: usize>() {
+    let mut v = create_array::<N>();
+    if D == 1 {
+        // Hardens 1-dimensional test cases
+        v.shuffle(&mut thread_rng());
+    }
+    let results = run_reduce(&v, N, D, "fast_max_f32");
+    assert_eq!(approx(results, 4), correct_max::<N, D>());
+}
+
+fn reduce_argmax_case<const N: usize, const D: usize>() {
+    let mut v = create_array::<N>();
+    if D == 1 {
+        // Hardens 1-dimensional test cases
+        v.shuffle(&mut thread_rng());
+    }
+    let results: Vec<u32> = run_reduce(&v, N, D, "fast_argmax_f32");
+    assert_eq!(results, correct_argmax::<N, D>(v));
+}
+
+#[test]
+fn reduce_sum1() {
+    reduce_sum_case::<9, 1>();
+    reduce_sum_case::<6, 1>();
+    reduce_sum_case::<10, 1>();
+    reduce_sum_case::<64, 1>();
+    reduce_sum_case::<128, 1>();
+    reduce_sum_case::<256, 1>();
+    reduce_sum_case::<512, 1>();
+    reduce_sum_case::<1024, 1>();
+    reduce_sum_case::<2048, 1>();
+    reduce_sum_case::<4096, 1>();
 }
 
 #[test]
 fn reduce_sum2() {
-    let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let out_length = 2;
+    reduce_sum_case::<6, 2>();
+    reduce_sum_case::<10, 2>();
+    reduce_sum_case::<64, 2>();
+    reduce_sum_case::<128, 2>();
+    reduce_sum_case::<256, 2>();
+    reduce_sum_case::<512, 2>();
+    reduce_sum_case::<1024, 2>();
+    reduce_sum_case::<2048, 2>();
+    reduce_sum_case::<4096, 2>();
+}
 
-    let results = run_reduce(&v, out_length, "fast_sum_f32_strided");
-    assert_eq!(approx(results, 4), vec![6.0, 15.0]);
+#[test]
+fn reduce_max() {
+    reduce_max_case::<6, 1>();
+    reduce_max_case::<9, 1>();
+    reduce_max_case::<10, 1>();
+    reduce_max_case::<64, 1>();
+    reduce_max_case::<128, 1>();
+    reduce_max_case::<256, 1>();
+    reduce_max_case::<512, 1>();
+    reduce_max_case::<1024, 1>();
+    reduce_max_case::<2048, 1>();
+    reduce_max_case::<4096, 1>();
+
+    reduce_max_case::<6, 2>();
+    reduce_max_case::<10, 2>();
+    reduce_max_case::<64, 2>();
+    reduce_max_case::<128, 2>();
+    reduce_max_case::<256, 2>();
+    reduce_max_case::<512, 2>();
+    reduce_max_case::<1024, 2>();
+    reduce_max_case::<2048, 2>();
+    reduce_max_case::<4096, 2>();
+
+    reduce_max_case::<6, 3>();
+    reduce_max_case::<10, 3>();
+    reduce_max_case::<64, 3>();
+    reduce_max_case::<128, 3>();
+    reduce_max_case::<256, 3>();
+    reduce_max_case::<512, 3>();
+    reduce_max_case::<1024, 3>();
+    reduce_max_case::<2048, 3>();
+    reduce_max_case::<4096, 3>();
+}
+
+#[test]
+fn reduce_argmax() {
+    reduce_argmax_case::<6, 1>();
+    reduce_argmax_case::<9, 1>();
+    reduce_argmax_case::<10, 1>();
+    reduce_argmax_case::<64, 1>();
+    reduce_argmax_case::<128, 1>();
+    reduce_argmax_case::<256, 1>();
+    reduce_argmax_case::<512, 1>();
+    reduce_argmax_case::<1024, 1>();
+    reduce_argmax_case::<2048, 1>();
+}
+
+#[test]
+fn reduce_argmax2() {
+    reduce_argmax_case::<6, 2>();
+    reduce_argmax_case::<10, 2>();
+    reduce_argmax_case::<64, 2>();
+    reduce_argmax_case::<128, 2>();
+    reduce_argmax_case::<256, 2>();
+    reduce_argmax_case::<512, 2>();
+    reduce_argmax_case::<1024, 2>();
+    reduce_argmax_case::<2048, 2>();
+    reduce_argmax_case::<4096, 2>();
 }
 
 #[test]
@@ -920,7 +1158,7 @@ fn softmax() {
     let results = run_softmax(&v, last_dim, "softmax_f16");
     assert_eq!(
         approx_f16(results, 4),
-        vec![0.0043, 0.0116, 0.0316, 0.0858, 0.2332, 0.6338]
+        vec![0.0043, 0.0116, 0.0315, 0.0858, 0.2332, 0.6338]
     );
 
     let v = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
@@ -1047,168 +1285,6 @@ fn where_cond_u32_f32() {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_gemm<T: Clone>(
-    name: &'static str,
-    (b, m, n, k): (usize, usize, usize, usize),
-    lhs: &[T],
-    lhs_stride: &[usize],
-    lhs_offset: usize,
-    rhs: &[T],
-    rhs_stride: &[usize],
-    rhs_offset: usize,
-) -> Vec<T> {
-    let device = device();
-    let kernels = Kernels::new();
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
-    let options = MTLResourceOptions::StorageModeManaged;
-
-    let lhs = device.new_buffer_with_data(
-        lhs.as_ptr() as *const core::ffi::c_void,
-        std::mem::size_of_val(lhs) as u64,
-        options,
-    );
-    let rhs = device.new_buffer_with_data(
-        rhs.as_ptr() as *const core::ffi::c_void,
-        std::mem::size_of_val(rhs) as u64,
-        options,
-    );
-    let length = b * m * n;
-    let output = device.new_buffer((length * core::mem::size_of::<T>()) as u64, options);
-    call_gemm(
-        &device,
-        command_buffer,
-        &kernels,
-        name,
-        (b, m, n, k),
-        lhs_stride,
-        lhs_offset,
-        &lhs,
-        rhs_stride,
-        rhs_offset,
-        &rhs,
-        &output,
-    )
-    .unwrap();
-    command_buffer.commit();
-    command_buffer.wait_until_completed();
-
-    read_to_vec(&output, length)
-}
-
-#[test]
-fn gemm() {
-    let (b, m, n, k) = (1, 2, 4, 3);
-    let lhs_stride = vec![m * k, k, 1];
-    let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
-    let rhs_stride = vec![n * k, n, 1];
-    let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
-    let results = run_gemm(
-        "sgemm",
-        (b, m, n, k),
-        &lhs,
-        &lhs_stride,
-        0,
-        &rhs,
-        &rhs_stride,
-        0,
-    );
-    assert_eq!(
-        approx(results, 4),
-        vec![20.0, 23.0, 26.0, 29.0, 56.0, 68.0, 80.0, 92.0]
-    );
-
-    let (b, m, n, k) = (2, 2, 4, 3);
-    let lhs_stride = vec![m * k, k, 1];
-    let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
-    let rhs_stride = vec![n * k, n, 1];
-    let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
-    let results = run_gemm(
-        "sgemm",
-        (b, m, n, k),
-        &lhs,
-        &lhs_stride,
-        0,
-        &rhs,
-        &rhs_stride,
-        0,
-    );
-    assert_eq!(
-        approx(results, 4),
-        vec![
-            20.0, 23.0, 26.0, 29.0, 56.0, 68.0, 80.0, 92.0, 344.0, 365.0, 386.0, 407.0, 488.0,
-            518.0, 548.0, 578.0
-        ]
-    );
-
-    // OFFSET
-    let (b, m, n, k) = (2, 2, 4, 3);
-    let lhs_stride = vec![m * k, k, 1];
-    let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
-    let rhs_stride = vec![n * k, n, 1];
-    let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
-    // Manually set batch_size=1 and offset 12 elements * 4 the number of bytes for f32
-    let results = run_gemm(
-        "sgemm",
-        (1, m, n, k),
-        &lhs,
-        &lhs_stride,
-        0,
-        &rhs,
-        &rhs_stride,
-        12 * 4,
-    );
-    assert_eq!(
-        approx(results, 4),
-        vec![56.0, 59.0, 62.0, 65.0, 200.0, 212.0, 224.0, 236.0]
-    );
-
-    // bgemm sanity test
-    if false {
-        let (b, m, n, k) = (1, 2, 4, 3);
-        let lhs_stride = vec![m * k, k, 1];
-        let lhs: Vec<bf16> = (0..b * m * k).map(|f| bf16::from_f32(f as f32)).collect();
-        let rhs_stride = vec![n * k, n, 1];
-        let rhs: Vec<bf16> = (0..b * n * k).map(|f| bf16::from_f32(f as f32)).collect();
-        let results = run_gemm(
-            "bgemm",
-            (b, m, n, k),
-            &lhs,
-            &lhs_stride,
-            0,
-            &rhs,
-            &rhs_stride,
-            0,
-        );
-        assert_eq!(
-            approx_bf16(results, 4),
-            vec![20.0, 23.0, 26.0, 29.0, 56.0, 68.0, 80.0, 92.0]
-        );
-    }
-
-    // hgemm sanity test
-    let (b, m, n, k) = (1, 2, 4, 3);
-    let lhs_stride = vec![m * k, k, 1];
-    let lhs: Vec<f16> = (0..b * m * k).map(|f| f16::from_f32(f as f32)).collect();
-    let rhs_stride = vec![n * k, n, 1];
-    let rhs: Vec<f16> = (0..b * n * k).map(|f| f16::from_f32(f as f32)).collect();
-    let results = run_gemm(
-        "hgemm",
-        (b, m, n, k),
-        &lhs,
-        &lhs_stride,
-        0,
-        &rhs,
-        &rhs_stride,
-        0,
-    );
-    assert_eq!(
-        approx_f16(results, 4),
-        vec![20.0, 23.0, 26.0, 29.0, 56.0, 68.0, 80.0, 92.0]
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
 fn run_mlx_gemm<T: Clone>(
     dtype: GemmDType,
     (b, m, n, k): (usize, usize, usize, usize),
@@ -1256,50 +1332,6 @@ fn run_mlx_gemm<T: Clone>(
     command_buffer.wait_until_completed();
 
     read_to_vec(&output, length)
-}
-
-fn mlx_vs_mfa_one(b: usize, m: usize, n: usize, k: usize, dtype: GemmDType) {
-    use rand::SeedableRng;
-    use rand_distr::Distribution;
-
-    let mut rng = rand::rngs::StdRng::seed_from_u64(42424242);
-    let normal = rand_distr::Normal::new(0.0, 1.0).unwrap();
-
-    let lhs: Vec<_> = (0..b * m * k).map(|_| normal.sample(&mut rng)).collect();
-    let rhs: Vec<_> = (0..b * n * k).map(|_| normal.sample(&mut rng)).collect();
-    let v1: Vec<f32> = run_mlx_gemm(
-        dtype,
-        (b, m, n, k),
-        &lhs,
-        &[m * k, k, 1],
-        0,
-        &rhs,
-        &[k * n, n, 1],
-        0,
-    );
-    let v2: Vec<f32> = run_gemm(
-        "sgemm",
-        (b, m, n, k),
-        &lhs,
-        &[m * k, k, 1],
-        0,
-        &rhs,
-        &[k * n, n, 1],
-        0,
-    );
-    for (a, b) in v1.iter().zip(v2.iter()) {
-        let diff = (a - b).abs();
-        assert_eq!((diff * 1e4).round(), 0.)
-    }
-}
-
-#[test]
-fn mlx_vs_mfa() {
-    mlx_vs_mfa_one(1, 32, 32, 25, GemmDType::F32);
-    mlx_vs_mfa_one(1, 128, 128, 100, GemmDType::F32);
-    mlx_vs_mfa_one(1, 256, 256, 256, GemmDType::F32);
-    mlx_vs_mfa_one(1, 192, 200, 75, GemmDType::F32);
-    mlx_vs_mfa_one(3, 27, 67, 64, GemmDType::F32);
 }
 
 #[test]

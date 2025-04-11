@@ -1,4 +1,4 @@
-/// Methods for backpropagation of gradients.
+//! Methods for backpropagation of gradients.
 use crate::op::{BinaryOp, Op, ReduceOp, UnaryOp};
 use crate::{Error, Result, Tensor, TensorId};
 use std::collections::HashMap;
@@ -32,7 +32,7 @@ impl Tensor {
     /// elements having dependencies on the latter ones, e.g. the first element if any is the
     /// argument.
     /// This assumes that the op graph is a DAG.
-    fn sorted_nodes(&self) -> Vec<&Tensor> {
+    pub fn sorted_nodes(&self) -> Vec<&Tensor> {
         // The vec of sorted nodes is passed as an owned value rather than a mutable reference
         // to get around some lifetime limitations.
         fn walk<'a>(

@@ -1,8 +1,14 @@
+//! Marian Neural Machine Translation
+//!
+//! See "Marian: Fast Neural Machine Translation in C++" Junczys-Dowmunt et al. 2018
+//! - [ACL Anthology](https://aclanthology.org/P18-4020/)
+//! - [Github](https://github.com/marian-nmt/marian)
+//!
 use super::with_tracing::{linear, Embedding, Linear};
 use candle::{Result, Tensor};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     pub vocab_size: usize,
     pub decoder_vocab_size: Option<usize>,
@@ -73,6 +79,126 @@ impl Config {
             share_encoder_decoder_embeddings: true,
             use_cache: true,
             vocab_size: 59514,
+        }
+    }
+
+    pub fn opus_mt_en_zh() -> Self {
+        Self {
+            activation_function: candle_nn::Activation::Swish,
+            d_model: 512,
+            decoder_attention_heads: 8,
+            decoder_ffn_dim: 2048,
+            decoder_layers: 6,
+            decoder_start_token_id: 65000,
+            decoder_vocab_size: Some(65001),
+            encoder_attention_heads: 8,
+            encoder_ffn_dim: 2048,
+            encoder_layers: 6,
+            eos_token_id: 0,
+            forced_eos_token_id: 0,
+            is_encoder_decoder: true,
+            max_position_embeddings: 512,
+            pad_token_id: 65000,
+            scale_embedding: true,
+            share_encoder_decoder_embeddings: true,
+            use_cache: true,
+            vocab_size: 65001,
+        }
+    }
+
+    pub fn opus_mt_en_hi() -> Self {
+        Self {
+            activation_function: candle_nn::Activation::Swish,
+            d_model: 512,
+            decoder_attention_heads: 8,
+            decoder_ffn_dim: 2048,
+            decoder_layers: 6,
+            decoder_start_token_id: 61949,
+            decoder_vocab_size: Some(61950),
+            encoder_attention_heads: 8,
+            encoder_ffn_dim: 2048,
+            encoder_layers: 6,
+            eos_token_id: 0,
+            forced_eos_token_id: 0,
+            is_encoder_decoder: true,
+            max_position_embeddings: 512,
+            pad_token_id: 61949,
+            scale_embedding: true,
+            share_encoder_decoder_embeddings: true,
+            use_cache: true,
+            vocab_size: 61950,
+        }
+    }
+
+    pub fn opus_mt_en_es() -> Self {
+        Self {
+            activation_function: candle_nn::Activation::Swish,
+            d_model: 512,
+            decoder_attention_heads: 8,
+            decoder_ffn_dim: 2048,
+            decoder_layers: 6,
+            decoder_start_token_id: 65000,
+            decoder_vocab_size: Some(65001),
+            encoder_attention_heads: 8,
+            encoder_ffn_dim: 2048,
+            encoder_layers: 6,
+            eos_token_id: 0,
+            forced_eos_token_id: 0,
+            is_encoder_decoder: true,
+            max_position_embeddings: 512,
+            pad_token_id: 65000,
+            scale_embedding: true,
+            share_encoder_decoder_embeddings: true,
+            use_cache: true,
+            vocab_size: 65001,
+        }
+    }
+
+    pub fn opus_mt_en_fr() -> Self {
+        Self {
+            activation_function: candle_nn::Activation::Swish,
+            d_model: 512,
+            decoder_attention_heads: 8,
+            decoder_ffn_dim: 2048,
+            decoder_layers: 6,
+            decoder_start_token_id: 59513,
+            decoder_vocab_size: Some(59514),
+            encoder_attention_heads: 8,
+            encoder_ffn_dim: 2048,
+            encoder_layers: 6,
+            eos_token_id: 0,
+            forced_eos_token_id: 0,
+            is_encoder_decoder: true,
+            max_position_embeddings: 512,
+            pad_token_id: 59513,
+            scale_embedding: true,
+            share_encoder_decoder_embeddings: true,
+            use_cache: true,
+            vocab_size: 59514,
+        }
+    }
+
+    pub fn opus_mt_en_ru() -> Self {
+        Self {
+            activation_function: candle_nn::Activation::Swish,
+            d_model: 512,
+            decoder_attention_heads: 8,
+            decoder_ffn_dim: 2048,
+            decoder_layers: 6,
+            decoder_start_token_id: 62517,
+            decoder_vocab_size: Some(62518),
+            encoder_attention_heads: 8,
+            encoder_ffn_dim: 2048,
+            encoder_layers: 6,
+            eos_token_id: 0,
+            forced_eos_token_id: 0,
+            is_encoder_decoder: true,
+            max_position_embeddings: 512,
+            pad_token_id: 62517,
+            scale_embedding: true,
+            share_encoder_decoder_embeddings: true,
+            use_cache: true,
+            vocab_size: 62518,
         }
     }
 }

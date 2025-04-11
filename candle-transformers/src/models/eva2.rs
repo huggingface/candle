@@ -1,3 +1,31 @@
+//! EVA-2 inference implementation.
+//!
+//! EVA-02 is a computer vision model that can be used as an ImageNet classifier.
+//! The model returns the probability for an image to belong to each of the 1000
+//! ImageNet categories.
+//!
+//! - [Paper](https://arxiv.org/abs/2303.11331). EVA-02: A Visual Representation for Neon Genesis
+//! - [Code](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/eva2.py)
+//!
+//! # Example
+//!
+//! ```bash
+//! cargo run \
+//!   --example eva2 \
+//!   --release -- \
+//!   --image candle-examples/examples/yolo-v8/assets/bike.jpg
+//!
+//! > mountain bike, all-terrain bike, off-roader: 37.09%
+//! > maillot                 : 8.30%
+//! > alp                     : 2.13%
+//! > bicycle-built-for-two, tandem bicycle, tandem: 0.84%
+//! > crash helmet            : 0.73%
+//! ```
+//!
+//! <div align=center>
+//!   <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.jpg" alt="" width=640>
+//! </div>
+//!
 use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 

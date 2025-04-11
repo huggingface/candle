@@ -1,4 +1,4 @@
-use crate::{shape::Dim, Error, Result, Shape, Tensor};
+use crate::{shape::Dim, Context, Error, Result, Shape, Tensor};
 
 impl Tensor {
     /// Concatenates two or more tensors along a particular dimension.
@@ -134,7 +134,7 @@ impl Tensor {
                     .bt())?
                 }
             }
-            let next_offset = offsets.last().unwrap() + arg.elem_count();
+            let next_offset = offsets.last().context("empty offsets")? + arg.elem_count();
             offsets.push(next_offset);
         }
         let shape = Shape::from(cat_dims);
@@ -247,6 +247,9 @@ impl Tensor {
         let dim = dim.to_index(self.shape(), "slice-set")?;
         if !self.is_contiguous() || !src.is_contiguous() {
             Err(Error::RequiresContiguous { op: "slice-set" }.bt())?
+        }
+        if self.same_storage(src) {
+            crate::bail!("cannot use slice_set when self and src share their storage")
         }
         if self.dtype() != src.dtype() {
             Err(Error::DTypeMismatchBinaryOp {

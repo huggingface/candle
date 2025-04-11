@@ -1,34 +1,142 @@
+//! Siglip model implementation.
+//!
+//! Siglip architecture combining vision and language for zero-shot tasks.
+//!
+//! References:
+//! - 🤗 [Model Card](https://huggingface.co/google/siglip-base-patch16-224)
+//!
+
 use crate::models::clip::div_l2_norm;
 use candle::{IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, linear, LayerNorm, Linear, VarBuilder};
 
+fn default_text_vocab_size() -> usize {
+    32000
+}
+
+fn default_text_hidden_size() -> usize {
+    768
+}
+
+fn default_text_intermediate_size() -> usize {
+    3072
+}
+
+fn default_text_num_hidden_layers() -> usize {
+    12
+}
+
+fn default_text_num_attention_heads() -> usize {
+    12
+}
+
+fn default_text_max_position_embeddings() -> usize {
+    64
+}
+
+fn default_text_layer_norm_eps() -> f64 {
+    1e-6
+}
+
+fn default_text_pad_token_id() -> u32 {
+    1
+}
+
+fn default_text_bos_token_id() -> u32 {
+    49406
+}
+
+fn default_text_eos_token_id() -> u32 {
+    49407
+}
+
+fn default_text_hidden_act() -> candle_nn::Activation {
+    candle_nn::Activation::GeluPytorchTanh
+}
+
 // https://github.com/huggingface/transformers/blob/2e24ee4dfa39cc0bc264b89edbccc373c8337086/src/transformers/models/siglip/configuration_siglip.py#L27
 #[derive(serde::Deserialize, Clone, Debug)]
 pub struct TextConfig {
+    #[serde(default = "default_text_vocab_size")]
     pub vocab_size: usize,
+    #[serde(default = "default_text_hidden_size")]
     pub hidden_size: usize,
+    #[serde(default = "default_text_intermediate_size")]
     pub intermediate_size: usize,
+    #[serde(default = "default_text_num_hidden_layers")]
     pub num_hidden_layers: usize,
+    #[serde(default = "default_text_num_attention_heads")]
     pub num_attention_heads: usize,
+    #[serde(default = "default_text_max_position_embeddings")]
     pub max_position_embeddings: usize,
+    #[serde(default = "default_text_hidden_act")]
     pub hidden_act: candle_nn::Activation,
+    #[serde(default = "default_text_layer_norm_eps")]
     pub layer_norm_eps: f64,
+    #[serde(default = "default_text_pad_token_id")]
     pub pad_token_id: u32,
+    #[serde(default = "default_text_bos_token_id")]
     pub bos_token_id: u32,
+    #[serde(default = "default_text_eos_token_id")]
     pub eos_token_id: u32,
+}
+
+fn default_vision_hidden_size() -> usize {
+    768
+}
+
+fn default_vision_intermediate_size() -> usize {
+    3072
+}
+
+fn default_vision_num_hidden_layers() -> usize {
+    12
+}
+
+fn default_vision_num_attention_heads() -> usize {
+    12
+}
+
+fn default_vision_num_channels() -> usize {
+    3
+}
+
+fn default_vision_image_size() -> usize {
+    224
+}
+
+fn default_vision_batch_size() -> usize {
+    16
+}
+
+fn default_vision_layer_norm_eps() -> f64 {
+    1e-6
+}
+
+fn default_vision_hidden_act() -> candle_nn::Activation {
+    candle_nn::Activation::GeluPytorchTanh
 }
 
 // https://github.com/huggingface/transformers/blob/2e24ee4dfa39cc0bc264b89edbccc373c8337086/src/transformers/models/siglip/configuration_siglip.py#L132
 #[derive(serde::Deserialize, Clone, Debug)]
 pub struct VisionConfig {
+    #[serde(default = "default_vision_hidden_size")]
     pub hidden_size: usize,
+    #[serde(default = "default_vision_intermediate_size")]
     pub intermediate_size: usize,
+    #[serde(default = "default_vision_num_hidden_layers")]
     pub num_hidden_layers: usize,
+    #[serde(default = "default_vision_num_attention_heads")]
     pub num_attention_heads: usize,
+    #[serde(default = "default_vision_num_channels")]
     pub num_channels: usize,
+    #[serde(default = "default_vision_image_size")]
     pub image_size: usize,
+    #[serde(default = "default_vision_batch_size")]
     pub patch_size: usize,
+    #[serde(default = "default_vision_hidden_act")]
     pub hidden_act: candle_nn::Activation,
+    #[serde(default = "default_vision_layer_norm_eps")]
     pub layer_norm_eps: f64,
 }
 
@@ -426,8 +534,9 @@ impl Encoder {
 #[derive(Debug, Clone)]
 struct VisionEmbeddings {
     patch_embedding: candle_nn::Conv2d,
-    position_embedding: candle_nn::Embedding,
-    position_ids: Tensor,
+    position_embedding: Tensor,
+    patch_size: usize,
+    base_num_patches_per_side: usize,
 }
 
 impl VisionEmbeddings {
@@ -443,25 +552,52 @@ impl VisionEmbeddings {
             conv2d_cfg,
             vb.pp("patch_embedding"),
         )?;
-        let num_patches = (cfg.image_size / cfg.patch_size).pow(2);
-        let position_ids = Tensor::arange(0, num_patches as i64, vb.device())?;
-        let position_embedding =
-            candle_nn::embedding(num_patches, cfg.hidden_size(), vb.pp("position_embedding"))?;
+        let num_patches_per_side = cfg.image_size / cfg.patch_size;
+        let embedder = candle_nn::embedding(
+            num_patches_per_side.pow(2),
+            cfg.hidden_size(),
+            vb.pp("position_embedding"),
+        )?;
+        let position_embedding = embedder.embeddings();
+        let position_embedding = position_embedding
+            .reshape((
+                1,
+                num_patches_per_side,
+                num_patches_per_side,
+                cfg.hidden_size(),
+            ))?
+            .permute((0, 3, 1, 2))?;
         Ok(Self {
             patch_embedding,
             position_embedding,
-            position_ids,
+            patch_size: cfg.patch_size,
+            base_num_patches_per_side: num_patches_per_side,
         })
     }
 }
 
 impl Module for VisionEmbeddings {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        //embed tokens
         let (_batch, _channels, _height, _width) = xs.dims4()?;
         let embeddings = xs.apply(&self.patch_embedding)?;
-        let embeddings = embeddings.flatten_from(2)?.transpose(1, 2)?;
-        let position_embedding = self.position_embedding.forward(&self.position_ids)?;
-        embeddings.broadcast_add(&position_embedding)
+        // interpolate position embeddings for the current image size (if needed)
+        let num_patches_h = _height / self.patch_size;
+        let num_patches_w = _width / self.patch_size;
+        let resized_position_embedding = if num_patches_w == self.base_num_patches_per_side
+            && num_patches_h == self.base_num_patches_per_side
+        {
+            self.position_embedding.clone()
+        } else {
+            self.position_embedding
+                .interpolate2d(num_patches_h, num_patches_w)?
+        };
+        // Add position embeddings to tokens and flatten from 2D patches to 1D sequence
+        let embeddings = embeddings
+            .broadcast_add(&resized_position_embedding)?
+            .flatten_from(2)?
+            .transpose(1, 2)?;
+        Ok(embeddings)
     }
 }
 

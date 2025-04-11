@@ -1,3 +1,22 @@
+//! Microsoft Phi-3 model implementation
+//!
+//! See Phi model details at:
+//! - [Phi-3 Model](https://huggingface.co/microsoft/phi-3)
+//!
+//! The Phi series are decoder-only transformers designed for code and language tasks.
+//! Key characteristics:
+//! - Decoder-only transformer architecture
+//! - RoPE embeddings
+//! - Layer normalization
+//! - QK normalization
+//! - Mixed activation functions
+//! - Improved context window handling
+//!
+//! References:
+//! - [Hugging Face Implementation](https://huggingface.co/microsoft/phi-3)
+//! - [Alternative Implementation](https://huggingface.co/microsoft/phi-3/tree/main)
+//!
+
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use crate::models::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};

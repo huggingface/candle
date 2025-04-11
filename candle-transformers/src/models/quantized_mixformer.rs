@@ -1,3 +1,16 @@
+//! Module containing quantized MixFormer model implementation.
+//!
+//! MixFormer is an efficient transformer variant for text generation that uses
+//! mixture-of-experts and parallel attention/feed-forward blocks.
+//! This implementation provides quantization for reduced memory usage.
+//!
+//! Key features:
+//! - Parallel attention and feed-forward computation
+//! - Rotary positional embeddings
+//! - Optional key-value caching
+//! - Support for 8-bit quantization
+//!
+
 use crate::quantized_nn::{layer_norm, linear, Linear};
 pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};

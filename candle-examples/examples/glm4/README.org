@@ -7,48 +7,25 @@ GLM-4-9B is the open-source version of the latest generation of pre-trained mode
 ** Running with ~cuda~
 
 #+begin_src shell
-  cargo run --example glm4 --release --features cuda 
+  cargo run --example glm4 --release --features cuda -- --prompt "Hello world"
 #+end_src
 
 ** Running with ~cpu~
 #+begin_src shell
-  cargo run --example glm4 --release -- --cpu
+  cargo run --example glm4 --release -- --cpu --prompt "Hello world"
 #+end_src
 
 ** Output Example
 #+begin_src shell
-cargo run  --example glm4 --release --features cuda -- --sample-len 500 --cache .
-    Finished release [optimized] target(s) in 0.24s
-     Running `/root/candle/target/release/examples/glm4 --sample-len 500 --cache .`
+cargo run --features cuda -r --example glm4 -- --prompt "Hello "
+
 avx: true, neon: false, simd128: false, f16c: true
 temp: 0.60 repeat-penalty: 1.20 repeat-last-n: 64
-cache path .
-retrieved the files in 6.88963ms
-loaded the model in 6.113752297s
+retrieved the files in 6.454375ms
+loaded the model in 3.652383779s
 starting the inference loop
-[欢迎使用GLM-4,请输入prompt]
-请你告诉我什么是FFT
-266 tokens generated (34.50 token/s)
-Result:
-。Fast Fourier Transform (FFT) 是一种快速计算离散傅里叶变换（DFT）的方法，它广泛应用于信号处理、图像处理和数据分析等领域。
-
-具体来说，FFT是一种将时域数据转换为频域数据的算法。在数字信号处理中，我们通常需要知道信号的频率成分，这就需要进行傅立叶变换。传统的傅立叶变换的计算复杂度较高，而 FFT 则大大提高了计算效率，使得大规模的 DFT 换成为可能。
-
-以下是使用 Python 中的 numpy 进行 FFT 的简单示例：
-
-```python
-import numpy as np
-
-# 创建一个时域信号
-t = np.linspace(0, 1, num=100)
-f = np.sin(2*np.pi*5*t) + 3*np.cos(2*np.pi*10*t)
-
-# 对该信号做FFT变换，并计算其幅值谱
-fft_result = np.fft.fftshift(np.abs(np.fft.fft(f)))
-
-```
-
-在这个例子中，我们首先创建了一个时域信号 f。然后我们对这个信号进行了 FFT 换，得到了一个频域结果 fft_result。
+Hello 2018, hello new year! I’m so excited to be back and sharing with you all my favorite things from the past month. This is a monthly series where I share what’s been inspiring me lately in hopes that it will inspire you too!
+...
 #+end_src
 
 This example will read prompt from stdin
