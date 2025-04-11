@@ -68,7 +68,7 @@ impl CustomOp1 for LayerNorm {
             Some((o1, o2)) => slice.slice(o1..o2),
         };
         let elem_count = layout.shape().elem_count();
-        let dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
+        let dst = unsafe { dev.alloc::<f32>(elem_count) }?;
         let func =
             dev.get_or_load_custom_func("rms_f32", "mymodule", cuda_kernels::LAYERNORM_KERNELS)?;
         let cfg = LaunchConfig {
