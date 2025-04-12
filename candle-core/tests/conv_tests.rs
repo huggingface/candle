@@ -53,6 +53,20 @@ fn conv1d(dev: &Device) -> Result<()> {
         test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
         [2.4509, 2.6357, -1.3336, 4.1393, 0.5657, 1.8091, -1.1784, 3.5675, 0.5069, 3.3352]
     );
+    let res = {
+        let t = Tensor::cat(&[&t.zeros_like()?, &t, &t.zeros_like()?], 0)?;
+        t.conv1d(&w, /*padding*/ 1, 1, 1, 1)?
+    };
+    assert_eq!(res.dims(), [3, 2, 5]);
+    // Same as pytorch default padding: use zeros.
+    assert_eq!(
+        test_utils::to_vec1_round(&res.i(0)?.flatten_all()?, 4)?,
+        [0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(&res.i(1)?.flatten_all()?, 4)?,
+        [2.4509, 2.6357, -1.3336, 4.1393, 0.5657, 1.8091, -1.1784, 3.5675, 0.5069, 3.3352]
+    );
 
     let w = w.transpose(0, 1)?;
     // The CPU kernels applied in the contiguous and non contiguous cases are different.
