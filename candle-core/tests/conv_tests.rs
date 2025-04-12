@@ -177,6 +177,22 @@ fn conv2d(dev: &Device) -> Result<()> {
             10.389, 3.6023, -4.2808, 0.2672, 5.3646, -5.2023, -2.1955, -9.4075
         ]
     );
+    let res = {
+        let t = Tensor::cat(&[&t.zeros_like()?, &t, &t.zeros_like()?], 0)?;
+        t.conv2d(&w, 0, 1, 1, 1)?
+    };
+    assert_eq!(res.dims(), [3, 2, 3, 3]);
+    assert_eq!(
+        test_utils::to_vec1_round(&res.i(0)?.flatten_all()?, 4)?,
+        [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(&res.i(1)?.flatten_all()?, 4)?,
+        [
+            -4.2812, 2.0923, 5.2187, 7.5184, 0.752, -14.9426, 10.0087, 4.391, 0.2918, 1.6715,
+            10.389, 3.6023, -4.2808, 0.2672, 5.3646, -5.2023, -2.1955, -9.4075
+        ]
+    );
 
     let res = t.conv_transpose2d(&w.transpose(0, 1)?, 0, 0, 1, 1)?;
 
