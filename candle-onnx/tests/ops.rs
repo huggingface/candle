@@ -1,3 +1,4 @@
+use anyhow::Ok;
 use candle::test_utils::to_vec2_round;
 use candle::{DType, Device, NdArray, Result, Tensor};
 use candle_onnx::onnx::attribute_proto::AttributeType;
@@ -7,6 +8,7 @@ use candle_onnx::onnx::{type_proto, TensorProto, TensorShapeProto, TypeProto};
 use candle_onnx::onnx::{AttributeProto, GraphProto, ModelProto, NodeProto, ValueInfoProto};
 use candle_onnx::simple_eval;
 use std::collections::HashMap;
+use std::fmt::Result;
 
 const INPUT_X: &str = "x";
 const INPUT_Y: &str = "y";
@@ -837,6 +839,140 @@ fn test_flatten_operation() -> Result<()> {
 
 // "Squeeze"
 // #[test]
+
+// "LayerNormalization"
+#[test]
+fn test_layer_normalization() -> Result<()> {
+    // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-80
+    test(
+        &[[1, 2, 3], [4, 5, 6]],
+        Some(1),
+        Some(1e-5),
+        &[[-1.2247, 0.0, 1.2247], [-1.2247, 0.0, 1.2247]],
+    );
+
+    test(
+        &[[1, 2, 3], [4, 5, 6]],
+        Some(1),
+        Some(1e-1),
+        &[[-1.2157, 0.0, 1.2157], [-1.2157, 0.0, 1.2157]],
+    );
+
+    fn test(
+        input: impl NdArray,
+        axis: Option<i64>,
+        epsilon: Option<f32>,
+        expected: impl NdArray,
+    ) -> Result<()> {
+        let mut attribute = vec![];
+
+        if let Some(axis) = axis {
+            let att_axis = AttributeProto {
+                name: "axis".to_string(),
+                ref_attr_name: "axis".to_string(),
+                i: axis,
+                doc_string: "axis".to_string(),
+                r#type: 2,
+                f: 0.0,
+                s: vec![],
+                t: None,
+                g: None,
+                sparse_tensor: None,
+                tp: None,
+                floats: vec![],
+                ints: vec![],
+                strings: vec![],
+                tensors: vec![],
+                graphs: vec![],
+                sparse_tensors: vec![],
+                type_protos: vec![],
+            };
+            attribute.push(att_axis);
+        }
+        if let Some(epsilon) = epsilon {
+            let att_eps = AttributeProto {
+                name: "epsilon".to_string(),
+                ref_attr_name: "epsilon".to_string(),
+                i: epsilon,
+                doc_string: "epsilon".to_string(),
+                r#type: 2,
+                f: 0.0,
+                s: vec![],
+                t: None,
+                g: None,
+                sparse_tensor: None,
+                tp: None,
+                floats: vec![],
+                ints: vec![],
+                strings: vec![],
+                tensors: vec![],
+                graphs: vec![],
+                sparse_tensors: vec![],
+                type_protos: vec![],
+            };
+            attribute.push(att_eps);
+        }
+
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "LayerNormalization".to_string(),
+                domain: "".to_string(),
+                attribute: attribute,
+                input: vec![INPUT_X.to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                name: "".to_string(),
+                doc_string: "".to_string(),
+            }],
+            name: "".to_string(),
+            initializer: vec![],
+            input: vec![
+                ValueInfoProto {
+                    name: INPUT_X.to_string(),
+                    doc_string: "".to_string(),
+                    r#type: None,
+                },
+                ValueInfoProto {
+                    name: INPUT_Y.to_string(),
+                    doc_string: "".to_string(),
+                    r#type: None,
+                },
+            ],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                doc_string: "".to_string(),
+                r#type: None,
+            }],
+            value_info: vec![],
+            doc_string: "".to_string(),
+            sparse_initializer: vec![],
+            quantization_annotation: vec![],
+        }));
+
+        let mut inputs: HashMap<String, Tensor> = HashMap::new();
+        inputs.insert(INPUT_X.to_string(), Tensor::new(input, &Device::Cpu)?);
+
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        assert_eq!(eval.len(), 1);
+
+        let z = eval
+            .get(OUTPUT_Z)
+            .expect("Output 'z' not found")
+            .to_dtype(DType::F64)?;
+
+        let expected = Tensor::new(expected, &Device::Cpu)?.to_dtype(DType::F64)?;
+        match expected.dims().len() {
+            0 => assert_eq!(z.to_vec0::<f64>()?, expected.to_vec0::<f64>()?),
+            1 => assert_eq!(z.to_vec1::<f64>()?, expected.to_vec1::<f64>()?),
+            2 => assert_eq!(z.to_vec2::<f64>()?, expected.to_vec2::<f64>()?),
+            3 => assert_eq!(z.to_vec3::<f64>()?, expected.to_vec3::<f64>()?),
+            _ => unreachable!(),
+        };
+
+        Ok(())
+    }
+
+    Ok(())
+}
 
 // "ConstantOfShape"
 #[test]
