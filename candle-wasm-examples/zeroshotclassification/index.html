@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>ZeroShot Classification</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <script src="script.js"></script>
+    </head>
+
+    <body class="bg-gray-50 min-h-screen flex items-center justify-center p-4">
+        <div
+            class="rounded-lg border bg-white text-gray-900 shadow-sm w-full max-w-md mx-auto"
+        >
+            <div class="flex flex-col space-y-1.5 p-6">
+                <h3 class="font-semibold tracking-tight text-2xl">
+                    ZeroShot Classification
+                </h3>
+            </div>
+            <div class="p-6">
+                <select
+                    id="select-example"
+                    class="flex h-9 items-center justify-between whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm ring-offset-background data-[placeholder]:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50 [&amp;>span]:line-clamp-1 w-[180px]"
+                >
+                    <option value="">--Choose Example--</option>
+                    <option value="1">Example1</option>
+                    <option value="2">Example2</option>
+                </select>
+            </div>
+            <form id="form" autocomplete="false">
+                <div class="p-6 pt-0 space-y-4">
+                    <div class="space-y-2">
+                        <label
+                            class="text-sm font-medium leading-none"
+                            for="text"
+                            >Text</label
+                        >
+                        <textarea
+                            id="text"
+                            rows="4"
+                            class="mt-1 p-2 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                            placeholder="Enter your text"
+                        ></textarea>
+                    </div>
+                    <div class="space-y-2">
+                        <label
+                            class="text-sm font-medium leading-none"
+                            for="labels"
+                            >Labels (comma-separated)</label
+                        >
+                        <input
+                            class="flex h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                            id="labels"
+                            placeholder="Enter labels separated by commas"
+                            autocomplete="false"
+                            value=""
+                            type="text"
+                        />
+                    </div>
+                    <div>
+                        <input
+                            type="checkbox"
+                            id="multilabel"
+                            name="multilabel"
+                            checked="true"
+                        />
+                        <label for="multilabel"
+                            >Allow multiple true classes</label
+                        >
+                    </div>
+                </div>
+                <div class="flex items-center p-6 pt-0">
+                    <button
+                        class="inline-flex items-center justify-center w-full h-10 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none"
+                        type="submit"
+                    >
+                        Compute
+                    </button>
+                </div>
+                <div class="p-6 pt-0">
+                    <div id="status" class="text-sm text-gray-600"></div>
+                    <div id="progressContainer" class="mt-4 hidden">
+                        <label
+                            for="progressBar"
+                            class="block text-sm font-medium text-gray-700"
+                            >Download Progress</label
+                        >
+                        <div
+                            class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700"
+                        >
+                            <div
+                                id="progressBar"
+                                class="bg-indigo-600 h-2.5 rounded-full"
+                                style="width: 0%"
+                            ></div>
+                        </div>
+                    </div>
+                    <div id="spinner" class="mt-4 hidden">
+                        <svg
+                            class="animate-spin h-5 w-5 text-gray-600"
+                            xmlns="http://www.w3.org/2000/svg"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                        >
+                            <circle
+                                class="opacity-25"
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="currentColor"
+                                stroke-width="4"
+                            ></circle>
+                            <path
+                                class="opacity-75"
+                                fill="currentColor"
+                                d="M4 12a8 8 0 018-8v8a8 8 0 01-8 8z"
+                            ></path>
+                        </svg>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </body>
+</html>
