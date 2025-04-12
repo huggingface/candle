@@ -858,6 +858,13 @@ fn test_layer_normalization() -> Result<()> {
         &[[-1.2157, 0.0, 1.2157], [-1.2157, 0.0, 1.2157]],
     );
 
+    test(
+        &[[1, 2, 3], [4, 5, 6]],
+        Some(1),
+        None,
+        &[[-1.2247, 0.0, 1.2247], [-1.2247, 0.0, 1.2247]],
+    );
+
     fn test(
         input: impl NdArray,
         axis: Option<i64>,
@@ -893,10 +900,10 @@ fn test_layer_normalization() -> Result<()> {
             let att_eps = AttributeProto {
                 name: "epsilon".to_string(),
                 ref_attr_name: "epsilon".to_string(),
-                i: epsilon,
+                i: 0,
                 doc_string: "epsilon".to_string(),
                 r#type: 2,
-                f: 0.0,
+                f: epsilon,
                 s: vec![],
                 t: None,
                 g: None,
