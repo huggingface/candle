@@ -18,7 +18,10 @@ half = { version = "2.3.1", features = ["num-traits"] }
 bindgen_cuda = "0.1.1"
 anyhow = { version = "1", features = ["backtrace"] }
 
-
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
 candle-nn = { path = "../candle-nn", features = ["cuda"] }
+
+[features]
+default = []
+cudnn = ["candle/cudnn"]
