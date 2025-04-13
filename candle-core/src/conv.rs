@@ -175,7 +175,7 @@ impl Tensor {
             padding,
             stride,
             dilation,
-            cudnn_fwd_algo: None,
+            cudnn_fwd_algo: Some(CudnnFwdAlgo::ImplicitGemm),
         };
         if groups == 1 {
             self.conv1d_single_group(kernel, &params)
