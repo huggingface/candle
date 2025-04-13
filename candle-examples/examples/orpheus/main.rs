@@ -215,7 +215,7 @@ impl Model {
         let mut tokens = [
             &[128259],
             tokens.get_ids(),
-            &[128009, 18260, 128261, 128257],
+            &[128009, 128260, 128261, 128257],
         ]
         .concat();
         if self.verbose_prompt {
