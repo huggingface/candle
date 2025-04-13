@@ -154,6 +154,11 @@ pub(crate) fn launch_conv1d<
         /* dilation */ [params.dilation as i32, 1],
         cudarc::cudnn::sys::cudnnConvolutionMode_t::CUDNN_CROSS_CORRELATION,
     )?;
+    // https://docs.nvidia.com/deeplearning/cudnn/backend/latest/api/cudnn-ops-library.html#cudnnsettensornddescriptor
+    // > Tensors are restricted to having at least 4 dimensions, and at most CUDNN_DIM_MAX
+    // > dimensions (defined in cudnn.h). When working with lower dimensional data, it is
+    // > recommended that the user create a 4D tensor, and set the size along unused dimensions
+    // > to 1.
     let x_shape = [
         params.b_size as i32,
         params.c_in as i32,
@@ -184,14 +189,14 @@ pub(crate) fn launch_conv1d<
         cudarc::cudnn::sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
         [params.b_size as i32, params.c_out as i32, l_out, 1],
     )?;
-    let conv2d = ConvForward {
+    let conv1d = ConvForward {
         conv: &conv,
         x: &x,
         w: &w,
         y: &y,
     };
     let alg = match params.cudnn_fwd_algo {
-        None => conv2d.pick_algorithm()?,
+        None => conv1d.pick_algorithm()?,
         Some(CandleAlgo::ImplicitGemm) => A::CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_GEMM,
         Some(CandleAlgo::ImplicitPrecompGemm) => {
             A::CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM
@@ -204,10 +209,10 @@ pub(crate) fn launch_conv1d<
         Some(CandleAlgo::WinogradNonFused) => A::CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD_NONFUSED,
         Some(CandleAlgo::Count) => A::CUDNN_CONVOLUTION_FWD_ALGO_COUNT,
     };
-    let workspace_size = conv2d.get_workspace_size(alg)?;
+    let workspace_size = conv1d.get_workspace_size(alg)?;
     let mut workspace = dev.cuda_stream().alloc_zeros::<u8>(workspace_size)?;
     unsafe {
-        conv2d.launch::<CudaSlice<u8>, _, _, _>(
+        conv1d.launch::<CudaSlice<u8>, _, _, _>(
             alg,
             Some(&mut workspace),
             (T::one(), T::zero()),
