@@ -99,7 +99,7 @@ enum Voice {
 }
 
 impl Voice {
-    fn to_str(&self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             Voice::Tara => "tara",
             Voice::Leah => "leah",
@@ -164,7 +164,7 @@ fn load_snac(device: &Device) -> Result<SnacModel> {
     let config: SnacConfig = serde_json::from_reader(std::fs::File::open(config)?)?;
     let m = api.model("lmz/candle-snac".to_string());
     let model = m.get("snac_24khz.safetensors")?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, device)? };
     let model = SnacModel::new(&config, vb)?;
     Ok(model)
 }
@@ -249,7 +249,7 @@ impl Model {
     fn run(&mut self, prompt: &str) -> Result<()> {
         println!("running the model on '{}'", prompt);
         let device = &self.device;
-        let prompt = format!("{voice}: {prompt}", voice = self.voice.to_str());
+        let prompt = format!("{voice}: {prompt}", voice = self.voice.as_str());
         let tokens = self.tokenizer.encode(prompt, true).map_err(E::msg)?;
         // https://github.com/canopyai/Orpheus-TTS/blob/df0b0d96685dd21885aef7f900ee7f705c669e94/orpheus_tts_pypi/orpheus_tts/engine_class.py#L82
         let mut tokens = [
@@ -273,7 +273,7 @@ impl Model {
                 (tokens.len(), 0)
             };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-            let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
+            let input = Tensor::new(ctxt, device)?.unsqueeze(0)?;
             let logits = self.model.forward(&input, context_index, &mut cache)?;
             let logits = logits.squeeze(0)?;
             index_pos += ctxt.len();
@@ -316,9 +316,9 @@ impl Model {
                 codes2.push(audio_tokens[i]);
             }
         }
-        let codes0 = Tensor::new(codes0, &device)?.unsqueeze(0)?;
-        let codes1 = Tensor::new(codes1, &device)?.unsqueeze(0)?;
-        let codes2 = Tensor::new(codes2, &device)?.unsqueeze(0)?;
+        let codes0 = Tensor::new(codes0, device)?.unsqueeze(0)?;
+        let codes1 = Tensor::new(codes1, device)?.unsqueeze(0)?;
+        let codes2 = Tensor::new(codes2, device)?.unsqueeze(0)?;
         let pcm = self.snac.decode(&[&codes0, &codes1, &codes2])?;
         println!("decoded to pcm {pcm:?}");
         let mut output = std::fs::File::create(&self.out_file)?;
