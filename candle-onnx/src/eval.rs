@@ -570,6 +570,27 @@ fn simple_eval_(
                 let eps = get_attr_opt::<f32>(node, "epsilon")?
                     .copied()
                     .unwrap_or(1e-5);
+
+                // Parameter used to convert N-D tensor layer normalization
+                // to equivalent 2-D matrix operations.
+                let mut row_number = 1;
+                let mut col_number = 1;
+                for i in 0..xs.rank() {
+                    if i < axis {
+                        row_number *= xs.dims()[i] as usize;
+                    } else {
+                        col_number *= xs.dims()[i] as usize;
+                    }
+                }
+
+                let xs = xs
+                    .reshape((row_number, col_number))?
+                    .broadcast_sub(&xs.mean(axis)?)?
+                    .broadcast_div(&(xs.var(axis)? + eps as f64)?.sqrt()?)?;
+
+                let weight = weight.reshape((1, col_number))?;
+                let bias = bias.reshape((1, col_number))?;
+                let xs = xs.broadcast_mul(&weight)?.broadcast_add(&bias)?;
             }
             "Squeeze" => {
                 let xs = get(&node.input[0])?;
