@@ -71,8 +71,46 @@ struct Args {
     #[arg(long, default_value = "3b-0.1-ft")]
     which: Which,
 
+    #[arg(long, default_value = "tara")]
+    voice: Voice,
+
     #[arg(long)]
     use_flash_attn: bool,
+}
+
+#[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Voice {
+    #[value(name = "tara")]
+    Tara,
+    #[value(name = "leah")]
+    Leah,
+    #[value(name = "jess")]
+    Jess,
+    #[value(name = "leo")]
+    Leo,
+    #[value(name = "dan")]
+    Dan,
+    #[value(name = "mia")]
+    Mia,
+    #[value(name = "zac")]
+    Zac,
+    #[value(name = "zoe")]
+    Zoe,
+}
+
+impl Voice {
+    fn to_str(&self) -> &'static str {
+        match self {
+            Voice::Tara => "tara",
+            Voice::Leah => "leah",
+            Voice::Jess => "jess",
+            Voice::Leo => "leo",
+            Voice::Dan => "dan",
+            Voice::Mia => "mia",
+            Voice::Zac => "zac",
+            Voice::Zoe => "zoe",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -116,6 +154,7 @@ struct Model {
     verbose_prompt: bool,
     snac: SnacModel,
     out_file: String,
+    voice: Voice,
 }
 
 fn load_snac(device: &Device) -> Result<SnacModel> {
@@ -202,6 +241,7 @@ impl Model {
             device,
             verbose_prompt: args.verbose_prompt,
             snac,
+            voice: args.voice,
             out_file: args.out_file,
         })
     }
@@ -209,7 +249,7 @@ impl Model {
     fn run(&mut self, prompt: &str) -> Result<()> {
         println!("running the model on '{}'", prompt);
         let device = &self.device;
-        let prompt = format!("{voice}: {prompt}", voice = "tara");
+        let prompt = format!("{voice}: {prompt}", voice = self.voice.to_str());
         let tokens = self.tokenizer.encode(prompt, true).map_err(E::msg)?;
         // https://github.com/canopyai/Orpheus-TTS/blob/df0b0d96685dd21885aef7f900ee7f705c669e94/orpheus_tts_pypi/orpheus_tts/engine_class.py#L82
         let mut tokens = [
