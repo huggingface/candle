@@ -14,6 +14,7 @@ pub struct ParamsConv1D {
     pub(crate) padding: usize,
     pub(crate) stride: usize,
     pub(crate) dilation: usize,
+    pub(crate) cudnn_fwd_algo: Option<CudnnFwdAlgo>,
 }
 
 impl ParamsConv1D {
@@ -174,6 +175,7 @@ impl Tensor {
             padding,
             stride,
             dilation,
+            cudnn_fwd_algo: None,
         };
         if groups == 1 {
             self.conv1d_single_group(kernel, &params)
