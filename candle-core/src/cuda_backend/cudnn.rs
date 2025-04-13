@@ -176,13 +176,12 @@ pub(crate) fn launch_conv1d<
         // The stride along the last dimension does not matter.
         cudnn.create_4d_tensor_ex::<T>(x_shape, [s[0] as i32, s[1] as i32, s[2] as i32, 1i32])?
     };
-    let w = cudnn.create_4d_filter::<T>(
+    let w = cudnn.create_3d_filter::<T>(
         cudarc::cudnn::sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
         [
             params.c_out as i32,
             params.c_in as i32,
             params.k_size as i32,
-            1,
         ],
     )?;
     let l_out = params.l_out() as i32;
