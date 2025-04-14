@@ -468,6 +468,7 @@ impl EncodecConv1d {
                     stride,
                     groups: 1,
                     dilation: 1,
+                    cudnn_fwd_algo: None,
                 },
                 vb.pp("conv"),
             )?,

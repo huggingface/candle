@@ -55,7 +55,7 @@ impl ParamsConvTranspose1D {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CudnnFwdAlgo {
     ImplicitGemm,
     ImplicitPrecompGemm,
@@ -153,6 +153,19 @@ impl Tensor {
         dilation: usize,
         groups: usize,
     ) -> Result<Self> {
+        self.conv1d_with_algo(kernel, padding, stride, dilation, groups, None)
+    }
+
+    /// Applies a 1D convolution over the input tensor.
+    pub fn conv1d_with_algo(
+        &self,
+        kernel: &Self,
+        padding: usize,
+        stride: usize,
+        dilation: usize,
+        groups: usize,
+        cudnn_fwd_algo: Option<CudnnFwdAlgo>,
+    ) -> Result<Self> {
         let (c_out, c_in_k, k_size) = kernel.dims3()?;
         let (b_size, c_in, l_in) = self.dims3()?;
         if c_in != c_in_k * groups {
@@ -175,7 +188,7 @@ impl Tensor {
             padding,
             stride,
             dilation,
-            cudnn_fwd_algo: Some(CudnnFwdAlgo::ImplicitGemm),
+            cudnn_fwd_algo,
         };
         if groups == 1 {
             self.conv1d_single_group(kernel, &params)
@@ -281,6 +294,18 @@ impl Tensor {
         dilation: usize,
         groups: usize,
     ) -> Result<Self> {
+        self.conv2d_with_algo(kernel, padding, stride, dilation, groups, None)
+    }
+
+    pub fn conv2d_with_algo(
+        &self,
+        kernel: &Self,
+        padding: usize,
+        stride: usize,
+        dilation: usize,
+        groups: usize,
+        cudnn_fwd_algo: Option<CudnnFwdAlgo>,
+    ) -> Result<Self> {
         let (b_size, c_in, i_h, i_w) = self.dims4()?;
         let (c_out, c_in_k, k_h, k_w) = kernel.dims4()?;
         if c_in != c_in_k * groups {
@@ -299,7 +324,7 @@ impl Tensor {
             padding,
             stride,
             dilation,
-            cudnn_fwd_algo: None,
+            cudnn_fwd_algo,
         };
         if groups == 1 {
             self.conv2d_single_group(kernel, &params)

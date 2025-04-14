@@ -248,12 +248,14 @@ impl AudioEncoder {
             stride: 1,
             groups: 1,
             dilation: 1,
+            cudnn_fwd_algo: None,
         };
         let cfg2 = Conv1dConfig {
             padding: 1,
             stride: 2,
             groups: 1,
             dilation: 1,
+            cudnn_fwd_algo: None,
         };
         let conv1 = conv1d(cfg.num_mel_bins, n_state, 3, cfg1, vb.pp("conv1"))?;
         let conv2 = conv1d(n_state, n_state, 3, cfg2, vb.pp("conv2"))?;
