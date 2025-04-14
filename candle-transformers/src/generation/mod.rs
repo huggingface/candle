@@ -13,6 +13,8 @@ pub enum Sampling {
     TopK { k: usize, temperature: f64 },
     TopP { p: f64, temperature: f64 },
     TopKThenTopP { k: usize, p: f64, temperature: f64 },
+    // Note that the rng is not used for the Gumbel-Softmax sampling.
+    GumbelSoftmax { temperature: f64 },
 }
 
 pub struct LogitsProcessor {
@@ -47,6 +49,12 @@ impl LogitsProcessor {
             .map(|(i, _)| i as u32)
             .context("empty logits")?;
         Ok(next_token)
+    }
+
+    fn sample_gumbel_softmax(&mut self, logits: &Tensor, temperature: f64) -> Result<u32> {
+        let minus_g = logits.rand_like(1e-7, 0.999)?.log()?.neg()?.log()?;
+        let sampled = (logits + minus_g * (-temperature))?.argmax(0)?;
+        sampled.to_vec0::<u32>()
     }
 
     fn sample_multinomial(&mut self, prs: &Vec<f32>) -> Result<u32> {
@@ -127,6 +135,9 @@ impl LogitsProcessor {
 
         let next_token = match &self.sampling {
             Sampling::ArgMax => self.sample_argmax(logits)?,
+            Sampling::GumbelSoftmax { temperature } => {
+                self.sample_gumbel_softmax(&logits, *temperature)?
+            }
             Sampling::All { temperature } => {
                 let prs = prs(*temperature)?;
                 self.sample_multinomial(&prs)?

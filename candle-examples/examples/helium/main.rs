@@ -46,7 +46,7 @@ impl TextGeneration {
                 Sampling::ArgMax
             } else {
                 match (top_k, top_p) {
-                    (None, None) => Sampling::All { temperature },
+                    (None, None) => Sampling::GumbelSoftmax { temperature },
                     (Some(k), None) => Sampling::TopK { k, temperature },
                     (None, Some(p)) => Sampling::TopP { p, temperature },
                     (Some(k), Some(p)) => Sampling::TopKThenTopP { k, p, temperature },
