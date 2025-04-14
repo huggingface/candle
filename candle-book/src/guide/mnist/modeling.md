@@ -1,8 +1,8 @@
-# Candle Mnist Tutorial
+# Candle MNIST Tutorial
 
 ## Modeling
 
-Open `src/main.rs` in your project folder and paste the following
+Open `src/main.rs` in your project folder and insert the following code:
 
 ```rust
 use candle_core::{Device, Result, Tensor};
@@ -21,7 +21,7 @@ impl Model {
 }
 
 fn main() -> Result<()> {
-    // Use Device::new_cuda(0)?; to use the GPU.
+    // Use Device::new_cuda(0)?; to utilize GPU acceleration.
     let device = Device::Cpu;
 
     let first = Tensor::randn(0f32, 1.0, (784, 100), &device)?;
@@ -36,7 +36,7 @@ fn main() -> Result<()> {
 }
 ```
 
-Everything should now run with:
+Execute the program with:
 
 ```bash
 $ cargo run --release
@@ -44,23 +44,23 @@ $ cargo run --release
 > Digit Tensor[dims 1, 10; f32] digit
 ```
 
-Since we're giving random inputs we should expect an incoherent output.
+Since random inputs are provided, expect an incoherent output.
 
-## Making a `Linear` layer.
+## Implementing a `Linear` Layer
 
-Now that we have a basic output, lets create a more complex layer type. If we add a `bias` to the weight we
-can build the classic `Linear` layer.
+To create a more sophisticated layer type, add a `bias` to the weight to construct the standard `Linear` layer.
 
-You can replace all the code in `src/main.rs` with the following:
+Replace the entire content of `src/main.rs` with:
 
 ```rust
 use candle_core::{Device, Result, Tensor};
 
-struct Linear{
+struct Linear {
     weight: Tensor,
     bias: Tensor,
 }
-impl Linear{
+
+impl Linear {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x = x.matmul(&self.weight)?;
         x.broadcast_add(&self.bias)
@@ -81,29 +81,29 @@ impl Model {
 }
 
 fn main() -> Result<()> {
-    // Use Device::new_cuda(0)?; to use the GPU.
-    // Use Device::Cpu; to use the CPU.
+    // Use Device::new_cuda(0)?; for GPU acceleration.
+    // Use Device::Cpu; for CPU computation.
     let device = Device::cuda_if_available(0)?;
 
-    // Creating a dummy model
+    // Initialize model parameters
     let weight = Tensor::randn(0f32, 1.0, (784, 100), &device)?;
     let bias = Tensor::randn(0f32, 1.0, (100, ), &device)?;
-    let first = Linear{weight, bias};
+    let first = Linear { weight, bias };
     let weight = Tensor::randn(0f32, 1.0, (100, 10), &device)?;
     let bias = Tensor::randn(0f32, 1.0, (10, ), &device)?;
-    let second = Linear{weight, bias};
+    let second = Linear { weight, bias };
     let model = Model { first, second };
 
     let dummy_image = Tensor::randn(0f32, 1.0, (1, 784), &device)?;
 
-    // Inference on the model
+    // Perform inference
     let digit = model.forward(&dummy_image)?;
     println!("Digit {digit:?} digit");
     Ok(())
 }
 ```
 
-Give it another run with:
+Execute again with:
 
 ```bash
 $ cargo run --release
@@ -111,21 +111,19 @@ $ cargo run --release
 > Digit Tensor[dims 1, 10; f32] digit
 ```
 
-## Using `candle_nn`.
+## Utilizing `candle_nn`
 
-Most of the classical layers (like [Linear](https://github.com/huggingface/candle/blob/main/candle-nn/src/linear.rs)) are already implemented in [candle-nn](https://github.com/huggingface/candle/tree/main/candle-nn).
+Many classical layers (such as [Linear](https://github.com/huggingface/candle/blob/main/candle-nn/src/linear.rs)) are already implemented in [candle-nn](https://github.com/huggingface/candle/tree/main/candle-nn).
 
-This Linear is coded with PyTorch layout in mind, to reuse better existing models out there, so it uses the transpose of the weights and not the weights directly.
+This `Linear` implementation follows PyTorch conventions for improved compatibility with existing models, utilizing the transpose of weights rather than direct weights.
 
-Lets simplify our example!
-
-First add `candle-nn` as a dependency:
+Let's simplify our implementation. First, add `candle-nn` as a dependency:
 
 ```bash
-cargo add --git https://github.com/huggingface/candle.git candle-nn
+$ cargo add --git https://github.com/huggingface/candle.git candle-nn
 ```
 
-Now, lets replace all the code in `src/main.rs` with:
+Now, replace the entire content of `src/main.rs` with:
 
 ```rust
 use candle_core::{Device, Result, Tensor};
@@ -145,10 +143,10 @@ impl Model {
 }
 
 fn main() -> Result<()> {
-    // Use Device::new_cuda(0)?; to use the GPU.
+    // Use Device::new_cuda(0)?; for GPU acceleration.
     let device = Device::Cpu;
 
-    // This has changed (784, 100) -> (100, 784) !
+    // Note the dimension change: (784, 100) -> (100, 784)
     let weight = Tensor::randn(0f32, 1.0, (100, 784), &device)?;
     let bias = Tensor::randn(0f32, 1.0, (100, ), &device)?;
     let first = Linear::new(weight, Some(bias));
@@ -164,6 +162,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+Execute the final version:
 
 ```bash
 $ cargo run --release

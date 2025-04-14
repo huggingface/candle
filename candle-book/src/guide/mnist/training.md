@@ -1,14 +1,14 @@
-# Candle Mnist Tutorial
+# Candle MNIST Tutorial
 
-## Training
+## Training Implementation
 
-First lets create a new function `make_linear` that takes in a `VarBuilder` and outputs a initalized linear layer. A `VarBuilder` builds a `VarMap` which is the datastructure that holds our trainable parameters.
+First, let's create a utility function `make_linear` that accepts a `VarBuilder` and returns an initialized linear layer. The `VarBuilder` constructs a `VarMap`, which is the data structure that stores our trainable parameters.
 
 ```rust
 use candle_core::{Device, Result, Tensor};
 use candle_nn::{Linear, Module, VarBuilder, VarMap};
 
-fn make_linear(vs: VarBuilder, in_dim: usize, out_dim: usize) -> Result<Linear>{
+fn make_linear(vs: VarBuilder, in_dim: usize, out_dim: usize) -> Result<Linear> {
     let ws = vs.get_with_hints(
         (out_dim, in_dim),
         "weight",
@@ -27,7 +27,7 @@ fn make_linear(vs: VarBuilder, in_dim: usize, out_dim: usize) -> Result<Linear>{
 }
 ```
 
-First lets create a function on our model class called `new` to accept a `VarBuilder` and initalize the model. We use `VarBuilder::pp` to "push prefix" so that the first layer weights are `first.weight` and`first.bias`, and the second layer weights are `second.weight` and `second.bias`.
+Next, let's implement a `new` method for our model class to accept a `VarBuilder` and initialize the model. We use `VarBuilder::pp` to "push prefix" so that the parameter names are organized hierarchically: the first layer weights as `first.weight` and `first.bias`, and the second layer weights as `second.weight` and `second.bias`.
 
 ```rust
 impl Model {
@@ -50,13 +50,13 @@ impl Model {
 }
 ```
 
-Now lets add `candle-datasets` to our project to use mnist.
+Now, let's add the `candle-datasets` package to our project to access the MNIST dataset:
 
 ```bash
-cargo add --git https://github.com/huggingface/candle.git candle-datasets
+$ cargo add --git https://github.com/huggingface/candle.git candle-datasets
 ```
 
-Now we can write our training loop.
+With the dataset available, we can implement our training loop:
 
 ```rust
 use candle_core::{DType, Device, Result, Tensor, D};
@@ -71,7 +71,7 @@ fn training_loop(
     let train_images = m.train_images.to_device(&dev)?;
     let train_labels = train_labels.to_dtype(DType::U32)?.to_device(&dev)?;
 
-    // Create a new varmap for a trainable parameters
+    // Initialize a VarMap to store trainable parameters
     let varmap = VarMap::new();
     let vs = VarBuilder::from_varmap(&varmap, DType::F32, &dev);
     let model = Model::new(vs.clone())?;
@@ -79,22 +79,23 @@ fn training_loop(
     let learning_rate = 0.05;
     let epochs = 10;
 
-    // Crease a stochastic gradient descent object, this is what will update our parameters.
+    // Initialize a stochastic gradient descent optimizer to update parameters
     let mut sgd = candle_nn::SGD::new(varmap.all_vars(), learning_rate)?;
     let test_images = m.test_images.to_device(&dev)?;
     let test_labels = m.test_labels.to_dtype(DType::U32)?.to_device(&dev)?;
+    
     for epoch in 1..epochs {
-        // Standard mnsit forward pass
+        // Perform forward pass on MNIST data
         let logits = model.forward(&train_images)?;
         let log_sm = ops::log_softmax(&logits, D::Minus1)?;
         
-        // compute Negitive Log Likelyhood loss
+        // Compute Negative Log Likelihood loss
         let loss = loss::nll(&log_sm, &train_labels)?;
 
-        // Do backward pass and update weights
+        // Perform backward pass and update weights
         sgd.backward_step(&loss)?;
 
-        // evaluate model on test set
+        // Evaluate model on test set
         let test_logits = model.forward(&test_images)?;
         let sum_ok = test_logits
             .argmax(D::Minus1)?
@@ -106,23 +107,23 @@ fn training_loop(
         println!(
             "{epoch:4} train loss: {:8.5} test acc: {:5.2}%",
             loss.to_scalar::<f32>()?,
-            1.   * test_accuracy
+            test_accuracy
         );
     }
     Ok(())
 }
 ```
 
-Now for our main function:
+Finally, let's implement our main function:
 
-``` rust
+```rust
 pub fn main() -> anyhow::Result<()> {
     let m = candle_datasets::vision::mnist::load()?;
     return training_loop(m);
 }
 ```
 
-Now lets run it:
+Let's execute the training process:
 
 ```bash
 $ cargo run --release

@@ -1,15 +1,12 @@
-# Candle Mnist Tutorial
+# Candle MNIST Tutorial
 
+## Saving and Loading Models
 
-## Saving an Loading
+After training a model, it is useful to save and subsequently load the model parameters. In Candle, this functionality is managed through the `VarMap` data structure, with parameters stored on disk using the [safetensors](https://huggingface.co/docs/safetensors/index) format.
 
-Now that we have a trained model, we likely want to save and load.
-Saving and loading happens inside the `VarMap` and is stored on disk in the
-[safetensors](https://huggingface.co/docs/safetensors/index) format.
+### Saving Model Parameters
 
-### Saving
-
-Lets modify our `training_loop` to save the weights:
+Let's modify our `training_loop` function to include functionality for saving weights:
 
 ```rust
 fn training_loop(
@@ -21,7 +18,7 @@ fn training_loop(
     let train_images = m.train_images.to_device(&dev)?;
     let train_labels = train_labels.to_dtype(DType::U32)?.to_device(&dev)?;
 
-    // Create a new varmap for a trainable parameters
+    // Initialize a VarMap for trainable parameters
     let varmap = VarMap::new();
     let vs = VarBuilder::from_varmap(&varmap, DType::F32, &dev);
     let model = Model::new(vs.clone())?;
@@ -29,22 +26,23 @@ fn training_loop(
     let learning_rate = 0.05;
     let epochs = 10;
 
-    // Crease a stochastic gradient descent object, this is what will update our parameters.
+    // Initialize stochastic gradient descent optimizer
     let mut sgd = candle_nn::SGD::new(varmap.all_vars(), learning_rate)?;
     let test_images = m.test_images.to_device(&dev)?;
     let test_labels = m.test_labels.to_dtype(DType::U32)?.to_device(&dev)?;
+    
     for epoch in 1..epochs {
-        // Standard mnsit forward pass
+        // Standard MNIST forward pass
         let logits = model.forward(&train_images)?;
         let log_sm = ops::log_softmax(&logits, D::Minus1)?;
         
-        // compute Negitive Log Likelyhood loss
+        // Compute Negative Log Likelihood loss
         let loss = loss::nll(&log_sm, &train_labels)?;
 
-        // Do backward pass and update weights
+        // Perform backward pass and update weights
         sgd.backward_step(&loss)?;
 
-        // evaluate model on test set
+        // Evaluate model on test set
         let test_logits = model.forward(&test_images)?;
         let sum_ok = test_logits
             .argmax(D::Minus1)?
@@ -56,11 +54,11 @@ fn training_loop(
         println!(
             "{epoch:4} train loss: {:8.5} test acc: {:5.2}%",
             loss.to_scalar::<f32>()?,
-            1.   * test_accuracy
+            test_accuracy
         );
     }
     
-    // Save the weights to this file
+    // Save model weights to disk
     varmap.save("model_weights.safetensors")?;
     Ok(())
 }
@@ -80,9 +78,9 @@ $ cargo run --release
 > 9 train loss:  2.05053 test acc:  0.35%
 ```
 
-### Loading
+### Loading Model Parameters
 
-Now that we have a saved model, lets load it. The main change we must make is to make `varmap` mutable.
+Now that we have saved our model parameters, we can modify the code to load them. The primary change required is to make the `varmap` variable mutable:
 
 ```rust
 fn training_loop(
@@ -94,33 +92,34 @@ fn training_loop(
     let train_images = m.train_images.to_device(&dev)?;
     let train_labels = train_labels.to_dtype(DType::U32)?.to_device(&dev)?;
 
-    // Create a new varmap for a trainable parameters
+    // Create a mutable VarMap for trainable parameters
     let mut varmap = VarMap::new();
     let vs = VarBuilder::from_varmap(&varmap, DType::F32, &dev);
     let model = Model::new(vs.clone())?;
 
-    // Load weights from this file and overwrite weights in our varmap.
+    // Load pre-trained weights from file
     varmap.load("model_weights.safetensors")?;
 
     let learning_rate = 0.05;
     let epochs = 10;
 
-    // Crease a stochastic gradient descent object, this is what will update our parameters.
+    // Initialize stochastic gradient descent optimizer
     let mut sgd = candle_nn::SGD::new(varmap.all_vars(), learning_rate)?;
     let test_images = m.test_images.to_device(&dev)?;
     let test_labels = m.test_labels.to_dtype(DType::U32)?.to_device(&dev)?;
+    
     for epoch in 1..epochs {
-        // Standard mnsit forward pass
+        // Standard MNIST forward pass
         let logits = model.forward(&train_images)?;
         let log_sm = ops::log_softmax(&logits, D::Minus1)?;
         
-        // compute Negitive Log Likelyhood loss
+        // Compute Negative Log Likelihood loss
         let loss = loss::nll(&log_sm, &train_labels)?;
 
-        // Do backward pass and update weights
+        // Perform backward pass and update weights
         sgd.backward_step(&loss)?;
 
-        // evaluate model on test set
+        // Evaluate model on test set
         let test_logits = model.forward(&test_images)?;
         let sum_ok = test_logits
             .argmax(D::Minus1)?
@@ -132,11 +131,11 @@ fn training_loop(
         println!(
             "{epoch:4} train loss: {:8.5} test acc: {:5.2}%",
             loss.to_scalar::<f32>()?,
-            1.   * test_accuracy
+            test_accuracy
         );
     }
     
-    // Save the weights to this file
+    // Save updated weights back to disk
     varmap.save("model_weights.safetensors")?;
     Ok(())
 }
@@ -156,7 +155,4 @@ $ cargo run --release
 > 9 train loss:  1.75989 test acc:  0.61%
 ```
 
-Of course this function will fail if the file doesn't exist or 
-is malformed for the current model, 
-so adding a check to see if the file exists could be beneficial.
-
+Note that loading the weights will fail if the specified file does not exist or is incompatible with the current model architecture. Implementing file existence checks and appropriate error handling is left to the user.
