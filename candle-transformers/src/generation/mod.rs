@@ -52,8 +52,7 @@ impl LogitsProcessor {
     }
 
     fn sample_gumbel_softmax(&mut self, logits: &Tensor, temperature: f64) -> Result<u32> {
-        let minus_g = logits.rand_like(1e-7, 0.999)?.log()?.neg()?.log()?;
-        let sampled = (logits + minus_g * (-temperature))?.argmax(0)?;
+        let sampled = candle_nn::sampling::gumbel_softmax(logits, temperature, candle::D::Minus1)?;
         sampled.to_vec0::<u32>()
     }
 
