@@ -5,7 +5,10 @@
 # User Guide
 
 - [Installation](guide/installation.md)
-- [Hello World - MNIST](guide/hello_world.md)
+- [Hello World - MNIST](guide/mnist/intro.md)
+  - [Modeling](guide/mnist/modeling.md)
+  - [Training](guide/mnist/training.md)
+  - [Saving And Loading](guide/mnist/saving_loading.md)
 - [PyTorch cheatsheet](guide/cheatsheet.md)
 
 # Reference Guide
