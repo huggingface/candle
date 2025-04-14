@@ -1958,7 +1958,7 @@ fn simple_eval_(
                     Some(n) => n?,
                     None => {
                         b_default = Tensor::zeros(
-                            (1, 2 * x.shape()[1] as usize),
+                            (1, 2 * x.shape().dims()[1] as usize),
                             DType::F32,
                             x.device(),
                         )?;
@@ -1970,12 +1970,12 @@ fn simple_eval_(
                     Some(n) => n?,
                     None => {
                         seq_lens_default =
-                            Tensor::full(x.shape()[0] as i64, (x.shape()[1],), x.device())?;
+                            Tensor::full(x.shape().dims()[0] as i64, (x.shape().dims()[1],), x.device())?;
                         &seq_lens_default
                     }
                 };
                 let seq_lens_is_default =
-                    (seq_lens.to_vec1::<i64>()?.iter()).all(|e| *e as usize == x.shape()[0]);
+                    (seq_lens.to_vec1::<i64>()?.iter()).all(|e| *e as usize == x.shape().dims()[0]);
             }
             // https://onnx.ai/onnx/operators/onnx__Xor.html
             "Xor" => {
