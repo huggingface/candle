@@ -44,7 +44,7 @@ criterion = { workspace = true }
 [features]
 default = []
 _cuda = ["dep:cudarc", "dep:candle-kernels", "dep:ug-cuda"]
-# cuda = ["_cuda", "cudarc?/cuda-version-from-build-system", "cudarc?/dynamic-linking"]
+cuda = ["_cuda"]
 cudnn = ["_cuda", "cudarc?/cudnn"]
 _mkl = ["dep:libc", "dep:intel-mkl-src"]
 mkl = ["_mkl", "intel-mkl-src?/mkl-static-lp64-iomp"] 
