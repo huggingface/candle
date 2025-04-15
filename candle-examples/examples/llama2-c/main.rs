@@ -184,6 +184,10 @@ fn run_eval(args: &EvaluationCmd, common_args: &Args) -> Result<()> {
     let tokenizer = common_args.tokenizer()?;
 
     let device = candle_examples::device(common_args.cpu)?;
+    #[cfg(feature = "cuda")]
+    if let candle::Device::Cuda(d) = &device {
+        unsafe { d.disable_event_tracking() }
+    };
     let mut file = std::fs::File::open(config_path)?;
     let config = Config::from_reader(&mut file)?;
     let weights = TransformerWeights::from_reader(&mut file, &config, &device)?;
