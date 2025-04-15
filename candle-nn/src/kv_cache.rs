@@ -294,6 +294,27 @@ impl RotatingCache {
         Tensor::from_slice(&mask, (size1, size2), device)
     }
 
+    /// Returns the positions corresponding to all the elements that will be retured
+    /// *after* adding `seq_len` to the cache.
+    pub fn positions(&self, seq_len: usize) -> Vec<usize> {
+        if seq_len <= self.max_seq_len {
+            let upd_offset = (self.offset + seq_len) % self.max_seq_len;
+            let cache_out_len = (self.current_seq_len + seq_len).min(self.max_seq_len);
+            (0..cache_out_len)
+                .map(|i| {
+                    let pos_cache = self.current_seq_len + seq_len + i - upd_offset;
+                    if i < upd_offset {
+                        pos_cache
+                    } else {
+                        pos_cache - self.max_seq_len
+                    }
+                })
+                .collect()
+        } else {
+            (self.current_seq_len..(self.current_seq_len + seq_len)).collect()
+        }
+    }
+
     /// Returns the attn_mask to be applied *after* adding `seq_len` to the cache.
     pub fn attn_mask(&self, seq_len: usize, device: &Device) -> Result<Option<Tensor>> {
         let mask = if seq_len == 1 {
@@ -362,8 +383,15 @@ impl RotatingKvCache {
         self.k.current_seq_len()
     }
 
+    /// Returns the attn_mask to be applied *after* adding `seq_len` to the cache.
     pub fn attn_mask(&self, seq_len: usize, device: &Device) -> Result<Option<Tensor>> {
         self.k.attn_mask(seq_len, device)
+    }
+
+    /// Returns the positions corresponding to all the elements that will be retured
+    /// *after* adding `seq_len` to the cache.
+    pub fn positions(&self, seq_len: usize) -> Vec<usize> {
+        self.k.positions(seq_len)
     }
 
     pub fn reset(&mut self) {
