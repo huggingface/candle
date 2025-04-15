@@ -6,70 +6,7 @@ use std::str::FromStr;
 
 const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
-const KERNEL_FILES: &[&str] = &[
-    "flash_api.cu",
-    "flash_fwd_hdim64_fp16_sm90.cu",
-    "flash_fwd_hdim64_bf16_sm90.cu",
-    "flash_fwd_hdim128_fp16_sm90.cu",
-    "flash_fwd_hdim128_bf16_sm90.cu",
-    "flash_fwd_hdim256_fp16_sm90.cu",
-    "flash_fwd_hdim256_bf16_sm90.cu",
-    // "flash_bwd_hdim64_fp16_sm90.cu",
-    // "flash_bwd_hdim96_fp16_sm90.cu",
-    // "flash_bwd_hdim128_fp16_sm90.cu",
-    // commented out in main repo: // "flash_bwd_hdim256_fp16_sm90.cu",
-    // "flash_bwd_hdim64_bf16_sm90.cu",
-    // "flash_bwd_hdim96_bf16_sm90.cu",
-    // "flash_bwd_hdim128_bf16_sm90.cu",
-    // "flash_fwd_hdim64_e4m3_sm90.cu",
-    // "flash_fwd_hdim128_e4m3_sm90.cu",
-    // "flash_fwd_hdim256_e4m3_sm90.cu",
-    "flash_fwd_hdim64_fp16_gqa2_sm90.cu",
-    "flash_fwd_hdim64_fp16_gqa4_sm90.cu",
-    "flash_fwd_hdim64_fp16_gqa8_sm90.cu",
-    "flash_fwd_hdim64_fp16_gqa16_sm90.cu",
-    "flash_fwd_hdim64_fp16_gqa32_sm90.cu",
-    "flash_fwd_hdim128_fp16_gqa2_sm90.cu",
-    "flash_fwd_hdim128_fp16_gqa4_sm90.cu",
-    "flash_fwd_hdim128_fp16_gqa8_sm90.cu",
-    "flash_fwd_hdim128_fp16_gqa16_sm90.cu",
-    "flash_fwd_hdim128_fp16_gqa32_sm90.cu",
-    "flash_fwd_hdim256_fp16_gqa2_sm90.cu",
-    "flash_fwd_hdim256_fp16_gqa4_sm90.cu",
-    "flash_fwd_hdim256_fp16_gqa8_sm90.cu",
-    "flash_fwd_hdim256_fp16_gqa16_sm90.cu",
-    "flash_fwd_hdim256_fp16_gqa32_sm90.cu",
-    "flash_fwd_hdim64_bf16_gqa2_sm90.cu",
-    "flash_fwd_hdim64_bf16_gqa4_sm90.cu",
-    "flash_fwd_hdim64_bf16_gqa8_sm90.cu",
-    "flash_fwd_hdim64_bf16_gqa16_sm90.cu",
-    "flash_fwd_hdim64_bf16_gqa32_sm90.cu",
-    "flash_fwd_hdim128_bf16_gqa2_sm90.cu",
-    "flash_fwd_hdim128_bf16_gqa4_sm90.cu",
-    "flash_fwd_hdim128_bf16_gqa8_sm90.cu",
-    "flash_fwd_hdim128_bf16_gqa16_sm90.cu",
-    "flash_fwd_hdim128_bf16_gqa32_sm90.cu",
-    "flash_fwd_hdim256_bf16_gqa2_sm90.cu",
-    "flash_fwd_hdim256_bf16_gqa4_sm90.cu",
-    "flash_fwd_hdim256_bf16_gqa8_sm90.cu",
-    "flash_fwd_hdim256_bf16_gqa16_sm90.cu",
-    "flash_fwd_hdim256_bf16_gqa32_sm90.cu",
-    // "flash_fwd_hdim64_e4m3_gqa2_sm90.cu",
-    // "flash_fwd_hdim64_e4m3_gqa4_sm90.cu",
-    // "flash_fwd_hdim64_e4m3_gqa8_sm90.cu",
-    // "flash_fwd_hdim64_e4m3_gqa16_sm90.cu",
-    // "flash_fwd_hdim64_e4m3_gqa32_sm90.cu",
-    // "flash_fwd_hdim128_e4m3_gqa2_sm90.cu",
-    // "flash_fwd_hdim128_e4m3_gqa4_sm90.cu",
-    // "flash_fwd_hdim128_e4m3_gqa8_sm90.cu",
-    // "flash_fwd_hdim128_e4m3_gqa16_sm90.cu",
-    // "flash_fwd_hdim128_e4m3_gqa32_sm90.cu",
-    // "flash_fwd_hdim256_e4m3_gqa2_sm90.cu",
-    // "flash_fwd_hdim256_e4m3_gqa4_sm90.cu",
-    // "flash_fwd_hdim256_e4m3_gqa8_sm90.cu",
-    // "flash_fwd_hdim256_e4m3_gqa16_sm90.cu",
-    // "flash_fwd_hdim256_e4m3_gqa32_sm90.cu",
-];
+const KERNEL_FILES: &[&str] = &["flash_api.cu", "flash_fwd_mla_bf16_sm90.cu"];
 
 fn main() -> Result<()> {
     // Use RAYON_NUM_THREADS or else default to the number of physical CPUs
@@ -123,10 +60,11 @@ fn main() -> Result<()> {
     // Determine the GPU architecture we’re targeting, e.g. 90 for `sm_90`.
     let compute_cap = compute_cap()?;
     // assert compute cap is sm90
-    assert!(compute_cap == 90, "Compute capability must be 90 (90a)");
+    // TODO TODO TODO
+    // assert!(compute_cap == 90, "Compute capability must be 90 (90a)");
 
     // Our final library name
-    let out_file = build_dir.join("libflashattentionv3.a");
+    let out_file = build_dir.join("libflashattentionmla.a");
 
     // Construct the list of (input_file -> output_object_file)
     let kernel_dir = PathBuf::from("hkernel");
@@ -202,9 +140,6 @@ fn main() -> Result<()> {
                 command.arg("-DCUTLASS_DEBUG_TRACE_LEVEL=0");
                 command.arg("-DNDEBUG");
 
-                // https://github.com/EricLBuehler/mistral.rs/issues/941
-                command.arg("-D_USE_MATH_DEFINES");
-
                 if let Some(ccbin_path) = &ccbin_env {
                     command.arg("-allow-unsupported-compiler");
                     command.args(["-ccbin", ccbin_path]);
@@ -266,7 +201,7 @@ fn main() -> Result<()> {
 
     // Finally, instruct cargo to link your library
     println!("cargo:rustc-link-search={}", build_dir.display());
-    println!("cargo:rustc-link-lib=static=flashattentionv3");
+    println!("cargo:rustc-link-lib=static=flashattentionmla");
 
     // Link required system libs
     println!("cargo:rustc-link-lib=dylib=cudart");

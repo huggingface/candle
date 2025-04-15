@@ -95,6 +95,8 @@ fn main() -> Result<()> {
             builder = builder.arg("-D_USE_MATH_DEFINES");
         }
     }
+    // https://github.com/EricLBuehler/mistral.rs/issues/941
+    builder = builder.arg("-D_USE_MATH_DEFINES");
 
     // https://github.com/EricLBuehler/mistral.rs/issues/286
     // https://github.com/huggingface/candle-flash-attn-v1/pull/2

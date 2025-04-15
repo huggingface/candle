@@ -1,0 +1,24 @@
+[package]
+name = "candle-flash-mla"
+version = "0.8.0"
+edition = "2021"
+
+description = "Flash MLA layer for the candle ML framework."
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+
+[dependencies]
+candle = { path = "../candle-core", features = ["cuda"], package = "candle-core", version = "0.8.0" }
+half = { version = "2.3.1", features = ["num-traits"] }
+
+[build-dependencies]
+anyhow = { version = "1", features = ["backtrace"] }
+num_cpus = "1.15.0"
+rayon = "1.7.0"
+
+[dev-dependencies]
+anyhow = { version = "1", features = ["backtrace"] }
+candle-nn = { path = "../candle-nn", features = ["cuda"] }
+rstest = "0.23"

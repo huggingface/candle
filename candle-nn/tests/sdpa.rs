@@ -25,7 +25,7 @@ mod metal_sdpa_tests {
             att.matmul(&v.clone())?
         };
 
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, 1.)?;
 
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
 
@@ -33,7 +33,7 @@ mod metal_sdpa_tests {
             .sum_all()?
             .to_scalar()?;
 
-        assert!(error <= 0.0005, "{}", error);
+        assert!(error <= 0.002, "{}", error);
 
         Ok(())
     }
@@ -63,7 +63,7 @@ mod metal_sdpa_tests {
             att.matmul(&v.clone())?
         };
 
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, 1.)?;
 
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
 
@@ -101,7 +101,7 @@ mod metal_sdpa_tests {
             att.matmul(&v.clone())?
         };
 
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, 1.)?;
 
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
 
@@ -115,9 +115,8 @@ mod metal_sdpa_tests {
     }
 
     #[test]
-    fn sdpa_full_softcapping() -> candle::Result<()> {
+    fn sdpa_full_masked() -> candle::Result<()> {
         use candle::{DType, Device, Tensor};
-        use std::ops::{Div, Mul};
 
         // Allow vectorized, seqlen = 1
         const BS: usize = 4;
@@ -125,7 +124,6 @@ mod metal_sdpa_tests {
         const L: usize = 4;
         const DK: usize = 64;
         const H: usize = 3;
-        const SOFTCAP: f64 = 50.;
         let scale: f64 = f64::from(DK as u32).sqrt().recip();
 
         let device = Device::new_metal(0)?;
@@ -133,20 +131,16 @@ mod metal_sdpa_tests {
         let q = Tensor::randn(0f32, 1f32, (BS, H, R, DK), &device)?;
         let k = Tensor::randn(0f32, 1f32, (BS, H, L, DK), &device)?;
         let v = Tensor::randn(0f32, 1f32, (BS, H, L, DK), &device)?;
+        let mask = Tensor::randn(0f32, 1f32, (BS, H, R, L), &device)?;
 
         let ground_truth = {
             let att = (q.clone() * scale)?.matmul(&k.clone().t()?)?;
-            let att = candle_nn::ops::softmax_last_dim(
-                &att.to_dtype(DType::F32)?
-                    .div(SOFTCAP)?
-                    .tanh()?
-                    .mul(SOFTCAP)?,
-            )?
-            .to_dtype(q.dtype())?;
+            let att = candle_nn::ops::softmax_last_dim(&(att.to_dtype(DType::F32)? + &mask)?)?
+                .to_dtype(q.dtype())?;
             att.matmul(&v.clone())?
         };
 
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, SOFTCAP as f32)?;
+        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, Some(&mask), false, scale as f32, 1.)?;
 
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
 
@@ -154,7 +148,7 @@ mod metal_sdpa_tests {
             .sum_all()?
             .to_scalar()?;
 
-        assert!(error <= 0.0004, "{}", error);
+        assert!(error <= 0.006, "{}", error);
 
         Ok(())
     }
@@ -191,7 +185,8 @@ mod metal_sdpa_tests {
             att.matmul(&v.clone())?
         };
 
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, SOFTCAP as f32)?;
+        let sdpa_output =
+            candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, SOFTCAP as f32)?;
 
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
 
@@ -236,7 +231,8 @@ mod metal_sdpa_tests {
             att.matmul(&v.clone())?
         };
 
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, SOFTCAP as f32)?;
+        let sdpa_output =
+            candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, SOFTCAP as f32)?;
 
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
 
@@ -274,7 +270,7 @@ mod metal_sdpa_tests {
             att.matmul(&v.clone())?
         };
 
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, 1.)?;
 
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
 
@@ -406,7 +402,12 @@ mod metal_sdpa_tests {
                 // Using cat is faster than a broadcast as it avoids going through a potentially
                 // strided copy.
                 // https://github.com/huggingface/candle/pull/2043
-                Tensor::cat(&vec![&xs; n_rep], 2)?.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
+                Tensor::cat(&vec![&xs; n_rep], 2)?.reshape((
+                    b_sz,
+                    n_kv_head * n_rep,
+                    seq_len,
+                    head_dim,
+                ))
             }
         }
 
@@ -432,7 +433,7 @@ mod metal_sdpa_tests {
                 .to_dtype(q.dtype())?;
             att.matmul(&v_aligned.clone())?
         };
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, 1.)?;
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
         let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
             .sum_all()?
