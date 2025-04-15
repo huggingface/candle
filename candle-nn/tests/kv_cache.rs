@@ -39,9 +39,16 @@ fn rotating_kv_cache() -> Result<()> {
         assert_eq!(cache.current_seq_len(), 0);
         let data = cache.current_data()?;
         assert!(data.is_none());
+        assert_eq!(cache.positions(1), &[0]);
+        assert_eq!(cache.positions(2), &[0, 1]);
         let t = Tensor::new(&[1., 2., 3.], &Device::Cpu)?;
         let data = cache.append(&t)?;
         assert_eq!(data.to_vec1::<f64>()?, [1., 2., 3.]);
+        assert_eq!(cache.positions(0), &[0, 1, 2]);
+        assert_eq!(cache.positions(1), &[0, 1, 2, 3]);
+        assert_eq!(cache.positions(2), &[0, 1, 2, 3, 4]);
+        assert_eq!(cache.positions(3), &[0, 1, 2, 3, 4, 5]);
+        assert_eq!(cache.positions(4), &[6, 1, 2, 3, 4, 5]);
         let t = Tensor::new(&[4.], &Device::Cpu)?;
         let data = cache.append(&t)?;
         assert_eq!(data.to_vec1::<f64>()?, [1., 2., 3., 4.]);
