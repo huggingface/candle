@@ -158,6 +158,10 @@ impl CudaDevice {
         self.context.disable_event_tracking()
     }
 
+    pub fn is_event_tracking(&self) -> bool {
+        self.context.is_event_tracking()
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub fn compile(
         &self,
