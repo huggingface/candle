@@ -79,11 +79,17 @@ fn rotating_kv_cache() -> Result<()> {
             mask.to_vec2::<u8>()?,
             &[[0, 0, 1, 1, 0, 0], [0, 0, 0, 1, 0, 0], [0, 0, 0, 0, 0, 0]],
         );
+        assert_eq!(cache.positions(0), &[12, 7, 8, 9, 10, 11]);
+        assert_eq!(cache.positions(2), &[12, 13, 14, 9, 10, 11]);
+        assert_eq!(cache.positions(3), &[12, 13, 14, 15, 10, 11]);
+        assert_eq!(cache.positions(8), &[13, 14, 15, 16, 17, 18, 19, 20]);
         let t = Tensor::new(&[0., 1., 2., 3., 4., 5., 6., 7., 8.], &Device::Cpu)?;
         let data = cache.append(&t)?;
         assert_eq!(data.to_vec1::<f64>()?, [0., 1., 2., 3., 4., 5., 6., 7., 8.]);
         assert_eq!(cache.current_seq_len(), 22);
         assert_eq!(cache.offset(), 0);
+        assert_eq!(cache.positions(0), &[16, 17, 18, 19, 20, 21]);
+        assert_eq!(cache.positions(1), &[22, 17, 18, 19, 20, 21]);
 
         let mask = cache.attn_mask(1, &Device::Cpu)?;
         assert!(mask.is_none());
