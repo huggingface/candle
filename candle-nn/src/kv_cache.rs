@@ -383,8 +383,15 @@ impl RotatingKvCache {
         self.k.current_seq_len()
     }
 
+    /// Returns the attn_mask to be applied *after* adding `seq_len` to the cache.
     pub fn attn_mask(&self, seq_len: usize, device: &Device) -> Result<Option<Tensor>> {
         self.k.attn_mask(seq_len, device)
+    }
+
+    /// Returns the positions corresponding to all the elements that will be retured
+    /// *after* adding `seq_len` to the cache.
+    pub fn positions(&self, seq_len: usize) -> Vec<usize> {
+        self.k.positions(seq_len)
     }
 
     pub fn reset(&mut self) {
