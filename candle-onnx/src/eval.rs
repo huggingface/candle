@@ -552,24 +552,20 @@ fn simple_eval_(
             "LayerNormalization" => {
                 let xs = get(&node.input[0])?;
                 let weight = get(&node.input[1])?;
-                let bias = get(&node.input[2])?;
-                let axis = match get_attr_opt::<[i64]>(node, "axis")? {
-                    None => xs.rank() - 1,
-                    Some(axis) => {
-                        if axis.len() != 1 {
-                            bail!("only single axis is supported for LayerNormalization")
-                        }
-                        let axis = axis[0];
-                        if axis < 0 {
-                            xs.rank() + axis.as_usize()
-                        } else {
-                            axis.as_usize()
-                        }
-                    }
+                let bias = if node.input.len() > 2 {
+                    get(&node.input[2])?
+                } else {
+                    &Tensor::zeros_like(&weight)?
                 };
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(-1);
+                let axis = xs.normalize_axis(axis)?;
                 let eps = get_attr_opt::<f32>(node, "epsilon")?
                     .copied()
                     .unwrap_or(1e-5);
+                let stash_type = get_attr_opt::<i64>(node, "stash_type")?;
+                if stash_type.copied().unwrap_or(0) != 1 {
+                    bail!("stash_type != 1 is not implemented")
+                };
 
                 // Parameter used to convert N-D tensor layer normalization
                 // to equivalent 2-D matrix operations.
