@@ -591,6 +591,7 @@ fn simple_eval_(
                 let weight = weight.reshape((1, col_number))?;
                 let bias = bias.reshape((1, col_number))?;
                 let xs = xs.broadcast_mul(&weight)?.broadcast_add(&bias)?;
+                values.insert(node.output[0].clone(), xs);
             }
             "Squeeze" => {
                 let xs = get(&node.input[0])?;
