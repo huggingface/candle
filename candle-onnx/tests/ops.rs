@@ -1,4 +1,3 @@
-use anyhow::Ok;
 use candle::test_utils::to_vec2_round;
 use candle::{DType, Device, NdArray, Result, Tensor};
 use candle_onnx::onnx::attribute_proto::AttributeType;
@@ -8,7 +7,6 @@ use candle_onnx::onnx::{type_proto, TensorProto, TensorShapeProto, TypeProto};
 use candle_onnx::onnx::{AttributeProto, GraphProto, ModelProto, NodeProto, ValueInfoProto};
 use candle_onnx::simple_eval;
 use std::collections::HashMap;
-use std::fmt::Result;
 
 const INPUT_X: &str = "x";
 const INPUT_Y: &str = "y";
