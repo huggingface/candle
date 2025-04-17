@@ -231,7 +231,7 @@ impl ModelWeights {
         let block_count = md_get("gemma3.block_count")?.to_u32()? as usize;
         let embedding_length = md_get("gemma3.embedding_length")?.to_u32()? as usize;
         let key_length = md_get("gemma3.attention.key_length")?.to_u32()? as usize;
-        let value_length = md_get("gemma3.attention.value_length")?.to_u32()? as usize;
+        let _value_length = md_get("gemma3.attention.value_length")?.to_u32()? as usize;
         let rms_norm_eps = md_get("gemma3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
 
         let rope_freq_base = md_get("gemma3.rope.freq_base")
@@ -324,8 +324,8 @@ impl ModelWeights {
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
-                attention_q_norm: attention_q_norm,
-                attention_k_norm: attention_k_norm,
+                attention_q_norm,
+                attention_k_norm,
                 attention_norm,
                 post_attention_norm,
                 ffn_norm,
@@ -386,7 +386,7 @@ impl ModelWeights {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         layer_in = (layer_in * (self.embedding_length as f64).sqrt())?;
 
-        for (i, layer) in self.layers.iter_mut().enumerate() {
+        for layer in self.layers.iter_mut() {
             // Attention block
             let residual = &layer_in;
             let x = layer.attention_norm.forward(&layer_in)?;

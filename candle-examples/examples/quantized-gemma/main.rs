@@ -8,8 +8,8 @@ use clap::{Parser, ValueEnum};
 use std::io::Write;
 use tokenizers::Tokenizer;
 
+use candle::quantized::gguf_file;
 use candle::Tensor;
-use candle::{quantized::gguf_file, IndexOp};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -20,7 +20,7 @@ const DEFAULT_PROMPT: &str = "Write a function to calculate fibonacci num";
 #[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
 enum Which {
     #[value(name = "gemma3-4b-it")]
-    Gemma3_4B_IT,
+    Gemma3_4bIt,
 }
 
 #[derive(Parser, Debug)]
@@ -108,7 +108,7 @@ impl Args {
             Some(config) => std::path::PathBuf::from(config),
             None => {
                 let (repo, filename) = match self.which {
-                    Which::Gemma3_4B_IT => (
+                    Which::Gemma3_4bIt => (
                         "google/gemma-3-4b-it-qat-q4_0-gguf",
                         "gemma-3-4b-it-q4_0.gguf",
                     ),
@@ -209,11 +209,10 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut pre_prompt_tokens = vec![];
-    for prompt_index in 0.. {
+    for _ in 0.. {
         let prompt_str = match &prompt {
             Prompt::One(prompt) => prompt.clone(),
             Prompt::Interactive | Prompt::Chat => {
-                let is_interactive = matches!(prompt, Prompt::Interactive);
                 print!("> ");
                 std::io::stdout().flush()?;
                 let mut prompt = String::new();
