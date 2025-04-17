@@ -8,8 +8,8 @@ use clap::{Parser, ValueEnum};
 use std::io::Write;
 use tokenizers::Tokenizer;
 
-use candle::{quantized::gguf_file, IndexOp};
 use candle::Tensor;
+use candle::{quantized::gguf_file, IndexOp};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -99,7 +99,7 @@ impl Args {
         };
         println!("DEBUG: Loading tokenizer from {:?}", tokenizer_path);
         let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)?;
-                 
+
         Ok(tokenizer)
     }
 
@@ -194,9 +194,12 @@ fn main() -> anyhow::Result<()> {
     println!("model built");
 
     let tokenizer = args.tokenizer()?;
-    
+
     let mut tos = TokenOutputStream::new(tokenizer);
-    println!("DEBUG: Tokenizer vocabulary size: {}", tos.tokenizer().get_vocab(true).len());
+    println!(
+        "DEBUG: Tokenizer vocabulary size: {}",
+        tos.tokenizer().get_vocab(true).len()
+    );
 
     let prompt = match args.prompt.as_deref() {
         Some("chat") => Prompt::Chat,
@@ -226,7 +229,7 @@ fn main() -> anyhow::Result<()> {
             }
         };
         print!("{}", &prompt_str);
-        
+
         let tokens = tos
             .tokenizer()
             .encode(prompt_str, true)
@@ -282,8 +285,12 @@ fn main() -> anyhow::Result<()> {
         }
 
         // For Gemma 3, use the correct end of sequence token
-        let eos_token = *tos.tokenizer().get_vocab(true).get("<end_of_turn>").unwrap();
-        
+        let eos_token = *tos
+            .tokenizer()
+            .get_vocab(true)
+            .get("<end_of_turn>")
+            .unwrap();
+
         let start_post_prompt = std::time::Instant::now();
         let mut sampled = 0;
         for index in 0..to_sample {
@@ -331,7 +338,7 @@ fn main() -> anyhow::Result<()> {
 
         match prompt {
             Prompt::One(_) => break,
-            Prompt::Interactive => {},
+            Prompt::Interactive => {}
             Prompt::Chat => {
                 pre_prompt_tokens = [prompt_tokens.as_slice(), all_tokens.as_slice()].concat()
             }

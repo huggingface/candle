@@ -17,8 +17,8 @@
 use std::collections::HashMap;
 
 use crate::quantized_nn::RmsNorm;
+use candle::quantized::gguf_file;
 use candle::quantized::QTensor;
-use candle::quantized::{ggml_file, gguf_file};
 use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, Module};
 
@@ -71,30 +71,30 @@ pub struct LayerWeights {
     // Specialized normalization for Q and K
     attention_q_norm: RmsNorm,
     attention_k_norm: RmsNorm,
-    
+
     // Layer normalization
-    attention_norm: RmsNorm,        // Applied before attention
-    post_attention_norm: RmsNorm,   // Applied after attention
-    ffn_norm: RmsNorm,              // Applied before feedforward
-    post_ffn_norm: RmsNorm,         // Applied after feedforward
-    
+    attention_norm: RmsNorm,      // Applied before attention
+    post_attention_norm: RmsNorm, // Applied after attention
+    ffn_norm: RmsNorm,            // Applied before feedforward
+    post_ffn_norm: RmsNorm,       // Applied after feedforward
+
     // Feed-forward network
     mlp: Mlp,
-    
+
     // Attention parameters
-    n_head: usize,       // Number of query heads
-    n_kv_head: usize,    // Number of key-value heads
-    head_dim: usize,     // Dimension of each head
-    q_dim: usize,        // Total dimension for queries
-    
+    n_head: usize,    // Number of query heads
+    n_kv_head: usize, // Number of key-value heads
+    head_dim: usize,  // Dimension of each head
+    q_dim: usize,     // Total dimension for queries
+
     // Rotary embedding
     cos: Tensor,
     sin: Tensor,
     neg_inf: Tensor,
-    
+
     // Cache
     pub kv_cache: Option<(Tensor, Tensor)>,
-    
+
     // Tracing
     span_attn: tracing::Span,
     span_rot: tracing::Span,
@@ -130,12 +130,15 @@ impl LayerWeights {
         let k = self.attention_wk.forward(x)?;
         let v = self.attention_wv.forward(x)?;
 
-        let q = q.reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-                 .transpose(1, 2)?;
-        let k = k.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                 .transpose(1, 2)?;
-        let v = v.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                 .transpose(1, 2)?;
+        let q = q
+            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+            .transpose(1, 2)?;
+        let k = k
+            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+            .transpose(1, 2)?;
+        let v = v
+            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+            .transpose(1, 2)?;
 
         let q = self.attention_q_norm.forward(&q.contiguous()?)?;
         let k = self.attention_k_norm.forward(&k.contiguous()?)?;
@@ -149,7 +152,7 @@ impl LayerWeights {
                 if index_pos == 0 {
                     (k, v)
                 } else {
-                    let k = Tensor::cat(&[k_cache, &k], 2)?;  // concat on seq dim
+                    let k = Tensor::cat(&[k_cache, &k], 2)?; // concat on seq dim
                     let v = Tensor::cat(&[v_cache, &v], 2)?;
                     (k, v)
                 }
@@ -161,7 +164,7 @@ impl LayerWeights {
         let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = crate::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-        // Scaled Dot-Product Attention 
+        // Scaled Dot-Product Attention
         let scale = 1.0 / (self.head_dim as f64).sqrt();
         let mut attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
 
@@ -176,7 +179,7 @@ impl LayerWeights {
         let attn_output = attn_output
             .transpose(1, 2)?
             .reshape((b_sz, seq_len, self.q_dim))?;
-        
+
         self.attention_wo.forward(&attn_output)
     }
 }
@@ -223,7 +226,6 @@ impl ModelWeights {
             Some(v) => Ok(v),
         };
 
-        // Parameter extraction from metadata
         let head_count = md_get("gemma3.attention.head_count")?.to_u32()? as usize;
         let head_count_kv = md_get("gemma3.attention.head_count_kv")?.to_u32()? as usize;
         let block_count = md_get("gemma3.block_count")?.to_u32()? as usize;
@@ -231,11 +233,11 @@ impl ModelWeights {
         let key_length = md_get("gemma3.attention.key_length")?.to_u32()? as usize;
         let value_length = md_get("gemma3.attention.value_length")?.to_u32()? as usize;
         let rms_norm_eps = md_get("gemma3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
-        
+
         let rope_freq_base = md_get("gemma3.rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(1000000f32);
-        
+
         // Compute the dimensions for queries, keys, and values
         // These are the total dimensions when projected across all heads
         let q_dim = head_count * key_length;
@@ -256,64 +258,67 @@ impl ModelWeights {
             Err(_) => ct.tensor(reader, "token_embd.weight", device)?, // Use tied weights if output.weight doesn't exist
         };
 
-        // Build the layers
         let mut layers = Vec::with_capacity(block_count);
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
-            
-            // Load attention weights
+
             let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
             let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
             let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"), device)?;
-            let attention_wo = ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
-            
-            // Load normalization weights
+            let attention_wo =
+                ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
+
             let attention_q_norm = RmsNorm::from_qtensor(
                 ct.tensor(reader, &format!("{prefix}.attn_q_norm.weight"), device)?,
                 rms_norm_eps,
             )?;
-            
+
             let attention_k_norm = RmsNorm::from_qtensor(
                 ct.tensor(reader, &format!("{prefix}.attn_k_norm.weight"), device)?,
                 rms_norm_eps,
             )?;
-            
+
             let attention_norm = RmsNorm::from_qtensor(
                 ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
                 rms_norm_eps,
             )?;
-            
+
             let post_attention_norm = RmsNorm::from_qtensor(
-                ct.tensor(reader, &format!("{prefix}.post_attention_norm.weight"), device)?,
+                ct.tensor(
+                    reader,
+                    &format!("{prefix}.post_attention_norm.weight"),
+                    device,
+                )?,
                 rms_norm_eps,
             )?;
-            
+
             let ffn_norm = RmsNorm::from_qtensor(
                 ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?,
                 rms_norm_eps,
             )?;
-            
+
             let post_ffn_norm = RmsNorm::from_qtensor(
                 ct.tensor(reader, &format!("{prefix}.post_ffw_norm.weight"), device)?,
                 rms_norm_eps,
             )?;
-            
-            // Load feedforward network weights
-            let feed_forward_gate = ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"), device)?;
+
+            let feed_forward_gate =
+                ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"), device)?;
             let feed_forward_up = ct.tensor(reader, &format!("{prefix}.ffn_up.weight"), device)?;
-            let feed_forward_down = ct.tensor(reader, &format!("{prefix}.ffn_down.weight"), device)?;
-            
+            let feed_forward_down =
+                ct.tensor(reader, &format!("{prefix}.ffn_down.weight"), device)?;
+
             let mlp = Mlp {
                 feed_forward_gate: QMatMul::from_qtensor(feed_forward_gate)?,
                 feed_forward_up: QMatMul::from_qtensor(feed_forward_up)?,
                 feed_forward_down: QMatMul::from_qtensor(feed_forward_down)?,
             };
-            
+
             // Tracing spans
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
             let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
             let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
-            
+
             layers.push(LayerWeights {
                 attention_wq: QMatMul::from_qtensor(attention_wq)?,
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
@@ -339,10 +344,10 @@ impl ModelWeights {
                 span_mlp,
             })
         }
-        
+
         let span = tracing::span!(tracing::Level::TRACE, "model");
         let span_output = tracing::span!(tracing::Level::TRACE, "output");
-        
+
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
             embedding_length,
@@ -377,29 +382,28 @@ impl ModelWeights {
             Some(self.mask(seq_len, x.device())?)
         };
         let _enter = self.span.enter();
-        
+
         let mut layer_in = self.tok_embeddings.forward(x)?;
         layer_in = (layer_in * (self.embedding_length as f64).sqrt())?;
-        
+
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            
             // Attention block
             let residual = &layer_in;
             let x = layer.attention_norm.forward(&layer_in)?;
             let x = layer.forward_attn(&x, mask.as_ref(), index_pos)?;
             let x = layer.post_attention_norm.forward(&x)?;
             let x = (x + residual)?;
-            
+
             // Feed-forward block
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
             let x = layer.mlp.forward(&x)?;
             let x = layer.post_ffn_norm.forward(&x)?;
             let x = (x + residual)?;
-            
+
             layer_in = x;
         }
-        
+
         let _enter = self.span_output.enter();
 
         let x = layer_in.i((.., seq_len - 1, ..))?;
