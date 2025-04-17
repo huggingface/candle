@@ -14,7 +14,7 @@ pub struct Config {
     pub attention_bias: bool,
     pub num_key_value_heads: usize,
     pub max_position_embeddings: usize,
-    pub sliding_window: Option<usize>, // ⬅️ Option 으로 수정
+    pub sliding_window: Option<usize>,
     pub max_window_layers: usize,
     pub tie_word_embeddings: bool,
     pub rope_theta: f64,
@@ -79,8 +79,7 @@ impl Qwen3RmsNorm {
         let rms = (var + self.eps)?.powf(-0.5)?;
         let xs = xs.broadcast_mul(&rms)?;
         let ws = self.weight.reshape((1, -1))?;
-        let out = xs * &ws;
-        out?.to_dtype(orig_dtype)
+        Ok((xs * &ws)?.to_dtype(orig_dtype))
     }
 }
 
@@ -104,8 +103,7 @@ impl Qwen3HeadRmsNorm {
         let rms = var.add(self.eps)?.powf(-0.5)?;
         let xs = xs.broadcast_mul(&rms)?;
         let ws = self.weight.reshape((1, -1))?;
-        let out = xs * &ws;
-        out?.to_dtype(orig_dtype)
+        Ok((xs * &ws)?.to_dtype(orig_dtype))
     }
 }
 
@@ -317,7 +315,7 @@ impl DecoderLayer {
         let x = x + h;
         let h2 = self.ln2.forward(&x)?;
         let h2 = h2.apply(&self.mlp)?;
-        Ok(x + h2?)
+        Ok(x + h2)
     }
 
     fn clear_kv_cache(&mut self) {
