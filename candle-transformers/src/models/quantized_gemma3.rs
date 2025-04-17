@@ -61,7 +61,7 @@ impl Module for Mlp {
 }
 
 #[derive(Debug, Clone)]
-struct LayerWeights {
+pub struct LayerWeights {
     // Attention components
     attention_wq: QMatMul,
     attention_wk: QMatMul,
@@ -86,7 +86,6 @@ struct LayerWeights {
     n_kv_head: usize,    // Number of key-value heads
     head_dim: usize,     // Dimension of each head
     q_dim: usize,        // Total dimension for queries
-    kv_dim: usize,       // Total dimension for keys/values
     
     // Rotary embedding
     cos: Tensor,
@@ -94,7 +93,7 @@ struct LayerWeights {
     neg_inf: Tensor,
     
     // Cache
-    kv_cache: Option<(Tensor, Tensor)>,
+    pub kv_cache: Option<(Tensor, Tensor)>,
     
     // Tracing
     span_attn: tracing::Span,
@@ -125,97 +124,68 @@ impl LayerWeights {
         mask: Option<&Tensor>,
         index_pos: usize,
     ) -> Result<Tensor> {
-        let _enter = self.span_attn.enter();
-        let (b_sz, seq_len, n_embd) = x.dims3()?;
-        
-        // Apply normalization for query and compute query projection
-        let norm_x = self.attention_norm.forward(x)?;
-        let q = self.attention_wq.forward(&norm_x)?;
-        
-        // Apply normalization for key/value and compute key/value projections
-        let k = self.attention_wk.forward(&norm_x)?;
-        let v = self.attention_wv.forward(&norm_x)?;
-        
-        // For Gemma3, q has shape [b_sz, seq_len, 2048]
-        // Reshape into multiple heads, each with head_dim=256
-        let q = q
-            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-            .transpose(1, 2)?;
-        
-        // For Gemma3, k has shape [b_sz, seq_len, 1024]
-        // Reshape into kv_head heads, each with head_dim=256
-        let k = k
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
-        
-        // For Gemma3, v has shape [b_sz, seq_len, 1024]
-        // Reshape into kv_head heads, each with head_dim=256
-        let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-            
-        // Apply per-head normalization to q and k
-        // This step requires reshaping to apply the norm to each head separately
-        let q_reshaped = q.reshape((b_sz * self.n_head * seq_len, self.head_dim))?;
-        let q_normed = self.attention_q_norm.forward(&q_reshaped)?;
-        let q = q_normed.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
-        
-        let k_reshaped = k.reshape((b_sz * self.n_kv_head * seq_len, self.head_dim))?;
-        let k_normed = self.attention_k_norm.forward(&k_reshaped)?;
-        let k = k_normed.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+        let (b_sz, seq_len, _) = x.dims3()?;
 
-        // Apply rotary positional embeddings
+        let q = self.attention_wq.forward(x)?;
+        let k = self.attention_wk.forward(x)?;
+        let v = self.attention_wv.forward(x)?;
+
+        let q = q.reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+                 .transpose(1, 2)?;
+        let k = k.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                 .transpose(1, 2)?;
+        let v = v.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                 .transpose(1, 2)?;
+
+        let q = self.attention_q_norm.forward(&q.contiguous()?)?;
+        let k = self.attention_k_norm.forward(&k.contiguous()?)?;
+
         let q = self.apply_rotary_emb(&q, index_pos)?;
         let k = self.apply_rotary_emb(&k, index_pos)?;
 
-        // Handle KV cache
         let (k, v) = match &self.kv_cache {
             None => (k, v),
             Some((k_cache, v_cache)) => {
                 if index_pos == 0 {
                     (k, v)
                 } else {
-                    let k = Tensor::cat(&[k_cache, &k], 2)?;
+                    let k = Tensor::cat(&[k_cache, &k], 2)?;  // concat on seq dim
                     let v = Tensor::cat(&[v_cache, &v], 2)?;
                     (k, v)
                 }
             }
         };
-        self.kv_cache = Some((k.clone(), v.clone()));
+        self.kv_cache = Some((k.clone(), v.clone())); // update cache
 
-        // Support for GQA (Grouped Query Attention)
+        // Repeat KV for GQA
         let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = crate::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-        // Compute attention scores
-        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-        let att = match mask {
-            None => att,
-            Some(mask) => {
-                let mask = mask.broadcast_as(att.shape())?;
-                masked_fill(&att, &mask, &self.neg_inf)?
-            }
-        };
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
+        // Scaled Dot-Product Attention 
+        let scale = 1.0 / (self.head_dim as f64).sqrt();
+        let mut attn_weights = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+
+        if let Some(mask) = mask {
+            let mask = mask.broadcast_as(attn_weights.shape())?;
+            attn_weights = masked_fill(&attn_weights, &mask, &self.neg_inf)?;
+        }
+
+        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        let attn_output = attn_weights.matmul(&v)?;
+
+        let attn_output = attn_output
+            .transpose(1, 2)?
+            .reshape((b_sz, seq_len, self.q_dim))?;
         
-        let y = att.matmul(&v.contiguous()?)?;
-        
-        let y = y.transpose(1, 2)?; // Now [b_sz, seq_len, n_head, head_dim]
-        
-        let y = y.reshape(&[b_sz, seq_len, self.q_dim])?;
-        
-        // Apply output projection
-        let y = self.attention_wo.forward(&y)?;
-        
-        Ok(y)
+        self.attention_wo.forward(&attn_output)
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct ModelWeights {
     tok_embeddings: Embedding,
-    layers: Vec<LayerWeights>,
+    embedding_length: usize,
+    pub layers: Vec<LayerWeights>,
     norm: RmsNorm,
     output: QMatMul,
     masks: HashMap<usize, Tensor>,
@@ -269,7 +239,6 @@ impl ModelWeights {
         // Compute the dimensions for queries, keys, and values
         // These are the total dimensions when projected across all heads
         let q_dim = head_count * key_length;
-        let kv_dim = head_count_kv * key_length;
 
         // Precompute rotary embeddings
         let (cos, sin) = precomput_freqs_cis(key_length, rope_freq_base, device)?;
@@ -361,7 +330,6 @@ impl ModelWeights {
                 n_kv_head: head_count_kv,
                 head_dim: key_length,
                 q_dim,
-                kv_dim,
                 cos: cos.clone(),
                 sin: sin.clone(),
                 neg_inf: neg_inf.clone(),
@@ -377,6 +345,7 @@ impl ModelWeights {
         
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
+            embedding_length,
             layers,
             norm,
             output: QMatMul::from_qtensor(output)?,
@@ -402,8 +371,6 @@ impl ModelWeights {
     pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
 
-        println!("{} {}", &x, &index_pos);
-        
         let mask = if seq_len == 1 {
             None
         } else {
@@ -411,37 +378,32 @@ impl ModelWeights {
         };
         let _enter = self.span.enter();
         
-        // Embedding
         let mut layer_in = self.tok_embeddings.forward(x)?;
+        layer_in = (layer_in * (self.embedding_length as f64).sqrt())?;
         
-        // Process through each layer
         for (i, layer) in self.layers.iter_mut().enumerate() {
             
             // Attention block
             let residual = &layer_in;
-            let attn = layer.forward_attn(&layer_in, mask.as_ref(), index_pos)?;
-            
-            let x = (attn + residual)?;
-            
-            // Post attention normalization
+            let x = layer.attention_norm.forward(&layer_in)?;
+            let x = layer.forward_attn(&x, mask.as_ref(), index_pos)?;
             let x = layer.post_attention_norm.forward(&x)?;
+            let x = (x + residual)?;
             
             // Feed-forward block
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
             let x = layer.mlp.forward(&x)?;
-            
-            // Post feed-forward normalization and residual connection
-            let x = (x + residual)?;
             let x = layer.post_ffn_norm.forward(&x)?;
+            let x = (x + residual)?;
             
             layer_in = x;
         }
-
-        let x = self.norm.forward(&layer_in)?;
-        let x = x.i((.., seq_len - 1, ..))?;
         
         let _enter = self.span_output.enter();
+
+        let x = layer_in.i((.., seq_len - 1, ..))?;
+        let x = self.norm.forward(&x)?;
         let output = self.output.forward(&x)?;
 
         Ok(output)

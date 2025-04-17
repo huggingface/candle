@@ -8,14 +8,14 @@ use clap::{Parser, ValueEnum};
 use std::io::Write;
 use tokenizers::Tokenizer;
 
-use candle::quantized::gguf_file;
+use candle::{quantized::gguf_file, IndexOp};
 use candle::Tensor;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_transformers::models::quantized_gemma3::ModelWeights;
 
-const DEFAULT_PROMPT: &str = "Write a function to calculate fibonacci numbers. ";
+const DEFAULT_PROMPT: &str = "Write a function to calculate fibonacci num";
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
 enum Which {
@@ -232,7 +232,7 @@ fn main() -> anyhow::Result<()> {
             .encode(prompt_str, true)
             .map_err(anyhow::Error::msg)?;
         let prompt_tokens = [&pre_prompt_tokens, tokens.get_ids()].concat();
-        println!("DEBUG: Prompt tokens: {:?}", prompt_tokens);
+        // println!("DEBUG: Prompt tokens: {:?}", prompt_tokens);
 
         let to_sample = args.sample_len.saturating_sub(1);
         let max_seq_len = 8192; // Gemma 3 context length
@@ -244,7 +244,7 @@ fn main() -> anyhow::Result<()> {
         };
         let mut all_tokens = vec![];
         let mut logits_processor = {
-            let temperature = 0.0;//args.temperature;
+            let temperature = args.temperature;
             let sampling = if temperature <= 0. {
                 Sampling::ArgMax
             } else {
@@ -300,8 +300,11 @@ fn main() -> anyhow::Result<()> {
                     &all_tokens[start_at..],
                 )?
             };
+            // println!("{}", &logits);
+            // println!("kv {}", model.layers.last().unwrap().kv_cache.clone().unwrap().0.i((0, 0, prompt_tokens.len() + index, ..))?);
             next_token = logits_processor.sample(&logits)?;
             all_tokens.push(next_token);
+            // println!("{} {:?}", next_token, tos.decode(&[next_token]));
             if let Some(t) = tos.next_token(next_token)? {
                 print!("{t}");
                 std::io::stdout().flush()?;
