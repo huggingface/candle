@@ -1,4 +1,5 @@
 use crate::backend::BackendDevice;
+use crate::scalar::Scalar;
 use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 pub use candle_kernels as kernels;
 pub use cudarc;
@@ -188,83 +189,77 @@ impl CudaDevice {
         self.id
     }
 
-    fn const_impl(&self, v: f64, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
+    fn const_impl(&self, v: Scalar, shape: &Shape) -> Result<CudaStorage> {
         let elem_count = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(elem_count as u32);
-        let slice = match dtype {
-            DType::U8 => {
+        let slice = match v {
+            Scalar::U8(v) => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<u8>(elem_count)? };
                 let func = self.get_or_load_func("fill_u8", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
-                let v = v as u8;
                 builder.arg(&data);
                 builder.arg(&v);
                 builder.arg(&elem_count);
                 unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::U8(data)
             }
-            DType::U32 => {
+            Scalar::U32(v) => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<u32>(elem_count)? };
                 let func = self.get_or_load_func("fill_u32", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
-                let v = v as u32;
                 builder.arg(&data);
                 builder.arg(&v);
                 builder.arg(&elem_count);
                 unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::U32(data)
             }
-            DType::I64 => {
+            Scalar::I64(v) => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<i64>(elem_count)? };
                 let func = self.get_or_load_func("fill_i64", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
-                let v = v as i64;
                 builder.arg(&data);
                 builder.arg(&v);
                 builder.arg(&elem_count);
                 unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::I64(data)
             }
-            DType::BF16 => {
+            Scalar::BF16(v) => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<bf16>(elem_count)? };
                 let func = self.get_or_load_func("fill_bf16", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
-                let v = bf16::from_f64(v);
                 builder.arg(&data);
                 builder.arg(&v);
                 builder.arg(&elem_count);
                 unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::BF16(data)
             }
-            DType::F16 => {
+            Scalar::F16(v) => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<f16>(elem_count)? };
                 let func = self.get_or_load_func("fill_f16", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
-                let v = f16::from_f64(v);
                 builder.arg(&data);
                 builder.arg(&v);
                 builder.arg(&elem_count);
                 unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::F16(data)
             }
-            DType::F32 => {
+            Scalar::F32(v) => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<f32>(elem_count)? };
                 let func = self.get_or_load_func("fill_f32", &kernels::FILL)?;
                 let mut builder = self.stream.launch_builder(&func);
-                let v = v as f32;
                 builder.arg(&data);
                 builder.arg(&v);
                 builder.arg(&elem_count);
                 unsafe { builder.launch(cfg) }.w()?;
                 CudaStorageSlice::F32(data)
             }
-            DType::F64 => {
+            Scalar::F64(v) => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<f64>(elem_count) }?;
                 let func = self.get_or_load_func("fill_f64", &kernels::FILL)?;
@@ -505,7 +500,7 @@ impl BackendDevice for CudaDevice {
     }
 
     fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
-        self.const_impl(1., shape, dtype)
+        self.const_impl(Scalar::one(dtype), shape)
     }
 
     unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
