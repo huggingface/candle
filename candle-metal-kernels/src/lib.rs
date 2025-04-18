@@ -2570,7 +2570,7 @@ pub fn call_const_fill(
     name: &'static str,
     length: usize,
     output: &Buffer,
-    v: f32,
+    v: impl EncoderParam,
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Fill, name)?;
     let encoder = ep.encoder();
