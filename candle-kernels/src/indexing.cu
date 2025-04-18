@@ -131,6 +131,7 @@ __device__ void scatter_add(
           for (unsigned int j = 0; j < src_dim_size; ++j) {
               const size_t src_i = (pre * src_dim_size + j) * right_size + post;
               const size_t idx = ids[src_i];
+              assert(idx < dst_dim_size);
               const size_t dst_i = (pre * dst_dim_size + idx) * right_size + post;
               out[dst_i] += inp[src_i];
           }
