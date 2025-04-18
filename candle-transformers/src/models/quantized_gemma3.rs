@@ -97,7 +97,6 @@ pub struct LayerWeights {
 
     // Tracing
     span_attn: tracing::Span,
-    span_rot: tracing::Span,
     span_mlp: tracing::Span,
 }
 
@@ -108,14 +107,18 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Ten
 }
 
 impl LayerWeights {
-    fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
-        let _enter = self.span_rot.enter();
-        let (_b_sz, _n_head, seq_len, _n_embd) = x.dims4()?;
+    fn apply_rotary_emb_qkv(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        index_pos: usize,
+    ) -> Result<(Tensor, Tensor)> {
+        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, index_pos, seq_len)?;
         let sin = self.sin.narrow(0, index_pos, seq_len)?;
-        // The call to contiguous below is only necessary when processing the prompt.
-        // When the seq_len is 1 in the inference loop, this is a no-op.
-        candle_nn::rotary_emb::rope_i(&x.contiguous()?, &cos, &sin)
+        let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
+        let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+        Ok((q_embed, k_embed))
     }
 
     fn forward_attn(
@@ -124,6 +127,7 @@ impl LayerWeights {
         mask: Option<&Tensor>,
         index_pos: usize,
     ) -> Result<Tensor> {
+        let _enter = self.span_attn.enter();
         let (b_sz, seq_len, _) = x.dims3()?;
 
         let q = self.attention_wq.forward(x)?;
@@ -143,8 +147,7 @@ impl LayerWeights {
         let q = self.attention_q_norm.forward(&q.contiguous()?)?;
         let k = self.attention_k_norm.forward(&k.contiguous()?)?;
 
-        let q = self.apply_rotary_emb(&q, index_pos)?;
-        let k = self.apply_rotary_emb(&k, index_pos)?;
+        let (q, k) = self.apply_rotary_emb_qkv(&q, &k, index_pos)?;
 
         let (k, v) = match &self.kv_cache {
             None => (k, v),
@@ -340,7 +343,6 @@ impl ModelWeights {
                 neg_inf: neg_inf.clone(),
                 kv_cache: None,
                 span_attn,
-                span_rot,
                 span_mlp,
             })
         }
@@ -395,11 +397,13 @@ impl ModelWeights {
             let x = (x + residual)?;
 
             // Feed-forward block
+            let _enter = layer.span_mlp.enter();
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
             let x = layer.mlp.forward(&x)?;
             let x = layer.post_ffn_norm.forward(&x)?;
             let x = (x + residual)?;
+            drop(_enter);
 
             layer_in = x;
         }
