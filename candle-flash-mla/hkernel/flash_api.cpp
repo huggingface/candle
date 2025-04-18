@@ -195,9 +195,3 @@ mha_fwd_kvcache_mla(
 
     return {out, softmax_lse};
 }
-
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.doc() = "FlashMLA";
-    m.def("get_mla_metadata", &get_mla_metadata);
-    m.def("fwd_kvcache_mla", &mha_fwd_kvcache_mla);
-}
