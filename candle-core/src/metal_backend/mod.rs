@@ -1966,37 +1966,15 @@ impl BackendDevice for MetalDevice {
     }
 
     fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
-        let name = match dtype {
-            DType::U8 => "fill_u8",
-            DType::U32 => "fill_u32",
-            DType::I64 => "fill_i64",
-            DType::F16 => "fill_f16",
-            DType::BF16 => "fill_bf16",
-            DType::F32 => "fill_f32",
-            DType::F64 => {
-                let cpu_storage = crate::cpu_backend::CpuDevice.ones_impl(shape, dtype)?;
-                return self.storage_from_cpu_storage(&cpu_storage);
-            }
-        };
-        let buffer = self.new_buffer(shape.elem_count(), dtype, "alloc-ones")?;
-        let command_buffer = self.command_buffer()?;
-        candle_metal_kernels::call_const_fill(
-            &self.device,
-            &command_buffer,
-            &self.kernels,
-            name,
-            shape.elem_count(),
-            &buffer,
-            1.,
-        )
-        .map_err(MetalError::from)?;
-
-        Ok(MetalStorage::new(
-            buffer,
-            self.clone(),
-            shape.elem_count(),
-            dtype,
-        ))
+        match dtype {
+            DType::U8 => self.const_impl(1u8, shape),
+            DType::U32 => self.const_impl(1u32, shape),
+            DType::I64 => self.const_impl(1i64, shape),
+            DType::F16 => self.const_impl(half::f16::ONE, shape),
+            DType::BF16 => self.const_impl(half::bf16::ONE, shape),
+            DType::F32 => self.const_impl(1f32, shape),
+            DType::F64 => self.const_impl(1f64, shape),
+        }
     }
 
     fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {

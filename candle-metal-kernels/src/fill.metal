@@ -4,20 +4,20 @@ using namespace metal;
 
 template<typename T> METAL_FUNC void fill_with(
     device T *out,
-    constant float &value,
+    constant T &value,
     constant size_t &numel,
     uint tid [[thread_position_in_grid]]
 ) {
     if (tid >= numel) {
         return;
     }
-    out[tid] = static_cast<T>(value);
+    out[tid] = value;
 }
 
 #define FILL_OP(NAME, T)                                \
 kernel void fill_##NAME(                                \
     device T *out,                                      \
-    constant float &value,                              \
+    constant T &value,                              \
     constant size_t &numel,                              \
     uint tid [[thread_position_in_grid]]                \
 ) {                                                     \

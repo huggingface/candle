@@ -107,6 +107,7 @@ pub trait WithDType:
 
     fn from_f64(v: f64) -> Self;
     fn to_f64(self) -> f64;
+    fn to_scalar(self) -> crate::scalar::Scalar;
     fn cpu_storage_ref(data: &[Self]) -> CpuStorageRef<'_>;
     fn to_cpu_storage_owned(data: Vec<Self>) -> CpuStorage;
 
@@ -129,6 +130,10 @@ macro_rules! with_dtype {
 
             fn to_f64(self) -> f64 {
                 $to_f64(self)
+            }
+
+            fn to_scalar(self) -> crate::scalar::Scalar {
+                crate::scalar::Scalar::$dtype(self)
             }
 
             fn cpu_storage_ref(data: &[Self]) -> CpuStorageRef<'_> {
