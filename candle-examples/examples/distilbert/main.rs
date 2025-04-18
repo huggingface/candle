@@ -103,7 +103,7 @@ impl Args {
     }
 
     fn resolve_model_and_revision(&self) -> (String, String) {
-        let default_model = "distilbert-base-uncased".to_string();
+        let default_model = "distilgoogle-bert/bert-base-uncased".to_string();
         let default_revision = "main".to_string();
 
         match (self.model_id.clone(), self.revision.clone()) {
