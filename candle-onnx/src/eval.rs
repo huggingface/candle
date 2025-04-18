@@ -1,7 +1,10 @@
 use crate::onnx::attribute_proto::AttributeType;
 use crate::onnx::tensor_proto::DataType;
 use crate::onnx::{self, GraphProto};
-use candle::{bail, DType, Device, Result, Tensor};
+use candle::{bail, DType, Device, IndexOp, Result, Tensor};
+use core::f64;
+use std::borrow::BorrowMut;
+use std::cmp;
 use std::collections::{HashMap, HashSet};
 
 pub type Value = Tensor;
@@ -1953,6 +1956,43 @@ fn simple_eval_(
             "Sign" => {
                 let input = get(&node.input[0])?;
                 let output = input.sign()?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "LRN" => {
+                let xs = get(&node.input[0])?;
+                if xs.rank() != 4 {
+                    bail!(
+                        "LRN only applies to 4D tensors but shape is {:?}",
+                        xs.shape()
+                    );
+                }
+                let alpha = get_attr_opt::<f32>(node, "alpha")?
+                    .copied()
+                    .unwrap_or(0.0001);
+                let beta = get_attr_opt::<f32>(node, "beta")?.copied().unwrap_or(0.75);
+                let bias = get_attr_opt::<f32>(node, "bias")?.copied().unwrap_or(1.0);
+                let size = match get_attr_opt::<i64>(node, "size")? {
+                    Some(size) => size,
+                    None => {
+                        bail!("LRN requires a size attribute")
+                    }
+                };
+
+                let mut square_sum = xs.zeros_like()?;
+                let minc = xs.shape().dim(1)?;
+                let c1 = ((*size as f64 - 1.0) / 2.0).floor() as usize;
+                let c2 = ((*size as f64 - 1.0) / 2.0).ceil() as usize;
+
+                for c in 1..xs.shape().dim(0)? {
+                    let begin = cmp::max(0, c - c1);
+                    let end = cmp::min(minc, c + c2);
+
+                    let xs_slice = xs.i((.., begin..end, .., ..))?.sqr()?;
+                    let square_sum_slice = square_sum.i((.., c, .., ..))?;
+                    square_sum.index_add(&xs_slice, &square_sum_slice, 1)?;
+                }
+
+                let output = xs.sqr()?.broadcast_add(&square_sum)?.broadcast_mul(&xs)?;
                 values.insert(node.output[0].clone(), output);
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
