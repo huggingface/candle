@@ -14,6 +14,12 @@ pub enum Scalar {
     F64(f64),
 }
 
+impl<T: WithDType> From<T> for Scalar {
+    fn from(value: T) -> Self {
+        value.to_scalar()
+    }
+}
+
 impl Scalar {
     pub fn zero(dtype: DType) -> Self {
         match dtype {
