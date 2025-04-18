@@ -290,6 +290,8 @@ Cheatsheet:
 
 ### Why should I use Candle?
 
+<!--- ANCHOR: goals --->
+
 Candle's core goal is to *make serverless inference possible*. Full machine learning frameworks like PyTorch
 are very large, which makes creating instances on a cluster slow. Candle allows deployment of lightweight
 binaries.
@@ -299,6 +301,7 @@ and the [GIL](https://www.backblaze.com/blog/the-python-gil-past-present-and-fut
 
 Finally, Rust is cool! A lot of the HF ecosystem already has Rust crates, like [safetensors](https://github.com/huggingface/safetensors) and [tokenizers](https://github.com/huggingface/tokenizers).
 
+<!--- ANCHOR_END: goals --->
 
 ### Other ML frameworks
 

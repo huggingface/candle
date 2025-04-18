@@ -144,6 +144,24 @@ impl CudaDevice {
         self.stream.clone()
     }
 
+    /// When turned on, all cuda tensors **created after calling this function** will
+    /// not track uses via cuda events.
+    ///
+    /// # Safety
+    ///
+    /// It is up to the user to ensure proper synchronization between multiple streams:
+    /// - Ensure that no tensor is freed before a use on another stream is finished.
+    /// - Ensure that a tensor is not used on another stream before allocation on the
+    ///   allocating stream finishes.
+    /// - Ensure that a tensor is not written two concurrently by multiple streams.
+    pub unsafe fn disable_event_tracking(&self) {
+        self.context.disable_event_tracking()
+    }
+
+    pub fn is_event_tracking(&self) -> bool {
+        self.context.is_event_tracking()
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub fn compile(
         &self,
