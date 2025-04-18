@@ -23,6 +23,7 @@ __device__ void index_select(
           unsigned int left_i = dst_i / (ids_dim_size * right_size);
           unsigned int id_i = dst_i / right_size % ids_dim_size;
           unsigned int right_i = dst_i % right_size;
+          assert(ids[id_i] < src_dim_size);
           unsigned int src_i = left_i * (src_dim_size * right_size) + ids[id_i] * right_size + right_i;
           unsigned strided_i = b ? src_i : get_strided_index(src_i, num_dims, dims, strides);
           out[dst_i] = inp[strided_i];
@@ -57,6 +58,7 @@ __device__ void gather(
     for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
         size_t post = i % right_size;
         size_t idx = ids[i];
+        assert(idx < src_dim_size);
         size_t pre = i / (right_size * ids_dim_size);
         size_t src_i = (pre * src_dim_size + idx) * right_size + post;
         out[i] = inp[src_i];
@@ -92,6 +94,7 @@ __device__ void index_add(
           const size_t post = i % right_size;
           for (unsigned int j = 0; j < ids_dim_size; ++j) {
               const size_t idx = ids[j];
+              assert(idx < dst_dim_size);
               const size_t src_i = (pre * ids_dim_size + j) * right_size + post;
               const size_t dst_i = (pre * dst_dim_size + idx) * right_size + post;
               out[dst_i] += inp[src_i];

@@ -395,7 +395,7 @@ impl Map1 for IndexSelect<'_> {
             CudaStorageSlice::U8(slice) => ("is_u8", slice_ptr(slice, ids_l.start_offset())),
             CudaStorageSlice::I64(slice) => ("is_i64", slice_ptr(slice, ids_l.start_offset())),
             _ => Err(CudaError::UnexpectedDType {
-                msg: "index_select ids should be u8 or u32",
+                msg: "index_select ids should be u8, u32, or i64",
                 expected: DType::U32,
                 got: self.0.dtype(),
             })
