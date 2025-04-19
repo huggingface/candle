@@ -5910,3 +5910,61 @@ fn test_sign_operation() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn test_selu_operator() -> Result<()> {
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "Selu".to_string(),
+            domain: "".to_string(),
+            attribute: vec![
+                AttributeProto {
+                    name: "alpha".to_string(),
+                    r#type: AttributeType::Float as i32,
+                    f: 1.6732632,
+                    ..Default::default()
+                },
+                AttributeProto {
+                    name: "gamma".to_string(),
+                    r#type: AttributeType::Float as i32,
+                    f: 1.050701,
+                    ..Default::default()
+                },
+            ],
+            input: vec!["input".to_string()],
+            output: vec!["output".to_string()],
+            ..Default::default()
+        }],
+        input: vec![ValueInfoProto {
+            name: "input".to_string(),
+            r#type: None,
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: "output".to_string(),
+            r#type: None,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let input_data = vec![-1.0f32, 0.0, 1.0, 2.0];
+    let expected = vec![
+        -1.1113f32, // ~gamma * (alpha * exp(x) - alpha)
+        0.0f32,     // 0
+        1.0507f32,  // gamma * x
+        2.1014f32,  // gamma * x
+    ];
+
+    let input = Tensor::from_vec(input_data.clone(), (2, 2), &Device::Cpu)?;
+    let mut inputs = HashMap::new();
+    inputs.insert("input".to_string(), input);
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    assert_eq!(eval.len(), 1);
+
+    let output = eval.get("output").expect("Output not found");
+    let out_vec = to_vec2_round(output, 4)?;
+    assert_eq!(out_vec, vec![vec![expected[0], expected[1]], vec![expected[2], expected[3]]]);
+    Ok(())
+}
