@@ -205,8 +205,7 @@ impl Tensor {
     }
 
     pub fn const_set(&self, value: crate::scalar::Scalar) -> Result<()> {
-        let layout = self.layout();
-        self.storage_mut().const_set(value, &layout)
+        self.storage_mut().const_set(value, self.layout())
     }
 
     /// Creates a new tensor filled with ones with same shape, dtype, and device as the other tensor.

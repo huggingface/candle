@@ -2466,7 +2466,7 @@ impl BackendStorage for CpuStorage {
                     block_start_index,
                     block_len: 1,
                 } => {
-                    for (_, src_index) in block_start_index.enumerate() {
+                    for src_index in block_start_index {
                         src[src_index] = s
                     }
                 }
