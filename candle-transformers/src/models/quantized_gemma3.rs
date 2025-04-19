@@ -319,7 +319,6 @@ impl ModelWeights {
 
             // Tracing spans
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
-            let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
             let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
 
             layers.push(LayerWeights {
