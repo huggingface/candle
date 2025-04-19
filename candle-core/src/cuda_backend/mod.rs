@@ -1235,6 +1235,10 @@ impl BackendStorage for CudaStorage {
         &self.device
     }
 
+    fn const_set(&mut self, s: crate::scalar::Scalar, l: &Layout) -> Result<()> {
+        todo!()
+    }
+
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
         let shape = layout.shape();
         let dims = shape.dims();

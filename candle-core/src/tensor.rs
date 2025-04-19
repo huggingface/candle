@@ -185,7 +185,9 @@ impl Tensor {
     ) -> Result<Self> {
         let none = BackpropOp::none();
         let shape = shape.into();
-        let storage = device.ones(&shape, dtype)?;
+        let mut storage = unsafe { device.alloc_uninit(&shape, dtype)? };
+        let layout = Layout::contiguous(shape.clone());
+        storage.const_set(crate::scalar::Scalar::one(dtype), &layout)?;
         Ok(from_storage(storage, shape, none, is_variable))
     }
 
@@ -200,6 +202,11 @@ impl Tensor {
     /// ```
     pub fn ones<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
         Self::ones_impl(shape, dtype, device, false)
+    }
+
+    pub fn const_set(&self, value: crate::scalar::Scalar) -> Result<()> {
+        let layout = self.layout();
+        self.storage_mut().const_set(value, &layout)
     }
 
     /// Creates a new tensor filled with ones with same shape, dtype, and device as the other tensor.

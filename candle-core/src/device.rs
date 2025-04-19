@@ -292,23 +292,6 @@ impl Device {
         self.rand_normal_f64(mean.to_f64(), std.to_f64(), shape, T::DTYPE)
     }
 
-    pub(crate) fn ones(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
-        match self {
-            Device::Cpu => {
-                let storage = CpuDevice.ones_impl(shape, dtype)?;
-                Ok(Storage::Cpu(storage))
-            }
-            Device::Cuda(device) => {
-                let storage = device.ones_impl(shape, dtype)?;
-                Ok(Storage::Cuda(storage))
-            }
-            Device::Metal(device) => {
-                let storage = device.ones_impl(shape, dtype)?;
-                Ok(Storage::Metal(storage))
-            }
-        }
-    }
-
     pub(crate) fn zeros(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
         match self {
             Device::Cpu => {

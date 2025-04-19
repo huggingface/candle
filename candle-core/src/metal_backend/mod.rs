@@ -413,6 +413,10 @@ impl BackendStorage for MetalStorage {
         self.binary(name, rhs, lhs_l, rhs_l)
     }
 
+    fn const_set(&mut self, s: crate::scalar::Scalar, l: &Layout) -> Result<()> {
+        todo!()
+    }
+
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
         let device = self.device();
         let shape = layout.shape();
@@ -1963,18 +1967,6 @@ impl BackendDevice for MetalDevice {
             shape.elem_count(),
             dtype,
         ))
-    }
-
-    fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
-        match dtype {
-            DType::U8 => self.const_impl(1u8, shape),
-            DType::U32 => self.const_impl(1u32, shape),
-            DType::I64 => self.const_impl(1i64, shape),
-            DType::F16 => self.const_impl(half::f16::ONE, shape),
-            DType::BF16 => self.const_impl(half::bf16::ONE, shape),
-            DType::F32 => self.const_impl(1f32, shape),
-            DType::F64 => self.const_impl(1f64, shape),
-        }
     }
 
     fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {

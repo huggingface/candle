@@ -499,10 +499,6 @@ impl BackendDevice for CudaDevice {
         })
     }
 
-    fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
-        self.const_impl(Scalar::one(dtype), shape)
-    }
-
     unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
         let elem_count = shape.elem_count();
         let slice = match dtype {
