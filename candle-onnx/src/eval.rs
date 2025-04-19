@@ -3,6 +3,7 @@ use crate::onnx::tensor_proto::DataType;
 use crate::onnx::{self, GraphProto};
 use candle::{bail, DType, Device, Result, Tensor};
 use std::collections::{HashMap, HashSet};
+use candle_nn::ops::log_softmax;
 
 pub type Value = Tensor;
 
@@ -1955,9 +1956,19 @@ fn simple_eval_(
                 let output = input.sign()?;
                 values.insert(node.output[0].clone(), output);
             }
+            // https://onnx.ai/onnx/operators/onnx__SoftmaxCrossEntropyLoss.html
             "SoftmaxCrossEntropyLoss" => {
-                let out = Tensor::from_slice(&[42i64], (), &Device::Cpu)?;
-                values.insert(node.output[0].clone(), out);
+                let logits = get(&node.input[0])?.to_dtype(DType::F32)?;
+                let labels = get(&node.input[1])?.to_dtype(DType::I64)?;
+                let labels = labels.unsqueeze(1)?;
+
+                let log_probs = log_softmax(&logits, 1)?;
+                let nll = log_probs
+                    .gather(&labels, 1)?
+                    .neg()?
+                    .squeeze(1)?; // [N]
+            
+                values.insert(node.output[0].clone(), nll);
             }
 
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),

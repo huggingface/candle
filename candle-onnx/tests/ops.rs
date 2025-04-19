@@ -5918,16 +5918,22 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
             op_type: "SoftmaxCrossEntropyLoss".to_string(),
             domain: "".to_string(),
             attribute: vec![],
-            input: vec![INPUT_A.to_string()],
+            input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
             output:  vec![OUTPUT_Z.to_string()],
             name: "".to_string(),
             doc_string: "".to_string(),
         }],
-        input: vec![ValueInfoProto {
-            name: INPUT_A.to_string(),
-            r#type: None,
-            ..Default::default()
-        }],
+        input: vec![
+            ValueInfoProto {
+                name: INPUT_X.to_string(),
+                r#type: None,
+                ..Default::default()
+            }, 
+            ValueInfoProto {
+                name: INPUT_Y.to_string(),
+                r#type: None,
+                ..Default::default()
+            }],
         output: vec![ValueInfoProto {
             name: OUTPUT_Z.to_string(),
             r#type: None,
@@ -5936,14 +5942,31 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
         ..Default::default()
     }));
 
-    let a = Tensor::zeros((1,), DType::F32, &Device::Cpu)?;
+    let logits = Tensor::from_vec(
+        vec![
+            2.0f32, 1.0, 0.1,
+            0.1, 0.2, 3.0
+        ],
+        (2, 3),
+        &Device::Cpu,
+    )?;
+    let labels = Tensor::from_vec(vec![0i64, 2], (2,), &Device::Cpu)?;
     let mut inputs = HashMap::new();
-    inputs.insert(INPUT_A.to_string(), a);
+    inputs.insert(INPUT_X.to_string(), logits);
+    inputs.insert(INPUT_Y.to_string(), labels);
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
     assert_eq!(eval.len(), 1);
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
-    assert_eq!(z.to_scalar::<i64>()?, 42);
+
+    let actual = z.to_vec1::<f32>()?;
+
+    let expected = vec![0.4170, 0.1096];
+    
+    for (a, e) in actual.iter().zip(expected.iter()) {
+        assert!((a - e).abs() < 1e-4, "Expected: {}, Actual: {}", e, a);
+    }
+    
     Ok(())
 }
