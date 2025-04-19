@@ -2454,6 +2454,48 @@ impl BackendStorage for CpuStorage {
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         Ok(self.clone())
     }
+
+    fn const_set(&mut self, s: crate::scalar::Scalar, l: &Layout) -> Result<()> {
+        use crate::scalar::Scalar;
+        fn set<T: crate::WithDType>(src: &mut [T], l: &Layout, s: T) {
+            match l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, len } => {
+                    src[start_offset..start_offset + len].fill(s)
+                }
+                crate::StridedBlocks::MultipleBlocks {
+                    block_start_index,
+                    block_len: 1,
+                } => {
+                    for src_index in block_start_index {
+                        src[src_index] = s
+                    }
+                }
+                crate::StridedBlocks::MultipleBlocks {
+                    block_start_index,
+                    block_len,
+                } => {
+                    for src_index in block_start_index {
+                        src[src_index..src_index + block_len].fill(s)
+                    }
+                }
+            }
+        }
+        match (self, s) {
+            (Self::BF16(storage), Scalar::BF16(v)) => set(storage, l, v),
+            (Self::F16(storage), Scalar::F16(v)) => set(storage, l, v),
+            (Self::F32(storage), Scalar::F32(v)) => set(storage, l, v),
+            (Self::F64(storage), Scalar::F64(v)) => set(storage, l, v),
+            (Self::U8(storage), Scalar::U8(v)) => set(storage, l, v),
+            (Self::U32(storage), Scalar::U32(v)) => set(storage, l, v),
+            (Self::I64(storage), Scalar::I64(v)) => set(storage, l, v),
+            (st, s) => crate::bail!(
+                "const_set dtype mismatch, expected {:?} but got {:?}",
+                st.dtype(),
+                s
+            ),
+        }
+        Ok(())
+    }
 }
 
 impl BackendDevice for CpuDevice {
@@ -2624,20 +2666,6 @@ impl BackendDevice for CpuDevice {
                 v.set_len(elem_count);
                 CpuStorage::F64(v)
             }
-        };
-        Ok(storage)
-    }
-
-    fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<CpuStorage> {
-        let elem_count = shape.elem_count();
-        let storage = match dtype {
-            DType::U8 => CpuStorage::U8(vec![1u8; elem_count]),
-            DType::U32 => CpuStorage::U32(vec![1u32; elem_count]),
-            DType::I64 => CpuStorage::I64(vec![1i64; elem_count]),
-            DType::BF16 => CpuStorage::BF16(vec![bf16::ONE; elem_count]),
-            DType::F16 => CpuStorage::F16(vec![f16::ONE; elem_count]),
-            DType::F32 => CpuStorage::F32(vec![1f32; elem_count]),
-            DType::F64 => CpuStorage::F64(vec![1f64; elem_count]),
         };
         Ok(storage)
     }

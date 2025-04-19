@@ -73,6 +73,44 @@ template <typename T> METAL_FUNC T sigmoid(T in) {
 
 #define TILE_SIZE 2
 
+#define CONST_SET(TYPENAME, FN_NAME) \
+kernel void FN_NAME( \
+    constant size_t &dim, \
+    constant TYPENAME &input,  \
+    device TYPENAME *output, \
+    uint tid [[ thread_position_in_grid ]] \
+) { \
+    if (tid >= dim) { \
+        return; \
+    } \
+    output[tid] = input; \
+} \
+kernel void FN_NAME##_##strided( \
+    constant size_t &dim, \
+    constant size_t &num_dims, \
+    constant size_t *dims, \
+    constant size_t *strides, \
+    constant TYPENAME &input,  \
+    device TYPENAME *output, \
+    uint tid [[ thread_position_in_grid ]] \
+) { \
+    if (tid >= dim) { \
+        return; \
+    } \
+    output[get_strided_index(tid, num_dims, dims, strides)] = input; \
+} \
+kernel void FN_NAME##_##tiled( \
+    constant size_t &dim, \
+    constant TYPENAME &input,  \
+    device TYPENAME *output, \
+    uint tid [[ thread_position_in_grid ]] \
+) { \
+    for (uint i = 0; i < TILE_SIZE; i++) { \
+        const uint idx = tid * TILE_SIZE + i; \
+        output[idx] = input; \
+    } \
+}
+
 #define UNARY(FN, TYPENAME, FN_NAME, FN_NAME_STRIDED) \
 kernel void FN_NAME( \
     constant size_t &dim, \
@@ -139,6 +177,11 @@ COPY2D(copy2d_f16, half)
 COPY2D(copy2d_u8, uint8_t)
 COPY2D(copy2d_u32, uint32_t)
 
+CONST_SET(float, const_set_f32)
+CONST_SET(half, const_set_f16)
+CONST_SET(uint8_t, const_set_u8)
+CONST_SET(uint32_t, const_set_u32)
+
 UNARY_OP(cos)
 UNARY_OP(sin)
 UNARY_OP(sqr)
@@ -171,6 +214,7 @@ UNARY(precise::tanh, half, tanh_f16, tanh_f16_strided);
 #if __METAL_VERSION__ >= 220
 UNARY(id, int64_t, copy_i64, copy_i64_strided)
 COPY2D(copy2d_i64, int64_t)
+CONST_SET(int64_t, const_set_i64)
 #endif
 
 #if defined(__HAVE_BFLOAT__)
@@ -199,4 +243,5 @@ UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
 UNARY(precise::tanh, bfloat, tanh_bf16, tanh_bf16_strided);
 
 COPY2D(copy2d_bf16, bfloat)
+CONST_SET(bfloat, const_set_bf16)
 #endif

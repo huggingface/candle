@@ -34,6 +34,21 @@ impl<T: DeviceRepr> SlicePtrOrNull<T> {
     }
 }
 
+impl crate::scalar::Scalar {
+    pub fn builder_arg<'a, 'b: 'a>(&'b self, builder: &mut cudarc::driver::LaunchArgs<'a>) {
+        use crate::scalar::Scalar;
+        match self {
+            Scalar::U8(v) => builder.arg(v),
+            Scalar::U32(v) => builder.arg(v),
+            Scalar::I64(v) => builder.arg(v),
+            Scalar::F32(v) => builder.arg(v),
+            Scalar::F64(v) => builder.arg(v),
+            Scalar::F16(v) => builder.arg(v),
+            Scalar::BF16(v) => builder.arg(v),
+        };
+    }
+}
+
 impl SlicePtrOrNull<usize> {
     pub fn params_from_layout(dev: &CudaDevice, l: &Layout) -> Result<Self> {
         let ds = if l.is_contiguous() {
@@ -1233,6 +1248,36 @@ impl BackendStorage for CudaStorage {
 
     fn device(&self) -> &CudaDevice {
         &self.device
+    }
+
+    fn const_set(&mut self, s: crate::scalar::Scalar, layout: &Layout) -> Result<()> {
+        let dev = &self.device;
+        let shape = layout.shape();
+        let dims = shape.dims();
+        let el_count = shape.elem_count();
+        let cfg = LaunchConfig::for_num_elems(el_count as u32);
+        let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
+        let src_o = layout.start_offset();
+        let ((src, _guard_src), kernel_name) = match &mut self.slice {
+            S::U8(s) => (slice_ptr(s, src_o), "const_set_u8"),
+            S::U32(s) => (slice_ptr(s, src_o), "const_set_u32"),
+            S::I64(s) => (slice_ptr(s, src_o), "const_set_i64"),
+            S::BF16(s) => (slice_ptr(s, src_o), "const_set_bf16"),
+            S::F16(s) => (slice_ptr(s, src_o), "const_set_f16"),
+            S::F32(s) => (slice_ptr(s, src_o), "const_set_f32"),
+            S::F64(s) => (slice_ptr(s, src_o), "const_set_f64"),
+        };
+
+        let func = dev.get_or_load_func(kernel_name, &kernels::FILL)?;
+        let mut builder = func.builder();
+        barg!(builder, el_count);
+        barg!(builder, dims.len());
+        ds.builder_arg(&mut builder);
+        s.builder_arg(&mut builder);
+        barg!(builder, src);
+        // SAFETY: ffi.
+        unsafe { builder.launch(cfg) }.w()?;
+        Ok(())
     }
 
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
