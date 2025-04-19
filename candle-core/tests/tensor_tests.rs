@@ -25,10 +25,12 @@ fn ones(device: &Device) -> Result<()> {
         Tensor::ones((2, 3), DType::F32, device)?.to_vec2::<f32>()?,
         [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
     );
-    assert_eq!(
-        Tensor::ones((2, 3), DType::F64, device)?.to_vec2::<f64>()?,
-        [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
-    );
+    if !device.is_metal() {
+        assert_eq!(
+            Tensor::ones((2, 3), DType::F64, device)?.to_vec2::<f64>()?,
+            [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        );
+    }
     assert_eq!(
         Tensor::ones((2, 3), DType::F16, device)?.to_vec2::<half::f16>()?,
         [
