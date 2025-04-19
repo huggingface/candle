@@ -1987,12 +1987,18 @@ fn simple_eval_(
                     let begin = cmp::max(0, c - c1);
                     let end = cmp::min(minc, c + c2);
 
-                    let xs_slice = xs.i((.., begin..end, .., ..))?.sqr()?;
-                    let square_sum_slice = square_sum.i((.., c, .., ..))?;
-                    square_sum.index_add(&xs_slice, &square_sum_slice, 1)?;
+                    let xs_sum = xs.i((.., begin..end, .., ..))?
+                        .sqr()?
+                        .sum(1)?;
+                    square_sum.i((.., c, .., ..))?
+                        .broadcast_add(&xs_sum)?;
                 }
 
-                let output = xs.sqr()?.broadcast_add(&square_sum)?.broadcast_mul(&xs)?;
+                let square_sum = square_sum
+                    .broadcast_mul(bias + (alpha / size))?
+                    .pow(-beta)?;
+                let output = xs
+                    .broadcast_div(&square_sum)?;
                 values.insert(node.output[0].clone(), output);
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
