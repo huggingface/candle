@@ -1849,7 +1849,6 @@ fn test_relu_operation() -> Result<()> {
 // "PRelu"
 #[test]
 fn test_prelu_operation() -> Result<()> {
-
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
             op_type: "PRelu".to_string(),
@@ -1862,16 +1861,18 @@ fn test_prelu_operation() -> Result<()> {
         }],
         name: "".to_string(),
         initializer: vec![],
-        input: vec![ValueInfoProto {
-            name: INPUT_X.to_string(),
-            doc_string: "".to_string(),
-            r#type: None,
-        },
-        ValueInfoProto {
-            name: INPUT_Y.to_string(),
-            doc_string: "".to_string(),
-            r#type: None,
-        }],
+        input: vec![
+            ValueInfoProto {
+                name: INPUT_X.to_string(),
+                doc_string: "".to_string(),
+                r#type: None,
+            },
+            ValueInfoProto {
+                name: INPUT_Y.to_string(),
+                doc_string: "".to_string(),
+                r#type: None,
+            },
+        ],
         output: vec![ValueInfoProto {
             name: OUTPUT_Z.to_string(),
             doc_string: "".to_string(),
@@ -1888,11 +1889,7 @@ fn test_prelu_operation() -> Result<()> {
         &Device::Cpu,
     )?;
 
-    let y: Tensor = Tensor::from_vec(
-        vec![1.0f32, 1.1f32, 1.2f32, 1.3f32],
-        &[2, 2],
-        &Device::Cpu,
-    )?;
+    let y: Tensor = Tensor::from_vec(vec![1.0f32, 1.1f32, 1.2f32, 1.3f32], &[2, 2], &Device::Cpu)?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);

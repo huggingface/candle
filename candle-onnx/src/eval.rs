@@ -1,9 +1,9 @@
 use crate::onnx::attribute_proto::AttributeType;
 use crate::onnx::tensor_proto::DataType;
 use crate::onnx::{self, GraphProto};
+use candle::Module;
 use candle::{bail, DType, Device, Result, Tensor};
 use candle_nn::activation::PReLU;
-use candle::Module;
 use std::collections::{HashMap, HashSet};
 
 pub type Value = Tensor;
