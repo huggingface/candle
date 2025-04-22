@@ -1977,36 +1977,46 @@ fn simple_eval_(
                     }
                 };
 
-                let square_sum = xs.zeros_like()?;
+                let mut square_sum: Vec<f32> = vec![];
                 let minc = xs.shape().dim(1)? as i64;
                 let c1 = ((*size as f64 - 1.0) / 2.0).floor() as i64;
                 let c2 = ((*size as f64 - 1.0) / 2.0).ceil() as i64 + 1;
 
                 println!("c1: {c1}, c2: {c2}");
-                println!("{:?}", xs.shape().dim(0)?);
-                for c in 0..xs.shape().dim(0)? {
-                    println!("c: {c}");
-                    let begin = cmp::max(0, c as i64 - c1) as usize;
-                    let end = cmp::min(minc, c as i64 + c2) as usize;
+                for n in 0..xs.shape().dim(0)? {
+                    for c in 0..xs.shape().dim(1)? {
+                        for h in 0..xs.shape().dim(2)? {
+                            for w in 0..xs.shape().dim(3)? {
+                                let begin = cmp::max(0, c as i64 - c1) as usize;
+                                let end = cmp::min(minc, c as i64 + c2) as usize;
 
-                    let xs_sum = xs.i((.., begin..end, .., ..))?.sqr()?.sum(1)?;
-                    // println!("{:?}", square_sum.i((.., c, .., ..)));
-                    // square_sum
-                    //     .i((.., c, .., ..))?
-                    //     .to_dtype(xs.dtype())?
-                    //     .broadcast_add(&xs_sum)?;
+                                let xs_sum = xs
+                                    .i((n, begin..end, h, w))?
+                                    .sqr()?
+                                    .sum(0)?
+                                    .to_scalar::<f32>()?;
+                                square_sum.push(xs_sum);
+                            }
+                        }
+                    }
                 }
 
-                // Create tensor to multiply with
+                println!("square_sum: {:?}", square_sum);
                 let mul_tensor =
                     Tensor::full(bias + (alpha / *size as f32), xs.shape(), xs.device())?
                         .to_dtype(xs.dtype())?;
 
                 let pow_tensor =
-                    Tensor::full(-beta, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
+                    Tensor::full(beta, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
 
-                let square_sum = square_sum.broadcast_mul(&mul_tensor)?.pow(&pow_tensor)?;
-                let output = xs.broadcast_div(&square_sum)?;
+                let square_sum =
+                    Tensor::from_vec(square_sum, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
+                let square_sum = square_sum.mul(&mul_tensor)?.pow(&pow_tensor)?;
+                println!(
+                    "square_sum: {:?}",
+                    square_sum.flatten_all()?.to_vec1::<f32>()?
+                );
+                let output = xs.div(&square_sum)?;
                 values.insert(node.output[0].clone(), output);
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
