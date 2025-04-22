@@ -5913,11 +5913,18 @@ fn test_sign_operation() -> Result<()> {
 
 #[test]
 fn test_lrn() -> Result<()> {
+    let mut attribs = vec![];
+    attribs.push(AttributeProto {
+        name: "size".to_string(),
+        r#type: AttributeType::Int.into(),
+        i: 4,
+        ..AttributeProto::default()
+    });
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
             op_type: "LRN".to_string(),
             domain: "".to_string(),
-            attribute: vec![],
+            attribute: attribs,
             input: vec![INPUT_X.to_string()],
             output: vec![OUTPUT_Z.to_string()],
             name: "".to_string(),
@@ -5941,22 +5948,28 @@ fn test_lrn() -> Result<()> {
     inputs.insert(
         INPUT_X.to_string(),
         Tensor::from_vec(
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
-            (3, 2, 2),
-            &Device::Cpu
+            vec![
+                1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
+            (3, 2, 2, 1),
+            &Device::Cpu,
         )?,
-    );
-    inputs.insert(
-        "size".to_string(),
-        Tensor::from_vec(vec![4i64], (1,), &Device::Cpu)?,
     );
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
 
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
     let expected = Tensor::from_vec(
-        vec![0.9991, 1.9975, 2.9949, 3.9913, 4.9864, 5.9798, 6.9834, 7.9898, 8.9848, 9.9783, 10.9700, 11.9597],
-        (3, 2, 2),
-        &Device::Cpu
+        vec![
+            0.9991f32, 1.9975, 2.9949, 3.9913, 4.9864, 5.9798, 6.9834, 7.9898, 8.9848, 9.9783,
+            10.9700, 11.9597,
+        ],
+        (3, 2, 2, 1),
+        &Device::Cpu,
     )?;
+
+    assert_eq!(
+        z.flatten_all()?.to_vec1::<f32>()?,
+        expected.flatten_all()?.to_vec1::<f32>()?
+    );
     Ok(())
 }
