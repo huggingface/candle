@@ -3,7 +3,6 @@ use crate::onnx::tensor_proto::DataType;
 use crate::onnx::{self, GraphProto};
 use candle::{bail, DType, Device, IndexOp, Result, Tensor};
 use core::f64;
-use std::borrow::BorrowMut;
 use std::cmp;
 use std::collections::{HashMap, HashSet};
 
@@ -1978,27 +1977,36 @@ fn simple_eval_(
                     }
                 };
 
-                let mut square_sum = xs.zeros_like()?;
-                let minc = xs.shape().dim(1)?;
-                let c1 = ((*size as f64 - 1.0) / 2.0).floor() as usize;
-                let c2 = ((*size as f64 - 1.0) / 2.0).ceil() as usize;
+                let square_sum = xs.zeros_like()?;
+                let minc = xs.shape().dim(1)? as i64;
+                let c1 = ((*size as f64 - 1.0) / 2.0).floor() as i64;
+                let c2 = ((*size as f64 - 1.0) / 2.0).ceil() as i64 + 1;
 
-                for c in 1..xs.shape().dim(0)? {
-                    let begin = cmp::max(0, c - c1);
-                    let end = cmp::min(minc, c + c2);
+                println!("c1: {c1}, c2: {c2}");
+                println!("{:?}", xs.shape().dim(0)?);
+                for c in 0..xs.shape().dim(0)? {
+                    println!("c: {c}");
+                    let begin = cmp::max(0, c as i64 - c1) as usize;
+                    let end = cmp::min(minc, c as i64 + c2) as usize;
 
-                    let xs_sum = xs.i((.., begin..end, .., ..))?
-                        .sqr()?
-                        .sum(1)?;
-                    square_sum.i((.., c, .., ..))?
-                        .broadcast_add(&xs_sum)?;
+                    let xs_sum = xs.i((.., begin..end, .., ..))?.sqr()?.sum(1)?;
+                    // println!("{:?}", square_sum.i((.., c, .., ..)));
+                    // square_sum
+                    //     .i((.., c, .., ..))?
+                    //     .to_dtype(xs.dtype())?
+                    //     .broadcast_add(&xs_sum)?;
                 }
 
-                let square_sum = square_sum
-                    .broadcast_mul(bias + (alpha / size))?
-                    .pow(-beta)?;
-                let output = xs
-                    .broadcast_div(&square_sum)?;
+                // Create tensor to multiply with
+                let mul_tensor =
+                    Tensor::full(bias + (alpha / *size as f32), xs.shape(), xs.device())?
+                        .to_dtype(xs.dtype())?;
+
+                let pow_tensor =
+                    Tensor::full(-beta, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
+
+                let square_sum = square_sum.broadcast_mul(&mul_tensor)?.pow(&pow_tensor)?;
+                let output = xs.broadcast_div(&square_sum)?;
                 values.insert(node.output[0].clone(), output);
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
