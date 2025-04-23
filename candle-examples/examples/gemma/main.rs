@@ -120,7 +120,11 @@ impl TextGeneration {
         std::io::stdout().flush()?;
 
         let mut generated_tokens = 0usize;
-        let eos_token = match self.tokenizer.get_token("<eos>") {
+        let eos_string = match self.model {
+            Model::V3(_) => "<end_of_turn>",
+            _ => "<eos>",
+        };
+        let eos_token = match self.tokenizer.get_token(eos_string) {
             Some(token) => token,
             None => anyhow::bail!("cannot find the <eos> token"),
         };
@@ -350,6 +354,31 @@ fn main() -> Result<()> {
         args.repeat_last_n,
         &device,
     );
-    pipeline.run(&args.prompt, args.sample_len)?;
+
+    let prompt = match args.which {
+        Which::Base2B
+        | Which::Base7B
+        | Which::Instruct2B
+        | Which::Instruct7B
+        | Which::InstructV1_1_2B
+        | Which::InstructV1_1_7B
+        | Which::CodeBase2B
+        | Which::CodeBase7B
+        | Which::CodeInstruct2B
+        | Which::CodeInstruct7B
+        | Which::BaseV2_2B
+        | Which::InstructV2_2B
+        | Which::BaseV2_9B
+        | Which::InstructV2_9B
+        | Which::BaseV3_1B => args.prompt,
+        Which::InstructV3_1B => {
+            format!(
+                "<start_of_turn> user\n{}<end_of_turn>\n<start_of_turn> model\n",
+                args.prompt
+            )
+        }
+    };
+
+    pipeline.run(&prompt, args.sample_len)?;
     Ok(())
 }

@@ -21,6 +21,7 @@ pub struct Config {
     pub num_key_value_heads: usize,
     pub rms_norm_eps: f64,
     pub rope_theta: f64,
+    pub rope_local_base_freq: f64,
     pub vocab_size: usize,
     pub final_logit_softcapping: Option<f64>,
     pub attn_logit_softcapping: Option<f64>,
@@ -67,12 +68,17 @@ struct RotaryEmbedding {
 }
 
 impl RotaryEmbedding {
-    fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
+    fn new(dtype: DType, cfg: &Config, dev: &Device, is_sliding: bool) -> Result<Self> {
         let dim = cfg.head_dim;
         let max_seq_len = cfg.max_position_embeddings;
+        let rope_freq = if is_sliding {
+            cfg.rope_local_base_freq
+        } else {
+            cfg.rope_theta
+        };
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
-            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+            .map(|i| 1f32 / rope_freq.powf(i as f64 / dim as f64) as f32)
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
@@ -305,13 +311,13 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(
-        rotary_emb: Arc<RotaryEmbedding>,
-        use_flash_attn: bool,
-        is_sliding: bool,
-        cfg: &Config,
-        vb: VarBuilder,
-    ) -> Result<Self> {
+    fn new(use_flash_attn: bool, is_sliding: bool, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let rotary_emb = Arc::new(RotaryEmbedding::new(
+            vb.dtype(),
+            cfg,
+            vb.device(),
+            is_sliding,
+        )?);
         let self_attn = Attention::new(
             rotary_emb,
             use_flash_attn,
@@ -388,18 +394,11 @@ impl Model {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
             let is_sliding = (layer_idx + 1) % cfg.sliding_window_pattern > 0;
-            let layer = DecoderLayer::new(
-                rotary_emb.clone(),
-                use_flash_attn,
-                is_sliding,
-                cfg,
-                vb_l.pp(layer_idx),
-            )?;
+            let layer = DecoderLayer::new(use_flash_attn, is_sliding, cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
