@@ -580,13 +580,25 @@ fn simple_eval_(
                 }
 
                 let x_mat = xs.reshape((row_number, col_number))?;
-                let x_mat = x_mat 
-                    .broadcast_sub(&x_mat.mean(1)?)?
-                    .reshape((row_number, col_number))?
-                    .broadcast_div(&(x_mat.var(1)? + eps as f64)?.sqrt()?)?
-                    .reshape(xs.shape())?;
+                let x_mean = x_mat
+                    .mean(1)? // compute mean for each column
+                    .reshape((row_number, 1))?;
+                let x_diff = x_mat.broadcast_sub(&x_mean)?;
+                let x_square_diff = x_diff
+                    .pow(&Tensor::full(2.0, xs.shape(), xs.device())?.to_dtype(xs.dtype())?)?;
+                let x_var = x_square_diff
+                    .mean(1)? // compute variance for each column
+                    .broadcast_add(
+                        &Tensor::full(eps as f32, row_number, xs.device())?.to_dtype(xs.dtype())?,
+                    )?
+                    .reshape((row_number, 1))?;
+                let x_std_dev = x_var.sqrt()?;
+                let y_mat = x_diff.broadcast_div(&x_std_dev)?;
 
-                let xs = x_mat.broadcast_mul(&weight)?.broadcast_add(&bias)?;
+                let xs = y_mat
+                    .reshape(xs.shape())?
+                    .broadcast_mul(&weight)?
+                    .broadcast_add(&bias)?;
                 values.insert(node.output[0].clone(), xs);
             }
             "Squeeze" => {

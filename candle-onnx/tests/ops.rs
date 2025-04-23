@@ -843,30 +843,30 @@ fn test_flatten_operation() -> Result<()> {
 fn test_layer_normalization() -> Result<()> {
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-80
     test(
-        &[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
-        &[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
-        Some(&[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+        &[[1.0f32, 2.0, 3.0], [4.0, 5.0, 6.0]],
+        &[[1.0f32, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        Some(&[[0.0f32, 0.0, 0.0], [0.0, 0.0, 0.0]]),
         Some(1),
         Some(1e-5),
-        &[[-1.2247, 0.0, 1.2247], [-1.2247, 0.0, 1.2247]],
+        &[[-1.2247f32, 0.0, 1.2247], [-1.2247, 0.0, 1.2247]],
     )?;
 
     test(
-        &[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
-        &[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
-        Some(&[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+        &[[1.0f32, 2.0, 3.0], [4.0, 5.0, 6.0]],
+        &[[1.0f32, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        Some(&[[0.0f32, 0.0, 0.0], [0.0, 0.0, 0.0]]),
         Some(1),
         Some(1e-1),
-        &[[-1.2157, 0.0, 1.2157], [-1.2157, 0.0, 1.2157]],
+        &[[-1.2157f32, 0.0, 1.2157], [-1.2157, 0.0, 1.2157]],
     )?;
 
     test(
-        &[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
-        &[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
-        Some(&[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+        &[[1.0f32, 2.0, 3.0], [4.0, 5.0, 6.0]],
+        &[[1.0f32, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        Some(&[[0.0f32, 0.0, 0.0], [0.0, 0.0, 0.0]]),
         Some(1),
         None,
-        &[[-1.2247, 0.0, 1.2247], [-1.2247, 0.0, 1.2247]],
+        &[[-1.2247f32, 0.0, 1.2247], [-1.2247, 0.0, 1.2247]],
     )?;
 
     fn test(
@@ -931,7 +931,11 @@ fn test_layer_normalization() -> Result<()> {
                 op_type: "LayerNormalization".to_string(),
                 domain: "".to_string(),
                 attribute: attribute,
-                input: vec![INPUT_X.to_string(), INPUT_Y.to_string(), INPUT_A.to_string()],
+                input: vec![
+                    INPUT_X.to_string(),
+                    INPUT_Y.to_string(),
+                    INPUT_A.to_string(),
+                ],
                 output: vec![OUTPUT_Z.to_string()],
                 name: "".to_string(),
                 doc_string: "".to_string(),
@@ -951,7 +955,10 @@ fn test_layer_normalization() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(xs, &Device::Cpu)?);
+        inputs.insert(
+            INPUT_X.to_string(),
+            Tensor::new(xs, &Device::Cpu)?.to_dtype(DType::F32)?,
+        );
         inputs.insert(
             INPUT_Y.to_string(),
             Tensor::new(weight, &Device::Cpu)?.to_dtype(DType::F32)?,
@@ -969,14 +976,14 @@ fn test_layer_normalization() -> Result<()> {
         let z = eval
             .get(OUTPUT_Z)
             .expect("Output 'z' not found")
-            .to_dtype(DType::F64)?;
+            .to_dtype(DType::F32)?;
 
-        let expected = Tensor::new(expected, &Device::Cpu)?.to_dtype(DType::F64)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?.to_dtype(DType::F32)?;
         match expected.dims().len() {
-            0 => assert_eq!(z.to_vec0::<f64>()?, expected.to_vec0::<f64>()?),
-            1 => assert_eq!(z.to_vec1::<f64>()?, expected.to_vec1::<f64>()?),
-            2 => assert_eq!(z.to_vec2::<f64>()?, expected.to_vec2::<f64>()?),
-            3 => assert_eq!(z.to_vec3::<f64>()?, expected.to_vec3::<f64>()?),
+            0 => assert_eq!(z.to_vec0::<f32>()?, expected.to_vec0::<f32>()?),
+            1 => assert_eq!(z.to_vec1::<f32>()?, expected.to_vec1::<f32>()?),
+            2 => assert_eq!(z.to_vec2::<f32>()?, expected.to_vec2::<f32>()?),
+            3 => assert_eq!(z.to_vec3::<f32>()?, expected.to_vec3::<f32>()?),
             _ => unreachable!(),
         };
 
