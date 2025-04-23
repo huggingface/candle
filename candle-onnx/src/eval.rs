@@ -558,12 +558,12 @@ fn simple_eval_(
                     &Tensor::zeros_like(&weight)?
                 };
                 let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(-1);
-                let axis = xs.normalize_axis(axis)?;
+                let axis = xs.normalize_axis(axis)?; // relative axis index
                 let eps = get_attr_opt::<f32>(node, "epsilon")?
                     .copied()
                     .unwrap_or(1e-5);
                 let stash_type = get_attr_opt::<i64>(node, "stash_type")?;
-                if stash_type.copied().unwrap_or(0) != 1 {
+                if stash_type.copied().unwrap_or(1) != 1 {
                     bail!("stash_type != 1 is not implemented")
                 };
 
@@ -579,14 +579,14 @@ fn simple_eval_(
                     }
                 }
 
-                let xs = xs
+                let x_mat = xs.reshape((row_number, col_number))?;
+                let x_mat = x_mat 
+                    .broadcast_sub(&x_mat.mean(1)?)?
                     .reshape((row_number, col_number))?
-                    .broadcast_sub(&xs.mean(axis)?)?
-                    .broadcast_div(&(xs.var(axis)? + eps as f64)?.sqrt()?)?;
+                    .broadcast_div(&(x_mat.var(1)? + eps as f64)?.sqrt()?)?
+                    .reshape(xs.shape())?;
 
-                let weight = weight.reshape((1, col_number))?;
-                let bias = bias.reshape((1, col_number))?;
-                let xs = xs.broadcast_mul(&weight)?.broadcast_add(&bias)?;
+                let xs = x_mat.broadcast_mul(&weight)?.broadcast_add(&bias)?;
                 values.insert(node.output[0].clone(), xs);
             }
             "Squeeze" => {

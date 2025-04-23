@@ -844,6 +844,8 @@ fn test_layer_normalization() -> Result<()> {
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-80
     test(
         &[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+        &[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        Some(&[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
         Some(1),
         Some(1e-5),
         &[[-1.2247, 0.0, 1.2247], [-1.2247, 0.0, 1.2247]],
@@ -851,6 +853,8 @@ fn test_layer_normalization() -> Result<()> {
 
     test(
         &[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+        &[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        Some(&[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
         Some(1),
         Some(1e-1),
         &[[-1.2157, 0.0, 1.2157], [-1.2157, 0.0, 1.2157]],
@@ -858,13 +862,17 @@ fn test_layer_normalization() -> Result<()> {
 
     test(
         &[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+        &[[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        Some(&[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
         Some(1),
         None,
         &[[-1.2247, 0.0, 1.2247], [-1.2247, 0.0, 1.2247]],
     )?;
 
     fn test(
-        input: impl NdArray,
+        xs: impl NdArray,
+        weight: impl NdArray,
+        bias: Option<impl NdArray>,
         axis: Option<i64>,
         epsilon: Option<f32>,
         expected: impl NdArray,
@@ -900,7 +908,7 @@ fn test_layer_normalization() -> Result<()> {
                 ref_attr_name: "epsilon".to_string(),
                 i: 0,
                 doc_string: "epsilon".to_string(),
-                r#type: 2,
+                r#type: 1, // f32
                 f: epsilon,
                 s: vec![],
                 t: None,
@@ -923,25 +931,14 @@ fn test_layer_normalization() -> Result<()> {
                 op_type: "LayerNormalization".to_string(),
                 domain: "".to_string(),
                 attribute: attribute,
-                input: vec![INPUT_X.to_string()],
+                input: vec![INPUT_X.to_string(), INPUT_Y.to_string(), INPUT_A.to_string()],
                 output: vec![OUTPUT_Z.to_string()],
                 name: "".to_string(),
                 doc_string: "".to_string(),
             }],
             name: "".to_string(),
             initializer: vec![],
-            input: vec![
-                ValueInfoProto {
-                    name: INPUT_X.to_string(),
-                    doc_string: "".to_string(),
-                    r#type: None,
-                },
-                ValueInfoProto {
-                    name: INPUT_Y.to_string(),
-                    doc_string: "".to_string(),
-                    r#type: None,
-                },
-            ],
+            input: vec![],
             output: vec![ValueInfoProto {
                 name: OUTPUT_Z.to_string(),
                 doc_string: "".to_string(),
@@ -954,7 +951,17 @@ fn test_layer_normalization() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(input, &Device::Cpu)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(xs, &Device::Cpu)?);
+        inputs.insert(
+            INPUT_Y.to_string(),
+            Tensor::new(weight, &Device::Cpu)?.to_dtype(DType::F32)?,
+        );
+        if let Some(bias) = bias {
+            inputs.insert(
+                INPUT_A.to_string(),
+                Tensor::new(bias, &Device::Cpu)?.to_dtype(DType::F32)?,
+            );
+        }
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
