@@ -1982,7 +1982,6 @@ fn simple_eval_(
                 let c1 = ((*size as f64 - 1.0) / 2.0).floor() as i64;
                 let c2 = ((*size as f64 - 1.0) / 2.0).ceil() as i64 + 1;
 
-                println!("c1: {c1}, c2: {c2}");
                 for n in 0..xs.shape().dim(0)? {
                     for c in 0..xs.shape().dim(1)? {
                         for h in 0..xs.shape().dim(2)? {
@@ -2001,21 +2000,19 @@ fn simple_eval_(
                     }
                 }
 
-                println!("square_sum: {:?}", square_sum);
-                let mul_tensor =
-                    Tensor::full(bias + (alpha / *size as f32), xs.shape(), xs.device())?
-                        .to_dtype(xs.dtype())?;
-
+                let mul_tensor = Tensor::full(alpha / *size as f32, xs.shape(), xs.device())?
+                    .to_dtype(xs.dtype())?;
+                let add_tensor =
+                    Tensor::full(bias, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
                 let pow_tensor =
                     Tensor::full(beta, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
 
                 let square_sum =
                     Tensor::from_vec(square_sum, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
-                let square_sum = square_sum.mul(&mul_tensor)?.pow(&pow_tensor)?;
-                println!(
-                    "square_sum: {:?}",
-                    square_sum.flatten_all()?.to_vec1::<f32>()?
-                );
+                let square_sum = mul_tensor
+                    .mul(&square_sum)?
+                    .add(&add_tensor)?
+                    .pow(&pow_tensor)?;
                 let output = xs.div(&square_sum)?;
                 values.insert(node.output[0].clone(), output);
             }

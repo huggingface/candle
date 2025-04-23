@@ -5911,6 +5911,7 @@ fn test_sign_operation() -> Result<()> {
     Ok(())
 }
 
+// LRN
 #[test]
 fn test_lrn() -> Result<()> {
     let mut attribs = vec![];
@@ -5960,8 +5961,18 @@ fn test_lrn() -> Result<()> {
     let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
     let expected = Tensor::from_vec(
         vec![
-            0.9991f32, 1.9975, 2.9949, 3.9913, 4.9864, 5.9798, 6.9834, 7.9898, 8.9848, 9.9783,
-            10.9700, 11.9597,
+            0.99906355f32,
+            1.99745381,
+            2.99494743,
+            3.99132180,
+            4.98635626,
+            5.97982931,
+            6.99344492,
+            7.98981524,
+            8.98484230,
+            9.97830486,
+            10.96998405,
+            11.95965862,
         ],
         (1, 2, 2, 3),
         &Device::Cpu,
