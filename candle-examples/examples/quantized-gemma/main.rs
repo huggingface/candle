@@ -224,7 +224,7 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 // Format for Gemma 3 chat/instruction format
-                format!("<start_of_turn>user\n{prompt}\n<end_of_turn>\n<start_of_turn>model\n")
+                format!("<start_of_turn> user\n{prompt}<end_of_turn>\n<start_of_turn> model\n")
             }
         };
         print!("{}", &prompt_str);
