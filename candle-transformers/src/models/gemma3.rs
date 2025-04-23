@@ -455,26 +455,54 @@ impl Model {
         })
     }
 
+    fn create_attention_masks(
+        &self,
+        batch_size: usize,
+        seq_len: usize,
+        seqlen_offset: usize,
+    ) -> Result<(Option<Tensor>, Option<Tensor>)> {
+        if seq_len <= 1 {
+            return Ok((None, None));
+        }
+
+        let mask = prepare_decoder_attention_mask(
+            batch_size,
+            seq_len,
+            seqlen_offset,
+            false,
+            self.sliding_window,
+            self.dtype,
+            &self.device,
+        )?;
+
+        let sliding_mask = prepare_decoder_attention_mask(
+            batch_size,
+            seq_len,
+            seqlen_offset,
+            true,
+            self.sliding_window,
+            self.dtype,
+            &self.device,
+        )?;
+
+        Ok((Some(mask), Some(sliding_mask)))
+    }
+
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
+
+        let (attention_mask, sliding_attention_mask) =
+            self.create_attention_masks(b_size, seq_len, seqlen_offset)?;
+
         for layer in self.layers.iter_mut() {
-            let attention_mask = if seq_len <= 1 {
-                None
+            let mask = if layer.is_sliding {
+                &sliding_attention_mask
             } else {
-                let mask = prepare_decoder_attention_mask(
-                    b_size,
-                    seq_len,
-                    seqlen_offset,
-                    layer.is_sliding,
-                    self.sliding_window,
-                    self.dtype,
-                    &self.device,
-                )?;
-                Some(mask)
+                &attention_mask
             };
-            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
+            xs = layer.forward(&xs, mask.as_ref(), seqlen_offset)?
         }
         let logits = xs
             .narrow(1, seq_len - 1, 1)?
