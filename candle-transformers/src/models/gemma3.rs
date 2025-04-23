@@ -450,7 +450,20 @@ impl Model {
             .to_dtype(self.dtype)
     }
 
+    pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
+        self.embed_tokens.forward(input_ids)
+    }
+
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        self.forward_embeds(input_ids, self.embed_tokens(input_ids)?, seqlen_offset)
+    }
+
+    pub fn forward_embeds(
+        &mut self,
+        input_ids: &Tensor,
+        xs: Tensor,
+        seqlen_offset: usize,
+    ) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
         let attention_mask = if seq_len <= 1 {
             None
@@ -458,7 +471,6 @@ impl Model {
             let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset)?;
             Some(mask)
         };
-        let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
