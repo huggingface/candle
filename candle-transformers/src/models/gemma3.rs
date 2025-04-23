@@ -302,6 +302,7 @@ fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Ten
 
 #[derive(Debug, Clone)]
 struct DecoderLayer {
+    is_sliding: bool,
     self_attn: Attention,
     mlp: MLP,
     input_layernorm: RmsNorm,
@@ -344,6 +345,7 @@ impl DecoderLayer {
             vb.pp("post_attention_layernorm"),
         )?;
         Ok(Self {
+            is_sliding,
             self_attn,
             mlp,
             input_layernorm,
@@ -374,6 +376,43 @@ impl DecoderLayer {
     fn clear_kv_cache(&mut self) {
         self.self_attn.clear_kv_cache()
     }
+}
+
+fn prepare_decoder_attention_mask(
+    b_size: usize,
+    tgt_len: usize,
+    seqlen_offset: usize,
+    is_sliding: bool,
+    sliding_window: usize,
+    dtype: DType,
+    device: &Device,
+) -> Result<Tensor> {
+    let mask: Vec<_> = if is_sliding {
+        (0..tgt_len)
+            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0f32 }))
+            .collect()
+    } else {
+        (0..tgt_len)
+            .flat_map(|i| {
+                (0..tgt_len).map(move |j| {
+                    if i < j || j + sliding_window < i {
+                        f32::NEG_INFINITY
+                    } else {
+                        0.
+                    }
+                })
+            })
+            .collect()
+    };
+    let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), device)?;
+    let mask = if seqlen_offset > 0 {
+        let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, device)?;
+        Tensor::cat(&[&mask0, &mask], D::Minus1)?
+    } else {
+        mask
+    };
+    mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
+        .to_dtype(dtype)
 }
 
 #[derive(Debug, Clone)]
@@ -416,50 +455,25 @@ impl Model {
         })
     }
 
-    fn prepare_decoder_attention_mask(
-        &self,
-        b_size: usize,
-        tgt_len: usize,
-        seqlen_offset: usize,
-    ) -> Result<Tensor> {
-        let mask: Vec<_> = match Some(self.sliding_window) {
-            None => (0..tgt_len)
-                .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
-                .collect(),
-            Some(sliding_window) => (0..tgt_len)
-                .flat_map(|i| {
-                    (0..tgt_len).map(move |j| {
-                        if i < j || j + sliding_window < i {
-                            f32::NEG_INFINITY
-                        } else {
-                            0.
-                        }
-                    })
-                })
-                .collect(),
-        };
-        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
-        let mask = if seqlen_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
-            Tensor::cat(&[&mask0, &mask], D::Minus1)?
-        } else {
-            mask
-        };
-        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
-            .to_dtype(self.dtype)
-    }
-
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
-        let attention_mask = if seq_len <= 1 {
-            None
-        } else {
-            let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset)?;
-            Some(mask)
-        };
         let xs = self.embed_tokens.forward(input_ids)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         for layer in self.layers.iter_mut() {
+            let attention_mask = if seq_len <= 1 {
+                None
+            } else {
+                let mask = prepare_decoder_attention_mask(
+                    b_size,
+                    seq_len,
+                    seqlen_offset,
+                    layer.is_sliding,
+                    self.sliding_window,
+                    self.dtype,
+                    &self.device,
+                )?;
+                Some(mask)
+            };
             xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
         }
         let logits = xs
