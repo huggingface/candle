@@ -243,14 +243,18 @@ impl ModelWeights {
 
         let rope_freq_scaling_factor = md_get("gemma3.rope.scaling.factor")
             .and_then(|m| m.to_f32())
-            .unwrap_or(8f32);    
+            .unwrap_or(8f32);
 
         // Compute the dimensions for queries, keys, and values
         // These are the total dimensions when projected across all heads
         let q_dim = head_count * key_length;
 
         // Precompute rotary embeddings
-        let (cos, sin) = precomput_freqs_cis(key_length, rope_freq_base/rope_freq_scaling_factor, device)?;
+        let (cos, sin) = precomput_freqs_cis(
+            key_length,
+            rope_freq_base / rope_freq_scaling_factor,
+            device,
+        )?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         // Load token embeddings and output projection
