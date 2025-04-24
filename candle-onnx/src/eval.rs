@@ -1,7 +1,7 @@
 use crate::onnx::attribute_proto::AttributeType;
 use crate::onnx::tensor_proto::DataType;
 use crate::onnx::{self, GraphProto};
-use candle::{bail, DType, Device, IntDType, Result, Tensor};
+use candle::{bail, DType, Device, Result, Tensor};
 use std::collections::{HashMap, HashSet};
 
 pub type Value = Tensor;
@@ -584,8 +584,7 @@ fn simple_eval_(
                     .mean(1)? // compute mean for each column
                     .reshape((row_number, 1))?;
                 let x_diff = x_mat.broadcast_sub(&x_mean)?;
-                let x_square_diff = x_diff
-                    .pow(&Tensor::full(2.0, xs.shape(), xs.device())?.to_dtype(xs.dtype())?)?;
+                let x_square_diff = x_diff.broadcast_mul(&x_diff)?;
                 let x_var = x_square_diff
                     .mean(1)? // compute variance for each column
                     .broadcast_add(
