@@ -413,6 +413,100 @@ impl BackendStorage for MetalStorage {
         self.binary(name, rhs, lhs_l, rhs_l)
     }
 
+    fn const_set(&mut self, s: crate::scalar::Scalar, l: &Layout) -> Result<()> {
+        use crate::scalar::Scalar;
+        fn set<S: crate::WithDType + candle_metal_kernels::utils::EncoderParam>(
+            self_: &mut MetalStorage,
+            s: S,
+            l: &Layout,
+        ) -> Result<()> {
+            let device = self_.device();
+            let dtype = self_.dtype;
+            let shape = l.shape();
+            let el_count = shape.elem_count();
+            let command_buffer = device.command_buffer()?;
+            command_buffer.set_label("const-set");
+            let dst = buffer_o(&self_.buffer, l, self_.dtype);
+
+            match (el_count % 2, dtype, l.is_contiguous()) {
+                (0, DType::BF16 | DType::F16, true) => {
+                    use candle_metal_kernels::unary::contiguous_tiled;
+                    let kernel_name = match dtype {
+                        DType::F16 => contiguous_tiled::const_set::HALF,
+                        DType::BF16 => contiguous_tiled::const_set::BFLOAT,
+                        _ => crate::bail!("internal bug in const_set"),
+                    };
+                    candle_metal_kernels::call_const_set_contiguous_tiled(
+                        &device.device,
+                        &command_buffer,
+                        &device.kernels,
+                        kernel_name,
+                        el_count,
+                        s,
+                        dst,
+                    )
+                    .map_err(MetalError::from)?;
+                }
+                (_, _, true) => {
+                    use candle_metal_kernels::unary::contiguous;
+                    let kernel_name = match dtype {
+                        DType::F16 => contiguous::const_set::HALF,
+                        DType::BF16 => contiguous::const_set::BFLOAT,
+                        DType::F32 => contiguous::const_set::FLOAT,
+                        DType::I64 => contiguous::const_set::I64,
+                        DType::U32 => contiguous::const_set::U32,
+                        DType::U8 => contiguous::const_set::U8,
+                        DType::F64 => crate::bail!("unsupported const-set f64"),
+                    };
+                    candle_metal_kernels::call_const_set_contiguous(
+                        &device.device,
+                        &command_buffer,
+                        &device.kernels,
+                        kernel_name,
+                        el_count,
+                        s,
+                        dst,
+                    )
+                    .map_err(MetalError::from)?;
+                }
+                (_, _, false) => {
+                    use candle_metal_kernels::unary::strided;
+                    let kernel_name = match dtype {
+                        DType::F16 => strided::const_set::HALF,
+                        DType::BF16 => strided::const_set::BFLOAT,
+                        DType::F32 => strided::const_set::FLOAT,
+                        DType::I64 => strided::const_set::I64,
+                        DType::U32 => strided::const_set::U32,
+                        DType::U8 => strided::const_set::U8,
+                        DType::F64 => crate::bail!("unsupported const-set f64"),
+                    };
+                    candle_metal_kernels::call_const_set_strided(
+                        &device.device,
+                        &command_buffer,
+                        &device.kernels,
+                        kernel_name,
+                        l.dims(),
+                        s,
+                        l.stride(),
+                        dst,
+                    )
+                    .map_err(MetalError::from)?;
+                }
+            }
+            Ok(())
+        }
+        match (self.dtype, s) {
+            (DType::U8, Scalar::U8(s)) => set(self, s, l),
+            (DType::U32, Scalar::U32(s)) => set(self, s, l),
+            (DType::I64, Scalar::I64(s)) => set(self, s, l),
+            (DType::F16, Scalar::F16(s)) => set(self, s, l),
+            (DType::BF16, Scalar::BF16(s)) => set(self, s, l),
+            (DType::F32, Scalar::F32(s)) => set(self, s, l),
+            (DType::F64, Scalar::F64(s)) => set(self, s, l),
+            _ => crate::bail!("dtype mismatch, expected {:?}, got {:?}", self.dtype, s),
+        }
+    }
+
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
         let device = self.device();
         let shape = layout.shape();
@@ -1957,40 +2051,6 @@ impl BackendDevice for MetalDevice {
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
         let size = shape.elem_count() * dtype.size_in_bytes();
         let buffer = self.allocate_zeros(size)?;
-        Ok(MetalStorage::new(
-            buffer,
-            self.clone(),
-            shape.elem_count(),
-            dtype,
-        ))
-    }
-
-    fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
-        let name = match dtype {
-            DType::U8 => "fill_u8",
-            DType::U32 => "fill_u32",
-            DType::I64 => "fill_i64",
-            DType::F16 => "fill_f16",
-            DType::BF16 => "fill_bf16",
-            DType::F32 => "fill_f32",
-            DType::F64 => {
-                let cpu_storage = crate::cpu_backend::CpuDevice.ones_impl(shape, dtype)?;
-                return self.storage_from_cpu_storage(&cpu_storage);
-            }
-        };
-        let buffer = self.new_buffer(shape.elem_count(), dtype, "alloc-ones")?;
-        let command_buffer = self.command_buffer()?;
-        candle_metal_kernels::call_const_fill(
-            &self.device,
-            &command_buffer,
-            &self.kernels,
-            name,
-            shape.elem_count(),
-            &buffer,
-            1.,
-        )
-        .map_err(MetalError::from)?;
-
         Ok(MetalStorage::new(
             buffer,
             self.clone(),

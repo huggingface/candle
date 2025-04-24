@@ -3,7 +3,7 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BackpropOp, BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::scalar::TensorOrScalar;
-use crate::shape::{Dim, Dims};
+use crate::shape::{Dim, Dims, ShapeWithOneHole};
 use crate::{bail, storage::Storage, DType, Device, Error, Layout, Result, Shape};
 use std::sync::{Arc, RwLock};
 
@@ -185,7 +185,9 @@ impl Tensor {
     ) -> Result<Self> {
         let none = BackpropOp::none();
         let shape = shape.into();
-        let storage = device.ones(&shape, dtype)?;
+        let mut storage = unsafe { device.alloc_uninit(&shape, dtype)? };
+        let layout = Layout::contiguous(shape.clone());
+        storage.const_set(crate::scalar::Scalar::one(dtype), &layout)?;
         Ok(from_storage(storage, shape, none, is_variable))
     }
 
@@ -200,6 +202,18 @@ impl Tensor {
     /// ```
     pub fn ones<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
         Self::ones_impl(shape, dtype, device, false)
+    }
+
+    pub fn const_set(&self, value: crate::scalar::Scalar) -> Result<()> {
+        self.storage_mut().const_set(value, self.layout())
+    }
+
+    pub fn zero_set(&self) -> Result<()> {
+        self.const_set(crate::scalar::Scalar::zero(self.dtype()))
+    }
+
+    pub fn one_set(&self) -> Result<()> {
+        self.const_set(crate::scalar::Scalar::one(self.dtype()))
     }
 
     /// Creates a new tensor filled with ones with same shape, dtype, and device as the other tensor.
@@ -452,17 +466,13 @@ impl Tensor {
         Self::from_vec_impl(data, len, device, false)
     }
 
-    pub(crate) fn from_vec_impl<S: Into<Shape>, D: crate::WithDType>(
+    pub(crate) fn from_vec_impl<S: ShapeWithOneHole, D: crate::WithDType>(
         data: Vec<D>,
         shape: S,
         device: &Device,
         is_variable: bool,
     ) -> Result<Self> {
-        let shape = shape.into();
-        let buffer_size = data.len();
-        if buffer_size != shape.elem_count() {
-            return Err(Error::ShapeMismatch { buffer_size, shape }.bt());
-        }
+        let shape = shape.into_shape(data.len())?;
         let storage = device.storage_owned(data)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, is_variable))
@@ -481,7 +491,7 @@ impl Tensor {
     /// ]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn from_vec<S: Into<Shape>, D: crate::WithDType>(
+    pub fn from_vec<S: ShapeWithOneHole, D: crate::WithDType>(
         data: Vec<D>,
         shape: S,
         device: &Device,
@@ -502,17 +512,12 @@ impl Tensor {
     /// ]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn from_slice<S: Into<Shape>, D: crate::WithDType>(
+    pub fn from_slice<S: ShapeWithOneHole, D: crate::WithDType>(
         array: &[D],
         shape: S,
         device: &Device,
     ) -> Result<Self> {
-        let shape = shape.into();
-        let n: usize = shape.elem_count();
-        let buffer_size: usize = array.len();
-        if buffer_size != n {
-            return Err(Error::ShapeMismatch { buffer_size, shape }.bt());
-        }
+        let shape = shape.into_shape(array.len())?;
         let storage = device.storage_from_slice(array)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, false))
@@ -2197,7 +2202,7 @@ impl Tensor {
     ///
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn reshape<S: crate::shape::ShapeWithOneHole>(&self, s: S) -> Result<Tensor> {
+    pub fn reshape<S: ShapeWithOneHole>(&self, s: S) -> Result<Tensor> {
         let shape = s.into_shape(self.elem_count())?;
         if shape.elem_count() != self.elem_count() {
             return Err(Error::ShapeMismatchBinaryOp {
@@ -2579,6 +2584,28 @@ impl Tensor {
     /// Broadcasting version of `pow`.
     pub fn broadcast_pow(&self, rhs: &Tensor) -> Result<Self> {
         rhs.broadcast_mul(&self.log()?)?.exp()
+    }
+
+    /// Returns a new tensor with the order of elements reversed along the specified dimensions.
+    /// This function makes a copy of the tensor’s data.
+    ///
+    /// ```rust
+    /// # use candle_core::{Tensor, Device};
+    /// let t = Tensor::arange(0., 6., &Device::Cpu)?.reshape((2, 3))?;
+    /// assert_eq!(t.to_vec2::<f64>()?, &[[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]);
+    /// let t_flipped = t.flip(&[0])?;
+    /// assert_eq!(t_flipped.to_vec2::<f64>()?, &[[3.0, 4.0, 5.0], [0.0, 1.0, 2.0]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn flip(&self, dims: &[usize]) -> Result<Tensor> {
+        let mut result = self.clone();
+        for &dim in dims.iter() {
+            let size = result.dim(dim)?;
+            let indices: Vec<i64> = (0..size).rev().map(|x| x as i64).collect();
+            let indices_tensor = Tensor::from_vec(indices, (size,), result.device())?;
+            result = result.index_select(&indices_tensor, dim)?;
+        }
+        Ok(result)
     }
 }
 

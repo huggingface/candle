@@ -1,5 +1,6 @@
 use crate::backend::BackendStorage;
 use crate::op::{self, CmpOp, ReduceOp};
+use crate::scalar::Scalar;
 use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
 use crate::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 
@@ -70,6 +71,14 @@ impl Storage {
             Err(Error::DTypeMismatchBinaryOp { lhs, rhs, op }.bt())
         } else {
             Ok(())
+        }
+    }
+
+    pub(crate) fn const_set(&mut self, v: Scalar, l: &Layout) -> Result<()> {
+        match self {
+            Storage::Cpu(storage) => storage.const_set(v, l),
+            Storage::Cuda(storage) => storage.const_set(v, l),
+            Storage::Metal(storage) => storage.const_set(v, l),
         }
     }
 
