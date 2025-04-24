@@ -68,10 +68,15 @@ struct RotaryEmbedding {
 }
 
 impl RotaryEmbedding {
-    fn new(dtype: DType, cfg: &Config, dev: &Device, is_sliding: bool) -> Result<Self> {
+    fn new(
+        dtype: DType,
+        cfg: &Config,
+        dev: &Device,
+        sliding_window: Option<usize>,
+    ) -> Result<Self> {
         let dim = cfg.head_dim;
         let max_seq_len = cfg.max_position_embeddings;
-        let rope_freq = if is_sliding {
+        let rope_freq = if sliding_window.is_some() {
             cfg.rope_local_base_freq
         } else {
             cfg.rope_theta
@@ -168,8 +173,8 @@ impl Attention {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         use_flash_attn: bool,
-        is_sliding: bool,
         cfg: &Config,
+        sliding_window: Option<usize>,
         vb: VarBuilder,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
@@ -184,13 +189,13 @@ impl Attention {
         let o_proj = linear(num_heads * head_dim, hidden_sz, bias, vb.pp("o_proj"))?;
         let q_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
         let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
-        let kv_cache = if is_sliding {
-            KvCache::Rotating(candle_nn::kv_cache::RotatingKvCache::new(
-                2,
-                cfg.sliding_window,
-            ))
+        let kv_cache = if let Some(sliding_window) = sliding_window {
+            KvCache::Rotating(candle_nn::kv_cache::RotatingKvCache::new(2, sliding_window))
         } else {
-            KvCache::Normal(candle_nn::kv_cache::KvCache::new(2, cfg.sliding_window))
+            KvCache::Normal(candle_nn::kv_cache::KvCache::new(
+                2,
+                cfg.max_position_embeddings,
+            ))
         };
         Ok(Self {
             q_proj,
@@ -302,28 +307,33 @@ fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Ten
 
 #[derive(Debug, Clone)]
 struct DecoderLayer {
-    is_sliding: bool,
     self_attn: Attention,
     mlp: MLP,
     input_layernorm: RmsNorm,
     pre_feedforward_layernorm: RmsNorm,
     post_feedforward_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
+    sliding_window: Option<usize>,
 }
 
 impl DecoderLayer {
-    fn new(use_flash_attn: bool, is_sliding: bool, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        use_flash_attn: bool,
+        cfg: &Config,
+        vb: VarBuilder,
+        sliding_window: Option<usize>,
+    ) -> Result<Self> {
         let rotary_emb = Arc::new(RotaryEmbedding::new(
             vb.dtype(),
             cfg,
             vb.device(),
-            is_sliding,
+            sliding_window,
         )?);
         let self_attn = Attention::new(
             rotary_emb,
             use_flash_attn,
-            is_sliding,
             cfg,
+            sliding_window,
             vb.pp("self_attn"),
         )?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
@@ -345,13 +355,13 @@ impl DecoderLayer {
             vb.pp("post_attention_layernorm"),
         )?;
         Ok(Self {
-            is_sliding,
             self_attn,
             mlp,
             input_layernorm,
             pre_feedforward_layernorm,
             post_feedforward_layernorm,
             post_attention_layernorm,
+            sliding_window,
         })
     }
 
@@ -382,16 +392,11 @@ fn prepare_decoder_attention_mask(
     b_size: usize,
     tgt_len: usize,
     seqlen_offset: usize,
-    is_sliding: bool,
-    sliding_window: usize,
+    sliding_window: Option<usize>,
     dtype: DType,
     device: &Device,
 ) -> Result<Tensor> {
-    let mask: Vec<_> = if is_sliding {
-        (0..tgt_len)
-            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0f32 }))
-            .collect()
-    } else {
+    let mask: Vec<_> = if let Some(sliding_window) = sliding_window {
         (0..tgt_len)
             .flat_map(|i| {
                 (0..tgt_len).map(move |j| {
@@ -402,6 +407,10 @@ fn prepare_decoder_attention_mask(
                     }
                 })
             })
+            .collect()
+    } else {
+        (0..tgt_len)
+            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0f32 }))
             .collect()
     };
     let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), device)?;
@@ -436,8 +445,13 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let is_sliding = (layer_idx + 1) % cfg.sliding_window_pattern > 0;
-            let layer = DecoderLayer::new(use_flash_attn, is_sliding, cfg, vb_l.pp(layer_idx))?;
+            let sliding_window = (layer_idx + 1) % cfg.sliding_window_pattern > 0;
+            let layer = DecoderLayer::new(
+                use_flash_attn,
+                cfg,
+                vb_l.pp(layer_idx),
+                sliding_window.then(|| cfg.sliding_window),
+            )?;
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
@@ -469,8 +483,7 @@ impl Model {
             batch_size,
             seq_len,
             seqlen_offset,
-            false,
-            self.sliding_window,
+            None,
             self.dtype,
             &self.device,
         )?;
@@ -479,8 +492,7 @@ impl Model {
             batch_size,
             seq_len,
             seqlen_offset,
-            true,
-            self.sliding_window,
+            Some(self.sliding_window),
             self.dtype,
             &self.device,
         )?;
@@ -497,7 +509,7 @@ impl Model {
             self.create_attention_masks(b_size, seq_len, seqlen_offset)?;
 
         for layer in self.layers.iter_mut() {
-            let mask = if layer.is_sliding {
+            let mask = if layer.sliding_window.is_some() {
                 &sliding_attention_mask
             } else {
                 &attention_mask
