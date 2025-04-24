@@ -450,7 +450,7 @@ impl Model {
                 use_flash_attn,
                 cfg,
                 vb_l.pp(layer_idx),
-                sliding_window.then(|| cfg.sliding_window),
+                sliding_window.then_some(cfg.sliding_window),
             )?;
             layers.push(layer)
         }
