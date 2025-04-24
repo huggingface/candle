@@ -22,6 +22,10 @@ use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, Module};
 
 pub const MAX_SEQ_LEN: usize = 131072; // Gemma 3 supports 128K context window
+pub const DEFAULT_SLIDING_WINDOW_TYPE: usize = 6;
+pub const DEFAULT_ROPE_FREQUENCY: f32 = 1_000_000.;
+pub const DEFAULT_ROPE_FREQUENCY_SLIDING: f32 = 10_000.;
+pub const DEFAULT_ROPE_FREQUENCY_SCALE_FACTOR: f32 = 1.;
 
 #[derive(Debug, Clone)]
 struct QMatMul {
@@ -66,22 +70,10 @@ struct RotaryEmbedding {
 }
 
 impl RotaryEmbedding {
-    fn new(
-        head_dim: usize,
-        rope_base_freq: f32,
-        rope_base_freq_sliding: f32,
-        _scale_factor: f32,
-        is_sliding: bool,
-        device: &Device,
-    ) -> Result<Self> {
-        let rope_freq = if is_sliding {
-            rope_base_freq_sliding
-        } else {
-            rope_base_freq
-        };
+    fn new(head_dim: usize, rope_frequency: f32, device: &Device) -> Result<Self> {
         let theta: Vec<_> = (0..head_dim)
             .step_by(2)
-            .map(|i| 1f32 / rope_freq.powf(i as f32 / head_dim as f32))
+            .map(|i| 1f32 / rope_frequency.powf(i as f32 / head_dim as f32))
             .collect();
         let theta = Tensor::new(theta.as_slice(), device)?;
         let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
@@ -135,8 +127,7 @@ struct LayerWeights {
     head_dim: usize,  // Dimension of each head
     q_dim: usize,     // Total dimension for queries
 
-    is_sliding: bool,
-    sliding_window_size: usize,
+    sliding_window_size: Option<usize>,
 
     rotary_embedding: RotaryEmbedding,
     neg_inf: Tensor,
@@ -158,15 +149,11 @@ impl LayerWeights {
         dtype: DType,
         device: &Device,
     ) -> Result<Tensor> {
-        let mask: Vec<_> = if self.is_sliding {
-            (0..seq_len)
-                .flat_map(|i| (0..seq_len).map(move |j| if i < j { 0u32 } else { 1u32 }))
-                .collect()
-        } else {
+        let mask: Vec<_> = if let Some(sliding_window_size) = self.sliding_window_size {
             (0..seq_len)
                 .flat_map(|i| {
                     (0..seq_len).map(move |j| {
-                        if i < j || j + self.sliding_window_size < i {
+                        if i < j || j + sliding_window_size < i {
                             0u32
                         } else {
                             1u32
@@ -174,10 +161,14 @@ impl LayerWeights {
                     })
                 })
                 .collect()
+        } else {
+            (0..seq_len)
+                .flat_map(|i| (0..seq_len).map(move |j| if i < j { 0u32 } else { 1u32 }))
+                .collect()
         };
-        let mask = Tensor::from_slice(&mask, (seq_len, seq_len), &device)?;
+        let mask = Tensor::from_slice(&mask, (seq_len, seq_len), device)?;
         let mask = if index_pos > 0 {
-            let mask0 = Tensor::zeros((seq_len, index_pos), DType::F32, &device)?;
+            let mask0 = Tensor::zeros((seq_len, index_pos), DType::F32, device)?;
             Tensor::cat(&[&mask0, &mask], D::Minus1)?
         } else {
             mask
@@ -286,17 +277,22 @@ impl ModelWeights {
         let rms_norm_eps = md_get("gemma3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
         let sliding_window_size = md_get("gemma3.attention.sliding_window")?.to_u32()? as usize;
 
+        let sliding_window_type = md_get("gemma3.attention.sliding_window_type")
+            .and_then(|m| Ok(m.to_u32()? as usize))
+            .unwrap_or(DEFAULT_SLIDING_WINDOW_TYPE);
+
         let rope_freq_base = md_get("gemma3.rope.freq_base")
             .and_then(|m| m.to_f32())
-            .unwrap_or(1000000f32);
+            .unwrap_or(DEFAULT_ROPE_FREQUENCY);
 
         let rope_freq_base_sliding = md_get("gemma3.rope.local_freq_base")
             .and_then(|m| m.to_f32())
-            .unwrap_or(10000f32);
+            .unwrap_or(DEFAULT_ROPE_FREQUENCY_SLIDING);
 
-        let rope_freq_scaling_factor = md_get("gemma3.rope.scaling.factor")
+        // Unused in Llama.cpp so we aren't using it here.
+        let _rope_freq_scaling_factor = md_get("gemma3.rope.scaling.factor")
             .and_then(|m| m.to_f32())
-            .unwrap_or(8f32);
+            .unwrap_or(DEFAULT_ROPE_FREQUENCY_SCALE_FACTOR);
 
         // Compute the dimensions for queries, keys, and values
         // These are the total dimensions when projected across all heads
@@ -373,15 +369,15 @@ impl ModelWeights {
             };
 
             // Sliding window pattern hardcoded to 6 because it's not explicitly defined
-            let is_sliding = (layer_idx + 1) % 6 > 0;
-            let rotary_embedding = RotaryEmbedding::new(
-                key_length,
-                rope_freq_base,
-                rope_freq_base_sliding,
-                rope_freq_scaling_factor,
-                is_sliding,
-                device,
-            )?;
+            let is_sliding = (layer_idx + 1) % sliding_window_type > 0;
+            let sliding_window_size = is_sliding.then_some(sliding_window_size);
+            let layer_rope_frequency = if is_sliding {
+                rope_freq_base_sliding
+            } else {
+                rope_freq_base
+            };
+
+            let rotary_embedding = RotaryEmbedding::new(key_length, layer_rope_frequency, device)?;
 
             // Tracing spans
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
@@ -403,7 +399,6 @@ impl ModelWeights {
                 n_kv_head: head_count_kv,
                 head_dim: key_length,
                 q_dim,
-                is_sliding,
                 sliding_window_size,
                 rotary_embedding,
                 neg_inf: neg_inf.clone(),
