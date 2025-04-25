@@ -554,20 +554,51 @@ impl<I: IntDType> Map1 for IndexSelect<'_, I> {
     }
 }
 
-struct ScatterAdd<'a, I: IntDType> {
+trait ElemUpdate {
+    fn f<T: WithDType>(dst: &mut T, src: T);
+}
+
+struct Set;
+struct Add;
+
+impl ElemUpdate for Set {
+    fn f<T: WithDType>(dst: &mut T, src: T) {
+        *dst = src
+    }
+}
+
+impl ElemUpdate for Add {
+    fn f<T: WithDType>(dst: &mut T, src: T) {
+        *dst += src
+    }
+}
+
+struct Scatter<'a, I: IntDType, M: ElemUpdate> {
     ids: &'a [I],
     ids_l: &'a Layout,
     dim: usize,
+    _phantom: std::marker::PhantomData<M>,
 }
 
-impl<I: IntDType> Map2 for ScatterAdd<'_, I> {
-    const OP: &'static str = "scatter-add";
+impl<'a, I: IntDType, M: ElemUpdate> Scatter<'a, I, M> {
+    fn new(ids: &'a [I], ids_l: &'a Layout, dim: usize) -> Self {
+        Self {
+            ids,
+            ids_l,
+            dim,
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<I: IntDType, M: ElemUpdate> Map2 for Scatter<'_, I, M> {
+    const OP: &'static str = "scatter";
     fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
         let dst_len = l1.shape().elem_count();
         let mut dst = vec![T::zero(); dst_len];
         copy_strided_src_(v1, &mut dst, 0, l1);
         let src = match src_l.contiguous_offsets() {
-            None => Err(Error::RequiresContiguous { op: "scatter-add" }.bt())?,
+            None => Err(Error::RequiresContiguous { op: "scatter" }.bt())?,
             Some((o1, o2)) => &src[o1..o2],
         };
 
@@ -602,7 +633,7 @@ impl<I: IntDType> Map2 for ScatterAdd<'_, I> {
                         .bt())?
                     }
                     let dst_idx = start_dst_idx + index * dst_right_len + right_i;
-                    dst[dst_idx] += src[ids_idx]
+                    M::f(&mut dst[dst_idx], src[ids_idx])
                 }
             }
         }
@@ -2381,6 +2412,23 @@ impl BackendStorage for CpuStorage {
         }
     }
 
+    fn scatter(
+        &self,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
+    ) -> Result<Self> {
+        match ids {
+            Self::U8(ids) => Scatter::<_, Set>::new(ids, ids_l, dim).map(self, l, src, src_l),
+            Self::U32(ids) => Scatter::<_, Set>::new(ids, ids_l, dim).map(self, l, src, src_l),
+            Self::I64(ids) => Scatter::<_, Set>::new(ids, ids_l, dim).map(self, l, src, src_l),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "scatter").bt()),
+        }
+    }
+
     fn scatter_add(
         &self,
         l: &Layout,
@@ -2391,9 +2439,9 @@ impl BackendStorage for CpuStorage {
         dim: usize,
     ) -> Result<Self> {
         match ids {
-            Self::U8(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
-            Self::U32(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
-            Self::I64(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
+            Self::U8(ids) => Scatter::<_, Add>::new(ids, ids_l, dim).map(self, l, src, src_l),
+            Self::U32(ids) => Scatter::<_, Add>::new(ids, ids_l, dim).map(self, l, src, src_l),
+            Self::I64(ids) => Scatter::<_, Add>::new(ids, ids_l, dim).map(self, l, src, src_l),
             _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "scatter-add").bt()),
         }
     }

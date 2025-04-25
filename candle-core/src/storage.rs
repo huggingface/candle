@@ -628,6 +628,34 @@ impl Storage {
         }
     }
 
+    pub(crate) fn scatter(
+        &self,
+        l: &Layout,
+        indexes: &Self,
+        indexes_l: &Layout,
+        source: &Self,
+        source_l: &Layout,
+        d: usize,
+    ) -> Result<Self> {
+        self.same_device(indexes, "scatter-add")?;
+        self.same_device(source, "scatter-add")?;
+        match (self, indexes, source) {
+            (Self::Cpu(s), Self::Cpu(indexes), Self::Cpu(source)) => {
+                let storage = s.scatter(l, indexes, indexes_l, source, source_l, d)?;
+                Ok(Self::Cpu(storage))
+            }
+            (Self::Cuda(s), Self::Cuda(indexes), Self::Cuda(source)) => {
+                let storage = s.scatter(l, indexes, indexes_l, source, source_l, d)?;
+                Ok(Self::Cuda(storage))
+            }
+            (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
+                let storage = s.scatter(l, indexes, indexes_l, source, source_l, d)?;
+                Ok(Self::Metal(storage))
+            }
+            _ => unreachable!(),
+        }
+    }
+
     pub(crate) fn scatter_add(
         &self,
         l: &Layout,

@@ -1447,7 +1447,7 @@ pub fn call_gather(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn call_scatter_add(
+pub fn call_scatter(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,

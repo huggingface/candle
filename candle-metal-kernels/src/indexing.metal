@@ -105,6 +105,31 @@ kernel void NAME( \
 }
 
 template<typename TYPENAME, typename INDEX_TYPENAME>
+METAL_FUNC void scatter(
+    constant size_t &dst_size,
+    constant size_t &left_size,
+    constant size_t &src_dim_size,
+    constant size_t &right_size,
+    constant size_t &dst_dim_size,
+    const device TYPENAME *input,
+    const device INDEX_TYPENAME *input_ids,
+    device TYPENAME *output,
+    uint tid [[ thread_position_in_grid ]]
+) {
+    if (tid >= dst_size) {
+        return;
+    }
+    const size_t right_rank_i = tid % right_size;
+    const size_t left_rank_i = tid / right_size;
+    for (unsigned int j = 0; j < src_dim_size; ++j) {
+        const size_t src_i = (left_rank_i * src_dim_size + j) * right_size + right_rank_i;
+        const INDEX_TYPENAME idx = input_ids[src_i];
+        const size_t dst_i = (left_rank_i * dst_dim_size + idx) * right_size + right_rank_i;
+        output[dst_i] = input[src_i];
+    }
+}
+
+template<typename TYPENAME, typename INDEX_TYPENAME>
 METAL_FUNC void scatter_add(
     constant size_t &dst_size,
     constant size_t &left_size,
@@ -127,6 +152,21 @@ METAL_FUNC void scatter_add(
         const size_t dst_i = (left_rank_i * dst_dim_size + idx) * right_size + right_rank_i;
         output[dst_i] += input[src_i];
     }
+}
+
+# define SCATTER_OP(NAME, INDEX_TYPENAME, TYPENAME) \
+kernel void NAME( \
+    constant size_t &dst_size, \
+    constant size_t &left_size, \
+    constant size_t &src_dim_size, \
+    constant size_t &right_size, \
+    constant size_t &dst_dim_size, \
+    const device TYPENAME *input, \
+    const device INDEX_TYPENAME *input_ids, \
+    device TYPENAME *output, \
+    uint tid [[ thread_position_in_grid ]] \
+) { \
+    scatter<TYPENAME, INDEX_TYPENAME>(dst_size, left_size, src_dim_size, right_size, dst_dim_size, input, input_ids, output, tid); \
 }
 
 # define SCATTER_ADD_OP(NAME, INDEX_TYPENAME, TYPENAME) \
@@ -233,6 +273,19 @@ SCATTER_ADD_OP(sa_i64_f16, int64_t, half)
 SCATTER_ADD_OP(sa_u32_bf16, uint32_t, bfloat)
 SCATTER_ADD_OP(sa_u8_bf16, uint8_t, bfloat)
 SCATTER_ADD_OP(sa_i64_bf16, int64_t, bfloat)
+#endif
+
+SCATTER_OP(s_u32_f32, uint32_t, float)
+SCATTER_OP(s_u8_f32, uint8_t, float)
+SCATTER_OP(s_i64_f32, int64_t, float)
+SCATTER_OP(s_u32_u32, uint32_t, uint32_t)
+SCATTER_OP(s_u32_f16, uint32_t, half)
+SCATTER_OP(s_u8_f16, uint8_t, half)
+SCATTER_OP(s_i64_f16, int64_t, half)
+#if defined(__HAVE_BFLOAT__)
+SCATTER_OP(s_u32_bf16, uint32_t, bfloat)
+SCATTER_OP(s_u8_bf16, uint8_t, bfloat)
+SCATTER_OP(s_i64_bf16, int64_t, bfloat)
 #endif
 
 // i64
