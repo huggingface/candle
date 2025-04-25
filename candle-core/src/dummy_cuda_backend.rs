@@ -128,6 +128,18 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    fn scatter(
+        &self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: usize,
+    ) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     fn scatter_add(
         &self,
         _: &Layout,

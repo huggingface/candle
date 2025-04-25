@@ -80,6 +80,7 @@ pub enum Op {
     Reduce(Tensor, ReduceOp, Vec<usize>),
     Matmul(Tensor, Tensor),
     Gather(Tensor, Tensor, usize),
+    Scatter(Tensor, Tensor, Tensor, usize),
     ScatterAdd(Tensor, Tensor, Tensor, usize),
     IndexSelect(Tensor, Tensor, usize),
     IndexAdd(Tensor, Tensor, Tensor, usize),

@@ -71,6 +71,15 @@ pub trait BackendStorage: Sized {
     fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self>;
 
     fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self>;
+    fn scatter(
+        &self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: usize,
+    ) -> Result<Self>;
     fn scatter_add(
         &self,
         _: &Layout,

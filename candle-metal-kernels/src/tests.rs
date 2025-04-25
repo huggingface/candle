@@ -1574,7 +1574,7 @@ fn run_scatter_add<T: Clone, I: Clone + std::fmt::Debug>(
     let input_buffer = new_buffer(&device, input);
     let ids_buffer = new_buffer(&device, ids);
     let output = device.new_buffer(std::mem::size_of_val(input) as u64, options);
-    call_scatter_add(
+    call_scatter(
         &device,
         command_buffer,
         &kernels,

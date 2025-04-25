@@ -1426,6 +1426,56 @@ impl BackendStorage for MetalStorage {
         Ok(Self::new(buffer, device.clone(), dst_el, dtype))
     }
 
+    fn scatter(
+        &self,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
+    ) -> Result<Self> {
+        let mut acc = self.device.zeros_impl(l.shape(), self.dtype())?;
+        self.copy_strided_src(&mut acc, 0, l)?;
+        if !ids_l.is_contiguous() || !src_l.is_contiguous() {
+            return Err(crate::Error::RequiresContiguous { op: "scatter" }.bt());
+        };
+        let name = match (ids.dtype, self.dtype) {
+            (DType::U8, DType::F32) => "s_u8_f32",
+            (DType::U8, DType::F16) => "s_u8_f16",
+            (DType::U8, DType::BF16) => "s_u8_bf16",
+            (DType::U32, DType::U32) => "s_u32_u32",
+            (DType::U32, DType::F32) => "s_u32_f32",
+            (DType::U32, DType::F16) => "s_u32_f16",
+            (DType::U32, DType::BF16) => "s_u32_bf16",
+            (DType::I64, DType::F32) => "s_i64_f32",
+            (DType::I64, DType::F16) => "s_i64_f16",
+            (DType::I64, DType::BF16) => "s_i64_bf16",
+            _ => Err(MetalError::UnexpectedDType {
+                msg: "scatter ids should be u8/u32/i64",
+                expected: DType::U32,
+                got: ids.dtype(),
+            })?,
+        };
+        let command_buffer = self.device.command_buffer()?;
+        let src = buffer_o(&src.buffer, src_l, src.dtype);
+        let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
+        candle_metal_kernels::call_scatter(
+            &self.device.device,
+            &command_buffer,
+            &self.device.kernels,
+            name,
+            src_l.dims(),
+            l.dims(),
+            dim,
+            src,
+            ids,
+            &acc.buffer,
+        )
+        .map_err(MetalError::from)?;
+        Ok(acc)
+    }
+
     fn scatter_add(
         &self,
         l: &Layout,
@@ -1460,7 +1510,7 @@ impl BackendStorage for MetalStorage {
         let command_buffer = self.device.command_buffer()?;
         let src = buffer_o(&src.buffer, src_l, src.dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
-        candle_metal_kernels::call_scatter_add(
+        candle_metal_kernels::call_scatter(
             &self.device.device,
             &command_buffer,
             &self.device.kernels,

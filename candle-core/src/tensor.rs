@@ -1354,6 +1354,52 @@ impl Tensor {
         self.index_select(ids, 0)
     }
 
+    pub fn scatter<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "scatter")?;
+        let source_dims = source.dims();
+        let self_dims = self.dims();
+        let mismatch = if source_dims.len() != self_dims.len() {
+            true
+        } else {
+            let mut mismatch = false;
+            for (i, (&d1, &d2)) in self_dims.iter().zip(source_dims.iter()).enumerate() {
+                if i != dim && d1 != d2 {
+                    mismatch = true;
+                    break;
+                }
+            }
+            mismatch
+        };
+        if mismatch {
+            Err(Error::ShapeMismatchBinaryOp {
+                op: "scatter (self, src)",
+                lhs: self.shape().clone(),
+                rhs: source.shape().clone(),
+            }
+            .bt())?
+        }
+        if indexes.dims() != source.dims() {
+            Err(Error::ShapeMismatchBinaryOp {
+                op: "scatter (indexes, src)",
+                lhs: indexes.shape().clone(),
+                rhs: source.shape().clone(),
+            }
+            .bt())?
+        }
+        let storage = self.storage().scatter(
+            self.layout(),
+            &indexes.storage(),
+            indexes.layout(),
+            &source.storage(),
+            source.layout(),
+            dim,
+        )?;
+        let op = BackpropOp::new3(self, indexes, source, |t1, t2, t3| {
+            Op::Scatter(t1, t2, t3, dim)
+        });
+        Ok(from_storage(storage, self.shape(), op, false))
+    }
+
     pub fn scatter_add<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "scatter-add")?;
         let source_dims = source.dims();
