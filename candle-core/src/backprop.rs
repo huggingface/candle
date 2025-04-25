@@ -420,12 +420,19 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.scatter_add(indexes, &grad, *dim)?;
                     }
-                    Op::Scatter(_, _, _, _) => {
-                        crate::bail!("scatter backprop is not supported")
+                    Op::Scatter(init, indexes, src, dim) => {
+                        let init_sum_grad = grads.or_insert(init)?;
+                        *init_sum_grad = init_sum_grad.add(&grad)?;
+
+                        let src_grad = grad.gather(indexes, *dim)?;
+                        let src_sum_grad = grads.or_insert(src)?;
+                        *src_sum_grad = src_sum_grad.add(&src_grad)?;
                     }
                     Op::ScatterAdd(init, indexes, src, dim) => {
                         let init_sum_grad = grads.or_insert(init)?;
-                        *init_sum_grad = init_sum_grad.add(&grad)?;
+                        let mask = init.ones_like()?;
+                        let mask = mask.scatter(indexes, &mask.zeros_like()?, *dim)?;
+                        *init_sum_grad = init_sum_grad.add(&grad.mul(&mask)?)?;
 
                         let src_grad = grad.gather(indexes, *dim)?;
                         let src_sum_grad = grads.or_insert(src)?;
