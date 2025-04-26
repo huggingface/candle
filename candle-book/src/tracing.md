@@ -2,6 +2,10 @@
 
 Tracing is a powerful tool for identifying performance issues and bottlenecks in code.
 
+> When using CUDA, Metal, or other devices with asyncronous execution, be aware that tracing might not accurately identify performance issues. GPU operations are typically queued and executed asynchronously, which can lead to misleading timing information in traces.
+> 
+> If are debugging CUDA specifically, you can set the environment variable `CUDA_LAUNCH_BLOCKING=1` which forces synchronous execution. This makes trace timings more accurate, at the cost of performance.
+
 ## Overview
 
 Candle uses the [tracing](https://docs.rs/tracing/latest/tracing/) crate for instrumentation.
