@@ -1354,8 +1354,7 @@ impl Tensor {
         self.index_select(ids, 0)
     }
 
-    pub fn scatter<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
-        let dim = dim.to_index(self.shape(), "scatter")?;
+    fn scatter_checks(&self, indexes: &Self, source: &Self, dim: usize) -> Result<()> {
         let source_dims = source.dims();
         let self_dims = self.dims();
         let mismatch = if source_dims.len() != self_dims.len() {
@@ -1386,6 +1385,12 @@ impl Tensor {
             }
             .bt())?
         }
+        Ok(())
+    }
+
+    pub fn scatter<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "scatter")?;
+        self.scatter_checks(indexes, source, dim)?;
         let shape = self.shape();
         let mut storage = unsafe { self.device().alloc_uninit(shape, self.dtype())? };
         self.storage()
@@ -1407,36 +1412,7 @@ impl Tensor {
 
     pub fn scatter_add<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "scatter-add")?;
-        let source_dims = source.dims();
-        let self_dims = self.dims();
-        let mismatch = if source_dims.len() != self_dims.len() {
-            true
-        } else {
-            let mut mismatch = false;
-            for (i, (&d1, &d2)) in self_dims.iter().zip(source_dims.iter()).enumerate() {
-                if i != dim && d1 != d2 {
-                    mismatch = true;
-                    break;
-                }
-            }
-            mismatch
-        };
-        if mismatch {
-            Err(Error::ShapeMismatchBinaryOp {
-                op: "scatter-add (self, src)",
-                lhs: self.shape().clone(),
-                rhs: source.shape().clone(),
-            }
-            .bt())?
-        }
-        if indexes.dims() != source.dims() {
-            Err(Error::ShapeMismatchBinaryOp {
-                op: "scatter-add (indexes, src)",
-                lhs: indexes.shape().clone(),
-                rhs: source.shape().clone(),
-            }
-            .bt())?
-        }
+        self.scatter_checks(indexes, source, dim)?;
         let shape = self.shape();
         let mut storage = unsafe { self.device().alloc_uninit(shape, self.dtype())? };
         self.storage()
