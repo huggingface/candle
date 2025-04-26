@@ -58,6 +58,30 @@ pub trait Map2 {
     }
 }
 
+pub trait Map2InPlace {
+    const OP: &'static str;
+    fn f<T: WithDType>(&self, v1: &mut [T], l1: &Layout, v2: &[T], l2: &Layout) -> Result<()>;
+
+    fn map(&self, v1: &mut C, l1: &Layout, v2: &C, l2: &Layout) -> Result<()> {
+        match (v1, v2) {
+            (C::U8(v1), C::U8(v2)) => self.f(v1, l1, v2, l2)?,
+            (C::U32(v1), C::U32(v2)) => self.f(v1, l1, v2, l2)?,
+            (C::I64(v1), C::I64(v2)) => self.f(v1, l1, v2, l2)?,
+            (C::BF16(v1), C::BF16(v2)) => self.f(v1, l1, v2, l2)?,
+            (C::F16(v1), C::F16(v2)) => self.f(v1, l1, v2, l2)?,
+            (C::F32(v1), C::F32(v2)) => self.f(v1, l1, v2, l2)?,
+            (C::F64(v1), C::F64(v2)) => self.f(v1, l1, v2, l2)?,
+            (v1, v2) => Err(Error::DTypeMismatchBinaryOp {
+                lhs: v1.dtype(),
+                rhs: v2.dtype(),
+                op: Self::OP,
+            }
+            .bt())?,
+        };
+        Ok(())
+    }
+}
+
 pub trait Map2U8 {
     const OP: &'static str;
     fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, v2: &[T], l2: &Layout) -> Result<Vec<u8>>;
