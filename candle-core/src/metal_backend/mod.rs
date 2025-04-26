@@ -1426,18 +1426,16 @@ impl BackendStorage for MetalStorage {
         Ok(Self::new(buffer, device.clone(), dst_el, dtype))
     }
 
-    fn scatter(
-        &self,
+    fn scatter_set(
+        &mut self,
         l: &Layout,
         ids: &Self,
         ids_l: &Layout,
         src: &Self,
         src_l: &Layout,
         dim: usize,
-    ) -> Result<Self> {
-        let mut acc = self.device.zeros_impl(l.shape(), self.dtype())?;
-        self.copy_strided_src(&mut acc, 0, l)?;
-        if !ids_l.is_contiguous() || !src_l.is_contiguous() {
+    ) -> Result<()> {
+        if !l.is_contiguous() || !ids_l.is_contiguous() || !src_l.is_contiguous() {
             return Err(crate::Error::RequiresContiguous { op: "scatter" }.bt());
         };
         let name = match (ids.dtype, self.dtype) {
@@ -1458,6 +1456,7 @@ impl BackendStorage for MetalStorage {
             })?,
         };
         let command_buffer = self.device.command_buffer()?;
+        let dst = buffer_o(&self.buffer, l, self.dtype);
         let src = buffer_o(&src.buffer, src_l, src.dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_scatter(
@@ -1470,24 +1469,22 @@ impl BackendStorage for MetalStorage {
             dim,
             src,
             ids,
-            &acc.buffer,
+            dst,
         )
         .map_err(MetalError::from)?;
-        Ok(acc)
+        Ok(())
     }
 
-    fn scatter_add(
-        &self,
+    fn scatter_add_set(
+        &mut self,
         l: &Layout,
         ids: &Self,
         ids_l: &Layout,
         src: &Self,
         src_l: &Layout,
         dim: usize,
-    ) -> Result<Self> {
-        let mut acc = self.device.zeros_impl(l.shape(), self.dtype())?;
-        self.copy_strided_src(&mut acc, 0, l)?;
-        if !ids_l.is_contiguous() || !src_l.is_contiguous() {
+    ) -> Result<()> {
+        if !l.is_contiguous() || !ids_l.is_contiguous() || !src_l.is_contiguous() {
             return Err(crate::Error::RequiresContiguous { op: "scatter-add" }.bt());
         };
         let name = match (ids.dtype, self.dtype) {
@@ -1508,6 +1505,7 @@ impl BackendStorage for MetalStorage {
             })?,
         };
         let command_buffer = self.device.command_buffer()?;
+        let dst = buffer_o(&self.buffer, l, self.dtype);
         let src = buffer_o(&src.buffer, src_l, src.dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_scatter(
@@ -1520,10 +1518,10 @@ impl BackendStorage for MetalStorage {
             dim,
             src,
             ids,
-            &acc.buffer,
+            dst,
         )
         .map_err(MetalError::from)?;
-        Ok(acc)
+        Ok(())
     }
 
     fn index_select(&self, ids: &Self, src_l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
