@@ -1410,6 +1410,23 @@ impl Tensor {
         Ok(from_storage(storage, self.shape(), op, false))
     }
 
+    pub fn scatter_set<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<()> {
+        if self.same_storage(source) {
+            crate::bail!("cannot use slice_set when self and src share their storage")
+        }
+        let dim = dim.to_index(self.shape(), "scatter-set")?;
+        self.scatter_checks(indexes, source, dim)?;
+        self.storage_mut().scatter_set(
+            self.layout(),
+            &indexes.storage(),
+            indexes.layout(),
+            &source.storage(),
+            source.layout(),
+            dim,
+        )?;
+        Ok(())
+    }
+
     pub fn scatter_add<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "scatter-add")?;
         self.scatter_checks(indexes, source, dim)?;
@@ -1430,6 +1447,23 @@ impl Tensor {
             Op::ScatterAdd(t1, t2, t3, dim)
         });
         Ok(from_storage(storage, self.shape(), op, false))
+    }
+
+    pub fn scatter_add_set<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<()> {
+        if self.same_storage(source) {
+            crate::bail!("cannot use slice_set when self and src share their storage")
+        }
+        let dim = dim.to_index(self.shape(), "scatter-add-set")?;
+        self.scatter_checks(indexes, source, dim)?;
+        self.storage_mut().scatter_add(
+            self.layout(),
+            &indexes.storage(),
+            indexes.layout(),
+            &source.storage(),
+            source.layout(),
+            dim,
+        )?;
+        Ok(())
     }
 
     /// Embeds the values of the `src` tensor into the `self` tensor on the specified dimension.
