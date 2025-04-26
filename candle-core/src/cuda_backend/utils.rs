@@ -1,5 +1,5 @@
 /// Helper functions to plug cuda kernels in candle.
-use crate::{Layout, Result, Shape, WithDType};
+use crate::{Layout, Result, WithDType};
 pub use cudarc;
 use cudarc::driver::{CudaSlice, DeviceRepr, ValidAsZeroBits};
 
@@ -96,7 +96,7 @@ pub trait Map2InPlace {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         dst: &mut CudaSlice<T>,
-        dst_shape: &Shape,
+        dst_l: &Layout,
         src: &CudaSlice<T>,
         src_l: &Layout,
         dev: &CudaDevice,
@@ -105,19 +105,19 @@ pub trait Map2InPlace {
     fn map(
         &self,
         dst: &mut S,
-        dst_s: &Shape,
+        dst_l: &Layout,
         src: &S,
         src_l: &Layout,
         d: &CudaDevice,
     ) -> Result<()> {
         match (dst, src) {
-            (S::U8(dst), S::U8(src)) => self.f(dst, dst_s, src, src_l, d),
-            (S::U32(dst), S::U32(src)) => self.f(dst, dst_s, src, src_l, d),
-            (S::I64(dst), S::I64(src)) => self.f(dst, dst_s, src, src_l, d),
-            (S::BF16(dst), S::BF16(src)) => self.f(dst, dst_s, src, src_l, d),
-            (S::F16(dst), S::F16(src)) => self.f(dst, dst_s, src, src_l, d),
-            (S::F32(dst), S::F32(src)) => self.f(dst, dst_s, src, src_l, d),
-            (S::F64(dst), S::F64(src)) => self.f(dst, dst_s, src, src_l, d),
+            (S::U8(dst), S::U8(src)) => self.f(dst, dst_l, src, src_l, d),
+            (S::U32(dst), S::U32(src)) => self.f(dst, dst_l, src, src_l, d),
+            (S::I64(dst), S::I64(src)) => self.f(dst, dst_l, src, src_l, d),
+            (S::BF16(dst), S::BF16(src)) => self.f(dst, dst_l, src, src_l, d),
+            (S::F16(dst), S::F16(src)) => self.f(dst, dst_l, src, src_l, d),
+            (S::F32(dst), S::F32(src)) => self.f(dst, dst_l, src, src_l, d),
+            (S::F64(dst), S::F64(src)) => self.f(dst, dst_l, src, src_l, d),
             _ => Err(CudaError::InternalError("dtype mismatch in binary op"))?,
         }
     }

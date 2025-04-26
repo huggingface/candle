@@ -7,7 +7,7 @@ use rayon::prelude::*;
 
 mod utils;
 pub use utils::{
-    binary_map, binary_map_vec, unary_map, unary_map_vec, Map1, Map1Any, Map2, Map2U8,
+    binary_map, binary_map_vec, unary_map, unary_map_vec, Map1, Map1Any, Map2, Map2InPlace, Map2U8,
 };
 
 const USE_IM2COL_CONV1D: bool = true;
@@ -591,12 +591,20 @@ impl<'a, I: IntDType, M: ElemUpdate> Scatter<'a, I, M> {
     }
 }
 
-impl<I: IntDType, M: ElemUpdate> Map2 for Scatter<'_, I, M> {
+impl<I: IntDType, M: ElemUpdate> Map2InPlace for Scatter<'_, I, M> {
     const OP: &'static str = "scatter";
-    fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
-        let dst_len = l1.shape().elem_count();
-        let mut dst = vec![T::zero(); dst_len];
-        copy_strided_src_(v1, &mut dst, 0, l1);
+    fn f<T: WithDType>(
+        &self,
+        dst: &mut [T],
+        dst_l: &Layout,
+        src: &[T],
+        src_l: &Layout,
+    ) -> Result<()> {
+        let dst = match dst_l.contiguous_offsets() {
+            None => Err(Error::RequiresContiguous { op: "scatter" }.bt())?,
+            Some((o1, o2)) => &mut dst[o1..o2],
+        };
+
         let src = match src_l.contiguous_offsets() {
             None => Err(Error::RequiresContiguous { op: "scatter" }.bt())?,
             Some((o1, o2)) => &src[o1..o2],
@@ -604,7 +612,7 @@ impl<I: IntDType, M: ElemUpdate> Map2 for Scatter<'_, I, M> {
 
         let dim = self.dim;
         let ids_dims = self.ids_l.dims();
-        let dst_dims = l1.dims();
+        let dst_dims = dst_l.dims();
         let dst_dim_len = dst_dims[dim];
         let dst_right_len: usize = dst_dims[dim + 1..].iter().product();
 
@@ -638,7 +646,7 @@ impl<I: IntDType, M: ElemUpdate> Map2 for Scatter<'_, I, M> {
             }
         }
 
-        Ok(dst)
+        Ok(())
     }
 }
 
@@ -2412,15 +2420,15 @@ impl BackendStorage for CpuStorage {
         }
     }
 
-    fn scatter(
-        &self,
+    fn scatter_set(
+        &mut self,
         l: &Layout,
         ids: &Self,
         ids_l: &Layout,
         src: &Self,
         src_l: &Layout,
         dim: usize,
-    ) -> Result<Self> {
+    ) -> Result<()> {
         match ids {
             Self::U8(ids) => Scatter::<_, Set>::new(ids, ids_l, dim).map(self, l, src, src_l),
             Self::U32(ids) => Scatter::<_, Set>::new(ids, ids_l, dim).map(self, l, src, src_l),
@@ -2429,15 +2437,15 @@ impl BackendStorage for CpuStorage {
         }
     }
 
-    fn scatter_add(
-        &self,
+    fn scatter_add_set(
+        &mut self,
         l: &Layout,
         ids: &Self,
         ids_l: &Layout,
         src: &Self,
         src_l: &Layout,
         dim: usize,
-    ) -> Result<Self> {
+    ) -> Result<()> {
         match ids {
             Self::U8(ids) => Scatter::<_, Add>::new(ids, ids_l, dim).map(self, l, src, src_l),
             Self::U32(ids) => Scatter::<_, Add>::new(ids, ids_l, dim).map(self, l, src, src_l),

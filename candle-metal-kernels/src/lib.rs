@@ -1457,7 +1457,7 @@ pub fn call_scatter(
     dim: usize,
     input: BufferOffset,
     ids: BufferOffset,
-    output: &Buffer,
+    output: BufferOffset,
 ) -> Result<(), MetalKernelError> {
     let left_size: usize = src_shape[..dim].iter().product();
     let right_size: usize = src_shape[dim + 1..].iter().product();
@@ -1482,7 +1482,7 @@ pub fn call_scatter(
             dst_dim_size,
             &input,
             &ids,
-            output
+            &output
         )
     );
 
@@ -1490,7 +1490,7 @@ pub fn call_scatter(
 
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(ids.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(output.buffer, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
