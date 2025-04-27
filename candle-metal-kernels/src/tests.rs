@@ -1584,7 +1584,7 @@ fn run_scatter_add<T: Clone, I: Clone + std::fmt::Debug>(
         dim,
         BufferOffset::zero_offset(&input_buffer),
         BufferOffset::zero_offset(&ids_buffer),
-        &output,
+        BufferOffset::zero_offset(&output),
     )
     .unwrap();
     command_buffer.commit();
