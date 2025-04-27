@@ -195,6 +195,11 @@ impl candle::CustomOp3 for RotaryEmbI {
             dtype => candle::bail!("rope-i is not implemented for {dtype:?}"),
         };
         let (b, h, t, d) = l_src.shape().dims4()?;
+        let stride_b = if l_cos.dims().len() == 3 && l_sin.dims().len() == 3 {
+            h * t * d
+        } else {
+            0usize
+        };
         let el = b * h * t * d;
         let output = device.new_buffer(el, src.dtype(), "rope-i")?;
         candle_metal_kernels::call_rope_i(
@@ -204,6 +209,7 @@ impl candle::CustomOp3 for RotaryEmbI {
             name,
             b * h,
             t * d,
+            stride_b,
             src.buffer(),
             l_src.start_offset() * src.dtype().size_in_bytes(),
             cos.buffer(),
@@ -471,6 +477,11 @@ impl candle::CustomOp3 for RotaryEmb {
             dtype => candle::bail!("rope is not implemented for {dtype:?}"),
         };
         let (b, h, t, d) = l_src.shape().dims4()?;
+        let stride_b = if l_cos.dims().len() == 3 && l_sin.dims().len() == 3 {
+            h * t * d
+        } else {
+            0usize
+        };
         let el = b * h * t * d;
         let output = device.new_buffer(el, src.dtype(), "rope-i")?;
         candle_metal_kernels::call_rope(
@@ -481,6 +492,7 @@ impl candle::CustomOp3 for RotaryEmb {
             b * h,
             t * d,
             d,
+            stride_b,
             src.buffer(),
             l_src.start_offset() * src.dtype().size_in_bytes(),
             cos.buffer(),
@@ -734,6 +746,11 @@ impl candle::CustomOp3 for RotaryEmbThd {
             dtype => candle::bail!("rope_thd is not implemented for {dtype:?}"),
         };
         let (b, t, h, d) = l_src.shape().dims4()?;
+        let stride_b = if l_cos.dims().len() == 3 && l_sin.dims().len() == 3 {
+            h * t * d
+        } else {
+            0usize
+        };
         let el = b * h * t * d;
         let output = device.new_buffer(el, src.dtype(), "rope-thd")?;
         candle_metal_kernels::call_rope_thd(
@@ -745,6 +762,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
             t,
             h,
             d,
+            stride_b,
             src.buffer(),
             l_src.start_offset() * src.dtype().size_in_bytes(),
             cos.buffer(),
