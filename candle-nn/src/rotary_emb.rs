@@ -46,15 +46,23 @@ impl candle::CustomOp3 for RotaryEmbI {
                 Some((o1, o2)) => &sin[o1..o2],
             };
             let (b, h, t, d) = l_src.shape().dims4()?;
+            let unbatched_rope = l_cos.shape().elem_count() == b * t * d;
             let el_count = b * h * t * d;
             let mut dst = vec![T::zero(); el_count];
             src.par_chunks(t * d)
                 .zip(dst.par_chunks_mut(t * d))
-                .for_each(|(src, dst)| {
+                .enumerate()
+                .for_each(|(bh_i, (src, dst))| {
                     for i_over_2 in 0..t * d / 2 {
                         let i = 2 * i_over_2;
-                        dst[i] = src[i] * cos[i_over_2] - src[i + 1] * sin[i_over_2];
-                        dst[i + 1] = src[i] * sin[i_over_2] + src[i + 1] * cos[i_over_2];
+                        let rope_i = if unbatched_rope {
+                            let b_i = bh_i / h;
+                            i_over_2 + b_i * t * d / 2
+                        } else {
+                            i_over_2
+                        };
+                        dst[i] = src[i] * cos[rope_i] - src[i + 1] * sin[rope_i];
+                        dst[i + 1] = src[i] * sin[rope_i] + src[i + 1] * cos[rope_i];
                     }
                 });
             let storage = candle::WithDType::to_cpu_storage_owned(dst);
@@ -125,7 +133,7 @@ impl candle::CustomOp3 for RotaryEmbI {
             builder.arg(&cos);
             builder.arg(&sin);
             builder.arg(&dst);
-            candle::builder_arg!(builder, (b * h) as u32, (t * d) as u32);
+            candle::builder_arg!(builder, (b * h) as u32, (t * d) as u32, 0u32);
             // SAFETY: ffi.
             unsafe { builder.launch(cfg) }.w()?;
             Ok(dst)
@@ -292,16 +300,24 @@ impl candle::CustomOp3 for RotaryEmb {
                 Some((o1, o2)) => &sin[o1..o2],
             };
             let (b, h, t, d) = l_src.shape().dims4()?;
+            let unbatched_rope = l_cos.shape().elem_count() == b * t * d;
             let el_count = b * h * t * d;
             let mut dst = vec![T::zero(); el_count];
             src.par_chunks(t * d)
                 .zip(dst.par_chunks_mut(t * d))
-                .for_each(|(src, dst)| {
+                .enumerate()
+                .for_each(|(bh_i, (src, dst))| {
                     for i_t in 0..t {
                         for i_d in 0..d / 2 {
                             let i1 = i_t * d + i_d;
                             let i2 = i1 + d / 2;
                             let i_cs = i_t * (d / 2) + i_d;
+                            let i_cs = if unbatched_rope {
+                                let b_i = bh_i / h;
+                                i_cs + b_i * t * d / 2
+                            } else {
+                                i_cs
+                            };
                             dst[i1] = src[i1] * cos[i_cs] - src[i2] * sin[i_cs];
                             dst[i2] = src[i1] * sin[i_cs] + src[i2] * cos[i_cs];
                         }
@@ -375,7 +391,7 @@ impl candle::CustomOp3 for RotaryEmb {
             builder.arg(&cos);
             builder.arg(&sin);
             builder.arg(&dst);
-            candle::builder_arg!(builder, (b * h) as u32, (t * d) as u32, d as u32);
+            candle::builder_arg!(builder, (b * h) as u32, (t * d) as u32, d as u32, 0u32);
             // SAFETY: ffi.
             unsafe { builder.launch(cfg) }.w()?;
             Ok(dst)
@@ -541,14 +557,22 @@ impl candle::CustomOp3 for RotaryEmbThd {
                 Some((o1, o2)) => &sin[o1..o2],
             };
             let (b, t, h, d) = l_src.shape().dims4()?;
+            let unbatched_rope = l_cos.shape().elem_count() == b * t * d;
             let el_count = b * h * t * d;
             let mut dst = vec![T::zero(); el_count];
             src.par_chunks(t * h * d)
                 .zip(dst.par_chunks_mut(t * h * d))
-                .for_each(|(src, dst)| {
+                .enumerate()
+                .for_each(|(bh_i, (src, dst))| {
                     for i_t in 0..t {
                         for i_d in 0..d / 2 {
                             let i_cs = i_t * (d / 2) + i_d;
+                            let i_cs = if unbatched_rope {
+                                let b_i = bh_i / h;
+                                i_cs + b_i * t * d / 2
+                            } else {
+                                i_cs
+                            };
                             for i_h in 0..h {
                                 let i1 = i_t * h * d + i_h * d + i_d;
                                 let i2 = i1 + d / 2;
@@ -626,7 +650,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
             builder.arg(&cos);
             builder.arg(&sin);
             builder.arg(&dst);
-            candle::builder_arg!(builder, b as u32, t as u32, h as u32, d as u32);
+            candle::builder_arg!(builder, b as u32, t as u32, h as u32, d as u32, 0u32);
             // SAFETY: ffi.
             unsafe { builder.launch(cfg) }.w()?;
             Ok(dst)
