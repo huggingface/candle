@@ -123,6 +123,11 @@ impl candle::CustomOp3 for RotaryEmbI {
                 Some((o1, o2)) => sin.slice(o1..o2),
             };
             let (b, h, t, d) = l_src.shape().dims4()?;
+            let stride_b = if l_cos.dims().len() == 3 && l_sin.dims().len() == 3 {
+                (h * t * d) as u32
+            } else {
+                0u32
+            };
             let el = b * h * t * d;
             let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
             let func = dev.get_or_load_func(&kernel_name::<T>("rope_i"), &kernels::REDUCE)?;
@@ -133,7 +138,7 @@ impl candle::CustomOp3 for RotaryEmbI {
             builder.arg(&cos);
             builder.arg(&sin);
             builder.arg(&dst);
-            candle::builder_arg!(builder, (b * h) as u32, (t * d) as u32, 0u32);
+            candle::builder_arg!(builder, (b * h) as u32, (t * d) as u32, stride_b);
             // SAFETY: ffi.
             unsafe { builder.launch(cfg) }.w()?;
             Ok(dst)
@@ -394,6 +399,11 @@ impl candle::CustomOp3 for RotaryEmb {
                 Some((o1, o2)) => sin.slice(o1..o2),
             };
             let (b, h, t, d) = l_src.shape().dims4()?;
+            let stride_b = if l_cos.dims().len() == 3 && l_sin.dims().len() == 3 {
+                (h * t * d) as u32
+            } else {
+                0u32
+            };
             let el = b * h * t * d;
             let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
             let func = dev.get_or_load_func(&kernel_name::<T>("rope"), &kernels::REDUCE)?;
@@ -404,7 +414,7 @@ impl candle::CustomOp3 for RotaryEmb {
             builder.arg(&cos);
             builder.arg(&sin);
             builder.arg(&dst);
-            candle::builder_arg!(builder, (b * h) as u32, (t * d) as u32, d as u32, 0u32);
+            candle::builder_arg!(builder, (b * h) as u32, (t * d) as u32, d as u32, stride_b);
             // SAFETY: ffi.
             unsafe { builder.launch(cfg) }.w()?;
             Ok(dst)
@@ -652,6 +662,11 @@ impl candle::CustomOp3 for RotaryEmbThd {
                 Some((o1, o2)) => sin.slice(o1..o2),
             };
             let (b, t, h, d) = l_src.shape().dims4()?;
+            let stride_b = if l_cos.dims().len() == 3 && l_sin.dims().len() == 3 {
+                (h * t * d) as u32
+            } else {
+                0u32
+            };
             let el = b * h * t * d;
             let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
             let func = dev.get_or_load_func(&kernel_name::<T>("rope_thd"), &kernels::REDUCE)?;
@@ -662,7 +677,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
             builder.arg(&cos);
             builder.arg(&sin);
             builder.arg(&dst);
-            candle::builder_arg!(builder, b as u32, t as u32, h as u32, d as u32, 0u32);
+            candle::builder_arg!(builder, b as u32, t as u32, h as u32, d as u32, stride_b);
             // SAFETY: ffi.
             unsafe { builder.launch(cfg) }.w()?;
             Ok(dst)
