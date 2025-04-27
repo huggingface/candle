@@ -46,7 +46,7 @@ impl candle::CustomOp3 for RotaryEmbI {
                 Some((o1, o2)) => &sin[o1..o2],
             };
             let (b, h, t, d) = l_src.shape().dims4()?;
-            let unbatched_rope = l_cos.shape().elem_count() == b * t * d;
+            let unbatched_rope = l_cos.dims().len() == 3 && l_sin.dims().len() == 3;
             let el_count = b * h * t * d;
             let mut dst = vec![T::zero(); el_count];
             src.par_chunks(t * d)
@@ -313,7 +313,7 @@ impl candle::CustomOp3 for RotaryEmb {
                 Some((o1, o2)) => &sin[o1..o2],
             };
             let (b, h, t, d) = l_src.shape().dims4()?;
-            let unbatched_rope = l_cos.shape().elem_count() == b * t * d;
+            let unbatched_rope = l_cos.dims().len() == 3 && l_sin.dims().len() == 3;
             let el_count = b * h * t * d;
             let mut dst = vec![T::zero(); el_count];
             src.par_chunks(t * d)
@@ -570,18 +570,17 @@ impl candle::CustomOp3 for RotaryEmbThd {
                 Some((o1, o2)) => &sin[o1..o2],
             };
             let (b, t, h, d) = l_src.shape().dims4()?;
-            let unbatched_rope = l_cos.shape().elem_count() == b * t * d;
+            let unbatched_rope = l_cos.dims().len() == 3 && l_sin.dims().len() == 3;
             let el_count = b * h * t * d;
             let mut dst = vec![T::zero(); el_count];
             src.par_chunks(t * h * d)
                 .zip(dst.par_chunks_mut(t * h * d))
                 .enumerate()
-                .for_each(|(bh_i, (src, dst))| {
+                .for_each(|(b_i, (src, dst))| {
                     for i_t in 0..t {
                         for i_d in 0..d / 2 {
                             let i_cs = i_t * (d / 2) + i_d;
                             let i_cs = if unbatched_rope {
-                                let b_i = bh_i / h;
                                 i_cs + b_i * t * d / 2
                             } else {
                                 i_cs
