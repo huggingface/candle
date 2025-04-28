@@ -172,8 +172,17 @@ impl<S: WithDType> NdArray for Vec<Vec<Vec<S>>> {
     }
 
     fn to_cpu_storage(&self) -> CpuStorage {
-        let data = self.iter().flatten().flatten().copied().collect::<Vec<_>>();
-        S::to_cpu_storage_owned(data)
+        if self.is_empty() {
+            return S::to_cpu_storage_owned(vec![]);
+        }
+        let len: usize = self.iter().map(|v| v.len()).sum();
+        let mut dst = Vec::with_capacity(len);
+        for v1 in self.iter() {
+            for v2 in v1.iter() {
+                dst.extend(v2.iter().copied());
+            }
+        }
+        S::to_cpu_storage_owned(dst)
     }
 }
 
