@@ -103,7 +103,59 @@ impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize, const N4: 
     }
 }
 
-impl<S: NdArray> NdArray for Vec<S> {
+impl<S: WithDType> NdArray for Vec<S> {
+    fn shape(&self) -> Result<Shape> {
+        Ok(Shape::from(self.len()))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        S::to_cpu_storage(self.as_slice())
+    }
+}
+
+impl<S: WithDType> NdArray for Vec<&[S]> {
+    fn shape(&self) -> Result<Shape> {
+        if self.is_empty() {
+            crate::bail!("empty array")
+        }
+        let n = self.len();
+        let m = self[0].len();
+        for v in self.iter() {
+            if v.len() != m {
+                crate::bail!("two elements have different len {m} {}", v.len())
+            }
+        }
+        Ok(Shape::from((n, m)))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        let data = self.iter().copied().flatten().copied().collect::<Vec<_>>();
+        S::to_cpu_storage_owned(data)
+    }
+}
+
+impl<S: WithDType> NdArray for Vec<Vec<S>> {
+    fn shape(&self) -> Result<Shape> {
+        if self.is_empty() {
+            crate::bail!("empty array")
+        }
+        let n = self.len();
+        let m = self[0].len();
+        for v in self.iter() {
+            if v.len() != m {
+                crate::bail!("two elements have different len {m} {}", v.len())
+            }
+        }
+        Ok(Shape::from((n, m)))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        let data = self.iter().flatten().copied().collect::<Vec<_>>();
+        S::to_cpu_storage_owned(data)
+    }
+}
+
+impl<S: WithDType> NdArray for Vec<Vec<Vec<S>>> {
     fn shape(&self) -> Result<Shape> {
         if self.is_empty() {
             crate::bail!("empty array")
@@ -120,9 +172,36 @@ impl<S: NdArray> NdArray for Vec<S> {
     }
 
     fn to_cpu_storage(&self) -> CpuStorage {
-        // This allocates intermediary memory and shouldn't be necessary.
-        let storages = self.iter().map(|v| v.to_cpu_storage()).collect::<Vec<_>>();
-        CpuStorage::concat(storages.as_slice()).unwrap()
+        let data = self.iter().flatten().flatten().copied().collect::<Vec<_>>();
+        S::to_cpu_storage_owned(data)
+    }
+}
+
+impl<S: WithDType> NdArray for Vec<Vec<Vec<Vec<S>>>> {
+    fn shape(&self) -> Result<Shape> {
+        if self.is_empty() {
+            crate::bail!("empty array")
+        }
+        let shape0 = self[0].shape()?;
+        let n = self.len();
+        for v in self.iter() {
+            let shape = v.shape()?;
+            if shape != shape0 {
+                crate::bail!("two elements have different shapes {shape:?} {shape0:?}")
+            }
+        }
+        Ok(Shape::from([[n].as_slice(), shape0.dims()].concat()))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        let data = self
+            .iter()
+            .flatten()
+            .flatten()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        S::to_cpu_storage_owned(data)
     }
 }
 
