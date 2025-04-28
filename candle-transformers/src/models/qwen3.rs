@@ -78,8 +78,8 @@ impl Qwen3RmsNorm {
         let var = (xs.clone() * &xs)?.mean_keepdim(D::Minus1)?;
         let rms = (var + self.eps)?.powf(-0.5)?;
         let xs = xs.broadcast_mul(&rms)?;
-        let ws = self.weight.reshape((1, -1))?;
-        Ok((xs * &ws)?.to_dtype(orig_dtype))
+        let ws = self.weight.unsqueeze(0)?.unsqueeze(1)?;
+        Ok((xs.broadcast_mul(&ws))?.to_dtype(orig_dtype)?)
     }
 }
 
@@ -91,7 +91,7 @@ struct Qwen3HeadRmsNorm {
 
 impl Qwen3HeadRmsNorm {
     fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let weight = vb.get((dim,), DType::F32)?;
+        let weight = vb.get((dim,), "weight")?;
         Ok(Self { weight, eps })
     }
 
@@ -100,10 +100,11 @@ impl Qwen3HeadRmsNorm {
         let orig_dtype = xs.dtype();
         let xs = xs.to_dtype(DType::F32)?;
         let var = (xs.clone() * &xs)?.mean_keepdim(D::Minus1)?;
-        let rms = var.add(self.eps)?.powf(-0.5)?;
+        let eps_tensor = Tensor::new::<f32>(self.eps as f32, xs.device())?;
+        let rms = var.broadcast_add(&eps_tensor)?.powf(-0.5)?;
         let xs = xs.broadcast_mul(&rms)?;
-        let ws = self.weight.reshape((1, -1))?;
-        Ok((xs * &ws)?.to_dtype(orig_dtype))
+        let ws = self.weight.unsqueeze(0)?;
+        Ok((xs.broadcast_mul(&ws))?.to_dtype(orig_dtype)?)
     }
 }
 
@@ -304,18 +305,18 @@ impl DecoderLayer {
         Ok(Self {
             self_attn: Qwen3Attention::new(cfg, rotary, idx, vb.pp("self_attn"))?,
             mlp: Qwen3MLP::new(cfg, vb.pp("mlp"))?,
-            ln1: Qwen3RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("ln1"))?,
-            ln2: Qwen3RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("ln2"))?,
+            ln1: Qwen3RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?,
+            ln2: Qwen3RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("post_attention_layernorm"))?,
         })
     }
 
     fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         let h = self.ln1.forward(x)?;
         let h = self.self_attn.forward(&h, mask, offset)?;
-        let x = x + h;
+        let x = x.broadcast_add(&h)?;
         let h2 = self.ln2.forward(&x)?;
         let h2 = h2.apply(&self.mlp)?;
-        Ok(x + h2)
+        Ok(x.broadcast_add(&h2)?)
     }
 
     fn clear_kv_cache(&mut self) {
@@ -336,17 +337,17 @@ pub struct Model {
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let embed_tokens =
-            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?;
+            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let rotary = Arc::new(Qwen3RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
-        let vb_l = vb.pp("layers");
+        let vb_l = vb.pp("model.layers");
         for i in 0..cfg.num_hidden_layers {
             layers.push(DecoderLayer::new(cfg, rotary.clone(), i, vb_l.pp(i))?);
         }
         Ok(Self {
             embed_tokens,
             layers,
-            norm: Qwen3RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("norm"))?,
+            norm: Qwen3RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?,
             rotary,
             device: vb.device().clone(),
             dtype: vb.dtype(),
@@ -399,7 +400,8 @@ impl Model {
         for layer in &mut self.layers {
             h = layer.forward(&h, causal.as_ref(), offset)?;
         }
-        self.norm.forward(&h)
+        let b = self.norm.forward(&h)?;
+        Ok(b)
     }
 }
 

@@ -9,6 +9,7 @@ use clap::Parser;
 
 use candle_transformers::models::qwen2::{Config as ConfigBase, ModelForCausalLM as ModelBase};
 use candle_transformers::models::qwen2_moe::{Config as ConfigMoe, Model as ModelMoe};
+use candle_transformers::models::qwen3::{Config as Config3, Model as Model3};
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -20,6 +21,7 @@ use tokenizers::Tokenizer;
 enum Model {
     Base(ModelBase),
     Moe(ModelMoe),
+    Base3(Model3)
 }
 
 impl Model {
@@ -27,6 +29,7 @@ impl Model {
         match self {
             Self::Moe(ref mut m) => m.forward(xs, s),
             Self::Base(ref mut m) => m.forward(xs, s),
+            Self::Base3(ref mut m) => m.forward(xs, s),
         }
     }
 }
@@ -152,6 +155,8 @@ enum WhichModel {
     W2_7b,
     #[value(name = "2-72b")]
     W2_72b,
+    #[value(name = "3-8B")]
+    W3_8b,
 }
 
 #[derive(Parser, Debug)]
@@ -254,6 +259,7 @@ fn main() -> Result<()> {
                 WhichModel::W14b => ("1.5", "14B"),
                 WhichModel::W72b => ("1.5", "72B"),
                 WhichModel::MoeA27b => ("1.5", "MoE-A2.7B"),
+                WhichModel::W3_8b => ("3", "8B"),
             };
             format!("Qwen/Qwen{version}-{size}")
         }
@@ -282,7 +288,8 @@ fn main() -> Result<()> {
             | WhichModel::W14b
             | WhichModel::W72b
             | WhichModel::W2_72b
-            | WhichModel::MoeA27b => {
+            | WhichModel::MoeA27b 
+            | WhichModel::W3_8b => {
                 candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
             }
         },
@@ -303,6 +310,10 @@ fn main() -> Result<()> {
         WhichModel::MoeA27b => {
             let config: ConfigMoe = serde_json::from_slice(&std::fs::read(config_file)?)?;
             Model::Moe(ModelMoe::new(&config, vb)?)
+        },
+        WhichModel::W3_8b => {
+            let config: Config3 = serde_json::from_slice(&std::fs::read(config_file)?)?;
+            Model::Base3(Model3::new(&config, vb)?)
         }
         _ => {
             let config: ConfigBase = serde_json::from_slice(&std::fs::read(config_file)?)?;
