@@ -382,8 +382,7 @@ impl Tensor {
         Self::new_impl(array, shape, device, false)
     }
 
-    /// Returns a new tensor with all the elements having the same specified value. Note that
-    /// the tensor is not contiguous so you would have to call `.contiguous()` on it if needed.
+    /// Returns a new tensor with all the elements having the same specified value.
     ///```rust
     /// use candle_core::{Tensor, Device};
     /// let a = Tensor::full(3.5, (2, 4), &Device::Cpu)?;
@@ -398,7 +397,12 @@ impl Tensor {
         shape: S,
         device: &Device,
     ) -> Result<Self> {
-        Self::from_vec_impl(vec![value], (), device, false)?.broadcast_as(shape)
+        let none = BackpropOp::none();
+        let shape = shape.into();
+        let mut storage = unsafe { device.alloc_uninit(&shape, D::DTYPE)? };
+        let layout = Layout::contiguous(shape.clone());
+        storage.const_set(value.to_scalar(), &layout)?;
+        Ok(from_storage(storage, shape, none, false))
     }
 
     /// Creates a new 1D tensor from an iterator.
