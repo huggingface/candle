@@ -1811,3 +1811,26 @@ fn test_flip_3d_channels() -> Result<()> {
     candle_core::test_utils::assert_tensor_eq(&flipped, &expected)?;
     Ok(())
 }
+
+#[test]
+fn tensor_new() -> Result<()> {
+    let t1 = Tensor::new(vec![1f32, 2.0, 3.0], &Device::Cpu)?;
+    assert_eq!(t1.to_vec1::<f32>()?, [1.0, 2.0, 3.0]);
+    let t2 = Tensor::new(vec![vec![1f32, 2., 3.], vec![4., 5., 6.]], &Device::Cpu)?;
+    assert_eq!(t2.to_vec2::<f32>()?, [[1., 2., 3.], [4., 5., 6.]]);
+    let t3 = Tensor::new(
+        vec![
+            vec![vec![1f32, 2., 3.], vec![4., 5., 6.]],
+            vec![vec![3f32, 1., 4.], vec![1., 5., 9.]],
+        ],
+        &Device::Cpu,
+    )?;
+    assert_eq!(
+        t3.to_vec3::<f32>()?,
+        [
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            [[3.0, 1.0, 4.0], [1.0, 5.0, 9.0]]
+        ]
+    );
+    Ok(())
+}

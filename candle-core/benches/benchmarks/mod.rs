@@ -1,5 +1,6 @@
 pub(crate) mod affine;
 pub(crate) mod conv_transpose2d;
+pub(crate) mod copy;
 pub(crate) mod matmul;
 pub(crate) mod qmatmul;
 pub(crate) mod random;
