@@ -2,9 +2,7 @@
 
 Tracing is a powerful tool for identifying performance issues and bottlenecks in code.
 
-> When using CUDA, Metal, or other devices with asynchronous execution, be aware that tracing might not accurately identify performance issues. GPU operations are typically queued and executed asynchronously, which can lead to misleading timing information in traces.
-> 
-> If are debugging CUDA specifically, you can set the environment variable `CUDA_LAUNCH_BLOCKING=1` which forces synchronous execution. This makes trace timings more accurate, at the cost of reduced performance.
+> Profiling on GPUs is trickier due to asynchronous execution, see the [GPU section](#gpu).
 
 ## Overview
 
@@ -49,3 +47,22 @@ let _guard = {
 };
 ```
 
+## GPU
+
+When using CUDA, Metal, or other asynchronous GPU backends, tracing may produce misleading timing data because operations are queued rather than executed immediately.
+
+### CUDA
+
+For CUDA-specific profiling, you have two options:
+
+1. Set the environment variable `CUDA_LAUNCH_BLOCKING=1` which forces synchronous execution. This makes trace timings more accurate, at the cost of reduced performance.
+2. Use [NVIDIA's Nsight Systems](https://developer.nvidia.com/nsight-systems) (`nsys profile` and `nsys-ui`) which are designed specifically for profiling asynchronous CUDA executions.
+
+We recommend using NVIDIA's Nsight Systems when possible, as it offers accurate performance data without altering typical execution patterns. In contrast, setting the `CUDA_LAUNCH_BLOCKING` environment variable forces synchronous execution, which can significantly alter execution behavior.
+
+#### Performance Profiling with NVIDIA Nsight Systems
+
+1. Generate an `.nsys-rep` file containing performance data ([docs](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#example-single-command-lines))
+   - Run `nsys profile --trace cuda,nvtx,osrt --gpu-metrics-device=all --output profile_run ./target/debug/... --prompt "whatever "`
+1. Open the generated `.nsys-rep` report file in Nsight Systems GUI
+    - File > Open
