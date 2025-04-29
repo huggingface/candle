@@ -9,7 +9,7 @@ use clap::Parser;
 
 use candle_transformers::models::qwen2::{Config as ConfigBase, ModelForCausalLM as ModelBase};
 use candle_transformers::models::qwen2_moe::{Config as ConfigMoe, Model as ModelMoe};
-use candle_transformers::models::qwen3::{Config as Config3, Model as Model3};
+use candle_transformers::models::qwen3::{Config as Config3, ModelForCausalLM as Model3};
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -21,7 +21,7 @@ use tokenizers::Tokenizer;
 enum Model {
     Base(ModelBase),
     Moe(ModelMoe),
-    Base3(Model3)
+    Base3(Model3),
 }
 
 impl Model {
@@ -155,6 +155,12 @@ enum WhichModel {
     W2_7b,
     #[value(name = "2-72b")]
     W2_72b,
+    #[value(name = "3-0.6B")]
+    W3_0_6b,
+    #[value(name = "3-1.7B")]
+    W3_1_7b,
+    #[value(name = "3-4B")]
+    W3_4b,
     #[value(name = "3-8B")]
     W3_8b,
 }
@@ -259,6 +265,9 @@ fn main() -> Result<()> {
                 WhichModel::W14b => ("1.5", "14B"),
                 WhichModel::W72b => ("1.5", "72B"),
                 WhichModel::MoeA27b => ("1.5", "MoE-A2.7B"),
+                WhichModel::W3_0_6b => ("3", "0.6B"),
+                WhichModel::W3_1_7b => ("3", "1.7B"),
+                WhichModel::W3_4b => ("3", "4B"),
                 WhichModel::W3_8b => ("3", "8B"),
             };
             format!("Qwen/Qwen{version}-{size}")
@@ -279,7 +288,11 @@ fn main() -> Result<()> {
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
         None => match args.model {
-            WhichModel::W0_5b | WhichModel::W2_0_5b | WhichModel::W2_1_5b | WhichModel::W1_8b => {
+            WhichModel::W0_5b
+            | WhichModel::W2_0_5b
+            | WhichModel::W2_1_5b
+            | WhichModel::W1_8b
+            | WhichModel::W3_0_6b => {
                 vec![repo.get("model.safetensors")?]
             }
             WhichModel::W4b
@@ -288,7 +301,9 @@ fn main() -> Result<()> {
             | WhichModel::W14b
             | WhichModel::W72b
             | WhichModel::W2_72b
-            | WhichModel::MoeA27b 
+            | WhichModel::MoeA27b
+            | WhichModel::W3_1_7b
+            | WhichModel::W3_4b
             | WhichModel::W3_8b => {
                 candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
             }
@@ -310,8 +325,8 @@ fn main() -> Result<()> {
         WhichModel::MoeA27b => {
             let config: ConfigMoe = serde_json::from_slice(&std::fs::read(config_file)?)?;
             Model::Moe(ModelMoe::new(&config, vb)?)
-        },
-        WhichModel::W3_8b => {
+        }
+        WhichModel::W3_0_6b | WhichModel::W3_1_7b | WhichModel::W3_4b | WhichModel::W3_8b => {
             let config: Config3 = serde_json::from_slice(&std::fs::read(config_file)?)?;
             Model::Base3(Model3::new(&config, vb)?)
         }

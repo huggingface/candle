@@ -79,7 +79,7 @@ impl Qwen3RmsNorm {
         let rms = (var + self.eps)?.powf(-0.5)?;
         let xs = xs.broadcast_mul(&rms)?;
         let ws = self.weight.unsqueeze(0)?.unsqueeze(1)?;
-        Ok((xs.broadcast_mul(&ws))?.to_dtype(orig_dtype)?)
+        xs.broadcast_mul(&ws)?.to_dtype(orig_dtype)
     }
 }
 
@@ -100,11 +100,10 @@ impl Qwen3HeadRmsNorm {
         let orig_dtype = xs.dtype();
         let xs = xs.to_dtype(DType::F32)?;
         let var = (xs.clone() * &xs)?.mean_keepdim(D::Minus1)?;
-        let eps_tensor = Tensor::new::<f32>(self.eps as f32, xs.device())?;
-        let rms = var.broadcast_add(&eps_tensor)?.powf(-0.5)?;
+        let rms = (var + self.eps)?.powf(-0.5)?;
         let xs = xs.broadcast_mul(&rms)?;
         let ws = self.weight.unsqueeze(0)?;
-        Ok((xs.broadcast_mul(&ws))?.to_dtype(orig_dtype)?)
+        xs.broadcast_mul(&ws)?.to_dtype(orig_dtype)
     }
 }
 
@@ -205,6 +204,9 @@ impl Qwen3Attention {
             None
         };
 
+        // Necessary because the hidden_size in the cofig isn't always accurate
+        let hidden_size = cfg.head_dim * cfg.num_attention_heads;
+
         Ok(Self {
             q_proj,
             k_proj,
@@ -216,7 +218,7 @@ impl Qwen3Attention {
             num_kv_heads,
             num_kv_groups,
             head_dim,
-            hidden_size: cfg.hidden_size,
+            hidden_size,
             sliding_window,
             rotary_emb,
             kv_cache: None,
@@ -306,7 +308,11 @@ impl DecoderLayer {
             self_attn: Qwen3Attention::new(cfg, rotary, idx, vb.pp("self_attn"))?,
             mlp: Qwen3MLP::new(cfg, vb.pp("mlp"))?,
             ln1: Qwen3RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?,
-            ln2: Qwen3RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("post_attention_layernorm"))?,
+            ln2: Qwen3RmsNorm::new(
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+                vb.pp("post_attention_layernorm"),
+            )?,
         })
     }
 
