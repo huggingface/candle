@@ -273,10 +273,10 @@ impl DecoderLayer {
     fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         let h = self.ln1.forward(x)?;
         let h = self.self_attn.forward(&h, mask, offset)?;
-        let x = x.broadcast_add(&h)?;
+        let x = (x + h)?;
         let h2 = self.ln2.forward(&x)?;
         let h2 = h2.apply(&self.mlp)?;
-        x.broadcast_add(&h2)
+        x + h2
     }
 
     fn clear_kv_cache(&mut self) {
