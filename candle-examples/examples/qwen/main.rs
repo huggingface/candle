@@ -91,6 +91,10 @@ impl TextGeneration {
             Some(token) => token,
             None => anyhow::bail!("cannot find the <|endoftext|> token"),
         };
+        let eos_token2 = match self.tokenizer.get_token("<|im_end|>") {
+            Some(token) => token,
+            None => anyhow::bail!("cannot find the <|im_end|> token"),
+        };
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
             let context_size = if index > 0 { 1 } else { tokens.len() };
@@ -113,7 +117,7 @@ impl TextGeneration {
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             generated_tokens += 1;
-            if next_token == eos_token {
+            if next_token == eos_token || next_token == eos_token2 {
                 break;
             }
             if let Some(t) = self.tokenizer.next_token(next_token)? {
@@ -158,13 +162,13 @@ enum WhichModel {
     W2_7b,
     #[value(name = "2-72b")]
     W2_72b,
-    #[value(name = "3-0.6B")]
+    #[value(name = "3-0.6b")]
     W3_0_6b,
-    #[value(name = "3-1.7B")]
+    #[value(name = "3-1.7b")]
     W3_1_7b,
-    #[value(name = "3-4B")]
+    #[value(name = "3-4b")]
     W3_4b,
-    #[value(name = "3-8B")]
+    #[value(name = "3-8b")]
     W3_8b,
     #[value(name = "3-moe-a3b")]
     W3MoeA3b,
