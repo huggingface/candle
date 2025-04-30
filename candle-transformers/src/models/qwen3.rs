@@ -1,4 +1,7 @@
-use crate::models::with_tracing::{linear, linear_no_bias, Linear, RmsNorm};
+use crate::{
+    models::with_tracing::{linear, linear_no_bias, Linear, RmsNorm},
+    utils::repeat_kv,
+};
 use candle::{DType, Device, Module, Result, Tensor};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
@@ -58,16 +61,6 @@ impl Qwen3RotaryEmbedding {
         let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
         Ok((q_embed, k_embed))
     }
-}
-
-fn repeat_kv(kv: &Tensor, n_rep: usize) -> Result<Tensor> {
-    if n_rep == 1 {
-        return Ok(kv.clone());
-    }
-    let (b, h_kv, l, d) = kv.dims4()?;
-    kv.unsqueeze(2)?
-        .expand((b, h_kv, n_rep, l, d))?
-        .reshape((b, h_kv * n_rep, l, d))
 }
 
 #[derive(Debug, Clone)]
@@ -219,8 +212,8 @@ impl Qwen3Attention {
         self.kv_cache = Some((k.clone(), v.clone()));
 
         // 6. GQA repeat_kv
-        let k = repeat_kv(&k, self.num_kv_groups)?;
-        let v = repeat_kv(&v, self.num_kv_groups)?;
+        let k = repeat_kv(k, self.num_kv_groups)?;
+        let v = repeat_kv(v, self.num_kv_groups)?;
 
         // 7. Attention score
         let scale = 1.0 / (self.head_dim as f64).sqrt();
