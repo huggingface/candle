@@ -27,13 +27,13 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone)]
-struct Qwen3RotaryEmbedding {
+pub(crate) struct Qwen3RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
 }
 
 impl Qwen3RotaryEmbedding {
-    fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
+    pub(crate) fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
         let dim = cfg.head_dim;
         let max_seq_len = cfg.max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
@@ -64,7 +64,7 @@ impl Qwen3RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-struct Qwen3MLP {
+pub(crate) struct Qwen3MLP {
     gate_proj: Linear,
     up_proj: Linear,
     down_proj: Linear,
@@ -72,7 +72,7 @@ struct Qwen3MLP {
 }
 
 impl Qwen3MLP {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub(crate) fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             gate_proj: linear_no_bias(cfg.hidden_size, cfg.intermediate_size, vb.pp("gate_proj"))?,
             up_proj: linear_no_bias(cfg.hidden_size, cfg.intermediate_size, vb.pp("up_proj"))?,
@@ -91,7 +91,7 @@ impl Module for Qwen3MLP {
 }
 
 #[derive(Debug, Clone)]
-struct Qwen3Attention {
+pub(crate) struct Qwen3Attention {
     // projections
     q_proj: Linear,
     k_proj: Linear,
@@ -114,7 +114,7 @@ struct Qwen3Attention {
 }
 
 impl Qwen3Attention {
-    fn new(
+    pub(crate) fn new(
         cfg: &Config,
         rotary_emb: Arc<Qwen3RotaryEmbedding>,
         layer_idx: usize,
@@ -182,7 +182,7 @@ impl Qwen3Attention {
         })
     }
 
-    fn forward(&mut self, x: &Tensor, attn_mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
+    pub(crate) fn forward(&mut self, x: &Tensor, attn_mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         let (b, l, _) = x.dims3()?;
 
         // 1. Proj
@@ -234,7 +234,7 @@ impl Qwen3Attention {
             .apply(&self.o_proj)
     }
 
-    fn clear_kv_cache(&mut self) {
+    pub(crate) fn clear_kv_cache(&mut self) {
         self.kv_cache.reset();
     }
 }
