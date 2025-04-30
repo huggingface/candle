@@ -3,7 +3,7 @@ use crate::{
     utils::repeat_kv,
 };
 use candle::{DType, Device, Module, Result, Tensor};
-use candle_nn::{Activation, VarBuilder};
+use candle_nn::{kv_cache::KvCache, Activation, VarBuilder};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -110,7 +110,7 @@ struct Qwen3Attention {
     _sliding_window: Option<usize>,
     // utils
     rotary_emb: Arc<Qwen3RotaryEmbedding>,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: KvCache,
 }
 
 impl Qwen3Attention {
@@ -160,7 +160,9 @@ impl Qwen3Attention {
         };
 
         // Necessary because the hidden_size in the cofig isn't always accurate
-        let hidden_size = cfg.head_dim * cfg.num_attention_heads;
+        let hidden_size = head_dim * cfg.num_attention_heads;
+
+        let kv_cache = KvCache::new(2, cfg.max_position_embeddings);
 
         Ok(Self {
             q_proj,
@@ -176,7 +178,7 @@ impl Qwen3Attention {
             hidden_size,
             _sliding_window: sliding_window,
             rotary_emb,
-            kv_cache: None,
+            kv_cache,
         })
     }
 
@@ -211,14 +213,7 @@ impl Qwen3Attention {
         let (q, k) = self.rotary_emb.apply(&q, &k, offset)?;
 
         // 5. Accumulate KV cache
-        let (k, v) = match &self.kv_cache {
-            None => (k, v),
-            Some((prev_k, prev_v)) => (
-                Tensor::cat(&[prev_k, &k], 2)?,
-                Tensor::cat(&[prev_v, &v], 2)?,
-            ),
-        };
-        self.kv_cache = Some((k.clone(), v.clone()));
+        let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
 
         // 6. GQA repeat_kv
         let k = repeat_kv(k, self.num_kv_groups)?;
@@ -240,7 +235,7 @@ impl Qwen3Attention {
     }
 
     fn clear_kv_cache(&mut self) {
-        self.kv_cache = None;
+        self.kv_cache.reset();
     }
 }
 
