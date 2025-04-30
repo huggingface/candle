@@ -49,7 +49,7 @@ impl Qwen3RotaryEmbedding {
         })
     }
 
-    /// RoPE 적용 (q, k shape: B x H x L x D)
+    /// Apply RoPE (q, k shape: B x H x L x D)
     fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
         let (_, _, seq_len, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?;
@@ -255,7 +255,7 @@ impl Qwen3Attention {
         // 4. RoPE
         let (q, k) = self.rotary_emb.apply(&q, &k, offset)?;
 
-        // 5. KV 캐시 누적
+        // 5. Accumulate KV cache
         let (k, v) = match &self.kv_cache {
             None => (k, v),
             Some((prev_k, prev_v)) => (
