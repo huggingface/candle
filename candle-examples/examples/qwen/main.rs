@@ -10,7 +10,6 @@ use clap::Parser;
 use candle_transformers::models::qwen2::{Config as ConfigBase, ModelForCausalLM as ModelBase};
 use candle_transformers::models::qwen2_moe::{Config as ConfigMoe, Model as ModelMoe};
 use candle_transformers::models::qwen3::{Config as Config3, ModelForCausalLM as Model3};
-use candle_transformers::models::qwen3_moe::{Config as ConfigMoe3, Model as ModelMoe3};
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -23,7 +22,6 @@ enum Model {
     Base(ModelBase),
     Moe(ModelMoe),
     Base3(Model3),
-    Moe3(ModelMoe3),
 }
 
 impl Model {
@@ -32,7 +30,6 @@ impl Model {
             Self::Moe(ref mut m) => m.forward(xs, s),
             Self::Base(ref mut m) => m.forward(xs, s),
             Self::Base3(ref mut m) => m.forward(xs, s),
-            Self::Moe3(ref mut m) => m.forward(xs, s),
         }
     }
 }
@@ -340,10 +337,6 @@ fn main() -> Result<()> {
         WhichModel::W3_0_6b | WhichModel::W3_1_7b | WhichModel::W3_4b | WhichModel::W3_8b => {
             let config: Config3 = serde_json::from_slice(&std::fs::read(config_file)?)?;
             Model::Base3(Model3::new(&config, vb)?)
-        }
-        WhichModel::W3MoeA3b => {
-            let config: ConfigMoe3 = serde_json::from_slice(&std::fs::read(config_file)?)?;
-            Model::Moe3(ModelMoe3::new(&config, vb)?)
         }
         _ => {
             let config: ConfigBase = serde_json::from_slice(&std::fs::read(config_file)?)?;
