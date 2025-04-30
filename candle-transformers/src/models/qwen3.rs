@@ -161,7 +161,7 @@ struct Qwen3Attention {
     head_dim: usize,
     hidden_size: usize,
     // sliding window
-    sliding_window: Option<usize>,
+    _sliding_window: Option<usize>,
     // utils
     rotary_emb: Arc<Qwen3RotaryEmbedding>,
     kv_cache: Option<(Tensor, Tensor)>,
@@ -219,7 +219,7 @@ impl Qwen3Attention {
             num_kv_groups,
             head_dim,
             hidden_size,
-            sliding_window,
+            _sliding_window: sliding_window,
             rotary_emb,
             kv_cache: None,
         })
@@ -322,7 +322,7 @@ impl DecoderLayer {
         let x = x.broadcast_add(&h)?;
         let h2 = self.ln2.forward(&x)?;
         let h2 = h2.apply(&self.mlp)?;
-        Ok(x.broadcast_add(&h2)?)
+        x.broadcast_add(&h2)
     }
 
     fn clear_kv_cache(&mut self) {
@@ -335,7 +335,7 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: Qwen3RmsNorm,
-    rotary: Arc<Qwen3RotaryEmbedding>,
+    _rotary: Arc<Qwen3RotaryEmbedding>,
     device: Device,
     dtype: DType,
 }
@@ -354,7 +354,7 @@ impl Model {
             embed_tokens,
             layers,
             norm: Qwen3RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?,
-            rotary,
+            _rotary: rotary,
             device: vb.device().clone(),
             dtype: vb.dtype(),
         })
@@ -406,8 +406,7 @@ impl Model {
         for layer in &mut self.layers {
             h = layer.forward(&h, causal.as_ref(), offset)?;
         }
-        let b = self.norm.forward(&h)?;
-        Ok(b)
+        self.norm.forward(&h)
     }
 }
 
