@@ -401,7 +401,6 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    _rotary: Arc<Qwen3RotaryEmbedding>,
     device: Device,
     dtype: DType,
 }
@@ -420,7 +419,6 @@ impl Model {
             embed_tokens,
             layers,
             norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?,
-            _rotary: rotary,
             device: vb.device().clone(),
             dtype: vb.dtype(),
         })
