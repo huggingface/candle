@@ -1,5 +1,5 @@
-use crate::models::with_tracing::{linear, linear_no_bias, Linear};
-use candle::{DType, Device, Module, Result, Tensor, D};
+use crate::models::with_tracing::{linear, linear_no_bias, Linear, RmsNorm};
+use candle::{DType, Device, Module, Result, Tensor};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
@@ -60,53 +60,6 @@ impl Qwen3RotaryEmbedding {
     }
 }
 
-#[derive(Debug, Clone)]
-struct Qwen3RmsNorm {
-    weight: Tensor,
-    eps: f64,
-}
-
-impl Qwen3RmsNorm {
-    fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let weight = vb.get((dim,), "weight")?;
-        Ok(Self { weight, eps })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let orig_dtype = xs.dtype();
-        let xs = xs.to_dtype(DType::F32)?;
-        let var = (xs.clone() * &xs)?.mean_keepdim(D::Minus1)?;
-        let rms = (var + self.eps)?.powf(-0.5)?;
-        let xs = xs.broadcast_mul(&rms)?;
-        let ws = self.weight.unsqueeze(0)?.unsqueeze(1)?;
-        xs.broadcast_mul(&ws)?.to_dtype(orig_dtype)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct Qwen3HeadRmsNorm {
-    weight: Tensor,
-    eps: f64,
-}
-
-impl Qwen3HeadRmsNorm {
-    fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let weight = vb.get((dim,), "weight")?;
-        Ok(Self { weight, eps })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        // xs: (B*L*H, D)
-        let orig_dtype = xs.dtype();
-        let xs = xs.to_dtype(DType::F32)?;
-        let var = (xs.clone() * &xs)?.mean_keepdim(D::Minus1)?;
-        let rms = (var + self.eps)?.powf(-0.5)?;
-        let xs = xs.broadcast_mul(&rms)?;
-        let ws = self.weight.unsqueeze(0)?;
-        xs.broadcast_mul(&ws)?.to_dtype(orig_dtype)
-    }
-}
-
 fn repeat_kv(kv: &Tensor, n_rep: usize) -> Result<Tensor> {
     if n_rep == 1 {
         return Ok(kv.clone());
@@ -152,8 +105,8 @@ struct Qwen3Attention {
     v_proj: Linear,
     o_proj: Linear,
     // norms
-    q_norm: Qwen3HeadRmsNorm,
-    k_norm: Qwen3HeadRmsNorm,
+    q_norm: RmsNorm,
+    k_norm: RmsNorm,
     // hyper params
     num_heads: usize,
     num_kv_heads: usize,
@@ -195,8 +148,8 @@ impl Qwen3Attention {
             )
         };
 
-        let q_norm = Qwen3HeadRmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
-        let k_norm = Qwen3HeadRmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
+        let q_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
+        let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
 
         let sliding_window = if cfg.use_sliding_window && layer_idx >= cfg.max_window_layers {
             cfg.sliding_window
@@ -293,8 +246,8 @@ impl Qwen3Attention {
 struct DecoderLayer {
     self_attn: Qwen3Attention,
     mlp: Qwen3MLP,
-    ln1: Qwen3RmsNorm,
-    ln2: Qwen3RmsNorm,
+    ln1: RmsNorm,
+    ln2: RmsNorm,
 }
 
 impl DecoderLayer {
@@ -307,8 +260,8 @@ impl DecoderLayer {
         Ok(Self {
             self_attn: Qwen3Attention::new(cfg, rotary, idx, vb.pp("self_attn"))?,
             mlp: Qwen3MLP::new(cfg, vb.pp("mlp"))?,
-            ln1: Qwen3RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?,
-            ln2: Qwen3RmsNorm::new(
+            ln1: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?,
+            ln2: RmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 vb.pp("post_attention_layernorm"),
@@ -334,7 +287,7 @@ impl DecoderLayer {
 pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
-    norm: Qwen3RmsNorm,
+    norm: RmsNorm,
     _rotary: Arc<Qwen3RotaryEmbedding>,
     device: Device,
     dtype: DType,
@@ -353,7 +306,7 @@ impl Model {
         Ok(Self {
             embed_tokens,
             layers,
-            norm: Qwen3RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?,
+            norm: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?,
             _rotary: rotary,
             device: vb.device().clone(),
             dtype: vb.dtype(),
