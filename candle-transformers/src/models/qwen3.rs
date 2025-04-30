@@ -106,8 +106,6 @@ pub(crate) struct Qwen3Attention {
     num_kv_groups: usize,
     head_dim: usize,
     hidden_size: usize,
-    // sliding window
-    _sliding_window: Option<usize>,
     // utils
     rotary_emb: Arc<Qwen3RotaryEmbedding>,
     kv_cache: KvCache,
@@ -117,9 +115,12 @@ impl Qwen3Attention {
     pub(crate) fn new(
         cfg: &Config,
         rotary_emb: Arc<Qwen3RotaryEmbedding>,
-        layer_idx: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
+        if cfg.use_sliding_window {
+            candle::bail!("sliding window is not suppored")
+        }
+
         let head_dim = cfg.head_dim;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -153,12 +154,6 @@ impl Qwen3Attention {
         let q_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
         let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
 
-        let sliding_window = if cfg.use_sliding_window && layer_idx >= cfg.max_window_layers {
-            cfg.sliding_window
-        } else {
-            None
-        };
-
         // Necessary because the hidden_size in the cofig isn't always accurate
         let hidden_size = head_dim * cfg.num_attention_heads;
 
@@ -176,13 +171,17 @@ impl Qwen3Attention {
             num_kv_groups,
             head_dim,
             hidden_size,
-            _sliding_window: sliding_window,
             rotary_emb,
             kv_cache,
         })
     }
 
-    pub(crate) fn forward(&mut self, x: &Tensor, attn_mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
+    pub(crate) fn forward(
+        &mut self,
+        x: &Tensor,
+        attn_mask: Option<&Tensor>,
+        offset: usize,
+    ) -> Result<Tensor> {
         let (b, l, _) = x.dims3()?;
 
         // 1. Proj
@@ -248,13 +247,8 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(
-        cfg: &Config,
-        rotary: Arc<Qwen3RotaryEmbedding>,
-        idx: usize,
-        vb: VarBuilder,
-    ) -> Result<Self> {
-        let self_attn = Qwen3Attention::new(cfg, rotary, idx, vb.pp("self_attn"))?;
+    fn new(cfg: &Config, rotary: Arc<Qwen3RotaryEmbedding>, vb: VarBuilder) -> Result<Self> {
+        let self_attn = Qwen3Attention::new(cfg, rotary, vb.pp("self_attn"))?;
         let mlp = Qwen3MLP::new(cfg, vb.pp("mlp"))?;
         let ln1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let ln2 = RmsNorm::new(
@@ -301,7 +295,7 @@ impl Model {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb.pp("model.layers");
         for i in 0..cfg.num_hidden_layers {
-            layers.push(DecoderLayer::new(cfg, rotary.clone(), i, vb_l.pp(i))?);
+            layers.push(DecoderLayer::new(cfg, rotary.clone(), vb_l.pp(i))?);
         }
         Ok(Self {
             embed_tokens,

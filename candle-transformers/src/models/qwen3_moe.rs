@@ -203,7 +203,7 @@ impl DecoderLayer {
         rotary: Arc<Qwen3RotaryEmbedding>,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let self_attn = Qwen3Attention::new(&cfg.into(), rotary, layer_idx, vb.pp("self_attn"))?;
+        let self_attn = Qwen3Attention::new(&cfg.into(), rotary, vb.pp("self_attn"))?;
 
         // Decide whether to use MoE or regular MLP based on layer_idx and decoder_sparse_step
         let feed_forward = if cfg.num_experts > 0 && (layer_idx + 1) % cfg.decoder_sparse_step == 0
