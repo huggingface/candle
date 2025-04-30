@@ -254,15 +254,19 @@ impl DecoderLayer {
         idx: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
+        let self_attn = Qwen3Attention::new(cfg, rotary, idx, vb.pp("self_attn"))?;
+        let mlp = Qwen3MLP::new(cfg, vb.pp("mlp"))?;
+        let ln1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let ln2 = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            vb.pp("post_attention_layernorm"),
+        )?;
         Ok(Self {
-            self_attn: Qwen3Attention::new(cfg, rotary, idx, vb.pp("self_attn"))?,
-            mlp: Qwen3MLP::new(cfg, vb.pp("mlp"))?,
-            ln1: RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?,
-            ln2: RmsNorm::new(
-                cfg.hidden_size,
-                cfg.rms_norm_eps,
-                vb.pp("post_attention_layernorm"),
-            )?,
+            self_attn,
+            mlp,
+            ln1,
+            ln2,
         })
     }
 
