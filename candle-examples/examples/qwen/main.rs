@@ -167,8 +167,6 @@ enum WhichModel {
     W3_4b,
     #[value(name = "3-8b")]
     W3_8b,
-    #[value(name = "3-moe-a3b")]
-    W3MoeA3b,
 }
 
 #[derive(Parser, Debug)]
@@ -275,7 +273,6 @@ fn main() -> Result<()> {
                 WhichModel::W3_1_7b => ("3", "1.7B"),
                 WhichModel::W3_4b => ("3", "4B"),
                 WhichModel::W3_8b => ("3", "8B"),
-                WhichModel::W3MoeA3b => ("3", "30B-A3B"),
             };
             format!("Qwen/Qwen{version}-{size}")
         }
@@ -311,8 +308,7 @@ fn main() -> Result<()> {
             | WhichModel::MoeA27b
             | WhichModel::W3_1_7b
             | WhichModel::W3_4b
-            | WhichModel::W3_8b
-            | WhichModel::W3MoeA3b => {
+            | WhichModel::W3_8b => {
                 candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
             }
         },
