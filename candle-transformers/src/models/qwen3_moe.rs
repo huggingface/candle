@@ -1,5 +1,5 @@
 use crate::{
-    models::with_tracing::{linear, linear_no_bias, Linear, RmsNorm},
+    models::with_tracing::{linear_b, linear_no_bias, Linear, RmsNorm},
     utils::repeat_kv,
 };
 use candle::{DType, Device, Module, Result, Tensor, D};
@@ -228,21 +228,30 @@ impl Qwen3Attention {
         let num_kv_heads = cfg.num_key_value_heads;
         let num_kv_groups = num_heads / num_kv_heads;
 
-        let (q_proj, k_proj, v_proj, o_proj) = if cfg.attention_bias {
-            (
-                linear(cfg.hidden_size, num_heads * head_dim, vb.pp("q_proj"))?,
-                linear(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?,
-                linear(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?,
-                linear(num_heads * head_dim, cfg.hidden_size, vb.pp("o_proj"))?,
-            )
-        } else {
-            (
-                linear_no_bias(cfg.hidden_size, num_heads * head_dim, vb.pp("q_proj"))?,
-                linear_no_bias(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?,
-                linear_no_bias(cfg.hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?,
-                linear_no_bias(num_heads * head_dim, cfg.hidden_size, vb.pp("o_proj"))?,
-            )
-        };
+        let q_proj = linear_b(
+            cfg.hidden_size,
+            num_heads * head_dim,
+            cfg.attention_bias,
+            vb.pp("q_proj"),
+        )?;
+        let k_proj = linear_b(
+            cfg.hidden_size,
+            num_kv_heads * head_dim,
+            cfg.attention_bias,
+            vb.pp("k_proj"),
+        )?;
+        let v_proj = linear_b(
+            cfg.hidden_size,
+            num_kv_heads * head_dim,
+            cfg.attention_bias,
+            vb.pp("v_proj"),
+        )?;
+        let o_proj = linear_b(
+            num_heads * head_dim,
+            cfg.hidden_size,
+            cfg.attention_bias,
+            vb.pp("o_proj"),
+        )?;
 
         let q_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?;
         let k_norm = RmsNorm::new(head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?;
