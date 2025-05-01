@@ -569,8 +569,7 @@ impl ScatteredCacheBuilder {
             }
         }
         // Flattening the attention mask then using Tensor::from_vec rather using Tensor::new ends
-        // up being almost 10x faster with candle 0.9.0. The slowness seems to be on the CPU
-        // copies, to be further investigated.
+        // up being almost 10x faster with candle 0.9.0. This has been fixed in candle 0.9.1.
         let attention_masks = attention_masks
             .into_iter()
             .flat_map(|m| m.into_iter().flatten())
