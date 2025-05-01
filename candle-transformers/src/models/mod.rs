@@ -97,6 +97,7 @@ pub mod quantized_stable_lm;
 pub mod quantized_t5;
 pub mod qwen2;
 pub mod qwen2_moe;
+pub mod qwen3;
 pub mod recurrent_gemma;
 pub mod repvgg;
 pub mod resnet;
