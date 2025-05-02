@@ -9,6 +9,7 @@ use clap::Parser;
 
 use candle_transformers::models::qwen2::{Config as ConfigBase, ModelForCausalLM as ModelBase};
 use candle_transformers::models::qwen2_moe::{Config as ConfigMoe, Model as ModelMoe};
+use candle_transformers::models::qwen3::{Config as Config3, ModelForCausalLM as Model3};
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -20,6 +21,7 @@ use tokenizers::Tokenizer;
 enum Model {
     Base(ModelBase),
     Moe(ModelMoe),
+    Base3(Model3),
 }
 
 impl Model {
@@ -27,6 +29,7 @@ impl Model {
         match self {
             Self::Moe(ref mut m) => m.forward(xs, s),
             Self::Base(ref mut m) => m.forward(xs, s),
+            Self::Base3(ref mut m) => m.forward(xs, s),
         }
     }
 }
@@ -85,6 +88,10 @@ impl TextGeneration {
             Some(token) => token,
             None => anyhow::bail!("cannot find the <|endoftext|> token"),
         };
+        let eos_token2 = match self.tokenizer.get_token("<|im_end|>") {
+            Some(token) => token,
+            None => anyhow::bail!("cannot find the <|im_end|> token"),
+        };
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
             let context_size = if index > 0 { 1 } else { tokens.len() };
@@ -107,7 +114,7 @@ impl TextGeneration {
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             generated_tokens += 1;
-            if next_token == eos_token {
+            if next_token == eos_token || next_token == eos_token2 {
                 break;
             }
             if let Some(t) = self.tokenizer.next_token(next_token)? {
@@ -152,6 +159,14 @@ enum WhichModel {
     W2_7b,
     #[value(name = "2-72b")]
     W2_72b,
+    #[value(name = "3-0.6b")]
+    W3_0_6b,
+    #[value(name = "3-1.7b")]
+    W3_1_7b,
+    #[value(name = "3-4b")]
+    W3_4b,
+    #[value(name = "3-8b")]
+    W3_8b,
 }
 
 #[derive(Parser, Debug)]
@@ -254,6 +269,10 @@ fn main() -> Result<()> {
                 WhichModel::W14b => ("1.5", "14B"),
                 WhichModel::W72b => ("1.5", "72B"),
                 WhichModel::MoeA27b => ("1.5", "MoE-A2.7B"),
+                WhichModel::W3_0_6b => ("3", "0.6B"),
+                WhichModel::W3_1_7b => ("3", "1.7B"),
+                WhichModel::W3_4b => ("3", "4B"),
+                WhichModel::W3_8b => ("3", "8B"),
             };
             format!("Qwen/Qwen{version}-{size}")
         }
@@ -273,7 +292,11 @@ fn main() -> Result<()> {
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
         None => match args.model {
-            WhichModel::W0_5b | WhichModel::W2_0_5b | WhichModel::W2_1_5b | WhichModel::W1_8b => {
+            WhichModel::W0_5b
+            | WhichModel::W2_0_5b
+            | WhichModel::W2_1_5b
+            | WhichModel::W1_8b
+            | WhichModel::W3_0_6b => {
                 vec![repo.get("model.safetensors")?]
             }
             WhichModel::W4b
@@ -282,7 +305,10 @@ fn main() -> Result<()> {
             | WhichModel::W14b
             | WhichModel::W72b
             | WhichModel::W2_72b
-            | WhichModel::MoeA27b => {
+            | WhichModel::MoeA27b
+            | WhichModel::W3_1_7b
+            | WhichModel::W3_4b
+            | WhichModel::W3_8b => {
                 candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
             }
         },
@@ -303,6 +329,10 @@ fn main() -> Result<()> {
         WhichModel::MoeA27b => {
             let config: ConfigMoe = serde_json::from_slice(&std::fs::read(config_file)?)?;
             Model::Moe(ModelMoe::new(&config, vb)?)
+        }
+        WhichModel::W3_0_6b | WhichModel::W3_1_7b | WhichModel::W3_4b | WhichModel::W3_8b => {
+            let config: Config3 = serde_json::from_slice(&std::fs::read(config_file)?)?;
+            Model::Base3(Model3::new(&config, vb)?)
         }
         _ => {
             let config: ConfigBase = serde_json::from_slice(&std::fs::read(config_file)?)?;
