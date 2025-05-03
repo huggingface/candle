@@ -1087,6 +1087,31 @@ fn scatter(device: &Device) -> Result<()> {
             [1.0, 1.0, 1.0]
         ]
     );
+
+    let hs = {
+        let ids = Tensor::new(
+            &[
+                [0u32, u32::MAX, 2],
+                [3, 4, u32::MAX],
+                [3, 3, 1],
+                [u32::MAX, u32::MAX, 4],
+            ],
+            device,
+        )?;
+        init.scatter(&ids, &t, 0)?
+    };
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 1.0],
+            [1.0, 1.0, 8.0],
+            [1.0, 1.0, 2.0],
+            [6.0, 7.0, 1.0],
+            [1.0, 4.0, 11.0],
+            [1.0, 1.0, 1.0]
+        ]
+    );
+
     init.scatter_set(&ids, &t, 0)?;
     assert_eq!(
         init.to_vec2::<f32>()?,
@@ -1099,6 +1124,7 @@ fn scatter(device: &Device) -> Result<()> {
             [1.0, 1.0, 1.0]
         ]
     );
+
     Ok(())
 }
 
@@ -1131,6 +1157,23 @@ fn gather(device: &Device) -> Result<()> {
     let ids = Tensor::new(&[[0u32, 2u32, 0u32], [0u32, 1u32, 1u32]], device)?;
     let hs = t.gather(&ids, 0)?;
     assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 7.0, 2.0], [0.0, 4.0, 5.0]]);
+
+    let hs = {
+        let ids = Tensor::new(
+            &[
+                [0u32, 0u32],
+                [2u32, u32::MAX],
+                [u32::MAX, 1u32],
+                [0u32, 2u32],
+            ],
+            device,
+        )?;
+        t.gather(&ids, 1)?
+    };
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[[0.0, 0.0], [5.0, 0.0], [0.0, 7.0], [9.0, 11.0]]
+    );
 
     // Random data
 
