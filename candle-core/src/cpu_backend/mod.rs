@@ -483,17 +483,22 @@ impl<I: IntDType> Map1 for Gather<'_, I> {
                 let start_dst_idx = start_dst_idx + i * dst_right_len;
                 for right_i in 0..dst_right_len {
                     let dst_idx = start_dst_idx + right_i;
-                    let index = ids[dst_idx].as_usize();
-                    if index >= src_dim_len {
-                        Err(Error::InvalidIndex {
-                            index,
-                            size: src_dim_len,
-                            op: "gather",
+                    let index = ids[dst_idx];
+                    if index == I::max_value() {
+                        dst[dst_idx] = T::zero();
+                    } else {
+                        let index = index.as_usize();
+                        if index >= src_dim_len {
+                            Err(Error::InvalidIndex {
+                                index,
+                                size: src_dim_len,
+                                op: "gather",
+                            }
+                            .bt())?
                         }
-                        .bt())?
+                        let src_idx = start_src_idx + index * src_right_len + right_i;
+                        dst[dst_idx] = src[src_idx]
                     }
-                    let src_idx = start_src_idx + index * src_right_len + right_i;
-                    dst[dst_idx] = src[src_idx]
                 }
             }
         }
@@ -535,19 +540,24 @@ impl<I: IntDType> Map1 for IndexSelect<'_, I> {
             let start_src_idx = left_i * right_len * src_dim;
             let start_dst_idx = left_i * right_len * n_ids;
             for i in 0..n_ids {
-                let index = self.ids[self.ids_l.start_offset() + stride_ids * i].as_usize();
-                if index >= src_dim {
-                    Err(Error::InvalidIndex {
-                        index,
-                        size: src_dim,
-                        op: "index-select",
-                    }
-                    .bt())?
-                }
-                let start_src_idx = start_src_idx + index * right_len;
                 let start_dst_idx = start_dst_idx + i * right_len;
-                dst[start_dst_idx..start_dst_idx + right_len]
-                    .copy_from_slice(&src[start_src_idx..start_src_idx + right_len])
+                let index = self.ids[self.ids_l.start_offset() + stride_ids * i];
+                if index == I::max_value() {
+                    dst[start_dst_idx..start_dst_idx + right_len].fill(T::zero());
+                } else {
+                    let index = index.as_usize();
+                    if index >= src_dim {
+                        Err(Error::InvalidIndex {
+                            index,
+                            size: src_dim,
+                            op: "index-select",
+                        }
+                        .bt())?
+                    }
+                    let start_src_idx = start_src_idx + index * right_len;
+                    dst[start_dst_idx..start_dst_idx + right_len]
+                        .copy_from_slice(&src[start_src_idx..start_src_idx + right_len])
+                }
             }
         }
         Ok(dst)
@@ -631,7 +641,11 @@ impl<I: IntDType, M: ElemUpdate> Map2InPlace for Scatter<'_, I, M> {
                 let start_ids_idx = start_ids_idx + i * ids_right_len;
                 for right_i in 0..dst_right_len {
                     let ids_idx = start_ids_idx + right_i;
-                    let index = ids[ids_idx].as_usize();
+                    let index = ids[ids_idx];
+                    if index == I::max_value() {
+                        continue;
+                    }
+                    let index = index.as_usize();
                     if index >= dst_dim_len {
                         Err(Error::InvalidIndex {
                             index,
@@ -674,6 +688,9 @@ impl<I: IntDType> Map2 for IndexAdd<'_, I> {
         let post_dim = src_l.dims()[dim + 1..].iter().product::<usize>();
         if dim == 0 {
             for (src_idx, dst_idx) in self.ids.iter().enumerate() {
+                if *dst_idx == I::max_value() {
+                    continue;
+                }
                 let dst_idx = dst_idx.as_usize();
                 if dst_idx >= max_idx {
                     Err(Error::InvalidIndex {
@@ -692,6 +709,9 @@ impl<I: IntDType> Map2 for IndexAdd<'_, I> {
             }
         } else {
             for (src_idx, dst_idx) in self.ids.iter().enumerate() {
+                if *dst_idx == I::max_value() {
+                    continue;
+                }
                 let dst_idx = dst_idx.as_usize();
                 if dst_idx >= max_idx {
                     Err(Error::InvalidIndex {
