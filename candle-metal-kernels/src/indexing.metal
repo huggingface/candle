@@ -1,6 +1,24 @@
 #include <metal_stdlib>
 using namespace metal;
 
+template <typename T>
+inline T max_value();
+
+template <>
+inline int64_t max_value<int64_t>() {
+    return 0x7FFFFFFFFFFFFFFF;
+}
+
+template <>
+inline uint32_t max_value<uint32_t>() {
+    return 0xFFFFFFFFu;
+}
+
+template <>
+inline uint8_t max_value<uint8_t>() {
+    return 0xFF;
+}
+
 METAL_FUNC uint get_strided_index(
     uint idx,
     constant size_t &num_dims,
@@ -35,17 +53,21 @@ METAL_FUNC void index(
         return;
     }
     const size_t id_i = (tid / right_size) % ids_size;
-    const INDEX_TYPENAME input_i = min(input_ids[id_i], (INDEX_TYPENAME)(src_dim_size - 1));
-    const size_t right_rank_i = tid % right_size;
-    const size_t left_rank_i = tid / right_size / ids_size;
-    /*
-    // Force prevent out of bounds indexing
-    // since there doesn't seem to be a good way to force crash
-    // No need to check for zero we're only allowing unsized.
-    */
-    const size_t src_i = left_rank_i * src_dim_size * right_size + input_i * right_size + right_rank_i;
-    const size_t strided_src_i = contiguous ? src_i : get_strided_index(src_i, src_dim_size, src_dims, src_strides);
-    output[tid] = input[strided_src_i];
+    if (input_ids[id_i] == max_value<INDEX_TYPENAME>()) {
+      output[tid] = static_cast<TYPENAME>(0);
+    } else {
+      const INDEX_TYPENAME input_i = min(input_ids[id_i], (INDEX_TYPENAME)(src_dim_size - 1));
+      const size_t right_rank_i = tid % right_size;
+      const size_t left_rank_i = tid / right_size / ids_size;
+      /*
+      // Force prevent out of bounds indexing
+      // since there doesn't seem to be a good way to force crash
+      // No need to check for zero we're only allowing unsized.
+      */
+      const size_t src_i = left_rank_i * src_dim_size * right_size + input_i * right_size + right_rank_i;
+      const size_t strided_src_i = contiguous ? src_i : get_strided_index(src_i, src_dim_size, src_dims, src_strides);
+      output[tid] = input[strided_src_i];
+    }
 }
 
 # define INDEX_OP(NAME, INDEX_TYPENAME, TYPENAME) \
@@ -83,10 +105,14 @@ METAL_FUNC void gather(
         return;
     }
     const INDEX_TYPENAME input_i = input_ids[tid];
-    const size_t right_rank_i = tid % right_size;
-    const size_t left_rank_i = tid / right_size / ids_size;
-    const size_t src_i = (left_rank_i * src_dim_size + input_i) * right_size + right_rank_i;
-    output[tid] = input[src_i];
+    if (input_i == max_value<INDEX_TYPENAME>()) {
+      output[tid] = static_cast<TYPENAME>(0);
+    } else {
+      const size_t right_rank_i = tid % right_size;
+      const size_t left_rank_i = tid / right_size / ids_size;
+      const size_t src_i = (left_rank_i * src_dim_size + input_i) * right_size + right_rank_i;
+      output[tid] = input[src_i];
+    }
 }
 
 # define GATHER_OP(NAME, INDEX_TYPENAME, TYPENAME) \
@@ -124,8 +150,10 @@ METAL_FUNC void scatter(
     for (unsigned int j = 0; j < src_dim_size; ++j) {
         const size_t src_i = (left_rank_i * src_dim_size + j) * right_size + right_rank_i;
         const INDEX_TYPENAME idx = input_ids[src_i];
-        const size_t dst_i = (left_rank_i * dst_dim_size + idx) * right_size + right_rank_i;
-        output[dst_i] = input[src_i];
+        if (idx < max_value<INDEX_TYPENAME>()) {
+          const size_t dst_i = (left_rank_i * dst_dim_size + idx) * right_size + right_rank_i;
+          output[dst_i] = input[src_i];
+        }
     }
 }
 
@@ -149,8 +177,10 @@ METAL_FUNC void scatter_add(
     for (unsigned int j = 0; j < src_dim_size; ++j) {
         const size_t src_i = (left_rank_i * src_dim_size + j) * right_size + right_rank_i;
         const INDEX_TYPENAME idx = input_ids[src_i];
-        const size_t dst_i = (left_rank_i * dst_dim_size + idx) * right_size + right_rank_i;
-        output[dst_i] += input[src_i];
+        if (idx < max_value<INDEX_TYPENAME>()) {
+          const size_t dst_i = (left_rank_i * dst_dim_size + idx) * right_size + right_rank_i;
+          output[dst_i] += input[src_i];
+        }
     }
 }
 
@@ -204,9 +234,11 @@ METAL_FUNC void index_add(
     const size_t left_rank_i = tid / right_size;
     for (unsigned int j = 0; j < ids_dim_size; ++j) {
         const INDEX_TYPENAME idx = input_ids[j];
-        const size_t src_i = (left_rank_i * src_dim_size + j) * right_size + right_rank_i;
-        const size_t dst_i = (left_rank_i * dst_dim_size + idx) * right_size + right_rank_i;
-        output[dst_i] += input[src_i];
+        if (idx < max_value<INDEX_TYPENAME>()) {
+          const size_t src_i = (left_rank_i * src_dim_size + j) * right_size + right_rank_i;
+          const size_t dst_i = (left_rank_i * dst_dim_size + idx) * right_size + right_rank_i;
+          output[dst_i] += input[src_i];
+        }
     }
 }
 
