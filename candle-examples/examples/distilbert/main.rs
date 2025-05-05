@@ -312,7 +312,7 @@ fn attention_mask_maskedlm(tokenizer: &Tokenizer, input: &str, device: &Device) 
     let ids = tokens.get_ids();
     for _ in 0..seq_len {
         for id in ids.iter() {
-            let mask_value = if id == &mask_token_id { 1u8 } else { 0u8 };
+            let mask_value = if id == &mask_token_id { 0u8 } else { 1u8 };
             attention_mask_vec.push(mask_value);
         }
     }
