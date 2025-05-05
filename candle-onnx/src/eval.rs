@@ -1960,6 +1960,65 @@ fn simple_eval_(
                 let output = input.sign()?;
                 values.insert(node.output[0].clone(), output);
             }
+            "LRN" => {
+                let xs = get(&node.input[0])?;
+                if xs.rank() != 4 {
+                    bail!(
+                        "LRN only applies to 4D tensors but shape is {:?}",
+                        xs.shape()
+                    );
+                }
+                let alpha = get_attr_opt::<f32>(node, "alpha")?
+                    .copied()
+                    .unwrap_or(0.0001);
+                let beta = get_attr_opt::<f32>(node, "beta")?.copied().unwrap_or(0.75);
+                let bias = get_attr_opt::<f32>(node, "bias")?.copied().unwrap_or(1.0);
+                let size = match get_attr_opt::<i64>(node, "size")? {
+                    Some(size) => size,
+                    None => {
+                        bail!("LRN requires a size attribute")
+                    }
+                };
+
+                let mut square_sum: Vec<f32> = vec![];
+                let minc = xs.shape().dim(1)? as i64;
+                let c1 = ((*size as f64 - 1.0) / 2.0).floor() as i64;
+                let c2 = ((*size as f64 - 1.0) / 2.0).ceil() as i64 + 1;
+
+                for n in 0..xs.shape().dim(0)? {
+                    for c in 0..xs.shape().dim(1)? {
+                        for h in 0..xs.shape().dim(2)? {
+                            for w in 0..xs.shape().dim(3)? {
+                                let begin = cmp::max(0, c as i64 - c1) as usize;
+                                let end = cmp::min(minc, c as i64 + c2) as usize;
+
+                                let xs_sum = xs
+                                    .i((n, begin..end, h, w))?
+                                    .sqr()?
+                                    .sum(0)?
+                                    .to_scalar::<f32>()?;
+                                square_sum.push(xs_sum);
+                            }
+                        }
+                    }
+                }
+
+                let mul_tensor = Tensor::full(alpha / *size as f32, xs.shape(), xs.device())?
+                    .to_dtype(xs.dtype())?;
+                let add_tensor =
+                    Tensor::full(bias, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
+                let pow_tensor =
+                    Tensor::full(beta, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
+
+                let square_sum =
+                    Tensor::from_vec(square_sum, xs.shape(), xs.device())?.to_dtype(xs.dtype())?;
+                let square_sum = mul_tensor
+                    .mul(&square_sum)?
+                    .add(&add_tensor)?
+                    .pow(&pow_tensor)?;
+                let output = xs.div(&square_sum)?;
+                values.insert(node.output[0].clone(), output);
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }

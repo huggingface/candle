@@ -5968,3 +5968,77 @@ fn test_sign_operation() -> Result<()> {
     );
     Ok(())
 }
+
+// LRN
+#[test]
+fn test_lrn() -> Result<()> {
+    let mut attribs = vec![];
+    attribs.push(AttributeProto {
+        name: "size".to_string(),
+        r#type: AttributeType::Int.into(),
+        i: 4,
+        ..AttributeProto::default()
+    });
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "LRN".to_string(),
+            domain: "".to_string(),
+            attribute: attribs,
+            input: vec![INPUT_X.to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            name: "".to_string(),
+            doc_string: "".to_string(),
+        }],
+        name: "".to_string(),
+        initializer: vec![],
+        input: vec![],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            doc_string: "".to_string(),
+            r#type: None,
+        }],
+        value_info: vec![],
+        doc_string: "".to_string(),
+        sparse_initializer: vec![],
+        quantization_annotation: vec![],
+    }));
+
+    let mut inputs = HashMap::new();
+    inputs.insert(
+        INPUT_X.to_string(),
+        Tensor::from_vec(
+            vec![
+                1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
+            (1, 2, 2, 3),
+            &Device::Cpu,
+        )?,
+    );
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    let expected = Tensor::from_vec(
+        vec![
+            0.99906355f32,
+            1.99745381,
+            2.99494743,
+            3.99132180,
+            4.98635626,
+            5.97982931,
+            6.99344492,
+            7.98981524,
+            8.98484230,
+            9.97830486,
+            10.96998405,
+            11.95965862,
+        ],
+        (1, 2, 2, 3),
+        &Device::Cpu,
+    )?;
+
+    assert_eq!(
+        z.flatten_all()?.to_vec1::<f32>()?,
+        expected.flatten_all()?.to_vec1::<f32>()?
+    );
+    Ok(())
+}
