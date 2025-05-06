@@ -379,54 +379,76 @@ struct BlockLoader {
 // Transforms and Epilogues
 ///////////////////////////////////////////////////////////////////////////////
 
-template<typename OutT, typename InT, typename _E = void>
-METAL_FUNC OutT accum_cast(InT x);
+template<typename OutT, typename InT>
+METAL_FUNC OutT mlx_cast(InT x);
 
 template<>
-METAL_FUNC float accum_cast<float, float, void>(float x) {
+METAL_FUNC float mlx_cast<float, float>(float x) {
+    return x;
+}
+
+template<>
+METAL_FUNC half mlx_cast<half, half>(half x) {
     return x;
 }
 template<>
-METAL_FUNC float accum_cast<float, half, void>(half x) {
+METAL_FUNC float mlx_cast<float, half>(half x) {
     return static_cast<float>(x);
+}
+template<>
+METAL_FUNC half mlx_cast<half, float>(float x) {
+    return static_cast<half>(x);
 }
 
 #if defined(__HAVE_BFLOAT__)
 template<>
-METAL_FUNC float accum_cast<float, bfloat, void>(bfloat x) {
+METAL_FUNC bfloat mlx_cast<bfloat, bfloat>(bfloat x) {
+    return x;
+}
+template<>
+METAL_FUNC float mlx_cast<float, bfloat>(bfloat x) {
     return static_cast<float>(x);
+}
+template<>
+METAL_FUNC bfloat mlx_cast<bfloat, float>(float x) {
+    return static_cast<bfloat>(x);
 }
 #endif
 
+
 template<>
-METAL_FUNC float accum_cast(fp8_storage_t x) {
-    return cast_fp8_to<float, E5M2>(x);
+METAL_FUNC fp8_storage_t mlx_cast<fp8_storage_t, fp8_storage_t>(fp8_storage_t x) {
+    return x;
 }
 
 template<>
-METAL_FUNC half accum_cast(fp8_storage_t x) {
+METAL_FUNC float mlx_cast<float, fp8_storage_t>(fp8_storage_t x) {
+    return cast_fp8_to<float, E5M2>(x);
+}
+
+//template<>
+//METAL_FUNC fp8_storage_t mlx_cast<fp8_storage_t, float>(float x) {
+//    return cast_to_f8<float, E5M2>(x);
+//}
+
+template<>
+METAL_FUNC half mlx_cast<half, fp8_storage_t>(fp8_storage_t x) {
     return cast_fp8_to<half, E5M2>(x);
 }
+
+//template<>
+//METAL_FUNC fp8_storage_t mlx_cast<fp8_storage_t, half>(half x) {
+//    return cast_to_f8<float, E5M2>(x);
+//}
 
 template <typename OutT, typename InT>
 struct TransformNone {
   static METAL_FUNC OutT apply(InT x) {
-    return static_cast<OutT>(x);
+    return mlx_cast<OutT>(x);
   }
 
   static METAL_FUNC OutT apply(InT x, OutT) {
-    return static_cast<OutT>(x);
-  }
-};
-
-template <typename OutT>
-struct TransformNone<OutT, fp8_storage_t>  {
-  static METAL_FUNC OutT apply(fp8_storage_t x) {
-    return cast_fp8_to<OutT, E5M2>(x);
-  }
-
-  static METAL_FUNC OutT apply(fp8_storage_t x, OutT) {
-    return cast_fp8_to<OutT, E5M2>(x);
+    return mlx_cast<OutT>(x);
   }
 };
 
@@ -435,25 +457,11 @@ struct TransformAdd {
   TransformAdd(const float, const float) {}
 
   static METAL_FUNC OutT apply(InT x) {
-    return static_cast<OutT>(x);
+    return mlx_cast<OutT>(x);
   }
 
   static METAL_FUNC OutT apply(InT x, OutT c) {
-    return static_cast<OutT>(x) + c;
-  }
-};
-
-
-template <typename OutT>
-struct TransformAdd<OutT, fp8_storage_t> {
-  TransformAdd(const float, const float) {}
-
-  static METAL_FUNC OutT apply(fp8_storage_t x) {
-    return cast_fp8_to<OutT, E5M2>(x);
-  }
-
-  static METAL_FUNC OutT apply(fp8_storage_t x, OutT c) {
-    return cast_fp8_to<OutT, E5M2>(x) + c;
+    return mlx_cast<OutT>(x) + c;
   }
 };
 
@@ -466,29 +474,11 @@ struct TransformAxpby {
       : alpha(alpha_), beta(beta_) {}
 
   static METAL_FUNC OutT apply(InT x) {
-    return static_cast<OutT>(x);
+    return mlx_cast<OutT>(x);
   }
 
   METAL_FUNC OutT apply(InT x, OutT c) const {
-    return static_cast<OutT>(x * alpha + (beta * c));
-  }
-};
-
-
-template <typename OutT>
-struct TransformAxpby<OutT, fp8_storage_t> {
-  const float alpha;
-  const float beta;
-
-  TransformAxpby(const float alpha_, const float beta_)
-      : alpha(alpha_), beta(beta_) {}
-
-  static METAL_FUNC OutT apply(fp8_storage_t x) {
-    return cast_fp8_to<OutT, E5M2>(x);
-  }
-
-  METAL_FUNC OutT apply(fp8_storage_t x, OutT c) const {
-    return cast_fp8_to<OutT, E5M2>(x) * alpha + (beta * c);
+    return mlx_cast<OutT>(x * alpha + (beta * c));
   }
 };
 
@@ -596,16 +586,16 @@ struct BlockMMA {
         // Load elements from threadgroup A as simdgroup matrices
         STEEL_PRAGMA_UNROLL
         for (short i = 0; i < TM; i++) {
-            Asimd[i].thread_elements()[0] = accum_cast<AccumType, T>(As[i * simd_stride_a + 0]);
-            Asimd[i].thread_elements()[1] = accum_cast<AccumType, T>(As[i * simd_stride_a + jump_a]);
+            Asimd[i].thread_elements()[0] = mlx_cast<AccumType>(As[i * simd_stride_a + 0]);
+            Asimd[i].thread_elements()[1] = mlx_cast<AccumType>(As[i * simd_stride_a + jump_a]);
         }
         simdgroup_barrier(mem_flags::mem_none);
 
         // Load elements from threadgroup B as simdgroup matrices
         STEEL_PRAGMA_UNROLL
         for (short j = 0; j < TN; j++) {
-            Bsimd[j].thread_elements()[0] = accum_cast<AccumType, T>(Bs[j * simd_stride_b + 0]);
-            Bsimd[j].thread_elements()[1] = accum_cast<AccumType, T>(Bs[j * simd_stride_b + jump_b]);
+            Bsimd[j].thread_elements()[0] = mlx_cast<AccumType>(Bs[j * simd_stride_b + 0]);
+            Bsimd[j].thread_elements()[1] = mlx_cast<AccumType>(Bs[j * simd_stride_b + jump_b]);
         }
 
     }
