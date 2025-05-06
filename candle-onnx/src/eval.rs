@@ -1960,6 +1960,71 @@ fn simple_eval_(
                 let output = input.sign()?;
                 values.insert(node.output[0].clone(), output);
             }
+            "Resize" => {
+                let input = get(&node.input[0])?;
+
+                let scales = if node.input.len() > 2 && !node.input[2].is_empty() {
+                    Some(get(&node.input[2])?)
+                } else {
+                    None
+                };
+
+                let sizes = if node.input.len() > 3 && !node.input[3].is_empty() {
+                    Some(get(&node.input[3])?)
+                } else {
+                    None
+                };
+
+                if scales.is_none() && sizes.is_none() {
+                    bail!("Either scales or sizes must be provided for Resize operation");
+                }
+
+                // Get attributes with their default values according to ONNX spec
+                let mode = get_attr_opt::<str>(node, "mode")?.unwrap_or("nearest");
+                let coordinate_transformation_mode =
+                    get_attr_opt::<str>(node, "coordinate_transformation_mode")?
+                        .unwrap_or("half_pixel");
+
+                let output_dims = if let Some(sizes_tensor) = sizes {
+                    // Use specified sizes
+                    sizes_tensor
+                        .to_vec1::<i64>()?
+                        .iter()
+                        .map(|&d| d as usize)
+                        .collect::<Vec<_>>()
+                } else if let Some(scales_tensor) = scales {
+                    // Calculate from scales
+                    let scale_values = scales_tensor.to_vec1::<f32>()?;
+                    input.dims()
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &d)| (d as f32 * scale_values[i]) as usize)
+                        .collect::<Vec<_>>()
+                } else {
+                    unreachable!("Either scales or sizes should be present");
+                };
+
+                let output = match mode {
+                    "nearest" => match coordinate_transformation_mode {
+                        "asymmetric" => {
+                            if input.rank() == 4 {
+                                let h = output_dims[2];
+                                let w = output_dims[3];
+                                input.upsample_nearest2d(h, w)?
+                            } else {
+                                bail!("Unsupported rank for nearest resize: {}", input.rank())
+                            }
+                        }
+                        _ => bail!(
+                            "Unsupported coordinate_transformation_mode for nearest: {}",
+                            coordinate_transformation_mode
+                        ),
+                    },
+                    _ => bail!("Unsupported resize mode: {}", mode),
+                };
+
+                values.insert(node.output[0].clone(), output);
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
