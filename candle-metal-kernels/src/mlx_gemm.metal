@@ -11,6 +11,186 @@
 
 using namespace metal;
 
+// FP8 casting
+
+enum _fp8_variant_t {
+  E4M3 = 0,      // OCP E4M3
+  E5M2 = 1,      // OCP E5M2
+  E4M3_FNUZ = 2, // Standard FP8
+  E5M2_FNUZ = 3, // BF8
+};
+
+template<int variant>
+struct _fp8_variant_traits;
+
+template <>
+struct _fp8_variant_traits<_fp8_variant_t::E4M3> {
+    constexpr static constant bool is_fnuz = false;
+    constexpr static constant int we = 4;
+    constexpr static constant int wm = 3;
+};
+template <>
+struct _fp8_variant_traits<_fp8_variant_t::E5M2> {
+    constexpr static constant bool is_fnuz = false;
+    constexpr static constant int we = 5;
+    constexpr static constant int wm = 2;
+};
+template <>
+struct _fp8_variant_traits<_fp8_variant_t::E4M3_FNUZ> {
+    constexpr static constant bool is_fnuz = true;
+    constexpr static constant int we = 4;
+    constexpr static constant int wm = 3;
+};
+template <>
+struct _fp8_variant_traits<_fp8_variant_t::E5M2_FNUZ> {
+    constexpr static constant bool is_fnuz = true;
+    constexpr static constant int we = 5;
+    constexpr static constant int wm = 2;
+};
+
+
+template <typename T>
+struct _fp8_cast_traits;
+
+template <>
+struct _fp8_cast_traits<float> {
+    typedef _fp_encoding_traits<float> traits;
+    typedef typename traits::encoding_type encoding_type;
+    constexpr static constant encoding_type head_mask = 0xFF800000;
+    constexpr static constant encoding_type mantissa_mask = 0x7FFFFF;
+    constexpr static constant encoding_type mask = 0x7FFFFFFF;
+};
+
+template <>
+struct _fp8_cast_traits<half> {
+    typedef _fp_encoding_traits<float> traits;
+    typedef typename traits::encoding_type encoding_type;
+    constexpr static constant encoding_type head_mask = 0xFC00;
+    constexpr static constant encoding_type mantissa_mask = 0x3FF;
+    constexpr static constant encoding_type mask = 0x7FFF;
+};
+
+template<typename T, int variant>
+struct _fp8_variant_cast_traits;
+
+template <>
+struct _fp8_variant_cast_traits<float, _fp8_variant_t::E4M3> {
+    typedef _fp_encoding_traits<float> traits;
+    constexpr static constant traits::encoding_type ifmax = 0x43E00000;
+    constexpr static constant traits::encoding_type ifmin = 0x0; // unused
+};
+template <>
+struct _fp8_variant_cast_traits<float, _fp8_variant_t::E5M2> {
+    typedef _fp_encoding_traits<float> traits;
+    constexpr static constant traits::encoding_type ifmax = 0x47600000;
+    constexpr static constant traits::encoding_type ifmin = 0xC7600000;
+};
+template <>
+struct _fp8_variant_cast_traits<float, _fp8_variant_t::E4M3_FNUZ> {
+    typedef _fp_encoding_traits<float> traits;
+    constexpr static constant traits::encoding_type ifmax = 0x43700000;
+    constexpr static constant traits::encoding_type ifmin = 0x0; // unused
+};
+template <>
+struct _fp8_variant_cast_traits<float, _fp8_variant_t::E5M2_FNUZ> {
+    typedef _fp_encoding_traits<float> traits;
+    constexpr static constant traits::encoding_type ifmax = 0x47600000;
+    constexpr static constant traits::encoding_type ifmin = 0xC7600000;
+};
+
+template <>
+struct _fp8_variant_cast_traits<half, _fp8_variant_t::E4M3> {
+    typedef _fp_encoding_traits<half> traits;
+    constexpr static constant traits::encoding_type ifmax = 0x5F00;
+    constexpr static constant traits::encoding_type ifmin = 0x0; // unused
+};
+template <>
+struct _fp8_variant_cast_traits<half, _fp8_variant_t::E5M2> {
+    typedef _fp_encoding_traits<half> traits;
+    constexpr static constant traits::encoding_type ifmax = 0x7B00;
+    constexpr static constant traits::encoding_type ifmin = 0xFB00;
+};
+template <>
+struct _fp8_variant_cast_traits<half, _fp8_variant_t::E4M3_FNUZ> {
+    typedef _fp_encoding_traits<half> traits;
+    constexpr static constant traits::encoding_type ifmax = 0x5B80;
+    constexpr static constant traits::encoding_type ifmin = 0x0; // unused
+};
+template <>
+struct _fp8_variant_cast_traits<half, _fp8_variant_t::E5M2_FNUZ> {
+    typedef _fp_encoding_traits<half> traits;
+    constexpr static constant traits::encoding_type ifmax = 0x7B00;
+    constexpr static constant traits::encoding_type ifmin = 0xFB00;
+};
+
+typedef unsigned char fp8_storage_t;
+typedef unsigned short int fp8x2_storage_t;
+typedef unsigned int fp8x4_storage_t;
+
+template <int variant>
+METAL_FUNC half fp8_to_half(fp8_storage_t x);
+
+template <>
+METAL_FUNC half fp8_to_half<_fp8_variant_t::E4M3>(fp8_storage_t x) {
+    typedef _fp_encoding_traits<half> traits;
+    typedef _fp8_cast_traits<half> cast_traits;
+    typedef typename traits::encoding_type bits;
+    typedef numeric_limits<bits> limits;
+
+    typedef _fp8_variant_traits<_fp8_variant_t::E4M3> variant_traits;
+    typedef _fp8_variant_cast_traits<half, _fp8_variant_t::E4M3> variant_cast_traits;
+
+    bits ur = x << 8U;
+    bits sign = ur & 0x8000U;
+    bits exponent = (bits)(((ur & 0x7800U) >> 1U) + 0x2000U);
+    bits mantissa = (ur & 0x0700U) >> 1U;
+    unsigned char absx = 0x7FU & (unsigned char)x;
+
+    if (absx == 0x7FU) {  // NaN
+        ur = 0x7FFFU; // fp16 canonical NaN, discard sign
+    } else if (exponent == 0x2000U) {
+        // zero or denormal
+        if (mantissa != 0U) {
+            // normalize
+            mantissa = (bits)(mantissa << 1U);
+            while ((mantissa & 0x0400U) == 0U) {
+                mantissa = (bits)(mantissa << 1U);
+                exponent = (bits)(exponent - 0x0400U);
+            }
+            // discard implicit leading bit
+            mantissa &= 0x03FFU;
+        } else { // Zero
+            exponent = 0U;
+        }
+
+        ur = (sign | exponent) | mantissa;
+    } else {
+        ur = (sign | exponent) | mantissa;
+    }
+
+    return as_type<half>(ur);
+}
+
+template <>
+METAL_FUNC half fp8_to_half<_fp8_variant_t::E5M2>(fp8_storage_t x) {
+    typedef _fp_encoding_traits<half> traits;
+    typedef _fp8_cast_traits<half> cast_traits;
+    typedef typename traits::encoding_type bits;
+    typedef numeric_limits<bits> limits;
+
+    bits ur = x << 8U;
+    if ((x & 0x7FFFU) > 0x7C00U) {
+        /* If NaN, return canonical NaN */
+        ur = 0x7FFFU;
+    }
+    return as_type<half>(ur);
+}
+
+template <typename T, int variant>
+METAL_FUNC T cast_fp8_to(fp8_storage_t x) {
+    return static_cast<T>(fp8_to_half<variant>(x));
+}
+
 // https://github.com/ml-explore/mlx/blob/02efb310cac667bc547d1b96f21596c221f84fe7/mlx/backend/metal/kernels/steel/gemm/params.h#L1
 ///////////////////////////////////////////////////////////////////////////////
 // GEMM param classes
@@ -199,6 +379,35 @@ struct BlockLoader {
 // Transforms and Epilogues
 ///////////////////////////////////////////////////////////////////////////////
 
+template<typename OutT, typename InT, typename _E = void>
+METAL_FUNC OutT accum_cast(InT x);
+
+template<>
+METAL_FUNC float accum_cast<float, float, void>(float x) {
+    return x;
+}
+template<>
+METAL_FUNC float accum_cast<float, half, void>(half x) {
+    return static_cast<float>(x);
+}
+
+#if defined(__HAVE_BFLOAT__)
+template<>
+METAL_FUNC float accum_cast<float, bfloat, void>(bfloat x) {
+    return static_cast<float>(x);
+}
+#endif
+
+template<>
+METAL_FUNC float accum_cast(fp8_storage_t x) {
+    return cast_fp8_to<float, E5M2>(x);
+}
+
+template<>
+METAL_FUNC half accum_cast(fp8_storage_t x) {
+    return cast_fp8_to<half, E5M2>(x);
+}
+
 template <typename OutT, typename InT>
 struct TransformNone {
   static METAL_FUNC OutT apply(InT x) {
@@ -207,6 +416,17 @@ struct TransformNone {
 
   static METAL_FUNC OutT apply(InT x, OutT) {
     return static_cast<OutT>(x);
+  }
+};
+
+template <typename OutT>
+struct TransformNone<OutT, fp8_storage_t>  {
+  static METAL_FUNC OutT apply(fp8_storage_t x) {
+    return cast_fp8_to<OutT, E5M2>(x);
+  }
+
+  static METAL_FUNC OutT apply(fp8_storage_t x, OutT) {
+    return cast_fp8_to<OutT, E5M2>(x);
   }
 };
 
@@ -220,6 +440,20 @@ struct TransformAdd {
 
   static METAL_FUNC OutT apply(InT x, OutT c) {
     return static_cast<OutT>(x) + c;
+  }
+};
+
+
+template <typename OutT>
+struct TransformAdd<OutT, fp8_storage_t> {
+  TransformAdd(const float, const float) {}
+
+  static METAL_FUNC OutT apply(fp8_storage_t x) {
+    return cast_fp8_to<OutT, E5M2>(x);
+  }
+
+  static METAL_FUNC OutT apply(fp8_storage_t x, OutT c) {
+    return cast_fp8_to<OutT, E5M2>(x) + c;
   }
 };
 
@@ -237,6 +471,24 @@ struct TransformAxpby {
 
   METAL_FUNC OutT apply(InT x, OutT c) const {
     return static_cast<OutT>(x * alpha + (beta * c));
+  }
+};
+
+
+template <typename OutT>
+struct TransformAxpby<OutT, fp8_storage_t> {
+  const float alpha;
+  const float beta;
+
+  TransformAxpby(const float alpha_, const float beta_)
+      : alpha(alpha_), beta(beta_) {}
+
+  static METAL_FUNC OutT apply(fp8_storage_t x) {
+    return cast_fp8_to<OutT, E5M2>(x);
+  }
+
+  METAL_FUNC OutT apply(fp8_storage_t x, OutT c) const {
+    return cast_fp8_to<OutT, E5M2>(x) * alpha + (beta * c);
   }
 };
 
@@ -336,53 +588,47 @@ struct BlockMMA {
     // Adjust for simdgroup and thread location
     As += As_offset;
     Bs += Bs_offset;
-
     // Iterate over BK in blocks of 8
     STEEL_PRAGMA_UNROLL
     for (short kk = 0; kk < BK; kk += 8) {
-      simdgroup_barrier(mem_flags::mem_none);
+        simdgroup_barrier(mem_flags::mem_none);
 
-      // Load elements from threadgroup A as simdgroup matrices
-      STEEL_PRAGMA_UNROLL
-      for (short i = 0; i < TM; i++) {
-        Asimd[i].thread_elements()[0] =
-            static_cast<AccumType>(As[i * simd_stride_a + 0]);
-        Asimd[i].thread_elements()[1] =
-            static_cast<AccumType>(As[i * simd_stride_a + jump_a]);
-      }
+        // Load elements from threadgroup A as simdgroup matrices
+        STEEL_PRAGMA_UNROLL
+        for (short i = 0; i < TM; i++) {
+            Asimd[i].thread_elements()[0] = accum_cast<AccumType, T>(As[i * simd_stride_a + 0]);
+            Asimd[i].thread_elements()[1] = accum_cast<AccumType, T>(As[i * simd_stride_a + jump_a]);
+        }
+        simdgroup_barrier(mem_flags::mem_none);
 
-      simdgroup_barrier(mem_flags::mem_none);
-
-      // Load elements from threadgroup B as simdgroup matrices
-      STEEL_PRAGMA_UNROLL
-      for (short j = 0; j < TN; j++) {
-        Bsimd[j].thread_elements()[0] =
-            static_cast<AccumType>(Bs[j * simd_stride_b + 0]);
-        Bsimd[j].thread_elements()[1] =
-            static_cast<AccumType>(Bs[j * simd_stride_b + jump_b]);
-      }
-
-      simdgroup_barrier(mem_flags::mem_none);
-
-      // Multiply and accumulate into result simdgroup matrices
-      STEEL_PRAGMA_UNROLL
-      for (short i = 0; i < TM; i++) {
+        // Load elements from threadgroup B as simdgroup matrices
         STEEL_PRAGMA_UNROLL
         for (short j = 0; j < TN; j++) {
-          short j_serp = (i % 2) ? (TN - 1 - j) : j;
-
-          simdgroup_multiply_accumulate(
-              results[i * TN + j_serp],
-              Asimd[i],
-              Bsimd[j_serp],
-              results[i * TN + j_serp]);
+            Bsimd[j].thread_elements()[0] = accum_cast<AccumType, T>(Bs[j * simd_stride_b + 0]);
+            Bsimd[j].thread_elements()[1] = accum_cast<AccumType, T>(Bs[j * simd_stride_b + jump_b]);
         }
-      }
 
-      // Progress to next simdgroup tile
-      As += tile_stride_a;
-      Bs += tile_stride_b;
     }
+    simdgroup_barrier(mem_flags::mem_none);
+
+    // Multiply and accumulate into result simdgroup matrices
+    STEEL_PRAGMA_UNROLL
+    for (short i = 0; i < TM; i++) {
+        STEEL_PRAGMA_UNROLL
+        for (short j = 0; j < TN; j++) {
+            short j_serp = (i % 2) ? (TN - 1 - j) : j;
+            simdgroup_multiply_accumulate(
+                results[i * TN + j_serp],
+                Asimd[i],
+                Bsimd[j_serp],
+                results[i * TN + j_serp]);
+        }
+    }
+
+    // Progress to next simdgroup tile
+    As += tile_stride_a;
+    Bs += tile_stride_b;
+
   }
 
   /* Store results from simdgroup_matrix results into device memory */
@@ -1020,12 +1266,13 @@ template <
     int WN,
     bool transpose_a,
     bool transpose_b,
-    typename AccumType = float>
+    typename AccumType = float,
+    typename ResultType = T>
 [[kernel, max_total_threads_per_threadgroup(WM* WN * 32)]] void gemm(
     const device T* A [[buffer(0)]],
     const device T* B [[buffer(1)]],
-    const device T* C [[buffer(2), function_constant(use_out_source)]],
-    device T* D [[buffer(3)]],
+    const device ResultType* C [[buffer(2), function_constant(use_out_source)]],
+    device ResultType* D [[buffer(3)]],
     const constant GEMMParams* params [[buffer(4)]],
     const constant GEMMAddMMParams* addmm_params [[buffer(5), function_constant(use_out_source)]],
     const constant int* batch_shape [[buffer(6)]],
@@ -1045,7 +1292,7 @@ template <
 
   using gemm_kernel = GEMMKernel<
       T,
-      T,
+      ResultType,
       BM,
       BN,
       BK,
@@ -1326,7 +1573,7 @@ template <
               addmm_params->fdc,
               short2(tgp_bn, tgp_bm),
               epilogue_op_add);
-        }
+              }
       }
 
       // Store results to device memory
@@ -1396,7 +1643,7 @@ template <
               addmm_params->fdc,
               short2(tgp_bn, tgp_bm),
               epilogue_op_add);
-        }
+              }
       }
 
       // Store results to device memory
@@ -1405,13 +1652,13 @@ template <
   }
 }
 
-#define instantiate_gemm(tname, trans_a, trans_b, iname, itype, oname, otype, bm, bn, bk, wm, wn) \
+#define instantiate_gemm(tname, trans_a, trans_b, iname, itype, oname, otype, bm, bn, bk, wm, wn, stype) \
   template [[host_name("gemm_" #tname "_"  #iname "_" #oname "_" #bm "_" #bn "_" #bk "_" #wm "_" #wn)]] \
-  [[kernel]] void gemm<itype, bm, bn, bk, wm, wn, trans_a, trans_b, float>( \
+  [[kernel]] void gemm<itype, bm, bn, bk, wm, wn, trans_a, trans_b, float, stype>( \
       const device itype *A [[buffer(0)]], \
       const device itype *B [[buffer(1)]], \
-      const device itype *C [[buffer(2), function_constant(use_out_source)]], \
-      device itype *D [[buffer(3)]], \
+      const device stype *C [[buffer(2), function_constant(use_out_source)]], \
+      device stype *D [[buffer(3)]], \
       const constant GEMMParams* params [[buffer(4)]], \
       const constant GEMMAddMMParams* addmm_params [[buffer(5), function_constant(use_out_source)]], \
       const constant int* batch_shape [[buffer(6)]], \
@@ -1427,14 +1674,17 @@ template <
       uint3 tid [[threadgroup_position_in_grid]], \
       uint3 lid [[thread_position_in_threadgroup]]);
 
-#define instantiate_gemm_transpose_helper(iname, itype, oname, otype, bm, bn, bk, wm, wn) \
-    instantiate_gemm(nn, false, false, iname, itype, oname, otype, bm, bn, bk, wm, wn) \
-    instantiate_gemm(nt, false, true , iname, itype, oname, otype, bm, bn, bk, wm, wn) \
-    instantiate_gemm(tn, true , false, iname, itype, oname, otype, bm, bn, bk, wm, wn) \
-    instantiate_gemm(tt, true , true , iname, itype, oname, otype, bm, bn, bk, wm, wn)
+#define instantiate_gemm_transpose_helper(iname, itype, oname, otype, bm, bn, bk, wm, wn, stype) \
+    instantiate_gemm(nn, false, false, iname, itype, oname, otype, bm, bn, bk, wm, wn, stype) \
+    instantiate_gemm(nt, false, true , iname, itype, oname, otype, bm, bn, bk, wm, wn, stype) \
+    instantiate_gemm(tn, true , false, iname, itype, oname, otype, bm, bn, bk, wm, wn, stype) \
+    instantiate_gemm(tt, true , true , iname, itype, oname, otype, bm, bn, bk, wm, wn, stype)
 
-instantiate_gemm_transpose_helper(f32, float, f32, float, 32, 32, 16, 2, 2)
-instantiate_gemm_transpose_helper(f16, half, f16, half, 32, 32, 16, 2, 2)
+instantiate_gemm_transpose_helper(f32, float, f32, float, 32, 32, 16, 2, 2, float)
+instantiate_gemm_transpose_helper(f16, half, f16, half, 32, 32, 16, 2, 2, half)
 #if defined(__HAVE_BFLOAT__)
-instantiate_gemm_transpose_helper(bf16, bfloat, bf16, bfloat, 32, 32, 16, 2, 2)
+instantiate_gemm_transpose_helper(bf16, bfloat, bf16, bfloat, 32, 32, 16, 2, 2, bfloat)
 #endif
+
+
+instantiate_gemm_transpose_helper(F8E5M2, fp8_storage_t, f16, half, 32, 32, 16, 2, 2, half)

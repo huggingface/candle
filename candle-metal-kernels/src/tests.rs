@@ -1,4 +1,6 @@
 use super::*;
+
+use float8::{F8E4M3, F8E5M2};
 use half::{bf16, f16};
 use metal::{Buffer, Device, MTLResourceOptions};
 use rand::prelude::SliceRandom;
@@ -421,6 +423,38 @@ fn cast_bf16() {
     // bf16 -> i64
     let results: Vec<i64> = run_cast(&v_bf16, "cast_bf16_i64");
     assert_eq!(results, v_i64);
+}
+
+#[test]
+fn cast_fp8() {
+    let v_f64 = [1.0f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
+    let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
+
+    let v_f8: Vec<F8E4M3> = v_f32.iter().map(|&v| F8E4M3::from(v)).collect();
+    let v_f16_rt: Vec<f16> = v_f8.iter().map(|&v| v.to_f16()).collect();
+
+    // E4M3
+    // f32 -> fp8 -> f32
+    let results: Vec<u8> = run_cast(&v_f32, "cast_f32_fp8_E4M3");
+    let roundtrip: Vec<f32> = run_cast(&results, "cast_fp8_f32_E4M3");
+    assert_eq!(v_f32, roundtrip);
+
+    // f16 -> fp8 -> f16
+    let results: Vec<u8> = run_cast(&v_f16, "cast_f16_fp8_E4M3");
+    let roundtrip: Vec<f16> = run_cast(&results, "cast_fp8_f16_E4M3");
+    assert_eq!(v_f16, roundtrip);
+
+    // E5M2
+    // f16 -> fp8 -> f16
+    let results: Vec<u8> = run_cast(&v_f16, "cast_f16_fp8_E5M2");
+    let roundtrip: Vec<f16> = run_cast(&results, "cast_fp8_f16_E5M2");
+    assert_eq!(v_f16, roundtrip);
+
+    // f32 -> fp8 -> f32
+    let results: Vec<u8> = run_cast(&v_f32, "cast_f32_fp8_E5M2");
+    let roundtrip: Vec<f32> = run_cast(&results, "cast_fp8_f32_E5M2");
+    assert_eq!(v_f32, roundtrip);
 }
 
 #[test]
@@ -1285,7 +1319,7 @@ fn where_cond_u32_f32() {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_mlx_gemm<T: Clone>(
+fn run_mlx_gemm<T: Clone, U: Clone>(
     dtype: GemmDType,
     (b, m, n, k): (usize, usize, usize, usize),
     lhs: &[T],
@@ -1294,7 +1328,7 @@ fn run_mlx_gemm<T: Clone>(
     rhs: &[T],
     rhs_stride: &[usize],
     rhs_offset: usize,
-) -> Vec<T> {
+) -> Vec<U> {
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
@@ -1434,6 +1468,33 @@ fn mlx_gemm() {
         assert_eq!(
             approx_f16(results, 4),
             vec![20.0, 23.0, 26.0, 29.0, 56.0, 68.0, 80.0, 92.0]
+        );
+    }
+
+    {
+        // F8E5M2 sanity test
+        let (b, m, n, k) = (1, 2, 4, 3);
+        let lhs: Vec<u8> = (0..b * m * k)
+            .map(|f| F8E5M2::from_f32(f as f32).to_bits())
+            .collect();
+        let rhs: Vec<u8> = (0..b * n * k)
+            .map(|f| F8E5M2::from_f32(f as f32).to_bits())
+            .collect();
+        let results: Vec<f16> = run_mlx_gemm(
+            GemmDType::F8E5M2,
+            (b, m, n, k),
+            &lhs,
+            &[m * k, k, 1],
+            0,
+            &rhs,
+            &[n * k, n, 1],
+            0,
+        );
+        println!("{results:?}");
+
+        assert_eq!(
+            approx_f16(results, 4),
+            vec![20.0, 21.0, 26.0, 31.0, 56.0, 63.0, 80.0, 97.0]
         );
     }
 }

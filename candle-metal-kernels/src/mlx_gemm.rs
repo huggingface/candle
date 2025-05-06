@@ -5,6 +5,7 @@ use std::ffi::c_void;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum GemmDType {
+    F8E5M2,
     BF16,
     F16,
     F32,
@@ -138,6 +139,10 @@ pub fn call_mlx_gemm(
         (GemmDType::F16, true, false) => "gemm_tn_f16_f16_32_32_16_2_2",
         (GemmDType::F16, false, true) => "gemm_nt_f16_f16_32_32_16_2_2",
         (GemmDType::F16, true, true) => "gemm_tt_f16_f16_32_32_16_2_2",
+        (GemmDType::F8E5M2, false, false) => "gemm_nn_F8E5M2_f16_32_32_16_2_2",
+        (GemmDType::F8E5M2, true, false) => "gemm_tn_F8E5M2_f16_32_32_16_2_2",
+        (GemmDType::F8E5M2, false, true) => "gemm_nt_F8E5M2_f16_32_32_16_2_2",
+        (GemmDType::F8E5M2, true, true) => "gemm_tt_F8E5M2_f16_32_32_16_2_2",
     };
     let pipeline = kernels.load_pipeline_with_constants(device, Source::Gemm, name, constants)?;
     let encoder = ep.encoder();

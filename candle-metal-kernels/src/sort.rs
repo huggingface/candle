@@ -41,6 +41,7 @@ pub fn call_arg_sort(
 
 fn mlx_dtype_str(dtype: DType) -> &'static str {
     match dtype {
+        DType::FP8(_) => todo!(),
         DType::U8 => "uint8",
         DType::U32 => "uint32",
         DType::I64 => "int64",
@@ -195,6 +196,7 @@ pub fn multi_block_sort(
     };
     // Copy output with appropriate strides
     let copy_kernel = match dtype {
+        DType::FP8(_) => todo!(),
         DType::U8 => crate::copy2d::U8,
         DType::U32 => crate::copy2d::U32,
         DType::I64 => crate::copy2d::I64,

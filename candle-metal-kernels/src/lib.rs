@@ -37,12 +37,19 @@ pub enum DType {
     I64,
     U32,
     U8,
+    FP8(FP8Variant),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FP8Variant {
+    E4M3,
+    E5M2,
 }
 
 impl DType {
     fn size_in_bytes(&self) -> usize {
         match self {
-            Self::U8 => 1,
+            Self::U8 | Self::FP8(_) => 1,
             Self::U32 => 4,
             Self::I64 => 8,
             Self::BF16 => 2,
@@ -311,7 +318,12 @@ impl Kernels {
                 let source_content = self.get_library_source(source);
                 device
                     .new_library_with_source(source_content, &CompileOptions::new())
-                    .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
+                    .map_err(|e| {
+                        // Makes metal errors easier to read.
+                        // TODO: Remove.
+                        panic!("{}", e);
+                        return MetalKernelError::LoadLibraryError(e.to_string());
+                    })?
             };
             libraries.insert(source, lib.clone());
             Ok(lib)
