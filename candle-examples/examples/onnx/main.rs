@@ -5,8 +5,8 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use candle::{IndexOp, D};
+use candle_examples::save_image;
 use clap::{Parser, ValueEnum};
-use candle_examples::{save_image};
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum Which {
@@ -31,7 +31,9 @@ struct Args {
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let image = match args.which {
-        Which::SqueezeNet | Which::EfficientNet => candle_examples::imagenet::load_image224(&args.image)?,
+        Which::SqueezeNet | Which::EfficientNet => {
+            candle_examples::imagenet::load_image224(&args.image)?
+        }
         Which::EsrGan => candle_examples::imagenet::load_image(&args.image, 128)?,
     };
     let image = match args.which {
@@ -53,7 +55,7 @@ pub fn main() -> anyhow::Result<()> {
                 .get("efficientnet-lite4-11.onnx")?,
             Which::EsrGan => hf_hub::api::sync::Api::new()?
                 .model("qualcomm/Real-ESRGAN-x4plus".into())
-                .get("Real-ESRGAN-x4plus.onnx")?
+                .get("Real-ESRGAN-x4plus.onnx")?,
         },
     };
 
@@ -77,7 +79,7 @@ pub fn main() -> anyhow::Result<()> {
             let mut top: Vec<_> = prs.iter().enumerate().collect();
             top.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap());
             let top = top.into_iter().take(5).collect::<Vec<_>>();
-        
+
             // Print the top predictions
             for &(i, p) in &top {
                 println!(
@@ -86,7 +88,7 @@ pub fn main() -> anyhow::Result<()> {
                     p * 100.0
                 );
             }
-        },
+        }
         Which::EsrGan => {
             let max_pixel_val = candle::Tensor::try_from(255.0f32)?
                 .to_device(prs.device())?
@@ -97,14 +99,12 @@ pub fn main() -> anyhow::Result<()> {
             let input_file_name = pb.file_name().unwrap();
             let mut output_file_name = std::ffi::OsString::from("super_");
             output_file_name.push(input_file_name);
-            let mut output_path = std::path::PathBuf::from("/Users/kb/Documents/webclones/candle/");
+            let mut output_path = std::path::PathBuf::from("./");
             output_path.push(output_file_name);
-            println!("{}", output_path.display());
-            
+
             save_image(&out, output_path).unwrap();
         }
     }
-
 
     Ok(())
 }
