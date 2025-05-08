@@ -1975,8 +1975,8 @@ fn simple_eval_(
                     None
                 };
 
-                if scales.is_none() && sizes.is_none() {
-                    bail!("Either scales or sizes must be provided for Resize operation");
+                if scales.is_some() && sizes.is_some() {
+                    bail!("Scales and sizes cannot both be set for Resize operation");
                 }
 
                 // Get attributes with their default values according to ONNX spec
@@ -2001,7 +2001,7 @@ fn simple_eval_(
                         .map(|(i, &d)| (d as f32 * scale_values[i]) as usize)
                         .collect::<Vec<_>>()
                 } else {
-                    unreachable!("Either scales or sizes should be present");
+                    bail!("Either scales or sizes should be present");
                 };
 
                 let output = match mode {
