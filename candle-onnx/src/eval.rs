@@ -1963,6 +1963,18 @@ fn simple_eval_(
             "Resize" => {
                 let input = get(&node.input[0])?;
 
+                if input.rank() != 4 {
+                    bail!("Unsupported rank for nearest resize: {}", input.rank());
+                }
+
+                // It only takes effect when coordinate_transformation_mode is “tf_crop_and_resize”.
+                // Which Candle doesn't implement.
+                let _roi = if node.input.len() > 1 && !node.input[1].is_empty() {
+                    Some(get(&node.input[1])?)
+                } else {
+                    None
+                };
+
                 let scales = if node.input.len() > 2 && !node.input[2].is_empty() {
                     Some(get(&node.input[2])?)
                 } else {
@@ -1975,53 +1987,70 @@ fn simple_eval_(
                     None
                 };
 
-                if scales.is_some() && sizes.is_some() {
-                    bail!("Scales and sizes cannot both be set for Resize operation");
-                }
-
-                // Get attributes with their default values according to ONNX spec
-                let mode = get_attr_opt::<str>(node, "mode")?.unwrap_or("nearest");
-                let coordinate_transformation_mode =
-                    get_attr_opt::<str>(node, "coordinate_transformation_mode")?
-                        .unwrap_or("half_pixel");
-
-                let output_dims = if let Some(sizes_tensor) = sizes {
-                    // Use specified sizes
-                    sizes_tensor
+                let output_dims = match (scales, sizes) {
+                    (Some(_), Some(_)) => {
+                        bail!("Scales and sizes cannot both be set for Resize operation")
+                    }
+                    (Some(scales_tensor), None) => {
+                        let scale_values = scales_tensor.to_vec1::<f32>()?;
+                        input
+                            .dims()
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &d)| (d as f32 * scale_values[i]) as usize)
+                            .collect::<Vec<_>>()
+                    }
+                    (None, Some(sizes_tensor)) => sizes_tensor
                         .to_vec1::<i64>()?
                         .iter()
                         .map(|&d| d as usize)
-                        .collect::<Vec<_>>()
-                } else if let Some(scales_tensor) = scales {
-                    // Calculate from scales
-                    let scale_values = scales_tensor.to_vec1::<f32>()?;
-                    input.dims()
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &d)| (d as f32 * scale_values[i]) as usize)
-                        .collect::<Vec<_>>()
-                } else {
-                    bail!("Either scales or sizes should be present");
+                        .collect::<Vec<_>>(),
+                    (None, None) => bail!("Either scales or sizes should be present"),
                 };
 
-                let output = match mode {
-                    "nearest" => match coordinate_transformation_mode {
-                        "asymmetric" => {
-                            if input.rank() == 4 {
-                                let h = output_dims[2];
-                                let w = output_dims[3];
-                                input.upsample_nearest2d(h, w)?
-                            } else {
-                                bail!("Unsupported rank for nearest resize: {}", input.rank())
-                            }
-                        }
-                        _ => bail!(
-                            "Unsupported coordinate_transformation_mode for nearest: {}",
-                            coordinate_transformation_mode
-                        ),
-                    },
-                    _ => bail!("Unsupported resize mode: {}", mode),
-                };
+                // Only used for 'linear' and 'cubic' interpolation modes. Not implemented in candle.
+                let _antialias = get_attr_opt::<i64>(node, "antialias")?.unwrap_or(&0i64);
+                // Axes that _roi, scales, and sizes refer too. Not implemented in candle.
+                let _axes = get_attr_opt::<[i64]>(node, "axes")?.unwrap_or(&[]);
+                // Defines the mathematical formula for mapping pixel coordinates
+                // from resized to original tensors during image resizing operations.
+                let coordinate_transformation_mode =
+                    get_attr_opt::<str>(node, "coordinate_transformation_mode")?
+                        .unwrap_or("half_pixel");
+                // Only used for 'cubic' interpolation mode. Not implemented in Candle.
+                let _cubic_coeff_a = get_attr_opt::<f32>(node, "cubic_coeff_a")?.unwrap_or(&-0.75);
+                // Controls whether to consider samples outside the input tensor. Not implemented in Candle.
+                let _exclude_outside = get_attr_opt::<i64>(node, "exclude_outside")?.unwrap_or(&0);
+                // Value used for extrapolation in tf_crop_and_resize mode. Not implemented in Candle.
+                let _extrapolation_value =
+                    get_attr_opt::<f32>(node, "extrapolation_value")?.unwrap_or(&0.0);
+                // Specifies how to maintain aspect ratio when resizing. Not implemented in Candle.
+                let _keep_aspect_ratio_policy =
+                    get_attr_opt::<str>(node, "keep_aspect_ratio_policy")?.unwrap_or("stretch");
+                // Interpolation mode: nearest, linear, or cubic.
+                let mode = get_attr_opt::<str>(node, "mode")?.unwrap_or("nearest");
+                // How to determine the "nearest" pixel in nearest interpolation mode.
+                let nearest_mode =
+                    get_attr_opt::<str>(node, "nearest_mode")?.unwrap_or("round_prefer_floor");
+
+                if mode != "nearest" {
+                    bail!("Unsupported resize mode: {}", mode);
+                }
+
+                if nearest_mode != "floor" {
+                    bail!("Unsupported nearest_mode for resize: {}", nearest_mode);
+                }
+
+                if coordinate_transformation_mode != "asymmetric" {
+                    bail!(
+                        "Unsupported coordinate_transformation_mode for resize: {}",
+                        coordinate_transformation_mode
+                    );
+                }
+
+                let h = output_dims[2];
+                let w = output_dims[3];
+                let output = input.upsample_nearest2d(h, w)?;
 
                 values.insert(node.output[0].clone(), output);
             }
