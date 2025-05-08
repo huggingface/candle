@@ -34,7 +34,25 @@ pub fn main() -> anyhow::Result<()> {
         Which::SqueezeNet | Which::EfficientNet => {
             candle_examples::imagenet::load_image224(&args.image)?
         }
-        Which::EsrGan => candle_examples::imagenet::load_image(&args.image, 128)?,
+        Which::EsrGan => {
+            let res = 128usize;
+            let img = image::ImageReader::open(&args.image)?
+                .decode()
+                .map_err(candle::Error::wrap)?
+                .resize_to_fill(
+                    res as u32,
+                    res as u32,
+                    image::imageops::FilterType::Triangle,
+                );
+            candle::Tensor::from_vec(
+                img.to_rgb8().into_raw(),
+                (res, res, 3),
+                &candle::Device::Cpu,
+            )?
+            .permute((2, 0, 1))?
+            .to_dtype(candle::DType::F32)?
+            .affine(1.0 / 255.0, 0.0)?
+        }
     };
     let image = match args.which {
         Which::SqueezeNet => image,
