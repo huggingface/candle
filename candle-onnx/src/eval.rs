@@ -1967,14 +1967,6 @@ fn simple_eval_(
                     bail!("Unsupported rank for nearest resize: {}", input.rank());
                 }
 
-                // It only takes effect when coordinate_transformation_mode is “tf_crop_and_resize”.
-                // Which Candle doesn't implement.
-                let _roi = if node.input.len() > 1 && !node.input[1].is_empty() {
-                    Some(get(&node.input[1])?)
-                } else {
-                    None
-                };
-
                 let scales = if node.input.len() > 2 && !node.input[2].is_empty() {
                     Some(get(&node.input[2])?)
                 } else {
@@ -2008,25 +2000,9 @@ fn simple_eval_(
                     (None, None) => bail!("Either scales or sizes should be present"),
                 };
 
-                // Only used for 'linear' and 'cubic' interpolation modes. Not implemented in candle.
-                let _antialias = get_attr_opt::<i64>(node, "antialias")?.unwrap_or(&0i64);
-                // Axes that _roi, scales, and sizes refer too. Not implemented in candle.
-                let _axes = get_attr_opt::<[i64]>(node, "axes")?.unwrap_or(&[]);
-                // Defines the mathematical formula for mapping pixel coordinates
-                // from resized to original tensors during image resizing operations.
                 let coordinate_transformation_mode =
                     get_attr_opt::<str>(node, "coordinate_transformation_mode")?
                         .unwrap_or("half_pixel");
-                // Only used for 'cubic' interpolation mode. Not implemented in Candle.
-                let _cubic_coeff_a = get_attr_opt::<f32>(node, "cubic_coeff_a")?.unwrap_or(&-0.75);
-                // Controls whether to consider samples outside the input tensor. Not implemented in Candle.
-                let _exclude_outside = get_attr_opt::<i64>(node, "exclude_outside")?.unwrap_or(&0);
-                // Value used for extrapolation in tf_crop_and_resize mode. Not implemented in Candle.
-                let _extrapolation_value =
-                    get_attr_opt::<f32>(node, "extrapolation_value")?.unwrap_or(&0.0);
-                // Specifies how to maintain aspect ratio when resizing. Not implemented in Candle.
-                let _keep_aspect_ratio_policy =
-                    get_attr_opt::<str>(node, "keep_aspect_ratio_policy")?.unwrap_or("stretch");
                 // Interpolation mode: nearest, linear, or cubic.
                 let mode = get_attr_opt::<str>(node, "mode")?.unwrap_or("nearest");
                 // How to determine the "nearest" pixel in nearest interpolation mode.
