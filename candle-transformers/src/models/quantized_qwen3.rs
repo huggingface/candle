@@ -186,6 +186,7 @@ pub(crate) struct AttentionWeights {
 }
 
 impl AttentionWeights {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new<R: Read + Seek>(
         ct: &gguf_file::Content,
         reader: &mut R,
@@ -327,6 +328,7 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
+    #[allow(clippy::too_many_arguments)]
     fn new<R: Read + Seek>(
         ct: &gguf_file::Content,
         reader: &mut R,
