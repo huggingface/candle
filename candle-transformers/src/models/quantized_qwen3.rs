@@ -6,65 +6,58 @@
 //! References:
 //! - [Qwen3 Models](https://huggingface.co/Qwen/Qwen3-0.6B) (architecture based on official implementations)
 //!
+use super::with_tracing::QMatMul;
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
-use candle::quantized::gguf_file;
-use candle::quantized::QTensor;
+use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Tensor};
 use candle_nn::{kv_cache::KvCache, Activation, Embedding, Module};
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
-struct QMatMul {
-    inner: candle::quantized::QMatMul,
-    span: tracing::Span,
+struct Gguf<R: Read + Seek> {
+    ct: gguf_file::Content,
+    reader: R,
+    device: Device,
 }
 
-impl QMatMul {
-    fn from_qtensor(qtensor: QTensor) -> Result<Self> {
-        let inner = candle::quantized::QMatMul::from_qtensor(qtensor)?;
-        let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
-        Ok(Self { inner, span })
+impl<R: Read + Seek> Gguf<R> {
+    fn new(ct: gguf_file::Content, reader: R, device: Device) -> Self {
+        Self { ct, reader, device }
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(xs)
+    fn qmatmul(&mut self, name: &str) -> Result<QMatMul> {
+        let ws = self.ct.tensor(&mut self.reader, name, &self.device)?;
+        QMatMul::from_weights(ws.into())
+    }
+
+    fn rms_norm(&mut self, name: &str, eps: f64) -> Result<RmsNorm> {
+        let ws = self.ct.tensor(&mut self.reader, name, &self.device)?;
+        RmsNorm::from_qtensor(ws, eps)
+    }
+
+    fn metadata(&self) -> &std::collections::HashMap<String, gguf_file::Value> {
+        &self.ct.metadata
+    }
+
+    fn tensor(&mut self, name: &str) -> Result<QTensor> {
+        self.ct.tensor(&mut self.reader, name, &self.device)
     }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct MlpWeights {
-    gate_proj: QMatMulWrapper,
-    up_proj: QMatMulWrapper,
-    down_proj: QMatMulWrapper,
+struct MlpWeights {
+    gate_proj: QMatMul,
+    up_proj: QMatMul,
+    down_proj: QMatMul,
     act_fn: Activation,
     span: tracing::Span,
 }
 
 impl MlpWeights {
-    pub(crate) fn new<R: Read + Seek>(
-        ct: &gguf_file::Content,
-        reader: &mut R,
-        prefix: &str,
-        device: &Device,
-    ) -> Result<Self> {
-        let gate_proj = QMatMulWrapper::from_qtensor(ct.tensor(
-            reader,
-            &format!("{prefix}.ffn_gate.weight"),
-            device,
-        )?)?;
-        let up_proj = QMatMulWrapper::from_qtensor(ct.tensor(
-            reader,
-            &format!("{prefix}.ffn_up.weight"),
-            device,
-        )?)?;
-        let down_proj = QMatMulWrapper::from_qtensor(ct.tensor(
-            reader,
-            &format!("{prefix}.ffn_down.weight"),
-            device,
-        )?)?;
-
+    fn new<R: Read + Seek>(gg: &mut Gguf<R>, prefix: &str) -> Result<Self> {
+        let gate_proj = gg.qmatmul(&format!("{prefix}.ffn_gate.weight"))?;
+        let up_proj = gg.qmatmul(&format!("{prefix}.ffn_up.weight"))?;
+        let down_proj = gg.qmatmul(&format!("{prefix}.ffn_down.weight"))?;
         let act_fn = Activation::Silu;
         let span = tracing::span!(tracing::Level::TRACE, "mlp");
         Ok(Self {
@@ -87,52 +80,14 @@ impl Module for MlpWeights {
     }
 }
 
-// Re-use the Config struct from the unquantized version
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
-pub struct Config {
-    pub vocab_size: usize,
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub head_dim: usize,
-    pub attention_bias: bool,
-    pub num_key_value_heads: usize,
-    pub max_position_embeddings: usize,
-    pub tie_word_embeddings: bool,
-    pub rope_theta: f64,
-    pub rms_norm_eps: f64,
-    pub hidden_act: Activation,
-}
-
-// Wrapper for QMatMul to include tracing span
 #[derive(Debug, Clone)]
-struct QMatMulWrapper {
-    inner: QMatMul,
-    span: tracing::Span,
-}
-
-impl QMatMulWrapper {
-    fn from_qtensor(qtensor: QTensor) -> Result<Self> {
-        let inner = QMatMul::from_qtensor(qtensor)?;
-        let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
-        Ok(Self { inner, span })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(xs)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RotaryEmbedding {
+struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
 }
 
 impl RotaryEmbedding {
-    pub(crate) fn new(
+    fn new(
         dtype: DType,
         head_dim: usize,
         max_position_embeddings: usize,
@@ -169,11 +124,11 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AttentionWeights {
-    q_proj: QMatMulWrapper,
-    k_proj: QMatMulWrapper,
-    v_proj: QMatMulWrapper,
-    o_proj: QMatMulWrapper,
+struct AttentionWeights {
+    q_proj: QMatMul,
+    k_proj: QMatMul,
+    v_proj: QMatMul,
+    o_proj: QMatMul,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
     num_heads: usize,
@@ -186,52 +141,27 @@ pub(crate) struct AttentionWeights {
 }
 
 impl AttentionWeights {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new<R: Read + Seek>(
-        ct: &gguf_file::Content,
-        reader: &mut R,
+    fn new<R: Read + Seek>(
+        gg: &mut Gguf<R>,
         num_heads: usize,
         num_kv_heads: usize,
         head_dim: usize,
         rms_norm_eps: f64,
         rotary_emb: Arc<RotaryEmbedding>,
         prefix: &str,
-        device: &Device,
     ) -> Result<Self> {
         let num_kv_groups = num_heads / num_kv_heads;
 
-        let q_proj = QMatMulWrapper::from_qtensor(ct.tensor(
-            reader,
-            &format!("{prefix}.attn_q.weight"),
-            device,
-        )?)?;
-        let k_proj = QMatMulWrapper::from_qtensor(ct.tensor(
-            reader,
-            &format!("{prefix}.attn_k.weight"),
-            device,
-        )?)?;
-        let v_proj = QMatMulWrapper::from_qtensor(ct.tensor(
-            reader,
-            &format!("{prefix}.attn_v.weight"),
-            device,
-        )?)?;
-        let o_proj = QMatMulWrapper::from_qtensor(ct.tensor(
-            reader,
-            &format!("{prefix}.attn_output.weight"),
-            device,
-        )?)?;
+        let q_proj = gg.qmatmul(&format!("{prefix}.attn_q.weight"))?;
+        let k_proj = gg.qmatmul(&format!("{prefix}.attn_k.weight"))?;
+        let v_proj = gg.qmatmul(&format!("{prefix}.attn_v.weight"))?;
+        let o_proj = gg.qmatmul(&format!("{prefix}.attn_output.weight"))?;
 
-        let q_norm = RmsNorm::from_qtensor(
-            ct.tensor(reader, &format!("{prefix}.attn_q_norm.weight"), device)?,
-            rms_norm_eps,
-        )?;
-        let k_norm = RmsNorm::from_qtensor(
-            ct.tensor(reader, &format!("{prefix}.attn_k_norm.weight"), device)?,
-            rms_norm_eps,
-        )?;
+        let q_norm = gg.rms_norm(&format!("{prefix}.attn_q_norm.weight"), rms_norm_eps)?;
+        let k_norm = gg.rms_norm(&format!("{prefix}.attn_k_norm.weight"), rms_norm_eps)?;
 
-        let max_position_embeddings = ct
-            .metadata
+        let max_position_embeddings = gg
+            .metadata()
             .get("qwen3.context_length")
             .and_then(|v| v.to_u32().ok())
             .unwrap_or(4096) as usize;
@@ -256,12 +186,7 @@ impl AttentionWeights {
         })
     }
 
-    pub(crate) fn forward(
-        &mut self,
-        x: &Tensor,
-        attn_mask: Option<&Tensor>,
-        offset: usize,
-    ) -> Result<Tensor> {
+    fn forward(&mut self, x: &Tensor, attn_mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let (b, l, _) = x.dims3()?;
 
@@ -328,42 +253,29 @@ struct LayerWeights {
 }
 
 impl LayerWeights {
-    #[allow(clippy::too_many_arguments)]
     fn new<R: Read + Seek>(
-        ct: &gguf_file::Content,
-        reader: &mut R,
+        gg: &mut Gguf<R>,
         num_attention_heads: usize,
         num_key_value_heads: usize,
         head_dim: usize,
         rms_norm_eps: f64,
         rotary: Arc<RotaryEmbedding>,
         layer_idx: usize,
-        device: &Device,
     ) -> Result<Self> {
         let prefix = format!("blk.{layer_idx}");
 
-        let ln1 = RmsNorm::from_qtensor(
-            ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
-            rms_norm_eps,
-        )?;
-        let ln2 = RmsNorm::from_qtensor(
-            ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?,
-            rms_norm_eps,
-        )?;
-
+        let ln1 = gg.rms_norm(&format!("{prefix}.attn_norm.weight"), rms_norm_eps)?;
+        let ln2 = gg.rms_norm(&format!("{prefix}.ffn_norm.weight"), rms_norm_eps)?;
         let self_attn = AttentionWeights::new(
-            ct,
-            reader,
+            gg,
             num_attention_heads,
             num_key_value_heads,
             head_dim,
             rms_norm_eps,
             rotary,
             &prefix,
-            device,
         )?;
-        let mlp = MlpWeights::new(ct, reader, &prefix, device)?;
-
+        let mlp = MlpWeights::new(gg, &prefix)?;
         Ok(Self {
             self_attn,
             mlp,
@@ -387,7 +299,7 @@ pub struct ModelWeights {
     embed_tokens: Embedding,
     layers: Vec<LayerWeights>,
     norm: RmsNorm,
-    lm_head: QMatMulWrapper,
+    lm_head: QMatMul,
     device: Device,
     dtype: DType,
     span: tracing::Span,
@@ -400,7 +312,8 @@ impl ModelWeights {
         reader: &mut R,
         device: &Device,
     ) -> Result<Self> {
-        let md_get = |s: &str| match ct.metadata.get(s) {
+        let mut gg = Gguf::new(ct, reader, device.clone());
+        let md_get = |s: &str| match gg.metadata().get(s) {
             None => candle::bail!("cannot find {s} in metadata"),
             Some(v) => Ok(v),
         };
@@ -414,7 +327,7 @@ impl ModelWeights {
         let rms_norm_eps = md_get("qwen3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
         let rope_freq_base = md_get("qwen3.rope.freq_base")?.to_f32()? as f64;
 
-        let dtype = match ct.metadata.get("general.dtype") {
+        let dtype = match gg.metadata().get("general.dtype") {
             Some(v) => match v.to_u32() {
                 Ok(0) => DType::F32,
                 Ok(1) => DType::F16,
@@ -423,7 +336,7 @@ impl ModelWeights {
             None => DType::F16,
         };
 
-        let embed_tensor = ct.tensor(reader, "token_embd.weight", device)?;
+        let embed_tensor = gg.tensor("token_embd.weight")?;
         let embed_tokens = Embedding::new(embed_tensor.dequantize(device)?, hidden_size);
 
         let rotary = Arc::new(RotaryEmbedding::new(
@@ -437,33 +350,25 @@ impl ModelWeights {
         let mut layers = Vec::with_capacity(num_layers);
         for i in 0..num_layers {
             layers.push(LayerWeights::new(
-                &ct,
-                reader,
+                &mut gg,
                 num_attention_heads,
                 num_kv_heads,
                 head_dim,
                 rms_norm_eps,
                 rotary.clone(),
                 i,
-                device,
             )?);
         }
 
-        let norm = RmsNorm::from_qtensor(
-            ct.tensor(reader, "output_norm.weight", device)?,
-            rms_norm_eps,
-        )?;
-
+        let norm = gg.rms_norm("output_norm.weight", rms_norm_eps)?;
         // Load output projection tensor, falling back to tied embeddings like gemma3
-        let lm_head_tensor = match ct.tensor(reader, "output.weight", device) {
+        let lm_head_tensor = match gg.tensor("output.weight") {
             Ok(tensor) => tensor,
-            Err(_) => ct.tensor(reader, "token_embd.weight", device)?,
+            Err(_) => gg.tensor("token_embd.weight")?,
         };
-        let lm_head = QMatMulWrapper::from_qtensor(lm_head_tensor)?;
-
+        let lm_head = QMatMul::from_weights(lm_head_tensor.into())?;
         let span = tracing::span!(tracing::Level::TRACE, "model");
         let span_output = tracing::span!(tracing::Level::TRACE, "output");
-
         Ok(Self {
             embed_tokens,
             layers,
@@ -507,22 +412,17 @@ impl ModelWeights {
         let _enter = self.span.enter();
         let (b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
-
-        let causal = if l == 1 {
+        let causal_mask = if l == 1 {
             None
         } else {
             Some(self.causal_mask(b, l, offset, None)?)
         };
-
         for layer in &mut self.layers {
-            h = layer.forward(&h, causal.as_ref(), offset)?;
+            h = layer.forward(&h, causal_mask.as_ref(), offset)?;
         }
-
         let h = self.norm.forward(&h)?;
-
         let _enter = self.span_output.enter();
         let last_hidden = h.narrow(1, l - 1, 1)?;
-
         self.lm_head.forward(&last_hidden)?.squeeze(1)
     }
 }

@@ -53,7 +53,7 @@ impl Qwen3RotaryEmbedding {
     }
 
     /// Apply RoPE (q, k shape: B x H x L x D)
-    fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
+    pub(crate) fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
         let (_, _, seq_len, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?;
         let sin = self.sin.narrow(0, offset, seq_len)?;
