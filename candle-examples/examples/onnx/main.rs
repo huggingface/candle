@@ -104,10 +104,8 @@ pub fn main() -> anyhow::Result<()> {
             let input_file_name = pb.file_name().unwrap();
             let mut output_file_name = std::ffi::OsString::from("super_");
             output_file_name.push(input_file_name);
-            let mut output_path = std::path::PathBuf::from("./");
-            output_path.push(output_file_name);
 
-            save_image(&out, output_path).unwrap();
+            save_image(&out, output_file_name)?;
         }
     }
 
