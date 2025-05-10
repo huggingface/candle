@@ -22,7 +22,7 @@ const M: usize = 1024;
 const K: usize = 1024;
 const SIZE: usize = B * M * K;
 
-const DATA: [u8; SIZE] = create_cond_arr::<SIZE>();
+static DATA: [u8; SIZE] = create_cond_arr::<SIZE>();
 
 fn run_where_cond_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
     let tensor = Tensor::from_slice(DATA.as_slice(), (B, M, K), device).unwrap();
