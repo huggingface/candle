@@ -10,7 +10,7 @@ use super::with_tracing::QMatMul;
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Tensor};
-use candle_nn::{Activation, Embedding, Module};
+use candle_nn::{kv_cache::KvCache, Activation, Embedding, Module};
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
@@ -136,7 +136,7 @@ struct AttentionWeights {
     num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: KvCache,
     span_attn: tracing::Span,
 }
 
@@ -160,6 +160,10 @@ impl AttentionWeights {
         let q_norm = gg.rms_norm(&format!("{prefix}.attn_q_norm.weight"), rms_norm_eps)?;
         let k_norm = gg.rms_norm(&format!("{prefix}.attn_k_norm.weight"), rms_norm_eps)?;
 
+        // Initialize KV cache with 512 tokens capacity to reduce initial memory allocation.
+        // The cache will grow in chunks of 512 tokens when needed.
+        let kv_cache = KvCache::new(2, 512);
+
         let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
 
         Ok(Self {
@@ -174,7 +178,7 @@ impl AttentionWeights {
             num_kv_groups,
             head_dim,
             rotary_emb,
-            kv_cache: None,
+            kv_cache,
             span_attn,
         })
     }
@@ -207,20 +211,11 @@ impl AttentionWeights {
 
         let (q, k) = self.rotary_emb.apply(&q, &k, offset)?;
 
-        // Refer to the `kv_cache` logic of quantized Qwen2.
-        let (k, v) = match self.kv_cache {
-            None => (k.contiguous()?, v.contiguous()?),
-            Some((ref k_cache, ref v_cache)) => {
-                if offset == 0 {
-                    (k.contiguous()?, v.contiguous()?)
-                } else {
-                    let k = Tensor::cat(&[k_cache, &k.contiguous()?], 2)?;
-                    let v = Tensor::cat(&[v_cache, &v.contiguous()?], 2)?;
-                    (k, v)
-                }
-            }
-        };
-        self.kv_cache = Some((k.clone(), v.clone()));
+        // Reset KV cache if we're at the first position
+        if offset == 0 {
+            self.kv_cache.reset();
+        }
+        let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
 
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
