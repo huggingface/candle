@@ -217,6 +217,10 @@ impl AttentionWeights {
         }
         let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
 
+        // Make tensor contiguous to avoid some strided copies
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
+
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
