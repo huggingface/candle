@@ -70,6 +70,7 @@ pub mod moondream;
 pub mod mpt;
 pub mod nvembed_v2;
 pub mod olmo;
+pub mod olmo2;
 pub mod openclip;
 pub mod paligemma;
 pub mod parler_tts;
