@@ -250,7 +250,7 @@ impl DecoderLayer {
         seqlen_offset: usize,
     ) -> Result<Tensor> {
         let residual = xs;
-        let xs = self.self_attn.forward(&xs, attention_mask, seqlen_offset)?;
+        let xs = self.self_attn.forward(xs, attention_mask, seqlen_offset)?;
         let xs = self.post_attention_layernorm.forward(&xs)?;
         let xs = (xs + residual)?;
         let residual = &xs;
