@@ -20,8 +20,8 @@ use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{Encoding, PaddingParams, Tokenizer};
 
 enum TaskType {
-    Ner(DebertaV2NERModel),
-    TextClassification(DebertaV2SeqClassificationModel),
+    Ner(Box<DebertaV2NERModel>),
+    TextClassification(Box<DebertaV2SeqClassificationModel>),
 }
 
 #[derive(Parser, Debug, Clone, ValueEnum)]
@@ -169,21 +169,16 @@ impl Args {
 
         match self.task {
             ArgsTask::Ner => Ok((
-                TaskType::Ner(DebertaV2NERModel::load(
-                    vb,
-                    &config,
-                    Some(id2label.clone()),
-                )?),
+                TaskType::Ner(DebertaV2NERModel::load(vb, &config, Some(id2label.clone()))?.into()),
                 config,
                 tokenizer,
                 id2label,
             )),
             ArgsTask::TextClassification => Ok((
-                TaskType::TextClassification(DebertaV2SeqClassificationModel::load(
-                    vb,
-                    &config,
-                    Some(id2label.clone()),
-                )?),
+                TaskType::TextClassification(
+                    DebertaV2SeqClassificationModel::load(vb, &config, Some(id2label.clone()))?
+                        .into(),
+                ),
                 config,
                 tokenizer,
                 id2label,

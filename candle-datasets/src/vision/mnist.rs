@@ -16,10 +16,9 @@ fn read_u32<T: Read>(reader: &mut T) -> std::io::Result<u32> {
 fn check_magic_number<T: Read>(reader: &mut T, expected: u32) -> Result<()> {
     let magic_number = read_u32(reader)?;
     if magic_number != expected {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("incorrect magic number {magic_number} != {expected}"),
-        ))?;
+        Err(io::Error::other(format!(
+            "incorrect magic number {magic_number} != {expected}"
+        )))?;
     }
     Ok(())
 }
