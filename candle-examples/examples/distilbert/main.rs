@@ -16,8 +16,8 @@ use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
 enum ModelType {
-    Masked(DistilBertForMaskedLM),
-    UnMasked(DistilBertModel),
+    Masked(Box<DistilBertForMaskedLM>),
+    UnMasked(Box<DistilBertModel>),
 }
 
 impl ModelType {
@@ -144,10 +144,12 @@ impl Args {
 
     fn create_model(&self, config: &Config, vb: VarBuilder) -> Result<ModelType> {
         match self.model {
-            Which::DistilbertForMaskedLM => {
-                Ok(ModelType::Masked(DistilBertForMaskedLM::load(vb, config)?))
-            }
-            Which::DistilBert => Ok(ModelType::UnMasked(DistilBertModel::load(vb, config)?)),
+            Which::DistilbertForMaskedLM => Ok(ModelType::Masked(
+                DistilBertForMaskedLM::load(vb, config)?.into(),
+            )),
+            Which::DistilBert => Ok(ModelType::UnMasked(
+                DistilBertModel::load(vb, config)?.into(),
+            )),
         }
     }
 }
