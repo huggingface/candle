@@ -13,6 +13,11 @@ pub use sort::{call_arg_sort, call_mlx_arg_sort};
 pub use utils::BufferOffset;
 use utils::{get_block_dims, linear_split, EncoderParam, EncoderProvider};
 
+#[cfg(target_os = "macos")]
+const CANDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/candle.metallib"));
+#[cfg(target_os = "ios")]
+const CANDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/candle_ios.metallib"));
+
 const AFFINE: &str = include_str!("affine.metal");
 const BINARY: &str = include_str!("binary.metal");
 const CAST: &str = include_str!("cast.metal");
@@ -23,7 +28,6 @@ const MLX_GEMM: &str = include_str!("mlx_gemm.metal");
 const MLX_SORT: &str = include_str!("mlx_sort.metal");
 const QUANTIZED: &str = include_str!("quantized.metal");
 const RANDOM: &str = include_str!("random.metal");
-const REDUCE: &str = include_str!("reduce.metal");
 const SORT: &str = include_str!("sort.metal");
 const TERNARY: &str = include_str!("ternary.metal");
 const UNARY: &str = include_str!("unary.metal");
@@ -54,6 +58,7 @@ impl DType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
+    Candle,
     Affine,
     Binary,
     Cast,
@@ -64,7 +69,6 @@ pub enum Source {
     MlxSort,
     Quantized,
     Random,
-    Reduce,
     Sort,
     Ternary,
     Unary,
@@ -288,11 +292,11 @@ impl Kernels {
             Source::MlxSort => MLX_SORT,
             Source::Quantized => QUANTIZED,
             Source::Random => RANDOM,
-            Source::Reduce => REDUCE,
             Source::Sort => SORT,
             Source::Ternary => TERNARY,
             Source::Unary => UNARY,
             Source::Sdpa => SDPA,
+            Source::Candle => panic!("Invalid lib"),
         }
     }
 
@@ -307,11 +311,21 @@ impl Kernels {
         if let Some(lib) = libraries.get(&source) {
             Ok(lib.clone())
         } else {
-            let lib = {
-                let source_content = self.get_library_source(source);
-                device
-                    .new_library_with_source(source_content, &CompileOptions::new())
-                    .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
+            let lib = match source {
+                Source::Candle => {
+                    let source_data = CANDLE;
+                    device.new_library_with_data(source_data).map_err(|e| {
+                        MetalKernelError::LoadLibraryError(format!(
+                            "Candle metal requires macosx > 13.0 or higher, cannot load candle metal library: {e}"
+                        ))
+                    })?
+                }
+                source => {
+                    let source_content = self.get_library_source(source);
+                    device
+                        .new_library_with_source(source_content, &CompileOptions::new())
+                        .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
+                }
             };
             libraries.insert(source, lib.clone());
             Ok(lib)
@@ -717,7 +731,7 @@ pub fn call_reduce_contiguous(
     let length = shape.iter().product::<usize>();
     let num_dims = shape.len();
     let work_per_threadgroup = length / out_length;
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -773,7 +787,7 @@ pub fn call_reduce_strided(
     let length: usize = shape.iter().product();
     let num_dims = shape.len();
     let work_per_threadgroup = length / out_length;
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -828,7 +842,7 @@ pub fn call_last_softmax(
 ) -> Result<(), MetalKernelError> {
     let work_per_threadgroup = elements;
 
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -877,7 +891,7 @@ pub fn call_rms_norm(
     alpha_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -938,7 +952,7 @@ pub fn call_layer_norm(
     beta_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -1000,7 +1014,7 @@ pub fn call_rope_i(
     sin_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -1045,7 +1059,7 @@ pub fn call_rope_thd(
     sin_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -1091,7 +1105,7 @@ pub fn call_rope(
     sin_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
