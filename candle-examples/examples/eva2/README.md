@@ -1,6 +1,6 @@
 # candle-eva2
 
-[EVA-02](https://arxiv.org/abs/2303.11331) is a computer vision model.
+[EVA-02](https://huggingface.co/papers/2303.11331) is a computer vision model.
 In this example, it is used as an ImageNet classifier: the model returns the
 probability for the image to belong to each of the 1000 ImageNet categories.
 

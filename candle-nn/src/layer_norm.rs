@@ -27,7 +27,7 @@
 //! # Ok(()) }
 //! ```
 //!
-//! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
+//! [`Layer Normalization`]: https://huggingface.co/papers/1607.06450
 use candle::{DType, Module, Result, Tensor, D};
 
 #[derive(Debug, Clone, Copy, PartialEq)]

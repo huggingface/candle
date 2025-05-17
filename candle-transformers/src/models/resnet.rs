@@ -4,7 +4,7 @@
 //!
 //! ## Reference
 //!
-//! [Deep Residual Learning for Image Recognition](https://arxiv.org/abs/1512.03385)
+//! [Deep Residual Learning for Image Recognition](https://huggingface.co/papers/1512.03385)
 //! He et al. (2015)
 //!
 //! This paper introduced ResNet, a deep neural network architecture that utilizes

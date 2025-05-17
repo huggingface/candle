@@ -5,7 +5,7 @@
 //! to achieve strong performance while maintaining low memory usage.
 //!
 //! The model was originally described in the paper:
-//! ["EfficientViT: Memory Efficient Vision Transformer with Cascaded Group Attention"](https://arxiv.org/abs/2305.07027)
+//! ["EfficientViT: Memory Efficient Vision Transformer with Cascaded Group Attention"](https://huggingface.co/papers/2305.07027)
 //!
 //! This implementation is based on the reference implementation from
 //! [pytorch-image-models](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/efficientvit_msra.py).

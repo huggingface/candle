@@ -10,7 +10,7 @@
 //! - Lightweight all-MLP decode head
 //!
 //! References:
-//! - [SegFormer Paper](https://arxiv.org/abs/2105.15203)
+//! - [SegFormer Paper](https://huggingface.co/papers/2105.15203)
 //! - [Model Card](https://huggingface.co/nvidia/mit-b0)
 //!
 

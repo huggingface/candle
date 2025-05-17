@@ -1,6 +1,6 @@
 # candle-starcoder2
 
-Candle implementation of Star Coder 2 family of code generation model from [StarCoder 2 and The Stack v2: The Next Generation](https://arxiv.org/pdf/2402.19173).
+Candle implementation of Star Coder 2 family of code generation model from [StarCoder 2 and The Stack v2: The Next Generation](https://huggingface.co/papers/2402.19173).
 
 ## Running an example
 

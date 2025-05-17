@@ -1,4 +1,4 @@
-// Implement the MMDiT model originally introduced for Stable Diffusion 3 (https://arxiv.org/abs/2403.03206),
+// Implement the MMDiT model originally introduced for Stable Diffusion 3 (https://huggingface.co/papers/2403.03206),
 // as well as the MMDiT-X variant introduced for Stable Diffusion 3.5-medium (https://huggingface.co/stabilityai/stable-diffusion-3.5-medium)
 // This follows the implementation of the MMDiT model in the ComfyUI repository.
 // https://github.com/comfyanonymous/ComfyUI/blob/78e133d0415784924cd2674e2ee48f3eeca8a2aa/comfy/ldm/modules/diffusionmodules/mmdit.py#L1

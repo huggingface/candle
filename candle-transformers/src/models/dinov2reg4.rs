@@ -4,7 +4,7 @@
 //! original architecture. This implementation is specifically trained for plant species
 //! classification on the PlantCLEF2024 dataset with 7,806 classes.
 //!
-//! - [Paper](https://arxiv.org/abs/2309.16588). DINOv2: Learning Robust Visual Features without Supervision
+//! - [Paper](https://huggingface.co/papers/2309.16588). DINOv2: Learning Robust Visual Features without Supervision
 //! - [GH Repo](https://github.com/facebookresearch/dinov2)
 //!
 //! # Example
