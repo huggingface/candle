@@ -8,7 +8,7 @@ The candle implementation reproduces the same structure/files for models and
 pipelines. Useful resources:
 
 - [Official implementation](https://github.com/dome272/Wuerstchen).
-- [Arxiv paper](https://arxiv.org/abs/2306.00637).
+- [Arxiv paper](https://huggingface.co/papers/2306.00637).
 - Blog post: [Introducing Würstchen: Fast Diffusion for Image Generation](https://huggingface.co/blog/wuerstchen).
 
 ## Getting the weights

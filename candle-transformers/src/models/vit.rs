@@ -11,7 +11,7 @@
 //! - Layer normalization
 //!
 //! References:
-//! - [ViT Paper](https://arxiv.org/abs/2010.11929)
+//! - [ViT Paper](https://huggingface.co/papers/2010.11929)
 //! - [Model Card](https://huggingface.co/google/vit-base-patch16-224)
 //!
 

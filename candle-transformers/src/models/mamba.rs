@@ -1,6 +1,6 @@
 //! Mamba inference implementation.
 //!
-//! See ["Mamba: Linear-Time Sequence Modeling with Selective State Spaces"](https://arxiv.org/abs/2312.00752)
+//! See ["Mamba: Linear-Time Sequence Modeling with Selective State Spaces"](https://huggingface.co/papers/2312.00752)
 //!
 //! Based on reference implementation from the AlbertMamba project
 //! A fast implementation of mamba for inference only.
@@ -122,7 +122,7 @@ impl MambaBlock {
         let proj_for_conv = candle_nn::ops::silu(&proj_for_conv)?;
         // SSM + Selection, we're doing inference here so only need the last step of
         // the sequence.
-        // Algorithm 3.2 on page 6, https://arxiv.org/pdf/2312.00752.pdf
+        // Algorithm 3.2 on page 6, https://huggingface.co/papers/2312.00752
 
         let x_proj = self.x_proj.forward(&proj_for_conv)?;
         let delta = x_proj.narrow(D::Minus1, 0, self.dt_rank)?.contiguous()?;

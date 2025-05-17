@@ -11,7 +11,7 @@
 //! - Support for 8-bit quantization
 //!
 //! References:
-//! - 📝 [StarCoder Paper](https://arxiv.org/abs/2305.06161)
+//! - 📝 [StarCoder Paper](https://huggingface.co/papers/2305.06161)
 //! - 🤗 [Model Card](https://huggingface.co/bigcode/starcoder)
 //!
 

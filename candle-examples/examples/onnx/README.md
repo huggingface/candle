@@ -2,7 +2,7 @@
 
 This example demonstrates how to run [ONNX](https://github.com/onnx/onnx) based models in Candle.
 
-It contains small variants of two models, [SqueezeNet](https://arxiv.org/pdf/1602.07360.pdf) (default) and [EfficientNet](https://arxiv.org/pdf/1905.11946.pdf).
+It contains small variants of two models, [SqueezeNet](https://huggingface.co/papers/1602.07360) (default) and [EfficientNet](https://huggingface.co/papers/1905.11946).
 
 You can run the examples with following commands:
 

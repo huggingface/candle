@@ -2,7 +2,7 @@
 
 MobileCLIP is family of efficient CLIP-like models using FastViT-based image encoders.
 
-See [MobileCLIP: Fast Image-Text Models through Multi-Modal Reinforced Training](https://arxiv.org/abs/2311.17049)
+See [MobileCLIP: Fast Image-Text Models through Multi-Modal Reinforced Training](https://huggingface.co/papers/2311.17049)
 
 
 ## Running on an example on cpu

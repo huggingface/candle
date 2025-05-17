@@ -8,7 +8,7 @@
 //!
 //! - ⚡ [Interactive Wasm Example](https://huggingface.co/spaces/radames/candle-segment-anything-wasm)
 //! - 💻 [GH Link](https://github.com/facebookresearch/segment-anything)
-//! - 📝 [Paper](https://arxiv.org/abs/2304.02643)
+//! - 📝 [Paper](https://huggingface.co/papers/2304.02643)
 //! - 💡 The default backbone can be replaced by the smaller and faster TinyViT model based on [MobileSAM](https://github.com/ChaoningZhang/MobileSAM).
 //!
 //!

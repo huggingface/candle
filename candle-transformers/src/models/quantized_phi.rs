@@ -11,7 +11,7 @@
 //! - Support for 8-bit quantization
 //!
 //! References:
-//! - [Phi2 Paper](https://arxiv.org/abs/2309.05463)
+//! - [Phi2 Paper](https://huggingface.co/papers/2309.05463)
 //! - [Model Card](https://huggingface.co/microsoft/phi-2)
 //!
 

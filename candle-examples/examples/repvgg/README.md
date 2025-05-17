@@ -1,6 +1,6 @@
 # candle-repvgg
 
-[RepVGG: Making VGG-style ConvNets Great Again](https://arxiv.org/abs/2101.03697).
+[RepVGG: Making VGG-style ConvNets Great Again](https://huggingface.co/papers/2101.03697).
 
 This candle implementation uses a pre-trained RepVGG network for inference. The
 classification head has been trained on the ImageNet dataset and returns the

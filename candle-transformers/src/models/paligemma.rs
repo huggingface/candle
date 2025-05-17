@@ -1,7 +1,7 @@
 //! Multimodal multi-purpose model combining Gemma-based language model with SigLIP image understanding
 //!
 //! See PaLiGemma details at:
-//! - [Paper](https://arxiv.org/abs/2402.05257)
+//! - [Paper](https://huggingface.co/papers/2402.05257)
 //! - [Google Blog Post](https://blog.research.google/2024/02/paligemma-scaling-language-image.html)
 //!
 //! The model is a multimodal combination of:
@@ -11,7 +11,7 @@
 //!
 //! References:
 //! - [HuggingFace Implementation](https://huggingface.co/google/paligemma-3b)
-//! - [Paper: PaLI-3 and Beyond: Scaling Language-Image Learning](https://arxiv.org/abs/2402.05257)
+//! - [Paper: PaLI-3 and Beyond: Scaling Language-Image Learning](https://huggingface.co/papers/2402.05257)
 //!
 
 use crate::models::{gemma, siglip};

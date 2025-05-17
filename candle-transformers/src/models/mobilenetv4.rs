@@ -4,7 +4,7 @@
 //!
 //! ## Paper
 //!
-//! ["MobileNetV4 - Universal Models for the Mobile Ecosystem"](https://arxiv.org/abs/2404.10518)
+//! ["MobileNetV4 - Universal Models for the Mobile Ecosystem"](https://huggingface.co/papers/2404.10518)
 //!
 //! ## References
 //!

@@ -4,7 +4,7 @@ Experimental, not instruction-tuned small LLM from the Hazy Research group, comb
 
 [Blogpost](https://hazyresearch.stanford.edu/blog/2024-03-03-based)
 
-[Simple linear attention language models balance the recall-throughput tradeoff](https://arxiv.org/abs/2402.18668)
+[Simple linear attention language models balance the recall-throughput tradeoff](https://huggingface.co/papers/2402.18668)
 
 ## Running an example
 

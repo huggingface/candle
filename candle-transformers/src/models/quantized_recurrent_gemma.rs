@@ -11,7 +11,7 @@
 //! - Support for 8-bit quantization
 //!
 //! References:
-//! - [Gemma Paper](https://arxiv.org/abs/2401.06751)
+//! - [Gemma Paper](https://huggingface.co/papers/2401.06751)
 //! - [Model Card](https://ai.google.dev/gemma)
 //!
 

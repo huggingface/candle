@@ -6,7 +6,7 @@
 //! Note that this implementation is for inference only, there is no possibility to track the
 //! running stats.
 //!
-//! [`Batch Normalization`]: https://arxiv.org/abs/1502.03167
+//! [`Batch Normalization`]: https://huggingface.co/papers/1502.03167
 use candle::{DType, Result, Tensor, Var};
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -1,7 +1,7 @@
 # candle-convnext
 
-[A ConvNet for the 2020s](https://arxiv.org/abs/2201.03545) and
-[ConvNeXt V2: Co-designing and Scaling ConvNets with Masked Autoencoders](https://arxiv.org/abs/2301.00808).
+[A ConvNet for the 2020s](https://huggingface.co/papers/2201.03545) and
+[ConvNeXt V2: Co-designing and Scaling ConvNets with Masked Autoencoders](https://huggingface.co/papers/2301.00808).
 
 This candle implementation uses a pre-trained ConvNeXt network for inference. The
 classification head has been trained on the ImageNet dataset and returns the

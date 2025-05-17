@@ -7,7 +7,7 @@
 Stable Diffusion 3 Medium is a text-to-image model based on Multimodal Diffusion Transformer (MMDiT) architecture.
 
 - [huggingface repo](https://huggingface.co/stabilityai/stable-diffusion-3-medium)
-- [research paper](https://arxiv.org/pdf/2403.03206)
+- [research paper](https://huggingface.co/papers/2403.03206)
 - [announcement blog post](https://stability.ai/news/stable-diffusion-3-medium)
 
 Stable Diffusion 3.5 is a family of text-to-image models with latest improvements:

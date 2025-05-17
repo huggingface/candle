@@ -69,7 +69,7 @@ pub fn euler_sample(
 }
 
 // The "Resolution-dependent shifting of timestep schedules" recommended in the SD3 tech report paper
-// https://arxiv.org/pdf/2403.03206
+// https://huggingface.co/papers/2403.03206
 // Following the implementation in ComfyUI:
 // https://github.com/comfyanonymous/ComfyUI/blob/3c60ecd7a83da43d694e26a77ca6b93106891251/
 // comfy/model_sampling.py#L181

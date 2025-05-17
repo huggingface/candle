@@ -512,8 +512,8 @@ message TensorProto {
     BFLOAT16 = 16;
 
     // Non-IEEE floating-point format based on papers
-    // FP8 Formats for Deep Learning, https://arxiv.org/abs/2209.05433,
-    // 8-bit Numerical Formats For Deep Neural Networks, https://arxiv.org/pdf/2206.02915.pdf.
+    // FP8 Formats for Deep Learning, https://huggingface.co/papers/2209.05433,
+    // 8-bit Numerical Formats For Deep Neural Networks, https://huggingface.co/papers/2206.02915.
     // Operators supported FP8 are Cast, CastLike, QuantizeLinear, DequantizeLinear.
     // The computation usually happens inside a block quantize / dequantize
     // fused by the runtime.

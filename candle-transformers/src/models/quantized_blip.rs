@@ -10,7 +10,7 @@
 //! - Support for 8-bit quantization
 //!
 //! References:
-//! - [BLIP Paper](https://arxiv.org/abs/2201.12086)
+//! - [BLIP Paper](https://huggingface.co/papers/2201.12086)
 //! - [Hugging Face Implementation](https://huggingface.co/docs/transformers/model_doc/blip)
 //!
 

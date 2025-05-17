@@ -10,7 +10,7 @@
 //! - Layer normalization and self-attention
 //!
 //! References:
-//! - [Paper](https://arxiv.org/abs/2109.10282)
+//! - [Paper](https://huggingface.co/papers/2109.10282)
 //! - [Model Card](https://huggingface.co/microsoft/trocr-base-handwritten)
 //!
 

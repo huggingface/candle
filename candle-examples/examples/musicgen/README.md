@@ -1,6 +1,6 @@
 # candle-musicgen
 
-Candle implementation of musicgen from [Simple and Controllable Music Generation](https://arxiv.org/pdf/2306.05284).
+Candle implementation of musicgen from [Simple and Controllable Music Generation](https://huggingface.co/papers/2306.05284).
 
 ## Running an example
 

@@ -1,6 +1,6 @@
 # candle-resnet
 
-A candle implementation of inference using a pre-trained [ResNet](https://arxiv.org/abs/1512.03385).
+A candle implementation of inference using a pre-trained [ResNet](https://huggingface.co/papers/1512.03385).
 This uses a classification head trained on the ImageNet dataset and returns the
 probabilities for the top-5 classes.
 
