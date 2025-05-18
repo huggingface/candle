@@ -6048,6 +6048,7 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
     }
 
     {
+    println!("\n-------------------------------", );
     println!("tests softmax_cross_entropy_loss with log_prob");
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
@@ -6127,6 +6128,174 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
 
     println!("log_prob test passed.");
     }
+
+    {
+        println!("\n-------------------------------", );
+        println!("tests SoftmaxCrossEntropyLoss with class weights");
+
+        let logits = Tensor::from_vec(
+            vec![
+                2.0f32, 1.0, 0.1,  // sample 1
+                0.1, 0.2, 3.0      // sample 2
+            ],
+            (2, 3),
+            &Device::Cpu,
+        )?;
+        let labels = Tensor::from_vec(vec![0i64, 2], (2,), &Device::Cpu)?;
+        let weights = Tensor::from_vec(vec![1.0f32, 1.0, 3.0], (3,), &Device::Cpu)?;
+
+        for reduction in ["none", "sum", "mean"] {
+            println!("Testing reduction={}", reduction);
+
+            let mut node = NodeProto {
+                op_type: "SoftmaxCrossEntropyLoss".to_string(),
+                input: vec![
+                    INPUT_X.to_string(),
+                    INPUT_Y.to_string(),
+                    "weights".to_string()
+                ],
+                output: vec![OUTPUT_Z.to_string()],
+                ..Default::default()
+            };
+            node.attribute.push(AttributeProto {
+                name: "reduction".to_string(),
+                r#type: AttributeType::String as i32,
+                s: reduction.as_bytes().to_vec(),
+                ..Default::default()
+            });
+
+            let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+                node: vec![node],
+                input: vec![
+                    ValueInfoProto { name: INPUT_X.to_string(), ..Default::default() },
+                    ValueInfoProto { name: INPUT_Y.to_string(), ..Default::default() },
+                    ValueInfoProto { name: "weights".to_string(), ..Default::default() },
+                ],
+                output: vec![ValueInfoProto { name: OUTPUT_Z.to_string(), ..Default::default() }],
+                ..Default::default()
+            }));
+
+            let mut inputs = HashMap::new();
+            inputs.insert(INPUT_X.to_string(), logits.clone());
+            inputs.insert(INPUT_Y.to_string(), labels.clone());
+            inputs.insert("weights".to_string(), weights.clone());
+
+            let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+            let z = eval.get(OUTPUT_Z).unwrap().flatten_all()?.to_vec1::<f32>()?;
+
+            match reduction {
+                "none" => {
+                    // log_probs: [-0.41703, -1.41703, -2.31703], [-3.0096, -2.9096, -0.1096]
+                    // loss = -log_prob[label], weighted
+                    // sample 1: label=0, loss=0.41703 * 1.0
+                    // sample 2: label=2, loss=0.1096 * 3.0 ≈ 0.3288
+                    let expected = vec![0.41703, 0.3288];
+                    for (i, (a, e)) in z.iter().zip(expected.iter()).enumerate() {
+                        assert!(
+                            (a - e).abs() < 1e-3,
+                            "reduction=none: sample {}: expected {}, got {}",
+                            i,
+                            e,
+                            a
+                        );
+                    }
+                }
+                "sum" => {
+                    let expected = 0.41703 + 0.3288;
+                    assert!((z[0] - expected).abs() < 1e-3, "reduction=sum: expected {}, got {}", expected, z[0]);
+                }
+                "mean" => {
+                    let weight_sum = 1.0 + 3.0;
+                    let expected = (0.41703 + 0.3288) / weight_sum;
+                    assert!((z[0] - expected).abs() < 1e-3, "reduction=mean: expected {}, got {}", expected, z[0]);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    {
+    println!("\n-------------------------------", );
+    println!("Testing SoftmaxCrossEntropyLoss with ignore_index");
+
+    let logits = Tensor::from_vec(
+        vec![
+            2.0f32, 1.0, 0.1,  // sample 0
+            0.1, 0.2, 3.0      // sample 1
+        ],
+        (2, 3),
+        &Device::Cpu,
+    )?;
+    let labels = Tensor::from_vec(vec![0i64, -1], (2,), &Device::Cpu)?; // -1 will be ignored
+    let ignore_index = -1i64;
+
+    for reduction in ["none", "sum", "mean"] {
+        println!("Testing reduction={}", reduction);
+
+        let mut node = NodeProto {
+            op_type: "SoftmaxCrossEntropyLoss".to_string(),
+            input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            ..Default::default()
+        };
+        node.attribute.push(AttributeProto {
+            name: "reduction".to_string(),
+            r#type: AttributeType::String as i32,
+            s: reduction.as_bytes().to_vec(),
+            ..Default::default()
+        });
+        node.attribute.push(AttributeProto {
+            name: "ignore_index".to_string(),
+            r#type: AttributeType::Int as i32,
+            i: ignore_index,
+            ..Default::default()
+        });
+
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![node],
+            input: vec![
+                ValueInfoProto { name: INPUT_X.to_string(), ..Default::default() },
+                ValueInfoProto { name: INPUT_Y.to_string(), ..Default::default() },
+            ],
+            output: vec![
+                ValueInfoProto { name: OUTPUT_Z.to_string(), ..Default::default() },
+            ],
+            ..Default::default()
+        }));
+
+        let mut inputs = HashMap::new();
+        inputs.insert(INPUT_X.to_string(), logits.clone());
+        inputs.insert(INPUT_Y.to_string(), labels.clone());
+
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let z = eval.get(OUTPUT_Z).unwrap().flatten_all()?.to_vec1::<f32>()?;
+
+        match reduction {
+            "none" => {
+                let expected = vec![0.41703, 0.0]; // second sample ignored
+                for (i, (a, e)) in z.iter().zip(expected.iter()).enumerate() {
+                    assert!(
+                        (a - e).abs() < 1e-3,
+                        "reduction=none: sample {}: expected {}, got {}",
+                        i,
+                        e,
+                        a
+                    );
+                }
+            }
+            "sum" => {
+                let expected = 0.41703;
+                assert!((z[0] - expected).abs() < 1e-3, "reduction=sum: expected {}, got {}", expected, z[0]);
+            }
+            "mean" => {
+                let expected = 0.41703; // mean over 1 non-ignored example
+                assert!((z[0] - expected).abs() < 1e-3, "reduction=mean: expected {}, got {}", expected, z[0]);
+            }
+            _ => unreachable!(),
+        }
+    }
+    }
+
     
     Ok(())
 }

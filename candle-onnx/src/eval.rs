@@ -1967,28 +1967,93 @@ fn simple_eval_(
                 };
                 let get_log_prob = node.output.len() == 2;
 
-                let labels = get(&node.input[1])?.to_dtype(DType::I64)?;
-                let labels = labels.unsqueeze(1)?;
+                let raw_labels = get(&node.input[1])?.to_dtype(DType::I64)?;
+                let labels = raw_labels.unsqueeze(1)?;
 
                 let log_probs = log_softmax(&logits, 1)?;
                 println!("log_probs: {:?}", log_probs.to_vec2::<f32>()?);
+
+                let ignore_index = get_attr_opt::<i64>(node, "ignore_index")?;
+
+                let mask = if let Some(ignore_index) = ignore_index {
+                    let scalar = *ignore_index;
+                    Some(raw_labels.ne(scalar)?)
+                } else {
+                    None
+                };
+
+                let safe_labels = if let Some(ref mask) = mask {
+                    let zeros = Tensor::zeros_like(&raw_labels)?;
+                    mask.where_cond(&raw_labels, &zeros)?  // if mask=true → keep, else → 0
+                } else {
+                    raw_labels.clone()
+                };
+                let labels = safe_labels.unsqueeze(1)?;
 
                 let nll = log_probs
                     .gather(&labels, 1)?
                     .neg()?
                     .squeeze(1)?; // [N]
+                let mut loss = nll.reshape((n, d))?;
 
                 println!("gathered shape: {:?}", nll.shape());
 
                 let reduction = get_attr_opt::<str>(node, "reduction")?
                     .unwrap_or("mean");
-            
-                let loss = match reduction {
-                    "none" => nll.clone(),
-                    "mean" => nll.mean(0)?,
-                    "sum" => nll.sum(0)?,
-                    _ => bail!("unsupported reduction mode: {reduction} in SoftmaxCrossEntropyLoss"),
+
+                let weights = if node.input.len() > 2 {
+                    Some(get(&node.input[2])?.to_dtype(DType::F32)?)
+                } else {
+                    None
                 };
+
+                if let Some(weights) = &weights {
+                    println!("weights: {:?}", weights.to_vec1::<f32>()?);
+                    let labels_flat = labels.reshape((n * d,))?;
+                    let class_weights = weights.gather(&labels_flat, 0)?;  // shape: [N*D]
+                    let mut class_weights = class_weights.reshape((n, d))?;     // shape: [N, D]
+                    
+                    if let Some(mask) = &mask {
+                        let mask_f = mask.to_dtype(DType::F32)?.reshape((n, d))?;
+                        loss = loss.broadcast_mul(&mask_f)?;                   // zero-out ignored
+                        class_weights = class_weights.broadcast_mul(&mask_f)?; // zero-out ignored
+                    }
+                    
+                    loss = loss.broadcast_mul(&class_weights)?;
+
+                    if reduction == "mean" {
+                        let weight_sum = class_weights.sum_all()?;
+                        loss = loss.sum_all()?.broadcast_div(&weight_sum)?;
+                    } else if reduction == "sum" {
+                        loss = loss.sum_all()?;
+                    } else if reduction == "none" {
+                        loss = loss.reshape(raw_labels.shape())?;
+                    } else {
+                        bail!("unsupported reduction mode: {reduction} in SoftmaxCrossEntropyLoss");
+                    }
+                } else {
+                    if let Some(mask) = &mask {
+                        let mask_f = mask.to_dtype(DType::F32)?.reshape((n, d))?;
+                        loss = loss.broadcast_mul(&mask_f)?;
+                    }
+                    loss = match reduction {
+                        "none" => loss.reshape(raw_labels.shape())?,
+                        "sum" => loss.sum_all()?,
+                        "mean" => {
+                            let denom = if let Some(mask) = &mask {
+                                mask.to_dtype(DType::F32)?.sum_all()?
+                            } else {
+                                Tensor::from_vec(vec![(n * d) as f32], (), logits.device())?
+                            };
+                            loss.sum_all()?.broadcast_div(&denom)?
+                        }
+                        _ => bail!("unsupported reduction mode: {reduction} in SoftmaxCrossEntropyLoss"),
+                    };
+                }
+
+                println!("loss shape: {:?}", loss.shape());
+                println!("log_probs shape: {:?}", log_probs.shape());
+
         
                 values.insert(node.output[0].clone(), loss);
                 if get_log_prob {
