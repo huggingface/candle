@@ -579,10 +579,8 @@ fn simple_eval_(
                     }
                 }
 
-                let x_mat = xs.reshape((row_number, col_number))?;
-
                 let y_mat = candle_nn::ops::layer_norm_slow(
-                    &x_mat,
+                    &xs.reshape((row_number, col_number))?,
                     &weight.reshape((row_number, col_number))?,
                     &bias.reshape((row_number, col_number))?,
                     eps as f32,

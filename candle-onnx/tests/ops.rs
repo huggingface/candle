@@ -1000,7 +1000,7 @@ fn test_layer_normalization() -> Result<()> {
             .to_dtype(DType::F32)?;
 
         let expected = Tensor::new(expected, &Device::Cpu)?.to_dtype(DType::F32)?;
-        assert_eq!(z.to_vec1::<f32>()?, expected.to_vec1::<f32>()?);
+        assert_eq!(z.to_vec2::<f32>()?, expected.to_vec2::<f32>()?);
 
         Ok(())
     }
