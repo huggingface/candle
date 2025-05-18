@@ -5913,6 +5913,7 @@ fn test_sign_operation() -> Result<()> {
 
 #[test]
 fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
+    {
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
             op_type: "SoftmaxCrossEntropyLoss".to_string(),
@@ -5958,14 +5959,173 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
     assert_eq!(eval.len(), 1);
 
-    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    println!("All available output keys: {:?}", eval.keys().collect::<Vec<_>>());
+    assert!(eval.contains_key(OUTPUT_Z), "Missing key: {}", OUTPUT_Z);
+    let z = eval.get(OUTPUT_Z).unwrap();
+    let z = z.as_ref().to_dtype(DType::F32)?.flatten_all()?;
+    let rank = z.rank();
+    let actual = if rank == 0 {
+        vec![z.to_vec0::<f32>()?]
+    } else {
+        z.to_vec1::<f32>()?
+    };
+    println!("Here");
 
-    let actual = z.to_vec1::<f32>()?;
-
-    let expected = vec![0.4170, 0.1096];
+    let expected: f32 = 0.2633;
     
-    for (a, e) in actual.iter().zip(expected.iter()) {
-        assert!((a - e).abs() < 1e-4, "Expected: {}, Actual: {}", e, a);
+    assert!((actual[0] - expected).abs() < 1e-4, "Expected {}, got {}", expected, actual[0]);
+
+    println!("SoftmaxCrossEntropyLoss output: {:?}", actual);
+    for reduction in ["none", "mean", "sum"] {
+        println!("\n-------------------------------", );
+        println!("Testing reduction: {}", reduction);
+        let mut node = NodeProto {
+            op_type: "SoftmaxCrossEntropyLoss".to_string(),
+            input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
+            output: vec![OUTPUT_Z.to_string()],
+            ..Default::default()
+        };
+        node.attribute.push(AttributeProto {
+            name: "reduction".to_string(),
+            r#type: AttributeType::String as i32,
+            s: reduction.as_bytes().to_vec(),
+            ..Default::default()
+        });
+    
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![node],
+            input: vec![ValueInfoProto {
+                name: INPUT_X.to_string(),
+                ..Default::default()
+            },
+            ValueInfoProto {
+                name: INPUT_Y.to_string(),
+                ..Default::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+    
+        let logits = Tensor::from_vec(
+            vec![2.0f32, 1.0, 0.1, 0.1, 0.2, 3.0],
+            (2, 3),
+            &Device::Cpu,
+        )?;
+        let labels = Tensor::from_vec(vec![0i64, 2], (2,), &Device::Cpu)?;
+        let mut inputs = HashMap::new();
+        inputs.insert(INPUT_X.to_string(), logits);
+        inputs.insert(INPUT_Y.to_string(), labels);
+    
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        let actual = if z.rank() == 0 {
+            vec![z.to_vec0::<f32>()?]
+        } else {
+            z.to_vec1::<f32>()?
+        };
+    
+        match reduction {
+            "none" => {
+                let expected = vec![0.4170, 0.1096];
+                for (a, e) in actual.iter().zip(expected.iter()) {
+                    assert!((a - e).abs() < 1e-4, "reduction=none: Expected {}, got {}", e, a);
+                }
+            }
+            "mean" => {
+                let expected = (0.4170 + 0.1096) / 2.0;
+                assert!((actual[0] - expected).abs() < 1e-4, "reduction=mean: Expected {}, got {}", expected, actual[0]);
+            }
+            "sum" => {
+                let expected = 0.4170 + 0.1096;
+                assert!((actual[0] - expected).abs() < 1e-4, "reduction=sum: Expected {}, got {}", expected, actual[0]);
+            }
+            _ => unreachable!(),
+        }
+    }
+    }
+
+    {
+    println!("tests softmax_cross_entropy_loss with log_prob");
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "SoftmaxCrossEntropyLoss".to_string(),
+            input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
+            output: vec![OUTPUT_Z.to_string(), "log_prob".to_string()],
+            ..Default::default()
+        }],
+        input: vec![
+            ValueInfoProto {
+                name: INPUT_X.to_string(),
+                ..Default::default()
+            },
+            ValueInfoProto {
+                name: INPUT_Y.to_string(),
+                ..Default::default()
+            }
+        ],
+        output: vec![
+            ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                ..Default::default()
+            },
+            ValueInfoProto {
+                name: "log_prob".to_string(),
+                ..Default::default()
+            }
+        ],
+        ..Default::default()
+    }));
+
+    let logits = Tensor::from_vec(
+        vec![
+            2.0f32, 1.0, 0.1,
+            0.1, 0.2, 3.0
+        ],
+        (2, 3),
+        &Device::Cpu,
+    )?;
+    let labels = Tensor::from_vec(vec![0i64, 2], (2,), &Device::Cpu)?;
+    let mut inputs = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), logits.clone());
+    inputs.insert(INPUT_Y.to_string(), labels);
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    assert_eq!(eval.len(), 2);
+    assert!(eval.contains_key(OUTPUT_Z));
+    assert!(eval.contains_key("log_prob"));
+
+    // loss (output[0]) mean
+    let loss = eval.get(OUTPUT_Z).unwrap().to_dtype(DType::F32)?.flatten_all()?;
+    let actual_loss_vec = loss.to_vec1::<f32>()?;
+    assert_eq!(actual_loss_vec.len(), 1, "Expected scalar loss, got {:?}", actual_loss_vec);
+    let actual_loss = actual_loss_vec[0];
+    let expected_loss = (0.4170 + 0.1096) / 2.0;
+    assert!((actual_loss - expected_loss).abs() < 1e-4, "Expected loss {}, got {}", expected_loss, actual_loss);
+
+    // log_prob (output[1])
+    let log_prob = eval.get("log_prob").unwrap().to_dtype(DType::F32)?;
+    let actual = log_prob.to_vec2::<f32>()?;
+    let expected = vec![
+        vec![-0.41703, -1.41703, -2.31703],
+        vec![-3.0096, -2.9096,  -0.1096 ],
+    ];
+    for (row_idx, (row_actual, row_expected)) in actual.iter().zip(expected.iter()).enumerate() {
+        for (col_idx, (a, e)) in row_actual.iter().zip(row_expected.iter()).enumerate() {
+            assert!(
+                (a - e).abs() < 1e-2,
+                "log_prob[{}, {}]: expected {}, got {}",
+                row_idx,
+                col_idx,
+                e,
+                a
+            );
+        }
+    }
+
+    println!("log_prob test passed.");
     }
     
     Ok(())
