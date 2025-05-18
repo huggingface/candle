@@ -5170,6 +5170,12 @@ fn test_lstm() -> Result<()> {
 }
 
 #[test]
+fn test_rnn() -> Result<()> {
+    // https://github.com/onnx/onnx/blob/main/docs/Operators.md#RNN
+    Ok(())
+}
+
+#[test]
 fn test_expand_dim_changed() -> Result<()> {
     // Create a manual graph for the Expand operation
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
