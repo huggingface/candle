@@ -1000,13 +1000,7 @@ fn test_layer_normalization() -> Result<()> {
             .to_dtype(DType::F32)?;
 
         let expected = Tensor::new(expected, &Device::Cpu)?.to_dtype(DType::F32)?;
-        match expected.dims().len() {
-            0 => assert_eq!(z.to_vec0::<f32>()?, expected.to_vec0::<f32>()?),
-            1 => assert_eq!(z.to_vec1::<f32>()?, expected.to_vec1::<f32>()?),
-            2 => assert_eq!(z.to_vec2::<f32>()?, expected.to_vec2::<f32>()?),
-            3 => assert_eq!(z.to_vec3::<f32>()?, expected.to_vec3::<f32>()?),
-            _ => unreachable!(),
-        };
+        assert_eq!(z.to_vec1::<f32>()?, expected.to_vec1::<f32>()?);
 
         Ok(())
     }
