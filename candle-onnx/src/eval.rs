@@ -1959,17 +1959,19 @@ fn simple_eval_(
             // https://onnx.ai/onnx/operators/onnx__SoftmaxCrossEntropyLoss.html
             "SoftmaxCrossEntropyLoss" => {
                 let logits = get(&node.input[0])?.to_dtype(DType::F32)?;
-                let input_shape = logits.shape();
+                let input_shape = logits.shape().dims();
                 let (n, c, d): (usize, usize, usize) = match *input_shape {
                     [n, c] => (n, c, 1),
                     [n, c, ref rest @ ..] => (n, c, rest.iter().product()),
                     _ => bail!("Unsupported input shape: {:?}", input_shape),
                 };
+                let get_log_prob = node.output.len() == 2;
 
                 let labels = get(&node.input[1])?.to_dtype(DType::I64)?;
                 let labels = labels.unsqueeze(1)?;
 
                 let log_probs = log_softmax(&logits, 1)?;
+                println!("log_probs: {:?}", log_probs.to_vec2::<f32>()?);
 
                 let nll = log_probs
                     .gather(&labels, 1)?
@@ -1989,6 +1991,10 @@ fn simple_eval_(
                 };
         
                 values.insert(node.output[0].clone(), loss);
+                if get_log_prob {
+                    values.insert(node.output[1].clone(), log_probs.clone());
+                }
+                println!("Ending SoftmaxCrossEntropyLoss");
             }
 
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
