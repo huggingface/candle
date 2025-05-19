@@ -384,7 +384,7 @@ impl DistilBertLMPredictionHead {
     pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let transform = DistilBertPredictionHeadTransform::load(vb.clone(), config)?;
 
-        // distil_bert_uncased uses the word embeddings for the vocab projector weight, but has a seperate vocab_projector bias
+        // distil_bert_uncased uses the word embeddings for the vocab projector weight, but has a separate vocab_projector bias
         let vocab_projector_weight_vb = vb.pp("distilbert.embeddings.word_embeddings");
         let init_ws = candle_nn::init::DEFAULT_KAIMING_NORMAL;
         let ws = vocab_projector_weight_vb.get_with_hints(

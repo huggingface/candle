@@ -59,12 +59,12 @@ These online demos run entirely in your browser:
 - [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm): Image segmentation.
 - [BLIP](https://huggingface.co/spaces/radames/Candle-BLIP-Image-Captioning): image captioning.
 
-We also provide a some command line based examples using state of the art models:
+We also provide some command line based examples using state of the art models:
 
 - [LLaMA v1, v2, and v3](./candle-examples/examples/llama/): general LLM, includes
   the SOLAR-10.7B variant.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
-- [Codegeex4](./candle-examples/examples/codegeex4-9b/): Code completion,code interpreter,web search,fuction calling,repository-level
+- [Codegeex4](./candle-examples/examples/codegeex4-9b/): Code completion, code interpreter, web search, function calling, repository-level
 - [GLM4](./candle-examples/examples/glm4/): Open Multilingual Multimodal Chat LMs by THUDM
 - [Gemma v1 and v2](./candle-examples/examples/gemma/): 2b and 7b+/9b general LLMs from Google Deepmind.
 - [RecurrentGemma](./candle-examples/examples/recurrent-gemma/): 2b and 7b
