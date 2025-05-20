@@ -1935,39 +1935,6 @@ fn simple_eval_(
                 }
             }
             "RNN" => {
-                //                 Attributes
-                //
-                // activation_alpha : list of floats
-                //     Optional scaling values used by some activation functions. The values are consumed in the order of activation functions, for example (f, g, h) in LSTM. Default values are the same as of corresponding ONNX operators.For example with LeakyRelu, the default alpha is 0.01.
-                // activation_beta : list of floats
-                //     Optional scaling values used by some activation functions. The values are consumed in the order of activation functions, for example (f, g, h) in LSTM. Default values are the same as of corresponding ONNX operators.
-                // activations : list of strings (default is ['Tanh', 'Tanh'])
-                //     One (or two if bidirectional) activation function for input gate. The activation function must be one of the activation functions specified above. Optional: Default `Tanh` if not specified.
-                // clip : float
-                //     Cell clip threshold. Clipping bounds the elements of a tensor in the range of [-threshold, +threshold] and is applied to the input of activations. No clip if not specified.
-                // direction : string (default is forward)
-                //     Specify if the RNN is forward, reverse, or bidirectional. Must be one of forward (default), reverse, or bidirectional.
-                // hidden_size : int
-                //     Number of neurons in the hidden layer
-                // layout : int (default is 0)
-                //     The shape format of inputs X, initial_h and outputs Y, Y_h. If 0, the following shapes are expected: X.shape = [seq_length, batch_size, input_size], Y.shape = [seq_length, num_directions, batch_size, hidden_size], initial_h.shape = Y_h.shape = [num_directions, batch_size, hidden_size]. If 1, the following shapes are expected: X.shape = [batch_size, seq_length, input_size], Y.shape = [batch_size, seq_length, num_directions, hidden_size], initial_h.shape = Y_h.shape = [batch_size, num_directions, hidden_size].
-                //
-                // Inputs (3 - 6)
-                //
-                // X (differentiable) : T
-                //     The input sequences packed (and potentially padded) into one 3-D tensor with the shape of `[seq_length, batch_size, input_size]`.
-                // W (differentiable) : T
-                //     The weight tensor for input gate. Concatenation of `Wi` and `WBi` (if bidirectional). The tensor has shape `[num_directions, hidden_size, input_size]`.
-                // R (differentiable) : T
-                //     The recurrence weight tensor. Concatenation of `Ri` and `RBi` (if bidirectional). The tensor has shape `[num_directions, hidden_size, hidden_size]`.
-                // B (optional, differentiable) : T
-                //     The bias tensor for input gate. Concatenation of `[Wbi, Rbi]` and `[WBbi, RBbi]` (if bidirectional). The tensor has shape `[num_directions, 2*hidden_size]`. Optional: If not specified - assumed to be 0.
-                // sequence_lens (optional, non-differentiable) : T1
-                //     Optional tensor specifying lengths of the sequences in a batch. If not specified - assumed all sequences in the batch to have length `seq_length`. It has shape `[batch_size]`.
-                // initial_h (optional, non-differentiable) : T
-                //     Optional initial value of the hidden. If not specified - assumed to be 0. It has shape `[num_directions, batch_size, hidden_size]`.
-                //
-                //
                 // activation_alpha and activation_beta don't apply to (Tanh, Tanh) so ignoring them is okay
                 let activations_default = vec!["Tanh".to_string(), "Tanh".to_string()];
                 let activations = get_attr_opt_owned::<Vec<String>>(node, "activations")?
