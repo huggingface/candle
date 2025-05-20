@@ -2027,6 +2027,40 @@ fn simple_eval_(
                         &initial_h_default
                     }
                 };
+
+                fn choose_activation(activation: &str, x: &Tensor) -> Result<Tensor> {
+                    match activation {
+                        "Tanh" => x.tanh(),
+                        _ => bail!("unsupported activation {activation}"),
+                    }
+                }
+
+                let mut h_list: Vec<Tensor> = vec![];
+                let mut h_t = initial_h.clone();
+
+                for i in 0..seq_length {
+                    let xs = x.get(i)?;
+                    /* Python code:
+                    H = self.f1(
+                        np.dot(x, np.transpose(W))
+                        + np.dot(H_t, np.transpose(R))
+                        + np.add(*np.split(B, 2))
+                    )
+                    */
+                    let h = xs.matmul(&w.t()?)?.add(&h_t.matmul(&r.t()?)?)?;
+                    let b_sum = b
+                        .get(0)?
+                        .add(&b.get(1)?)?
+                        .reshape((num_directions, 2 * hidden_size as usize))?;
+                    let h = h.add(&b_sum)?;
+                    let h = choose_activation(&activations[0], &h)?;
+                    h_list.push(h.to_owned());
+                    h_t = h;
+                }
+                let h = Tensor::stack(&h_list, 0)?;
+                let h =
+                    h.reshape((seq_length, num_directions, batch_size, hidden_size as usize))?;
+                values.insert(node.output[0].clone(), h);
             }
             // https://onnx.ai/onnx/operators/onnx__Xor.html
             "Xor" => {
