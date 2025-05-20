@@ -583,7 +583,11 @@ fn simple_eval_(
                     &Device::Cpu,
                 )?);
 
-                let xs = Tensor::ones(input.shape(), value.dtype(), input.device())?
+                let shape_vec: Vec<usize> = input.to_vec1::<i64>()?.iter()
+                    .map(|&x| x as usize)
+                    .collect();
+
+                let xs = Tensor::ones(shape_vec, value.dtype(), input.device())?
                     .broadcast_mul(&value)?;
                 values.insert(node.output[0].clone(), xs);
             }
@@ -1238,7 +1242,7 @@ fn simple_eval_(
                     }
 
                     let indexes = Tensor::arange_step(s, e, p, data.device())?;
-                    out = out.index_select(&indexes, axis)?
+                    out = out.contiguous()?.index_select(&indexes, axis)?
                 }
                 values.insert(node.output[0].clone(), out);
             }
@@ -2030,194 +2034,94 @@ fn simple_eval_(
 
                 values.insert(node.output[0].clone(), output);
             }
-            "Attention" => {
-               // https://onnx.ai/onnx/operators/onnx__Attention.html
-               let q = get(&node.input[0])?;
-               let k = get(&node.input[1])?;
-               let v = get(&node.input[2])?;
-
-               let attn_mask = get_opt(3);
-               let past_key = get_opt(4);
-               let past_value = get_opt(5);
-               
-               let is_causal = get_attr_opt::<i64>(node, "is_causal")?.copied().unwrap_or(0) == 1;
-               let q_num_heads = get_attr::<i64>(node, "q_num_heads")?;
-               let kv_num_heads = get_attr::<i64>(node, "kv_num_heads")?;
-               let qk_matmul_output_mode = get_attr_opt::<i64>(node, "qk_matmul_output_mode")?.copied().unwrap_or(0);
-               let scale = get_attr_opt::<f32>(node, "scale")?.copied();
-               let softcap = get_attr_opt::<f32>(node, "softcap")?.copied().unwrap_or(0.0);
-               
-               let (query, key, value, is_3d) = match q.rank() {
-                   3 => {
-                       let (batch_size, q_seq_len, q_hidden_size) = q.dims3()?;
-                       let (_, kv_seq_len, kv_hidden_size) = k.dims3()?;
-                       let (_, _, v_hidden_size) = v.dims3()?;
-                       
-                       let head_size = q_hidden_size / *q_num_heads as usize;
-                       let kv_head_size = kv_hidden_size / *kv_num_heads as usize;
-                       let v_head_size = v_hidden_size / *kv_num_heads as usize;
-                       
-                       let q = q.reshape((batch_size, q_seq_len, *q_num_heads as usize, head_size))?
-                           .transpose(1, 2)?;
-                       let k = k.reshape((batch_size, kv_seq_len, *kv_num_heads as usize, kv_head_size))?
-                           .transpose(1, 2)?;
-                       let v = v.reshape((batch_size, kv_seq_len, *kv_num_heads as usize, v_head_size))?
-                           .transpose(1, 2)?;
-                           
-                       (q, k, v, true)
-                   }
-                   4 => (q.clone(), k.clone(), v.clone(), false),
-                   _ => bail!("Attention expects 3D or 4D input for Q, got rank {}", q.rank())
-               };
-               
-               let (batch_size, q_num_heads, q_seq_len, head_size) = query.dims4()?;
-               let (_, kv_num_heads, kv_seq_len, _) = key.dims4()?;
-               let (_, _, _, v_head_size) = value.dims4()?;
-               
-               // Calculate scale (default: 1/sqrt(head_size))
-               let scale = scale.unwrap_or((head_size as f32).sqrt().recip());
-               
-               // Apply scale to Q and K
-               let query = query.broadcast_mul(&Tensor::full(scale, query.shape(), query.device())?)?;
-               let key = key.broadcast_mul(&Tensor::full(scale, key.shape(), key.device())?)?;
-               
-               // Handle past states if provided
-               let (key, value, past_seq_len) = if let (Some(Ok(past_key)), Some(Ok(past_value))) = (past_key, past_value) {
-                   let (_, _, past_len, _) = past_key.dims4()?;
-                   let concatenated_key = Tensor::cat(&[past_key, &key], 2)?;
-                   let concatenated_value = Tensor::cat(&[past_value, &value], 2)?;
-                   (concatenated_key, concatenated_value, past_len)
-               } else {
-                   (key, value, 0)
-               };
-               
-               let total_seq_len = past_seq_len + kv_seq_len;
-               
-               // Handle multi-query/group-query attention by repeating k,v heads
-               let (key, value) = if q_num_heads > kv_num_heads {
-                   if q_num_heads % kv_num_heads != 0 {
-                       bail!("q_num_heads must be divisible by kv_num_heads for GQA/MQA");
-                   }
-                   let repeat_factor = (q_num_heads / kv_num_heads) as usize;
-                   
-                   // Expand kv_num_heads to q_num_heads by repeating
-                   let key = key.unsqueeze(2)?
-                       .expand((batch_size, kv_num_heads as usize, repeat_factor, total_seq_len, head_size))?
-                       .reshape((batch_size, q_num_heads as usize, total_seq_len, head_size))?;
-                   let value = value.unsqueeze(2)?
-                       .expand((batch_size, kv_num_heads as usize, repeat_factor, total_seq_len, v_head_size))?
-                       .reshape((batch_size, q_num_heads as usize, total_seq_len, v_head_size))?;
-                       
-                   (key, value)
-               } else {
-                   (key, value)
-               };
-               
-               let key_transpose = key.transpose(2, 3)?;
-               
-               let mut scores = query.matmul(&key_transpose)?;
-               
-               let qk_matmul_raw = if qk_matmul_output_mode == 0 && node.output.len() > 3 {
-                   Some(scores.clone())
-               } else {
-                   None
-               };
-               
-               if let Some(Ok(mask)) = attn_mask {
-                   scores = if mask.dtype() == DType::U8 {
-                       let mask_f32 = mask.to_dtype(DType::F32)?;
-                       let neg_inf = Tensor::full(f32::NEG_INFINITY, (), mask.device())?;
-                       scores.where_cond(&mask_f32.gt(&0.0_f32)?, &(scores.clone() + neg_inf)?)?
-                   } else {
-                       scores.broadcast_add(&mask)?
-                   };
-               } else if is_causal {
-                   // Create causal mask (lower triangular)
-                   let device = scores.device();
-                   let causal_mask = Tensor::tril_indices(q_seq_len, total_seq_len, 0, device)?;
-                   
-                   let row_indices = causal_mask.get(0)?;
-                   let col_indices = causal_mask.get(1)?;
-                   
-                   let mut mask_full = Tensor::zeros((q_seq_len, total_seq_len), DType::F32, device)?;
-
-                   let identity = Tensor::eye(q_seq_len, DType::F32, device)?;
-                   if q_seq_len <= total_seq_len {
-                       let mask_slice = identity.pad_with_zeros(1, 0, total_seq_len - q_seq_len)?;
-                       mask_full = mask_slice;
-                   } else {
-                       mask_full = identity.narrow(1, 0, total_seq_len)?;
-                   }
-                   
-                   let neg_inf = Tensor::full(f32::NEG_INFINITY, (), device)?;
-                   scores = scores.where_cond(&mask_full.unsqueeze(0)?.unsqueeze(0)?.expand(scores.shape())?.gt(&0.0_f32)?, &(scores.clone() + neg_inf)?)?;
-               }
-               
-               // Store the QK matmul output after mask addition if needed
-               let qk_matmul_masked = if qk_matmul_output_mode == 1 && node.output.len() > 3 {
-                   Some(scores.clone())
-               } else {
-                   None
-               };
-               
-               // Apply softcap if provided
-               if softcap > 0.0 {
-                   let softcap_t = Tensor::full(softcap, scores.shape(), scores.device())?;
-                   scores = (scores.div(&softcap_t)?).tanh()?.mul(&softcap_t)?;
-               }
-               
-               // Store the QK matmul output after softcap if needed
-               let qk_matmul_softcapped = if qk_matmul_output_mode == 2 && node.output.len() > 3 {
-                   Some(scores.clone())
-               } else {
-                   None
-               };
-               
-               // Apply softmax
-               let attention_weights = candle_nn::ops::softmax(&scores, 3)?;
-               
-               // Store the QK matmul output after softmax if needed
-               let qk_matmul_softmaxed = if qk_matmul_output_mode == 3 && node.output.len() > 3 {
-                   Some(attention_weights.clone())
-               } else {
-                   None
-               };
-               
-               // Attention output: (batch_size, num_heads, q_seq_len, v_head_size)
-               let output = attention_weights.matmul(&value)?;
-               
-               // Reshape output back to 3D if input was 3D
-               let output = if is_3d {
-                   output.transpose(1, 2)?
-                       .reshape((batch_size, q_seq_len, q_num_heads as usize * v_head_size))?
-               } else {
-                   output
-               };
-               
-               values.insert(node.output[0].clone(), output);
-               
-               // Present key/value outputs if requested
-               if node.output.len() > 1 && !node.output[1].is_empty() {
-                   values.insert(node.output[1].clone(), key.clone());
-               }
-               if node.output.len() > 2 && !node.output[2].is_empty() {
-                   values.insert(node.output[2].clone(), value.clone());
-               }
-               
-               // QK matmul output if requested
-               if node.output.len() > 3 && !node.output[3].is_empty() {
-                   let qk_output = match qk_matmul_output_mode {
-                       0 => qk_matmul_raw,
-                       1 => qk_matmul_masked,
-                       2 => qk_matmul_softcapped,
-                       3 => qk_matmul_softmaxed,
-                       _ => bail!("Invalid qk_matmul_output_mode: {}", qk_matmul_output_mode)
-                   };
-                   
-                   if let Some(qk) = qk_output {
-                       values.insert(node.output[3].clone(), qk);
-                   }
-               }
+            "Trilu" => {
+                let input = get(&node.input[0])?;
+                
+                // Get the diagonal offset 'k' from the second input if provided
+                let k = if node.input.len() > 1 && !node.input[1].is_empty() {
+                    get(&node.input[1])?.to_vec0::<i64>()?
+                } else {
+                    0 // Default to 0 if not provided
+                };
+                
+                // Get the 'upper' attribute (default to 1/true if not specified)
+                let upper = get_attr_opt::<i64>(node, "upper")?.copied().unwrap_or(1);
+                
+                // For batched inputs, we need to handle each matrix separately
+                let dims = input.dims();
+                println!("{}", dims.len());
+                if dims.len() < 2 {
+                    bail!("Trilu expects input with at least 2 dimensions: {:?}", dims);
+                }
+                
+                // Get the last two dimensions which represent the matrix
+                let n = dims[dims.len() - 2];
+                let m = dims[dims.len() - 1];
+                let max_dim = std::cmp::max(n, m);
+                
+                // Create base triangular matrix using the provided functions
+                let mask = if upper != 0 {
+                    Tensor::triu2(max_dim, input.dtype(), input.device())?
+                } else {
+                    Tensor::tril2(max_dim, input.dtype(), input.device())?
+                };
+                
+                // Handle the diagonal offset k
+                let adjusted_mask = if k != 0 {
+                    // Shift the mask by k positions
+                    if upper != 0 {
+                        // For upper triangular with positive k, we need to shift up
+                        // For upper triangular with negative k, we need to shift down
+                        if k > 0 {
+                            let zero_rows = Tensor::zeros((k as usize, max_dim), input.dtype(), input.device())?;
+                            let mask_rows = mask.narrow(0, 0, max_dim - k as usize)?;
+                            Tensor::cat(&[&zero_rows, &mask_rows], 0)?
+                        } else {
+                            let mask_rows = mask.narrow(0, -k as usize, max_dim + k as usize)?;
+                            let zero_rows = Tensor::zeros((-k as usize, max_dim), input.dtype(), input.device())?;
+                            Tensor::cat(&[&mask_rows, &zero_rows], 0)?
+                        }
+                    } else {
+                        // For lower triangular with positive k, we need to shift right
+                        // For lower triangular with negative k, we need to shift left
+                        if k > 0 {
+                            let mask_rows = mask.narrow(0, k as usize, max_dim - k as usize)?;
+                            let zero_rows = Tensor::zeros((k as usize, max_dim), input.dtype(), input.device())?;
+                            Tensor::cat(&[&mask_rows, &zero_rows], 0)?
+                        } else {
+                            let zero_rows = Tensor::zeros((-k as usize, max_dim), input.dtype(), input.device())?;
+                            let mask_rows = mask.narrow(0, 0, max_dim + k as usize)?;
+                            Tensor::cat(&[&zero_rows, &mask_rows], 0)?
+                        }
+                    }
+                } else {
+                    mask
+                };
+                
+                // If n != m, we need to resize the mask
+                let final_mask = if n != m {
+                    adjusted_mask.narrow(0, 0, n)?.narrow(1, 0, m)?
+                } else {
+                    adjusted_mask
+                };
+                
+                // If we have a batched input, broadcast the mask to match the input shape
+                let broadcast_mask = if dims.len() > 2 {
+                    // Calculate the batch size (all dimensions except last two)
+                    let mut mask_shape = vec![1; dims.len() - 2];
+                    mask_shape.push(n);
+                    mask_shape.push(m);
+                    
+                    // Reshape and broadcast
+                    final_mask.reshape(mask_shape)?.broadcast_as(dims)?
+                } else {
+                    final_mask
+                };
+                
+                // Apply mask to input
+                let output = input.mul(&broadcast_mask)?;
+                
+                values.insert(node.output[0].clone(), output);
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
