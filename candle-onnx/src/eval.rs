@@ -2040,13 +2040,6 @@ fn simple_eval_(
 
                 for i in 0..seq_length {
                     let xs = x.get(i)?;
-                    /* Python code:
-                    H = self.f1(
-                        np.dot(x, np.transpose(W))
-                        + np.dot(H_t, np.transpose(R))
-                        + np.add(*np.split(B, 2))
-                    )
-                    */
                     let h = xs.matmul(&w.t()?)?.add(&h_t.matmul(&r.t()?)?)?;
                     let b_sum = b
                         .get(0)?
