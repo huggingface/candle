@@ -5172,6 +5172,179 @@ fn test_lstm() -> Result<()> {
 #[test]
 fn test_rnn() -> Result<()> {
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#RNN
+    let model = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "RNN".to_string(),
+            name: "RNN_test".to_string(),
+            attribute: vec![AttributeProto {
+                name: "hidden_size".to_string(),
+                r#type: AttributeType::Int.into(),
+                i: 5,
+                ..AttributeProto::default()
+            }],
+            input: vec![
+                "input".to_string(),
+                "w".to_string(),
+                "r".to_string(),
+                "b".to_string(), // b
+                "".to_string(),  // seq_lens
+                "h".to_string(),
+            ],
+            output: vec!["output".to_string(), "hn".to_string()],
+            ..NodeProto::default()
+        }],
+        input: ["input", "w", "r", "b", "h"]
+            .into_iter()
+            .map(|name| ValueInfoProto {
+                name: name.to_string(),
+                ..ValueInfoProto::default()
+            })
+            .collect(),
+        output: ["output", "hn"]
+            .into_iter()
+            .map(|name| ValueInfoProto {
+                name: name.to_string(),
+                ..ValueInfoProto::default()
+            })
+            .collect(),
+        ..GraphProto::default()
+    }));
+
+    let input = Tensor::from_vec::<_, f32>(
+        vec![
+            0.647_212_8,
+            -0.041_167_17,
+            -0.177_493_08,
+            -0.500_039_3,
+            0.867_274_94,
+            -0.273_192_23,
+            -0.460_768_13,
+            -0.099_093_71,
+            0.472_844_8,
+            1.004_948_5,
+            -0.287_142_04,
+            -1.161_862_1,
+        ],
+        (4, 1, 3),
+        &Device::Cpu,
+    )?;
+    let w = Tensor::from_vec::<_, f32>(
+        vec![
+            -1.525_595_9,
+            -0.750_231_8,
+            -0.653_980_9,
+            -1.609_484_8,
+            -0.100_167_18,
+            -0.609_188_9,
+            -0.979_772_27,
+            -1.609_096_3,
+            -0.712_144_6,
+            0.303_722,
+            -0.777_314_3,
+            -0.251_455_25,
+        ],
+        (20, 3),
+        &Device::Cpu,
+    )?;
+    let r = Tensor::from_vec::<_, f32>(
+        vec![
+            0.409_972_43,
+            0.408_450_66,
+            0.257_865_4,
+            1.095_021_4,
+            -0.506_486_6,
+            0.099_775_404,
+            -0.653_973_4,
+            0.731_693_7,
+            -1.456_733,
+            1.608_935_4,
+            0.093_769_975,
+            -1.259_749,
+        ],
+        (20, 5),
+        &Device::Cpu,
+    )?;
+    let b = Tensor::from_vec::<_, f32>(
+        vec![
+            -0.568_515_96,
+            0.837_596_2,
+            1.783_660_7,
+            -0.195_424_66,
+            0.235_193_13,
+            1.914_243_3,
+            1.836_411_1,
+            1.324_532_4,
+        ],
+        (20,),
+        &Device::Cpu,
+    )?;
+    let h = Tensor::from_vec::<_, f32>(
+        vec![
+            0.027_581_785,
+            0.565_238_24,
+            -0.011_487_379,
+            0.670_640_05,
+            -0.492_925_05,
+        ],
+        (1, 1, 5),
+        &Device::Cpu,
+    )?;
+    let output = Tensor::from_vec::<_, f32>(
+        vec![
+            0.595_601_7,
+            -0.017_232_792,
+            0.110_355_72,
+            -0.493_231_74,
+            0.047_632_16,
+            0.635_845_2,
+            0.040_328_12,
+            -0.378_861_16,
+            -0.746_434,
+            0.200_809_09,
+            0.584_026_5,
+            0.145_328_82,
+        ],
+        (4, 1, 5),
+        &Device::Cpu,
+    )?;
+    let hn = Tensor::from_vec::<_, f32>(
+        vec![
+            0.742_045_16,
+            0.319_438_8,
+            -0.047_266_465,
+            -0.282_384_96,
+            0.271_313_4,
+        ],
+        (1, 1, 5),
+        &Device::Cpu,
+    )?;
+
+    let diff_close_enough = |a: &Tensor, b| -> Result<_> {
+        let diffs = a.sub(b)?.flatten_all()?.to_vec1::<f32>()?;
+        Ok(diffs.iter().all(|f| f.abs() < 0.0001))
+    };
+    let result = simple_eval(
+        &model,
+        HashMap::from_iter([
+            ("input".to_string(), input),
+            ("w".to_string(), w),
+            ("r".to_string(), r),
+            ("b".to_string(), b),
+            ("h".to_string(), h),
+        ]),
+    )?;
+    let actual_output = result.get("output").unwrap();
+    assert_eq!(output.dims(), actual_output.dims());
+    let actual_hn = result.get("hn").unwrap();
+    assert_eq!(hn.dims(), actual_hn.dims());
+    assert!(
+        diff_close_enough(&output, actual_output)?,
+        "output did not match expected\n{actual_output}\n{output}",
+    );
+    assert!(
+        diff_close_enough(&hn, actual_hn)?,
+        "hn did not match expected\n{actual_hn}\n{hn}",
+    );
     Ok(())
 }
 
