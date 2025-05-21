@@ -6,7 +6,7 @@ use criterion::{black_box, criterion_group, Criterion};
 use std::time::Instant;
 
 fn run(input: &Tensor) {
-    let _ = softmax_last_dim(&input).unwrap();
+    let _ = softmax_last_dim(input).unwrap();
 }
 
 const B: usize = 1;
@@ -16,7 +16,7 @@ const K: usize = 1024;
 fn run_softmax_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
     let elements = B * M * K;
 
-    let input = Tensor::rand(-1000.0f32, 1000.0f32, (B, M, K), &device)
+    let input = Tensor::rand(-1000.0f32, 1000.0f32, (B, M, K), device)
         .unwrap()
         .to_dtype(dtype)
         .unwrap();
