@@ -139,11 +139,11 @@ impl RotaryEmbedding {
 
     fn rope(&self, xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
         let x = match self.partial_dim {
-            None => candle_nn::rotary_emb::rope(&xs.contiguous()?, &cos, &sin)?,
+            None => candle_nn::rotary_emb::rope(&xs.contiguous()?, cos, sin)?,
             Some(dim) => {
                 let xs_rot = xs.i((.., .., .., ..dim))?.contiguous()?;
                 let xs_pass = xs.i((.., .., .., dim..))?;
-                let xs_rot = candle_nn::rotary_emb::rope(&xs_rot, &cos, &sin)?;
+                let xs_rot = candle_nn::rotary_emb::rope(&xs_rot, cos, sin)?;
                 Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)?.contiguous()?
             }
         };
