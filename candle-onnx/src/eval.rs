@@ -1968,7 +1968,7 @@ fn simple_eval_(
                 // with the shape of `[seq_length, batch_size, input_size]`.
                 let x = get(&node.input[0])?;
                 // XXX: depends on layout
-                let (seq_length, batch_size, input_size) = x.dims3()?;
+                let (seq_length, batch_size, _) = x.dims3()?;
                 // The weight tensor for the input gate.
                 // Concatenation of `Wi` and `WBi` (if bidirectional).
                 // The tensor has shape `[num_directions, hidden_size, input_size]`.
@@ -1980,7 +1980,7 @@ fn simple_eval_(
 
                 // The bias tensor for input gate.
                 // Concatenation of `[Wbi, Rbi]` and `[WBbi, RBbi]` (if bidirectional).
-                // This tensor has shape `[num_directions, 8*hidden_size]`.
+                // This tensor has shape `[num_directions, 2*hidden_size]`.
                 // Optional: If not specified - assumed to be 0.
                 let b_default: Tensor;
                 let b = match get_opt(3) {
@@ -2035,17 +2035,23 @@ fn simple_eval_(
                     }
                 }
 
+                // these all have [num_directions, ...] shapes
+                let w = w.get(0)?;
+                let r = r.get(0)?;
+                let b = b.get(0)?;
+                let idx_wb = Tensor::arange(0, hidden_size, x.device())?;
+                let idx_rb = Tensor::arange(hidden_size, 2 * hidden_size, x.device())?;
+                let wb = b.index_select(&idx_wb, 0)?;
+                let rb = b.index_select(&idx_rb, 0)?;
+                let mut h_t = initial_h.get(0)?;
                 let mut h_list: Vec<Tensor> = vec![];
-                let mut h_t = initial_h.clone();
-
                 for i in 0..seq_length {
                     let xs = x.get(i)?;
-                    let h = xs.matmul(&w.t()?)?.add(&h_t.matmul(&r.t()?)?)?;
-                    let b_sum = b
-                        .get(0)?
-                        .add(&b.get(1)?)?
-                        .reshape((num_directions, 2 * hidden_size as usize))?;
-                    let h = h.add(&b_sum)?;
+                    let h = xs
+                        .matmul(&w.t()?)?
+                        .add(&h_t.matmul(&r.t()?)?)?
+                        .add(&wb)?
+                        .add(&rb)?;
                     let h = choose_activation(&activations[0], &h)?;
                     h_list.push(h.to_owned());
                     h_t = h;
