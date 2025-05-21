@@ -82,7 +82,7 @@ pub fn main() -> Result<()> {
     // State for maintaining past key values between generations
     let mut past_key_values: Option<Vec<(Tensor, Tensor)>> = None;
     // Number of layers in the model (based on the input document, there are 36 layers)
-    let num_layers = 36;
+    let num_layers = 30;
     
     for _ in 0..args.max_tokens {
         let mut inputs = std::collections::HashMap::new();
@@ -176,8 +176,7 @@ pub fn main() -> Result<()> {
         
         // Apply temperature
         let logits_with_temp = if args.temperature > 0.0 {
-            let temp_tensor = Tensor::new(&[args.temperature], &device)?;
-            last_logits.div(&temp_tensor)?
+            (args.temperature.recip() as f64 * &last_logits)?
         } else {
             last_logits.clone()
         };
@@ -187,11 +186,11 @@ pub fn main() -> Result<()> {
         let next_token = probs.argmax(0)?;
         
         // Convert back to i64 for storing in our generated tokens vector
-        let next_token_id = next_token.to_scalar::<i64>()?;
-        generated_tokens.push(next_token_id);
+        let next_token_id = next_token.to_scalar::<u32>()?;
+        generated_tokens.push(next_token_id as i64);
         
         // Convert to u32 for tokenizer (which expects u32)
-        let next_token_u32 = next_token_id as u32;
+        let next_token_u32 = next_token_id;
         
         if let Some(token_str) = tokenizer.decode(&[next_token_u32], false).ok() {
             print!("{}", token_str);
