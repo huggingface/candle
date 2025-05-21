@@ -32,8 +32,8 @@ pub enum RopeScalingType {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct RopeScaling {
-    pub short_factor: Vec<f64>,
-    pub long_factor: Vec<f64>,
+    pub short_factor: Vec<f32>,
+    pub long_factor: Vec<f32>,
     #[serde(rename = "type")]
     pub type_: RopeScalingType,
 }
@@ -80,17 +80,56 @@ impl RotaryEmbedding {
             .as_ref()
             .map(|v| (v * cfg.head_dim() as f64) as usize);
         let dim = partial_dim.unwrap_or(cfg.head_dim());
-        let max_seq_len = cfg.max_position_embeddings;
-        let inv_freq: Vec<_> = (0..dim)
-            .step_by(2)
-            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
-            .collect();
-        let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
-        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(dtype)?
-            .reshape((max_seq_len, 1))?;
-        let freqs = t.matmul(&inv_freq)?;
+        let freqs = match cfg.rope_scaling.as_ref() {
+            None => {
+                let max_seq_len = cfg.max_position_embeddings;
+                let inv_freq: Vec<_> = (0..dim)
+                    .step_by(2)
+                    .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+                    .collect();
+                let inv_freq = Tensor::from_vec(inv_freq, (1, ()), dev)?.to_dtype(dtype)?;
+                let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
+                    .to_dtype(dtype)?
+                    .reshape((max_seq_len, 1))?;
+                t.matmul(&inv_freq)?
+            }
+            Some(rope_scaling) => {
+                let inv_freq_s: Vec<_> = (0..dim)
+                    .step_by(2)
+                    .zip(rope_scaling.short_factor.iter())
+                    .map(|(i, &f)| f / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+                    .collect();
+                let inv_freq_s = Tensor::from_vec(inv_freq_s, (1, ()), dev)?.to_dtype(dtype)?;
+                let max_seq_len = cfg.max_position_embeddings;
+                match cfg.original_max_position_embeddings {
+                    None => {
+                        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
+                            .to_dtype(dtype)?
+                            .reshape((max_seq_len, 1))?;
+                        t.matmul(&inv_freq_s)?
+                    }
+                    Some(original_max_seq_len) => {
+                        let t_s = Tensor::arange(0u32, original_max_seq_len as u32, dev)?
+                            .to_dtype(dtype)?
+                            .reshape((original_max_seq_len, 1))?;
+                        let freq_s = t_s.matmul(&inv_freq_s)?;
+                        let inv_freq_l: Vec<_> = (0..dim)
+                            .step_by(2)
+                            .zip(rope_scaling.long_factor.iter())
+                            .map(|(i, &f)| f / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+                            .collect();
+                        let inv_freq_l =
+                            Tensor::from_vec(inv_freq_l, (1, ()), dev)?.to_dtype(dtype)?;
+                        let t_l =
+                            Tensor::arange(original_max_seq_len as u32, max_seq_len as u32, dev)?
+                                .to_dtype(dtype)?
+                                .reshape(((), 1))?;
+                        let freq_l = t_l.matmul(&inv_freq_l)?;
+                        Tensor::cat(&[&freq_s, &freq_l], 0)?
+                    }
+                }
+            }
+        };
         Ok(Self {
             partial_dim,
             sin: freqs.sin()?,
