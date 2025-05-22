@@ -5171,6 +5171,50 @@ fn test_lstm() -> Result<()> {
 
 #[test]
 fn test_rnn() -> Result<()> {
+    // values generated from pytorch, so at least it's close enough to what pytorch does
+    /*
+    #!/usr/bin/env python3
+
+    import torch
+
+    rand_gen = torch.Generator()
+    rand_gen.manual_seed(42)
+    input_size = 3
+    hidden_size = 5
+    batch_size = 1
+    sequence_length = 4
+    number_directions = 1
+    rnn = torch.nn.RNN(input_size,hidden_size)
+    weight_ih_l0 = torch.randn(rnn.weight_ih_l0.shape, generator=rand_gen)
+    weight_hh_l0 = torch.randn(rnn.weight_hh_l0.shape, generator=rand_gen)
+    bias_ih_l0 = torch.randn(rnn.bias_ih_l0.shape, generator=rand_gen)
+    bias_hh_l0 = torch.randn(rnn.bias_hh_l0.shape, generator=rand_gen)
+    rnn.weight_ih_l0 = torch.nn.Parameter(weight_ih_l0)
+    rnn.weight_hh_l0 = torch.nn.Parameter(weight_hh_l0)
+    rnn.bias_ih_l0 = torch.nn.Parameter(bias_ih_l0)
+    rnn.bias_hh_l0 = torch.nn.Parameter(bias_hh_l0)
+    input = torch.randn(sequence_length, batch_size, input_size, generator=rand_gen)
+    hx = torch.randn(number_directions, batch_size, hidden_size, generator=rand_gen)
+    output, hn = rnn(input, hx)
+
+    def fmt_tensor(t):
+        return "Tensor::from_vec::<_, f32>(vec!"+  str(t.flatten().tolist()) + ", (" + "".join([str(n)+"," for n in t.shape])+"), &Device::Cpu)?"
+
+    print("let input_size = ", input_size, ";")
+    print("let hidden_size = ", hidden_size, ";")
+    print("let batch_size = ", batch_size, ";")
+    print("let sequence_length = ", sequence_length, ";")
+    print("let number_directions = ", number_directions, ";")
+    print("let weight_ih_l0 = ", fmt_tensor(rnn.weight_ih_l0), ";")
+    print("let weight_hh_l0 = ", fmt_tensor(rnn.weight_hh_l0), ";")
+    print("let bias_ih_l0 = ", fmt_tensor(rnn.bias_ih_l0), ";")
+    print("let bias_hh_l0 = ", fmt_tensor(rnn.bias_hh_l0), ";")
+    print("let input = ", fmt_tensor(input), ";")
+    print("let hx = ", fmt_tensor(hx), ";")
+    print("let output = ", fmt_tensor(output), ";")
+    print("let hn = ", fmt_tensor(hn), ";")
+    */
+
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#RNN
     let model = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
