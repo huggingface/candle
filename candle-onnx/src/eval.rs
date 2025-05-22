@@ -2050,8 +2050,8 @@ fn simple_eval_(
                     let h = xs
                         .matmul(&w.t()?)?
                         .add(&h_t.matmul(&r.t()?)?)?
-                        .add(&wb)?
-                        .add(&rb)?;
+                        .add(&wb.unsqueeze(0)?)?
+                        .add(&rb.unsqueeze(0)?)?;
                     let h = choose_activation(&activations[0], &h)?;
                     h_list.push(h.to_owned());
                     h_t = h;
@@ -2060,6 +2060,10 @@ fn simple_eval_(
                 let h =
                     h.reshape((seq_length, num_directions, batch_size, hidden_size as usize))?;
                 values.insert(node.output[0].clone(), h);
+                values.insert(
+                    node.output[1].clone(),
+                    h_t.reshape((num_directions, batch_size, hidden_size as usize))?,
+                );
             }
             // https://onnx.ai/onnx/operators/onnx__Xor.html
             "Xor" => {
