@@ -3,6 +3,33 @@ use crate::models::with_tracing::{linear, linear_no_bias, Linear};
 use candle::{Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Conv1d, Conv1dConfig, Embedding, LayerNorm, Module, VarBuilder};
 
+type HookFn = Box<dyn Fn(&Tensor) -> Result<()>>;
+
+#[derive(Debug, Clone)]
+struct HookedLinear {
+    traced_linear: crate::models::with_tracing::Linear,
+    hook: Option<HookFn>,
+}
+
+impl HookedLinear {
+    fn new(traced_linear: crate::models::with_tracing::Linear) -> Self {
+        Self { traced_linear, hook: None }
+    }
+
+    fn forward(&self, input: &Tensor) -> Result<Tensor> {
+        let output = self.traced_linear.forward(input)?;
+        if let Some(hook_fn) = &self.hook {
+            (*hook_fn)(&output)?;
+        }
+        Ok(output)
+    }
+
+    fn set_hook(&mut self, hook: Option<HookFn>) {
+        self.hook = hook;
+    }
+}
+
+
 fn conv1d(
     in_channels: usize,
     out_channels: usize,
@@ -25,8 +52,8 @@ fn layer_norm(size: usize, vb: VarBuilder) -> Result<LayerNorm> {
 #[derive(Debug, Clone)]
 struct MultiHeadAttention {
     query: Linear,
-    key: Linear,
-    value: Linear,
+    key: HookedLinear,
+    value: HookedLinear,
     out: Linear,
     n_head: usize,
     span: tracing::Span,
@@ -41,8 +68,8 @@ impl MultiHeadAttention {
         let softmax_span = tracing::span!(tracing::Level::TRACE, "multi-head-attn-softmax");
         let matmul_span = tracing::span!(tracing::Level::TRACE, "multi-head-attn-matmul");
         let query = linear(n_state, n_state, vb.pp("q_proj"))?;
-        let value = linear(n_state, n_state, vb.pp("v_proj"))?;
-        let key = linear_no_bias(n_state, n_state, vb.pp("k_proj"))?;
+        let value = HookedLinear::new(linear(n_state, n_state, vb.pp("v_proj"))?);
+        let key = HookedLinear::new(linear_no_bias(n_state, n_state, vb.pp("k_proj"))?);
         let out = linear(n_state, n_state, vb.pp("out_proj"))?;
         Ok(Self {
             query,
@@ -89,6 +116,14 @@ impl MultiHeadAttention {
         let wv = self.qkv_attention(&q, &k, &v, mask)?;
         let out = self.out.forward(&wv)?;
         Ok(out)
+    }
+
+    pub fn set_key_hook(&mut self, hook: Option<HookFn>) {
+        self.key.set_hook(hook);
+    }
+
+    pub fn set_value_hook(&mut self, hook: Option<HookFn>) {
+        self.value.set_hook(hook);
     }
 
     fn reshape_head(&self, x: &Tensor) -> Result<Tensor> {
@@ -140,7 +175,7 @@ impl MultiHeadAttention {
 struct ResidualAttentionBlock {
     attn: MultiHeadAttention,
     attn_ln: LayerNorm,
-    cross_attn: Option<(MultiHeadAttention, LayerNorm)>,
+    pub cross_attn: Option<(MultiHeadAttention, LayerNorm)>,
     mlp_linear1: Linear,
     mlp_linear2: Linear,
     mlp_ln: LayerNorm,
@@ -305,7 +340,7 @@ impl AudioEncoder {
 pub struct TextDecoder {
     token_embedding: Embedding,
     positional_embedding: Tensor,
-    blocks: Vec<ResidualAttentionBlock>,
+    pub blocks: Vec<ResidualAttentionBlock>,
     ln: LayerNorm,
     mask: Tensor,
     span: tracing::Span,
