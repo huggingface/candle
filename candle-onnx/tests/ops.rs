@@ -6296,6 +6296,146 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
     }
     }
 
+    {
+    println!("\n-------------------------------", );
+    println!("Test softmaxcrossentropy_sum_log_prob");
+
+    let device = &Device::Cpu;
+
+    let x_data = vec![
+        1.0, 2.0, 3.0, 6.0, 5.0,  // sample 0
+        1.0, 3.0, 2.0, 4.0, 0.0,  // sample 1
+        0.5, 0.5, 0.5, 0.5, 0.5,  // sample 2 (uniform logits)
+    ];
+    let labels_data = vec![3i64, 1, 0];
+
+    let logits = Tensor::from_vec(x_data.clone(), (3, 5), device)?;
+    let labels = Tensor::from_vec(labels_data.clone(), (3,), device)?;
+
+    let mut node = NodeProto {
+        op_type: "SoftmaxCrossEntropyLoss".to_string(),
+        input: vec!["x".to_string(), "y".to_string()],
+        output: vec!["z".to_string(), "log_prob".to_string()],
+        ..Default::default()
+    };
+    node.attribute.push(AttributeProto {
+        name: "reduction".to_string(),
+        r#type: AttributeType::String as i32,
+        s: b"sum".to_vec(),
+        ..Default::default()
+    });
+
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![node],
+        input: vec![
+            ValueInfoProto { name: "x".to_string(), ..Default::default() },
+            ValueInfoProto { name: "y".to_string(), ..Default::default() },
+        ],
+        output: vec![
+            ValueInfoProto { name: "z".to_string(), ..Default::default() },
+            ValueInfoProto { name: "log_prob".to_string(), ..Default::default() },
+        ],
+        ..Default::default()
+    }));
+
+    let mut inputs = HashMap::new();
+    inputs.insert("x".to_string(), logits.clone());
+    inputs.insert("y".to_string(), labels.clone());
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    assert_eq!(eval.len(), 2);
+
+    let loss = eval.get("z").unwrap().to_vec0::<f32>()?;
+    let log_prob = eval.get("log_prob").unwrap().to_vec2::<f32>()?;
+
+    let expected_loss = 3.4278827;
+    assert!(
+        (loss - expected_loss).abs() < 1e-3,
+        "Expected loss {}, got {}", expected_loss, loss
+    );
+
+    println!("✅ Loss: {}", loss);
+    println!("log_prob: {:?}", log_prob);
+    println!("labels: {:?}", labels_data);
+    println!("logits: {:?}", x_data);
+    let expected_log_prob = vec![
+        vec![-5.3665304, -4.3665304, -3.3665302, -0.36653024, -1.3665302],
+        vec![-3.4519143, -1.4519144, -2.4519143, -0.45191443, -4.4519143],
+        vec![-1.609438,  -1.609438,  -1.609438,  -1.609438,  -1.609438],
+    ];
+
+    for (row_idx, (row_actual, row_expected)) in log_prob.iter().zip(expected_log_prob.iter()).enumerate() {
+        for (col_idx, (a, e)) in row_actual.iter().zip(row_expected.iter()).enumerate() {
+            assert!(
+                (a - e).abs() < 1e-4,
+                "log_prob[{}, {}]: expected {}, got {}",
+                row_idx,
+                col_idx,
+                e,
+                a
+            );
+        }
+    }
+    }
+
+    {
+    println!("\n-------------------------------", );
+    println!("Testing SoftmaxCrossEntropyLoss with 7D input and reduction=none (with log_prob)");
+    use candle::Shape;
+
+    let device = &Device::Cpu;
+    let shape = &[3, 5, 6, 6, 5, 3, 4];
+    let labels_shape = &[3, 6, 6, 5, 3, 4];
+    let total_elems = shape[0] * shape[1] * shape[2] * shape[3] * shape[4] * shape[5] * shape[6];
+
+    // deterministic dummy data
+    let x_data: Vec<f32> = (0..total_elems).map(|i| (i % 10) as f32).collect();
+    let labels_data: Vec<i64> = (0..(total_elems / shape[1])).map(|i| (i % shape[1]) as i64).collect();
+
+    let x = Tensor::from_vec(x_data, &shape[..], device)?;
+    let labels = Tensor::from_vec(labels_data, labels_shape, device)?;
+
+    let mut node = NodeProto {
+        op_type: "SoftmaxCrossEntropyLoss".to_string(),
+        input: vec!["x".to_string(), "y".to_string()],
+        output: vec!["z".to_string(), "log_prob".to_string()],
+        ..Default::default()
+    };
+    node.attribute.push(AttributeProto {
+        name: "reduction".to_string(),
+        r#type: AttributeType::String as i32,
+        s: b"none".to_vec(),
+        ..Default::default()
+    });
+
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![node],
+        input: vec![
+            ValueInfoProto { name: "x".to_string(), ..Default::default() },
+            ValueInfoProto { name: "y".to_string(), ..Default::default() },
+        ],
+        output: vec![
+            ValueInfoProto { name: "z".to_string(), ..Default::default() },
+            ValueInfoProto { name: "log_prob".to_string(), ..Default::default() },
+        ],
+        ..Default::default()
+    }));
+
+    let mut inputs = HashMap::new();
+    inputs.insert("x".to_string(), x.clone());
+    inputs.insert("y".to_string(), labels.clone());
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    assert_eq!(eval.len(), 2);
+
+    let loss = eval.get("z").unwrap();
+    let log_prob = eval.get("log_prob").unwrap();
+
+    assert_eq!(loss.shape(), &Shape::from(&[3, 6, 6, 5, 3, 4][..]));
+    assert_eq!(log_prob.shape(), &Shape::from(&[3, 5, 6, 6, 5, 3, 4][..]));
+
+    println!("✅ Shapes OK: loss = {:?}, log_prob = {:?}", loss.shape(), log_prob.shape());
+    }
     
     Ok(())
 }

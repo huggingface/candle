@@ -1971,7 +1971,6 @@ fn simple_eval_(
                 let labels = raw_labels.unsqueeze(1)?;
 
                 let log_probs = log_softmax(&logits, 1)?;
-                println!("log_probs: {:?}", log_probs.to_vec2::<f32>()?);
 
                 let ignore_index = get_attr_opt::<i64>(node, "ignore_index")?;
 
@@ -1996,8 +1995,6 @@ fn simple_eval_(
                     .squeeze(1)?; // [N]
                 let mut loss = nll.reshape((n, d))?;
 
-                println!("gathered shape: {:?}", nll.shape());
-
                 let reduction = get_attr_opt::<str>(node, "reduction")?
                     .unwrap_or("mean");
 
@@ -2008,7 +2005,6 @@ fn simple_eval_(
                 };
 
                 if let Some(weights) = &weights {
-                    println!("weights: {:?}", weights.to_vec1::<f32>()?);
                     let labels_flat = labels.reshape((n * d,))?;
                     let class_weights = weights.gather(&labels_flat, 0)?;  // shape: [N*D]
                     let mut class_weights = class_weights.reshape((n, d))?;     // shape: [N, D]
@@ -2050,16 +2046,11 @@ fn simple_eval_(
                         _ => bail!("unsupported reduction mode: {reduction} in SoftmaxCrossEntropyLoss"),
                     };
                 }
-
-                println!("loss shape: {:?}", loss.shape());
-                println!("log_probs shape: {:?}", log_probs.shape());
-
         
                 values.insert(node.output[0].clone(), loss);
                 if get_log_prob {
                     values.insert(node.output[1].clone(), log_probs.clone());
                 }
-                println!("Ending SoftmaxCrossEntropyLoss");
             }
 
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
