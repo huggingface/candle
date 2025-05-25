@@ -1955,7 +1955,14 @@ fn simple_eval_(
                 let output = input.sign()?;
                 values.insert(node.output[0].clone(), output);
             }
+            "HardSwish" => {
+                let input = get(&node.input[0])?;
+                let hard_sigmoid = candle_nn::ops::hard_sigmoid(&input)?;
+                let output = input * hard_sigmoid;
+                values.insert(node.output[0].clone(), output?);
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
+            
         }
     }
     graph
