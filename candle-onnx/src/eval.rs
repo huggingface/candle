@@ -986,11 +986,6 @@ fn simple_eval_(
                 let output = input.gelu_erf()?;
                 values.insert(node.output[0].clone(), output);
             }
-            "Elu" => {
-                let input = get(&node.input[0])?;
-                let output = input.gelu_erf()?;
-                values.insert(node.output[0].clone(), output);
-            }
             "Relu" => {
                 let input = get(&node.input[0])?;
                 let output = input.relu()?;
