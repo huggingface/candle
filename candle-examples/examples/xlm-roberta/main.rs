@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Error as E, Result};
 use candle::{Device, Tensor};
+use candle_nn::ops::softmax;
 use candle_nn::VarBuilder;
 use candle_transformers::models::xlm_roberta::{
     Config, XLMRobertaForMaskedLM, XLMRobertaForSequenceClassification,
@@ -17,12 +18,14 @@ enum Model {
     BgeRerankerBaseV2,
     XLMRobertaBase,
     XLMRobertaLarge,
+    XLMRFormalityClassifier,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Task {
     FillMask,
     Reranker,
+    TextClassification,
 }
 
 #[derive(Parser, Debug)]
@@ -82,6 +85,12 @@ fn main() -> Result<()> {
                 Model::BgeRerankerLarge => "BAAI/bge-reranker-large".to_string(),
                 Model::BgeRerankerBaseV2 => "BAAI/bge-reranker-base-v2-m3".to_string(),
                 _ => anyhow::bail!("XLM-RoBERTa models are not supported for reranker task"),
+            },
+            Task::TextClassification => match args.model {
+                Model::XLMRFormalityClassifier => "s-nlp/xlmr_formality_classifier".to_string(),
+                _ => anyhow::bail!(
+                    "XLM-RoBERTa models are not supported for text classification task"
+                ),
             },
         },
     };
@@ -216,6 +225,36 @@ fn main() -> Result<()> {
                 println!("Rank #{:<2} | Score: {:.4} | {}", rank + 1, score[0], doc);
             });
             println!("{:-<80}", "");
+        }
+        Task::TextClassification => {
+            let sentences = vec![
+                "I like you. I love you".to_string(),
+                "Hey, what's up?".to_string(),
+                "Siema, co porabiasz?".to_string(),
+                "I feel deep regret and sadness about the situation in international politics."
+                    .to_string(),
+            ];
+            let model = XLMRobertaForSequenceClassification::new(2, &config, vb)?;
+            let input_ids = tokenize_batch(&tokenizer, TokenizeInput::Single(&sentences), &device)?;
+
+            let attention_mask =
+                get_attention_mask(&tokenizer, TokenizeInput::Single(&sentences), &device)?;
+            let token_type_ids = Tensor::zeros(input_ids.dims(), input_ids.dtype(), &device)?;
+
+            let logits = model
+                .forward(&input_ids, &attention_mask, &token_type_ids)?
+                .to_dtype(candle::DType::F32)?;
+
+            let probabilities = softmax(&logits, 1)?;
+            let probs_vec = probabilities.to_vec2::<f32>()?;
+
+            println!("Formality Scores:");
+            for (i, (text, probs)) in sentences.iter().zip(probs_vec.iter()).enumerate() {
+                println!("Text {}: \"{}\"", i + 1, text);
+                println!("  formal: {:.4}", probs[0]);
+                println!("  informal: {:.4}", probs[1]);
+                println!();
+            }
         }
     }
     Ok(())
