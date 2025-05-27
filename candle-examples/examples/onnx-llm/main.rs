@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use anyhow::{Result, bail};
+use anyhow::{Result};
 use candle::{DType, Device, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use clap::{Parser, ValueEnum};
@@ -93,8 +93,7 @@ pub fn main() -> Result<()> {
     
     let tokenizer_path = tokenizer_repo.get("tokenizer.json")?;
     let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)?;
-    
-    // Get tokens and convert them to i64
+
     let tokens_u32 = tokenizer.encode(args.prompt.as_str(), true)
         .map_err(anyhow::Error::msg)?
         .get_ids()
@@ -104,7 +103,6 @@ pub fn main() -> Result<()> {
     
     println!("Loading ONNX model from {:?}", model_path);
     let model = candle_onnx::read_file(model_path)?;
-    let graph = model.graph.as_ref().unwrap();
     
     let mut generated_tokens = tokens.clone();
     print!("{}", args.prompt);
@@ -125,62 +123,48 @@ pub fn main() -> Result<()> {
         LogitsProcessor::from_sampling(args.seed, sampling)
     };
     
-    // State for maintaining past key values between generations
     let mut past_key_values: Option<Vec<(Tensor, Tensor)>> = None;
-    // Number of layers in the model (based on the input document, there are 36 layers)
     let num_layers = 30;
     
     for _ in 0..args.max_tokens {
         let mut inputs = std::collections::HashMap::new();
         
         if let Some(past_kv) = &past_key_values {
-            // If we have past_key_values, only process the last token
             let last_token = vec![generated_tokens[generated_tokens.len() - 1]];
             let input_tensor = Tensor::new(last_token, &device)?.unsqueeze(0)?;
             inputs.insert("input_ids".to_string(), input_tensor);
             
-            // Add attention mask for all tokens seen so far
             let seq_len = generated_tokens.len();
             let attention_mask = vec![vec![1i64; seq_len]];
             let attention_mask_tensor = Tensor::new(attention_mask, &device)?;
             inputs.insert("attention_mask".to_string(), attention_mask_tensor);
             
-            // Add position_ids for the current token
-            // Position IDs are usually just the indices of the tokens in the sequence
             let position_ids = vec![vec![(seq_len - 1) as i64]];
             let position_ids_tensor = Tensor::new(position_ids, &device)?;
             inputs.insert("position_ids".to_string(), position_ids_tensor);
             
-            // Add past_key_values
             for (i, (key, value)) in past_kv.iter().enumerate() {
                 inputs.insert(format!("past_key_values.{}.key", i), key.clone());
                 inputs.insert(format!("past_key_values.{}.value", i), value.clone());
             }
         } else {
-            // First pass, process all tokens without past_key_values
             let input_tensor = Tensor::new(generated_tokens.clone(), &device)?.unsqueeze(0)?;
             inputs.insert("input_ids".to_string(), input_tensor);
             
-            // Add attention mask (all 1s for the current sequence)
             let seq_len = generated_tokens.len();
             let attention_mask = vec![vec![1i64; seq_len]];
             let attention_mask_tensor = Tensor::new(attention_mask, &device)?;
             inputs.insert("attention_mask".to_string(), attention_mask_tensor);
             
-            // Add position_ids (indices of the sequence)
             let position_ids: Vec<i64> = (0..seq_len as i64).collect();
             let position_ids_tensor = Tensor::new(position_ids, &device)?.unsqueeze(0)?;
             inputs.insert("position_ids".to_string(), position_ids_tensor);
             
-            // Initialize empty past_key_values if needed by the model
-            // This is only for the first pass; most models don't require this
             for i in 0..num_layers {
-                // Create empty tensors with the right shape for keys and values
-                // The shape depends on your model architecture
                 let batch_size = 1;
-                let num_heads = 3; // Adjust based on your model
-                let head_dim = 64; // Adjust based on your model
-                let seq_len = 0;    // Empty sequence for first run
+                let num_heads = 3; 
+                let head_dim = 64; 
+                let seq_len = 0;  
                 
                 // Create empty key and value tensors
                 let empty_key = Tensor::zeros(&[batch_size, num_heads, seq_len, head_dim], DType::F32, &device)?;
@@ -209,17 +193,15 @@ pub fn main() -> Result<()> {
         let logits_dim = logits.dims();
         let seq_len = logits_dim[1];
 
-        // Get the last token's logits
         let next_token_id = logits_processor.sample(&logits.get(0)?.get(seq_len - 1)?)?;
         generated_tokens.push(next_token_id as i64);
         
         if let Some(token_str) = tokenizer.decode(&[next_token_id], true).ok() {
-            print!("{}({})", token_str, next_token_id);
+            print!("{}", token_str);
             std::io::stdout().flush()?;
         }
         
-        // Check for EOS token (need to use the u32 version for comparison with tokenizer output)
-        if let Some(eos_id) = tokenizer.token_to_id("</s>") {
+        if let Some(eos_id) = tokenizer.token_to_id("<|endoftext|>") {
             if next_token_id == eos_id {
                 break;
             }
