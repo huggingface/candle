@@ -2049,7 +2049,6 @@ fn simple_eval_(
                 
                 // For batched inputs, we need to handle each matrix separately
                 let dims = input.dims();
-                println!("{}", dims.len());
                 if dims.len() < 2 {
                     bail!("Trilu expects input with at least 2 dimensions: {:?}", dims);
                 }
@@ -2059,50 +2058,28 @@ fn simple_eval_(
                 let m = dims[dims.len() - 1];
                 let max_dim = std::cmp::max(n, m);
                 
-                // Create base triangular matrix using the provided functions
-                let mask = if upper != 0 {
-                    Tensor::triu2(max_dim, input.dtype(), input.device())?
-                } else {
-                    Tensor::tril2(max_dim, input.dtype(), input.device())?
-                };
-                
                 // Handle the diagonal offset k
-                let adjusted_mask = if k != 0 {
-                    // Shift the mask by k positions
-                    if upper != 0 {
-                        // For upper triangular with positive k, we need to shift up
-                        // For upper triangular with negative k, we need to shift down
-                        if k > 0 {
-                            let zero_rows = Tensor::zeros((k as usize, max_dim), input.dtype(), input.device())?;
-                            let mask_rows = mask.narrow(0, 0, max_dim - k as usize)?;
-                            Tensor::cat(&[&zero_rows, &mask_rows], 0)?
-                        } else {
-                            let mask_rows = mask.narrow(0, -k as usize, max_dim + k as usize)?;
-                            let zero_rows = Tensor::zeros((-k as usize, max_dim), input.dtype(), input.device())?;
-                            Tensor::cat(&[&mask_rows, &zero_rows], 0)?
-                        }
-                    } else {
-                        // For lower triangular with positive k, we need to shift right
-                        // For lower triangular with negative k, we need to shift left
-                        if k > 0 {
-                            let mask_rows = mask.narrow(0, k as usize, max_dim - k as usize)?;
-                            let zero_rows = Tensor::zeros((k as usize, max_dim), input.dtype(), input.device())?;
-                            Tensor::cat(&[&mask_rows, &zero_rows], 0)?
-                        } else {
-                            let zero_rows = Tensor::zeros((-k as usize, max_dim), input.dtype(), input.device())?;
-                            let mask_rows = mask.narrow(0, 0, max_dim + k as usize)?;
-                            Tensor::cat(&[&zero_rows, &mask_rows], 0)?
+                let mask = if k != 0 {
+                    let mut data = vec![0.0f32; n * m];
+                    for i in 0..n {
+                        for j in 0..m {
+                            if (upper != 0 && (j as i64) >= (i as i64) + k) || (upper == 0 && (j as i64) <= (i as i64) + k) {
+                                data[i * m + j] = 1.0;
+                            }
                         }
                     }
+                    Tensor::from_vec(data, (n, m), input.device())?
+                } else if upper == 0  {
+                    Tensor::tril2(max_dim, input.dtype(), input.device())?
                 } else {
-                    mask
+                    Tensor::triu2(max_dim, input.dtype(), input.device())?
                 };
                 
                 // If n != m, we need to resize the mask
                 let final_mask = if n != m {
-                    adjusted_mask.narrow(0, 0, n)?.narrow(1, 0, m)?
+                    mask.narrow(0, 0, n)?.narrow(1, 0, m)?
                 } else {
-                    adjusted_mask
+                    mask
                 };
                 
                 // If we have a batched input, broadcast the mask to match the input shape

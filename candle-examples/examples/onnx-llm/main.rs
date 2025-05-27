@@ -6,6 +6,7 @@ extern crate accelerate_src;
 
 use anyhow::{Result, bail};
 use candle::{DType, Device, Tensor};
+use candle_transformers::generation::{LogitsProcessor, Sampling};
 use clap::{Parser, ValueEnum};
 use hf_hub::api::sync::Api;
 use std::io::Write;
@@ -41,9 +42,39 @@ struct Args {
     /// The temperature used for sampling.
     #[arg(long, default_value_t = 0.8)]
     temperature: f32,
+
+    /// Nucleus sampling probability cutoff.
+    #[arg(long)]
+    top_p: Option<f64>,
+
+    /// Only sample among the top K samples.
+    #[arg(long)]
+    top_k: Option<usize>,
+
+    /// The seed to use when generating random samples.
+    #[arg(long, default_value_t = 299792458)]
+    seed: u64,
 }
 
 pub fn main() -> Result<()> {
+
+    // let model_path = std::path::PathBuf::from("/Users/kb/Documents/webclones/onnx-graph/trilu_test.onnx");
+    // let model = candle_onnx::read_file(model_path)?;
+    // let graph = model.graph.as_ref().unwrap();
+
+    // let mut inputs = std::collections::HashMap::new();
+
+    // inputs.insert("input".to_string(), Tensor::from_vec(vec![1_f32,2.,3.,4.,5.,6.,7.,8.,9.], (3,3), &Device::Cpu)?);
+
+    // let outputs = candle_onnx::simple_eval(&model, inputs)?;
+
+    // let out = outputs.get("output").unwrap();
+
+    // println!("{}", out);
+
+    // return Ok(())
+
+
     let args = Args::parse();
     let device = if args.cpu { Device::Cpu } else { Device::cuda_if_available(0)? };
     
@@ -78,6 +109,21 @@ pub fn main() -> Result<()> {
     let mut generated_tokens = tokens.clone();
     print!("{}", args.prompt);
     std::io::stdout().flush()?;
+
+    let mut logits_processor = {
+        let temperature = args.temperature as f64;
+        let sampling = if temperature <= 0. {
+            Sampling::ArgMax
+        } else {
+            match (args.top_k, args.top_p) {
+                (None, None) => Sampling::All { temperature },
+                (Some(k), None) => Sampling::TopK { k, temperature },
+                (None, Some(p)) => Sampling::TopP { p, temperature },
+                (Some(k), Some(p)) => Sampling::TopKThenTopP { k, p, temperature },
+            }
+        };
+        LogitsProcessor::from_sampling(args.seed, sampling)
+    };
     
     // State for maintaining past key values between generations
     let mut past_key_values: Option<Vec<(Tensor, Tensor)>> = None;
@@ -147,59 +193,34 @@ pub fn main() -> Result<()> {
         
         // Perform inference
         let outputs = candle_onnx::simple_eval(&model, inputs)?;
-        
-        // Extract logits and present KV cache for next iteration
-        if !outputs.contains_key("logits") {
-            bail!("Model output doesn't contain 'logits'");
-        }
-        
+
         let logits = outputs.get("logits").unwrap();
         
-        // Update past_key_values for next iteration if present in outputs
-        if outputs.contains_key("present.0.key") {
-            // Extract present key values for all layers
-            let mut new_past_kv = Vec::with_capacity(num_layers);
-            for i in 0..num_layers {
-                let key = outputs.get(&format!("present.{}.key", i))
-                    .ok_or_else(|| anyhow::anyhow!("Missing present.{}.key", i))?;
-                let value = outputs.get(&format!("present.{}.value", i))
-                    .ok_or_else(|| anyhow::anyhow!("Missing present.{}.value", i))?;
-                new_past_kv.push((key.clone(), value.clone()));
-            }
-            past_key_values = Some(new_past_kv);
+        let mut new_past_kv = Vec::with_capacity(num_layers);
+        for i in 0..num_layers {
+            let key = outputs.get(&format!("present.{}.key", i))
+                .ok_or_else(|| anyhow::anyhow!("Missing present.{}.key", i))?;
+            let value = outputs.get(&format!("present.{}.value", i))
+                .ok_or_else(|| anyhow::anyhow!("Missing present.{}.value", i))?;
+            new_past_kv.push((key.clone(), value.clone()));
         }
+        past_key_values = Some(new_past_kv);
         
-        // Get the last token's logits
         let logits_dim = logits.dims();
-        let seq_len = logits_dim[1]; // Assuming shape is [batch, seq_len, vocab]
-        let last_logits = logits.get(0)?.get(seq_len - 1)?;
-        
-        // Apply temperature
-        let logits_with_temp = if args.temperature > 0.0 {
-            (args.temperature.recip() as f64 * &last_logits)?
-        } else {
-            last_logits.clone()
-        };
-        
-        // Apply softmax and sample
-        let probs = candle_nn::ops::softmax(&logits_with_temp, 0)?;
-        let next_token = probs.argmax(0)?;
-        
-        // Convert back to i64 for storing in our generated tokens vector
-        let next_token_id = next_token.to_scalar::<u32>()?;
+        let seq_len = logits_dim[1];
+
+        // Get the last token's logits
+        let next_token_id = logits_processor.sample(&logits.get(0)?.get(seq_len - 1)?)?;
         generated_tokens.push(next_token_id as i64);
         
-        // Convert to u32 for tokenizer (which expects u32)
-        let next_token_u32 = next_token_id;
-        
-        if let Some(token_str) = tokenizer.decode(&[next_token_u32], false).ok() {
-            print!("{}", token_str);
+        if let Some(token_str) = tokenizer.decode(&[next_token_id], true).ok() {
+            print!("{}({})", token_str, next_token_id);
             std::io::stdout().flush()?;
         }
         
         // Check for EOS token (need to use the u32 version for comparison with tokenizer output)
         if let Some(eos_id) = tokenizer.token_to_id("</s>") {
-            if next_token_u32 == eos_id {
+            if next_token_id == eos_id {
                 break;
             }
         }
