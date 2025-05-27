@@ -1955,6 +1955,37 @@ fn simple_eval_(
                 let output = input.sign()?;
                 values.insert(node.output[0].clone(), output);
             }
+            // https://onnx.ai/onnx/operators/onnx__OneHot.html
+            "OneHot" => {
+                let indices = get(&node.input[0])?;
+                let depth_tensor = get(&node.input[1])?;
+                let values_tensor = get(&node.input[2])?;
+
+                let depth = depth_tensor.to_scalar::<i64>()? as usize;
+                let values_vec = values_tensor.to_vec1::<f32>()?;
+                if values_vec.len() != 2 {
+                    return Err(candle::Error::Msg(
+                        "OneHot: expected 2-element values tensor".to_string(),
+                    ));
+                }
+                let off_value = values_vec[0];
+                let on_value = values_vec[1];
+
+                let axis = node
+                    .attribute
+                    .iter()
+                    .find(|attr| attr.name == "axis")
+                    .map(|attr| attr.i)
+                    .unwrap_or(-1);
+                if axis != -1 {
+                    return Err(candle::Error::Msg(
+                        "OneHot: only axis = -1 is currently supported".to_string(),
+                    ));
+                }
+
+                let output = candle_nn::encoding::one_hot(indices.clone(), depth, on_value, off_value)?;
+                values.insert(node.output[0].clone(), output);
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
