@@ -147,13 +147,13 @@ pub fn main() -> Result<()> {
             let position_ids_tensor = Tensor::new(position_ids, &device)?.unsqueeze(0)?;
             inputs.insert("position_ids".to_string(), position_ids_tensor);
 
+            // Create empty key and value tensors
             for i in 0..num_layers {
                 let batch_size = 1;
                 let num_heads = 3;
                 let head_dim = 64;
                 let seq_len = 0;
 
-                // Create empty key and value tensors
                 let empty_key = Tensor::zeros(
                     &[batch_size, num_heads, seq_len, head_dim],
                     DType::F32,
@@ -170,7 +170,6 @@ pub fn main() -> Result<()> {
             }
         }
 
-        // Perform inference
         let outputs = candle_onnx::simple_eval(&model, inputs)?;
 
         let logits = outputs.get("logits").unwrap();

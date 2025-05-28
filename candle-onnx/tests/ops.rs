@@ -6119,7 +6119,6 @@ fn test_trilu_operation() -> Result<()> {
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
         let results = z.to_vec2::<i64>()?;
 
-        // Upper triangular matrix (default k=0)
         assert_eq!(
             results,
             vec![
@@ -6186,7 +6185,6 @@ fn test_trilu_operation() -> Result<()> {
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
         let results = z.to_vec2::<i64>()?;
 
-        // Upper triangular with k=1 (one diagonal above main)
         assert_eq!(
             results,
             vec![
@@ -6243,7 +6241,6 @@ fn test_trilu_operation() -> Result<()> {
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
         let results = z.to_vec2::<i64>()?;
 
-        // Upper triangular with k=-1 (one diagonal below main)
         assert_eq!(
             results,
             vec![
@@ -6262,7 +6259,7 @@ fn test_trilu_operation() -> Result<()> {
             ref_attr_name: "upper".to_string(),
             i: 0, // 0 means false, use lower triangular
             doc_string: "upper".to_string(),
-            r#type: 2, // INT
+            r#type: 2,
             f: 0.0,
             s: vec![],
             t: None,
@@ -6336,9 +6333,9 @@ fn test_trilu_operation() -> Result<()> {
         let att_upper = AttributeProto {
             name: "upper".to_string(),
             ref_attr_name: "upper".to_string(),
-            i: 0, // 0 means false, use lower triangular
+            i: 0,
             doc_string: "upper".to_string(),
-            r#type: 2, // INT
+            r#type: 2,
             f: 0.0,
             s: vec![],
             t: None,
@@ -6398,7 +6395,6 @@ fn test_trilu_operation() -> Result<()> {
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
         let results = z.to_vec2::<i64>()?;
 
-        // Lower triangular with k=-1 (one diagonal below main)
         assert_eq!(
             results,
             vec![
@@ -6415,9 +6411,9 @@ fn test_trilu_operation() -> Result<()> {
         let att_upper = AttributeProto {
             name: "upper".to_string(),
             ref_attr_name: "upper".to_string(),
-            i: 0, // 0 means false, use lower triangular
+            i: 0,
             doc_string: "upper".to_string(),
-            r#type: 2, // INT
+            r#type: 2,
             f: 0.0,
             s: vec![],
             t: None,
@@ -6477,7 +6473,6 @@ fn test_trilu_operation() -> Result<()> {
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
         let results = z.to_vec2::<i64>()?;
 
-        // Lower triangular with k=2 (two diagonals above main)
         assert_eq!(
             results,
             vec![
