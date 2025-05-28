@@ -58,23 +58,6 @@ struct Args {
 
 pub fn main() -> Result<()> {
 
-    // let model_path = std::path::PathBuf::from("/Users/kb/Documents/webclones/onnx-graph/trilu_test.onnx");
-    // let model = candle_onnx::read_file(model_path)?;
-    // let graph = model.graph.as_ref().unwrap();
-
-    // let mut inputs = std::collections::HashMap::new();
-
-    // inputs.insert("input".to_string(), Tensor::from_vec(vec![1_f32,2.,3.,4.,5.,6.,7.,8.,9.], (3,3), &Device::Cpu)?);
-
-    // let outputs = candle_onnx::simple_eval(&model, inputs)?;
-
-    // let out = outputs.get("output").unwrap();
-
-    // println!("{}", out);
-
-    // return Ok(())
-
-
     let args = Args::parse();
     let device = if args.cpu { Device::Cpu } else { Device::cuda_if_available(0)? };
     

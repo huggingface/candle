@@ -2088,144 +2088,145 @@ fn simple_eval_(
                 values.insert(node.output[0].clone(), output);
             }
             "ScatterND" => {
-                // Get required inputs: data, indices, updates
                 let data = get(&node.input[0])?;
+                
                 let indices = get(&node.input[1])?;
+                let indices = indices.to_dtype(DType::I64)?;
+
                 let updates = get(&node.input[2])?;
                 
-                // Get optional reduction attribute (default is 'none')
                 let reduction = get_attr_opt::<str>(node, "reduction")?.unwrap_or("none");
+
+                // Extract shapes and validate
+                let indices_shape = indices.dims();
+                let data_shape = data.dims();
+                let updates_shape = updates.dims();
                 
-                // Validate indices is integer tensor
-                if indices.dtype() != DType::I64 {
-                    bail!("ScatterND expects indices to be of type int64");
-                }
+                // Last dimension of indices represents the depth of indexing
+                let k = indices_shape.last().unwrap().clone();
                 
-                // Clone data to create output tensor
-                let mut output = data.clone();
-                
-                // Let k denote indices.shape[-1], the last dimension in the shape of indices
-                let indices_dims = indices.dims();
-                let k = *indices_dims.last().unwrap();
-                
-                // Ensure k is at most the rank of data
                 if k > data.rank() {
                     bail!("ScatterND expects k (indices.shape[-1]) to be at most the rank of data");
                 }
                 
-                // Reshape indices for easier processing
-                let flat_indices_shape = indices_dims[..indices_dims.len()-1].iter().product();
-                let flat_indices = indices.reshape((flat_indices_shape, k))?;
+                // Calculate number of updates to perform
+                let num_updates = indices_shape[..indices_shape.len() - 1].iter().product::<usize>();
                 
-                // Reshape updates for easier processing
-
-                let flat_updates = updates.reshape(flat_indices_shape)?;
-
-                // A helper function to create an update tensor for given indices
-                let create_updated_tensor = |tensor: &Tensor, 
-                                            index_values: &[i64], 
-                                            update_value: &Tensor, 
-                                            op: &str| -> Result<Tensor> {
-                    // Create a copy of the input tensor
-                    let mut result = tensor.clone();
+                // Reshape indices to [num_updates, k] for consistent processing
+                let flat_indices = if indices.rank() == 1 && k == 1 {
+                    indices.unsqueeze(0)?
+                } else {
+                    indices.reshape((num_updates, k))?
+                };
+                
+                // Calculate update element shape (the shape of each update element)
+                let update_element_shape = if k < data_shape.len() {
+                    data_shape[k..].to_vec()
+                } else {
+                    vec![]
+                };
+                
+                // Expected shape for updates based on indices and target tensor
+                let expected_updates_shape = {
+                    let mut shape = indices_shape[..indices_shape.len() - 1].to_vec();
+                    shape.extend(&update_element_shape);
+                    shape
+                };
+                
+                // Validate or reshape updates to expected shape
+                let updates = if updates.dims() != expected_updates_shape {
+                    if updates.rank() == 0 {
+                        // Handle scalar updates
+                        let mut target_shape = vec![num_updates];
+                        target_shape.extend(&update_element_shape);
+                        updates.broadcast_as(target_shape)?
+                    } else {
+                        // Try to broadcast or reshape updates to expected shape
+                        let flat_shape = vec![num_updates, update_element_shape.iter().product::<usize>()];
+                        let flattened = updates.reshape(flat_shape)?;
+                        flattened.reshape(expected_updates_shape)?
+                    }
+                } else {
+                    updates.clone()
+                };
+                
+                // Start with a copy of data for output
+                let mut output = data.clone();
+                
+                // For multi-dimensional scatter, convert indices to flat indices
+                let mut flat_output = output.flatten_all()?;
+                let flat_updates = if update_element_shape.is_empty() {
+                    updates.reshape(num_updates)?
+                } else {
+                    let product = update_element_shape.iter().product::<usize>();
+                    updates.reshape((num_updates, product))?
+                };
+                
+                // Calculate strides for the output tensor
+                let mut strides: Vec<usize> = vec![1];
+                for i in (0..data_shape.len() - 1).rev() {
+                    strides.push(strides.last().unwrap() * data_shape[i + 1]);
+                }
+                strides.reverse();
+                
+                // Process each update
+                for i in 0..num_updates {
+                    // Extract current indices
+                    let index_slice = flat_indices.narrow(0, i, 1)?;
+                    let indices_vec = index_slice.squeeze(0)?.to_vec1::<i64>()?;
                     
-                    // Build a mask of ones with the same shape as the tensor
-                    let mut mask_ones = Tensor::ones(tensor.dims().to_vec(), tensor.dtype(), tensor.device())?;
-                    let mut mask_zeros = Tensor::zeros(tensor.dims().to_vec(), tensor.dtype(), tensor.device())?;
+                    // Convert multi-dimensional indices to flat index
+                    let mut flat_idx: usize = 0;
+                    for (dim, &idx) in indices_vec.iter().enumerate() {
+                        let dim_size = data_shape[dim] as i64;
+                        // Handle negative indices
+                        let norm_idx = if idx < 0 { dim_size + idx } else { idx };
+                        
+                        if norm_idx < 0 || norm_idx >= dim_size {
+                            bail!("Index {} out of bounds for dimension {} with size {}", idx, dim, dim_size);
+                        }
+                        
+                        flat_idx += (norm_idx as usize) * strides[dim];
+                    }
                     
-                    // Create a mask for the indexed location by starting with a tensor of zeros
-                    let mut idx_mask = mask_zeros.clone();
-                    
-
-                    let idx_vec: Vec<usize> = index_values.iter()
-                        .map(|&v| if v < 0 { tensor.dim(0).unwrap() as i64 + v } else { v } as usize)
-                        .collect();
-                    
-                    // Build the new value tensor based on operation
-                    let new_value = match op {
-                        "none" => update_value.clone(),
-                        "add" => {
-                            let curr_val = tensor.clone(); // Get the current value at the index
-                            curr_val.add(update_value)?
-                        },
-                        "mul" => {
-                            let curr_val = tensor.clone(); // Get the current value at the index
-                            curr_val.mul(update_value)?
-                        },
-                        "max" => {
-                            let curr_val = tensor.clone(); // Get the current value at the index
-                            curr_val.maximum(update_value)?
-                        },
-                        "min" => {
-                            let curr_val = tensor.clone(); // Get the current value at the index
-                            curr_val.minimum(update_value)?
-                        },
-                        _ => bail!("Unsupported op: {}", op)
+                    // Extract current update
+                    let update_slice = if update_element_shape.is_empty() {
+                        flat_updates.narrow(0, i, 1)?.squeeze(0)?
+                    } else {
+                        flat_updates.narrow(0, i, 1)?
                     };
                     
-
-                    Ok(new_value)
-                };
-
-                match reduction {
-                    "none" => {
-
-                        for i in 0..flat_indices_shape {
-                            let index_tuple = flat_indices.get(i)?;
-                            let index_values = index_tuple.to_vec1::<i64>()?;
-                            let update_value = flat_updates.get(i)?;
-                            
-                            // Use narrow operations to navigate to the specific location
-                            let mut location = output.clone();
-                            let mut indices_for_dim = Vec::new();
-                            
-                            // Navigate to the specific location using the index tuple
-                            for (dim_idx, &idx_val) in index_values.iter().enumerate() {
-                                let dim_size = output.dim(dim_idx)?;
-                                let norm_idx = if idx_val < 0 { 
-                                    dim_size as i64 + idx_val 
-                                } else { 
-                                    idx_val 
-                                } as usize;
-                                
-                                indices_for_dim.push(norm_idx);
-                                location = location.narrow(dim_idx, norm_idx, 1)?;
-                            }
-                            
-                            // If we're updating a slice (k < rank), reshape the location and update value
-                            if k < output.rank() {
-                                // Determine the shape of the slice
-                                let mut slice_shape = Vec::new();
-                                for dim_idx in k..output.rank() {
-                                    slice_shape.push(output.dim(dim_idx)?);
-                                }
-                                
-                                // Reshape location and update value to match the slice shape
-                                let reshaped_location = location.reshape(slice_shape.clone())?;
-                                let reshaped_update = update_value.reshape(slice_shape)?;
-                                
-                                // Create a tensor of ones for masking
-                                let mask_ones = Tensor::ones(output.dims().to_vec(), output.dtype(), output.device())?;
-                                
-                                // Create an all-one mask for masking out the original values
-                                let mut mask = mask_ones.clone();
-
-                                // Create temporary tensors for the update
-                                let mut tmp_output = output.clone();
-
-                                output = tmp_output;
+                    // Apply update based on reduction mode
+                    match reduction {
+                        "add" => {
+                            if update_element_shape.is_empty() {
+                                // Scalar update
+                                let existing = flat_output.narrow(0, flat_idx, 1)?;
+                                let new_value = existing.add(&update_slice.unsqueeze(0)?)?;
+                                flat_output = flat_output.slice_scatter(&new_value, 0, flat_idx)?;
                             } else {
-  
-                                // Create temporary tensors for the update
-                                let mut tmp_output = output.clone();
-                                
-                                output = tmp_output;
+                                // Vector update
+                                let slice_size = update_element_shape.iter().product::<usize>();
+                                let existing = flat_output.narrow(0, flat_idx, slice_size)?;
+                                let new_value = existing.add(&update_slice)?;
+                                flat_output = flat_output.slice_scatter(&new_value, 0, flat_idx)?;
+                            }
+                        },
+                        "none" | _ => {
+                            if update_element_shape.is_empty() {
+                                // Scalar update
+                                flat_output = flat_output.slice_scatter(&update_slice.unsqueeze(0)?, 0, flat_idx)?;
+                            } else {
+                                // Vector update
+                                flat_output = flat_output.slice_scatter(&update_slice, 0, flat_idx)?;
                             }
                         }
-                    },
-                    _ => bail!("unsupported reduce type")
+                    }
                 }
-
+                
+                // Reshape flat output back to original shape
+                output = flat_output.reshape(data_shape.to_vec())?;
+                
                 values.insert(node.output[0].clone(), output);
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
