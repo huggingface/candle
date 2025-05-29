@@ -21,6 +21,7 @@ safetensors = { workspace = true }
 serde = { workspace = true }
 metal = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
+libc = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

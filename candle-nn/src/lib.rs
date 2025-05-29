@@ -18,6 +18,7 @@
 pub mod activation;
 pub mod batch_norm;
 pub mod conv;
+pub mod cpu_flash_attention;
 pub mod embedding;
 pub mod encoding;
 pub mod func;
