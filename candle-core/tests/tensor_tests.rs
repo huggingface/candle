@@ -1880,3 +1880,11 @@ fn tensor_new() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn tensor_norm() -> Result<()> {
+    let t = Tensor::new(&[[3., 4.], [0., 0.]], &Device::Cpu)?;
+    let norm = t.norm()?;
+    assert_eq!(norm.to_scalar::<f64>()?, 5.);
+    Ok(())
+}
