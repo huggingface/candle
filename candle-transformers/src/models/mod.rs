@@ -98,6 +98,7 @@ pub mod quantized_rwkv_v6;
 pub mod quantized_stable_lm;
 pub mod quantized_t5;
 pub mod qwen2;
+pub mod qwen2_5_vl;
 pub mod qwen2_moe;
 pub mod qwen3;
 pub mod recurrent_gemma;
