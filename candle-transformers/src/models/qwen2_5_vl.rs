@@ -21,7 +21,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct VisionConfig {
     pub hidden_size: usize,
-    pub intermediate_size: usize, 
+    pub intermediate_size: usize,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
     pub image_size: usize,
@@ -130,12 +130,7 @@ struct MultimodalRotaryEmbedding {
 }
 
 impl MultimodalRotaryEmbedding {
-    fn new(
-        dim: usize,
-        base: f64,
-        mrope_section: Vec<usize>,
-        device: &Device,
-    ) -> Result<Self> {
+    fn new(dim: usize, base: f64, mrope_section: Vec<usize>, device: &Device) -> Result<Self> {
         let inv_freq_mask: Vec<f32> = (0..dim)
             .step_by(2)
             .enumerate()
@@ -143,28 +138,28 @@ impl MultimodalRotaryEmbedding {
                 if i < mrope_section[0] {
                     1.0
                 } else if i < mrope_section[0] + mrope_section[1] {
-                    0.5  
+                    0.5
                 } else {
                     0.25
                 }
             })
             .collect();
-        
+
         let inv_freq: Vec<f32> = (0..dim)
             .step_by(2)
             .enumerate()
             .map(|(i, d)| inv_freq_mask[i] / base.powf(d as f64 / dim as f64) as f32)
             .collect();
-        
+
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, inv_freq_len, device)?;
-        
+
         Ok(Self {
             inv_freq,
             mrope_section,
         })
     }
-    
+
     fn apply_rotary_pos_emb(
         &self,
         q: &Tensor,
@@ -173,7 +168,7 @@ impl MultimodalRotaryEmbedding {
     ) -> Result<(Tensor, Tensor)> {
         let dtype = q.dtype();
         let seq_len = q.dim(2)?;
-        
+
         // Expand position_ids for multimodal
         let mut grid_pos = Vec::new();
         for pos_id in position_ids.to_vec2::<i64>()? {
@@ -185,25 +180,25 @@ impl MultimodalRotaryEmbedding {
                 grid_pos.push(vec![t, h, w]);
             }
         }
-        
+
         let grid_pos = Tensor::from_vec(
             grid_pos.into_iter().flatten().collect::<Vec<_>>(),
             (position_ids.dims()[0], seq_len, 3),
             q.device(),
         )?;
-        
+
         // Compute frequencies
         let grid_pos = grid_pos.to_dtype(DType::F32)?;
         let freqs = grid_pos.matmul(&self.inv_freq.unsqueeze(0)?.transpose(0, 1)?)?;
         let freqs = freqs.transpose(D::Minus1, D::Minus2)?;
-        
+
         let cos = freqs.cos()?.to_dtype(dtype)?;
         let sin = freqs.sin()?.to_dtype(dtype)?;
-        
+
         // Apply rotary embeddings
         let q_rot = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
         let k_rot = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
-        
+
         Ok((q_rot, k_rot))
     }
 }
@@ -225,7 +220,7 @@ impl VisionAttention {
         let k_proj = linear_no_bias(hidden_size, hidden_size, vb.pp("k_proj"))?;
         let v_proj = linear_no_bias(hidden_size, hidden_size, vb.pp("v_proj"))?;
         let o_proj = linear_no_bias(hidden_size, hidden_size, vb.pp("o_proj"))?;
-        
+
         Ok(Self {
             q_proj,
             k_proj,
@@ -235,32 +230,38 @@ impl VisionAttention {
             head_dim,
         })
     }
-    
+
     fn forward(&self, x: &Tensor, rotary_emb: &MultimodalRotaryEmbedding) -> Result<Tensor> {
         let (batch_size, seq_len, _) = x.dims3()?;
-        
-        let q = self.q_proj.forward(x)?
+
+        let q = self
+            .q_proj
+            .forward(x)?
             .reshape((batch_size, seq_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let k = self.k_proj.forward(x)?
+        let k = self
+            .k_proj
+            .forward(x)?
             .reshape((batch_size, seq_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let v = self.v_proj.forward(x)?
+        let v = self
+            .v_proj
+            .forward(x)?
             .reshape((batch_size, seq_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
-        
+
         // Apply rotary embeddings
         let position_ids = Tensor::arange(0i64, seq_len as i64, x.device())?
             .unsqueeze(0)?
             .expand((batch_size, seq_len))?;
         let (q, k) = rotary_emb.apply_rotary_pos_emb(&q, &k, &position_ids)?;
-        
+
         // Attention
         let scale = (self.head_dim as f64).sqrt();
         let scores = (q.matmul(&k.transpose(D::Minus1, D::Minus2)?)? / scale)?;
         let attn_weights = candle_nn::ops::softmax_last_dim(&scores)?;
         let attn_output = attn_weights.matmul(&v)?;
-        
+
         // Reshape and project
         attn_output
             .transpose(1, 2)?
@@ -281,7 +282,7 @@ impl VisionMlp {
         let gate_proj = linear_no_bias(hidden_size, intermediate_size, vb.pp("gate_proj"))?;
         let up_proj = linear_no_bias(hidden_size, intermediate_size, vb.pp("up_proj"))?;
         let down_proj = linear_no_bias(intermediate_size, hidden_size, vb.pp("down_proj"))?;
-        
+
         Ok(Self {
             gate_proj,
             up_proj,
@@ -313,22 +314,11 @@ impl VisionEncoderLayer {
             config.num_attention_heads,
             vb.pp("self_attn"),
         )?;
-        let mlp = VisionMlp::new(
-            config.hidden_size,
-            config.intermediate_size,
-            vb.pp("mlp"),
-        )?;
-        let input_layernorm = RmsNorm::new(
-            config.hidden_size,
-            1e-6,
-            vb.pp("input_layernorm"),
-        )?;
-        let post_attention_layernorm = RmsNorm::new(
-            config.hidden_size,
-            1e-6,
-            vb.pp("post_attention_layernorm"),
-        )?;
-        
+        let mlp = VisionMlp::new(config.hidden_size, config.intermediate_size, vb.pp("mlp"))?;
+        let input_layernorm = RmsNorm::new(config.hidden_size, 1e-6, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm =
+            RmsNorm::new(config.hidden_size, 1e-6, vb.pp("post_attention_layernorm"))?;
+
         Ok(Self {
             self_attn,
             mlp,
@@ -336,13 +326,13 @@ impl VisionEncoderLayer {
             post_attention_layernorm,
         })
     }
-    
+
     fn forward(&self, x: &Tensor, rotary_emb: &MultimodalRotaryEmbedding) -> Result<Tensor> {
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
         let x = self.self_attn.forward(&x, rotary_emb)?;
         let x = (x + residual)?;
-        
+
         let residual = &x;
         let x = self.post_attention_layernorm.forward(&x)?;
         let x = self.mlp.forward(&x)?;
@@ -361,7 +351,7 @@ impl VisionPatchEmbed {
             stride: config.patch_size,
             ..Default::default()
         };
-        
+
         let proj = candle_nn::conv2d(
             config.num_channels,
             config.hidden_size,
@@ -369,15 +359,13 @@ impl VisionPatchEmbed {
             conv_config,
             vb.pp("proj"),
         )?;
-        
+
         Ok(Self { proj })
     }
-    
+
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         // x: [batch, channels, height, width]
-        self.proj.forward(x)?
-            .flatten_from(2)?
-            .transpose(1, 2) // [batch, num_patches, hidden_size]
+        self.proj.forward(x)?.flatten_from(2)?.transpose(1, 2) // [batch, num_patches, hidden_size]
     }
 }
 
@@ -391,35 +379,32 @@ impl VisionPatchMerger {
     fn new(hidden_size: usize, merge_size: usize, vb: VarBuilder) -> Result<Self> {
         let ln_q = candle_nn::layer_norm(hidden_size, 1e-6, vb.pp("ln_q"))?;
         let mlp = vec![
-            linear_no_bias(hidden_size * merge_size * merge_size, hidden_size, vb.pp("mlp.0"))?,
+            linear_no_bias(
+                hidden_size * merge_size * merge_size,
+                hidden_size,
+                vb.pp("mlp.0"),
+            )?,
             linear_no_bias(hidden_size, hidden_size, vb.pp("mlp.2"))?,
         ];
-        
+
         Ok(Self { ln_q, mlp })
     }
-    
+
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x = self.ln_q.forward(x)?;
         let (b, n, c) = x.dims3()?;
         let h = (n as f64).sqrt() as usize;
         let w = h;
-        
+
         let x = x.reshape((b, h, w, c))?;
-        
+
         // Merge patches
         let merge_size = 2; // Using default merge size
-        let x = x.reshape((
-            b,
-            h / merge_size,
-            merge_size,
-            w / merge_size,
-            merge_size,
-            c,
-        ))?;
+        let x = x.reshape((b, h / merge_size, merge_size, w / merge_size, merge_size, c))?;
         let x = x.permute((0, 1, 3, 2, 4, 5))?;
         let x = x.flatten(3, 5)?;
         let x = x.flatten(1, 2)?;
-        
+
         // Apply MLP
         let x = self.mlp[0].forward(&x)?.gelu()?;
         self.mlp[1].forward(&x)
@@ -437,7 +422,7 @@ pub struct VisionModel {
 impl VisionModel {
     pub fn new(config: &VisionConfig, vb: VarBuilder) -> Result<Self> {
         let patch_embed = VisionPatchEmbed::new(config, vb.pp("patch_embed"))?;
-        
+
         let head_dim = config.hidden_size / config.num_attention_heads;
         let rotary_emb = Arc::new(MultimodalRotaryEmbedding::new(
             head_dim,
@@ -445,12 +430,15 @@ impl VisionModel {
             vec![head_dim / 3, head_dim / 3, head_dim / 3],
             vb.device(),
         )?);
-        
+
         let mut layers = Vec::with_capacity(config.num_hidden_layers);
         for i in 0..config.num_hidden_layers {
-            layers.push(VisionEncoderLayer::new(config, vb.pp(&format!("layers.{}", i)))?);
+            layers.push(VisionEncoderLayer::new(
+                config,
+                vb.pp(format!("layers.{}", i)),
+            )?);
         }
-        
+
         let merger = if config.spatial_merge_size > 1 {
             Some(VisionPatchMerger::new(
                 config.hidden_size,
@@ -460,7 +448,7 @@ impl VisionModel {
         } else {
             None
         };
-        
+
         Ok(Self {
             patch_embed,
             rotary_emb,
@@ -468,18 +456,18 @@ impl VisionModel {
             merger,
         })
     }
-    
+
     pub fn forward(&self, pixel_values: &Tensor) -> Result<Tensor> {
         let mut x = self.patch_embed.forward(pixel_values)?;
-        
+
         for layer in &self.layers {
             x = layer.forward(&x, &self.rotary_emb)?;
         }
-        
+
         if let Some(merger) = &self.merger {
             x = merger.forward(&x)?;
         }
-        
+
         Ok(x)
     }
 }
@@ -507,12 +495,12 @@ impl TextAttention {
         let num_heads = config.num_attention_heads;
         let num_kv_heads = config.num_key_value_heads;
         let head_dim = hidden_size / num_heads;
-        
+
         let q_proj = linear(hidden_size, num_heads * head_dim, vb.pp("q_proj"))?;
         let k_proj = linear(hidden_size, num_kv_heads * head_dim, vb.pp("k_proj"))?;
         let v_proj = linear(hidden_size, num_kv_heads * head_dim, vb.pp("v_proj"))?;
         let o_proj = linear_no_bias(num_heads * head_dim, hidden_size, vb.pp("o_proj"))?;
-        
+
         Ok(Self {
             q_proj,
             k_proj,
@@ -525,7 +513,7 @@ impl TextAttention {
             kv_cache: None,
         })
     }
-    
+
     fn forward(
         &mut self,
         x: &Tensor,
@@ -533,19 +521,25 @@ impl TextAttention {
         position_ids: &Tensor,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
-        
-        let q = self.q_proj.forward(x)?
+
+        let q = self
+            .q_proj
+            .forward(x)?
             .reshape((b_sz, seq_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let k = self.k_proj.forward(x)?
+        let k = self
+            .k_proj
+            .forward(x)?
             .reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let v = self.v_proj.forward(x)?
+        let v = self
+            .v_proj
+            .forward(x)?
             .reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
-        
+
         let (q, k) = self.rotary_emb.apply_rotary_pos_emb(&q, &k, position_ids)?;
-        
+
         // Handle KV cache
         let (k, v) = match &self.kv_cache {
             None => (k, v),
@@ -556,7 +550,7 @@ impl TextAttention {
             }
         };
         self.kv_cache = Some((k.clone(), v.clone()));
-        
+
         // Repeat KV heads if needed
         let repeat_count = self.num_heads / self.num_kv_heads;
         let k = if repeat_count > 1 {
@@ -569,25 +563,25 @@ impl TextAttention {
         } else {
             v
         };
-        
+
         // Attention
         let scale = (self.head_dim as f64).sqrt();
         let scores = (q.matmul(&k.transpose(D::Minus1, D::Minus2)?)? / scale)?;
-        
+
         let scores = match attention_mask {
             None => scores,
             Some(mask) => scores.broadcast_add(mask)?,
         };
-        
+
         let attn_weights = candle_nn::ops::softmax_last_dim(&scores)?;
         let attn_output = attn_weights.matmul(&v)?;
-        
+
         attn_output
             .transpose(1, 2)?
             .reshape((b_sz, seq_len, self.num_heads * self.head_dim))?
             .apply(&self.o_proj)
     }
-    
+
     fn clear_kv_cache(&mut self) {
         self.kv_cache = None;
     }
@@ -605,7 +599,7 @@ impl TextMlp {
         let gate_proj = linear_no_bias(hidden_size, intermediate_size, vb.pp("gate_proj"))?;
         let up_proj = linear_no_bias(hidden_size, intermediate_size, vb.pp("up_proj"))?;
         let down_proj = linear_no_bias(intermediate_size, hidden_size, vb.pp("down_proj"))?;
-        
+
         Ok(Self {
             gate_proj,
             up_proj,
@@ -648,7 +642,7 @@ impl TextDecoderLayer {
             config.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
         )?;
-        
+
         Ok(Self {
             self_attn,
             mlp,
@@ -656,7 +650,7 @@ impl TextDecoderLayer {
             post_attention_layernorm,
         })
     }
-    
+
     fn forward(
         &mut self,
         x: &Tensor,
@@ -667,13 +661,13 @@ impl TextDecoderLayer {
         let x = self.input_layernorm.forward(x)?;
         let x = self.self_attn.forward(&x, attention_mask, position_ids)?;
         let x = (x + residual)?;
-        
+
         let residual = &x;
         let x = self.post_attention_layernorm.forward(&x)?;
         let x = self.mlp.forward(&x)?;
         x + residual
     }
-    
+
     fn clear_kv_cache(&mut self) {
         self.self_attn.clear_kv_cache();
     }
@@ -688,12 +682,9 @@ pub struct TextModel {
 
 impl TextModel {
     pub fn new(config: &TextConfig, vb: VarBuilder) -> Result<Self> {
-        let embed_tokens = candle_nn::embedding(
-            config.vocab_size,
-            config.hidden_size,
-            vb.pp("embed_tokens"),
-        )?;
-        
+        let embed_tokens =
+            candle_nn::embedding(config.vocab_size, config.hidden_size, vb.pp("embed_tokens"))?;
+
         let head_dim = config.hidden_size / config.num_attention_heads;
         let rotary_emb = Arc::new(MultimodalRotaryEmbedding::new(
             head_dim,
@@ -701,25 +692,25 @@ impl TextModel {
             vec![head_dim / 3, head_dim / 3, head_dim / 3],
             vb.device(),
         )?);
-        
+
         let mut layers = Vec::with_capacity(config.num_hidden_layers);
         for i in 0..config.num_hidden_layers {
             layers.push(TextDecoderLayer::new(
                 config,
                 rotary_emb.clone(),
-                vb.pp(&format!("layers.{}", i)),
+                vb.pp(format!("layers.{}", i)),
             )?);
         }
-        
+
         let norm = RmsNorm::new(config.hidden_size, config.rms_norm_eps, vb.pp("norm"))?;
-        
+
         Ok(Self {
             embed_tokens,
             layers,
             norm,
         })
     }
-    
+
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
@@ -727,14 +718,14 @@ impl TextModel {
         attention_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let mut x = self.embed_tokens.forward(input_ids)?;
-        
+
         for layer in &mut self.layers {
             x = layer.forward(&x, attention_mask, position_ids)?;
         }
-        
+
         self.norm.forward(&x)
     }
-    
+
     pub fn clear_kv_cache(&mut self) {
         for layer in &mut self.layers {
             layer.clear_kv_cache();
@@ -743,7 +734,7 @@ impl TextModel {
 }
 
 #[derive(Debug, Clone)]
-pub struct Qwen25VL {
+pub struct Qwen2_5VL {
     vision_model: VisionModel,
     text_model: TextModel,
     visual_tokenizer: Linear,
@@ -751,23 +742,23 @@ pub struct Qwen25VL {
     config: Config,
 }
 
-impl Qwen25VL {
+impl Qwen2_5VL {
     pub fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
         let vision_model = VisionModel::new(&config.vision_config, vb.pp("vision_model"))?;
         let text_model = TextModel::new(&config.text_config, vb.pp("text_model"))?;
-        
+
         let visual_tokenizer = linear(
             config.vision_config.hidden_size,
             config.text_config.hidden_size,
             vb.pp("visual_tokenizer"),
         )?;
-        
+
         let lm_head = linear_no_bias(
             config.text_config.hidden_size,
             config.text_config.vocab_size,
             vb.pp("lm_head"),
         )?;
-        
+
         Ok(Self {
             vision_model,
             text_model,
@@ -776,12 +767,12 @@ impl Qwen25VL {
             config: config.clone(),
         })
     }
-    
+
     pub fn encode_images(&self, pixel_values: &Tensor) -> Result<Tensor> {
         let vision_features = self.vision_model.forward(pixel_values)?;
         self.visual_tokenizer.forward(&vision_features)
     }
-    
+
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
@@ -789,39 +780,39 @@ impl Qwen25VL {
         attention_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let (batch_size, seq_len) = input_ids.dims2()?;
-        
+
         // Process vision inputs if provided
         let input_embeds = if let Some(pixel_values) = pixel_values {
             let image_embeds = self.encode_images(pixel_values)?;
-            
+
             // Find image token positions
             let image_token_mask = input_ids.eq(self.config.image_token_id as i64)?;
-            
+
             // Get text embeddings
             let text_embeds = self.text_model.embed_tokens.forward(input_ids)?;
-            
+
             // Merge vision and text embeddings
             self.merge_vision_text_embeds(&text_embeds, &image_embeds, &image_token_mask)?
         } else {
             self.text_model.embed_tokens.forward(input_ids)?
         };
-        
+
         // Create position ids
         let position_ids = Tensor::arange(0i64, seq_len as i64, input_ids.device())?
             .unsqueeze(0)?
             .expand((batch_size, seq_len))?;
-        
+
         // Forward through text model
         let mut hidden_states = input_embeds;
         for layer in &mut self.text_model.layers {
             hidden_states = layer.forward(&hidden_states, attention_mask, &position_ids)?;
         }
         let hidden_states = self.text_model.norm.forward(&hidden_states)?;
-        
+
         // Generate logits
         self.lm_head.forward(&hidden_states)
     }
-    
+
     fn merge_vision_text_embeds(
         &self,
         text_embeds: &Tensor,
@@ -830,10 +821,10 @@ impl Qwen25VL {
     ) -> Result<Tensor> {
         let (batch_size, seq_len, hidden_size) = text_embeds.dims3()?;
         let device = text_embeds.device();
-        
+
         // Initialize output with text embeddings
         let mut output = text_embeds.clone();
-        
+
         // Replace image tokens with vision embeddings
         // Find image token positions
         let image_token_mask_vec = image_token_mask.to_vec2::<u8>()?;
@@ -848,17 +839,21 @@ impl Qwen25VL {
         if !image_positions.is_empty() {
             let num_images = image_positions.len();
             let image_seq_len = image_embeds.dim(1)?;
-            
+
             // Create expanded output tensor
             let new_seq_len = seq_len - num_images + num_images * image_seq_len;
-            let mut new_output = Tensor::zeros((batch_size, new_seq_len, hidden_size), text_embeds.dtype(), device)?;
-            
+            let mut new_output = Tensor::zeros(
+                (batch_size, new_seq_len, hidden_size),
+                text_embeds.dtype(),
+                device,
+            )?;
+
             let mut output_idx = 0;
             let mut image_idx = 0;
-            
+
             for i in 0..seq_len {
                 let is_image_token = image_token_mask.i((0, i))?.to_scalar::<u8>()? > 0;
-                
+
                 if is_image_token && image_idx < num_images {
                     // Insert vision embeddings
                     let start = output_idx;
@@ -877,7 +872,6 @@ impl Qwen25VL {
                     image_idx += 1;
                 } else {
                     // Copy text embedding
-                    // Copy text embedding
                     let text_emb = output.i((.., i..i + 1, ..))?;
                     new_output = new_output.slice_assign(
                         &[0..batch_size, output_idx..output_idx + 1, 0..hidden_size],
@@ -886,29 +880,29 @@ impl Qwen25VL {
                     output_idx += 1;
                 }
             }
-            
+
             output = new_output;
         }
-        
+
         Ok(output)
     }
-    
+
     pub fn clear_kv_cache(&mut self) {
         self.text_model.clear_kv_cache();
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Qwen25VLForConditionalGeneration {
-    model: Qwen25VL,
+pub struct Qwen2_5VLForConditionalGeneration {
+    model: Qwen2_5VL,
 }
 
-impl Qwen25VLForConditionalGeneration {
+impl Qwen2_5VLForConditionalGeneration {
     pub fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
-        let model = Qwen25VL::new(config, vb)?;
+        let model = Qwen2_5VL::new(config, vb)?;
         Ok(Self { model })
     }
-    
+
     pub fn forward(
         &mut self,
         input_ids: &Tensor,
@@ -917,8 +911,9 @@ impl Qwen25VLForConditionalGeneration {
     ) -> Result<Tensor> {
         self.model.forward(input_ids, pixel_values, attention_mask)
     }
-    
+
     pub fn clear_kv_cache(&mut self) {
         self.model.clear_kv_cache();
     }
 }
+
