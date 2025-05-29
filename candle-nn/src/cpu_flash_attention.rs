@@ -59,6 +59,19 @@ fn vec_dot<T: WithDType + Sum + Copy + std::ops::Mul<Output = T>>(a: &[T], b: &[
     sum
 }
 
+/// Fused attention optimized for CPU.
+///
+/// Computes softmax(qk^T*scale)v.
+///
+/// **Inputs shapes:**
+/// - `q`: (bs, seq, qhead, hidden)
+/// - `k`: (bs, kv_seq, v_head, hidden)
+/// - `k`: (bs, kv_seq, kv_head_seq, v_hidden)
+/// - `scale` is applied before softmax.
+/// 
+/// - This supports ALiBi with `max_bias` as well as softcapping with `softcap`.
+///
+/// **Output shape:** (bs, seq, qhead, v_hidden)
 pub fn run_flash_attn_cpu<T>(
     q: &Tensor,
     k: &Tensor,
