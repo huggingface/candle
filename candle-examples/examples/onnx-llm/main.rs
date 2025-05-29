@@ -5,12 +5,21 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::Result;
-use candle::{DType, Device, Tensor};
+use candle::{DType, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use clap::{Parser, ValueEnum};
 use hf_hub::api::sync::Api;
+use serde::Deserialize;
 use std::io::Write;
 use tokenizers::Tokenizer;
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Config {
+    pub num_hidden_layers: usize,
+    pub num_key_value_heads: usize,
+    pub hidden_size: usize,
+    pub num_attention_heads: usize,
+}
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum Which {
@@ -22,10 +31,6 @@ struct Args {
     /// The prompt to be used.
     #[arg(long, default_value = "My favorite theorem is ")]
     prompt: String,
-
-    /// Path to a local ONNX model file.
-    #[arg(long)]
-    model: Option<String>,
 
     /// The model to be used.
     #[arg(value_enum, long, default_value_t = Which::SmolLM135M)]
@@ -58,11 +63,7 @@ struct Args {
 
 pub fn main() -> Result<()> {
     let args = Args::parse();
-    let device = if args.cpu {
-        Device::Cpu
-    } else {
-        Device::cuda_if_available(0)?
-    };
+    let device = candle_examples::device(args.cpu)?;
 
     let (model_id, tokenizer_id) = match args.which {
         Which::SmolLM135M => ("HuggingFaceTB/SmolLM-135M", "HuggingFaceTB/SmolLM-135M"),
@@ -72,10 +73,9 @@ pub fn main() -> Result<()> {
     let model_repo = api.model(model_id.to_string());
     let tokenizer_repo = api.model(tokenizer_id.to_string());
 
-    let model_path = match &args.model {
-        Some(path) => std::path::PathBuf::from(path),
-        None => model_repo.get("onnx/model.onnx")?,
-    };
+    let model_path = model_repo.get("onnx/model.onnx")?;
+    let config_file = model_repo.get("config.json")?;
+    let config: Config = serde_json::from_reader(std::fs::File::open(config_file)?)?;
 
     let tokenizer_path = tokenizer_repo.get("tokenizer.json")?;
     let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)?;
@@ -111,7 +111,7 @@ pub fn main() -> Result<()> {
     };
 
     let mut past_key_values: Option<Vec<(Tensor, Tensor)>> = None;
-    let num_layers = 30;
+    let num_layers = config.num_hidden_layers;
 
     for _ in 0..args.max_tokens {
         let mut inputs = std::collections::HashMap::new();
@@ -150,8 +150,8 @@ pub fn main() -> Result<()> {
             // Create empty key and value tensors
             for i in 0..num_layers {
                 let batch_size = 1;
-                let num_heads = 3;
-                let head_dim = 64;
+                let num_heads = config.num_key_value_heads;
+                let head_dim = config.hidden_size / config.num_attention_heads;
                 let seq_len = 0;
 
                 let empty_key = Tensor::zeros(
