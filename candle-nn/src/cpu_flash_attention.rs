@@ -71,7 +71,7 @@ fn vec_dot<T: WithDType + Sum + Copy + std::ops::Mul<Output = T>>(a: &[T], b: &[
 ///
 /// - This supports ALiBi with `max_bias` as well as softcapping with `softcap`.
 ///
-/// **Output shape:** (bs, seq, qhead, v_hidden)
+/// **Output shape:** (bs, qhead, seq, v_hidden)
 pub fn run_flash_attn_cpu<T>(
     q: &Tensor,
     k: &Tensor,

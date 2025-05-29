@@ -30,8 +30,7 @@ fn cpu_flash_attn() -> Result<()> {
         softmax_scale,
         None,
         None,
-    )?
-    .transpose(1, 2)?;
+    )?;
 
     let out_arr: Vec<f32> = out.flatten_all()?.to_vec1()?;
     let ground_truth_arr: Vec<f32> = ground_truth.flatten_all()?.to_vec1()?;
