@@ -842,13 +842,22 @@ fn test_flatten_operation() -> Result<()> {
 #[test]
 fn test_constant_of_shape() -> Result<()> {
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-31
-    test(&[4i64, 3, 2], Some(1.), &[1., 1., 1.])?;
+    test(
+        &[4i64, 3, 2],
+        Some(1.),
+        &[
+            [[1., 1.], [1., 1.], [1., 1.]],
+            [[1., 1.], [1., 1.], [1., 1.]],
+            [[1., 1.], [1., 1.], [1., 1.]],
+            [[1., 1.], [1., 1.], [1., 1.]],
+        ],
+    )?;
 
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-31
-    test(&[0.], Some(0i64), &[0i64])?;
+    test(&[1i64], Some(0i64), &[0i64])?;
 
     // "value" defaults to 0 f32
-    test(&[1i64, 2, 3, 4], None as Option<i64>, &[0., 0., 0., 0.])?;
+    test(&[4i64], None as Option<i64>, &[0., 0., 0., 0.])?;
 
     fn test(
         input: impl NdArray,
@@ -5966,5 +5975,514 @@ fn test_sign_operation() -> Result<()> {
         z.to_dtype(candle::DType::I64)?.to_vec1::<i64>()?.to_vec(),
         vec![-1, -1, 0, 1, 1]
     );
+    Ok(())
+}
+
+#[test]
+fn test_scatternd_operation() -> Result<()> {
+    // Example 1 based on ONNX documentation
+    test(
+        &[1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+        &[[4i64], [3], [1], [7]],
+        &[9.0f32, 10.0, 11.0, 12.0],
+        &[1.0f32, 11.0, 3.0, 10.0, 9.0, 6.0, 7.0, 12.0],
+    )?;
+
+    // A more complex example with 2D data
+    test(
+        &[[1.0f32, 2.0], [3.0, 4.0], [5.0, 6.0]],
+        &[[0i64, 1], [1, 0]],
+        &[10.0f32, 20.0],
+        &[[1.0f32, 10.0], [20.0, 4.0], [5.0, 6.0]],
+    )?;
+
+    // 3D example with indices pointing to specific locations
+    test(
+        &[
+            [[1.0f32, 2.0], [3.0, 4.0]],
+            [[5.0, 6.0], [7.0, 8.0]],
+            [[9.0, 10.0], [11.0, 12.0]],
+        ],
+        &[[0i64, 0, 1], [1, 1, 0]],
+        &[100.0f32, 200.0],
+        &[
+            [[1.0f32, 100.0], [3.0, 4.0]],
+            [[5.0, 6.0], [200.0, 8.0]],
+            [[9.0, 10.0], [11.0, 12.0]],
+        ],
+    )?;
+
+    fn test(
+        data: impl NdArray,
+        indices: impl NdArray,
+        updates: impl NdArray,
+        expected: impl NdArray,
+    ) -> Result<()> {
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "ScatterND".to_string(),
+                domain: "".to_string(),
+                attribute: vec![],
+                input: vec![
+                    INPUT_X.to_string(),
+                    INPUT_Y.to_string(),
+                    INPUT_A.to_string(),
+                ],
+                output: vec![OUTPUT_Z.to_string()],
+                name: "".to_string(),
+                doc_string: "".to_string(),
+            }],
+            name: "".to_string(),
+            initializer: vec![],
+            input: vec![],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                doc_string: "".to_string(),
+                r#type: None,
+            }],
+            value_info: vec![],
+            doc_string: "".to_string(),
+            sparse_initializer: vec![],
+            quantization_annotation: vec![],
+        }));
+
+        let mut inputs: HashMap<String, Tensor> = HashMap::new();
+        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
+        inputs.insert(INPUT_Y.to_string(), Tensor::new(indices, &Device::Cpu)?);
+        inputs.insert(INPUT_A.to_string(), Tensor::new(updates, &Device::Cpu)?);
+
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        assert_eq!(eval.len(), 1);
+
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        let expected = Tensor::new(expected, &Device::Cpu)?;
+
+        match expected.dims().len() {
+            1 => assert_eq!(z.to_vec1::<f32>()?, expected.to_vec1::<f32>()?),
+            2 => assert_eq!(z.to_vec2::<f32>()?, expected.to_vec2::<f32>()?),
+            3 => assert_eq!(z.to_vec3::<f32>()?, expected.to_vec3::<f32>()?),
+            _ => unreachable!(),
+        };
+
+        Ok(())
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_trilu_operation() -> Result<()> {
+    // Test 1: Upper triangular matrix (default behavior with upper=true)
+    {
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "Trilu".to_string(),
+                domain: "".to_string(),
+                attribute: vec![], // empty attribute means default upper=true
+                input: vec![INPUT_X.to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                name: "".to_string(),
+                doc_string: "".to_string(),
+            }],
+            name: "".to_string(),
+            initializer: vec![],
+            input: vec![ValueInfoProto {
+                name: INPUT_X.to_string(),
+                doc_string: "".to_string(),
+                r#type: None,
+            }],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                doc_string: "".to_string(),
+                r#type: None,
+            }],
+            value_info: vec![],
+            doc_string: "".to_string(),
+            sparse_initializer: vec![],
+            quantization_annotation: vec![],
+        }));
+
+        let x = Tensor::from_vec(
+            vec![
+                4i64, 7, 3, 7, 9, 1, 2, 8, 6, 9, 9, 4, 0, 8, 7, 4, 3, 4, 2, 4,
+            ],
+            &[4, 5],
+            &Device::Cpu,
+        )?;
+
+        let mut inputs: HashMap<String, Tensor> = HashMap::new();
+        inputs.insert(INPUT_X.to_string(), x);
+
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        assert_eq!(eval.len(), 1);
+
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        let results = z.to_vec2::<i64>()?;
+
+        assert_eq!(
+            results,
+            vec![
+                vec![4, 7, 3, 7, 9],
+                vec![0, 2, 8, 6, 9],
+                vec![0, 0, 0, 8, 7],
+                vec![0, 0, 0, 2, 4]
+            ]
+        );
+    }
+
+    // Test 2: Upper triangular with positive k=1 (diagonal above main)
+    {
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "Trilu".to_string(),
+                domain: "".to_string(),
+                attribute: vec![],
+                input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                name: "".to_string(),
+                doc_string: "".to_string(),
+            }],
+            name: "".to_string(),
+            initializer: vec![],
+            input: vec![
+                ValueInfoProto {
+                    name: INPUT_X.to_string(),
+                    doc_string: "".to_string(),
+                    r#type: None,
+                },
+                ValueInfoProto {
+                    name: INPUT_Y.to_string(),
+                    doc_string: "".to_string(),
+                    r#type: None,
+                },
+            ],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                doc_string: "".to_string(),
+                r#type: None,
+            }],
+            value_info: vec![],
+            doc_string: "".to_string(),
+            sparse_initializer: vec![],
+            quantization_annotation: vec![],
+        }));
+
+        let x = Tensor::from_vec(
+            vec![1i64, 4, 9, 7, 1, 9, 2, 8, 8, 4, 3, 9, 7, 4, 2],
+            &[3, 5],
+            &Device::Cpu,
+        )?;
+
+        let k = Tensor::from_vec(vec![1i64], (), &Device::Cpu)?;
+
+        let mut inputs: HashMap<String, Tensor> = HashMap::new();
+        inputs.insert(INPUT_X.to_string(), x);
+        inputs.insert(INPUT_Y.to_string(), k);
+
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        assert_eq!(eval.len(), 1);
+
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        let results = z.to_vec2::<i64>()?;
+
+        assert_eq!(
+            results,
+            vec![
+                vec![0, 4, 9, 7, 1],
+                vec![0, 0, 8, 8, 4],
+                vec![0, 0, 0, 4, 2]
+            ]
+        );
+    }
+
+    // Test 3: Upper triangular with negative k=-1 (one diagonal below main)
+    {
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "Trilu".to_string(),
+                domain: "".to_string(),
+                attribute: vec![],
+                input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                name: "".to_string(),
+                doc_string: "".to_string(),
+            }],
+            name: "".to_string(),
+            initializer: vec![],
+            input: vec![],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                doc_string: "".to_string(),
+                r#type: None,
+            }],
+            value_info: vec![],
+            doc_string: "".to_string(),
+            sparse_initializer: vec![],
+            quantization_annotation: vec![],
+        }));
+
+        let x = Tensor::from_vec(
+            vec![
+                4i64, 7, 3, 7, 9, 1, 2, 8, 6, 9, 9, 4, 0, 8, 7, 4, 3, 4, 2, 4,
+            ],
+            &[4, 5],
+            &Device::Cpu,
+        )?;
+
+        let k = Tensor::from_vec(vec![-1i64], (), &Device::Cpu)?;
+
+        let mut inputs: HashMap<String, Tensor> = HashMap::new();
+        inputs.insert(INPUT_X.to_string(), x);
+        inputs.insert(INPUT_Y.to_string(), k);
+
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        assert_eq!(eval.len(), 1);
+
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        let results = z.to_vec2::<i64>()?;
+
+        assert_eq!(
+            results,
+            vec![
+                vec![4, 7, 3, 7, 9],
+                vec![1, 2, 8, 6, 9],
+                vec![0, 4, 0, 8, 7],
+                vec![0, 0, 4, 2, 4]
+            ]
+        );
+    }
+
+    // Test 4: Lower triangular matrix (upper=0)
+    {
+        let att_upper = AttributeProto {
+            name: "upper".to_string(),
+            ref_attr_name: "upper".to_string(),
+            i: 0, // 0 means false, use lower triangular
+            doc_string: "upper".to_string(),
+            r#type: 2,
+            f: 0.0,
+            s: vec![],
+            t: None,
+            g: None,
+            sparse_tensor: None,
+            tp: None,
+            floats: vec![],
+            ints: vec![],
+            strings: vec![],
+            tensors: vec![],
+            graphs: vec![],
+            sparse_tensors: vec![],
+            type_protos: vec![],
+        };
+
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "Trilu".to_string(),
+                domain: "".to_string(),
+                attribute: vec![att_upper],
+                input: vec![INPUT_X.to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                name: "".to_string(),
+                doc_string: "".to_string(),
+            }],
+            name: "".to_string(),
+            initializer: vec![],
+            input: vec![],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                doc_string: "".to_string(),
+                r#type: None,
+            }],
+            value_info: vec![],
+            doc_string: "".to_string(),
+            sparse_initializer: vec![],
+            quantization_annotation: vec![],
+        }));
+
+        let x = Tensor::from_vec(
+            vec![
+                4i64, 7, 3, 7, 9, 1, 2, 8, 6, 9, 9, 4, 1, 8, 7, 4, 3, 4, 2, 4,
+            ],
+            &[4, 5],
+            &Device::Cpu,
+        )?;
+
+        let mut inputs: HashMap<String, Tensor> = HashMap::new();
+        inputs.insert(INPUT_X.to_string(), x);
+
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        assert_eq!(eval.len(), 1);
+
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        let results = z.to_vec2::<i64>()?;
+
+        // Lower triangular matrix (default k=0)
+        assert_eq!(
+            results,
+            vec![
+                vec![4, 0, 0, 0, 0],
+                vec![1, 2, 0, 0, 0],
+                vec![9, 4, 1, 0, 0],
+                vec![4, 3, 4, 2, 0]
+            ]
+        );
+    }
+
+    // Test 5: Lower triangular with negative k=-1
+    {
+        let att_upper = AttributeProto {
+            name: "upper".to_string(),
+            ref_attr_name: "upper".to_string(),
+            i: 0,
+            doc_string: "upper".to_string(),
+            r#type: 2,
+            f: 0.0,
+            s: vec![],
+            t: None,
+            g: None,
+            sparse_tensor: None,
+            tp: None,
+            floats: vec![],
+            ints: vec![],
+            strings: vec![],
+            tensors: vec![],
+            graphs: vec![],
+            sparse_tensors: vec![],
+            type_protos: vec![],
+        };
+
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "Trilu".to_string(),
+                domain: "".to_string(),
+                attribute: vec![att_upper],
+                input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                name: "".to_string(),
+                doc_string: "".to_string(),
+            }],
+            name: "".to_string(),
+            initializer: vec![],
+            input: vec![],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                doc_string: "".to_string(),
+                r#type: None,
+            }],
+            value_info: vec![],
+            doc_string: "".to_string(),
+            sparse_initializer: vec![],
+            quantization_annotation: vec![],
+        }));
+
+        let x = Tensor::from_vec(
+            vec![
+                4i64, 7, 3, 7, 9, 1, 2, 8, 6, 9, 9, 4, 1, 8, 7, 4, 3, 4, 2, 4,
+            ],
+            &[4, 5],
+            &Device::Cpu,
+        )?;
+
+        let k = Tensor::from_vec(vec![-1i64], (), &Device::Cpu)?;
+
+        let mut inputs: HashMap<String, Tensor> = HashMap::new();
+        inputs.insert(INPUT_X.to_string(), x);
+        inputs.insert(INPUT_Y.to_string(), k);
+
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        assert_eq!(eval.len(), 1);
+
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        let results = z.to_vec2::<i64>()?;
+
+        assert_eq!(
+            results,
+            vec![
+                vec![0, 0, 0, 0, 0],
+                vec![1, 0, 0, 0, 0],
+                vec![9, 4, 0, 0, 0],
+                vec![4, 3, 4, 0, 0]
+            ]
+        );
+    }
+
+    // Test 6: Lower triangular with positive k=2
+    {
+        let att_upper = AttributeProto {
+            name: "upper".to_string(),
+            ref_attr_name: "upper".to_string(),
+            i: 0,
+            doc_string: "upper".to_string(),
+            r#type: 2,
+            f: 0.0,
+            s: vec![],
+            t: None,
+            g: None,
+            sparse_tensor: None,
+            tp: None,
+            floats: vec![],
+            ints: vec![],
+            strings: vec![],
+            tensors: vec![],
+            graphs: vec![],
+            sparse_tensors: vec![],
+            type_protos: vec![],
+        };
+
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "Trilu".to_string(),
+                domain: "".to_string(),
+                attribute: vec![att_upper],
+                input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                name: "".to_string(),
+                doc_string: "".to_string(),
+            }],
+            name: "".to_string(),
+            initializer: vec![],
+            input: vec![],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                doc_string: "".to_string(),
+                r#type: None,
+            }],
+            value_info: vec![],
+            doc_string: "".to_string(),
+            sparse_initializer: vec![],
+            quantization_annotation: vec![],
+        }));
+
+        let x = Tensor::from_vec(
+            vec![
+                4i64, 7, 3, 7, 9, 1, 2, 8, 6, 9, 9, 4, 1, 8, 7, 4, 3, 4, 2, 4,
+            ],
+            &[4, 5],
+            &Device::Cpu,
+        )?;
+
+        let k = Tensor::from_vec(vec![2i64], (), &Device::Cpu)?;
+
+        let mut inputs: HashMap<String, Tensor> = HashMap::new();
+        inputs.insert(INPUT_X.to_string(), x);
+        inputs.insert(INPUT_Y.to_string(), k);
+
+        let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+        assert_eq!(eval.len(), 1);
+
+        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+        let results = z.to_vec2::<i64>()?;
+
+        assert_eq!(
+            results,
+            vec![
+                vec![4, 7, 3, 0, 0],
+                vec![1, 2, 8, 6, 0],
+                vec![9, 4, 1, 8, 7],
+                vec![4, 3, 4, 2, 4]
+            ]
+        );
+    }
+
     Ok(())
 }

@@ -85,6 +85,10 @@ name = "onnx"
 required-features = ["onnx"]
 
 [[example]]
+name = "onnx-llm"
+required-features = ["onnx"]
+
+[[example]]
 name = "onnx_basics"
 required-features = ["onnx"]
 
