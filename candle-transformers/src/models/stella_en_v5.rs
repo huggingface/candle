@@ -11,7 +11,7 @@
 //! - Rotary positional embeddings (RoPE)
 //!
 //! References:
-//! - [MRL Framework](https://arxiv.org/abs/2205.13147)
+//! - [MRL Framework](https://huggingface.co/papers/2205.13147)
 //! - [Model Card](https://huggingface.co/dunzhang/stella_en_1.5B_v5)
 //!
 
@@ -56,7 +56,7 @@ pub struct Config {
 }
 
 // Excerpt from `stella` model card:
-// `Stella_en_1.5B_v5` models have been trained on [MRL](https://arxiv.org/abs/2205.13147) enabling multiple output dimensions
+// `Stella_en_1.5B_v5` models have been trained on [MRL](https://huggingface.co/papers/2205.13147) enabling multiple output dimensions
 // Embed head represents the config for various embedding dims supported
 #[derive(Debug, Default, Clone, PartialEq, serde::Deserialize)]
 pub struct EmbedHead {

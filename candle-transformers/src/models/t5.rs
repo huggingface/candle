@@ -14,7 +14,7 @@
 //! - ⚡ [Interactive Wasm Example](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm)
 //! - 💻[GH Model](https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py)
 //! - 🤗 [HF Link](https://huggingface.co/docs/transformers/model_doc/t5)
-//! - 📝 [T5 Paper](https://arxiv.org/abs/1910.10683)
+//! - 📝 [T5 Paper](https://huggingface.co/papers/1910.10683)
 //!
 //! # Encoder-decoder example:
 //!
@@ -33,7 +33,7 @@
 //! # Translation with MADLAD
 //!
 //!
-//! [MADLAD-400](https://arxiv.org/abs/2309.04662) is a series of multilingual machine translation T5 models trained on 250 billion tokens covering over 450 languages using publicly available data. These models are competitive with significantly larger models.
+//! [MADLAD-400](https://huggingface.co/papers/2309.04662) is a series of multilingual machine translation T5 models trained on 250 billion tokens covering over 450 languages using publicly available data. These models are competitive with significantly larger models.
 //!
 //! ```bash
 //! cargo run --example t5 --release  -- \

@@ -3,7 +3,7 @@
 gte-Qwen1.5-7B-instruct is a variant of the GTE embedding model family.
 
 - [Model card](https://huggingface.co/Alibaba-NLP/gte-Qwen1.5-7B-instruct) on the HuggingFace Hub.
-- [Technical report](https://arxiv.org/abs/2308.03281) *Towards General Text Embeddings with Multi-stage Contrastive Learning*
+- [Technical report](https://huggingface.co/papers/2308.03281) *Towards General Text Embeddings with Multi-stage Contrastive Learning*
 
 
 ## Running the example
