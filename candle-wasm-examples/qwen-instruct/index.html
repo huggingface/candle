@@ -1,0 +1,359 @@
+<html>
+
+<head>
+  <meta content="text/html;charset=utf-8" http-equiv="Content-Type" />
+  <title>Candle Qwen2.5 Instruct Rust/WASM</title>
+</head>
+
+<body></body>
+
+</html>
+
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet"
+    href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.8.0/build/styles/default.min.css" />
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@200;300;400&family=Source+Sans+3:wght@100;200;300;400;500;600;700;800;900&display=swap");
+
+    html,
+    body {
+      font-family: "Source Sans 3", sans-serif;
+    }
+
+    code,
+    output,
+    select,
+    pre {
+      font-family: "Source Code Pro", monospace;
+    }
+  </style>
+  <style type="text/tailwindcss">
+    .link {
+        @apply underline hover:text-blue-500 hover:no-underline;
+      }
+    </style>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="module">
+    import snarkdown from "https://cdn.skypack.dev/snarkdown";
+    import hljs from "https://cdn.skypack.dev/highlight.js";
+    // models base url
+    const MODELS = {
+      qwen_25_05_instruct_q4k: {
+        model_name: "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+        model_url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+        tokenizer_url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/main/tokenizer.json",
+        config_url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/main/config.json",
+        quantized: true,
+        seq_len: 2048,
+        size: "491 MB",
+      },
+      qwen_25_05_instruct_q80: {
+        model_name: "qwen2.5-0.5b-instruct-q8_0.gguf",
+        model_url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q8_0.gguf",
+        tokenizer_url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/main/tokenizer.json",
+        config_url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/main/config.json",
+        quantized: true,
+        seq_len: 2048,
+        size: "676 MB",
+      },
+      qwen_25_05_instruct_f16: {
+        model_name: "qwen2.5-0.5b-instruct-f16.gguf",
+        model_url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-f16.gguf",
+        tokenizer_url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/main/tokenizer.json",
+        config_url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/main/config.json",
+        quantized: true,
+        seq_len: 2048,
+        size: "1.27 GB",
+      },
+      qwen_25_15_instruct_q4k: {
+        model_name: "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+        model_url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+        tokenizer_url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/resolve/main/tokenizer.json",
+        config_url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/resolve/main/config.json",
+        quantized: true,
+        seq_len: 2048,
+        size: "1.12 GB",
+      },
+      qwen_25_15_instruct_q80: {
+        model_name: "qwen2.5-1.5b-instruct-q8_0.gguf",
+        model_url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q8_0.gguf",
+        tokenizer_url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/resolve/main/tokenizer.json",
+        config_url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/resolve/main/config.json",
+        quantized: true,
+        seq_len: 2048,
+        size: "1.89 GB",
+      },
+      qwen_25_15_instruct_f16: {
+        model_name: "qwen2.5-1.5b-instruct-f16.gguf",
+        model_url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-f16.gguf",
+        tokenizer_url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/resolve/main/tokenizer.json",
+        config_url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/resolve/main/config.json",
+        quantized: true,
+        seq_len: 2048,
+        size: "3.56 GB",
+      },
+    };
+
+    const qwenWorker = new Worker("./qwenWorker.js", {
+      type: "module",
+    });
+    async function generateSequence(controller) {
+      const getValue = (id) => document.querySelector(`#${id}`).value;
+
+      const modelID = getValue("model");
+      const model = MODELS[modelID];
+      const weightsURL = model.model_url
+      const tokenizerURL = model.tokenizer_url;
+      const configURL = model.config_url;
+
+      const prompt = getValue("prompt").trim();
+      const temperature = getValue("temperature");
+      const topP = getValue("top-p");
+      const repeatPenalty = getValue("repeat_penalty");
+      const seed = getValue("seed");
+      const maxSeqLen = getValue("max-seq");
+
+      function updateStatus(data) {
+        const outStatus = document.querySelector("#output-status");
+        const outGen = document.querySelector("#output-generation");
+        const outCounter = document.querySelector("#output-counter");
+
+        switch (data.status) {
+          case "loading":
+            outStatus.hidden = false;
+            outStatus.textContent = data.message;
+            outGen.hidden = true;
+            outCounter.hidden = true;
+            break;
+          case "generating":
+            const { message, prompt, sentence, tokensSec, totalTime } = data;
+            outStatus.hidden = true;
+            outCounter.hidden = false;
+            outGen.hidden = false;
+            outGen.innerHTML = snarkdown(sentence);
+            outCounter.innerHTML = `${(totalTime / 1000).toFixed(
+              2
+            )}s (${tokensSec.toFixed(2)} tok/s)`;
+            hljs.highlightAll();
+            break;
+          case "complete":
+            outStatus.hidden = true;
+            outGen.hidden = false;
+            break;
+        }
+      }
+
+      return new Promise((resolve, reject) => {
+        qwenWorker.postMessage({
+          weightsURL,
+          modelID,
+          tokenizerURL,
+          configURL,
+          quantized: model.quantized,
+          prompt,
+          temp: temperature,
+          top_p: topP,
+          repeatPenalty,
+          seed: seed,
+          maxSeqLen,
+          command: "start",
+        });
+
+        const handleAbort = () => {
+          qwenWorker.postMessage({ command: "abort" });
+        };
+        const handleMessage = (event) => {
+          const { status, error, message, prompt, sentence } = event.data;
+          if (status) updateStatus(event.data);
+          if (error) {
+            qwenWorker.removeEventListener("message", handleMessage);
+            reject(new Error(`ERROR: ${error}. Please check available RAM in your local machine.`));
+          }
+          if (status === "aborted") {
+            qwenWorker.removeEventListener("message", handleMessage);
+            resolve(event.data);
+          }
+          if (status === "complete") {
+            qwenWorker.removeEventListener("message", handleMessage);
+            resolve(event.data);
+          }
+        };
+
+        controller.signal.addEventListener("abort", handleAbort);
+        qwenWorker.addEventListener("message", handleMessage);
+      });
+    }
+
+    const form = document.querySelector("#form");
+    const prompt = document.querySelector("#prompt");
+    const clearBtn = document.querySelector("#clear-btn");
+    const runBtn = document.querySelector("#run");
+    const modelSelect = document.querySelector("#model");
+    let runController = new AbortController();
+    let isRunning = false;
+
+    document.addEventListener("DOMContentLoaded", () => {
+      for (const [id, model] of Object.entries(MODELS)) {
+        const option = document.createElement("option");
+        option.value = id;
+        option.innerText = `${model.model_name} (${model.size})`;
+        modelSelect.appendChild(option);
+      }
+      const query = new URLSearchParams(window.location.search);
+      const modelID = query.get("model");
+      if (modelID) {
+        modelSelect.value = modelID;
+      } else {
+        modelSelect.value = "qwen_25_05_instruct_q4k";
+      }
+    });
+
+    modelSelect.addEventListener("change", (e) => {
+      const query = new URLSearchParams(window.location.search);
+      query.set("model", e.target.value);
+      window.history.replaceState(
+        {},
+        "",
+        `${window.location.pathname}?${query}`
+      );
+      window.parent.postMessage({ queryString: "?" + query }, "*");
+      const model = MODELS[e.target.value];
+      document.querySelector("#max-seq").max = model.seq_len;
+      document.querySelector("#max-seq").nextElementSibling.value = 512;
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (isRunning) {
+        stopRunning();
+      } else {
+        startRunning();
+        await generateSequence(runController);
+        stopRunning();
+      }
+    });
+
+    function startRunning() {
+      isRunning = true;
+      runBtn.textContent = "Stop";
+    }
+
+    function stopRunning() {
+      runController.abort();
+      runController = new AbortController();
+      runBtn.textContent = "Run";
+      isRunning = false;
+    }
+    clearBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      prompt.value = "";
+      clearBtn.classList.add("invisible");
+      runBtn.disabled = true;
+      stopRunning();
+    });
+    prompt.addEventListener("input", (e) => {
+      runBtn.disabled = false;
+      if (e.target.value.length > 0) {
+        clearBtn.classList.remove("invisible");
+      } else {
+        clearBtn.classList.add("invisible");
+      }
+    });
+  </script>
+</head>
+
+<body class="container max-w-4xl mx-auto p-4 text-gray-800">
+  <main class="grid grid-cols-1 gap-8 relative">
+    <span class="absolute text-5xl -ml-[1em]"> 🕯️ </span>
+    <div>
+      <h1 class="text-5xl font-bold">Candle Qwen2.5 Instruct</h1>
+      <h2 class="text-2xl font-bold">Rust/WASM Demo</h2>
+      <p class="max-w-lg">
+        The
+        <a href="https://huggingface.co/collections/Qwen/qwen25-66e81a666513e518adb90d9e" class="link"
+          target="_blank">Qwen2.5</a>
+        models are state-of-the-art multi-language models ranging from 0.5B to 72B parameters.
+        From the benefits of WebAssembly, you can try some of them without LLM servers.
+        For more details of these models, please refer to the
+        <a href="https://arxiv.org/pdf/2412.15115" class="link" target="_blank">technical report</a>.
+      </p>
+    </div>
+    <div>
+      <p class="text-xs italic max-w-lg">
+        <b>Note:</b>
+        When first run, the app will download and cache the model, which could take a few minutes.
+      </p>
+    </div>
+    <div>
+      <label for="model" class="font-medium">Models Options: </label>
+      <select id="model" class="border-2 border-gray-500 rounded-md font-light"></select>
+    </div>
+    <form id="form" class="flex text-normal px-1 py-1 border border-gray-700 rounded-md items-center">
+      <input type="submit" hidden />
+      <textarea type="text" id="prompt" class="font-light text-lg w-full px-3 py-2 mx-1 resize-none outline-none"
+        oninput="this.style.height = 0;this.style.height = this.scrollHeight + 'px'"
+        placeholder="Add your prompt here..."></textarea>
+      <button id="clear-btn">
+        <svg fill="none" xmlns="http://www.w3.org/2000/svg" width="40" viewBox="0 0 70 40">
+          <path opacity=".5" d="M39 .2v40.2" stroke="#1F2937" />
+          <path d="M1.5 11.5 19 29.1m0-17.6L1.5 29.1" opacity=".5" stroke="#1F2937" stroke-width="2" />
+        </svg>
+      </button>
+      <button id="run"
+        class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 w-16 rounded disabled:bg-gray-300 disabled:cursor-not-allowed">
+        Run
+      </button>
+    </form>
+    <details>
+      <summary class="font-medium cursor-pointer">Advanced Options</summary>
+
+      <div class="grid grid-cols-3 max-w-md items-center gap-3 py-3">
+        <label class="text-sm font-medium" for="max-seq">Maximum length
+        </label>
+        <input type="range" id="max-seq" name="max-seq" min="1" max="2048" step="1" value="512"
+          oninput="this.nextElementSibling.value = Number(this.value)" />
+        <output class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+          512</output>
+        <label class="text-sm font-medium" for="temperature">Temperature</label>
+        <input type="range" id="temperature" name="temperature" min="0" max="2" step="0.01" value="0.00"
+          oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+        <output class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+          0.00</output>
+        <label class="text-sm font-medium" for="top-p">Top-p</label>
+        <input type="range" id="top-p" name="top-p" min="0" max="1" step="0.01" value="0.90"
+          oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+        <output class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+          0.90</output>
+        <label class="text-sm font-medium" for="repeat_penalty">Repeat Penalty</label>
+        <input type="range" id="repeat_penalty" name="repeat_penalty" min="1" max="2" step="0.01" value="1.10"
+          oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+        <output
+          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">1.10</output>
+        <label class="text-sm font-medium" for="seed">Seed</label>
+        <input type="number" id="seed" name="seed" value="42"
+          class="font-light border border-gray-700 text-right rounded-md p-2" />
+        <button id="run"
+          onclick="document.querySelector('#seed').value = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)"
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-1 w-[50px] rounded disabled:bg-gray-300 disabled:cursor-not-allowed text-sm">
+          Rand
+        </button>
+      </div>
+    </details>
+
+    <div>
+      <h3 class="font-medium">Generation:</h3>
+      <div class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md flex flex-col gap-2">
+        <div id="output-counter" hidden class="ml-auto font-semibold grid-rows-1"></div>
+        <p hidden id="output-generation" class="grid-rows-2 text-lg"></p>
+        <span id="output-status" class="m-auto font-light">No output yet</span>
+      </div>
+    </div>
+  </main>
+</body>
+
+</html>
