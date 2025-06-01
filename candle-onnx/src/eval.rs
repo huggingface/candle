@@ -1960,15 +1960,14 @@ fn simple_eval_(
             "SoftmaxCrossEntropyLoss" => {
                 let logits = get(&node.input[0])?.to_dtype(DType::F32)?;
                 let input_shape = logits.shape().dims();
-                let (n, c, d): (usize, usize, usize) = match *input_shape {
-                    [n, c] => (n, c, 1),
-                    [n, c, ref rest @ ..] => (n, c, rest.iter().product()),
+                let (n, _c, d): (usize, usize, usize) = match *input_shape {
+                    [n, _c] => (n, _c, 1),
+                    [n, _c, ref rest @ ..] => (n, _c, rest.iter().product()),
                     _ => bail!("Unsupported input shape: {:?}", input_shape),
                 };
                 let get_log_prob = node.output.len() == 2;
 
                 let raw_labels = get(&node.input[1])?.to_dtype(DType::I64)?;
-                let labels = raw_labels.unsqueeze(1)?;
 
                 let log_probs = log_softmax(&logits, 1)?;
 

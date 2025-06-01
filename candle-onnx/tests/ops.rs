@@ -5959,7 +5959,6 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
     assert_eq!(eval.len(), 1);
 
-    println!("All available output keys: {:?}", eval.keys().collect::<Vec<_>>());
     assert!(eval.contains_key(OUTPUT_Z), "Missing key: {}", OUTPUT_Z);
     let z = eval.get(OUTPUT_Z).unwrap();
     let z = z.as_ref().to_dtype(DType::F32)?.flatten_all()?;
@@ -5969,16 +5968,12 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
     } else {
         z.to_vec1::<f32>()?
     };
-    println!("Here");
 
     let expected: f32 = 0.2633;
     
     assert!((actual[0] - expected).abs() < 1e-4, "Expected {}, got {}", expected, actual[0]);
 
-    println!("SoftmaxCrossEntropyLoss output: {:?}", actual);
     for reduction in ["none", "mean", "sum"] {
-        println!("\n-------------------------------", );
-        println!("Testing reduction: {}", reduction);
         let mut node = NodeProto {
             op_type: "SoftmaxCrossEntropyLoss".to_string(),
             input: vec![INPUT_X.to_string(), INPUT_Y.to_string()],
@@ -6048,8 +6043,6 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
     }
 
     {
-    println!("\n-------------------------------", );
-    println!("tests softmax_cross_entropy_loss with log_prob");
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
             op_type: "SoftmaxCrossEntropyLoss".to_string(),
@@ -6126,13 +6119,9 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
         }
     }
 
-    println!("log_prob test passed.");
     }
 
     {
-        println!("\n-------------------------------", );
-        println!("tests SoftmaxCrossEntropyLoss with class weights");
-
         let logits = Tensor::from_vec(
             vec![
                 2.0f32, 1.0, 0.1,  // sample 1
@@ -6145,8 +6134,6 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
         let weights = Tensor::from_vec(vec![1.0f32, 1.0, 3.0], (3,), &Device::Cpu)?;
 
         for reduction in ["none", "sum", "mean"] {
-            println!("Testing reduction={}", reduction);
-
             let mut node = NodeProto {
                 op_type: "SoftmaxCrossEntropyLoss".to_string(),
                 input: vec![
@@ -6215,9 +6202,6 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
     }
 
     {
-    println!("\n-------------------------------", );
-    println!("Testing SoftmaxCrossEntropyLoss with ignore_index");
-
     let logits = Tensor::from_vec(
         vec![
             2.0f32, 1.0, 0.1,  // sample 0
@@ -6230,7 +6214,6 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
     let ignore_index = -1i64;
 
     for reduction in ["none", "sum", "mean"] {
-        println!("Testing reduction={}", reduction);
 
         let mut node = NodeProto {
             op_type: "SoftmaxCrossEntropyLoss".to_string(),
@@ -6297,9 +6280,6 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
     }
 
     {
-    println!("\n-------------------------------", );
-    println!("Test softmaxcrossentropy_sum_log_prob");
-
     let device = &Device::Cpu;
 
     let x_data = vec![
@@ -6353,11 +6333,6 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
         (loss - expected_loss).abs() < 1e-3,
         "Expected loss {}, got {}", expected_loss, loss
     );
-
-    println!("✅ Loss: {}", loss);
-    println!("log_prob: {:?}", log_prob);
-    println!("labels: {:?}", labels_data);
-    println!("logits: {:?}", x_data);
     let expected_log_prob = vec![
         vec![-5.3665304, -4.3665304, -3.3665302, -0.36653024, -1.3665302],
         vec![-3.4519143, -1.4519144, -2.4519143, -0.45191443, -4.4519143],
@@ -6378,17 +6353,12 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
     }
     }
 
-    {
-    println!("\n-------------------------------", );
-    println!("Testing SoftmaxCrossEntropyLoss with 7D input and reduction=none (with log_prob)");
-    use candle::Shape;
-
+    { 
     let device = &Device::Cpu;
     let shape = &[3, 5, 6, 6, 5, 3, 4];
     let labels_shape = &[3, 6, 6, 5, 3, 4];
     let total_elems = shape[0] * shape[1] * shape[2] * shape[3] * shape[4] * shape[5] * shape[6];
 
-    // deterministic dummy data
     let x_data: Vec<f32> = (0..total_elems).map(|i| (i % 10) as f32).collect();
     let labels_data: Vec<i64> = (0..(total_elems / shape[1])).map(|i| (i % shape[1]) as i64).collect();
 
@@ -6431,10 +6401,8 @@ fn test_softmax_cross_entropy_loss_operator() -> Result<()> {
     let loss = eval.get("z").unwrap();
     let log_prob = eval.get("log_prob").unwrap();
 
-    assert_eq!(loss.shape(), &Shape::from(&[3, 6, 6, 5, 3, 4][..]));
-    assert_eq!(log_prob.shape(), &Shape::from(&[3, 5, 6, 6, 5, 3, 4][..]));
-
-    println!("✅ Shapes OK: loss = {:?}, log_prob = {:?}", loss.shape(), log_prob.shape());
+    assert_eq!(loss.shape(), &candle::Shape::from(&[3, 6, 6, 5, 3, 4][..]));
+    assert_eq!(log_prob.shape(), &candle::Shape::from(&[3, 5, 6, 6, 5, 3, 4][..]));
     }
     
     Ok(())
