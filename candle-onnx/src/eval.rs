@@ -1955,6 +1955,50 @@ fn simple_eval_(
                 let output = input.sign()?;
                 values.insert(node.output[0].clone(), output);
             }
+            // https://onnx.ai/onnx/operators/onnx__EyeLike.html
+            "EyeLike" => {
+                let input = get(&node.input[0])?;
+                let shape = input.shape();
+                if shape.rank() != 2 {
+                    candle::bail!("EyeLike: input must be a 2D tensor");
+                }
+                let (rows, cols) = (shape.dims()[0], shape.dims()[1]);
+                let device = input.device();
+
+                let k = get_attr_opt(node, "k")?.copied().unwrap_or(0);
+
+                let dtype = match get_attr_opt(node, "dtype")?.copied() {
+                    Some(1) => DType::F32,
+                    Some(11) => DType::F64,
+                    Some(7) => DType::I64,
+                    Some(12) => DType::U32,
+                    Some(2) => DType::U8,
+                    None => input.dtype(),
+                    Some(dt) => candle::bail!("EyeLike: unsupported dtype {dt}"),
+                };
+
+                let row_idx = Tensor::arange(0i64, rows as i64, device)?;
+                let col_idx = Tensor::arange(0i64, cols as i64, device)?;
+
+                let row_idx = row_idx.reshape((rows, 1))?.broadcast_as((rows, cols))?;
+                let col_idx = col_idx.reshape((1, cols))?.broadcast_as((rows, cols))?;
+                let mask = match k.cmp(&0) {
+                    std::cmp::Ordering::Equal => row_idx.eq(&col_idx)?,
+                    std::cmp::Ordering::Greater => {
+                        let k_tensor = Tensor::new(k as i64, device)?.broadcast_as((rows, cols))?;
+                        let col_shifted = col_idx.sub(&k_tensor)?;
+                        row_idx.eq(&col_shifted)?
+                    }
+                    std::cmp::Ordering::Less => {
+                        let k_tensor = Tensor::new((-k) as i64, device)?.broadcast_as((rows, cols))?;
+                        let row_shifted = row_idx.sub(&k_tensor)?;
+                        row_shifted.eq(&col_idx)?
+                    }
+                };
+
+                let output = mask.to_dtype(dtype)?;
+                values.insert(node.output[0].clone(), output);
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }

@@ -5910,3 +5910,146 @@ fn test_sign_operation() -> Result<()> {
     );
     Ok(())
 }
+
+
+#[test]
+fn test_eyelike_operator() -> candle::Result<()> {
+    // Test based on: https://github.com/onnx/onnx/blob/main/docs/Operators.md#EyeLike
+    // === Test: EyeLike with dtype=FLOAT and k=1 ===
+    {
+        let shape = (4, 5);
+        let input_name = "x".to_string();
+        let output_name = "y".to_string();
+
+        let model = create_model_proto_with_graph(Some(GraphProto {
+            input: vec![ValueInfoProto {
+                name: input_name.clone(),
+                ..Default::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: output_name.clone(),
+                ..Default::default()
+            }],
+            node: vec![NodeProto {
+                op_type: "EyeLike".to_string(),
+                input: vec![input_name.clone()],
+                output: vec![output_name.clone()],
+                attribute: vec![
+                    AttributeProto {
+                        name: "k".to_string(),
+                        r#type: AttributeType::Int as i32,
+                        i: 1,
+                        ..Default::default()
+                    },
+                    AttributeProto {
+                        name: "dtype".to_string(),
+                        r#type: AttributeType::Int as i32,
+                        i: 1,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+
+        let mut inputs = HashMap::new();
+        inputs.insert(input_name.clone(), Tensor::zeros(shape, DType::I64, &Device::Cpu)?);
+
+        let outputs = simple_eval(&model, inputs)?;
+        let actual = outputs.get(&output_name).unwrap().to_vec2::<f32>()?;
+
+        let expected = vec![
+            vec![0., 1., 0., 0., 0.],
+            vec![0., 0., 1., 0., 0.],
+            vec![0., 0., 0., 1., 0.],
+            vec![0., 0., 0., 0., 1.],
+        ];
+        assert_eq!(actual, expected);
+    }
+
+    // === Test: EyeLike with dtype=DOUBLE ===
+    {
+        let shape = (3, 4);
+        let input_name = "x".to_string();
+        let output_name = "y".to_string();
+
+        let model = create_model_proto_with_graph(Some(GraphProto {
+            input: vec![ValueInfoProto {
+                name: input_name.clone(),
+                ..Default::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: output_name.clone(),
+                ..Default::default()
+            }],
+            node: vec![NodeProto {
+                op_type: "EyeLike".to_string(),
+                input: vec![input_name.clone()],
+                output: vec![output_name.clone()],
+                attribute: vec![AttributeProto {
+                    name: "dtype".to_string(),
+                    r#type: AttributeType::Int as i32,
+                    i: 11,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+
+        let mut inputs = HashMap::new();
+        inputs.insert(input_name.clone(), Tensor::zeros(shape, DType::I64, &Device::Cpu)?);
+
+        let outputs = simple_eval(&model, inputs)?;
+        let actual = outputs.get(&output_name).unwrap().to_vec2::<f64>()?;
+
+        let expected = vec![
+            vec![1., 0., 0., 0.],
+            vec![0., 1., 0., 0.],
+            vec![0., 0., 1., 0.],
+        ];
+        assert_eq!(actual, expected);
+    }
+
+    // === Test: EyeLike without dtype (inherits from input) ===
+    {
+        let shape = (4, 4);
+        let input_name = "x".to_string();
+        let output_name = "y".to_string();
+
+        let model = create_model_proto_with_graph(Some(GraphProto {
+            input: vec![ValueInfoProto {
+                name: input_name.clone(),
+                ..Default::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: output_name.clone(),
+                ..Default::default()
+            }],
+            node: vec![NodeProto {
+                op_type: "EyeLike".to_string(),
+                input: vec![input_name.clone()],
+                output: vec![output_name.clone()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+
+        let mut inputs = HashMap::new();
+        inputs.insert(input_name.clone(), Tensor::zeros(shape, DType::I64, &Device::Cpu)?);
+
+        let outputs = simple_eval(&model, inputs)?;
+        let actual = outputs.get(&output_name).unwrap().to_vec2::<i64>()?;
+
+        let expected = vec![
+            vec![1, 0, 0, 0],
+            vec![0, 1, 0, 0],
+            vec![0, 0, 1, 0],
+            vec![0, 0, 0, 1],
+        ];
+        assert_eq!(actual, expected);
+    }
+
+    Ok(())
+}
