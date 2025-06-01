@@ -3,7 +3,6 @@ use crate::onnx::tensor_proto::DataType;
 use crate::onnx::{self, GraphProto};
 use candle::{bail, DType, Device, Result, Tensor};
 use std::collections::{HashMap, HashSet};
-use candle_nn::ops::log_softmax;
 
 pub type Value = Tensor;
 
@@ -987,11 +986,6 @@ fn simple_eval_(
                 let output = input.gelu_erf()?;
                 values.insert(node.output[0].clone(), output);
             }
-            "Elu" => {
-                let input = get(&node.input[0])?;
-                let output = input.gelu_erf()?;
-                values.insert(node.output[0].clone(), output);
-            }
             "Relu" => {
                 let input = get(&node.input[0])?;
                 let output = input.relu()?;
@@ -1969,7 +1963,7 @@ fn simple_eval_(
 
                 let raw_labels = get(&node.input[1])?.to_dtype(DType::I64)?;
 
-                let log_probs = log_softmax(&logits, 1)?;
+                let log_probs = candle_nn::ops::log_softmax(&logits, 1)?;
 
                 let ignore_index = get_attr_opt::<i64>(node, "ignore_index")?;
 
