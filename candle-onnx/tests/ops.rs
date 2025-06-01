@@ -5913,9 +5913,10 @@ fn test_sign_operation() -> Result<()> {
 
 
 #[test]
-fn test_one_hot_basic() -> Result<()> {
+fn test_one_hot() -> Result<()> {
+    {
     let depth_value = Tensor::new(3i64, &Device::Cpu)?; // depth = 3
-    let values_tensor = Tensor::new(vec![0.0f32, 1.0], &Device::Cpu)?; // off = 0.0, on = 1.0
+    let values_tensor = Tensor::from_vec(vec![0.0f32, 1.0], (2,), &Device::Cpu)?; // off = 0.0, on = 1.0
 
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
         node: vec![NodeProto {
@@ -5966,6 +5967,145 @@ fn test_one_hot_basic() -> Result<()> {
 
     let z_reshaped = z.to_dtype(DType::F32)?.reshape((3, 3))?.to_vec2::<f32>()?;
     assert_eq!(z_reshaped, expected);
+    }
+    {
+    // Test with axis
+    println!("Testing OneHot with axis attribute");
+    let indices = Tensor::from_vec(vec![1i64, 9, 2, 4], (2, 2), &Device::Cpu)?;
+    let depth = Tensor::new(10i64, &Device::Cpu)?;
+    let values = Tensor::from_vec(vec![1.0f32, 3.0], (2,), &Device::Cpu)?;
+
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "OneHot".to_string(),
+            input: vec!["indices".into(), "depth".into(), "values".into()],
+            output: vec!["y".into()],
+            attribute: vec![AttributeProto {
+                name: "axis".into(),
+                r#type: AttributeType::Int as i32,
+                i: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: "y".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let mut inputs = HashMap::new();
+    inputs.insert("indices".into(), indices);
+    inputs.insert("depth".into(), depth);
+    inputs.insert("values".into(), values);
+
+    let eval = simple_eval(&graph, inputs)?;
+    let y = eval.get("y").unwrap();
+    assert_eq!(y.dims(), &[2, 10, 2]);
+    }
+    {
+    // Test with negative axis
+    println!("Testing OneHot with negative axis attribute");
+    let indices = Tensor::from_vec(vec![1i64, 9, 2, 4], (2, 2), &Device::Cpu)?;
+    let depth = Tensor::new(10i64, &Device::Cpu)?;
+    let values = Tensor::from_vec(vec![1.0f32, 3.0], (2,), &Device::Cpu)?;
+
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "OneHot".to_string(),
+            input: vec!["indices".into(), "depth".into(), "values".into()],
+            output: vec!["y".into()],
+            attribute: vec![AttributeProto {
+                name: "axis".into(),
+                r#type: AttributeType::Int as i32,
+                i: -2,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: "y".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let mut inputs = HashMap::new();
+    inputs.insert("indices".into(), indices);
+    inputs.insert("depth".into(), depth);
+    inputs.insert("values".into(), values);
+
+    let eval = simple_eval(&graph, inputs)?;
+    let y = eval.get("y").unwrap();
+    assert_eq!(y.dims(), &[2, 10, 2]);
+    }
+    {
+    // Test with negative indices
+    println!("Testing OneHot with negative indices");
+    let indices = Tensor::from_vec(vec![0i64, -7, -8], (3,), &Device::Cpu)?;
+    let depth = Tensor::new(10i64, &Device::Cpu)?;
+    let values = Tensor::from_vec(vec![1.0f32, 3.0], (2,), &Device::Cpu)?;
+
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "OneHot".to_string(),
+            input: vec!["indices".into(), "depth".into(), "values".into()],
+            output: vec!["y".into()],
+            attribute: vec![AttributeProto {
+                name: "axis".into(),
+                r#type: AttributeType::Int as i32,
+                i: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: "y".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let mut inputs = HashMap::new();
+    inputs.insert("indices".into(), indices);
+    inputs.insert("depth".into(), depth);
+    inputs.insert("values".into(), values);
+
+    let eval = simple_eval(&graph, inputs)?;
+    let y = eval.get("y").unwrap();
+    assert_eq!(y.dims(), &[3, 10]);
+    }
+    {
+    // Test without axis
+    println!("Testing OneHot without axis attribute");
+    let indices = Tensor::from_vec(vec![0i64, 7, 8], (3,), &Device::Cpu)?;
+    let depth = Tensor::new(12i64, &Device::Cpu)?;
+    let values = Tensor::from_vec(vec![2f32, 5.0], (2,), &Device::Cpu)?;
+
+    let graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "OneHot".to_string(),
+            input: vec!["indices".into(), "depth".into(), "values".into()],
+            output: vec!["y".into()],
+            ..Default::default()
+        }],
+        output: vec![ValueInfoProto {
+            name: "y".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let mut inputs = HashMap::new();
+    inputs.insert("indices".into(), indices);
+    inputs.insert("depth".into(), depth);
+    inputs.insert("values".into(), values);
+
+    let eval = simple_eval(&graph, inputs)?;
+    let y = eval.get("y").unwrap();
+    assert_eq!(y.dims(), &[3, 12]);
+    }
 
     Ok(())
 }

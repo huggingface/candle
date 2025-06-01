@@ -986,11 +986,6 @@ fn simple_eval_(
                 let output = input.gelu_erf()?;
                 values.insert(node.output[0].clone(), output);
             }
-            "Elu" => {
-                let input = get(&node.input[0])?;
-                let output = input.gelu_erf()?;
-                values.insert(node.output[0].clone(), output);
-            }
             "Relu" => {
                 let input = get(&node.input[0])?;
                 let output = input.relu()?;
@@ -1971,20 +1966,31 @@ fn simple_eval_(
                 let off_value = values_vec[0];
                 let on_value = values_vec[1];
 
-                let axis = node
+                let mut axis = node
                     .attribute
                     .iter()
                     .find(|attr| attr.name == "axis")
                     .map(|attr| attr.i)
                     .unwrap_or(-1);
-                if axis != -1 {
-                    return Err(candle::Error::Msg(
-                        "OneHot: only axis = -1 is currently supported".to_string(),
-                    ));
+
+
+                let rank = indices.rank();
+                if axis < -((rank as i64) + 1) || axis > (rank as i64) {
+                    return Err(candle::Error::Msg(format!("OneHot: invalid axis {axis} for rank {rank}")));
+                }
+                if axis < 0 {
+                    axis += rank as i64 + 1;
                 }
 
                 let output = candle_nn::encoding::one_hot(indices.clone(), depth, on_value, off_value)?;
-                values.insert(node.output[0].clone(), output);
+
+                let final_output = if axis as usize == output.rank() - 1 {
+                    output
+                } else {
+                    output.permute(output.rank() - 1)?
+                };
+
+                values.insert(node.output[0].clone(), final_output);
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
