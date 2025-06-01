@@ -1953,6 +1953,7 @@ fn simple_eval_(
             // https://onnx.ai/onnx/operators/onnx__OneHot.html
             "OneHot" => {
                 let indices = get(&node.input[0])?;
+                let orig_shape = get(&node.input[0])?.dims().to_vec();
                 let depth_tensor = get(&node.input[1])?;
                 let values_tensor = get(&node.input[2])?;
 
@@ -1982,14 +1983,38 @@ fn simple_eval_(
                     axis += rank as i64 + 1;
                 }
 
-                let output = candle_nn::encoding::one_hot(indices.clone(), depth, on_value, off_value)?;
+                let indices = indices.flatten_all()?;
+                let indices_vec = indices.to_vec1::<i64>()?;
+                let mut out = vec![off_value; depth * indices.elem_count()];
+                for (i, &index) in indices_vec.iter().enumerate() {
+                    let idx = if index < 0 {
+                        (index + depth as i64) as usize
+                    } else {
+                        index as usize
+                    };
+                    if idx >= depth {
+                        continue;
+                    }
+                    out[i * depth + idx] = on_value;
+                }
+
+                let mut target_shape = orig_shape;
+                target_shape.push(depth);
+                let output = Tensor::from_vec(out, target_shape, indices.device())?;
 
                 let final_output = if axis as usize == output.rank() - 1 {
                     output
                 } else {
-                    output.permute(output.rank() - 1)?
-                };
+                    fn move_axis_to(rank: usize, from: usize, to: usize) -> Vec<usize> {
+                        let mut dims: Vec<usize> = (0..rank).collect();
+                        let axis = dims.remove(from);
+                        dims.insert(to, axis);
+                        dims
+                    }
 
+                    let perm = move_axis_to(output.rank(), output.rank() - 1, axis as usize);
+                    output.permute(&*perm)?
+                };
                 values.insert(node.output[0].clone(), final_output);
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
