@@ -858,7 +858,7 @@ struct finalize_softmax {
 };
 
 // Welford's algorithm approach for an online softmax implementation.
-// Same as the Online normalizer calculation for softmax: https://arxiv.org/pdf/1805.02867.pdf
+// Same as the Online normalizer calculation for softmax: https://huggingface.co/papers/1805.02867
 template<typename T, ushort BLOCKSIZE>
 METAL_FUNC void softmax(
     constant uint &src_numel,
