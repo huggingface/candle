@@ -5,7 +5,7 @@
 ## Running the example
 
 ```bash
-$ cargo run --example qwen25-instruct --release  -- --prompt "Hello there "
+cargo run --example qwen25-instruct --release  -- --prompt "Write a function to count prime numbers up to N."
 ```
 
 - Various model sizes are available via the `--model` argument:
