@@ -157,7 +157,7 @@ impl Qwen3Attention {
         // Necessary because the hidden_size in the config isn't always accurate
         let hidden_size = head_dim * cfg.num_attention_heads;
 
-        let kv_cache = KvCache::new(2, cfg.max_position_embeddings);
+        let kv_cache = KvCache::new(2, 512);
 
         Ok(Self {
             q_proj,
