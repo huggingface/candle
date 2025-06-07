@@ -157,6 +157,8 @@ impl Qwen3Attention {
         // Necessary because the hidden_size in the config isn't always accurate
         let hidden_size = head_dim * cfg.num_attention_heads;
 
+        // Initialize KV cache with 512 tokens capacity to reduce initial memory allocation.
+        // The cache will grow in chunks of 512 tokens when needed.
         let kv_cache = KvCache::new(2, 512);
 
         Ok(Self {
