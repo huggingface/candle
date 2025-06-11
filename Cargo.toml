@@ -62,7 +62,10 @@ half = { version = "2.5.0", features = [
     "use-intrinsics",
     "rand_distr",
 ] }
-float8 = { version = "0.1.3", features = ["num-traits", "rand_distr"] }
+float8 = { git = "https://github.com/zackangelo/float8", branch = "cudarc_0_16", features = [
+    "num-traits",
+    "rand_distr",
+] }
 hound = "3.5.1"
 image = { version = "0.25.2", default-features = false, features = [
     "jpeg",

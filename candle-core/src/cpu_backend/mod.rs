@@ -2727,7 +2727,8 @@ impl BackendDevice for CpuDevice {
             DType::F8E4M3 => {
                 let mut data = Vec::with_capacity(elem_count);
                 let uniform =
-                    rand::distributions::Uniform::new(F8E4M3::from_f64(min), F8E4M3::from_f64(max));
+                    rand::distr::Uniform::new(F8E4M3::from_f64(min), F8E4M3::from_f64(max))
+                        .map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(rng.sample::<F8E4M3, _>(uniform))
                 }

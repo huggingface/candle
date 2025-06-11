@@ -2,7 +2,7 @@ use crate::backend::BackendDevice;
 use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 pub use candle_kernels as kernels;
 pub use cudarc;
-use cudarc::driver::{CudaFunction, LaunchAsync, LaunchConfig};
+use cudarc::driver::CudaFunction;
 use float8::F8E4M3;
 use half::{bf16, f16};
 use std::collections::HashMap;
@@ -328,7 +328,7 @@ impl BackendDevice for CudaDevice {
                 CudaStorageSlice::F64(data)
             }
             DType::F8E4M3 => {
-                let data = self.alloc_zeros::<F8E4M3>(elem_count).w()?;
+                let data = self.alloc_zeros::<F8E4M3>(elem_count)?;
                 CudaStorageSlice::F8E4M3(data)
             }
         };
@@ -447,7 +447,7 @@ impl BackendDevice for CudaDevice {
                 CudaStorageSlice::F64(data)
             }
             DType::F8E4M3 => {
-                let data = self.alloc::<F8E4M3>(elem_count).w()?;
+                let data = self.alloc::<F8E4M3>(elem_count)?;
                 CudaStorageSlice::F8E4M3(data)
             }
         };
@@ -488,7 +488,7 @@ impl BackendDevice for CudaDevice {
                 CudaStorageSlice::F64(data)
             }
             CpuStorageRef::F8E4M3(storage) => {
-                let data = self.htod_sync_copy(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::F8E4M3(data)
             }
         };
@@ -529,7 +529,7 @@ impl BackendDevice for CudaDevice {
                 CudaStorageSlice::F64(data)
             }
             CpuStorage::F8E4M3(storage) => {
-                let data = self.htod_sync_copy(storage).w()?;
+                let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::F8E4M3(data)
             }
         };
@@ -570,7 +570,7 @@ impl BackendDevice for CudaDevice {
                 CudaStorageSlice::F64(data)
             }
             CpuStorage::F8E4M3(storage) => {
-                let data = self.htod_copy(storage).w()?;
+                let data = self.memcpy_stod(&storage)?;
                 CudaStorageSlice::F8E4M3(data)
             }
         };

@@ -123,7 +123,7 @@ pub trait Map2InPlace {
             (S::F16(dst), S::F16(src)) => self.f(dst, dst_l, src, src_l, d),
             (S::F32(dst), S::F32(src)) => self.f(dst, dst_l, src, src_l, d),
             (S::F64(dst), S::F64(src)) => self.f(dst, dst_l, src, src_l, d),
-            (S::F8E4M3(dst), S::F8E4M3(src)) => self.f(dst, dst_s, src, src_l, d),
+            (S::F8E4M3(dst), S::F8E4M3(src)) => self.f(dst, dst_l, src, src_l, d),
             _ => Err(CudaError::InternalError("dtype mismatch in binary op"))?,
         }
     }

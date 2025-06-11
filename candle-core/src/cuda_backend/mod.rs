@@ -46,6 +46,7 @@ impl crate::scalar::Scalar {
             Scalar::F64(v) => builder.arg(v),
             Scalar::F16(v) => builder.arg(v),
             Scalar::BF16(v) => builder.arg(v),
+            Scalar::F8E4M3(v) => builder.arg(v),
         };
     }
 }
@@ -1330,6 +1331,7 @@ impl BackendStorage for CudaStorage {
             S::F16(s) => (slice_ptr(s, src_o), "const_set_f16"),
             S::F32(s) => (slice_ptr(s, src_o), "const_set_f32"),
             S::F64(s) => (slice_ptr(s, src_o), "const_set_f64"),
+            S::F8E4M3(s) => (slice_ptr(s, src_o), "const_set_f8_e4m3"),
         };
 
         let func = dev.get_or_load_func(kernel_name, &kernels::FILL)?;
@@ -1448,9 +1450,16 @@ impl BackendStorage for CudaStorage {
                 CudaStorageSlice::F64(out)
             }
             DType::F8E4M3 => {
-                let out = unsafe { dev.alloc::<F8E4M3>(el) }.w()?;
-                let params = (el, dims.len(), &ds, *inp, &out);
-                unsafe { func.launch(cfg, params) }.w()?;
+                let out: CudaSlice<F8E4M3> = unsafe { dev.alloc::<F8E4M3>(el) }?;
+
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
+
                 CudaStorageSlice::F8E4M3(out)
             }
         };
@@ -1538,8 +1547,7 @@ impl BackendStorage for CudaStorage {
                 Ok(CpuStorage::F64(cpu_storage))
             }
             CudaStorageSlice::F8E4M3(slice) => {
-                let dev = slice.device();
-                let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::F8E4M3(cpu_storage))
             }
         }
@@ -2119,13 +2127,17 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F8E4M3(src), CudaStorageSlice::F8E4M3(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
                 if src_l.is_contiguous() {
-                    dev.dtod_copy(&src, &mut dst).w()?
+                    dev.memcpy_dtod(&src, &mut dst)?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_f8_e4m3", kernels::UNARY)?;
-                    // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    let func = dev.get_or_load_func("ucopy_f8_e4m3", &kernels::UNARY)?;
+                    let mut builder = func.builder();
+                    barg!(builder, el_count);
+                    barg!(builder, dims.len());
+                    ds.builder_arg(&mut builder);
+                    builder.arg(&src);
+                    builder.arg(&mut dst);
                     // SAFETY: ffi.
-                    unsafe { func.launch(cfg, params) }.w()?
+                    unsafe { builder.launch(cfg) }.w()?;
                 }
             }
             (CudaStorageSlice::U8(src), CudaStorageSlice::U8(dst)) => {

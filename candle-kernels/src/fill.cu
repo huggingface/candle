@@ -83,4 +83,5 @@ CONST_SET_OP(__nv_bfloat16, const_set_bf16)
 
 extern "C" __global__ void fill_f8_e4m3(__nv_fp8_e4m3 *buf, __nv_fp8_e4m3 value, const size_t numel) { fill_with(buf, value, numel); }
 COPY2D_OP(__nv_fp8_e4m3, copy2d_f8_e4m3)
+CONST_SET_OP(__nv_fp8_e4m3, const_set_f8_e4m3)
 #endif
