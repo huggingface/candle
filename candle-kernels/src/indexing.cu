@@ -25,6 +25,18 @@ constexpr uint8_t max_value<uint8_t>() {
     return 0xFFu;
 }
 
+template <>
+__host__ __device__
+constexpr int32_t max_value<int32_t>() {
+    return 0x7FFFFFFF;
+}
+
+template <>
+__host__ __device__
+constexpr int16_t max_value<int16_t>() {
+    return 0x7FFF;
+}
+
 template<typename T, typename I>
 __device__ void index_select(
     const size_t numel,
@@ -134,7 +146,7 @@ __device__ void index_add(
       }
 }
 
-#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ >= 890
 #define F8E4M3_TO_FLOAT(x) __half2float(__nv_cvt_fp8_to_halfraw(x.__x, __NV_E4M3))
 
 template<typename I>
@@ -311,7 +323,9 @@ SA_OP(__nv_bfloat16, uint8_t, sa_u8_bf16)
 S_OP(__nv_bfloat16, int64_t, s_i64_bf16)
 S_OP(__nv_bfloat16, uint32_t, s_u32_bf16)
 S_OP(__nv_bfloat16, uint8_t, s_u8_bf16)
+#endif
 
+#if __CUDA_ARCH__ >= 890
 IS_OP(__nv_fp8_e4m3, int16_t, is_i16_f8_e4m3)
 IS_OP(__nv_fp8_e4m3, int32_t, is_i32_f8_e4m3)
 IS_OP(__nv_fp8_e4m3, int64_t, is_i64_f8_e4m3)

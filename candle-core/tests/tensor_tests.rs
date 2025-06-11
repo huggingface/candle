@@ -126,6 +126,21 @@ fn arange(device: &Device) -> Result<()> {
         Tensor::arange_step(5i64, 0i64, -1, device)?.to_vec1::<i64>()?,
         [5, 4, 3, 2, 1],
     );
+
+    assert_eq!(
+        Tensor::arange_step(
+            F8E4M3::from_f32(0.),
+            F8E4M3::from_f32(5.),
+            F8E4M3::from_f32(2.),
+            device
+        )?
+        .to_vec1::<F8E4M3>()?,
+        [
+            F8E4M3::from_f32(0.),
+            F8E4M3::from_f32(2.),
+            F8E4M3::from_f32(4.),
+        ],
+    );
     Ok(())
 }
 
