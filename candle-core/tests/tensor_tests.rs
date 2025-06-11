@@ -1,4 +1,5 @@
 use candle_core::{test_device, test_utils, DType, Device, IndexOp, Result, Tensor, D};
+use float8::F8E4M3;
 
 fn zeros(device: &Device) -> Result<()> {
     let tensor = Tensor::zeros((5, 2), DType::F32, device)?;
@@ -58,6 +59,22 @@ fn ones(device: &Device) -> Result<()> {
                 half::bf16::from_f32(1.0),
                 half::bf16::from_f32(1.0),
                 half::bf16::from_f32(1.0)
+            ]
+        ],
+    );
+
+    assert_eq!(
+        Tensor::ones((2, 3), DType::F8E4M3, device)?.to_vec2::<F8E4M3>()?,
+        [
+            [
+                F8E4M3::from_f32(1.),
+                F8E4M3::from_f32(1.),
+                F8E4M3::from_f32(1.)
+            ],
+            [
+                F8E4M3::from_f32(1.),
+                F8E4M3::from_f32(1.),
+                F8E4M3::from_f32(1.)
             ]
         ],
     );
