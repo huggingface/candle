@@ -1,0 +1,24 @@
+[package]
+name = "zeroshotclassification"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+[dependencies]
+candle = { workspace = true }
+candle-nn = { workspace = true }
+candle-transformers = { workspace = true}
+tokenizers = { workspace = true, features = ["unstable_wasm"] }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+js-sys = "0.3.77"
+
+getrandom = { version = "0.3.2", features = ["wasm_js"] }
+wasm-bindgen = "0.2.100"
+serde-wasm-bindgen = "0.6.5"
+console_error_panic_hook = "0.1.7"
