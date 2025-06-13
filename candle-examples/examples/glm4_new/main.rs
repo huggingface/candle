@@ -186,7 +186,7 @@ fn main() -> anyhow::Result<()> {
 
     let model_id = match args.model_id.as_ref() {
         Some(model_id) => model_id.to_string(),
-        None => "ZhipuAI/GLM-4-9B-0414".to_string(),
+        None => "THUDM/GLM-4-9B-0414".to_string(),
     };
     let revision = match args.revision.as_ref() {
         Some(rev) => rev.to_string(),
@@ -196,7 +196,7 @@ fn main() -> anyhow::Result<()> {
     let tokenizer_filename = match &args.weight_path {
         Some(path) => std::path::Path::new(path).join("tokenizer.json"),
         None => api
-            .model("ZhipuAI/GLM-4-9B-0414".to_string())
+            .model("THUDM/GLM-4-9B-0414".to_string())
             .get("tokenizer.json")
             .map_err(anyhow::Error::msg)?,
     };

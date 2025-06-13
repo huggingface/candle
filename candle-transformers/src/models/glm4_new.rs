@@ -75,13 +75,13 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct MLP {
+pub(crate) struct Mlp {
     gate_up_proj: Linear,
     down_proj: Linear,
     act_fn: Activation,
 }
 
-impl MLP {
+impl Mlp {
     pub(crate) fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             gate_up_proj: linear_no_bias(
@@ -95,7 +95,7 @@ impl MLP {
     }
 }
 
-impl Module for MLP {
+impl Module for Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let w = self.gate_up_proj.forward(x)?;
         let dim = w.dims().len() - 1;
@@ -234,7 +234,7 @@ impl Attention {
 #[derive(Debug, Clone)]
 struct DecoderLayer {
     self_attn: Attention,
-    mlp: MLP,
+    mlp: Mlp,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
     post_mlp_layernorm: RmsNorm,
@@ -244,7 +244,7 @@ struct DecoderLayer {
 impl DecoderLayer {
     fn new(cfg: &Config, rotary: Arc<RotaryEmbedding>, vb: VarBuilder) -> Result<Self> {
         let self_attn = Attention::new(cfg, rotary, vb.pp("self_attn"))?;
-        let mlp = MLP::new(cfg, vb.pp("mlp"))?;
+        let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
 
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
@@ -276,7 +276,7 @@ impl DecoderLayer {
 
     fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         let residual = xs;
-        let hidden_states = self.input_layernorm.forward(&xs)?;
+        let hidden_states = self.input_layernorm.forward(xs)?;
         let hidden_states = self.self_attn.forward(&hidden_states, mask, offset)?;
         let hidden_states = self.post_self_attn_layernorm.forward(&hidden_states)?;
         let hidden_states = (residual + hidden_states)?;
