@@ -12,6 +12,7 @@ readme = "README.md"
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
 candle = { workspace = true }
+candle-helpers = { workspace = true }
 candle-datasets = { workspace = true, optional = true }
 candle-nn = { workspace = true }
 candle-transformers = { workspace = true }
