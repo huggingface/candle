@@ -6,12 +6,12 @@
 //! - Projection layers to align the feature spaces
 //!
 //! See model details at:
-//! - [FastViT](https://arxiv.org/abs/2303.14189)
+//! - [FastViT](https://huggingface.co/papers/2303.14189)
 //! - [OpenCLIP](https://github.com/mlfoundations/open_clip)
 //!
 //! References:
 //! - [MobileVLM](https://huggingface.co/mobileVLM)
-//! - [MetaCLIP](https://arxiv.org/abs/2309.16671)
+//! - [MetaCLIP](https://huggingface.co/papers/2309.16671)
 //!
 
 use super::fastvit;

@@ -1,6 +1,6 @@
 //! EfficientNet implementation.
 //!
-//! https://arxiv.org/abs/1905.11946
+//! https://huggingface.co/papers/1905.11946
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;

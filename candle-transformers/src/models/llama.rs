@@ -1,6 +1,6 @@
 //! Llama inference implementation.
 //!
-//! See ["LLaMA: Open and Efficient Foundation Language Models"](https://arxiv.org/abs/2302.13971)
+//! See ["LLaMA: Open and Efficient Foundation Language Models"](https://huggingface.co/papers/2302.13971)
 //!
 //! Implementation based on Hugging Face's [transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py)
 

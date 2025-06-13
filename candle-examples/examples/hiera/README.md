@@ -1,6 +1,6 @@
 # hiera
 
-[Hiera: A Hierarchical Vision Transformer without the Bells-and-Whistles](https://arxiv.org/abs/2306.00989)
+[Hiera: A Hierarchical Vision Transformer without the Bells-and-Whistles](https://huggingface.co/papers/2306.00989)
 This candle implementation uses pre-trained Hiera models from timm for inference.
 The classification head has been trained on the ImageNet dataset and returns the probabilities for the top-5 classes.
 

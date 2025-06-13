@@ -8,8 +8,8 @@
 //! - 💻 [ConvNeXt](https://github.com/facebookresearch/ConvNeXt/)
 //! - 💻 [ConvNeXt-V2](https://github.com/facebookresearch/ConvNeXt-V2/)
 //! - 💻 [timm](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/convnext.py)
-//! - 📝 [Paper](https://arxiv.org/abs/2201.03545) A ConvNet for the 2020s
-//! - 📝 [Paper](https://arxiv.org/abs/2301.00808) ConvNeXt V2: Co-designing and Scaling ConvNets with Masked Autoencoders
+//! - 📝 [Paper](https://huggingface.co/papers/2201.03545) A ConvNet for the 2020s
+//! - 📝 [Paper](https://huggingface.co/papers/2301.00808) ConvNeXt V2: Co-designing and Scaling ConvNets with Masked Autoencoders
 //!
 
 use candle::shape::ShapeWithOneHole;

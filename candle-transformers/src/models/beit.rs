@@ -1,7 +1,7 @@
 //! Based on the BEIT vision-language model.
 //!
 //! See "BEIT: BERT Pre-Training of Image Transformers", Bao et al. 2021
-//! - [Arxiv](https://arxiv.org/abs/2106.08254)
+//! - [Arxiv](https://huggingface.co/papers/2106.08254)
 //! - [Github](https://github.com/microsoft/unilm/tree/master/beit)
 //!
 
