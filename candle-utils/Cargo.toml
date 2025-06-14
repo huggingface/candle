@@ -1,5 +1,5 @@
 [package]
-name = "candle-helpers"
+name = "candle-utils"
 version.workspace = true
 edition.workspace = true
 description.workspace = true

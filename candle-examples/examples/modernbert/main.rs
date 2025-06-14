@@ -2,8 +2,12 @@ use std::path::Path;
 
 use anyhow::{Error as E, Result};
 
-use candle_helpers::{build_attention_mask, device, encode_tokens, load_tokenizer_config_model};
 use candle_transformers::models::modernbert::{Config, ModernBertForMaskedLM};
+use candle_utils::{
+    get_device,
+    loader::load_tokenizer_config_model,
+    tokenization::{build_attention_mask, encode_tokens},
+};
 use clap::{Parser, ValueEnum};
 use tokenizers::PaddingParams;
 
@@ -52,7 +56,7 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let device = device(args.cpu, false)?;
+    let device = get_device(args.cpu, false)?;
 
     let model_id = match &args.model_id {
         Some(model_id) => model_id.to_string(),
