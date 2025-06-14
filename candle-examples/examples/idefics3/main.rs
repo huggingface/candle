@@ -65,25 +65,8 @@ fn unfold_1d(x: &candle::Tensor, size: usize, step: usize) -> candle::Result<can
     let idx = candle::Tensor::from_vec(idx_data, &idx_shape, x.device())?;
 
     let x = x.repeat(&[num, 1])?;
-    println!("x_repeat: {}", x);
-    println!("idx: {}", idx);
     let out = x.gather(&idx, 1)?;
     Ok(out)
-}
-
-// Helper: apply unfold_1d to each row= of a 2D tensor and stack results
-fn unfold_1d_batched(x: &candle::Tensor, size: usize, step: usize) -> candle::Result<candle::Tensor> {
-    let (batch, len) = {
-        let shape = x.shape().dims();
-        (shape[0], shape[1])
-    };
-    let mut outs = Vec::with_capacity(batch);
-    for i in 0..batch {
-        let row = x.get(i)?;
-        let unfolded = unfold_1d(&row, size, step)?;
-        outs.push(unfolded);
-    }
-    candle::Tensor::stack(&outs, 0)
 }
 
 fn unfold(x: &candle::Tensor, size: usize, step: usize, dim: usize) -> candle::Result<candle::Tensor> {
@@ -96,7 +79,12 @@ fn unfold(x: &candle::Tensor, size: usize, step: usize, dim: usize) -> candle::R
     let len = x_shape[dim] as usize;
     let num = (len - size) / step + 1;
 
-    println!("num: {}", num);
+    // Get the size of the other dimension that wasn't selected
+    let other_dim_size = x_shape.iter().enumerate()
+        .filter(|&(i, _)| i != dim)
+        .map(|(_, &size)| size as usize)
+        .next()
+        .unwrap();
 
     // Build index data: for each window i, indices [i*step .. i*step + size)
     let mut idx_data = Vec::with_capacity(num * size);
@@ -107,18 +95,31 @@ fn unfold(x: &candle::Tensor, size: usize, step: usize, dim: usize) -> candle::R
         }
     }
 
-    
+    //bring the dimension to be transpose to the end
+    let mut perm: Vec<usize> = (0..x_shape.len()).filter(|&i| i != dim).collect();
+    perm.push(dim);
+    let perm_clone = perm.clone();
+    let x = x.permute(perm)?;
+
+    // Create inverse permutation to restore original order
+    let mut inv_perm = vec![0; x_shape.len()];
+    for (i, &p) in perm_clone.iter().enumerate() {
+        inv_perm[p] = i;
+    }
+    inv_perm.push(x_shape.len());
+
     let idx_shape = [num, size];
-    let idx = candle::Tensor::from_vec(idx_data, &idx_shape, x.device())?.broadcast_as(&[2,2,4]).unwrap();
+    let idx = candle::Tensor::from_vec(idx_data, &idx_shape, x.device())?
+        .unsqueeze(1)?
+        .repeat(&[1, other_dim_size, 1])?;
 
-    let x = x.unsqueeze(0).unwrap().repeat(&[num, 1,1]).unwrap();
-    println!("x_repeat: {}", x);
-    println!("idx: {}", idx);
+    let x = x.unsqueeze(0)?.repeat(&[num, 1, 1])?;
 
-    let x_i = x.gather(&idx, 1).unwrap();
 
-    println!("x_gather: {}", x_i);
-    Ok(x)
+    let x_i = x.gather(&idx, 2).unwrap().permute((1,0,x_shape.len()))?;
+    // Permute back to original dimension order
+    let x_i = x_i.permute(inv_perm)?;
+    Ok(x_i)
 }
 
 #[cfg(test)]
@@ -168,7 +169,8 @@ mod tests {
         )
         .unwrap();
         println!("x: {}", x);
-        let out = unfold(&x, 2, 1, 0).unwrap();
+        let out = unfold(&x, 2, 1,0).unwrap();
+        println!("out: {}", out);
         // Expected shape: [3, 3, 2] where:
         // - First window: [[1,2], [5,6], [9,10]]
         // - Second window: [[2,3], [6,7], [10,11]]
