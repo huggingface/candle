@@ -6,9 +6,11 @@ extern crate accelerate_src;
 use candle_transformers::models::bert::{BertModel, Config, HiddenAct, DTYPE};
 
 use anyhow::Result;
-use candle_helpers::{
-    build_attention_mask, device, encode_tokens, load_config, load_model, load_repo,
-    load_tokenizer, normalize_l2,
+use candle_utils::{
+    get_device,
+    loader::{load_config, load_model, load_repo, load_tokenizer},
+    normalize_l2,
+    tokenization::{build_attention_mask, encode_tokens},
 };
 use clap::Parser;
 use tokenizers::PaddingParams;
@@ -67,7 +69,7 @@ fn main() -> Result<()> {
     };
     let start = std::time::Instant::now();
 
-    let device = device(args.cpu, false)?;
+    let device = get_device(args.cpu, false)?;
 
     let default_model = "sentence-transformers/all-MiniLM-L6-v2".to_string();
     let default_revision = "refs/pr/21".to_string();

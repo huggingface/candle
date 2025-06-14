@@ -3,7 +3,7 @@ members = [
     "candle-core",
     "candle-datasets",
     "candle-examples",
-    "candle-helpers",
+    "candle-utils",
     "candle-nn",
     "candle-pyo3",
     "candle-transformers",
@@ -36,7 +36,7 @@ anyhow = { version = "1", features = ["backtrace"] }
 byteorder = "1.4.3"
 candle = { path = "./candle-core", package = "candle-core", version = "0.9.1" }
 candle-datasets = { path = "./candle-datasets", version = "0.9.1" }
-candle-helpers = { path = "./candle-helpers", version = "0.9.1" }
+candle-utils = { path = "./candle-utils", version = "0.9.1" }
 candle-flash-attn = { path = "./candle-flash-attn", version = "0.9.1" }
 candle-kernels = { path = "./candle-kernels", version = "0.9.1" }
 candle-metal-kernels = { path = "./candle-metal-kernels", version = "0.9.1" }
