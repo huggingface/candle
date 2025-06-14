@@ -3,15 +3,15 @@ extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
-use candle::Device;
 use candle_transformers::models::bert::{BertModel, Config, HiddenAct, DTYPE};
 
-use anyhow::{Error as E, Result};
-use candle_helpers::{build_attention_mask, device, encode_tokens, normalize_l2};
-use candle_nn::VarBuilder;
+use anyhow::Result;
+use candle_helpers::{
+    build_attention_mask, device, encode_tokens, load_config, load_model, load_repo,
+    load_tokenizer, normalize_l2,
+};
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
-use tokenizers::{PaddingParams, Tokenizer};
+use tokenizers::PaddingParams;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -68,7 +68,25 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
 
     let device = device(args.cpu, false)?;
-    let (model, mut tokenizer) = build_model_and_tokenizer(&args, &device)?;
+
+    let default_model = "sentence-transformers/all-MiniLM-L6-v2".to_string();
+    let default_revision = "refs/pr/21".to_string();
+    let (model_id, revision) = match (args.model_id.to_owned(), args.revision.to_owned()) {
+        (Some(model_id), Some(revision)) => (model_id, revision),
+        (Some(model_id), None) => (model_id, "main".to_string()),
+        (None, Some(revision)) => (default_model, revision),
+        (None, None) => (default_model, default_revision),
+    };
+
+    let repo = load_repo(&model_id, &revision)?;
+    let mut tokenizer = load_tokenizer(&repo, None)?;
+    let mut config: Config = load_config(&repo, None)?;
+
+    if args.approximate_gelu {
+        config.hidden_act = HiddenAct::GeluApproximate;
+    }
+
+    let model: BertModel = load_model(&repo, &device, DTYPE, &config, None)?;
 
     if let Some(prompt) = args.prompt {
         let _ = tokenizer.with_padding(None).with_truncation(None);
@@ -142,43 +160,4 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn build_model_and_tokenizer(args: &Args, device: &Device) -> Result<(BertModel, Tokenizer)> {
-    let default_model = "sentence-transformers/all-MiniLM-L6-v2".to_string();
-    let default_revision = "refs/pr/21".to_string();
-    let (model_id, revision) = match (args.model_id.to_owned(), args.revision.to_owned()) {
-        (Some(model_id), Some(revision)) => (model_id, revision),
-        (Some(model_id), None) => (model_id, "main".to_string()),
-        (None, Some(revision)) => (default_model, revision),
-        (None, None) => (default_model, default_revision),
-    };
-
-    let repo = Repo::with_revision(model_id, RepoType::Model, revision);
-    let (config_filename, tokenizer_filename, weights_filename) = {
-        let api = Api::new()?;
-        let api = api.repo(repo);
-        let config = api.get("config.json")?;
-        let tokenizer = api.get("tokenizer.json")?;
-        let weights = if args.use_pth {
-            api.get("pytorch_model.bin")?
-        } else {
-            api.get("model.safetensors")?
-        };
-        (config, tokenizer, weights)
-    };
-    let config = std::fs::read_to_string(config_filename)?;
-    let mut config: Config = serde_json::from_str(&config)?;
-    let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
-
-    let vb = if args.use_pth {
-        VarBuilder::from_pth(&weights_filename, DTYPE, device)?
-    } else {
-        unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, device)? }
-    };
-    if args.approximate_gelu {
-        config.hidden_act = HiddenAct::GeluApproximate;
-    }
-    let model = BertModel::load(vb, &config)?;
-    Ok((model, tokenizer))
 }
