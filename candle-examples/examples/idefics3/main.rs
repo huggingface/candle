@@ -86,14 +86,12 @@ fn unfold(x: &candle::Tensor, size: usize, step: usize, dim: usize) -> candle::R
     // Create permutation to move the unfolding dimension to the end
     let mut perm: Vec<usize> = (0..x_shape.len()).filter(|&i| i != dim).collect();
     perm.push(dim);
-    let perm_clone = perm.clone();
     let x = x.permute(perm)?;
 
     // Create inverse permutation to restore original order
-    let mut inv_perm = vec![0; x_shape.len()];
-    for (i, &p) in perm_clone.iter().enumerate() {
-        inv_perm[p] = i;
-    }
+    // Start with [0, 1, 2, 3, ...] and swap 0 with dim
+    let mut inv_perm: Vec<usize> = (0..x_shape.len()).collect();
+    inv_perm.swap(0, dim);
     inv_perm.push(x_shape.len());
 
     // Create index tensor with proper broadcasting
@@ -160,15 +158,15 @@ mod tests {
     #[test]
     fn test_unfold() {
         // Test 2D case (dim=0)
-        // let x = candle::Tensor::from_vec(
-        //     vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
-        //     &[3, 4],
-        //     &Device::Cpu,
-        // )
-        // .unwrap();
-        // let out = unfold(&x, 2, 1, 0).unwrap();
-        // println!("2D test - input shape: {:?}, output shape: {:?}", x.shape(), out.shape());
-        // println!("2D test - output: {}", out);
+        let x = candle::Tensor::from_vec(
+            vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            &[3, 4],
+            &Device::Cpu,
+        )
+        .unwrap();
+        let out = unfold(&x, 2, 1, 1).unwrap();
+        println!("2D test - input shape: {:?}, output shape: {:?}", x.shape(), out.shape());
+        println!("2D test - output: {}", out);
 
         // Test 3D case (dim=1)
         let x = candle::Tensor::from_vec(
@@ -178,7 +176,7 @@ mod tests {
             &Device::Cpu,
         )
         .unwrap();
-        let out = unfold(&x, 2, 1, 1).unwrap();
+        let out = unfold(&x, 2, 1, 2).unwrap();
         println!("3D test - input shape: {:?}, output shape: {:?}", x.shape(), out.shape());
         println!("3D test - output: {}", out);
     }
