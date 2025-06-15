@@ -471,6 +471,51 @@ impl Block {
     }
 }
 
+
+pub struct LlamaBase {
+    embed_tokens: Embedding,
+    layers: Vec<Block>,
+    norm: RmsNorm,
+}
+
+impl LlamaBase {
+    pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+        let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?;
+        let layers: Vec<_> = (0..cfg.num_hidden_layers)
+            .map(|i| Block::load(vb.pp(format!("layers.{i}")), cfg).unwrap())
+            .collect();
+        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("norm"))?;
+        Ok(Self {
+            embed_tokens,
+            layers,
+            norm,
+        })
+    }
+
+    pub fn embed(&self, x: &Tensor) -> Result<Tensor> {
+        self.embed_tokens.forward(x)
+    }
+
+
+    pub fn forward_input_embed(&self, x: &Tensor, index_pos: usize, cache: &mut Cache) -> Result<Tensor> {
+        let mut x = x.clone();
+        for (block_idx, block) in self.layers.iter().enumerate() {
+            x = block.forward(&x, index_pos, block_idx, cache)?;
+        }
+        let x = self.norm.forward(&x)?;
+        Ok(x)
+    }
+
+    pub fn forward(&self, x: &Tensor, index_pos: usize, cache: &mut Cache) -> Result<Tensor> {
+        let mut x = self.embed_tokens.forward(x)?;
+        for (block_idx, block) in self.layers.iter().enumerate() {
+            x = block.forward(&x, index_pos, block_idx, cache)?;
+        }
+        let x = self.norm.forward(&x)?;
+        Ok(x)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Llama {
     wte: Embedding,
@@ -478,6 +523,7 @@ pub struct Llama {
     ln_f: RmsNorm,
     lm_head: Linear,
 }
+
 
 impl Llama {
     // required by LLaVA
