@@ -471,7 +471,6 @@ impl Block {
     }
 }
 
-
 pub struct LlamaBase {
     embed_tokens: Embedding,
     layers: Vec<Block>,
@@ -496,8 +495,12 @@ impl LlamaBase {
         self.embed_tokens.forward(x)
     }
 
-
-    pub fn forward_input_embed(&self, x: &Tensor, index_pos: usize, cache: &mut Cache) -> Result<Tensor> {
+    pub fn forward_input_embed(
+        &self,
+        x: &Tensor,
+        index_pos: usize,
+        cache: &mut Cache,
+    ) -> Result<Tensor> {
         let mut x = x.clone();
         for (block_idx, block) in self.layers.iter().enumerate() {
             x = block.forward(&x, index_pos, block_idx, cache)?;
@@ -523,7 +526,6 @@ pub struct Llama {
     ln_f: RmsNorm,
     lm_head: Linear,
 }
-
 
 impl Llama {
     // required by LLaVA

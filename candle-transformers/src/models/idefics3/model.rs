@@ -46,7 +46,7 @@ pub struct Idefics3Config {
     pub image_token_id: usize,
 }
 
-pub struct Idefics3VisionEmbeddings {
+struct Idefics3VisionEmbeddings {
     patch_size: usize,
     patch_embeddings: candle_nn::Conv2d,
     num_patches_per_side: usize,
@@ -54,7 +54,7 @@ pub struct Idefics3VisionEmbeddings {
 }
 
 impl Idefics3VisionEmbeddings {
-    pub fn load(config: &Idefic3VisionConfig, vb: candle_nn::VarBuilder) -> Result<Self> {
+    fn load(config: &Idefic3VisionConfig, vb: candle_nn::VarBuilder) -> Result<Self> {
         let embed_dim = config.hidden_size;
         let image_size = config.image_size;
         let patch_size = config.patch_size;
@@ -84,7 +84,7 @@ impl Idefics3VisionEmbeddings {
         })
     }
 
-    pub fn forward(
+    fn forward(
         &self,
         pixel_values: &Tensor,
         patch_attention_mask: &Tensor,
@@ -140,7 +140,6 @@ impl Idefics3VisionEmbeddings {
             // Use tensor operations to find indices where mask is 1
             let indices = p_attn_mask_flat
                 .to_dtype(DType::F32)?
-                .eq(1.0)?
                 .nonzero()?
                 .squeeze(1)?;
 
@@ -170,7 +169,7 @@ struct Idefics3VisionAttention {
 }
 
 impl Idefics3VisionAttention {
-    pub fn load(
+    fn load(
         config: &Idefic3VisionConfig,
         use_flash_attn: bool,
         vb: candle_nn::VarBuilder,
@@ -196,7 +195,7 @@ impl Idefics3VisionAttention {
         })
     }
 
-    pub fn forward(
+    fn forward(
         &self,
         hidden_states: &Tensor,
         attention_mask: &Option<Tensor>,
@@ -248,7 +247,7 @@ struct Idefics3VisionMLP {
 }
 
 impl Idefics3VisionMLP {
-    pub fn load(config: &Idefic3VisionConfig, vb: candle_nn::VarBuilder) -> Result<Self> {
+    fn load(config: &Idefic3VisionConfig, vb: candle_nn::VarBuilder) -> Result<Self> {
         let activation_fn = config.hidden_act;
         let fc1 = linear(config.hidden_size, config.intermediate_size, vb.pp("fc1"))?;
         let fc2 = linear(config.intermediate_size, config.hidden_size, vb.pp("fc2"))?;
@@ -259,7 +258,7 @@ impl Idefics3VisionMLP {
         })
     }
 
-    pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let hidden_states = self.fc1.forward(hidden_states)?;
         let hidden_states = self.activation_fn.forward(&hidden_states)?;
         let hidden_states = self.fc2.forward(&hidden_states)?;
@@ -272,7 +271,7 @@ struct Idefics3SimpleMLP {
 }
 
 impl Idefics3SimpleMLP {
-    pub fn load(config: &Idefics3Config, vb: candle_nn::VarBuilder) -> Result<Self> {
+    fn load(config: &Idefics3Config, vb: candle_nn::VarBuilder) -> Result<Self> {
         let proj = linear_no_bias(
             config.vision_config.hidden_size * (config.scale_factor.unwrap_or(2).pow(2)),
             config.text_config.hidden_size,
@@ -281,7 +280,7 @@ impl Idefics3SimpleMLP {
         Ok(Self { proj })
     }
 
-    pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let hidden_states = self.proj.forward(hidden_states)?;
         Ok(hidden_states)
     }
@@ -295,7 +294,7 @@ struct Idefics3EncoderLayer {
 }
 
 impl Idefics3EncoderLayer {
-    pub fn load(
+    fn load(
         config: &Idefic3VisionConfig,
         use_flash_attn: bool,
         vb: candle_nn::VarBuilder,
@@ -344,7 +343,7 @@ struct Idefics3Encoder {
 }
 
 impl Idefics3Encoder {
-    pub fn load(
+    fn load(
         config: &Idefic3VisionConfig,
         use_flash_attn: bool,
         vb: candle_nn::VarBuilder,
@@ -357,11 +356,7 @@ impl Idefics3Encoder {
         Ok(Self { layers })
     }
 
-    pub fn forward(
-        &self,
-        input_embeds: &Tensor,
-        attention_mask: &Option<Tensor>,
-    ) -> Result<Tensor> {
+    fn forward(&self, input_embeds: &Tensor, attention_mask: &Option<Tensor>) -> Result<Tensor> {
         let mut hidden_states = input_embeds.clone();
         for layer in &self.layers {
             hidden_states = layer.forward(&hidden_states, attention_mask)?.0;
@@ -415,14 +410,14 @@ impl Idefics3Connector {
     }
 }
 
-pub struct Idefics3VisionTransformer {
+struct Idefics3VisionTransformer {
     embeddings: Idefics3VisionEmbeddings,
     encoder: Idefics3Encoder,
     post_layernorm: LayerNorm,
 }
 
 impl Idefics3VisionTransformer {
-    pub fn load(
+    fn load(
         config: &Idefics3Config,
         use_flash_attn: bool,
         vb: candle_nn::VarBuilder,
@@ -443,7 +438,7 @@ impl Idefics3VisionTransformer {
         })
     }
 
-    pub fn forward(
+    fn forward(
         &self,
         pixel_values: &Tensor,
         patch_attention_mask: Option<&Tensor>,
@@ -479,7 +474,7 @@ impl Idefics3VisionTransformer {
 pub struct Idefics3Model {
     vision_model: Idefics3VisionTransformer,
     connector: Idefics3Connector,
-    text_model: LlamaBase,
+    pub text_model: LlamaBase,
     image_token_id: usize,
     use_flash_attn: bool,
     config: Idefics3Config,
@@ -517,12 +512,15 @@ impl Idefics3Model {
         input_ids: &Tensor,
         pixel_values: &Option<Tensor>,
         pixel_attention_mask: &Option<Tensor>,
+        kv_cache: &mut Cache,
     ) -> Result<Tensor> {
         if let (Some(pixel_values), Some(pixel_attention_mask)) =
             (pixel_values, pixel_attention_mask)
         {
             let pixel_values = pixel_values.to_dtype(self.dtype)?;
+
             let input_embeds = self.text_model.embed(input_ids)?;
+
             let (bsz, num_images, channels, height, width) = pixel_values.dims5()?;
             let pixel_values = pixel_values.reshape((bsz * num_images, channels, height, width))?;
             let pixel_attention_mask =
@@ -563,41 +561,19 @@ impl Idefics3Model {
             let image_hidden_states = self
                 .vision_model
                 .forward(&pixel_values, Some(&patch_attention_mask))?;
+
             let image_hidden_states = self.connector.forward(&image_hidden_states)?;
 
             let new_input_embeds =
                 self.inputs_merger(input_ids, &input_embeds, &image_hidden_states)?;
 
-            let output = self.text_model.forward_input_embed(
-                &new_input_embeds,
-                0,
-                &mut Cache::new(
-                    false,
-                    pixel_values.dtype(),
-                    &self
-                        .config
-                        .text_config
-                        .clone()
-                        .into_config(self.use_flash_attn),
-                    pixel_values.device(),
-                )?,
-            )?;
+            let output = self
+                .text_model
+                .forward_input_embed(&new_input_embeds, 0, kv_cache)?;
+
             Ok(output)
         } else {
-            self.text_model.forward(
-                input_ids,
-                0,
-                &mut Cache::new(
-                    false,
-                    self.dtype,
-                    &self
-                        .config
-                        .text_config
-                        .clone()
-                        .into_config(self.use_flash_attn),
-                    input_ids.device(),
-                )?,
-            )
+            self.text_model.forward(input_ids, 0, kv_cache)
         }
     }
 
@@ -613,11 +589,12 @@ impl Idefics3Model {
         let input_embeds_reshaped = input_embeds.reshape((bsz * text_seq_len, embed_dim))?;
 
         let input_ids = input_ids.flatten_from(0)?;
-        let special_image_token_indices = input_ids.eq(self.image_token_id as f64)?;
 
         let image_hidden_states =
             image_hidden_states.reshape((num_images * seq_len, vision_hidden_size))?;
-        let special_image_token_indices = special_image_token_indices
+
+        let special_image_token_indices = input_ids
+            .eq(self.image_token_id as f64)?
             .nonzero()?
             .repeat((1, embed_dim))?;
 
@@ -632,6 +609,7 @@ impl Idefics3Model {
 pub struct ColIdefics3Model {
     model: Idefics3Model,
     linear: Linear,
+    dtype: DType,
 }
 
 impl ColIdefics3Model {
@@ -643,7 +621,11 @@ impl ColIdefics3Model {
         let model = Idefics3Model::load(config, use_flash_attn, vb.pp("model"))?;
         let dim = 128;
         let linear = linear(model.config.text_config.hidden_size, dim, vb.pp("linear"))?;
-        Ok(Self { model, linear })
+        Ok(Self {
+            model,
+            linear,
+            dtype: vb.dtype(),
+        })
     }
 
     pub fn forward(
@@ -653,9 +635,22 @@ impl ColIdefics3Model {
         pixel_values: &Option<Tensor>,
         pixel_attention_mask: &Option<Tensor>,
     ) -> Result<Tensor> {
-        let output = self
-            .model
-            .forward(input_ids, pixel_values, pixel_attention_mask)?;
+        let output = self.model.forward(
+            input_ids,
+            pixel_values,
+            pixel_attention_mask,
+            &mut Cache::new(
+                false,
+                self.dtype,
+                &self
+                    .model
+                    .config
+                    .text_config
+                    .clone()
+                    .into_config(self.model.use_flash_attn),
+                input_ids.device(),
+            )?,
+        )?;
         let proj = self.linear.forward(&output)?;
         let proj = proj.broadcast_div(&proj.sqr()?.sum_keepdim(2)?.sqrt()?)?;
         let proj = proj.broadcast_mul(&attention_mask.unsqueeze(2)?.to_dtype(proj.dtype())?)?;

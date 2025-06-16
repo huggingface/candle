@@ -27,7 +27,6 @@ fn default_max_image_size() -> Option<HashMap<String, i32>> {
 }
 
 impl Idefics3ImageProcessor {
-
     pub fn resize_for_vision_encoder(
         &self,
         image: &DynamicImage,
@@ -73,14 +72,20 @@ impl Idefics3ImageProcessor {
     ) -> Result<Tensor, anyhow::Error> {
         let resized_image = if size.contains_key("height") && size.contains_key("width") {
             image.resize_exact(
-                size.get("width").cloned().ok_or_else(|| anyhow::anyhow!("Missing width"))? as u32,
-                size.get("height").cloned().ok_or_else(|| anyhow::anyhow!("Missing height"))? as u32,
+                size.get("width")
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("Missing width"))? as u32,
+                size.get("height")
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("Missing height"))? as u32,
                 resample,
             )
         } else {
             let size = get_resize_output_image_size(
                 image.clone(),
-                size.get("longest_edge").cloned().ok_or_else(|| anyhow::anyhow!("Missing longest_edge"))?,
+                size.get("longest_edge")
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("Missing longest_edge"))?,
             );
             image.resize_exact(size.1 as u32, size.0 as u32, resample)
         };
@@ -225,8 +230,8 @@ impl Idefics3ImageProcessor {
                 &Tensor::ones((input_height, input_width), DType::I64, device)?,
             )?;
         } else {
-            padded_image = padded_image
-                .slice_assign(&[0..3, 0..input_height, 0..input_width], &image)?;
+            padded_image =
+                padded_image.slice_assign(&[0..3, 0..input_height, 0..input_width], &image)?;
             pixel_mask = pixel_mask.slice_assign(
                 &[0..input_height, 0..input_width],
                 &Tensor::ones((input_height, input_width), DType::I64, device)?,
@@ -251,7 +256,9 @@ impl Idefics3ImageProcessor {
         for batch in images {
             max_num_images = std::cmp::max(max_num_images, batch.len());
             for image in batch {
-                let (height, width, _) = image.dims3().map_err(|e| anyhow::anyhow!("Error getting dimensions: {}", e))?;
+                let (height, width, _) = image
+                    .dims3()
+                    .map_err(|e| anyhow::anyhow!("Error getting dimensions: {}", e))?;
                 max_height = std::cmp::max(max_height, height);
                 max_width = std::cmp::max(max_width, width);
             }
@@ -292,8 +299,8 @@ impl Idefics3ImageProcessor {
         // Pad each image
         for (batch_idx, batch) in images.iter().enumerate() {
             for (sample_idx, image) in batch.iter().enumerate() {
-                let (padded_image, pixel_mask) = self
-                    .pad_image(image, output_size, data_format, device)?;
+                let (padded_image, pixel_mask) =
+                    self.pad_image(image, output_size, data_format, device)?;
                 padded_images[batch_idx][sample_idx] = padded_image;
                 if let Some(ref mut masks) = padded_masks {
                     masks[batch_idx][sample_idx] = pixel_mask;
@@ -315,7 +322,9 @@ impl Idefics3ImageProcessor {
         // Step 1: Initial resize
         let resized_image = self.resize(
             image,
-            self.size.clone().ok_or_else(|| anyhow::anyhow!("Missing size"))?,
+            self.size
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("Missing size"))?,
             FilterType::Lanczos3,
             device,
         )?;
@@ -333,7 +342,10 @@ impl Idefics3ImageProcessor {
         // Step 2: Resize for vision encoder
         let vision_encoder_image = self.resize_for_vision_encoder(
             &resized_dynamic_image,
-            &self.max_image_size.clone().ok_or_else(|| anyhow::anyhow!("Missing max_image_size"))?["longest_edge"],
+            &self
+                .max_image_size
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("Missing max_image_size"))?["longest_edge"],
             FilterType::Lanczos3,
             device,
         )?;
@@ -351,7 +363,10 @@ impl Idefics3ImageProcessor {
         let (frames, n_rows, n_cols) = if self.do_image_splitting {
             self.split_image(
                 &vision_encoder_image,
-                &self.max_image_size.clone().ok_or_else(|| anyhow::anyhow!("Missing max_image_size"))?,
+                &self
+                    .max_image_size
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("Missing max_image_size"))?,
                 FilterType::Lanczos3,
                 device,
             )?
@@ -442,7 +457,8 @@ impl Idefics3ImageProcessor {
         let max_num_images = preprocessed_images
             .iter()
             .map(|image| image.len())
-            .max().expect("No images found");
+            .max()
+            .expect("No images found");
         let (max_height, max_width) = get_max_height_width(&preprocessed_images);
         let mut padded_image_list_full = vec![];
         let mut padded_mask_list_full = vec![];
@@ -451,7 +467,11 @@ impl Idefics3ImageProcessor {
                 .map(|_| -> Result<(Tensor, Tensor), anyhow::Error> {
                     Ok((
                         empty_image(3, max_height as u32, max_width as u32, DType::F32, device)?,
-                        Tensor::zeros((max_height as usize, max_width as usize), DType::I64, device)?,
+                        Tensor::zeros(
+                            (max_height as usize, max_width as usize),
+                            DType::I64,
+                            device,
+                        )?,
                     ))
                 })
                 .collect::<Result<Vec<_>, _>>()?
@@ -466,15 +486,18 @@ impl Idefics3ImageProcessor {
             }
         }
 
-        let (padded_image_list_full, padded_mask_list_full): (Vec<_>, Vec<_>) = padded_image_list_full
-            .iter()
-            .zip(padded_mask_list_full.iter())
-            .map(|(image_list, mask_list)| -> Result<(Tensor, Tensor), anyhow::Error> {
-                Ok((Tensor::stack(image_list, 0)?, Tensor::stack(mask_list, 0)?))
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .unzip();
+        let (padded_image_list_full, padded_mask_list_full): (Vec<_>, Vec<_>) =
+            padded_image_list_full
+                .iter()
+                .zip(padded_mask_list_full.iter())
+                .map(
+                    |(image_list, mask_list)| -> Result<(Tensor, Tensor), anyhow::Error> {
+                        Ok((Tensor::stack(image_list, 0)?, Tensor::stack(mask_list, 0)?))
+                    },
+                )
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .unzip();
 
         let padded_image_list_full = Tensor::stack(&padded_image_list_full, 0)?;
         let padded_mask_list_full = Tensor::stack(&padded_mask_list_full, 0)?;

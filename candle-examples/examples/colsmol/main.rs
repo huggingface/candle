@@ -184,7 +184,7 @@ fn main() -> Result<()> {
         pdf2image::Pages::Range(1..=pdf.page_count()) // can use pdf2image::Pages::All but there is a bug in the library which causes the first page to rendered twice.
     };
 
-    let mut retriever = PageRetriever::new(model, pdf, processor, &device, Some(range), 3, 3);
+    let mut retriever = PageRetriever::new(model, pdf, processor, &device, Some(range), 1, 3);
 
     let start_time = std::time::Instant::now();
     let top_k_indices = retriever.retrieve(&args.prompt)?;
