@@ -9,8 +9,6 @@ const MAX_IMAGE_SIZE: i32 = 4096;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Idefics3ImageProcessor {
-    do_convert_rgb: bool,
-    do_resize: bool,
     size: Option<HashMap<String, i32>>,
     do_image_splitting: bool,
     image_mean: Option<Vec<f32>>,
@@ -29,37 +27,6 @@ fn default_max_image_size() -> Option<HashMap<String, i32>> {
 }
 
 impl Idefics3ImageProcessor {
-    pub fn new(
-        do_convert_rgb: bool,
-        do_resize: bool,
-        size: Option<HashMap<String, i32>>,
-        do_image_splitting: bool,
-        max_image_size: Option<HashMap<String, i32>>,
-        do_rescale: bool,
-        rescale_factor: f32,
-        do_pad: bool,
-        do_normalize: bool,
-        image_mean: Option<Vec<f32>>,
-        image_std: Option<Vec<f32>>,
-    ) -> Self {
-        let max_image_size =
-            max_image_size.unwrap_or(HashMap::from([("longest_edge".to_string(), 364)]));
-        let image_mean = image_mean.unwrap_or(vec![0.5, 0.5, 0.5]);
-        let image_std = image_std.unwrap_or(vec![0.5, 0.5, 0.5]);
-        Self {
-            do_convert_rgb,
-            do_resize,
-            size,
-            do_image_splitting,
-            image_mean: Some(image_mean),
-            image_std: Some(image_std),
-            max_image_size: Some(max_image_size),
-            do_rescale,
-            rescale_factor,
-            do_pad,
-            do_normalize,
-        }
-    }
 
     pub fn resize_for_vision_encoder(
         &self,
@@ -520,14 +487,6 @@ impl Idefics3ImageProcessor {
         let padded_image_list_full = Tensor::stack(&padded_image_list_full, 0)?;
         let padded_mask_list_full = Tensor::stack(&padded_mask_list_full, 0)?;
 
-     
-
-        // let preprocessed_images = Tensor::stack(&padded_image_list_full, 0)?;
-        // let preprocessed_masks = if !preprocessed_masks.is_empty() {
-        //     Some(Tensor::stack(&padded_mask_list_full, 0)?)
-        // } else {
-        //     None
-        // };
         Ok((
             padded_image_list_full,
             Some(padded_mask_list_full),
@@ -645,28 +604,14 @@ impl Idefics3Processor {
         let prompt = "<|im_start|>user\n<image>Describe the image.<end_of_utterance>";
 
         // in the prompt replace the image_token with the image_prompt
-        let prompt = prompt.replace(&self.image_token.content, &image_prompt);
+        let mut prompts = Vec::new();
+        for _ in images {
+            let prompt = prompt.replace(&self.image_token.content, &image_prompt);
+            prompts.push(prompt);
+        }
 
-        let encodings = self
-            .tokenizer
-            .encode(prompt, true)
-            .map_err(|e| anyhow::anyhow!("Tokenizer error: {}", e))?;
-
-        let input_ids = Tensor::from_vec(
-            encodings.get_ids().iter().map(|x| *x as i64).collect(),
-            (1, encodings.get_ids().len()),
-            device,
-        )?;
-
-        let attention_mask = Tensor::from_vec(
-            encodings
-                .get_attention_mask()
-                .iter()
-                .map(|x| *x as u32)
-                .collect(),
-            (1, encodings.get_attention_mask().len()),
-            device,
-        )?;
+        let (input_ids, attention_mask) =
+            self.tokenize_batch(prompts.iter().map(|x| x.as_str()).collect(), device)?;
 
         Ok((
             input_ids,

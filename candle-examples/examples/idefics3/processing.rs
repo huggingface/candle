@@ -3,14 +3,13 @@ use hf_hub::{api::sync::Api, Repo, RepoType};
 use image::{imageops::FilterType, DynamicImage, GenericImageView, RgbImage};
 use serde::Deserialize;
 use std::collections::HashMap;
-use tokenizers::{AddedToken, PaddingParams, Tokenizer, TruncationParams};
+use tokenizers::{AddedToken, Tokenizer};
 
 const MAX_IMAGE_SIZE: i32 = 4096;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Idefics3ImageProcessor {
-    do_convert_rgb: bool,
-    do_resize: bool,
+
     size: Option<HashMap<String, i32>>,
     do_image_splitting: bool,
     image_mean: Option<Vec<f32>>,
@@ -29,38 +28,7 @@ fn default_max_image_size() -> Option<HashMap<String, i32>> {
 }
 
 impl Idefics3ImageProcessor {
-    pub fn new(
-        do_convert_rgb: bool,
-        do_resize: bool,
-        size: Option<HashMap<String, i32>>,
-        do_image_splitting: bool,
-        max_image_size: Option<HashMap<String, i32>>,
-        do_rescale: bool,
-        rescale_factor: f32,
-        do_pad: bool,
-        do_normalize: bool,
-        image_mean: Option<Vec<f32>>,
-        image_std: Option<Vec<f32>>,
-    ) -> Self {
-        let max_image_size =
-            max_image_size.unwrap_or(HashMap::from([("longest_edge".to_string(), 364)]));
-        let image_mean = image_mean.unwrap_or(vec![0.5, 0.5, 0.5]);
-        let image_std = image_std.unwrap_or(vec![0.5, 0.5, 0.5]);
-        Self {
-            do_convert_rgb,
-            do_resize,
-            size,
-            do_image_splitting,
-            image_mean: Some(image_mean),
-            image_std: Some(image_std),
-            max_image_size: Some(max_image_size),
-            do_rescale,
-            rescale_factor,
-            do_pad,
-            do_normalize,
-        }
-    }
-
+    
     pub fn resize_for_vision_encoder(
         &self,
         image: &DynamicImage,
@@ -348,7 +316,7 @@ impl Idefics3ImageProcessor {
         &self,
         image: &DynamicImage,
         device: &Device,
-    ) -> Result<(Tensor, Option<Tensor>, i32, i32), anyhow::Error> {
+    ) -> Result<(Vec<Tensor>, Option<Vec<Tensor>>, i32, i32), anyhow::Error> {
         // Step 1: Initial resize
         let resized_image = self.resize(
             image,
@@ -451,22 +419,7 @@ impl Idefics3ImageProcessor {
             (normalized_frames, None)
         };
 
-        // Stack frames into a single batch
-        let padded_images_concatenated = Tensor::stack(&padded_images, 0)?;
-
-        // Stack masks if they exist
-        let padded_masks_concatenated = if let Some(masks) = padded_masks {
-            Some(Tensor::stack(&masks.to_vec(), 0)?)
-        } else {
-            None
-        };
-
-        Ok((
-            padded_images_concatenated,
-            padded_masks_concatenated,
-            n_rows,
-            n_cols,
-        ))
+        Ok((padded_images, padded_masks, n_rows, n_cols))
     }
 
     pub fn preprocess(
@@ -488,13 +441,59 @@ impl Idefics3ImageProcessor {
             n_rows = rows;
             n_cols = cols;
         }
-        let preprocessed_images = Tensor::stack(&preprocessed_images, 0)?;
-        let preprocessed_masks = if !preprocessed_masks.is_empty() {
-            Some(Tensor::stack(&preprocessed_masks, 0)?)
-        } else {
-            None
-        };
-        Ok((preprocessed_images, preprocessed_masks, n_rows, n_cols))
+        let max_num_images = preprocessed_images
+            .iter()
+            .map(|image| image.len())
+            .max()
+            .unwrap();
+        let (max_height, max_width) = get_max_height_width(&preprocessed_images);
+        let mut padded_image_list_full = vec![];
+        let mut padded_mask_list_full = vec![];
+        for _ in images {
+            let mut padded_image_list = vec![];
+            let mut padded_mask_list = vec![];
+            for _ in 0..max_num_images {
+                padded_image_list.push(empty_image(
+                    3,
+                    max_height as u32,
+                    max_width as u32,
+                    DType::F32,
+                    device,
+                )?);
+                padded_mask_list.push(Tensor::zeros(
+                    (max_height as usize, max_width as usize),
+                    DType::I64,
+                    device,
+                )?);
+            }
+            padded_image_list_full.push(padded_image_list);
+            padded_mask_list_full.push(padded_mask_list);
+        }
+        for (i, image) in preprocessed_images.iter().enumerate() {
+            for j in 0..image.len() {
+                padded_image_list_full[i][j] = image[j].clone();
+            }
+        }
+
+        let padded_image_list_full = padded_image_list_full
+            .iter()
+            .map(|list| Tensor::stack(list, 0))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let padded_mask_list_full = padded_mask_list_full
+            .iter()
+            .map(|list| Tensor::stack(list, 0))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let padded_image_list_full = Tensor::stack(&padded_image_list_full, 0)?;
+        let padded_mask_list_full = Tensor::stack(&padded_mask_list_full, 0)?;
+
+        Ok((
+            padded_image_list_full,
+            Some(padded_mask_list_full),
+            n_rows,
+            n_cols,
+        ))
     }
 
     pub fn from_pretrained(model_id: &str) -> Result<Self, anyhow::Error> {
@@ -551,6 +550,42 @@ impl Idefics3Processor {
         })
     }
 
+    pub fn tokenize_batch(
+        &self,
+        prompts: Vec<&str>,
+        device: &Device,
+    ) -> Result<(Tensor, Tensor), anyhow::Error> {
+        let new_prompts = prompts
+            .iter()
+            .map(|prompt| {
+                let prompt = format!("Query: {} {} \n", prompt, "<end_of_utterance>".repeat(10));
+                prompt
+            })
+            .collect::<Vec<_>>();
+
+        let tokens = self
+            .tokenizer
+            .encode_batch(new_prompts, true)
+            .map_err(|e| anyhow::anyhow!("Tokenizer error: {}", e))?;
+        let token_ids = tokens
+            .iter()
+            .map(|tokens| {
+                let tokens = tokens.get_ids().to_vec();
+                Tensor::new(tokens.as_slice(), device)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let input = Tensor::stack(&token_ids, 0)?;
+        let attention_mask = tokens
+            .iter()
+            .map(|tokens| {
+                let tokens = tokens.get_attention_mask().to_vec();
+                Tensor::new(tokens.as_slice(), device)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let attention_mask = Tensor::stack(&attention_mask, 0)?;
+        Ok((input, attention_mask))
+    }
+
     pub fn preprocess(
         &self,
         images: &[DynamicImage],
@@ -570,28 +605,14 @@ impl Idefics3Processor {
         let prompt = "<|im_start|>user\n<image>Describe the image.<end_of_utterance>";
 
         // in the prompt replace the image_token with the image_prompt
-        let prompt = prompt.replace(&self.image_token.content, &image_prompt);
+        let mut prompts = Vec::new();
+        for _ in images {
+            let prompt = prompt.replace(&self.image_token.content, &image_prompt);
+            prompts.push(prompt);
+        }
 
-        let encodings = self
-            .tokenizer
-            .encode(prompt, true)
-            .map_err(|e| anyhow::anyhow!("Tokenizer error: {}", e))?;
-
-        let input_ids = Tensor::from_vec(
-            encodings.get_ids().iter().map(|x| *x as i64).collect(),
-            (1, encodings.get_ids().len()),
-            device,
-        )?;
-
-        let attention_mask = Tensor::from_vec(
-            encodings
-                .get_attention_mask()
-                .iter()
-                .map(|x| *x as u32)
-                .collect(),
-            (1, encodings.get_attention_mask().len()),
-            device,
-        )?;
+        let (input_ids, attention_mask) =
+            self.tokenize_batch(prompts.iter().map(|x| x.as_str()).collect(), device)?;
 
         Ok((
             input_ids,
@@ -600,6 +621,34 @@ impl Idefics3Processor {
             preprocessed_masks,
         ))
     }
+}
+
+fn get_max_height_width(image_list: &[Vec<Tensor>]) -> (usize, usize) {
+    let mut max_height = 0;
+    let mut max_width = 0;
+    for images in image_list {
+        for image in images {
+            let height = image.dims()[1];
+            let width = image.dims()[2];
+            max_height = std::cmp::max(max_height, height);
+            max_width = std::cmp::max(max_width, width);
+        }
+    }
+    (max_height, max_width)
+}
+
+fn empty_image(
+    channels: usize,
+    height: u32,
+    width: u32,
+    dtype: DType,
+    device: &Device,
+) -> Result<Tensor, anyhow::Error> {
+    Ok(Tensor::zeros(
+        (channels, height as usize, width as usize),
+        dtype,
+        device,
+    )?)
 }
 
 fn _prompt_split_image(
@@ -819,11 +868,12 @@ mod tests {
 
     #[test]
     fn test_idefics3_processor() {
-        let image = image::open("/home/akshay/projects/EmbedAnything/test.jpg").unwrap();
-        let processor =
-            Idefics3Processor::from_pretrained("onnx-community/colSmol-256M-ONNX").unwrap();
-        let (input_ids, attention_mask, preprocessed_images, preprocessed_masks) =
-            processor.preprocess(&[image], &Device::Cpu).unwrap();
+        let image1 = image::open("/home/akshay/projects/EmbedAnything/image1.jpg").unwrap();
+        let image2 = image::open("/home/akshay/projects/EmbedAnything/image2.jpg").unwrap();
+        let processor = Idefics3Processor::from_pretrained("vidore/colSmol-256M").unwrap();
+        let (input_ids, attention_mask, preprocessed_images, preprocessed_masks) = processor
+            .preprocess(&[image1, image2], &Device::Cpu)
+            .unwrap();
         println!(
             "Input IDs: {:?}",
             input_ids

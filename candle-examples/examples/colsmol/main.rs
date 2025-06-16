@@ -1,5 +1,5 @@
-use anyhow::{Error as E, Result};
-use candle::{DType, Device, Tensor};
+use anyhow::Result;
+use candle::{DType, Device};
 use candle_nn::VarBuilder;
 use candle_transformers::models::idefics3::model::{ColIdefics3Model, Idefics3Config};
 use clap::Parser;
@@ -12,7 +12,6 @@ use processing::Idefics3Processor;
 
 struct PageRetriever {
     model: ColIdefics3Model,
-    config: Idefics3Config,
     pdf: PDF,
     device: Device,
     processor: Idefics3Processor,
@@ -24,7 +23,6 @@ struct PageRetriever {
 impl PageRetriever {
     fn new(
         model: ColIdefics3Model,
-        config: Idefics3Config,
         pdf: PDF,
         processor: Idefics3Processor,
         device: &Device,
@@ -35,7 +33,6 @@ impl PageRetriever {
         let page_count = pdf.page_count();
         Self {
             model,
-            config,
             pdf,
             device: device.clone(),
             processor,
@@ -68,10 +65,8 @@ impl PageRetriever {
 
             // println!("Image embeddings: {}", image_embeddings);
 
-            let (input, attention_mask) = self.processor.tokenize_batch(
-                vec![prompt],
-                &self.device,
-            )?;
+            let (input, attention_mask) =
+                self.processor.tokenize_batch(vec![prompt], &self.device)?;
 
             // println!("Input: {}", input);
 
@@ -189,8 +184,7 @@ fn main() -> Result<()> {
         pdf2image::Pages::Range(1..=pdf.page_count()) // can use pdf2image::Pages::All but there is a bug in the library which causes the first page to rendered twice.
     };
 
-    let mut retriever =
-        PageRetriever::new(model, config, pdf, processor, &device, Some(range), 1, 3);
+    let mut retriever = PageRetriever::new(model, pdf, processor, &device, Some(range), 3, 3);
     let top_k_indices = retriever.retrieve(&args.prompt)?;
 
     println!("Prompt: {}", args.prompt);

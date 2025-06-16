@@ -1,9 +1,8 @@
-use crate::models::csm::LlamaConfig;
-use crate::models::llama::{self, Cache, Llama, LlamaBase};
+use crate::models::llama::{self, Cache, LlamaBase};
 use crate::models::with_tracing::{linear, linear_no_bias, Embedding, Linear};
-use candle::{DType, Device, IndexOp, Module, D};
+use candle::{DType, Device, Module, D};
 use candle::{Result, Tensor};
-use candle_nn::{Conv2dConfig, LayerNorm, LayerNormConfig, VarBuilder};
+use candle_nn::{Conv2dConfig, LayerNorm, LayerNormConfig};
 use serde::{Deserialize, Serialize};
 
 use crate::models::deepseek2::NonZeroOp;
@@ -29,7 +28,6 @@ pub struct Idefic3VisionConfig {
     hidden_size: usize,
     intermediate_size: usize,
     num_hidden_layers: usize,
-
     num_attention_heads: usize,
     num_channels: usize,
     pub patch_size: usize,
@@ -96,7 +94,7 @@ impl Idefics3VisionEmbeddings {
         let max_im_h = pixel_values.dims()[2];
         let max_im_w = pixel_values.dims()[3];
 
-        let patch_embeds = self.patch_embeddings.forward(&pixel_values)?;
+        let patch_embeds = self.patch_embeddings.forward(pixel_values)?;
         let embeddings = patch_embeds.flatten_from(2)?.transpose(1, 2)?;
         let (max_nb_patchs_h, max_nb_patchs_w) =
             (max_im_h / self.patch_size, max_im_w / self.patch_size);
@@ -104,7 +102,7 @@ impl Idefics3VisionEmbeddings {
             1.0 / self.num_patches_per_side as f64,
             1.0,
             1.0 / self.num_patches_per_side as f64,
-            device,
+            &Device::Cpu,
         )?
         .to_vec1::<f64>()?;
         let mut position_ids = Tensor::zeros(
@@ -160,11 +158,9 @@ impl Idefics3VisionEmbeddings {
 }
 
 struct Idefics3VisionAttention {
-    embed_dim: usize,
     num_heads: usize,
     head_dim: usize,
     scale: f32,
-    dropout: f32,
     k_proj: Linear,
     v_proj: Linear,
     q_proj: Linear,
@@ -188,11 +184,9 @@ impl Idefics3VisionAttention {
         let q_proj = linear(embed_dim, embed_dim, vb.pp("q_proj"))?;
         let out_proj = linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
         Ok(Self {
-            embed_dim,
             num_heads,
             head_dim,
             scale,
-            dropout: config.attention_dropout,
             k_proj,
             v_proj,
             q_proj,
@@ -207,7 +201,7 @@ impl Idefics3VisionAttention {
         hidden_states: &Tensor,
         attention_mask: &Option<Tensor>,
     ) -> Result<(Tensor, Option<Tensor>)> {
-        let (batch_size, seq_len, embed_dim) = hidden_states.dims3()?;
+        let (batch_size, q_len, embed_dim) = hidden_states.dims3()?;
         let q = self.q_proj.forward(hidden_states)?;
         let k = self.k_proj.forward(hidden_states)?;
         let v = self.v_proj.forward(hidden_states)?;
@@ -221,39 +215,29 @@ impl Idefics3VisionAttention {
             let attn_output = flash_attn(&q, &k, &v, scale, self.is_causal)?.transpose(1, 2)?;
             let attn_output = attn_output
                 .transpose(1, 2)?
-                .reshape((batch_size, seq_len, embed_dim))?;
+                .reshape((batch_size, q_len, embed_dim))?;
             let attn_output = self.out_proj.forward(&attn_output)?;
             return Ok((attn_output, None));
         }
+        let shape = (batch_size, q_len, self.num_heads, self.head_dim);
 
-        let q = q
-            .reshape((batch_size, seq_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let k = k
-            .reshape((batch_size, seq_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let v = v
-            .reshape((batch_size, seq_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+        let query_states = q.reshape(shape)?.transpose(1, 2)?.contiguous()?;
+        let key_states = k.reshape(shape)?.transpose(1, 2)?.contiguous()?;
+        let value_states = v.reshape(shape)?.transpose(1, 2)?.contiguous()?;
 
-        let attn_weights =
-            (q.matmul(&k.transpose(D::Minus1, D::Minus2)?).unwrap() * self.scale as f64)?;
-        let attn_weights = if let Some(attention_mask) = attention_mask {
-            attn_weights.broadcast_add(&attention_mask)?
-        } else {
-            attn_weights
+        let attn_weights = (query_states.matmul(&key_states.t()?)? * self.scale as f64)?;
+        let attn_weights = match attention_mask {
+            None => attn_weights,
+            Some(mask) => attn_weights.broadcast_add(mask)?,
         };
+        // The original implementation upcasts to f32 but candle_nn::ops::softmax should handle this properly.
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let attn_weights = candle_nn::ops::dropout(&attn_weights, self.dropout)?;
-        let attn_output = attn_weights.matmul(&v)?;
-        let attn_output = attn_output
+        let attn_outputs = attn_weights
+            .matmul(&value_states)?
             .transpose(1, 2)?
-            .reshape((batch_size, seq_len, embed_dim))?;
-        let attn_output = self.out_proj.forward(&attn_output)?;
-        Ok((attn_output, Some(attn_weights)))
+            .reshape((batch_size, q_len, ()))?
+            .apply(&self.out_proj)?;
+        Ok((attn_outputs, None))
     }
 }
 
@@ -343,15 +327,14 @@ impl Idefics3EncoderLayer {
     ) -> Result<(Tensor, Option<Tensor>)> {
         let residual = hidden_states;
 
-        let hidden_states = self.layer_norm1.forward(hidden_states)?;
+        let hidden_states = hidden_states.apply(&self.layer_norm1)?;
         let (hidden_states, attn_weights) =
             self.self_attn.forward(&hidden_states, attention_mask)?;
-        let hidden_states = hidden_states.add(&residual)?;
+        let hidden_states = hidden_states.add(residual)?;
 
         let residual = hidden_states.clone();
-        let hidden_states = self.layer_norm2.forward(&hidden_states)?;
-        let hidden_states = self.mlp.forward(&hidden_states)?;
-        let hidden_states = hidden_states.add(&residual)?;
+        let hidden_states = hidden_states.apply(&self.layer_norm2)?;
+        let hidden_states = self.mlp.forward(&hidden_states)?.add(&residual)?;
         Ok((hidden_states, attn_weights))
     }
 }
@@ -387,31 +370,6 @@ impl Idefics3Encoder {
     }
 }
 
-struct Idefics3RMSNorm {
-    weight: Tensor,
-    variance_epsilon: f64,
-}
-
-impl Idefics3RMSNorm {
-    pub fn load(config: &Idefic3VisionConfig, vb: candle_nn::VarBuilder) -> Result<Self> {
-        let weight =
-            vb.get_with_hints(config.hidden_size, "weight", candle_nn::Init::Const(1.0))?;
-        Ok(Self {
-            weight,
-            variance_epsilon: config.layer_norm_eps,
-        })
-    }
-
-    pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let variance = hidden_states.powf(2.0)?.mean_keepdim(D::Minus1)?;
-        let hidden_states = (hidden_states * (variance + self.variance_epsilon))?
-            .sqrt()?
-            .recip()?;
-        let hidden_states = (hidden_states * &self.weight)?;
-        Ok(hidden_states)
-    }
-}
-
 struct Idefics3Connector {
     modaliity_projection: Idefics3SimpleMLP,
     scale_factor: Option<usize>,
@@ -419,7 +377,7 @@ struct Idefics3Connector {
 
 impl Idefics3Connector {
     pub fn load(config: &Idefics3Config, vb: candle_nn::VarBuilder) -> Result<Self> {
-        let modaliity_projection = Idefics3SimpleMLP::load(&config, vb.pp("modality_projection"))?;
+        let modaliity_projection = Idefics3SimpleMLP::load(config, vb.pp("modality_projection"))?;
         Ok(Self {
             modaliity_projection,
             scale_factor: config.scale_factor,
@@ -461,7 +419,6 @@ pub struct Idefics3VisionTransformer {
     embeddings: Idefics3VisionEmbeddings,
     encoder: Idefics3Encoder,
     post_layernorm: LayerNorm,
-    use_flash_attn: bool,
 }
 
 impl Idefics3VisionTransformer {
@@ -483,7 +440,6 @@ impl Idefics3VisionTransformer {
             embeddings,
             encoder,
             post_layernorm,
-            use_flash_attn,
         })
     }
 
@@ -502,12 +458,12 @@ impl Idefics3VisionTransformer {
                     pixel_values.dims()[3],
                 ),
                 DType::F32,
-                &pixel_values.device(),
+                pixel_values.device(),
             )?
         };
         let hidden_states =
             self.embeddings
-                .forward(pixel_values, &patch_attention_mask, &pixel_values.device())?;
+                .forward(pixel_values, &patch_attention_mask, pixel_values.device())?;
         let patch_attention_mask = patch_attention_mask.flatten_from(1)?;
         let patch_attention_mask =
             prepare_4d_attention_mask(&patch_attention_mask, pixel_values.dtype(), None)?;
@@ -524,7 +480,6 @@ pub struct Idefics3Model {
     vision_model: Idefics3VisionTransformer,
     connector: Idefics3Connector,
     text_model: LlamaBase,
-    image_seq_len: usize,
     image_token_id: usize,
     use_flash_attn: bool,
     config: Idefics3Config,
@@ -545,15 +500,11 @@ impl Idefics3Model {
             &config.text_config.clone().into_config(use_flash_attn),
         )?;
 
-        let image_seq_len = (config.vision_config.image_size / config.vision_config.patch_size)
-            .pow(2)
-            / config.scale_factor.unwrap_or(2).pow(2);
         let image_token_id = config.image_token_id;
         Ok(Self {
             vision_model,
             connector,
             text_model,
-            image_seq_len,
             image_token_id,
             use_flash_attn,
             config: config.clone(),
@@ -564,7 +515,6 @@ impl Idefics3Model {
     pub fn forward(
         &self,
         input_ids: &Tensor,
-        attention_mask: &Tensor,
         pixel_values: &Option<Tensor>,
         pixel_attention_mask: &Option<Tensor>,
     ) -> Result<Tensor> {
@@ -608,11 +558,7 @@ impl Idefics3Model {
                 2,
             )?;
 
-            let patch_attention_mask = patches_subgrid
-                .sum((D::Minus1, D::Minus2))
-                .unwrap()
-                .ge(0.0)
-                .unwrap();
+            let patch_attention_mask = patches_subgrid.sum((D::Minus1, D::Minus2))?.ge(0.0)?;
 
             let image_hidden_states = self
                 .vision_model
@@ -622,38 +568,34 @@ impl Idefics3Model {
             let new_input_embeds =
                 self.inputs_merger(input_ids, &input_embeds, &image_hidden_states)?;
 
-            let output = self
-                .text_model
-                .forward_input_embed(
-                    &new_input_embeds,
-                    0,
-                    &mut Cache::new(
-                        true,
-                        pixel_values.dtype(),
-                        &self
-                            .config
-                            .text_config
-                            .clone()
-                            .into_config(self.use_flash_attn),
-                        &pixel_values.device(),
-                    )
-                    .unwrap(),
-                )
-                .unwrap();
+            let output = self.text_model.forward_input_embed(
+                &new_input_embeds,
+                0,
+                &mut Cache::new(
+                    false,
+                    pixel_values.dtype(),
+                    &self
+                        .config
+                        .text_config
+                        .clone()
+                        .into_config(self.use_flash_attn),
+                    pixel_values.device(),
+                )?,
+            )?;
             Ok(output)
         } else {
             self.text_model.forward(
                 input_ids,
                 0,
                 &mut Cache::new(
-                    true,
+                    false,
                     self.dtype,
                     &self
                         .config
                         .text_config
                         .clone()
                         .into_config(self.use_flash_attn),
-                    &input_ids.device(),
+                    input_ids.device(),
                 )?,
             )
         }
@@ -669,6 +611,7 @@ impl Idefics3Model {
         let (bsz, text_seq_len, embed_dim) = input_embeds.dims3()?;
 
         let input_embeds_reshaped = input_embeds.reshape((bsz * text_seq_len, embed_dim))?;
+
         let input_ids = input_ids.flatten_from(0)?;
         let special_image_token_indices = input_ids.eq(self.image_token_id as f64)?;
 
@@ -677,8 +620,9 @@ impl Idefics3Model {
         let special_image_token_indices = special_image_token_indices
             .nonzero()?
             .repeat((1, embed_dim))?;
+
         let new_input_embeds =
-            input_embeds_reshaped.scatter(&special_image_token_indices, &image_hidden_states, 0)?;
+            input_embeds_reshaped.scatter(&special_image_token_indices, &image_hidden_states, 0).unwrap();
         let new_input_embeds = new_input_embeds.reshape((bsz, text_seq_len, embed_dim))?;
 
         Ok(new_input_embeds)
@@ -688,7 +632,6 @@ impl Idefics3Model {
 pub struct ColIdefics3Model {
     model: Idefics3Model,
     linear: Linear,
-    image_token_id: usize,
 }
 
 impl ColIdefics3Model {
@@ -700,7 +643,7 @@ impl ColIdefics3Model {
         let model = Idefics3Model::load(config, use_flash_attn, vb.pp("model"))?;
         let dim = 128;
         let linear = linear(model.config.text_config.hidden_size, dim, vb.pp("linear"))?;
-        Ok(Self { model, linear, image_token_id: config.image_token_id })
+        Ok(Self { model, linear })
     }
 
     pub fn forward(
@@ -710,12 +653,9 @@ impl ColIdefics3Model {
         pixel_values: &Option<Tensor>,
         pixel_attention_mask: &Option<Tensor>,
     ) -> Result<Tensor> {
-        let output = self.model.forward(
-            input_ids,
-            attention_mask,
-            pixel_values,
-            pixel_attention_mask,
-        )?;
+        let output = self
+            .model
+            .forward(input_ids, pixel_values, pixel_attention_mask)?;
         let proj = self.linear.forward(&output)?;
         let proj = proj.broadcast_div(&proj.sqr()?.sum_keepdim(2)?.sqrt()?)?;
         let proj = proj.broadcast_mul(&attention_mask.unsqueeze(2)?.to_dtype(proj.dtype())?)?;
@@ -754,19 +694,9 @@ fn unfold(
     dim: usize,
 ) -> candle::Result<candle::Tensor> {
     let x_shape = x.shape().dims().to_vec();
-    let len = x_shape[dim] as usize;
+    let len = x_shape[dim];
     let num = (len - size) / step + 1;
-    tracing::info!(
-        "Unfolding dimension {}: len={}, size={}, step={}, num_windows={}",
-        dim,
-        len,
-        size,
-        step,
-        num
-    );
 
-    // Build index data for the unfolding dimension
-    tracing::debug!("Building index data for {} windows", num);
     let mut idx_data = Vec::with_capacity(num * size);
     for i in 0..num {
         let base = i * step;
@@ -774,38 +704,26 @@ fn unfold(
             idx_data.push((base + j) as i64);
         }
     }
-    tracing::debug!("Generated {} indices", idx_data.len());
 
-    // Create permutation to move the unfolding dimension to the end
-    tracing::debug!("Creating permutation for dimension reordering");
     let mut perm: Vec<usize> = (0..x_shape.len()).filter(|&i| i != dim).collect();
     perm.push(dim);
     let x = x.permute(perm)?;
-    tracing::debug!("Permuted tensor shape: {:?}", x.shape().dims());
 
-    // Create inverse permutation to restore original order
     let mut inv_perm: Vec<usize> = (0..x_shape.len()).collect();
     let moved_element = inv_perm.remove(0);
     inv_perm.insert(dim, moved_element);
     inv_perm.push(x_shape.len());
-    tracing::debug!("Created inverse permutation: {:?}", inv_perm);
 
-    // Create index tensor with proper broadcasting
-    tracing::debug!("Building index tensor shape");
     let mut idx_shape = vec![num];
-    for i in 0..x_shape.len() {
+    for (i, _) in x_shape.iter().enumerate() {
         if i != dim {
-            idx_shape.push(x_shape[i] as usize);
+            idx_shape.push(x_shape[i]);
         }
     }
     idx_shape.push(size);
-    tracing::debug!("Index tensor shape: {:?}", idx_shape);
 
-    // Create index tensor and reshape for broadcasting
-    tracing::debug!("Creating and reshaping index tensor");
     let idx = candle::Tensor::from_vec(idx_data, &[num, size], x.device())?;
 
-    // Build reshape dimensions: [num, 1s for other dims, size]
     let mut reshape_dims = vec![num];
     for i in 0..x_shape.len() {
         if i != dim {
@@ -813,34 +731,20 @@ fn unfold(
         }
     }
     reshape_dims.push(size);
-    tracing::debug!("Reshape dimensions: {:?}", reshape_dims);
 
     let reshape_dims: &[usize] = &reshape_dims;
     let idx = idx
         .reshape(reshape_dims)?
         .broadcast_as(&idx_shape[..])?
         .contiguous()?;
-    tracing::debug!(
-        "Reshaped and broadcasted index tensor shape: {:?}",
-        idx.shape().dims()
-    );
 
-    // Repeat x for each window
-    tracing::debug!("Repeating input tensor for windows");
     let mut repeat_dims = vec![1; x_shape.len()];
     repeat_dims[0] = num;
     let x = x.unsqueeze(0)?.repeat(repeat_dims)?;
-    tracing::debug!("Repeated tensor shape: {:?}", x.shape().dims());
 
-    // Gather and permute back to original order
-    tracing::debug!("Gathering and permuting back to original order");
-    let x_i = x.gather(&idx, x_shape.len())?;
-    let x_i = x_i.permute(inv_perm)?;
-    tracing::info!(
-        "Completed unfold operation. Final shape: {:?}",
-        x_i.shape().dims()
-    );
-    Ok(x_i)
+    let x = x.gather(&idx, x_shape.len())?.permute(inv_perm)?;
+
+    Ok(x)
 }
 
 // Global attention mask calculated from padded token inputs
