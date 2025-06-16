@@ -622,7 +622,7 @@ impl Idefics3Model {
             .repeat((1, embed_dim))?;
 
         let new_input_embeds =
-            input_embeds_reshaped.scatter(&special_image_token_indices, &image_hidden_states, 0).unwrap();
+            input_embeds_reshaped.scatter(&special_image_token_indices, &image_hidden_states, 0)?;
         let new_input_embeds = new_input_embeds.reshape((bsz, text_seq_len, embed_dim))?;
 
         Ok(new_input_embeds)

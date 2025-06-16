@@ -73,14 +73,14 @@ impl Idefics3ImageProcessor {
     ) -> Result<Tensor, anyhow::Error> {
         let resized_image = if size.contains_key("height") && size.contains_key("width") {
             image.resize_exact(
-                size.get("width").cloned().unwrap() as u32,
-                size.get("height").cloned().unwrap() as u32,
+                size.get("width").cloned().ok_or_else(|| anyhow::anyhow!("Missing width"))? as u32,
+                size.get("height").cloned().ok_or_else(|| anyhow::anyhow!("Missing height"))? as u32,
                 resample,
             )
         } else {
             let size = get_resize_output_image_size(
                 image.clone(),
-                size.get("longest_edge").cloned().unwrap(),
+                size.get("longest_edge").cloned().ok_or_else(|| anyhow::anyhow!("Missing longest_edge"))?,
             );
             image.resize_exact(size.1 as u32, size.0 as u32, resample)
         };
@@ -190,7 +190,7 @@ impl Idefics3ImageProcessor {
         data_format: &str,
         device: &Device,
     ) -> Result<(Tensor, Tensor), anyhow::Error> {
-        let (input_height, input_width, _) = image.dims3().unwrap();
+        let (input_height, input_width, _) = image.dims3()?;
         let (output_height, output_width) = output_size;
 
         // Create padded image with zeros
@@ -217,18 +217,16 @@ impl Idefics3ImageProcessor {
 
         // Copy the original image into the padded image
         if data_format == "channels_first" {
-            let transposed_image = image.to_owned().permute([2, 0, 1]).unwrap();
+            let transposed_image = image.to_owned().permute([2, 0, 1])?;
             padded_image = padded_image
-                .slice_assign(&[0..3, 0..input_height, 0..input_width], &transposed_image)
-                .unwrap();
+                .slice_assign(&[0..3, 0..input_height, 0..input_width], &transposed_image)?;
             pixel_mask = pixel_mask.slice_assign(
                 &[0..input_height, 0..input_width],
                 &Tensor::ones((input_height, input_width), DType::I64, device)?,
             )?;
         } else {
             padded_image = padded_image
-                .slice_assign(&[0..3, 0..input_height, 0..input_width], &image)
-                .unwrap();
+                .slice_assign(&[0..3, 0..input_height, 0..input_width], &image)?;
             pixel_mask = pixel_mask.slice_assign(
                 &[0..input_height, 0..input_width],
                 &Tensor::ones((input_height, input_width), DType::I64, device)?,
@@ -253,7 +251,7 @@ impl Idefics3ImageProcessor {
         for batch in images {
             max_num_images = std::cmp::max(max_num_images, batch.len());
             for image in batch {
-                let (height, width, _) = image.dims3().unwrap();
+                let (height, width, _) = image.dims3().map_err(|e| anyhow::anyhow!("Error getting dimensions: {}", e))?;
                 max_height = std::cmp::max(max_height, height);
                 max_width = std::cmp::max(max_width, width);
             }
@@ -266,9 +264,9 @@ impl Idefics3ImageProcessor {
         let mut padded_images = vec![
             vec![
                 if data_format == "channels_first" {
-                    Tensor::zeros((3, max_height, max_width), DType::F32, device).unwrap()
+                    Tensor::zeros((3, max_height, max_width), DType::F32, device)?
                 } else {
-                    Tensor::zeros((max_height, max_width, 3), DType::F32, device).unwrap()
+                    Tensor::zeros((max_height, max_width, 3), DType::F32, device)?
                 };
                 max_num_images
             ];
@@ -282,8 +280,7 @@ impl Idefics3ImageProcessor {
                         (max_height, max_width),
                         DType::I64,
                         device
-                    )
-                    .unwrap();
+                    )?;
                     max_num_images
                 ];
                 batch_size
@@ -296,8 +293,7 @@ impl Idefics3ImageProcessor {
         for (batch_idx, batch) in images.iter().enumerate() {
             for (sample_idx, image) in batch.iter().enumerate() {
                 let (padded_image, pixel_mask) = self
-                    .pad_image(image, output_size, data_format, device)
-                    .unwrap();
+                    .pad_image(image, output_size, data_format, device)?;
                 padded_images[batch_idx][sample_idx] = padded_image;
                 if let Some(ref mut masks) = padded_masks {
                     masks[batch_idx][sample_idx] = pixel_mask;
@@ -319,7 +315,7 @@ impl Idefics3ImageProcessor {
         // Step 1: Initial resize
         let resized_image = self.resize(
             image,
-            self.size.clone().unwrap(),
+            self.size.clone().ok_or_else(|| anyhow::anyhow!("Missing size"))?,
             FilterType::Lanczos3,
             device,
         )?;
@@ -337,7 +333,7 @@ impl Idefics3ImageProcessor {
         // Step 2: Resize for vision encoder
         let vision_encoder_image = self.resize_for_vision_encoder(
             &resized_dynamic_image,
-            &self.max_image_size.clone().unwrap()["longest_edge"],
+            &self.max_image_size.clone().ok_or_else(|| anyhow::anyhow!("Missing max_image_size"))?["longest_edge"],
             FilterType::Lanczos3,
             device,
         )?;
@@ -355,7 +351,7 @@ impl Idefics3ImageProcessor {
         let (frames, n_rows, n_cols) = if self.do_image_splitting {
             self.split_image(
                 &vision_encoder_image,
-                &self.max_image_size.clone().unwrap(),
+                &self.max_image_size.clone().ok_or_else(|| anyhow::anyhow!("Missing max_image_size"))?,
                 FilterType::Lanczos3,
                 device,
             )?
@@ -373,20 +369,7 @@ impl Idefics3ImageProcessor {
             (vec![frame], 1, 1)
         };
 
-        // Step 4: Rescale frames
-        let rescale_image_frames: Vec<Tensor> = if self.do_rescale {
-            frames
-                .iter()
-                .map(|frame| self.rescale(frame, self.rescale_factor))
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            frames
-                .iter()
-                .map(|frame| frame.to_dtype(DType::F32))
-                .collect::<Result<Vec<_>, _>>()?
-        };
-
-        // Step 5: Normalize frames
+        // Step 4 & 5: Rescale and normalize frames
         let normalized_frames = if self.do_normalize {
             let image_mean = self
                 .image_mean
@@ -400,15 +383,31 @@ impl Idefics3ImageProcessor {
                 Tensor::from_vec(image_mean.clone(), (1, 1, image_mean.len()), device)?;
             let image_std = Tensor::from_vec(image_std.clone(), (1, 1, image_std.len()), device)?;
 
-            rescale_image_frames
+            frames
                 .iter()
                 .map(|frame| {
-                    let frame = frame.clone();
-                    normalize(&frame, &image_mean, &image_std)
+                    // First rescale the frame
+                    let rescaled_frame = if self.do_rescale {
+                        self.rescale(frame, self.rescale_factor)?
+                    } else {
+                        frame.to_dtype(DType::F32)?
+                    };
+                    // Then normalize the rescaled frame
+                    normalize(&rescaled_frame, &image_mean, &image_std)
                 })
                 .collect::<Result<Vec<_>, _>>()?
         } else {
-            rescale_image_frames
+            // Only rescale without normalization
+            frames
+                .iter()
+                .map(|frame| -> Result<Tensor, anyhow::Error> {
+                    if self.do_rescale {
+                        self.rescale(frame, self.rescale_factor)
+                    } else {
+                        Ok(frame.to_dtype(DType::F32)?)
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?
         };
 
         // Step 6: Pad and stack frames
@@ -443,28 +442,21 @@ impl Idefics3ImageProcessor {
         let max_num_images = preprocessed_images
             .iter()
             .map(|image| image.len())
-            .max()
-            .unwrap();
+            .max().expect("No images found");
         let (max_height, max_width) = get_max_height_width(&preprocessed_images);
         let mut padded_image_list_full = vec![];
         let mut padded_mask_list_full = vec![];
         for _ in images {
-            let mut padded_image_list = vec![];
-            let mut padded_mask_list = vec![];
-            for _ in 0..max_num_images {
-                padded_image_list.push(empty_image(
-                    3,
-                    max_height as u32,
-                    max_width as u32,
-                    DType::F32,
-                    device,
-                )?);
-                padded_mask_list.push(Tensor::zeros(
-                    (max_height as usize, max_width as usize),
-                    DType::I64,
-                    device,
-                )?);
-            }
+            let (padded_image_list, padded_mask_list): (Vec<_>, Vec<_>) = (0..max_num_images)
+                .map(|_| -> Result<(Tensor, Tensor), anyhow::Error> {
+                    Ok((
+                        empty_image(3, max_height as u32, max_width as u32, DType::F32, device)?,
+                        Tensor::zeros((max_height as usize, max_width as usize), DType::I64, device)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .unzip();
             padded_image_list_full.push(padded_image_list);
             padded_mask_list_full.push(padded_mask_list);
         }
@@ -474,15 +466,15 @@ impl Idefics3ImageProcessor {
             }
         }
 
-        let padded_image_list_full = padded_image_list_full
+        let (padded_image_list_full, padded_mask_list_full): (Vec<_>, Vec<_>) = padded_image_list_full
             .iter()
-            .map(|list| Tensor::stack(list, 0))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let padded_mask_list_full = padded_mask_list_full
-            .iter()
-            .map(|list| Tensor::stack(list, 0))
-            .collect::<Result<Vec<_>, _>>()?;
+            .zip(padded_mask_list_full.iter())
+            .map(|(image_list, mask_list)| -> Result<(Tensor, Tensor), anyhow::Error> {
+                Ok((Tensor::stack(image_list, 0)?, Tensor::stack(mask_list, 0)?))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .unzip();
 
         let padded_image_list_full = Tensor::stack(&padded_image_list_full, 0)?;
         let padded_mask_list_full = Tensor::stack(&padded_mask_list_full, 0)?;

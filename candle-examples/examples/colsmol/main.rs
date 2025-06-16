@@ -185,7 +185,11 @@ fn main() -> Result<()> {
     };
 
     let mut retriever = PageRetriever::new(model, pdf, processor, &device, Some(range), 3, 3);
+
+    let start_time = std::time::Instant::now();
     let top_k_indices = retriever.retrieve(&args.prompt)?;
+    let end_time = std::time::Instant::now();
+    println!("Time taken: {:?}", end_time.duration_since(start_time));
 
     println!("Prompt: {}", args.prompt);
     println!(
