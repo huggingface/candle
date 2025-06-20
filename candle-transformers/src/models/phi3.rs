@@ -21,7 +21,7 @@
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use crate::models::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::VarBuilder;
+use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -59,12 +59,41 @@ pub struct Config {
     #[serde(default)]
     pub tie_word_embeddings: bool,
 }
-
 impl Config {
+    pub fn mini_4k_instruct() -> Self {
+        Self {
+            vocab_size: 32064,
+            hidden_act: Activation::GeGlu,
+            hidden_size: 3072,
+            intermediate_size: 8192,
+            num_hidden_layers: 32,
+            num_attention_heads: 32,
+            num_key_value_heads: 32,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10000.0,
+            bos_token_id: Some(1),
+            eos_token_id: Some(2),
+            rope_scaling: None,
+            max_position_embeddings: 4096,
+            original_max_position_embeddings: None,
+            partial_rotary_factor: None,
+            tie_word_embeddings: false,
+        }
+    }
+
+    pub fn with_activation(mut self, activation: Activation) -> Self {
+        self.hidden_act = activation;
+        self
+    }
     pub fn head_dim(&self) -> usize {
         self.hidden_size / self.num_attention_heads
     }
 }
+// impl Config {
+//     pub fn head_dim(&self) -> usize {
+//         self.hidden_size / self.num_attention_heads
+//     }
+// }
 
 #[derive(Debug, Clone)]
 pub struct RotaryEmbedding {
