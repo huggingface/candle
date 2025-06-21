@@ -63,21 +63,23 @@ fn ones(device: &Device) -> Result<()> {
         ],
     );
 
-    assert_eq!(
-        Tensor::ones((2, 3), DType::F8E4M3, device)?.to_vec2::<F8E4M3>()?,
-        [
+    if !device.is_metal() {
+        assert_eq!(
+            Tensor::ones((2, 3), DType::F8E4M3, device)?.to_vec2::<F8E4M3>()?,
             [
-                F8E4M3::from_f32(1.),
-                F8E4M3::from_f32(1.),
-                F8E4M3::from_f32(1.)
+                [
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.)
+                ],
+                [
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.)
+                ]
             ],
-            [
-                F8E4M3::from_f32(1.),
-                F8E4M3::from_f32(1.),
-                F8E4M3::from_f32(1.)
-            ]
-        ],
-    );
+        );
+    }
     Ok(())
 }
 
@@ -127,20 +129,23 @@ fn arange(device: &Device) -> Result<()> {
         [5, 4, 3, 2, 1],
     );
 
-    assert_eq!(
-        Tensor::arange_step(
-            F8E4M3::from_f32(0.),
-            F8E4M3::from_f32(5.),
-            F8E4M3::from_f32(2.),
-            device
-        )?
-        .to_vec1::<F8E4M3>()?,
-        [
-            F8E4M3::from_f32(0.),
-            F8E4M3::from_f32(2.),
-            F8E4M3::from_f32(4.),
-        ],
-    );
+    if !device.is_metal() {
+        assert_eq!(
+            Tensor::arange_step(
+                F8E4M3::from_f32(0.),
+                F8E4M3::from_f32(5.),
+                F8E4M3::from_f32(2.),
+                device
+            )?
+            .to_vec1::<F8E4M3>()?,
+            [
+                F8E4M3::from_f32(0.),
+                F8E4M3::from_f32(2.),
+                F8E4M3::from_f32(4.),
+            ],
+        );
+    }
+
     Ok(())
 }
 

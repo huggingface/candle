@@ -457,6 +457,7 @@ impl BackendStorage for MetalStorage {
                         DType::I64 => contiguous::const_set::I64,
                         DType::U32 => contiguous::const_set::U32,
                         DType::U8 => contiguous::const_set::U8,
+                        DType::F8E4M3 => crate::bail!("unsupported const-set f8e4m3"),
                         DType::F64 => crate::bail!("unsupported const-set f64"),
                     };
                     candle_metal_kernels::call_const_set_contiguous(
@@ -479,6 +480,7 @@ impl BackendStorage for MetalStorage {
                         DType::I64 => strided::const_set::I64,
                         DType::U32 => strided::const_set::U32,
                         DType::U8 => strided::const_set::U8,
+                        DType::F8E4M3 => crate::bail!("unsupported const-set f8e4m3"),
                         DType::F64 => crate::bail!("unsupported const-set f64"),
                     };
                     candle_metal_kernels::call_const_set_strided(
