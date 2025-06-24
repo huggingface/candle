@@ -2010,7 +2010,7 @@ fn simple_eval_(
                 let seq_lens_is_default =
                     (seq_lens.to_vec1::<i64>()?.iter()).all(|e| *e as usize == seq_length);
                 if !seq_lens_is_default {
-                    bail!("RNN currently only supports default value of seq_lens");
+                    bail!("RNN currently does not support variable-length sequences. All sequences must use the full sequence length of {}", seq_length);
                 }
 
                 // Optional initial value of the hidden. If not specified - assumed to be 0.
