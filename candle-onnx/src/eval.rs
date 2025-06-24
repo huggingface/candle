@@ -1950,6 +1950,137 @@ fn simple_eval_(
                     );
                 }
             }
+            "RNN" => {
+                // activation_alpha and activation_beta don't apply to (Tanh, Tanh) so ignoring them is okay
+                let activations_default = vec!["Tanh".to_string(), "Tanh".to_string()];
+                let activations = get_attr_opt_owned::<Vec<String>>(node, "activations")?
+                    .unwrap_or(activations_default.clone());
+                let clip = get_attr_opt::<f32>(node, "clip")?.copied();
+                if clip.is_some() {
+                    bail!("RNN does not currently support clip attribute");
+                }
+                let direction = get_attr_opt(node, "direction")?.unwrap_or("forward");
+                if direction != "forward" {
+                    bail!("RNN currently only supports direction == \"forward\"");
+                }
+                let num_directions = if direction == "bidirectional" { 2 } else { 1 };
+                let hidden_size: i64 = get_attr(node, "hidden_size").copied()?;
+
+                // The shape format of inputs X, initial_h and outputs Y, Y_h.
+                // If 0, the following shapes are expected:
+                //    X.shape = [seq_length, batch_size, input_size],
+                //    Y.shape = [seq_length, num_directions, batch_size, hidden_size],
+                //    initial_h.shape = Y_h.shape = [num_directions, batch_size, hidden_size].
+                // If 1, the following shapes are expected:
+                //    X.shape = [batch_size, seq_length, input_size],
+                //    Y.shape = [batch_size, seq_length, num_directions, hidden_size],
+                //    initial_h.shape = Y_h.shape = [batch_size, num_directions, hidden_size].
+                let layout = get_attr_opt(node, "layout")?.copied().unwrap_or(0);
+                if layout != 0 {
+                    bail!("RNN currently only supports layout == 0");
+                }
+
+                // The input sequences packed (and potentially padded) into one 3-D tensor
+                // with the shape of `[seq_length, batch_size, input_size]`.
+                let x = get(&node.input[0])?;
+                // XXX: depends on layout
+                let (seq_length, batch_size, _) = x.dims3()?;
+                // The weight tensor for the input gate.
+                // Concatenation of `Wi` and `WBi` (if bidirectional).
+                // The tensor has shape `[num_directions, hidden_size, input_size]`.
+                let w = get(&node.input[1])?;
+                // The recurrence weight tensor.
+                // Concatenation of `Ri` and `RBi` (if bidirectional).
+                // This tensor has shape `[num_directions, hidden_size, hidden_size]`.
+                let r = get(&node.input[2])?;
+
+                // The bias tensor for input gate.
+                // Concatenation of `[Wbi, Rbi]` and `[WBbi, RBbi]` (if bidirectional).
+                // This tensor has shape `[num_directions, 2*hidden_size]`.
+                // Optional: If not specified - assumed to be 0.
+                let b_default: Tensor;
+                let b = match get_opt(3) {
+                    Some(n) => n?,
+                    None => {
+                        b_default = Tensor::zeros(
+                            (num_directions, 2 * hidden_size as usize),
+                            DType::F32,
+                            x.device(),
+                        )?;
+                        &b_default
+                    }
+                };
+
+                // Optional tensor specifying lengths of the sequences in a batch.
+                // If not specified - assumed all sequences in the batch to have length `seq_length`.
+                // It has shape `[batch_size]`.
+                let seq_lens_default: Tensor;
+                let seq_lens = match get_opt(4) {
+                    Some(n) => n?,
+                    None => {
+                        seq_lens_default =
+                            Tensor::full(seq_length as i64, (batch_size,), x.device())?;
+                        &seq_lens_default
+                    }
+                };
+                let seq_lens_is_default =
+                    (seq_lens.to_vec1::<i64>()?.iter()).all(|e| *e as usize == seq_length);
+                if !seq_lens_is_default {
+                    bail!("RNN currently does not support variable-length sequences. All sequences must use the full sequence length of {}", seq_length);
+                }
+
+                // Optional initial value of the hidden. If not specified - assumed to be 0.
+                // It has shape `[num_directions, batch_size, hidden_size]`.
+                let initial_h_default: Tensor;
+                let initial_h = match get_opt(5) {
+                    Some(n) => n?,
+                    _ => {
+                        initial_h_default = Tensor::zeros(
+                            (num_directions, batch_size, hidden_size as usize),
+                            DType::F32,
+                            x.device(),
+                        )?;
+                        &initial_h_default
+                    }
+                };
+
+                fn choose_activation(activation: &str, x: &Tensor) -> Result<Tensor> {
+                    match activation {
+                        "Tanh" => x.tanh(),
+                        _ => bail!("unsupported activation {activation}"),
+                    }
+                }
+
+                // these all have [num_directions, ...] shapes
+                let w = w.get(0)?;
+                let r = r.get(0)?;
+                let b = b.get(0)?;
+                let idx_wb = Tensor::arange(0, hidden_size, x.device())?;
+                let idx_rb = Tensor::arange(hidden_size, 2 * hidden_size, x.device())?;
+                let wb = b.index_select(&idx_wb, 0)?;
+                let rb = b.index_select(&idx_rb, 0)?;
+                let mut h_t = initial_h.get(0)?;
+                let mut h_list: Vec<Tensor> = vec![];
+                for i in 0..seq_length {
+                    let xs = x.get(i)?;
+                    let h = xs
+                        .matmul(&w.t()?)?
+                        .add(&h_t.matmul(&r.t()?)?)?
+                        .add(&wb.unsqueeze(0)?)?
+                        .add(&rb.unsqueeze(0)?)?;
+                    let h = choose_activation(&activations[0], &h)?;
+                    h_list.push(h.to_owned());
+                    h_t = h;
+                }
+                let h = Tensor::stack(&h_list, 0)?;
+                let h =
+                    h.reshape((seq_length, num_directions, batch_size, hidden_size as usize))?;
+                values.insert(node.output[0].clone(), h);
+                values.insert(
+                    node.output[1].clone(),
+                    h_t.reshape((num_directions, batch_size, hidden_size as usize))?,
+                );
+            }
             // https://onnx.ai/onnx/operators/onnx__Xor.html
             "Xor" => {
                 // Since we don't have a `DType::Bool` yet, this ensures that we are working with `0`(False) & `1`(True)

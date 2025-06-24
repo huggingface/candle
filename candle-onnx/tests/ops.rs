@@ -5237,6 +5237,275 @@ fn test_lstm() -> Result<()> {
 }
 
 #[test]
+fn test_rnn() -> Result<()> {
+    // values generated from pytorch, so at least it's close enough to what pytorch does
+    /*
+    #!/usr/bin/env python3
+
+    import torch
+
+    rand_gen = torch.Generator()
+    rand_gen.manual_seed(42)
+    input_size = 3
+    hidden_size = 5
+    batch_size = 1
+    sequence_length = 4
+    number_directions = 1
+    rnn = torch.nn.RNN(input_size,hidden_size)
+    weight_ih_l0 = torch.randn(rnn.weight_ih_l0.shape, generator=rand_gen)
+    weight_hh_l0 = torch.randn(rnn.weight_hh_l0.shape, generator=rand_gen)
+    bias_ih_l0 = torch.randn(rnn.bias_ih_l0.shape, generator=rand_gen)
+    bias_hh_l0 = torch.randn(rnn.bias_hh_l0.shape, generator=rand_gen)
+    rnn.weight_ih_l0 = torch.nn.Parameter(weight_ih_l0)
+    rnn.weight_hh_l0 = torch.nn.Parameter(weight_hh_l0)
+    rnn.bias_ih_l0 = torch.nn.Parameter(bias_ih_l0)
+    rnn.bias_hh_l0 = torch.nn.Parameter(bias_hh_l0)
+    input = torch.randn(sequence_length, batch_size, input_size, generator=rand_gen)
+    hx = torch.randn(number_directions, batch_size, hidden_size, generator=rand_gen)
+    output, hn = rnn(input, hx)
+
+    def fmt_tensor(t):
+        return "Tensor::from_vec::<_, f32>(vec!"+  str(t.flatten().tolist()) + ", (" + "".join([str(n)+"," for n in t.shape])+"), &Device::Cpu)?"
+
+    print("let input_size = ", input_size, ";")
+    print("let hidden_size = ", hidden_size, ";")
+    print("let batch_size = ", batch_size, ";")
+    print("let sequence_length = ", sequence_length, ";")
+    print("let number_directions = ", number_directions, ";")
+    print("let weight_ih_l0 = ", fmt_tensor(rnn.weight_ih_l0), ";")
+    print("let weight_hh_l0 = ", fmt_tensor(rnn.weight_hh_l0), ";")
+    print("let bias_ih_l0 = ", fmt_tensor(rnn.bias_ih_l0), ";")
+    print("let bias_hh_l0 = ", fmt_tensor(rnn.bias_hh_l0), ";")
+    print("let input = ", fmt_tensor(input), ";")
+    print("let hx = ", fmt_tensor(hx), ";")
+    print("let output = ", fmt_tensor(output), ";")
+    print("let hn = ", fmt_tensor(hn), ";")
+    */
+
+    // https://github.com/onnx/onnx/blob/main/docs/Operators.md#RNN
+    let model = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "RNN".to_string(),
+            name: "RNN_test".to_string(),
+            attribute: vec![AttributeProto {
+                name: "hidden_size".to_string(),
+                r#type: AttributeType::Int.into(),
+                i: 5,
+                ..AttributeProto::default()
+            }],
+            input: vec![
+                "input".to_string(),
+                "w".to_string(),
+                "r".to_string(),
+                "b".to_string(), // b
+                "".to_string(),  // seq_lens
+                "h".to_string(),
+            ],
+            output: vec!["output".to_string(), "hn".to_string()],
+            ..NodeProto::default()
+        }],
+        input: ["input", "w", "r", "b", "h"]
+            .into_iter()
+            .map(|name| ValueInfoProto {
+                name: name.to_string(),
+                ..ValueInfoProto::default()
+            })
+            .collect(),
+        output: ["output", "hn"]
+            .into_iter()
+            .map(|name| ValueInfoProto {
+                name: name.to_string(),
+                ..ValueInfoProto::default()
+            })
+            .collect(),
+        ..GraphProto::default()
+    }));
+
+    let input_size = 3;
+    let hidden_size = 5;
+    let batch_size = 1;
+    let sequence_length = 4;
+    let number_directions = 1;
+    let weight_ih_l0 = Tensor::from_vec::<_, f32>(
+        vec![
+            0.33669036626815796,
+            0.12880940735340118,
+            0.23446236550807953,
+            0.23033303022384644,
+            -1.1228563785552979,
+            -0.18632829189300537,
+            2.2082014083862305,
+            -0.637997031211853,
+            0.46165722608566284,
+            0.2673508822917938,
+            0.5349046587944031,
+            0.809357225894928,
+            1.110290288925171,
+            -1.6897989511489868,
+            -0.9889599084854126,
+        ],
+        (5, 3),
+        &Device::Cpu,
+    )?;
+    let weight_hh_l0 = Tensor::from_vec::<_, f32>(
+        vec![
+            -1.3846737146377563,
+            -0.8712361454963684,
+            -0.223365917801857,
+            1.7173614501953125,
+            0.3188803195953369,
+            -0.42451897263526917,
+            0.3057209253311157,
+            -0.7745925188064575,
+            -1.5575724840164185,
+            -0.9223900437355042,
+            1.811317801475525,
+            0.16056492924690247,
+            0.36724865436553955,
+            0.17541083693504333,
+            1.3851605653762817,
+            -0.44585201144218445,
+            1.4451338052749634,
+            0.7078122496604919,
+            -1.0758858919143677,
+            0.5356546640396118,
+            1.1753677129745483,
+            0.5611738562583923,
+            -0.45274803042411804,
+            -0.771777868270874,
+            -0.1721901297569275,
+        ],
+        (5, 5),
+        &Device::Cpu,
+    )?;
+    let bias_ih_l0 = Tensor::from_vec::<_, f32>(
+        vec![
+            0.9579718112945557,
+            -0.6381967663764954,
+            -1.9187371730804443,
+            -0.6441153287887573,
+            -0.6060903072357178,
+        ],
+        (5,),
+        &Device::Cpu,
+    )?;
+    let bias_hh_l0 = Tensor::from_vec::<_, f32>(
+        vec![
+            -0.1425034999847412,
+            0.972653865814209,
+            2.0037777423858643,
+            0.6621911525726318,
+            0.5332217216491699,
+        ],
+        (5,),
+        &Device::Cpu,
+    )?;
+    let input = Tensor::from_vec::<_, f32>(
+        vec![
+            2.748873233795166,
+            -0.3840780258178711,
+            -1.962258219718933,
+            -0.30899786949157715,
+            -0.4268203377723694,
+            0.4503966271877289,
+            -0.0022214562632143497,
+            -0.19801591336727142,
+            1.775763750076294,
+            -1.6059082746505737,
+            0.48799338936805725,
+            -0.17943637073040009,
+        ],
+        (4, 1, 3),
+        &Device::Cpu,
+    )?;
+    let hx = Tensor::from_vec::<_, f32>(
+        vec![
+            1.4753035306930542,
+            -1.353177547454834,
+            0.16822677850723267,
+            -0.8245629668235779,
+            -0.060138583183288574,
+        ],
+        (1, 1, 5),
+        &Device::Cpu,
+    )?;
+    let output = Tensor::from_vec::<_, f32>(
+        vec![
+            -0.8023818135261536,
+            0.9590549468994141,
+            0.9999996423721313,
+            -0.9906406402587891,
+            0.9999986886978149,
+            -0.5140700936317444,
+            0.8138962388038635,
+            0.16080257296562195,
+            0.9994772672653198,
+            -0.38456836342811584,
+            0.992118239402771,
+            -0.5608834624290466,
+            -0.07238662987947464,
+            0.9196381568908691,
+            -0.9843823313713074,
+            0.5993185043334961,
+            -0.9232994914054871,
+            -0.9976708292961121,
+            -0.9960790276527405,
+            -0.973706841468811,
+        ],
+        (4, 1, 5),
+        &Device::Cpu,
+    )?;
+    let hn = Tensor::from_vec::<_, f32>(
+        vec![
+            0.5993185043334961,
+            -0.9232994914054871,
+            -0.9976708292961121,
+            -0.9960790276527405,
+            -0.973706841468811,
+        ],
+        (1, 1, 5),
+        &Device::Cpu,
+    )?;
+
+    let w = weight_ih_l0.reshape((number_directions, hidden_size, input_size))?;
+    let r = weight_hh_l0.reshape((number_directions, hidden_size, hidden_size))?;
+    let wb = bias_ih_l0.reshape((number_directions, hidden_size))?;
+    let rb = bias_hh_l0.reshape((number_directions, hidden_size))?;
+    let b = Tensor::cat(&[wb, rb], 0)?.reshape((number_directions, 2 * hidden_size))?;
+    let h = hx.reshape((number_directions, batch_size, hidden_size))?;
+    let output = output.reshape((sequence_length, number_directions, batch_size, hidden_size))?;
+    let hn = hn.reshape((number_directions, batch_size, hidden_size))?;
+
+    let diff_close_enough = |a: &Tensor, b| -> Result<_> {
+        let diffs = a.sub(b)?.flatten_all()?.to_vec1::<f32>()?;
+        Ok(diffs.iter().all(|f| f.abs() < 0.0001))
+    };
+    let result = simple_eval(
+        &model,
+        HashMap::from_iter([
+            ("input".to_string(), input),
+            ("w".to_string(), w),
+            ("r".to_string(), r),
+            ("b".to_string(), b),
+            ("h".to_string(), h),
+        ]),
+    )?;
+    let actual_output = result.get("output").unwrap();
+    assert_eq!(output.dims(), actual_output.dims());
+    let actual_hn = result.get("hn").unwrap();
+    assert_eq!(hn.dims(), actual_hn.dims());
+    assert!(
+        diff_close_enough(&output, actual_output)?,
+        "output did not match expected\n{actual_output}\n{output}",
+    );
+    assert!(
+        diff_close_enough(&hn, actual_hn)?,
+        "hn did not match expected\n{actual_hn}\n{hn}",
+    );
+    Ok(())
+}
+
+#[test]
 fn test_expand_dim_changed() -> Result<()> {
     // Create a manual graph for the Expand operation
     let manual_graph = create_model_proto_with_graph(Some(GraphProto {
