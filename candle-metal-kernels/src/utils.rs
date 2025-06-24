@@ -88,9 +88,13 @@ primitive!(bool);
 primitive!(usize);
 primitive!(i32);
 primitive!(i64);
+primitive!(u8);
 primitive!(u32);
 primitive!(u64);
 primitive!(f32);
+primitive!(f64);
+primitive!(half::bf16);
+primitive!(half::f16);
 
 pub struct BufferOffset<'a> {
     pub buffer: &'a Buffer,

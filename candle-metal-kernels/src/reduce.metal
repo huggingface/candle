@@ -1097,6 +1097,7 @@ template<typename T>
 METAL_FUNC void ropei(
     constant size_t &bh,
     constant size_t &td,
+    constant size_t &stride_b,
     device const T *src,
     device const T *cos,
     device const T *sin,
@@ -1107,6 +1108,10 @@ METAL_FUNC void ropei(
         return;
     }
     size_t rope_idx = tid % (td / 2);
+    if (stride_b > 0) {
+      size_t b_idx = (2 * tid) / stride_b;
+      rope_idx += b_idx * (td / 2);
+    }
     T c = cos[rope_idx];
     T s = sin[rope_idx];
     dst[2 * tid] = src[2 * tid] * c - src[2 * tid + 1] * s;
@@ -1118,6 +1123,7 @@ METAL_FUNC void rope(
     constant size_t &bh,
     constant size_t &td,
     constant size_t &d,
+    constant size_t &stride_b,
     device const T *src,
     device const T *cos,
     device const T *sin,
@@ -1134,6 +1140,10 @@ METAL_FUNC void rope(
     size_t i1 = i_bh * td + i_t * d + i_d;
     size_t i2 = i1 + d / 2;
     size_t i_cs = i_t * (d / 2) + i_d;
+    if (stride_b > 0) {
+      size_t b_idx = (2 * idx) / stride_b;
+      i_cs += b_idx * (td / 2);
+    }
     T c = cos[i_cs];
     T s = sin[i_cs];
     dst[i1] = src[i1] * c - src[i2] * s;
@@ -1146,6 +1156,7 @@ METAL_FUNC void rope_thd(
     constant size_t &t,
     constant size_t &h,
     constant size_t &d,
+    constant size_t &stride_b,
     device const T *src,
     device const T *cos,
     device const T *sin,
@@ -1160,8 +1171,12 @@ METAL_FUNC void rope_thd(
     const size_t i_t = (i_bth / h) % t;
     const size_t i1 = i_bth * d + i_d;
     const size_t i2 = i1 + d / 2;
-    const size_t i_cs = i_t * (d / 2) + i_d;
-     T c = cos[i_cs];
+    size_t i_cs = i_t * (d / 2) + i_d;
+    if (stride_b > 0) {
+      const size_t b_idx = (2 * idx) / stride_b;
+      i_cs += b_idx * ((t * d) / 2);
+    }
+    T c = cos[i_cs];
     T s = sin[i_cs];
     dst[i1] = src[i1] * c - src[i2] * s;
     dst[i2] = src[i1] * s + src[i2] * c;
@@ -1171,38 +1186,41 @@ METAL_FUNC void rope_thd(
 kernel void FN_NAME_I( \
     constant size_t &bh, \
     constant size_t &td, \
+    constant size_t &stride_b, \
     device const TYPENAME *src,  \
     device const TYPENAME *cos,  \
     device const TYPENAME *sin,  \
     device TYPENAME *dst, \
     uint tid [[ thread_position_in_grid ]] \
 ) { \
-    ropei<TYPENAME>(bh, td, src, cos, sin, dst, tid); \
+    ropei<TYPENAME>(bh, td, stride_b, src, cos, sin, dst, tid); \
 }\
 kernel void FN_NAME( \
     constant size_t &bh, \
     constant size_t &td, \
     constant size_t &d, \
+    constant size_t &stride_b, \
     device const TYPENAME *src,  \
     device const TYPENAME *cos,  \
     device const TYPENAME *sin,  \
     device TYPENAME *dst, \
     uint idx [[ thread_position_in_grid ]] \
 ) { \
-    rope<TYPENAME>(bh, td, d, src, cos, sin, dst, idx); \
+    rope<TYPENAME>(bh, td, d, stride_b, src, cos, sin, dst, idx); \
 }\
 kernel void FN_NAME_THD( \
     constant size_t &b, \
     constant size_t &t, \
     constant size_t &h, \
     constant size_t &d, \
+    constant size_t &stride_b, \
     device const TYPENAME *src,  \
     device const TYPENAME *cos,  \
     device const TYPENAME *sin,  \
     device TYPENAME *dst, \
     uint idx [[ thread_position_in_grid ]] \
 ) { \
-    rope_thd<TYPENAME>(b, t, h, d, src, cos, sin, dst, idx); \
+    rope_thd<TYPENAME>(b, t, h, d, stride_b, src, cos, sin, dst, idx); \
 }\
 
 RMSNORM(rmsnorm_f32, float)

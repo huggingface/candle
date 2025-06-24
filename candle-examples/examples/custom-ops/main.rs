@@ -56,7 +56,7 @@ impl CustomOp1 for LayerNorm {
         layout: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::backend::BackendStorage;
-        use candle::cuda_backend::cudarc::driver::{LaunchAsync, LaunchConfig};
+        use candle::cuda_backend::cudarc::driver::{LaunchConfig, PushKernelArg};
         use candle::cuda_backend::WrapErr;
         let (d1, d2) = layout.shape().dims2()?;
         let d1 = d1 as u32;
@@ -68,15 +68,19 @@ impl CustomOp1 for LayerNorm {
             Some((o1, o2)) => slice.slice(o1..o2),
         };
         let elem_count = layout.shape().elem_count();
-        let dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
-        let func = dev.get_or_load_func("rms_f32", cuda_kernels::LAYERNORM_KERNELS)?;
-        let params = (&dst, &slice, self.eps, d1, d2);
+        let dst = unsafe { dev.alloc::<f32>(elem_count) }?;
+        let func =
+            dev.get_or_load_custom_func("rms_f32", "mymodule", cuda_kernels::LAYERNORM_KERNELS)?;
         let cfg = LaunchConfig {
             grid_dim: (d1, 1, 1),
             block_dim: (d2, 1, 1),
             shared_mem_bytes: 0,
         };
-        unsafe { func.launch(cfg, params) }.w()?;
+        let mut builder = func.builder();
+        builder.arg(&dst);
+        builder.arg(&slice);
+        candle::builder_arg!(builder, self.eps, d1, d2);
+        unsafe { builder.launch(cfg) }.w()?;
 
         let dst = candle::CudaStorage::wrap_cuda_slice(dst, dev);
         Ok((dst, layout.shape().clone()))

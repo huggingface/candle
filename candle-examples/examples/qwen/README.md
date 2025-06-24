@@ -25,3 +25,28 @@ def print_prime(n: int):  # n is the number of primes to be printed
             print(i)
 ```
 
+The qwen3 MoE variant is also an option.
+
+```bash
+$ cargo run --example qwen --features metal --release  -- --prompt "Write a poem about butterflies. <think></think>." --model "3-moe-a3b"
+> In morning's hush, where daisies sleep,  
+> A fleeting dance through sunlit deep—  
+> They flutter soft on gossamer thread,  
+> The messengers of spring’s own head.
+> 
+> With painted sails and delicate grace,  
+> They drift from bloom to blossom's face.  
+> Each wing a tale in hues unseen,  
+> Of ancient dreams and secrets between.
+> 
+> No sound they make, yet still they speak—  
+> Of time that flies, of life so brief.  
+> A fleeting kiss on summer’s breath,  
+> A whisper lost before death.
+> 
+> Yet in their flight, the soul takes wing,  
+> And for a moment, all is spring.  
+> For though they fade, they never die—  
+> Their beauty lives where hearts can fly.
+> 161 tokens generated (3.00 token/s)
+```

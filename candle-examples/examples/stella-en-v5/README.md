@@ -10,7 +10,7 @@ Stella_en_1.5B_v5 is used to generate text embeddings embeddings for a prompt. T
 are downloaded from the hub on the first run.
 
 ```bash
-$ cargo run --example stella-en-v5 --release  -- --query "What are safetensors?"
+$ cargo run --example stella-en-v5 --release  -- --query "What are safetensors?" --which 1.5b
 
 > [[ 0.3905, -0.0130,  0.2072, ..., -0.1100, -0.0086,  0.6002]]
 >  Tensor[[1, 1024], f32]

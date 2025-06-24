@@ -716,7 +716,7 @@ pub mod transformer {
                 None => {
                     let hidden_dim = self.dim * 4;
                     let n_hidden = ((2 * hidden_dim) as f64 / 3.) as usize;
-                    (n_hidden + 255) / 256 * 256
+                    n_hidden.div_ceil(256) * 256
                 }
             }
         }
