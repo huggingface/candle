@@ -6250,85 +6250,78 @@ fn test_sign_operation() -> Result<()> {
 #[test]
 fn test_hard_swish() -> candle::Result<()> {
     {
-    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
-        node: vec![NodeProto {
-            op_type: "HardSwish".to_string(),
-            input: vec![INPUT_X.to_string()],
-            output: vec![OUTPUT_Z.to_string()],
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "HardSwish".to_string(),
+                input: vec![INPUT_X.to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                ..Default::default()
+            }],
+            input: vec![ValueInfoProto {
+                name: INPUT_X.to_string(),
+                ..Default::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        input: vec![ValueInfoProto {
-            name: INPUT_X.to_string(),
-            ..Default::default()
-        }],
-        output: vec![ValueInfoProto {
-            name: OUTPUT_Z.to_string(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }));
-    let input_data = vec![-4.0f32, -3.0, 0.0, 2.0, 3.0, 5.0];
-    let input_tensor = Tensor::from_vec(input_data.clone(), (input_data.len(),), &Device::Cpu)?;
-    let mut inputs = HashMap::new();
-    inputs.insert(INPUT_X.to_string(), input_tensor);
+        }));
+        let input_data = vec![-4.0f32, -3.0, 0.0, 2.0, 3.0, 5.0];
+        let input_tensor = Tensor::from_vec(input_data.clone(), (input_data.len(),), &Device::Cpu)?;
+        let mut inputs = HashMap::new();
+        inputs.insert(INPUT_X.to_string(), input_tensor);
 
-    let outputs = simple_eval(&manual_graph, inputs)?;
-    let output = outputs.get(OUTPUT_Z).expect("missing output Z");
-    let output_vec = output.to_vec1::<f32>()?;
+        let outputs = simple_eval(&manual_graph, inputs)?;
+        let output = outputs.get(OUTPUT_Z).expect("missing output Z");
+        let output_vec = output.to_vec1::<f32>()?;
 
-    let expected = vec![
-        0.0,
-        0.0,
-        0.0,
-        1.6666666,
-        3.0,
-        5.0,
-    ];
+        let expected = vec![0.0, 0.0, 0.0, 1.6666666, 3.0, 5.0];
 
-    for (i, (got, exp)) in output_vec.iter().zip(expected.iter()).enumerate() {
-        let diff = (got - exp).abs();
-        assert!(
-            diff < 1e-4,
-            "Mismatch at index {i}: got {got}, expected {exp}, diff={diff}"
-        );
-    }
+        for (i, (got, exp)) in output_vec.iter().zip(expected.iter()).enumerate() {
+            let diff = (got - exp).abs();
+            assert!(
+                diff < 1e-4,
+                "Mismatch at index {i}: got {got}, expected {exp}, diff={diff}"
+            );
+        }
     }
     {
-    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
-        node: vec![NodeProto {
-            op_type: "HardSwish".to_string(),
-            input: vec![INPUT_X.to_string()],
-            output: vec![OUTPUT_Z.to_string()],
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "HardSwish".to_string(),
+                input: vec![INPUT_X.to_string()],
+                output: vec![OUTPUT_Z.to_string()],
+                ..Default::default()
+            }],
+            input: vec![ValueInfoProto {
+                name: INPUT_X.to_string(),
+                ..Default::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: OUTPUT_Z.to_string(),
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        input: vec![ValueInfoProto {
-            name: INPUT_X.to_string(),
-            ..Default::default()
-        }],
-        output: vec![ValueInfoProto {
-            name: OUTPUT_Z.to_string(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }));
-    let input_data = vec![-4.0f32, -2.0, 0.0, 2.0, 4.0];
-    let input_tensor = Tensor::from_vec(input_data.clone(), (input_data.len(),), &Device::Cpu)?;
-    let mut inputs = HashMap::new();
-    inputs.insert(INPUT_X.to_string(), input_tensor);
+        }));
+        let input_data = vec![-4.0f32, -2.0, 0.0, 2.0, 4.0];
+        let input_tensor = Tensor::from_vec(input_data.clone(), (input_data.len(),), &Device::Cpu)?;
+        let mut inputs = HashMap::new();
+        inputs.insert(INPUT_X.to_string(), input_tensor);
 
-    let outputs = simple_eval(&manual_graph, inputs)?;
-    let output = outputs.get(OUTPUT_Z).expect("missing output Z");
-    let output_vec = output.to_vec1::<f32>()?;
+        let outputs = simple_eval(&manual_graph, inputs)?;
+        let output = outputs.get(OUTPUT_Z).expect("missing output Z");
+        let output_vec = output.to_vec1::<f32>()?;
 
-    let expected = vec![0.0, -0.33333334, 0.0, 1.6666667, 4.0 ];
+        let expected = vec![0.0, -0.33333334, 0.0, 1.6666667, 4.0];
 
-    for (i, (got, exp)) in output_vec.iter().zip(expected.iter()).enumerate() {
-        let diff = (got - exp).abs();
-        assert!(
-            diff < 1e-4,
-            "Mismatch at index {i}: got {got}, expected {exp}, diff={diff}"
-        );
-    }
+        for (i, (got, exp)) in output_vec.iter().zip(expected.iter()).enumerate() {
+            let diff = (got - exp).abs();
+            assert!(
+                diff < 1e-4,
+                "Mismatch at index {i}: got {got}, expected {exp}, diff={diff}"
+            );
+        }
     }
     Ok(())
 }
