@@ -92,12 +92,12 @@ impl Args {
             None => {
                 let api = hf_hub::api::sync::Api::new()?;
                 let repo = "google/gemma-3-4b-it";
-                println!("DEBUG: Downloading tokenizer from {}", repo);
+                println!("DEBUG: Downloading tokenizer from {repo}");
                 let api = api.model(repo.to_string());
                 api.get("tokenizer.json")?
             }
         };
-        println!("DEBUG: Loading tokenizer from {:?}", tokenizer_path);
+        println!("DEBUG: Loading tokenizer from {tokenizer_path:?}");
         let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)?;
 
         Ok(tokenizer)
@@ -128,7 +128,7 @@ impl Args {
 
 fn format_size(size_in_bytes: usize) -> String {
     if size_in_bytes < 1_000 {
-        format!("{}B", size_in_bytes)
+        format!("{size_in_bytes}B")
     } else if size_in_bytes < 1_000_000 {
         format!("{:.2}KB", size_in_bytes as f64 / 1e3)
     } else if size_in_bytes < 1_000_000_000 {

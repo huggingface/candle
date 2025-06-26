@@ -38,7 +38,7 @@ impl Which {
             Self::B2G4 => "b2g4",
             Self::B3G4 => "b3g4",
         };
-        format!("timm/repvgg_{}.rvgg_in1k", name)
+        format!("timm/repvgg_{name}.rvgg_in1k")
     }
 
     fn config(&self) -> repvgg::Config {

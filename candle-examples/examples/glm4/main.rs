@@ -89,8 +89,7 @@ impl TextGeneration {
                 .expect("token decode error");
             if args.verbose {
                 println!(
-                    "[Count: {}] [Raw Token: {}] [Decode Token: {}]",
-                    generated_tokens, next_token, token
+                    "[Count: {generated_tokens}] [Raw Token: {next_token}] [Decode Token: {token}]"
                 );
             } else {
                 print!("{token}");
