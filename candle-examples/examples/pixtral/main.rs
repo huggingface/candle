@@ -295,7 +295,7 @@ fn main() -> Result<()> {
         )?
     };
     let image = image.to_device(&device)?.unsqueeze(0)?;
-    println!("loaded image with shape {:?}", image);
+    println!("loaded image with shape {image:?}");
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
 
     if args.vision_only {
