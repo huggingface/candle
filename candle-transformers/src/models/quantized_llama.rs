@@ -224,8 +224,23 @@ impl LayerWeights {
         self.kv_cache = Some((k.clone(), v.clone()));
 
         let y = if q.device().is_metal() && seq_len == 1 {
-            // SDPA will do MQA for us
-            candle_nn::ops::sdpa(&q, &k, &v, 1. / (self.head_dim as f32).sqrt(), 1.)?
+            let mask = match mask {
+                Some(mask) => {
+                    Some(mask.broadcast_as(vec![b_sz, self.n_head, seq_len, k.dim(2)?])?)
+                }
+                None => None,
+            };
+            // SDPA will do MQA for us. If the mask is causal anyway (no prompt chunking or sliding window),
+            // we could omit the mask and set `do_causal=true`!
+            candle_nn::ops::sdpa(
+                &q,
+                &k,
+                &v,
+                mask.as_ref(),
+                false,
+                1. / (self.head_dim as f32).sqrt(),
+                1.,
+            )?
         } else {
             // Support for MQA, useful for 70B models and mistral.
             let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
