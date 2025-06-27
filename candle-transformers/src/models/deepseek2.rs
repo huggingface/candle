@@ -50,6 +50,7 @@ impl CustomOp1 for NonZero {
             candle::CpuStorage::F16(vs) => self.nonzero(vs, layout),
             candle::CpuStorage::F32(vs) => self.nonzero(vs, layout),
             candle::CpuStorage::F64(vs) => self.nonzero(vs, layout),
+            candle::CpuStorage::F8E4M3(vs) => self.nonzero(vs, layout),
         };
         let index_len = layout.dims().len();
         let result_len = result.len() / index_len;
