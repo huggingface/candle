@@ -655,7 +655,10 @@ pub fn rms_norm(xs: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
     xs.apply_op2_no_bwd(alpha, &RmsNorm { eps })
 }
 
+// NOTE: This LayerNorm CustomOp is no longer used due to gradient flow issues.
+// The layer_norm() function now uses layer_norm_slow() to preserve gradients.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct LayerNorm {
     eps: f32,
 }
@@ -881,14 +884,23 @@ pub fn layer_norm_slow(x: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> R
         DType::F16 | DType::BF16 => DType::F32,
         d => d,
     };
-    let hidden_size = x.dim(D::Minus1)?;
     let x = x.to_dtype(internal_dtype)?;
     let x = {
-        let mean_x = (x.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
+        // Use mean_keepdim instead of manual division to preserve gradient flow
+        let mean_x = x.mean_keepdim(D::Minus1)?;
         x.broadcast_sub(&mean_x)?
     };
-    let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
-    let x_normed = x.broadcast_div(&(norm_x + eps as f64)?.sqrt()?)?;
+    // Use mean_keepdim for variance calculation to preserve gradient flow
+    let var_x = x.sqr()?.mean_keepdim(D::Minus1)?;
+    
+    // Create epsilon as a tensor for proper gradient flow
+    let eps_tensor = Tensor::new(&[eps as f64], x.device())?.to_dtype(internal_dtype)?;
+    
+    // Use broadcast_add for adding epsilon to maintain gradient tracking
+    let std_x = var_x.broadcast_add(&eps_tensor)?.sqrt()?;
+    
+    // Use broadcast_div for normalization
+    let x_normed = x.broadcast_div(&std_x)?;
     x_normed
         .to_dtype(x_dtype)?
         .broadcast_mul(alpha)?
@@ -907,7 +919,8 @@ pub fn layer_norm(xs: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Resul
             beta.shape()
         )
     }
-    xs.apply_op3_no_bwd(alpha, beta, &LayerNorm { eps })
+    // Use the gradient-preserving slow implementation to maintain backward pass
+    layer_norm_slow(xs, alpha, beta, eps)
 }
 
 // https://pytorch.org/docs/stable/generated/torch.nn.PixelShuffle.html
