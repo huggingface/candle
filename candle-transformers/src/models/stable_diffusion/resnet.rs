@@ -3,7 +3,7 @@
 //! Some Residual Network blocks used in UNet models.
 //!
 //! Denoising Diffusion Implicit Models, K. He and al, 2015.
-//! - [Paper](https://arxiv.org/abs/1512.03385)
+//! - [Paper](https://huggingface.co/papers/1512.03385)
 //!
 use crate::models::with_tracing::{conv2d, Conv2d};
 use candle::{Result, Tensor, D};

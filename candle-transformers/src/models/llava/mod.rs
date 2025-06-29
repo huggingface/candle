@@ -4,7 +4,7 @@
 //! language model (Llama) for multimodal capabilities. The architecture implements the training-free projection technique.
 //!
 //! - 💻[GH Link](https://github.com/haotian-liu/LLaVA/tree/main)
-//! - 📝 [Paper](https://arxiv.org/abs/2304.08485)/ Visual Instruction Tuning
+//! - 📝 [Paper](https://huggingface.co/papers/2304.08485)/ Visual Instruction Tuning
 //!
 
 pub mod config;
