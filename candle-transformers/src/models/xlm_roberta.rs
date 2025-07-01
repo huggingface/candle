@@ -336,7 +336,7 @@ struct XLMRobertaEncoder {
 impl XLMRobertaEncoder {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let layers = (0..cfg.num_hidden_layers)
-            .map(|i| XLMRobertaLayer::new(cfg, vb.pp(format!("layer.{}", i))))
+            .map(|i| XLMRobertaLayer::new(cfg, vb.pp(format!("layer.{i}"))))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self { layers })
     }
