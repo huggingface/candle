@@ -773,6 +773,7 @@ fn simple_eval_(
                     DType::F16 => arange_step!(f32),
                     DType::F32 => arange_step!(f32),
                     DType::F64 => arange_step!(f64),
+                    DType::F8E4M3 => arange_step!(f32),
                 };
 
                 values.insert(node.output[0].clone(), output);
@@ -1700,7 +1701,7 @@ fn simple_eval_(
                             dt.as_str()
                         )
                     }
-                    DType::BF16 | DType::F16 | DType::F32 | DType::F64 => {}
+                    DType::BF16 | DType::F16 | DType::F32 | DType::F64 | DType::F8E4M3 => {}
                 }
                 let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(0.01);
                 let output = candle_nn::ops::leaky_relu(input, alpha.into())?;
