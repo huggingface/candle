@@ -8,7 +8,7 @@ pub(crate) mod reduce;
 pub(crate) mod unary;
 pub(crate) mod where_cond;
 
-use candle_core::{backend::BackendDevice, Device, Result};
+use candle_core::{Device, Result};
 
 pub(crate) trait BenchDevice {
     fn sync(&self) -> Result<()>;
