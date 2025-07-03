@@ -7,12 +7,19 @@
 use crate::models::with_tracing::{linear_b as linear, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
+use either::Either;
+use serde::Deserialize;
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct TokenID(
+    #[serde(with = "either::serde_untagged")] pub Either<Option<u32>, Option<Vec<u32>>>,
+);
 
 fn default_one() -> usize {
     1
 }
 
-#[derive(Debug, Clone, serde::Deserialize, Default)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     pub num_layers: usize,
     pub padded_vocab_size: usize,
@@ -35,33 +42,7 @@ pub struct Config {
     pub fp32_residual_connection: bool,
     #[serde(default = "default_one")]
     pub rope_ratio: usize,
-}
-
-impl Config {
-    pub fn glm4() -> Self {
-        Self {
-            num_layers: 40,
-            padded_vocab_size: 151552,
-            hidden_size: 4096,
-            ffn_hidden_size: 13696,
-            kv_channels: 128,
-            num_attention_heads: 32,
-            seq_length: 8192,
-            layernorm_epsilon: 1e-5,
-            rmsnorm: true,
-            apply_residual_connection_post_layernorm: false,
-            post_layer_norm: true,
-            add_bias_linear: false,
-            add_qkv_bias: true,
-            bias_dropout_fusion: true,
-            multi_query_attention: true,
-            multi_query_group_num: 2,
-            apply_query_key_layer_scaling: true,
-            attention_softmax_in_fp32: true,
-            fp32_residual_connection: false,
-            rope_ratio: 500,
-        }
-    }
+    pub eos_token_id: TokenID,
 }
 
 #[derive(Debug, Clone)]

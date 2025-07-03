@@ -1,22 +1,54 @@
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use candle_transformers::models::glm4::*;
+use candle_transformers::models::glm4::{Config as ConfigOld, Model as ModelOld, TokenID};
+use candle_transformers::models::glm4_new::{Config as ConfigNew, ModelForCausalLM as ModelNew};
+
 use clap::Parser;
+use either::Either;
 use hf_hub::{Repo, RepoType};
 use tokenizers::Tokenizer;
+
+enum Model {
+    Old(ModelOld),
+    New(ModelNew),
+}
+
+impl Model {
+    fn forward(&mut self, input_ids: &Tensor, pos: usize) -> candle::Result<Tensor> {
+        match self {
+            Self::Old(m) => m.forward(input_ids),
+            Self::New(m) => m.forward(input_ids, pos),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Which {
+    #[value(name = "glm4-old")]
+    GLM4Old,
+    #[value(name = "glm4-new")]
+    GLM4New,
+}
+
 struct TextGeneration {
     model: Model,
     device: Device,
     tokenizer: Tokenizer,
     logits_processor: LogitsProcessor,
     args: Args,
-    dtype: DType,
+    eos_tokens: Vec<u32>,
 }
 
 impl TextGeneration {
     #[allow(clippy::too_many_arguments)]
-    fn new(model: Model, tokenizer: Tokenizer, args: Args, device: &Device, dtype: DType) -> Self {
+    fn new(
+        model: Model,
+        tokenizer: Tokenizer,
+        args: Args,
+        device: &Device,
+        eos_tokens: Vec<u32>,
+    ) -> Self {
         let logits_processor =
             LogitsProcessor::new(args.seed, Some(args.temperature), Some(args.top_p));
         Self {
@@ -25,7 +57,7 @@ impl TextGeneration {
             logits_processor,
             args,
             device: device.clone(),
-            dtype,
+            eos_tokens,
         }
     }
 
@@ -34,10 +66,12 @@ impl TextGeneration {
         let args = &self.args;
         println!("starting the inference loop");
 
-        let tokens = self
-            .tokenizer
-            .encode(args.prompt.to_string(), true)
-            .expect("tokens error");
+        let prompt = format!(
+            "[gMASK]<sop><|user|>\n{}<|assistant|>",
+            args.prompt.to_string()
+        );
+
+        let tokens = self.tokenizer.encode(prompt, true).expect("tokens error");
         if tokens.is_empty() {
             panic!("Empty prompts are not supported in the chatglm model.")
         }
@@ -50,10 +84,7 @@ impl TextGeneration {
             print!("{}", &args.prompt);
             std::io::stdout().flush()?;
         }
-        let eos_token = match self.tokenizer.get_vocab(true).get("<|endoftext|>") {
-            Some(token) => *token,
-            None => panic!("cannot find the endoftext token"),
-        };
+
         let mut tokens = tokens.get_ids().to_vec();
         let mut generated_tokens = 0usize;
 
@@ -62,10 +93,15 @@ impl TextGeneration {
 
         for index in 0..args.sample_len {
             let context_size = if index > 0 { 1 } else { tokens.len() };
-            let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
+            let start_pos = tokens.len().saturating_sub(context_size);
+            let ctxt = &tokens[start_pos..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input)?;
-            let logits = logits.squeeze(0)?.to_dtype(self.dtype)?;
+            let logits = self.model.forward(&input, start_pos)?;
+            let logits = match self.model {
+                Model::Old(_) => logits.squeeze(0)?.to_dtype(DType::F32)?,
+                Model::New(_) => logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?,
+            };
+
             let logits = if args.repeat_penalty == 1. {
                 logits
             } else {
@@ -80,7 +116,7 @@ impl TextGeneration {
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             generated_tokens += 1;
-            if next_token == eos_token {
+            if self.eos_tokens.contains(&next_token) {
                 break;
             }
             let token = self
@@ -158,6 +194,13 @@ struct Args {
     /// The context size to consider for the repeat penalty.
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
+
+    /// Specifies the model type (e.g., GLM4-Old or GLM4-New, such as GLM4-0414).
+    /// This argument is required because the two architectures are incompatible.
+    /// For example, if the user does not explicitly specify the model type (defaulting to "glm4-old"),
+    /// but provides a GLM4-New model ID, it can cause a runtime panic during model execution!
+    #[arg(long)]
+    which: Which,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -186,19 +229,23 @@ fn main() -> anyhow::Result<()> {
 
     let model_id = match args.model_id.as_ref() {
         Some(model_id) => model_id.to_string(),
-        None => "THUDM/glm-4-9b".to_string(),
+        None => match args.which {
+            Which::GLM4Old => "THUDM/glm-4-9b".to_string(),
+            Which::GLM4New => "THUDM/GLM-4-9B-0414".to_string(),
+        },
     };
     let revision = match args.revision.as_ref() {
         Some(rev) => rev.to_string(),
         None => "main".to_string(),
     };
     let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
-    let tokenizer_filename = match args.tokenizer.as_ref() {
-        Some(file) => std::path::PathBuf::from(file),
-        None => api
-            .model("THUDM/codegeex4-all-9b".to_string())
-            .get("tokenizer.json")
-            .map_err(anyhow::Error::msg)?,
+    let tokenizer_filename = match (args.weight_path.as_ref(), args.tokenizer.as_ref()) {
+        (Some(_), Some(file)) => std::path::PathBuf::from(file),
+        (None, Some(file)) => std::path::PathBuf::from(file),
+        (Some(path), None) => {
+            std::path::PathBuf::from(std::path::Path::new(path).join("tokenizer.json"))
+        }
+        (None, None) => repo.get("tokenizer.json")?,
     };
     let config_filename = match &args.weight_path {
         Some(path) => std::path::Path::new(path).join("config.json"),
@@ -216,7 +263,6 @@ fn main() -> anyhow::Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).expect("Tokenizer Error");
 
     let start = std::time::Instant::now();
-    let config: Config = serde_json::from_slice(&std::fs::read(config_filename)?)?;
     let device = candle_examples::device(args.cpu)?;
     let dtype = if device.is_cuda() {
         DType::BF16
@@ -224,11 +270,43 @@ fn main() -> anyhow::Result<()> {
         DType::F32
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-    let model = Model::new(&config, vb)?;
+
+    let (model, eos_token_id) = match args.which {
+        Which::GLM4Old => {
+            let config: ConfigOld = serde_json::from_slice(&std::fs::read(config_filename)?)?;
+            let model = ModelOld::new(&config, vb)?;
+            (Model::Old(model), config.eos_token_id)
+        }
+        Which::GLM4New => {
+            let config: ConfigNew = serde_json::from_slice(&std::fs::read(config_filename)?)?;
+            let model = ModelNew::new(&config, vb)?;
+            (Model::New(model), config.eos_token_id)
+        }
+    };
+
+    let mut eos_tokens = Vec::new();
+    match eos_token_id {
+        TokenID(Either::Left(Some(eos))) => {
+            eos_tokens.push(eos);
+        }
+        TokenID(Either::Right(Some(eos_vec))) => {
+            eos_tokens.extend(eos_vec);
+        }
+        _ => {
+            let eos_token = match args.which {
+                Which::GLM4Old => "<|endoftext|>",
+                Which::GLM4New => "<|user|>",
+            };
+            match tokenizer.get_vocab(true).get(eos_token) {
+                Some(token) => eos_tokens.push(*token),
+                None => panic!("cannot find the endoftext token"),
+            };
+        }
+    }
 
     println!("loaded the model in {:?}", start.elapsed());
 
-    let mut pipeline = TextGeneration::new(model, tokenizer, args, &device, dtype);
+    let mut pipeline = TextGeneration::new(model, tokenizer, args, &device, eos_tokens);
     pipeline.run()?;
     Ok(())
 }

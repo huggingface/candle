@@ -1,3 +1,4 @@
+use crate::models::glm4::TokenID;
 use crate::{
     models::with_tracing::{linear_b, linear_no_bias, Linear, RmsNorm},
     utils::repeat_kv,
@@ -5,7 +6,8 @@ use crate::{
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{kv_cache::KvCache, Activation, VarBuilder};
 use std::sync::Arc;
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     pub vocab_size: usize,
     pub hidden_size: usize,
@@ -22,6 +24,7 @@ pub struct Config {
     pub rope_theta: f64,
     pub rms_norm_eps: f64,
     pub hidden_act: Activation,
+    pub eos_token_id: TokenID,
 }
 
 #[derive(Debug, Clone)]
