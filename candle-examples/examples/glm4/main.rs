@@ -1,11 +1,10 @@
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use candle_transformers::models::glm4::{Config as ConfigOld, Model as ModelOld, TokenID};
+use candle_transformers::models::glm4::{Config as ConfigOld, EosTokenId, Model as ModelOld};
 use candle_transformers::models::glm4_new::{Config as ConfigNew, ModelForCausalLM as ModelNew};
 
 use clap::Parser;
-use either::Either;
 use hf_hub::{Repo, RepoType};
 use tokenizers::Tokenizer;
 
@@ -286,10 +285,10 @@ fn main() -> anyhow::Result<()> {
 
     let mut eos_tokens = Vec::new();
     match eos_token_id {
-        TokenID(Either::Left(Some(eos))) => {
+        Some(EosTokenId::Single(eos)) => {
             eos_tokens.push(eos);
         }
-        TokenID(Either::Right(Some(eos_vec))) => {
+        Some(EosTokenId::Multiple(eos_vec)) => {
             eos_tokens.extend(eos_vec);
         }
         _ => {

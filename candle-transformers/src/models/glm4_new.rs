@@ -1,4 +1,4 @@
-use crate::models::glm4::TokenID;
+use crate::models::glm4::EosTokenId;
 use crate::{
     models::with_tracing::{linear_b, linear_no_bias, Linear, RmsNorm},
     utils::repeat_kv,
@@ -24,7 +24,7 @@ pub struct Config {
     pub rope_theta: f64,
     pub rms_norm_eps: f64,
     pub hidden_act: Activation,
-    pub eos_token_id: TokenID,
+    pub eos_token_id: Option<EosTokenId>,
 }
 
 #[derive(Debug, Clone)]

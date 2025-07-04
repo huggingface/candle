@@ -7,13 +7,56 @@
 use crate::models::with_tracing::{linear_b as linear, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
-use either::Either;
+use serde::de::{self, Deserializer, Visitor};
 use serde::Deserialize;
+use std::fmt;
 
-#[derive(Deserialize, Debug, Clone)]
-pub struct TokenID(
-    #[serde(with = "either::serde_untagged")] pub Either<Option<u32>, Option<Vec<u32>>>,
-);
+#[derive(Debug, Clone)]
+pub enum EosTokenId {
+    Single(u32),
+    Multiple(Vec<u32>),
+}
+
+impl<'de> Deserialize<'de> for EosTokenId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct EosTokenIdVisitor;
+
+        impl<'de> Visitor<'de> for EosTokenIdVisitor {
+            type Value = EosTokenId;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("an integer or a list of integers")
+            }
+
+            fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if value <= u32::MAX as u64 {
+                    Ok(EosTokenId::Single(value as u32))
+                } else {
+                    Err(de::Error::custom("value too large for u32"))
+                }
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut values = Vec::new();
+                while let Some(value) = seq.next_element::<u32>()? {
+                    values.push(value);
+                }
+                Ok(EosTokenId::Multiple(values))
+            }
+        }
+
+        deserializer.deserialize_any(EosTokenIdVisitor)
+    }
+}
 
 fn default_one() -> usize {
     1
@@ -42,7 +85,7 @@ pub struct Config {
     pub fp32_residual_connection: bool,
     #[serde(default = "default_one")]
     pub rope_ratio: usize,
-    pub eos_token_id: TokenID,
+    pub eos_token_id: Option<EosTokenId>,
 }
 
 #[derive(Debug, Clone)]
