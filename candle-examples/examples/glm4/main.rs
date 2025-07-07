@@ -65,10 +65,7 @@ impl TextGeneration {
         let args = &self.args;
         println!("starting the inference loop");
 
-        let prompt = format!(
-            "[gMASK]<sop><|user|>\n{}<|assistant|>",
-            args.prompt.to_string()
-        );
+        let prompt = format!("[gMASK]<sop><|user|>\n{}<|assistant|>", args.prompt);
 
         let tokens = self.tokenizer.encode(prompt, true).expect("tokens error");
         if tokens.is_empty() {
@@ -241,9 +238,7 @@ fn main() -> anyhow::Result<()> {
     let tokenizer_filename = match (args.weight_path.as_ref(), args.tokenizer.as_ref()) {
         (Some(_), Some(file)) => std::path::PathBuf::from(file),
         (None, Some(file)) => std::path::PathBuf::from(file),
-        (Some(path), None) => {
-            std::path::PathBuf::from(std::path::Path::new(path).join("tokenizer.json"))
-        }
+        (Some(path), None) => std::path::Path::new(path).join("tokenizer.json"),
         (None, None) => repo.get("tokenizer.json")?,
     };
     let config_filename = match &args.weight_path {
