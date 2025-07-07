@@ -1974,10 +1974,11 @@ fn simple_eval_(
                     .map(|attr| attr.i)
                     .unwrap_or(-1);
 
-
                 let rank = indices.rank();
                 if axis < -((rank as i64) + 1) || axis > (rank as i64) {
-                    return Err(candle::Error::Msg(format!("OneHot: invalid axis {axis} for rank {rank}")));
+                    return Err(candle::Error::Msg(format!(
+                        "OneHot: invalid axis {axis} for rank {rank}"
+                    )));
                 }
                 if axis < 0 {
                     axis += rank as i64 + 1;
