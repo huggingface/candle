@@ -23,13 +23,24 @@ pub enum Activation {
     LeakyRelu(f64),
     #[serde(alias = "gelu_pytorch_tanh")]
     GeluPytorchTanh,
+
+    // New GLU variants
+    /// Gated Linear Unit - splits input in half, applies sigmoid to one half,
+    /// multiplies with the other half. Commonly used in transformer FFNs.
+    #[serde(alias = "glu")]
+    Glu,
+    /// GeGLU - GLU variant using GELU instead of sigmoid
+    #[serde(alias = "geglu")]
+    GeGlu,
+    /// ReGLU - GLU variant using ReLU instead of sigmoid  
+    #[serde(alias = "reglu")]
+    ReGlu,
 }
 
 impl super::Module for Activation {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::Gelu => xs.gelu_erf(),
-            // https://github.com/huggingface/transformers/blob/12f043eaeaabfef6f6efea411d98e6f6d3c094b7/src/transformers/activations.py#L49-L78
             Self::NewGelu => xs.gelu(),
             Self::Relu => xs.relu(),
             Self::Relu2 => xs.relu()?.sqr(),
@@ -43,6 +54,9 @@ impl super::Module for Activation {
             &Self::Elu(alpha) => xs.elu(alpha),
             &Self::LeakyRelu(negative_slope) => crate::ops::leaky_relu(xs, negative_slope),
             Self::GeluPytorchTanh => xs.gelu(),
+            Self::Glu => xs.glu(),
+            Self::GeGlu => xs.geglu(),
+            Self::ReGlu => xs.reglu(),
         }
     }
 }
