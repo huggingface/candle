@@ -6249,191 +6249,194 @@ fn test_sign_operation() -> Result<()> {
 
 #[test]
 fn test_selu_operator() -> Result<()> {
-
     {
-    // Test 1: Default alpha and gamma 
-    let default_graph = create_model_proto_with_graph(Some(GraphProto {
-        node: vec![NodeProto {
-            op_type: "Selu".to_string(),
-            domain: "".to_string(),
-            input: vec!["input".to_string()],
-            output: vec!["output".to_string()],
-            ..Default::default()
-        }],
-        input: vec![ValueInfoProto {
-            name: "input".to_string(),
-            ..Default::default()
-        }],
-        output: vec![ValueInfoProto {
-            name: "output".to_string(),
-            r#type: None,
-            ..Default::default()
-        }],
-        ..Default::default()
-    }));
-
-    let input = Tensor::from_vec(vec![-1.0f32, 0.0, 1.0, 2.0], (2, 2), &Device::Cpu)?;
-    let mut inputs = HashMap::new();
-    inputs.insert("input".to_string(), input);
-
-    let eval = simple_eval(&default_graph, inputs)?;
-    let output = eval.get("output").unwrap();
-    let out_vec = to_vec2_round(output, 4)?;
-    assert_eq!(out_vec, vec![vec![-1.1113, 0.0], vec![1.0507, 2.1014]]);
-    }   
-
-    {
-    // Test 2: Change alpha and gamma
-    let custom_graph = create_model_proto_with_graph(Some(GraphProto {
-        node: vec![NodeProto {
-            op_type: "Selu".to_string(),
-            attribute: vec![
-                AttributeProto {
-                    name: "alpha".to_string(),
-                    r#type: AttributeType::Float as i32,
-                    f: 2.0,
-                    ..Default::default()
-                },
-                AttributeProto {
-                    name: "gamma".to_string(),
-                    r#type: AttributeType::Float as i32,
-                    f: 0.5,
-                    ..Default::default()
-                },
-            ],
-            input: vec!["input".to_string()],
-            output: vec!["output".to_string()],
-            ..Default::default()
-        }],
-        input: vec![ValueInfoProto {
-            name: "input".to_string(),
-            ..Default::default()
-        }],
-        output: vec![ValueInfoProto {
-            name: "output".to_string(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }));
-
-    let input = Tensor::from_vec(vec![-1.0f32, 0.0, 1.0, 2.0], (2, 2), &Device::Cpu)?;
-    let mut inputs = HashMap::new();
-    inputs.insert("input".to_string(), input);
-    let eval = simple_eval(&custom_graph, inputs)?;
-    let output = eval.get("output").unwrap();
-    let out_vec = to_vec2_round(output, 4)?;
-    assert_eq!(out_vec, vec![vec![-0.6321, 0.0], vec![0.5, 1.0]]);
-    }
-
-    {
-    // Test 3: Different input values
-    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
-        node: vec![NodeProto {
-            op_type: "Selu".to_string(),
-            domain: "".to_string(),
-            input: vec!["input".to_string()],
-            output: vec!["output".to_string()],
-            ..Default::default()
-        }],
-        input: vec![ValueInfoProto {
-            name: "input".to_string(),
-            ..Default::default()
-        }],
-        output: vec![ValueInfoProto {
-            name: "output".to_string(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }));
-
-    let expected = vec![-1.758, -1.7463, 0.0, 10.507];
-
-    let input = Tensor::from_vec(vec![-10.0f32, -5.0, 0.0, 10.0], (2, 2), &Device::Cpu)?;
-    let mut inputs = HashMap::new();
-    inputs.insert("input".to_string(), input);
-    let eval = simple_eval(&manual_graph, inputs)?;
-    let output = eval.get("output").unwrap();
-    let out_vec = to_vec2_round(output, 4)?;
-    assert_eq!(out_vec, vec![vec![expected[0], expected[1]], vec![expected[2], expected[3]]]);
-    }
-
-    {
-    // Test 4: Test based on https://github.com/onnx/onnx/blob/main/docs/Operators.md#Selu
-    let graph = create_model_proto_with_graph(Some(GraphProto {
-    node: vec![NodeProto {
-        op_type: "Selu".to_string(),
-        input: vec!["input".to_string()],
-        output: vec!["output".to_string()],
-        attribute: vec![
-            AttributeProto {
-                name: "alpha".to_string(),
-                r#type: AttributeType::Float as i32,
-                f: 2.0,
+        // Test 1: Default alpha and gamma
+        let default_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "Selu".to_string(),
+                domain: "".to_string(),
+                input: vec!["input".to_string()],
+                output: vec!["output".to_string()],
                 ..Default::default()
-            },
-            AttributeProto {
-                name: "gamma".to_string(),
-                r#type: AttributeType::Float as i32,
-                f: 3.0,
+            }],
+            input: vec![ValueInfoProto {
+                name: "input".to_string(),
                 ..Default::default()
-            },
-        ],
-        ..Default::default()
-    }],
-    input: vec![ValueInfoProto {
-        name: "input".to_string(),
-        ..Default::default()
-    }],
-    output: vec![ValueInfoProto {
-        name: "output".to_string(),
-        ..Default::default()
-    }],
-    ..Default::default()
-    }));
+            }],
+            output: vec![ValueInfoProto {
+                name: "output".to_string(),
+                r#type: None,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
 
-    let input = Tensor::from_vec(vec![-1.0f32, 0.0, 1.0], (3,), &Device::Cpu)?;
-    let mut inputs = HashMap::new();
-    inputs.insert("input".to_string(), input);
+        let input = Tensor::from_vec(vec![-1.0f32, 0.0, 1.0, 2.0], (2, 2), &Device::Cpu)?;
+        let mut inputs = HashMap::new();
+        inputs.insert("input".to_string(), input);
 
-    let eval = simple_eval(&graph, inputs)?;
-    let output = eval.get("output").unwrap();
-    let out_vec = output.to_vec1::<f32>()?;
-    let expected = vec![-3.7927232, 0.0, 3.0];
-
-    for (o, e) in out_vec.iter().zip(expected.iter()) {
-        assert!((o - e).abs() < 1e-5, "Got {o}, expected {e}");
-    }
+        let eval = simple_eval(&default_graph, inputs)?;
+        let output = eval.get("output").unwrap();
+        let out_vec = to_vec2_round(output, 4)?;
+        assert_eq!(out_vec, vec![vec![-1.1113, 0.0], vec![1.0507, 2.1014]]);
     }
 
     {
-    // Test 5: Empty tensor
-    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
-        node: vec![NodeProto {
-            op_type: "Selu".to_string(),
-            domain: "".to_string(),
-            input: vec!["input".to_string()],
-            output: vec!["output".to_string()],
+        // Test 2: Change alpha and gamma
+        let custom_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "Selu".to_string(),
+                attribute: vec![
+                    AttributeProto {
+                        name: "alpha".to_string(),
+                        r#type: AttributeType::Float as i32,
+                        f: 2.0,
+                        ..Default::default()
+                    },
+                    AttributeProto {
+                        name: "gamma".to_string(),
+                        r#type: AttributeType::Float as i32,
+                        f: 0.5,
+                        ..Default::default()
+                    },
+                ],
+                input: vec!["input".to_string()],
+                output: vec!["output".to_string()],
+                ..Default::default()
+            }],
+            input: vec![ValueInfoProto {
+                name: "input".to_string(),
+                ..Default::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: "output".to_string(),
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        input: vec![ValueInfoProto {
-            name: "input".to_string(),
+        }));
+
+        let input = Tensor::from_vec(vec![-1.0f32, 0.0, 1.0, 2.0], (2, 2), &Device::Cpu)?;
+        let mut inputs = HashMap::new();
+        inputs.insert("input".to_string(), input);
+        let eval = simple_eval(&custom_graph, inputs)?;
+        let output = eval.get("output").unwrap();
+        let out_vec = to_vec2_round(output, 4)?;
+        assert_eq!(out_vec, vec![vec![-0.6321, 0.0], vec![0.5, 1.0]]);
+    }
+
+    {
+        // Test 3: Different input values
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "Selu".to_string(),
+                domain: "".to_string(),
+                input: vec!["input".to_string()],
+                output: vec!["output".to_string()],
+                ..Default::default()
+            }],
+            input: vec![ValueInfoProto {
+                name: "input".to_string(),
+                ..Default::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: "output".to_string(),
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        output: vec![ValueInfoProto {
-            name: "output".to_string(),
+        }));
+
+        let expected = vec![-1.758, -1.7463, 0.0, 10.507];
+
+        let input = Tensor::from_vec(vec![-10.0f32, -5.0, 0.0, 10.0], (2, 2), &Device::Cpu)?;
+        let mut inputs = HashMap::new();
+        inputs.insert("input".to_string(), input);
+        let eval = simple_eval(&manual_graph, inputs)?;
+        let output = eval.get("output").unwrap();
+        let out_vec = to_vec2_round(output, 4)?;
+        assert_eq!(
+            out_vec,
+            vec![
+                vec![expected[0], expected[1]],
+                vec![expected[2], expected[3]]
+            ]
+        );
+    }
+
+    {
+        // Test 4: Test based on https://github.com/onnx/onnx/blob/main/docs/Operators.md#Selu
+        let graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "Selu".to_string(),
+                input: vec!["input".to_string()],
+                output: vec!["output".to_string()],
+                attribute: vec![
+                    AttributeProto {
+                        name: "alpha".to_string(),
+                        r#type: AttributeType::Float as i32,
+                        f: 2.0,
+                        ..Default::default()
+                    },
+                    AttributeProto {
+                        name: "gamma".to_string(),
+                        r#type: AttributeType::Float as i32,
+                        f: 3.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            input: vec![ValueInfoProto {
+                name: "input".to_string(),
+                ..Default::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: "output".to_string(),
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        ..Default::default()
-    }));
+        }));
 
+        let input = Tensor::from_vec(vec![-1.0f32, 0.0, 1.0], (3,), &Device::Cpu)?;
+        let mut inputs = HashMap::new();
+        inputs.insert("input".to_string(), input);
 
-    let input = Tensor::from_vec(vec![] as Vec<f32>, (0, 2), &Device::Cpu)?;
-    let mut inputs = HashMap::new();
-    inputs.insert("input".to_string(), input);
-    let eval = simple_eval(&manual_graph, inputs)?;
-    let output = eval.get("output").unwrap();
-    assert_eq!(output.dims(), &[0, 2]);
+        let eval = simple_eval(&graph, inputs)?;
+        let output = eval.get("output").unwrap();
+        let out_vec = output.to_vec1::<f32>()?;
+        let expected = vec![-3.7927232, 0.0, 3.0];
 
+        for (o, e) in out_vec.iter().zip(expected.iter()) {
+            assert!((o - e).abs() < 1e-5, "Got {o}, expected {e}");
+        }
+    }
+
+    {
+        // Test 5: Empty tensor
+        let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+            node: vec![NodeProto {
+                op_type: "Selu".to_string(),
+                domain: "".to_string(),
+                input: vec!["input".to_string()],
+                output: vec!["output".to_string()],
+                ..Default::default()
+            }],
+            input: vec![ValueInfoProto {
+                name: "input".to_string(),
+                ..Default::default()
+            }],
+            output: vec![ValueInfoProto {
+                name: "output".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+
+        let input = Tensor::from_vec(vec![] as Vec<f32>, (0, 2), &Device::Cpu)?;
+        let mut inputs = HashMap::new();
+        inputs.insert("input".to_string(), input);
+        let eval = simple_eval(&manual_graph, inputs)?;
+        let output = eval.get("output").unwrap();
+        assert_eq!(output.dims(), &[0, 2]);
     }
 
     Ok(())

@@ -2100,8 +2100,12 @@ fn simple_eval_(
             // https://onnx.ai/onnx/operators/onnx__Selu.html
             "Selu" => {
                 let input = get(&node.input[0])?;
-                let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(1.6732632);
-                let gamma = get_attr_opt::<f32>(node, "gamma")?.copied().unwrap_or(1.050701);                
+                let alpha = get_attr_opt::<f32>(node, "alpha")?
+                    .copied()
+                    .unwrap_or(1.6732632);
+                let gamma = get_attr_opt::<f32>(node, "gamma")?
+                    .copied()
+                    .unwrap_or(1.050701);
                 let out = candle_nn::ops::selu(input, alpha as f32, gamma as f32)?;
                 values.insert(node.output[0].clone(), out);
             }
