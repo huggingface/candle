@@ -1574,7 +1574,7 @@ fn run_scatter_add<T: Clone, I: Clone + std::fmt::Debug>(
     let input_buffer = new_buffer(&device, input);
     let ids_buffer = new_buffer(&device, ids);
     let output = device.new_buffer(std::mem::size_of_val(input) as u64, options);
-    call_scatter_add(
+    call_scatter(
         &device,
         command_buffer,
         &kernels,
@@ -1584,7 +1584,7 @@ fn run_scatter_add<T: Clone, I: Clone + std::fmt::Debug>(
         dim,
         BufferOffset::zero_offset(&input_buffer),
         BufferOffset::zero_offset(&ids_buffer),
-        &output,
+        BufferOffset::zero_offset(&output),
     )
     .unwrap();
     command_buffer.commit();
@@ -2343,7 +2343,7 @@ fn conv_transpose1d_u32() {
 
 #[test]
 fn const_fill() {
-    fn constant_fill<T: Clone>(name: &'static str, len: usize, value: f32) -> Vec<T> {
+    fn constant_fill<T: Clone + EncoderParam>(name: &'static str, len: usize, value: T) -> Vec<T> {
         let dev = device();
         let kernels = Kernels::new();
         let command_queue = dev.new_command_queue();
@@ -2357,11 +2357,15 @@ fn const_fill() {
         command_buffer.wait_until_completed();
         read_to_vec::<T>(&buffer, len)
     }
-    fn test<T: Clone + PartialEq + std::fmt::Debug, F: FnOnce(f32) -> T>(name: &'static str, f: F) {
+    fn test<T: Clone + Copy + EncoderParam + PartialEq + std::fmt::Debug, F: FnOnce(f32) -> T>(
+        name: &'static str,
+        f: F,
+    ) {
         let len = rand::thread_rng().gen_range(2..16) * rand::thread_rng().gen_range(4..16);
         let value = rand::thread_rng().gen_range(1. ..19.);
+        let value = f(value);
         let v = constant_fill::<T>(name, len, value);
-        assert_eq!(v, vec![f(value); len])
+        assert_eq!(v, vec![value; len])
     }
     test::<u8, _>("fill_u8", |v| v as u8);
     test::<u32, _>("fill_u32", |v| v as u32);

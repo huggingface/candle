@@ -518,9 +518,7 @@ impl PyTensor {
             // Check that the index is in range
             if actual_index < 0 || actual_index >= dims[current_dim] as isize {
                 return Err(PyValueError::new_err(format!(
-                    "index out of range for dimension '{i}' with indexer '{value}'",
-                    i = current_dim,
-                    value = index
+                    "index out of range for dimension '{current_dim}' with indexer '{index}'"
                 )));
             }
             Ok(actual_index as usize)
@@ -580,8 +578,7 @@ impl PyTensor {
                 Ok((Indexer::Expand, current_dim))
             } else {
                 Err(PyTypeError::new_err(format!(
-                    "unsupported indexer {}",
-                    py_indexer
+                    "unsupported indexer {py_indexer}"
                 )))
             }
         }
@@ -1423,8 +1420,7 @@ fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) 
             gguf_file::Value::Array(x)
         } else {
             return Err(PyErr::new::<PyValueError, _>(format!(
-                "unsupported type {:?}",
-                v
+                "unsupported type {v:?}"
             )));
         };
         Ok(v)

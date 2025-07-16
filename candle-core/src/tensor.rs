@@ -3,7 +3,7 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BackpropOp, BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::scalar::TensorOrScalar;
-use crate::shape::{Dim, Dims};
+use crate::shape::{Dim, Dims, ShapeWithOneHole};
 use crate::{bail, storage::Storage, DType, Device, Error, Layout, Result, Shape};
 use std::sync::{Arc, RwLock};
 
@@ -185,7 +185,9 @@ impl Tensor {
     ) -> Result<Self> {
         let none = BackpropOp::none();
         let shape = shape.into();
-        let storage = device.ones(&shape, dtype)?;
+        let mut storage = unsafe { device.alloc_uninit(&shape, dtype)? };
+        let layout = Layout::contiguous(shape.clone());
+        storage.const_set(crate::scalar::Scalar::one(dtype), &layout)?;
         Ok(from_storage(storage, shape, none, is_variable))
     }
 
@@ -200,6 +202,18 @@ impl Tensor {
     /// ```
     pub fn ones<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
         Self::ones_impl(shape, dtype, device, false)
+    }
+
+    pub fn const_set(&self, value: crate::scalar::Scalar) -> Result<()> {
+        self.storage_mut().const_set(value, self.layout())
+    }
+
+    pub fn zero_set(&self) -> Result<()> {
+        self.const_set(crate::scalar::Scalar::zero(self.dtype()))
+    }
+
+    pub fn one_set(&self) -> Result<()> {
+        self.const_set(crate::scalar::Scalar::one(self.dtype()))
     }
 
     /// Creates a new tensor filled with ones with same shape, dtype, and device as the other tensor.
@@ -368,8 +382,7 @@ impl Tensor {
         Self::new_impl(array, shape, device, false)
     }
 
-    /// Returns a new tensor with all the elements having the same specified value. Note that
-    /// the tensor is not contiguous so you would have to call `.contiguous()` on it if needed.
+    /// Returns a new tensor with all the elements having the same specified value.
     ///```rust
     /// use candle_core::{Tensor, Device};
     /// let a = Tensor::full(3.5, (2, 4), &Device::Cpu)?;
@@ -384,7 +397,12 @@ impl Tensor {
         shape: S,
         device: &Device,
     ) -> Result<Self> {
-        Self::from_vec_impl(vec![value], (), device, false)?.broadcast_as(shape)
+        let none = BackpropOp::none();
+        let shape = shape.into();
+        let mut storage = unsafe { device.alloc_uninit(&shape, D::DTYPE)? };
+        let layout = Layout::contiguous(shape.clone());
+        storage.const_set(value.to_scalar(), &layout)?;
+        Ok(from_storage(storage, shape, none, false))
     }
 
     /// Creates a new 1D tensor from an iterator.
@@ -452,17 +470,13 @@ impl Tensor {
         Self::from_vec_impl(data, len, device, false)
     }
 
-    pub(crate) fn from_vec_impl<S: Into<Shape>, D: crate::WithDType>(
+    pub(crate) fn from_vec_impl<S: ShapeWithOneHole, D: crate::WithDType>(
         data: Vec<D>,
         shape: S,
         device: &Device,
         is_variable: bool,
     ) -> Result<Self> {
-        let shape = shape.into();
-        let buffer_size = data.len();
-        if buffer_size != shape.elem_count() {
-            return Err(Error::ShapeMismatch { buffer_size, shape }.bt());
-        }
+        let shape = shape.into_shape(data.len())?;
         let storage = device.storage_owned(data)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, is_variable))
@@ -481,7 +495,7 @@ impl Tensor {
     /// ]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn from_vec<S: Into<Shape>, D: crate::WithDType>(
+    pub fn from_vec<S: ShapeWithOneHole, D: crate::WithDType>(
         data: Vec<D>,
         shape: S,
         device: &Device,
@@ -502,17 +516,12 @@ impl Tensor {
     /// ]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn from_slice<S: Into<Shape>, D: crate::WithDType>(
+    pub fn from_slice<S: ShapeWithOneHole, D: crate::WithDType>(
         array: &[D],
         shape: S,
         device: &Device,
     ) -> Result<Self> {
-        let shape = shape.into();
-        let n: usize = shape.elem_count();
-        let buffer_size: usize = array.len();
-        if buffer_size != n {
-            return Err(Error::ShapeMismatch { buffer_size, shape }.bt());
-        }
+        let shape = shape.into_shape(array.len())?;
         let storage = device.storage_from_slice(array)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, false))
@@ -1226,6 +1235,83 @@ impl Tensor {
         Ok(from_storage(storage, (n, c, h_out, w_out), op, false))
     }
 
+    /// Computes the dot product of two 1D tensors.
+    ///
+    /// - If inputs are 1D vectors (`[n]`), returns their scalar dot product.
+    /// - Panics if shapes are not compatible
+    /// - Not supported for integer dtypes
+    ///
+    /// # Example (vectors)
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// let t1 = Tensor::new(&[1.0, 2.0, 3.0], &Device::Cpu)?;
+    /// let t2 = Tensor::new(&[4.0, 5.0, 6.0], &Device::Cpu)?;
+    /// let res = t1.dot(&t2)?;
+    /// assert_eq!(res.to_scalar::<f64>()?, 32.);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn dot(&self, rhs: &Self) -> Result<Self> {
+        if self.dims().len() != 1 || rhs.dims().len() != 1 {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "dot",
+            });
+        }
+
+        (self * rhs).and_then(|ret| ret.sum_all())
+    }
+
+    /// Computes the **Frobenius norm** (L2 norm of all elements) of the tensor.
+    /// - Output is `sqrt(sum(x^2))`.
+    /// - Always returns a scalar (`[]` shape).
+    ///
+    /// # Example
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// let t = Tensor::new(&[[3., 4.], [0., 0.]], &Device::Cpu)?;
+    /// let norm = t.norm()?;
+    /// assert_eq!(norm.to_scalar::<f64>()?, 5.);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn norm(&self) -> Result<Self> {
+        if self.dtype().is_int() {
+            bail!("norm not supported for integer dtypes");
+        }
+
+        self.sqr().and_then(|x| x.sum_all()).and_then(|x| x.sqrt())
+    }
+
+    /// Performs strict matrix-vector multiplication (`[m, n] * [n] = [m]`).
+    ///
+    /// - If `self` is a matrix (`[m, n]`) and `rhs` is a vector (`[n]`), returns a vector (`[m]`).
+    /// - **No broadcasting**: Panics if `self` is not 2D or if `rhs` is not 1D with matching size.
+    ///
+    /// # Example
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// let mat = Tensor::new(&[[1., 2., 3.], [4., 5., 6.]], &Device::Cpu)?;
+    /// let vec = Tensor::new(&[1., 1., 1.], &Device::Cpu)?;
+    /// let res = mat.mv(&vec)?;
+    /// assert_eq!(res.to_vec1::<f64>()?, [6., 15.]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn mv(&self, rhs: &Self) -> Result<Self> {
+        // Strict shape checks
+        let lhs_dims = self.dims();
+        let rhs_dims = rhs.dims();
+        if lhs_dims.len() != 2 || rhs_dims.len() != 1 || lhs_dims[1] != rhs_dims[0] {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "mv",
+            });
+        }
+
+        // Direct matmul after ensuring rhs is column vector
+        self.matmul(&rhs.unsqueeze(1)?)?.squeeze(1)
+    }
+
     /// Returns the matrix-multiplication of the input tensor with the other provided tensor.
     ///
     /// # Arguments
@@ -1349,8 +1435,7 @@ impl Tensor {
         self.index_select(ids, 0)
     }
 
-    pub fn scatter_add<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
-        let dim = dim.to_index(self.shape(), "scatter-add")?;
+    fn scatter_checks(&self, indexes: &Self, source: &Self, dim: usize) -> Result<()> {
         let source_dims = source.dims();
         let self_dims = self.dims();
         let mismatch = if source_dims.len() != self_dims.len() {
@@ -1367,7 +1452,7 @@ impl Tensor {
         };
         if mismatch {
             Err(Error::ShapeMismatchBinaryOp {
-                op: "scatter-add (self, src)",
+                op: "scatter (self, src)",
                 lhs: self.shape().clone(),
                 rhs: source.shape().clone(),
             }
@@ -1375,14 +1460,64 @@ impl Tensor {
         }
         if indexes.dims() != source.dims() {
             Err(Error::ShapeMismatchBinaryOp {
-                op: "scatter-add (indexes, src)",
+                op: "scatter (indexes, src)",
                 lhs: indexes.shape().clone(),
                 rhs: source.shape().clone(),
             }
             .bt())?
         }
-        let storage = self.storage().scatter_add(
+        Ok(())
+    }
+
+    pub fn scatter<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "scatter")?;
+        self.scatter_checks(indexes, source, dim)?;
+        let shape = self.shape();
+        let mut storage = unsafe { self.device().alloc_uninit(shape, self.dtype())? };
+        self.storage()
+            .copy_strided_src(&mut storage, 0, self.layout())?;
+        let layout = Layout::contiguous(shape);
+        storage.scatter_set(
+            &layout,
+            &indexes.storage(),
+            indexes.layout(),
+            &source.storage(),
+            source.layout(),
+            dim,
+        )?;
+        let op = BackpropOp::new3(self, indexes, source, |t1, t2, t3| {
+            Op::Scatter(t1, t2, t3, dim)
+        });
+        Ok(from_storage(storage, self.shape(), op, false))
+    }
+
+    pub fn scatter_set<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<()> {
+        if self.same_storage(source) {
+            crate::bail!("cannot use slice_set when self and src share their storage")
+        }
+        let dim = dim.to_index(self.shape(), "scatter-set")?;
+        self.scatter_checks(indexes, source, dim)?;
+        self.storage_mut().scatter_set(
             self.layout(),
+            &indexes.storage(),
+            indexes.layout(),
+            &source.storage(),
+            source.layout(),
+            dim,
+        )?;
+        Ok(())
+    }
+
+    pub fn scatter_add<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "scatter-add")?;
+        self.scatter_checks(indexes, source, dim)?;
+        let shape = self.shape();
+        let mut storage = unsafe { self.device().alloc_uninit(shape, self.dtype())? };
+        self.storage()
+            .copy_strided_src(&mut storage, 0, self.layout())?;
+        let layout = Layout::contiguous(shape);
+        storage.scatter_add(
+            &layout,
             &indexes.storage(),
             indexes.layout(),
             &source.storage(),
@@ -1393,6 +1528,23 @@ impl Tensor {
             Op::ScatterAdd(t1, t2, t3, dim)
         });
         Ok(from_storage(storage, self.shape(), op, false))
+    }
+
+    pub fn scatter_add_set<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<()> {
+        if self.same_storage(source) {
+            crate::bail!("cannot use slice_set when self and src share their storage")
+        }
+        let dim = dim.to_index(self.shape(), "scatter-add-set")?;
+        self.scatter_checks(indexes, source, dim)?;
+        self.storage_mut().scatter_add(
+            self.layout(),
+            &indexes.storage(),
+            indexes.layout(),
+            &source.storage(),
+            source.layout(),
+            dim,
+        )?;
+        Ok(())
     }
 
     /// Embeds the values of the `src` tensor into the `self` tensor on the specified dimension.
@@ -2197,7 +2349,7 @@ impl Tensor {
     ///
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn reshape<S: crate::shape::ShapeWithOneHole>(&self, s: S) -> Result<Tensor> {
+    pub fn reshape<S: ShapeWithOneHole>(&self, s: S) -> Result<Tensor> {
         let shape = s.into_shape(self.elem_count())?;
         if shape.elem_count() != self.elem_count() {
             return Err(Error::ShapeMismatchBinaryOp {
@@ -2579,6 +2731,28 @@ impl Tensor {
     /// Broadcasting version of `pow`.
     pub fn broadcast_pow(&self, rhs: &Tensor) -> Result<Self> {
         rhs.broadcast_mul(&self.log()?)?.exp()
+    }
+
+    /// Returns a new tensor with the order of elements reversed along the specified dimensions.
+    /// This function makes a copy of the tensor’s data.
+    ///
+    /// ```rust
+    /// # use candle_core::{Tensor, Device};
+    /// let t = Tensor::arange(0., 6., &Device::Cpu)?.reshape((2, 3))?;
+    /// assert_eq!(t.to_vec2::<f64>()?, &[[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]);
+    /// let t_flipped = t.flip(&[0])?;
+    /// assert_eq!(t_flipped.to_vec2::<f64>()?, &[[3.0, 4.0, 5.0], [0.0, 1.0, 2.0]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn flip(&self, dims: &[usize]) -> Result<Tensor> {
+        let mut result = self.clone();
+        for &dim in dims.iter() {
+            let size = result.dim(dim)?;
+            let indices: Vec<i64> = (0..size).rev().map(|x| x as i64).collect();
+            let indices_tensor = Tensor::from_vec(indices, (size,), result.device())?;
+            result = result.index_select(&indices_tensor, dim)?;
+        }
+        Ok(result)
     }
 }
 

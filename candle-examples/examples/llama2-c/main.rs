@@ -256,6 +256,12 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
     let tokenizer = common_args.tokenizer()?;
 
     let device = candle_examples::device(common_args.cpu)?;
+    #[cfg(feature = "cuda")]
+    if let candle::Device::Cuda(d) = &device {
+        unsafe {
+            d.disable_event_tracking();
+        }
+    };
 
     let is_gguf = config_path.extension().map_or(false, |v| v == "gguf");
     let is_safetensors = config_path

@@ -57,16 +57,16 @@ enum Commands {
 }
 
 fn get_vb_and_config(model_name: String, device: &Device) -> anyhow::Result<(VarBuilder, Config)> {
-    println!("loading model {} via huggingface hub", model_name);
+    println!("loading model {model_name} via huggingface hub");
     let api = hf_hub::api::sync::Api::new()?;
     let api = api.model(model_name.clone());
     let model_file = api.get("model.safetensors")?;
-    println!("model {} downloaded and loaded", model_name);
+    println!("model {model_name} downloaded and loaded");
     let vb =
         unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], candle::DType::F32, device)? };
     let config = std::fs::read_to_string(api.get("config.json")?)?;
     let config: Config = serde_json::from_str(&config)?;
-    println!("{:?}", config);
+    println!("{config:?}");
     Ok((vb, config))
 }
 
@@ -138,7 +138,7 @@ fn classification_task(args: ClassificationArgs, device: &Device) -> anyhow::Res
         classification.to_vec1::<f32>()?
     );
     let label_id = classification.argmax(0)?.to_scalar::<u32>()?;
-    let label_id = format!("{}", label_id);
+    let label_id = format!("{label_id}");
     println!("label: {}", config.id2label[&label_id]);
     Ok(())
 }

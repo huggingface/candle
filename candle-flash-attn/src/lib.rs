@@ -2,7 +2,6 @@ mod ffi;
 
 use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
-use candle::cuda_backend::WrapErr;
 use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
 
@@ -88,6 +87,7 @@ impl FlashAttn {
             candle::bail!("number of k/v heads {num_heads_k} must divide number of heads in query {num_heads}")
         }
 
+        let stream = dev.cuda_stream();
         let alibi_slopes_ptr = if let Some(alibi_slopes) = &self.alibi_slopes {
             if alibi_slopes.dtype() != DType::F32 {
                 candle::bail!(
@@ -114,7 +114,9 @@ impl FlashAttn {
 
             let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
 
-            *alibi_slopes.device_ptr() as *const core::ffi::c_void
+            // Dropping the guard here doesn't seem very safe.
+            let (ptr, _guard) = alibi_slopes.device_ptr(&stream);
+            ptr as *const core::ffi::c_void
         } else {
             std::ptr::null()
         };
@@ -139,10 +141,8 @@ impl FlashAttn {
         let seqlen_k_rounded = round_multiple(seqlen_k, 128);
 
         let elem_count = out_shape.elem_count();
-        let dst = unsafe { dev.alloc::<T>(elem_count) }.w()?;
-        let softmax_lse = dev
-            .alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)
-            .w()?;
+        let dst = unsafe { dev.alloc::<T>(elem_count)? };
+        let softmax_lse = dev.alloc_zeros::<f32>(b_sz * 128 * num_heads * seqlen_q)?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -161,17 +161,17 @@ impl FlashAttn {
         }
 
         unsafe {
-            let q_ptr = *q.device_ptr() as *const core::ffi::c_void;
-            let k_ptr = *k.device_ptr() as *const core::ffi::c_void;
-            let v_ptr = *v.device_ptr() as *const core::ffi::c_void;
-            let dst_ptr = *dst.device_ptr() as *const core::ffi::c_void;
-            let softmax_lse_ptr = *softmax_lse.device_ptr() as *const core::ffi::c_void;
+            let (q_ptr, _guard) = q.device_ptr(&stream);
+            let (k_ptr, _guard) = k.device_ptr(&stream);
+            let (v_ptr, _guard) = v.device_ptr(&stream);
+            let (dst_ptr, _guard) = dst.device_ptr(&stream);
+            let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr(&stream);
             ffi::run_mha(
-                q_ptr,
-                k_ptr,
-                v_ptr,
-                dst_ptr,
-                softmax_lse_ptr,
+                q_ptr as *const core::ffi::c_void,
+                k_ptr as *const core::ffi::c_void,
+                v_ptr as *const core::ffi::c_void,
+                dst_ptr as *const core::ffi::c_void,
+                softmax_lse_ptr as *const core::ffi::c_void,
                 /* alibi_slopes_ptr */ alibi_slopes_ptr,
                 /* cu_seqlens_q_ptr */ std::ptr::null(),
                 /* cu_seqlens_k_ptr */ std::ptr::null(),
@@ -550,6 +550,7 @@ impl FlashAttnVarLen {
 
         let batch_size = nseqlens_q - 1;
 
+        let stream = dev.cuda_stream();
         let alibi_slopes_ptr = if let Some(alibi_slopes) = &self.alibi_slopes {
             if alibi_slopes.dtype() != DType::F32 {
                 candle::bail!(
@@ -576,7 +577,9 @@ impl FlashAttnVarLen {
 
             let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
 
-            *alibi_slopes.device_ptr() as *const core::ffi::c_void
+            // Dropping the guard here doesn't seem very safe.
+            let (ptr, _guard) = alibi_slopes.device_ptr(&stream);
+            ptr as *const core::ffi::c_void
         } else {
             std::ptr::null()
         };
@@ -601,8 +604,8 @@ impl FlashAttnVarLen {
         let seqlen_k_rounded = round_multiple(self.max_seqlen_k, 128);
 
         let elem_count = out_shape.elem_count();
-        let dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
-        let softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q).w()?;
+        let dst = unsafe { dev.alloc::<f16>(elem_count)? };
+        let softmax_lse = dev.alloc_zeros::<f32>(num_heads * total_q)?;
 
         let is_bf16 = if is_bf16 { 1 } else { 0 };
 
@@ -621,22 +624,22 @@ impl FlashAttnVarLen {
         }
 
         unsafe {
-            let q_ptr = *q.device_ptr() as *const core::ffi::c_void;
-            let k_ptr = *k.device_ptr() as *const core::ffi::c_void;
-            let v_ptr = *v.device_ptr() as *const core::ffi::c_void;
-            let dst_ptr = *dst.device_ptr() as *const core::ffi::c_void;
-            let softmax_lse_ptr = *softmax_lse.device_ptr() as *const core::ffi::c_void;
-            let seqlens_q_ptr = *seqlens_q.device_ptr() as *const core::ffi::c_int;
-            let seqlens_k_ptr = *seqlens_k.device_ptr() as *const core::ffi::c_int;
+            let (q_ptr, _guard) = q.device_ptr(&stream);
+            let (k_ptr, _guard) = k.device_ptr(&stream);
+            let (v_ptr, _guard) = v.device_ptr(&stream);
+            let (dst_ptr, _guard) = dst.device_ptr(&stream);
+            let (softmax_lse_ptr, _guard) = softmax_lse.device_ptr(&stream);
+            let (seqlens_q_ptr, _guard) = seqlens_q.device_ptr(&stream);
+            let (seqlens_k_ptr, _guard) = seqlens_k.device_ptr(&stream);
             ffi::run_mha(
-                q_ptr,
-                k_ptr,
-                v_ptr,
-                dst_ptr,
-                softmax_lse_ptr,
-                /* alibi_slopes_ptr */ alibi_slopes_ptr,
-                /* cu_seqlens_q_ptr */ seqlens_q_ptr,
-                /* cu_seqlens_k_ptr */ seqlens_k_ptr,
+                q_ptr as *const core::ffi::c_void,
+                k_ptr as *const core::ffi::c_void,
+                v_ptr as *const core::ffi::c_void,
+                dst_ptr as *const core::ffi::c_void,
+                softmax_lse_ptr as *const core::ffi::c_void,
+                /* alibi_slopes_ptr */ alibi_slopes_ptr as *const core::ffi::c_void,
+                /* cu_seqlens_q_ptr */ seqlens_q_ptr as *const i32,
+                /* cu_seqlens_k_ptr */ seqlens_k_ptr as *const i32,
                 /* q_batch_stride */ 0,
                 /* k_batch_stride */ 0,
                 /* v_batch_stride */ 0,
