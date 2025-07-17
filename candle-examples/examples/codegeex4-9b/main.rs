@@ -1,9 +1,8 @@
-use candle_transformers::models::codegeex4_9b::*;
-use clap::Parser;
-
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::models::codegeex4_9b::*;
+use clap::Parser;
 use hf_hub::{Repo, RepoType};
 use tokenizers::Tokenizer;
 
@@ -14,7 +13,7 @@ struct TextGeneration {
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
-    verbose_prompt: bool,
+    verbose: bool,
     dtype: DType,
 }
 
@@ -24,22 +23,22 @@ impl TextGeneration {
         model: Model,
         tokenizer: Tokenizer,
         seed: u64,
-        temp: Option<f64>,
-        top_p: Option<f64>,
+        temp: f64,
+        top_p: f64,
         repeat_penalty: f32,
         repeat_last_n: usize,
-        verbose_prompt: bool,
+        verbose: bool,
         device: &Device,
         dtype: DType,
     ) -> Self {
-        let logits_processor = LogitsProcessor::new(seed, temp, top_p);
+        let logits_processor = LogitsProcessor::new(seed, Some(temp), Some(top_p));
         Self {
             model,
             tokenizer,
             logits_processor,
             repeat_penalty,
             repeat_last_n,
-            verbose_prompt,
+            verbose,
             device: device.clone(),
             dtype,
         }
@@ -52,7 +51,7 @@ impl TextGeneration {
         if tokens.is_empty() {
             panic!("Empty prompts are not supported in the chatglm model.")
         }
-        if self.verbose_prompt {
+        if self.verbose {
             for (token, id) in tokens.get_tokens().iter().zip(tokens.get_ids().iter()) {
                 let token = token.replace('▁', " ").replace("<0x0A>", "\n");
                 println!("{id:7} -> '{token}'");
@@ -70,7 +69,7 @@ impl TextGeneration {
         let start_gen = std::time::Instant::now();
 
         println!("\n start_gen");
-        println!("samplelen {}", sample_len);
+        println!("samplelen {sample_len}");
         let mut count = 0;
         let mut result = vec![];
         for index in 0..sample_len {
@@ -101,11 +100,8 @@ impl TextGeneration {
                 .tokenizer
                 .decode(&[next_token], true)
                 .expect("Token error");
-            if self.verbose_prompt {
-                println!(
-                    "[Count: {}] [Raw Token: {}] [Decode Token: {}]",
-                    count, next_token, token
-                );
+            if self.verbose {
+                println!("[Count: {count}] [Raw Token: {next_token}] [Decode Token: {token}]");
             }
             result.push(token);
             std::io::stdout().flush()?;
@@ -126,34 +122,35 @@ impl TextGeneration {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Run on CPU rather than on GPU.
-    #[arg(name = "cache", short, long, default_value = ".")]
-    cache_path: String,
+    #[arg(name = "cache", short)]
+    cache_path: Option<String>,
 
+    /// Run on CPU rather than on GPU.
     #[arg(long)]
     cpu: bool,
 
     /// Display the token for the specified prompt.
     #[arg(long)]
-    verbose_prompt: bool,
-
-    #[arg(long)]
     prompt: String,
 
-    /// The temperature used to generate samples.
+    /// Display the tokens for the specified prompt and outputs.
     #[arg(long)]
-    temperature: Option<f64>,
+    verbose: bool,
+
+    /// The temperature used to generate samples.
+    #[arg(long, default_value_t = 0.95)]
+    temperature: f64,
 
     /// Nucleus sampling probability cutoff.
-    #[arg(long)]
-    top_p: Option<f64>,
+    #[arg(long, default_value_t = 0.8)]
+    top_p: f64,
 
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
     seed: u64,
 
     /// The length of the sample to generate (in tokens).
-    #[arg(long, short = 'n', default_value_t = 5000)]
+    #[arg(long, short = 'n', default_value_t = 8192)]
     sample_len: usize,
 
     #[arg(long)]
@@ -163,20 +160,19 @@ struct Args {
     revision: Option<String>,
 
     #[arg(long)]
-    weight_file: Option<String>,
+    weight_path: Option<String>,
 
     #[arg(long)]
     tokenizer: Option<String>,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
-    #[arg(long, default_value_t = 1.1)]
+    #[arg(long, default_value_t = 1.2)]
     repeat_penalty: f32,
 
     /// The context size to consider for the repeat penalty.
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
 }
-
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     println!(
@@ -188,17 +184,18 @@ fn main() -> anyhow::Result<()> {
     );
     println!(
         "temp: {:.2} repeat-penalty: {:.2} repeat-last-n: {}",
-        args.temperature.unwrap_or(0.95),
-        args.repeat_penalty,
-        args.repeat_last_n
+        args.temperature, args.repeat_penalty, args.repeat_last_n
     );
 
     let start = std::time::Instant::now();
-    println!("cache path {}", args.cache_path);
-    let api = hf_hub::api::sync::ApiBuilder::from_cache(hf_hub::Cache::new(args.cache_path.into()))
-        .build()
-        .map_err(anyhow::Error::msg)?;
-
+    let api = match args.cache_path.as_ref() {
+        None => hf_hub::api::sync::Api::new()?,
+        Some(path) => {
+            hf_hub::api::sync::ApiBuilder::from_cache(hf_hub::Cache::new(path.to_string().into()))
+                .build()
+                .map_err(anyhow::Error::msg)?
+        }
+    };
     let model_id = match args.model_id {
         Some(model_id) => model_id.to_string(),
         None => "THUDM/codegeex4-all-9b".to_string(),
@@ -215,15 +212,22 @@ fn main() -> anyhow::Result<()> {
             .get("tokenizer.json")
             .map_err(anyhow::Error::msg)?,
     };
-    let filenames = match args.weight_file {
-        Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+    let config_filename = match &args.weight_path {
+        Some(path) => std::path::Path::new(path).join("config.json"),
+        None => repo.get("config.json")?,
+    };
+
+    let filenames = match &args.weight_path {
+        Some(path) => {
+            candle_examples::hub_load_local_safetensors(path, "model.safetensors.index.json")?
+        }
+        _ => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).expect("Tokenizer Error");
 
     let start = std::time::Instant::now();
-    let config = Config::codegeex4();
+    let config: Config = serde_json::from_slice(&std::fs::read(config_filename)?)?;
     let device = candle_examples::device(args.cpu)?;
     let dtype = if device.is_cuda() {
         DType::BF16
@@ -243,7 +247,7 @@ fn main() -> anyhow::Result<()> {
         args.top_p,
         args.repeat_penalty,
         args.repeat_last_n,
-        args.verbose_prompt,
+        args.verbose,
         &device,
         dtype,
     );

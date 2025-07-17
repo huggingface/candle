@@ -1,3 +1,19 @@
+//! BLIP model implementation with quantization support.
+//!
+//! BLIP is a vision-language model for image understanding and generation tasks.
+//! This implementation provides quantization for reduced memory and compute.
+//!
+//! Key characteristics:
+//! - Vision encoder using ViT architecture
+//! - Text decoder using BERT-style transformer
+//! - Cross-attention between vision and text features
+//! - Support for 8-bit quantization
+//!
+//! References:
+//! - [BLIP Paper](https://arxiv.org/abs/2201.12086)
+//! - [Hugging Face Implementation](https://huggingface.co/docs/transformers/model_doc/blip)
+//!
+
 use super::quantized_blip_text as blip_text;
 use crate::quantized_nn::{layer_norm, linear, Linear};
 pub use crate::quantized_var_builder::VarBuilder;

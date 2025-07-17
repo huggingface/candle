@@ -147,6 +147,8 @@ enum WhichModel {
     V3,
     #[value(name = "3-medium")]
     V3Medium,
+    #[value(name = "4-mini")]
+    V4Mini,
     #[value(name = "2-old")]
     V2Old,
     PuffinPhiV2,
@@ -261,6 +263,7 @@ fn main() -> Result<()> {
                     WhichModel::V2 | WhichModel::V2Old => "microsoft/phi-2".to_string(),
                     WhichModel::V3 => "microsoft/Phi-3-mini-4k-instruct".to_string(),
                     WhichModel::V3Medium => "microsoft/Phi-3-medium-4k-instruct".to_string(),
+                    WhichModel::V4Mini => "microsoft/Phi-4-mini-instruct".to_string(),
                     WhichModel::PuffinPhiV2 | WhichModel::PhiHermes => {
                         "lmz/candle-quantized-phi".to_string()
                     }
@@ -281,6 +284,7 @@ fn main() -> Result<()> {
                     WhichModel::V2
                     | WhichModel::V3
                     | WhichModel::V3Medium
+                    | WhichModel::V4Mini
                     | WhichModel::PuffinPhiV2
                     | WhichModel::PhiHermes => "main".to_string(),
                 }
@@ -296,7 +300,8 @@ fn main() -> Result<()> {
             | WhichModel::V2
             | WhichModel::V2Old
             | WhichModel::V3
-            | WhichModel::V3Medium => repo.get("tokenizer.json")?,
+            | WhichModel::V3Medium
+            | WhichModel::V4Mini => repo.get("tokenizer.json")?,
             WhichModel::PuffinPhiV2 | WhichModel::PhiHermes => {
                 repo.get("tokenizer-puffin-phi-v2.json")?
             }
@@ -312,19 +317,21 @@ fn main() -> Result<()> {
                     WhichModel::V2 | WhichModel::V2Old => vec![repo.get("model-v2-q4k.gguf")?],
                     WhichModel::PuffinPhiV2 => vec![repo.get("model-puffin-phi-v2-q4k.gguf")?],
                     WhichModel::PhiHermes => vec![repo.get("model-phi-hermes-1_3B-q4k.gguf")?],
-                    WhichModel::V3 | WhichModel::V3Medium => anyhow::bail!(
+                    WhichModel::V3 | WhichModel::V3Medium | WhichModel::V4Mini => anyhow::bail!(
                         "use the quantized or quantized-phi examples for quantized phi-v3"
                     ),
                 }
             } else {
                 match args.model {
                     WhichModel::V1 | WhichModel::V1_5 => vec![repo.get("model.safetensors")?],
-                    WhichModel::V2 | WhichModel::V2Old | WhichModel::V3 | WhichModel::V3Medium => {
-                        candle_examples::hub_load_safetensors(
-                            &repo,
-                            "model.safetensors.index.json",
-                        )?
-                    }
+                    WhichModel::V2
+                    | WhichModel::V2Old
+                    | WhichModel::V3
+                    | WhichModel::V3Medium
+                    | WhichModel::V4Mini => candle_examples::hub_load_safetensors(
+                        &repo,
+                        "model.safetensors.index.json",
+                    )?,
                     WhichModel::PuffinPhiV2 => vec![repo.get("model-puffin-phi-v2.safetensors")?],
                     WhichModel::PhiHermes => vec![repo.get("model-phi-hermes-1_3B.safetensors")?],
                 }
@@ -341,7 +348,7 @@ fn main() -> Result<()> {
         WhichModel::V2 | WhichModel::V2Old => Config::v2(),
         WhichModel::PuffinPhiV2 => Config::puffin_phi_v2(),
         WhichModel::PhiHermes => Config::phi_hermes_1_3b(),
-        WhichModel::V3 | WhichModel::V3Medium => {
+        WhichModel::V3 | WhichModel::V3Medium | WhichModel::V4Mini => {
             panic!("use the quantized or quantized-phi examples for quantized phi-v3")
         }
     };
@@ -361,7 +368,10 @@ fn main() -> Result<()> {
         let dtype = match args.dtype {
             Some(dtype) => std::str::FromStr::from_str(&dtype)?,
             None => {
-                if args.model == WhichModel::V3 || args.model == WhichModel::V3Medium {
+                if args.model == WhichModel::V3
+                    || args.model == WhichModel::V3Medium
+                    || args.model == WhichModel::V4Mini
+                {
                     device.bf16_default_to_f32()
                 } else {
                     DType::F32
@@ -377,7 +387,7 @@ fn main() -> Result<()> {
                 let phi = Phi::new(&config, vb)?;
                 Model::Phi(phi)
             }
-            WhichModel::V3 | WhichModel::V3Medium => {
+            WhichModel::V3 | WhichModel::V3Medium | WhichModel::V4Mini => {
                 let config_filename = repo.get("config.json")?;
                 let config = std::fs::read_to_string(config_filename)?;
                 let config: Phi3Config = serde_json::from_str(&config)?;

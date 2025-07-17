@@ -414,12 +414,7 @@ fn compare_with_error(values: &[f32], expected: &[f32], tolerance: f32) {
 
         assert!(
             difference < tolerance,
-            "Error at index {}: value = {}, expected = {}. Difference = {} exceeds tolerance = {}.",
-            i,
-            value,
-            expected_value,
-            difference,
-            tolerance
+            "Error at index {i}: value = {value}, expected = {expected_value}. Difference = {difference} exceeds tolerance = {tolerance}."
         );
     }
 }
@@ -916,10 +911,10 @@ fn get_random_tensors(
     let mut rng = StdRng::seed_from_u64(314159265358979);
 
     let lhs = (0..m * k)
-        .map(|_| rng.gen::<f32>() - 0.5)
+        .map(|_| rng.random::<f32>() - 0.5)
         .collect::<Vec<_>>();
     let rhs = (0..n * k)
-        .map(|_| rng.gen::<f32>() - 0.5)
+        .map(|_| rng.random::<f32>() - 0.5)
         .collect::<Vec<_>>();
 
     let lhs = Tensor::from_vec(lhs, (m, k), device)?;

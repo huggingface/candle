@@ -1,12 +1,11 @@
 use std::collections::VecDeque;
-use std::fmt::Display;
 
 use candle::{DType, Device, Error, Module, Result, Tensor, Var};
 use candle_nn::{
     func, linear, sequential::seq, Activation, AdamW, Optimizer, ParamsAdamW, Sequential,
     VarBuilder, VarMap,
 };
-use rand::{distributions::Uniform, thread_rng, Rng};
+use rand::{distr::Uniform, rng, Rng};
 
 use super::gym_env::GymEnv;
 
@@ -104,8 +103,8 @@ impl ReplayBuffer {
         if self.size < batch_size {
             Ok(None)
         } else {
-            let transitions: Vec<&Transition> = thread_rng()
-                .sample_iter(Uniform::from(0..self.size))
+            let transitions: Vec<&Transition> = rng()
+                .sample_iter(Uniform::try_from(0..self.size).map_err(Error::wrap)?)
                 .take(batch_size)
                 .map(|i| self.buffer.get(i).unwrap())
                 .collect();
@@ -167,6 +166,7 @@ fn track(
     Ok(())
 }
 
+#[allow(unused)]
 struct Actor<'a> {
     varmap: VarMap,
     vb: VarBuilder<'a>,
@@ -211,7 +211,7 @@ impl Actor<'_> {
         let target_network = make_network("target-actor")?;
 
         // this sets the two networks to be equal to each other using tau = 1.0
-        track(&mut varmap, &vb, "target-actor", "actor", &dims, 1.0);
+        track(&mut varmap, &vb, "target-actor", "actor", &dims, 1.0)?;
 
         Ok(Self {
             varmap,
@@ -244,6 +244,7 @@ impl Actor<'_> {
     }
 }
 
+#[allow(unused)]
 struct Critic<'a> {
     varmap: VarMap,
     vb: VarBuilder<'a>,
@@ -287,7 +288,7 @@ impl Critic<'_> {
         let target_network = make_network("target-critic")?;
 
         // this sets the two networks to be equal to each other using tau = 1.0
-        track(&mut varmap, &vb, "target-critic", "critic", &dims, 1.0);
+        track(&mut varmap, &vb, "target-critic", "critic", &dims, 1.0)?;
 
         Ok(Self {
             varmap,
@@ -322,6 +323,7 @@ impl Critic<'_> {
     }
 }
 
+#[allow(unused)]
 #[allow(clippy::upper_case_acronyms)]
 pub struct DDPG<'a> {
     actor: Actor<'a>,
@@ -496,11 +498,11 @@ pub fn run() -> Result<()> {
         OuNoise::new(MU, THETA, SIGMA, size_action)?,
     )?;
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for episode in 0..MAX_EPISODES {
         // let mut state = env.reset(episode as u64)?;
-        let mut state = env.reset(rng.gen::<u64>())?;
+        let mut state = env.reset(rng.random::<u64>())?;
 
         let mut total_reward = 0.0;
         for _ in 0..EPISODE_LENGTH {
@@ -536,7 +538,7 @@ pub fn run() -> Result<()> {
     agent.train = false;
     for episode in 0..10 {
         // let mut state = env.reset(episode as u64)?;
-        let mut state = env.reset(rng.gen::<u64>())?;
+        let mut state = env.reset(rng.random::<u64>())?;
         let mut total_reward = 0.0;
         for _ in 0..EPISODE_LENGTH {
             let mut action = 2.0 * agent.actions(&state)?;

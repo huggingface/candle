@@ -1,3 +1,9 @@
+//! # JinaBERT inference implementation
+//!
+//! Based on implementation from huggingface for Jina BERT and its variants
+//!
+//! See: [Jina Embeddings on HuggingFace](https://huggingface.co/jinaai/jina-embeddings-v2-base-en)
+
 use super::with_tracing::{linear, linear_no_bias, Embedding, Linear};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Module, VarBuilder};

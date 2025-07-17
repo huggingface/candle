@@ -1,3 +1,11 @@
+//! Implementation of the Depth Anything model from FAIR.
+//!
+//! See:
+//! - ["Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data"](https://github.com/LiheYoung/Depth-Anything)
+//!
+
+use std::sync::Arc;
+
 use candle::D::Minus1;
 use candle::{Module, Result, Tensor};
 use candle_nn::ops::Identity;
@@ -116,6 +124,7 @@ impl ResidualConvUnit {
             stride: 1,
             dilation: 1,
             groups: 1,
+            cudnn_fwd_algo: None,
         };
         let conv1 = conv2d(
             conf.num_features,
@@ -200,6 +209,7 @@ impl FeatureFusionBlock {
             stride: 1,
             dilation: 1,
             groups: 1,
+            cudnn_fwd_algo: None,
         };
         let output_conv = conv2d(
             conf.num_features,
@@ -250,6 +260,7 @@ impl Scratch {
             stride: 1,
             dilation: 1,
             groups: 1,
+            cudnn_fwd_algo: None,
         };
 
         let layer1_rn = conv2d_no_bias(
@@ -311,6 +322,7 @@ impl Scratch {
             stride: 1,
             dilation: 1,
             groups: 1,
+            cudnn_fwd_algo: None,
         };
         let output_conv1 = conv2d(
             conf.num_features,
@@ -359,16 +371,18 @@ impl Scratch {
 
 const NUM_CHANNELS: usize = 4;
 
-pub struct DPTHead<'a> {
-    conf: &'a DepthAnythingV2Config,
+pub struct DPTHead {
     projections: Vec<Conv2d>,
     resize_layers: Vec<Box<dyn Module>>,
     readout_projections: Vec<Sequential>,
     scratch: Scratch,
+    use_class_token: bool,
+    input_image_size: usize,
+    target_patch_size: usize,
 }
 
-impl<'a> DPTHead<'a> {
-    pub fn new(conf: &'a DepthAnythingV2Config, vb: VarBuilder) -> Result<Self> {
+impl DPTHead {
+    pub fn new(conf: &DepthAnythingV2Config, vb: VarBuilder) -> Result<Self> {
         let mut projections: Vec<Conv2d> = Vec::with_capacity(conf.out_channel_sizes.len());
         for (conv_index, out_channel_size) in conf.out_channel_sizes.iter().enumerate() {
             projections.push(conv2d(
@@ -415,6 +429,7 @@ impl<'a> DPTHead<'a> {
                     stride: 2,
                     dilation: 1,
                     groups: 1,
+                    cudnn_fwd_algo: None,
                 },
                 vb.pp("resize_layers").pp("3"),
             )?),
@@ -439,20 +454,22 @@ impl<'a> DPTHead<'a> {
         let scratch = Scratch::new(conf, vb.pp("scratch"))?;
 
         Ok(Self {
-            conf,
             projections,
             resize_layers,
             readout_projections,
             scratch,
+            use_class_token: conf.use_class_token,
+            input_image_size: conf.input_image_size,
+            target_patch_size: conf.target_patch_size,
         })
     }
 }
 
-impl Module for DPTHead<'_> {
+impl Module for DPTHead {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut out: Vec<Tensor> = Vec::with_capacity(NUM_CHANNELS);
         for i in 0..NUM_CHANNELS {
-            let x = if self.conf.use_class_token {
+            let x = if self.use_class_token {
                 let x = xs.get(i)?.get(0)?;
                 let class_token = xs.get(i)?.get(1)?;
                 let readout = class_token.unsqueeze(1)?.expand(x.shape())?;
@@ -467,8 +484,8 @@ impl Module for DPTHead<'_> {
             let x = x.permute((0, 2, 1))?.reshape((
                 x_dims[0],
                 x_dims[x_dims.len() - 1],
-                self.conf.target_patch_size,
-                self.conf.target_patch_size,
+                self.target_patch_size,
+                self.target_patch_size,
             ))?;
             let x = self.projections[i].forward(&x)?;
 
@@ -509,25 +526,25 @@ impl Module for DPTHead<'_> {
 
         let out = self.scratch.output_conv1.forward(&path1)?;
 
-        let out = out.interpolate2d(self.conf.input_image_size, self.conf.input_image_size)?;
+        let out = out.interpolate2d(self.input_image_size, self.input_image_size)?;
 
         self.scratch.output_conv2.forward(&out)
     }
 }
 
-pub struct DepthAnythingV2<'a> {
-    pretrained: &'a DinoVisionTransformer,
-    depth_head: DPTHead<'a>,
-    conf: &'a DepthAnythingV2Config,
+pub struct DepthAnythingV2 {
+    pretrained: Arc<DinoVisionTransformer>,
+    depth_head: DPTHead,
+    conf: DepthAnythingV2Config,
 }
 
-impl<'a> DepthAnythingV2<'a> {
+impl DepthAnythingV2 {
     pub fn new(
-        pretrained: &'a DinoVisionTransformer,
-        conf: &'a DepthAnythingV2Config,
+        pretrained: Arc<DinoVisionTransformer>,
+        conf: DepthAnythingV2Config,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let depth_head = DPTHead::new(conf, vb.pp("depth_head"))?;
+        let depth_head = DPTHead::new(&conf, vb.pp("depth_head"))?;
 
         Ok(Self {
             pretrained,
@@ -537,7 +554,7 @@ impl<'a> DepthAnythingV2<'a> {
     }
 }
 
-impl<'a> Module for DepthAnythingV2<'a> {
+impl Module for DepthAnythingV2 {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let features = self.pretrained.get_intermediate_layers(
             xs,

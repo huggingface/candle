@@ -1,4 +1,4 @@
-use crate::{shape::Dim, Error, Result, Shape, Tensor};
+use crate::{shape::Dim, Context, Error, Result, Shape, Tensor};
 
 impl Tensor {
     /// Concatenates two or more tensors along a particular dimension.
@@ -134,7 +134,7 @@ impl Tensor {
                     .bt())?
                 }
             }
-            let next_offset = offsets.last().unwrap() + arg.elem_count();
+            let next_offset = offsets.last().context("empty offsets")? + arg.elem_count();
             offsets.push(next_offset);
         }
         let shape = Shape::from(cat_dims);
@@ -241,12 +241,15 @@ impl Tensor {
     /// `self` and `src` must have the same shape except on dimension `dim` where the `self` size
     /// has to be greater than or equal to `offset` plus the `src` size.
     ///
-    /// Note that this modifies `self` in place and as such is not compatibel with
+    /// Note that this modifies `self` in place and as such is not compatible with
     /// back-propagation.  
     pub fn slice_set<D: Dim>(&self, src: &Self, dim: D, offset: usize) -> Result<()> {
         let dim = dim.to_index(self.shape(), "slice-set")?;
         if !self.is_contiguous() || !src.is_contiguous() {
             Err(Error::RequiresContiguous { op: "slice-set" }.bt())?
+        }
+        if self.same_storage(src) {
+            crate::bail!("cannot use slice_set when self and src share their storage")
         }
         if self.dtype() != src.dtype() {
             Err(Error::DTypeMismatchBinaryOp {

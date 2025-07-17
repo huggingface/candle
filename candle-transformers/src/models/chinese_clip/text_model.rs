@@ -3,8 +3,8 @@
 //! Chinese contrastive Language-Image Pre-Training (CLIP) is an architecture trained on
 //! pairs of images with related texts.
 //!
-//! https://github.com/OFA-Sys/Chinese-CLIP
-//! https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py
+//! - 💻 [Chinese-CLIP](https://github.com/OFA-Sys/Chinese-CLIP)
+//! - 💻 [HF](https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py)
 
 use candle::{DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn as nn;
@@ -67,7 +67,7 @@ impl Default for ChineseClipTextConfig {
 }
 
 impl ChineseClipTextConfig {
-    /// referer: https://huggingface.co/OFA-Sys/chinese-clip-vit-base-patch16/blob/main/config.json
+    /// [referer](https://huggingface.co/OFA-Sys/chinese-clip-vit-base-patch16/blob/main/config.json)
     pub fn clip_vit_base_patch16() -> Self {
         Self {
             vocab_size: 21128,
@@ -514,8 +514,9 @@ impl ChineseClipTextTransformer {
             Some(attention_mask) => attention_mask.clone(),
             None => input_ids.ones_like()?,
         };
+        let dtype = embedding_output.dtype();
         // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L995
-        let attention_mask = get_extended_attention_mask(&attention_mask, DType::F32)?;
+        let attention_mask = get_extended_attention_mask(&attention_mask, dtype)?;
         let encoder_outputs = self.encoder.forward(&embedding_output, &attention_mask)?;
         let encoder_output = encoder_outputs.i((.., 0, ..))?;
         let pooled_output = match &self.pooler {
@@ -535,6 +536,9 @@ fn get_extended_attention_mask(attention_mask: &Tensor, dtype: DType) -> Result<
     };
     let attention_mask = attention_mask.to_dtype(dtype)?;
     // torch.finfo(dtype).min
-    (attention_mask.ones_like()? - &attention_mask)?
-        .broadcast_mul(&Tensor::try_from(f32::MIN)?.to_device(attention_mask.device())?)
+    (attention_mask.ones_like()? - &attention_mask)?.broadcast_mul(
+        &Tensor::try_from(f32::MIN)?
+            .to_device(attention_mask.device())?
+            .to_dtype(dtype)?,
+    )
 }

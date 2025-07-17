@@ -1,3 +1,5 @@
+//! Traits and methods for CPU-backed Tensors
+
 pub mod erf;
 pub mod kernels;
 

@@ -1,4 +1,4 @@
-/// Methods for backpropagation of gradients.
+//! Methods for backpropagation of gradients.
 use crate::op::{BinaryOp, Op, ReduceOp, UnaryOp};
 use crate::{Error, Result, Tensor, TensorId};
 use std::collections::HashMap;
@@ -32,7 +32,7 @@ impl Tensor {
     /// elements having dependencies on the latter ones, e.g. the first element if any is the
     /// argument.
     /// This assumes that the op graph is a DAG.
-    fn sorted_nodes(&self) -> Vec<&Tensor> {
+    pub fn sorted_nodes(&self) -> Vec<&Tensor> {
         // The vec of sorted nodes is passed as an owned value rather than a mutable reference
         // to get around some lifetime limitations.
         fn walk<'a>(
@@ -53,6 +53,7 @@ impl Tensor {
             } else if let Some(op) = node.op() {
                 match op {
                     Op::IndexAdd(t1, t2, t3, _)
+                    | Op::Scatter(t1, t2, t3, _)
                     | Op::ScatterAdd(t1, t2, t3, _)
                     | Op::CustomOp3(t1, t2, t3, _)
                     | Op::WhereCond(t1, t2, t3) => {
@@ -419,9 +420,19 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.scatter_add(indexes, &grad, *dim)?;
                     }
-                    Op::ScatterAdd(init, indexes, src, dim) => {
+                    Op::Scatter(init, indexes, src, dim) => {
                         let init_sum_grad = grads.or_insert(init)?;
                         *init_sum_grad = init_sum_grad.add(&grad)?;
+
+                        let src_grad = grad.gather(indexes, *dim)?;
+                        let src_sum_grad = grads.or_insert(src)?;
+                        *src_sum_grad = src_sum_grad.add(&src_grad)?;
+                    }
+                    Op::ScatterAdd(init, indexes, src, dim) => {
+                        let init_sum_grad = grads.or_insert(init)?;
+                        let mask = init.ones_like()?;
+                        let mask = mask.scatter(indexes, &mask.zeros_like()?, *dim)?;
+                        *init_sum_grad = init_sum_grad.add(&grad.mul(&mask)?)?;
 
                         let src_grad = grad.gather(indexes, *dim)?;
                         let src_sum_grad = grads.or_insert(src)?;

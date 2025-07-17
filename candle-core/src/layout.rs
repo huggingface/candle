@@ -1,3 +1,4 @@
+//! Tensor Layouts including contiguous or sparse strides
 use crate::{Error, Result, Shape};
 
 #[derive(Debug, PartialEq, Eq, Clone)]

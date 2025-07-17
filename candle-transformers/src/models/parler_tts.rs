@@ -1,3 +1,20 @@
+//! Parler Model implementation for parler_tts text-to-speech synthesis
+//!
+//! Implements a transformer-based decoder architecture for generating audio tokens
+//! from text using discrete tokens. The model converts text into audio segments
+//! using multiple codebooks of quantized audio tokens.
+//!
+//! The model architecture includes:
+//! - Multi-head attention layers for text and audio processing
+//! - Feed-forward networks
+//! - Layer normalization
+//! - Positional embeddings
+//! - Multiple codebook prediction heads
+//!
+//! The implementation follows the original parler_tts architecture while focusing
+//! on audio token generation for text-to-speech synthesis.
+//!
+
 use crate::generation::LogitsProcessor;
 use crate::models::t5;
 use candle::{IndexOp, Result, Tensor};
@@ -350,7 +367,7 @@ impl Model {
             None
         };
         let audio_encoder =
-            crate::models::dac::Model::new(&cfg.audio_encoder, vb.pp("audio_encoder"))?;
+            crate::models::dac::Model::new(&cfg.audio_encoder, vb.pp("audio_encoder.model"))?;
         Ok(Self {
             decoder,
             text_encoder,

@@ -1,3 +1,5 @@
+//! Apply penalty and repeat_kv
+
 use candle::{Result, Tensor};
 
 pub fn apply_repeat_penalty(logits: &Tensor, penalty: f32, context: &[u32]) -> Result<Tensor> {

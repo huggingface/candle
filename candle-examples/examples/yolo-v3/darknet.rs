@@ -133,6 +133,7 @@ fn conv(vb: VarBuilder, index: usize, p: usize, b: &Block) -> Result<(usize, Bl)
         padding,
         groups: 1,
         dilation: 1,
+        cudnn_fwd_algo: None,
     };
     let conv = if bias {
         conv2d(p, filters, size, conv_cfg, vb.pp(format!("conv_{index}")))?

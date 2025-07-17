@@ -3,9 +3,9 @@
 //! Chinese contrastive Language-Image Pre-Training (CLIP) is an architecture trained on
 //! pairs of images with related texts.
 //!
-//! https://github.com/OFA-Sys/Chinese-CLIP
-//! https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py
-
+//! - 💻 [GH Link](https://github.com/OFA-Sys/Chinese-CLIP)
+//! - 💻 Transformers Python [reference implementation](https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py)
+//!
 use candle::{Module, Result, Tensor, D};
 use candle_nn as nn;
 
@@ -30,7 +30,7 @@ impl From<String> for Activation {
             "gelu" => Activation::Gelu,
             "gelu_new" => Activation::GeluNew,
             "relu" => Activation::Relu,
-            _ => panic!("Invalid activation function: {}", value),
+            _ => panic!("Invalid activation function: {value}"),
         }
     }
 }

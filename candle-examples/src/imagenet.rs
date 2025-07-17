@@ -6,7 +6,6 @@ pub const IMAGENET_STD: [f32; 3] = [0.229f32, 0.224, 0.225];
 /// Loads an image from disk using the image crate at the requested resolution,
 /// using the given std and mean parameters.
 /// This returns a tensor with shape (3, res, res). imagenet normalization is applied.
-
 pub fn load_image_with_std_mean<P: AsRef<std::path::Path>>(
     p: P,
     res: usize,

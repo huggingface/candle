@@ -27,7 +27,7 @@ intel-mkl-src = { workspace = true, optional = true }
 num-traits = { workspace = true }
 palette = { version = "0.7.6", optional = true }
 enterpolation = { version = "0.2.1", optional = true}
-pyo3 = { version = "0.22.0", features = ["auto-initialize"], optional = true }
+pyo3 = { version = "0.22.0", features = ["auto-initialize", "abi3-py311"], optional = true }
 rayon = { workspace = true }
 rubato = { version = "0.15.0", optional = true }
 safetensors = { workspace = true }
@@ -50,7 +50,7 @@ tracing = { workspace = true }
 tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }
 # Necessary to disambiguate with tokio in wasm examples which are 1.28.1
-tokio = "1.29.1"
+tokio = "1.43.0"
 
 [build-dependencies]
 anyhow = { workspace = true }
@@ -60,7 +60,7 @@ bindgen_cuda = { version = "0.1.1", optional = true }
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
 cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda", "dep:bindgen_cuda"]
-cudnn = ["candle/cudnn"]
+cudnn = ["candle/cudnn", "candle-nn/cudnn", "candle-transformers/cudnn"]
 flash-attn = ["cuda", "candle-transformers/flash-attn", "dep:candle-flash-attn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
 nccl = ["cuda", "cudarc/nccl", "dep:half"]
@@ -69,6 +69,7 @@ metal = ["candle/metal", "candle-nn/metal"]
 microphone = ["cpal", "rubato"]
 encodec = ["cpal", "symphonia", "rubato"]
 mimi = ["cpal", "symphonia", "rubato"]
+snac = ["cpal", "symphonia", "rubato"]
 depth_anything_v2 = ["palette", "enterpolation"]
 
 [[example]]
@@ -81,6 +82,10 @@ required-features = ["pyo3"]
 
 [[example]]
 name = "onnx"
+required-features = ["onnx"]
+
+[[example]]
+name = "onnx-llm"
 required-features = ["onnx"]
 
 [[example]]
@@ -106,6 +111,10 @@ required-features = ["candle-datasets"]
 [[example]]
 name = "mimi"
 required-features = ["mimi"]
+
+[[example]]
+name = "snac"
+required-features = ["snac"]
 
 [[example]]
 name = "encodec"

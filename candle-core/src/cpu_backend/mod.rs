@@ -1,3 +1,4 @@
+//! Implementation of Backend Fns for CPU
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
@@ -6,7 +7,7 @@ use rayon::prelude::*;
 
 mod utils;
 pub use utils::{
-    binary_map, binary_map_vec, unary_map, unary_map_vec, Map1, Map1Any, Map2, Map2U8,
+    binary_map, binary_map_vec, unary_map, unary_map_vec, Map1, Map1Any, Map2, Map2InPlace, Map2U8,
 };
 
 const USE_IM2COL_CONV1D: bool = true;
@@ -65,7 +66,7 @@ impl Map2U8 for Cmp {
 
 struct WCond<'a, T: IntDType>(&'a [T], &'a Layout);
 
-impl<'a, I: IntDType> Map2 for WCond<'a, I> {
+impl<I: IntDType> Map2 for WCond<'_, I> {
     const OP: &'static str = "where";
     #[inline(always)]
     fn f<T: WithDType>(&self, t: &[T], t_l: &Layout, f: &[T], f_l: &Layout) -> Result<Vec<T>> {
@@ -215,7 +216,7 @@ struct ReduceSum<'a> {
     reduce_dims_and_stride: Vec<(usize, usize)>,
 }
 
-impl<'a> ReduceSum<'a> {
+impl ReduceSum<'_> {
     #[inline(always)]
     fn fold_impl<T>(&self, src: &[T], src_l: &Layout, start_elt: T) -> Result<Vec<T>>
     where
@@ -280,7 +281,7 @@ impl<'a> ReduceSum<'a> {
     }
 }
 
-impl<'a> Map1 for ReduceSum<'a> {
+impl Map1 for ReduceSum<'_> {
     #[inline(always)]
     fn f<T: WithDType>(&self, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
         self.fold_impl(src, src_l, T::zero())
@@ -453,7 +454,7 @@ struct Gather<'a, I: IntDType> {
     dim: usize,
 }
 
-impl<'a, I: IntDType> Map1 for Gather<'a, I> {
+impl<I: IntDType> Map1 for Gather<'_, I> {
     fn f<T: WithDType>(&self, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
         let ids = match self.ids_l.contiguous_offsets() {
             Some((a, b)) => &self.ids[a..b],
@@ -482,17 +483,22 @@ impl<'a, I: IntDType> Map1 for Gather<'a, I> {
                 let start_dst_idx = start_dst_idx + i * dst_right_len;
                 for right_i in 0..dst_right_len {
                     let dst_idx = start_dst_idx + right_i;
-                    let index = ids[dst_idx].as_usize();
-                    if index >= src_dim_len {
-                        Err(Error::InvalidIndex {
-                            index,
-                            size: src_dim_len,
-                            op: "gather",
+                    let index = ids[dst_idx];
+                    if index == I::max_value() {
+                        dst[dst_idx] = T::zero();
+                    } else {
+                        let index = index.as_usize();
+                        if index >= src_dim_len {
+                            Err(Error::InvalidIndex {
+                                index,
+                                size: src_dim_len,
+                                op: "gather",
+                            }
+                            .bt())?
                         }
-                        .bt())?
+                        let src_idx = start_src_idx + index * src_right_len + right_i;
+                        dst[dst_idx] = src[src_idx]
                     }
-                    let src_idx = start_src_idx + index * src_right_len + right_i;
-                    dst[dst_idx] = src[src_idx]
                 }
             }
         }
@@ -506,7 +512,7 @@ struct IndexSelect<'a, T: IntDType> {
     dim: usize,
 }
 
-impl<'a, I: IntDType> Map1 for IndexSelect<'a, I> {
+impl<I: IntDType> Map1 for IndexSelect<'_, I> {
     fn f<T: WithDType>(&self, src: &[T], layout: &Layout) -> Result<Vec<T>> {
         let src = match layout.contiguous_offsets() {
             Some((a, b)) => &src[a..b],
@@ -534,45 +540,89 @@ impl<'a, I: IntDType> Map1 for IndexSelect<'a, I> {
             let start_src_idx = left_i * right_len * src_dim;
             let start_dst_idx = left_i * right_len * n_ids;
             for i in 0..n_ids {
-                let index = self.ids[self.ids_l.start_offset() + stride_ids * i].as_usize();
-                if index >= src_dim {
-                    Err(Error::InvalidIndex {
-                        index,
-                        size: src_dim,
-                        op: "index-select",
-                    }
-                    .bt())?
-                }
-                let start_src_idx = start_src_idx + index * right_len;
                 let start_dst_idx = start_dst_idx + i * right_len;
-                dst[start_dst_idx..start_dst_idx + right_len]
-                    .copy_from_slice(&src[start_src_idx..start_src_idx + right_len])
+                let index = self.ids[self.ids_l.start_offset() + stride_ids * i];
+                if index == I::max_value() {
+                    dst[start_dst_idx..start_dst_idx + right_len].fill(T::zero());
+                } else {
+                    let index = index.as_usize();
+                    if index >= src_dim {
+                        Err(Error::InvalidIndex {
+                            index,
+                            size: src_dim,
+                            op: "index-select",
+                        }
+                        .bt())?
+                    }
+                    let start_src_idx = start_src_idx + index * right_len;
+                    dst[start_dst_idx..start_dst_idx + right_len]
+                        .copy_from_slice(&src[start_src_idx..start_src_idx + right_len])
+                }
             }
         }
         Ok(dst)
     }
 }
 
-struct ScatterAdd<'a, I: IntDType> {
+trait ElemUpdate {
+    fn f<T: WithDType>(dst: &mut T, src: T);
+}
+
+struct Set;
+struct Add;
+
+impl ElemUpdate for Set {
+    fn f<T: WithDType>(dst: &mut T, src: T) {
+        *dst = src
+    }
+}
+
+impl ElemUpdate for Add {
+    fn f<T: WithDType>(dst: &mut T, src: T) {
+        *dst += src
+    }
+}
+
+struct Scatter<'a, I: IntDType, M: ElemUpdate> {
     ids: &'a [I],
     ids_l: &'a Layout,
     dim: usize,
+    _phantom: std::marker::PhantomData<M>,
 }
 
-impl<'a, I: IntDType> Map2 for ScatterAdd<'a, I> {
-    const OP: &'static str = "scatter-add";
-    fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
-        let dst_len = l1.shape().elem_count();
-        let mut dst = vec![T::zero(); dst_len];
-        copy_strided_src_(v1, &mut dst, 0, l1);
+impl<'a, I: IntDType, M: ElemUpdate> Scatter<'a, I, M> {
+    fn new(ids: &'a [I], ids_l: &'a Layout, dim: usize) -> Self {
+        Self {
+            ids,
+            ids_l,
+            dim,
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<I: IntDType, M: ElemUpdate> Map2InPlace for Scatter<'_, I, M> {
+    const OP: &'static str = "scatter";
+    fn f<T: WithDType>(
+        &self,
+        dst: &mut [T],
+        dst_l: &Layout,
+        src: &[T],
+        src_l: &Layout,
+    ) -> Result<()> {
+        let dst = match dst_l.contiguous_offsets() {
+            None => Err(Error::RequiresContiguous { op: "scatter" }.bt())?,
+            Some((o1, o2)) => &mut dst[o1..o2],
+        };
+
         let src = match src_l.contiguous_offsets() {
-            None => Err(Error::RequiresContiguous { op: "scatter-add" }.bt())?,
+            None => Err(Error::RequiresContiguous { op: "scatter" }.bt())?,
             Some((o1, o2)) => &src[o1..o2],
         };
 
         let dim = self.dim;
         let ids_dims = self.ids_l.dims();
-        let dst_dims = l1.dims();
+        let dst_dims = dst_l.dims();
         let dst_dim_len = dst_dims[dim];
         let dst_right_len: usize = dst_dims[dim + 1..].iter().product();
 
@@ -591,7 +641,11 @@ impl<'a, I: IntDType> Map2 for ScatterAdd<'a, I> {
                 let start_ids_idx = start_ids_idx + i * ids_right_len;
                 for right_i in 0..dst_right_len {
                     let ids_idx = start_ids_idx + right_i;
-                    let index = ids[ids_idx].as_usize();
+                    let index = ids[ids_idx];
+                    if index == I::max_value() {
+                        continue;
+                    }
+                    let index = index.as_usize();
                     if index >= dst_dim_len {
                         Err(Error::InvalidIndex {
                             index,
@@ -601,12 +655,12 @@ impl<'a, I: IntDType> Map2 for ScatterAdd<'a, I> {
                         .bt())?
                     }
                     let dst_idx = start_dst_idx + index * dst_right_len + right_i;
-                    dst[dst_idx] += src[ids_idx]
+                    M::f(&mut dst[dst_idx], src[ids_idx])
                 }
             }
         }
 
-        Ok(dst)
+        Ok(())
     }
 }
 
@@ -615,7 +669,7 @@ struct IndexAdd<'a, I: IntDType> {
     dim: usize,
 }
 
-impl<'a, I: IntDType> Map2 for IndexAdd<'a, I> {
+impl<I: IntDType> Map2 for IndexAdd<'_, I> {
     const OP: &'static str = "index-add";
     // https://pytorch.org/docs/stable/generated/torch.Tensor.index_add_.html#torch.Tensor.index_add_
     // v1, l1 -> self
@@ -634,6 +688,9 @@ impl<'a, I: IntDType> Map2 for IndexAdd<'a, I> {
         let post_dim = src_l.dims()[dim + 1..].iter().product::<usize>();
         if dim == 0 {
             for (src_idx, dst_idx) in self.ids.iter().enumerate() {
+                if *dst_idx == I::max_value() {
+                    continue;
+                }
                 let dst_idx = dst_idx.as_usize();
                 if dst_idx >= max_idx {
                     Err(Error::InvalidIndex {
@@ -652,6 +709,9 @@ impl<'a, I: IntDType> Map2 for IndexAdd<'a, I> {
             }
         } else {
             for (src_idx, dst_idx) in self.ids.iter().enumerate() {
+                if *dst_idx == I::max_value() {
+                    continue;
+                }
                 let dst_idx = dst_idx.as_usize();
                 if dst_idx >= max_idx {
                     Err(Error::InvalidIndex {
@@ -735,7 +795,7 @@ fn copy_strided_src_<T: Copy>(src: &[T], dst: &mut [T], dst_offset: usize, src_l
 
 struct Conv1D<'a>(&'a crate::conv::ParamsConv1D);
 
-impl<'a> Map2 for Conv1D<'a> {
+impl Map2 for Conv1D<'_> {
     const OP: &'static str = "conv1d";
     fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
         let p = self.0;
@@ -959,7 +1019,7 @@ impl Map1 for Col2Im1D {
 
 struct ConvTranspose1D<'a>(&'a crate::conv::ParamsConvTranspose1D);
 
-impl<'a> Map2 for ConvTranspose1D<'a> {
+impl Map2 for ConvTranspose1D<'_> {
     const OP: &'static str = "conv_transpose1d";
     fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
         let p = self.0;
@@ -1028,7 +1088,7 @@ impl<'a> Map2 for ConvTranspose1D<'a> {
 
 struct Conv2D<'a>(&'a crate::conv::ParamsConv2D);
 
-impl<'a> Map2 for Conv2D<'a> {
+impl Map2 for Conv2D<'_> {
     const OP: &'static str = "conv2d";
     fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
         let p = self.0;
@@ -1116,7 +1176,7 @@ impl<'a> Map2 for Conv2D<'a> {
 
 struct ConvTranspose2D<'a>(&'a crate::conv::ParamsConvTranspose2D);
 
-impl<'a> Map2 for ConvTranspose2D<'a> {
+impl Map2 for ConvTranspose2D<'_> {
     const OP: &'static str = "conv_transpose2d";
     fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
         let p = self.0;
@@ -1287,6 +1347,15 @@ impl Map2 for MatMul {
             Parallelism::Rayon(num_threads)
         } else {
             Parallelism::None
+        };
+        let (b, m, n, k) = if b_skip == 0 && a_skip == m * k {
+            // a_skip and c_skip should be updated but step is always 0 so
+            // it wouldn't matter.
+            (1, b * m, n, k)
+        } else if a_skip == 0 && b_skip == n * k {
+            (1, m, b * n, k)
+        } else {
+            (b, m, n, k)
         };
         for step in 0..b {
             let lhs_p = &lhs[step * a_skip..];
@@ -2371,19 +2440,36 @@ impl BackendStorage for CpuStorage {
         }
     }
 
-    fn scatter_add(
-        &self,
+    fn scatter_set(
+        &mut self,
         l: &Layout,
         ids: &Self,
         ids_l: &Layout,
         src: &Self,
         src_l: &Layout,
         dim: usize,
-    ) -> Result<Self> {
+    ) -> Result<()> {
         match ids {
-            Self::U8(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
-            Self::U32(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
-            Self::I64(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
+            Self::U8(ids) => Scatter::<_, Set>::new(ids, ids_l, dim).map(self, l, src, src_l),
+            Self::U32(ids) => Scatter::<_, Set>::new(ids, ids_l, dim).map(self, l, src, src_l),
+            Self::I64(ids) => Scatter::<_, Set>::new(ids, ids_l, dim).map(self, l, src, src_l),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "scatter").bt()),
+        }
+    }
+
+    fn scatter_add_set(
+        &mut self,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
+    ) -> Result<()> {
+        match ids {
+            Self::U8(ids) => Scatter::<_, Add>::new(ids, ids_l, dim).map(self, l, src, src_l),
+            Self::U32(ids) => Scatter::<_, Add>::new(ids, ids_l, dim).map(self, l, src, src_l),
+            Self::I64(ids) => Scatter::<_, Add>::new(ids, ids_l, dim).map(self, l, src, src_l),
             _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "scatter-add").bt()),
         }
     }
@@ -2444,6 +2530,48 @@ impl BackendStorage for CpuStorage {
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         Ok(self.clone())
     }
+
+    fn const_set(&mut self, s: crate::scalar::Scalar, l: &Layout) -> Result<()> {
+        use crate::scalar::Scalar;
+        fn set<T: crate::WithDType>(src: &mut [T], l: &Layout, s: T) {
+            match l.strided_blocks() {
+                crate::StridedBlocks::SingleBlock { start_offset, len } => {
+                    src[start_offset..start_offset + len].fill(s)
+                }
+                crate::StridedBlocks::MultipleBlocks {
+                    block_start_index,
+                    block_len: 1,
+                } => {
+                    for src_index in block_start_index {
+                        src[src_index] = s
+                    }
+                }
+                crate::StridedBlocks::MultipleBlocks {
+                    block_start_index,
+                    block_len,
+                } => {
+                    for src_index in block_start_index {
+                        src[src_index..src_index + block_len].fill(s)
+                    }
+                }
+            }
+        }
+        match (self, s) {
+            (Self::BF16(storage), Scalar::BF16(v)) => set(storage, l, v),
+            (Self::F16(storage), Scalar::F16(v)) => set(storage, l, v),
+            (Self::F32(storage), Scalar::F32(v)) => set(storage, l, v),
+            (Self::F64(storage), Scalar::F64(v)) => set(storage, l, v),
+            (Self::U8(storage), Scalar::U8(v)) => set(storage, l, v),
+            (Self::U32(storage), Scalar::U32(v)) => set(storage, l, v),
+            (Self::I64(storage), Scalar::I64(v)) => set(storage, l, v),
+            (st, s) => crate::bail!(
+                "const_set dtype mismatch, expected {:?} but got {:?}",
+                st.dtype(),
+                s
+            ),
+        }
+        Ok(())
+    }
 }
 
 impl BackendDevice for CpuDevice {
@@ -2481,15 +2609,15 @@ impl BackendDevice for CpuDevice {
         use rand::prelude::*;
 
         let elem_count = shape.elem_count();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         match dtype {
             DType::U8 | DType::U32 | DType::I64 => {
                 Err(Error::UnsupportedDTypeForOp(dtype, "rand_uniform").bt())
             }
             DType::BF16 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let uniform =
-                    rand::distributions::Uniform::new(bf16::from_f64(min), bf16::from_f64(max));
+                let uniform = rand::distr::Uniform::new(bf16::from_f64(min), bf16::from_f64(max))
+                    .map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(rng.sample::<bf16, _>(uniform))
                 }
@@ -2497,8 +2625,8 @@ impl BackendDevice for CpuDevice {
             }
             DType::F16 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let uniform =
-                    rand::distributions::Uniform::new(f16::from_f64(min), f16::from_f64(max));
+                let uniform = rand::distr::Uniform::new(f16::from_f64(min), f16::from_f64(max))
+                    .map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(rng.sample::<f16, _>(uniform))
                 }
@@ -2506,7 +2634,8 @@ impl BackendDevice for CpuDevice {
             }
             DType::F32 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let uniform = rand::distributions::Uniform::new(min as f32, max as f32);
+                let uniform =
+                    rand::distr::Uniform::new(min as f32, max as f32).map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(rng.sample::<f32, _>(uniform))
                 }
@@ -2514,7 +2643,7 @@ impl BackendDevice for CpuDevice {
             }
             DType::F64 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let uniform = rand::distributions::Uniform::new(min, max);
+                let uniform = rand::distr::Uniform::new(min, max).map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(rng.sample::<f64, _>(uniform))
                 }
@@ -2527,7 +2656,7 @@ impl BackendDevice for CpuDevice {
         use rand::prelude::*;
 
         let elem_count = shape.elem_count();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         match dtype {
             DType::U8 | DType::U32 | DType::I64 => {
                 Err(Error::UnsupportedDTypeForOp(dtype, "rand_normal").bt())
@@ -2613,20 +2742,6 @@ impl BackendDevice for CpuDevice {
                 v.set_len(elem_count);
                 CpuStorage::F64(v)
             }
-        };
-        Ok(storage)
-    }
-
-    fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<CpuStorage> {
-        let elem_count = shape.elem_count();
-        let storage = match dtype {
-            DType::U8 => CpuStorage::U8(vec![1u8; elem_count]),
-            DType::U32 => CpuStorage::U32(vec![1u32; elem_count]),
-            DType::I64 => CpuStorage::I64(vec![1i64; elem_count]),
-            DType::BF16 => CpuStorage::BF16(vec![bf16::ONE; elem_count]),
-            DType::F16 => CpuStorage::F16(vec![f16::ONE; elem_count]),
-            DType::F32 => CpuStorage::F32(vec![1f32; elem_count]),
-            DType::F64 => CpuStorage::F64(vec![1f64; elem_count]),
         };
         Ok(storage)
     }

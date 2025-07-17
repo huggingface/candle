@@ -1,9 +1,8 @@
 //! Activation Functions
 //!
 use candle::{Result, Tensor};
-use serde::Deserialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Activation {
     #[default]
@@ -72,6 +71,8 @@ impl candle::Module for PReLU {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let weight = if self.is_scalar {
             self.weight.reshape(())?
+        } else if xs.shape() == self.weight.shape() {
+            self.weight.clone()
         } else if xs.rank() >= 2 {
             let num_channels = xs.dim(1)?;
             let num_weights = self.weight.elem_count();
@@ -79,7 +80,7 @@ impl candle::Module for PReLU {
                 candle::bail!("error in prelu: unexpected number of channels for the input, got {num_channels}, weight dim is {num_weights}")
             }
             let mut s = vec![1; xs.rank()];
-            s[1] = self.weight.elem_count();
+            s[1] = num_weights;
             self.weight.reshape(s)?
         } else {
             self.weight.clone()

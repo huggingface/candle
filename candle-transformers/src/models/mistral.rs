@@ -1,3 +1,10 @@
+//! Mixtral Model, based on the Mistral architecture
+//!
+//! See Mistral and Mixtral at:
+//! - [Hugging Face](https://huggingface.co/docs/transformers/model_doc/mixtral)
+//! - [Github](https://github.com/mistralai/mistral-src)
+//!
+
 use crate::models::with_tracing::{linear_no_bias, Linear, RmsNorm};
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle::{DType, Device, Module, Result, Tensor, D};
@@ -255,7 +262,8 @@ impl Attention {
             .contiguous()?;
         let value_states = value_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
 
         let (query_states, key_states) =
             self.rotary_emb

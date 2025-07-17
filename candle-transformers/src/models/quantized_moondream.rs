@@ -1,3 +1,18 @@
+//! Implementation of a quantized Moondream vision language model.
+//!
+//! Moondream is a lightweight vision-language model for image understanding and generation.
+//! This module provides a quantized version for reduced memory usage and faster inference.
+//!
+//! Key features:
+//! - ViT-based vision encoder
+//! - Phi-2 text decoder model
+//! - Memory efficient 8-bit quantization
+//! - Optimized for efficient deployment
+//!
+//! References:
+//! - [Moondream Model](https://github.com/vikhyat/moondream)
+//!
+
 use crate::models::moondream::{Config, VisionConfig};
 use crate::models::quantized_mixformer::MixFormerSequentialForCausalLM as PhiModel;
 use crate::quantized_nn::{layer_norm, linear_b, Linear};
@@ -119,7 +134,7 @@ impl VisionTransformer {
         let blocks = (0..cfg.num_blocks)
             .map(|i| {
                 VitBlock::new(
-                    vb.pp(format!("blocks.{}", i)),
+                    vb.pp(format!("blocks.{i}")),
                     cfg.embed_dim,
                     cfg.num_heads,
                     cfg,

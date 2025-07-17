@@ -1,11 +1,11 @@
-//! FastViT inference implementation based on timm
+//! # FastViT inference implementation based on timm
 //!
-//! See "FastViT: A Fast Hybrid Vision Transformer using Structural Reparameterization"
-//! https://arxiv.org/pdf/2303.14189
+//! ## Description
+//! See ["FastViT: A Fast Hybrid Vision Transformer using Structural Reparameterization"](https://arxiv.org/pdf/2303.14189)
 //!
-//! https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/fastvit.py
+//! Implementation based on [timm model](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/fastvit.py)
 
-use candle::{DType, Result, Tensor, D};
+use candle::{Context, DType, Result, Tensor, D};
 use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, linear, linear_no_bias, ops::sigmoid, ops::softmax,
     BatchNorm, Conv2d, Conv2dConfig, Func, VarBuilder,
@@ -178,7 +178,7 @@ fn squeeze_and_excitation(
 // based on the _fuse_bn_tensor method in timm
 // see https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/byobnet.py#L602
 fn fuse_conv_bn(weights: &Tensor, bn: BatchNorm) -> Result<(Tensor, Tensor)> {
-    let (gamma, beta) = bn.weight_and_bias().unwrap();
+    let (gamma, beta) = bn.weight_and_bias().context("no weight-bias")?;
     let mu = bn.running_mean();
     let sigma = (bn.running_var() + bn.eps())?.sqrt();
     let gps = (gamma / sigma)?;

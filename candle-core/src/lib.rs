@@ -7,8 +7,8 @@
 //!
 //! let a = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((2, 3))?;
 //! let b = Tensor::arange(0f32, 12f32, &Device::Cpu)?.reshape((3, 4))?;
-//!
 //! let c = a.matmul(&b)?;
+//!
 //! # Ok(())}
 //! ```
 //!
@@ -94,7 +94,7 @@ pub use cpu_backend::{CpuStorage, CpuStorageRef};
 pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3, UgIOp1};
 pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
-pub use error::{Error, Result};
+pub use error::{Context, Error, Result};
 pub use indexer::{IndexOp, TensorIndexer};
 pub use layout::Layout;
 pub use shape::{Shape, D};
@@ -140,7 +140,7 @@ impl ToUsize2 for (usize, usize) {
     }
 }
 
-// A simple trait defining a module with forward method using a single argument.
+/// Defining a module with forward method using a single argument.
 pub trait Module {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
 }
@@ -160,8 +160,8 @@ impl<M: Module> Module for Option<&M> {
     }
 }
 
-// A trait defining a module with forward method using a single tensor argument and a flag to
-// separate the training and evaluation behaviors.
+/// A single forward method using a single single tensor argument and a flag to
+/// separate the training and evaluation behaviors.
 pub trait ModuleT {
     fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor>;
 }

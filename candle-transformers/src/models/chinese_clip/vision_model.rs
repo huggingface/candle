@@ -3,10 +3,10 @@
 //! Chinese contrastive Language-Image Pre-Training (CLIP) is an architecture trained on
 //! pairs of images with related texts.
 //!
-//! https://github.com/OFA-Sys/Chinese-CLIP
-//! https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py
+//! - 💻 [Chinese-CLIP](https://github.com/OFA-Sys/Chinese-CLIP)
+//! - 💻 [GH](https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py_
 
-use candle::{DType, IndexOp, Module, Result, Shape, Tensor, D};
+use candle::{Context, DType, IndexOp, Module, Result, Shape, Tensor, D};
 use candle_nn as nn;
 
 use super::{Activation, EncoderConfig};
@@ -49,7 +49,7 @@ impl Default for ChineseClipVisionConfig {
 }
 
 impl ChineseClipVisionConfig {
-    /// referer: https://huggingface.co/OFA-Sys/chinese-clip-vit-base-patch16/blob/main/config.json
+    /// [referer](https://huggingface.co/OFA-Sys/chinese-clip-vit-base-patch16/blob/main/config.json)
     pub fn clip_vit_base_patch16() -> Self {
         Self {
             hidden_size: 768,
@@ -363,7 +363,7 @@ impl ChineseClipVisionTransformer {
             .apply(&self.pre_layer_norm)?;
 
         let mut result = self.encoder.output_hidden_states(&hidden_states, None)?;
-        let encoder_outputs = result.last().unwrap();
+        let encoder_outputs = result.last().context("no last")?;
         let pooled_output = encoder_outputs.i((.., 0, ..))?;
         result.push(self.final_layer_norm.forward(&pooled_output)?.clone());
         Ok(result)

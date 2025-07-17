@@ -1,8 +1,68 @@
+//! GLM-4 inference implementation.
+//!
+//! An open bilingual language model with 130B parameters.
+//!
+//! Based on implementation from [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B)
+
 use crate::models::with_tracing::{linear_b as linear, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
+use serde::de::{self, Deserializer, Visitor};
+use serde::Deserialize;
+use std::fmt;
 
 #[derive(Debug, Clone)]
+pub enum EosTokenId {
+    Single(u32),
+    Multiple(Vec<u32>),
+}
+
+impl<'de> Deserialize<'de> for EosTokenId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct EosTokenIdVisitor;
+
+        impl<'de> Visitor<'de> for EosTokenIdVisitor {
+            type Value = EosTokenId;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("an integer or a list of integers")
+            }
+
+            fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if value <= u32::MAX as u64 {
+                    Ok(EosTokenId::Single(value as u32))
+                } else {
+                    Err(de::Error::custom("value too large for u32"))
+                }
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut values = Vec::new();
+                while let Some(value) = seq.next_element::<u32>()? {
+                    values.push(value);
+                }
+                Ok(EosTokenId::Multiple(values))
+            }
+        }
+
+        deserializer.deserialize_any(EosTokenIdVisitor)
+    }
+}
+
+fn default_one() -> usize {
+    1
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     pub num_layers: usize,
     pub padded_vocab_size: usize,
@@ -23,32 +83,9 @@ pub struct Config {
     pub apply_query_key_layer_scaling: bool,
     pub attention_softmax_in_fp32: bool,
     pub fp32_residual_connection: bool,
-}
-
-impl Config {
-    pub fn glm4() -> Self {
-        Self {
-            num_layers: 40,
-            padded_vocab_size: 151552,
-            hidden_size: 4096,
-            ffn_hidden_size: 13696,
-            kv_channels: 128,
-            num_attention_heads: 32,
-            seq_length: 8192,
-            layernorm_epsilon: 1e-5,
-            rmsnorm: true,
-            apply_residual_connection_post_layernorm: false,
-            post_layer_norm: true,
-            add_bias_linear: false,
-            add_qkv_bias: true,
-            bias_dropout_fusion: true,
-            multi_query_attention: true,
-            multi_query_group_num: 2,
-            apply_query_key_layer_scaling: true,
-            attention_softmax_in_fp32: true,
-            fp32_residual_connection: false,
-        }
-    }
+    #[serde(default = "default_one")]
+    pub rope_ratio: usize,
+    pub eos_token_id: Option<EosTokenId>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,9 +97,10 @@ impl RotaryEmbedding {
     fn new(cfg: &Config, dtype: DType, dev: &Device) -> Result<Self> {
         let rotary_dim = cfg.kv_channels;
         let n_elem = rotary_dim / 2;
+        let base = 10_000f64 * cfg.rope_ratio as f64;
         let inv_freq: Vec<_> = (0..n_elem)
             .step_by(2)
-            .map(|i| 1f32 / 10_000f64.powf(i as f64 / n_elem as f64) as f32)
+            .map(|i| 1f32 / base.powf(i as f64 / n_elem as f64) as f32)
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
