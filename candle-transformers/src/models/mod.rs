@@ -50,6 +50,7 @@ pub mod glm4_new;
 pub mod granite;
 pub mod helium;
 pub mod hiera;
+pub mod idefics3;
 pub mod jina_bert;
 pub mod llama;
 pub mod llama2_c;
