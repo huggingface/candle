@@ -2,7 +2,7 @@
 //!
 //! MobileOne inference implementation based on timm and candle-repvgg
 //!
-//! See ["MobileOne: An Improved One millisecond Mobile Backbone"](https://arxiv.org/abs/2206.04040)
+//! See ["MobileOne: An Improved One millisecond Mobile Backbone"](https://huggingface.co/papers/2206.04040)
 
 use candle::{DType, Result, Tensor, D};
 use candle_nn::{

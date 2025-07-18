@@ -1,6 +1,6 @@
 //! EnCodec neural audio codec based on the Encodec implementation.
 //!
-//! See ["High Fidelity Neural Audio Compression"](https://arxiv.org/abs/2210.13438)
+//! See ["High Fidelity Neural Audio Compression"](https://huggingface.co/papers/2210.13438)
 //!
 //! Based on implementation from [huggingface/transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/encodec/modeling_encodec.py)
 
