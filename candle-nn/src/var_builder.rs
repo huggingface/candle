@@ -279,6 +279,22 @@ impl SimpleBackend for VarMap {
         self.data().lock().unwrap().contains_key(name)
     }
 }
+impl SimpleBackend for crate::var_map::ConcurrentVarMap {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        h: crate::Init,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor> {
+        self.get(s, name, h, dtype, dev)
+    }
+
+    fn contains_tensor(&self, name: &str) -> bool {
+        self.contains_key(name)
+    }
+}
 
 #[allow(dead_code)]
 pub struct SafeTensorWithRouting<'a> {
@@ -466,6 +482,12 @@ impl SimpleBackend for candle::safetensors::SliceSafetensors<'_> {
 }
 
 impl<'a> VarBuilder<'a> {
+    /// Initializes a `VarBuilder` using a custom backend.
+    ///
+    /// It is preferred to use one of the more specific constructors. This
+    /// constructor is provided to allow downstream users to define their own
+    /// backends.
+
     /// Initializes a `VarBuilder` using a custom backend.
     ///
     /// It is preferred to use one of the more specific constructors. This
