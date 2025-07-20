@@ -37,8 +37,7 @@ pub struct VoxtralEncoderConfig {
     pub max_source_positions: usize,
     pub initializer_range: f64,
     pub attention_dropout: f64,
-    // Note: These are hardcoded to 0.0 for compatibility with Whisper modular architecture
-    // TODO: Remove after Whisper refactor
+    // These are set to 0.0 for compatibility with Whisper modular architecture
     pub dropout: f64,
     pub layerdrop: f64,
     pub activation_dropout: f64,
@@ -66,7 +65,7 @@ impl Default for VoxtralEncoderConfig {
             max_source_positions: 1500,
             initializer_range: 0.02,
             attention_dropout: 0.0,
-            // Hardcoded for Whisper compatibility
+            // Set for Whisper compatibility
             dropout: 0.0,
             layerdrop: 0.0,
             activation_dropout: 0.0,
@@ -86,7 +85,6 @@ impl VoxtralEncoderConfig {
 
 /// Custom cache for multimodal inputs
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct VoxtralCache {
     llama_cache: LlamaCache,
     audio_processed: bool,
@@ -112,22 +110,16 @@ impl VoxtralCache {
     }
 
     pub fn reset(&mut self) {
-        // Reset the cache by creating a new one
-        // We need to recreate the cache since there's no public reset method
-        // and device field is private
+        // Reset the audio cache state
         self.audio_processed = false;
         self.cached_audio_embeds = None;
         self.cached_audio_positions = None;
-        // Note: We can't reset the llama_cache without access to the device
-        // This would need to be handled at a higher level
-        self.audio_processed = false;
-        self.cached_audio_embeds = None;
-        self.cached_audio_positions = None;
+        // Note: LlamaCache reset needs to be handled at a higher level
+        // as it requires device access
     }
 }
 
 /// Generates sinusoidal position embeddings for audio sequences
-#[allow(dead_code)]
 fn sinusoids(num_positions: usize, embedding_dim: usize, device: &Device) -> Result<Tensor> {
     let half_dim = embedding_dim / 2;
     let emb = -(10000_f64.ln()) / (half_dim - 1) as f64;
@@ -175,51 +167,60 @@ fn replace_audio_tokens(
         return Ok(inputs_embeds.clone());
     }
 
-    let (batch_size, seq_len, _hidden_size) = inputs_embeds.dims3()?;
-
-    // Create mask for audio positions
-    let mut mask_data = vec![0f32; batch_size * seq_len];
-    for &(batch_idx, seq_idx) in audio_positions {
-        mask_data[batch_idx * seq_len + seq_idx] = 1.0;
-    }
-
-    let audio_mask = Tensor::new(mask_data.as_slice(), device)?
-        .reshape((batch_size, seq_len, 1))?
-        .to_dtype(inputs_embeds.dtype())?;
-
-    // Since Candle doesn't have scatter_add, we'll use a mask-based approach
-    // This assumes audio_embeds has been properly reshaped to match the number of audio tokens
+    let (batch_size, seq_len, hidden_size) = inputs_embeds.dims3()?;
     let num_audio_tokens = audio_positions.len();
-    let audio_embeds_reshaped = if audio_embeds.dim(0)? == num_audio_tokens {
-        // Create a tensor with zeros everywhere except at audio positions
-        let result = inputs_embeds.clone();
-
-        // For each audio position, we need to replace the embedding
-        // This is a workaround for the lack of scatter operations
-        for (idx, &(batch_idx, seq_idx)) in audio_positions.iter().enumerate() {
-            if idx < audio_embeds.dim(0)? {
-                // Get the audio embedding for this position
-                let _audio_embed = audio_embeds.i(idx)?;
-
-                // Create indices for the replacement
-                let _indices = Tensor::new(&[batch_idx as i64, seq_idx as i64], device)?;
-
-                // This is where we'd use scatter_add if it were available
-                // For now, we'll use masking approach
-            }
-        }
-        result
+    
+    // Verify audio embeddings match expected dimensions
+    let audio_embeds = if audio_embeds.dims2()? == (num_audio_tokens, hidden_size) {
+        audio_embeds.clone()
     } else {
-        // Fallback: use masking approach
-        let not_audio_mask = (1.0 - &audio_mask)?;
-        let text_embeds = inputs_embeds.broadcast_mul(&not_audio_mask)?;
-
-        // Reshape audio embeds to match sequence positions
-        // This assumes audio embeds are provided in the correct order
-        text_embeds
+        candle::bail!(
+            "Audio embeddings shape mismatch: expected ({}, {}), got {:?}",
+            num_audio_tokens,
+            hidden_size,
+            audio_embeds.shape()
+        );
     };
 
-    Ok(audio_embeds_reshaped)
+    // Create result tensor starting with text embeddings
+    let mut result = inputs_embeds.clone();
+    
+    // Replace audio tokens with audio embeddings
+    // Since we don't have scatter operations, we'll do this manually
+    for (idx, &(batch_idx, seq_idx)) in audio_positions.iter().enumerate() {
+        if batch_idx >= batch_size || seq_idx >= seq_len {
+            candle::bail!(
+                "Invalid audio position: ({}, {}) for tensor shape ({}, {}, {})",
+                batch_idx,
+                seq_idx,
+                batch_size,
+                seq_len,
+                hidden_size
+            );
+        }
+        
+        // Get the audio embedding for this position
+        let audio_embed = audio_embeds.i(idx)?;
+        
+        // Create a mask for this specific position
+        let mut position_mask = vec![0f32; batch_size * seq_len];
+        position_mask[batch_idx * seq_len + seq_idx] = 1.0;
+        let position_mask = Tensor::new(position_mask.as_slice(), device)?
+            .reshape((batch_size, seq_len, 1))?
+            .to_dtype(inputs_embeds.dtype())?;
+        
+        // Broadcast audio embedding to full tensor shape
+        let audio_embed_broadcast = audio_embed
+            .unsqueeze(0)?
+            .unsqueeze(0)?
+            .broadcast_as((batch_size, seq_len, hidden_size))?;
+        
+        // Update result: keep original where mask is 0, use audio where mask is 1
+        let inverse_mask = (1.0 - &position_mask)?;
+        result = (result.broadcast_mul(&inverse_mask)? + audio_embed_broadcast.broadcast_mul(&position_mask)?)?;
+    }
+
+    Ok(result)
 }
 
 /// Find positions of audio tokens in input sequences
@@ -412,11 +413,9 @@ pub struct VoxtralEncoder {
     embed_positions: Tensor,
     layers: Vec<VoxtralEncoderLayer>,
     layer_norm: LayerNorm,
-    #[allow(dead_code)]
     embed_scale: f64,
     dropout: Dropout,
     layerdrop: f64,
-    #[allow(dead_code)]
     max_source_positions: usize,
 }
 
@@ -523,20 +522,17 @@ impl VoxtralEncoder {
         &self,
         x: &Tensor,
         layer: &VoxtralEncoderLayer,
-        layer_idx: usize,
+        _layer_idx: usize,
         training: bool,
     ) -> Result<Tensor> {
         if training && self.layerdrop > 0.0 {
-            // Use a deterministic dropout pattern based on layer index
-            // This ensures reproducibility
-            let dropout_seed = layer_idx as u64;
-            let _keep_prob = 1.0 - self.layerdrop;
-
-            // Simple deterministic check - in production, use proper RNG
-            let keep = (dropout_seed as f64 / self.layers.len() as f64) > self.layerdrop;
+            // Apply stochastic depth with proper randomization
+            let mut rng = rand::thread_rng();
+            let keep_prob = 1.0 - self.layerdrop;
+            let keep: bool = rng.gen::<f64>() < keep_prob;
 
             if !keep {
-                // Skip layer entirely
+                // Skip layer entirely (identity mapping)
                 return Ok(x.clone());
             }
         }
@@ -656,7 +652,6 @@ pub struct VoxtralForConditionalGeneration {
     language_model: Llama,
     multi_modal_projector: VoxtralMultiModalProjector,
     audio_token_id: usize,
-    #[allow(dead_code)]
     audio_config: VoxtralEncoderConfig,
     text_config: LlamaConfig,
 }
@@ -676,6 +671,21 @@ impl VoxtralForConditionalGeneration {
             audio_config: cfg.audio_config.clone(),
             text_config: cfg.text_config.clone(),
         })
+    }
+    
+    /// Get the audio token ID used for this model
+    pub fn audio_token_id(&self) -> usize {
+        self.audio_token_id
+    }
+    
+    /// Get the text model configuration
+    pub fn text_config(&self) -> &LlamaConfig {
+        &self.text_config
+    }
+    
+    /// Get the audio encoder configuration  
+    pub fn audio_config(&self) -> &VoxtralEncoderConfig {
+        &self.audio_config
     }
 
     /// Process audio features through encoder and projector
@@ -755,12 +765,35 @@ impl VoxtralForConditionalGeneration {
         top_p: Option<f64>,
         device: &Device,
     ) -> Result<Vec<u32>> {
+        // Validate inputs
+        if max_new_tokens == 0 {
+            return Ok(input_ids.to_vec1::<u32>()?);
+        }
+        
+        if temperature < 0.0 {
+            candle::bail!("Temperature must be non-negative, got {}", temperature);
+        }
+        
+        if let Some(p) = top_p {
+            if !(0.0..=1.0).contains(&p) {
+                candle::bail!("top_p must be between 0 and 1, got {}", p);
+            }
+        }
+
         let mut cache = VoxtralCache::new(true, DType::F32, &self.text_config, device)?;
         let mut tokens = input_ids.to_vec1::<u32>()?;
+        let initial_len = tokens.len();
 
-        for _ in 0..max_new_tokens {
-            let input = Tensor::new(&tokens[tokens.len().saturating_sub(1)..], device)?;
-            let logits = if tokens.len() == input_ids.dim(0)? {
+        for idx in 0..max_new_tokens {
+            let start_pos = if idx == 0 { 0 } else { initial_len + idx - 1 };
+            let input = if idx == 0 {
+                input_ids.clone()
+            } else {
+                Tensor::new(&tokens[start_pos..], device)?
+                    .unsqueeze(0)?
+            };
+            
+            let logits = if idx == 0 {
                 // First pass - include audio features
                 self.forward(&input, input_features, &mut cache)?
             } else {
@@ -768,17 +801,31 @@ impl VoxtralForConditionalGeneration {
                 self.forward(&input, None, &mut cache)?
             };
 
-            let logits = logits.i((.., logits.dim(0)? - 1, ..))?;
+            let logits = logits.i((.., logits.dim(1)? - 1, ..))?;
             let next_token = if temperature > 0.0 {
                 // Sample with temperature
                 let prs = (logits / temperature)?;
                 let prs = candle_nn::ops::softmax_last_dim(&prs)?;
 
-                if let Some(top_p) = top_p {
+                if let Some(top_p_val) = top_p {
                     // Apply top-p sampling
-                    sample_top_p(&prs, top_p, device)?
+                    sample_top_p(&prs.squeeze(0)?, top_p_val, device)?
                 } else {
-                    prs.argmax(D::Minus1)?.to_scalar::<u32>()?
+                    // Sample from full distribution
+                    let probs_vec = prs.squeeze(0)?.to_vec1::<f32>()?;
+                    let mut rng = rand::thread_rng();
+                    let mut cumsum = 0.0;
+                    let rand_val: f32 = rng.gen();
+                    let mut sampled = 0u32;
+                    
+                    for (idx, &prob) in probs_vec.iter().enumerate() {
+                        cumsum += prob;
+                        if cumsum > rand_val {
+                            sampled = idx as u32;
+                            break;
+                        }
+                    }
+                    sampled
                 }
             } else {
                 // Greedy decoding
@@ -798,7 +845,6 @@ impl VoxtralForConditionalGeneration {
 }
 
 /// Sample from top-p probability distribution
-#[allow(deprecated)]
 fn sample_top_p(probs: &Tensor, top_p: f64, _device: &Device) -> Result<u32> {
     let (sorted_probs, sorted_indices) = probs.sort_last_dim(false)?;
     let cumsum = sorted_probs.cumsum(D::Minus1)?;
