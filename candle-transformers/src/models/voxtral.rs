@@ -157,7 +157,7 @@ fn safe_clamp(x: &Tensor) -> Result<Tensor> {
 }
 
 /// Replace audio tokens in embeddings with projected audio features
-fn replace_audio_tokens(
+pub fn replace_audio_tokens(
     inputs_embeds: &Tensor,
     audio_embeds: &Tensor,
     audio_positions: &[(usize, usize)],
@@ -224,7 +224,7 @@ fn replace_audio_tokens(
 }
 
 /// Find positions of audio tokens in input sequences
-fn find_audio_token_positions(
+pub fn find_audio_token_positions(
     input_ids: &Tensor,
     audio_token_id: usize,
 ) -> Result<Vec<(usize, usize)>> {
@@ -527,9 +527,9 @@ impl VoxtralEncoder {
     ) -> Result<Tensor> {
         if training && self.layerdrop > 0.0 {
             // Apply stochastic depth with proper randomization
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             let keep_prob = 1.0 - self.layerdrop;
-            let keep: bool = rng.gen::<f64>() < keep_prob;
+            let keep: bool = rng.random::<f64>() < keep_prob;
 
             if !keep {
                 // Skip layer entirely (identity mapping)
@@ -813,9 +813,9 @@ impl VoxtralForConditionalGeneration {
                 } else {
                     // Sample from full distribution
                     let probs_vec = prs.squeeze(0)?.to_vec1::<f32>()?;
-                    let mut rng = rand::thread_rng();
+                    let mut rng = rand::rng();
                     let mut cumsum = 0.0;
-                    let rand_val: f32 = rng.gen();
+                    let rand_val: f32 = rng.random();
                     let mut sampled = 0u32;
                     
                     for (idx, &prob) in probs_vec.iter().enumerate() {
@@ -859,7 +859,7 @@ fn sample_top_p(probs: &Tensor, top_p: f64, _device: &Device) -> Result<u32> {
     let probs_vec = filtered_probs.to_vec1::<f32>()?;
     let mut cumsum = 0.0;
     let mut rng = rand::thread_rng();
-    let rand_val: f32 = rng.gen();
+    let rand_val: f32 = rng.random();
     let mut sample_idx = 0;
 
     for (idx, &prob) in probs_vec.iter().enumerate() {

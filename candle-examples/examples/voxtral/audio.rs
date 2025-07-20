@@ -51,6 +51,8 @@ pub fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> Result<(Vec<f32>, u32)>
             AudioBufferRef::U32(buf) => conv(&mut pcm_data, buf),
             AudioBufferRef::U16(buf) => conv(&mut pcm_data, buf),
             AudioBufferRef::U8(buf) => conv(&mut pcm_data, buf),
+            AudioBufferRef::U24(buf) => conv(&mut pcm_data, buf),
+            AudioBufferRef::S24(buf) => conv(&mut pcm_data, buf),
         }
     }
 

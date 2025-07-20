@@ -1,8 +1,10 @@
 mod audio;
 
-use anyhow::Result;
-use candle::{DType, Device};
+use anyhow::{Error as E, Result};
+use candle::{DType, Device, Tensor};
+use candle_transformers::models::voxtral::{VoxtralForConditionalGeneration, VoxtralCache};
 use clap::Parser;
+use tokenizers::Tokenizer;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -29,7 +31,11 @@ struct Args {
 
     /// Maximum number of tokens to generate
     #[arg(long, default_value = "512")]
-    max_new_tokens: usize
+    max_new_tokens: usize,
+
+    /// Audio token ID for the model
+    #[arg(long, default_value = "128256")]
+    audio_token_id: usize,
 }
 
 
