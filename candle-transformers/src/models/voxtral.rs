@@ -12,10 +12,12 @@
 //! - Autoregressive text generation conditioned on audio
 //!
 
-use candle::{DType, Device, IndexOp, Module, Result, Tensor};
-use candle_nn::{embedding, layer_norm, linear, linear_no_bias, Conv1d, LayerNorm, Linear};
-use candle_transformers::llama::{Llama, LlamaConfig, LlamaForCausalLM};
-use std::sync::Arc;
+use crate::models::llama::{Cache as LlamaCache, Config as LlamaConfig, Llama};
+use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_nn::{
+    embedding, layer_norm, linear, linear_no_bias, Conv1d, Dropout, Embedding, LayerNorm, Linear,
+    VarBuilder,
+};
 
 #[derive(Debug, Clone)]
 pub struct VoxtralEncoderConfig {
@@ -33,12 +35,9 @@ pub struct VoxtralEncoderConfig {
     // According to transformers implementation,
     // Note: These are hardcoded to 0.0 for compatibility with Whisper modular architecture
     // TODO: Remove after Whisper refactor
-    #[serde(default)]
     pub dropout: f64,
-    #[serde(default)]
     pub layer_dropout: f64,
-    #[serde(default)]
-    activation_dropout: f64,
+    pub activation_dropout: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -70,3 +69,70 @@ impl Default for VoxtralEncoderConfig {
         }
     }
 }
+
+impl VoxtralEncoderConfig {
+    /// Dropout values are properly set sue to Whisper compatibility
+    pub fn with_whisper_compatibility(mut self) -> Self {
+        self.dropout = 0.0;
+        self.layer_dropout = 0.0;
+        self.activation_dropout = 0.0;
+        self
+    }
+}
+
+/// Custom cache for Voxtral
+pub struct VoxtralCache {
+    llama_cache: LlamaCache,
+    audio_processed: bool,
+    cached_audio_embeds: Option<Tensor>,
+    cached_audio_positions: Option<Vec<(usize, usize)>>,
+}
+
+impl VoxtralCache {
+    pub fn new(
+        use_kv_cache: bool,
+        dtype: Dtype,
+        config: &LlamaConfig,
+        device: &Device,
+    ) -> Result<Self> {
+        let llama_cache = LlamaCache::new(use_kv_cache, dtype, config, device)?;
+        Ok(Self {
+            llama_cache,
+            audio_processed: false,
+            cached_audio_embeds: None,
+            cached_audio_positions: None,
+        })
+    }
+
+    pub fn reset(&mut self) {
+        self.llama_cache.reset();
+        self.audio_processed = false;
+        self.cached_audio_embeds = None;
+        self.cached_audio_positions = None;
+    }
+}
+
+/// Generate sinusodial position emdbeddings for audio sequence
+fn sinusoids(num_positions: usize, embedding_dim: usize, device: &Device) -> Result<Tensor> {
+    let half_dim = embedding_dim / 2;
+    let mut emb = -(10000_f64.ln()) / (half_dim - 1) as f64;
+    emb = (0..half_dim)
+        .map(|i| (i as f64 * emb).exp())
+        .collect::<Vec<_>>();
+    emb = Tensor::new(emb.as_slice(), device)?;
+
+    let pos = Tensor::arange(0, num_positions as i64, (DType::I64, device))?
+        .to_dtype(DType::F64)?
+        .unsqueeze(1)?;
+
+    emb = emb.unsqueeze(0)?;
+    let phase = pos.broadcast_mul(&emb)?;
+
+    let sin = phase.sin()?;
+    let cos = phase.cos()?;
+
+    Tensor::cat(&[sin, cos], 1)
+}
+
+/// Safety clamp tensor values for different Dtypes
+fn safe_clamp(x: &Tensor) -> Result<Tensor> {}
