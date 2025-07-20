@@ -858,7 +858,7 @@ fn sample_top_p(probs: &Tensor, top_p: f64, _device: &Device) -> Result<u32> {
     // Since multinomial is not available, we'll use a simple sampling approach
     let probs_vec = filtered_probs.to_vec1::<f32>()?;
     let mut cumsum = 0.0;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let rand_val: f32 = rng.random();
     let mut sample_idx = 0;
 
