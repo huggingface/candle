@@ -205,6 +205,21 @@ trait MapDType {
             DType::F16 => self.f::<f16>(t),
             DType::F32 => self.f::<f32>(t),
             DType::F64 => self.f::<f64>(t),
+            DType::I16 => Err(PyErr::new::<PyTypeError, _>(
+                "i16 dtype is not supported in Python interface",
+            )),
+            DType::I32 => Err(PyErr::new::<PyTypeError, _>(
+                "i32 dtype is not supported in Python interface",
+            )),
+            DType::F8E4M3 => Err(PyErr::new::<PyTypeError, _>(
+                "f8e4m3 dtype is not supported in Python interface",
+            )),
+            DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+                Err(PyErr::new::<PyTypeError, _>(format!(
+                    "Dummy dtype {:?} is not supported",
+                    t.dtype()
+                )))
+            }
         }
     }
 }
@@ -518,9 +533,7 @@ impl PyTensor {
             // Check that the index is in range
             if actual_index < 0 || actual_index >= dims[current_dim] as isize {
                 return Err(PyValueError::new_err(format!(
-                    "index out of range for dimension '{i}' with indexer '{value}'",
-                    i = current_dim,
-                    value = index
+                    "index out of range for dimension '{current_dim}' with indexer '{index}'"
                 )));
             }
             Ok(actual_index as usize)
@@ -580,8 +593,7 @@ impl PyTensor {
                 Ok((Indexer::Expand, current_dim))
             } else {
                 Err(PyTypeError::new_err(format!(
-                    "unsupported indexer {}",
-                    py_indexer
+                    "unsupported indexer {py_indexer}"
                 )))
             }
         }
@@ -1423,8 +1435,7 @@ fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) 
             gguf_file::Value::Array(x)
         } else {
             return Err(PyErr::new::<PyValueError, _>(format!(
-                "unsupported type {:?}",
-                v
+                "unsupported type {v:?}"
             )));
         };
         Ok(v)

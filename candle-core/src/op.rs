@@ -2,6 +2,7 @@
 //!
 #![allow(clippy::redundant_closure_call)]
 use crate::Tensor;
+use float8::F8E4M3 as f8e4m3;
 use half::{bf16, f16};
 use num_traits::float::Float;
 
@@ -192,7 +193,10 @@ pub trait UnaryOpT {
     fn f64(v1: f64) -> f64;
     fn u8(v1: u8) -> u8;
     fn u32(v1: u32) -> u32;
+    fn i16(v1: i16) -> i16;
+    fn i32(v1: i32) -> i32;
     fn i64(v1: i64) -> i64;
+    fn f8e4m3(v1: f8e4m3) -> f8e4m3;
 
     // There is no very good way to represent optional function in traits so we go for an explicit
     // boolean flag to mark the function as existing.
@@ -216,7 +220,10 @@ pub trait BinaryOpT {
     fn f64(v1: f64, v2: f64) -> f64;
     fn u8(v1: u8, v2: u8) -> u8;
     fn u32(v1: u32, v2: u32) -> u32;
+    fn i16(v1: i16, v2: i16) -> i16;
+    fn i32(v1: i32, v2: i32) -> i32;
     fn i64(v1: i64, v2: i64) -> i64;
+    fn f8e4m3(v1: f8e4m3, v2: f8e4m3) -> f8e4m3;
 
     const BF16_VEC: bool = false;
     fn bf16_vec(_xs1: &[bf16], _xs2: &[bf16], _ys: &mut [bf16]) {}
@@ -291,7 +298,19 @@ macro_rules! bin_op {
                 $e(v1, v2)
             }
             #[inline(always)]
+            fn i16(v1: i16, v2: i16) -> i16 {
+                $e(v1, v2)
+            }
+            #[inline(always)]
+            fn i32(v1: i32, v2: i32) -> i32 {
+                $e(v1, v2)
+            }
+            #[inline(always)]
             fn i64(v1: i64, v2: i64) -> i64 {
+                $e(v1, v2)
+            }
+            #[inline(always)]
+            fn f8e4m3(v1: f8e4m3, v2: f8e4m3) -> f8e4m3 {
                 $e(v1, v2)
             }
 
@@ -379,8 +398,20 @@ macro_rules! unary_op {
                 todo!("no unary function for u32")
             }
             #[inline(always)]
+            fn i16(_: i16) -> i16 {
+                todo!("no unary function for i16")
+            }
+            #[inline(always)]
+            fn i32(_: i32) -> i32 {
+                todo!("no unary function for i32")
+            }
+            #[inline(always)]
             fn i64(_: i64) -> i64 {
                 todo!("no unary function for i64")
+            }
+            #[inline(always)]
+            fn f8e4m3($a: f8e4m3) -> f8e4m3 {
+                $e
             }
         }
     };
@@ -415,8 +446,20 @@ macro_rules! unary_op {
                 todo!("no unary function for u32")
             }
             #[inline(always)]
+            fn i16(_: i16) -> i16 {
+                todo!("no unary function for i16")
+            }
+            #[inline(always)]
+            fn i32(_: i32) -> i32 {
+                todo!("no unary function for i32")
+            }
+            #[inline(always)]
             fn i64(_: i64) -> i64 {
                 todo!("no unary function for i64")
+            }
+            #[inline(always)]
+            fn f8e4m3($a: f8e4m3) -> f8e4m3 {
+                $e
             }
 
             #[cfg(feature = "mkl")]
@@ -514,8 +557,27 @@ impl UnaryOpT for Gelu {
         0
     }
     #[inline(always)]
+    fn i16(_: i16) -> i16 {
+        0
+    }
+    #[inline(always)]
+    fn i32(_: i32) -> i32 {
+        0
+    }
+    #[inline(always)]
     fn i64(_: i64) -> i64 {
         0
+    }
+    #[inline(always)]
+    fn f8e4m3(v: f8e4m3) -> f8e4m3 {
+        f8e4m3::from_f32(0.5)
+            * v
+            * (f8e4m3::ONE
+                + f8e4m3::tanh(
+                    f8e4m3::from_f32(SQRT_TWO_OVER_PI_F32)
+                        * v
+                        * (f8e4m3::ONE + f8e4m3::from_f32(0.044715) * v * v),
+                ))
     }
     const KERNEL: &'static str = "ugelu";
 
@@ -587,8 +649,20 @@ impl UnaryOpT for Erf {
         0
     }
     #[inline(always)]
+    fn i16(_: i16) -> i16 {
+        0
+    }
+    #[inline(always)]
+    fn i32(_: i32) -> i32 {
+        0
+    }
+    #[inline(always)]
     fn i64(_: i64) -> i64 {
         0
+    }
+    #[inline(always)]
+    fn f8e4m3(v: f8e4m3) -> f8e4m3 {
+        f8e4m3::from_f64(Self::f64(v.to_f64()))
     }
 }
 
@@ -621,8 +695,20 @@ impl UnaryOpT for Silu {
         0
     }
     #[inline(always)]
+    fn i16(_: i16) -> i16 {
+        0
+    }
+    #[inline(always)]
+    fn i32(_: i32) -> i32 {
+        0
+    }
+    #[inline(always)]
     fn i64(_: i64) -> i64 {
         0
+    }
+    #[inline(always)]
+    fn f8e4m3(v: f8e4m3) -> f8e4m3 {
+        v / (f8e4m3::ONE + (-v).exp())
     }
     const KERNEL: &'static str = "usilu";
 
@@ -692,7 +778,19 @@ impl UnaryOpT for Abs {
         v
     }
     #[inline(always)]
+    fn i16(v: i16) -> i16 {
+        v.abs()
+    }
+    #[inline(always)]
+    fn i32(v: i32) -> i32 {
+        v.abs()
+    }
+    #[inline(always)]
     fn i64(v: i64) -> i64 {
+        v.abs()
+    }
+    #[inline(always)]
+    fn f8e4m3(v: f8e4m3) -> f8e4m3 {
         v.abs()
     }
 }
@@ -726,8 +824,20 @@ impl UnaryOpT for Ceil {
         v
     }
     #[inline(always)]
+    fn i16(v: i16) -> i16 {
+        v
+    }
+    #[inline(always)]
+    fn i32(v: i32) -> i32 {
+        v
+    }
+    #[inline(always)]
     fn i64(v: i64) -> i64 {
         v
+    }
+    #[inline(always)]
+    fn f8e4m3(v: f8e4m3) -> f8e4m3 {
+        v.ceil()
     }
 }
 
@@ -760,8 +870,20 @@ impl UnaryOpT for Floor {
         v
     }
     #[inline(always)]
+    fn i16(v: i16) -> i16 {
+        v
+    }
+    #[inline(always)]
+    fn i32(v: i32) -> i32 {
+        v
+    }
+    #[inline(always)]
     fn i64(v: i64) -> i64 {
         v
+    }
+    #[inline(always)]
+    fn f8e4m3(v: f8e4m3) -> f8e4m3 {
+        v.floor()
     }
 }
 
@@ -794,8 +916,20 @@ impl UnaryOpT for Round {
         v
     }
     #[inline(always)]
+    fn i16(v: i16) -> i16 {
+        v
+    }
+    #[inline(always)]
+    fn i32(v: i32) -> i32 {
+        v
+    }
+    #[inline(always)]
     fn i64(v: i64) -> i64 {
         v
+    }
+    #[inline(always)]
+    fn f8e4m3(v: f8e4m3) -> f8e4m3 {
+        v.round()
     }
 }
 
@@ -828,8 +962,20 @@ impl UnaryOpT for GeluErf {
         0
     }
     #[inline(always)]
+    fn i16(_: i16) -> i16 {
+        0
+    }
+    #[inline(always)]
+    fn i32(_: i32) -> i32 {
+        0
+    }
+    #[inline(always)]
     fn i64(_: i64) -> i64 {
         0
+    }
+    #[inline(always)]
+    fn f8e4m3(v: f8e4m3) -> f8e4m3 {
+        f8e4m3::from_f64(Self::f64(v.to_f64()))
     }
 }
 
@@ -862,8 +1008,20 @@ impl UnaryOpT for Relu {
         v
     }
     #[inline(always)]
+    fn i16(v: i16) -> i16 {
+        v.max(0)
+    }
+    #[inline(always)]
+    fn i32(v: i32) -> i32 {
+        v.max(0)
+    }
+    #[inline(always)]
     fn i64(v: i64) -> i64 {
-        v
+        v.max(0)
+    }
+    #[inline(always)]
+    fn f8e4m3(v: f8e4m3) -> f8e4m3 {
+        v.max(f8e4m3::ZERO)
     }
 }
 
@@ -960,7 +1118,25 @@ impl UnaryOpT for Sign {
         u32::min(1, v)
     }
     #[inline(always)]
+    fn i16(v: i16) -> i16 {
+        (v > 0) as i16 - (v < 0) as i16
+    }
+    #[inline(always)]
+    fn i32(v: i32) -> i32 {
+        (v > 0) as i32 - (v < 0) as i32
+    }
+    #[inline(always)]
     fn i64(v: i64) -> i64 {
         (v > 0) as i64 - (v < 0) as i64
+    }
+    #[inline(always)]
+    fn f8e4m3(v: f8e4m3) -> f8e4m3 {
+        if v > f8e4m3::ZERO {
+            f8e4m3::ONE
+        } else if v < f8e4m3::ZERO {
+            -f8e4m3::ONE
+        } else {
+            f8e4m3::ZERO
+        }
     }
 }

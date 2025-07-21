@@ -13,6 +13,7 @@ members = [
 exclude = [
    "candle-book",
    "candle-flash-attn",
+   "candle-flash-attn-v3",
    "candle-kernels",
    "candle-metal-kernels",
    "candle-onnx",
@@ -36,6 +37,7 @@ byteorder = "1.4.3"
 candle = { path = "./candle-core", package = "candle-core", version = "0.9.1" }
 candle-datasets = { path = "./candle-datasets", version = "0.9.1" }
 candle-flash-attn = { path = "./candle-flash-attn", version = "0.9.1" }
+candle-flash-attn-v3 = { path = "./candle-flash-attn-v3", version = "0.9.1" }
 candle-kernels = { path = "./candle-kernels", version = "0.9.1" }
 candle-metal-kernels = { path = "./candle-metal-kernels", version = "0.9.1" }
 candle-nn = { path = "./candle-nn", version = "0.9.1" }
@@ -43,11 +45,12 @@ candle-onnx = { path = "./candle-onnx", version = "0.9.1" }
 candle-transformers = { path = "./candle-transformers", version = "0.9.1" }
 clap = { version = "4.2.4", features = ["derive"] }
 criterion = { version = "0.5.1", default-features=false }
-cudarc = { version = "0.16.3", features = ["std", "cublas", "cublaslt", "curand", "driver", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-linking"], default-features=false }
+cudarc = { version = "0.16.6", features = ["std", "cublas", "cublaslt", "curand", "driver", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-linking"], default-features=false }
 fancy-regex = "0.13.0"
 gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
 hf-hub = "0.4.1"
 half = { version = "2.5.0", features = ["num-traits", "use-intrinsics", "rand_distr"] }
+float8 = { version = "0.3.0", features = ["num-traits"] }
 hound = "3.5.1"
 image = { version = "0.25.2", default-features = false, features = ["jpeg", "png"] }
 imageproc = { version = "0.24.0", default-features = false }
@@ -61,7 +64,7 @@ parquet = { version = "51.0.0" }
 rand = "0.9.0"
 rand_distr = "0.5.1"
 rayon = "1.7.0"
-safetensors = "0.4.1"
+safetensors = "0.6.0"
 serde = { version = "1.0.171", features = ["derive"] }
 serde_plain = "1.0.2"
 serde_json = "1.0.99"

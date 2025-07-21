@@ -13,10 +13,10 @@ impl Tensor {
         let device_str = match self.device().location() {
             crate::DeviceLocation::Cpu => "".to_owned(),
             crate::DeviceLocation::Cuda { gpu_id } => {
-                format!(", cuda:{}", gpu_id)
+                format!(", cuda:{gpu_id}")
             }
             crate::DeviceLocation::Metal { gpu_id } => {
-                format!(", metal:{}", gpu_id)
+                format!(", metal:{gpu_id}")
             }
         };
 
@@ -56,11 +56,22 @@ impl std::fmt::Debug for Tensor {
         match self.dtype() {
             DType::U8 => self.fmt_dt::<u8>(f),
             DType::U32 => self.fmt_dt::<u32>(f),
+            DType::I16 => self.fmt_dt::<i16>(f),
+            DType::I32 => self.fmt_dt::<i32>(f),
             DType::I64 => self.fmt_dt::<i64>(f),
             DType::BF16 => self.fmt_dt::<bf16>(f),
             DType::F16 => self.fmt_dt::<f16>(f),
             DType::F32 => self.fmt_dt::<f32>(f),
             DType::F64 => self.fmt_dt::<f64>(f),
+            DType::F8E4M3 => self.fmt_dt::<float8::F8E4M3>(f),
+            DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+                write!(
+                    f,
+                    "Tensor[{:?}; dtype={}, unsupported dummy type]",
+                    self.shape(),
+                    self.dtype().as_str()
+                )
+            }
         }
     }
 }
@@ -464,6 +475,18 @@ impl std::fmt::Display for Tensor {
                 tf.fmt_tensor(self, 1, max_w, summarize, &po, f)?;
                 writeln!(f)?;
             }
+            DType::I16 => {
+                let tf: IntFormatter<i16> = IntFormatter::new();
+                let max_w = tf.max_width(&to_display);
+                tf.fmt_tensor(self, 1, max_w, summarize, &po, f)?;
+                writeln!(f)?;
+            }
+            DType::I32 => {
+                let tf: IntFormatter<i32> = IntFormatter::new();
+                let max_w = tf.max_width(&to_display);
+                tf.fmt_tensor(self, 1, max_w, summarize, &po, f)?;
+                writeln!(f)?;
+            }
             DType::I64 => {
                 let tf: IntFormatter<i64> = IntFormatter::new();
                 let max_w = tf.max_width(&to_display);
@@ -498,15 +521,29 @@ impl std::fmt::Display for Tensor {
                     writeln!(f)?;
                 }
             }
+            DType::F8E4M3 => {
+                if let Ok(tf) = FloatFormatter::<float8::F8E4M3>::new(&to_display, &po) {
+                    let max_w = tf.max_width(&to_display);
+                    tf.fmt_tensor(self, 1, max_w, summarize, &po, f)?;
+                    writeln!(f)?;
+                }
+            }
+            DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+                writeln!(
+                    f,
+                    "Dummy type {} (not supported for display)",
+                    self.dtype().as_str()
+                )?;
+            }
         };
 
         let device_str = match self.device().location() {
             crate::DeviceLocation::Cpu => "".to_owned(),
             crate::DeviceLocation::Cuda { gpu_id } => {
-                format!(", cuda:{}", gpu_id)
+                format!(", cuda:{gpu_id}")
             }
             crate::DeviceLocation::Metal { gpu_id } => {
-                format!(", metal:{}", gpu_id)
+                format!(", metal:{gpu_id}")
             }
         };
 

@@ -3,7 +3,7 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
+use crate::{CpuStorage, CpuStorageRef, DType, Error, Layout, Result, Shape};
 use candle_metal_kernels::{BufferOffset, CallConvTranspose2dCfg, Kernels};
 use metal::{Buffer, MTLResourceOptions, NSUInteger};
 use std::collections::HashMap;
@@ -98,11 +98,17 @@ impl BackendStorage for MetalStorage {
         match self.dtype {
             DType::U8 => Ok(CpuStorage::U8(self.to_cpu()?)),
             DType::U32 => Ok(CpuStorage::U32(self.to_cpu()?)),
+            DType::I16 => Ok(CpuStorage::I16(self.to_cpu()?)),
+            DType::I32 => Ok(CpuStorage::I32(self.to_cpu()?)),
             DType::I64 => Ok(CpuStorage::I64(self.to_cpu()?)),
             DType::F16 => Ok(CpuStorage::F16(self.to_cpu()?)),
             DType::BF16 => Ok(CpuStorage::BF16(self.to_cpu()?)),
             DType::F32 => Ok(CpuStorage::F32(self.to_cpu()?)),
             DType::F64 => Ok(CpuStorage::F64(self.to_cpu()?)),
+            DType::F8E4M3 => Ok(CpuStorage::F8E4M3(self.to_cpu()?)),
+            DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+                Err(crate::Error::UnsupportedDTypeForOp(self.dtype, "to_cpu_storage").bt())
+            }
         }
     }
 
@@ -457,6 +463,12 @@ impl BackendStorage for MetalStorage {
                         DType::U32 => contiguous::const_set::U32,
                         DType::U8 => contiguous::const_set::U8,
                         DType::F64 => crate::bail!("unsupported const-set f64"),
+                        DType::F8E4M3 => crate::bail!("unsupported const-set f8e4m3"),
+                        DType::I16 => crate::bail!("unsupported const-set i16"),
+                        DType::I32 => crate::bail!("unsupported const-set i32"),
+                        DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+                            crate::bail!("unsupported const-set for dummy type {:?}", dtype)
+                        }
                     };
                     candle_metal_kernels::call_const_set_contiguous(
                         &device.device,
@@ -479,6 +491,12 @@ impl BackendStorage for MetalStorage {
                         DType::U32 => strided::const_set::U32,
                         DType::U8 => strided::const_set::U8,
                         DType::F64 => crate::bail!("unsupported const-set f64"),
+                        DType::F8E4M3 => crate::bail!("unsupported const-set f8e4m3"),
+                        DType::I16 => crate::bail!("unsupported const-set i16"),
+                        DType::I32 => crate::bail!("unsupported const-set i32"),
+                        DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+                            crate::bail!("unsupported const-set for dummy type {:?}", dtype)
+                        }
                     };
                     candle_metal_kernels::call_const_set_strided(
                         &device.device,
@@ -503,6 +521,7 @@ impl BackendStorage for MetalStorage {
             (DType::BF16, Scalar::BF16(s)) => set(self, s, l),
             (DType::F32, Scalar::F32(s)) => set(self, s, l),
             (DType::F64, Scalar::F64(s)) => set(self, s, l),
+            (DType::F8E4M3, _) => crate::bail!("Metal const_set does not support f8e4m3"),
             _ => crate::bail!("dtype mismatch, expected {:?}, got {:?}", self.dtype, s),
         }
     }
@@ -2055,6 +2074,7 @@ impl BackendDevice for MetalDevice {
             buffers: Arc::new(RwLock::new(HashMap::new())),
             kernels,
             seed,
+            seed_value: Arc::new(RwLock::new(299792458)),
         })
     }
 
@@ -2093,11 +2113,20 @@ impl BackendDevice for MetalDevice {
         let (count, buffer) = match T::cpu_storage_ref(s) {
             CpuStorageRef::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::I16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::I32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::BF16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::F8E4M3(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::F6E2M3(_)
+            | CpuStorageRef::F6E3M2(_)
+            | CpuStorageRef::F4(_)
+            | CpuStorageRef::F8E8M0(_) => {
+                return Err(Error::UnsupportedDTypeForOp(T::DTYPE, "to_dtype").bt())
+            }
         };
         Ok(Self::Storage::new(buffer?, self.clone(), count, T::DTYPE))
     }
@@ -2106,11 +2135,20 @@ impl BackendDevice for MetalDevice {
         let (count, buffer) = match storage {
             CpuStorage::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::I16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::I32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::BF16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F8E4M3(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F6E2M3(_)
+            | CpuStorage::F6E3M2(_)
+            | CpuStorage::F4(_)
+            | CpuStorage::F8E8M0(_) => {
+                return Err(Error::UnsupportedDTypeForOp(storage.dtype(), "to_dtype").bt())
+            }
         };
         Ok(Self::Storage::new(
             buffer?,
@@ -2197,6 +2235,8 @@ impl BackendDevice for MetalDevice {
     }
 
     fn set_seed(&self, seed: u64) -> Result<()> {
+        *self.seed_value.write().unwrap() = seed;
+
         let seed: u32 = seed.try_into().map_err(|_| {
             MetalError::Message("Metal seed must be less than or equal to u32::MAX".to_string())
         })?;
@@ -2209,6 +2249,10 @@ impl BackendDevice for MetalDevice {
         seed_buffer.did_modify_range(metal::NSRange::new(0, 4));
 
         Ok(())
+    }
+
+    fn get_current_seed(&self) -> Result<u64> {
+        Ok(*self.seed_value.read().unwrap())
     }
 
     fn synchronize(&self) -> Result<()> {

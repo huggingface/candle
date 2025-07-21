@@ -139,3 +139,58 @@ CAST_OP(double, uint32_t, cast_f64_u32)
 CAST_OP(double, int64_t,  cast_f64_i64 )
 CAST_OP(double, float,    cast_f64_f32)
 CAST_OP(double, double,   cast_f64_f64)
+
+// I32 casts
+CAST_OP(int32_t, uint8_t,  cast_i32_u8 )
+CAST_OP(int32_t, uint32_t, cast_i32_u32)
+CAST_OP(int32_t, int32_t,  cast_i32_i32)
+CAST_OP(int32_t, int64_t,  cast_i32_i64)
+CAST_OP(int32_t, float,    cast_i32_f32)
+CAST_OP(int32_t, double,   cast_i32_f64)
+#if __CUDA_ARCH__ >= 530
+CAST_OP(int32_t, __half,   cast_i32_f16)
+#endif
+#if __CUDA_ARCH__ >= 800
+CAST_OP(int32_t, __nv_bfloat16, cast_i32_bf16)
+#endif
+
+CAST_OP(uint8_t,  int32_t, cast_u8_i32 )
+CAST_OP(uint32_t, int32_t, cast_u32_i32)
+CAST_OP(int64_t,  int32_t, cast_i64_i32)
+CAST_OP(float,    int32_t, cast_f32_i32)
+CAST_OP(double,   int32_t, cast_f64_i32)
+#if __CUDA_ARCH__ >= 530
+CAST_OP(__half,   int32_t, cast_f16_i32)
+#endif
+#if __CUDA_ARCH__ >= 800
+CAST_THROUGH_OP(__nv_bfloat16, int32_t, float, cast_bf16_i32)
+#endif
+
+// I16 casts
+CAST_OP(int16_t, uint8_t,  cast_i16_u8 )
+CAST_OP(int16_t, uint32_t, cast_i16_u32)
+CAST_OP(int16_t, int16_t,  cast_i16_i16)
+CAST_OP(int16_t, int32_t,  cast_i16_i32)
+CAST_OP(int16_t, int64_t,  cast_i16_i64)
+CAST_OP(int16_t, float,    cast_i16_f32)
+CAST_OP(int16_t, double,   cast_i16_f64)
+#if __CUDA_ARCH__ >= 530
+CAST_OP(int16_t, __half,   cast_i16_f16)
+#endif
+#if __CUDA_ARCH__ >= 800
+CAST_OP(int16_t, __nv_bfloat16, cast_i16_bf16)
+#endif
+
+CAST_OP(uint8_t,  int16_t, cast_u8_i16 )
+CAST_OP(uint32_t, int16_t, cast_u32_i16)
+CAST_OP(int32_t,  int16_t, cast_i32_i16)
+CAST_OP(int64_t,  int16_t, cast_i64_i16)
+CAST_OP(float,    int16_t, cast_f32_i16)
+CAST_OP(double,   int16_t, cast_f64_i16)
+#if __CUDA_ARCH__ >= 530
+CAST_OP(__half,   int16_t, cast_f16_i16)
+#endif
+#if __CUDA_ARCH__ >= 800
+CAST_THROUGH_OP(__nv_bfloat16, int16_t, float, cast_bf16_i16)
+#endif
+

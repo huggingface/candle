@@ -378,12 +378,7 @@ fn compare_with_error(values: &[f32], expected: &[f32], tolerance: f32) {
 
         assert!(
             difference < tolerance,
-            "Error at index {}: value = {}, expected = {}. Difference = {} exceeds tolerance = {}.",
-            i,
-            value,
-            expected_value,
-            difference,
-            tolerance
+            "Error at index {i}: value = {value}, expected = {expected_value}. Difference = {difference} exceeds tolerance = {tolerance}."
         );
     }
 }

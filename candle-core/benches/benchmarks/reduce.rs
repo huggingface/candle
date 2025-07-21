@@ -44,12 +44,12 @@ fn run_reduce<T: candle_core::FloatDType>(
     let k = 1024;
 
     let a = if strided {
-        Tensor::rand(lo, up, (b, m, k), &device)
+        Tensor::rand(lo, up, (b, m, k), device)
             .unwrap()
             .transpose(0, 2)
             .unwrap()
     } else {
-        Tensor::rand(lo, up, (b, m, k), &device).unwrap()
+        Tensor::rand(lo, up, (b, m, k), device).unwrap()
     };
 
     let flops = b * m * k * T::DTYPE.size_in_bytes();
@@ -105,12 +105,12 @@ fn run_arg_reduce<T: candle_core::FloatDType>(
     let k = 1024;
 
     let a = if strided {
-        Tensor::rand(lo, up, (b, m, k), &device)
+        Tensor::rand(lo, up, (b, m, k), device)
             .unwrap()
             .transpose(0, 2)
             .unwrap()
     } else {
-        Tensor::rand(lo, up, (b, m, k), &device).unwrap()
+        Tensor::rand(lo, up, (b, m, k), device).unwrap()
     };
 
     let flops = b * m * k * T::DTYPE.size_in_bytes();

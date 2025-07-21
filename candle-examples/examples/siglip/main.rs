@@ -146,7 +146,7 @@ pub fn main() -> anyhow::Result<()> {
     let (_logits_per_text, logits_per_image) = model.forward(&images, &input_ids)?;
     let softmax_image = softmax(&logits_per_image, 1)?;
     let softmax_image_vec = softmax_image.flatten_all()?.to_vec1::<f32>()?;
-    println!("softmax_image_vec: {:?}", softmax_image_vec);
+    println!("softmax_image_vec: {softmax_image_vec:?}");
     let probability_vec = softmax_image_vec
         .iter()
         .map(|v| v * 100.0)
@@ -156,7 +156,7 @@ pub fn main() -> anyhow::Result<()> {
         let start = i * probability_per_image;
         let end = start + probability_per_image;
         let prob = &probability_vec[start..end];
-        println!("\n\nResults for image: {}\n", img);
+        println!("\n\nResults for image: {img}\n");
         for (i, p) in prob.iter().enumerate() {
             println!("Probability: {:.4}% Text: {} ", p, vec_seq[i]);
         }

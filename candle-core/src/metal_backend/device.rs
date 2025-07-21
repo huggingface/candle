@@ -58,14 +58,21 @@ impl Commands {
         })
     }
 
+    pub fn flush_command_buffer(&mut self) -> Result<()> {
+        self.command_buffer.commit();
+        let command_buffer = self.command_queue.new_command_buffer().to_owned();
+        self.command_buffer = command_buffer.clone();
+        self.command_buffer_index = 0;
+
+        Ok(())
+    }
+
     pub fn command_buffer(&mut self) -> Result<(bool, CommandBuffer)> {
         let mut command_buffer = self.command_buffer.to_owned();
         let mut flushed = false;
         if self.command_buffer_index > self.compute_per_buffer {
-            self.command_buffer.commit();
-            command_buffer = self.command_queue.new_command_buffer().to_owned();
-            self.command_buffer = command_buffer.clone();
-            self.command_buffer_index = 0;
+            self.flush_command_buffer()?;
+            command_buffer = self.command_buffer.to_owned();
             flushed = true;
         }
         self.command_buffer_index += 1;
@@ -120,6 +127,8 @@ pub struct MetalDevice {
     pub(crate) kernels: Arc<Kernels>,
     /// Seed for random number generation.
     pub(crate) seed: Arc<Mutex<Buffer>>,
+    /// Value of the current seed
+    pub(crate) seed_value: Arc<RwLock<u64>>,
 }
 
 impl std::fmt::Debug for MetalDevice {
@@ -181,6 +190,13 @@ impl MetalDevice {
         Ok(())
     }
 
+    pub fn flush_command_buffer(&self) -> Result<()> {
+        let mut commands = self.commands.write().map_err(MetalError::from)?;
+        commands.flush_command_buffer()?;
+
+        Ok(())
+    }
+
     pub fn command_buffer(&self) -> Result<CommandBuffer> {
         let mut commands = self.commands.write().map_err(MetalError::from)?;
         let (flushed, command_buffer) = commands.command_buffer()?;
@@ -188,6 +204,11 @@ impl MetalDevice {
             self.drop_unused_buffers()?
         }
         Ok(command_buffer)
+    }
+
+    pub fn new_command_buffer(&self) -> Result<CommandBuffer> {
+        let commands = self.commands.write().map_err(MetalError::from)?;
+        Ok(commands.command_queue.new_command_buffer().to_owned())
     }
 
     pub fn wait_until_completed(&self) -> Result<()> {
@@ -216,6 +237,16 @@ impl MetalDevice {
     ) -> Result<Arc<Buffer>> {
         let size = (element_count * dtype.size_in_bytes()) as NSUInteger;
         self.allocate_buffer(size, MTLResourceOptions::StorageModePrivate, name)
+    }
+
+    pub fn new_buffer_private(
+        &self,
+        element_count: usize,
+        dtype: DType,
+        name: &str,
+    ) -> Result<Arc<Buffer>> {
+        let size = (element_count * dtype.size_in_bytes()) as NSUInteger;
+        self.allocate_buffer(size, metal::MTLResourceOptions::StorageModePrivate, name)
     }
 
     /// Creates a new buffer (not necessarily zeroed).

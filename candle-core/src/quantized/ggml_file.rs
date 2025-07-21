@@ -134,7 +134,7 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
     super::QTensor::new(data, dims)
 }
 
-/// Creates a Tensor from a raw GGML tensor.
+/// Creates a [Tensor] from a raw GGML tensor.
 pub fn qtensor_from_ggml(
     ggml_dtype: GgmlDType,
     raw_data: &[u8],
@@ -153,6 +153,7 @@ pub fn qtensor_from_ggml(
     match ggml_dtype {
         GgmlDType::F32 => from_raw_data::<f32>(raw_data, size_in_bytes, dims, device),
         GgmlDType::F16 => from_raw_data::<half::f16>(raw_data, size_in_bytes, dims, device),
+        GgmlDType::BF16 => from_raw_data::<half::bf16>(raw_data, size_in_bytes, dims, device),
         GgmlDType::Q4_0 => {
             from_raw_data::<k_quants::BlockQ4_0>(raw_data, size_in_bytes, dims, device)
         }

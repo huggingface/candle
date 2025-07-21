@@ -8,6 +8,8 @@ pub(crate) mod reduce;
 pub(crate) mod unary;
 pub(crate) mod where_cond;
 
+#[cfg(feature = "cuda")]
+use candle_core::backend::BackendDevice;
 use candle_core::{Device, Result};
 
 pub(crate) trait BenchDevice {
@@ -26,13 +28,13 @@ impl BenchDevice for Device {
                     .synchronize()
                     .map_err(|e| candle_core::Error::Cuda(Box::new(e)))?);
                 #[cfg(not(feature = "cuda"))]
-                panic!("Cuda device without cuda feature enabled: {:?}", device)
+                panic!("Cuda device without cuda feature enabled: {device:?}")
             }
             Device::Metal(device) => {
                 #[cfg(feature = "metal")]
                 return Ok(device.wait_until_completed()?);
                 #[cfg(not(feature = "metal"))]
-                panic!("Metal device without metal feature enabled: {:?}", device)
+                panic!("Metal device without metal feature enabled: {device:?}")
             }
         }
     }
