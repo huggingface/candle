@@ -260,7 +260,9 @@ typedef struct _MLX_BFloat16 bfloat16_t;
 
 #define N_SIMDWIDTH 32 // assuming SIMD group size is 32
 
-typedef matrix<bfloat16_t, 4, 4> bfloat4x4;
+#if defined(__HAVE_BFLOAT__)
+typedef matrix<bfloat, 4, 4> bfloat4x4;
+#endif
 
 // QK = number of values after dequantization
 // QK_K = super-block size
@@ -6721,6 +6723,13 @@ void dequantize_f16(device const half4x4 * src, short il, thread type4x4 & reg) 
     }
 }
 
+#if defined(__HAVE_BFLOAT__)
+template <typename type4x4>
+void dequantize_bf16(device const bfloat4x4 * src, short il, thread type4x4 & reg) {
+    reg = (type4x4)(*src);
+}
+#endif
+
 template <typename type4x4>
 void dequantize_bf16(device const bfloat4x4 * src, short il, thread type4x4 & reg) {
     reg = (type4x4)(*src);
@@ -7595,7 +7604,9 @@ typedef decltype(kernel_get_rows_f<float>) get_rows_f_t;
 
 template [[host_name("kernel_get_rows_f32")]]  kernel get_rows_f_t kernel_get_rows_f<float>;
 template [[host_name("kernel_get_rows_f16")]]  kernel get_rows_f_t kernel_get_rows_f<half>;
-template [[host_name("kernel_get_rows_bf16")]] kernel get_rows_f_t kernel_get_rows_f<bfloat16_t>;
+#if defined(__HAVE_BFLOAT__)
+template [[host_name("kernel_get_rows_bf16")]] kernel get_rows_f_t kernel_get_rows_f<bfloat>;
+#endif
 
 typedef decltype(kernel_get_rows_q<block_q4_0, 2, dequantize_q4_0>) get_rows_q_t;
 
@@ -7627,7 +7638,9 @@ typedef decltype(kernel_mul_mm<half, half4x4, simdgroup_half8x8, float4x4, 1, de
 
 template [[host_name("kernel_mul_mm_f32_f32")]]     kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   float4x4,      1,     dequantize_f32>;
 template [[host_name("kernel_mul_mm_f16_f32")]]     kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half4x4,       1,     dequantize_f16>;
-template [[host_name("kernel_mul_mm_bf16_f32")]]    kernel mat_mm_t kernel_mul_mm<bfloat16_t, bfloat4x4, simdgroup_bfloat8x8, bfloat4x4,     1,     dequantize_bf16>;
+#if defined(__HAVE_BFLOAT__)
+template [[host_name("kernel_mul_mm_bf16_f32")]]    kernel mat_mm_t kernel_mul_mm<bfloat, bfloat4x4, simdgroup_bfloat8x8, bfloat4x4,     1,     dequantize_bf16>;
+#endif
 template [[host_name("kernel_mul_mm_q4_0_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0>;
 template [[host_name("kernel_mul_mm_q4_1_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q4_1,    2,     dequantize_q4_1>;
 template [[host_name("kernel_mul_mm_q5_0_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q5_0,    2,     dequantize_q5_0>;

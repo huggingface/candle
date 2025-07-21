@@ -1071,7 +1071,7 @@ impl BackendStorage for MetalStorage {
                 )?
             };
             // It is important for the command buffer to be obtained *after* the matmul
-            // kernel has run, otherwise we might use a command-buffer that has been commited
+            // kernel has run, otherwise we might use a command-buffer that has been committed
             // already resulting in the following error.
             // _status < MTLCommandBufferStatusCommitted >
             // -[IOGPUMetalCommandBuffer setCurrentCommandEncoder:]
