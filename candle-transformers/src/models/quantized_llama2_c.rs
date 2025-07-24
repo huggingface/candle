@@ -10,7 +10,7 @@
 //! - 8-bit quantization of weights
 //!
 //! References:
-//! - [LLaMA2 Paper](https://arxiv.org/abs/2307.09288)
+//! - [LLaMA2 Paper](https://huggingface.co/papers/2307.09288)
 //! - [LLaMA2 Technical Report](https://ai.meta.com/research/publications/llama-2-open-foundation-and-fine-tuned-chat-models/)
 //!
 
