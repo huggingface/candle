@@ -122,6 +122,8 @@ impl Config {
     }
 }
 
+impl crate::models::ModelConfig for Config {}
+
 #[derive(Clone)]
 struct Dropout {
     #[allow(dead_code)]
@@ -509,6 +511,12 @@ impl BertModel {
         let attention_mask = get_extended_attention_mask(&attention_mask, dtype)?;
         let sequence_output = self.encoder.forward(&embedding_output, &attention_mask)?;
         Ok(sequence_output)
+    }
+}
+
+impl crate::models::LoadableModel<Config> for BertModel {
+    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+        Self::load(vb, config)
     }
 }
 
