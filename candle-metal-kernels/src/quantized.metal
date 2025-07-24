@@ -6731,11 +6731,6 @@ void dequantize_bf16(device const bfloat4x4 * src, short il, thread type4x4 & re
 #endif
 
 template <typename type4x4>
-void dequantize_bf16(device const bfloat4x4 * src, short il, thread type4x4 & reg) {
-    reg = (type4x4)(*src);
-}
-
-template <typename type4x4>
 void dequantize_q4_0(device const block_q4_0 *xb, short il, thread type4x4 & reg) {
     device const uint16_t * qs = ((device const uint16_t *)xb + 1);
     const float d1 = il ? (xb->d / 16.h) : xb->d;
