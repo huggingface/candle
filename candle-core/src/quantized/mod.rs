@@ -3,7 +3,7 @@ use crate::{Context, CpuStorage, DType, Device, Result, Shape, Storage, Tensor};
 use k_quants::*;
 use std::borrow::Cow;
 
-#[cfg(target_feature = "avx")]
+#[cfg(target_feature = "avx2")]
 pub mod avx;
 mod dummy_cuda;
 mod dummy_metal;
