@@ -62,11 +62,6 @@ impl VoxtralModel {
         // Create cache
         let cache = VoxtralCache::new(true, DType::F16, &config.text_config, &device)?;
 
-        let mel_bytes = include_bytes!("melfilters128.bytes").as_slice();
-        let mut mel_filters = vec![0f32; mel_bytes.len() / 4];
-        let mut cursor = Cursor::new(mel_bytes);
-        cursor.read_f32_into::<LittleEndian>(&mut mel_filters)?;
-
         let audio_token_id = config.audio_token_id;
 
         Ok(Self {
