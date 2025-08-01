@@ -6,7 +6,6 @@ use model::VoxtralModel;
 mod audio_utils;
 mod download;
 mod model;
-mod pcm_decode;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -53,7 +52,7 @@ fn main() -> Result<()> {
     };
 
     let (audio_data, sample_rate) =
-        pcm_decode::pcm_decode(audio_file).context("Failed to decode audio file")?;
+        candle_examples::audio::pcm_decode(audio_file).context("Failed to decode audio file")?;
 
     // Transcribe audio with token output
     let result = model
