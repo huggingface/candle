@@ -476,7 +476,7 @@ impl VoxtralEncoder {
         for i in 0..cfg.num_hidden_layers {
             layers.push(VoxtralEncoderLayer::new(
                 &cfg,
-                vb.pp(format!("layers.{}", i)),
+                vb.pp(format!("layers.{i}")),
             )?);
         }
 
@@ -925,8 +925,7 @@ impl VoxtralForConditionalGeneration {
                     Ok(logits) => logits,
                     Err(e) => {
                         return Err(candle::Error::Msg(format!(
-                            "Failed to generate tokens: {}",
-                            e
+                            "Failed to generate tokens: {e}"
                         )));
                     }
                 }
@@ -936,8 +935,7 @@ impl VoxtralForConditionalGeneration {
                     Ok(logits) => logits,
                     Err(e) => {
                         return Err(candle::Error::Msg(format!(
-                            "Failed to generate tokens: {}",
-                            e
+                            "Failed to generate tokens: {e}"
                         )));
                     }
                 }
@@ -982,7 +980,7 @@ impl VoxtralForConditionalGeneration {
                 let argmax_result = match logits.argmax(D::Minus1) {
                     Ok(result) => result,
                     Err(e) => {
-                        return Err(candle::Error::Msg(format!("Argmax failed: {}", e)));
+                        return Err(candle::Error::Msg(format!("Argmax failed: {e}")));
                     }
                 };
 
@@ -993,7 +991,7 @@ impl VoxtralForConditionalGeneration {
                     match argmax_result.to_scalar::<u32>() {
                         Ok(token) => token,
                         Err(e) => {
-                            return Err(candle::Error::Msg(format!("to_scalar failed: {}", e)));
+                            return Err(candle::Error::Msg(format!("to_scalar failed: {e}")));
                         }
                     }
                 } else if argmax_result.dims() == [1] {
@@ -1003,15 +1001,13 @@ impl VoxtralForConditionalGeneration {
                             Ok(token) => token,
                             Err(e) => {
                                 return Err(candle::Error::Msg(format!(
-                                    "to_scalar on extracted element failed: {}",
-                                    e
+                                    "to_scalar on extracted element failed: {e}"
                                 )));
                             }
                         },
                         Err(e) => {
                             return Err(candle::Error::Msg(format!(
-                                "indexing argmax result failed: {}",
-                                e
+                                "indexing argmax result failed: {e}"
                             )));
                         }
                     }
