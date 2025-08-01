@@ -78,29 +78,11 @@ impl VoxtralModel {
     /// # Errors
     ///
     /// Returns an error if the audio data cannot be transcribed.
-    pub fn transcribe_audio_with_tokens(
+    pub fn transcribe_audio(
         &mut self,
         audio_data: &[f32],
         sample_rate: u32,
     ) -> Result<TranscriptionResult> {
-        let (transcription, tokens) = self.transcribe_audio_internal(audio_data, sample_rate)?;
-
-        Ok(TranscriptionResult {
-            text: transcription,
-            tokens,
-        })
-    }
-
-    /// Internal transcribe method that returns both text and tokens
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the audio data cannot be transcribed.
-    fn transcribe_audio_internal(
-        &mut self,
-        audio_data: &[f32],
-        sample_rate: u32,
-    ) -> Result<(String, Vec<u32>)> {
         // Resample to 16kHz if needed
         let audio = if sample_rate == SAMPLE_RATE {
             audio_data.to_vec()
@@ -139,7 +121,10 @@ impl VoxtralModel {
             &self.cache.clone(),
         )?;
 
-        Ok((result, tokens))
+        Ok(TranscriptionResult {
+            text: result,
+            tokens,
+        })
     }
 
     pub fn device(&self) -> &Device {

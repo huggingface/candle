@@ -56,7 +56,7 @@ fn main() -> Result<()> {
 
     // Transcribe audio with token output
     let result = model
-        .transcribe_audio_with_tokens(&audio_data, sample_rate)
+        .transcribe_audio(&audio_data, sample_rate)
         .context("Failed to transcribe audio with tokens")?;
 
     println!("\n===================================================\n");
