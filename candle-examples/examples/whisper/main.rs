@@ -20,7 +20,6 @@ use rand::SeedableRng;
 use tokenizers::Tokenizer;
 
 mod multilingual;
-mod pcm_decode;
 
 use candle_transformers::models::whisper::{self as m, audio, Config};
 
@@ -546,7 +545,7 @@ fn main() -> Result<()> {
     let mut mel_filters = vec![0f32; mel_bytes.len() / 4];
     <byteorder::LittleEndian as byteorder::ByteOrder>::read_f32_into(mel_bytes, &mut mel_filters);
 
-    let (pcm_data, sample_rate) = pcm_decode::pcm_decode(input)?;
+    let (pcm_data, sample_rate) = candle_examples::audio::pcm_decode(input)?;
     if sample_rate != m::SAMPLE_RATE as u32 {
         anyhow::bail!("input file must have a {} sampling rate", m::SAMPLE_RATE)
     }

@@ -141,7 +141,7 @@ fn main() -> Result<()> {
                 let (pcm, sample_rate) = audio_io::pcm_decode(args.in_file)?;
                 if sample_rate != model_sample_rate {
                     println!("WARNING: snac uses a {model_sample_rate} sample rate, input uses {sample_rate}, resampling...");
-                    audio_io::resample(&pcm, sample_rate, model_sample_rate)?
+                    candle_examples::audio::resample(&pcm, sample_rate, model_sample_rate)?
                 } else {
                     pcm
                 }
