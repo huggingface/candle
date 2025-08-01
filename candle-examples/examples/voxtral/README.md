@@ -4,14 +4,18 @@ An implementation of Voxtral speech recognition using candle.
 
 ## Running the example
 
-For faster processing with CUDA GPU acceleration:
+Run with the `cuda` feature for GPU acceleration:
 ```bash
-cargo run --example voxtral --features tekken,symphonia,rubato,cuda,cudnn --release
+cargo run --example voxtral --features tekken,symphonia,rubato,cuda --release
+# you may also add the `cudnn` feature for extra performance
+# cargo run --example voxtral --features tekken,symphonia,rubato,cuda,cudnn --release
 ```
 
-To run on CPU instead:
+Remove the `cuda` feature to run on the CPU instead:
 ```bash
-cargo run --example voxtral --features tekken,symphonia,rubato --release -- --cpu
+cargo run --example voxtral --features tekken,symphonia,rubato --release
+# or pass the `--cpu` flag to force CPU usage
+# cargo run --example voxtral --features tekken,symphonia,rubato,cuda --release -- --cpu
 ```
 
 ## Command line options

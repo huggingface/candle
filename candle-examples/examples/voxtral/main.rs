@@ -23,10 +23,20 @@ struct Args {
     model_id: Option<String>,
 }
 
+#[cfg(feature = "cuda")]
+fn use_cpu() -> bool {
+    true
+}
+
+#[cfg(not(feature = "cuda"))]
+fn use_cpu() -> bool {
+    false
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    let use_cpu = args.cpu;
+    let use_cpu = args.cpu || !use_cpu();
 
     let model_id = args.model_id.unwrap();
 
