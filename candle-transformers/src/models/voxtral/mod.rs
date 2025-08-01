@@ -5,7 +5,7 @@ pub mod voxtral_llama;
 pub use audio::extract_features;
 pub use model::{
     VoxtralCache, VoxtralConfig, VoxtralEncoder, VoxtralEncoderConfig,
-    VoxtralForConditionalGeneration, VoxtralMultiModalProjector,
+    VoxtralForConditionalGeneration, VoxtralGenerationConfig, VoxtralMultiModalProjector,
 };
 pub use voxtral_llama::{VoxtralLlama, VoxtralLlamaCache, VoxtralLlamaConfig};
 

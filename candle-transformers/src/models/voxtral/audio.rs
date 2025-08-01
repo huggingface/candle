@@ -41,10 +41,10 @@ pub fn extract_features(audio: &[f32], filters: &[f32], device: &Device) -> Resu
     // Python approach: reshape (feature_size, total_frames) -> (feature_size, -1, max_source_positions)
     // First, create mel tensor with shape (N_MELS, total_frames)
     let mel_tensor = Tensor::from_vec(mel, (N_MELS, total_frames), device)
-        .map_err(|e| Error::Msg(format!("Failed to create mel tensor: {}", e).into()))?;
+        .map_err(|e| Error::Msg(format!("Failed to create mel tensor: {e}")))?;
 
     // Calculate number of chunks (equivalent to Python's -1 dimension in reshape)
-    let num_chunks = (total_frames + max_source_positions - 1) / max_source_positions;
+    let num_chunks = total_frames.div_ceil(max_source_positions);
 
     // Pad the mel tensor to be divisible by max_source_positions
     let padded_frames = num_chunks * max_source_positions;

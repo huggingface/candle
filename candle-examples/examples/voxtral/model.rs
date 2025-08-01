@@ -7,7 +7,7 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::voxtral;
 use candle_transformers::models::voxtral::{
     VoxtralCache, VoxtralConfig, VoxtralEncoderConfig, VoxtralForConditionalGeneration,
-    VoxtralLlamaConfig as LlamaConfig,
+    VoxtralGenerationConfig, VoxtralLlamaConfig as LlamaConfig,
 };
 use serde_json;
 
@@ -186,21 +186,24 @@ fn transcribe_with_voxtral(
     let input_ids = Tensor::new(input_tokens, device)?.unsqueeze(0)?;
 
     // Generate response using the model (match Python parameters)
+    let generation_config = VoxtralGenerationConfig {
+        max_new_tokens: 1000, // max_new_tokens
+        temperature: 0.0,     // temperature=0 for deterministic generation
+        top_p: None,
+        device: device.clone(),
+        cache: Some(cache.clone()),
+    };
+
     let generated_tokens = model
         .generate(
             &input_ids,
             Some(audio_features), // Audio features will be processed and inserted at audio token position
-            1000,                 // max_new_tokens (match Python exactly)
-            0.0,                  // temperature=0 for deterministic generation (like Python)
-            None,                 // top_p disabled due to CUDA sorting bug
-            device,
-            Some(cache.clone()),
-            Some(false), // ignore_eos=false to stop at EOS tokens and prevent endless generation
+            generation_config,
         )
         .map_err(|e| {
             println!("Generation error: {:?}", e);
             println!("Error details: {:#}", e);
-            anyhow::anyhow!("Failed to generate tokens: {}", e)
+            anyhow::anyhow!("Failed to generate tokens: {e}")
         })?;
 
     // Decode only the newly generated tokens (skip input prompt)

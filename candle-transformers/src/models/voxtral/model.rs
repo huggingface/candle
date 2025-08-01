@@ -88,6 +88,28 @@ pub struct VoxtralCache {
     cached_audio_positions: Option<Vec<(usize, usize)>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct VoxtralGenerationConfig {
+    pub max_new_tokens: usize,
+    pub temperature: f64,
+    pub top_p: Option<f64>,
+    pub device: Device,
+    /// If cache is None, the model will create a new cache.
+    pub cache: Option<VoxtralCache>,
+}
+
+impl VoxtralGenerationConfig {
+    pub fn new(device: Device) -> Self {
+        Self {
+            max_new_tokens: 500,
+            temperature: 0.0,
+            top_p: None,
+            device,
+            cache: None,
+        }
+    }
+}
+
 impl VoxtralCache {
     pub fn new(
         use_kv_cache: bool,
@@ -764,8 +786,7 @@ impl VoxtralForConditionalGeneration {
                 shape: candle::Shape::from_dims(&[batch_size, seq_len, hidden_size]),
                 dim: 0,
                 op: "reshape",
-            }
-            .into());
+            });
         }
 
         let audio_hidden =
@@ -853,41 +874,39 @@ impl VoxtralForConditionalGeneration {
         &self,
         input_ids: &Tensor,
         input_features: Option<&Tensor>,
-        max_new_tokens: usize,
-        temperature: f64,
-        top_p: Option<f64>,
-        device: &Device,
-        cache: Option<VoxtralCache>,
-        ignore_eos: Option<bool>,
+        config: VoxtralGenerationConfig,
     ) -> Result<Vec<u32>> {
         // Validate inputs
-        if max_new_tokens == 0 {
-            return Ok(input_ids.i(0)?.to_vec1::<u32>()?); // Get first batch
+        if config.max_new_tokens == 0 {
+            return input_ids.i(0)?.to_vec1::<u32>(); // Get first batch
         }
 
-        if temperature < 0.0 {
-            candle::bail!("Temperature must be non-negative, got {}", temperature);
+        if config.temperature < 0.0 {
+            candle::bail!(
+                "Temperature must be non-negative, got {}",
+                config.temperature
+            );
         }
 
-        if let Some(p) = top_p {
+        if let Some(p) = config.top_p {
             if !(0.0..=1.0).contains(&p) {
                 candle::bail!("top_p must be between 0 and 1, got {}", p);
             }
         }
 
-        let mut final_cache = if let Some(cache) = cache {
+        let mut final_cache = if let Some(cache) = config.cache {
             cache
         } else {
             // Get the dtype from the language model by creating a small embedding
-            let dummy_token = Tensor::new(&[1u32], device)?;
+            let dummy_token = Tensor::new(&[1u32], &config.device)?;
             let dummy_embed = self.language_model.embed(&dummy_token)?;
             let model_dtype = dummy_embed.dtype();
-            VoxtralCache::new(true, model_dtype, &self.text_config, device)?
+            VoxtralCache::new(true, model_dtype, &self.text_config, &config.device)?
         };
         let mut tokens = input_ids.i(0)?.to_vec1::<u32>()?; // Get first batch
         let initial_len = tokens.len();
 
-        for idx in 0..max_new_tokens {
+        for idx in 0..config.max_new_tokens {
             let (input, index_pos) = if idx == 0 {
                 (input_ids.clone(), 0)
             } else {
@@ -895,7 +914,7 @@ impl VoxtralForConditionalGeneration {
                 let last_token = tokens[tokens.len() - 1];
                 let calculated_pos = initial_len + idx - 1;
                 (
-                    Tensor::new(&[last_token], device)?.unsqueeze(0)?,
+                    Tensor::new(&[last_token], &config.device)?.unsqueeze(0)?,
                     calculated_pos,
                 )
             };
@@ -933,14 +952,14 @@ impl VoxtralForConditionalGeneration {
                 logits
             };
 
-            let next_token = if temperature > 0.0 {
+            let next_token = if config.temperature > 0.0 {
                 // Sample with temperature
-                let prs = (logits / temperature)?;
+                let prs = (logits / config.temperature)?;
                 let prs = candle_nn::ops::softmax_last_dim(&prs)?;
 
-                if let Some(top_p_val) = top_p {
+                if let Some(top_p_val) = config.top_p {
                     // Apply top-p sampling
-                    sample_top_p(&prs.squeeze(0)?, top_p_val, device)?
+                    sample_top_p(&prs.squeeze(0)?, top_p_val, &config.device)?
                 } else {
                     // Sample from full distribution
                     let probs_vec = prs.squeeze(0)?.to_vec1::<f32>()?;
@@ -968,7 +987,8 @@ impl VoxtralForConditionalGeneration {
                 };
 
                 // Handle the case where argmax returns [1] instead of scalar
-                let token = if argmax_result.dims().len() == 0 {
+
+                if argmax_result.dims().is_empty() {
                     // Already a scalar
                     match argmax_result.to_scalar::<u32>() {
                         Ok(token) => token,
@@ -976,7 +996,7 @@ impl VoxtralForConditionalGeneration {
                             return Err(candle::Error::Msg(format!("to_scalar failed: {}", e)));
                         }
                     }
-                } else if argmax_result.dims() == &[1] {
+                } else if argmax_result.dims() == [1] {
                     // Shape [1] - extract the single element
                     match argmax_result.i(0) {
                         Ok(scalar_tensor) => match scalar_tensor.to_scalar::<u32>() {
@@ -1000,8 +1020,7 @@ impl VoxtralForConditionalGeneration {
                         "Unexpected argmax result shape: {:?}",
                         argmax_result.shape()
                     )));
-                };
-                token
+                }
             };
 
             tokens.push(next_token);
@@ -1012,7 +1031,7 @@ impl VoxtralForConditionalGeneration {
             let eos_tokens = [2u32, 128001, 128009, 128256]; // Don't include 0 as it might be valid generation
 
             // Check for EOS tokens only if not ignoring them
-            if !ignore_eos.unwrap_or(false) && eos_tokens.contains(&next_token) {
+            if eos_tokens.contains(&next_token) {
                 break;
             }
 
