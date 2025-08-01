@@ -1,5 +1,56 @@
 use candle_core::{test_device, test_utils, DType, Device, IndexOp, Result, Tensor, D};
+fn glu_activation(device: &Device) -> Result<()> {
+    let input = Tensor::new(&[[1.0f32, 2.0, 3.0, 4.0]], device)?;
+    let output = input.glu()?;
 
+    // Verify output shape (most important)
+    assert_eq!(output.dims(), &[1, 2]);
+
+    // Verify output is finite and reasonable
+    let output_vals: Vec<f32> = output.flatten_all()?.to_vec1()?;
+    assert!(output_vals.iter().all(|&x| x.is_finite()));
+    assert!(output_vals.iter().all(|&x| x >= 0.0)); // GLU with positive inputs should be positive
+
+    Ok(())
+}
+
+fn geglu_activation(device: &Device) -> Result<()> {
+    let input = Tensor::new(&[[1.0f32, 2.0, 3.0, 4.0]], device)?;
+    let output = input.geglu()?;
+
+    assert_eq!(output.dims(), &[1, 2]);
+
+    let output_vals: Vec<f32> = output.flatten_all()?.to_vec1()?;
+    assert!(output_vals.iter().all(|&x| x.is_finite()));
+
+    Ok(())
+}
+
+fn reglu_activation(device: &Device) -> Result<()> {
+    let input = Tensor::new(&[[-1.0f32, 2.0, 3.0, 4.0]], device)?;
+    let output = input.reglu()?;
+
+    assert_eq!(output.dims(), &[1, 2]);
+
+    // ReLU(-1) = 0, ReLU(2) = 2
+    // output = [0 * 3, 2 * 4] = [0, 8]
+    let output_vals: Vec<f32> = output.flatten_all()?.to_vec1()?;
+    assert_eq!(output_vals[0], 0.0);
+    assert_eq!(output_vals[1], 8.0);
+
+    Ok(())
+}
+
+fn glu_odd_dimension_error(device: &Device) -> Result<()> {
+    let input = Tensor::new(&[[1.0f32, 2.0, 3.0]], device)?;
+
+    // Should error with odd dimension
+    assert!(input.glu().is_err());
+    assert!(input.geglu().is_err());
+    assert!(input.reglu().is_err());
+
+    Ok(())
+}
 fn zeros(device: &Device) -> Result<()> {
     let tensor = Tensor::zeros((5, 2), DType::F32, device)?;
     let (dim1, dim2) = tensor.dims2()?;
@@ -1656,6 +1707,30 @@ test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal);
 test_device!(asort, asort_cpu, asort_gpu, asort_metal);
 test_device!(var, var_cpu, var_gpu, var_metal);
 test_device!(zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal);
+test_device!(
+    glu_activation,
+    glu_activation_cpu,
+    glu_activation_gpu,
+    glu_activation_metal
+);
+test_device!(
+    geglu_activation,
+    geglu_activation_cpu,
+    geglu_activation_gpu,
+    geglu_activation_metal
+);
+test_device!(
+    reglu_activation,
+    reglu_activation_cpu,
+    reglu_activation_gpu,
+    reglu_activation_metal
+);
+test_device!(
+    glu_odd_dimension_error,
+    glu_odd_dimension_error_cpu,
+    glu_odd_dimension_error_gpu,
+    glu_odd_dimension_error_metal
+);
 
 // There was originally a bug on the CPU implementation for randn
 // https://github.com/huggingface/candle/issues/381

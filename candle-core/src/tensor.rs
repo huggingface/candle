@@ -2754,6 +2754,58 @@ impl Tensor {
         }
         Ok(result)
     }
+    /// Gated Linear Unit (GLU) activation function.
+    ///
+    /// GLU(x) = σ(x_left) ⊙ x_right where x is split in half along the last dimension.
+    /// The input tensor's last dimension must be even.
+    pub fn glu(&self) -> Result<Self> {
+        let dim = self.dim(crate::D::Minus1)?;
+        if dim % 2 != 0 {
+            crate::bail!("GLU requires input dimension to be even, got {}", dim);
+        }
+
+        let half_dim = dim / 2;
+        let x_left = self.narrow(crate::D::Minus1, 0, half_dim)?;
+        let x_right = self.narrow(crate::D::Minus1, half_dim, half_dim)?;
+        let gate = (x_left.neg()?.exp()? + 1.0)?.recip()?; // sigmoid(x) = 1/(1+exp(-x))
+        &gate * &x_right
+    }
+
+    /// GeGLU (GELU-Gated Linear Unit) activation function.
+    ///
+    /// GeGLU(x) = GELU(x_left) ⊙ x_right where x is split in half along the last dimension.
+    /// The input tensor's last dimension must be even.
+    pub fn geglu(&self) -> Result<Self> {
+        let dim = self.dim(crate::D::Minus1)?;
+        if dim % 2 != 0 {
+            crate::bail!("GeGLU requires input dimension to be even, got {}", dim);
+        }
+
+        let half_dim = dim / 2;
+        let x_left = self.narrow(crate::D::Minus1, 0, half_dim)?;
+        let x_right = self.narrow(crate::D::Minus1, half_dim, half_dim)?;
+
+        let gate = x_left.gelu()?;
+        &gate * &x_right
+    }
+
+    /// ReGLU (ReLU-Gated Linear Unit) activation function.
+    ///
+    /// ReGLU(x) = ReLU(x_left) ⊙ x_right where x is split in half along the last dimension.
+    /// The input tensor's last dimension must be even.
+    pub fn reglu(&self) -> Result<Self> {
+        let dim = self.dim(crate::D::Minus1)?;
+        if dim % 2 != 0 {
+            crate::bail!("ReGLU requires input dimension to be even, got {}", dim);
+        }
+
+        let half_dim = dim / 2;
+        let x_left = self.narrow(crate::D::Minus1, 0, half_dim)?;
+        let x_right = self.narrow(crate::D::Minus1, half_dim, half_dim)?;
+
+        let gate = x_left.relu()?; // Use existing ReLU method
+        &gate * &x_right
+    }
 }
 
 macro_rules! bin_trait {
