@@ -3,7 +3,6 @@ use clap::Parser;
 use hf_hub::api::sync::Api;
 use model::VoxtralModel;
 
-mod audio_utils;
 mod download;
 mod model;
 

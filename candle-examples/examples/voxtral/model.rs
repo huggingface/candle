@@ -14,7 +14,6 @@ use serde_json;
 use std::io::Cursor;
 use tekken::Tekkenizer;
 
-use super::audio_utils;
 use super::download;
 
 const SAMPLE_RATE: u32 = 16000;
@@ -87,7 +86,8 @@ impl VoxtralModel {
         let audio = if sample_rate == SAMPLE_RATE {
             audio_data.to_vec()
         } else {
-            audio_utils::resample_audio(audio_data, sample_rate, SAMPLE_RATE)
+            candle_examples::audio::resample(audio_data, sample_rate, SAMPLE_RATE)
+                .context("Failed to resample audio")?
         };
 
         // Pad audio to multiple of 480000 samples before feature extraction
