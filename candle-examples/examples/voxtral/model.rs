@@ -132,71 +132,6 @@ impl VoxtralModel {
     }
 }
 
-/// Post-process transcription to clean up formatting artifacts
-///
-/// This function handles common formatting issues that arise from different token
-/// generation between Python and Rust implementations, particularly when the first
-/// token is a quote character instead of regular text.
-///
-/// # Errors
-///
-/// Returns an error if the transcription is invalid (empty or just punctuation).
-pub(crate) fn post_process_transcription(text: &str) -> Result<String> {
-    let mut cleaned = text.trim().to_string();
-
-    // Handle the case where transcription starts with quotes and has extra spaces
-    // Pattern: "' It  is  a  le av ened..." -> "it is a leavened..."
-    if cleaned.starts_with("\"'") || cleaned.starts_with("'\"") {
-        // Remove leading quotes
-        cleaned = cleaned
-            .trim_start_matches("\"'")
-            .trim_start_matches("'\"")
-            .trim()
-            .to_string();
-    }
-
-    // Remove single quotes at the beginning if present
-    if cleaned.starts_with("'") {
-        cleaned = cleaned[1..].trim().to_string();
-    }
-
-    // Fix excessive spacing between words (multiple spaces to single space)
-    // This handles cases like "It  is  a  le av ened" -> "It is a leavened"
-    cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-
-    // Fix split words that should be joined
-    // Common patterns from Voxtral output
-    let word_fixes = [
-        ("le av ened", "leavened"),
-        ("smile ware", "smileware"),
-        ("del ved", "delved"),
-        ("fra il", "frail"),
-        ("N ay", "Nay"),
-        ("N oring", "Noring"),
-    ];
-
-    for (pattern, replacement) in &word_fixes {
-        cleaned = cleaned.replace(pattern, replacement);
-    }
-
-    // Remove quote patterns in the middle of text
-    cleaned = cleaned.replace(" \"' ", " ");
-    cleaned = cleaned.replace(" '\" ", " ");
-
-    // Handle case where Rust mel generation produces just "."
-    if cleaned == "." || cleaned.trim().is_empty() {
-        return Err(anyhow::anyhow!("Mel feature generation produced invalid output. This is a known issue with Candle's mel spectrogram implementation."));
-    }
-
-    // Remove any trailing quotes
-    cleaned = cleaned
-        .trim_end_matches("'")
-        .trim_end_matches("\"")
-        .to_string();
-
-    Ok(cleaned)
-}
-
 fn transcribe_with_voxtral(
     model: &VoxtralForConditionalGeneration,
     tokenizer: &Tekkenizer,
@@ -279,11 +214,8 @@ fn transcribe_with_voxtral(
         .decode(new_tokens, tekken::SpecialTokenPolicy::Ignore)
         .map_err(|e| anyhow::anyhow!("Failed to decode tokens: {}", e))?;
 
-    // Post-process the transcription to clean up formatting artifacts
-    let transcription = post_process_transcription(&decoded_text)?;
-
     // Return both transcription and tokens
-    Ok((transcription, new_tokens.to_vec()))
+    Ok((decoded_text, new_tokens.to_vec()))
 }
 
 /// Load model weights from safetensors files
