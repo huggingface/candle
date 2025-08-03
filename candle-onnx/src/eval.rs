@@ -2098,6 +2098,87 @@ fn simple_eval_(
                 let output = input.sign()?;
                 values.insert(node.output[0].clone(), output);
             }
+            // https://onnx.ai/onnx/operators/onnx__Selu.html
+            "Selu" => {
+                let input = get(&node.input[0])?;
+                let alpha = get_attr_opt::<f32>(node, "alpha")?
+                    .copied()
+                    .unwrap_or(1.6732632);
+                let gamma = get_attr_opt::<f32>(node, "gamma")?
+                    .copied()
+                    .unwrap_or(1.050701);
+                let out = candle_nn::ops::selu(input, alpha as f32, gamma as f32)?;
+                values.insert(node.output[0].clone(), out);
+            }
+
+            // https://onnx.ai/onnx/operators/onnx__OneHot.html
+            "OneHot" => {
+                let indices = get(&node.input[0])?;
+                let orig_shape = get(&node.input[0])?.dims().to_vec();
+                let depth_tensor = get(&node.input[1])?;
+                let values_tensor = get(&node.input[2])?;
+
+                let depth = depth_tensor.to_scalar::<i64>()? as usize;
+                let values_vec = values_tensor.to_vec1::<f32>()?;
+                if values_vec.len() != 2 {
+                    return Err(candle::Error::Msg(
+                        "OneHot: expected 2-element values tensor".to_string(),
+                    ));
+                }
+                let off_value = values_vec[0];
+                let on_value = values_vec[1];
+
+                let mut axis = node
+                    .attribute
+                    .iter()
+                    .find(|attr| attr.name == "axis")
+                    .map(|attr| attr.i)
+                    .unwrap_or(-1);
+
+                let rank = indices.rank();
+                if axis < -((rank as i64) + 1) || axis > (rank as i64) {
+                    return Err(candle::Error::Msg(format!(
+                        "OneHot: invalid axis {axis} for rank {rank}"
+                    )));
+                }
+                if axis < 0 {
+                    axis += rank as i64 + 1;
+                }
+
+                let indices = indices.flatten_all()?;
+                let indices_vec = indices.to_vec1::<i64>()?;
+                let mut out = vec![off_value; depth * indices.elem_count()];
+                for (i, &index) in indices_vec.iter().enumerate() {
+                    let idx = if index < 0 {
+                        (index + depth as i64) as usize
+                    } else {
+                        index as usize
+                    };
+                    if idx >= depth {
+                        continue;
+                    }
+                    out[i * depth + idx] = on_value;
+                }
+
+                let mut target_shape = orig_shape;
+                target_shape.push(depth);
+                let output = Tensor::from_vec(out, target_shape, indices.device())?;
+
+                let final_output = if axis as usize == output.rank() - 1 {
+                    output
+                } else {
+                    fn move_axis_to(rank: usize, from: usize, to: usize) -> Vec<usize> {
+                        let mut dims: Vec<usize> = (0..rank).collect();
+                        let axis = dims.remove(from);
+                        dims.insert(to, axis);
+                        dims
+                    }
+
+                    let perm = move_axis_to(output.rank(), output.rank() - 1, axis as usize);
+                    output.permute(&*perm)?
+                };
+                values.insert(node.output[0].clone(), final_output);
+            }
             "HardSwish" => {
                 let input = get(&node.input[0])?;
                 let hard_sigmoid = candle_nn::ops::hard_sigmoid(&input)?;

@@ -5,7 +5,7 @@ use super::utils::{
 use super::GgmlDType;
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
-use half::f16;
+use half::{bf16, f16};
 use rayon::prelude::*;
 
 // Default to QK_K 256 rather than 64.
@@ -222,7 +222,7 @@ impl GgmlType for BlockQ4_0 {
     // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L2361C10-L2361C122
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        #[cfg(target_feature = "avx")]
+        #[cfg(target_feature = "avx2")]
         return super::avx::vec_dot_q4_0_q8_0(n, xs, ys);
 
         #[cfg(target_feature = "neon")]
@@ -616,7 +616,7 @@ impl GgmlType for BlockQ8_0 {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        #[cfg(target_feature = "avx")]
+        #[cfg(target_feature = "avx2")]
         return super::avx::vec_dot_q8_0_q8_0(n, xs, ys);
 
         #[cfg(target_feature = "neon")]
@@ -702,7 +702,7 @@ impl GgmlType for BlockQ2K {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        #[cfg(target_feature = "avx")]
+        #[cfg(target_feature = "avx2")]
         return super::avx::vec_dot_q2k_q8k(n, xs, ys);
 
         #[cfg(target_feature = "neon")]
@@ -878,7 +878,7 @@ impl GgmlType for BlockQ3K {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        #[cfg(target_feature = "avx")]
+        #[cfg(target_feature = "avx2")]
         return super::avx::vec_dot_q3k_q8k(n, xs, ys);
 
         #[cfg(target_feature = "neon")]
@@ -1156,7 +1156,7 @@ impl GgmlType for BlockQ4K {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        #[cfg(target_feature = "avx")]
+        #[cfg(target_feature = "avx2")]
         return super::avx::vec_dot_q4k_q8k(n, xs, ys);
 
         #[cfg(target_feature = "neon")]
@@ -1349,7 +1349,7 @@ impl GgmlType for BlockQ5K {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        #[cfg(target_feature = "avx")]
+        #[cfg(target_feature = "avx2")]
         return super::avx::vec_dot_q5k_q8k(n, xs, ys);
 
         #[cfg(target_feature = "neon")]
@@ -1570,7 +1570,7 @@ impl GgmlType for BlockQ6K {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        #[cfg(target_feature = "avx")]
+        #[cfg(target_feature = "avx2")]
         return super::avx::vec_dot_q6k_q8k(n, xs, ys);
 
         #[cfg(target_feature = "neon")]
@@ -1753,7 +1753,7 @@ impl GgmlType for BlockQ8K {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        #[cfg(target_feature = "avx")]
+        #[cfg(target_feature = "avx2")]
         return super::avx::vec_dot_q8k_q8k(n, xs, ys);
 
         #[cfg(target_feature = "neon")]
@@ -1948,6 +1948,50 @@ impl GgmlType for f16 {
         // TODO: vectorize
         for (x, y) in xs.iter().zip(ys.iter_mut()) {
             *y = f16::from_f32(*x)
+        }
+        Ok(())
+    }
+
+    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
+        if xs.len() != ys.len() {
+            crate::bail!("size mismatch {} {}", xs.len(), ys.len());
+        }
+        // TODO: vectorize
+        for (x, y) in xs.iter().zip(ys.iter_mut()) {
+            *y = x.to_f32()
+        }
+        Ok(())
+    }
+}
+
+impl GgmlType for bf16 {
+    const DTYPE: GgmlDType = GgmlDType::BF16;
+    const BLCK_SIZE: usize = 1;
+    type VecDotType = bf16;
+
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        if xs.len() < n {
+            crate::bail!("size mismatch {} < {n}", xs.len())
+        }
+        if ys.len() < n {
+            crate::bail!("size mismatch {} < {n}", ys.len())
+        }
+        let mut res = 0f32;
+        unsafe { crate::cpu::vec_dot_bf16(xs.as_ptr(), ys.as_ptr(), &mut res, n) };
+        Ok(res)
+    }
+
+    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        if xs.len() != ys.len() {
+            crate::bail!("size mismatch {} {}", xs.len(), ys.len());
+        }
+        // TODO: vectorize
+        for (x, y) in xs.iter().zip(ys.iter_mut()) {
+            *y = bf16::from_f32(*x)
         }
         Ok(())
     }
