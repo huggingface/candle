@@ -122,7 +122,9 @@ UNARY_OP(__nv_bfloat16, usilu_bf16, silu_fwd(x))
 UNARY_OP1(__nv_bfloat16, upowf_bf16, powg(x, param))
 UNARY_OP(__nv_bfloat16, usign_bf16, sign_(x))
 UNARY_OP(__nv_bfloat16, usigmoid_bf16, sigmoid_fwd(x))
+#endif
 
+#if __CUDA_ARCH__ >= 890
 #define F8E4M3_TO_FLOAT(x) __half2float(__nv_cvt_fp8_to_halfraw(x.__x, __NV_E4M3))
 
 UNARY_OP(__nv_fp8_e4m3, ucopy_f8_e4m3, x)
