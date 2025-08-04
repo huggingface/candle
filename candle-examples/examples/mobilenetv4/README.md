@@ -1,6 +1,6 @@
 # candle-mobilenetv4
 
-[MobileNetV4 - Universal Models for the Mobile Ecosystem](https://arxiv.org/abs/2404.10518)
+[MobileNetV4 - Universal Models for the Mobile Ecosystem](https://huggingface.co/papers/2404.10518)
 This candle implementation uses pre-trained MobileNetV4 models from timm for inference.
 The classification head has been trained on the ImageNet dataset and returns the probabilities for the top-5 classes.
 

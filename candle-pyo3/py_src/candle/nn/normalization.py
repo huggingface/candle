@@ -9,7 +9,7 @@ import numbers
 
 class LayerNorm(Module):
     r"""Applies Layer Normalization over a mini-batch of inputs as described in
-    the paper `Layer Normalization <https://arxiv.org/abs/1607.06450>`
+    the paper `Layer Normalization <https://huggingface.co/papers/1607.06450>`
 
     math::
         y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x] + \epsilon}} * \gamma + \beta

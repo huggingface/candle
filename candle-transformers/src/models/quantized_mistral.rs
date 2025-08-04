@@ -11,7 +11,7 @@
 //! - Support for 8-bit quantization
 //!
 //! References:
-//! - [Mistral Paper](https://arxiv.org/abs/2310.06825)
+//! - [Mistral Paper](https://huggingface.co/papers/2310.06825)
 //! - [Model Card](https://huggingface.co/mistralai/Mistral-7B-v0.1)
 //!
 

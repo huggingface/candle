@@ -7,7 +7,7 @@
 //! - High accuracy with VGG-like plain architecture and training
 //!
 //! References:
-//! - [RepVGG Paper](https://arxiv.org/abs/2101.03697). RepVGG: Making VGG-style ConvNets Great Again
+//! - [RepVGG Paper](https://huggingface.co/papers/2101.03697). RepVGG: Making VGG-style ConvNets Great Again
 //! - [Official Implementation](https://github.com/DingXiaoH/RepVGG)
 //!
 

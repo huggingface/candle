@@ -4,7 +4,7 @@
 //! The model returns the probability for an image to belong to each of the 1000
 //! ImageNet categories.
 //!
-//! - [Paper](https://arxiv.org/abs/2303.11331). EVA-02: A Visual Representation for Neon Genesis
+//! - [Paper](https://huggingface.co/papers/2303.11331). EVA-02: A Visual Representation for Neon Genesis
 //! - [Code](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/eva2.py)
 //!
 //! # Example

@@ -10,7 +10,7 @@
 //! - ReLU activation and dropout
 //!
 //! References:
-//! - [Very Deep Convolutional Networks for Large-Scale Image Recognition](https://arxiv.org/abs/1409.1556)
+//! - [Very Deep Convolutional Networks for Large-Scale Image Recognition](https://huggingface.co/papers/1409.1556)
 //!
 
 use candle::{ModuleT, Result, Tensor};

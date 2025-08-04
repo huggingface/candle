@@ -2,7 +2,7 @@
 //!
 //! See OLMo 2 model details at:
 //! - [Hugging Face Collection](https://huggingface.co/collections/allenai/olmo-2-674117b93ab84e98afc72edc)
-//! - [OLMo 2 Paper](https://arxiv.org/abs/2501.00656)
+//! - [OLMo 2 Paper](https://huggingface.co/papers/2501.00656)
 //!
 //!
 use candle::{DType, Device, Module, Result, Tensor, D};

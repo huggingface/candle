@@ -1,7 +1,7 @@
 //! # FastViT inference implementation based on timm
 //!
 //! ## Description
-//! See ["FastViT: A Fast Hybrid Vision Transformer using Structural Reparameterization"](https://arxiv.org/pdf/2303.14189)
+//! See ["FastViT: A Fast Hybrid Vision Transformer using Structural Reparameterization"](https://huggingface.co/papers/2303.14189)
 //!
 //! Implementation based on [timm model](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/fastvit.py)
 
