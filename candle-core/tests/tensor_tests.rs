@@ -1,4 +1,5 @@
 use candle_core::{test_device, test_utils, DType, Device, IndexOp, Result, Tensor, D};
+use float8::F8E4M3;
 
 fn zeros(device: &Device) -> Result<()> {
     let tensor = Tensor::zeros((5, 2), DType::F32, device)?;
@@ -61,6 +62,24 @@ fn ones(device: &Device) -> Result<()> {
             ]
         ],
     );
+
+    if !device.is_metal() {
+        assert_eq!(
+            Tensor::ones((2, 3), DType::F8E4M3, device)?.to_vec2::<F8E4M3>()?,
+            [
+                [
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.)
+                ],
+                [
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.)
+                ]
+            ],
+        );
+    }
     Ok(())
 }
 
@@ -109,6 +128,24 @@ fn arange(device: &Device) -> Result<()> {
         Tensor::arange_step(5i64, 0i64, -1, device)?.to_vec1::<i64>()?,
         [5, 4, 3, 2, 1],
     );
+
+    if !device.is_metal() {
+        assert_eq!(
+            Tensor::arange_step(
+                F8E4M3::from_f32(0.),
+                F8E4M3::from_f32(5.),
+                F8E4M3::from_f32(2.),
+                device
+            )?
+            .to_vec1::<F8E4M3>()?,
+            [
+                F8E4M3::from_f32(0.),
+                F8E4M3::from_f32(2.),
+                F8E4M3::from_f32(4.),
+            ],
+        );
+    }
+
     Ok(())
 }
 

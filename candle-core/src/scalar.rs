@@ -1,6 +1,7 @@
 //! TensorScalar Enum and Trait
 //!
 use crate::{DType, Result, Tensor, WithDType};
+use float8::F8E4M3;
 use half::{bf16, f16};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -12,6 +13,7 @@ pub enum Scalar {
     F16(f16),
     F32(f32),
     F64(f64),
+    F8E4M3(F8E4M3),
 }
 
 impl<T: WithDType> From<T> for Scalar {
@@ -30,6 +32,7 @@ impl Scalar {
             DType::F16 => Scalar::F16(f16::ZERO),
             DType::F32 => Scalar::F32(0.0),
             DType::F64 => Scalar::F64(0.0),
+            DType::F8E4M3 => Scalar::F8E4M3(F8E4M3::ZERO),
         }
     }
 
@@ -42,6 +45,7 @@ impl Scalar {
             DType::F16 => Scalar::F16(f16::ONE),
             DType::F32 => Scalar::F32(1.0),
             DType::F64 => Scalar::F64(1.0),
+            DType::F8E4M3 => Scalar::F8E4M3(F8E4M3::ONE),
         }
     }
 
@@ -54,6 +58,7 @@ impl Scalar {
             Scalar::F16(_) => DType::F16,
             Scalar::F32(_) => DType::F32,
             Scalar::F64(_) => DType::F64,
+            Scalar::F8E4M3(_) => DType::F8E4M3,
         }
     }
 
@@ -66,6 +71,7 @@ impl Scalar {
             Scalar::F16(v) => v.to_f64(),
             Scalar::F32(v) => *v as f64,
             Scalar::F64(v) => *v,
+            Scalar::F8E4M3(v) => v.to_f64(),
         }
     }
 }
