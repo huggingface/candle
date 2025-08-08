@@ -1,6 +1,6 @@
 use anyhow::Result;
-use candle::{DType, Device, IndexOp, Tensor, D};
 use baseten_candle_flash_attn_v3;
+use candle::{DType, Device, IndexOp, Tensor, D};
 use rstest::rstest;
 
 fn to_vec3_round(t: Tensor, digits: i32) -> Result<Vec<Vec<Vec<f32>>>> {
@@ -149,7 +149,8 @@ fn flash_attn_acausal_gqa() -> Result<()> {
         let q = q.transpose(1, 2)?;
         let k_gqa = k_gqa.transpose(1, 2)?;
         let v_gqa = v_gqa.transpose(1, 2)?;
-        baseten_candle_flash_attn_v3::flash_attn(&q, &k_gqa, &v_gqa, 0.125, false, true)?.transpose(1, 2)?
+        baseten_candle_flash_attn_v3::flash_attn(&q, &k_gqa, &v_gqa, 0.125, false, true)?
+            .transpose(1, 2)?
     };
     let ys2 = ys2.i(0)?.to_dtype(DType::F32)?;
     assert_eq!(ys2.dims(), &[n_h, 2, 64]);

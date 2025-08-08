@@ -373,7 +373,116 @@ fn mul_mat_via_q8_1(
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 
+fn indexed_moe_forward_fused_q8_1_input(
+    weight: &CudaView<u8>,
+    w_shape: &crate::Shape, //[num_experts, n, k]
+    w_dtype: GgmlDType,
+    input: &CudaView<f32>,
+    in_shape: &crate::Shape, //[batch, topk or 1, k]
+    ids: &CudaView<u32>,
+    idx_shape: &crate::Shape, //[batch, topk]
+    dev: &CudaDevice,
+) -> Result<(CudaStorage, crate::Shape)> {
+    let (_, n, k) = w_shape.dims3()?;
+    let batch = in_shape.dims()[0];
+    let input_dim1 = in_shape.dims()[1];
+
+    let topk = idx_shape.dims()[1];
+    assert!(batch == idx_shape.dims()[0], "batch dim not match!");
+
+    //quant input into q8_1
+    let k_padded = pad(k, MATRIX_ROW_PADDING);
+    let y_size_in_bytes =
+        batch * input_dim1 * k_padded * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
+    let mut input_quant = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
+    quantize_q8_1(input, &mut input_quant, k, batch * input_dim1, dev)?;
+
+    // output buffer
+    let outsize = batch * topk * n;
+    let out = unsafe { dev.alloc::<f32>(outsize)? };
+
+    let kernel_name = match w_dtype {
+        GgmlDType::Q2K => "indexed_moe_forward_q2k_q8_1",
+        GgmlDType::Q3K => "indexed_moe_forward_q3k_q8_1",
+        GgmlDType::Q4K => "indexed_moe_forward_q4k_q8_1",
+        GgmlDType::Q5K => "indexed_moe_forward_q5k_q8_1",
+        GgmlDType::Q6K => "indexed_moe_forward_q6k_q8_1",
+        GgmlDType::Q8_0 => "indexed_moe_forward_q8_0_q8_1",
+        _ => crate::bail!("unsupported dtype for indexed_moe_forward {w_dtype:?}"),
+    };
+    let func = dev.get_or_load_func(&kernel_name, &candle_kernels::QUANTIZED)?;
+    let (nblocks, nwarps) = (n as u32, 4);
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (nblocks, batch as u32, topk as u32),
+        block_dim: (WARP_SIZE as u32, nwarps, 1),
+        shared_mem_bytes: 0,
+    };
+
+    let mut builder = func.builder();
+    builder.arg(weight);
+    builder.arg(&input_quant);
+    builder.arg(ids);
+    builder.arg(&out);
+
+    barg!(
+        builder,
+        n as i32,
+        k as i32,
+        batch as i32,
+        topk as i32,
+        k_padded as i32,
+        input_dim1 as i32
+    );
+    unsafe { builder.launch(cfg) }.w()?;
+
+    let mut out_shape = in_shape.dims().to_vec();
+    out_shape.pop();
+    out_shape.push(n);
+    out_shape[1] = topk;
+    Ok((
+        CudaStorage::wrap_cuda_slice(out, dev.clone()),
+        out_shape.into(),
+    ))
+}
+
 impl QCudaStorage {
+    pub fn indexed_moe_forward(
+        &self,
+        self_shape: &crate::Shape, //[num_experts, n, k]
+        input: &CudaStorage,       //[batch, topk or 1, k]
+        input_l: &crate::Layout,
+        ids: &CudaStorage, //[batch, topk]
+        ids_l: &crate::Layout,
+    ) -> Result<(CudaStorage, crate::Shape)> {
+        if matches!(
+            self.dtype(),
+            GgmlDType::Q8_0
+                | GgmlDType::Q2K
+                | GgmlDType::Q3K
+                | GgmlDType::Q4K
+                | GgmlDType::Q5K
+                | GgmlDType::Q6K
+        ) {
+            let input_storage = input.as_cuda_slice::<f32>()?;
+            let ids_storage = ids.as_cuda_slice::<u32>()?;
+            indexed_moe_forward_fused_q8_1_input(
+                &self.data.inner.slice(0..),
+                self_shape, //[num_experts, n, k]
+                self.dtype(),
+                &input_storage.slice(0..),
+                input_l.shape(), //[batch, topk or 1, k]
+                &ids_storage.slice(0..),
+                ids_l.shape(), //[batch, topk]
+                &self.device,
+            )
+        } else {
+            crate::bail!(
+                "The given quantized dtype {:?} is not supported for indexed_moe_forward!",
+                self.dtype()
+            );
+        }
+    }
+
     pub fn zeros(device: &CudaDevice, el_count: usize, dtype: GgmlDType) -> Result<Self> {
         let size_in_bytes = ceil_div(el_count, dtype.block_size()) * dtype.type_size();
         let padded_size_in_bytes =
@@ -444,7 +553,6 @@ impl QCudaStorage {
             GgmlDType::Q5K => deq::<crate::quantized::BlockQ5K>(&buffer, block_len, &mut out)?,
             GgmlDType::Q6K => deq::<crate::quantized::BlockQ6K>(&buffer, block_len, &mut out)?,
             GgmlDType::Q8K => deq::<crate::quantized::BlockQ8K>(&buffer, block_len, &mut out)?,
-            GgmlDType::BF16 => deq::<half::bf16>(&buffer, block_len, &mut out)?,
         }
 
         self.device
