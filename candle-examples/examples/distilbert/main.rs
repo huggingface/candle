@@ -134,7 +134,7 @@ impl Args {
         Ok((config, tokenizer, weights))
     }
 
-    fn load_variables(&self, weights_path: &PathBuf, device: &Device) -> Result<VarBuilder> {
+    fn load_variables(&self, weights_path: &PathBuf, device: &Device) -> Result<VarBuilder<'_>> {
         if self.use_pth {
             Ok(VarBuilder::from_pth(weights_path, DTYPE, device)?)
         } else {

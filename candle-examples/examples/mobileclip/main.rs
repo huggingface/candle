@@ -99,7 +99,13 @@ pub fn main() -> anyhow::Result<()> {
     let vb = if args.use_pth {
         VarBuilder::from_pth(&model_file, DType::F32, &device)?
     } else {
-        unsafe { VarBuilder::from_mmaped_safetensors(&[model_file.clone()], DType::F32, &device)? }
+        unsafe {
+            VarBuilder::from_mmaped_safetensors(
+                std::slice::from_ref(&model_file),
+                DType::F32,
+                &device,
+            )?
+        }
     };
 
     let model = mobileclip::MobileClipModel::new(vb, config)?;

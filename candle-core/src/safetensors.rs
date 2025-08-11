@@ -57,7 +57,7 @@ impl st::View for Tensor {
         self.shape().dims()
     }
 
-    fn data(&self) -> Cow<[u8]> {
+    fn data(&self) -> Cow<'_, [u8]> {
         // This copies data from GPU to CPU.
         // TODO: Avoid the unwrap here.
         Cow::Owned(convert_back(self).unwrap())
@@ -78,7 +78,7 @@ impl st::View for &Tensor {
         self.dims()
     }
 
-    fn data(&self) -> Cow<[u8]> {
+    fn data(&self) -> Cow<'_, [u8]> {
         // This copies data from GPU to CPU.
         // TODO: Avoid the unwrap here.
         Cow::Owned(convert_back(self).unwrap())
