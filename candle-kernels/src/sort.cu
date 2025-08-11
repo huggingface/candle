@@ -15,7 +15,7 @@ template<int order, typename T>
 static __device__ void k_argsort(const T * x, uint32_t * dst, const int ncols, int ncols_pad) {
     // bitonic sort
     int col = threadIdx.x;
-    int row = blockIdx.y;
+    int row = blockIdx.x;
 
     if (col >= ncols_pad) {
         return;
