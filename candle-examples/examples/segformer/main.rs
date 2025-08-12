@@ -56,7 +56,10 @@ enum Commands {
     Classify(ClassificationArgs),
 }
 
-fn get_vb_and_config(model_name: String, device: &Device) -> anyhow::Result<(VarBuilder, Config)> {
+fn get_vb_and_config(
+    model_name: String,
+    device: &Device,
+) -> anyhow::Result<(VarBuilder<'_>, Config)> {
     println!("loading model {model_name} via huggingface hub");
     let api = hf_hub::api::sync::Api::new()?;
     let api = api.model(model_name.clone());

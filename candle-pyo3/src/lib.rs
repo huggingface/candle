@@ -747,7 +747,7 @@ impl PyTensor {
 
             compare(&self.0, &scalar_tensor)
         } else {
-            return Err(PyTypeError::new_err("unsupported rhs for __richcmp__"));
+            Err(PyTypeError::new_err("unsupported rhs for __richcmp__"))
         }
     }
 
