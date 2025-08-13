@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BERT Classifier Demo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center space-y-8">
+    <div class="bg-white p-6 rounded-lg shadow-lg w-full max-w-md space-y-4">
+        <h1 class="text-2xl font-bold text-gray-800 mb-4">BERT Sentiment Classifier</h1>
+        <div>
+        <label for="model" class="font-medium block">Choose the model</label>
+        <select
+          id="model"
+          class="border-2 border-gray-500 rounded-md font-light interactive disabled:cursor-not-allowed w-full max-w-max"
+        >
+          <option value="textattack_bert_base_uncased_yelp_polarity" selected>
+            textattack/bert-base-uncased-yelp-polarity
+          </option>
+          <option value="nlptown_bert_base_multilingual_uncased_sentiment" >
+            nlptown/bert-base-multilingual-uncased-sentiment
+          </option>
+          <option value="cirimus_modernbert_base_go_emotions">
+            cirimus/modernbert-base-go-emotions
+          </option>
+          <option value="clapAI_modernBERT_base_multilingual_sentiment">
+            clapAI/modernBERT-base-multilingual-sentiment
+          </option>
+        </select>
+      </div>
+<div class="space-y-2">
+  <h3 class="font-medium">Examples:</h3>
+  <form
+    id="form-example"
+    class="flex text-xs rounded-md justify-between w-min gap-3"
+  >
+    <input type="submit" hidden />
+
+    <button type="submit" data-example class="disabled:cursor-not-allowed interactive" value="Moon_Landing" name="example">
+      Moon Landing (Wiki)
+    </button>
+    <button type="submit" data-example class="disabled:cursor-not-allowed interactive" value="financial" name="example">
+      Financial Market (Fictious)
+    </button>
+    <input
+      type="text"
+      id="search-example"
+      name="search"
+      title="Search example"
+      class="font-light py-0 mx-1 resize-none outline-none w-32 disabled:cursor-not-allowed interactive"
+      placeholder="Load example ..."
+    />
+  </form>
+</div>
+      <div>
+        <form id="inputForm" class="space-y-4">
+            <div>
+                <textarea 
+                    id="textInput" 
+                    rows="4" 
+                    class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" 
+                    placeholder="Type your text here..."
+                    aria-label="Text input for sentiment analysis"
+                ></textarea>
+            </div>
+            <div class="flex justify-between">
+                <button 
+                    type="submit" 
+                    class="bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                    aria-label="Analyze text"
+                    id = "submit-button"
+                >
+                    Analyze
+                </button>
+                <button 
+                    type="button" 
+                    id="clearButton" 
+                    class="bg-gray-600 text-white py-2 px-4 rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+                    aria-label="Clear text input and result"
+                >
+                    Clear
+                </button>
+            </div>
+        </form>
+
+        <div id="output" class="mt-6">
+            <h2 class="text-lg font-semibold text-gray-800">Result</h2>
+            <pre id="result" class="bg-gray-50 p-4 rounded-md text-sm text-gray-700 overflow-auto max-h-40">
+                Waiting for prediction...
+            </pre>
+        </div>
+
+        <div id="status" class="mt-4 text-sm text-gray-600"></div>
+
+        <div id="progressContainer" class="mt-4 hidden">
+            <label for="progressBar" class="block text-sm font-medium text-gray-700">Download Progress</label>
+            <div class="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
+                <div id="progressBar" class="bg-indigo-600 h-2.5 rounded-full" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <div id="spinner" class="mt-4 hidden">
+            <svg class="animate-spin h-5 w-5 text-gray-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8a8 8 0 01-8 8z"></path>
+            </svg>
+        </div>
+    </div>
+
+    <script type="text/javascript" src="./script.js"></script>
+</body>
+</html>
