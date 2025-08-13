@@ -287,6 +287,8 @@ impl Decoder {
         };
 
         let mut masks = Vec::new();
+        // Pre-allocate reusable mask buffer to avoid repeated allocations
+        let mut mask_buffer = vec![0.0f32; vocab_size as usize];
 
         // ========== RULE 1: Timestamp pairing constraints ==========
         // Timestamps must come in pairs, except directly before EOT
@@ -305,28 +307,24 @@ impl Decoder {
             if last_was_timestamp {
                 if penultimate_was_timestamp {
                     // Has to be non-timestamp - suppress timestamp tokens
-                    let mask = (0..vocab_size)
-                        .map(|i| {
-                            if i >= timestamp_begin {
-                                f32::NEG_INFINITY
-                            } else {
-                                0.0
-                            }
-                        })
-                        .collect::<Vec<f32>>();
-                    masks.push(Tensor::new(mask.as_slice(), &device)?);
+                    for i in 0..vocab_size {
+                        mask_buffer[i as usize] = if i >= timestamp_begin {
+                            f32::NEG_INFINITY
+                        } else {
+                            0.0
+                        };
+                    }
+                    masks.push(Tensor::new(mask_buffer.as_slice(), &device)?);
                 } else {
                     // Cannot be normal text tokens - suppress everything before EOT
-                    let mask = (0..vocab_size)
-                        .map(|i| {
-                            if i < self.eot_token {
-                                f32::NEG_INFINITY
-                            } else {
-                                0.0
-                            }
-                        })
-                        .collect::<Vec<f32>>();
-                    masks.push(Tensor::new(mask.as_slice(), &device)?);
+                    for i in 0..vocab_size {
+                        mask_buffer[i as usize] = if i < self.eot_token {
+                            f32::NEG_INFINITY
+                        } else {
+                            0.0
+                        };
+                    }
+                    masks.push(Tensor::new(mask_buffer.as_slice(), &device)?);
                 }
             }
 
@@ -345,47 +343,41 @@ impl Decoder {
                     timestamp_tokens.last().unwrap() + 1
                 };
 
-                let mask = (0..vocab_size)
-                    .map(|i| {
-                        if i >= timestamp_begin && i < timestamp_last {
-                            f32::NEG_INFINITY
-                        } else {
-                            0.0
-                        }
-                    })
-                    .collect::<Vec<f32>>();
-                masks.push(Tensor::new(mask.as_slice(), &device)?);
+                for i in 0..vocab_size {
+                    mask_buffer[i as usize] = if i >= timestamp_begin && i < timestamp_last {
+                        f32::NEG_INFINITY
+                    } else {
+                        0.0
+                    };
+                }
+                masks.push(Tensor::new(mask_buffer.as_slice(), &device)?);
             }
         }
 
         // ========== RULE 3: Force initial timestamp ==========
         // At the beginning, suppress generating non-timestamp tokens
         if tokens.len() == sample_begin {
-            let mask = (0..vocab_size)
-                .map(|i| {
-                    if i < timestamp_begin {
-                        f32::NEG_INFINITY
-                    } else {
-                        0.0
-                    }
-                })
-                .collect::<Vec<f32>>();
-            masks.push(Tensor::new(mask.as_slice(), &device)?);
+            for i in 0..vocab_size {
+                mask_buffer[i as usize] = if i < timestamp_begin {
+                    f32::NEG_INFINITY
+                } else {
+                    0.0
+                };
+            }
+            masks.push(Tensor::new(mask_buffer.as_slice(), &device)?);
 
             // Apply the max_initial_timestamp constraint
             if let Some(max_initial_timestamp_index) = self.max_initial_timestamp_index {
                 let last_allowed = timestamp_begin + max_initial_timestamp_index;
                 if last_allowed < vocab_size {
-                    let mask = (0..vocab_size)
-                        .map(|i| {
-                            if i > last_allowed {
-                                f32::NEG_INFINITY
-                            } else {
-                                0.0
-                            }
-                        })
-                        .collect::<Vec<f32>>();
-                    masks.push(Tensor::new(mask.as_slice(), &device)?);
+                    for i in 0..vocab_size {
+                        mask_buffer[i as usize] = if i > last_allowed {
+                            f32::NEG_INFINITY
+                        } else {
+                            0.0
+                        };
+                    }
+                    masks.push(Tensor::new(mask_buffer.as_slice(), &device)?);
                 }
             }
         }
@@ -399,29 +391,28 @@ impl Decoder {
         // ========== RULE 4: Probability-based timestamp preference ==========
         // If sum of probability over timestamps is above any other token, sample timestamp
         let log_probs = softmax(&logits, 0)?;
-        let log_probs_vec: Vec<f32> = log_probs.to_vec1()?;
 
-        // Sum probabilities for timestamp tokens
-        let timestamp_prob_sum: f32 = log_probs_vec[timestamp_begin as usize..].iter().sum();
+        // Use tensor operations instead of converting to vector
+        let timestamp_probs = log_probs.narrow(
+            0,
+            timestamp_begin as usize,
+            vocab_size as usize - timestamp_begin as usize,
+        )?;
+        let timestamp_prob_sum: f32 = timestamp_probs.sum(0)?.to_scalar::<f32>()?;
 
-        // Find max probability for non-timestamp tokens
-        let max_text_prob = log_probs_vec[..timestamp_begin as usize]
-            .iter()
-            .cloned()
-            .fold(0.0f32, f32::max);
+        let text_probs = log_probs.narrow(0, 0, timestamp_begin as usize)?;
+        let max_text_prob: f32 = text_probs.max(0)?.to_scalar::<f32>()?;
 
         if timestamp_prob_sum > max_text_prob {
             // Only consider timestamp tokens
-            let mask = (0..vocab_size)
-                .map(|i| {
-                    if i < timestamp_begin {
-                        f32::NEG_INFINITY
-                    } else {
-                        0.0
-                    }
-                })
-                .collect::<Vec<f32>>();
-            let mask_tensor = Tensor::new(mask.as_slice(), &device)?;
+            for i in 0..vocab_size {
+                mask_buffer[i as usize] = if i < timestamp_begin {
+                    f32::NEG_INFINITY
+                } else {
+                    0.0
+                };
+            }
+            let mask_tensor = Tensor::new(mask_buffer.as_slice(), &device)?;
             logits = logits.broadcast_add(&mask_tensor)?;
         }
 
