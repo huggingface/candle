@@ -11,7 +11,10 @@ extern crate intel_mkl_src;
 
 use anyhow::{Error as E, Result};
 use candle::{Device, IndexOp, Tensor};
-use candle_nn::{ops::softmax, VarBuilder};
+use candle_nn::{
+    ops::{log_softmax, softmax},
+    VarBuilder,
+};
 use clap::{Parser, ValueEnum};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use rand::distr::weighted::WeightedIndex;
@@ -390,20 +393,32 @@ impl Decoder {
 
         // ========== RULE 4: Probability-based timestamp preference ==========
         // If sum of probability over timestamps is above any other token, sample timestamp
-        let log_probs = softmax(&logits, 0)?;
+        let log_probs = log_softmax(&logits, 0)?;
 
-        // Use tensor operations instead of converting to vector
-        let timestamp_probs = log_probs.narrow(
+        // Extract timestamp and text log probabilities
+        let timestamp_log_probs = log_probs.narrow(
             0,
             timestamp_begin as usize,
             vocab_size as usize - timestamp_begin as usize,
         )?;
-        let timestamp_prob_sum: f32 = timestamp_probs.sum(0)?.to_scalar::<f32>()?;
 
-        let text_probs = log_probs.narrow(0, 0, timestamp_begin as usize)?;
-        let max_text_prob: f32 = text_probs.max(0)?.to_scalar::<f32>()?;
+        let text_log_probs = log_probs.narrow(0, 0, timestamp_begin as usize)?;
 
-        if timestamp_prob_sum > max_text_prob {
+        // Implement logsumexp for timestamp tokens (numerically stable)
+        let timestamp_logprob = {
+            let max_val = timestamp_log_probs.max(0)?;
+            let shifted = timestamp_log_probs.broadcast_sub(&max_val)?;
+            let exp_shifted = shifted.exp()?;
+            let sum_exp = exp_shifted.sum(0)?;
+            let log_sum = sum_exp.log()?;
+            max_val.broadcast_add(&log_sum)?.to_scalar::<f32>()?
+        };
+
+        // Get max text token log probability
+        let max_text_token_logprob: f32 = text_log_probs.max(0)?.to_scalar::<f32>()?;
+
+        // Compare in log space
+        if timestamp_logprob > max_text_token_logprob {
             // Only consider timestamp tokens
             for i in 0..vocab_size {
                 mask_buffer[i as usize] = if i < timestamp_begin {
