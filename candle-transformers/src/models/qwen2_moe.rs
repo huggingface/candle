@@ -12,7 +12,7 @@
 //! - Rotary positional embeddings (RoPE)
 //!
 //! References:
-//! - [Qwen2 Paper](https://arxiv.org/abs/2401.08985)
+//! - [Qwen2 Paper](https://huggingface.co/papers/2401.08985)
 //! - [Model Card](https://huggingface.co/Qwen/Qwen2-7B-beta)
 //!
 
