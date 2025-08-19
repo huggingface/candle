@@ -1,7 +1,6 @@
 use crate::{Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipeline};
 use objc2_metal::MTLSize;
 use std::ffi::c_void;
-use std::ptr::NonNull;
 
 /// Most kernels apply similarly across the tensors
 /// This creates a strategy that uses the maximum amount of threads per threadgroup (capped at the

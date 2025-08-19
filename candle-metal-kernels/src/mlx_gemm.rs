@@ -2,7 +2,7 @@ use crate::metal_utils::{Buffer, ComputeCommandEncoder, Device};
 use crate::utils::EncoderProvider;
 use crate::{ConstantValues, Kernels, MetalKernelError, Source, Value};
 use objc2_metal::{MTLResourceUsage, MTLSize};
-use std::{ffi::c_void, ptr::NonNull};
+use std::ffi::c_void;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum GemmDType {

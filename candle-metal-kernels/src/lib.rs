@@ -1,7 +1,6 @@
 use objc2_metal::{MTLDataType, MTLResourceUsage, MTLSize};
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::ptr::NonNull;
 use std::sync::RwLock;
 pub mod metal_utils;
 pub mod mlx_gemm;

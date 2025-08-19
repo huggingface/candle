@@ -1,4 +1,3 @@
-use crate::utils::EncoderProvider;
 use crate::{ConstantValues, MetalKernelError};
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSRange, NSString};
@@ -8,15 +7,7 @@ use objc2_metal::{
     MTLCreateSystemDefaultDevice, MTLDataType, MTLDevice, MTLFunction, MTLFunctionConstantValues,
     MTLLibrary, MTLResource, MTLResourceUsage, MTLSize,
 };
-use std::{
-    collections::HashMap,
-    ffi::c_void,
-    marker::PhantomData,
-    ops::Deref,
-    ptr,
-    sync::{Arc, Mutex},
-    thread, time,
-};
+use std::{collections::HashMap, ffi::c_void, ptr, sync::Arc};
 
 // Use Retained when appropriate. Gives us a more elegant way of handling memory (peaks) than autoreleasepool.
 // https://docs.rs/objc2/latest/objc2/rc/struct.Retained.html
@@ -206,15 +197,6 @@ impl FunctionConstantValues {
     }
 }
 
-pub struct CommandEncoder {
-    raw: Option<CommandBuffer>,
-    name: String,
-    queue: Arc<Mutex<CommandQueue>>,
-    enable_debug_groups: bool,
-    enable_dispatch_type: bool,
-    has_open_debug_group: bool,
-}
-
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub struct Buffer {
     raw: *mut ProtocolObject<dyn objc2_metal::MTLBuffer>,
@@ -354,13 +336,11 @@ impl AsRef<BlitCommandEncoder> for BlitCommandEncoder {
 
 impl BlitCommandEncoder {
     pub fn end_encoding(&self) {
-        use objc2_metal::MTLBlitCommandEncoder as _;
         use objc2_metal::MTLCommandEncoder as _;
         self.raw.endEncoding()
     }
 
     pub fn set_label(&self, label: &str) {
-        use objc2_metal::MTLBlitCommandEncoder as _;
         use objc2_metal::MTLCommandEncoder as _;
         self.raw.setLabel(Some(&NSString::from_str(&label)))
     }
