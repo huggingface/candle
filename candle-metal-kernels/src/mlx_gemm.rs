@@ -1,7 +1,8 @@
+use crate::metal_utils::{Buffer, ComputeCommandEncoder, Device};
 use crate::utils::EncoderProvider;
 use crate::{ConstantValues, Kernels, MetalKernelError, Source, Value};
-use metal::{Buffer, ComputeCommandEncoderRef, Device, MTLSize, NSUInteger};
-use std::ffi::c_void;
+use objc2_metal::{MTLResourceUsage, MTLSize};
+use std::{ffi::c_void, ptr::NonNull};
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum GemmDType {
@@ -141,40 +142,40 @@ pub fn call_mlx_gemm(
     };
     let pipeline = kernels.load_pipeline_with_constants(device, Source::Gemm, name, constants)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
-    encoder.set_buffer(0, Some(lhs_buffer), lhs_offset as NSUInteger);
-    encoder.set_buffer(1, Some(rhs_buffer), rhs_offset as NSUInteger);
+    encoder.set_buffer(0, Some(lhs_buffer), lhs_offset);
+    encoder.set_buffer(1, Some(rhs_buffer), rhs_offset);
     encoder.set_buffer(3, Some(output), 0);
     encoder.set_bytes(
         4,
-        std::mem::size_of::<GemmParams>() as u64,
+        std::mem::size_of::<GemmParams>(),
         &gemm_params as *const GemmParams as *const c_void,
     );
     encoder.set_bytes(
         6, // batch_shape
-        std::mem::size_of::<i32>() as u64,
+        std::mem::size_of::<i32>(),
         &(b as i32) as *const i32 as *const c_void,
     );
     encoder.set_bytes(
         7,
-        (std::mem::size_of::<isize>() * batch_strides.len()) as u64,
-        batch_strides.as_ptr() as *const c_void,
+        std::mem::size_of::<isize>() * batch_strides.len(),
+        batch_strides.as_ptr().cast(),
     );
 
     let grid_size = MTLSize {
-        width: tn as u64,
-        height: tm as u64,
-        depth: /* batch_size_out */ b as u64,
+        width: tn,
+        height: tm,
+        depth: /* batch_size_out */ b,
     };
     let group_size = MTLSize {
         width: 32,
         height: wn,
         depth: wm,
     };
-    encoder.use_resource(lhs_buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(rhs_buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(lhs_buffer, MTLResourceUsage::Read);
+    encoder.use_resource(rhs_buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(grid_size, group_size);
     Ok(())
 }

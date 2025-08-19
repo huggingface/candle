@@ -1,6 +1,7 @@
 use crate::utils::{BufferOffset, EncoderProvider};
 use crate::{set_params, DType, Kernels, MetalKernelError, Source};
-use metal::{Buffer, ComputeCommandEncoderRef, Device, MTLResourceOptions, MTLSize};
+use crate::{Buffer, ComputeCommandEncoder, Device, MTLResourceOptions, MTLSize};
+use objc2_metal::MTLResourceUsage;
 
 #[allow(clippy::too_many_arguments)]
 pub fn call_arg_sort(
@@ -16,25 +17,25 @@ pub fn call_arg_sort(
 ) -> Result<(), crate::MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Sort, name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (&src, dst, ncols as i64, ncols_pad as i64));
 
     let thread_group_count = MTLSize {
         width: 1,
-        height: nrows as u64,
+        height: nrows,
         depth: 1,
     };
     let thread_group_size = MTLSize {
-        width: ncols_pad as u64,
+        width: ncols_pad,
         height: 1,
         depth: 1,
     };
 
-    encoder.use_resource(src.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(dst, metal::MTLResourceUsage::Write);
-    encoder.set_threadgroup_memory_length(0, (ncols_pad * 4).max(16) as u64);
+    encoder.use_resource(src.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(dst, MTLResourceUsage::Write);
+    encoder.set_threadgroup_memory_length(0, (ncols_pad * 4).max(16));
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -67,20 +68,18 @@ pub fn multi_block_sort(
     let dtype_str = mlx_dtype_str(dtype);
     // Do allocations
     let el_count = nrows * ncols;
-    let bytes_len = (el_count * dtype.size_in_bytes()) as u64;
-    let mut dev_vals_0 = device.new_buffer(bytes_len, MTLResourceOptions::StorageModePrivate);
-    let mut dev_vals_1 = device.new_buffer(bytes_len, MTLResourceOptions::StorageModePrivate);
-    let mut dev_idxs_0 =
-        device.new_buffer(el_count as u64 * 4, MTLResourceOptions::StorageModePrivate);
-    let mut dev_idxs_1 =
-        device.new_buffer(el_count as u64 * 4, MTLResourceOptions::StorageModePrivate);
+    let bytes_len = el_count * dtype.size_in_bytes();
+    let mut dev_vals_0 = device.new_buffer(bytes_len, MTLResourceOptions::StorageModePrivate)?;
+    let mut dev_vals_1 = device.new_buffer(bytes_len, MTLResourceOptions::StorageModePrivate)?;
+    let mut dev_idxs_0 = device.new_buffer(el_count * 4, MTLResourceOptions::StorageModePrivate)?;
+    let mut dev_idxs_1 = device.new_buffer(el_count * 4, MTLResourceOptions::StorageModePrivate)?;
     let mut block_partitions = device.new_buffer(
-        (nrows * (nblocks + 1)) as u64 * 4,
+        (nrows * (nblocks + 1)) * 4,
         MTLResourceOptions::StorageModePrivate,
-    );
+    )?;
     // Prepare command encoder
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     // Do blockwise sort
     {
         let name = format!("sort_mbsort_{dtype_str}_uint32_bn{bn}_tn{tn}");
@@ -100,12 +99,12 @@ pub fn multi_block_sort(
             )
         );
         let thread_group_count = MTLSize {
-            width: nblocks as u64,
-            height: nrows as u64,
+            width: nblocks,
+            height: nrows,
             depth: 1,
         };
         let thread_group_size = MTLSize {
-            width: bn as u64,
+            width: bn,
             height: 1,
             depth: 1,
         };
@@ -147,11 +146,11 @@ pub fn multi_block_sort(
             );
             let thread_group_count = MTLSize {
                 width: 1,
-                height: nrows as u64,
+                height: nrows,
                 depth: 1,
             };
             let thread_group_size = MTLSize {
-                width: n_thr_per_group as u64,
+                width: n_thr_per_group,
                 height: 1,
                 depth: 1,
             };
@@ -175,12 +174,12 @@ pub fn multi_block_sort(
                 )
             );
             let thread_group_count = MTLSize {
-                width: nblocks as u64,
-                height: nrows as u64,
+                width: nblocks,
+                height: nrows,
                 depth: 1,
             };
             let thread_group_size = MTLSize {
-                width: bn as u64,
+                width: bn,
                 height: 1,
                 depth: 1,
             };
@@ -236,7 +235,7 @@ pub fn block_sort(
     let name = format!("carg_block_sort_{dtype_str}_uint32_bn{bn}_tn{tn}");
     let pipeline = kernels.load_pipeline(device, Source::MlxSort, name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
@@ -252,16 +251,16 @@ pub fn block_sort(
     );
     let thread_group_count = MTLSize {
         width: 1,
-        height: nrows as u64,
+        height: nrows,
         depth: 1,
     };
     let thread_group_size = MTLSize {
-        width: bn as u64,
+        width: bn,
         height: 1,
         depth: 1,
     };
-    encoder.use_resource(src.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(dst, metal::MTLResourceUsage::Write);
+    encoder.use_resource(src.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(dst, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
