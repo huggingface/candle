@@ -169,8 +169,6 @@ pub mod binary {
 
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
-    #[error("Failed to allocate: {0}")]
-    AllocationError(String),
     #[error("Could not lock kernel map: {0}")]
     LockError(String),
     #[error("Error while loading library: {0}")]

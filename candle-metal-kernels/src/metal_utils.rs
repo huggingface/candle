@@ -52,7 +52,9 @@ impl Device {
             .map(|b| Buffer {
                 raw: Retained::into_raw(b),
             })
-            .ok_or(MetalKernelError::AllocationError("".into()))
+            .ok_or(MetalKernelError::FailedToCreateResource(
+                "Buffer".to_string(),
+            ))
     }
 
     pub fn new_buffer_with_data(
@@ -68,7 +70,9 @@ impl Device {
                 .map(|b| Buffer {
                     raw: Retained::into_raw(b),
                 })
-                .ok_or(MetalKernelError::AllocationError("".into()))
+                .ok_or(MetalKernelError::FailedToCreateResource(
+                    "Buffer".to_string(),
+                ))
         }
     }
 
