@@ -1,7 +1,8 @@
 #![allow(unused)]
 use anyhow::{Context, Result};
+use std::env;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 struct KernelDirectories {
     kernel_glob: &'static str,
@@ -20,11 +21,21 @@ fn main() -> Result<()> {
 
     #[cfg(feature = "cuda")]
     {
+        // Added: Get the safe output directory from the environment.
+        let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+
         for kdir in KERNEL_DIRS.iter() {
             let builder = bindgen_cuda::Builder::default().kernel_paths_glob(kdir.kernel_glob);
             println!("cargo:info={builder:?}");
             let bindings = builder.build_ptx().unwrap();
-            bindings.write(kdir.rust_target).unwrap()
+
+            // Changed: This now writes to a safe path inside $OUT_DIR.
+            let safe_target = out_dir.join(
+                Path::new(kdir.rust_target)
+                    .file_name()
+                    .context("Failed to get filename from rust_target")?,
+            );
+            bindings.write(safe_target).unwrap()
         }
     }
     Ok(())
