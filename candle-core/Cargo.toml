@@ -22,6 +22,7 @@ float8 = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
 memmap2 = { workspace = true }
+mathfun = { workspace = true }
 num-traits = { workspace = true }
 num_cpus = { workspace = true }
 rand = { workspace = true }
