@@ -1,6 +1,6 @@
 # candle-efficientvit
 
-[EfﬁcientViT: Memory Efﬁcient Vision Transformer with Cascaded Group Attention](https://arxiv.org/abs/2305.07027).
+[EfﬁcientViT: Memory Efﬁcient Vision Transformer with Cascaded Group Attention](https://huggingface.co/papers/2305.07027).
 
 This candle implementation uses a pre-trained EfficientViT (from Microsoft Research Asia) network for inference.
 The classification head has been trained on the ImageNet dataset and returns the probabilities for the top-5 classes.

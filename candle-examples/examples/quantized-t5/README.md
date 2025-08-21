@@ -51,7 +51,7 @@ cargo run --example quantized-t5 --release  -- \
  Note that a storm surge is what forecasters consider a hurricane's most dangerous part.
 ```
 
-### [MADLAD-400](https://arxiv.org/abs/2309.04662)
+### [MADLAD-400](https://huggingface.co/papers/2309.04662)
 
 MADLAD-400 is a series of multilingual machine translation T5 models trained on 250 billion tokens covering over 450 languages using publicly available data. These models are competitive with significantly larger models.
 

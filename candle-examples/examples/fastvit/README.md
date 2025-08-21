@@ -1,6 +1,6 @@
 # candle-fastvit
 
-[FastViT: A Fast Hybrid Vision Transformer using Structural Reparameterization](https://arxiv.org/abs/2303.14189).
+[FastViT: A Fast Hybrid Vision Transformer using Structural Reparameterization](https://huggingface.co/papers/2303.14189).
 This candle implementation uses a pre-trained FastViT network for inference. The
 classification head has been trained on the ImageNet dataset and returns the
 probabilities for the top-5 classes.

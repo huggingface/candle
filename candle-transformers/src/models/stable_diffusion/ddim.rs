@@ -6,7 +6,7 @@
 //! this to non-Markovian guidance.
 //!
 //! Denoising Diffusion Implicit Models, J. Song et al, 2020.
-//! https://arxiv.org/abs/2010.02502
+//! https://huggingface.co/papers/2010.02502
 use super::schedulers::{
     betas_for_alpha_bar, BetaSchedule, PredictionType, Scheduler, SchedulerConfig, TimestepSpacing,
 };

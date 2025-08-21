@@ -2,7 +2,7 @@
 //!
 //! NV-Embed-v2 is a text embedding model that combines a Mistral decoder with a latent attention mechanism to produce high-quality text embeddings.
 //!
-//! This implementation is based on the [paper](https://arxiv.org/pdf/2405.17428) and [weights](https://huggingface.co/nvidia/NV-Embed-v2)
+//! This implementation is based on the [paper](https://huggingface.co/papers/2405.17428) and [weights](https://huggingface.co/nvidia/NV-Embed-v2)
 //!
 //! # Query-Passage Retrieval Example
 //! ```bash
