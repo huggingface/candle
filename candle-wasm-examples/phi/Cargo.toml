@@ -28,4 +28,8 @@ serde_json = { workspace = true }
 # Wasm specific crates.
 console_error_panic_hook = "0.1.7"
 wasm-bindgen = "0.2.87"
+wasm-bindgen-rayon = "1.2"
+rayon = "1.8"
 js-sys = "0.3.64"
+web-sys = { version = "0.3", features = ["console", "Worker", "MessageEvent", "MessagePort", "DedicatedWorkerGlobalScope", "WorkerGlobalScope", "WorkerLocation", "WorkerNavigator"] }
+
