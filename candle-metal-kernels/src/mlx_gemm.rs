@@ -1,8 +1,7 @@
 use crate::metal_utils::{Buffer, ComputeCommandEncoder, Device};
 use crate::utils::EncoderProvider;
-use crate::{ConstantValues, Kernels, MetalKernelError, Source, Value};
+use crate::{set_params, ConstantValues, EncoderParam, Kernels, MetalKernelError, Source, Value};
 use objc2_metal::{MTLResourceUsage, MTLSize};
-use std::ffi::c_void;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum GemmDType {
@@ -144,23 +143,25 @@ pub fn call_mlx_gemm(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
-    encoder.set_buffer(0, Some(lhs_buffer), lhs_offset);
-    encoder.set_buffer(1, Some(rhs_buffer), rhs_offset);
-    encoder.set_buffer(3, Some(output), 0);
-    encoder.set_bytes(
-        4,
-        std::mem::size_of::<GemmParams>(),
-        &gemm_params as *const GemmParams as *const c_void,
-    );
-    encoder.set_bytes(
-        6, // batch_shape
-        std::mem::size_of::<i32>(),
-        &(b as i32) as *const i32 as *const c_void,
-    );
-    encoder.set_bytes(
-        7,
-        std::mem::size_of::<isize>() * batch_strides.len(),
-        batch_strides.as_ptr().cast(),
+
+    impl EncoderParam for GemmParams {
+        fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
+            encoder.set_bytes(position, &data);
+        }
+    }
+
+    set_params!(
+        encoder,
+        (
+            (lhs_buffer, lhs_offset),
+            (rhs_buffer, rhs_offset),
+            (),
+            output,
+            gemm_params,
+            (),
+            b as i32,
+            &batch_strides[..]
+        )
     );
 
     let grid_size = MTLSize {

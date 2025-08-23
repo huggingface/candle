@@ -33,3 +33,7 @@ half = { version = "2.3.1", features = [
 anyhow = "1"
 rand = "0.8.5"
 rand_distr = "0.4.3"
+
+[profile.profiling]
+inherits = "release"
+debug = 2

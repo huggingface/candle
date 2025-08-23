@@ -1,6 +1,5 @@
-use objc2_metal::{MTLDataType, MTLResourceUsage, MTLSize};
+use objc2_metal::{MTLCompileOptions, MTLDataType, MTLMathMode, MTLResourceUsage, MTLSize};
 use std::collections::HashMap;
-use std::ffi::c_void;
 use std::sync::RwLock;
 pub mod metal_utils;
 pub mod mlx_gemm;
@@ -310,8 +309,11 @@ impl Kernels {
         } else {
             let lib = {
                 let source_content = self.get_library_source(source);
+                let compile_options = MTLCompileOptions::new();
+                // unsafe { compile_options.setEnableLogging(true) };
+                unsafe { compile_options.setMathMode(MTLMathMode::Fast) };
                 device
-                    .new_library_with_source(source_content, None)
+                    .new_library_with_source(source_content, Some(&compile_options))
                     .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
             };
             libraries.insert(source, lib.clone());
@@ -1570,7 +1572,9 @@ impl std::hash::Hash for Value {
 impl Value {
     fn data_type(&self) -> MTLDataType {
         match self {
-            Value::USize(_) => MTLDataType::UInt,
+            // usize is usually u64 aka ulong, but can be u32 on 32-bit systems.
+            // https://developer.apple.com/documentation/objectivec/nsuinteger
+            Value::USize(_) => MTLDataType::ULong,
             Value::F32(_) => MTLDataType::Float,
             Value::U16(_) => MTLDataType::UShort,
             Value::Bool(_) => MTLDataType::Bool,
@@ -1775,11 +1779,7 @@ pub fn call_sdpa_full(
 
     impl EncoderParam for MLXFastAttentionParams {
         fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-            encoder.set_bytes(
-                position,
-                core::mem::size_of::<MLXFastAttentionParams>(),
-                &data as *const MLXFastAttentionParams as *const c_void,
-            );
+            encoder.set_bytes(position, &data);
         }
     }
 

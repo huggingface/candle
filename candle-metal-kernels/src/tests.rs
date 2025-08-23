@@ -1,5 +1,6 @@
 use super::*;
 use crate::{Buffer, Device, MTLResourceOptions};
+use core::ffi::c_void;
 use half::{bf16, f16};
 use rand::prelude::SliceRandom;
 use rand::thread_rng;

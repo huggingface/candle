@@ -1,6 +1,5 @@
 use crate::{Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipeline};
 use objc2_metal::MTLSize;
-use std::ffi::c_void;
 
 /// Most kernels apply similarly across the tensors
 /// This creates a strategy that uses the maximum amount of threads per threadgroup (capped at the
@@ -76,11 +75,7 @@ macro_rules! primitive {
     ($type:ty) => {
         impl EncoderParam for $type {
             fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-                encoder.set_bytes(
-                    position,
-                    core::mem::size_of::<$type>(),
-                    &data as *const $type as *const c_void,
-                );
+                encoder.set_bytes(position, &data);
             }
         }
     };
@@ -113,7 +108,7 @@ impl<'a> BufferOffset<'a> {
 
 impl<T> EncoderParam for &[T] {
     fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-        encoder.set_bytes(position, core::mem::size_of_val(data), data.as_ptr().cast());
+        encoder.set_bytes_directly(position, core::mem::size_of_val(data), data.as_ptr().cast());
     }
 }
 
@@ -147,6 +142,10 @@ impl EncoderParam for (&mut Buffer, usize) {
     }
 }
 
+impl EncoderParam for () {
+    fn set_param(_: &ComputeCommandEncoder, _: usize, _: Self) {}
+}
+
 #[macro_export]
 macro_rules! set_params {
     ($encoder:ident, ($($param:expr),+)) => (
@@ -162,8 +161,6 @@ pub trait EncoderProvider {
     type Encoder<'a>: AsRef<ComputeCommandEncoder>
     where
         Self: 'a;
-
-    const END_ENCODING_ON_DROP: bool;
 
     fn encoder(&self) -> Self::Encoder<'_>;
 }
@@ -188,7 +185,6 @@ impl AsRef<ComputeCommandEncoder> for WrappedEncoder<'_> {
 }
 
 impl EncoderProvider for &CommandBuffer {
-    const END_ENCODING_ON_DROP: bool = true;
     type Encoder<'a>
         = ComputeCommandEncoder
     where
@@ -199,7 +195,6 @@ impl EncoderProvider for &CommandBuffer {
 }
 
 impl EncoderProvider for &ComputeCommandEncoder {
-    const END_ENCODING_ON_DROP: bool = false;
     type Encoder<'a>
         = WrappedEncoder<'a>
     where

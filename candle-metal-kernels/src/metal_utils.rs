@@ -49,9 +49,7 @@ impl Device {
     ) -> Result<Buffer, MetalKernelError> {
         self.as_ref()
             .newBufferWithLength_options(length, options)
-            .map(|b| Buffer {
-                raw: Retained::into_raw(b),
-            })
+            .map(|raw| Buffer { raw })
             .ok_or(MetalKernelError::FailedToCreateResource(
                 "Buffer".to_string(),
             ))
@@ -67,9 +65,7 @@ impl Device {
         unsafe {
             self.as_ref()
                 .newBufferWithBytes_length_options(pointer, length, options)
-                .map(|b| Buffer {
-                    raw: Retained::into_raw(b),
-                })
+                .map(|raw| Buffer { raw })
                 .ok_or(MetalKernelError::FailedToCreateResource(
                     "Buffer".to_string(),
                 ))
@@ -195,31 +191,23 @@ impl FunctionConstantValues {
         }
     }
 
-    pub fn set_constant_value_at_index<T>(&self, value: T, dtype: MTLDataType, index: usize) {
-        let value = ptr::NonNull::new(&value as *const T as *mut c_void).unwrap();
+    pub fn set_constant_value_at_index<T>(&self, value: &T, dtype: MTLDataType, index: usize) {
+        let value = ptr::NonNull::new(value as *const T as *mut c_void).unwrap();
         unsafe { self.raw.setConstantValue_type_atIndex(value, dtype, index) }
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq)]
+#[derive(Clone, Debug, Hash, PartialEq)]
 pub struct Buffer {
-    raw: *mut ProtocolObject<dyn objc2_metal::MTLBuffer>,
+    raw: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
 }
 
 unsafe impl Send for Buffer {}
 unsafe impl Sync for Buffer {}
 
-impl Default for Buffer {
-    fn default() -> Self {
-        Self {
-            raw: ptr::null_mut(),
-        }
-    }
-}
-
 impl Buffer {
     fn as_ref(&self) -> &ProtocolObject<dyn MTLBuffer> {
-        unsafe { &*self.raw }
+        &*self.raw
     }
 
     pub fn contents(&self) -> *mut u8 {
@@ -295,10 +283,18 @@ impl ComputeCommandEncoder {
                 .setBuffer_offset_atIndex(buffer.map(|b| &*b.raw), offset, index)
         }
     }
-    pub fn set_bytes(&self, index: usize, length: usize, bytes: *const c_void) {
+
+    pub fn set_bytes_directly(&self, index: usize, length: usize, bytes: *const c_void) {
         let pointer = ptr::NonNull::new(bytes as *mut c_void).unwrap();
         unsafe { self.raw.setBytes_length_atIndex(pointer, length, index) }
     }
+
+    pub fn set_bytes<T>(&self, index: usize, data: &T) {
+        let size = core::mem::size_of::<T>();
+        let ptr = ptr::NonNull::new(data as *const T as *mut c_void).unwrap();
+        unsafe { self.raw.setBytes_length_atIndex(ptr, size, index) }
+    }
+
     pub fn set_compute_pipeline_state(&self, pipeline: &ComputePipeline) {
         self.raw.setComputePipelineState(&pipeline.raw);
     }
