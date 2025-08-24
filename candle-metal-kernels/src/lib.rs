@@ -310,7 +310,7 @@ impl Kernels {
             let lib = {
                 let source_content = self.get_library_source(source);
                 let compile_options = MTLCompileOptions::new();
-                // unsafe { compile_options.setEnableLogging(true) };
+                //unsafe { compile_options.setEnableLogging(true) };
                 unsafe { compile_options.setMathMode(MTLMathMode::Fast) };
                 device
                     .new_library_with_source(source_content, Some(&compile_options))

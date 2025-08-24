@@ -257,7 +257,7 @@ impl AsRef<ComputeCommandEncoder> for ComputeCommandEncoder {
     }
 }
 impl ComputeCommandEncoder {
-    pub fn set_threadgroup_memory_length(&self, length: usize, index: usize) {
+    pub fn set_threadgroup_memory_length(&self, index: usize, length: usize) {
         unsafe { self.raw.setThreadgroupMemoryLength_atIndex(length, index) }
     }
 
@@ -379,7 +379,6 @@ impl BlitCommandEncoder {
 
 pub type BufferMap = HashMap<(usize, MTLResourceOptions), Vec<Arc<Buffer>>>;
 pub struct Commands {
-    device: Device,
     /// Single command queue for the entire device.
     command_queue: CommandQueue,
     /// One command buffer at a time.
@@ -401,8 +400,6 @@ pub struct Commands {
     //capture: Option<Retained<objc2_metal::MTLCaptureManager>>,
     //timestamp_counter_set: Option<CounterSet>,
 }
-
-// needed for `capture` and `timestamp_counter_set`
 unsafe impl Send for Commands {}
 unsafe impl Sync for Commands {}
 
@@ -419,10 +416,6 @@ pub fn create_command_buffer(
 
 impl Commands {
     pub fn new(command_queue: CommandQueue) -> Result<Self, MetalKernelError> {
-        let raw_device = MTLCreateSystemDefaultDevice().ok_or(
-            MetalKernelError::LoadLibraryError(String::from("Could not get default device")),
-        )?;
-        let device = Device { raw: raw_device };
         let command_buffer = create_command_buffer(&command_queue)?;
         command_buffer.enqueue();
         let compute_per_buffer = match std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER") {
@@ -430,7 +423,6 @@ impl Commands {
             _ => 50,
         };
         Ok(Self {
-            device,
             command_queue,
             command_buffer,
             command_buffer_index: 0,
