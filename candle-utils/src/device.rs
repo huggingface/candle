@@ -11,7 +11,7 @@ use candle::{Device, Result};
 ///
 /// # Example  
 /// ```
-/// let device = candle_utils::device::get(true, false).unwrap();
+/// let device = candle_utils::device::get_device(true, false).unwrap();
 /// ```
 pub fn get_device(use_cpu: bool, quiet: bool) -> Result<Device> {
     if use_cpu {
