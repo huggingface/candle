@@ -11,21 +11,21 @@ pub use sort::{call_arg_sort, call_mlx_arg_sort};
 pub use utils::BufferOffset;
 use utils::{get_block_dims, linear_split, EncoderParam, EncoderProvider};
 
-const AFFINE: &str = include_str!("affine.metal");
-const BINARY: &str = include_str!("binary.metal");
-const CAST: &str = include_str!("cast.metal");
-const CONV: &str = include_str!("conv.metal");
-const FILL: &str = include_str!("fill.metal");
-const INDEXING: &str = include_str!("indexing.metal");
-const MLX_GEMM: &str = include_str!("mlx_gemm.metal");
-const MLX_SORT: &str = include_str!("mlx_sort.metal");
-const QUANTIZED: &str = include_str!("quantized.metal");
-const RANDOM: &str = include_str!("random.metal");
-const REDUCE: &str = include_str!("reduce.metal");
-const SORT: &str = include_str!("sort.metal");
-const TERNARY: &str = include_str!("ternary.metal");
-const UNARY: &str = include_str!("unary.metal");
-const SDPA: &str = include_str!("scaled_dot_product_attention.metal");
+const AFFINE: &str = include_str!("kernels/affine.metal");
+const BINARY: &str = include_str!("kernels/binary.metal");
+const CAST: &str = include_str!("kernels/cast.metal");
+const CONV: &str = include_str!("kernels/conv.metal");
+const FILL: &str = include_str!("kernels/fill.metal");
+const INDEXING: &str = include_str!("kernels/indexing.metal");
+const MLX_GEMM: &str = include_str!("kernels/mlx_gemm.metal");
+const MLX_SORT: &str = include_str!("kernels/mlx_sort.metal");
+const QUANTIZED: &str = include_str!("kernels/quantized.metal");
+const RANDOM: &str = include_str!("kernels/random.metal");
+const REDUCE: &str = include_str!("kernels/reduce.metal");
+const SORT: &str = include_str!("kernels/sort.metal");
+const TERNARY: &str = include_str!("kernels/ternary.metal");
+const UNARY: &str = include_str!("kernels/unary.metal");
+const SDPA: &str = include_str!("kernels/scaled_dot_product_attention.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DType {
