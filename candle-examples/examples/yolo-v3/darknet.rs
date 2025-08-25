@@ -268,7 +268,7 @@ impl Darknet {
         Ok(image_width)
     }
 
-    pub fn build_model(&self, vb: VarBuilder) -> Result<Func> {
+    pub fn build_model(&self, vb: VarBuilder) -> Result<Func<'_>> {
         let mut blocks: Vec<(usize, Bl)> = vec![];
         let mut prev_channels: usize = 3;
         for (index, block) in self.blocks.iter().enumerate() {

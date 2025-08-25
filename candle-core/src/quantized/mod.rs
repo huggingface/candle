@@ -115,7 +115,7 @@ impl QStorage {
         }
     }
 
-    fn data(&self) -> Result<Cow<[u8]>> {
+    fn data(&self) -> Result<Cow<'_, [u8]>> {
         match self {
             QStorage::Cpu(storage) => {
                 let data_ptr = storage.as_ptr();
