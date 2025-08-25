@@ -5,6 +5,8 @@ use candle_metal_kernels::{
     },
     Kernels,
 };
+use objc2_foundation::NSURL;
+use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -230,10 +232,6 @@ impl MetalDevice {
 
     /// Create a metal GPU capture trace on [`path`].
     pub fn capture<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        use objc2_foundation::NSURL;
-        use objc2_metal::MTLCaptureDescriptor;
-        use objc2_metal::MTLCaptureDestination;
-        use objc2_metal::MTLCaptureManager;
         let capture = unsafe { MTLCaptureManager::sharedCaptureManager() };
         let descriptor = MTLCaptureDescriptor::new();
         descriptor.setDestination(MTLCaptureDestination::GPUTraceDocument);

@@ -203,7 +203,7 @@ impl FunctionConstantValues {
 
 #[derive(Clone, Debug, Hash, PartialEq)]
 pub struct Buffer {
-    raw: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+    raw: Retained<ProtocolObject<dyn MTLBuffer>>,
 }
 
 unsafe impl Send for Buffer {}
@@ -401,7 +401,7 @@ pub struct Commands {
     command_buffer_index: usize,
     /// The maximum amount of [compute command encoder](https://developer.apple.com/documentation/metal/mtlcomputecommandencoder?language=objc) per [command buffer](https://developer.apple.com/documentation/metal/mtlcommandbuffer?language=objc)
     compute_per_buffer: usize,
-    //capture: Option<Retained<objc2_metal::MTLCaptureManager>>,
+    //capture: Option<Retained<MTLCaptureManager>>,
     //timestamp_counter_set: Option<CounterSet>,
 }
 unsafe impl Send for Commands {}
@@ -450,9 +450,9 @@ impl Commands {
 
     pub fn wait_until_completed(&mut self) -> Result<(), MetalKernelError> {
         match self.command_buffer.status() {
-            objc2_metal::MTLCommandBufferStatus::Committed
-            | objc2_metal::MTLCommandBufferStatus::Scheduled
-            | objc2_metal::MTLCommandBufferStatus::Completed => {
+            MTLCommandBufferStatus::Committed
+            | MTLCommandBufferStatus::Scheduled
+            | MTLCommandBufferStatus::Completed => {
                 panic!("Already committed");
             }
             _ => {}
