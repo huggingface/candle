@@ -21,6 +21,8 @@ pub type MTLResourceOptions = objc2_metal::MTLResourceOptions;
 pub struct Device {
     raw: Retained<ProtocolObject<dyn MTLDevice>>,
 }
+unsafe impl Send for Device {}
+unsafe impl Sync for Device {}
 
 impl Device {
     pub fn as_ref(&self) -> &ProtocolObject<dyn MTLDevice> {
@@ -106,6 +108,8 @@ impl Device {
 pub struct Library {
     raw: Retained<ProtocolObject<dyn MTLLibrary>>,
 }
+unsafe impl Send for Library {}
+unsafe impl Sync for Library {}
 
 impl Library {
     pub fn get_function(
