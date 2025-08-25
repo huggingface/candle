@@ -617,17 +617,7 @@ fn run(args: Args) -> Result<()> {
     let mut scheduler = sd_config.build_scheduler(n_steps)?;
     let device = candle_examples::device(cpu)?;
     // If a seed is not given, generate a random seed and print it
-    let seed = seed.unwrap_or_else(|| {
-        #[cfg(feature = "metal")]
-        {
-            // Metal backend requires seed to be within u32 range
-            rand::rng().random_range(0u64..u32::MAX as u64)
-        }
-        #[cfg(not(feature = "metal"))]
-        {
-            rand::rng().random_range(0u64..u64::MAX)
-        }
-    });
+    let seed = seed.unwrap_or(rand::rng().random_range(0u64..u64::MAX));
 
     println!("Using seed {seed}");
     device.set_seed(seed)?;

@@ -111,11 +111,30 @@ struct HybridTaus {
     }
 };
 
+struct atomic_uintx2 {
+    device atomic_uint *x;
+    device atomic_uint *y;
+};
+
+METAL_FUNC ulong atomic_load_seed(device atomic_uintx2 *seed) {
+    uint x = atomic_load_explicit(seed->x, memory_order_relaxed);
+    uint y = atomic_load_explicit(seed->y, memory_order_relaxed);
+    return (static_cast<ulong>(x) << 32) | y;
+}
+
+METAL_FUNC void atomic_store_seed(device atomic_uintx2 *seed, ulong desired) {
+    uint x = static_cast<uint>(desired >> 32);
+    uint y = static_cast<uint>(desired & 0xFFFFFFFF);
+    atomic_store_explicit(seed->x, x, memory_order_relaxed);
+    atomic_store_explicit(seed->y, y, memory_order_relaxed);
+}
+
+
 template<typename T> METAL_FUNC void rand_uniform(
     constant size_t &size,
     constant float &min,
     constant float &max,
-    device atomic_uint *seed,
+    device atomic_uintx2 *seed,
     device T *out,
     uint tid [[thread_position_in_grid]]
 ) {
@@ -126,11 +145,11 @@ template<typename T> METAL_FUNC void rand_uniform(
     // Evenly sized vectors need an offset when writing the mirror element.
     uint off = 1 - size % 2;
     float diff = abs(min - max);
-    uint s = atomic_load_explicit(seed, memory_order_relaxed);
-    HybridTaus rng = HybridTaus::init({ulong(s), tid, 1, 1});
+    ulong s = atomic_load_seed(seed);
+    HybridTaus rng = HybridTaus::init({s, tid, 1, 1});
     out[tid] = static_cast<T>(rng.rand() * diff + min);
     if (tid == 0) {
-        atomic_store_explicit(seed, uint(rng.rand() * UNIF01_NORM32), memory_order_relaxed);
+        atomic_store_seed(seed, rng.rand() * UNIF01_NORM32);
         // Return early if tid == 0 && off == 0, otherwise we will write to out[size].
         if (off == 0)
             return;
@@ -145,7 +164,7 @@ template<typename T> METAL_FUNC void normal(
     constant size_t &size,
     constant float &mean,
     constant float &stddev,
-    device atomic_uint *seed,
+    device atomic_uintx2 *seed,
     device T *out,
     uint tid [[thread_position_in_grid]]
 ) {
@@ -154,8 +173,8 @@ template<typename T> METAL_FUNC void normal(
     }
     // Evenly sized vectors need an offset when writing the mirror element.
     uint off = 1 - size % 2;
-    uint s = atomic_load_explicit(seed, memory_order_relaxed);
-    HybridTaus rng = HybridTaus::init({ulong(s), tid, 1, 1});
+    ulong s = atomic_load_seed(seed);
+    HybridTaus rng = HybridTaus::init({s, tid, 1, 1});
     float u1 = rng.rand();
     float u2 = rng.rand();
 
@@ -168,7 +187,7 @@ template<typename T> METAL_FUNC void normal(
     out[tid] = static_cast<T>(z0);
 
     if (tid == 0) {
-        atomic_store_explicit(seed, uint(rng.rand() * UNIF01_NORM32), memory_order_relaxed);
+        atomic_store_seed(seed, rng.rand() * UNIF01_NORM32);
         // Return early if tid == 0 && off == 0, otherwise we will write to out[size].
         if (off == 0)
             return;
@@ -182,7 +201,7 @@ kernel void rand_uniform_##NAME(                        \
     constant size_t &size,                              \
     constant float &min,                                \
     constant float &max,                                \
-    device atomic_uint *seed,                           \
+    device atomic_uintx2 *seed,                         \
     device T *out,                                      \
     uint tid [[thread_position_in_grid]]                \
 ) {                                                     \
@@ -194,7 +213,7 @@ kernel void rand_normal_##NAME(                         \
     constant size_t &size,                              \
     constant float &mean,                               \
     constant float &stddev,                             \
-    device atomic_uint *seed,                           \
+    device atomic_uintx2 *seed,                         \
     device T *out,                                      \
     uint tid [[thread_position_in_grid]]                \
 ) {                                                     \
