@@ -1,7 +1,10 @@
+use crate::source::{
+    AFFINE, BINARY, CAST, CONV, FILL, INDEXING, MLX_GEMM, MLX_SORT, QUANTIZED, RANDOM, REDUCE,
+    SDPA, SORT, TERNARY, UNARY,
+};
 use crate::{
     ComputePipeline, ConstantValues, Device, Function, Library, MTLCompileOptions, MTLMathMode,
-    MetalKernelError, Source, AFFINE, BINARY, CAST, CONV, FILL, INDEXING, MLX_GEMM, MLX_SORT,
-    QUANTIZED, RANDOM, REDUCE, SDPA, SORT, TERNARY, UNARY,
+    MetalKernelError, Source,
 };
 use std::collections::HashMap;
 use std::sync::RwLock;
