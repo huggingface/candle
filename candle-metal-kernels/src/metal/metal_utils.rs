@@ -1,11 +1,10 @@
-use crate::{ConstantValues, MetalKernelError};
+use crate::MetalKernelError;
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSRange, NSString};
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue,
-    MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState, MTLCounterSet,
-    MTLCreateSystemDefaultDevice, MTLDataType, MTLDevice, MTLFunction, MTLFunctionConstantValues,
-    MTLLibrary, MTLResource, MTLResourceUsage, MTLSize,
+    MTLComputeCommandEncoder, MTLComputePipelineState, MTLCounterSet, MTLResource,
+    MTLResourceUsage, MTLSize,
 };
 use std::{collections::HashMap, ffi::c_void, ptr, sync::Arc};
 

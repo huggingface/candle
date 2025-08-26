@@ -1,21 +1,10 @@
 use crate::{
-    Buffer, ComputePipeline, ConstantValues, Function, Library, MTLResourceOptions,
-    MetalKernelError,
+    Buffer, CommandQueue, ComputePipeline, Function, Library, MTLResourceOptions, MetalKernelError,
 };
 use objc2::{rc::Retained, runtime::ProtocolObject};
-use objc2_foundation::{NSRange, NSString};
-use objc2_metal::{
-    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue,
-    MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState, MTLCounterSet,
-    MTLCreateSystemDefaultDevice, MTLDataType, MTLDevice, MTLFunction, MTLFunctionConstantValues,
-    MTLLibrary, MTLResource, MTLResourceUsage, MTLSize,
-};
-use std::{collections::HashMap, ffi::c_void, ptr, sync::Arc};
-
-// Use Retained when appropriate. Gives us a more elegant way of handling memory (peaks) than autoreleasepool.
-// https://docs.rs/objc2/latest/objc2/rc/struct.Retained.html
-pub type CommandQueue = Retained<ProtocolObject<dyn MTLCommandQueue>>;
-pub type CounterSet = Retained<ProtocolObject<dyn MTLCounterSet>>;
+use objc2_foundation::NSString;
+use objc2_metal::{MTLCompileOptions, MTLCreateSystemDefaultDevice, MTLDevice};
+use std::{ffi::c_void, ptr};
 
 #[derive(Clone, Debug)]
 pub struct Device {

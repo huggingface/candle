@@ -1,13 +1,8 @@
 use crate::{ConstantValues, MetalKernelError};
 use objc2::{rc::Retained, runtime::ProtocolObject};
-use objc2_foundation::{NSRange, NSString};
-use objc2_metal::{
-    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue,
-    MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState, MTLCounterSet,
-    MTLCreateSystemDefaultDevice, MTLDataType, MTLDevice, MTLFunction, MTLFunctionConstantValues,
-    MTLLibrary, MTLResource, MTLResourceUsage, MTLSize,
-};
-use std::{collections::HashMap, ffi::c_void, ptr, sync::Arc};
+use objc2_foundation::NSString;
+use objc2_metal::{MTLDataType, MTLFunction, MTLFunctionConstantValues, MTLLibrary};
+use std::{ffi::c_void, ptr};
 
 #[derive(Clone, Debug)]
 pub struct Library {
