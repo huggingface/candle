@@ -1,35 +1,11 @@
 use crate::{CommandBuffer, MetalKernelError};
 use objc2::{rc::Retained, runtime::ProtocolObject};
-use objc2_metal::{
-    MTLCommandBufferStatus, MTLCommandQueue, MTLComputePipelineState, MTLCounterSet,
-};
+use objc2_metal::{MTLCommandBufferStatus, MTLCommandQueue, MTLCounterSet};
 
 // Use Retained when appropriate. Gives us a more elegant way of handling memory (peaks) than autoreleasepool.
 // https://docs.rs/objc2/latest/objc2/rc/struct.Retained.html
 pub type CommandQueue = Retained<ProtocolObject<dyn MTLCommandQueue>>;
 pub type CounterSet = Retained<ProtocolObject<dyn MTLCounterSet>>;
-
-#[derive(Clone, Debug)]
-pub struct ComputePipeline {
-    raw: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
-}
-
-unsafe impl Send for ComputePipeline {}
-unsafe impl Sync for ComputePipeline {}
-
-impl ComputePipeline {
-    pub fn new(raw: Retained<ProtocolObject<dyn MTLComputePipelineState>>) -> ComputePipeline {
-        ComputePipeline { raw }
-    }
-
-    pub fn as_ref(&self) -> &ProtocolObject<dyn MTLComputePipelineState> {
-        &self.raw
-    }
-
-    pub fn max_total_threads_per_threadgroup(&self) -> usize {
-        self.raw.maxTotalThreadsPerThreadgroup()
-    }
-}
 
 pub struct Commands {
     /// Single command queue for the entire device.
