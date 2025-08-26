@@ -1,3 +1,4 @@
+pub mod affine;
 pub mod binary;
 pub mod cast;
 mod macros;
@@ -8,6 +9,7 @@ pub mod sdpa;
 pub mod sort;
 pub mod unary;
 
+pub use affine::*;
 pub use binary::{call_binary_contiguous, call_binary_strided};
 pub use cast::{call_cast_contiguous, call_cast_strided};
 pub use mlx_gemm::{call_mlx_gemm, GemmDType};
