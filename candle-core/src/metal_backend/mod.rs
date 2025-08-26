@@ -5,7 +5,7 @@ use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvT
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 use candle_metal_kernels::{
-    metal_utils::{Buffer, Commands, Device, MTLResourceOptions},
+    metal::{Buffer, Commands, Device, MTLResourceOptions},
     BufferOffset, CallConvTranspose2dCfg, Kernels,
 };
 use objc2_foundation::NSRange;
