@@ -1,9 +1,9 @@
-use crate::{Buffer, MetalKernelError, MetalResource};
+use crate::{Buffer, CommandBuffer, MetalKernelError, MetalResource};
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSRange, NSString};
 use objc2_metal::{
-    MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLCounterSet, MTLResourceUsage, MTLSize,
+    MTLBlitCommandEncoder, MTLCommandBufferStatus, MTLCommandQueue, MTLComputeCommandEncoder,
+    MTLComputePipelineState, MTLCounterSet, MTLResourceUsage, MTLSize,
 };
 use std::{ffi::c_void, ptr};
 
@@ -11,51 +11,6 @@ use std::{ffi::c_void, ptr};
 // https://docs.rs/objc2/latest/objc2/rc/struct.Retained.html
 pub type CommandQueue = Retained<ProtocolObject<dyn MTLCommandQueue>>;
 pub type CounterSet = Retained<ProtocolObject<dyn MTLCounterSet>>;
-
-#[derive(Clone, Debug)]
-pub struct CommandBuffer {
-    raw: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
-}
-
-impl CommandBuffer {
-    fn as_ref(&self) -> &ProtocolObject<dyn MTLCommandBuffer> {
-        &*self.raw
-    }
-
-    pub fn compute_command_encoder(&self) -> ComputeCommandEncoder {
-        self.as_ref()
-            .computeCommandEncoder()
-            .map(|raw| ComputeCommandEncoder { raw })
-            .unwrap()
-    }
-
-    pub fn blit_command_encoder(&self) -> BlitCommandEncoder {
-        self.as_ref()
-            .blitCommandEncoder()
-            .map(|raw| BlitCommandEncoder { raw })
-            .unwrap()
-    }
-
-    pub fn commit(&self) {
-        self.raw.commit()
-    }
-
-    pub fn enqueue(&self) {
-        self.raw.enqueue()
-    }
-
-    pub fn set_label(&self, label: &str) {
-        self.as_ref().setLabel(Some(&NSString::from_str(&label)))
-    }
-
-    pub fn status(&self) -> MTLCommandBufferStatus {
-        self.raw.status()
-    }
-
-    pub fn wait_until_completed(&self) {
-        unsafe { self.raw.waitUntilCompleted() }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct ComputePipeline {
@@ -85,6 +40,12 @@ impl AsRef<ComputeCommandEncoder> for ComputeCommandEncoder {
     }
 }
 impl ComputeCommandEncoder {
+    pub fn new(
+        raw: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>,
+    ) -> ComputeCommandEncoder {
+        ComputeCommandEncoder { raw }
+    }
+
     pub fn set_threadgroup_memory_length(&self, index: usize, length: usize) {
         unsafe { self.raw.setThreadgroupMemoryLength_atIndex(length, index) }
     }
@@ -163,6 +124,10 @@ impl AsRef<BlitCommandEncoder> for BlitCommandEncoder {
 }
 
 impl BlitCommandEncoder {
+    pub fn new(raw: Retained<ProtocolObject<dyn MTLBlitCommandEncoder>>) -> BlitCommandEncoder {
+        BlitCommandEncoder { raw }
+    }
+
     pub fn end_encoding(&self) {
         use objc2_metal::MTLCommandEncoder as _;
         self.raw.endEncoding()
@@ -233,12 +198,9 @@ unsafe impl Sync for Commands {}
 pub fn create_command_buffer(
     command_queue: &CommandQueue,
 ) -> Result<CommandBuffer, MetalKernelError> {
-    command_queue
-        .commandBuffer()
-        .map(|raw| CommandBuffer { raw })
-        .ok_or(MetalKernelError::FailedToCreateResource(
-            "CommandBuffer".to_string(),
-        ))
+    command_queue.commandBuffer().map(CommandBuffer::new).ok_or(
+        MetalKernelError::FailedToCreateResource("CommandBuffer".to_string()),
+    )
 }
 
 impl Commands {
