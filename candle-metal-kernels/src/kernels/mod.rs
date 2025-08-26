@@ -15,7 +15,4 @@ pub use quantized::{call_quantized_matmul_mm_t, call_quantized_matmul_mv_t, Ggml
 pub use reduce::*;
 pub use sdpa::{call_sdpa_full, call_sdpa_vector, call_sdpa_vector_2pass};
 pub use sort::{call_arg_sort, call_mlx_arg_sort};
-pub use unary::{
-    call_const_set_contiguous, call_const_set_contiguous_tiled, call_const_set_strided,
-    call_unary_contiguous, call_unary_contiguous_tiled, call_unary_strided,
-};
+pub use unary::*;
