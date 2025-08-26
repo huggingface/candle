@@ -9,14 +9,14 @@ pub use err::MetalKernelError;
 pub use kernel::Kernels;
 pub use kernels::{
     affine::*, call_binary_contiguous, call_binary_strided, call_mlx_gemm, cast::*, convolution::*,
-    indexing::*, quantized::*, random::*, reduce::*, sort::*, ternary::*, unary, unary::*,
+    fill::*, indexing::*, quantized::*, random::*, reduce::*, sort::*, ternary::*, unary, unary::*,
     GemmDType, GgmlDType,
 };
 use metal::{
     BlitCommandEncoder, Buffer, CommandQueue, ComputeCommandEncoder, ComputePipeline,
     ConstantValues, Device, Function, Library, MTLResourceOptions, Value,
 };
-use objc2_metal::{MTLCompileOptions, MTLMathMode, MTLResourceUsage, MTLSize};
+use objc2_metal::{MTLCompileOptions, MTLMathMode, MTLSize};
 use source::Source;
 pub use utils::BufferOffset;
 use utils::{get_block_dims, linear_split, EncoderParam, EncoderProvider};
@@ -42,26 +42,6 @@ impl DType {
             Self::F32 => 4,
         }
     }
-}
-
-pub fn call_const_fill(
-    device: &Device,
-    ep: impl EncoderProvider,
-    kernels: &Kernels,
-    name: &'static str,
-    length: usize,
-    output: &Buffer,
-    v: impl EncoderParam,
-) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Fill, name)?;
-    let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoder = encoder.as_ref();
-    encoder.set_compute_pipeline_state(&pipeline);
-    set_params!(encoder, (output, v, length));
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
-    encoder.use_resource(output, MTLResourceUsage::Write);
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    Ok(())
 }
 
 #[cfg(test)]
