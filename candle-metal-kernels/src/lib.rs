@@ -1,20 +1,18 @@
 pub mod err;
+pub mod kernel;
 pub mod kernels;
 pub mod metal;
-pub mod mlx_gemm;
-pub mod sort;
 pub mod source;
 pub mod utils;
 
 pub use err::MetalKernelError;
-pub use kernels::Kernels;
+pub use kernel::Kernels;
+pub use kernels::{call_arg_sort, call_mlx_arg_sort, call_mlx_gemm, GemmDType};
 use metal::{
     BlitCommandEncoder, Buffer, CommandQueue, ComputeCommandEncoder, ComputePipeline, Device,
     Function, FunctionConstantValues, Library, MTLResourceOptions,
 };
-pub use mlx_gemm::{call_mlx_gemm, GemmDType};
 use objc2_metal::{MTLCompileOptions, MTLDataType, MTLMathMode, MTLResourceUsage, MTLSize};
-pub use sort::{call_arg_sort, call_mlx_arg_sort};
 use source::Source;
 pub use utils::BufferOffset;
 use utils::{get_block_dims, linear_split, EncoderParam, EncoderProvider};
