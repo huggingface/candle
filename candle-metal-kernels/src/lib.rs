@@ -1,13 +1,17 @@
-use objc2_metal::{MTLCompileOptions, MTLDataType, MTLMathMode, MTLResourceUsage, MTLSize};
-use std::collections::HashMap;
-use std::sync::RwLock;
 pub mod metal;
 pub mod mlx_gemm;
 pub mod sort;
 pub mod utils;
-use metal::*;
+
+use metal::{
+    BlitCommandEncoder, Buffer, CommandQueue, ComputeCommandEncoder, ComputePipeline, Device,
+    Function, FunctionConstantValues, Library, MTLResourceOptions,
+};
 pub use mlx_gemm::{call_mlx_gemm, GemmDType};
+use objc2_metal::{MTLCompileOptions, MTLDataType, MTLMathMode, MTLResourceUsage, MTLSize};
 pub use sort::{call_arg_sort, call_mlx_arg_sort};
+use std::collections::HashMap;
+use std::sync::RwLock;
 pub use utils::BufferOffset;
 use utils::{get_block_dims, linear_split, EncoderParam, EncoderProvider};
 

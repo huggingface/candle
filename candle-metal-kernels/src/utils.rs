@@ -1,4 +1,4 @@
-use crate::{Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipeline};
+use crate::metal::{Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipeline};
 use objc2_metal::MTLSize;
 
 /// Most kernels apply similarly across the tensors

@@ -1,4 +1,5 @@
-use crate::{CommandBuffer, MetalKernelError};
+use crate::metal::CommandBuffer;
+use crate::MetalKernelError;
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_metal::{MTLCommandBufferStatus, MTLCommandQueue, MTLCounterSet};
 
@@ -26,8 +27,6 @@ pub struct Commands {
     command_buffer_index: usize,
     /// The maximum amount of [compute command encoder](https://developer.apple.com/documentation/metal/mtlcomputecommandencoder?language=objc) per [command buffer](https://developer.apple.com/documentation/metal/mtlcommandbuffer?language=objc)
     compute_per_buffer: usize,
-    //capture: Option<Retained<MTLCaptureManager>>,
-    //timestamp_counter_set: Option<CounterSet>,
 }
 unsafe impl Send for Commands {}
 unsafe impl Sync for Commands {}

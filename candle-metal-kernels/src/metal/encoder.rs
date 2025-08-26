@@ -1,4 +1,4 @@
-use crate::{Buffer, ComputePipeline, MetalResource};
+use crate::metal::{Buffer, ComputePipeline, MetalResource};
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSRange, NSString};
 use objc2_metal::{MTLBlitCommandEncoder, MTLComputeCommandEncoder, MTLResourceUsage, MTLSize};
