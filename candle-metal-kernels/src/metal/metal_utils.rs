@@ -1,20 +1,16 @@
-use crate::MetalKernelError;
+use crate::{Buffer, MetalKernelError, MetalResource};
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSRange, NSString};
 use objc2_metal::{
-    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLCounterSet, MTLResource,
-    MTLResourceUsage, MTLSize,
+    MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue,
+    MTLComputeCommandEncoder, MTLComputePipelineState, MTLCounterSet, MTLResourceUsage, MTLSize,
 };
-use std::{collections::HashMap, ffi::c_void, ptr, sync::Arc};
+use std::{ffi::c_void, ptr};
 
 // Use Retained when appropriate. Gives us a more elegant way of handling memory (peaks) than autoreleasepool.
 // https://docs.rs/objc2/latest/objc2/rc/struct.Retained.html
 pub type CommandQueue = Retained<ProtocolObject<dyn MTLCommandQueue>>;
 pub type CounterSet = Retained<ProtocolObject<dyn MTLCounterSet>>;
-
-pub type MetalResource = ProtocolObject<dyn MTLResource>;
-pub type MTLResourceOptions = objc2_metal::MTLResourceOptions;
 
 #[derive(Clone, Debug)]
 pub struct CommandBuffer {
@@ -58,47 +54,6 @@ impl CommandBuffer {
 
     pub fn wait_until_completed(&self) {
         unsafe { self.raw.waitUntilCompleted() }
-    }
-}
-
-#[derive(Clone, Debug, Hash, PartialEq)]
-pub struct Buffer {
-    raw: Retained<ProtocolObject<dyn MTLBuffer>>,
-}
-
-unsafe impl Send for Buffer {}
-unsafe impl Sync for Buffer {}
-
-impl Buffer {
-    pub fn new(raw: Retained<ProtocolObject<dyn MTLBuffer>>) -> Buffer {
-        Buffer { raw }
-    }
-
-    fn as_ref(&self) -> &ProtocolObject<dyn MTLBuffer> {
-        &*self.raw
-    }
-
-    pub fn contents(&self) -> *mut u8 {
-        self.data()
-    }
-
-    pub fn data(&self) -> *mut u8 {
-        use objc2_metal::MTLBuffer as _;
-        self.as_ref().contents().as_ptr() as *mut u8
-    }
-
-    pub fn length(&self) -> usize {
-        self.as_ref().length()
-    }
-
-    pub fn did_modify_range(&self, range: NSRange) {
-        self.as_ref().didModifyRange(range);
-    }
-}
-
-impl<'a> Into<&'a MetalResource> for &'a Buffer {
-    fn into(self) -> &'a MetalResource {
-        &ProtocolObject::from_ref(self.as_ref())
     }
 }
 
@@ -153,7 +108,7 @@ impl ComputeCommandEncoder {
     pub fn set_buffer(&self, index: usize, buffer: Option<&Buffer>, offset: usize) {
         unsafe {
             self.raw
-                .setBuffer_offset_atIndex(buffer.map(|b| &*b.raw), offset, index)
+                .setBuffer_offset_atIndex(buffer.map(|b| b.as_ref()), offset, index)
         }
     }
 
@@ -250,7 +205,6 @@ impl BlitCommandEncoder {
     }
 }
 
-pub type BufferMap = HashMap<(usize, MTLResourceOptions), Vec<Arc<Buffer>>>;
 pub struct Commands {
     /// Single command queue for the entire device.
     command_queue: CommandQueue,
