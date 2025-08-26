@@ -1,6 +1,7 @@
 pub mod affine;
 pub mod binary;
 pub mod cast;
+pub mod indexing;
 mod macros;
 pub mod mlx_gemm;
 pub mod quantized;
@@ -13,6 +14,7 @@ pub mod unary;
 pub use affine::*;
 pub use binary::{call_binary_contiguous, call_binary_strided};
 pub use cast::{call_cast_contiguous, call_cast_strided};
+pub use indexing::*;
 pub use mlx_gemm::{call_mlx_gemm, GemmDType};
 pub use quantized::{call_quantized_matmul_mm_t, call_quantized_matmul_mv_t, GgmlDType};
 pub use reduce::*;
