@@ -13,10 +13,10 @@ pub use kernels::{
     call_unary_contiguous, call_unary_contiguous_tiled, call_unary_strided, unary, GemmDType,
 };
 use metal::{
-    BlitCommandEncoder, Buffer, CommandQueue, ComputeCommandEncoder, ComputePipeline, Device,
-    Function, FunctionConstantValues, Library, MTLResourceOptions,
+    BlitCommandEncoder, Buffer, CommandQueue, ComputeCommandEncoder, ComputePipeline,
+    ConstantValues, Device, Function, Library, MTLResourceOptions, Value,
 };
-use objc2_metal::{MTLCompileOptions, MTLDataType, MTLMathMode, MTLResourceUsage, MTLSize};
+use objc2_metal::{MTLCompileOptions, MTLMathMode, MTLResourceUsage, MTLSize};
 use source::Source;
 pub use utils::BufferOffset;
 use utils::{get_block_dims, linear_split, EncoderParam, EncoderProvider};
@@ -1001,72 +1001,6 @@ pub fn call_index_add(
     encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Value {
-    USize(usize),
-    Bool(bool),
-    F32(f32),
-    U16(u16),
-}
-
-impl std::hash::Hash for Value {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self {
-            Value::F32(v) => v.to_bits().hash(state),
-            Value::USize(v) => v.hash(state),
-            Value::U16(v) => v.hash(state),
-            Value::Bool(v) => v.hash(state),
-        }
-    }
-}
-
-impl Value {
-    fn data_type(&self) -> MTLDataType {
-        match self {
-            // usize is usually u64 aka ulong, but can be u32 on 32-bit systems.
-            // https://developer.apple.com/documentation/objectivec/nsuinteger
-            Value::USize(_) => MTLDataType::ULong,
-            Value::F32(_) => MTLDataType::Float,
-            Value::U16(_) => MTLDataType::UShort,
-            Value::Bool(_) => MTLDataType::Bool,
-        }
-    }
-}
-
-/// Not true, good enough for our purposes.
-impl Eq for Value {}
-
-#[derive(Debug, Eq, PartialEq, Hash)]
-pub struct ConstantValues(Vec<(usize, Value)>);
-
-impl ConstantValues {
-    pub fn new(values: Vec<(usize, Value)>) -> Self {
-        Self(values)
-    }
-
-    fn function_constant_values(&self) -> FunctionConstantValues {
-        let f = FunctionConstantValues::new();
-        for (index, value) in &self.0 {
-            let ty = value.data_type();
-            match value {
-                Value::USize(v) => {
-                    f.set_constant_value_at_index(v, ty, *index);
-                }
-                Value::F32(v) => {
-                    f.set_constant_value_at_index(v, ty, *index);
-                }
-                Value::U16(v) => {
-                    f.set_constant_value_at_index(v, ty, *index);
-                }
-                Value::Bool(v) => {
-                    f.set_constant_value_at_index(v, ty, *index);
-                }
-            }
-        }
-        f
-    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
