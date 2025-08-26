@@ -1,4 +1,4 @@
-use crate::metal_utils::{Buffer, ComputeCommandEncoder, Device};
+use crate::metal::{Buffer, ComputeCommandEncoder, Device};
 use crate::utils::EncoderProvider;
 use crate::{set_params, ConstantValues, EncoderParam, Kernels, MetalKernelError, Source, Value};
 use objc2_metal::{MTLResourceUsage, MTLSize};

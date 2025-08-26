@@ -18,93 +18,6 @@ pub type MetalResource = ProtocolObject<dyn MTLResource>;
 pub type MTLResourceOptions = objc2_metal::MTLResourceOptions;
 
 #[derive(Clone, Debug)]
-pub struct Device {
-    raw: Retained<ProtocolObject<dyn MTLDevice>>,
-}
-unsafe impl Send for Device {}
-unsafe impl Sync for Device {}
-
-impl Device {
-    pub fn as_ref(&self) -> &ProtocolObject<dyn MTLDevice> {
-        &*self.raw
-    }
-
-    pub fn registry_id(&self) -> u64 {
-        self.as_ref().registryID()
-    }
-
-    pub fn all() -> Vec<Self> {
-        MTLCreateSystemDefaultDevice()
-            .into_iter()
-            .map(|raw| Device { raw })
-            .collect()
-    }
-
-    pub fn system_default() -> Option<Self> {
-        MTLCreateSystemDefaultDevice().map(|raw| Device { raw })
-    }
-
-    pub fn new_buffer(
-        &self,
-        length: usize,
-        options: MTLResourceOptions,
-    ) -> Result<Buffer, MetalKernelError> {
-        self.as_ref()
-            .newBufferWithLength_options(length, options)
-            .map(|raw| Buffer { raw })
-            .ok_or(MetalKernelError::FailedToCreateResource(
-                "Buffer".to_string(),
-            ))
-    }
-
-    pub fn new_buffer_with_data(
-        &self,
-        pointer: *const c_void,
-        length: usize,
-        options: MTLResourceOptions,
-    ) -> Result<Buffer, MetalKernelError> {
-        let pointer = ptr::NonNull::new(pointer as *mut c_void).unwrap();
-        unsafe {
-            self.as_ref()
-                .newBufferWithBytes_length_options(pointer, length, options)
-                .map(|raw| Buffer { raw })
-                .ok_or(MetalKernelError::FailedToCreateResource(
-                    "Buffer".to_string(),
-                ))
-        }
-    }
-
-    pub fn new_library_with_source(
-        &self,
-        source: &str,
-        options: Option<&MTLCompileOptions>,
-    ) -> Result<Library, MetalKernelError> {
-        let raw = self
-            .as_ref()
-            .newLibraryWithSource_options_error(&NSString::from_str(source), options)
-            .unwrap();
-
-        Ok(Library { raw })
-    }
-
-    pub fn new_compute_pipeline_state_with_function(
-        &self,
-        function: &Function,
-    ) -> Result<ComputePipeline, MetalKernelError> {
-        let raw = self
-            .as_ref()
-            .newComputePipelineStateWithFunction_error(&function.raw)
-            .unwrap();
-        Ok(ComputePipeline { raw })
-    }
-
-    pub fn new_command_queue(&self) -> Result<CommandQueue, MetalKernelError> {
-        let raw = self.as_ref().newCommandQueue().unwrap();
-        Ok(raw)
-    }
-}
-
-#[derive(Clone, Debug)]
 pub struct Library {
     raw: Retained<ProtocolObject<dyn MTLLibrary>>,
 }
@@ -112,6 +25,10 @@ unsafe impl Send for Library {}
 unsafe impl Sync for Library {}
 
 impl Library {
+    pub fn new(raw: Retained<ProtocolObject<dyn MTLLibrary>>) -> Library {
+        Library { raw }
+    }
+
     pub fn get_function(
         &self,
         name: &str,
@@ -184,6 +101,12 @@ pub struct Function {
     raw: Retained<ProtocolObject<dyn MTLFunction>>,
 }
 
+impl Function {
+    pub fn as_ref(&self) -> &ProtocolObject<dyn MTLFunction> {
+        &*self.raw
+    }
+}
+
 pub struct FunctionConstantValues {
     raw: Retained<MTLFunctionConstantValues>,
 }
@@ -210,6 +133,10 @@ unsafe impl Send for Buffer {}
 unsafe impl Sync for Buffer {}
 
 impl Buffer {
+    pub fn new(raw: Retained<ProtocolObject<dyn MTLBuffer>>) -> Buffer {
+        Buffer { raw }
+    }
+
     fn as_ref(&self) -> &ProtocolObject<dyn MTLBuffer> {
         &*self.raw
     }
@@ -245,7 +172,12 @@ pub struct ComputePipeline {
 
 unsafe impl Send for ComputePipeline {}
 unsafe impl Sync for ComputePipeline {}
+
 impl ComputePipeline {
+    pub fn new(raw: Retained<ProtocolObject<dyn MTLComputePipelineState>>) -> ComputePipeline {
+        ComputePipeline { raw }
+    }
+
     pub fn max_total_threads_per_threadgroup(&self) -> usize {
         self.raw.maxTotalThreadsPerThreadgroup()
     }

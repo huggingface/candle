@@ -1,11 +1,11 @@
 use objc2_metal::{MTLCompileOptions, MTLDataType, MTLMathMode, MTLResourceUsage, MTLSize};
 use std::collections::HashMap;
 use std::sync::RwLock;
-pub mod metal_utils;
+pub mod metal;
 pub mod mlx_gemm;
 pub mod sort;
 pub mod utils;
-use metal_utils::*;
+use metal::*;
 pub use mlx_gemm::{call_mlx_gemm, GemmDType};
 pub use sort::{call_arg_sort, call_mlx_arg_sort};
 pub use utils::BufferOffset;
