@@ -1,4 +1,4 @@
-use crate::SdpaDType;
+use crate::kernels::sdpa::SdpaDType;
 
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
