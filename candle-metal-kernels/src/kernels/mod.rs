@@ -1,8 +1,10 @@
+pub mod binary;
 mod macros;
 pub mod mlx_gemm;
 pub mod sort;
 pub mod unary;
 
+pub use binary::{call_binary_contiguous, call_binary_strided};
 pub use mlx_gemm::{call_mlx_gemm, GemmDType};
 pub use sort::{call_arg_sort, call_mlx_arg_sort};
 pub use unary::{

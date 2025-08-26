@@ -8,9 +8,9 @@ pub mod utils;
 pub use err::MetalKernelError;
 pub use kernel::Kernels;
 pub use kernels::{
-    call_arg_sort, call_const_set_contiguous, call_const_set_contiguous_tiled,
-    call_const_set_strided, call_mlx_arg_sort, call_mlx_gemm, call_unary_contiguous,
-    call_unary_contiguous_tiled, call_unary_strided, unary, GemmDType,
+    call_arg_sort, call_binary_contiguous, call_binary_strided, call_const_set_contiguous,
+    call_const_set_contiguous_tiled, call_const_set_strided, call_mlx_arg_sort, call_mlx_gemm,
+    call_unary_contiguous, call_unary_contiguous_tiled, call_unary_strided, unary, GemmDType,
 };
 use metal::{
     BlitCommandEncoder, Buffer, CommandQueue, ComputeCommandEncoder, ComputePipeline, Device,
@@ -54,87 +54,6 @@ pub mod copy2d {
     pub const U8: Kernel = Kernel("copy2d_u8");
 }
 
-macro_rules! ops{
-    ($($name:ident),+) => {
-
-        pub mod contiguous {
-        pub struct Kernel(pub &'static str);
-        $(
-        pub mod $name {
-            use super::Kernel;
-            pub const FLOAT: Kernel = Kernel(concat!(stringify!($name), "_f32"));
-            pub const HALF: Kernel = Kernel(concat!(stringify!($name), "_f16"));
-            pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bf16"));
-            pub const I64: Kernel = Kernel(concat!(stringify!($name), "_i64"));
-            pub const U32: Kernel = Kernel(concat!(stringify!($name), "_u32"));
-            pub const U8: Kernel = Kernel(concat!(stringify!($name), "_u8"));
-        }
-        )+
-            pub mod copy {
-                use super::Kernel;
-                pub const FLOAT: Kernel = Kernel("copy_f32");
-                pub const HALF: Kernel = Kernel("copy_f16");
-                pub const BFLOAT: Kernel = Kernel("copy_bf16");
-                pub const I64: Kernel = Kernel("copy_i64");
-                pub const U32: Kernel = Kernel("copy_u32");
-                pub const U8: Kernel = Kernel("copy_u8");
-            }
-        }
-
-        pub mod contiguous_tiled {
-        pub struct Kernel(pub &'static str);
-        $(
-        pub mod $name {
-            use super::Kernel;
-            pub const FLOAT: Kernel = Kernel(concat!(stringify!($name), "_f32_tiled"));
-            pub const HALF: Kernel = Kernel(concat!(stringify!($name), "_f16_tiled"));
-            pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bf16_tiled"));
-            pub const I64: Kernel = Kernel(concat!(stringify!($name), "_i64_tiled"));
-            pub const U32: Kernel = Kernel(concat!(stringify!($name), "_u32_tiled"));
-            pub const U8: Kernel = Kernel(concat!(stringify!($name), "_u8_tiled"));
-        }
-        )+
-            pub mod copy {
-                use super::Kernel;
-                pub const FLOAT: Kernel = Kernel("copy_f32_tiled");
-                pub const HALF: Kernel = Kernel("copy_f16_tiled");
-                pub const BFLOAT: Kernel = Kernel("copy_bf16_tiled");
-                pub const I64: Kernel = Kernel("copy_i64_tiled");
-                pub const U32: Kernel = Kernel("copy_u32_tiled");
-                pub const U8: Kernel = Kernel("copy_u8_tiled");
-            }
-        }
-
-        pub mod strided {
-        pub struct Kernel(pub &'static str);
-        $(
-        pub mod $name {
-            use super::Kernel;
-            pub const FLOAT: Kernel = Kernel(concat!(stringify!($name), "_f32_strided"));
-            pub const HALF: Kernel = Kernel(concat!(stringify!($name), "_f16_strided"));
-            pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bf16_strided"));
-            pub const I64: Kernel = Kernel(concat!(stringify!($name), "_i64_strided"));
-            pub const U32: Kernel = Kernel(concat!(stringify!($name), "_u32_strided"));
-            pub const U8: Kernel = Kernel(concat!(stringify!($name), "_u8_strided"));
-        }
-        )+
-            pub mod copy {
-                use super::Kernel;
-                pub const FLOAT: Kernel = Kernel("copy_f32_strided");
-                pub const HALF: Kernel = Kernel("copy_f16_strided");
-                pub const BFLOAT: Kernel = Kernel("copy_bf16_strided");
-                pub const I64: Kernel = Kernel("copy_i64_strided");
-                pub const U32: Kernel = Kernel("copy_u32_strided");
-                pub const U8: Kernel = Kernel("copy_u8_strided");
-            }
-        }
-    };
-}
-
-pub mod binary {
-    ops!(add, sub, mul, div, min, max, eq, ne, le, lt, ge, gt);
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn call_copy2d(
     device: &Device,
@@ -175,78 +94,6 @@ pub fn call_copy2d(
     encoder.use_resource(input, MTLResourceUsage::Read);
     encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_threads(grid_dims, group_dims);
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn call_binary_contiguous(
-    device: &Device,
-    ep: impl EncoderProvider,
-    kernels: &Kernels,
-    kernel_name: binary::contiguous::Kernel,
-    length: usize,
-    left: BufferOffset,
-    right: BufferOffset,
-    output: &Buffer,
-) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Binary, kernel_name.0)?;
-
-    let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoder = encoder.as_ref();
-    encoder.set_compute_pipeline_state(&pipeline);
-
-    set_params!(encoder, (length, &left, &right, output));
-
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
-
-    encoder.use_resource(left.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(right.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn call_binary_strided(
-    device: &Device,
-    ep: impl EncoderProvider,
-    kernels: &Kernels,
-    name: binary::strided::Kernel,
-    shape: &[usize],
-    left_input: BufferOffset,
-    left_strides: &[usize],
-    right_input: BufferOffset,
-    right_strides: &[usize],
-    output: &Buffer,
-) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Binary, name.0)?;
-
-    let num_dims: usize = shape.len();
-    let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoder = encoder.as_ref();
-    let width: usize = shape.iter().product();
-    let length: usize = shape.iter().product();
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
-
-    encoder.set_compute_pipeline_state(&pipeline);
-    set_params!(
-        encoder,
-        (
-            length,
-            num_dims,
-            shape,
-            left_strides,
-            right_strides,
-            &left_input,
-            &right_input,
-            output
-        )
-    );
-    encoder.use_resource(left_input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(right_input.buffer, MTLResourceUsage::Read);
-    encoder.use_resource(output, MTLResourceUsage::Write);
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-
     Ok(())
 }
 
