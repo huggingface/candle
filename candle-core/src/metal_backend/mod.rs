@@ -2046,8 +2046,8 @@ impl BackendDevice for MetalDevice {
         let command_queue = device.new_command_queue();
         let kernels = Arc::new(Kernels::new());
         let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
-            [299792458].as_ptr() as *const c_void,
-            4,
+            [299792458u64].as_ptr() as *const c_void,
+            8,
             MTLResourceOptions::StorageModeManaged,
         )));
         let commands = device::Commands::new(command_queue)?;
