@@ -52,7 +52,7 @@ fn mlx_dtype_str(dtype: DType) -> &'static str {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn multi_block_sort(
+fn multi_block_sort(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
@@ -219,7 +219,7 @@ pub fn multi_block_sort(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn block_sort(
+fn block_sort(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,

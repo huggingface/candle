@@ -1,7 +1,7 @@
 use super::{GgmlDType, QStorage};
 use crate::backend::BackendStorage;
 use crate::{DType, MetalDevice, MetalStorage, Result, Shape, D};
-use candle_metal_kernels::metal_utils::Buffer;
+use candle_metal_kernels::metal::Buffer;
 use std::sync::Arc;
 
 pub struct QMetalStorage {

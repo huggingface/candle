@@ -381,7 +381,7 @@ pub struct UgIOp1 {
     #[cfg(feature = "cuda")]
     func: cudarc::driver::CudaFunction,
     #[cfg(feature = "metal")]
-    func: candle_metal_kernels::metal_utils::ComputePipeline,
+    func: candle_metal_kernels::metal::ComputePipeline,
 }
 
 impl UgIOp1 {
