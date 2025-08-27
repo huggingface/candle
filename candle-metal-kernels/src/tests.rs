@@ -1457,7 +1457,7 @@ fn mlx_gemm() {
     }
 }
 
-fn run_random<T: Clone>(name: &'static str, seed: u32, length: usize, a: f32, b: f32) -> Vec<T> {
+fn run_random<T: Clone>(name: &'static str, seed: u64, length: usize, a: f32, b: f32) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
@@ -1470,8 +1470,8 @@ fn run_random<T: Clone>(name: &'static str, seed: u32, length: usize, a: f32, b:
 
     let seed = device
         .new_buffer_with_data(
-            &seed as *const u32 as *const core::ffi::c_void,
-            std::mem::size_of::<u32>(),
+            &seed as *const u64 as *const core::ffi::c_void,
+            std::mem::size_of::<u64>(),
             options,
         )
         .unwrap();
@@ -1538,7 +1538,7 @@ fn random() {
     let shape = [1024, 10];
 
     let length = shape.iter().product::<usize>();
-    let seed = 299792458;
+    let seed = 299792458u64;
 
     let min = -30.0;
     let max = 30.0;
