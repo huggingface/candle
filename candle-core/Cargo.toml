@@ -29,13 +29,22 @@ rand_distr = { workspace = true }
 rayon = { workspace = true }
 safetensors = { workspace = true }
 thiserror = { workspace = true }
-ug-cuda = { workspace = true, optional = true }
-ug-metal = { workspace = true, optional = true }
 yoke = { workspace = true }
 zip = { workspace = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 ug = { workspace = true }
+ug-cuda = { workspace = true, optional = true }
+ug-metal = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ug-cuda = { workspace = true, optional = true }
+ug-metal = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+ug = "0.0.2"
+ug-cuda = "0.0.2"
+ug-metal = "0.0.2"
 
 [dev-dependencies]
 anyhow = { workspace = true }
