@@ -163,7 +163,7 @@ impl CudaDevice {
         self.context.is_event_tracking()
     }
 
-    #[cfg(target_arch = "cuda")]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn compile(
         &self,
         func_name: &'static str,

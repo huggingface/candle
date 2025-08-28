@@ -37,15 +37,6 @@ ug = { workspace = true }
 ug-cuda = { workspace = true, optional = true }
 ug-metal = { workspace = true, optional = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-ug-cuda = { workspace = true, optional = true }
-ug-metal = { workspace = true, optional = true }
-
-[target.'cfg(target_os = "ios")'.dependencies]
-ug = "0.0.2"
-ug-cuda = "0.0.2"
-ug-metal = "0.0.2"
-
 [dev-dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
