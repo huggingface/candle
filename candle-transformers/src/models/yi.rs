@@ -6,7 +6,7 @@
 //! Original code:
 //! - 💻 [Yi Model](https://huggingface.co/01-ai/Yi-6B)
 //! - 💻 [Yi Modeling Code](https://huggingface.co/01-ai/Yi-6B/blob/main/modeling_yi.py)
-//! - 📝 [Technical Report](https://arxiv.org/abs/2403.04652) Yi: Open Foundation Models by 01.AI
+//! - 📝 [Technical Report](https://huggingface.co/papers/2403.04652) Yi: Open Foundation Models by 01.AI
 //!
 //! Key characteristics:
 //! - Multi-head attention with rotary positional embeddings

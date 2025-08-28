@@ -4,7 +4,7 @@
 //! pairs of images with related texts.
 //!
 //! - 💻 [GH Link](https://github.com/mlfoundations/open_clip)
-//! - 📝 [Paper](https://arxiv.org/abs/2212.07143)
+//! - 📝 [Paper](https://huggingface.co/papers/2212.07143)
 //!
 //! ## Overview
 //!

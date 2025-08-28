@@ -1,5 +1,5 @@
 //! DINOv2 reg4 finetuned on PlantCLEF 2024
-//! https://arxiv.org/abs/2309.16588
+//! https://huggingface.co/papers/2309.16588
 //! https://huggingface.co/spaces/BVRA/PlantCLEF2024
 //! https://zenodo.org/records/10848263
 

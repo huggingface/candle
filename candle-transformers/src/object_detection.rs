@@ -70,7 +70,7 @@ fn update_confidences<D>(
         for index in (current_index + 1)..len {
             let iou_val = iou(current_bbox, &bboxes_for_class[index]);
             if iou_val > iou_threshold {
-                // Decay calculation from page 4 of: https://arxiv.org/pdf/1704.04503
+                // Decay calculation from page 4 of: https://huggingface.co/papers/1704.04503
                 let decay = (-iou_val * iou_val / sigma).exp();
                 let updated_confidence = bboxes_for_class[index].confidence * decay;
                 updated_confidences[index] = updated_confidence;
@@ -80,7 +80,7 @@ fn update_confidences<D>(
 }
 
 // Sorts the bounding boxes by confidence and applies soft non-maximum suppression.
-// This function is based on the algorithm described in https://arxiv.org/pdf/1704.04503
+// This function is based on the algorithm described in https://huggingface.co/papers/1704.04503
 pub fn soft_non_maximum_suppression<D>(
     bboxes: &mut [Vec<Bbox<D>>],
     iou_threshold: Option<f32>,

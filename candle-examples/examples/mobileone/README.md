@@ -1,6 +1,6 @@
 # candle-mobileone
 
-[MobileOne: An Improved One millisecond Mobile Backbone](https://arxiv.org/abs/2206.04040).
+[MobileOne: An Improved One millisecond Mobile Backbone](https://huggingface.co/papers/2206.04040).
 
 This candle implementation uses a pre-trained MobileOne network for inference. The
 classification head has been trained on the ImageNet dataset and returns the

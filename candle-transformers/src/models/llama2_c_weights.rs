@@ -1,6 +1,6 @@
 //! Llama2 inference implementation.
 //!
-//! See ["LLaMA 2: Open Foundation and Fine-Tuned Chat Models"](https://arxiv.org/abs/2307.09288)
+//! See ["LLaMA 2: Open Foundation and Fine-Tuned Chat Models"](https://huggingface.co/papers/2307.09288)
 //!
 //! Based on the [llama2.c](https://github.com/karpathy/llama2.c) implementation
 

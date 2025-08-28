@@ -1,6 +1,6 @@
 # candle-dinov2-reg4
 
-[DINOv2-reg4](https://arxiv.org/abs/2309.16588) is the lastest version of DINOv2 with registers.
+[DINOv2-reg4](https://huggingface.co/papers/2309.16588) is the lastest version of DINOv2 with registers.
 In this example, it is used as an plant species classifier: the model returns the
 probability for the image to belong to each of the 7806 PlantCLEF2024 categories.
 

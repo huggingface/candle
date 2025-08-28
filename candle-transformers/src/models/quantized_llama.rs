@@ -11,7 +11,7 @@
 //! - Configurable model sizes and parameter counts
 //!
 //! - 💻 [GH Link](https://github.com/facebookresearch/llama)
-//! - 📝 [Paper](https://arxiv.org/abs/2302.13971)
+//! - 📝 [Paper](https://huggingface.co/papers/2302.13971)
 //!
 //! ![](https://raw.githubusercontent.com/huggingface/candle/main/candle-examples/examples/quantized/assets/aoc.gif)
 //!

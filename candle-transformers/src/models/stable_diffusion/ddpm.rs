@@ -104,7 +104,7 @@ impl DDPMScheduler {
         };
         let current_beta_t = 1. - alpha_prod_t / alpha_prod_t_prev;
 
-        // For t > 0, compute predicted variance βt (see formula (6) and (7) from [the pdf](https://arxiv.org/pdf/2006.11239.pdf))
+        // For t > 0, compute predicted variance βt (see formula (6) and (7) from [the pdf](https://huggingface.co/papers/2006.11239))
         // and sample from it to get previous sample
         // x_{t-1} ~ N(pred_prev_sample, variance) == add variance to pred_sample
         let variance = (1. - alpha_prod_t_prev) / (1. - alpha_prod_t) * current_beta_t;
@@ -112,7 +112,7 @@ impl DDPMScheduler {
         // retrieve variance
         match self.config.variance_type {
             DDPMVarianceType::FixedSmall => variance.max(1e-20),
-            // for rl-diffuser https://arxiv.org/abs/2205.09991
+            // for rl-diffuser https://huggingface.co/papers/2205.09991
             DDPMVarianceType::FixedSmallLog => {
                 let variance = variance.max(1e-20).ln();
                 (variance * 0.5).exp()
@@ -166,12 +166,12 @@ impl DDPMScheduler {
         }
 
         // 4. Compute coefficients for pred_original_sample x_0 and current sample x_t
-        // See formula (7) from https://arxiv.org/pdf/2006.11239.pdf
+        // See formula (7) from https://huggingface.co/papers/2006.11239
         let pred_original_sample_coeff = (alpha_prod_t_prev.sqrt() * current_beta_t) / beta_prod_t;
         let current_sample_coeff = current_alpha_t.sqrt() * beta_prod_t_prev / beta_prod_t;
 
         // 5. Compute predicted previous sample µ_t
-        // See formula (7) from https://arxiv.org/pdf/2006.11239.pdf
+        // See formula (7) from https://huggingface.co/papers/2006.11239
         let pred_prev_sample = ((&pred_original_sample * pred_original_sample_coeff)?
             + sample * current_sample_coeff)?;
 

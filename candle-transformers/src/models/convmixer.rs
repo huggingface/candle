@@ -2,7 +2,7 @@
 //!
 //! See "Patches Are All You Need?" by Trockman et al. 2022
 //!
-//! - 📝 [Arxiv](https://arxiv.org/abs/2201.09792)
+//! - 📝 [Arxiv](https://huggingface.co/papers/2201.09792)
 //! - 💻 [Github](https://github.com/locuslab/convmixer)
 //!
 use candle::Result;

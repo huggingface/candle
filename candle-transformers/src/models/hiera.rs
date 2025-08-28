@@ -2,7 +2,7 @@
 //!
 //!
 //! - 💻 [Hiera](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/hiera.py)
-//! - 📝 [Paper](https://arxiv.org/abs/2306.00989). Hiera: A Hierarchical Vision Transformer without the Bells-and-Whistles
+//! - 📝 [Paper](https://huggingface.co/papers/2306.00989). Hiera: A Hierarchical Vision Transformer without the Bells-and-Whistles
 
 use candle::{Result, D};
 use candle_nn::{conv2d, layer_norm, linear, ops::softmax, Conv2dConfig, Func, VarBuilder};

@@ -4,7 +4,7 @@
 //! See: [SNAC](https://github.com/hubertsiuzdak/snac)
 //!
 /// Multi-Scale Neural Audio Codec (SNAC) compresses audio into discrete codes at a low bitrate.
-/// For more information, read the paper: https://arxiv.org/abs/2410.14411
+/// For more information, read the paper: https://huggingface.co/papers/2410.14411
 ///
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{

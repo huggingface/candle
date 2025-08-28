@@ -1,11 +1,11 @@
 //! Implementation of BLIP text encoder/decoder.
 //!
-//! - 📝 [Paper](https://arxiv.org/abs/2201.12086). BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation"
+//! - 📝 [Paper](https://huggingface.co/papers/2201.12086). BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation"
 //!
 //! - ⚡ [Interactive Wasm Example](https://huggingface.co/spaces/radames/Candle-BLIP-Image-Captioning)
 //! - 💻 [GH Link](https://github.com/salesforce/BLIP)
 //! - 🤗 [HF Link](https://huggingface.co/Salesforce/blip-image-captioning-base)
-//! - 📝 [Paper](https://arxiv.org/abs/2201.12086)
+//! - 📝 [Paper](https://huggingface.co/papers/2201.12086)
 //!
 use super::with_tracing::{linear, Embedding, Linear};
 use candle::{Module, Result, Tensor, D};

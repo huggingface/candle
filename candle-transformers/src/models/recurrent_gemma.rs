@@ -12,7 +12,7 @@
 //!
 //! References:
 //! - [Gemma: Open Models Based on Gemini Technology](https://blog.google/technology/developers/gemma-open-models/)
-//! - [Recurrent Memory model architecture](https://arxiv.org/abs/2402.00441)
+//! - [Recurrent Memory model architecture](https://huggingface.co/papers/2402.00441)
 //!
 //! This implementation is based on the python version from huggingface/transformers.
 //! https://github.com/huggingface/transformers/blob/b109257f4fb8b1166e7c53cc5418632014ed53a5/src/transformers/models/recurrent_gemma/modeling_recurrent_gemma.py#L2

@@ -13,7 +13,7 @@ $ cargo run --example t5 --release -- --model-id "t5-small" --prompt "translate 
 
 Variants such as [flan-t5](https://huggingface.co/google/flan-t5-small), [flan-ul2](https://huggingface.co/google/flan-ul2) (with `--revision "refs/pr/25"`), and [Co-EdIT](https://huggingface.co/grammarly/coedit-large) are also supported.
 
-## Translation with [MADLAD-400](https://arxiv.org/abs/2309.04662)
+## Translation with [MADLAD-400](https://huggingface.co/papers/2309.04662)
 
 MADLAD-400 is a series of multilingual machine translation T5 models trained on 250 billion tokens covering over 450 languages using publicly available data. These models are competitive with significantly larger models.
 
