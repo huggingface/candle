@@ -2,7 +2,7 @@
 //!
 //! See "Simple linear attention language models balance the recall-throughput tradeoff", Arora et al. 2024
 //! - Simple linear attention language models balance the recall-throughput tradeoff. [Arxiv](https://arxiv.org/abs/2402.18668)
-//! - [Github Rep](https://github.com/HazyResearch/based)
+//! - [GitHub Rep](https://github.com/HazyResearch/based)
 //! - [Blogpost](https://hazyresearch.stanford.edu/blog/2024-03-03-based)
 
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};

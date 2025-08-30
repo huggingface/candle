@@ -171,7 +171,7 @@ impl QMetalStorage {
         let dst = device.new_buffer(dst_shape.elem_count(), DType::F32, "qmatmul")?;
         let command_buffer = device.command_buffer()?;
         // In some cases it would be better to use the mm variant, though it has its drawbacks
-        // around memory alignemnt.
+        // around memory alignment.
         for batch_id in 0..m {
             candle_metal_kernels::call_quantized_matmul_mv_t(
                 device.device(),

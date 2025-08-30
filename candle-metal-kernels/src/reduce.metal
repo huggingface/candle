@@ -545,7 +545,7 @@ METAL_FUNC void reduce(
     loader<T, R, OP, BLOCKSIZE, STRIDED> load;
     block_reducer<T, OP, BLOCKSIZE> reduce(shared);
 
-    // Calcluate offset for the threadgroup of current thread
+    // Calculate offset for the threadgroup of current thread
     const uint offset = dst_id * el_per_block;
 
     // Load with reduction from global memory into shared memory
@@ -672,7 +672,7 @@ METAL_FUNC void reduce(
     loader<T, indexed<T>, ReductionOp, BLOCKSIZE, STRIDED> load;
     block_reducer<I, ReductionOp, BLOCKSIZE> reduce(shared);
 
-    // Calcluate offset for the threadgroup of current thread
+    // Calculate offset for the threadgroup of current thread
     const uint offset = dst_id * el_per_block;
 
     // Load with reduction from global memory into shared memory
@@ -877,7 +877,7 @@ METAL_FUNC void softmax(
     block_reducer<MD<T>, MDReduceOp, BLOCKSIZE> reduce(shared);
     finalize_softmax<T, BLOCKSIZE> softmax_finalize;
 
-    // Calcluate offset for the threadgroup of current thread;
+    // Calculate offset for the threadgroup of current thread;
     const uint offset = dst_id * el_per_block;
 
     // Calculate partial result for current thread

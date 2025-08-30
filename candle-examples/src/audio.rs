@@ -64,7 +64,7 @@ pub fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> Result<(Vec<f32>, u32)>
     // Get the instantiated format reader.
     let mut format = probed.format;
 
-    // Find the first audio track with a known (decodeable) codec.
+    // Find the first audio track with a known (decodable) codec.
     let track = format
         .tracks()
         .iter()
