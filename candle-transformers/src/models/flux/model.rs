@@ -588,6 +588,7 @@ impl super::WithForward for Flux {
         timesteps: &Tensor,
         y: &Tensor,
         guidance: Option<&Tensor>,
+        kontext_image_ids: Option<&Tensor>,
     ) -> Result<Tensor> {
         if txt.rank() != 3 {
             candle::bail!("unexpected shape for txt {:?}", txt.shape())
@@ -597,7 +598,11 @@ impl super::WithForward for Flux {
         }
         let dtype = img.dtype();
         let pe = {
-            let ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
+            let mut ids = Tensor::cat(&[txt_ids, img_ids], 1)?;
+            // Handle Kontext: concatenate additional image IDs if provided
+            if let Some(kontext_ids) = kontext_image_ids {
+                ids = Tensor::cat(&[&ids, kontext_ids], 1)?;
+            }
             ids.apply(&self.pe_embedder)?
         };
         let mut txt = txt.apply(&self.txt_in)?;
@@ -616,11 +621,23 @@ impl super::WithForward for Flux {
             (img, txt) = block.forward(&img, &txt, &vec_, &pe)?
         }
         // Single blocks
-        let mut img = Tensor::cat(&[&txt, &img], 1)?;
+        let original_txt_len = txt.dim(1)?;
+        let original_img_len = img.dim(1)?;
+        let mut concatenated = Tensor::cat(&[&txt, &img], 1)?;
         for block in self.single_blocks.iter() {
-            img = block.forward(&img, &vec_, &pe)?;
+            concatenated = block.forward(&concatenated, &vec_, &pe)?;
         }
-        let img = img.i((.., txt.dim(1)?..))?;
-        self.final_layer.forward(&img, &vec_)
+        // Extract only the image part (generation + any additional kontext latents)
+        // For Kontext: extract only the generation portion, skip static image latents
+        let output_start = original_txt_len;
+        let output_end = if kontext_image_ids.is_some() {
+            // For Kontext: extract only original image dimensions (first part of img)
+            original_txt_len + original_img_len
+        } else {
+            // Standard FLUX: extract all image latents
+            concatenated.dim(1)?
+        };
+        let img_output = concatenated.i((.., output_start..output_end))?;
+        self.final_layer.forward(&img_output, &vec_)
     }
 }

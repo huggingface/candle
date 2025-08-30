@@ -34,6 +34,7 @@ pub trait WithForward {
         timesteps: &Tensor,
         y: &Tensor,
         guidance: Option<&Tensor>,
+        kontext_image_ids: Option<&Tensor>,
     ) -> Result<Tensor>;
 }
 

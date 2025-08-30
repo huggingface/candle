@@ -1,4 +1,4 @@
-use candle::{Device, Result, Tensor};
+use candle::{Device, IndexOp, Result, Tensor};
 
 pub fn get_noise(
     num_samples: usize,
@@ -112,8 +112,89 @@ pub fn denoise<M: super::WithForward>(
             _ => continue,
         };
         let t_vec = Tensor::full(*t_curr as f32, b_sz, dev)?;
-        let pred = model.forward(&img, img_ids, txt, txt_ids, &t_vec, vec_, Some(&guidance))?;
-        img = (img + pred * (t_prev - t_curr))?
+        let pred = model.forward(&img, img_ids, txt, txt_ids, &t_vec, vec_, Some(&guidance), None)?;
+        img = (&img + &pred * (t_prev - t_curr))?
     }
     Ok(img)
+}
+
+/// Denoise function specifically for Kontext image conditioning
+/// This handles the concatenation of generation latents with static image latents
+#[allow(clippy::too_many_arguments)]
+pub fn denoise_kontext<M: super::WithForward>(
+    model: &M,
+    img: &Tensor,
+    img_ids: &Tensor,
+    txt: &Tensor,
+    txt_ids: &Tensor,
+    vec_: &Tensor,
+    timesteps: &[f64],
+    guidance: f64,
+    static_image_latents: &Tensor,
+    kontext_image_ids: &Tensor,
+) -> Result<Tensor> {
+    let b_sz = img.dim(0)?;
+    let dev = img.device();
+    let guidance = Tensor::full(guidance as f32, b_sz, dev)?;
+    let mut img = img.clone();
+    let original_img_len = img.dim(1)?;
+    
+    for window in timesteps.windows(2) {
+        let (t_curr, t_prev) = match window {
+            [a, b] => (a, b),
+            _ => continue,
+        };
+        
+        // Concatenate generation latents with static image latents (like mflux)
+        let concatenated_img = Tensor::cat(&[&img, static_image_latents], 1)?;
+        
+        let t_vec = Tensor::full(*t_curr as f32, b_sz, dev)?;
+        let pred = model.forward(
+            &concatenated_img, 
+            img_ids, 
+            txt, 
+            txt_ids, 
+            &t_vec, 
+            vec_, 
+            Some(&guidance), 
+            Some(kontext_image_ids)
+        )?;
+        
+        // Extract only the noise for generation latents (first part, like mflux line 105)
+        let generation_pred = pred.i((.., ..original_img_len))?;
+        
+        // Update only the generation latents
+        img = (&img + &generation_pred * (t_prev - t_curr))?;
+    }
+    Ok(img)
+}
+
+/// Create image IDs for Kontext conditioning (based on mflux implementation)
+/// This creates positional embeddings for the conditioning image
+pub fn create_kontext_image_ids(
+    height: usize,
+    width: usize,
+    device: &candle::Device,
+    dtype: candle::DType,
+) -> Result<Tensor> {
+    let latent_height = height.div_ceil(16);
+    let latent_width = width.div_ceil(16);
+    
+    // Create coordinate grids for image positioning
+    let mut image_ids = Vec::new();
+    
+    for h in 0..latent_height {
+        for w in 0..latent_width {
+            // Format: [1, row, col] - first dim=1 distinguishes from generation latents (which use 0)
+            image_ids.push([1.0f32, h as f32, w as f32]);
+        }
+    }
+    
+    // Convert to tensor: [seq_len, 3] -> [1, seq_len, 3]
+    let coords: Vec<f32> = image_ids.into_iter().flatten().collect();
+    let image_ids = Tensor::from_vec(coords, (latent_height * latent_width, 3), device)?
+        .to_dtype(dtype)?
+        .unsqueeze(0)?; // Add batch dimension
+    
+    Ok(image_ids)
 }
