@@ -1,7 +1,7 @@
 * candle-codegeex4_9b
 THUDM/CodeGeeX4 is a versatile model for all AI software development scenarios, including code completion, code interpreter, web search, function calling, repository-level Q&A and much more.
 
-- [[https://github.com/THUDM/CodeGeeX4][Github]]
+- [[https://github.com/THUDM/CodeGeeX4][GitHub]]
 - [[https://codegeex.cn/][HomePage]]
 - [[https://huggingface.co/THUDM/codegeex4-all-9b][huggingface]]  
 
@@ -30,7 +30,7 @@ THUDM/CodeGeeX4 is a versatile model for all AI software development scenarios, 
   Prompt: [please write a FFT in rust]
   Using Seed 11511762269791786684
   DType is BF16
-  transofrmer layers create
+  transformer layers create
   模型加载完毕 4
   starting the inference loop
 

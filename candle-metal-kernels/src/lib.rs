@@ -186,7 +186,7 @@ pub enum MetalKernelError {
         rhs_stride: Vec<usize>,
         mnk: (usize, usize, usize),
     },
-    #[error("Sdpa {variation} head size was {got}, expectd {expected:?}")]
+    #[error("Sdpa {variation} head size was {got}, expected {expected:?}")]
     SdpaHeadSizeMismatch {
         variation: &'static str,
         got: usize,

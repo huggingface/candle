@@ -206,7 +206,7 @@ UNARY(id, half, copy_f16, copy_f16_strided)
 UNARY(id, uint8_t, copy_u8, copy_u8_strided)
 UNARY(id, uint32_t, copy_u32, copy_u32_strided)
 
-// tanh may create NaN on large values, e.g. 45 rather than outputing 1.
+// tanh may create NaN on large values, e.g. 45 rather than outputting 1.
 // This has been an issue for the encodec example.
 UNARY(precise::tanh, float, tanh_f32, tanh_f32_strided);
 UNARY(precise::tanh, half, tanh_f16, tanh_f16_strided);

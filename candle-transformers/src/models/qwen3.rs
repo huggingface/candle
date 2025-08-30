@@ -118,7 +118,7 @@ impl Qwen3Attention {
         vb: VarBuilder,
     ) -> Result<Self> {
         if cfg.use_sliding_window {
-            candle::bail!("sliding window is not suppored")
+            candle::bail!("sliding window is not supported")
         }
 
         let head_dim = cfg.head_dim;

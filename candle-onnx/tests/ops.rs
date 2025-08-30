@@ -1924,7 +1924,7 @@ fn test_prelu_operation() -> Result<()> {
 fn test_reduce_max() -> Result<()> {
     // Tests with random data generated with `np.random.uniform`
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-119 bool_inputs
-    // No special treatment reqired for bool
+    // No special treatment required for bool
     // `np.maximum.reduce(data, axis=axes, keepdims=True)`
     test(
         &[[1_u8, 1], [1, 0], [0, 1], [0, 0]],
@@ -2217,7 +2217,7 @@ fn test_reduce_max() -> Result<()> {
         false,
     )?;
 
-    // `noop_with_empty_axes = true (1)` should yield tensor equivallent to the input tensor
+    // `noop_with_empty_axes = true (1)` should yield tensor equivalent to the input tensor
     test(
         &[
             [[-7.648377, -5.4018507], [-7.318765, 7.2374434]],
@@ -2443,7 +2443,7 @@ fn test_reduce_max() -> Result<()> {
 fn test_reduce_min() -> Result<()> {
     // Tests with random data generated with `np.random.uniform`
     // https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-121 bool_inputs
-    // No special treatment reqired for bool
+    // No special treatment required for bool
     // `np.minimum.reduce(data, axis=axes, keepdims=True)`
     test(
         &[[1_u8, 1], [1, 0], [0, 1], [0, 0]],
@@ -2736,7 +2736,7 @@ fn test_reduce_min() -> Result<()> {
         false,
     )?;
 
-    // `noop_with_empty_axes = true (1)` should yield tensor equivallent to the input tensor
+    // `noop_with_empty_axes = true (1)` should yield tensor equivalent to the input tensor
     test(
         &[
             [[-7.648377, -5.4018507], [-7.318765, 7.2374434]],
@@ -6191,7 +6191,7 @@ fn test_xor() -> Result<()> {
                 assert_eq!(z.to_vec3::<u8>()?, expected.to_vec3::<u8>()?)
             }
             4 => {
-                // Candle has no method equivallent to `to_vec4()`
+                // Candle has no method equivalent to `to_vec4()`
                 // So, as a hack, we flatten it to a single dim vec to test the results
                 assert_eq!(
                     z.flatten_all()?.to_vec1::<u8>()?,
