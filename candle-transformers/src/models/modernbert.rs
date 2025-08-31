@@ -47,7 +47,7 @@ pub enum ClassifierPooling {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ClassifierConfig {
     pub id2label: HashMap<String, String>,
-    pub label2id: HashMap<String, String>,
+    pub label2id: HashMap<String, u32>,
     pub classifier_pooling: ClassifierPooling,
 }
 
