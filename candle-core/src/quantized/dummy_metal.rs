@@ -1,37 +1,65 @@
 #![allow(unused)]
 use super::GgmlDType;
-use crate::{Error, MetalDevice, MetalStorage, Result};
+use crate::{
+    quantized::{GgmlType, QuantizedBackend, QuantizedDevice},
+    Error, MetalDevice, MetalStorage, Result,
+};
 
+#[derive(Debug)]
 pub struct QMetalStorage {
     dtype: GgmlDType,
     device: MetalDevice,
 }
 
-impl QMetalStorage {
-    pub fn zeros(_: &MetalDevice, _: usize, _: GgmlDType) -> Result<Self> {
-        Err(Error::NotCompiledWithMetalSupport)
+impl QuantizedDevice for MetalDevice {
+    type Storage = QMetalStorage;
+
+    fn qzeros(&self, elem_count: usize, dtype: GgmlDType) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithCudaSupport)
     }
 
-    pub fn dtype(&self) -> GgmlDType {
-        self.dtype
+    fn load_quantized<T: GgmlType + Send + Sync + 'static>(
+        self: &Self,
+        data: &[T],
+    ) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithCudaSupport)
     }
+}
 
-    pub fn device(&self) -> &MetalDevice {
-        &self.device
-    }
+impl QuantizedBackend for QMetalStorage {
+    type Storage = MetalStorage;
+    type Device = MetalDevice;
 
-    pub fn dequantize(&self, _elem_count: usize) -> Result<MetalStorage> {
-        Err(Error::NotCompiledWithMetalSupport)
-    }
-
-    pub fn quantize(&mut self, _src: &MetalStorage) -> Result<()> {
-        Err(Error::NotCompiledWithMetalSupport)
-    }
-
-    pub fn storage_size_in_bytes(&self) -> usize {
+    fn block_size(&self) -> usize {
         0
     }
 
+    fn dtype(&self) -> GgmlDType {
+        self.dtype
+    }
+
+    fn storage_size_in_bytes(&self) -> usize {
+        0
+    }
+
+    fn quantize(&mut self, src: &Self::Storage) -> Result<()> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn dequantize(&self, elem_count: usize) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn data(&self) -> Result<std::borrow::Cow<'_, [u8]>> {
+        crate::bail!("not implemented");
+    }
+
+    fn device(&self) -> impl AsRef<Self::Device> {
+        &self.device
+    }
+}
+
+impl QMetalStorage {
     pub fn fwd(
         &self,
         _self_shape: &crate::Shape,
