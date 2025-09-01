@@ -135,7 +135,7 @@ pub trait BackendDevice<B: BackendStorage>: Sized + std::fmt::Debug + Clone {
 
     fn location(&self) -> crate::DeviceLocation;
 
-    fn same_device<O: BackendStorage>(&self, device: &O::Device) -> bool {
+    fn same_device(&self, device: &B::Device) -> bool {
         self.location() == device.location()
     }
 
