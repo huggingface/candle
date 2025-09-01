@@ -3,14 +3,14 @@
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 
-pub trait BackendStorage: Sized {
-    type Device: BackendDevice;
+pub trait BackendStorage: Sized + Clone {
+    type Device: BackendDevice<Self>;
 
     fn try_clone(&self, _: &Layout) -> Result<Self>;
 
     fn dtype(&self) -> DType;
 
-    fn device(&self) -> &Self::Device;
+    fn device(&self) -> impl AsRef<Self::Device>;
 
     // Maybe this should return a Cow instead so that no copy is done on the cpu case.
     fn to_cpu_storage(&self) -> Result<CpuStorage>;
@@ -129,33 +129,33 @@ pub trait BackendStorage: Sized {
     fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()>;
 }
 
-pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
-    type Storage: BackendStorage;
-
+pub trait BackendDevice<B: BackendStorage>: Sized + std::fmt::Debug + Clone {
     // TODO: Make the usize generic and part of a generic DeviceLocation.
     fn new(_: usize) -> Result<Self>;
 
     fn location(&self) -> crate::DeviceLocation;
 
-    fn same_device(&self, _: &Self) -> bool;
+    fn same_device<O: BackendStorage>(&self, device: &O::Device) -> bool {
+        self.location() == device.location()
+    }
 
-    fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage>;
+    fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<B>;
 
     /// # Safety
     /// This function is unsafe as it doesn't initialize the underlying data store.
     /// The caller should ensure that the data is properly initialized as early as possible
     /// after this call.
-    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage>;
+    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<B>;
 
-    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<Self::Storage>;
+    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<B>;
 
-    fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage>;
+    fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<B>;
 
-    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<Self::Storage>;
+    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<B>;
 
-    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage>;
+    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<B>;
 
-    fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage>;
+    fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<B>;
 
     fn set_seed(&self, _: u64) -> Result<()>;
 
