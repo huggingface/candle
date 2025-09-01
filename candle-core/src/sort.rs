@@ -1,4 +1,4 @@
-use crate::{Result, Tensor};
+use crate::{backend::BackendStorage, Result, Tensor};
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy)]
@@ -109,7 +109,7 @@ mod cuda {
     }
 }
 
-impl crate::CustomOp1 for ArgSort {
+impl<B: BackendStorage> crate::CustomOp1<B> for ArgSort {
     fn name(&self) -> &'static str {
         "argsort"
     }
@@ -213,13 +213,13 @@ impl crate::CustomOp1 for ArgSort {
     }
 }
 
-impl Tensor {
+impl<B: BackendStorage> Tensor<B> {
     /// Returns the indices that sort the tensor along the last dimension.
     ///
     /// If `asc` is `true`, sorting is in ascending order. Otherwise sorting is performed in
     /// descending order. The sort is unstable so there is no guarantees on the final order when it
     /// comes to ties.
-    pub fn arg_sort_last_dim(&self, asc: bool) -> Result<Tensor> {
+    pub fn arg_sort_last_dim(&self, asc: bool) -> Result<Self> {
         if !self.is_contiguous() {
             return Err(crate::Error::RequiresContiguous {
                 op: "arg_sort_last_dim",
@@ -239,7 +239,7 @@ impl Tensor {
     /// If `asc` is `true`, sorting is in ascending order. Otherwise sorting is performed in
     /// descending order. The sort is unstable so there is no guarantees on the final order when it
     /// comes to ties.
-    pub fn sort_last_dim(&self, asc: bool) -> Result<(Tensor, Tensor)> {
+    pub fn sort_last_dim(&self, asc: bool) -> Result<(Self, Self)> {
         if !self.is_contiguous() {
             return Err(crate::Error::RequiresContiguous {
                 op: "sort_last_dim",
