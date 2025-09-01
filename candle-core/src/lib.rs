@@ -87,10 +87,10 @@ pub mod test_utils;
 pub mod utils;
 mod variable;
 
+use backend::BackendStorage;
+pub use cpu_backend::{CpuStorage, CpuStorageRef};
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;
-
-pub use cpu_backend::{CpuStorage, CpuStorageRef};
 pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3, UgIOp1};
 pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
@@ -141,18 +141,18 @@ impl ToUsize2 for (usize, usize) {
 }
 
 /// Defining a module with forward method using a single argument.
-pub trait Module {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor>;
+pub trait Module<B: BackendStorage> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>>;
 }
 
-impl<T: Fn(&Tensor) -> Result<Tensor>> Module for T {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage, T: Fn(&Tensor<B>) -> Result<Tensor<B>>> Module<B> for T {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         self(xs)
     }
 }
 
-impl<M: Module> Module for Option<&M> {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<M: Module<B>, B: BackendStorage> Module<B> for Option<&M> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         match self {
             None => Ok(xs.clone()),
             Some(m) => m.forward(xs),
@@ -162,12 +162,12 @@ impl<M: Module> Module for Option<&M> {
 
 /// A single forward method using a single single tensor argument and a flag to
 /// separate the training and evaluation behaviors.
-pub trait ModuleT {
-    fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor>;
+pub trait ModuleT<B: BackendStorage> {
+    fn forward_t(&self, xs: &Tensor<B>, train: bool) -> Result<Tensor<B>>;
 }
 
-impl<M: Module> ModuleT for M {
-    fn forward_t(&self, xs: &Tensor, _train: bool) -> Result<Tensor> {
+impl<M: Module<B>, B: BackendStorage> ModuleT<B> for M {
+    fn forward_t(&self, xs: &Tensor<B>, _train: bool) -> Result<Tensor<B>> {
         self.forward(xs)
     }
 }
