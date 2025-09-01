@@ -1,6 +1,7 @@
 //! Implementation of Backend Fns for CPU
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
+use crate::quantized::QuantizedBackend;
 use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
 use float8::F8E4M3;
 use half::{bf16, f16};
@@ -43,6 +44,12 @@ pub enum CpuStorageRef<'a> {
 
 #[derive(Debug, Clone)]
 pub struct CpuDevice;
+
+impl AsRef<CpuDevice> for CpuDevice {
+    fn as_ref(&self) -> &CpuDevice {
+        self
+    }
+}
 
 struct Cmp(CmpOp);
 impl Map2U8 for Cmp {
@@ -2667,26 +2674,24 @@ impl BackendStorage for CpuStorage {
     }
 }
 
-impl BackendDevice for CpuDevice {
-    type Storage = CpuStorage;
-
+impl BackendDevice<CpuStorage> for CpuDevice {
     fn location(&self) -> crate::DeviceLocation {
         crate::DeviceLocation::Cpu
     }
 
-    fn same_device(&self, _: &Self) -> bool {
+    fn same_device<O: BackendStorage>(&self, _: &O::Device) -> bool {
         true
     }
 
-    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {
+    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<CpuStorage> {
         Ok(T::to_cpu_storage(s))
     }
 
-    fn storage_from_cpu_storage(&self, s: &CpuStorage) -> Result<Self::Storage> {
+    fn storage_from_cpu_storage(&self, s: &CpuStorage) -> Result<CpuStorage> {
         Ok(s.clone())
     }
 
-    fn storage_from_cpu_storage_owned(&self, s: CpuStorage) -> Result<Self::Storage> {
+    fn storage_from_cpu_storage_owned(&self, s: CpuStorage) -> Result<CpuStorage> {
         Ok(s)
     }
 
