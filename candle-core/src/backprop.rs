@@ -1,11 +1,16 @@
 //! Methods for backpropagation of gradients.
+use crate::backend::BackendStorage;
 use crate::op::{BinaryOp, Op, ReduceOp, UnaryOp};
 use crate::{Error, Result, Tensor, TensorId};
 use std::collections::HashMap;
 
 // arg has been reduced to node via reduce_dims, expand it back to arg.
 // This has to handle keepdims.
-fn broadcast_back(arg: &Tensor, node: &Tensor, reduced_dims: &[usize]) -> Result<Tensor> {
+fn broadcast_back<B: BackendStorage>(
+    arg: &Tensor<B>,
+    node: &Tensor<B>,
+    reduced_dims: &[usize],
+) -> Result<Tensor<B>> {
     if arg.rank() == node.rank() {
         // keepdim = true
         node.broadcast_as(arg.shape())
@@ -27,19 +32,19 @@ thread_local! {
     }
 }
 
-impl Tensor {
+impl<B: BackendStorage> Tensor<B> {
     /// Return all the nodes that lead to this value in a topologically sorted vec, the first
     /// elements having dependencies on the latter ones, e.g. the first element if any is the
     /// argument.
     /// This assumes that the op graph is a DAG.
-    pub fn sorted_nodes(&self) -> Vec<&Tensor> {
+    pub fn sorted_nodes(&self) -> Vec<&Tensor<B>> {
         // The vec of sorted nodes is passed as an owned value rather than a mutable reference
         // to get around some lifetime limitations.
-        fn walk<'a>(
-            node: &'a Tensor,
-            nodes: Vec<&'a Tensor>,
+        fn walk<'a, B: BackendStorage>(
+            node: &'a Tensor<B>,
+            nodes: Vec<&'a Tensor<B>>,
             already_seen: &mut HashMap<TensorId, bool>,
-        ) -> (bool, Vec<&'a Tensor>) {
+        ) -> (bool, Vec<&'a Tensor<B>>) {
             if let Some(&tg) = already_seen.get(&node.id()) {
                 return (tg, nodes);
             }
@@ -161,7 +166,7 @@ impl Tensor {
         nodes
     }
 
-    pub fn backward(&self) -> Result<GradStore> {
+    pub fn backward(&self) -> Result<GradStore<B>> {
         let sorted_nodes = self.sorted_nodes();
         let mut grads = GradStore::new();
         grads.insert(self, self.ones_like()?.contiguous()?);
@@ -726,37 +731,37 @@ impl Tensor {
 
 /// A store for gradients, associating a tensor id to the corresponding gradient tensor, used for back propagation.
 #[derive(Debug)]
-pub struct GradStore(HashMap<TensorId, Tensor>);
+pub struct GradStore<B: BackendStorage>(HashMap<TensorId, Tensor<B>>);
 
-impl GradStore {
+impl<B: BackendStorage> GradStore<B> {
     /// Create a new gradient store
     fn new() -> Self {
         GradStore(HashMap::new())
     }
 
     /// Get the gradient tensor corresponding to the given tensor id
-    pub fn get_id(&self, id: TensorId) -> Option<&Tensor> {
+    pub fn get_id(&self, id: TensorId) -> Option<&Tensor<B>> {
         self.0.get(&id)
     }
 
     /// Get the gradient tensor associated with the given tensor
-    pub fn get(&self, tensor: &Tensor) -> Option<&Tensor> {
+    pub fn get(&self, tensor: &Tensor<B>) -> Option<&Tensor<B>> {
         self.0.get(&tensor.id())
     }
 
     /// Remove the gradient tensor associated with the given tensor, returning it if it exists
-    pub fn remove(&mut self, tensor: &Tensor) -> Option<Tensor> {
+    pub fn remove(&mut self, tensor: &Tensor<B>) -> Option<Tensor<B>> {
         self.0.remove(&tensor.id())
     }
 
     /// Insert a gradient tensor associated with the given tensor, returning the previous gradient tensor if it existed
-    pub fn insert(&mut self, tensor: &Tensor, grad: Tensor) -> Option<Tensor> {
+    pub fn insert(&mut self, tensor: &Tensor<B>, grad: Tensor<B>) -> Option<Tensor<B>> {
         self.0.insert(tensor.id(), grad)
     }
 
     /// Get the gradient tensor associated with the given tensor, or, if it does not exist,
     /// insert a tensor of zeroes, with the same shape and type as the given tensors and return it
-    fn or_insert(&mut self, tensor: &Tensor) -> Result<&mut Tensor> {
+    fn or_insert(&mut self, tensor: &Tensor<B>) -> Result<&mut Tensor<B>> {
         use std::collections::hash_map::Entry;
         let grad = match self.0.entry(tensor.id()) {
             Entry::Occupied(entry) => entry.into_mut(),
