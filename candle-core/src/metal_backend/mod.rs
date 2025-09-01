@@ -2051,7 +2051,7 @@ impl BackendDevice for MetalDevice {
         let seed = Arc::new(Mutex::new(
             device
                 .new_buffer_with_data(
-                    [299792458].as_ptr() as *const c_void,
+                    [299792458u64].as_ptr() as *const c_void,
                     4,
                     MTLResourceOptions::StorageModeManaged,
                 )
@@ -2209,16 +2209,12 @@ impl BackendDevice for MetalDevice {
     }
 
     fn set_seed(&self, seed: u64) -> Result<()> {
-        let seed: u32 = seed.try_into().map_err(|_| {
-            MetalError::Message("Metal seed must be less than or equal to u32::MAX".to_string())
-        })?;
-
         let seed_buffer = self.seed.try_lock().map_err(MetalError::from)?;
         let contents = seed_buffer.data();
         unsafe {
-            std::ptr::copy([seed].as_ptr(), contents as *mut u32, 1);
+            std::ptr::copy([seed].as_ptr(), contents as *mut u64, 1);
         }
-        seed_buffer.did_modify_range(NSRange::new(0, 4));
+        seed_buffer.did_modify_range(NSRange::new(0, 8));
 
         Ok(())
     }

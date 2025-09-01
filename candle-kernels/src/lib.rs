@@ -1,4 +1,6 @@
-mod ptx;
+mod ptx {
+    include!(concat!(env!("OUT_DIR"), "/ptx.rs"));
+}
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
