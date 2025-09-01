@@ -136,6 +136,12 @@ impl std::ops::Deref for MetalDevice {
     }
 }
 
+impl AsRef<MetalDevice> for MetalDevice {
+    fn as_ref(&self) -> &MetalDevice {
+        self
+    }
+}
+
 impl MetalDevice {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn compile(

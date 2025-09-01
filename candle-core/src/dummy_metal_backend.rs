@@ -5,7 +5,13 @@ use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
 #[derive(Debug, Clone)]
 pub struct MetalDevice;
 
-#[derive(Debug)]
+impl AsRef<MetalDevice> for MetalDevice {
+    fn as_ref(&self) -> &MetalDevice {
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct MetalStorage;
 
 #[derive(thiserror::Error, Debug)]
@@ -212,8 +218,7 @@ impl crate::backend::BackendStorage for MetalStorage {
     }
 }
 
-impl crate::backend::BackendDevice for MetalDevice {
-    type Storage = MetalStorage;
+impl crate::backend::BackendDevice<MetalStorage> for MetalDevice {
     fn new(_: usize) -> Result<Self> {
         Err(Error::NotCompiledWithMetalSupport)
     }
@@ -226,35 +231,35 @@ impl crate::backend::BackendDevice for MetalDevice {
         fail!()
     }
 
-    fn same_device(&self, _: &Self) -> bool {
+    fn same_device<O: crate::backend::BackendStorage>(&self, _: &O::Device) -> bool {
         fail!()
     }
 
-    fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
+    fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<MetalStorage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
+    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<MetalStorage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<Self::Storage> {
+    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<MetalStorage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage> {
+    fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<MetalStorage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<Self::Storage> {
+    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<MetalStorage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
+    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<MetalStorage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
+    fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<MetalStorage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 

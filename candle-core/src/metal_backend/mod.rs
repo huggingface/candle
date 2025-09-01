@@ -2038,9 +2038,7 @@ impl MetalStorage {
     }
 }
 
-impl BackendDevice for MetalDevice {
-    type Storage = MetalStorage;
-
+impl BackendDevice<MetalStorage> for MetalDevice {
     fn new(ordinal: usize) -> Result<Self> {
         let device = metal::Device::all().swap_remove(ordinal);
         let command_queue = device.new_command_queue();
@@ -2092,7 +2090,7 @@ impl BackendDevice for MetalDevice {
         ))
     }
 
-    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {
+    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<MetalStorage> {
         let (count, buffer) = match T::cpu_storage_ref(s) {
             CpuStorageRef::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
@@ -2106,7 +2104,7 @@ impl BackendDevice for MetalDevice {
         Ok(Self::Storage::new(buffer?, self.clone(), count, T::DTYPE))
     }
 
-    fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
+    fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<MetalStorage> {
         let (count, buffer) = match storage {
             CpuStorage::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
@@ -2125,7 +2123,7 @@ impl BackendDevice for MetalDevice {
         ))
     }
 
-    fn storage_from_cpu_storage_owned(&self, storage: CpuStorage) -> Result<Self::Storage> {
+    fn storage_from_cpu_storage_owned(&self, storage: CpuStorage) -> Result<MetalStorage> {
         self.storage_from_cpu_storage(&storage)
     }
 
@@ -2135,7 +2133,7 @@ impl BackendDevice for MetalDevice {
         dtype: DType,
         min: f64,
         max: f64,
-    ) -> Result<Self::Storage> {
+    ) -> Result<MetalStorage> {
         let name = match dtype {
             DType::F32 => "rand_uniform_f32",
             DType::F16 => "rand_uniform_f16",
@@ -2171,7 +2169,7 @@ impl BackendDevice for MetalDevice {
         dtype: DType,
         mean: f64,
         stddev: f64,
-    ) -> Result<Self::Storage> {
+    ) -> Result<MetalStorage> {
         let name = match dtype {
             DType::F32 => "rand_normal_f32",
             DType::F16 => "rand_normal_f16",
