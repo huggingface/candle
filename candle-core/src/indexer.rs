@@ -1,9 +1,9 @@
-use crate::{Error, Tensor};
+use crate::{backend::BackendStorage, Error, Tensor};
 use std::ops::{
     Bound, Range, RangeBounds, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive,
 };
 
-impl Tensor {
+impl<B: BackendStorage> Tensor<B> {
     /// Intended to be use by the trait `.i()`
     ///
     /// ```
@@ -24,7 +24,7 @@ impl Tensor {
     ///
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    fn index(&self, indexers: &[TensorIndexer]) -> Result<Self, Error> {
+    fn index(&self, indexers: &[TensorIndexer<B>]) -> Result<Self, Error> {
         let mut x = self.clone();
         let dims = self.shape().dims();
         let mut current_dim = 0;
@@ -63,43 +63,43 @@ impl Tensor {
 
 #[derive(Debug)]
 /// Generic structure used to index a slice of the tensor
-pub enum TensorIndexer {
+pub enum TensorIndexer<B: BackendStorage> {
     /// This selects the elements for which an index has some specific value.
     Select(usize),
     /// This is a regular slice, purely indexing a chunk of the tensor
     Narrow(Bound<usize>, Bound<usize>),
     /// Indexing via a 1d tensor
-    IndexSelect(Tensor),
+    IndexSelect(Tensor<B>),
     Err(Error),
 }
 
-impl From<usize> for TensorIndexer {
+impl<B: BackendStorage> From<usize> for TensorIndexer<B> {
     fn from(index: usize) -> Self {
         TensorIndexer::Select(index)
     }
 }
 
-impl From<&[u32]> for TensorIndexer {
+impl From<&[u32]> for TensorIndexer<crate::CpuStorage> {
     fn from(index: &[u32]) -> Self {
-        match Tensor::new(index, &crate::Device::Cpu) {
+        match Tensor::new(index, &crate::cpu_backend::CpuDevice {}) {
             Ok(tensor) => TensorIndexer::IndexSelect(tensor),
             Err(e) => TensorIndexer::Err(e),
         }
     }
 }
 
-impl From<Vec<u32>> for TensorIndexer {
+impl From<Vec<u32>> for TensorIndexer<crate::CpuStorage> {
     fn from(index: Vec<u32>) -> Self {
         let len = index.len();
-        match Tensor::from_vec(index, len, &crate::Device::Cpu) {
+        match Tensor::from_vec(index, len, &crate::cpu_backend::CpuDevice {}) {
             Ok(tensor) => TensorIndexer::IndexSelect(tensor),
             Err(e) => TensorIndexer::Err(e),
         }
     }
 }
 
-impl From<&Tensor> for TensorIndexer {
-    fn from(tensor: &Tensor) -> Self {
+impl<B: BackendStorage> From<&Tensor<B>> for TensorIndexer<B> {
+    fn from(tensor: &Tensor<B>) -> Self {
         TensorIndexer::IndexSelect(tensor.clone())
     }
 }
@@ -112,7 +112,7 @@ impl RB for RangeInclusive<usize> {}
 impl RB for RangeTo<usize> {}
 impl RB for RangeToInclusive<usize> {}
 
-impl<T: RB> From<T> for TensorIndexer {
+impl<T: RB, B: BackendStorage> From<T> for TensorIndexer<B> {
     fn from(range: T) -> Self {
         use std::ops::Bound::*;
         let start = match range.start_bound() {
@@ -131,15 +131,15 @@ impl<T: RB> From<T> for TensorIndexer {
 
 /// Trait used to implement multiple signatures for ease of use of the slicing
 /// of a tensor
-pub trait IndexOp<T> {
+pub trait IndexOp<T, B: BackendStorage> {
     /// Returns a slicing iterator which are the chunks of data necessary to
     /// reconstruct the desired tensor.
-    fn i(&self, index: T) -> Result<Tensor, Error>;
+    fn i(&self, index: T) -> Result<Tensor<B>, Error>;
 }
 
-impl<T> IndexOp<T> for Tensor
+impl<T, B: BackendStorage> IndexOp<T, B> for Tensor<B>
 where
-    T: Into<TensorIndexer>,
+    T: Into<TensorIndexer<B>>,
 {
     ///```rust
     /// use candle_core::{Tensor, DType, Device, IndexOp};
@@ -168,14 +168,14 @@ where
     /// ]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    fn i(&self, index: T) -> Result<Tensor, Error> {
+    fn i(&self, index: T) -> Result<Tensor<B>, Error> {
         self.index(&[index.into()])
     }
 }
 
-impl<A> IndexOp<(A,)> for Tensor
+impl<T, B: BackendStorage> IndexOp<(T,), B> for Tensor<B>
 where
-    A: Into<TensorIndexer>,
+    T: Into<TensorIndexer<B>>,
 {
     ///```rust
     /// use candle_core::{Tensor, DType, Device, IndexOp};
@@ -204,15 +204,15 @@ where
     /// ]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    fn i(&self, (a,): (A,)) -> Result<Tensor, Error> {
-        self.index(&[a.into()])
+    fn i(&self, (t,): (T,)) -> Result<Tensor<B>, Error> {
+        self.index(&[t.into()])
     }
 }
 #[allow(non_snake_case)]
-impl<A, B> IndexOp<(A, B)> for Tensor
+impl<T, U, B: BackendStorage> IndexOp<(T, U), B> for Tensor<B>
 where
-    A: Into<TensorIndexer>,
-    B: Into<TensorIndexer>,
+    T: Into<TensorIndexer<B>>,
+    U: Into<TensorIndexer<B>>,
 {
     ///```rust
     /// use candle_core::{Tensor, DType, Device, IndexOp};
@@ -230,20 +230,20 @@ where
     /// assert_eq!(d.to_vec2::<f32>()?, &[[6., 7., 8.]]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    fn i(&self, (a, b): (A, B)) -> Result<Tensor, Error> {
-        self.index(&[a.into(), b.into()])
+    fn i(&self, (t, u): (T, U)) -> Result<Tensor<B>, Error> {
+        self.index(&[t.into(), u.into()])
     }
 }
 
 macro_rules! index_op_tuple {
     ($doc:tt, $($t:ident),+) => {
         #[allow(non_snake_case)]
-        impl<$($t),*> IndexOp<($($t,)*)> for Tensor
+        impl<Storage: BackendStorage,$($t),*> IndexOp<($($t,)*), Storage> for Tensor<Storage>
         where
-            $($t: Into<TensorIndexer>,)*
+            $($t: Into<TensorIndexer<Storage>>,)*
         {
             #[doc=$doc]
-            fn i(&self, ($($t,)*): ($($t,)*)) -> Result<Tensor, Error> {
+            fn i(&self, ($($t,)*): ($($t,)*)) -> Result<Tensor<Storage>, Error> {
                 self.index(&[$($t.into(),)*])
             }
         }
