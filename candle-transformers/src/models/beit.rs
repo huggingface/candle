@@ -2,7 +2,7 @@
 //!
 //! See "BEIT: BERT Pre-Training of Image Transformers", Bao et al. 2021
 //! - [Arxiv](https://arxiv.org/abs/2106.08254)
-//! - [Github](https://github.com/microsoft/unilm/tree/master/beit)
+//! - [GitHub](https://github.com/microsoft/unilm/tree/master/beit)
 //!
 
 use candle::{DType, Device, IndexOp, Result, Tensor, D};

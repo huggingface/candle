@@ -1259,7 +1259,7 @@ fn simple_eval_(
                     // Satisfies version 18+
                     axes.to_vec1::<i64>().ok()
                 } else if let Ok(Some(axes)) = get_attr_opt::<[i64]>(node, "axes") {
-                    // Backward compatiblity with version 13 and below
+                    // Backward compatibility with version 13 and below
                     Some(axes.to_vec())
                 } else {
                     None
@@ -1368,7 +1368,7 @@ fn simple_eval_(
                     // Satisfies version 18+
                     axes.to_vec1::<i64>().ok()
                 } else if let Ok(Some(axes)) = get_attr_opt::<[i64]>(node, "axes") {
-                    // Backward compatiblity with version 13 and below
+                    // Backward compatibility with version 13 and below
                     Some(axes.to_vec())
                 } else {
                     None

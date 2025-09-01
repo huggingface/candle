@@ -1,13 +1,11 @@
-use metal::{
-    Buffer, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
-    FunctionConstantValues, Library, MTLDataType, MTLSize, NSUInteger,
-};
+use objc2_metal::{MTLCompileOptions, MTLDataType, MTLMathMode, MTLResourceUsage, MTLSize};
 use std::collections::HashMap;
-use std::ffi::c_void;
 use std::sync::RwLock;
+pub mod metal_utils;
 pub mod mlx_gemm;
 pub mod sort;
 pub mod utils;
+use metal_utils::*;
 pub use mlx_gemm::{call_mlx_gemm, GemmDType};
 pub use sort::{call_arg_sort, call_mlx_arg_sort};
 pub use utils::BufferOffset;
@@ -178,6 +176,8 @@ pub enum MetalKernelError {
     LoadFunctionError(String),
     #[error("Failed to create compute function")]
     FailedToCreateComputeFunction,
+    #[error("Failed to create metal resource: {0}")]
+    FailedToCreateResource(String),
     #[error("Failed to create pipeline")]
     FailedToCreatePipeline(String),
     #[error("Invalid matmul arguments {lhs_stride:?} {rhs_stride:?} {mnk:?}")]
@@ -186,7 +186,7 @@ pub enum MetalKernelError {
         rhs_stride: Vec<usize>,
         mnk: (usize, usize, usize),
     },
-    #[error("Sdpa {variation} head size was {got}, expectd {expected:?}")]
+    #[error("Sdpa {variation} head size was {got}, expected {expected:?}")]
     SdpaHeadSizeMismatch {
         variation: &'static str,
         got: usize,
@@ -252,7 +252,7 @@ impl From<String> for KernelName {
 }
 
 type Libraries = HashMap<Source, Library>;
-type Pipelines = HashMap<(KernelName, Option<ConstantValues>), ComputePipelineState>;
+type Pipelines = HashMap<(KernelName, Option<ConstantValues>), ComputePipeline>;
 
 #[derive(Debug)]
 pub struct Kernels {
@@ -309,8 +309,11 @@ impl Kernels {
         } else {
             let lib = {
                 let source_content = self.get_library_source(source);
+                let compile_options = MTLCompileOptions::new();
+                //unsafe { compile_options.setEnableLogging(true) };
+                unsafe { compile_options.setMathMode(MTLMathMode::Fast) };
                 device
-                    .new_library_with_source(source_content, &CompileOptions::new())
+                    .new_library_with_source(source_content, Some(&compile_options))
                     .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
             };
             libraries.insert(source, lib.clone());
@@ -323,7 +326,7 @@ impl Kernels {
         device: &Device,
         source: Source,
         name: &str,
-        constants: Option<FunctionConstantValues>,
+        constants: Option<&ConstantValues>,
     ) -> Result<Function, MetalKernelError> {
         let func = self
             .load_library(device, source)?
@@ -341,19 +344,14 @@ impl Kernels {
         source: Source,
         name: impl Into<KernelName>,
         constants: Option<ConstantValues>,
-    ) -> Result<ComputePipelineState, MetalKernelError> {
+    ) -> Result<ComputePipeline, MetalKernelError> {
         let mut pipelines = self.pipelines.write()?;
         let key = (name.into(), constants);
         if let Some(pipeline) = pipelines.get(&key) {
             Ok(pipeline.clone())
         } else {
             let (name, constants) = key;
-            let func = self.load_function(
-                device,
-                source,
-                name.as_ref(),
-                constants.as_ref().map(|c| c.function_constant_values()),
-            )?;
+            let func = self.load_function(device, source, name.as_ref(), constants.as_ref())?;
             let pipeline = device
                 .new_compute_pipeline_state_with_function(&func)
                 .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
@@ -371,7 +369,7 @@ impl Kernels {
         device: &Device,
         source: Source,
         name: impl Into<KernelName>,
-    ) -> Result<ComputePipelineState, MetalKernelError> {
+    ) -> Result<ComputePipeline, MetalKernelError> {
         self.load_pipeline_with_constants(device, source, name, None)
     }
 }
@@ -393,7 +391,7 @@ pub fn call_copy2d(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Unary, name.0)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
@@ -408,13 +406,13 @@ pub fn call_copy2d(
     );
 
     let grid_dims = MTLSize {
-        width: d1 as u64,
-        height: d2 as u64,
+        width: d1,
+        height: d2,
         depth: 1,
     };
-    let group_dims = get_block_dims(d1 as u64, d2 as u64, 1);
-    encoder.use_resource(input, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    let group_dims = get_block_dims(d1, d2, 1);
+    encoder.use_resource(input, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_threads(grid_dims, group_dims);
     Ok(())
 }
@@ -431,7 +429,7 @@ pub fn call_const_set_contiguous_tiled(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Unary, kernel_name.0)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     let tile_size = 2;
     let tiles = length.div_ceil(tile_size);
 
@@ -440,7 +438,7 @@ pub fn call_const_set_contiguous_tiled(
     set_params!(encoder, (length, input, &output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
-    encoder.use_resource(output.buffer, metal::MTLResourceUsage::Write);
+    encoder.use_resource(output.buffer, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -457,14 +455,14 @@ pub fn call_const_set_contiguous(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Unary, kernel_name.0)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (length, input, &output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
-    encoder.use_resource(output.buffer, metal::MTLResourceUsage::Write);
+    encoder.use_resource(output.buffer, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -485,12 +483,12 @@ pub fn call_const_set_strided(
     let length: usize = shape.iter().product();
     let num_dims: usize = shape.len();
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
 
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(encoder, (length, num_dims, shape, strides, input, &output));
-    encoder.use_resource(output.buffer, metal::MTLResourceUsage::Write);
+    encoder.use_resource(output.buffer, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -507,7 +505,7 @@ pub fn call_unary_contiguous_tiled(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Unary, kernel_name.0)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     let tile_size = 2;
     let tiles = length.div_ceil(tile_size);
 
@@ -516,8 +514,8 @@ pub fn call_unary_contiguous_tiled(
     set_params!(encoder, (length, &input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -534,15 +532,15 @@ pub fn call_unary_contiguous(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Unary, kernel_name.0)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (length, &input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -563,13 +561,13 @@ pub fn call_unary_strided(
     let length: usize = shape.iter().product();
     let num_dims: usize = shape.len();
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
 
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(encoder, (length, num_dims, shape, strides, &input, &output));
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output.buffer, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output.buffer, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -588,16 +586,16 @@ pub fn call_binary_contiguous(
     let pipeline = kernels.load_pipeline(device, Source::Binary, kernel_name.0)?;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (length, &left, &right, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
 
-    encoder.use_resource(left.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(right.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(left.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(right.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -619,7 +617,7 @@ pub fn call_binary_strided(
 
     let num_dims: usize = shape.len();
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     let width: usize = shape.iter().product();
     let length: usize = shape.iter().product();
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
@@ -638,9 +636,9 @@ pub fn call_binary_strided(
             output
         )
     );
-    encoder.use_resource(left_input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(right_input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(left_input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(right_input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
 
     Ok(())
@@ -659,14 +657,14 @@ pub fn call_cast_contiguous(
     let pipeline = kernels.load_pipeline(device, Source::Cast, kernel_name)?;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (length, &input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -685,7 +683,7 @@ pub fn call_cast_strided(
     let pipeline = kernels.load_pipeline(device, Source::Cast, kernel_name)?;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     let length: usize = shape.iter().product();
@@ -697,8 +695,8 @@ pub fn call_cast_strided(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
 
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -720,7 +718,7 @@ pub fn call_reduce_contiguous(
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -736,14 +734,14 @@ pub fn call_reduce_contiguous(
     );
 
     let thread_group_count = MTLSize {
-        width: out_length as u64,
+        width: out_length,
         height: 1,
         depth: 1,
     };
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        (work_per_threadgroup / 2).next_power_of_two() as NSUInteger,
+        (work_per_threadgroup / 2).next_power_of_two(),
     );
 
     let thread_group_size = MTLSize {
@@ -752,8 +750,8 @@ pub fn call_reduce_contiguous(
         depth: 1,
     };
 
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -776,7 +774,7 @@ pub fn call_reduce_strided(
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -793,14 +791,14 @@ pub fn call_reduce_strided(
     );
 
     let thread_group_count = MTLSize {
-        width: out_length as u64,
+        width: out_length,
         height: 1,
         depth: 1,
     };
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        (work_per_threadgroup / 2).next_power_of_two() as NSUInteger,
+        (work_per_threadgroup / 2).next_power_of_two(),
     );
 
     let thread_group_size = MTLSize {
@@ -808,8 +806,8 @@ pub fn call_reduce_strided(
         height: 1,
         depth: 1,
     };
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -830,7 +828,7 @@ pub fn call_last_softmax(
 
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -841,14 +839,14 @@ pub fn call_last_softmax(
     let out_length = length / work_per_threadgroup;
 
     let thread_group_count = MTLSize {
-        width: out_length as NSUInteger,
+        width: out_length,
         height: 1,
         depth: 1,
     };
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        (work_per_threadgroup / 2).next_power_of_two() as NSUInteger,
+        (work_per_threadgroup / 2).next_power_of_two(),
     );
 
     let thread_group_size = MTLSize {
@@ -856,8 +854,8 @@ pub fn call_last_softmax(
         height: 1,
         depth: 1,
     };
-    encoder.use_resource(input, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -879,7 +877,7 @@ pub fn call_rms_norm(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -897,14 +895,14 @@ pub fn call_rms_norm(
     let out_length = length / elements_to_sum;
 
     let thread_group_count = MTLSize {
-        width: out_length as u64,
+        width: out_length,
         height: 1,
         depth: 1,
     };
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        elements_to_sum as u64,
+        elements_to_sum,
     )
     .next_power_of_two();
 
@@ -914,9 +912,9 @@ pub fn call_rms_norm(
         depth: 1,
     };
 
-    encoder.use_resource(input, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
-    encoder.set_threadgroup_memory_length(0, (width * 4).max(16) as u64);
+    encoder.use_resource(input, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
+    encoder.set_threadgroup_memory_length(0, (width * 4).max(16));
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -940,7 +938,7 @@ pub fn call_layer_norm(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -959,14 +957,14 @@ pub fn call_layer_norm(
     let out_length = length / elements_to_sum;
 
     let thread_group_count = MTLSize {
-        width: out_length as u64,
+        width: out_length,
         height: 1,
         depth: 1,
     };
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        elements_to_sum as u64,
+        elements_to_sum,
     )
     .next_power_of_two();
 
@@ -976,9 +974,9 @@ pub fn call_layer_norm(
         depth: 1,
     };
 
-    encoder.use_resource(input, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
-    encoder.set_threadgroup_memory_length(0, (width * 8).max(32) as u64);
+    encoder.use_resource(input, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
+    encoder.set_threadgroup_memory_length(0, (width * 8).max(32));
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1002,7 +1000,7 @@ pub fn call_rope_i(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -1018,10 +1016,10 @@ pub fn call_rope_i(
         )
     );
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, (bh * td) / 2);
-    encoder.use_resource(src, metal::MTLResourceUsage::Read);
-    encoder.use_resource(cos, metal::MTLResourceUsage::Read);
-    encoder.use_resource(sin, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(src, MTLResourceUsage::Read);
+    encoder.use_resource(cos, MTLResourceUsage::Read);
+    encoder.use_resource(sin, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1047,7 +1045,7 @@ pub fn call_rope_thd(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -1065,10 +1063,10 @@ pub fn call_rope_thd(
         )
     );
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, (b * t * h * d) / 2);
-    encoder.use_resource(src, metal::MTLResourceUsage::Read);
-    encoder.use_resource(cos, metal::MTLResourceUsage::Read);
-    encoder.use_resource(sin, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(src, MTLResourceUsage::Read);
+    encoder.use_resource(cos, MTLResourceUsage::Read);
+    encoder.use_resource(sin, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1093,7 +1091,7 @@ pub fn call_rope(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -1110,10 +1108,10 @@ pub fn call_rope(
         )
     );
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, (bh * td) / 2);
-    encoder.use_resource(src, metal::MTLResourceUsage::Read);
-    encoder.use_resource(cos, metal::MTLResourceUsage::Read);
-    encoder.use_resource(sin, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(src, MTLResourceUsage::Read);
+    encoder.use_resource(cos, MTLResourceUsage::Read);
+    encoder.use_resource(sin, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1133,14 +1131,14 @@ pub fn call_affine(
     let pipeline = kernels.load_pipeline(device, Source::Affine, name)?;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (size, mul, add, &input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1162,7 +1160,7 @@ pub fn call_affine_strided(
     let size: usize = shape.iter().product();
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -1180,8 +1178,8 @@ pub fn call_affine_strided(
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1200,14 +1198,14 @@ pub fn call_powf(
     let pipeline = kernels.load_pipeline(device, Source::Affine, name)?;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (size, mul, &input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1228,7 +1226,7 @@ pub fn call_powf_strided(
     let size: usize = shape.iter().product();
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -1237,8 +1235,8 @@ pub fn call_powf_strided(
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1257,14 +1255,14 @@ pub fn call_elu(
     let pipeline = kernels.load_pipeline(device, Source::Affine, name)?;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (size, mul, &input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1285,7 +1283,7 @@ pub fn call_elu_strided(
     let size: usize = shape.iter().product();
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -1294,8 +1292,8 @@ pub fn call_elu_strided(
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1318,7 +1316,7 @@ pub fn call_where_cond_strided(
     let pipeline = kernels.load_pipeline(device, Source::Ternary, name)?;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     let size: usize = shape.iter().product();
@@ -1342,10 +1340,10 @@ pub fn call_where_cond_strided(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
 
-    encoder.use_resource(cond.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(left.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(right.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(cond.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(left.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(right.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1374,7 +1372,7 @@ pub fn call_index_select(
     let pipeline = kernels.load_pipeline(device, Source::Indexing, name)?;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
 
@@ -1397,9 +1395,9 @@ pub fn call_index_select(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
 
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(ids.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(ids.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1425,7 +1423,7 @@ pub fn call_gather(
     let pipeline = kernels.load_pipeline(device, Source::Indexing, name)?;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
 
@@ -1445,9 +1443,9 @@ pub fn call_gather(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
 
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(ids.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(ids.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1474,7 +1472,7 @@ pub fn call_scatter(
     let pipeline = kernels.load_pipeline(device, Source::Indexing, name)?;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
 
@@ -1494,9 +1492,9 @@ pub fn call_scatter(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
 
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(ids.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output.buffer, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(ids.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output.buffer, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1524,7 +1522,7 @@ pub fn call_index_add(
 
     let pipeline = kernels.load_pipeline(device, Source::Indexing, name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     encoder.set_compute_pipeline_state(&pipeline);
 
@@ -1545,9 +1543,9 @@ pub fn call_index_add(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
 
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(ids.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(ids.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -1574,7 +1572,9 @@ impl std::hash::Hash for Value {
 impl Value {
     fn data_type(&self) -> MTLDataType {
         match self {
-            Value::USize(_) => MTLDataType::UInt,
+            // usize is usually u64 aka ulong, but can be u32 on 32-bit systems.
+            // https://developer.apple.com/documentation/objectivec/nsuinteger
+            Value::USize(_) => MTLDataType::ULong,
             Value::F32(_) => MTLDataType::Float,
             Value::U16(_) => MTLDataType::UShort,
             Value::Bool(_) => MTLDataType::Bool,
@@ -1586,7 +1586,7 @@ impl Value {
 impl Eq for Value {}
 
 #[derive(Debug, Eq, PartialEq, Hash)]
-struct ConstantValues(Vec<(usize, Value)>);
+pub struct ConstantValues(Vec<(usize, Value)>);
 
 impl ConstantValues {
     pub fn new(values: Vec<(usize, Value)>) -> Self {
@@ -1599,32 +1599,16 @@ impl ConstantValues {
             let ty = value.data_type();
             match value {
                 Value::USize(v) => {
-                    f.set_constant_value_at_index(
-                        v as *const usize as *const c_void,
-                        ty,
-                        *index as u64,
-                    );
+                    f.set_constant_value_at_index(v, ty, *index);
                 }
                 Value::F32(v) => {
-                    f.set_constant_value_at_index(
-                        v as *const f32 as *const c_void,
-                        ty,
-                        *index as u64,
-                    );
+                    f.set_constant_value_at_index(v, ty, *index);
                 }
                 Value::U16(v) => {
-                    f.set_constant_value_at_index(
-                        v as *const u16 as *const c_void,
-                        ty,
-                        *index as u64,
-                    );
+                    f.set_constant_value_at_index(v, ty, *index);
                 }
                 Value::Bool(v) => {
-                    f.set_constant_value_at_index(
-                        v as *const bool as *const c_void,
-                        ty,
-                        *index as u64,
-                    );
+                    f.set_constant_value_at_index(v, ty, *index);
                 }
             }
         }
@@ -1728,7 +1712,7 @@ pub fn call_sdpa_full(
 
     let pipeline = kernels.load_pipeline(device, Source::Sdpa, name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     // q = (bs, qhead, seq, hidden)
@@ -1794,12 +1778,8 @@ pub fn call_sdpa_full(
     let batch_strides = [b_stride_q, b_stride_k, b_stride_v, b_stride_o];
 
     impl EncoderParam for MLXFastAttentionParams {
-        fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
-            encoder.set_bytes(
-                position,
-                core::mem::size_of::<MLXFastAttentionParams>() as u64,
-                &data as *const MLXFastAttentionParams as *const c_void,
-            );
+        fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
+            encoder.set_bytes(position, &data);
         }
     }
 
@@ -1818,18 +1798,18 @@ pub fn call_sdpa_full(
 
     let grid_dims = MTLSize {
         width: 1,
-        height: tm as u64,
-        depth: bs_out as u64,
+        height: tm,
+        depth: bs_out,
     };
     let group_dims = MTLSize {
         width: 32,
-        height: WM as u64,
-        depth: WN as u64,
+        height: WM,
+        depth: WN,
     };
-    encoder.use_resource(q_buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(k_buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(v_buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(q_buffer, MTLResourceUsage::Read);
+    encoder.use_resource(k_buffer, MTLResourceUsage::Read);
+    encoder.use_resource(v_buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(grid_dims, group_dims);
     Ok(())
 }
@@ -1904,7 +1884,7 @@ pub fn call_sdpa_vector(
 
     let pipeline = kernels.load_pipeline_with_constants(device, Source::Sdpa, name, constants)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     // q = (bs, qhead, seq, hidden)
@@ -1928,18 +1908,18 @@ pub fn call_sdpa_vector(
 
     let grid_dims = MTLSize {
         width: 1,
-        height: b as u64,
-        depth: 1_u64,
+        height: b as usize,
+        depth: 1,
     };
     let group_dims = MTLSize {
         width: 1024,
         height: 1,
         depth: 1,
     };
-    encoder.use_resource(q_buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(k_buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(v_buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(q_buffer, MTLResourceUsage::Read);
+    encoder.use_resource(k_buffer, MTLResourceUsage::Read);
+    encoder.use_resource(v_buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(grid_dims, group_dims);
     Ok(())
 }
@@ -2022,7 +2002,7 @@ pub fn call_sdpa_vector_2pass(
         let pipeline =
             kernels.load_pipeline_with_constants(device, Source::Sdpa, name_pass1, constants)?;
         let encoder = ep.encoder();
-        let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+        let encoder: &ComputeCommandEncoder = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
 
         // q = (bs, qhead, seq, hidden)
@@ -2048,20 +2028,20 @@ pub fn call_sdpa_vector_2pass(
 
         let grid_dims = MTLSize {
             width: 1,
-            height: b as u64,
-            depth: SDPA_2PASS_BLOCKS as u64,
+            height: b as usize,
+            depth: SDPA_2PASS_BLOCKS,
         };
         let group_dims = MTLSize {
             width: 8 * 32,
             height: 1,
             depth: 1,
         };
-        encoder.use_resource(q_buffer, metal::MTLResourceUsage::Read);
-        encoder.use_resource(k_buffer, metal::MTLResourceUsage::Read);
-        encoder.use_resource(v_buffer, metal::MTLResourceUsage::Read);
-        encoder.use_resource(intermediate, metal::MTLResourceUsage::Write);
-        encoder.use_resource(sums, metal::MTLResourceUsage::Write);
-        encoder.use_resource(maxs, metal::MTLResourceUsage::Write);
+        encoder.use_resource(q_buffer, MTLResourceUsage::Read);
+        encoder.use_resource(k_buffer, MTLResourceUsage::Read);
+        encoder.use_resource(v_buffer, MTLResourceUsage::Read);
+        encoder.use_resource(intermediate, MTLResourceUsage::Write);
+        encoder.use_resource(sums, MTLResourceUsage::Write);
+        encoder.use_resource(maxs, MTLResourceUsage::Write);
 
         encoder.dispatch_thread_groups(grid_dims, group_dims);
     }
@@ -2093,11 +2073,11 @@ pub fn call_sdpa_vector_2pass(
             }
         };
 
-        let b = (q_shape[0] * q_shape[1]) as i32;
+        let b = (q_shape[0] * q_shape[1]) as usize;
 
         let pipeline = kernels.load_pipeline(device, Source::Sdpa, name_pass2)?;
         let encoder = ep.encoder();
-        let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+        let encoder: &ComputeCommandEncoder = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
 
         // q = (bs, qhead, seq, hidden)
@@ -2107,7 +2087,7 @@ pub fn call_sdpa_vector_2pass(
 
         let grid_dims = MTLSize {
             width: 1,
-            height: b as u64,
+            height: b,
             depth: 1,
         };
         let group_dims = MTLSize {
@@ -2115,10 +2095,10 @@ pub fn call_sdpa_vector_2pass(
             height: 1,
             depth: 1,
         };
-        encoder.use_resource(intermediate, metal::MTLResourceUsage::Write);
-        encoder.use_resource(sums, metal::MTLResourceUsage::Write);
-        encoder.use_resource(maxs, metal::MTLResourceUsage::Write);
-        encoder.use_resource(output, metal::MTLResourceUsage::Write);
+        encoder.use_resource(intermediate, MTLResourceUsage::Write);
+        encoder.use_resource(sums, MTLResourceUsage::Write);
+        encoder.use_resource(maxs, MTLResourceUsage::Write);
+        encoder.use_resource(output, MTLResourceUsage::Write);
 
         encoder.dispatch_thread_groups(grid_dims, group_dims);
     }
@@ -2142,15 +2122,15 @@ pub fn call_im2col1d_strided(
     let dst_el = shape[0] * l_out * shape[1] * k_size;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
         (dst_el, l_out, k_size, stride, padding, dilation, shape, strides, &input, output)
     );
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -2174,15 +2154,15 @@ pub fn call_col2im1d(
     let dst_el = shape[0] * c_out * l_out;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
         (dst_el, l_out, l_in, c_out, k_size, stride, &input, output)
     );
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -2209,7 +2189,7 @@ pub fn call_im2col_strided(
     let dst_el = shape[0] * h_out * w_out * shape[1] * h_k * w_k;
 
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
@@ -2219,8 +2199,8 @@ pub fn call_im2col_strided(
             output
         )
     );
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -2244,14 +2224,14 @@ pub fn call_upsample_nearest_2d(
     let scale_h = shape[3] as f32 / out_h as f32;
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
         (out_w, out_h, scale_w, scale_h, shape, strides, &input, output)
     );
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -2275,7 +2255,7 @@ pub fn call_random_uniform(
     }
     let pipeline = kernels.load_pipeline(device, Source::Random, name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     let odd = (length % 2 != 0) as usize;
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length / 2 + odd);
@@ -2284,11 +2264,8 @@ pub fn call_random_uniform(
 
     set_params!(encoder, (length, min, max, seed, buffer));
 
-    encoder.use_resource(
-        seed,
-        metal::MTLResourceUsage::Read | metal::MTLResourceUsage::Write,
-    );
-    encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
+    encoder.use_resource(seed, MTLResourceUsage::Read | MTLResourceUsage::Write);
+    encoder.use_resource(buffer, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -2307,7 +2284,7 @@ pub fn call_random_normal(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Random, name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
 
     let odd = (length % 2 != 0) as usize;
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length / 2 + odd);
@@ -2316,11 +2293,8 @@ pub fn call_random_normal(
 
     set_params!(encoder, (length, mean, stddev, seed, buffer));
 
-    encoder.use_resource(
-        seed,
-        metal::MTLResourceUsage::Read | metal::MTLResourceUsage::Write,
-    );
-    encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
+    encoder.use_resource(seed, MTLResourceUsage::Read | MTLResourceUsage::Write);
+    encoder.use_resource(buffer, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -2435,8 +2409,8 @@ pub fn call_quantized_matmul_mv_t(
     };
     let thread_groups_count = MTLSize {
         width: divide(ne01 as usize, align),
-        height: ne11 as u64,
-        depth: (ne12 * ne13) as u64,
+        height: ne11 as usize,
+        depth: (ne12 * ne13) as usize,
     };
     let threads_per_threadgroup = MTLSize {
         width: nth0,
@@ -2463,7 +2437,7 @@ pub fn call_quantized_matmul_mv_t(
 
     let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -2490,9 +2464,9 @@ pub fn call_quantized_matmul_mv_t(
             r3
         )
     );
-    encoder.use_resource(lhs, metal::MTLResourceUsage::Read);
-    encoder.use_resource(rhs, metal::MTLResourceUsage::Read);
-    encoder.use_resource(dst, metal::MTLResourceUsage::Write);
+    encoder.use_resource(lhs, MTLResourceUsage::Read);
+    encoder.use_resource(rhs, MTLResourceUsage::Read);
+    encoder.use_resource(dst, MTLResourceUsage::Write);
 
     encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
     Ok(())
@@ -2544,7 +2518,7 @@ pub fn call_quantized_matmul_mm_t(
     let thread_groups_count = MTLSize {
         width: divide(ne11 as usize, 32),
         height: divide(ne01 as usize, 64),
-        depth: (ne12 * ne13) as u64,
+        depth: (ne12 * ne13) as usize,
     };
     let threads_per_threadgroup = MTLSize {
         width: 128,
@@ -2571,7 +2545,7 @@ pub fn call_quantized_matmul_mm_t(
 
     let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -2596,9 +2570,9 @@ pub fn call_quantized_matmul_mm_t(
             r3
         )
     );
-    encoder.use_resource(src0, metal::MTLResourceUsage::Read);
-    encoder.use_resource(src1, metal::MTLResourceUsage::Read);
-    encoder.use_resource(dst, metal::MTLResourceUsage::Write);
+    encoder.use_resource(src0, MTLResourceUsage::Read);
+    encoder.use_resource(src1, MTLResourceUsage::Read);
+    encoder.use_resource(dst, MTLResourceUsage::Write);
 
     encoder.set_threadgroup_memory_length(0, 8192);
 
@@ -2606,8 +2580,8 @@ pub fn call_quantized_matmul_mm_t(
     Ok(())
 }
 
-fn divide(m: usize, b: usize) -> NSUInteger {
-    m.div_ceil(b) as NSUInteger
+fn divide(m: usize, b: usize) -> usize {
+    m.div_ceil(b)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2628,17 +2602,17 @@ pub fn call_pool2d(
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let dst_el = out_w * out_h * shape[0] * shape[1];
-    let pipeline: ComputePipelineState = kernels.load_pipeline(device, Source::Conv, name)?;
+    let pipeline: ComputePipeline = kernels.load_pipeline(device, Source::Conv, name)?;
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
         (w_k, h_k, w_stride, h_stride, shape, strides, input, output)
     );
-    encoder.use_resource(input, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -2667,10 +2641,10 @@ pub fn call_conv_transpose1d(
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let dst_el = c_out * l_out * b_size;
-    let pipeline: ComputePipelineState = kernels.load_pipeline(device, Source::Conv, name)?;
+    let pipeline: ComputePipeline = kernels.load_pipeline(device, Source::Conv, name)?;
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
@@ -2689,9 +2663,9 @@ pub fn call_conv_transpose1d(
             output
         )
     );
-    encoder.use_resource(input, metal::MTLResourceUsage::Read);
-    encoder.use_resource(kernel, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input, MTLResourceUsage::Read);
+    encoder.use_resource(kernel, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -2725,10 +2699,10 @@ pub fn call_conv_transpose2d(
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let dst_el = cfg.c_out * cfg.out_w * cfg.out_h * cfg.b_size;
-    let pipeline: ComputePipelineState = kernels.load_pipeline(device, Source::Conv, name)?;
+    let pipeline: ComputePipeline = kernels.load_pipeline(device, Source::Conv, name)?;
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
@@ -2748,9 +2722,9 @@ pub fn call_conv_transpose2d(
             output
         )
     );
-    encoder.use_resource(input, metal::MTLResourceUsage::Read);
-    encoder.use_resource(kernel, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input, MTLResourceUsage::Read);
+    encoder.use_resource(kernel, MTLResourceUsage::Read);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
@@ -2766,11 +2740,11 @@ pub fn call_const_fill(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Fill, name)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(encoder, (output, v, length));
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(output, MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }

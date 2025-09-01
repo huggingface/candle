@@ -1,4 +1,4 @@
-//! Tensor Opertion Enums and Traits
+//! Tensor Operation Enums and Traits
 //!
 #![allow(clippy::redundant_closure_call)]
 use crate::{backend::BackendStorage, Tensor};

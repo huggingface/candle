@@ -6,7 +6,7 @@ use candle::{DType, Device, Result, Tensor};
 pub struct Cache {
     // all_data is an option on a Tensor, this makes it possible to only create the actual tensor
     // on the first call where the batch size is easily known.
-    // Also this makes it safe to clone a KvCache that has been reseted (as in it will not share
+    // Also this makes it safe to clone a KvCache that has been reset (as in it will not share
     // its internal state with the cloned instance).
     all_data: Option<Tensor>,
     dim: usize,
@@ -294,7 +294,7 @@ impl RotatingCache {
         Tensor::from_slice(&mask, (size1, size2), device)
     }
 
-    /// Returns the positions corresponding to all the elements that will be retured
+    /// Returns the positions corresponding to all the elements that will be returned
     /// *after* adding `seq_len` to the cache.
     pub fn positions(&self, seq_len: usize) -> Vec<usize> {
         if seq_len <= self.max_seq_len {
@@ -388,7 +388,7 @@ impl RotatingKvCache {
         self.k.attn_mask(seq_len, device)
     }
 
-    /// Returns the positions corresponding to all the elements that will be retured
+    /// Returns the positions corresponding to all the elements that will be returned
     /// *after* adding `seq_len` to the cache.
     pub fn positions(&self, seq_len: usize) -> Vec<usize> {
         self.k.positions(seq_len)

@@ -390,7 +390,7 @@ pub struct UgIOp1 {
     #[cfg(feature = "cuda")]
     func: cudarc::driver::CudaFunction,
     #[cfg(feature = "metal")]
-    func: metal::ComputePipelineState,
+    func: candle_metal_kernels::metal_utils::ComputePipeline,
 }
 
 impl UgIOp1 {
@@ -436,6 +436,7 @@ impl InplaceOp1 for UgIOp1 {
     fn metal_fwd(&self, sto: &mut MetalStorage, layout: &Layout) -> Result<()> {
         use crate::backend::BackendStorage;
         use candle_metal_kernels::utils::EncoderProvider;
+        use objc2_metal;
 
         let elem_count = layout.shape().elem_count();
         if sto.dtype() != crate::DType::F32 {
@@ -454,15 +455,15 @@ impl InplaceOp1 for UgIOp1 {
         } else {
             (elem_count, 1)
         };
-        let grid_dims = metal::MTLSize {
-            width: g as u64,
+        let grid_dims = objc2_metal::MTLSize {
+            width: g,
             height: 1,
             depth: 1,
         };
-        let group_dims = candle_metal_kernels::utils::get_block_dims(b as u64, 1, 1);
+        let group_dims = candle_metal_kernels::utils::get_block_dims(b, 1, 1);
         candle_metal_kernels::utils::set_param(encoder, 0, (sto.buffer(), 0usize));
 
-        encoder.use_resource(sto.buffer(), metal::MTLResourceUsage::Write);
+        encoder.use_resource(sto.buffer(), objc2_metal::MTLResourceUsage::Write);
         encoder.dispatch_threads(grid_dims, group_dims);
 
         Ok(())

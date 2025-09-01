@@ -4,8 +4,11 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
-use candle_metal_kernels::{BufferOffset, CallConvTranspose2dCfg, Kernels};
-use metal::{Buffer, MTLResourceOptions, NSUInteger};
+use candle_metal_kernels::{
+    metal_utils::{Buffer, Commands, Device, MTLResourceOptions},
+    BufferOffset, CallConvTranspose2dCfg, Kernels,
+};
+use objc2_foundation::NSRange;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
@@ -70,7 +73,7 @@ impl From<String> for MetalError {
 #[derive(Debug, Clone)]
 pub struct MetalStorage {
     /// The actual buffer containing the data.
-    buffer: Arc<metal::Buffer>,
+    buffer: Arc<Buffer>,
     /// a reference to the device owning this buffer
     device: MetalDevice,
     /// The count of allocated elements in the buffer
@@ -1712,11 +1715,11 @@ impl BackendStorage for MetalStorage {
         let command_buffer = self.device.command_buffer()?;
         if src_s == d2 && dst_s == d2 {
             command_buffer.set_label("copy2d_contiguous");
-            let blit = command_buffer.new_blit_command_encoder();
+            let blit = command_buffer.blit_command_encoder();
             blit.set_label("copy2d_contiguous");
-            let src_offset = (src_o * self.dtype.size_in_bytes()) as NSUInteger;
-            let length = (d1 * d2 * self.dtype.size_in_bytes()) as NSUInteger;
-            let dst_offset = (dst_o * dst.dtype().size_in_bytes()) as NSUInteger;
+            let src_offset = src_o * self.dtype.size_in_bytes();
+            let length = d1 * d2 * self.dtype.size_in_bytes();
+            let dst_offset = dst_o * dst.dtype().size_in_bytes();
             blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
             blit.end_encoding();
         } else {
@@ -1757,11 +1760,11 @@ impl BackendStorage for MetalStorage {
         let command_buffer = self.device.command_buffer()?;
         if src_l.is_contiguous() && self.dtype == dst.dtype() {
             command_buffer.set_label("copy_contiguous");
-            let blit = command_buffer.new_blit_command_encoder();
+            let blit = command_buffer.blit_command_encoder();
             blit.set_label("copy_contiguous");
-            let src_offset = (src_l.start_offset() * self.dtype.size_in_bytes()) as NSUInteger;
-            let length = (src_l.shape().elem_count() * self.dtype.size_in_bytes()) as NSUInteger;
-            let dst_offset = (dst_offset * dst.dtype().size_in_bytes()) as NSUInteger;
+            let src_offset = src_l.start_offset() * self.dtype.size_in_bytes();
+            let length = src_l.shape().elem_count() * self.dtype.size_in_bytes();
+            let dst_offset = dst_offset * dst.dtype().size_in_bytes();
             blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
             blit.end_encoding();
         } else {
@@ -2022,13 +2025,13 @@ impl MetalStorage {
     }
 
     pub(crate) fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
-        let size = (self.count * self.dtype.size_in_bytes()) as NSUInteger;
+        let size = self.count * self.dtype.size_in_bytes();
 
         let buffer = self.device.new_buffer_managed(size)?;
         {
             let command_buffer = self.device.command_buffer()?;
             command_buffer.set_label("to_cpu");
-            let blit = command_buffer.new_blit_command_encoder();
+            let blit = command_buffer.blit_command_encoder();
             blit.set_label("blit_to_cpu");
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
             blit.end_encoding();
@@ -2040,15 +2043,19 @@ impl MetalStorage {
 
 impl BackendDevice<MetalStorage> for MetalDevice {
     fn new(ordinal: usize) -> Result<Self> {
-        let device = metal::Device::all().swap_remove(ordinal);
-        let command_queue = device.new_command_queue();
+        let device = Device::all().swap_remove(ordinal);
+        let command_queue = device.new_command_queue().map_err(MetalError::from)?;
         let kernels = Arc::new(Kernels::new());
-        let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
-            [299792458].as_ptr() as *const c_void,
-            4,
-            MTLResourceOptions::StorageModeManaged,
-        )));
-        let commands = device::Commands::new(command_queue)?;
+        let seed = Arc::new(Mutex::new(
+            device
+                .new_buffer_with_data(
+                    [299792458u64].as_ptr() as *const c_void,
+                    4,
+                    MTLResourceOptions::StorageModeManaged,
+                )
+                .map_err(MetalError::from)?,
+        ));
+        let commands = Commands::new(command_queue).map_err(MetalError::from)?;
         Ok(Self {
             id: DeviceId::new(),
             device,
@@ -2201,11 +2208,11 @@ impl BackendDevice<MetalStorage> for MetalDevice {
 
     fn set_seed(&self, seed: u64) -> Result<()> {
         let seed_buffer = self.seed.try_lock().map_err(MetalError::from)?;
-        let contents = seed_buffer.contents();
+        let contents = seed_buffer.data();
         unsafe {
             std::ptr::copy([seed].as_ptr(), contents as *mut u64, 1);
         }
-        seed_buffer.did_modify_range(metal::NSRange::new(0, 8));
+        seed_buffer.did_modify_range(NSRange::new(0, 8));
 
         Ok(())
     }

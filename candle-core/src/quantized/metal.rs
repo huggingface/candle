@@ -1,7 +1,7 @@
 use super::{GgmlDType, QStorage};
 use crate::backend::BackendStorage;
 use crate::{DType, MetalDevice, MetalStorage, Result, Shape, D};
-use metal::Buffer;
+use candle_metal_kernels::metal_utils::Buffer;
 use std::sync::Arc;
 
 pub struct QMetalStorage {
@@ -39,7 +39,7 @@ impl QMetalStorage {
         let buffer = self.device.new_buffer_managed(self.buffer.length())?;
         let command_buffer = self.device.command_buffer()?;
         command_buffer.set_label("to_cpu");
-        let blit = command_buffer.new_blit_command_encoder();
+        let blit = command_buffer.blit_command_encoder();
         blit.set_label("blit_to_cpu");
         blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
         blit.end_encoding();
@@ -171,7 +171,7 @@ impl QMetalStorage {
         let dst = device.new_buffer(dst_shape.elem_count(), DType::F32, "qmatmul")?;
         let command_buffer = device.command_buffer()?;
         // In some cases it would be better to use the mm variant, though it has its drawbacks
-        // around memory alignemnt.
+        // around memory alignment.
         for batch_id in 0..m {
             candle_metal_kernels::call_quantized_matmul_mv_t(
                 device.device(),
@@ -288,7 +288,7 @@ impl QMetalStorage {
         {
             let command_buffer = self.device.command_buffer()?;
             command_buffer.set_label("to_cpu");
-            let blit = command_buffer.new_blit_command_encoder();
+            let blit = command_buffer.blit_command_encoder();
             blit.set_label("blit_to_cpu");
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
             blit.end_encoding();

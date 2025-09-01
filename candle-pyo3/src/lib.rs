@@ -1385,7 +1385,7 @@ fn load_gguf(
 #[pyo3(
     signature = (path, tensors, metadata)
 )]
-/// Save quanitzed tensors and metadata to a GGUF file.
+/// Save quantized tensors and metadata to a GGUF file.
 fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) -> PyResult<()> {
     use ::candle::quantized::gguf_file;
 
