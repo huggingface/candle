@@ -7,7 +7,13 @@ use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
 #[derive(Debug, Clone)]
 pub struct CudaDevice;
 
-#[derive(Debug)]
+impl AsRef<CudaDevice> for CudaDevice {
+    fn as_ref(&self) -> &CudaDevice {
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct CudaStorage;
 
 macro_rules! fail {
@@ -208,8 +214,7 @@ impl crate::backend::BackendStorage for CudaStorage {
     }
 }
 
-impl crate::backend::BackendDevice for CudaDevice {
-    type Storage = CudaStorage;
+impl crate::backend::BackendDevice<CudaStorage> for CudaDevice {
     fn new(_: usize) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
@@ -222,35 +227,35 @@ impl crate::backend::BackendDevice for CudaDevice {
         fail!()
     }
 
-    fn same_device(&self, _: &Self) -> bool {
+    fn same_device<O: crate::BackendStorage>(&self, _: &O::Device) -> bool {
         fail!()
     }
 
-    fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
+    fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
+    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<Self::Storage> {
+    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage> {
+    fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<Self::Storage> {
+    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
+    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
+    fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 

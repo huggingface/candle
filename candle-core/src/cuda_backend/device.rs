@@ -256,12 +256,16 @@ impl CudaDevice {
     }
 }
 
-impl BackendDevice for CudaDevice {
-    type Storage = CudaStorage;
+impl AsRef<CudaDevice> for CudaDevice {
+    fn as_ref(&self) -> &CudaDevice {
+        self
+    }
+}
 
+impl BackendDevice<CudaStorage> for CudaDevice {
     fn new(ordinal: usize) -> Result<Self> {
         let context = cudarc::driver::CudaContext::new(ordinal).w()?;
-        let stream = context.default_stream();
+        let stream = context.default_stream().w()?;
         let blas = cudarc::cublas::CudaBlas::new(stream.clone()).w()?;
         let curand = cudarc::curand::CudaRng::new(299792458, stream.clone()).w()?;
         let module_store = ModuleStore {
@@ -415,7 +419,7 @@ impl BackendDevice for CudaDevice {
         })
     }
 
-    unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
+    unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
         let elem_count = shape.elem_count();
         let slice = match dtype {
             DType::U8 => {
@@ -457,7 +461,7 @@ impl BackendDevice for CudaDevice {
         })
     }
 
-    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {
+    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<CudaStorage> {
         let slice = match T::cpu_storage_ref(s) {
             CpuStorageRef::U8(storage) => {
                 let data = self.memcpy_stod(storage)?;
