@@ -1,4 +1,4 @@
-use crate::{Result, Tensor};
+use crate::{BackendStorage, Result, Tensor};
 
 #[macro_export]
 macro_rules! test_device {
@@ -24,7 +24,7 @@ macro_rules! test_device {
     };
 }
 
-pub fn assert_tensor_eq(t1: &Tensor, t2: &Tensor) -> Result<()> {
+pub fn assert_tensor_eq<B: BackendStorage>(t1: &Tensor<B>, t2: &Tensor<B>) -> Result<()> {
     assert_eq!(t1.shape(), t2.shape());
     // Default U8 may not be large enough to hold the sum (`t.sum_all` defaults to the dtype of `t`)
     let eq_tensor = t1.eq(t2)?.to_dtype(crate::DType::U32)?;
@@ -33,20 +33,20 @@ pub fn assert_tensor_eq(t1: &Tensor, t2: &Tensor) -> Result<()> {
     Ok(())
 }
 
-pub fn to_vec0_round(t: &Tensor, digits: i32) -> Result<f32> {
+pub fn to_vec0_round<B: BackendStorage>(t: &Tensor<B>, digits: i32) -> Result<f32> {
     let b = 10f32.powi(digits);
     let t = t.to_vec0::<f32>()?;
     Ok(f32::round(t * b) / b)
 }
 
-pub fn to_vec1_round(t: &Tensor, digits: i32) -> Result<Vec<f32>> {
+pub fn to_vec1_round<B: BackendStorage>(t: &Tensor<B>, digits: i32) -> Result<Vec<f32>> {
     let b = 10f32.powi(digits);
     let t = t.to_vec1::<f32>()?;
     let t = t.iter().map(|t| f32::round(t * b) / b).collect();
     Ok(t)
 }
 
-pub fn to_vec2_round(t: &Tensor, digits: i32) -> Result<Vec<Vec<f32>>> {
+pub fn to_vec2_round<B: BackendStorage>(t: &Tensor<B>, digits: i32) -> Result<Vec<Vec<f32>>> {
     let b = 10f32.powi(digits);
     let t = t.to_vec2::<f32>()?;
     let t = t
@@ -56,7 +56,7 @@ pub fn to_vec2_round(t: &Tensor, digits: i32) -> Result<Vec<Vec<f32>>> {
     Ok(t)
 }
 
-pub fn to_vec3_round(t: &Tensor, digits: i32) -> Result<Vec<Vec<Vec<f32>>>> {
+pub fn to_vec3_round<B: BackendStorage>(t: &Tensor<B>, digits: i32) -> Result<Vec<Vec<Vec<f32>>>> {
     let b = 10f32.powi(digits);
     let t = t.to_vec3::<f32>()?;
     let t = t
