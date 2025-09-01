@@ -1,6 +1,6 @@
 //! 1D and 2D Convolutions
 //!
-use crate::{op::BackpropOp, op::Op, Error, Result, Tensor};
+use crate::{backend::BackendStorage, op::BackpropOp, op::Op, Error, Result, Tensor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamsConv1D {
@@ -128,7 +128,7 @@ impl ParamsConvTranspose2D {
     }
 }
 
-impl Tensor {
+impl<B: BackendStorage> Tensor<B> {
     fn conv1d_single_group(&self, kernel: &Self, params: &ParamsConv1D) -> Result<Self> {
         let storage =
             self.storage()
@@ -141,7 +141,7 @@ impl Tensor {
             dilation: params.dilation,
         });
         let out_dims = params.out_dims();
-        Ok(crate::tensor::from_storage(storage, out_dims, op, false))
+        Ok(Tensor::from_storage(storage, out_dims, op, false))
     }
 
     /// Applies a 1D convolution over the input tensor.
@@ -224,7 +224,7 @@ impl Tensor {
             dilation: params.dilation,
         });
         let out_dims = params.out_dims();
-        Ok(crate::tensor::from_storage(storage, out_dims, op, false))
+        Ok(Tensor::from_storage(storage, out_dims, op, false))
     }
 
     /// Applies a 1D transposed convolution over the input tensor.
@@ -282,7 +282,7 @@ impl Tensor {
             dilation: params.dilation,
         });
         let out_dims = params.out_dims();
-        Ok(crate::tensor::from_storage(storage, out_dims, op, false))
+        Ok(Tensor::from_storage(storage, out_dims, op, false))
     }
 
     /// Applies a 2D convolution over the input tensor.
