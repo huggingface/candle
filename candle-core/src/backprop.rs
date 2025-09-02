@@ -221,11 +221,11 @@ impl<B: BackendStorage> Tensor<B> {
 
                         // If both masks are 1 one the same point, we want to scale the
                         // gradient by 0.5 rather than 1.
-                        let lhs_grad = mask_lhs.mul(&grad)?.div(&(&mask_rhs + 1.)?)?;
+                        let lhs_grad = mask_lhs.mul(&grad)?.div((&mask_rhs + 1.)?)?;
                         let lhs_sum_grad = grads.or_insert(lhs)?;
                         *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?;
 
-                        let rhs_grad = mask_rhs.mul(&grad)?.div(&(&mask_lhs + 1.)?)?;
+                        let rhs_grad = mask_rhs.mul(&grad)?.div(&(mask_lhs + 1.)?)?;
                         let rhs_sum_grad = grads.or_insert(rhs)?;
                         *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
                     }
@@ -538,26 +538,26 @@ impl<B: BackendStorage> Tensor<B> {
                     }
                     Op::Unary(arg, UnaryOp::Sin) => {
                         let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&(&grad * arg.cos())?)?
+                        *sum_grad = sum_grad.add(&(grad * arg.cos())?)?
                     }
                     Op::Unary(arg, UnaryOp::Cos) => {
                         let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.sub(&(&grad * arg.sin())?)?
+                        *sum_grad = sum_grad.sub(&(grad * arg.sin())?)?
                     }
                     Op::Unary(arg, UnaryOp::Tanh) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let minus_dtanh = (node.sqr()? - 1.)?;
-                        *sum_grad = sum_grad.sub(&(&grad * &minus_dtanh)?)?
+                        *sum_grad = sum_grad.sub(&(grad * &minus_dtanh)?)?
                     }
                     Op::Unary(arg, UnaryOp::Abs) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let ones = arg.ones_like()?;
                         let abs_grad = arg.ge(&arg.zeros_like()?)?.where_cond(&ones, &ones.neg()?);
-                        *sum_grad = sum_grad.add(&(&grad * abs_grad)?)?
+                        *sum_grad = sum_grad.add(&(grad * abs_grad)?)?
                     }
                     Op::Unary(arg, UnaryOp::Exp) => {
                         let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&(&grad * *node)?)?
+                        *sum_grad = sum_grad.add(&(grad * *node)?)?
                     }
                     Op::Unary(arg, UnaryOp::Neg) => {
                         let sum_grad = grads.or_insert(arg)?;
@@ -609,40 +609,41 @@ impl<B: BackendStorage> Tensor<B> {
                     Op::Unary(arg, UnaryOp::Gelu) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let cube = arg.powf(3.)?;
-                        let tanh = (0.0356774 * &cube + (0.797885 * arg)?)?.tanh()?;
-                        let gelu_grad = (((0.5 * &tanh)?
-                            + (0.0535161 * cube + (0.398942 * arg)?)? * (1. - tanh.powf(2.)?))?
+                        let tanh = ((&cube * 0.0356774)? + (arg * 0.797885)?)?.tanh()?;
+                        let gelu_grad = (((&tanh * 0.5)?
+                            + ((cube * 0.0535161)? + (0.398942 * arg)?)?
+                                * (1. - tanh.powf(2.)?)?)?
                             + 0.5)?;
-                        *sum_grad = sum_grad.add(&(&grad * gelu_grad)?)?
+                        *sum_grad = sum_grad.add(&(grad * gelu_grad)?)?
                     }
                     Op::Unary(arg, UnaryOp::Erf) => {
                         let sum_grad = grads.or_insert(arg)?;
                         // d/dx erf(x) = 2/sqrt(pi) * e^(-x^2)
                         let erf_grad =
                             (2. / std::f64::consts::PI.sqrt()) * (arg.sqr()?.neg()?).exp()?;
-                        *sum_grad = sum_grad.add(&(&grad * erf_grad)?)?
+                        *sum_grad = sum_grad.add(&(grad * erf_grad?)?)?
                     }
                     Op::Unary(arg, UnaryOp::GeluErf) => {
                         let sum_grad = grads.or_insert(arg)?;
                         // d/dx gelu_erf(x) = 0.5 + 0.398942 e^(-x^2/2) x + 0.5 erf(x/sqrt(2))
                         let neg_half_square = (arg.sqr()?.neg()? / 2.)?;
-                        let scaled_exp_arg = (0.398942 * neg_half_square.exp()? * arg)?;
+                        let scaled_exp_arg = ((neg_half_square.exp()? * arg)? * 0.398942)?;
                         let arg_scaled_sqrt = (arg / 2f64.sqrt())?;
-                        let erf_scaled_sqrt = (0.5 * arg_scaled_sqrt.erf()?)?;
-                        let gelu_erf_grad = (0.5 + scaled_exp_arg + erf_scaled_sqrt)?;
-                        *sum_grad = sum_grad.add(&(&grad * gelu_erf_grad)?)?;
+                        let erf_scaled_sqrt = (arg_scaled_sqrt.erf()? * 0.5)?;
+                        let gelu_erf_grad = ((scaled_exp_arg + erf_scaled_sqrt)? + 0.5)?;
+                        *sum_grad = sum_grad.add(&(grad * gelu_erf_grad)?)?;
                     }
                     Op::Unary(arg, UnaryOp::Relu) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let relu_grad = arg.ge(&arg.zeros_like()?)?.to_dtype(arg.dtype())?;
-                        *sum_grad = sum_grad.add(&(&grad * relu_grad)?)?
+                        *sum_grad = sum_grad.add(&(grad * relu_grad)?)?
                     }
                     Op::Unary(arg, UnaryOp::Silu) => {
                         let sum_grad = grads.or_insert(arg)?;
                         // d/dx silu = sigmoid(x) * (1 + x * (1 - sigmoid(x))) = sigmoid(x) * (1 - node) + node
                         let sigmoid_arg = (arg.neg()?.exp()? + 1.)?.recip()?;
-                        let silu_grad = &sigmoid_arg * (1. - *node) + *node;
-                        *sum_grad = sum_grad.add(&(&grad * silu_grad)?)?
+                        let silu_grad = sigmoid_arg * (1. - *node)? + *node;
+                        *sum_grad = sum_grad.add(&(grad * silu_grad?)?)?
                     }
                     Op::Elu(arg, alpha) => {
                         // d/dx elu(x) = 1 for x > 0, alpha * e^x for x <= 0
@@ -656,7 +657,7 @@ impl<B: BackendStorage> Tensor<B> {
                         *sum_grad = sum_grad.add(&(grad * combined_mask)?)?
                     }
                     Op::Powf(arg, e) => {
-                        let arg_grad = (&(grad * arg.powf(e - 1.)?)? * *e)?;
+                        let arg_grad = ((grad * arg.powf(e - 1.)?)? * *e)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
