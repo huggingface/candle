@@ -1,6 +1,6 @@
 //! TensorScalar Enum and Trait
 //!
-use crate::{BackendStorage, DType, Result, Tensor, WithDType};
+use crate::{backend::BackendDevice, BackendStorage, DType, Result, Tensor, WithDType};
 use float8::F8E4M3;
 use half::{bf16, f16};
 
@@ -91,9 +91,9 @@ impl<B: BackendStorage> TensorOrScalar<B> for &Tensor<B> {
     }
 }
 
-impl<T: WithDType> TensorOrScalar<crate::CpuStorage> for T {
-    fn to_tensor_scalar(self) -> Result<TensorScalar<crate::CpuStorage>> {
-        let scalar = Tensor::new(self, &crate::cpu_backend::CpuDevice {})?;
+impl<B: BackendStorage, T: WithDType> TensorOrScalar<B> for T {
+    fn to_tensor_scalar(self) -> Result<TensorScalar<B>> {
+        let scalar = Tensor::new(self, &B::Device::new(0)?)?;
         Ok(TensorScalar::Scalar(scalar))
     }
 }
