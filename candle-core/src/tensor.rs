@@ -2824,7 +2824,7 @@ macro_rules! bin_trait {
         impl<S: BackendStorage, B: std::borrow::Borrow<Tensor<S>>> std::ops::$trait<B>
             for &Tensor<S>
         {
-            type Output = Result<Self>;
+            type Output = Result<Tensor<S>>;
 
             fn $fn1(self, rhs: B) -> Self::Output {
                 Tensor::$fn1(&self, rhs.borrow())
@@ -2834,7 +2834,7 @@ macro_rules! bin_trait {
         impl<S: BackendStorage, B: std::borrow::Borrow<Tensor<S>>> std::ops::$trait<Tensor<S>>
             for Result<B>
         {
-            type Output = Result<Self>;
+            type Output = Result<Tensor<S>>;
 
             fn $fn1(self, rhs: Tensor<S>) -> Self::Output {
                 Tensor::$fn1(self?.borrow(), &rhs)
@@ -2844,7 +2844,7 @@ macro_rules! bin_trait {
         impl<S: BackendStorage, B: std::borrow::Borrow<Tensor<S>>> std::ops::$trait<&Tensor<S>>
             for Result<B>
         {
-            type Output = Result<Self>;
+            type Output = Result<Tensor<S>>;
 
             fn $fn1(self, rhs: &Tensor<S>) -> Self::Output {
                 Tensor::$fn1(self?.borrow(), rhs)
@@ -2864,7 +2864,7 @@ macro_rules! bin_trait {
         impl<S: BackendStorage, B: std::borrow::Borrow<Tensor<S>>> std::ops::$trait<Result<B>>
             for &Tensor<S>
         {
-            type Output = Result<Self>;
+            type Output = Result<Tensor<S>>;
 
             fn $fn1(self, rhs: Result<B>) -> Self::Output {
                 Tensor::$fn1(&self, rhs?.borrow())
@@ -2880,7 +2880,7 @@ macro_rules! bin_trait {
         }
 
         impl<S: BackendStorage> std::ops::$trait<f64> for &Tensor<S> {
-            type Output = Result<Self>;
+            type Output = Result<Tensor<S>>;
 
             fn $fn1(self, rhs: f64) -> Self::Output {
                 self.affine($mul(rhs), $add(rhs))
@@ -2895,7 +2895,7 @@ bin_trait!(Mul, mul, |v| v, |_| 0.);
 bin_trait!(Div, div, |v| 1. / v, |_| 0.);
 
 impl<B: BackendStorage> std::ops::Add<Tensor<B>> for f64 {
-    type Output = Result<Self>;
+    type Output = Result<Tensor<B>>;
 
     fn add(self, rhs: Tensor<B>) -> Self::Output {
         rhs + self
@@ -2903,7 +2903,7 @@ impl<B: BackendStorage> std::ops::Add<Tensor<B>> for f64 {
 }
 
 impl<B: BackendStorage> std::ops::Add<&Tensor<B>> for f64 {
-    type Output = Result<Self>;
+    type Output = Result<Tensor<B>>;
 
     fn add(self, rhs: &Tensor<B>) -> Self::Output {
         rhs + self
@@ -2911,7 +2911,7 @@ impl<B: BackendStorage> std::ops::Add<&Tensor<B>> for f64 {
 }
 
 impl<B: BackendStorage> std::ops::Mul<Tensor<B>> for f64 {
-    type Output = Result<Self>;
+    type Output = Result<Tensor<B>>;
 
     fn mul(self, rhs: Tensor<B>) -> Self::Output {
         rhs * self
@@ -2919,7 +2919,7 @@ impl<B: BackendStorage> std::ops::Mul<Tensor<B>> for f64 {
 }
 
 impl<B: BackendStorage> std::ops::Mul<&Tensor<B>> for f64 {
-    type Output = Result<Self>;
+    type Output = Result<Tensor<B>>;
 
     fn mul(self, rhs: &Tensor<B>) -> Self::Output {
         rhs * self
@@ -2927,7 +2927,7 @@ impl<B: BackendStorage> std::ops::Mul<&Tensor<B>> for f64 {
 }
 
 impl<B: BackendStorage> std::ops::Sub<Tensor<B>> for f64 {
-    type Output = Result<Self>;
+    type Output = Result<Tensor<B>>;
 
     fn sub(self, rhs: Tensor<B>) -> Self::Output {
         rhs.affine(-1., self)
@@ -2935,7 +2935,7 @@ impl<B: BackendStorage> std::ops::Sub<Tensor<B>> for f64 {
 }
 
 impl<B: BackendStorage> std::ops::Sub<&Tensor<B>> for f64 {
-    type Output = Result<Self>;
+    type Output = Result<Tensor<B>>;
 
     fn sub(self, rhs: &Tensor<B>) -> Self::Output {
         rhs.affine(-1., self)
@@ -2943,7 +2943,7 @@ impl<B: BackendStorage> std::ops::Sub<&Tensor<B>> for f64 {
 }
 
 impl<B: BackendStorage> std::ops::Div<Tensor<B>> for f64 {
-    type Output = Result<Self>;
+    type Output = Result<Tensor<B>>;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: Tensor<B>) -> Self::Output {
@@ -2952,7 +2952,7 @@ impl<B: BackendStorage> std::ops::Div<Tensor<B>> for f64 {
 }
 
 impl<B: BackendStorage> std::ops::Div<&Tensor<B>> for f64 {
-    type Output = Result<Self>;
+    type Output = Result<Tensor<B>>;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: &Tensor<B>) -> Self::Output {

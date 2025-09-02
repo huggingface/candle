@@ -221,7 +221,7 @@ impl<B: BackendStorage> Tensor<B> {
 
                         // If both masks are 1 one the same point, we want to scale the
                         // gradient by 0.5 rather than 1.
-                        let lhs_grad = mask_lhs.mul(&grad)?.div((&mask_rhs + 1.)?)?;
+                        let lhs_grad = mask_lhs.mul(&grad)?.div(&(&mask_rhs + 1.)?)?;
                         let lhs_sum_grad = grads.or_insert(lhs)?;
                         *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?;
 
