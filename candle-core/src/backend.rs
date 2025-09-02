@@ -1,7 +1,11 @@
 //! Traits to Define Backend Behavior
 //!
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
+#[cfg(feature = "cuda")]
+use crate::CudaDevice;
 use crate::{CpuStorage, DType, Layout, Result, Shape};
+//#[cfg(feature = "metal")]
+use crate::{MetalDevice, MetalError};
 
 pub trait BackendStorage: Sized + Clone {
     type Device: BackendDevice<Self>;
@@ -170,6 +174,8 @@ pub trait BackendStorage: Sized + Clone {
 }
 
 pub trait BackendDevice<B: BackendStorage>: Sized + std::fmt::Debug + Clone {
+    const SUPPORTS_BF16: bool = false;
+
     // TODO: Make the usize generic and part of a generic DeviceLocation.
     fn new(_: usize) -> Result<Self>;
 
@@ -205,4 +211,66 @@ pub trait BackendDevice<B: BackendStorage>: Sized + std::fmt::Debug + Clone {
 
     /// Synchronize should block until all the operations on the device are completed.
     fn synchronize(&self) -> Result<()>;
+}
+
+pub trait UgDevice {
+    type UgFunction;
+
+    fn compile(
+        &self,
+        _func_name: &'static str,
+        _kernel: ug::lang::ssa::Kernel,
+    ) -> Result<Self::UgFunction>;
+}
+
+#[cfg(all(feature = "cuda", not(target_arch = "wasm32")))]
+impl UgDevice for CudaDevice {
+    type UgFunction = candle_core::cudarc::driver::CudaFunction;
+    fn compile(
+        &self,
+        func_name: &'static str,
+        kernel: ug::lang::ssa::Kernel,
+    ) -> Result<Self::UgFunction> {
+        let mut buf = vec![];
+        ug_cuda::code_gen::gen(&mut buf, func_name, &kernel)?;
+        let cuda_code = String::from_utf8(buf)?;
+        let opts = cudarc::nvrtc::CompileOptions {
+            use_fast_math: Some(true),
+            ..Default::default()
+        };
+        let ptx = cudarc::nvrtc::safe::compile_ptx_with_opts(cuda_code, opts).w()?;
+        let module = self.context.load_module(ptx).w()?;
+        let func = module.load_function(func_name).w()?;
+        Ok(CudaFunc {
+            func,
+            stream: self.stream.clone(),
+        })
+    }
+}
+
+#[cfg(all(feature = "metal", not(target_arch = "wasm32")))]
+impl UgDevice for MetalDevice {
+    type UgFunction = candle_metal_kernels::metal_utils::ComputePipeline;
+
+    fn compile(
+        &self,
+        func_name: &'static str,
+        kernel: ug::lang::ssa::Kernel,
+    ) -> Result<Self::UgFunction> {
+        let mut buf = vec![];
+        ug_metal::code_gen::gen(&mut buf, func_name, &kernel)?;
+        let metal_code = String::from_utf8(buf)?;
+        let lib = self
+            .device
+            .new_library_with_source(&metal_code, None)
+            .map_err(MetalError::from)?;
+        let func = lib
+            .get_function(func_name, None)
+            .map_err(MetalError::from)?;
+        let pl = self
+            .device
+            .new_compute_pipeline_state_with_function(&func)
+            .map_err(MetalError::from)?;
+        Ok(pl)
+    }
 }
