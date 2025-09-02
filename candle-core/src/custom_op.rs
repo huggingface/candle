@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "wasm32"))]
+use crate::backend::UgDevice;
 use crate::op::{BackpropOp, Op};
 use crate::tensor::from_storage;
 use crate::{BackendStorage, CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Tensor};
@@ -385,25 +387,27 @@ impl<B: BackendStorage> Tensor<B> {
     }
 }
 
-pub struct UgIOp1 {
+pub struct UgIOp1<B: BackendStorage>
+where
+    B::Device: UgDevice,
+{
     name: &'static str,
-    #[cfg(feature = "cuda")]
-    func: cudarc::driver::CudaFunction,
-    #[cfg(feature = "metal")]
-    func: candle_metal_kernels::metal_utils::ComputePipeline,
+    func: <B::Device as UgDevice>::UgFunction,
 }
 
-impl UgIOp1 {
+impl<B: BackendStorage> UgIOp1<B>
+where
+    B::Device: UgDevice,
+{
     #[allow(unused)]
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(
         name: &'static str,
         kernel: ug::lang::ssa::Kernel,
-        device: &crate::Device,
+        device: &B::Device,
     ) -> Result<Self> {
         #[cfg(feature = "cuda")]
         {
-            let device = device.as_cuda_device()?;
             let func = device.compile(name, kernel)?;
             Ok(Self {
                 name,
@@ -412,27 +416,26 @@ impl UgIOp1 {
         }
         #[cfg(feature = "metal")]
         {
-            let device = device.as_metal_device()?;
             let func = device.compile(name, kernel)?;
             Ok(Self { name, func })
         }
         #[cfg(not(any(feature = "cuda", feature = "metal")))]
         {
-            Ok(Self { name })
+            crate::bail!("ug ops are only supported on metal/cuda at the moment")
         }
     }
 }
 
-impl InplaceOp1 for UgIOp1 {
+#[cfg(all(feature = "metal", not(target_arch = "wasm32")))]
+impl InplaceOp1 for UgIOp1<MetalStorage> {
     fn name(&self) -> &'static str {
         self.name
     }
 
     fn cpu_fwd(&self, _: &mut CpuStorage, _: &Layout) -> Result<()> {
-        crate::bail!("ug ops are only supported on metal/cuda at the moment")
+        unreachable!()
     }
 
-    #[cfg(feature = "metal")]
     fn metal_fwd(&self, sto: &mut MetalStorage, layout: &Layout) -> Result<()> {
         use crate::backend::BackendStorage;
         use candle_metal_kernels::utils::EncoderProvider;
@@ -469,7 +472,25 @@ impl InplaceOp1 for UgIOp1 {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    fn cuda_fwd(&self, _: &mut CudaStorage, _: &Layout) -> Result<()> {
+        unreachable!()
+    }
+}
+
+#[cfg(all(feature = "cuda", not(target_arch = "wasm32")))]
+impl InplaceOp1 for UgIOp1<CudaStorage> {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn cpu_fwd(&self, _: &mut CpuStorage, _: &Layout) -> Result<()> {
+        unreachable!()
+    }
+
+    fn metal_fwd(&self, _: &mut MetalStorage, _: &Layout) -> Result<()> {
+        unreachable!()
+    }
+
     fn cuda_fwd(&self, sto: &mut CudaStorage, layout: &Layout) -> Result<()> {
         use crate::cuda_backend::WrapErr;
         use cudarc::driver::PushKernelArg;
