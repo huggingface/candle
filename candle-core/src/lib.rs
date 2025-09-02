@@ -81,13 +81,13 @@ mod sort;
 mod storage;
 pub mod streaming;
 mod strided_index;
-mod tensor;
+pub mod tensor;
 mod tensor_cat;
 pub mod test_utils;
 pub mod utils;
 mod variable;
 
-use backend::BackendStorage;
+pub use backend::BackendStorage;
 pub use cpu_backend::{CpuStorage, CpuStorageRef};
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;
