@@ -939,10 +939,7 @@ impl<B: BackendStorage> BackpropOp<B> {
         BackpropOp(None)
     }
 
-    pub(crate) fn new1<BS: BackendStorage>(
-        arg: &Tensor<BS>,
-        f: impl Fn(Tensor<BS>) -> Op<BS>,
-    ) -> Self {
+    pub(crate) fn new1(arg: &Tensor<B>, f: impl Fn(Tensor<B>) -> Op<B>) -> BackpropOp<B> {
         let op = if arg.track_op() {
             Some(f(arg.clone()))
         } else {

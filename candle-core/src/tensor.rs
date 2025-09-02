@@ -219,7 +219,7 @@ impl TryToDevice<CudaStorage, CpuStorage> for Tensor<CudaStorage> {
         device: &<CpuStorage as BackendStorage>::Device,
     ) -> Result<Tensor<CpuStorage>> {
         let storage = self.storage().to_cpu_storage()?;
-        let op = BackpropOp::new1(&self, Op::ToDevice);
+        let op = BackpropOp::none();
         let tensor_ = Tensor_ {
             id: TensorId::new(),
             storage: Arc::new(RwLock::new(storage)),
@@ -241,7 +241,7 @@ impl TryToDevice<MetalStorage, CpuStorage> for Tensor<MetalStorage> {
         device: &<CpuStorage as BackendStorage>::Device,
     ) -> Result<Tensor<CpuStorage>> {
         let storage = self.storage().to_cpu_storage()?;
-        let op = BackpropOp::new1(&self, Op::ToDevice);
+        let op = BackpropOp::none();
         let tensor_ = Tensor_ {
             id: TensorId::new(),
             storage: Arc::new(RwLock::new(storage)),
