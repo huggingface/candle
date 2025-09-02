@@ -1,7 +1,7 @@
 //! Code for GGML and GGUF files
 use crate::{
-    backend::BackendDevice, cpu_backend::CpuDevice, BackendStorage, Context, CpuStorage, DType,
-    Device, Result, Shape, Storage, Tensor,
+    backend::BackendDevice, cpu_backend::CpuDevice, BackendStorage, Context, CpuStorage, CustomOp1,
+    DType, Device, Result, Shape, Storage, Tensor,
 };
 use k_quants::*;
 use std::borrow::Cow;
@@ -490,7 +490,7 @@ impl<B: QuantizedBackend> QTensor<B> {
         &self.shape
     }
 
-    pub fn dequantize(&self, device: &B::Device) -> Result<Tensor<B::Storage>> {
+    pub fn dequantize(&self, _: &B::Device) -> Result<Tensor<B::Storage>> {
         let storage = self.storage.dequantize(self.shape.elem_count())?;
         let none = crate::op::BackpropOp::none();
         Ok(crate::tensor::from_storage(
@@ -501,7 +501,7 @@ impl<B: QuantizedBackend> QTensor<B> {
         ))
     }
 
-    pub fn dequantize_f16(&self, device: &Device) -> Result<Tensor<B::Storage>> {
+    pub fn dequantize_f16(&self, _: &B::Device) -> Result<Tensor<B::Storage>> {
         // In the CUDA case, we have a specialized kernel as this can be useful for volta
         // architectures. https://github.com/huggingface/candle/issues/2136
 
@@ -563,8 +563,8 @@ thread_local! {
     }
 }
 
-impl<B: BackendStorage> QMatMul<B> {
-    pub fn from_arc(qtensor: std::sync::Arc<QTensor>) -> Result<Self> {
+impl<B: BackendStorage, QB: QuantizedBackend<Storage = B>> QMatMul<B, QB> {
+    pub fn from_arc(qtensor: std::sync::Arc<QTensor<QB>>) -> Result<Self> {
         let dequantize = match qtensor.dtype() {
             GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16 => true,
             _ => DEQUANTIZE_ALL.with(|b| *b),
@@ -581,7 +581,7 @@ impl<B: BackendStorage> QMatMul<B> {
         Ok(t)
     }
 
-    pub fn from_qtensor(qtensor: QTensor) -> Result<Self> {
+    pub fn from_qtensor(qtensor: QTensor<QB>) -> Result<Self> {
         Self::from_arc(std::sync::Arc::new(qtensor))
     }
 
@@ -605,7 +605,7 @@ impl<B: BackendStorage> QMatMul<B> {
     }
 }
 
-impl<B: BackendStorage> crate::CustomOp1<B> for QTensor {
+impl crate::CustomOp1<CpuStorage> for QTensor<QCpuStorage> {
     fn name(&self) -> &'static str {
         "qmatmul"
     }
@@ -631,44 +631,37 @@ impl<B: BackendStorage> crate::CustomOp1<B> for QTensor {
         }
         dst_shape.push(n);
         let dst_shape = Shape::from(dst_shape);
-        #[allow(clippy::infallible_destructuring_match)]
-        let self_storage = match &self.storage {
-            QStorage::Cpu(storage) => storage,
-            QStorage::Metal(_) | QStorage::Cuda(_) => crate::bail!("Invalid storage"),
-        };
+
         let slice = storage.as_slice::<f32>()?;
         let slice = &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
         let mut dst_storage = vec![0f32; dst_shape.elem_count()];
-        self_storage.matmul_t((dst_shape.elem_count() / n, k, n), slice, &mut dst_storage)?;
+        self.storage
+            .0
+            .matmul_t((dst_shape.elem_count() / n, k, n), slice, &mut dst_storage)?;
         Ok((crate::CpuStorage::F32(dst_storage), dst_shape))
     }
 
     fn metal_fwd(
         &self,
-        storage: &crate::MetalStorage,
-        layout: &crate::Layout,
+        _: &crate::MetalStorage,
+        _: &crate::Layout,
     ) -> Result<(crate::MetalStorage, Shape)> {
-        let self_storage = match &self.storage {
-            QStorage::Metal(metal) => metal,
-            _ => unreachable!("Cannot call metal matmul on non metal QTensor"),
-        };
-        self_storage.fwd(&self.shape, storage, layout)
+        crate::bail!("Invalid storage")
     }
 
     fn cuda_fwd(
         &self,
-        storage: &crate::CudaStorage,
-        layout: &crate::Layout,
+        _: &crate::CudaStorage,
+        _: &crate::Layout,
     ) -> Result<(crate::CudaStorage, Shape)> {
-        let self_storage = match &self.storage {
-            QStorage::Cuda(cuda) => cuda,
-            _ => unreachable!("Cannot call cuda matmul on non cuda QTensor"),
-        };
-        self_storage.fwd(&self.shape, storage, layout)
+        crate::bail!("Invalid storage")
     }
 }
 
-impl<B: BackendStorage> crate::Module<B> for QMatMul<B> {
+impl<B: BackendStorage, QB: QuantizedBackend<Storage = B>> crate::Module<B> for QMatMul<B, QB>
+where
+    QTensor<QB>: CustomOp1<B>,
+{
     fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         match self {
             Self::QTensor(t) => xs.apply_op1_no_bwd(t.as_ref()),
