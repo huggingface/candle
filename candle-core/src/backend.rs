@@ -127,6 +127,46 @@ pub trait BackendStorage: Sized + Clone {
     ) -> Result<()>;
 
     fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()>;
+
+    fn apply_op1(&self, _l: &Layout, _c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)>;
+
+    fn apply_op2(
+        &self,
+        _l1: &Layout,
+        _t2: &Self,
+        _l2: &Layout,
+        _c: &dyn crate::CustomOp2<Self>,
+    ) -> Result<(Self, Shape)>;
+
+    fn apply_op3(
+        &self,
+        _l1: &Layout,
+        _t2: &Self,
+        _l2: &Layout,
+        _t3: &Self,
+        _l3: &Layout,
+        _c: &dyn crate::CustomOp3<Self>,
+    ) -> Result<(Self, Shape)>;
+
+    fn inplace_op1(&mut self, _l: &Layout, _c: &dyn crate::InplaceOp1) -> Result<()>;
+
+    fn inplace_op2(
+        &mut self,
+        _l1: &Layout,
+        _t2: &Self,
+        _l2: &Layout,
+        _c: &dyn crate::InplaceOp2,
+    ) -> Result<()>;
+
+    fn inplace_op3(
+        &mut self,
+        _l1: &Layout,
+        _t2: &Self,
+        _l2: &Layout,
+        _t3: &Self,
+        _l3: &Layout,
+        _c: &dyn crate::InplaceOp3,
+    ) -> Result<()>;
 }
 
 pub trait BackendDevice<B: BackendStorage>: Sized + std::fmt::Debug + Clone {
@@ -139,7 +179,7 @@ pub trait BackendDevice<B: BackendStorage>: Sized + std::fmt::Debug + Clone {
         self.location() == device.location()
     }
 
-    fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<B>;
+    fn zeros(&self, _shape: &Shape, _dtype: DType) -> Result<B>;
 
     /// # Safety
     /// This function is unsafe as it doesn't initialize the underlying data store.
@@ -152,6 +192,10 @@ pub trait BackendDevice<B: BackendStorage>: Sized + std::fmt::Debug + Clone {
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<B>;
 
     fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<B>;
+
+    fn storage<A: crate::NdArray>(&self, array: A) -> Result<B>;
+
+    fn storage_owned<S: crate::WithDType>(&self, data: Vec<S>) -> Result<B>;
 
     fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<B>;
 

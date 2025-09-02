@@ -319,42 +319,6 @@ impl Device {
     ) -> Result<Storage> {
         self.rand_normal(shape, T::DTYPE, mean.to_f64(), std.to_f64())
     }
-
-    pub(crate) fn zeros(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
-        self.zeros_impl(shape, dtype)
-    }
-
-    pub(crate) fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
-        match self {
-            Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
-            Device::Cuda(device) => {
-                let storage = array.to_cpu_storage();
-                let storage = device.storage_from_cpu_storage_owned(storage)?;
-                Ok(Storage::Cuda(storage))
-            }
-            Device::Metal(device) => {
-                let storage = array.to_cpu_storage();
-                let storage = device.storage_from_cpu_storage_owned(storage)?;
-                Ok(Storage::Metal(storage))
-            }
-        }
-    }
-
-    pub(crate) fn storage_owned<S: WithDType>(&self, data: Vec<S>) -> Result<Storage> {
-        match self {
-            Device::Cpu => Ok(Storage::Cpu(S::to_cpu_storage_owned(data))),
-            Device::Cuda(device) => {
-                let storage = S::to_cpu_storage_owned(data);
-                let storage = device.storage_from_cpu_storage_owned(storage)?;
-                Ok(Storage::Cuda(storage))
-            }
-            Device::Metal(device) => {
-                let storage = S::to_cpu_storage_owned(data);
-                let storage = device.storage_from_cpu_storage_owned(storage)?;
-                Ok(Storage::Metal(storage))
-            }
-        }
-    }
 }
 
 impl BackendDevice<Storage> for Device {
@@ -375,29 +339,19 @@ impl BackendDevice<Storage> for Device {
             Device::Metal(device) => device.location(),
         }
     }
-    /*
-    fn same_device<O: BackendStorage>(&self, rhs: &O::Device) -> bool {
-        match (self, rhs) {
-            (Self::Cpu, Self::Cpu) => true,
-            (Self::Cuda(lhs), Self::Cuda(rhs)) => lhs.same_device(rhs),
-            (Self::Metal(lhs), Self::Metal(rhs)) => lhs.same_device(rhs),
-            _ => false,
-        }
-    }
-     */
 
-    fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
+    fn zeros(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
         match self {
             Device::Cpu => {
-                let storage = CpuDevice.zeros_impl(shape, dtype)?;
+                let storage = CpuDevice.zeros(shape, dtype)?;
                 Ok(Storage::Cpu(storage))
             }
             Device::Cuda(device) => {
-                let storage = device.zeros_impl(shape, dtype)?;
+                let storage = device.zeros(shape, dtype)?;
                 Ok(Storage::Cuda(storage))
             }
             Device::Metal(device) => {
-                let storage = device.zeros_impl(shape, dtype)?;
+                let storage = device.zeros(shape, dtype)?;
                 Ok(Storage::Metal(storage))
             }
         }
@@ -461,6 +415,38 @@ impl BackendDevice<Storage> for Device {
             }
             Device::Metal(device) => {
                 let storage = device.storage_from_cpu_storage_owned(cpu)?;
+                Ok(Storage::Metal(storage))
+            }
+        }
+    }
+
+    fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
+        match self {
+            Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
+            Device::Cuda(device) => {
+                let storage = array.to_cpu_storage();
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(device) => {
+                let storage = array.to_cpu_storage();
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                Ok(Storage::Metal(storage))
+            }
+        }
+    }
+
+    fn storage_owned<S: WithDType>(&self, data: Vec<S>) -> Result<Storage> {
+        match self {
+            Device::Cpu => Ok(Storage::Cpu(S::to_cpu_storage_owned(data))),
+            Device::Cuda(device) => {
+                let storage = S::to_cpu_storage_owned(data);
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(device) => {
+                let storage = S::to_cpu_storage_owned(data);
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Metal(storage))
             }
         }

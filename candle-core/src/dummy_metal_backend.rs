@@ -43,12 +43,10 @@ impl crate::backend::BackendStorage for MetalStorage {
         fail!()
     }
 
-    fn device(&self) -> &Self::Device {
-        fail!()
-    }
-
-    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
-        Err(Error::NotCompiledWithMetalSupport)
+    fn device(&self) -> impl AsRef<Self::Device> {
+        fail!();
+        #[allow(unreachable_code)]
+        MetalDevice
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
@@ -131,9 +129,21 @@ impl crate::backend::BackendStorage for MetalStorage {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self> {
+    fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
         Err(Error::NotCompiledWithMetalSupport)
     }
+
+    fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+    fn upsample_nearest1d(&self, _: &Layout, _: usize) -> Result<Self> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
     fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self> {
         Err(Error::NotCompiledWithMetalSupport)
     }
@@ -159,6 +169,10 @@ impl crate::backend::BackendStorage for MetalStorage {
         _: &Layout,
         _: usize,
     ) -> Result<()> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
@@ -201,19 +215,59 @@ impl crate::backend::BackendStorage for MetalStorage {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
+    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
+    fn apply_op1(&self, _l: &Layout, _c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn upsample_nearest1d(&self, _: &Layout, _: usize) -> Result<Self> {
+    fn apply_op2(
+        &self,
+        _l1: &Layout,
+        _t2: &Self,
+        _l2: &Layout,
+        _c: &dyn crate::CustomOp2<Self>,
+    ) -> Result<(Self, Shape)> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
+    fn apply_op3(
+        &self,
+        _l1: &Layout,
+        _t2: &Self,
+        _l2: &Layout,
+        _t3: &Self,
+        _l3: &Layout,
+        _c: &dyn crate::CustomOp3<Self>,
+    ) -> Result<(Self, Shape)> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn inplace_op1(&mut self, _: &Layout, _: &dyn crate::InplaceOp1) -> Result<()> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn inplace_op2(
+        &mut self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &dyn crate::InplaceOp2,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn inplace_op3(
+        &mut self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &dyn crate::InplaceOp3,
+    ) -> Result<()> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 }
@@ -223,19 +277,15 @@ impl crate::backend::BackendDevice<MetalStorage> for MetalDevice {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn set_seed(&self, _: u64) -> Result<()> {
-        Err(Error::NotCompiledWithMetalSupport)
-    }
-
     fn location(&self) -> crate::DeviceLocation {
         fail!()
     }
 
-    fn same_device<O: crate::backend::BackendStorage>(&self, _: &O::Device) -> bool {
+    fn same_device(&self, _: &MetalDevice) -> bool {
         fail!()
     }
 
-    fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<MetalStorage> {
+    fn zeros(&self, _shape: &Shape, _dtype: DType) -> Result<MetalStorage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
@@ -255,11 +305,23 @@ impl crate::backend::BackendDevice<MetalStorage> for MetalDevice {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
+    fn storage<A: crate::NdArray>(&self, _: A) -> Result<MetalStorage> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn storage_owned<S: crate::WithDType>(&self, _: Vec<S>) -> Result<MetalStorage> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
     fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<MetalStorage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
     fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<MetalStorage> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
+    fn set_seed(&self, _: u64) -> Result<()> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 

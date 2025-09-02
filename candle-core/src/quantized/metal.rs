@@ -1,39 +1,36 @@
 use super::{GgmlDType, QStorage};
 use crate::backend::BackendStorage;
+use crate::quantized::{GgmlType, QuantizedBackend, QuantizedDevice};
 use crate::{DType, MetalDevice, MetalStorage, Result, Shape, D};
 use candle_metal_kernels::metal_utils::Buffer;
+use std::borrow::Cow;
+use std::fmt::Debug;
 use std::sync::Arc;
 
+#[derive(Debug)]
 pub struct QMetalStorage {
     dtype: GgmlDType,
     device: MetalDevice,
     buffer: Arc<Buffer>,
 }
 
-impl QMetalStorage {
-    pub fn zeros(device: &MetalDevice, elem_count: usize, dtype: GgmlDType) -> Result<Self> {
-        let size = elem_count * dtype.type_size() / dtype.block_size();
-        let buffer = device.allocate_zeros(size)?;
-        Ok(Self {
-            buffer,
-            device: device.clone(),
-            dtype,
-        })
-    }
+impl QuantizedBackend for QMetalStorage {
+    type Storage = MetalStorage;
+    type Device = MetalDevice;
 
-    pub fn dtype(&self) -> GgmlDType {
+    fn dtype(&self) -> GgmlDType {
         self.dtype
     }
 
-    pub fn device(&self) -> &MetalDevice {
+    fn block_size(&self) -> usize {
+        self.dtype.block_size()
+    }
+
+    fn device(&self) -> impl AsRef<MetalDevice> {
         &self.device
     }
 
-    pub fn buffer(&self) -> &Buffer {
-        &self.buffer
-    }
-
-    pub fn dequantize(&self, elem_count: usize) -> Result<MetalStorage> {
+    fn dequantize(&self, elem_count: usize) -> Result<MetalStorage> {
         use crate::quantized::k_quants::GgmlType;
 
         let buffer = self.device.new_buffer_managed(self.buffer.length())?;
@@ -118,7 +115,7 @@ impl QMetalStorage {
         ))
     }
 
-    pub fn quantize(&mut self, src: &MetalStorage) -> Result<()> {
+    fn quantize(&mut self, src: &MetalStorage) -> Result<()> {
         // Quantization only happens on CPU for now.
         let src = src.to_cpu::<f32>()?;
         let elem_count = src.len();
@@ -130,8 +127,42 @@ impl QMetalStorage {
         Ok(())
     }
 
-    pub fn storage_size_in_bytes(&self) -> usize {
+    fn storage_size_in_bytes(&self) -> usize {
         self.buffer.length() as usize
+    }
+
+    fn data(&self) -> Result<Cow<'_, [u8]>> {
+        let buffer = self.device.new_buffer_managed(self.buffer.length())?;
+        {
+            let command_buffer = self.device.command_buffer()?;
+            command_buffer.set_label("to_cpu");
+            let blit = command_buffer.blit_command_encoder();
+            blit.set_label("blit_to_cpu");
+            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
+            blit.end_encoding();
+        }
+        self.device.wait_until_completed()?;
+
+        let ptr = buffer.contents() as *const u8;
+        assert!(!ptr.is_null());
+        let slice = unsafe { std::slice::from_raw_parts(ptr, self.buffer.length()) };
+        Ok(Cow::from(slice))
+    }
+}
+
+impl QMetalStorage {
+    fn zeros(device: &MetalDevice, elem_count: usize, dtype: GgmlDType) -> Result<Self> {
+        let size = elem_count * dtype.type_size() / dtype.block_size();
+        let buffer = device.allocate_zeros(size)?;
+        Ok(Self {
+            buffer,
+            device: device.clone(),
+            dtype,
+        })
+    }
+
+    fn buffer(&self) -> &Buffer {
+        &self.buffer
     }
 
     fn fwd_mv(
@@ -167,7 +198,7 @@ impl QMetalStorage {
         }
         dst_shape.push(n);
         let dst_shape = Shape::from(dst_shape);
-        let device = storage.device().clone();
+        let device = storage.device().as_ref().clone();
         let dst = device.new_buffer(dst_shape.elem_count(), DType::F32, "qmatmul")?;
         let command_buffer = device.command_buffer()?;
         // In some cases it would be better to use the mm variant, though it has its drawbacks
@@ -229,7 +260,7 @@ impl QMetalStorage {
         }
         dst_shape.push(n);
         let dst_shape = Shape::from(dst_shape);
-        let device = storage.device().clone();
+        let device = storage.device().as_ref().clone();
         let dst = device.new_buffer(dst_shape.elem_count(), DType::F32, "qmatmul")?;
         let command_buffer = device.command_buffer()?;
 
@@ -282,19 +313,32 @@ impl QMetalStorage {
         let dst_storage = crate::MetalStorage::new(dst, device, dst_shape.elem_count(), DType::F32);
         Ok((dst_storage, dst_shape))
     }
+}
 
-    pub fn data(&self) -> Result<Vec<u8>> {
-        let buffer = self.device.new_buffer_managed(self.buffer.length())?;
-        {
-            let command_buffer = self.device.command_buffer()?;
-            command_buffer.set_label("to_cpu");
-            let blit = command_buffer.blit_command_encoder();
-            blit.set_label("blit_to_cpu");
-            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
-            blit.end_encoding();
-        }
-        self.device.wait_until_completed()?;
-        Ok(read_to_vec::<u8>(&buffer, self.buffer.length() as usize))
+impl QuantizedDevice<QMetalStorage> for MetalDevice {
+    type Storage = MetalStorage;
+
+    fn qzeros(&self, elem_count: usize, dtype: GgmlDType) -> Result<QMetalStorage> {
+        let size = elem_count * dtype.type_size() / dtype.block_size();
+        let buffer = self.allocate_zeros(size)?;
+        Ok(QMetalStorage {
+            buffer,
+            device: self.clone(),
+            dtype,
+        })
+    }
+
+    fn load_quantized<T: GgmlType + Send + Sync + Debug + 'static>(
+        self: &Self,
+        data: &[T],
+    ) -> Result<QMetalStorage> {
+        let buffer = self.new_buffer_with_data(data)?;
+        let device = self.clone();
+        Ok(QMetalStorage {
+            dtype: T::DTYPE,
+            device,
+            buffer,
+        })
     }
 }
 
@@ -316,6 +360,13 @@ fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     assert!(!ptr.is_null());
     let slice = unsafe { std::slice::from_raw_parts(ptr, n) };
     slice.to_vec()
+}
+
+fn read_to_cow<T: Clone>(buffer: &Buffer, n: usize) -> Cow<'_, [T]> {
+    let ptr = buffer.contents() as *const T;
+    assert!(!ptr.is_null());
+    let slice = unsafe { std::slice::from_raw_parts(ptr, n) };
+    Cow::from(slice)
 }
 
 impl From<GgmlDType> for candle_metal_kernels::GgmlDType {

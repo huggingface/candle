@@ -11,17 +11,17 @@ pub struct QCudaStorage {
     device: CudaDevice,
 }
 
-impl QuantizedDevice for CudaDevice {
-    type Storage = QCudaStorage;
+impl QuantizedDevice<QCudaStorage> for CudaDevice {
+    type Storage = CudaStorage;
 
-    fn qzeros(&self, elem_count: usize, dtype: GgmlDType) -> Result<Self::Storage> {
+    fn qzeros(&self, elem_count: usize, dtype: GgmlDType) -> Result<QCudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
     fn load_quantized<T: GgmlType + Send + Sync + 'static>(
         self: &Self,
         data: &[T],
-    ) -> Result<Self::Storage> {
+    ) -> Result<QCudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 }

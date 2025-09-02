@@ -584,6 +584,18 @@ impl BackendDevice<CudaStorage> for CudaDevice {
         })
     }
 
+    fn storage<A: crate::NdArray>(&self, array: A) -> Result<Storage> {
+        let storage = array.to_cpu_storage();
+        let storage = self.storage_from_cpu_storage_owned(storage)?;
+        Ok(storage)
+    }
+
+    fn storage_owned<S: crate::WithDType>(&self, data: Vec<S>) -> Result<Storage> {
+        let storage = S::to_cpu_storage_owned(data);
+        let storage = self.storage_from_cpu_storage_owned(storage)?;
+        Ok(storage)
+    }
+
     fn synchronize(&self) -> Result<()> {
         self.stream.synchronize().map_err(crate::Error::wrap)?;
         Ok(())

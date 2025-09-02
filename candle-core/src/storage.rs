@@ -62,125 +62,6 @@ impl Storage {
         }
     }
 
-    pub(crate) fn apply_op1<B: BackendStorage>(
-        &self,
-        l: &Layout,
-        c: &dyn CustomOp1<B>,
-    ) -> Result<(Self, Shape)> {
-        match self {
-            Self::Cpu(storage) => {
-                let (storage, shape) = c.cpu_fwd(storage, l)?;
-                Ok((Self::Cpu(storage), shape))
-            }
-            Self::Cuda(storage) => {
-                let (storage, shape) = c.cuda_fwd(storage, l)?;
-                Ok((Self::Cuda(storage), shape))
-            }
-            Self::Metal(storage) => {
-                let (storage, shape) = c.metal_fwd(storage, l)?;
-                Ok((Self::Metal(storage), shape))
-            }
-        }
-    }
-
-    pub(crate) fn apply_op2<B: BackendStorage>(
-        &self,
-        l1: &Layout,
-        t2: &Self,
-        l2: &Layout,
-        c: &dyn CustomOp2<B>,
-    ) -> Result<(Self, Shape)> {
-        self.same_device(t2, c.name())?;
-        match (self, t2) {
-            (Self::Cpu(s1), Self::Cpu(s2)) => {
-                let (s, shape) = c.cpu_fwd(s1, l1, s2, l2)?;
-                Ok((Self::Cpu(s), shape))
-            }
-            (Self::Cuda(s1), Self::Cuda(s2)) => {
-                let (s, shape) = c.cuda_fwd(s1, l1, s2, l2)?;
-                Ok((Self::Cuda(s), shape))
-            }
-            (Self::Metal(s1), Self::Metal(s2)) => {
-                let (s, shape) = c.metal_fwd(s1, l1, s2, l2)?;
-                Ok((Self::Metal(s), shape))
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    pub(crate) fn apply_op3<B: BackendStorage>(
-        &self,
-        l1: &Layout,
-        t2: &Self,
-        l2: &Layout,
-        t3: &Self,
-        l3: &Layout,
-        c: &dyn CustomOp3<B>,
-    ) -> Result<(Self, Shape)> {
-        self.same_device(t2, c.name())?;
-        self.same_device(t3, c.name())?;
-        match (self, t2, t3) {
-            (Self::Cpu(s1), Self::Cpu(s2), Self::Cpu(s3)) => {
-                let (s, shape) = c.cpu_fwd(s1, l1, s2, l2, s3, l3)?;
-                Ok((Self::Cpu(s), shape))
-            }
-            (Self::Cuda(s1), Self::Cuda(s2), Self::Cuda(s3)) => {
-                let (s, shape) = c.cuda_fwd(s1, l1, s2, l2, s3, l3)?;
-                Ok((Self::Cuda(s), shape))
-            }
-            (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
-                let (s, shape) = c.metal_fwd(s1, l1, s2, l2, s3, l3)?;
-                Ok((Self::Metal(s), shape))
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    pub(crate) fn inplace_op1(&mut self, l: &Layout, c: &dyn InplaceOp1) -> Result<()> {
-        match self {
-            Self::Cpu(storage) => c.cpu_fwd(storage, l),
-            Self::Cuda(storage) => c.cuda_fwd(storage, l),
-            Self::Metal(storage) => c.metal_fwd(storage, l),
-        }
-    }
-
-    pub(crate) fn inplace_op2(
-        &mut self,
-        l1: &Layout,
-        t2: &Self,
-        l2: &Layout,
-        c: &dyn InplaceOp2,
-    ) -> Result<()> {
-        self.same_device(t2, c.name())?;
-        match (self, t2) {
-            (Self::Cpu(s1), Self::Cpu(s2)) => c.cpu_fwd(s1, l1, s2, l2),
-            (Self::Cuda(s1), Self::Cuda(s2)) => c.cuda_fwd(s1, l1, s2, l2),
-            (Self::Metal(s1), Self::Metal(s2)) => c.metal_fwd(s1, l1, s2, l2),
-            _ => unreachable!(),
-        }
-    }
-
-    pub(crate) fn inplace_op3(
-        &mut self,
-        l1: &Layout,
-        t2: &Self,
-        l2: &Layout,
-        t3: &Self,
-        l3: &Layout,
-        c: &dyn InplaceOp3,
-    ) -> Result<()> {
-        self.same_device(t2, c.name())?;
-        self.same_device(t3, c.name())?;
-        match (self, t2, t3) {
-            (Self::Cpu(s1), Self::Cpu(s2), Self::Cpu(s3)) => c.cpu_fwd(s1, l1, s2, l2, s3, l3),
-            (Self::Cuda(s1), Self::Cuda(s2), Self::Cuda(s3)) => c.cuda_fwd(s1, l1, s2, l2, s3, l3),
-            (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
-                c.metal_fwd(s1, l1, s2, l2, s3, l3)
-            }
-            _ => unreachable!(),
-        }
-    }
-
     pub(crate) fn scatter_add(
         &mut self,
         l: &Layout,
@@ -223,8 +104,8 @@ impl BackendStorage for Storage {
     fn device(&self) -> impl AsRef<Device> {
         match self {
             Self::Cpu(_) => Device::Cpu,
-            Self::Cuda(storage) => Device::Cuda(storage.device().clone()),
-            Self::Metal(storage) => Device::Metal(storage.device().clone()),
+            Self::Cuda(storage) => Device::Cuda(storage.device().as_ref().clone()),
+            Self::Metal(storage) => Device::Metal(storage.device().as_ref().clone()),
         }
     }
 
@@ -840,6 +721,121 @@ impl BackendStorage for Storage {
                 op: "copy2d",
             }
             .bt()),
+        }
+    }
+
+    fn apply_op1(&self, l: &Layout, c: &dyn CustomOp1<Self>) -> Result<(Self, Shape)> {
+        match self {
+            Self::Cpu(storage) => {
+                let (storage, shape) = c.cpu_fwd(storage, l)?;
+                Ok((Self::Cpu(storage), shape))
+            }
+            Self::Cuda(storage) => {
+                let (storage, shape) = c.cuda_fwd(storage, l)?;
+                Ok((Self::Cuda(storage), shape))
+            }
+            Self::Metal(storage) => {
+                let (storage, shape) = c.metal_fwd(storage, l)?;
+                Ok((Self::Metal(storage), shape))
+            }
+        }
+    }
+
+    fn apply_op2(
+        &self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn CustomOp2<Self>,
+    ) -> Result<(Self, Shape)> {
+        self.same_device(t2, c.name())?;
+        match (self, t2) {
+            (Self::Cpu(s1), Self::Cpu(s2)) => {
+                let (s, shape) = c.cpu_fwd(s1, l1, s2, l2)?;
+                Ok((Self::Cpu(s), shape))
+            }
+            (Self::Cuda(s1), Self::Cuda(s2)) => {
+                let (s, shape) = c.cuda_fwd(s1, l1, s2, l2)?;
+                Ok((Self::Cuda(s), shape))
+            }
+            (Self::Metal(s1), Self::Metal(s2)) => {
+                let (s, shape) = c.metal_fwd(s1, l1, s2, l2)?;
+                Ok((Self::Metal(s), shape))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn apply_op3(
+        &self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn CustomOp3<Self>,
+    ) -> Result<(Self, Shape)> {
+        self.same_device(t2, c.name())?;
+        self.same_device(t3, c.name())?;
+        match (self, t2, t3) {
+            (Self::Cpu(s1), Self::Cpu(s2), Self::Cpu(s3)) => {
+                let (s, shape) = c.cpu_fwd(s1, l1, s2, l2, s3, l3)?;
+                Ok((Self::Cpu(s), shape))
+            }
+            (Self::Cuda(s1), Self::Cuda(s2), Self::Cuda(s3)) => {
+                let (s, shape) = c.cuda_fwd(s1, l1, s2, l2, s3, l3)?;
+                Ok((Self::Cuda(s), shape))
+            }
+            (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
+                let (s, shape) = c.metal_fwd(s1, l1, s2, l2, s3, l3)?;
+                Ok((Self::Metal(s), shape))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn inplace_op1(&mut self, l: &Layout, c: &dyn InplaceOp1) -> Result<()> {
+        match self {
+            Self::Cpu(storage) => c.cpu_fwd(storage, l),
+            Self::Cuda(storage) => c.cuda_fwd(storage, l),
+            Self::Metal(storage) => c.metal_fwd(storage, l),
+        }
+    }
+
+    fn inplace_op2(
+        &mut self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn InplaceOp2,
+    ) -> Result<()> {
+        self.same_device(t2, c.name())?;
+        match (self, t2) {
+            (Self::Cpu(s1), Self::Cpu(s2)) => c.cpu_fwd(s1, l1, s2, l2),
+            (Self::Cuda(s1), Self::Cuda(s2)) => c.cuda_fwd(s1, l1, s2, l2),
+            (Self::Metal(s1), Self::Metal(s2)) => c.metal_fwd(s1, l1, s2, l2),
+            _ => unreachable!(),
+        }
+    }
+
+    fn inplace_op3(
+        &mut self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn InplaceOp3,
+    ) -> Result<()> {
+        self.same_device(t2, c.name())?;
+        self.same_device(t3, c.name())?;
+        match (self, t2, t3) {
+            (Self::Cpu(s1), Self::Cpu(s2), Self::Cpu(s3)) => c.cpu_fwd(s1, l1, s2, l2, s3, l3),
+            (Self::Cuda(s1), Self::Cuda(s2), Self::Cuda(s3)) => c.cuda_fwd(s1, l1, s2, l2, s3, l3),
+            (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
+                c.metal_fwd(s1, l1, s2, l2, s3, l3)
+            }
+            _ => unreachable!(),
         }
     }
 }

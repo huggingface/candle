@@ -93,7 +93,7 @@ impl BackendStorage for MetalStorage {
         self.dtype
     }
 
-    fn device(&self) -> &Self::Device {
+    fn device(&self) -> impl AsRef<MetalDevice> {
         &self.device
     }
 
@@ -111,7 +111,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device().as_ref().clone();
 
         let shape = layout.shape();
         let el = shape.elem_count();
@@ -166,7 +166,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn powf(&self, layout: &Layout, pow: f64) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device().as_ref().clone();
 
         let shape = layout.shape();
         let el = shape.elem_count();
@@ -217,7 +217,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device().as_ref().clone();
 
         let shape = layout.shape();
         let el = shape.elem_count();
@@ -424,7 +424,7 @@ impl BackendStorage for MetalStorage {
             s: S,
             l: &Layout,
         ) -> Result<()> {
-            let device = self_.device();
+            let device = self_.device().as_ref().clone();
             let dtype = self_.dtype;
             let shape = l.shape();
             let el_count = shape.elem_count();
@@ -441,7 +441,7 @@ impl BackendStorage for MetalStorage {
                         _ => crate::bail!("internal bug in const_set"),
                     };
                     candle_metal_kernels::call_const_set_contiguous_tiled(
-                        &device.device,
+                        &device.as_ref().device,
                         &command_buffer,
                         &device.kernels,
                         kernel_name,
@@ -514,7 +514,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
-        let device = self.device();
+        let device = self.device().as_ref().clone();
         let shape = layout.shape();
         let el_count = shape.elem_count();
         let buffer = device.new_buffer(el_count, dtype, "todtype")?;
@@ -631,7 +631,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn unary_impl<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
-        let device = self.device();
+        let device = self.device.clone();
         let dtype = self.dtype;
         let shape = layout.shape();
         let el_count = shape.elem_count();
@@ -943,7 +943,7 @@ impl BackendStorage for MetalStorage {
         kernel_l: &Layout,
         params: &ParamsConv1D,
     ) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device.clone();
         let shape = layout.shape();
         let dims = shape.dims();
         let strides = layout.stride();
@@ -994,7 +994,10 @@ impl BackendStorage for MetalStorage {
             col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
-            let mut kernel_c = self.device().zeros_impl(kernel_l.shape(), kernel.dtype())?;
+            let mut kernel_c = self
+                .device()
+                .as_ref()
+                .zeros(kernel_l.shape(), kernel.dtype())?;
             kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
@@ -1002,7 +1005,7 @@ impl BackendStorage for MetalStorage {
             col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, l_out, n)).transpose(1, 2)?;
-        let mut res_t = self.device().zeros_impl(res_l.shape(), res.dtype())?;
+        let mut res_t = self.device.zeros(res_l.shape(), res.dtype())?;
         res.copy_strided_src(&mut res_t, 0, &res_l)?;
         Ok(res_t)
     }
@@ -1125,7 +1128,7 @@ impl BackendStorage for MetalStorage {
         kernel_l: &Layout,
         params: &ParamsConv2D,
     ) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device().as_ref().clone();
         let shape = layout.shape();
         let dims = shape.dims();
 
@@ -1185,7 +1188,10 @@ impl BackendStorage for MetalStorage {
             col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
-            let mut kernel_c = self.device().zeros_impl(kernel_l.shape(), kernel.dtype())?;
+            let mut kernel_c = self
+                .device()
+                .as_ref()
+                .zeros(kernel_l.shape(), kernel.dtype())?;
             kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
@@ -1195,7 +1201,7 @@ impl BackendStorage for MetalStorage {
         let res_l = Layout::contiguous((b, h_out, w_out, n))
             .transpose(1, 2)?
             .transpose(1, 3)?;
-        let mut res_t = self.device().zeros_impl(res_l.shape(), res.dtype())?;
+        let mut res_t = self.device.zeros(res_l.shape(), res.dtype())?;
         res.copy_strided_src(&mut res_t, 0, &res_l)?;
         Ok(res_t)
     }
@@ -1398,8 +1404,7 @@ impl BackendStorage for MetalStorage {
         let ids_el = ids_l.dims()[dim];
         let dst_el = ids_l.shape().elem_count();
         let dtype = self.dtype;
-        let device = self.device();
-        let buffer = device.new_buffer(dst_el, dtype, "gather")?;
+        let buffer = self.device.new_buffer(dst_el, dtype, "gather")?;
         let name = match (ids.dtype, self.dtype) {
             (DType::U32, DType::F32) => "gather_u32_f32",
             (DType::U32, DType::F16) => "gather_u32_f16",
@@ -1417,7 +1422,7 @@ impl BackendStorage for MetalStorage {
         let src = buffer_o(&self.buffer, src_l, dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_gather(
-            &device.device,
+            &self.device,
             &command_buffer,
             &self.device.kernels,
             name,
@@ -1429,7 +1434,7 @@ impl BackendStorage for MetalStorage {
             &buffer,
         )
         .map_err(MetalError::from)?;
-        Ok(Self::new(buffer, device.clone(), dst_el, dtype))
+        Ok(Self::new(buffer, self.device.clone(), dst_el, dtype))
     }
 
     fn scatter_set(
@@ -1539,7 +1544,7 @@ impl BackendStorage for MetalStorage {
         let ids_el = ids_l.shape().elem_count();
         let dst_el = ids_el * left_size * right_size;
         let dtype = self.dtype;
-        let device = self.device();
+        let device = self.device.clone();
         let buffer = device.new_buffer(dst_el, dtype, "index_select")?;
         let name = match (ids.dtype, self.dtype) {
             (DType::U8, DType::U8) => "is_u8_u8",
@@ -1586,7 +1591,7 @@ impl BackendStorage for MetalStorage {
             &buffer,
         )
         .map_err(MetalError::from)?;
-        Ok(Self::new(buffer, device.clone(), dst_el, dtype))
+        Ok(Self::new(buffer, device, dst_el, dtype))
     }
 
     fn index_add(
@@ -1598,7 +1603,7 @@ impl BackendStorage for MetalStorage {
         src_l: &Layout,
         dim: usize,
     ) -> Result<Self> {
-        let mut acc = self.device.zeros_impl(l.shape(), self.dtype())?;
+        let mut acc = self.device.zeros(l.shape(), self.dtype())?;
         self.copy_strided_src(&mut acc, 0, l)?;
         if !ids_l.is_contiguous() || !src_l.is_contiguous() {
             return Err(crate::Error::RequiresContiguous { op: "index-add" }.bt());
@@ -1802,6 +1807,58 @@ impl BackendStorage for MetalStorage {
         }
         Ok(())
     }
+
+    fn apply_op1(&self, l: &Layout, c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)> {
+        c.metal_fwd(self, l)
+    }
+
+    fn apply_op2(
+        &self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn crate::CustomOp2<Self>,
+    ) -> Result<(Self, Shape)> {
+        c.metal_fwd(self, l1, t2, l2)
+    }
+
+    fn apply_op3(
+        &self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn crate::CustomOp3<Self>,
+    ) -> Result<(Self, Shape)> {
+        c.metal_fwd(self, l1, t2, l2, t3, l3)
+    }
+
+    fn inplace_op1(&mut self, l: &Layout, c: &dyn crate::InplaceOp1) -> Result<()> {
+        c.metal_fwd(self, l)
+    }
+
+    fn inplace_op2(
+        &mut self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn crate::InplaceOp2,
+    ) -> Result<()> {
+        c.metal_fwd(self, l1, t2, l2)
+    }
+
+    fn inplace_op3(
+        &mut self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn crate::InplaceOp3,
+    ) -> Result<()> {
+        c.metal_fwd(self, l1, t2, l2, t3, l3)
+    }
 }
 
 impl MetalStorage {
@@ -1825,7 +1882,7 @@ impl MetalStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        let device = self.device();
+        let device = self.device.clone();
         let shape = lhs_l.shape();
         let el_count = shape.elem_count();
         let command_buffer = device.command_buffer()?;
@@ -2086,7 +2143,7 @@ impl BackendDevice<MetalStorage> for MetalDevice {
         ))
     }
 
-    fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
+    fn zeros(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
         let size = shape.elem_count() * dtype.size_in_bytes();
         let buffer = self.allocate_zeros(size)?;
         Ok(MetalStorage::new(
@@ -2108,7 +2165,7 @@ impl BackendDevice<MetalStorage> for MetalDevice {
             CpuStorageRef::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F8E4M3(_) => crate::bail!("Metal device does not yet support F8E4M3."),
         };
-        Ok(Self::Storage::new(buffer?, self.clone(), count, T::DTYPE))
+        Ok(MetalStorage::new(buffer?, self.clone(), count, T::DTYPE))
     }
 
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<MetalStorage> {
@@ -2122,7 +2179,7 @@ impl BackendDevice<MetalStorage> for MetalDevice {
             CpuStorage::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F8E4M3(_) => crate::bail!("Metal device does not yet support F8E4M3."),
         };
-        Ok(Self::Storage::new(
+        Ok(MetalStorage::new(
             buffer?,
             self.clone(),
             count,
@@ -2132,6 +2189,18 @@ impl BackendDevice<MetalStorage> for MetalDevice {
 
     fn storage_from_cpu_storage_owned(&self, storage: CpuStorage) -> Result<MetalStorage> {
         self.storage_from_cpu_storage(&storage)
+    }
+
+    fn storage<A: crate::NdArray>(&self, array: A) -> Result<MetalStorage> {
+        let storage = array.to_cpu_storage();
+        let storage = self.storage_from_cpu_storage_owned(storage)?;
+        Ok(storage)
+    }
+
+    fn storage_owned<S: crate::WithDType>(&self, data: Vec<S>) -> Result<MetalStorage> {
+        let storage = S::to_cpu_storage_owned(data);
+        let storage = self.storage_from_cpu_storage_owned(storage)?;
+        Ok(storage)
     }
 
     fn rand_uniform(
@@ -2162,7 +2231,7 @@ impl BackendDevice<MetalStorage> for MetalDevice {
         )
         .map_err(MetalError::from)?;
 
-        Ok(Self::Storage::new(
+        Ok(MetalStorage::new(
             buffer,
             self.clone(),
             shape.elem_count(),
@@ -2198,7 +2267,7 @@ impl BackendDevice<MetalStorage> for MetalDevice {
         )
         .map_err(MetalError::from)?;
 
-        Ok(Self::Storage::new(
+        Ok(MetalStorage::new(
             buffer,
             self.clone(),
             shape.elem_count(),
