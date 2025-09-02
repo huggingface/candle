@@ -7,19 +7,55 @@ macro_rules! test_device {
     ($fn_name: ident, $test_cpu: ident, $test_cuda: ident, $test_metal: ident) => {
         #[test]
         fn $test_cpu() -> Result<()> {
-            $fn_name(&Device::Cpu)
+            use candle_core::backend::BackendDevice;
+            $fn_name::<candle_core::CpuStorage>(&candle_core::cpu_backend::CpuDevice {})
         }
 
         #[cfg(feature = "cuda")]
         #[test]
         fn $test_cuda() -> Result<()> {
-            $fn_name(&Device::new_cuda(0)?)
+            use candle_core::backend::BackendDevice;
+            $fn_name::<candle_core::CudaStorage>(&candle_core::CudaDevice::new(0)?)
         }
 
         #[cfg(feature = "metal")]
         #[test]
         fn $test_metal() -> Result<()> {
-            $fn_name(&Device::new_metal(0)?)
+            use candle_core::backend::BackendDevice;
+            $fn_name::<candle_core::MetalStorage>(&candle_core::MetalDevice::new(0)?)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! test_quantized_device {
+    // TODO: Switch to generating the two last arguments automatically once concat_idents is
+    // stable. https://github.com/rust-lang/rust/issues/29599
+    ($fn_name: ident, $test_cpu: ident, $test_cuda: ident, $test_metal: ident) => {
+        #[test]
+        fn $test_cpu() -> Result<()> {
+            use candle_core::backend::BackendDevice;
+            $fn_name::<candle_core::CpuStorage, candle_core::quantized::QCpuStorage>(
+                &candle_core::cpu_backend::CpuDevice {},
+            )
+        }
+
+        #[cfg(feature = "cuda")]
+        #[test]
+        fn $test_cuda() -> Result<()> {
+            use candle_core::backend::BackendDevice;
+            $fn_name::<candle_core::CudaStorage, candle_core::quantized::QCudaStorage>(
+                &candle_core::CudaDevice::new(0)?,
+            )
+        }
+
+        #[cfg(feature = "metal")]
+        #[test]
+        fn $test_metal() -> Result<()> {
+            use candle_core::backend::BackendDevice;
+            $fn_name::<candle_core::MetalStorage, candle_core::quantized::metal::QMetalStorage>(
+                &candle_core::MetalDevice::new(0)?,
+            )
         }
     };
 }
