@@ -1,7 +1,7 @@
 //! Just enough pickle support to be able to read PyTorch checkpoints.
 // This hardcodes objects that are required for tensor reading, we may want to make this a bit more
 // composable/tensor agnostic at some point.
-use crate::{BackendStorage, Context, DType, Error as E, Layout, Result, Tensor};
+use crate::{Context, DType, Error as E, Layout, Result, Tensor};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -762,7 +762,7 @@ impl PthTensors {
         &self.tensor_infos
     }
 
-    pub fn get<B: BackendStorage>(&self, name: &str) -> Result<Option<Tensor<B>>> {
+    pub fn get(&self, name: &str) -> Result<Option<Tensor<crate::CpuStorage>>> {
         use std::io::Read;
         let tensor_info = match self.tensor_infos.get(name) {
             None => return Ok(None),
@@ -817,10 +817,10 @@ impl PthTensors {
 /// * `path` - Path to the pth file.
 /// * `key` - Optional key to retrieve `state_dict` from the pth file. Sometimes the pth file
 ///   contains multiple objects and the state_dict is the one we are interested in.
-pub fn read_all_with_key<B: BackendStorage, P: AsRef<std::path::Path>>(
+pub fn read_all_with_key<P: AsRef<std::path::Path>>(
     path: P,
     key: Option<&str>,
-) -> Result<Vec<(String, Tensor<B>)>> {
+) -> Result<Vec<(String, Tensor<crate::CpuStorage>)>> {
     let pth = PthTensors::new(path, key)?;
     let tensor_names = pth.tensor_infos.keys();
     let mut tensors = Vec::with_capacity(tensor_names.len());
@@ -836,8 +836,8 @@ pub fn read_all_with_key<B: BackendStorage, P: AsRef<std::path::Path>>(
 ///
 /// # Arguments
 /// * `path` - Path to the pth file.
-pub fn read_all<B: BackendStorage, P: AsRef<std::path::Path>>(
+pub fn read_all<P: AsRef<std::path::Path>>(
     path: P,
-) -> Result<Vec<(String, Tensor<B>)>> {
+) -> Result<Vec<(String, Tensor<crate::CpuStorage>)>> {
     read_all_with_key(path, None)
 }
