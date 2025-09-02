@@ -166,7 +166,7 @@ pub(crate) fn from_storage<B: BackendStorage, S: Into<Shape>>(
     is_variable: bool,
 ) -> Tensor<B> {
     let dtype = storage.dtype();
-    let device = storage.device().clone();
+    let device = storage.device().as_ref().clone();
     let tensor_ = Tensor_ {
         id: TensorId::new(),
         storage: Arc::new(RwLock::new(storage)),
@@ -266,7 +266,7 @@ where
         is_variable: bool,
     ) -> Self {
         let dtype = storage.dtype();
-        let device = storage.device().clone();
+        let device = storage.device().as_ref().clone();
         let tensor_ = Tensor_ {
             id: TensorId::new(),
             storage: Arc::new(RwLock::new(storage)),
@@ -380,7 +380,7 @@ where
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_uniform_impl(lo, up, &s)?;
+        let storage = device.rand_uniform(&s, DType::F64, lo.to_f64(), up.to_f64())?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }
@@ -394,7 +394,7 @@ where
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_uniform_impl(lo, up, &s)?;
+        let storage = device.rand_uniform(&s, DType::F64, lo, up)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }
@@ -421,7 +421,7 @@ where
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_uniform_impl(mean, std, &s)?;
+        let storage = device.rand_normal(&s, DType::F64, mean.to_f64(), std.to_f64())?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }
@@ -435,7 +435,7 @@ where
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_uniform_impl(mean, std, &s)?;
+        let storage = device.rand_normal(&s, DType::F64, mean, std)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }
