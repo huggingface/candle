@@ -184,7 +184,7 @@ impl<B: BackendStorage> crate::CustomOp1<B> for ArgSort {
                 }
             }
         };
-        let device = storage.device();
+        let device = storage.device().as_ref().clone();
         let kernels = device.kernels();
         let command_buffer = device.command_buffer()?;
         let el = layout.shape().elem_count();

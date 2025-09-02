@@ -443,7 +443,7 @@ impl InplaceOp1 for UgIOp1 {
             // TODO: support more dtypes.
             crate::bail!("input is not a f32 tensor")
         }
-        let device = sto.device();
+        let device = sto.device().as_ref().clone();
         println!("here");
         let command_buffer = device.command_buffer()?;
         let command_buffer = &command_buffer;
