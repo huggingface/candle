@@ -1,7 +1,8 @@
 //! Code for GGML and GGUF files
 use crate::{
-    backend::BackendDevice, cpu_backend::CpuDevice, BackendStorage, Context, CpuStorage, CustomOp1,
-    DType, Device, Result, Shape, Storage, Tensor,
+    backend::BackendDevice, cpu_backend::CpuDevice, quantized::metal::QMetalStorage,
+    BackendStorage, Context, CpuStorage, CustomOp1, DType, Device, MetalStorage, Result, Shape,
+    Storage, Tensor,
 };
 use k_quants::*;
 use std::borrow::Cow;
@@ -42,7 +43,7 @@ pub struct QTensor<B: QuantizedBackend> {
 }
 
 #[derive(Debug)]
-struct QCpuStorage(Box<dyn QuantizedType>);
+pub struct QCpuStorage(Box<dyn QuantizedType>);
 
 #[derive(Debug)]
 pub enum QStorage {
@@ -156,7 +157,7 @@ impl QuantizedBackend for QCpuStorage {
     }
 
     fn quantize(&mut self, src: &Self::Storage) -> Result<()> {
-        self.0.from_float(src.as_slice::<f32>()?);
+        self.0.from_float(src.as_slice::<f32>()?)?;
         Ok(())
     }
 
@@ -647,6 +648,36 @@ impl crate::CustomOp1<CpuStorage> for QTensor<QCpuStorage> {
         _: &crate::Layout,
     ) -> Result<(crate::MetalStorage, Shape)> {
         crate::bail!("Invalid storage")
+    }
+
+    fn cuda_fwd(
+        &self,
+        _: &crate::CudaStorage,
+        _: &crate::Layout,
+    ) -> Result<(crate::CudaStorage, Shape)> {
+        crate::bail!("Invalid storage")
+    }
+}
+
+impl crate::CustomOp1<MetalStorage> for QTensor<QMetalStorage> {
+    fn name(&self) -> &'static str {
+        "qmatmul"
+    }
+
+    fn cpu_fwd(
+        &self,
+        storage: &crate::CpuStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::CpuStorage, Shape)> {
+        crate::bail!("Invalid storage")
+    }
+
+    fn metal_fwd(
+        &self,
+        storage: &crate::MetalStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::MetalStorage, Shape)> {
+        self.storage.fwd(&self.shape, storage, layout)
     }
 
     fn cuda_fwd(
