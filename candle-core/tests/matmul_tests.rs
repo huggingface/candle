@@ -1,8 +1,12 @@
-use candle_core::{test_device, DType, Device, IndexOp, Result, Tensor};
+use candle_core::{
+    backend::{BackendDevice, BackendStorage},
+    cpu_backend::CpuDevice,
+    test_device, CpuStorage, DType, IndexOp, Result, Tensor,
+};
 
-fn matmul(device: &Device) -> Result<()> {
+fn matmul<B: BackendStorage>(device: &B::Device) -> Result<()> {
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
-    let a = Tensor::from_slice(&data, (2, 2), device)?;
+    let a: Tensor<B> = Tensor::from_slice(&data, (2, 2), device)?;
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
     let b = Tensor::from_slice(&data, (2, 2), device)?;
 
@@ -10,21 +14,21 @@ fn matmul(device: &Device) -> Result<()> {
     assert_eq!(c.to_vec2::<f32>()?, &[[7.0f32, 10.0], [15.0, 22.0]]);
 
     let data = vec![1.0f32, 2.0];
-    let a = Tensor::from_slice(&data, (2, 1), device)?;
+    let a: Tensor<B> = Tensor::from_slice(&data, (2, 1), device)?;
     let data = vec![3.0f32, 4.0];
     let b = Tensor::from_slice(&data, (1, 2), device)?;
     let c = a.matmul(&b)?;
     assert_eq!(c.to_vec2::<f32>()?, &[&[3.0, 4.0], &[6.0, 8.0]]);
 
     let data: Vec<_> = (0..6).map(|i| i as f32).collect();
-    let a = Tensor::from_slice(&data, (2, 3), device)?;
+    let a: Tensor<B> = Tensor::from_slice(&data, (2, 3), device)?;
     let data: Vec<_> = (0..6).map(|i| (i + 2) as f32).collect();
     let b = Tensor::from_slice(&data, (3, 2), device)?;
     let c = a.matmul(&b)?;
     assert_eq!(c.to_vec2::<f32>()?, &[&[16., 19.], &[52., 64.]]);
 
     let data: Vec<_> = (0..12).map(|i| i as f32).collect();
-    let a = Tensor::from_slice(&data, (2, 2, 3), device)?;
+    let a: Tensor<B> = Tensor::from_slice(&data, (2, 2, 3), device)?;
     let data: Vec<_> = (0..12).map(|i| (i + 2) as f32).collect();
     let b = Tensor::from_slice(&data, (2, 3, 2), device)?;
     let expected = [[[16., 19.], [52., 64.]], [[214., 235.], [304., 334.]]];
@@ -49,12 +53,12 @@ fn matmul(device: &Device) -> Result<()> {
     Ok(())
 }
 
-fn matmul_bf16(device: &Device) -> Result<()> {
-    if !device.supports_bf16() {
+fn matmul_bf16<B: BackendStorage>(device: &B::Device) -> Result<()> {
+    if !B::Device::SUPPORTS_BF16 {
         return Ok(());
     }
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
-    let a = Tensor::from_slice(&data, (2, 2), device)?.to_dtype(DType::BF16)?;
+    let a: Tensor<B> = Tensor::from_slice(&data, (2, 2), device)?.to_dtype(DType::BF16)?;
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
     let b = Tensor::from_slice(&data, (2, 2), device)?.to_dtype(DType::BF16)?;
 
@@ -63,8 +67,8 @@ fn matmul_bf16(device: &Device) -> Result<()> {
     Ok(())
 }
 
-fn broadcast_matmul(device: &Device) -> Result<()> {
-    let lhs = Tensor::randn(0f32, 1f32, (3, 1, 4, 5), device)?;
+fn broadcast_matmul<B: BackendStorage>(device: &B::Device) -> Result<()> {
+    let lhs: Tensor<B> = Tensor::randn(0f32, 1f32, (3, 1, 4, 5), device)?;
     let rhs = Tensor::randn(0f32, 1f32, (6, 5, 2), device)?;
     let out = lhs.broadcast_matmul(&rhs)?;
     assert_eq!(out.dims(), &[3, 6, 4, 2]);
@@ -84,9 +88,9 @@ fn broadcast_matmul(device: &Device) -> Result<()> {
 
 #[test]
 fn tensor_dot() -> Result<()> {
-    let lhs = Tensor::new(&[1., 2., 3.], &Device::Cpu)?;
-    let rhs = Tensor::new(&[4., 5., 6.], &Device::Cpu)?;
-    let expected = Tensor::new(32., &Device::Cpu)?;
+    let lhs: Tensor<CpuStorage> = Tensor::new(&[1., 2., 3.], &CpuDevice)?;
+    let rhs = Tensor::new(&[4., 5., 6.], &CpuDevice)?;
+    let expected = Tensor::new(32., &CpuDevice)?;
     let dot_ret = lhs.dot(&rhs)?;
     candle_core::test_utils::assert_tensor_eq(&dot_ret, &expected)?;
     Ok(())
@@ -94,18 +98,18 @@ fn tensor_dot() -> Result<()> {
 
 #[test]
 fn tensor_mv() -> Result<()> {
-    let mat = Tensor::new(&[[1., 2., 3.], [4., 5., 6.]], &Device::Cpu)?;
-    let vec = Tensor::new(&[1., 1., 1.], &Device::Cpu)?;
-    let expected = Tensor::new(&[6., 15.], &Device::Cpu)?;
+    let mat: Tensor<CpuStorage> = Tensor::new(&[[1., 2., 3.], [4., 5., 6.]], &CpuDevice)?;
+    let vec = Tensor::new(&[1., 1., 1.], &CpuDevice)?;
+    let expected = Tensor::new(&[6., 15.], &CpuDevice)?;
     let mv_ret = mat.mv(&vec)?;
     candle_core::test_utils::assert_tensor_eq(&mv_ret, &expected)?;
     Ok(())
 }
 
 // https://github.com/huggingface/candle/issues/1948
-fn squeeze_mm(device: &Device) -> Result<()> {
+fn squeeze_mm<B: BackendStorage>(device: &B::Device) -> Result<()> {
     let seq_len = 8_usize;
-    let a = Tensor::zeros((1, seq_len, 16), DType::F32, device)?;
+    let a: Tensor<B> = Tensor::zeros((1, seq_len, 16), DType::F32, device)?;
     let x = a.i((.., seq_len - 1, ..))?;
     let w = Tensor::zeros((32, 16), DType::F32, device)?.t()?;
     let x = x.matmul(&w)?;
@@ -114,8 +118,8 @@ fn squeeze_mm(device: &Device) -> Result<()> {
 }
 
 // https://github.com/huggingface/candle/issues/1992
-fn mm_layout(device: &Device) -> Result<()> {
-    let a = Tensor::arange(0f32, 16f32, device)?.reshape((1, 1, 4, 4))?;
+fn mm_layout<B: BackendStorage>(device: &B::Device) -> Result<()> {
+    let a: Tensor<B> = Tensor::arange(0f32, 16f32, device)?.reshape((1, 1, 4, 4))?;
     let b = Tensor::arange(0f32, 8f32, device)?.reshape((1, 1, 4, 2))?;
     let mm1 = a.matmul(&b)?;
     // Forces the layout to be:

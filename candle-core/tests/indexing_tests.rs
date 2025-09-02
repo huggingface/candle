@@ -1,11 +1,11 @@
 use anyhow::Result;
-use candle_core::{Device, IndexOp, Tensor};
+use candle_core::{cpu_backend::CpuDevice, CpuStorage, Device, IndexOp, Tensor};
+
+type CpuTensor = Tensor<CpuStorage>;
 
 #[test]
 fn integer_index() -> Result<()> {
-    let dev = Device::Cpu;
-
-    let tensor = Tensor::arange(0u32, 2 * 3, &dev)?.reshape((2, 3))?;
+    let tensor = CpuTensor::arange(0u32, 2 * 3, &CpuDevice)?.reshape((2, 3))?;
     let result = tensor.i(1)?;
     assert_eq!(result.dims(), &[3]);
     assert_eq!(result.to_vec1::<u32>()?, &[3, 4, 5]);
@@ -19,15 +19,14 @@ fn integer_index() -> Result<()> {
 
 #[test]
 fn range_index() -> Result<()> {
-    let dev = Device::Cpu;
     // RangeFull
-    let tensor = Tensor::arange(0u32, 2 * 3, &dev)?.reshape((2, 3))?;
+    let tensor = CpuTensor::arange(0u32, 2 * 3, &CpuDevice)?.reshape((2, 3))?;
     let result = tensor.i(..)?;
     assert_eq!(result.dims(), &[2, 3]);
     assert_eq!(result.to_vec2::<u32>()?, &[[0, 1, 2], [3, 4, 5]]);
 
     // Range
-    let tensor = Tensor::arange(0u32, 4 * 3, &dev)?.reshape((4, 3))?;
+    let tensor = CpuTensor::arange(0u32, 4 * 3, &CpuDevice)?.reshape((4, 3))?;
     let result = tensor.i(1..3)?;
     assert_eq!(result.dims(), &[2, 3]);
     assert_eq!(result.to_vec2::<u32>()?, &[[3, 4, 5], [6, 7, 8]]);
@@ -74,7 +73,7 @@ fn range_index() -> Result<()> {
 
 #[test]
 fn index_3d() -> Result<()> {
-    let tensor = Tensor::from_iter(0..24u32, &Device::Cpu)?.reshape((2, 3, 4))?;
+    let tensor = CpuTensor::from_iter(0..24u32, &CpuDevice)?.reshape((2, 3, 4))?;
     assert_eq!(tensor.i((0, 0, 0))?.to_scalar::<u32>()?, 0);
     assert_eq!(tensor.i((1, 0, 0))?.to_scalar::<u32>()?, 12);
     assert_eq!(tensor.i((0, 1, 0))?.to_scalar::<u32>()?, 4);
@@ -94,10 +93,8 @@ fn index_3d() -> Result<()> {
 
 #[test]
 fn slice_assign() -> Result<()> {
-    let dev = Device::Cpu;
-
-    let tensor = Tensor::arange(0u32, 4 * 5, &dev)?.reshape((4, 5))?;
-    let src = Tensor::arange(0u32, 2 * 3, &dev)?.reshape((3, 2))?;
+    let tensor = CpuTensor::arange(0u32, 4 * 5, &CpuDevice)?.reshape((4, 5))?;
+    let src = Tensor::arange(0u32, 2 * 3, &CpuDevice)?.reshape((3, 2))?;
     let out = tensor.slice_assign(&[1..4, 3..5], &src)?;
     assert_eq!(
         out.to_vec2::<u32>()?,

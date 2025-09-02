@@ -1,7 +1,9 @@
 use candle_core::backend::BackendStorage;
-use candle_core::cpu_backend;
+use candle_core::cpu_backend::{self, CpuDevice};
 use candle_core::test_utils::to_vec1_round;
-use candle_core::{CpuStorage, CustomOp1, DType, Device, Error, Layout, Result, Shape, Tensor};
+use candle_core::{CpuStorage, CustomOp1, DType, Error, Layout, Result, Shape, Tensor};
+
+type CpuTensor = Tensor<CpuStorage>;
 
 fn fwd<T: num_traits::Float>(v: T, alpha: f64) -> T {
     if v.is_sign_positive() {
@@ -16,7 +18,7 @@ struct Elu {
     alpha: f64,
 }
 
-impl CustomOp1 for Elu {
+impl CustomOp1<CpuStorage> for Elu {
     fn name(&self) -> &'static str {
         "elu"
     }
@@ -34,8 +36,7 @@ impl CustomOp1 for Elu {
 
 #[test]
 fn custom_op1_no_backward() -> Result<()> {
-    let cpu = &Device::Cpu;
-    let t = Tensor::arange(0u32, 12u32, cpu)?.to_dtype(DType::F32)?;
+    let t = CpuTensor::arange(0u32, 12u32, &CpuDevice)?.to_dtype(DType::F32)?;
     let t = (t - 5.)?;
     let elu_t = t.apply_op1_no_bwd(&Elu { alpha: 1. })?;
     assert_eq!(
@@ -59,7 +60,7 @@ struct EluBackward {
     alpha: f64,
 }
 
-impl CustomOp1 for EluBackward {
+impl CustomOp1<CpuStorage> for EluBackward {
     fn name(&self) -> &'static str {
         "elu-bwd"
     }
@@ -83,7 +84,7 @@ impl EluWithBackward {
     }
 }
 
-impl CustomOp1 for EluWithBackward {
+impl CustomOp1<CpuStorage> for EluWithBackward {
     fn name(&self) -> &'static str {
         "elu"
     }
@@ -92,7 +93,12 @@ impl CustomOp1 for EluWithBackward {
         self.0.cpu_fwd(s, l)
     }
 
-    fn bwd(&self, arg: &Tensor, _res: &Tensor, grad_res: &Tensor) -> Result<Option<Tensor>> {
+    fn bwd(
+        &self,
+        arg: &CpuTensor,
+        _res: &CpuTensor,
+        grad_res: &CpuTensor,
+    ) -> Result<Option<CpuTensor>> {
         let alpha = self.0.alpha;
         let bwd = arg.apply_op1(EluBackward { alpha })?;
         Ok(Some(grad_res.mul(&bwd)?))
@@ -101,8 +107,7 @@ impl CustomOp1 for EluWithBackward {
 
 #[test]
 fn custom_op1_with_backward() -> Result<()> {
-    let cpu = &Device::Cpu;
-    let t = candle_core::Var::new(&[-2f32, 0f32, 2f32], cpu)?;
+    let t = candle_core::Var::new(&[-2f32, 0f32, 2f32], &CpuDevice)?;
     let elu_t = t.apply_op1(EluWithBackward::new(2.))?;
     assert_eq!(to_vec1_round(&elu_t, 4)?, &[-1.7293, 0.0, 2.0]);
 
@@ -134,8 +139,7 @@ impl candle_core::InplaceOp1 for Elu {
 
 #[test]
 fn inplace_op1() -> Result<()> {
-    let cpu = &Device::Cpu;
-    let t = Tensor::arange(0u32, 12u32, cpu)?.to_dtype(DType::F32)?;
+    let t = CpuTensor::arange(0u32, 12u32, &CpuDevice)?.to_dtype(DType::F32)?;
     let t = (t - 5.)?;
     t.inplace_op1(&Elu { alpha: 1. })?;
     assert_eq!(
@@ -149,34 +153,48 @@ fn inplace_op1() -> Result<()> {
 #[allow(clippy::approx_constant)]
 #[test]
 fn ug_op() -> Result<()> {
-    let kernel = {
-        use ug::lang::op;
+    use candle_core::backend::{BackendDevice, UgDevice};
+    use candle_core::{InplaceOp1, UgIOp1};
 
-        let layout = ug::Layout::from_shape(&[12]);
-        let ptr = op::Arg::ptr(ug::DType::F32);
-        let src = op::load(ptr.id(), layout.clone(), ug::DType::F32)?;
-        let src = op::unary(op::UnaryOp::Exp, src)?;
-        let st = op::store(ptr.id(), layout, src)?;
-        let kernel = op::Kernel::new("exp".to_string(), vec![ptr], vec![st]);
-        let opts: ug::lower_op::Opts = Default::default();
-        kernel.lower(&opts)?
-    };
-    let device = if candle_core::utils::cuda_is_available() {
-        Device::new_cuda(0)?
-    } else if candle_core::utils::metal_is_available() {
-        Device::new_metal(0)?
-    } else {
-        candle_core::bail!("metal/cuda is mandatory for this test")
-    };
-    let op = candle_core::UgIOp1::new("test", kernel, &device)?;
-    let t = Tensor::arange(0u32, 12u32, &device)?.to_dtype(DType::F32)?;
-    t.inplace_op1(&op)?;
-    assert_eq!(
-        to_vec1_round(&t, 2)?,
-        &[
-            1.0, 2.72, 7.39, 20.09, 54.6, 148.41, 403.43, 1096.63, 2980.96, 8103.08, 22026.47,
-            59874.13
-        ]
-    );
+    fn inner<B: BackendStorage>(device: &B::Device) -> Result<()>
+    where
+        B::Device: UgDevice,
+        UgIOp1<B>: InplaceOp1,
+    {
+        let kernel = {
+            use ug::lang::op;
+
+            let layout = ug::Layout::from_shape(&[12]);
+            let ptr = op::Arg::ptr(ug::DType::F32);
+            let src = op::load(ptr.id(), layout.clone(), ug::DType::F32)?;
+            let src = op::unary(op::UnaryOp::Exp, src)?;
+            let st = op::store(ptr.id(), layout, src)?;
+            let kernel = op::Kernel::new("exp".to_string(), vec![ptr], vec![st]);
+            let opts: ug::lower_op::Opts = Default::default();
+            kernel.lower(&opts)?
+        };
+        let op = candle_core::UgIOp1::<B>::new("test", kernel, device)?;
+        let t: Tensor<B> = Tensor::arange(0u32, 12u32, device)?.to_dtype(DType::F32)?;
+        t.inplace_op1(&op)?;
+        assert_eq!(
+            to_vec1_round(&t, 2)?,
+            &[
+                1.0, 2.72, 7.39, 20.09, 54.6, 148.41, 403.43, 1096.63, 2980.96, 8103.08, 22026.47,
+                59874.13
+            ]
+        );
+        Ok(())
+    }
+    #[cfg(feature = "cuda")]
+    {
+        use candle_core::{CudaDevice, CudaStorage};
+        inner::<CudaStorage>(&CudaDevice::new(0)?)?;
+    }
+    #[cfg(feature = "metal")]
+    {
+        use candle_core::{MetalDevice, MetalStorage};
+        inner::<MetalStorage>(&MetalDevice::new(0)?)?;
+    }
+
     Ok(())
 }

@@ -1,28 +1,28 @@
-use candle_core::{test_device, test_utils, Device, IndexOp, Result, Tensor};
+use candle_core::{backend::BackendStorage, test_device, test_utils, IndexOp, Result, Tensor};
 
 // https://github.com/huggingface/candle/issues/364
-fn avg_pool2d(dev: &Device) -> Result<()> {
+fn avg_pool2d<B: BackendStorage>(dev: &B::Device) -> Result<()> {
     let data: Vec<f32> = vec![
         1., 1., 1., 1., 0., 0., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
     ];
-    let t = Tensor::from_vec(data, (1, 1, 4, 4), dev)?;
+    let t: Tensor<B> = Tensor::from_vec(data, (1, 1, 4, 4), dev)?;
     let pool = t.avg_pool2d(2)?.squeeze(0)?.squeeze(0)?;
     assert_eq!(pool.to_vec2::<f32>()?, [[0.5f32, 1.], [1., 1.]]);
 
     let data: Vec<f32> = vec![
         1., 2., 1., 3., 0., 0., 1., 1., 1., 1., 1., 1., 5., 1., 1., 1.,
     ];
-    let t = Tensor::from_vec(data, (1, 1, 2, 8), dev)?;
+    let t: Tensor<B> = Tensor::from_vec(data, (1, 1, 2, 8), dev)?;
     let pool = t.avg_pool2d(2)?.squeeze(0)?.squeeze(0)?;
     assert_eq!(pool.to_vec2::<f32>()?, [[5. / 4., 6. / 4., 6. / 4., 1.]]);
     Ok(())
 }
 
-fn max_pool2d(dev: &Device) -> Result<()> {
+fn max_pool2d<B: BackendStorage>(dev: &B::Device) -> Result<()> {
     let data: Vec<f32> = vec![
         1., 2., 1., 3., 0., 0., 1., 1., 1., 1., 1., 1., 5., 1., 1., 1.,
     ];
-    let t = Tensor::from_vec(data, (1, 1, 4, 4), dev)?;
+    let t: Tensor<B> = Tensor::from_vec(data, (1, 1, 4, 4), dev)?;
 
     let pool = t.max_pool2d(2)?.squeeze(0)?.squeeze(0)?;
     assert_eq!(pool.to_vec2::<f32>()?, [[2f32, 3.], [5., 1.]]);
@@ -42,11 +42,11 @@ print(t.flatten())
 res = torch.nn.functional.avg_pool2d(t, 2)
 print(res)
 */
-fn avg_pool2d_pytorch(dev: &Device) -> Result<()> {
-    if dev.is_metal() {
-        return Ok(());
-    }
-    let t = Tensor::new(
+fn avg_pool2d_pytorch<B: BackendStorage>(dev: &B::Device) -> Result<()> {
+    //if dev.is_metal() {
+    //    return Ok(());
+    //}
+    let t: Tensor<B> = Tensor::new(
         &[
             0.4056f32, -0.8689, -0.0773, -1.5630, -2.8012, -1.5059, 0.3972, 1.0852, 0.4997, 3.0616,
             1.6541, 0.0964, -0.8338, -1.6523, -0.8323, -0.1699, 0.0823, 0.3526, 0.6843, 0.2395,
@@ -82,8 +82,8 @@ fn avg_pool2d_pytorch(dev: &Device) -> Result<()> {
     Ok(())
 }
 
-fn upsample_nearest2d(dev: &Device) -> Result<()> {
-    let t = Tensor::arange(0f32, 6f32, dev)?.reshape((1, 1, 2, 3))?;
+fn upsample_nearest2d<B: BackendStorage>(dev: &B::Device) -> Result<()> {
+    let t: Tensor<B> = Tensor::arange(0f32, 6f32, dev)?.reshape((1, 1, 2, 3))?;
     let upsampled = t.upsample_nearest2d(4, 6)?.i(0)?.i(0)?;
     assert_eq!(
         t.i(0)?.i(0)?.to_vec2::<f32>()?,

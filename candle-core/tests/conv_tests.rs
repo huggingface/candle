@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle_core::{test_device, test_utils, Device, IndexOp, Tensor};
+use candle_core::{backend::BackendStorage, test_device, test_utils, IndexOp, Tensor};
 
 /* This test is based on the following script.
 import torch
@@ -22,8 +22,8 @@ res = torch.nn.functional.conv_transpose1d(t, w_t, groups=2)
 print(res.shape)
 print(res)
 */
-fn conv1d(dev: &Device) -> Result<()> {
-    let t = Tensor::new(
+fn conv1d<B: BackendStorage>(dev: &B::Device) -> Result<()> {
+    let t: Tensor<B> = Tensor::new(
         &[
             0.4056f32, -0.8689, -0.0773, -1.5630, 1.2279, -0.9287, -1.7030, 0.1370, 0.1866, 0.4145,
             1.8025, -0.1536, 2.2013, -0.6836, 0.2477, 1.3127, -0.6957, 0.3278, -1.0124, 0.5599,
@@ -95,9 +95,10 @@ fn conv1d(dev: &Device) -> Result<()> {
     Ok(())
 }
 
-fn conv1d_small(dev: &Device) -> Result<()> {
-    let t = Tensor::new(&[0.4056f32, -0.8689, -0.0773, -1.5630], dev)?.reshape((1, 1, 4))?;
-    let w = Tensor::new(&[1f32, 0., 0.], dev)?.reshape((1, 1, 3))?;
+fn conv1d_small<B: BackendStorage>(dev: &B::Device) -> Result<()> {
+    let t: Tensor<B> =
+        Tensor::new(&[0.4056f32, -0.8689, -0.0773, -1.5630], dev)?.reshape((1, 1, 4))?;
+    let w: Tensor<B> = Tensor::new(&[1f32, 0., 0.], dev)?.reshape((1, 1, 3))?;
     let res = t.conv1d(&w, 0, 1, 1, 1)?;
     assert_eq!(res.dims(), [1, 1, 2]);
     assert_eq!(
@@ -137,8 +138,8 @@ res = torch.nn.functional.conv_transpose2d(t, w_t, dilation=2)
 print(res.shape)
 print(res)
 */
-fn conv2d(dev: &Device) -> Result<()> {
-    let t = Tensor::new(
+fn conv2d<B: BackendStorage>(dev: &B::Device) -> Result<()> {
+    let t: Tensor<B> = Tensor::new(
         &[
             0.4056f32, -0.8689, -0.0773, -1.5630, -2.8012, -1.5059, 0.3972, 1.0852, 0.4997, 3.0616,
             1.6541, 0.0964, -0.8338, -1.6523, -0.8323, -0.1699, 0.0823, 0.3526, 0.6843, 0.2395,
@@ -284,8 +285,8 @@ res = torch.nn.functional.conv_transpose2d(t_t, w)
 print(res.shape)
 print(res.flatten())
 */
-fn conv2d_small(dev: &Device) -> Result<()> {
-    let t = Tensor::new(
+fn conv2d_small<B: BackendStorage>(dev: &B::Device) -> Result<()> {
+    let t: Tensor<B> = Tensor::new(
         &[
             0.4056f32, -0.8689, 0.6843, 0.2395, 1.2279, -0.9287, -1.7030, 0.1370, 0.1866, 0.4145,
             -0.6266, 0.3529, 2.2013, -0.6836, 0.2477, 1.3127, -0.6957, 0.3278,
@@ -333,8 +334,8 @@ fn conv2d_small(dev: &Device) -> Result<()> {
     Ok(())
 }
 
-fn conv2d_smaller(dev: &Device) -> Result<()> {
-    let t = Tensor::new(
+fn conv2d_smaller<B: BackendStorage>(dev: &B::Device) -> Result<()> {
+    let t: Tensor<B> = Tensor::new(
         &[
             0.4056f32, -0.8689, 0.6843, 0.2395, 1.2279, -0.9287, -1.7030, 0.1370, 0.1866,
         ],
@@ -363,8 +364,8 @@ print(w.flatten())
 res = torch.nn.functional.conv2d(t, w)
 print(res.flatten())
 */
-fn conv2d_non_square(dev: &Device) -> Result<()> {
-    let t = Tensor::new(
+fn conv2d_non_square<B: BackendStorage>(dev: &B::Device) -> Result<()> {
+    let t: Tensor<B> = Tensor::new(
         &[
             0.4056f32, -0.8689, -0.0773, -1.5630, -2.8012, -1.5059, 0.3972, 1.0852, 0.4997, 3.0616,
             1.6541, 0.0964, -0.8338, -1.6523, -0.8323, -0.1699,
@@ -413,10 +414,10 @@ print(t.grad[0])
 print(w.grad.shape)
 print(w.grad[0])
 */
-fn conv2d_grad(dev: &Device) -> Result<()> {
+fn conv2d_grad<B: BackendStorage>(dev: &B::Device) -> Result<()> {
     // conv-transposes are not implemented for metal
     use candle_core::Var;
-    let t = Var::from_slice(
+    let t: Var<B> = Var::from_slice(
         &[
             0.4056f32, -0.8689, -0.0773, -1.5630, -2.8012, -1.5059, 0.3972, 1.0852, 0.4997, 3.0616,
             1.6541, 0.0964, -0.8338, -1.6523, -0.8323, -0.1699, 0.0823, 0.3526, 0.6843, 0.2395,
@@ -648,7 +649,7 @@ fn conv2d_grad(dev: &Device) -> Result<()> {
     let dilation = 3;
     let stride = 3;
 
-    let t = Var::from_slice(
+    let t: Var<B> = Var::from_slice(
         &[
             0.4056_f32, -0.8689, -0.0773, -1.5630, -2.8012, -1.5059, 0.3972, 1.0852, 0.4997,
             3.0616, 1.6541, 0.0964, -0.8338, -1.6523, -0.8323, -0.1699, 0.0823, 0.3526, 0.6843,
@@ -671,7 +672,7 @@ fn conv2d_grad(dev: &Device) -> Result<()> {
     )?;
 
     #[rustfmt::skip]
-    let w = Var::from_slice(
+    let w: Var<B> = Var::from_slice(
         &[
             -1.1744_f32, 0.3266, 2.5893, 1.0142, 0.1763, 0.7752, 0.6604, 0.2029, -0.2145, 0.7234,
             -0.3441, -1.5400, -0.6333, 0.6613, 0.2083, 0.6230, -1.7002, 0.3393, 0.4049, 1.0762,
