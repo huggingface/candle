@@ -7,8 +7,10 @@ impl<B: BackendStorage> Tensor<B> {
     /// Intended to be use by the trait `.i()`
     ///
     /// ```
-    /// # use candle_core::{Tensor, DType, Device, IndexOp};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, DType, IndexOp};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
     ///
     /// let c = a.i(0..1)?;
     /// assert_eq!(c.shape().dims(), &[1, 3]);
@@ -142,12 +144,14 @@ where
     T: Into<TensorIndexer<B>>,
 {
     ///```rust
-    /// use candle_core::{Tensor, DType, Device, IndexOp};
+    /// use candle_core::{CpuStorage, CpuDevice, DType, IndexOp};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
     /// let a = Tensor::new(&[
     ///     [0., 1.],
     ///     [2., 3.],
     ///     [4., 5.]
-    /// ], &Device::Cpu)?;
+    /// ], &CpuDevice)?;
     ///
     /// let b = a.i(0)?;
     /// assert_eq!(b.shape().dims(), &[2]);
@@ -178,12 +182,14 @@ where
     T: Into<TensorIndexer<B>>,
 {
     ///```rust
-    /// use candle_core::{Tensor, DType, Device, IndexOp};
+    /// use candle_core::{CpuStorage, CpuDevice, DType, IndexOp};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
     /// let a = Tensor::new(&[
     ///     [0f32, 1.],
     ///     [2.  , 3.],
     ///     [4.  , 5.]
-    /// ], &Device::Cpu)?;
+    /// ], &CpuDevice)?;
     ///
     /// let b = a.i((0,))?;
     /// assert_eq!(b.shape().dims(), &[2]);
@@ -215,8 +221,10 @@ where
     U: Into<TensorIndexer<B>>,
 {
     ///```rust
-    /// use candle_core::{Tensor, DType, Device, IndexOp};
-    /// let a = Tensor::new(&[[0f32, 1., 2.], [3., 4., 5.], [6., 7., 8.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, DType, IndexOp};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::new(&[[0f32, 1., 2.], [3., 4., 5.], [6., 7., 8.]], &CpuDevice)?;
     ///
     /// let b = a.i((1, 0))?;
     /// assert_eq!(b.to_vec0::<f32>()?, 3.);

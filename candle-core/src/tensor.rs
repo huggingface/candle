@@ -57,10 +57,10 @@ impl<B: BackendStorage> AsRef<Tensor<B>> for Tensor<B> {
 /// The core struct for manipulating tensors.
 ///
 /// ```rust
-/// use candle_core::{Tensor, DType, Device};
-///
-/// let a = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((2, 3))?;
-/// let b = Tensor::arange(0f32, 12f32, &Device::Cpu)?.reshape((3, 4))?;
+/// use candle_core::{CpuStorage, cpu_backend::CpuDevice, DType, Device};
+/// type Tensor = candle_core::Tensor<CpuStorage>;
+/// let a = Tensor::arange(0f32, 6f32, &CpuDevice)?.reshape((2, 3))?;
+/// let b = Tensor::arange(0f32, 12f32, &CpuDevice)?.reshape((3, 4))?;
 ///
 /// let c = a.matmul(&b)?;
 /// # Ok::<(), candle_core::Error>(())
@@ -296,9 +296,11 @@ where
     /// Creates a new tensor filled with ones.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, DType, Device};
-    /// let a = Tensor::ones((2, 3), DType::F32, &Device::Cpu)?;
-    /// let b = Tensor::from_slice(&[1.0f32, 1.0, 1.0, 1.0, 1.0, 1.0], (2, 3), &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, DType};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::ones((2, 3), DType::F32, &CpuDevice)?;
+    /// let b = Tensor::from_slice(&[1.0f32, 1.0, 1.0, 1.0, 1.0, 1.0], (2, 3), &CpuDevice)?;
     /// // a == b
     /// # Ok::<(), candle_core::Error>(())
     /// ```
@@ -321,8 +323,10 @@ where
     /// Creates a new tensor filled with ones with same shape, dtype, and device as the other tensor.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, DType, Device};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, DType};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
     /// let b = a.ones_like()?;
     /// // b == a + 1
     /// # Ok::<(), candle_core::Error>(())
@@ -348,10 +352,13 @@ where
     /// Creates a new tensor filled with zeros.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, DType, Device};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
-    /// let b = Tensor::from_slice(&[0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0], (2, 3), &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, DType};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
+    /// let b = Tensor::from_slice(&[0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0], (2, 3), &CpuDevice)?;
     /// // a == b
+    ///
     /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn zeros<S: Into<Shape>>(shape: S, dtype: DType, device: &B::Device) -> Result<Self> {
@@ -362,8 +369,10 @@ where
     /// tensor.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, DType, Device};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, DType};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
     /// let b = a.zeros_like()?;
     /// // b is on CPU f32.
     /// # Ok::<(), candle_core::Error>(())
@@ -486,8 +495,10 @@ where
 
     /// Returns a new tensor with all the elements having the same specified value.
     ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::full(3.5, (2, 4), &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::full(3.5, (2, 4), &CpuDevice)?;
     ///
     /// assert_eq!(a.to_vec2::<f64>()?, &[
     ///     [3.5, 3.5, 3.5, 3.5],
@@ -509,8 +520,10 @@ where
 
     /// Creates a new 1D tensor from an iterator.
     ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::from_iter( [1.0, 2.0, 3.0, 4.0].into_iter(), &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::from_iter( [1.0, 2.0, 3.0, 4.0].into_iter(), &CpuDevice)?;
     ///
     /// assert_eq!(a.to_vec1::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
     /// # Ok::<(), candle_core::Error>(())
@@ -527,8 +540,10 @@ where
     /// Creates a new 1D tensor with values from the interval `[start, end)` taken with a common
     /// difference `1` from `start`.
     ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::arange(2., 5., &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::arange(2., 5., &CpuDevice)?;
     ///
     /// assert_eq!(a.to_vec1::<f64>()?, &[2., 3., 4.]);
     /// # Ok::<(), candle_core::Error>(())
@@ -540,8 +555,10 @@ where
     /// Creates a new 1D tensor with values from the interval `[start, end)` taken with a common
     /// difference `step` from `start`.
     ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::arange_step(2.0, 4.0, 0.5, &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::arange_step(2.0, 4.0, 0.5, &CpuDevice)?;
     ///
     /// assert_eq!(a.to_vec1::<f64>()?, &[2.0, 2.5, 3.0, 3.5]);
     /// # Ok::<(), candle_core::Error>(())
@@ -588,8 +605,10 @@ where
     /// in this vector must be the same as the number of elements defined by the shape.
     /// If the device is cpu, no data copy is made.
     ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::from_vec(vec!{1., 2., 3., 4., 5., 6.}, (2, 3), &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::from_vec(vec!{1., 2., 3., 4., 5., 6.}, (2, 3), &CpuDevice)?;
     ///
     /// assert_eq!(a.to_vec2::<f64>()?, &[
     ///     [1., 2., 3.],
@@ -608,9 +627,11 @@ where
     /// Creates a new tensor initialized with values from the input slice. The number of elements
     /// in this vector must be the same as the number of elements defined by the shape.
     ///```rust
-    /// use candle_core::{Tensor, Device};
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
     /// let values = vec![1., 2., 3., 4., 5., 6., 7., 8.];
-    /// let a = Tensor::from_slice(&values[1..7], (2, 3), &Device::Cpu)?;
+    /// let a = Tensor::from_slice(&values[1..7], (2, 3), &CpuDevice)?;
     ///
     /// assert_eq!(a.to_vec2::<f64>()?, &[
     ///     [2., 3., 4.],
@@ -755,9 +776,11 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device, Shape};
-    /// let x = Tensor::new(&[1f32, 2., 3.], &Device::Cpu)?;
-    /// let y = Tensor::new(&[4f32, 5., 6.], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, Shape};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let x = Tensor::new(&[1f32, 2., 3.], &CpuDevice)?;
+    /// let y = Tensor::new(&[4f32, 5., 6.], &CpuDevice)?;
     ///
     /// let grids_xy = Tensor::meshgrid(&[&x, &y], true)?;
     ///
@@ -814,8 +837,10 @@ where
     /// be performed.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &CpuDevice)?;
     /// let a = a.affine(4., -2.)?;
     /// assert_eq!(a.to_vec2::<f32>()?, &[[-2.0, 2.0], [6.0, 10.0]]);
     /// # Ok::<(), candle_core::Error>(())
@@ -891,12 +916,14 @@ where
     /// Returns a new tensor that is a narrowed version of the input, the dimension `dim`
     /// ranges from `start` to `start + len`.
     /// ```
-    /// use candle_core::{Tensor, Device};
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
     /// let a = Tensor::new(&[
     ///     [0f32, 1., 2.],
     ///     [3.  , 4., 5.],
     ///     [6.  , 7., 8.]
-    /// ], &Device::Cpu)?;
+    /// ], &CpuDevice)?;
     ///
     /// let b = a.narrow(0, 1, 2)?;
     /// assert_eq!(b.shape().dims(), &[2, 3]);
@@ -1016,11 +1043,13 @@ where
     /// Elements that are shifted beyond the last position are re-introduced at the first position.
     ///
     /// ```rust
-    /// # use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let tensor = tensor.roll(1, 0)?;
     /// assert_eq!(tensor.to_vec2::<f32>()?, &[[4., 5.], [0., 1.], [2., 3.]]);
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let tensor = tensor.roll(-1, 0)?;
     /// assert_eq!(tensor.to_vec2::<f32>()?, &[[2., 3.], [4., 5.], [0., 1.]]);
     /// # Ok::<(), candle_core::Error>(())
@@ -1048,8 +1077,10 @@ where
     /// that the number of elements for each dimension index in `sum_dims` is 1.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &CpuDevice)?;
     /// let s = a.sum_keepdim(0)?;
     /// assert_eq!(s.to_vec2::<f32>()?, &[[2., 4.]]);
     /// let s = a.sum_keepdim(1)?;
@@ -1076,8 +1107,10 @@ where
     /// that the number of elements for each dimension index in `mean_dims` is 1.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &CpuDevice)?;
     /// let s = a.mean_keepdim(0)?;
     /// assert_eq!(s.to_vec2::<f32>()?, &[[1., 2.]]);
     /// let s = a.mean_keepdim(1)?;
@@ -1345,9 +1378,11 @@ where
     ///
     /// # Example (vectors)
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let t1 = Tensor::new(&[1.0, 2.0, 3.0], &Device::Cpu)?;
-    /// let t2 = Tensor::new(&[4.0, 5.0, 6.0], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let t1 = Tensor::new(&[1.0, 2.0, 3.0], &CpuDevice)?;
+    /// let t2 = Tensor::new(&[4.0, 5.0, 6.0], &CpuDevice)?;
     /// let res = t1.dot(&t2)?;
     /// assert_eq!(res.to_scalar::<f64>()?, 32.);
     /// # Ok::<(), candle_core::Error>(())
@@ -1370,8 +1405,10 @@ where
     ///
     /// # Example
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let t = Tensor::new(&[[3., 4.], [0., 0.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let t = Tensor::new(&[[3., 4.], [0., 0.]], &CpuDevice)?;
     /// let norm = t.norm()?;
     /// assert_eq!(norm.to_scalar::<f64>()?, 5.);
     /// # Ok::<(), candle_core::Error>(())
@@ -1391,9 +1428,11 @@ where
     ///
     /// # Example
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let mat = Tensor::new(&[[1., 2., 3.], [4., 5., 6.]], &Device::Cpu)?;
-    /// let vec = Tensor::new(&[1., 1., 1.], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let mat = Tensor::new(&[[1., 2., 3.], [4., 5., 6.]], &CpuDevice)?;
+    /// let vec = Tensor::new(&[1., 1., 1.], &CpuDevice)?;
     /// let res = mat.mv(&vec)?;
     /// assert_eq!(res.to_vec1::<f64>()?, [6., 15.]);
     /// # Ok::<(), candle_core::Error>(())
@@ -1518,9 +1557,11 @@ where
     /// vocabulary size, and `h` the hidden size.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let values = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
-    /// let ids = Tensor::new(&[2u32, 1u32, 2u32], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let values = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
+    /// let ids = Tensor::new(&[2u32, 1u32, 2u32], &CpuDevice)?;
     /// let emb = values.embedding(&ids)?;
     /// assert_eq!(emb.to_vec2::<f32>()?, &[[4., 5.], [2., 3.], [4., 5.]]);
     /// # Ok::<(), candle_core::Error>(())
@@ -2006,8 +2047,10 @@ where
     /// scalar with zero dimensions.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let tensor = tensor.max_all()?;
     /// assert_eq!(tensor.to_scalar::<f32>()?, 5.);
     /// # Ok::<(), candle_core::Error>(())
@@ -2024,8 +2067,10 @@ where
     /// scalar with zero dimensions.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let tensor = tensor.min_all()?;
     /// assert_eq!(tensor.to_scalar::<f32>()?, 0.);
     /// # Ok::<(), candle_core::Error>(())
@@ -2042,8 +2087,10 @@ where
     /// scalar with zero dimensions.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let tensor = tensor.sum_all()?;
     /// assert_eq!(tensor.to_scalar::<f32>()?, 15.);
     /// # Ok::<(), candle_core::Error>(())
@@ -2107,8 +2154,10 @@ where
     /// Flattens the input tensor by reshaping it into a one dimension tensor.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let tensor = tensor.flatten_all()?;
     /// assert_eq!(tensor.to_vec1::<f32>()?, &[0., 1., 2., 3., 4., 5.]);
     /// # Ok::<(), candle_core::Error>(())
@@ -2120,8 +2169,10 @@ where
     /// Returns the sub-tensor fixing the index at `i` on the first dimension.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let t = tensor.get(0)?;
     /// assert_eq!(t.to_vec1::<f32>()?, &[0., 1.]);
     /// let t = tensor.get(1)?;
@@ -2140,8 +2191,10 @@ where
     /// Returns the sub-tensor fixing the index at `index` on the dimension `dim`.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let t = tensor.get_on_dim(1, 0)?;
     /// assert_eq!(t.to_vec1::<f32>()?, &[0., 2., 4.]);
     /// let t = tensor.get_on_dim(1, 1)?;
@@ -2159,8 +2212,10 @@ where
     /// input are swapped.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let tensor = tensor.t()?;
     /// assert_eq!(tensor.to_vec2::<f32>()?, &[[0.0, 2.0, 4.0], [1.0, 3.0, 5.0]]);
     /// # Ok::<(), candle_core::Error>(())
@@ -2203,8 +2258,10 @@ where
     /// dims must be a permutation, i.e. include each dimension index exactly once.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::arange(0u32, 120u32, &Device::Cpu)?.reshape((2, 3, 4, 5))?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::arange(0u32, 120u32, &CpuDevice)?.reshape((2, 3, 4, 5))?;
     /// assert_eq!(tensor.dims(), &[2, 3, 4, 5]);
     /// let tensor = tensor.permute((2, 3, 1, 0))?;
     /// assert_eq!(tensor.dims(), &[4, 5, 3, 2]);
@@ -2327,8 +2384,10 @@ where
     /// Casts the input tensor to the target `dtype`.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(3.14159265358979f64, &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(3.14159265358979f64, &CpuDevice)?;
     /// assert_eq!(tensor.to_scalar::<f64>()?, 3.14159265358979);
     /// let tensor = tensor.to_dtype(candle_core::DType::F32)?;
     /// assert_eq!(tensor.to_scalar::<f32>()?, 3.1415927);
@@ -2390,8 +2449,10 @@ where
     /// as to match the number of elements in the tensor.
     ///
     /// ```rust
-    /// # use candle_core::{Tensor, DType, Device, D};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, DType, D};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
     ///
     /// let c = a.reshape((1, 6))?;
     /// assert_eq!(c.shape().dims(), &[1, 6]);
@@ -2437,8 +2498,10 @@ where
     /// Creates a new tensor with the specified dimension removed if its size was one.
     ///
     /// ```rust
-    /// # use candle_core::{Tensor, DType, Device, D};
-    /// let a = Tensor::zeros((2, 3, 1), DType::F32, &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, DType, D};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3, 1), DType::F32, &CpuDevice)?;
     ///
     /// let c = a.squeeze(2)?;
     /// assert_eq!(c.shape().dims(), &[2, 3]);
@@ -2475,8 +2538,10 @@ where
     /// Creates a new tensor with a dimension of size one inserted at the specified position.
     ///
     /// ```rust
-    /// # use candle_core::{Tensor, DType, Device, D};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// # use candle_core::{CpuStorage, CpuDevice, DType, D};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
     ///
     /// let c = a.unsqueeze(0)?;
     /// assert_eq!(c.shape().dims(), &[1, 2, 3]);
@@ -2512,9 +2577,11 @@ where
     /// All tensors must have the same rank, and the output has one additional rank
     ///
     /// ```rust
-    /// # use candle_core::{Tensor, DType, Device};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
-    /// let b = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// # use candle_core::{CpuStorage, CpuDevice, DType};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
+    /// let b = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
     ///
     /// let c = Tensor::stack(&[&a, &b], 0)?;
     /// assert_eq!(c.shape().dims(), &[2, 2, 3]);
@@ -2790,8 +2857,10 @@ where
     /// This function makes a copy of the tensor’s data.
     ///
     /// ```rust
-    /// # use candle_core::{Tensor, Device};
-    /// let t = Tensor::arange(0., 6., &Device::Cpu)?.reshape((2, 3))?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let t = Tensor::arange(0., 6., &CpuDevice)?.reshape((2, 3))?;
     /// assert_eq!(t.to_vec2::<f64>()?, &[[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]);
     /// let t_flipped = t.flip(&[0])?;
     /// assert_eq!(t_flipped.to_vec2::<f64>()?, &[[3.0, 4.0, 5.0], [0.0, 1.0, 2.0]]);

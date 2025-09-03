@@ -1,12 +1,14 @@
 //! ML framework for Rust
 //!
 //! ```rust
-//! use candle_core::{Tensor, DType, Device};
+//! use candle_core::{CpuStorage, CpuDevice, DType};
+//! type Tensor = candle_core::Tensor<CpuStorage>;
+//!
 //! # use candle_core::Error;
 //! # fn main() -> Result<(), Error>{
 //!
-//! let a = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((2, 3))?;
-//! let b = Tensor::arange(0f32, 12f32, &Device::Cpu)?.reshape((3, 4))?;
+//! let a = Tensor::arange(0f32, 6f32, &CpuDevice)?.reshape((2, 3))?;
+//! let b = Tensor::arange(0f32, 12f32, &CpuDevice)?.reshape((3, 4))?;
 //! let c = a.matmul(&b)?;
 //!
 //! # Ok(())}
