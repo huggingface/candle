@@ -151,20 +151,6 @@ impl QuantizedBackend for QMetalStorage {
 }
 
 impl QMetalStorage {
-    fn zeros(device: &MetalDevice, elem_count: usize, dtype: GgmlDType) -> Result<Self> {
-        let size = elem_count * dtype.type_size() / dtype.block_size();
-        let buffer = device.allocate_zeros(size)?;
-        Ok(Self {
-            buffer,
-            device: device.clone(),
-            dtype,
-        })
-    }
-
-    fn buffer(&self) -> &Buffer {
-        &self.buffer
-    }
-
     fn fwd_mv(
         &self,
         self_shape: &Shape,
@@ -360,13 +346,6 @@ fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     assert!(!ptr.is_null());
     let slice = unsafe { std::slice::from_raw_parts(ptr, n) };
     slice.to_vec()
-}
-
-fn read_to_cow<T: Clone>(buffer: &Buffer, n: usize) -> Cow<'_, [T]> {
-    let ptr = buffer.contents() as *const T;
-    assert!(!ptr.is_null());
-    let slice = unsafe { std::slice::from_raw_parts(ptr, n) };
-    Cow::from(slice)
 }
 
 impl From<GgmlDType> for candle_metal_kernels::GgmlDType {

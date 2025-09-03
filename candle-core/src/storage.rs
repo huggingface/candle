@@ -61,18 +61,6 @@ impl Storage {
             Ok(())
         }
     }
-
-    pub(crate) fn scatter_add(
-        &mut self,
-        l: &Layout,
-        indexes: &Self,
-        indexes_l: &Layout,
-        source: &Self,
-        source_l: &Layout,
-        d: usize,
-    ) -> Result<()> {
-        self.scatter_add_set(l, indexes, indexes_l, source, source_l, d)
-    }
 }
 
 impl BackendStorage for Storage {
