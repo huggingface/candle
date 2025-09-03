@@ -2203,12 +2203,12 @@ impl BackendDevice<MetalStorage> for MetalDevice {
         Ok(storage)
     }
 
-    fn rand_uniform(
+    fn rand_uniform<T: crate::FloatDType>(
         &self,
         shape: &Shape,
         dtype: DType,
-        min: f64,
-        max: f64,
+        min: T,
+        max: T,
     ) -> Result<MetalStorage> {
         let name = match dtype {
             DType::F32 => "rand_uniform_f32",
@@ -2223,8 +2223,8 @@ impl BackendDevice<MetalStorage> for MetalDevice {
             &command_buffer,
             &self.kernels,
             name,
-            min as f32,
-            max as f32,
+            min.to_f64() as f32,
+            max.to_f64() as f32,
             shape.elem_count(),
             &self.seed.lock().unwrap(),
             &buffer,
@@ -2239,12 +2239,12 @@ impl BackendDevice<MetalStorage> for MetalDevice {
         ))
     }
 
-    fn rand_normal(
+    fn rand_normal<T: crate::FloatDType>(
         &self,
         shape: &Shape,
         dtype: DType,
-        mean: f64,
-        stddev: f64,
+        mean: T,
+        stddev: T,
     ) -> Result<MetalStorage> {
         let name = match dtype {
             DType::F32 => "rand_normal_f32",
@@ -2259,8 +2259,8 @@ impl BackendDevice<MetalStorage> for MetalDevice {
             &command_buffer,
             &self.kernels,
             name,
-            mean as f32,
-            stddev as f32,
+            mean.to_f64() as f32,
+            stddev.to_f64() as f32,
             shape.elem_count(),
             &self.seed.lock().unwrap(),
             &buffer,

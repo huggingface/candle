@@ -4,7 +4,7 @@ use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 #[cfg(feature = "cuda")]
 use crate::CudaDevice;
 use crate::{CpuStorage, DType, Layout, Result, Shape};
-//#[cfg(feature = "metal")]
+#[cfg(feature = "metal")]
 use crate::{MetalDevice, MetalError};
 
 pub trait BackendStorage: Sized + Clone {
@@ -203,9 +203,9 @@ pub trait BackendDevice<B: BackendStorage>: Sized + std::fmt::Debug + Clone {
 
     fn storage_owned<S: crate::WithDType>(&self, data: Vec<S>) -> Result<B>;
 
-    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<B>;
+    fn rand_uniform<T: crate::FloatDType>(&self, _: &Shape, _: DType, _: T, _: T) -> Result<B>;
 
-    fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<B>;
+    fn rand_normal<T: crate::FloatDType>(&self, _: &Shape, _: DType, _: T, _: T) -> Result<B>;
 
     fn set_seed(&self, _: u64) -> Result<()>;
 

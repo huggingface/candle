@@ -380,7 +380,7 @@ where
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_uniform(&s, DType::F64, lo.to_f64(), up.to_f64())?;
+        let storage = device.rand_uniform(&s, T::DTYPE, lo, up)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }
@@ -421,7 +421,7 @@ where
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_normal(&s, DType::F64, mean.to_f64(), std.to_f64())?;
+        let storage = device.rand_normal(&s, T::DTYPE, mean, std)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }

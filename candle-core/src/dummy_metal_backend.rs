@@ -313,11 +313,23 @@ impl crate::backend::BackendDevice<MetalStorage> for MetalDevice {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<MetalStorage> {
+    fn rand_uniform<T: crate::FloatDType>(
+        &self,
+        _: &Shape,
+        _: DType,
+        _: T,
+        _: T,
+    ) -> Result<MetalStorage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<MetalStorage> {
+    fn rand_normal<T: crate::FloatDType>(
+        &self,
+        _: &Shape,
+        _: DType,
+        _: T,
+        _: T,
+    ) -> Result<MetalStorage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 

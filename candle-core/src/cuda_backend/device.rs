@@ -342,7 +342,13 @@ impl BackendDevice<CudaStorage> for CudaDevice {
         })
     }
 
-    fn rand_uniform(&self, shape: &Shape, dtype: DType, lo: f64, up: f64) -> Result<CudaStorage> {
+    fn rand_uniform<T: crate::FloatDType>(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        lo: T,
+        up: T,
+    ) -> Result<CudaStorage> {
         let elem_count = shape.elem_count();
         let curand = self.curand.lock().unwrap();
         let slice = match dtype {

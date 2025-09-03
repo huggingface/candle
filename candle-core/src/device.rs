@@ -301,24 +301,6 @@ impl Device {
             Ok(Self::Cpu)
         }
     }
-
-    pub(crate) fn rand_uniform_impl<T: crate::FloatDType>(
-        &self,
-        lo: T,
-        up: T,
-        shape: &Shape,
-    ) -> Result<Storage> {
-        self.rand_uniform(shape, T::DTYPE, lo.to_f64(), up.to_f64())
-    }
-
-    pub(crate) fn rand_normal_impl<T: crate::FloatDType>(
-        &self,
-        mean: T,
-        std: T,
-        shape: &Shape,
-    ) -> Result<Storage> {
-        self.rand_normal(shape, T::DTYPE, mean.to_f64(), std.to_f64())
-    }
 }
 
 impl BackendDevice<Storage> for Device {
@@ -452,7 +434,13 @@ impl BackendDevice<Storage> for Device {
         }
     }
 
-    fn rand_uniform(&self, shape: &Shape, dtype: DType, lo: f64, up: f64) -> Result<Storage> {
+    fn rand_uniform<T: crate::FloatDType>(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        lo: T,
+        up: T,
+    ) -> Result<Storage> {
         match self {
             Device::Cpu => {
                 let storage = CpuDevice.rand_uniform(shape, dtype, lo, up)?;
@@ -469,13 +457,24 @@ impl BackendDevice<Storage> for Device {
                 }
             }
             Device::Metal(device) => {
-                let storage = device.rand_uniform(shape, dtype, lo, up)?;
-                Ok(Storage::Metal(storage))
+                if dtype == DType::F64 {
+                    let storage = device.rand_uniform(shape, DType::F32, lo, up)?;
+                    Ok(Storage::Metal(storage))
+                } else {
+                    let storage = device.rand_uniform(shape, dtype, lo, up)?;
+                    Ok(Storage::Metal(storage))
+                }
             }
         }
     }
 
-    fn rand_normal(&self, shape: &Shape, dtype: DType, mean: f64, std: f64) -> Result<Storage> {
+    fn rand_normal<T: crate::FloatDType>(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        mean: T,
+        std: T,
+    ) -> Result<Storage> {
         match self {
             Device::Cpu => {
                 let storage = CpuDevice.rand_normal(shape, dtype, mean, std)?;
