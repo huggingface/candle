@@ -1,4 +1,6 @@
 use crate::{BackendStorage, Result, Tensor};
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
 
 #[macro_export]
 macro_rules! test_device {
@@ -104,4 +106,38 @@ pub fn to_vec3_round<B: BackendStorage>(t: &Tensor<B>, digits: i32) -> Result<Ve
         })
         .collect();
     Ok(t)
+}
+
+pub struct ExpectedResults<T: crate::NdArray> {
+    inner: HashMap<TypeId, T>,
+}
+
+impl<T: crate::NdArray> ExpectedResults<T> {
+    pub fn new() -> Self {
+        Self {
+            inner: HashMap::new(),
+        }
+    }
+
+    pub fn get<U: Any>(&self) -> Option<&T> {
+        println!(
+            "TypeId::of::<{}>(): {:?}",
+            std::any::type_name::<U>(),
+            TypeId::of::<U>()
+        );
+        self.inner.get(&TypeId::of::<U>())
+    }
+}
+impl<T: Into<TypeId>, U: crate::NdArray> FromIterator<(T, U)> for ExpectedResults<U> {
+    fn from_iter<I: IntoIterator<Item = (T, U)>>(iter: I) -> Self {
+        ExpectedResults {
+            inner: HashMap::from_iter(iter.into_iter().map(|(t, u)| (t.into(), u))),
+        }
+    }
+}
+
+impl<T: crate::NdArray, const N: usize> From<[(TypeId, T); N]> for ExpectedResults<T> {
+    fn from(arr: [(TypeId, T); N]) -> Self {
+        ExpectedResults::from_iter(arr)
+    }
 }

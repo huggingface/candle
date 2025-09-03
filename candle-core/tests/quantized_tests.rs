@@ -3,13 +3,13 @@ use candle_core::{
     bail,
     cpu_backend::CpuDevice,
     quantized::{self, GgmlDType, QTensor, QuantizedBackend, QuantizedDevice},
-    tensor::{IsSame, True},
-    test_device, test_quantized_device,
-    test_utils::to_vec2_round,
-    CpuStorage, DType, Device, IndexOp, Module, Result, Tensor,
+    test_quantized_device,
+    test_utils::{to_vec2_round, ExpectedResults},
+    CpuStorage, CudaStorage, DType, IndexOp, MetalStorage, Module, Result, Tensor,
 };
 use quantized::{k_quants, GgmlType};
 use rand::prelude::*;
+use std::any::TypeId;
 
 const GGML_TEST_SIZE: usize = 32 * 128;
 
@@ -92,7 +92,10 @@ fn test_matmul_mm() -> Result<()> {
     Ok(())
 }
 
-fn quantized_matmul<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
+fn quantized_matmul<
+    B: BackendStorage + 'static,
+    QB: QuantizedBackend<Storage = B, Device = B::Device>,
+>(
     device: &B::Device,
 ) -> Result<()>
 where
@@ -128,37 +131,45 @@ where
     let qtensor: QTensor<QB> = quantized::QTensor::quantize(&tensor_rhs.t()?, GgmlDType::Q4_0)?;
     let matmul = quantized::QMatMul::<B, QB>::from_qtensor(qtensor)?;
     let res = matmul.forward(&lhs)?;
-    assert_eq!(
-        to_vec2_round(&res, 0)?,
-        &[
-            [84946.0, 214126.0, 344757.0, 473798.0],
-            [213458.0, 604350.0, 1000469.0, 1387990.0],
-            [341970.0, 994574.0, 1656181.0, 2302182.0]
-        ]
-    );
-    /*
-        Device::Cuda(_) => assert_eq!(
-            to_vec2_round(&res, 0)?,
-            &[
-                [84866.0, 214045.0, 344676.0, 473707.0],
-                [213425.0, 604313.0, 1000431.0, 1387960.0],
-                [342030.0, 994630.0, 1656248.0, 2302250.0]
-            ]
+
+    let expected_results = ExpectedResults::from_iter([
+        (
+            TypeId::of::<CpuStorage>(),
+            vec![
+                vec![85120.0, 214562.0, 345455.0, 474748.0],
+                vec![213475.0, 604465.0, 1000686.0, 1388317.0],
+                vec![341876.0, 994283.0, 1655709.0, 2301518.0],
+            ],
         ),
-        Device::Cpu => assert_eq!(
-            to_vec2_round(&res, 0)?,
-            &[
-                [85120.0, 214562.0, 345455.0, 474748.0],
-                [213475.0, 604465.0, 1000686.0, 1388317.0],
-                [341876.0, 994283.0, 1655709.0, 2301518.0]
-            ]
+        (
+            TypeId::of::<CudaStorage>(),
+            vec![
+                vec![84866.0, 214045.0, 344676.0, 473707.0],
+                vec![213425.0, 604313.0, 1000431.0, 1387960.0],
+                vec![342030.0, 994630.0, 1656248.0, 2302250.0],
+            ],
         ),
-    }*/
+        (
+            TypeId::of::<MetalStorage>(),
+            vec![
+                vec![84946.0, 214126.0, 344757.0, 473798.0],
+                vec![213458.0, 604350.0, 1000469.0, 1387990.0],
+                vec![341970.0, 994574.0, 1656181.0, 2302182.0],
+            ],
+        ),
+    ]);
+    let expected = expected_results.get::<B>().unwrap();
+    let actual = to_vec2_round(&res, 0)?;
+    assert_eq!(expected, &actual);
+
     test_matmul(device, (1, 3, 4, 256), GgmlDType::Q4_0)?;
     Ok(())
 }
 
-fn quantized_matmul_neg<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
+fn quantized_matmul_neg<
+    B: BackendStorage + 'static,
+    QB: QuantizedBackend<Storage = B, Device = B::Device>,
+>(
     device: &B::Device,
 ) -> Result<()>
 where
@@ -198,32 +209,38 @@ where
     let qtensor = quantized::QTensor::quantize(&tensor_rhs.t()?, GgmlDType::Q4_0)?;
     let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
     let res = matmul.forward(&lhs)?;
+
+    let expected_results = ExpectedResults::from_iter([
+        (
+            TypeId::of::<CpuStorage>(),
+            vec![
+                vec![243524.0, -19596.0, -285051.0, -549815.0],
+                vec![23777.0, 21651.0, 19398.0, 18367.0],
+                vec![-196472.0, 63012.0, 324585.0, 587902.0],
+            ],
+        ),
+        (
+            TypeId::of::<CudaStorage>(),
+            vec![
+                vec![243740.0, -19762.0, -285476.0, -550498.0],
+                vec![23774.0, 21645.0, 19395.0, 18364.0],
+                vec![-196045.0, 63030.0, 324120.0, 587079.0],
+            ],
+        ),
+        (
+            TypeId::of::<MetalStorage>(),
+            vec![
+                vec![243659.0, -19716.0, -285444.0, -550439.0],
+                vec![23779.0, 21653.0, 19404.0, 18349.0],
+                vec![-196101.0, 63021.0, 324252.0, 587137.0],
+            ],
+        ),
+    ]);
+
     assert_eq!(
-        to_vec2_round(&res, 0)?,
-        &[
-            [243659.0, -19716.0, -285444.0, -550439.0],
-            [23779.0, 21653.0, 19404.0, 18349.0],
-            [-196101.0, 63021.0, 324252.0, 587137.0]
-        ]
+        expected_results.get::<B>().unwrap(),
+        to_vec2_round(&res, 0)?.as_slice(),
     );
-    /*
-    Device::Cuda(_) => assert_eq!(
-        to_vec2_round(&res, 0)?,
-        &[
-            [243740.0, -19762.0, -285476.0, -550498.0],
-            [23774.0, 21645.0, 19395.0, 18364.0],
-            [-196045.0, 63030.0, 324120.0, 587079.0]
-        ]
-    ),
-    Device::Cpu => assert_eq!(
-        to_vec2_round(&res, 0)?,
-        &[
-            [243524.0, -19596.0, -285051.0, -549815.0],
-            [23777.0, 21651.0, 19398.0, 18367.0],
-            [-196472.0, 63012.0, 324585.0, 587902.0]
-        ]
-    ),
-    */
     let lhs2 = Tensor::stack(&[&lhs, &lhs], 0)?;
     let res2 = matmul.forward(&lhs2)?;
     let res2 = res2.i(1)?;
@@ -233,7 +250,7 @@ where
     Ok(())
 }
 
-fn qmm_batch<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
+fn qmm_batch<B: BackendStorage + 'static, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
     device: &B::Device,
 ) -> Result<()>
 where
@@ -262,12 +279,13 @@ where
     assert_eq!(mm4.shape().dims(), [12, 6]);
     let diff4 = (mm4.i(..6)? - &mm3)?.abs()?.sum_all()?.to_vec0::<f32>()?;
     //if dev.is_cuda() {
-    // We use a different kernel for sizes from 1 to 8 on cuda which explains
-    // the difference here.
-    assert!(0. < diff4 && diff4 < 1e-4);
-    //} else {
-    //    assert_eq!(diff4, 0.0)
-    //};
+    if TypeId::of::<B>() == TypeId::of::<CudaStorage>() {
+        // We use a different kernel for sizes from 1 to 8 on cuda which explains
+        // the difference here.
+        assert!(0. < diff4 && diff4 < 1e-4);
+    } else {
+        assert_eq!(diff4, 0.0)
+    };
     let diff4 = (mm4.i(6..)? - &mm4.i(..6)?)?
         .abs()?
         .sum_all()?

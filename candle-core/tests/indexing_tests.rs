@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle_core::{cpu_backend::CpuDevice, CpuStorage, Device, IndexOp, Tensor};
+use candle_core::{cpu_backend::CpuDevice, CpuStorage, IndexOp, Tensor};
 
 type CpuTensor = Tensor<CpuStorage>;
 

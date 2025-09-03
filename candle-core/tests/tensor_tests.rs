@@ -1,8 +1,7 @@
 use candle_core::{
     backend::BackendStorage, cpu_backend::CpuDevice, test_device, test_utils, CpuStorage, DType,
-    Device, IndexOp, Result, Tensor, D,
+    IndexOp, Result, Tensor, D,
 };
-use float8::F8E4M3;
 
 fn zeros<B: BackendStorage>(device: &B::Device) -> Result<()> {
     let tensor: Tensor<B> = Tensor::zeros((5, 2), DType::F32, device)?;
