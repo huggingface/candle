@@ -184,7 +184,7 @@ fn tensor_2d<B: BackendStorage>(device: &B::Device) -> Result<()> {
 fn clamp<B: BackendStorage>(device: &B::Device) -> Result<()> {
     let data = &[[3f32, 1., 4., 1., 5.], [2., 1., 7., 8., 2.]];
     let tensor: Tensor<B> = Tensor::new(data, device)?;
-    let tensor = &tensor.clamp(1.5, 6.2)?;
+    let tensor = tensor.clamp(1.5f32, 6.2f32)?;
     assert_eq!(
         tensor.to_vec2::<f32>()?,
         [[3.0, 1.5, 4.0, 1.5, 5.0], [2.0, 1.5, 6.2, 6.2, 2.0]],
