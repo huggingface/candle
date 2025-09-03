@@ -666,8 +666,8 @@ impl crate::CustomOp1<MetalStorage> for QTensor<QMetalStorage> {
 
     fn cpu_fwd(
         &self,
-        storage: &crate::CpuStorage,
-        layout: &crate::Layout,
+        _: &crate::CpuStorage,
+        _: &crate::Layout,
     ) -> Result<(crate::CpuStorage, Shape)> {
         crate::bail!("Invalid storage")
     }

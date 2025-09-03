@@ -387,6 +387,7 @@ impl<B: BackendStorage> Tensor<B> {
     }
 }
 
+#[allow(unused)]
 pub struct UgIOp1<B: BackendStorage>
 where
     B::Device: UgDevice,
