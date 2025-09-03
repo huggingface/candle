@@ -88,7 +88,7 @@ pub mod utils;
 mod variable;
 
 pub use backend::BackendStorage;
-pub use cpu_backend::{CpuStorage, CpuStorageRef};
+pub use cpu_backend::{CpuDevice, CpuStorage, CpuStorageRef};
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;
 pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3, UgIOp1};
