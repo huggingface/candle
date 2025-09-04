@@ -86,10 +86,11 @@ mod strided_index;
 pub mod tensor;
 mod tensor_cat;
 pub mod test_utils;
+pub mod util_traits;
 pub mod utils;
 mod variable;
 
-pub use backend::BackendStorage;
+pub use backend::{BackendDevice, BackendStorage};
 pub use cpu_backend::{CpuDevice, CpuStorage, CpuStorageRef};
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;
@@ -104,6 +105,7 @@ pub use storage::Storage;
 pub use streaming::{StreamTensor, StreamingBinOp, StreamingModule};
 pub use strided_index::{StridedBlocks, StridedIndex};
 pub use tensor::{Tensor, TensorId};
+pub use util_traits::{Condition, False, IsSame, True};
 pub use variable::Var;
 
 #[cfg(feature = "cuda")]
@@ -166,10 +168,4 @@ impl<M: Module<B>, B: BackendStorage> Module<B> for Option<&M> {
 /// separate the training and evaluation behaviors.
 pub trait ModuleT<B: BackendStorage> {
     fn forward_t(&self, xs: &Tensor<B>, train: bool) -> Result<Tensor<B>>;
-}
-
-impl<M: Module<B>, B: BackendStorage> ModuleT<B> for M {
-    fn forward_t(&self, xs: &Tensor<B>, _train: bool) -> Result<Tensor<B>> {
-        self.forward(xs)
-    }
 }

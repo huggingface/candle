@@ -1,13 +1,14 @@
 //! Traits to Define Backend Behavior
 //!
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
+use crate::{CpuStorage, DType, Layout, Result, Shape};
+
 #[cfg(feature = "cuda")]
 use crate::CudaDevice;
-use crate::{CpuStorage, DType, Layout, Result, Shape};
 #[cfg(feature = "metal")]
 use crate::{MetalDevice, MetalError};
 
-pub trait BackendStorage: Sized + Clone {
+pub trait BackendStorage: Sized + Clone + Send + Sync {
     type Device: BackendDevice<Self>;
 
     fn try_clone(&self, _: &Layout) -> Result<Self>;
@@ -173,7 +174,7 @@ pub trait BackendStorage: Sized + Clone {
     ) -> Result<()>;
 }
 
-pub trait BackendDevice<B: BackendStorage>: Sized + std::fmt::Debug + Clone {
+pub trait BackendDevice<B: BackendStorage>: Sized + std::fmt::Debug + Clone + Send + Sync {
     const SUPPORTS_BF16: bool = false;
 
     // TODO: Make the usize generic and part of a generic DeviceLocation.
@@ -181,7 +182,7 @@ pub trait BackendDevice<B: BackendStorage>: Sized + std::fmt::Debug + Clone {
 
     fn location(&self) -> crate::DeviceLocation;
 
-    fn same_device(&self, device: &B::Device) -> bool {
+    fn same_device(&self, device: &Self) -> bool {
         self.location() == device.location()
     }
 

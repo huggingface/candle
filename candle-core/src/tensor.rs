@@ -1,12 +1,11 @@
 //! Tensors are N-dimensional matrixes of elements using a single data type.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::cpu_backend::CpuStorage;
+use crate::convert::{TryConvertStorage, TryToDevice};
 use crate::op::{BackpropOp, BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::scalar::TensorOrScalar;
 use crate::shape::{Dim, Dims, ShapeWithOneHole};
 use crate::{bail, DType, Error, Layout, Result, Shape};
-use crate::{CudaStorage, MetalStorage};
 use std::sync::{Arc, RwLock};
 
 /// Unique identifier for tensors.
@@ -68,7 +67,10 @@ impl<B: BackendStorage> AsRef<Tensor<B>> for Tensor<B> {
 ///
 /// Tensors are reference counted with [`Arc`] so cloning them is cheap.
 #[derive(Clone)]
-pub struct Tensor<B: BackendStorage>(Arc<Tensor_<B>>);
+pub struct Tensor<B>(Arc<Tensor_<B>>)
+where
+    B: BackendStorage;
+//Self: TryToDevice<CpuStorage, B>; //+ TryToDevice<B, CpuStorage>;
 
 impl<B: BackendStorage> std::ops::Deref for Tensor<B> {
     type Target = Tensor_<B>;
@@ -119,7 +121,7 @@ macro_rules! binary_op_scalar {
                 crate::scalar::TensorScalar::Tensor(rhs) => rhs,
                 crate::scalar::TensorScalar::Scalar(rhs) => rhs
                     .to_dtype(self.dtype())?
-                    .to_device::<B>(self.device())?
+                    .try_to_device(self.device())?
                     .broadcast_as(self.shape())?,
             };
             let shape = self.same_shape_binary_op(&rhs, stringify!($fn_name))?;
@@ -179,46 +181,17 @@ pub(crate) fn from_storage<B: BackendStorage, S: Into<Shape>>(
     Tensor(Arc::new(tensor_))
 }
 
-pub trait True {}
-pub trait False {}
-
-pub struct IsSame<T, U> {
-    marker: std::marker::PhantomData<(T, U)>,
-}
-
-impl<B: BackendStorage> True for IsSame<B, B> {}
-//impl True for IsSame<CpuStorage, CpuStorage> {}
-//impl True for IsSame<CudaStorage, CudaStorage> {}
-//impl True for IsSame<MetalStorage, MetalStorage> {}
-
-pub trait TryToDevice<T: BackendStorage, U: BackendStorage>: Sized {
-    /// The type returned in the event of a conversion error.
-    type Error;
-
-    /// Performs the conversion.
-    fn try_to_device(&self, device: &U::Device) -> Result<Tensor<U>>;
-}
-
-impl<T> TryToDevice<T, T> for Tensor<T>
+impl<T, U> TryToDevice<T, U> for Tensor<T>
 where
     T: BackendStorage,
-    IsSame<T, T>: True,
+    U: BackendStorage,
+    U::Device: TryConvertStorage<T, U>,
 {
     type Error = Error;
 
-    fn try_to_device(&self, _: &T::Device) -> Result<Tensor<T>> {
-        Ok(self.clone())
-    }
-}
-
-impl TryToDevice<CudaStorage, CpuStorage> for Tensor<CudaStorage> {
-    type Error = Error;
-
-    fn try_to_device(
-        &self,
-        device: &<CpuStorage as BackendStorage>::Device,
-    ) -> Result<Tensor<CpuStorage>> {
-        let storage = self.storage().to_cpu_storage()?;
+    fn try_to_device(&self, device: &<U as BackendStorage>::Device) -> Result<Tensor<U>> {
+        let storage = self.storage().clone();
+        let storage = device.try_convert(storage)?;
         let op = BackpropOp::none();
         let tensor_ = Tensor_ {
             id: TensorId::new(),
@@ -232,33 +205,7 @@ impl TryToDevice<CudaStorage, CpuStorage> for Tensor<CudaStorage> {
         Ok(Tensor(Arc::new(tensor_)))
     }
 }
-
-impl TryToDevice<MetalStorage, CpuStorage> for Tensor<MetalStorage> {
-    type Error = Error;
-
-    fn try_to_device(
-        &self,
-        device: &<CpuStorage as BackendStorage>::Device,
-    ) -> Result<Tensor<CpuStorage>> {
-        let storage = self.storage().to_cpu_storage()?;
-        let op = BackpropOp::none();
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: Arc::new(RwLock::new(storage)),
-            layout: self.layout.clone(),
-            op,
-            is_variable: false,
-            dtype: self.dtype,
-            device: device.clone(),
-        };
-        Ok(Tensor(Arc::new(tensor_)))
-    }
-}
-
-impl<B: BackendStorage> Tensor<B>
-where
-    IsSame<B, B>: True,
-{
+impl<B: BackendStorage> Tensor<B> {
     pub fn from_storage<S: Into<Shape>>(
         storage: B,
         shape: S,
@@ -2340,9 +2287,10 @@ where
     }
 
     /// If the target device is the same as the tensor device, only a shallow copy is performed.
-    pub fn to_device<OB: BackendStorage>(&self, device: &OB::Device) -> Result<Tensor<OB>>
+    pub fn to_device<U: BackendStorage>(&self, device: &U::Device) -> Result<Tensor<U>>
     where
-        Self: TryToDevice<B, OB>,
+        Self: TryToDevice<B, U>,
+        U::Device: TryConvertStorage<B, U>,
     {
         self.try_to_device(device)
     }
