@@ -1,5 +1,12 @@
-use candle::{backend::BackendStorage, test_device, IndexOp, Result, Tensor};
-use candle_core::{self as candle, cpu_backend::CpuDevice, CpuStorage};
+use candle::{test_device, BackendStorage, IndexOp, Result, Tensor};
+use candle_core::{self as candle, CpuDevice, CpuStorage};
+
+#[allow(unused_imports)]
+use candle_core::BackendDevice;
+#[cfg(feature = "cuda")]
+use candle_core::{CudaDevice, CudaStorage};
+#[cfg(feature = "metal")]
+use candle_core::{MetalDevice, MetalStorage};
 
 fn contiguous<B: BackendStorage>(device: &B::Device) -> Result<()> {
     let tensor: Tensor<B> = Tensor::arange(0u32, 24u32, device)?.reshape((2, 3, 4))?;

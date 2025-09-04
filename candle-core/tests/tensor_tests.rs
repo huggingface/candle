@@ -1,7 +1,14 @@
 use candle_core::{
-    backend::BackendStorage, cpu_backend::CpuDevice, test_device, test_utils, CpuStorage, DType,
-    IndexOp, Result, Tensor, D,
+    test_device, test_utils, BackendStorage, CpuDevice, CpuStorage, DType, IndexOp, Result, Tensor,
+    D,
 };
+
+#[allow(unused_imports)]
+use candle_core::BackendDevice;
+#[cfg(feature = "cuda")]
+use candle_core::{CudaDevice, CudaStorage};
+#[cfg(feature = "metal")]
+use candle_core::{MetalDevice, MetalStorage};
 
 fn zeros<B: BackendStorage>(device: &B::Device) -> Result<()> {
     let tensor: Tensor<B> = Tensor::zeros((5, 2), DType::F32, device)?;

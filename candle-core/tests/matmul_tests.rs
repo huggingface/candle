@@ -1,8 +1,12 @@
 use candle_core::{
-    backend::{BackendDevice, BackendStorage},
-    cpu_backend::CpuDevice,
-    test_device, CpuStorage, DType, IndexOp, Result, Tensor,
+    test_device, BackendDevice, BackendStorage, CpuDevice, CpuStorage, DType, IndexOp, Result,
+    Tensor,
 };
+
+#[cfg(feature = "cuda")]
+use candle_core::{CudaDevice, CudaStorage};
+#[cfg(feature = "metal")]
+use candle_core::{MetalDevice, MetalStorage};
 
 fn matmul<B: BackendStorage>(device: &B::Device) -> Result<()> {
     let data = vec![1.0f32, 2.0, 3.0, 4.0];

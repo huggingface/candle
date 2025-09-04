@@ -9,22 +9,19 @@ macro_rules! test_device {
     ($fn_name: ident, $test_cpu: ident, $test_cuda: ident, $test_metal: ident) => {
         #[test]
         fn $test_cpu() -> Result<()> {
-            use candle_core::backend::BackendDevice;
-            $fn_name::<candle_core::CpuStorage>(&candle_core::cpu_backend::CpuDevice {})
+            $fn_name::<CpuStorage>(&CpuDevice {})
         }
 
         #[cfg(feature = "cuda")]
         #[test]
         fn $test_cuda() -> Result<()> {
-            use candle_core::backend::BackendDevice;
-            $fn_name::<candle_core::CudaStorage>(&candle_core::CudaDevice::new(0)?)
+            $fn_name::<CudaStorage>(&CudaDevice::new(0)?)
         }
 
         #[cfg(feature = "metal")]
         #[test]
         fn $test_metal() -> Result<()> {
-            use candle_core::backend::BackendDevice;
-            $fn_name::<candle_core::MetalStorage>(&candle_core::MetalDevice::new(0)?)
+            $fn_name::<MetalStorage>(&MetalDevice::new(0)?)
         }
     };
 }

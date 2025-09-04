@@ -1,9 +1,15 @@
 #![allow(clippy::approx_constant)]
 use anyhow::{Context, Result};
 use candle_core::{
-    backend::BackendStorage, cpu_backend::CpuDevice, test_device, test_utils, CpuStorage, DType,
-    Shape, Tensor, Var,
+    test_device, test_utils, BackendStorage, CpuDevice, CpuStorage, DType, Shape, Tensor, Var,
 };
+
+#[allow(unused_imports)]
+use candle_core::BackendDevice;
+#[cfg(feature = "cuda")]
+use candle_core::{CudaDevice, CudaStorage};
+#[cfg(feature = "metal")]
+use candle_core::{MetalDevice, MetalStorage};
 
 fn simple_grad<B: BackendStorage>(device: &B::Device) -> Result<()> {
     let x: Var<B> = Var::new(&[3f32, 1., 4.], device)?;

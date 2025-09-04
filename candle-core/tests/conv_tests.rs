@@ -1,5 +1,14 @@
 use anyhow::Result;
-use candle_core::{backend::BackendStorage, test_device, test_utils, IndexOp, Tensor};
+use candle_core::{
+    test_device, test_utils, BackendStorage, CpuDevice, CpuStorage, IndexOp, Tensor,
+};
+
+#[allow(unused_imports)]
+use candle_core::BackendDevice;
+#[cfg(feature = "cuda")]
+use candle_core::{CudaDevice, CudaStorage};
+#[cfg(feature = "metal")]
+use candle_core::{MetalDevice, MetalStorage};
 
 /* This test is based on the following script.
 import torch

@@ -1,4 +1,13 @@
-use candle_core::{backend::BackendStorage, test_device, test_utils, IndexOp, Result, Tensor};
+use candle_core::{
+    test_device, test_utils, BackendStorage, CpuDevice, CpuStorage, IndexOp, Result, Tensor,
+};
+
+#[allow(unused_imports)]
+use candle_core::BackendDevice;
+#[cfg(feature = "cuda")]
+use candle_core::{CudaDevice, CudaStorage};
+#[cfg(feature = "metal")]
+use candle_core::{MetalDevice, MetalStorage};
 
 // https://github.com/huggingface/candle/issues/364
 fn avg_pool2d<B: BackendStorage>(dev: &B::Device) -> Result<()> {
