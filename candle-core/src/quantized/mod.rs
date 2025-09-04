@@ -534,10 +534,13 @@ impl<B: QuantizedBackend> QTensor<B> {
 }
 
 #[derive(Clone, Debug)]
-pub enum QMatMul<B: BackendStorage, QB: QuantizedBackend> {
+pub enum QMatMul<QB>
+where
+    QB: QuantizedBackend,
+{
     QTensor(std::sync::Arc<QTensor<QB>>),
-    Tensor(Tensor<B>),
-    TensorF16(Tensor<B>),
+    Tensor(Tensor<QB::Storage>),
+    TensorF16(Tensor<QB::Storage>),
 }
 
 thread_local! {
@@ -562,8 +565,8 @@ thread_local! {
     }
 }
 
-impl<B: BackendStorage, QB: QuantizedBackend<Storage = B>> QMatMul<B, QB> {
-    pub fn from_arc(qtensor: std::sync::Arc<QTensor<QB>>) -> Result<Self> {
+impl<B: QuantizedBackend> QMatMul<B> {
+    pub fn from_arc(qtensor: std::sync::Arc<QTensor<B>>) -> Result<Self> {
         let dequantize = match qtensor.dtype() {
             GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16 => true,
             _ => DEQUANTIZE_ALL.with(|b| *b),
@@ -580,11 +583,11 @@ impl<B: BackendStorage, QB: QuantizedBackend<Storage = B>> QMatMul<B, QB> {
         Ok(t)
     }
 
-    pub fn from_qtensor(qtensor: QTensor<QB>) -> Result<Self> {
+    pub fn from_qtensor(qtensor: QTensor<B>) -> Result<Self> {
         Self::from_arc(std::sync::Arc::new(qtensor))
     }
 
-    pub fn dequantize_f16(&self) -> Result<Tensor<B>> {
+    pub fn dequantize_f16(&self) -> Result<Tensor<B::Storage>> {
         match self {
             Self::QTensor(t) => t.dequantize_f16(&t.device()),
             Self::Tensor(t) => t.to_dtype(DType::F16),
@@ -592,7 +595,7 @@ impl<B: BackendStorage, QB: QuantizedBackend<Storage = B>> QMatMul<B, QB> {
         }
     }
 
-    pub fn forward_via_f16(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
+    pub fn forward_via_f16(&self, xs: &Tensor<B::Storage>) -> Result<Tensor<B::Storage>> {
         let w = self.dequantize_f16()?;
         let in_dtype = xs.dtype();
         let w = match *xs.dims() {
@@ -687,11 +690,11 @@ impl crate::CustomOp1<MetalStorage> for QTensor<QMetalStorage> {
     }
 }
 
-impl<B: BackendStorage, QB: QuantizedBackend<Storage = B>> crate::Module<B> for QMatMul<B, QB>
+impl<B: QuantizedBackend> crate::Module<B::Storage> for QMatMul<B>
 where
-    QTensor<QB>: CustomOp1<B>,
+    QTensor<B>: CustomOp1<B::Storage>,
 {
-    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
+    fn forward(&self, xs: &Tensor<B::Storage>) -> Result<Tensor<B::Storage>> {
         match self {
             Self::QTensor(t) => xs.apply_op1_no_bwd(t.as_ref()),
             Self::Tensor(w) => {

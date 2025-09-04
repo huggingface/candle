@@ -2,7 +2,7 @@ use candle_core::{
     backend::BackendStorage,
     bail,
     cpu_backend::CpuDevice,
-    quantized::{self, GgmlDType, QTensor, QuantizedBackend, QuantizedDevice},
+    quantized::{self, GgmlDType, QCpuStorage, QTensor, QuantizedBackend, QuantizedDevice},
     test_quantized_device,
     test_utils::{to_vec2_round, ExpectedResults},
     CpuStorage, CudaStorage, DType, IndexOp, MetalStorage, Module, Result, Tensor,
@@ -18,13 +18,14 @@ const GGML_MAX_QUANTIZATION_TOTAL_ERROR_2BITS: f32 = 0.0075;
 const GGML_MAX_QUANTIZATION_TOTAL_ERROR_3BITS: f32 = 0.0040;
 const GGML_MAX_DOT_PRODUCT_ERROR: f32 = 0.02;
 
-fn test_matmul<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
+fn test_matmul<B, QB>(
     device: &B::Device,
     (b, m, n, k): (usize, usize, usize, usize),
     dtype: GgmlDType,
 ) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device>,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let lhs = (0..(m * k))
@@ -37,7 +38,7 @@ where
     let lhs: Tensor<B> = Tensor::from_slice(&lhs, (m, k), device)?;
     let rhs: Tensor<B> = Tensor::from_slice(&rhs, (k, n), device)?;
     let mm = lhs.matmul(&rhs)?;
-    let qtensor: QTensor<QB> = quantized::QTensor::quantize(&rhs.t()?, dtype)?;
+    let qtensor = quantized::QTensor::quantize(&rhs.t()?, dtype)?;
     let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
     let res = matmul.forward(&lhs)?;
 
@@ -76,7 +77,7 @@ fn test_matmul_mm() -> Result<()> {
     let rhs = Tensor::from_slice(&rhs, (1, 1, k, n), &device)?.repeat((5, 20, 1, 1))?;
     let mm = lhs.broadcast_matmul(&rhs)?;
     let qtensor: QTensor<QMetalStorage> = QTensor::quantize(&lhs.t()?, dtype)?;
-    let matmul: QMatMul<MetalStorage, QMetalStorage> = QMatMul::from_qtensor(qtensor)?;
+    let matmul: QMatMul<QMetalStorage> = QMatMul::from_qtensor(qtensor)?;
     let res = matmul.forward(&rhs)?;
 
     let error: f32 = ((&mm - &res)?.abs()? / &mm.abs()?)?
@@ -92,19 +93,15 @@ fn test_matmul_mm() -> Result<()> {
     Ok(())
 }
 
-fn quantized_matmul<
-    B: BackendStorage + 'static,
-    QB: QuantizedBackend<Storage = B, Device = B::Device>,
->(
-    device: &B::Device,
-) -> Result<()>
+fn quantized_matmul<B, QB>(device: &B::Device) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device> + 'static,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let (m, k, n) = (3, 64, 4);
     let lhs_s = (0..(m * k)).map(|v| v as f32).collect::<Vec<_>>();
-    let lhs: Tensor<B> = Tensor::from_slice(&lhs_s, (m, k), device)?;
+    let lhs = Tensor::from_slice(&lhs_s, (m, k), device)?;
     let mut dst = vec![42.; 3 * 4];
     let mut rhs_t = vec![k_quants::BlockQ4_0::zeros(); 8];
     let rhs = (0..(k * n)).map(|v| v as f32).collect::<Vec<_>>();
@@ -128,8 +125,8 @@ where
         ]
     );
 
-    let qtensor: QTensor<QB> = quantized::QTensor::quantize(&tensor_rhs.t()?, GgmlDType::Q4_0)?;
-    let matmul = quantized::QMatMul::<B, QB>::from_qtensor(qtensor)?;
+    let qtensor = quantized::QTensor::quantize(&tensor_rhs.t()?, GgmlDType::Q4_0)?;
+    let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
     let res = matmul.forward(&lhs)?;
 
     let expected_results = ExpectedResults::from_iter([
@@ -166,14 +163,10 @@ where
     Ok(())
 }
 
-fn quantized_matmul_neg<
-    B: BackendStorage + 'static,
-    QB: QuantizedBackend<Storage = B, Device = B::Device>,
->(
-    device: &B::Device,
-) -> Result<()>
+fn quantized_matmul_neg<B, QB>(device: &B::Device) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device> + 'static,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let (m, k, n) = (3, 64, 4);
@@ -250,11 +243,10 @@ where
     Ok(())
 }
 
-fn qmm_batch<B: BackendStorage + 'static, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
-    device: &B::Device,
-) -> Result<()>
+fn qmm_batch<B, QB>(device: &B::Device) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device> + 'static,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let (lhs, rhs, _mm) = get_random_tensors(2, 256, 6, device)?;
@@ -298,11 +290,10 @@ test_quantized_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal);
 test_quantized_device!(quantized_matmul_neg, qmm_n_cpu, qmm_n_cuda, qmm_n_metal);
 test_quantized_device!(qmm_batch, qmm_b_cpu, qmm_b_cuda, qmm_b_metal);
 
-fn quantize_q4_0<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
-    device: &B::Device,
-) -> Result<()>
+fn quantize_q4_0<B, QB>(device: &B::Device) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device> + 'static,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
@@ -338,11 +329,10 @@ where
     Ok(())
 }
 
-fn quantize_q4_1<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
-    device: &B::Device,
-) -> Result<()>
+fn quantize_q4_1<B, QB>(device: &QB::Device) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device> + 'static,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
@@ -377,11 +367,10 @@ where
     Ok(())
 }
 
-fn quantize_q5_0<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
-    device: &B::Device,
-) -> Result<()>
+fn quantize_q5_0<B, QB>(device: &B::Device) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device> + 'static,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
@@ -416,11 +405,10 @@ where
     Ok(())
 }
 
-fn quantize_q5_1<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
-    device: &B::Device,
-) -> Result<()>
+fn quantize_q5_1<B, QB>(device: &B::Device) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device> + 'static,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
@@ -512,16 +500,14 @@ fn calculate_rmse(a: &[f32], b: &[f32]) -> f32 {
 
 /// Similar to the GGML quantization unit test:
 /// https://github.com/ggerganov/llama.cpp/blob/master/tests/test-quantize-fns.cpp#L43-L50
-fn ggml_quantization_error_test<
-    B: BackendStorage,
-    QB: QuantizedBackend<Storage = B, Device = B::Device>,
->(
+fn ggml_quantization_error_test<B, QB>(
     dtype: GgmlDType,
     device: &B::Device,
     max_error: f32,
 ) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device> + 'static,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let src = create_ggml_like_vector(0.0);
@@ -546,11 +532,10 @@ where
     Ok(())
 }
 
-fn quantize_q2k<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
-    device: &B::Device,
-) -> Result<()>
+fn quantize_q2k<B, QB>(device: &B::Device) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device> + 'static,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let dtype = GgmlDType::Q2K;
@@ -600,11 +585,10 @@ where
     Ok(())
 }
 
-fn quantize_q3k<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
-    device: &B::Device,
-) -> Result<()>
+fn quantize_q3k<B, QB>(device: &B::Device) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device> + 'static,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let dtype = GgmlDType::Q3K;
@@ -653,11 +637,10 @@ where
     Ok(())
 }
 
-fn quantize_q4k<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
-    device: &B::Device,
-) -> Result<()>
+fn quantize_q4k<B, QB>(device: &B::Device) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device> + 'static,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let dtype = GgmlDType::Q4K;
@@ -706,11 +689,10 @@ where
     Ok(())
 }
 
-fn quantize_q5k<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
-    device: &B::Device,
-) -> Result<()>
+fn quantize_q5k<B, QB>(device: &B::Device) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device> + 'static,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let dtype = GgmlDType::Q5K;
@@ -759,11 +741,10 @@ where
     Ok(())
 }
 
-fn quantize_q6k<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
-    device: &B::Device,
-) -> Result<()>
+fn quantize_q6k<B, QB>(device: &B::Device) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device> + 'static,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let dtype = GgmlDType::Q6K;
@@ -812,11 +793,10 @@ where
     Ok(())
 }
 
-fn quantize_q8k<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
-    device: &B::Device,
-) -> Result<()>
+fn quantize_q8k<B, QB>(device: &B::Device) -> Result<()>
 where
-    <B as BackendStorage>::Device: QuantizedDevice<QB>,
+    B: BackendStorage<Device = QB::Device> + 'static,
+    QB: QuantizedBackend<Storage = B>,
     QTensor<QB>: candle_core::CustomOp1<B>,
 {
     let dtype = GgmlDType::Q8K;
@@ -1162,7 +1142,7 @@ fn quantized_matmul_q2k() -> Result<()> {
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
     assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
 
-    let rhs = quantized::QTensor::quantize(&rhs, GgmlDType::Q2K)?;
+    let rhs: QTensor<QCpuStorage> = quantized::QTensor::quantize(&rhs, GgmlDType::Q2K)?;
     let rhs = quantized::QMatMul::from_qtensor(rhs)?;
     let mm = rhs.forward(&lhs)?;
 
@@ -1188,7 +1168,7 @@ fn quantized_matmul_q3k() -> Result<()> {
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
     assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
 
-    let rhs = quantized::QTensor::quantize(&rhs, GgmlDType::Q3K)?;
+    let rhs: QTensor<QCpuStorage> = quantized::QTensor::quantize(&rhs, GgmlDType::Q3K)?;
     let rhs = quantized::QMatMul::from_qtensor(rhs)?;
     let mm = rhs.forward(&lhs)?;
 
@@ -1214,7 +1194,7 @@ fn quantized_matmul_q4k() -> Result<()> {
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
     assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
 
-    let rhs = quantized::QTensor::quantize(&rhs, GgmlDType::Q4K)?;
+    let rhs: QTensor<QCpuStorage> = quantized::QTensor::quantize(&rhs, GgmlDType::Q4K)?;
     let rhs = quantized::QMatMul::from_qtensor(rhs)?;
     let mm = rhs.forward(&lhs)?;
 
@@ -1240,7 +1220,7 @@ fn quantized_matmul_q5k() -> Result<()> {
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
     assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
 
-    let rhs = quantized::QTensor::quantize(&rhs, GgmlDType::Q5K)?;
+    let rhs: QTensor<QCpuStorage> = quantized::QTensor::quantize(&rhs, GgmlDType::Q5K)?;
     let rhs = quantized::QMatMul::from_qtensor(rhs)?;
     let mm = rhs.forward(&lhs)?;
 
@@ -1267,7 +1247,7 @@ fn quantized_matmul_q6k() -> Result<()> {
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
     assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
 
-    let rhs = quantized::QTensor::quantize(&rhs, GgmlDType::Q6K)?;
+    let rhs: QTensor<QCpuStorage> = quantized::QTensor::quantize(&rhs, GgmlDType::Q6K)?;
     let rhs = quantized::QMatMul::from_qtensor(rhs)?;
     let mm = rhs.forward(&lhs)?;
 
@@ -1292,7 +1272,7 @@ fn quantized_matmul_q8k() -> Result<()> {
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
     assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
 
-    let rhs = quantized::QTensor::quantize(&rhs, GgmlDType::Q8K)?;
+    let rhs: QTensor<QCpuStorage> = quantized::QTensor::quantize(&rhs, GgmlDType::Q8K)?;
     let rhs = quantized::QMatMul::from_qtensor(rhs)?;
     let mm = rhs.forward(&lhs)?;
 

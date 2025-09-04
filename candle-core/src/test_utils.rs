@@ -117,11 +117,6 @@ impl<T: crate::NdArray> ExpectedResults<T> {
     }
 
     pub fn get<U: Any>(&self) -> Option<&T> {
-        println!(
-            "TypeId::of::<{}>(): {:?}",
-            std::any::type_name::<U>(),
-            TypeId::of::<U>()
-        );
         self.inner.get(&TypeId::of::<U>())
     }
 }

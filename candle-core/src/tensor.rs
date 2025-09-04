@@ -70,7 +70,6 @@ impl<B: BackendStorage> AsRef<Tensor<B>> for Tensor<B> {
 pub struct Tensor<B>(Arc<Tensor_<B>>)
 where
     B: BackendStorage;
-//Self: TryToDevice<CpuStorage, B>; //+ TryToDevice<B, CpuStorage>;
 
 impl<B: BackendStorage> std::ops::Deref for Tensor<B> {
     type Target = Tensor_<B>;
