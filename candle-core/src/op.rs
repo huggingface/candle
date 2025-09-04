@@ -935,7 +935,7 @@ impl UnaryOpT for Relu {
 pub struct BackpropOp<B: BackendStorage>(Option<Op<B>>);
 
 impl<B: BackendStorage> BackpropOp<B> {
-    pub(crate) fn none() -> Self {
+    pub fn none() -> Self {
         BackpropOp(None)
     }
 

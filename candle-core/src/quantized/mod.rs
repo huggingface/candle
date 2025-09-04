@@ -45,6 +45,12 @@ pub struct QTensor<B: QuantizedBackend> {
 #[derive(Debug)]
 pub struct QCpuStorage(Box<dyn QuantizedType>);
 
+impl QCpuStorage {
+    pub fn new(data: Box<dyn QuantizedType>) -> Self {
+        QCpuStorage(data)
+    }
+}
+
 #[derive(Debug)]
 pub enum QStorage {
     Cpu(QCpuStorage),
@@ -447,14 +453,6 @@ impl<B: QuantizedBackend> QTensor<B> {
     pub fn quantize(src: &Tensor<B::Storage>, dtype: GgmlDType) -> Result<Self>
     where
         <B::Storage as BackendStorage>::Device: QuantizedDevice<B>,
-        //QStorage: From<B>,
-        //crate::tensor::IsSame<B::Device, <B::Storage as BackendStorage>::Device>:
-        //    crate::tensor::True,
-        //crate::tensor::IsSame<B::Storage, B::Storage>: crate::tensor::True,
-        //crate::tensor::IsSame<
-        //    <B as QuantizedBackend>::Storage,
-        //    <<B::Storage as BackendStorage>::Device as QuantizedDevice<B::Storage>>::Storage,
-        //>: crate::tensor::True,
     {
         let shape = src.shape();
         let block_size = dtype.block_size();
