@@ -103,6 +103,14 @@ impl CudaDevice {
     ) -> Result<cudarc::driver::CudaSlice<T>> {
         self.stream.memcpy_stod(src).w()
     }
+
+    pub fn context(&self) -> &cudarc::driver::CudaContext {
+        &self.context
+    }
+
+    pub fn stream(&self) -> &cudarc::driver::CudaStream {
+        &self.stream
+    }
 }
 
 pub struct CudaFunc {
@@ -177,11 +185,11 @@ impl CudaDevice {
             ..Default::default()
         };
         let ptx = cudarc::nvrtc::safe::compile_ptx_with_opts(cuda_code, opts).w()?;
-        let module = self.context.load_module(ptx).w()?;
+        let module = self.context().load_module(ptx).w()?;
         let func = module.load_function(func_name).w()?;
         Ok(CudaFunc {
             func,
-            stream: self.stream.clone(),
+            stream: self.stream().clone(),
         })
     }
 
@@ -300,7 +308,7 @@ impl BackendDevice<CudaStorage> for CudaDevice {
         self.id == rhs.id
     }
 
-    fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
+    fn zeros(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
         let elem_count = shape.elem_count();
         let slice = match dtype {
             DType::U8 => {
