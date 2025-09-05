@@ -8,68 +8,54 @@ pub(crate) mod reduce;
 pub(crate) mod unary;
 pub(crate) mod where_cond;
 
-use candle_core::{Device, Result};
+use candle_core::{BackendDevice, BackendStorage, CpuDevice, CpuStorage};
+#[cfg(feature = "metal")]
+use candle_core::{MetalDevice, MetalStorage};
 
-pub(crate) trait BenchDevice {
-    fn sync(&self) -> Result<()>;
-
+pub(crate) trait BenchDevice<B>: BackendDevice<B>
+where
+    B: BackendStorage,
+{
     fn bench_name<S: Into<String>>(&self, name: S) -> String;
 }
 
-impl BenchDevice for Device {
-    fn sync(&self) -> Result<()> {
-        match self {
-            Device::Cpu => Ok(()),
-            Device::Cuda(device) => {
-                #[cfg(feature = "cuda")]
-                {
-                    use cuda::WrapErr;
-                    return Ok(device.synchronize().w()?);
-                }
-                #[cfg(not(feature = "cuda"))]
-                panic!("Cuda device without cuda feature enabled: {:?}", device)
-            }
-            Device::Metal(device) => {
-                #[cfg(feature = "metal")]
-                return Ok(device.wait_until_completed()?);
-                #[cfg(not(feature = "metal"))]
-                panic!("Metal device without metal feature enabled: {:?}", device)
-            }
-        }
-    }
-
+impl BenchDevice<CpuStorage> for CpuDevice {
     fn bench_name<S: Into<String>>(&self, name: S) -> String {
-        match self {
-            Device::Cpu => {
-                let cpu_type = if cfg!(feature = "accelerate") {
-                    "accelerate"
-                } else if cfg!(feature = "mkl") {
-                    "mkl"
-                } else {
-                    "cpu"
-                };
-                format!("{}_{}", cpu_type, name.into())
-            }
-            Device::Cuda(_) => format!("cuda_{}", name.into()),
-            Device::Metal(_) => format!("metal_{}", name.into()),
-        }
-    }
-}
-
-struct BenchDeviceHandler {
-    devices: Vec<Device>,
-}
-
-impl BenchDeviceHandler {
-    pub fn new() -> Result<Self> {
-        let mut devices = Vec::new();
-        if cfg!(feature = "metal") {
-            devices.push(Device::new_metal(0)?);
-        } else if cfg!(feature = "cuda") {
-            devices.push(Device::new_cuda(0)?);
+        let cpu_type = if cfg!(feature = "accelerate") {
+            "accelerate"
+        } else if cfg!(feature = "mkl") {
+            "mkl"
         } else {
-            devices.push(Device::Cpu);
-        }
-        Ok(Self { devices })
+            "cpu"
+        };
+        format!("{}_{}", cpu_type, name.into())
     }
+}
+
+#[cfg(feature = "metal")]
+impl BenchDevice<MetalStorage> for MetalDevice {
+    fn bench_name<S: Into<String>>(&self, name: S) -> String {
+        format!("metal_{}", name.into())
+    }
+}
+
+impl BenchDevice<candle_core::CudaStorage> for candle_core::CudaDevice {
+    fn bench_name<S: Into<String>>(&self, name: S) -> String {
+        format!("cuda_{}", name.into())
+    }
+}
+
+#[cfg(feature = "metal")]
+fn bench_device() -> MetalDevice {
+    MetalDevice::new(0).unwrap()
+}
+
+#[cfg(feature = "cuda")]
+fn bench_device() -> candle_core::CudaDevice {
+    candle_core::CudaDevice::new(0).unwrap()
+}
+
+#[cfg(not(any(feature = "metal", feature = "cuda")))]
+fn bench_device() -> CpuDevice {
+    CpuDevice
 }

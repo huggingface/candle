@@ -240,11 +240,11 @@ impl UgDevice for CudaDevice {
             ..Default::default()
         };
         let ptx = cudarc::nvrtc::safe::compile_ptx_with_opts(cuda_code, opts).w()?;
-        let module = self.context.load_module(ptx).w()?;
+        let module = self.context().load_module(ptx).w()?;
         let func = module.load_function(func_name).w()?;
         Ok(CudaFunc {
             func,
-            stream: self.stream.clone(),
+            stream: self.stream().clone(),
         })
     }
 }

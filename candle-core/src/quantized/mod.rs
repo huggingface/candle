@@ -1,8 +1,7 @@
 //! Code for GGML and GGUF files
 use crate::{
-    backend::BackendDevice, cpu_backend::CpuDevice, quantized::metal::QMetalStorage,
-    BackendStorage, Context, CpuStorage, CustomOp1, DType, Device, MetalStorage, Result, Shape,
-    Storage, Tensor,
+    BackendDevice, BackendStorage, Context, CpuDevice, CpuStorage, CustomOp1, DType, Device,
+    MetalStorage, Result, Shape, Storage, Tensor,
 };
 use k_quants::*;
 use std::borrow::Cow;
@@ -15,6 +14,7 @@ mod dummy_metal;
 pub mod ggml_file;
 pub mod gguf_file;
 pub mod k_quants;
+
 #[cfg(feature = "metal")]
 pub mod metal;
 #[cfg(not(feature = "metal"))]
@@ -36,6 +36,7 @@ pub mod utils;
 use half::{bf16, f16};
 
 pub use k_quants::GgmlType;
+pub use metal::QMetalStorage;
 
 pub struct QTensor<B: QuantizedBackend> {
     storage: B,

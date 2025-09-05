@@ -2211,6 +2211,7 @@ impl BackendDevice<MetalStorage> for MetalDevice {
         max: T,
     ) -> Result<MetalStorage> {
         let name = match dtype {
+            DType::F64 => "rand_uniform_f64",
             DType::F32 => "rand_uniform_f32",
             DType::F16 => "rand_uniform_f16",
             DType::BF16 => "rand_uniform_bf16",
@@ -2247,6 +2248,7 @@ impl BackendDevice<MetalStorage> for MetalDevice {
         stddev: T,
     ) -> Result<MetalStorage> {
         let name = match dtype {
+            DType::F64 => "rand_uniform_f64",
             DType::F32 => "rand_normal_f32",
             DType::F16 => "rand_normal_f16",
             DType::BF16 => "rand_normal_bf16",
