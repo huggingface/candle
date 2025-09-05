@@ -6,41 +6,43 @@
 //! output has shape `(b_sz, out_c)` and `(out_c,)` respectively.
 //!
 //! ```rust
-//! use candle::{Tensor, Device::Cpu};
+//! use candle::{CpuDevice, CpuStorage};
+//! type Tensor = candle::Tensor<CpuStorage>;
+//!
 //! use candle_nn::{Linear, Module};
 //! # fn main() -> candle::Result<()> {
 //!
-//! let w = Tensor::new(&[[1f32, 2.], [3., 4.], [5., 6.]], &Cpu)?;
+//! let w = Tensor::new(&[[1f32, 2.], [3., 4.], [5., 6.]], &CpuDevice)?;
 //! let layer = Linear::new(w, None); // Use no bias.
-//! let xs = Tensor::new(&[[10f32, 100.]], &Cpu)?;
+//! let xs = Tensor::new(&[[10f32, 100.]], &CpuDevice)?;
 //! let ys = layer.forward(&xs)?;
 //! assert_eq!(ys.to_vec2::<f32>()?, &[[210.0, 430.0, 650.0]]);
 //! # Ok(()) }
 //! ```
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 
 #[derive(Clone, Debug)]
-pub struct Linear {
-    weight: Tensor,
-    bias: Option<Tensor>,
+pub struct Linear<B: BackendStorage> {
+    weight: Tensor<B>,
+    bias: Option<Tensor<B>>,
 }
 
-impl Linear {
-    pub fn new(weight: Tensor, bias: Option<Tensor>) -> Self {
+impl<B: BackendStorage> Linear<B> {
+    pub fn new(weight: Tensor<B>, bias: Option<Tensor<B>>) -> Self {
         Self { weight, bias }
     }
 
-    pub fn weight(&self) -> &Tensor {
+    pub fn weight(&self) -> &Tensor<B> {
         &self.weight
     }
 
-    pub fn bias(&self) -> Option<&Tensor> {
+    pub fn bias(&self) -> Option<&Tensor<B>> {
         self.bias.as_ref()
     }
 }
 
-impl super::Module for Linear {
-    fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
+impl<B: BackendStorage> super::Module<B> for Linear<B> {
+    fn forward(&self, x: &Tensor<B>) -> candle::Result<Tensor<B>> {
         // When possible, we avoid using a broadcasted matmul as it is much slower
         // than the standard matmul for the cuda and cpu backends.
         let x = match *x.dims() {
@@ -81,7 +83,12 @@ impl super::Module for Linear {
 /// Create or initialize a new linear layer.
 ///
 /// This uses some default names for weights and biases, namely `"weight"` and `"bias"`.
-pub fn linear(in_dim: usize, out_dim: usize, vb: crate::VarBuilder) -> Result<Linear> {
+pub fn linear<B>(in_dim: usize, out_dim: usize, vb: crate::VarBuilder<B>) -> Result<Linear<B>>
+where
+    B: BackendStorage,
+    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
+    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
+{
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
     let bound = 1. / (in_dim as f64).sqrt();
@@ -94,18 +101,32 @@ pub fn linear(in_dim: usize, out_dim: usize, vb: crate::VarBuilder) -> Result<Li
 }
 
 /// Create or initialize a new linear layer without biases.
-pub fn linear_no_bias(in_dim: usize, out_dim: usize, vb: crate::VarBuilder) -> Result<Linear> {
+pub fn linear_no_bias<B>(
+    in_dim: usize,
+    out_dim: usize,
+    vb: crate::VarBuilder<B>,
+) -> Result<Linear<B>>
+where
+    B: BackendStorage,
+    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
+    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
+{
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
     Ok(Linear::new(ws, None))
 }
 
-pub fn linear_b(
+pub fn linear_b<B>(
     in_dim: usize,
     out_dim: usize,
     bias: bool,
-    vb: crate::VarBuilder,
-) -> Result<Linear> {
+    vb: crate::VarBuilder<B>,
+) -> Result<Linear<B>>
+where
+    B: BackendStorage,
+    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
+    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
+{
     if bias {
         linear(in_dim, out_dim, vb)
     } else {

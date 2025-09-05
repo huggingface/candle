@@ -7,17 +7,18 @@
 //! # Example
 //!
 //! ```rust
-//! use candle::{Tensor, Device::Cpu, test_utils::to_vec3_round};
+//! use candle::{CpuDevice, CpuStorage, test_utils::to_vec3_round};
 //! use candle_nn::{LayerNorm, Module};
 //! # fn main() -> candle::Result<()> {
+//! type Tensor = candle::Tensor<CpuStorage>;
 //!
-//! let w = Tensor::new(&[1f32, 1f32, 1f32], &Cpu)?;
-//! let b = Tensor::new(&[0f32, 0f32, 0f32], &Cpu)?;
+//! let w = Tensor::new(&[1f32, 1f32, 1f32], &CpuDevice)?;
+//! let b = Tensor::new(&[0f32, 0f32, 0f32], &CpuDevice)?;
 //! let layer = LayerNorm::new(w, b, 1e-5);
 //!
 //! let xs = Tensor::new(
 //!     &[[[1f32, 2., 3.], [4., 5., 6.], [9., 8., 7.]]],
-//!     &Cpu)?;
+//!     &CpuDevice)?;
 //! let ys = layer.forward(&xs)?;
 //! assert_eq!(
 //!     to_vec3_round(&ys, 4)?,
@@ -28,7 +29,7 @@
 //! ```
 //!
 //! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
-use candle::{DType, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, Module, Result, Tensor, D};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerNormConfig {
@@ -61,15 +62,15 @@ impl From<f64> for LayerNormConfig {
 
 // This layer norm version handles both weight and bias so removes the mean.
 #[derive(Clone, Debug)]
-pub struct LayerNorm {
-    weight: Tensor,
-    bias: Option<Tensor>,
+pub struct LayerNorm<B: BackendStorage> {
+    weight: Tensor<B>,
+    bias: Option<Tensor<B>>,
     remove_mean: bool,
     eps: f64,
 }
 
-impl LayerNorm {
-    pub fn new(weight: Tensor, bias: Tensor, eps: f64) -> Self {
+impl<B: BackendStorage> LayerNorm<B> {
+    pub fn new(weight: Tensor<B>, bias: Tensor<B>, eps: f64) -> Self {
         Self {
             weight,
             bias: Some(bias),
@@ -78,7 +79,7 @@ impl LayerNorm {
         }
     }
 
-    pub fn new_no_bias(weight: Tensor, eps: f64) -> Self {
+    pub fn new_no_bias(weight: Tensor<B>, eps: f64) -> Self {
         Self {
             weight,
             bias: None,
@@ -87,7 +88,7 @@ impl LayerNorm {
         }
     }
 
-    pub fn rms_norm(weight: Tensor, eps: f64) -> Self {
+    pub fn rms_norm(weight: Tensor<B>, eps: f64) -> Self {
         Self {
             weight,
             bias: None,
@@ -96,17 +97,17 @@ impl LayerNorm {
         }
     }
 
-    pub fn weight(&self) -> &Tensor {
+    pub fn weight(&self) -> &Tensor<B> {
         &self.weight
     }
 
-    pub fn bias(&self) -> Option<&Tensor> {
+    pub fn bias(&self) -> Option<&Tensor<B>> {
         self.bias.as_ref()
     }
 }
 
-impl Module for LayerNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for LayerNorm<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         if x.is_contiguous() && self.remove_mean {
             if let Some(bias) = self.bias.as_ref() {
                 return crate::ops::layer_norm(x, &self.weight, bias, self.eps as f32);
@@ -135,11 +136,13 @@ impl Module for LayerNorm {
     }
 }
 
-pub fn layer_norm<C: Into<LayerNormConfig>>(
-    size: usize,
-    config: C,
-    vb: crate::VarBuilder,
-) -> Result<LayerNorm> {
+pub fn layer_norm<C, B>(size: usize, config: C, vb: crate::VarBuilder<B>) -> Result<LayerNorm<B>>
+where
+    C: Into<LayerNormConfig>,
+    B: BackendStorage,
+    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
+    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
+{
     let config = config.into();
     let weight = vb.get_with_hints(size, "weight", crate::Init::Const(1.))?;
     let bias = if config.affine {
@@ -155,7 +158,16 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
     })
 }
 
-pub fn layer_norm_no_bias(size: usize, eps: f64, vb: crate::VarBuilder) -> Result<LayerNorm> {
+pub fn layer_norm_no_bias<B>(
+    size: usize,
+    eps: f64,
+    vb: crate::VarBuilder<B>,
+) -> Result<LayerNorm<B>>
+where
+    B: BackendStorage,
+    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
+    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
+{
     let config = LayerNormConfig {
         eps,
         remove_mean: true,
@@ -166,25 +178,25 @@ pub fn layer_norm_no_bias(size: usize, eps: f64, vb: crate::VarBuilder) -> Resul
 
 /// RmsNorm is a specialized version of the LayerNorm module.
 #[derive(Clone, Debug)]
-pub struct RmsNorm(LayerNorm);
+pub struct RmsNorm<B: BackendStorage>(LayerNorm<B>);
 
-impl RmsNorm {
-    pub fn new(weight: Tensor, eps: f64) -> Self {
+impl<B: BackendStorage> RmsNorm<B> {
+    pub fn new(weight: Tensor<B>, eps: f64) -> Self {
         Self(LayerNorm::rms_norm(weight, eps))
     }
 
-    pub fn into_inner(self) -> LayerNorm {
+    pub fn into_inner(self) -> LayerNorm<B> {
         self.0
     }
 
     /// Faster variant of the forward kernel, this can only be used on contiguous tensors though.
-    pub fn forward_diff(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward_diff(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         self.0.forward(xs)
     }
 }
 
-impl Module for RmsNorm {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for RmsNorm<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         if xs.is_contiguous() {
             crate::ops::rms_norm(xs, &self.0.weight, self.0.eps as f32)
         } else {
@@ -193,7 +205,12 @@ impl Module for RmsNorm {
     }
 }
 
-pub fn rms_norm(size: usize, eps: f64, vb: crate::VarBuilder) -> Result<RmsNorm> {
+pub fn rms_norm<B>(size: usize, eps: f64, vb: crate::VarBuilder<B>) -> Result<RmsNorm<B>>
+where
+    B: BackendStorage,
+    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
+    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
+{
     let config = LayerNormConfig {
         eps,
         remove_mean: false,

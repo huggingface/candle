@@ -1,21 +1,21 @@
 //! Cache Implementations
 //!
-use candle::{DType, Device, Result, Tensor};
+use candle::{BackendStorage, DType, Result, Tensor};
 
 #[derive(Debug, Clone)]
-pub struct Cache {
+pub struct Cache<B: BackendStorage> {
     // all_data is an option on a Tensor, this makes it possible to only create the actual tensor
     // on the first call where the batch size is easily known.
     // Also this makes it safe to clone a KvCache that has been reset (as in it will not share
     // its internal state with the cloned instance).
-    all_data: Option<Tensor>,
+    all_data: Option<Tensor<B>>,
     dim: usize,
     current_seq_len: usize,
     grow_by: usize,
     max_seq_len: usize,
 }
 
-impl Cache {
+impl<B: BackendStorage> Cache<B> {
     pub fn new(dim: usize, max_seq_len: usize) -> Self {
         Self {
             all_data: None,
@@ -38,11 +38,11 @@ impl Cache {
         self.max_seq_len
     }
 
-    pub fn all_data(&self) -> &Option<Tensor> {
+    pub fn all_data(&self) -> &Option<Tensor<B>> {
         &self.all_data
     }
 
-    pub fn current_data(&self) -> Result<Option<Tensor>> {
+    pub fn current_data(&self) -> Result<Option<Tensor<B>>> {
         let data = match self.all_data.as_ref() {
             None => None,
             Some(d) => Some(d.narrow(self.dim, 0, self.current_seq_len)?),
@@ -55,7 +55,7 @@ impl Cache {
         self.all_data = None;
     }
 
-    pub fn append(&mut self, src: &Tensor) -> Result<()> {
+    pub fn append(&mut self, src: &Tensor<B>) -> Result<()> {
         let seq_len = src.dim(self.dim)?;
         // This doesn't seem very idiomatic but because the creation can fail, it's tricky to use
         // self.all_data.get_or_insert_with.
@@ -80,43 +80,43 @@ impl Cache {
 }
 
 #[derive(Debug, Clone)]
-pub struct KvCache {
-    k: Cache,
-    v: Cache,
+pub struct KvCache<B: BackendStorage> {
+    k: Cache<B>,
+    v: Cache<B>,
 }
 
-impl KvCache {
+impl<B: BackendStorage> KvCache<B> {
     pub fn new(dim: usize, max_seq_len: usize) -> Self {
         let k = Cache::new(dim, max_seq_len);
         let v = Cache::new(dim, max_seq_len);
         Self { k, v }
     }
 
-    pub fn k_cache(&self) -> &Cache {
+    pub fn k_cache(&self) -> &Cache<B> {
         &self.k
     }
 
-    pub fn v_cache(&self) -> &Cache {
+    pub fn v_cache(&self) -> &Cache<B> {
         &self.v
     }
 
-    pub fn k_cache_mut(&mut self) -> &mut Cache {
+    pub fn k_cache_mut(&mut self) -> &mut Cache<B> {
         &mut self.k
     }
 
-    pub fn v_cache_mut(&mut self) -> &mut Cache {
+    pub fn v_cache_mut(&mut self) -> &mut Cache<B> {
         &mut self.v
     }
 
-    pub fn k(&self) -> Result<Option<Tensor>> {
+    pub fn k(&self) -> Result<Option<Tensor<B>>> {
         self.k.current_data()
     }
 
-    pub fn v(&self) -> Result<Option<Tensor>> {
+    pub fn v(&self) -> Result<Option<Tensor<B>>> {
         self.v.current_data()
     }
 
-    pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+    pub fn append(&mut self, k: &Tensor<B>, v: &Tensor<B>) -> Result<(Tensor<B>, Tensor<B>)> {
         self.k.append(k)?;
         self.v.append(v)?;
         let out_k = self.k.current_data()?;
@@ -151,8 +151,8 @@ impl KvCache {
 }
 
 #[derive(Debug, Clone)]
-pub struct RotatingCache {
-    all_data: Option<Tensor>,
+pub struct RotatingCache<B: BackendStorage> {
+    all_data: Option<Tensor<B>>,
     dim: usize,
     // `offset` is the current write index in the buffer
     offset: usize,
@@ -163,7 +163,7 @@ pub struct RotatingCache {
     max_seq_len: usize,
 }
 
-impl RotatingCache {
+impl<B: BackendStorage> RotatingCache<B> {
     pub fn new(dim: usize, max_seq_len: usize) -> Self {
         Self {
             all_data: None,
@@ -190,11 +190,11 @@ impl RotatingCache {
         self.max_seq_len
     }
 
-    pub fn all_data(&self) -> &Option<Tensor> {
+    pub fn all_data(&self) -> &Option<Tensor<B>> {
         &self.all_data
     }
 
-    pub fn current_data(&self) -> Result<Option<Tensor>> {
+    pub fn current_data(&self) -> Result<Option<Tensor<B>>> {
         let data = match self.all_data.as_ref() {
             None => None,
             Some(d) => {
@@ -214,7 +214,7 @@ impl RotatingCache {
         self.all_data = None;
     }
 
-    pub fn append(&mut self, src: &Tensor) -> Result<Tensor> {
+    pub fn append(&mut self, src: &Tensor<B>) -> Result<Tensor<B>> {
         let seq_len = src.dim(self.dim)?;
         // This doesn't seem very idiomatic but because the creation can fail, it's tricky to use
         // self.all_data.get_or_insert_with.
@@ -260,7 +260,7 @@ impl RotatingCache {
         }
     }
 
-    fn get_mask_abs(&self, size1: usize, size2: usize, device: &Device) -> Result<Tensor> {
+    fn get_mask_abs(&self, size1: usize, size2: usize, device: &B::Device) -> Result<Tensor<B>> {
         let context = self.max_seq_len;
         let mask: Vec<_> = (0..size1)
             .flat_map(|i| {
@@ -272,7 +272,7 @@ impl RotatingCache {
         Tensor::from_slice(&mask, (size1, size2), device)
     }
 
-    fn get_mask_rel(&self, size1: usize, size2: usize, device: &Device) -> Result<Tensor> {
+    fn get_mask_rel(&self, size1: usize, size2: usize, device: &B::Device) -> Result<Tensor<B>> {
         let context = self.max_seq_len;
         let upd_offset = (self.offset + size1) % self.max_seq_len;
         let mask: Vec<_> = (0..size1)
@@ -316,7 +316,7 @@ impl RotatingCache {
     }
 
     /// Returns the attn_mask to be applied *after* adding `seq_len` to the cache.
-    pub fn attn_mask(&self, seq_len: usize, device: &Device) -> Result<Option<Tensor>> {
+    pub fn attn_mask(&self, seq_len: usize, device: &B::Device) -> Result<Option<Tensor<B>>> {
         let mask = if seq_len == 1 {
             None
         } else {
@@ -333,43 +333,43 @@ impl RotatingCache {
 }
 
 #[derive(Debug, Clone)]
-pub struct RotatingKvCache {
-    k: RotatingCache,
-    v: RotatingCache,
+pub struct RotatingKvCache<B: BackendStorage> {
+    k: RotatingCache<B>,
+    v: RotatingCache<B>,
 }
 
-impl RotatingKvCache {
+impl<B: BackendStorage> RotatingKvCache<B> {
     pub fn new(dim: usize, max_seq_len: usize) -> Self {
         let k = RotatingCache::new(dim, max_seq_len);
         let v = RotatingCache::new(dim, max_seq_len);
         Self { k, v }
     }
 
-    pub fn k_cache(&self) -> &RotatingCache {
+    pub fn k_cache(&self) -> &RotatingCache<B> {
         &self.k
     }
 
-    pub fn v_cache(&self) -> &RotatingCache {
+    pub fn v_cache(&self) -> &RotatingCache<B> {
         &self.v
     }
 
-    pub fn k_cache_mut(&mut self) -> &mut RotatingCache {
+    pub fn k_cache_mut(&mut self) -> &mut RotatingCache<B> {
         &mut self.k
     }
 
-    pub fn v_cache_mut(&mut self) -> &mut RotatingCache {
+    pub fn v_cache_mut(&mut self) -> &mut RotatingCache<B> {
         &mut self.v
     }
 
-    pub fn k(&self) -> Result<Option<Tensor>> {
+    pub fn k(&self) -> Result<Option<Tensor<B>>> {
         self.k.current_data()
     }
 
-    pub fn v(&self) -> Result<Option<Tensor>> {
+    pub fn v(&self) -> Result<Option<Tensor<B>>> {
         self.v.current_data()
     }
 
-    pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+    pub fn append(&mut self, k: &Tensor<B>, v: &Tensor<B>) -> Result<(Tensor<B>, Tensor<B>)> {
         let out_k = self.k.append(k)?;
         let out_v = self.v.append(v)?;
         Ok((out_k, out_v))
@@ -384,7 +384,7 @@ impl RotatingKvCache {
     }
 
     /// Returns the attn_mask to be applied *after* adding `seq_len` to the cache.
-    pub fn attn_mask(&self, seq_len: usize, device: &Device) -> Result<Option<Tensor>> {
+    pub fn attn_mask(&self, seq_len: usize, device: &B::Device) -> Result<Option<Tensor<B>>> {
         self.k.attn_mask(seq_len, device)
     }
 
@@ -401,31 +401,31 @@ impl RotatingKvCache {
 }
 
 #[derive(Debug, Clone)]
-pub struct IndicesAndMask {
-    indices: Tensor,
-    mask: Tensor,
+pub struct IndicesAndMask<B: BackendStorage> {
+    indices: Tensor<B>,
+    mask: Tensor<B>,
 }
 
-impl IndicesAndMask {
-    pub fn mask(&self) -> &Tensor {
+impl<B: BackendStorage> IndicesAndMask<B> {
+    pub fn mask(&self) -> &Tensor<B> {
         &self.mask
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ScatteredKvCache {
-    k: Tensor,
-    v: Tensor,
+pub struct ScatteredKvCache<B: BackendStorage> {
+    k: Tensor<B>,
+    v: Tensor<B>,
     context: usize,
 }
 
-impl ScatteredKvCache {
+impl<B: BackendStorage> ScatteredKvCache<B> {
     pub fn append(
         &mut self,
-        k: &Tensor,
-        v: &Tensor,
-        iam: &IndicesAndMask,
-    ) -> Result<(Tensor, Tensor)> {
+        k: &Tensor<B>,
+        v: &Tensor<B>,
+        iam: &IndicesAndMask<B>,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         if self.context <= k.dim(2)? {
             return Ok((k.clone(), v.clone()));
         }
@@ -436,28 +436,33 @@ impl ScatteredKvCache {
         Ok((self.k.clone(), self.v.clone()))
     }
 
-    pub fn k(&self) -> &Tensor {
+    pub fn k(&self) -> &Tensor<B> {
         &self.k
     }
 
-    pub fn v(&self) -> &Tensor {
+    pub fn v(&self) -> &Tensor<B> {
         &self.v
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ScatteredCacheBuilder {
+pub struct ScatteredCacheBuilder<B: BackendStorage> {
     context: usize,
     // The current position in the stream, this can be larger than context.
     positions: Vec<usize>,
     // The index where the next element will be stored.
     indices: Vec<usize>,
     dtype: DType,
-    device: Device,
+    device: B::Device,
 }
 
-impl ScatteredCacheBuilder {
-    pub fn new(batch_size: usize, context: usize, dtype: DType, device: &Device) -> Result<Self> {
+impl<B: BackendStorage> ScatteredCacheBuilder<B> {
+    pub fn new(
+        batch_size: usize,
+        context: usize,
+        dtype: DType,
+        device: &B::Device,
+    ) -> Result<Self> {
         let positions = vec![0; batch_size];
         let indices = vec![0; batch_size];
         Ok(Self {
@@ -469,7 +474,7 @@ impl ScatteredCacheBuilder {
         })
     }
 
-    pub fn make_cache(&self, num_heads: usize, head_dim: usize) -> Result<ScatteredKvCache> {
+    pub fn make_cache(&self, num_heads: usize, head_dim: usize) -> Result<ScatteredKvCache<B>> {
         let batch_size = self.batch_size();
         let shape = (batch_size, num_heads, self.context, head_dim);
         let k = Tensor::zeros(shape, self.dtype, self.device())?;
@@ -504,7 +509,7 @@ impl ScatteredCacheBuilder {
         &mut self,
         seq_len: usize,
         batch_mask: &[bool],
-    ) -> Result<IndicesAndMask> {
+    ) -> Result<IndicesAndMask<B>> {
         // mask shape is (b, h, t, k)
         let context = self.context;
         if self.context <= seq_len {
@@ -580,7 +585,7 @@ impl ScatteredCacheBuilder {
         Ok(IndicesAndMask { indices, mask })
     }
 
-    pub fn device(&self) -> &Device {
+    pub fn device(&self) -> &B::Device {
         &self.device
     }
 
@@ -589,7 +594,7 @@ impl ScatteredCacheBuilder {
         &mut self,
         seq_len: usize,
         batch_mask: &[bool],
-    ) -> Result<IndicesAndMask> {
+    ) -> Result<IndicesAndMask<B>> {
         let mask = self.get_mask_abs(seq_len, seq_len)?;
         let mut cache_indices = Vec::with_capacity(self.batch_size());
         for (batch_i, &batch_mask) in batch_mask.iter().enumerate() {
@@ -614,7 +619,7 @@ impl ScatteredCacheBuilder {
         Ok(IndicesAndMask { indices, mask })
     }
 
-    fn get_mask_abs(&self, size1: usize, size2: usize) -> Result<Tensor> {
+    fn get_mask_abs(&self, size1: usize, size2: usize) -> Result<Tensor<B>> {
         let context = self.context;
         let mask: Vec<_> = (0..size1)
             .flat_map(|i| {
@@ -634,12 +639,13 @@ impl ScatteredCacheBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle::IndexOp;
+    use candle::{CpuDevice, CpuStorage, IndexOp};
 
     #[test]
     fn test_scattered_kv_cache() -> Result<()> {
-        let device = Device::Cpu;
-        let mut cache = ScatteredCacheBuilder::new(2, 5, DType::F32, &device)?;
+        let device = CpuDevice;
+        let mut cache: ScatteredCacheBuilder<CpuStorage> =
+            ScatteredCacheBuilder::new(2, 5, DType::F32, &device)?;
         let inf = f32::INFINITY;
 
         let iam = cache.indices_and_mask(1, &[true, false])?;

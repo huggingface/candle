@@ -1,7 +1,7 @@
 //! Variable initialization.
 // This is based on:
 // https://github.com/pytorch/pytorch/blob/07107919297db3f8ab37f11c12666b6d6d5f692e/torch/nn/init.py#
-use candle::{DType, Device, Result, Shape, Tensor, Var};
+use candle::{BackendStorage, DType, Result, Shape, Tensor, Var};
 
 /// Number of features as input or output of a layer.
 /// In Kaiming initialization, choosing `FanIn` preserves
@@ -110,7 +110,12 @@ pub const DEFAULT_KAIMING_NORMAL: Init = Init::Kaiming {
 
 impl Init {
     /// Creates a new tensor with the specified shape, device, and initialization.
-    pub fn var<S: Into<Shape>>(&self, s: S, dtype: DType, device: &Device) -> Result<Var> {
+    pub fn var<S: Into<Shape>, B: BackendStorage>(
+        &self,
+        s: S,
+        dtype: DType,
+        device: &B::Device,
+    ) -> Result<Var<B>> {
         match self {
             Self::Const(v) if *v == 0. => Var::zeros(s, dtype, device),
             Self::Const(v) if *v == 1. => Var::ones(s, dtype, device),

@@ -1,22 +1,22 @@
 //! Group Normalization.
 //!
 //! This layer applies Group Normalization over a mini-batch of inputs.
-use candle::{DType, Result, Tensor};
+use candle::{BackendStorage, DType, Result, Tensor};
 
 // This group norm version handles both weight and bias so removes the mean.
 #[derive(Clone, Debug)]
-pub struct GroupNorm {
-    weight: Tensor,
-    bias: Tensor,
+pub struct GroupNorm<B: BackendStorage> {
+    weight: Tensor<B>,
+    bias: Tensor<B>,
     eps: f64,
     num_channels: usize,
     num_groups: usize,
 }
 
-impl GroupNorm {
+impl<B: BackendStorage> GroupNorm<B> {
     pub fn new(
-        weight: Tensor,
-        bias: Tensor,
+        weight: Tensor<B>,
+        bias: Tensor<B>,
         num_channels: usize,
         num_groups: usize,
         eps: f64,
@@ -36,8 +36,8 @@ impl GroupNorm {
     }
 }
 
-impl crate::Module for GroupNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> crate::Module<B> for GroupNorm<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let x_shape = x.dims();
         if x_shape.len() <= 2 {
             candle::bail!("input rank for GroupNorm should be at least 3");
@@ -73,12 +73,17 @@ impl crate::Module for GroupNorm {
     }
 }
 
-pub fn group_norm(
+pub fn group_norm<B>(
     num_groups: usize,
     num_channels: usize,
     eps: f64,
-    vb: crate::VarBuilder,
-) -> Result<GroupNorm> {
+    vb: crate::VarBuilder<B>,
+) -> Result<GroupNorm<B>>
+where
+    B: BackendStorage,
+    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
+    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
+{
     let weight = vb.get_with_hints(num_channels, "weight", crate::Init::Const(1.))?;
     let bias = vb.get_with_hints(num_channels, "bias", crate::Init::Const(0.))?;
     GroupNorm::new(weight, bias, num_channels, num_groups, eps)

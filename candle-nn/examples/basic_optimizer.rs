@@ -4,15 +4,15 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle::{DType, Device, Result, Tensor};
+use candle::{CpuDevice, CpuStorage, DType, Result, Tensor};
 use candle_nn::{linear, AdamW, Linear, Module, Optimizer, ParamsAdamW, VarBuilder, VarMap};
 
-fn gen_data() -> Result<(Tensor, Tensor)> {
+fn gen_data() -> Result<(Tensor<CpuStorage>, Tensor<CpuStorage>)> {
     // Generate some sample linear data.
-    let w_gen = Tensor::new(&[[3f32, 1.]], &Device::Cpu)?;
-    let b_gen = Tensor::new(-2f32, &Device::Cpu)?;
+    let w_gen: Tensor<CpuStorage> = Tensor::new(&[[3f32, 1.]], &CpuDevice)?;
+    let b_gen = Tensor::new(-2f32, &CpuDevice)?;
     let gen = Linear::new(w_gen, Some(b_gen));
-    let sample_xs = Tensor::new(&[[2f32, 1.], [7., 4.], [-4., 12.], [5., 8.]], &Device::Cpu)?;
+    let sample_xs = Tensor::new(&[[2f32, 1.], [7., 4.], [-4., 12.], [5., 8.]], &CpuDevice)?;
     let sample_ys = gen.forward(&sample_xs)?;
     Ok((sample_xs, sample_ys))
 }
@@ -22,7 +22,7 @@ fn main() -> Result<()> {
 
     // Use backprop to run a linear regression between samples and get the coefficients back.
     let varmap = VarMap::new();
-    let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
+    let vb = VarBuilder::from_varmap(&varmap, DType::F32, &CpuDevice);
     let model = linear(2, 1, vb.pp("linear"))?;
     let params = ParamsAdamW {
         lr: 0.1,

@@ -1,11 +1,11 @@
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 
 /// Sample according to the Gumbel-Softmax distribution.
-pub fn gumbel_softmax<D: candle::shape::Dim>(
-    logits: &Tensor,
+pub fn gumbel_softmax<B: BackendStorage, D: candle::shape::Dim>(
+    logits: &Tensor<B>,
     temperature: f64,
     dim: D,
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     if temperature <= 0.0 {
         logits.argmax(dim)
     } else {

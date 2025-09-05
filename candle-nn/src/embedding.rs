@@ -1,21 +1,21 @@
 //! Embedding Layer.
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 
 #[derive(Clone, Debug)]
-pub struct Embedding {
-    embeddings: Tensor,
+pub struct Embedding<B: BackendStorage> {
+    embeddings: Tensor<B>,
     hidden_size: usize,
 }
 
-impl Embedding {
-    pub fn new(embeddings: Tensor, hidden_size: usize) -> Self {
+impl<B: BackendStorage> Embedding<B> {
+    pub fn new(embeddings: Tensor<B>, hidden_size: usize) -> Self {
         Self {
             embeddings,
             hidden_size,
         }
     }
 
-    pub fn embeddings(&self) -> &Tensor {
+    pub fn embeddings(&self) -> &Tensor<B> {
         &self.embeddings
     }
 
@@ -25,8 +25,8 @@ impl Embedding {
     }
 }
 
-impl crate::Module for Embedding {
-    fn forward(&self, indexes: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> crate::Module<B> for Embedding<B> {
+    fn forward(&self, indexes: &Tensor<B>) -> Result<Tensor<B>> {
         let mut final_dims = indexes.dims().to_vec();
         final_dims.push(self.hidden_size);
         let indexes = indexes.flatten_all()?;
@@ -36,7 +36,16 @@ impl crate::Module for Embedding {
     }
 }
 
-pub fn embedding(in_size: usize, out_size: usize, vb: crate::VarBuilder) -> Result<Embedding> {
+pub fn embedding<B>(
+    in_size: usize,
+    out_size: usize,
+    vb: crate::VarBuilder<B>,
+) -> Result<Embedding<B>>
+where
+    B: BackendStorage,
+    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
+    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
+{
     let embeddings = vb.get_with_hints(
         (in_size, out_size),
         "weight",

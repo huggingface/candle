@@ -1,6 +1,6 @@
 //! Activation Functions
 //!
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize, serde::Serialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -25,8 +25,8 @@ pub enum Activation {
     GeluPytorchTanh,
 }
 
-impl super::Module for Activation {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> super::Module<B> for Activation {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         match self {
             Self::Gelu => xs.gelu_erf(),
             // https://github.com/huggingface/transformers/blob/12f043eaeaabfef6f6efea411d98e6f6d3c094b7/src/transformers/activations.py#L49-L78
@@ -48,17 +48,17 @@ impl super::Module for Activation {
 }
 
 #[derive(Clone, Debug)]
-pub struct PReLU {
-    weight: Tensor,
+pub struct PReLU<B: BackendStorage> {
+    weight: Tensor<B>,
     is_scalar: bool,
 }
 
-impl PReLU {
-    pub fn new(weight: Tensor, is_scalar: bool) -> Self {
+impl<B: BackendStorage> PReLU<B> {
+    pub fn new(weight: Tensor<B>, is_scalar: bool) -> Self {
         Self { weight, is_scalar }
     }
 
-    pub fn weight(&self) -> &Tensor {
+    pub fn weight(&self) -> &Tensor<B> {
         &self.weight
     }
 
@@ -67,8 +67,8 @@ impl PReLU {
     }
 }
 
-impl candle::Module for PReLU {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for PReLU<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let weight = if self.is_scalar {
             self.weight.reshape(())?
         } else if xs.shape() == self.weight.shape() {
@@ -99,7 +99,12 @@ impl candle::Module for PReLU {
 ///   `Some` for a 1D vector with the appropriate number of channels. When applying the `forward`
 ///   function, the input tensor shape `s` should either be one dimension with this number of
 ///   channels or if `s.len() >= 2` it should have `s[1]` equal to this number.
-pub fn prelu(num_channels: Option<usize>, vs: crate::VarBuilder) -> Result<PReLU> {
+pub fn prelu<B>(num_channels: Option<usize>, vs: crate::VarBuilder<B>) -> Result<PReLU<B>>
+where
+    B: BackendStorage,
+    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
+    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
+{
     let init_ws = crate::init::Init::Const(0.25);
     // When using a scalar weight, the PyTorch encoding is to use a 1d vector of length 1.
     let ws = vs.get_with_hints((num_channels.unwrap_or(1),), "weight", init_ws)?;

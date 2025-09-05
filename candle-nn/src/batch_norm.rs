@@ -7,7 +7,7 @@
 //! running stats.
 //!
 //! [`Batch Normalization`]: https://arxiv.org/abs/1502.03167
-use candle::{DType, Result, Tensor, Var};
+use candle::{BackendStorage, DType, Result, Tensor, Var};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BatchNormConfig {
@@ -45,16 +45,16 @@ impl From<f64> for BatchNormConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct BatchNorm {
-    running_mean: Var,
-    running_var: Var,
-    weight_and_bias: Option<(Tensor, Tensor)>,
+pub struct BatchNorm<B: BackendStorage> {
+    running_mean: Var<B>,
+    running_var: Var<B>,
+    weight_and_bias: Option<(Tensor<B>, Tensor<B>)>,
     remove_mean: bool,
     eps: f64,
     momentum: f64,
 }
 
-impl BatchNorm {
+impl<B: BackendStorage> BatchNorm<B> {
     fn check_validity(&self, num_features: usize) -> Result<()> {
         if self.eps < 0. {
             candle::bail!("batch-norm eps cannot be negative {}", self.eps)
@@ -96,10 +96,10 @@ impl BatchNorm {
 
     pub fn new(
         num_features: usize,
-        running_mean: Tensor,
-        running_var: Tensor,
-        weight: Tensor,
-        bias: Tensor,
+        running_mean: Tensor<B>,
+        running_var: Tensor<B>,
+        weight: Tensor<B>,
+        bias: Tensor<B>,
         eps: f64,
     ) -> Result<Self> {
         let out = Self {
@@ -116,8 +116,8 @@ impl BatchNorm {
 
     pub fn new_no_bias(
         num_features: usize,
-        running_mean: Tensor,
-        running_var: Tensor,
+        running_mean: Tensor<B>,
+        running_var: Tensor<B>,
         eps: f64,
     ) -> Result<Self> {
         let out = Self {
@@ -134,10 +134,10 @@ impl BatchNorm {
 
     pub fn new_with_momentum(
         num_features: usize,
-        running_mean: Tensor,
-        running_var: Tensor,
-        weight: Tensor,
-        bias: Tensor,
+        running_mean: Tensor<B>,
+        running_var: Tensor<B>,
+        weight: Tensor<B>,
+        bias: Tensor<B>,
         eps: f64,
         momentum: f64,
     ) -> Result<Self> {
@@ -155,8 +155,8 @@ impl BatchNorm {
 
     pub fn new_no_bias_with_momentum(
         num_features: usize,
-        running_mean: Tensor,
-        running_var: Tensor,
+        running_mean: Tensor<B>,
+        running_var: Tensor<B>,
         eps: f64,
         momentum: f64,
     ) -> Result<Self> {
@@ -172,11 +172,11 @@ impl BatchNorm {
         Ok(out)
     }
 
-    pub fn running_mean(&self) -> &Tensor {
+    pub fn running_mean(&self) -> &Tensor<B> {
         self.running_mean.as_tensor()
     }
 
-    pub fn running_var(&self) -> &Tensor {
+    pub fn running_var(&self) -> &Tensor<B> {
         self.running_var.as_tensor()
     }
 
@@ -184,7 +184,7 @@ impl BatchNorm {
         self.eps
     }
 
-    pub fn weight_and_bias(&self) -> Option<(&Tensor, &Tensor)> {
+    pub fn weight_and_bias(&self) -> Option<(&Tensor<B>, &Tensor<B>)> {
         self.weight_and_bias.as_ref().map(|v| (&v.0, &v.1))
     }
 
@@ -192,7 +192,7 @@ impl BatchNorm {
         self.momentum
     }
 
-    pub fn forward_train(&self, x: &Tensor) -> Result<Tensor> {
+    pub fn forward_train(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let num_features = self.running_mean.as_tensor().dim(0)?;
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
@@ -252,7 +252,7 @@ impl BatchNorm {
         x.reshape(x_dims_post_transpose)?.transpose(0, 1)
     }
 
-    fn forward_eval(&self, x: &Tensor) -> Result<Tensor> {
+    fn forward_eval(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let target_shape: Vec<usize> = x
             .dims()
             .iter()
@@ -288,8 +288,8 @@ impl BatchNorm {
     }
 }
 
-impl crate::ModuleT for BatchNorm {
-    fn forward_t(&self, x: &Tensor, train: bool) -> Result<Tensor> {
+impl<B: BackendStorage> crate::ModuleT<B> for BatchNorm<B> {
+    fn forward_t(&self, x: &Tensor<B>, train: bool) -> Result<Tensor<B>> {
         if train {
             self.forward_train(x)
         } else {
@@ -298,11 +298,17 @@ impl crate::ModuleT for BatchNorm {
     }
 }
 
-pub fn batch_norm<C: Into<BatchNormConfig>>(
+pub fn batch_norm<B, C>(
     num_features: usize,
     config: C,
-    vb: crate::VarBuilder,
-) -> Result<BatchNorm> {
+    vb: crate::VarBuilder<B>,
+) -> Result<BatchNorm<B>>
+where
+    C: Into<BatchNormConfig>,
+    B: BackendStorage,
+    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
+    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
+{
     use crate::Init;
     let config = config.into();
     if config.eps < 0. {

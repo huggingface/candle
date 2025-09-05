@@ -1,17 +1,17 @@
-use candle::{Result, Shape, Tensor};
+use candle::{CpuDevice, CpuStorage, Result, Shape, Tensor};
 use candle_nn::encoding::one_hot;
 
 #[test]
 fn test_i64_one_hot() -> Result<()> {
-    let device = candle::Device::Cpu;
+    let device = CpuDevice;
 
-    let indices = Tensor::new(vec![vec![0i64, 2], vec![1, -1]], &device)?;
+    let indices: Tensor<CpuStorage> = Tensor::new(vec![vec![0i64, 2], vec![1, -1]], &device)?;
     let depth = 4;
 
     let on_value = 1.0;
     let off_value = 0.0;
 
-    let one_hot = one_hot::<f32>(indices, depth, on_value, off_value)?;
+    let one_hot = one_hot::<_, f32>(indices, depth, on_value, off_value)?;
 
     let expected_matrix = [
         [[1., 0., 0., 0.], [0., 0., 1., 0.]],
@@ -29,9 +29,9 @@ fn test_i64_one_hot() -> Result<()> {
 
 #[test]
 fn test_rank_3_one_hot() -> Result<()> {
-    let device = candle::Device::Cpu;
+    let device = CpuDevice;
 
-    let indices = Tensor::new(
+    let indices: Tensor<CpuStorage> = Tensor::new(
         vec![
             vec![vec![0i64, 1], vec![2, 3]],
             vec![vec![3, 1], vec![1, -1]],
@@ -43,9 +43,9 @@ fn test_rank_3_one_hot() -> Result<()> {
     let on_value = 1.0;
     let off_value = 0.0;
 
-    let one_hot = one_hot::<f32>(indices, depth, on_value, off_value)?;
+    let one_hot = one_hot::<_, f32>(indices, depth, on_value, off_value)?;
 
-    let expected_matrix = Tensor::new(
+    let expected_matrix: Tensor<CpuStorage> = Tensor::new(
         vec![
             vec![
                 vec![vec![1f32, 0., 0., 0.], vec![0., 1., 0., 0.]],
@@ -72,9 +72,9 @@ fn test_rank_3_one_hot() -> Result<()> {
 
 #[test]
 fn test_u8_one_cold() -> Result<()> {
-    let device = candle::Device::Cpu;
+    let device = CpuDevice;
     let depth = 4;
-    let indices = Tensor::new(vec![vec![0i64, 2], vec![1, -1]], &device)?;
+    let indices: Tensor<CpuStorage> = Tensor::new(vec![vec![0i64, 2], vec![1, -1]], &device)?;
 
     let on_value = 0u8;
     let off_value = 1;
@@ -95,9 +95,9 @@ fn test_u8_one_cold() -> Result<()> {
 
 #[test]
 fn test_iter() -> Result<()> {
-    let device = candle::Device::Cpu;
+    let device = CpuDevice;
     let depth = 4;
-    let indices = Tensor::new(vec![vec![0i64, 2], vec![1, -1]], &device)?;
+    let indices: Tensor<CpuStorage> = Tensor::new(vec![vec![0i64, 2], vec![1, -1]], &device)?;
     let matrix = indices.to_vec2::<i64>()?;
     let (dim1, dim2) = indices.dims2()?;
 

@@ -91,6 +91,7 @@ pub mod utils;
 mod variable;
 
 pub use backend::{BackendDevice, BackendStorage};
+pub use convert::{TryConvertStorage, TryToDevice};
 pub use cpu_backend::{CpuDevice, CpuStorage, CpuStorageRef};
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;

@@ -5,11 +5,13 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle::quantized::GgmlType;
-use candle::{CpuStorage, Device, Layout, Module, Result, Shape, Tensor, D};
+use candle::quantized::{GgmlType, QCpuStorage};
+use candle::{CpuDevice, CpuStorage, Layout, Module, Result, Shape, D};
 use clap::{Parser, Subcommand};
 
 const CHECK_CONV2D: bool = false;
+
+type Tensor = candle::Tensor<CpuStorage>;
 
 trait Benchmark {
     type PreProcessData;
@@ -37,7 +39,7 @@ impl Im2Col {
     }
 }
 
-impl candle::CustomOp1 for Im2Col {
+impl candle::CustomOp1<CpuStorage> for Im2Col {
     fn name(&self) -> &'static str {
         "im2col"
     }
@@ -108,8 +110,8 @@ impl Benchmark for Conv1d {
     type PreProcessData = (Tensor, Tensor);
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
-        let inp = Tensor::randn(0f32, 1., (1, 384, 3000), &Device::Cpu)?;
-        let w = Tensor::randn(0f32, 1., (384, 384, 3), &Device::Cpu)?;
+        let inp = Tensor::randn(0f32, 1., (1, 384, 3000), &CpuDevice)?;
+        let w = Tensor::randn(0f32, 1., (384, 384, 3), &CpuDevice)?;
         Ok((inp, w))
     }
 
@@ -127,8 +129,8 @@ impl Benchmark for Conv2d {
     type RunResult = Tensor;
 
     fn preprocess() -> Result<Self::PreProcessData> {
-        let inp = Tensor::randn(0f32, 1., (2, 320, 96, 96), &Device::Cpu)?;
-        let w = Tensor::randn(0f32, 1., (320, 320, 3, 3), &Device::Cpu)?;
+        let inp = Tensor::randn(0f32, 1., (2, 320, 96, 96), &CpuDevice)?;
+        let w = Tensor::randn(0f32, 1., (320, 320, 3, 3), &CpuDevice)?;
         Ok((inp, w))
     }
 
@@ -146,8 +148,8 @@ impl Benchmark for Conv2dIm2Col {
     type RunResult = Tensor;
 
     fn preprocess() -> Result<Self::PreProcessData> {
-        let inp = Tensor::randn(0f32, 1., (2, 320, 96, 96), &Device::Cpu)?;
-        let w = Tensor::randn(0f32, 1., (320, 320, 3, 3), &Device::Cpu)?;
+        let inp = Tensor::randn(0f32, 1., (2, 320, 96, 96), &CpuDevice)?;
+        let w = Tensor::randn(0f32, 1., (320, 320, 3, 3), &CpuDevice)?;
         Ok((inp, w))
     }
 
@@ -185,8 +187,8 @@ impl Benchmark for MatMul {
     type PreProcessData = (Tensor, Tensor);
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
-        let lhs = Tensor::randn(0f32, 1., (1024, 1024), &Device::Cpu)?;
-        let rhs = Tensor::randn(0f32, 1., (1024, 1024), &Device::Cpu)?;
+        let lhs = Tensor::randn(0f32, 1., (1024, 1024), &CpuDevice)?;
+        let rhs = Tensor::randn(0f32, 1., (1024, 1024), &CpuDevice)?;
         Ok((lhs, rhs))
     }
 
@@ -202,8 +204,8 @@ impl Benchmark for MatVec {
     type PreProcessData = (Tensor, Tensor);
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
-        let lhs = Tensor::randn(0f32, 1., (1024 * 4, 1024 * 4), &Device::Cpu)?;
-        let rhs = Tensor::randn(0f32, 1., (1024 * 4, 1), &Device::Cpu)?;
+        let lhs = Tensor::randn(0f32, 1., (1024 * 4, 1024 * 4), &CpuDevice)?;
+        let rhs = Tensor::randn(0f32, 1., (1024 * 4, 1), &CpuDevice)?;
         Ok((lhs, rhs))
     }
 
@@ -218,16 +220,16 @@ impl Benchmark for MatVec {
 // https://github.com/ggerganov/llama.cpp/blob/master/examples/benchmark/benchmark-matmult.cpp
 struct QMatMul;
 impl Benchmark for QMatMul {
-    type PreProcessData = (candle::quantized::QMatMul, Tensor);
+    type PreProcessData = (candle::quantized::QMatMul<QCpuStorage>, Tensor);
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
         let zeros = vec![candle::quantized::k_quants::BlockQ4_0::zeros(); 4096 * 11008 / 32];
         let mm = candle::quantized::QTensor::new(
-            candle::quantized::QStorage::Cpu(Box::new(zeros)),
+            QCpuStorage::new(Box::new(zeros)).into(),
             (4096, 11008),
         )?;
         let mm = candle::quantized::QMatMul::from_qtensor(mm)?;
-        let arg = Tensor::randn(0f32, 1., (128, 11008), &Device::Cpu)?;
+        let arg = Tensor::randn(0f32, 1., (128, 11008), &CpuDevice)?;
         Ok((mm, arg))
     }
 
@@ -243,8 +245,8 @@ impl Benchmark for Cat {
     type PreProcessData = (Tensor, Tensor);
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
-        let lhs = Tensor::randn(0f32, 1., (1, 32, 2000, 128), &Device::Cpu)?;
-        let rhs = Tensor::randn(0f32, 1., (1, 32, 1, 128), &Device::Cpu)?;
+        let lhs = Tensor::randn(0f32, 1., (1, 32, 2000, 128), &CpuDevice)?;
+        let rhs = Tensor::randn(0f32, 1., (1, 32, 1, 128), &CpuDevice)?;
         Ok((lhs, rhs))
     }
 
@@ -261,7 +263,7 @@ impl Benchmark for Softmax {
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
         // Typical whisper tiny size.
-        let x = Tensor::randn(0f32, 1., (1, 6, 200, 1500), &Device::Cpu)?;
+        let x = Tensor::randn(0f32, 1., (1, 6, 200, 1500), &CpuDevice)?;
         Ok(x)
     }
 
@@ -278,7 +280,7 @@ impl Benchmark for SoftmaxLastDim {
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
         // Typical whisper tiny size.
-        let x = Tensor::randn(0f32, 1., (1, 6, 200, 1500), &Device::Cpu)?;
+        let x = Tensor::randn(0f32, 1., (1, 6, 200, 1500), &CpuDevice)?;
         Ok(x)
     }
 

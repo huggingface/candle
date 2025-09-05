@@ -1,14 +1,16 @@
 #[cfg(feature = "metal")]
 mod metal_sdpa_tests {
-    use candle::{DType, Device, Result, Shape, Tensor};
+    use candle::{BackendDevice, DType, MetalDevice, MetalStorage, Result, Shape};
     use rand::SeedableRng;
     use rand_distr::Distribution;
     use std::ops::{Div, Mul};
 
+    type Tensor = candle::Tensor<MetalStorage>;
+
     fn randn<S: Into<Shape>>(
         rng: &mut rand::rngs::StdRng,
         shape: S,
-        dev: &Device,
+        dev: &MetalDevice,
     ) -> Result<Tensor> {
         let shape = shape.into();
         let elem_count = shape.elem_count();
@@ -27,7 +29,7 @@ mod metal_sdpa_tests {
         const H: usize = 3;
 
         let scale: f64 = f64::from(DK as u32).sqrt().recip();
-        let device = Device::new_metal(0)?;
+        let device = MetalDevice::new(0)?;
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let q = randn(&mut rng, (BS, H, R, DK), &device)?;
         let k = randn(&mut rng, (BS, H, L, DK), &device)?;
@@ -57,7 +59,7 @@ mod metal_sdpa_tests {
         const H: usize = 3;
 
         let scale: f64 = f64::from(DK as u32).sqrt().recip();
-        let device = Device::new_metal(0)?;
+        let device = MetalDevice::new(0)?;
         let mut rng = rand::rngs::StdRng::seed_from_u64(4242);
         let q = randn(&mut rng, (BS, H, R, DK), &device)?;
         let k = randn(&mut rng, (BS, H, L, DK), &device)?;
@@ -88,7 +90,7 @@ mod metal_sdpa_tests {
         const SOFTCAP: f64 = 50.;
 
         let scale: f64 = f64::from(DK as u32).sqrt().recip();
-        let device = Device::new_metal(0)?;
+        let device = MetalDevice::new(0)?;
         let mut rng = rand::rngs::StdRng::seed_from_u64(424242);
         let q = randn(&mut rng, (BS, H, R, DK), &device)?;
         let k = randn(&mut rng, (BS, H, L, DK), &device)?;
@@ -124,7 +126,7 @@ mod metal_sdpa_tests {
         const SOFTCAP: f64 = 50.;
 
         let scale: f64 = f64::from(DK as u32).sqrt().recip();
-        let device = Device::new_metal(0)?;
+        let device = MetalDevice::new(0)?;
         let mut rng = rand::rngs::StdRng::seed_from_u64(42424242);
         let q = randn(&mut rng, (BS, H, R, DK), &device)?;
         let k = randn(&mut rng, (BS, H, L, DK), &device)?;
@@ -159,7 +161,7 @@ mod metal_sdpa_tests {
         const H: usize = 3;
 
         let scale: f64 = f64::from(DK as u32).sqrt().recip();
-        let device = Device::new_metal(0)?;
+        let device = MetalDevice::new(0)?;
         let mut rng = rand::rngs::StdRng::seed_from_u64(4242424242);
         let q = randn(&mut rng, (BS, H, R, DK), &device)?;
         let k = randn(&mut rng, (BS, H, L, DK), &device)?;

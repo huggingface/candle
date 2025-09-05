@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle::{test_utils::to_vec2_round, DType, Device, Result, Tensor};
+use candle::{test_utils::to_vec2_round, CpuDevice, CpuStorage, DType, Result, Tensor};
 use candle_nn::RNN;
 
 /* The following test can be verified against PyTorch using the following snippet.
@@ -24,8 +24,8 @@ print(state)
 */
 #[test]
 fn lstm() -> Result<()> {
-    let cpu = &Device::Cpu;
-    let w_ih = Tensor::arange(0f32, 24f32, cpu)?.reshape((12, 2))?;
+    let cpu = &CpuDevice;
+    let w_ih: Tensor<CpuStorage> = Tensor::arange(0f32, 24f32, cpu)?.reshape((12, 2))?;
     let w_ih = w_ih.cos()?;
     let w_hh = Tensor::arange(0f32, 36f32, cpu)?.reshape((12, 3))?;
     let w_hh = w_hh.sin()?;
@@ -42,7 +42,9 @@ fn lstm() -> Result<()> {
     ]
     .into_iter()
     .collect();
-    let vb = candle_nn::VarBuilder::from_tensors(tensors, DType::F32, cpu);
+    let vb: candle_nn::VarBuilder<CpuStorage> =
+        candle_nn::VarBuilder::from_tensors(tensors, DType::F32, cpu);
+
     let lstm = candle_nn::lstm(2, 3, Default::default(), vb)?;
     let mut state = lstm.zero_state(1)?;
     for inp in [3f32, 1., 4., 1., 5., 9., 2.] {
@@ -73,8 +75,8 @@ print(state)
 */
 #[test]
 fn gru() -> Result<()> {
-    let cpu = &Device::Cpu;
-    let w_ih = Tensor::arange(0f32, 18f32, cpu)?.reshape((9, 2))?;
+    let cpu = &CpuDevice;
+    let w_ih: Tensor<CpuStorage> = Tensor::arange(0f32, 18f32, cpu)?.reshape((9, 2))?;
     let w_ih = w_ih.cos()?;
     let w_hh = Tensor::arange(0f32, 27f32, cpu)?.reshape((9, 3))?;
     let w_hh = w_hh.sin()?;

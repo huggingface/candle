@@ -1,6 +1,6 @@
 //! A `VarMap` is a store that holds named variables.
 //!
-use candle::{DType, Device, Result, Shape, Tensor, Var};
+use candle::{BackendStorage, DType, Result, Shape, Tensor, Var};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -9,11 +9,11 @@ use std::sync::{Arc, Mutex};
 /// missing.
 /// `VarMap` structures can be serialized in the safetensors format.
 #[derive(Clone)]
-pub struct VarMap {
-    data: Arc<Mutex<HashMap<String, Var>>>,
+pub struct VarMap<B: BackendStorage> {
+    data: Arc<Mutex<HashMap<String, Var<B>>>>,
 }
 
-impl VarMap {
+impl<B: BackendStorage> VarMap<B> {
     /// Create a new empty `VarMap`.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
@@ -22,7 +22,7 @@ impl VarMap {
     }
 
     /// Retrieve all the variables currently stored in the map.
-    pub fn all_vars(&self) -> Vec<Var> {
+    pub fn all_vars(&self) -> Vec<Var<B>> {
         let tensor_data = self.data.lock().unwrap();
         #[allow(clippy::map_clone)]
         tensor_data.values().map(|c| c.clone()).collect::<Vec<_>>()
@@ -54,7 +54,7 @@ impl VarMap {
     }
 
     /// Set a named variable to some value.
-    pub fn set_one<K: AsRef<str>, V: AsRef<Tensor>>(&mut self, name: K, value: V) -> Result<()> {
+    pub fn set_one<K: AsRef<str>, V: AsRef<Tensor<B>>>(&mut self, name: K, value: V) -> Result<()> {
         let tensor_data = self.data.lock().unwrap();
         let name = name.as_ref();
         match tensor_data.get(name) {
@@ -72,7 +72,7 @@ impl VarMap {
     ///
     /// If an error is returned, some of the variables might have already been set to their new
     /// values.
-    pub fn set<I: Iterator<Item = (K, V)>, K: AsRef<str>, V: AsRef<Tensor>>(
+    pub fn set<I: Iterator<Item = (K, V)>, K: AsRef<str>, V: AsRef<Tensor<B>>>(
         &mut self,
         iter: I,
     ) -> Result<()> {
@@ -98,8 +98,8 @@ impl VarMap {
         path: &str,
         init: crate::Init,
         dtype: DType,
-        device: &Device,
-    ) -> Result<Tensor> {
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
         let shape = shape.into();
         let mut tensor_data = self.data.lock().unwrap();
         if let Some(tensor) = tensor_data.get(path) {
@@ -115,7 +115,7 @@ impl VarMap {
         Ok(tensor)
     }
 
-    pub fn data(&self) -> &Mutex<HashMap<String, Var>> {
+    pub fn data(&self) -> &Mutex<HashMap<String, Var<B>>> {
         &self.data
     }
 }
