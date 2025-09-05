@@ -1,5 +1,5 @@
 use super::voxtral_llama::{VoxtralLlama, VoxtralLlamaCache, VoxtralLlamaConfig};
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{
     layer_norm, linear, linear_no_bias, Conv1d, Dropout, LayerNorm, Linear, VarBuilder,
 };
@@ -81,25 +81,25 @@ impl VoxtralEncoderConfig {
 
 /// Custom cache for multimodal inputs
 #[derive(Debug, Clone)]
-pub struct VoxtralCache {
+pub struct VoxtralCache<B: BackendStorage> {
     cache: VoxtralLlamaCache,
     audio_processed: bool,
-    cached_audio_embeds: Option<Tensor>,
+    cached_audio_embeds: Option<Tensor<B>>,
     cached_audio_positions: Option<Vec<(usize, usize)>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct VoxtralGenerationConfig {
+pub struct VoxtralGenerationConfig<B: BackendStorage> {
     pub max_new_tokens: usize,
     pub temperature: f64,
     pub top_p: Option<f64>,
-    pub device: Device,
+    pub device: B::Device,
     /// If cache is None, the model will create a new cache.
-    pub cache: Option<VoxtralCache>,
+    pub cache: Option<VoxtralCache<B>>,
 }
 
-impl VoxtralGenerationConfig {
-    pub fn new(device: Device) -> Self {
+impl<B: BackendStorage> VoxtralGenerationConfig<B> {
+    pub fn new(device: B::Device) -> Self {
         Self {
             max_new_tokens: 500,
             temperature: 0.0,
@@ -110,12 +110,12 @@ impl VoxtralGenerationConfig {
     }
 }
 
-impl VoxtralCache {
+impl<B: BackendStorage> VoxtralCache<B> {
     pub fn new(
         use_kv_cache: bool,
         dtype: DType,
         config: &VoxtralLlamaConfig,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         Ok(Self {
             cache: VoxtralLlamaCache::new(use_kv_cache, dtype, config, device)?,
@@ -136,7 +136,7 @@ impl VoxtralCache {
 }
 
 /// Safely clamp tensor values for different dtypes
-fn safe_clamp(x: &Tensor) -> Result<Tensor> {
+fn safe_clamp<B: BackendStorage>(x: &Tensor<B>) -> Result<Tensor<B>> {
     match x.dtype() {
         DType::F16 => {
             // Match PyTorch exactly: torch.finfo(torch.float16).max - 1000 = 64504.0
@@ -152,12 +152,12 @@ fn safe_clamp(x: &Tensor) -> Result<Tensor> {
 }
 
 /// Replace audio tokens in embeddings with projected audio features
-pub fn replace_audio_tokens(
-    inputs_embeds: &Tensor,
-    audio_embeds: &Tensor,
+pub fn replace_audio_tokens<B: BackendStorage>(
+    inputs_embeds: &Tensor<B>,
+    audio_embeds: &Tensor<B>,
     audio_positions: &[(usize, usize)],
-    device: &Device,
-) -> Result<Tensor> {
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     if audio_positions.is_empty() {
         return Ok(inputs_embeds.clone());
     }
@@ -231,8 +231,8 @@ pub fn replace_audio_tokens(
 }
 
 /// Find positions of audio tokens in input sequences
-pub fn find_audio_token_positions(
-    input_ids: &Tensor,
+pub fn find_audio_token_positions<B: BackendStorage>(
+    input_ids: &Tensor<B>,
     audio_token_id: usize,
 ) -> Result<Vec<(usize, usize)>> {
     // Handle both i64 and u32 token types by converting to i64 first if needed
@@ -257,19 +257,19 @@ pub fn find_audio_token_positions(
 }
 
 #[derive(Debug, Clone)]
-struct VoxtralAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    out_proj: Linear,
+struct VoxtralAttention<B: BackendStorage> {
+    q_proj: Linear<B>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    out_proj: Linear<B>,
     num_heads: usize,
     head_dim: usize,
     scaling: f64,
     attention_dropout: Dropout,
 }
 
-impl VoxtralAttention {
-    fn new(cfg: &VoxtralEncoderConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> VoxtralAttention<B> {
+    fn new(cfg: &VoxtralEncoderConfig, vb: VarBuilder<B>) -> Result<Self> {
         let embed_dim = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let head_dim = embed_dim / num_heads;
@@ -303,15 +303,15 @@ impl VoxtralAttention {
         })
     }
 
-    fn reshape_for_scores(&self, x: &Tensor, seq_len: usize, bsz: usize) -> Result<Tensor> {
+    fn reshape_for_scores(&self, x: &Tensor<B>, seq_len: usize, bsz: usize) -> Result<Tensor<B>> {
         x.reshape((bsz, seq_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()
     }
 }
 
-impl Module for VoxtralAttention {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for VoxtralAttention<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let (bsz, seq_len, _) = x.dims3()?;
 
         // Project queries, keys, and values - apply scaling to queries to match PyTorch SDPA
@@ -349,19 +349,19 @@ impl Module for VoxtralAttention {
 }
 
 #[derive(Debug, Clone)]
-struct VoxtralEncoderLayer {
-    self_attn: VoxtralAttention,
-    self_attn_layer_norm: LayerNorm,
-    fc1: Linear,
-    fc2: Linear,
-    final_layer_norm: LayerNorm,
+struct VoxtralEncoderLayer<B: BackendStorage> {
+    self_attn: VoxtralAttention<B>,
+    self_attn_layer_norm: LayerNorm<B>,
+    fc1: Linear<B>,
+    fc2: Linear<B>,
+    final_layer_norm: LayerNorm<B>,
     activation: candle_nn::Activation,
     dropout: Dropout,
     activation_dropout: Dropout,
 }
 
-impl VoxtralEncoderLayer {
-    fn new(cfg: &VoxtralEncoderConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> VoxtralEncoderLayer<B> {
+    fn new(cfg: &VoxtralEncoderConfig, vb: VarBuilder<B>) -> Result<Self> {
         let embed_dim = cfg.hidden_size;
 
         let self_attn = VoxtralAttention::new(cfg, vb.pp("self_attn"))?;
@@ -400,7 +400,7 @@ impl VoxtralEncoderLayer {
         self.fc1.weight().dims()[0]
     }
 
-    fn forward(&self, x: &Tensor, training: bool) -> Result<Tensor> {
+    fn forward(&self, x: &Tensor<B>, training: bool) -> Result<Tensor<B>> {
         // Self-attention with residual connection
         let residual = x;
         let x = self.self_attn_layer_norm.forward(x)?;
@@ -424,18 +424,18 @@ impl VoxtralEncoderLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct VoxtralEncoder {
-    conv1: Conv1d,
-    conv2: Conv1d,
-    embed_positions: Tensor,
-    layers: Vec<VoxtralEncoderLayer>,
-    layer_norm: LayerNorm,
+pub struct VoxtralEncoder<B: BackendStorage> {
+    conv1: Conv1d<B>,
+    conv2: Conv1d<B>,
+    embed_positions: Tensor<B>,
+    layers: Vec<VoxtralEncoderLayer<B>>,
+    layer_norm: LayerNorm<B>,
     dropout: Dropout,
     layerdrop: f64,
 }
 
-impl VoxtralEncoder {
-    pub fn new(cfg: &VoxtralEncoderConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> VoxtralEncoder<B> {
+    pub fn new(cfg: &VoxtralEncoderConfig, vb: VarBuilder<B>) -> Result<Self> {
         // Ensure Whisper compatibility
         let cfg = cfg.clone().with_whisper_compatibility();
 
@@ -494,11 +494,15 @@ impl VoxtralEncoder {
         })
     }
 
-    pub fn forward(&self, input_features: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, input_features: &Tensor<B>) -> Result<Tensor<B>> {
         self.forward_with_training(input_features, false)
     }
 
-    pub fn forward_with_training(&self, input_features: &Tensor, training: bool) -> Result<Tensor> {
+    pub fn forward_with_training(
+        &self,
+        input_features: &Tensor<B>,
+        training: bool,
+    ) -> Result<Tensor<B>> {
         // Keep conv layers in F16 to avoid shape issues
         let expected_dtype = self.conv1.weight().dtype();
         let input_features = if input_features.dtype() != expected_dtype {
@@ -597,11 +601,11 @@ impl VoxtralEncoder {
     /// Forward a single layer with stochastic depth (layer dropout)
     fn forward_layer_with_dropout(
         &self,
-        x: &Tensor,
-        layer: &VoxtralEncoderLayer,
+        x: &Tensor<B>,
+        layer: &VoxtralEncoderLayer<B>,
         _layer_idx: usize,
         training: bool,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         if training && self.layerdrop > 0.0 {
             // Apply stochastic depth with proper randomization
             let mut rng = rand::rng();
@@ -630,10 +634,10 @@ impl VoxtralEncoder {
     /// Process long audio sequences in chunks to save memory
     pub fn process_long_audio(
         &self,
-        input_features: &Tensor,
+        input_features: &Tensor<B>,
         chunk_size: usize,
         overlap: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let (_batch_size, _num_mel, seq_len) = input_features.dims3()?;
 
         if seq_len <= chunk_size {
@@ -653,7 +657,7 @@ impl VoxtralEncoder {
             // Handle overlap by averaging
             if !outputs.is_empty() && overlap > 0 {
                 let overlap_frames = overlap / 2; // Account for conv2 stride
-                let last_output: &mut Tensor = outputs.last_mut().unwrap();
+                let last_output: &mut Tensor<B> = outputs.last_mut().unwrap();
                 let last_len = last_output.dim(1)?;
 
                 // Average overlapping regions
@@ -674,20 +678,20 @@ impl VoxtralEncoder {
         }
 
         // Concatenate all outputs
-        let outputs_ref: Vec<&Tensor> = outputs.iter().collect();
+        let outputs_ref: Vec<&Tensor<B>> = outputs.iter().collect();
         Tensor::cat(&outputs_ref, 1)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct VoxtralMultiModalProjector {
-    linear_1: Linear,
-    linear_2: Linear,
+pub struct VoxtralMultiModalProjector<B: BackendStorage> {
+    linear_1: Linear<B>,
+    linear_2: Linear<B>,
     activation: candle_nn::Activation,
 }
 
-impl VoxtralMultiModalProjector {
-    pub fn new(cfg: &VoxtralConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> VoxtralMultiModalProjector<B> {
+    pub fn new(cfg: &VoxtralConfig, vb: VarBuilder<B>) -> Result<Self> {
         let linear_1 = linear_no_bias(
             cfg.audio_config.intermediate_size,
             cfg.text_config.hidden_size,
@@ -716,7 +720,7 @@ impl VoxtralMultiModalProjector {
         })
     }
 
-    pub fn forward(&self, audio_features: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, audio_features: &Tensor<B>) -> Result<Tensor<B>> {
         let x = self.linear_1.forward(audio_features)?;
         let x = x.apply(&self.activation)?;
         self.linear_2.forward(&x)
@@ -724,10 +728,10 @@ impl VoxtralMultiModalProjector {
 }
 
 #[derive(Debug, Clone)]
-pub struct VoxtralForConditionalGeneration {
-    audio_tower: VoxtralEncoder,
-    language_model: VoxtralLlama,
-    multi_modal_projector: VoxtralMultiModalProjector,
+pub struct VoxtralForConditionalGeneration<B: BackendStorage> {
+    audio_tower: VoxtralEncoder<B>,
+    language_model: VoxtralLlama<B>,
+    multi_modal_projector: VoxtralMultiModalProjector<B>,
     audio_token_id: usize,
     audio_config: VoxtralEncoderConfig,
     text_config: VoxtralLlamaConfig,

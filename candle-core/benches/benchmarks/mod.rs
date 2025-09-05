@@ -9,8 +9,6 @@ pub(crate) mod unary;
 pub(crate) mod where_cond;
 
 use candle_core::{BackendDevice, BackendStorage, CpuDevice, CpuStorage};
-#[cfg(feature = "metal")]
-use candle_core::{MetalDevice, MetalStorage};
 
 pub(crate) trait BenchDevice<B>: BackendDevice<B>
 where
@@ -33,12 +31,13 @@ impl BenchDevice<CpuStorage> for CpuDevice {
 }
 
 #[cfg(feature = "metal")]
-impl BenchDevice<MetalStorage> for MetalDevice {
+impl BenchDevice<candle_core::MetalStorage> for candle_core::MetalDevice {
     fn bench_name<S: Into<String>>(&self, name: S) -> String {
         format!("metal_{}", name.into())
     }
 }
 
+#[cfg(feature = "cuda")]
 impl BenchDevice<candle_core::CudaStorage> for candle_core::CudaDevice {
     fn bench_name<S: Into<String>>(&self, name: S) -> String {
         format!("cuda_{}", name.into())

@@ -16,7 +16,7 @@
 //!
 
 use crate::models::with_tracing::{linear, linear_no_bias, Linear, RmsNorm};
-use candle::{DType, Device, Error, IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, Error, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, Activation, LayerNorm, VarBuilder};
 use std::sync::Arc;
 
@@ -145,13 +145,13 @@ impl Config {
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+struct RotaryEmbedding<B: BackendStorage> {
+    sin: Tensor<B>,
+    cos: Tensor<B>,
 }
 
-impl RotaryEmbedding {
-    fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
+impl<B: BackendStorage> RotaryEmbedding<B> {
+    fn new(dtype: DType, cfg: &Config, dev: &B::Device) -> Result<Self> {
         let dim = cfg.hidden_size / cfg.num_attention_heads;
         // Factoring in `scaling factor` for `400M` variant
         let max_seq_len = if cfg.scaling_factor == 0. {
@@ -199,7 +199,7 @@ impl RotaryEmbedding {
     }
 
     // TODO: re-visit this
-    fn apply_rotary_emb_qkv(&self, q: &Tensor, k: &Tensor) -> Result<(Tensor, Tensor)> {
+    fn apply_rotary_emb_qkv(&self, q: &Tensor<B>, k: &Tensor<B>) -> Result<(Tensor<B>, Tensor<B>)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, 0, seq_len)?;
         let sin = self.sin.narrow(0, 0, seq_len)?;
@@ -212,16 +212,16 @@ impl RotaryEmbedding {
 
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
-struct MLP {
+struct MLP<B: BackendStorage> {
     variant: ModelVariant,
-    gate_proj: Linear,
-    up_proj: Option<Linear>, // `up_proj` only for 1.5B variant
-    down_proj: Linear,
+    gate_proj: Linear<B>,
+    up_proj: Option<Linear<B>>, // `up_proj` only for 1.5B variant
+    down_proj: Linear<B>,
     act_fn: Activation,
 }
 
-impl MLP {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MLP<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
 
@@ -252,8 +252,8 @@ impl MLP {
     }
 }
 
-impl Module for MLP {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for MLP<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let up = self.gate_proj.forward(xs)?;
 
         let (lhs, rhs) = match self.variant {
@@ -281,20 +281,20 @@ impl Module for MLP {
 }
 
 #[derive(Debug, Clone)]
-struct Attention {
-    qkv_proj: Linear,
-    o_proj: Linear,
+struct Attention<B: BackendStorage> {
+    qkv_proj: Linear<B>,
+    o_proj: Linear<B>,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
     hidden_size: usize,
-    rotary_emb: Arc<RotaryEmbedding>,
+    rotary_emb: Arc<RotaryEmbedding<B>>,
     variant: ModelVariant,
 }
 
-impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Attention<B> {
+    fn new(rotary_emb: Arc<RotaryEmbedding<B>>, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -350,7 +350,7 @@ impl Attention {
         })
     }
 
-    fn forward(&mut self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&mut self, xs: &Tensor<B>, attention_mask: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let qkv = self.qkv_proj.forward(xs)?;
@@ -438,24 +438,24 @@ impl Attention {
 }
 
 #[derive(Debug, Clone)]
-enum NormType {
-    Layer(LayerNorm),
-    Rms(RmsNorm),
+enum NormType<B: BackendStorage> {
+    Layer(LayerNorm<B>),
+    Rms(RmsNorm<B>),
 }
 
 #[derive(Debug, Clone)]
-struct Layer {
+struct Layer<B: BackendStorage> {
     variant: ModelVariant,
-    attention: Attention,
-    mlp: MLP,
+    attention: Attention<B>,
+    mlp: MLP<B>,
     // For 1.5B: this is `input_layernorm`
     // For 400M: this is `output_layernorm`
-    layernorm: NormType,
-    post_attention_layernorm: NormType,
+    layernorm: NormType<B>,
+    post_attention_layernorm: NormType<B>,
 }
 
-impl Layer {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Layer<B> {
+    fn new(rotary_emb: Arc<RotaryEmbedding<B>>, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let attention = Attention::new(
             rotary_emb,
             cfg,
@@ -508,7 +508,7 @@ impl Layer {
         })
     }
 
-    fn forward(&mut self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&mut self, xs: &Tensor<B>, attention_mask: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         // Here, the application of normalizations and activation calculations differ
         // For Large [1.5B]:
         //  residual = x
@@ -574,19 +574,19 @@ impl Layer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Embeddings {
+pub struct Embeddings<B: BackendStorage> {
     variant: ModelVariant,
     // For 1.5B: this is the `embed_tokens`
     // For 400M: this is the `word_embeddings`
-    embeddings: candle_nn::Embedding,
+    embeddings: candle_nn::Embedding<B>,
     // following are specifically for 400M
-    token_type_embeddings: Option<candle_nn::Embedding>,
-    layer_norm: Option<LayerNorm>,
-    position_ids: Option<Tensor>,
+    token_type_embeddings: Option<candle_nn::Embedding<B>>,
+    layer_norm: Option<LayerNorm<B>>,
+    position_ids: Option<Tensor<B>>,
 }
 
-impl Embeddings {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Embeddings<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let (embeddings, token_type_embeddings, layer_norm, position_ids) = match cfg.variant {
             ModelVariant::Large => (
                 candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?,
@@ -641,8 +641,8 @@ impl Embeddings {
     }
 }
 
-impl Module for Embeddings {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Embeddings<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let embd = self.embeddings.forward(xs)?;
         // For 1.5B just forward the embeddings
         if self.variant == ModelVariant::Large {
@@ -675,16 +675,16 @@ impl Module for Embeddings {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    embeddings: Embeddings,
-    layers: Vec<Layer>,
-    norm: Option<RmsNorm>,
-    device: Device,
+pub struct Model<B: BackendStorage> {
+    embeddings: Embeddings<B>,
+    layers: Vec<Layer<B>>,
+    norm: Option<RmsNorm<B>>,
+    device: B::Device,
     dtype: DType,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb_m = match cfg.variant {
             ModelVariant::Large => vb.pp("model"),
             ModelVariant::Small => vb.pp("new"),
@@ -719,9 +719,9 @@ impl Model {
         })
     }
 
-    fn prepare_attention_mask(&self, attn_mask: &Tensor) -> Result<Tensor> {
+    fn prepare_attention_mask(&self, attn_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let (b_sz, sql_len) = attn_mask.dims2()?;
-        let mut mask: Vec<Tensor> = vec![];
+        let mut mask: Vec<Tensor<B>> = vec![];
         for b in 0..b_sz {
             mask.push(attn_mask.i((b, ..))?.expand((1, 1, sql_len, sql_len))?);
         }
@@ -733,7 +733,7 @@ impl Model {
         mask.where_cond(&on_true, &on_false)
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor<B>, mask: &Tensor<B>) -> Result<Tensor<B>> {
         let (_, seq_len) = input_ids.dims2()?;
         let attention_mask = if seq_len <= 1 {
             None
@@ -756,13 +756,13 @@ impl Model {
 }
 
 #[derive(Debug)]
-pub struct EmbeddingModel {
-    base_model: Model,
-    lm_head: Linear,
+pub struct EmbeddingModel<B: BackendStorage> {
+    base_model: Model<B>,
+    lm_head: Linear<B>,
 }
 
-impl EmbeddingModel {
-    pub fn new(cfg: &Config, base_vb: VarBuilder, embed_vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> EmbeddingModel<B> {
+    pub fn new(cfg: &Config, base_vb: VarBuilder<B>, embed_vb: VarBuilder<B>) -> Result<Self> {
         let base_model = Model::new(cfg, base_vb.clone())?;
         let lm_head = linear(
             cfg.embed_head.in_features,
@@ -776,7 +776,7 @@ impl EmbeddingModel {
         })
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor<B>, mask: &Tensor<B>) -> Result<Tensor<B>> {
         let x = self.base_model.forward(input_ids, mask)?;
         let x = self.pool(&x, mask)?;
 
@@ -785,13 +785,13 @@ impl EmbeddingModel {
     }
 
     /// Same as forward pass but normalizes the output
-    pub fn forward_norm(&mut self, input_ids: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    pub fn forward_norm(&mut self, input_ids: &Tensor<B>, mask: &Tensor<B>) -> Result<Tensor<B>> {
         let x = self.forward(input_ids, mask)?;
         // Normalize
         x.broadcast_div(&x.sqr()?.sum_keepdim(1)?.sqrt()?)
     }
 
-    fn pool(&self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    fn pool(&self, x: &Tensor<B>, mask: &Tensor<B>) -> Result<Tensor<B>> {
         let mask = mask.to_dtype(x.dtype())?; // [B_Sz, Seq_len]
         let (batch_size, seq_len, hidden_dim) = x.dims3()?;
         // expanding the shape of the mask from [B_Sz, Seq_len] -> [B_Sz, Seq_len, Hidden_size]

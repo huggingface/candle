@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use candle::{bail, Context, DType, Device, Module, Result, Tensor, D};
+use candle::{bail, BackendStorage, Context, DType, Module, Result, Tensor, D};
 use candle_nn::{
     conv1d, embedding, layer_norm, Conv1d, Conv1dConfig, Embedding, LayerNorm, VarBuilder,
 };
@@ -117,27 +117,27 @@ impl StableDropout {
         }
     }
 
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    pub fn forward<B: BackendStorage>(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         Ok(x.clone())
     }
 }
 
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L823
-pub struct DebertaV2Embeddings {
-    device: Device,
-    word_embeddings: Embedding,
-    position_embeddings: Option<Embedding>,
-    token_type_embeddings: Option<Embedding>,
-    layer_norm: LayerNorm,
+pub struct DebertaV2Embeddings<B: BackendStorage> {
+    device: B::Device,
+    word_embeddings: Embedding<B>,
+    position_embeddings: Option<Embedding<B>>,
+    token_type_embeddings: Option<Embedding<B>>,
+    layer_norm: LayerNorm<B>,
     dropout: StableDropout,
-    position_ids: Tensor,
+    position_ids: Tensor<B>,
     config: Config,
     embedding_size: usize,
-    embed_proj: Option<candle_nn::Linear>,
+    embed_proj: Option<candle_nn::Linear<B>>,
 }
 
-impl DebertaV2Embeddings {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DebertaV2Embeddings<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let device = vb.device().clone();
         let config = config.clone();
 
@@ -203,12 +203,12 @@ impl DebertaV2Embeddings {
 
     pub fn forward(
         &self,
-        input_ids: Option<&Tensor>,
-        token_type_ids: Option<&Tensor>,
-        position_ids: Option<&Tensor>,
-        mask: Option<&Tensor>,
-        inputs_embeds: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        input_ids: Option<&Tensor<B>>,
+        token_type_ids: Option<&Tensor<B>>,
+        position_ids: Option<&Tensor<B>>,
+        mask: Option<&Tensor<B>>,
+        inputs_embeds: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let (input_shape, input_embeds) = match (input_ids, inputs_embeds) {
             (Some(ids), None) => {
                 let embs = self.word_embeddings.forward(ids)?;
@@ -289,7 +289,12 @@ impl DebertaV2Embeddings {
 struct XSoftmax {}
 
 impl XSoftmax {
-    pub fn apply(input: &Tensor, mask: &Tensor, dim: D, device: &Device) -> Result<Tensor> {
+    pub fn apply<B: BackendStorage>(
+        input: &Tensor<B>,
+        mask: &Tensor<B>,
+        dim: D,
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
         // NOTE: At the time of this writing, candle does not have a logical-not operator.
         let mut rmask = mask.broadcast_as(input.shape())?.to_dtype(DType::F32)?;
 
@@ -310,26 +315,26 @@ impl XSoftmax {
 }
 
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L605
-pub struct DebertaV2DisentangledSelfAttention {
+pub struct DebertaV2DisentangledSelfAttention<B: BackendStorage> {
     config: Config,
     num_attention_heads: usize,
-    query_proj: candle_nn::Linear,
-    key_proj: candle_nn::Linear,
-    value_proj: candle_nn::Linear,
+    query_proj: candle_nn::Linear<B>,
+    key_proj: candle_nn::Linear<B>,
+    value_proj: candle_nn::Linear<B>,
     dropout: StableDropout,
-    device: Device,
+    device: B::Device,
     relative_attention: bool,
     pos_dropout: Option<StableDropout>,
     position_buckets: isize,
     max_relative_positions: isize,
     pos_ebd_size: isize,
     share_att_key: bool,
-    pos_key_proj: Option<candle_nn::Linear>,
-    pos_query_proj: Option<candle_nn::Linear>,
+    pos_key_proj: Option<candle_nn::Linear<B>>,
+    pos_query_proj: Option<candle_nn::Linear<B>>,
 }
 
-impl DebertaV2DisentangledSelfAttention {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DebertaV2DisentangledSelfAttention<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let config = config.clone();
         let vb = vb.clone();
 
@@ -701,13 +706,13 @@ impl DebertaV2DisentangledSelfAttention {
 }
 
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L270
-pub struct DebertaV2Attention {
-    dsa: DebertaV2DisentangledSelfAttention,
-    output: DebertaV2SelfOutput,
+pub struct DebertaV2Attention<B: BackendStorage> {
+    dsa: DebertaV2DisentangledSelfAttention<B>,
+    output: DebertaV2SelfOutput<B>,
 }
 
-impl DebertaV2Attention {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DebertaV2Attention<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let dsa = DebertaV2DisentangledSelfAttention::load(vb.pp("attention.self"), config)?;
         let output = DebertaV2SelfOutput::load(vb.pp("attention.output"), config)?;
         Ok(Self { dsa, output })
@@ -715,12 +720,12 @@ impl DebertaV2Attention {
 
     fn forward(
         &self,
-        hidden_states: &Tensor,
-        attention_mask: &Tensor,
-        query_states: Option<&Tensor>,
-        relative_pos: Option<&Tensor>,
-        rel_embeddings: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        hidden_states: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+        query_states: Option<&Tensor<B>>,
+        relative_pos: Option<&Tensor<B>>,
+        rel_embeddings: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let self_output = self.dsa.forward(
             hidden_states,
             attention_mask,
@@ -735,14 +740,14 @@ impl DebertaV2Attention {
 }
 
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L255
-pub struct DebertaV2SelfOutput {
-    dense: candle_nn::Linear,
-    layer_norm: LayerNorm,
+pub struct DebertaV2SelfOutput<B: BackendStorage> {
+    dense: candle_nn::Linear<B>,
+    layer_norm: LayerNorm<B>,
     dropout: StableDropout,
 }
 
-impl DebertaV2SelfOutput {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DebertaV2SelfOutput<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let dense = candle_nn::linear(config.hidden_size, config.hidden_size, vb.pp("dense"))?;
         let layer_norm = candle_nn::layer_norm(
             config.hidden_size,
@@ -757,7 +762,11 @@ impl DebertaV2SelfOutput {
         })
     }
 
-    pub fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        hidden_states: &Tensor<B>,
+        input_tensor: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let mut hidden_states = self.dense.forward(hidden_states)?;
         hidden_states = self.dropout.forward(&hidden_states)?;
         self.layer_norm
@@ -766,13 +775,13 @@ impl DebertaV2SelfOutput {
 }
 
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L307
-pub struct DebertaV2Intermediate {
-    dense: candle_nn::Linear,
+pub struct DebertaV2Intermediate<B: BackendStorage> {
+    dense: candle_nn::Linear<B>,
     intermediate_act: HiddenActLayer,
 }
 
-impl DebertaV2Intermediate {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DebertaV2Intermediate<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let dense = candle_nn::linear(
             config.hidden_size,
             config.intermediate_size,
@@ -785,21 +794,21 @@ impl DebertaV2Intermediate {
         })
     }
 
-    pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, hidden_states: &Tensor<B>) -> Result<Tensor<B>> {
         self.intermediate_act
             .forward(&self.dense.forward(hidden_states)?)
     }
 }
 
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L323
-pub struct DebertaV2Output {
-    dense: candle_nn::Linear,
-    layer_norm: LayerNorm,
+pub struct DebertaV2Output<B: BackendStorage> {
+    dense: candle_nn::Linear<B>,
+    layer_norm: LayerNorm<B>,
     dropout: StableDropout,
 }
 
-impl DebertaV2Output {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DebertaV2Output<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let dense = candle_nn::linear(
             config.intermediate_size,
             config.hidden_size,
@@ -818,7 +827,11 @@ impl DebertaV2Output {
         })
     }
 
-    pub fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        hidden_states: &Tensor<B>,
+        input_tensor: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let mut hidden_states = self.dense.forward(hidden_states)?;
         hidden_states = self.dropout.forward(&hidden_states)?;
         hidden_states = {
@@ -830,14 +843,14 @@ impl DebertaV2Output {
 }
 
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L339
-pub struct DebertaV2Layer {
-    attention: DebertaV2Attention,
-    intermediate: DebertaV2Intermediate,
-    output: DebertaV2Output,
+pub struct DebertaV2Layer<B: BackendStorage> {
+    attention: DebertaV2Attention<B>,
+    intermediate: DebertaV2Intermediate<B>,
+    output: DebertaV2Output<B>,
 }
 
-impl DebertaV2Layer {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DebertaV2Layer<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let attention = DebertaV2Attention::load(vb.clone(), config)?;
         let intermediate = DebertaV2Intermediate::load(vb.clone(), config)?;
         let output = DebertaV2Output::load(vb.clone(), config)?;
@@ -850,12 +863,12 @@ impl DebertaV2Layer {
 
     fn forward(
         &self,
-        hidden_states: &Tensor,
-        attention_mask: &Tensor,
-        query_states: Option<&Tensor>,
-        relative_pos: Option<&Tensor>,
-        rel_embeddings: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        hidden_states: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+        query_states: Option<&Tensor<B>>,
+        relative_pos: Option<&Tensor<B>>,
+        rel_embeddings: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let attention_output = self.attention.forward(
             hidden_states,
             attention_mask,
@@ -876,16 +889,16 @@ impl DebertaV2Layer {
 
 // TODO: In order to fully test ConvLayer a model needs to be found has a configuration where `conv_kernel_size` exists and is > 0
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L373
-pub struct ConvLayer {
+pub struct ConvLayer<B: BackendStorage> {
     _conv_act: String,
-    _conv: Conv1d,
-    _layer_norm: LayerNorm,
+    _conv: Conv1d<B>,
+    _layer_norm: LayerNorm<B>,
     _dropout: StableDropout,
     _config: Config,
 }
 
-impl ConvLayer {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> ConvLayer<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let config = config.clone();
         let kernel_size = config.conv_kernel_size.unwrap_or(3);
         let groups = config.conv_groups.unwrap_or(1);
@@ -924,29 +937,29 @@ impl ConvLayer {
 
     pub fn forward(
         &self,
-        _hidden_states: &Tensor,
-        _residual_states: &Tensor,
-        _input_mask: &Tensor,
-    ) -> Result<Tensor> {
+        _hidden_states: &Tensor<B>,
+        _residual_states: &Tensor<B>,
+        _input_mask: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         todo!("Need a model that contains a conv layer to test against.")
     }
 }
 
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L409
-pub struct DebertaV2Encoder {
-    layer: Vec<DebertaV2Layer>,
+pub struct DebertaV2Encoder<B: BackendStorage> {
+    layer: Vec<DebertaV2Layer<B>>,
     relative_attention: bool,
     max_relative_positions: isize,
     position_buckets: isize,
-    rel_embeddings: Option<Embedding>,
+    rel_embeddings: Option<Embedding<B>>,
     norm_rel_ebd: String,
-    layer_norm: Option<LayerNorm>,
-    conv: Option<ConvLayer>,
-    device: Device,
+    layer_norm: Option<LayerNorm<B>>,
+    conv: Option<ConvLayer<B>>,
+    device: B::Device,
 }
 
-impl DebertaV2Encoder {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DebertaV2Encoder<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let layer = (0..config.num_hidden_layers)
             .map(|index| DebertaV2Layer::load(vb.pp(format!("layer.{index}")), config))
             .collect::<Result<Vec<_>>>()?;
@@ -1014,11 +1027,11 @@ impl DebertaV2Encoder {
 
     pub fn forward(
         &self,
-        hidden_states: &Tensor,
-        attention_mask: &Tensor,
-        query_states: Option<&Tensor>,
-        relative_pos: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        hidden_states: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+        query_states: Option<&Tensor<B>>,
+        relative_pos: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let input_mask = if attention_mask.dims().len() <= 2 {
             attention_mask.clone()
         } else {
@@ -1065,7 +1078,7 @@ impl DebertaV2Encoder {
         Ok(output_states)
     }
 
-    fn get_attention_mask(&self, mut attention_mask: Tensor) -> Result<Tensor> {
+    fn get_attention_mask(&self, mut attention_mask: Tensor<B>) -> Result<Tensor<B>> {
         match attention_mask.dims().len() {
             0..=2 => {
                 let extended_attention_mask = attention_mask.unsqueeze(1)?.unsqueeze(2)?;
@@ -1084,10 +1097,10 @@ impl DebertaV2Encoder {
 
     fn get_rel_pos(
         &self,
-        hidden_states: &Tensor,
-        query_states: Option<&Tensor>,
-        relative_pos: Option<&Tensor>,
-    ) -> Result<Option<Tensor>> {
+        hidden_states: &Tensor<B>,
+        query_states: Option<&Tensor<B>>,
+        relative_pos: Option<&Tensor<B>>,
+    ) -> Result<Option<Tensor<B>>> {
         if self.relative_attention && relative_pos.is_none() {
             let q = if let Some(query_states) = query_states {
                 query_states.dim(D::Minus2)?
@@ -1110,7 +1123,7 @@ impl DebertaV2Encoder {
             Ok(None)
         }
     }
-    fn get_rel_embedding(&self) -> Result<Option<Tensor>> {
+    fn get_rel_embedding(&self) -> Result<Option<Tensor<B>>> {
         if !self.relative_attention {
             return Ok(None);
         }
@@ -1137,15 +1150,15 @@ impl DebertaV2Encoder {
 }
 
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L991
-pub struct DebertaV2Model {
-    embeddings: DebertaV2Embeddings,
-    encoder: DebertaV2Encoder,
+pub struct DebertaV2Model<B: BackendStorage> {
+    embeddings: DebertaV2Embeddings<B>,
+    encoder: DebertaV2Encoder<B>,
     z_steps: usize,
-    pub device: Device,
+    pub device: B::Device,
 }
 
-impl DebertaV2Model {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DebertaV2Model<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let vb = vb.clone();
         let embeddings = DebertaV2Embeddings::load(vb.pp("embeddings"), config)?;
         let encoder = DebertaV2Encoder::load(vb.pp("encoder"), config)?;
@@ -1161,10 +1174,10 @@ impl DebertaV2Model {
 
     pub fn forward(
         &self,
-        input_ids: &Tensor,
-        token_type_ids: Option<Tensor>,
-        attention_mask: Option<Tensor>,
-    ) -> Result<Tensor> {
+        input_ids: &Tensor<B>,
+        token_type_ids: Option<Tensor<B>>,
+        attention_mask: Option<Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let input_ids_shape = input_ids.shape();
 
         let attention_mask = match attention_mask {
@@ -1213,11 +1226,11 @@ pub struct TextClassificationItem {
     pub score: f32,
 }
 
-pub struct DebertaV2NERModel {
-    pub device: Device,
-    deberta: DebertaV2Model,
+pub struct DebertaV2NERModel<B: Backend> {
+    pub device: B::Device,
+    deberta: DebertaV2Model<B>,
     dropout: candle_nn::Dropout,
-    classifier: candle_nn::Linear,
+    classifier: candle_nn::Linear<B>,
 }
 
 fn id2label_len(config: &Config, id2label: Option<HashMap<u32, String>>) -> Result<usize> {
@@ -1236,8 +1249,8 @@ fn id2label_len(config: &Config, id2label: Option<HashMap<u32, String>>) -> Resu
     Ok(id2label_len)
 }
 
-impl DebertaV2NERModel {
-    pub fn load(vb: VarBuilder, config: &Config, id2label: Option<Id2Label>) -> Result<Self> {
+impl<B: BackendStorage> DebertaV2NERModel<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config, id2label: Option<Id2Label>) -> Result<Self> {
         let id2label_len = id2label_len(config, id2label)?;
 
         let deberta = DebertaV2Model::load(vb.clone(), config)?;
@@ -1258,10 +1271,10 @@ impl DebertaV2NERModel {
 
     pub fn forward(
         &self,
-        input_ids: &Tensor,
-        token_type_ids: Option<Tensor>,
-        attention_mask: Option<Tensor>,
-    ) -> Result<Tensor> {
+        input_ids: &Tensor<B>,
+        token_type_ids: Option<Tensor<B>>,
+        attention_mask: Option<Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let output = self
             .deberta
             .forward(input_ids, token_type_ids, attention_mask)?;
@@ -1270,16 +1283,16 @@ impl DebertaV2NERModel {
     }
 }
 
-pub struct DebertaV2SeqClassificationModel {
-    pub device: Device,
-    deberta: DebertaV2Model,
+pub struct DebertaV2SeqClassificationModel<B: BackendStorage> {
+    pub device: B::Device,
+    deberta: DebertaV2Model<B>,
     dropout: StableDropout,
-    pooler: DebertaV2ContextPooler,
-    classifier: candle_nn::Linear,
+    pooler: DebertaV2ContextPooler<B>,
+    classifier: candle_nn::Linear<B>,
 }
 
-impl DebertaV2SeqClassificationModel {
-    pub fn load(vb: VarBuilder, config: &Config, id2label: Option<Id2Label>) -> Result<Self> {
+impl<B: BackendStorage> DebertaV2SeqClassificationModel<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config, id2label: Option<Id2Label>) -> Result<Self> {
         let id2label_len = id2label_len(config, id2label)?;
         let deberta = DebertaV2Model::load(vb.clone(), config)?;
         let pooler = DebertaV2ContextPooler::load(vb.clone(), config)?;
@@ -1301,10 +1314,10 @@ impl DebertaV2SeqClassificationModel {
 
     pub fn forward(
         &self,
-        input_ids: &Tensor,
-        token_type_ids: Option<Tensor>,
-        attention_mask: Option<Tensor>,
-    ) -> Result<Tensor> {
+        input_ids: &Tensor<B>,
+        token_type_ids: Option<Tensor<B>>,
+        attention_mask: Option<Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let encoder_layer = self
             .deberta
             .forward(input_ids, token_type_ids, attention_mask)?;
@@ -1314,15 +1327,15 @@ impl DebertaV2SeqClassificationModel {
     }
 }
 
-pub struct DebertaV2ContextPooler {
-    dense: candle_nn::Linear,
+pub struct DebertaV2ContextPooler<B: BackendStorage> {
+    dense: candle_nn::Linear<B>,
     dropout: StableDropout,
     config: Config,
 }
 
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L49
-impl DebertaV2ContextPooler {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DebertaV2ContextPooler<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let pooler_hidden_size = config
             .pooler_hidden_size
             .context("config.pooler_hidden_size is required for DebertaV2ContextPooler")?;
@@ -1346,7 +1359,7 @@ impl DebertaV2ContextPooler {
         })
     }
 
-    pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, hidden_states: &Tensor<B>) -> Result<Tensor<B>> {
         let context_token = hidden_states.narrow(1, 0, 1)?.squeeze(1)?;
         let context_token = self.dropout.forward(&context_token)?;
 
@@ -1365,13 +1378,13 @@ impl DebertaV2ContextPooler {
 }
 
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L557
-pub(crate) fn build_relative_position(
+pub(crate) fn build_relative_position<B: BackendStorage>(
     query_size: usize,
     key_size: usize,
-    device: &Device,
+    device: &B::Device,
     bucket_size: Option<isize>,
     max_position: Option<isize>,
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     let q_ids = Tensor::arange(0, query_size as i64, device)?.unsqueeze(0)?;
     let k_ids: Tensor = Tensor::arange(0, key_size as i64, device)?.unsqueeze(D::Minus1)?;
     let mut rel_pos_ids = k_ids.broadcast_sub(&q_ids)?;
@@ -1388,12 +1401,12 @@ pub(crate) fn build_relative_position(
 }
 
 // https://github.com/huggingface/transformers/blob/78b2929c0554b79e0489b451ce4ece14d265ead2/src/transformers/models/deberta_v2/modeling_deberta_v2.py#L542
-pub(crate) fn make_log_bucket_position(
-    relative_pos: Tensor,
+pub(crate) fn make_log_bucket_position<B: BackendStorage>(
+    relative_pos: Tensor<B>,
     bucket_size: isize,
     max_position: isize,
-    device: &Device,
-) -> Result<Tensor> {
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let sign = relative_pos.to_dtype(DType::F32)?.sign()?;
 
     let mid = bucket_size / 2;

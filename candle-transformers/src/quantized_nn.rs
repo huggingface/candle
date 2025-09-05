@@ -6,42 +6,42 @@
 
 use crate::models::with_tracing::QMatMul;
 use crate::quantized_var_builder::VarBuilder;
-use candle::quantized::QTensor;
-use candle::{Module, Result, Tensor};
+use candle::quantized::{QTensor, QuantizedBackend};
+use candle::{BackendStorage, Module, Result, Tensor};
 
 #[derive(Debug, Clone)]
-pub struct Embedding {
-    inner: candle_nn::Embedding,
+pub struct Embedding<B: BackendStorage> {
+    inner: candle_nn::Embedding<B>,
     span: tracing::Span,
 }
 
-impl Embedding {
-    pub fn new(d1: usize, d2: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Embedding<B> {
+    pub fn new(d1: usize, d2: usize, vb: VarBuilder<B>) -> Result<Self> {
         let embeddings = vb.get((d1, d2), "weight")?.dequantize(vb.device())?;
         let inner = candle_nn::Embedding::new(embeddings, d2);
         let span = tracing::span!(tracing::Level::TRACE, "embedding");
         Ok(Self { inner, span })
     }
 
-    pub fn embeddings(&self) -> &Tensor {
+    pub fn embeddings(&self) -> &Tensor<B> {
         self.inner.embeddings()
     }
 }
 
-impl Module for Embedding {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Embedding<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         self.inner.forward(xs)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Linear {
-    weight: QMatMul,
-    bias: Option<Tensor>,
+pub struct Linear<B: BackendStorage, QB: QuantizedBackend> {
+    weight: QMatMul<B, QB>,
+    bias: Option<Tensor<B>>,
 }
 
-impl Linear {
+impl<B: BackendStorage, QB: QuantizedBackend> Linear<B, QB> {
     pub fn from_arc(weight: std::sync::Arc<QTensor>, bias: Option<Tensor>) -> Result<Self> {
         let weight = QMatMul::from_weights(weight)?;
         Ok(Self { weight, bias })

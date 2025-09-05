@@ -22,7 +22,7 @@ use super::{
     schedulers::{Scheduler, SchedulerConfig},
     utils::{interp, linspace},
 };
-use candle::{Error, IndexOp, Result, Tensor};
+use candle::{BackendStorage, Error, IndexOp, Result, Tensor};
 
 #[derive(Debug, Clone, Copy)]
 pub enum SigmaSchedule {
@@ -245,14 +245,14 @@ impl SchedulerConfig for UniPCSchedulerConfig {
     }
 }
 
-struct State {
-    model_outputs: Vec<Option<Tensor>>,
+struct State<B: BackendStorage> {
+    model_outputs: Vec<Option<Tensor<B>>>,
     lower_order_nums: usize,
     order: usize,
-    last_sample: Option<Tensor>,
+    last_sample: Option<Tensor<B>>,
 }
 
-impl State {
+impl<B: BackendStorage> State<B> {
     fn new(solver_order: usize) -> Self {
         Self {
             model_outputs: vec![None; solver_order],
@@ -270,19 +270,19 @@ impl State {
         self.lower_order_nums = n;
     }
 
-    fn model_outputs(&self) -> &[Option<Tensor>] {
+    fn model_outputs(&self) -> &[Option<Tensor<B>>] {
         self.model_outputs.as_slice()
     }
 
-    fn update_model_output(&mut self, idx: usize, output: Option<Tensor>) {
+    fn update_model_output(&mut self, idx: usize, output: Option<Tensor<B>>) {
         self.model_outputs[idx] = output;
     }
 
-    fn last_sample(&self) -> Option<&Tensor> {
+    fn last_sample(&self) -> Option<&Tensor<B>> {
         self.last_sample.as_ref()
     }
 
-    fn update_last_sample(&mut self, sample: Tensor) {
+    fn update_last_sample(&mut self, sample: Tensor<B>) {
         let _ = self.last_sample.replace(sample);
     }
 
@@ -295,13 +295,13 @@ impl State {
     }
 }
 
-pub struct EdmDpmMultistepScheduler {
+pub struct EdmDpmMultistepScheduler<B: BackendStorage> {
     schedule: Schedule,
     config: UniPCSchedulerConfig,
-    state: State,
+    state: State<B>,
 }
 
-impl EdmDpmMultistepScheduler {
+impl<B: BackendStorage> EdmDpmMultistepScheduler<B> {
     pub fn new(config: UniPCSchedulerConfig, num_inference_steps: usize) -> Result<Self> {
         let schedule = Schedule::new(
             config.timestep_schedule.clone(),
@@ -344,10 +344,10 @@ impl EdmDpmMultistepScheduler {
 
     fn convert_model_output(
         &self,
-        model_output: &Tensor,
-        sample: &Tensor,
+        model_output: &Tensor<B>,
+        sample: &Tensor<B>,
         timestep: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let (alpha_t, sigma_t) = (
             self.schedule.alpha_t(timestep),
             self.schedule.sigma_t(timestep),
@@ -366,7 +366,7 @@ impl EdmDpmMultistepScheduler {
         }
     }
 
-    fn threshold_sample(&self, sample: Tensor) -> Result<Tensor> {
+    fn threshold_sample(&self, sample: Tensor<B>) -> Result<Tensor<B>> {
         let shape = sample.shape().clone().into_dims();
         let v = sample
             .abs()?
@@ -380,7 +380,7 @@ impl EdmDpmMultistepScheduler {
         sample.clamp(-threshold, threshold)? / (threshold / max).sqrt().min(1.)
     }
 
-    fn multistep_uni_p_bh_update(&self, sample: &Tensor, timestep: usize) -> Result<Tensor> {
+    fn multistep_uni_p_bh_update(&self, sample: &Tensor<B>, timestep: usize) -> Result<Tensor<B>> {
         let step_index = self.step_index(timestep);
         let ns = &self.schedule;
         let model_outputs = self.state.model_outputs();
@@ -484,12 +484,12 @@ impl EdmDpmMultistepScheduler {
 
     fn multistep_uni_c_bh_update(
         &self,
-        model_output: &Tensor,
-        model_outputs: &[Option<Tensor>],
-        last_sample: &Tensor,
-        sample: &Tensor,
+        model_output: &Tensor<B>,
+        model_outputs: &[Option<Tensor<B>>],
+        last_sample: &Tensor<B>,
+        sample: &Tensor<B>,
         timestep: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let step_index = self.step_index(timestep);
         let Some(m0) = model_outputs.last().into_iter().flatten().next() else {
             return Err(Error::Msg(
@@ -598,8 +598,13 @@ impl EdmDpmMultistepScheduler {
     }
 }
 
-impl Scheduler for EdmDpmMultistepScheduler {
-    fn step(&mut self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Scheduler for EdmDpmMultistepScheduler<B> {
+    fn step(
+        &mut self,
+        model_output: &Tensor<B>,
+        timestep: usize,
+        sample: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let step_index = self.step_index(timestep);
         let model_output_converted = &self.convert_model_output(model_output, sample, timestep)?;
         let sample = match (&self.config.corrector, self.state.last_sample()) {
@@ -650,7 +655,7 @@ impl Scheduler for EdmDpmMultistepScheduler {
         Ok(prev_sample)
     }
 
-    fn scale_model_input(&self, sample: Tensor, _timestep: usize) -> Result<Tensor> {
+    fn scale_model_input(&self, sample: Tensor<B>, _timestep: usize) -> Result<Tensor<B>> {
         Ok(sample)
     }
 
@@ -658,7 +663,12 @@ impl Scheduler for EdmDpmMultistepScheduler {
         &self.schedule.timesteps
     }
 
-    fn add_noise(&self, original: &Tensor, noise: Tensor, timestep: usize) -> Result<Tensor> {
+    fn add_noise(
+        &self,
+        original: &Tensor<B>,
+        noise: Tensor<B>,
+        timestep: usize,
+    ) -> Result<Tensor<B>> {
         let (alpha_t, sigma_t) = (
             self.schedule.alpha_t(timestep),
             self.schedule.sigma_t(timestep),
@@ -882,17 +892,17 @@ mod stats {
 }
 
 mod linalg {
-    use candle::{IndexOp, Result, Shape, Tensor};
+    use candle::{BackendStorage, IndexOp, Result, Shape, Tensor};
 
-    pub fn inverse(m: &Tensor) -> Result<Tensor> {
+    pub fn inverse<B: BackendStorage>(m: &Tensor<B>) -> Result<Tensor<B>> {
         adjoint(m)? / determinant(m)?.to_scalar::<f64>()?
     }
 
-    pub fn adjoint(m: &Tensor) -> Result<Tensor> {
+    pub fn adjoint<B: BackendStorage>(m: &Tensor<B>) -> Result<Tensor<B>> {
         cofactor(m)?.transpose(0, 1)
     }
 
-    pub fn cofactor(m: &Tensor) -> Result<Tensor> {
+    pub fn cofactor<B: BackendStorage>(m: &Tensor<B>) -> Result<Tensor<B>> {
         let s = m.shape().dim(0)?;
         if s == 2 {
             let mut v = vec![];
@@ -921,7 +931,7 @@ mod linalg {
         Tensor::stack(&v, 1)?.squeeze(0)
     }
 
-    pub fn determinant(m: &Tensor) -> Result<Tensor> {
+    pub fn determinant<B: BackendStorage>(m: &Tensor<B>) -> Result<Tensor<B>> {
         let s = m.shape().dim(0)?;
         if s == 2 {
             return (m.i((0, 0))? * m.i((1, 1))?)? - (m.i((0, 1))? * m.i((1, 0))?);
@@ -936,7 +946,7 @@ mod linalg {
         Ok(det)
     }
 
-    pub fn minors(m: &Tensor) -> Result<Tensor> {
+    pub fn minors<B: BackendStorage>(m: &Tensor<B>) -> Result<Tensor<B>> {
         let s = m.shape().dim(0)?;
         if s == 1 {
             return m.i((0, 0));
@@ -965,7 +975,11 @@ mod linalg {
     }
 
     impl TensordotGeneral {
-        pub fn eval(&self, lhs: &Tensor, rhs: &Tensor) -> Result<Tensor> {
+        pub fn eval<B: BackendStorage>(
+            &self,
+            lhs: &Tensor<B>,
+            rhs: &Tensor<B>,
+        ) -> Result<Tensor<B>> {
             let permuted_lhs = self.lhs_permutation.eval(lhs)?;
             let permuted_rhs = self.rhs_permutation.eval(rhs)?;
             let tensordotted = self
@@ -984,7 +998,7 @@ mod linalg {
     }
 
     impl TensordotFixedPosition {
-        fn eval(&self, lhs: &Tensor, rhs: &Tensor) -> Result<Tensor> {
+        fn eval<B: BackendStorage>(&self, lhs: &Tensor<B>, rhs: &Tensor<B>) -> Result<Tensor<B>> {
             let lhs_view = lhs.reshape((self.len_uncontracted_lhs, self.len_contracted_axes))?;
             let rhs_view = rhs.reshape((self.len_contracted_axes, self.len_uncontracted_rhs))?;
 
@@ -998,7 +1012,7 @@ mod linalg {
     }
 
     impl Permutation {
-        fn eval(&self, tensor: &Tensor) -> Result<Tensor> {
+        fn eval<B: BackendStorage>(&self, tensor: &Tensor<B>) -> Result<Tensor<B>> {
             tensor.permute(self.dims.as_slice())
         }
     }
