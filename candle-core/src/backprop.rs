@@ -754,6 +754,11 @@ impl GradStore {
         self.0.insert(tensor.id(), grad)
     }
 
+    /// Insert a gradient tensor associated with the given tensor id, returning the previous gradient tensor if it existed
+    pub fn insert_id(&mut self, id: TensorId, grad: Tensor) -> Option<Tensor> {
+        self.0.insert(id, grad)
+    }
+
     /// Get the gradient tensor associated with the given tensor, or, if it does not exist,
     /// insert a tensor of zeroes, with the same shape and type as the given tensors and return it
     fn or_insert(&mut self, tensor: &Tensor) -> Result<&mut Tensor> {
