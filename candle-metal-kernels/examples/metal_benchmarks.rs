@@ -1,6 +1,6 @@
 use anyhow::Result;
 use candle_metal_kernels::{
-    metal_utils::{create_command_buffer, Device},
+    metal::{create_command_buffer, Device},
     GemmDType,
 };
 /// This example contains some simple benchmarks so that it's easy to run them in perf etc.

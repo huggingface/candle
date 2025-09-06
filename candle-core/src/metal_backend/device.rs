@@ -1,6 +1,6 @@
 use crate::{DType, Result};
 use candle_metal_kernels::{
-    metal_utils::{
+    metal::{
         Buffer, BufferMap, CommandBuffer, Commands, ComputePipeline, Device, MTLResourceOptions,
     },
     Kernels,

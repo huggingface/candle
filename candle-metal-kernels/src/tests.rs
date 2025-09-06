@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Buffer, Device, MTLResourceOptions};
+use crate::metal::create_command_buffer;
 use core::ffi::c_void;
 use half::{bf16, f16};
 use rand::prelude::SliceRandom;
@@ -65,7 +65,7 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
     read_to_vec(&output, v.len())
 }
 
-fn run_binary<T: Clone>(x: &[T], y: &[T], name: binary::contiguous::Kernel) -> Vec<T> {
+fn run_binary<T: Clone>(x: &[T], y: &[T], name: kernels::binary::contiguous::Kernel) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
@@ -270,7 +270,7 @@ fn silu_f32() {
 fn binary_add_f32() {
     let left = vec![1.0f32, 2.0, 3.0];
     let right = vec![2.0f32, 3.1, 4.2];
-    let results = run_binary(&left, &right, binary::contiguous::add::FLOAT);
+    let results = run_binary(&left, &right, kernels::binary::contiguous::add::FLOAT);
     let expected: Vec<_> = left
         .iter()
         .zip(right.iter())
@@ -290,7 +290,7 @@ fn binary_ops_bf16() {
 
     macro_rules! binary_op {
         ($opname:ident, $opexpr:expr) => {{
-            let results = run_binary(&lhs, &rhs, binary::contiguous::$opname::BFLOAT);
+            let results = run_binary(&lhs, &rhs, kernels::binary::contiguous::$opname::BFLOAT);
             let expected: Vec<bf16> = lhs
                 .iter()
                 .zip(rhs.iter())
