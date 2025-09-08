@@ -168,7 +168,7 @@ pub mod binary {
 
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
-    #[error("Could not lock kernel map: {0}")]
+    #[error("Could not lock: {0}")]
     LockError(String),
     #[error("Error while loading library: {0}")]
     LoadLibraryError(String),

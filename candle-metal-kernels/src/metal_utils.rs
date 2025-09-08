@@ -7,7 +7,13 @@ use objc2_metal::{
     MTLCreateSystemDefaultDevice, MTLDataType, MTLDevice, MTLFunction, MTLFunctionConstantValues,
     MTLLibrary, MTLResource, MTLResourceUsage, MTLSize,
 };
-use std::{collections::HashMap, ffi::c_void, ptr, sync::Arc};
+use std::{
+    collections::HashMap,
+    ffi::c_void,
+    ptr,
+    sync::{Arc, Mutex},
+    thread,
+};
 
 // Use Retained when appropriate. Gives us a more elegant way of handling memory (peaks) than autoreleasepool.
 // https://docs.rs/objc2/latest/objc2/rc/struct.Retained.html
@@ -382,6 +388,7 @@ impl BlitCommandEncoder {
 }
 
 pub type BufferMap = HashMap<(usize, MTLResourceOptions), Vec<Arc<Buffer>>>;
+type CommandBufferMap = HashMap<thread::ThreadId, CommandBuffer>;
 pub struct Commands {
     /// Single command queue for the entire device.
     command_queue: CommandQueue,
@@ -394,7 +401,7 @@ pub struct Commands {
     /// Despite what the documentation says, command buffers are NOT ordered. They are ordered
     /// for their START time, but there's no guarantee that command buffer1 will finish before
     /// command buffer2 starts (or there are metal bugs there)
-    command_buffer: CommandBuffer,
+    command_buffers: Arc<Mutex<CommandBufferMap>>,
     /// Keeps track of the current amount of compute command encoders on the current
     /// command buffer
     /// Arc, RwLock because of the interior mutability.
@@ -422,34 +429,50 @@ impl Commands {
     pub fn new(command_queue: CommandQueue) -> Result<Self, MetalKernelError> {
         let command_buffer = create_command_buffer(&command_queue)?;
         command_buffer.enqueue();
+        let command_buffers = HashMap::from([(thread::current().id(), command_buffer)]);
+        let command_buffers = Arc::new(Mutex::new(command_buffers));
+
         let compute_per_buffer = match std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER") {
             Ok(val) => val.parse().unwrap_or(50),
             _ => 50,
         };
         Ok(Self {
             command_queue,
-            command_buffer,
+            command_buffers,
             command_buffer_index: 0,
             compute_per_buffer,
         })
     }
 
     pub fn command_buffer(&mut self) -> Result<(bool, CommandBuffer), MetalKernelError> {
-        let mut command_buffer = self.command_buffer.to_owned();
+        let mut command_buffers = self.command_buffers.lock()?;
+        let command_buffer =
+            command_buffers
+                .get_mut(&thread::current().id())
+                .ok_or(MetalKernelError::LockError(
+                    "Command buffer map".to_string(),
+                ))?;
+
         let mut flushed = false;
         if self.command_buffer_index > self.compute_per_buffer {
-            self.command_buffer.commit();
-            command_buffer = create_command_buffer(&self.command_queue)?;
-            self.command_buffer = command_buffer.clone();
+            command_buffer.commit();
+            *command_buffer = create_command_buffer(&self.command_queue)?;
             self.command_buffer_index = 0;
             flushed = true;
         }
         self.command_buffer_index += 1;
-        Ok((flushed, command_buffer))
+        Ok((flushed, command_buffer.clone()))
     }
 
     pub fn wait_until_completed(&mut self) -> Result<(), MetalKernelError> {
-        match self.command_buffer.status() {
+        let mut command_buffers = self.command_buffers.lock()?;
+        let command_buffer =
+            command_buffers
+                .get_mut(&thread::current().id())
+                .ok_or(MetalKernelError::LockError(
+                    "Command buffer map".to_string(),
+                ))?;
+        match command_buffer.status() {
             MTLCommandBufferStatus::Committed
             | MTLCommandBufferStatus::Scheduled
             | MTLCommandBufferStatus::Completed => {
@@ -457,9 +480,9 @@ impl Commands {
             }
             _ => {}
         }
-        self.command_buffer.commit();
-        self.command_buffer.wait_until_completed();
-        self.command_buffer = create_command_buffer(&self.command_queue)?;
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+        *command_buffer = create_command_buffer(&self.command_queue)?;
 
         Ok(())
     }

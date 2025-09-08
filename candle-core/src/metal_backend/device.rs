@@ -123,7 +123,7 @@ impl MetalDevice {
         if flushed {
             self.drop_unused_buffers()?
         }
-        Ok(command_buffer)
+        Ok(command_buffer.clone())
     }
 
     pub fn wait_until_completed(&self) -> Result<()> {
