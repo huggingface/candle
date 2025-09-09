@@ -43,7 +43,7 @@ candle-onnx = { path = "./candle-onnx", version = "0.9.1" }
 candle-transformers = { path = "./candle-transformers", version = "0.9.1" }
 clap = { version = "4.2.4", features = ["derive"] }
 criterion = { version = "0.5.1", default-features = false }
-cudarc = { version = "0.16.3", features = [
+cudarc = { version = "0.17.3", features = [
     "std",
     "cublas",
     "cublaslt",
@@ -51,6 +51,7 @@ cudarc = { version = "0.16.3", features = [
     "driver",
     "nvrtc",
     "f16",
+    "f8",
     "cuda-version-from-build-system",
     "dynamic-linking",
 ], default-features = false }
@@ -62,7 +63,7 @@ half = { version = "2.5.0", features = [
     "use-intrinsics",
     "rand_distr",
 ] }
-float8 = { git = "https://github.com/zackangelo/float8", branch = "cudarc_0_16", features = [
+float8 = { version = "0.4.2", features = [
     "num-traits",
     "rand_distr",
 ] }
