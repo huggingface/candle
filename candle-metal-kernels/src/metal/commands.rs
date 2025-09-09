@@ -2,11 +2,18 @@ use crate::metal::CommandBuffer;
 use crate::MetalKernelError;
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_metal::{MTLCommandBufferStatus, MTLCommandQueue, MTLCounterSet};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    thread,
+};
 
 // Use Retained when appropriate. Gives us a more elegant way of handling memory (peaks) than autoreleasepool.
 // https://docs.rs/objc2/latest/objc2/rc/struct.Retained.html
 pub type CommandQueue = Retained<ProtocolObject<dyn MTLCommandQueue>>;
 pub type CounterSet = Retained<ProtocolObject<dyn MTLCounterSet>>;
+
+type CommandBufferMap = HashMap<thread::ThreadId, CommandBuffer>;
 
 pub struct Commands {
     /// Single command queue for the entire device.
@@ -20,13 +27,15 @@ pub struct Commands {
     /// Despite what the documentation says, command buffers are NOT ordered. They are ordered
     /// for their START time, but there's no guarantee that command buffer1 will finish before
     /// command buffer2 starts (or there are metal bugs there)
-    command_buffer: CommandBuffer,
+    command_buffers: Arc<Mutex<CommandBufferMap>>,
     /// Keeps track of the current amount of compute command encoders on the current
     /// command buffer
     /// Arc, RwLock because of the interior mutability.
     command_buffer_index: usize,
     /// The maximum amount of [compute command encoder](https://developer.apple.com/documentation/metal/mtlcomputecommandencoder?language=objc) per [command buffer](https://developer.apple.com/documentation/metal/mtlcommandbuffer?language=objc)
     compute_per_buffer: usize,
+    //capture: Option<Retained<MTLCaptureManager>>,
+    //timestamp_counter_set: Option<CounterSet>,
 }
 unsafe impl Send for Commands {}
 unsafe impl Sync for Commands {}
@@ -43,34 +52,50 @@ impl Commands {
     pub fn new(command_queue: CommandQueue) -> Result<Self, MetalKernelError> {
         let command_buffer = create_command_buffer(&command_queue)?;
         command_buffer.enqueue();
+        let command_buffers = HashMap::from([(thread::current().id(), command_buffer)]);
+        let command_buffers = Arc::new(Mutex::new(command_buffers));
+
         let compute_per_buffer = match std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER") {
             Ok(val) => val.parse().unwrap_or(50),
             _ => 50,
         };
         Ok(Self {
             command_queue,
-            command_buffer,
+            command_buffers,
             command_buffer_index: 0,
             compute_per_buffer,
         })
     }
 
     pub fn command_buffer(&mut self) -> Result<(bool, CommandBuffer), MetalKernelError> {
-        let mut command_buffer = self.command_buffer.to_owned();
+        let mut command_buffers = self.command_buffers.lock()?;
+        let command_buffer =
+            command_buffers
+                .get_mut(&thread::current().id())
+                .ok_or(MetalKernelError::LockError(
+                    "Command buffer map".to_string(),
+                ))?;
+
         let mut flushed = false;
         if self.command_buffer_index > self.compute_per_buffer {
-            self.command_buffer.commit();
-            command_buffer = create_command_buffer(&self.command_queue)?;
-            self.command_buffer = command_buffer.clone();
+            command_buffer.commit();
+            *command_buffer = create_command_buffer(&self.command_queue)?;
             self.command_buffer_index = 0;
             flushed = true;
         }
         self.command_buffer_index += 1;
-        Ok((flushed, command_buffer))
+        Ok((flushed, command_buffer.clone()))
     }
 
     pub fn wait_until_completed(&mut self) -> Result<(), MetalKernelError> {
-        match self.command_buffer.status() {
+        let mut command_buffers = self.command_buffers.lock()?;
+        let command_buffer =
+            command_buffers
+                .get_mut(&thread::current().id())
+                .ok_or(MetalKernelError::LockError(
+                    "Command buffer map".to_string(),
+                ))?;
+        match command_buffer.status() {
             MTLCommandBufferStatus::Committed
             | MTLCommandBufferStatus::Scheduled
             | MTLCommandBufferStatus::Completed => {
@@ -78,9 +103,9 @@ impl Commands {
             }
             _ => {}
         }
-        self.command_buffer.commit();
-        self.command_buffer.wait_until_completed();
-        self.command_buffer = create_command_buffer(&self.command_queue)?;
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+        *command_buffer = create_command_buffer(&self.command_queue)?;
 
         Ok(())
     }
