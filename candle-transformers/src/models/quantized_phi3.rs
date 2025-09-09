@@ -136,7 +136,7 @@ impl LayerWeights {
         let q = self.apply_rotary_emb(&q, index_pos)?.contiguous()?;
         let k = self.apply_rotary_emb(&k, index_pos)?;
 
-	    if index_pos == 0 {
+        if index_pos == 0 {
             self.kv_cache.reset();
         }
         let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
