@@ -358,6 +358,12 @@ fn simple_eval_(
                 let output = input0.broadcast_div(input1)?;
                 values.insert(node.output[0].clone(), output);
             }
+            "Reciprocal" => {
+                let xs = get(&node.input[0])?;
+                let ones = Tensor::ones_like(&xs)?;
+                let output = ones.div(xs)?;
+                values.insert(node.output[0].clone(), output);
+            }
             "Pow" => {
                 let input0 = get(&node.input[0])?;
                 let input1 = get(&node.input[1])?;
