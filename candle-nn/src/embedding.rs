@@ -44,7 +44,6 @@ pub fn embedding<B>(
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     let embeddings = vb.get_with_hints(
         (in_size, out_size),

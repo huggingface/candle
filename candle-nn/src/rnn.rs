@@ -133,7 +133,6 @@ impl<B> LSTM<B>
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     /// Creates a LSTM layer.
     pub fn new(
@@ -200,7 +199,6 @@ pub fn lstm<B>(
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     LSTM::new(in_dim, hidden_dim, config, vb)
 }
@@ -313,7 +311,6 @@ impl<B> GRU<B>
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     /// Creates a GRU layer.
     pub fn new(
@@ -366,7 +363,6 @@ pub fn gru<B>(
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     GRU::new(in_dim, hidden_dim, config, vb)
 }

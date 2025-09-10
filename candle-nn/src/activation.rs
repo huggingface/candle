@@ -103,7 +103,6 @@ pub fn prelu<B>(num_channels: Option<usize>, vs: crate::VarBuilder<B>) -> Result
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     let init_ws = crate::init::Init::Const(0.25);
     // When using a scalar weight, the PyTorch encoding is to use a 1d vector of length 1.

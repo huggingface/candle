@@ -141,7 +141,6 @@ where
     C: Into<LayerNormConfig>,
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     let config = config.into();
     let weight = vb.get_with_hints(size, "weight", crate::Init::Const(1.))?;
@@ -166,7 +165,6 @@ pub fn layer_norm_no_bias<B>(
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     let config = LayerNormConfig {
         eps,
@@ -209,7 +207,6 @@ pub fn rms_norm<B>(size: usize, eps: f64, vb: crate::VarBuilder<B>) -> Result<Rm
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     let config = LayerNormConfig {
         eps,

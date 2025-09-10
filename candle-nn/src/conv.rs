@@ -314,7 +314,6 @@ pub fn conv1d<B>(
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints(
@@ -341,7 +340,6 @@ pub fn conv1d_no_bias<B>(
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints(
@@ -362,7 +360,6 @@ pub fn conv_transpose1d<B>(
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     let bound = 1. / (out_channels as f64 * kernel_size as f64).sqrt();
     let init = crate::Init::Uniform {
@@ -388,7 +385,6 @@ pub fn conv_transpose1d_no_bias<B>(
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     let bound = 1. / (out_channels as f64 * kernel_size as f64).sqrt();
     let init = crate::Init::Uniform {
@@ -413,7 +409,6 @@ pub fn conv2d<B>(
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints(
@@ -445,7 +440,6 @@ pub fn conv2d_no_bias<B>(
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints(
@@ -471,7 +465,6 @@ pub fn conv_transpose2d<B>(
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     let bound = 1. / (out_channels as f64).sqrt() / kernel_size as f64;
     let init = crate::Init::Uniform {
@@ -497,7 +490,6 @@ pub fn conv_transpose2d_no_bias<B>(
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     let bound = 1. / (out_channels as f64).sqrt() / kernel_size as f64;
     let init = crate::Init::Uniform {

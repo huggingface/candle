@@ -5,7 +5,7 @@
 //! for training, e.g. using `VarBuilder::from_varmap`.
 use crate::VarMap;
 use candle::{safetensors::Load, DType, Error, Result, Shape, Tensor};
-use candle::{BackendStorage, CpuDevice, CpuStorage, TryConvertStorage, TryToDevice};
+use candle::{BackendStorage, CpuDevice, CpuStorage, TryConvertStorage};
 use safetensors::{slice::IndexOp, tensor::SafeTensors};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,7 +21,6 @@ where
     B: Backend<BS>,
     BS: BackendStorage,
     BS::Device: TryConvertStorage<CpuStorage, BS>,
-    Tensor<BS>: TryToDevice<CpuStorage, BS>,
 {
     data: Arc<TensorData<B, BS>>,
     path: Vec<String>,
@@ -34,7 +33,6 @@ where
     B: Backend<BS>,
     BS: BackendStorage,
     BS::Device: TryConvertStorage<CpuStorage, BS>,
-    Tensor<BS>: TryToDevice<CpuStorage, BS>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -56,7 +54,6 @@ where
     B: Backend<BS>,
     BS: BackendStorage,
     BS::Device: TryConvertStorage<CpuStorage, BS>,
-    Tensor<BS>: TryToDevice<CpuStorage, BS>,
 {
     backend: B,
     pub device: BS::Device,
@@ -73,7 +70,6 @@ where
     Self: Send + Sync,
     B: BackendStorage,
     B::Device: TryConvertStorage<CpuStorage, B>,
-    Tensor<B>: TryToDevice<CpuStorage, B>,
 {
     type Hints: Default;
 
@@ -101,7 +97,6 @@ impl<B> Backend<B> for Box<dyn SimpleBackend + '_>
 where
     B: BackendStorage,
     B::Device: TryConvertStorage<CpuStorage, B>,
-    Tensor<B>: TryToDevice<CpuStorage, B>,
 {
     type Hints = crate::Init;
     fn get(
@@ -125,7 +120,6 @@ where
     B: Backend<BS>,
     BS: BackendStorage,
     BS::Device: TryConvertStorage<CpuStorage, BS>,
-    Tensor<BS>: TryToDevice<CpuStorage, BS>,
 {
     pub fn new_with_args(backend: B, dtype: DType, dev: &BS::Device) -> Self {
         let data = TensorData {
@@ -445,7 +439,6 @@ impl<'a, BS> VarBuilder<'a, BS>
 where
     BS: BackendStorage + 'a,
     BS::Device: TryConvertStorage<CpuStorage, BS>,
-    Tensor<BS>: TryToDevice<CpuStorage, BS>,
 {
     /// Initializes a `VarBuilder` using a custom backend.
     ///
@@ -476,7 +469,10 @@ where
 
     /// Initializes a `VarBuilder` that retrieves tensors stored in a hashtable. An error is
     /// returned if no tensor is available under the requested path or on shape mismatches.
-    pub fn from_tensors(ts: HashMap<String, CpuTensor>, dtype: DType, device: &BS::Device) -> Self {
+    pub fn from_tensors(ts: HashMap<String, Tensor<BS>>, dtype: DType, device: &BS::Device) -> Self
+    where
+        HashMap<String, Tensor<BS>>: SimpleBackend,
+    {
         Self::from_backend(Box::new(ts), dtype, device)
     }
 
@@ -486,7 +482,10 @@ where
     ///
     /// Note that it is possible to load the tensor values after model creation using the `load`
     /// method on `varmap`, this can be used to start model training from an existing checkpoint.
-    pub fn from_varmap(varmap: &VarMap<CpuStorage>, dtype: DType, device: &BS::Device) -> Self {
+    pub fn from_varmap(varmap: &VarMap<BS>, dtype: DType, device: &BS::Device) -> Self
+    where
+        VarMap<BS>: SimpleBackend,
+    {
         Self::from_backend(Box::new(varmap.clone()), dtype, device)
     }
 
@@ -583,7 +582,6 @@ where
     pub fn rename_f<F: Fn(&str) -> String + Sync + Send + 'static>(self, f: F) -> Self
     where
         CpuDevice: TryConvertStorage<BS, CpuStorage>,
-        CpuTensor: TryToDevice<BS, CpuStorage>,
     {
         let f: Box<dyn Fn(&str) -> String + Sync + Send + 'static> = Box::new(f);
         self.rename(f)
@@ -592,7 +590,6 @@ where
     pub fn rename<R: Renamer + Send + Sync + 'a>(self, renamer: R) -> Self
     where
         CpuDevice: TryConvertStorage<BS, CpuStorage>,
-        CpuTensor: TryToDevice<BS, CpuStorage>,
     {
         let dtype = self.dtype();
         let device: BS::Device = self.device().clone();
@@ -628,8 +625,7 @@ impl ShardedSafeTensors {
     ) -> Result<ShardedVarBuilder<'static, BS>>
     where
         BS: BackendStorage,
-        BS::Device: TryConvertStorage<CpuStorage, BS>,
-        Tensor<BS>: TryToDevice<CpuStorage, BS>,
+        BS::Device: TryConvertStorage<BS, CpuStorage>,
     {
         let tensors = candle::safetensors::MmapedSafetensors::multi(paths)?;
         let backend = ShardedSafeTensors(tensors);
@@ -669,7 +665,6 @@ impl<B> Backend<B> for ShardedSafeTensors
 where
     B: BackendStorage,
     B::Device: TryConvertStorage<CpuStorage, B>,
-    Tensor<B>: TryToDevice<CpuStorage, B>,
 {
     type Hints = Shard;
 
@@ -753,7 +748,6 @@ where
     R: Renamer,
     BS: BackendStorage,
     BS::Device: TryConvertStorage<CpuStorage, BS>,
-    Tensor<BS>: TryToDevice<CpuStorage, BS>,
 {
     inner: VarBuilder<'a, BS>,
     renamer: R,
@@ -763,10 +757,7 @@ impl<R, BS> SimpleBackend for Rename<'_, R, BS>
 where
     R: Renamer + Sync + Send,
     BS: BackendStorage,
-    BS::Device: TryConvertStorage<CpuStorage, BS>,
-    Tensor<BS>: TryToDevice<CpuStorage, BS>,
     CpuDevice: TryConvertStorage<BS, CpuStorage>,
-    CpuTensor: TryToDevice<BS, CpuStorage>,
 {
     fn get(&self, s: Shape, name: &str, h: crate::Init, dtype: DType) -> Result<CpuTensor> {
         let name = self.renamer.rename(name);
@@ -787,7 +778,6 @@ where
     R: Renamer + Sync + Send,
     BS: BackendStorage,
     BS::Device: TryConvertStorage<CpuStorage, BS>,
-    Tensor<BS>: TryToDevice<CpuStorage, BS>,
 {
     type Hints = crate::Init;
 
@@ -814,7 +804,6 @@ where
     R: Renamer,
     BS: BackendStorage,
     BS::Device: TryConvertStorage<CpuStorage, BS>,
-    Tensor<BS>: TryToDevice<CpuStorage, BS>,
 {
     pub fn new(inner: VarBuilder<'a, BS>, renamer: R) -> Self {
         Self { inner, renamer }

@@ -307,7 +307,6 @@ where
     C: Into<BatchNormConfig>,
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     use crate::Init;
     let config = config.into();

@@ -82,7 +82,6 @@ pub fn group_norm<B>(
 where
     B: BackendStorage,
     B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-    Tensor<B>: candle::TryToDevice<candle::CpuStorage, B>,
 {
     let weight = vb.get_with_hints(num_channels, "weight", crate::Init::Const(1.))?;
     let bias = vb.get_with_hints(num_channels, "bias", crate::Init::Const(0.))?;

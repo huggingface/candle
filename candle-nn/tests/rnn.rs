@@ -90,7 +90,8 @@ fn gru() -> Result<()> {
     ]
     .into_iter()
     .collect();
-    let vb = candle_nn::VarBuilder::from_tensors(tensors, DType::F32, cpu);
+    let vb: candle_nn::VarBuilder<CpuStorage> =
+        candle_nn::VarBuilder::from_tensors(tensors, DType::F32, cpu);
     let gru = candle_nn::gru(2, 3, Default::default(), vb)?;
     let mut state = gru.zero_state(1)?;
     for inp in [3f32, 1., 4., 1., 5., 9., 2.] {
