@@ -1,7 +1,6 @@
 //! Implement conversion traits for tensors
-use crate::{BackendDevice, BackendStorage, DType, Error, Tensor, WithDType};
-use crate::{Condition, False, IsSame, True};
-use crate::{CpuDevice, CpuStorage, CudaDevice, CudaStorage, MetalDevice, MetalStorage};
+use crate::{BackendStorage, DType, Error, Tensor, WithDType};
+use crate::{CpuDevice, CpuStorage};
 use float8::F8E4M3;
 use half::{bf16, f16, slice::HalfFloatSliceExt};
 use std::convert::TryFrom;
@@ -152,8 +151,30 @@ impl<B: BackendStorage> Tensor<B> {
     }
 }
 
-impl<B: BackendStorage> Condition for IsSame<B, B> {
-    type Value = True;
+pub trait TryConvertStorage<T, U>: Sized + std::fmt::Debug + Clone + Send + Sync {
+    /// Performs the conversion.
+    fn convert(&self, storage: T) -> Result<U, Error>;
+}
+
+impl<B: BackendStorage> TryConvertStorage<B, B> for B::Device {
+    fn convert(&self, storage: B) -> Result<B, Error> {
+        Ok(storage)
+    }
+}
+
+/*
+impl TryConvertStorage<CudaStorage, CpuStorage> for CpuDevice {
+    fn convert(&self, storage: CudaStorage) -> Result<CpuStorage, Error> {
+        storage.to_cpu_storage()
+    }
+}
+
+pub trait ToDevice<T, U>: Sized
+where
+    Self: ConvertStorage<T, U>,
+{
+    /// Performs the conversion.
+    fn try_to_device(&self, device: &Self) -> Result<U, Error>;
 }
 
 pub trait TryConvertStorage<T, U>: BackendDevice<U>
@@ -199,7 +220,6 @@ pub trait TryToDevice<T, U>: Sized
 where
     T: BackendStorage,
     U: BackendStorage,
-    U::Device: TryConvertStorage<T, U>,
 {
     /// The type returned in the event of a conversion error.
     type Error;
@@ -207,3 +227,4 @@ where
     /// Performs the conversion.
     fn try_to_device(&self, device: &U::Device) -> Result<Tensor<U>, Error>;
 }
+ */

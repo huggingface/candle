@@ -1,7 +1,7 @@
 //! Code for GGML and GGUF files
 use crate::{
     BackendDevice, BackendStorage, Context, CpuDevice, CpuStorage, CustomOp1, DType, Device,
-    MetalStorage, Result, Shape, Storage, Tensor,
+    MetalStorage, Result, Shape, Storage, Tensor, TryConvertStorage,
 };
 use k_quants::*;
 use std::borrow::Cow;
@@ -39,8 +39,8 @@ pub use k_quants::GgmlType;
 pub use metal::QMetalStorage;
 
 pub struct QTensor<B: QuantizedBackend> {
-    storage: B,
-    shape: Shape,
+    pub storage: B,
+    pub shape: Shape,
 }
 
 #[derive(Debug)]
@@ -135,7 +135,7 @@ impl QuantizedDevice<QStorage> for Device {
 
 pub trait QuantizedBackend: Sized {
     type Storage: BackendStorage;
-    type Device: BackendDevice<Self::Storage> + QuantizedDevice<Self>;
+    type Device: QuantizedDevice<Self> + BackendDevice<Self::Storage>;
 
     fn block_size(&self) -> usize;
     fn dtype(&self) -> GgmlDType;
@@ -490,8 +490,20 @@ impl<B: QuantizedBackend> QTensor<B> {
         &self.shape
     }
 
-    pub fn dequantize(&self, _: &B::Device) -> Result<Tensor<B::Storage>> {
+    // TODO: fix qtensor.dequantize impl
+    pub fn dequantize<
+        O: BackendStorage<Device = D>,
+        QB: QuantizedBackend<Storage = O, Device = D>,
+        D: QuantizedDevice<QB> + BackendDevice<QB::Storage>,
+    >(
+        &self,
+        device: &D,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        QB::Device: TryConvertStorage<B::Storage, O>,
+    {
         let storage = self.storage.dequantize(self.shape.elem_count())?;
+        let storage: QB::Storage = device.convert(storage)?;
         let none = crate::op::BackpropOp::none();
         Ok(crate::tensor::from_storage(
             storage,
@@ -573,8 +585,18 @@ impl<B: QuantizedBackend> QMatMul<B> {
             _ => DEQUANTIZE_ALL.with(|b| *b),
         };
         let t = if dequantize {
-            let tensor = qtensor.dequantize(&qtensor.device())?;
+            // TODO: fix qtensor.dequantize impl
+            let storage = qtensor.storage.dequantize(qtensor.shape.elem_count())?;
+            let tensor = Tensor::from_storage(
+                storage,
+                qtensor.shape.clone(),
+                crate::op::BackpropOp::none(),
+                false,
+            );
             Self::Tensor(tensor)
+            //let device: B::Device = qtensor.device();
+            //let tensor: Tensor<B::Storage> = qtensor.dequantize(&device)?;
+            //Self::Tensor(tensor)
         } else if DEQUANTIZE_ALL_F16.with(|b| *b) {
             let tensor = qtensor.dequantize_f16(&qtensor.device())?;
             Self::TensorF16(tensor)

@@ -18,3 +18,7 @@ pub trait Condition {
 pub struct IsSame<T, U> {
     marker: std::marker::PhantomData<(T, U)>,
 }
+
+impl<T> Condition for IsSame<T, T> {
+    type Value = True;
+}

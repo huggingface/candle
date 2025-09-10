@@ -1,4 +1,4 @@
-use crate::{DType, Result};
+use crate::{BackendDevice, DType, Result, TryConvertStorage};
 use candle_metal_kernels::{
     metal_utils::{
         Buffer, BufferMap, CommandBuffer, Commands, ComputePipeline, Device, MTLResourceOptions,
@@ -281,4 +281,10 @@ fn find_available_buffer(
         }
     }
     best_buffer.cloned()
+}
+
+impl TryConvertStorage<crate::CpuStorage, crate::MetalStorage> for MetalDevice {
+    fn convert(&self, storage: crate::CpuStorage) -> Result<crate::MetalStorage> {
+        self.storage_from_cpu_storage(&storage)
+    }
 }

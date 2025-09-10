@@ -45,8 +45,8 @@ impl BenchDevice<candle_core::CudaStorage> for candle_core::CudaDevice {
 }
 
 #[cfg(feature = "metal")]
-fn bench_device() -> MetalDevice {
-    MetalDevice::new(0).unwrap()
+fn bench_device() -> candle_core::MetalDevice {
+    candle_core::MetalDevice::new(0).unwrap()
 }
 
 #[cfg(feature = "cuda")]

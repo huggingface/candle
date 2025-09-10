@@ -1,7 +1,7 @@
 //! Tensors are N-dimensional matrixes of elements using a single data type.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::convert::{TryConvertStorage, TryToDevice};
+use crate::convert::TryConvertStorage;
 use crate::op::{BackpropOp, BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::scalar::TensorOrScalar;
 use crate::shape::{Dim, Dims, ShapeWithOneHole};
@@ -49,6 +49,12 @@ impl<B: BackendStorage> AsRef<Tensor<B>> for Tensor<B> {
         self
     }
 }
+#[cfg(not(any(feature = "cuda", feature = "metal")))]
+type DefaultStorage = crate::CpuStorage;
+#[cfg(feature = "cuda")]
+type DefaultStorage = crate::CudaStorage;
+#[cfg(feature = "metal")]
+type DefaultStorage = crate::MetalStorage;
 
 // Tensors are refcounted so that cloning is cheap when building the op graph.
 // Storages are also refcounted independently so that its possible to avoid
@@ -67,7 +73,7 @@ impl<B: BackendStorage> AsRef<Tensor<B>> for Tensor<B> {
 ///
 /// Tensors are reference counted with [`Arc`] so cloning them is cheap.
 #[derive(Clone)]
-pub struct Tensor<B>(Arc<Tensor_<B>>)
+pub struct Tensor<B = DefaultStorage>(Arc<Tensor_<B>>)
 where
     B: BackendStorage;
 
@@ -120,7 +126,7 @@ macro_rules! binary_op_scalar {
                 crate::scalar::TensorScalar::Tensor(rhs) => rhs,
                 crate::scalar::TensorScalar::Scalar(rhs) => rhs
                     .to_dtype(self.dtype())?
-                    .try_to_device(self.device())?
+                    .to_device(self.device())?
                     .broadcast_as(self.shape())?,
             };
             let shape = self.same_shape_binary_op(&rhs, stringify!($fn_name))?;
@@ -180,30 +186,6 @@ pub(crate) fn from_storage<B: BackendStorage, S: Into<Shape>>(
     Tensor(Arc::new(tensor_))
 }
 
-impl<T, U> TryToDevice<T, U> for Tensor<T>
-where
-    T: BackendStorage,
-    U: BackendStorage,
-    U::Device: TryConvertStorage<T, U>,
-{
-    type Error = Error;
-
-    fn try_to_device(&self, device: &<U as BackendStorage>::Device) -> Result<Tensor<U>> {
-        let storage = self.storage().clone();
-        let storage = device.try_convert(storage)?;
-        let op = BackpropOp::none();
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: Arc::new(RwLock::new(storage)),
-            layout: self.layout.clone(),
-            op,
-            is_variable: false,
-            dtype: self.dtype,
-            device: device.clone(),
-        };
-        Ok(Tensor(Arc::new(tensor_)))
-    }
-}
 impl<B: BackendStorage> Tensor<B> {
     pub fn from_storage<S: Into<Shape>>(
         storage: B,
@@ -1138,7 +1120,7 @@ impl<B: BackendStorage> Tensor<B> {
             crate::scalar::TensorScalar::Tensor(rhs) => rhs,
             crate::scalar::TensorScalar::Scalar(rhs) => rhs
                 .to_dtype(self.dtype())?
-                .try_to_device(self.device())?
+                .to_device(self.device())?
                 .broadcast_as(self.shape())?,
         };
         let shape = self.same_shape_binary_op(&rhs, "cmp")?;
@@ -2281,10 +2263,21 @@ impl<B: BackendStorage> Tensor<B> {
     /// If the target device is the same as the tensor device, only a shallow copy is performed.
     pub fn to_device<U: BackendStorage>(&self, device: &U::Device) -> Result<Tensor<U>>
     where
-        Self: TryToDevice<B, U>,
         U::Device: TryConvertStorage<B, U>,
     {
-        self.try_to_device(device)
+        let storage = self.storage().clone();
+        let storage = device.convert(storage)?;
+        let op = BackpropOp::none();
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: Arc::new(RwLock::new(storage)),
+            layout: self.layout.clone(),
+            op,
+            is_variable: false,
+            dtype: self.dtype,
+            device: device.clone(),
+        };
+        Ok(Tensor(Arc::new(tensor_)))
     }
 
     /// Returns a new tensor duplicating data from the original tensor. New dimensions are inserted

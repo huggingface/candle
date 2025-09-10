@@ -1,6 +1,6 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::cpu_backend::CpuDevice;
-use crate::{CpuStorage, DType, Result, Shape, Storage, WithDType};
+use crate::{CpuStorage, DType, Result, Shape, Storage, TryConvertStorage, WithDType};
 use std::convert::Into;
 
 /// A `DeviceLocation` represents a physical device whereas multiple `Device`
@@ -23,6 +23,12 @@ pub enum Device {
 impl AsRef<Device> for Device {
     fn as_ref(&self) -> &Device {
         self
+    }
+}
+
+impl TryConvertStorage<CpuStorage, Storage> for Device {
+    fn convert(&self, storage: CpuStorage) -> Result<Storage> {
+        self.storage_from_cpu_storage(&storage)
     }
 }
 
