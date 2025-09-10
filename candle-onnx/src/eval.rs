@@ -494,6 +494,29 @@ fn simple_eval_(
                 };
                 values.insert(node.output[0].clone(), ys);
             }
+            "GlobalAveragePool" => {
+                // https://github.com/onnx/onnx/blob/main/docs/Operators.md#GlobalAveragePool
+                let xs = get(&node.input[0])?;
+                let [_n_dim, _c_dim, kernel_shape @ ..] = xs.dims() else {
+                    bail!(
+                        "only 2d GlobalAveragePool is supported, kernel shape {:?}",
+                        xs.dims()
+                    );
+                };
+                let ys = match kernel_shape {
+                    [d1, d2] => xs.avg_pool2d((*d1, *d2)),
+                    [d1] => {
+                        let xs = xs.unsqueeze(1)?;
+                        let xs = xs.avg_pool2d((1, *d1))?;
+                        xs.squeeze(1)
+                    }
+                    _ => bail!(
+                        "only 2d GlobalAveragePool is supported, kernel shape {:?}",
+                        xs.dims()
+                    ),
+                }?;
+                values.insert(node.output[0].clone(), ys);
+            }
             "AveragePool" => {
                 // https://github.com/onnx/onnx/blob/main/docs/Operators.md#AveragePool
                 let dilations = get_attr_opt::<[i64]>(node, "dilations")?;
