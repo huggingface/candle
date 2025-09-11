@@ -50,11 +50,11 @@ impl<B: BackendStorage> AsRef<Tensor<B>> for Tensor<B> {
     }
 }
 #[cfg(not(any(feature = "cuda", feature = "metal")))]
-type DefaultStorage = crate::CpuStorage;
+pub type DefaultStorage = crate::CpuStorage;
 #[cfg(feature = "cuda")]
-type DefaultStorage = crate::CudaStorage;
+pub type DefaultStorage = crate::CudaStorage;
 #[cfg(feature = "metal")]
-type DefaultStorage = crate::MetalStorage;
+pub type DefaultStorage = crate::MetalStorage;
 
 // Tensors are refcounted so that cloning is cheap when building the op graph.
 // Storages are also refcounted independently so that its possible to avoid
