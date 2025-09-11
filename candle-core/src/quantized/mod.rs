@@ -1,7 +1,7 @@
 //! Code for GGML and GGUF files
 use crate::{
     BackendDevice, BackendStorage, Context, CpuDevice, CpuStorage, CustomOp1, DType, Device,
-    MetalStorage, Result, Shape, Storage, Tensor, TryConvertStorage,
+    MetalStorage, Result, Shape, Storage, Tensor,
 };
 use k_quants::*;
 use std::borrow::Cow;
@@ -38,7 +38,17 @@ use half::{bf16, f16};
 pub use k_quants::GgmlType;
 pub use metal::QMetalStorage;
 
-pub struct QTensor<B: QuantizedBackend> {
+#[cfg(not(any(feature = "cuda", feature = "metal")))]
+pub type DefaultQStorage = QCpuStorage;
+#[cfg(feature = "cuda")]
+pub type DefaultQStorage = cuda::QCudaStorage;
+#[cfg(feature = "metal")]
+pub type DefaultQStorage = metal::QMetalStorage;
+
+pub struct QTensor<B = DefaultQStorage>
+where
+    B: QuantizedBackend,
+{
     pub storage: B,
     pub shape: Shape,
 }
@@ -444,16 +454,16 @@ fn check_shape(shape: &Shape, block_size: usize) -> Result<()> {
     Ok(())
 }
 
-impl<B: QuantizedBackend> QTensor<B> {
-    pub fn new<S: Into<Shape>>(storage: B, shape: S) -> Result<Self> {
+impl<QB: QuantizedBackend> QTensor<QB> {
+    pub fn new<S: Into<Shape>>(storage: QB, shape: S) -> Result<Self> {
         let shape = shape.into();
         check_shape(&shape, storage.block_size())?;
         Ok(Self { storage, shape })
     }
 
-    pub fn quantize(src: &Tensor<B::Storage>, dtype: GgmlDType) -> Result<Self>
+    pub fn quantize(src: &Tensor<QB::Storage>, dtype: GgmlDType) -> Result<Self>
     where
-        <B::Storage as BackendStorage>::Device: QuantizedDevice<B>,
+        QB::Storage: BackendStorage<Device = QB::Device>,
     {
         let shape = src.shape();
         let block_size = dtype.block_size();
@@ -478,7 +488,7 @@ impl<B: QuantizedBackend> QTensor<B> {
         self.storage.dtype()
     }
 
-    pub fn device(&self) -> B::Device {
+    pub fn device(&self) -> QB::Device {
         self.storage.device().as_ref().clone()
     }
 
@@ -491,19 +501,14 @@ impl<B: QuantizedBackend> QTensor<B> {
     }
 
     // TODO: fix qtensor.dequantize impl
-    pub fn dequantize<
-        O: BackendStorage<Device = D>,
-        QB: QuantizedBackend<Storage = O, Device = D>,
-        D: QuantizedDevice<QB> + BackendDevice<QB::Storage>,
-    >(
-        &self,
-        device: &D,
-    ) -> Result<Tensor<QB::Storage>>
+    pub fn dequantize(&self, device: &QB::Device) -> Result<Tensor<QB::Storage>>
     where
-        QB::Device: TryConvertStorage<B::Storage, O>,
+        QB::Storage: BackendStorage<Device = QB::Device>,
+        //QB::Device: TryConvertStorage<B::Storage, QB::Storage>,
+        //<B::Storage as BackendStorage>::Device: QuantizedDevice<B>,
     {
         let storage = self.storage.dequantize(self.shape.elem_count())?;
-        let storage: QB::Storage = device.convert(storage)?;
+        //let storage: QB::Storage = device.convert(storage)?;
         let none = crate::op::BackpropOp::none();
         Ok(crate::tensor::from_storage(
             storage,
@@ -513,7 +518,7 @@ impl<B: QuantizedBackend> QTensor<B> {
         ))
     }
 
-    pub fn dequantize_f16(&self, _: &B::Device) -> Result<Tensor<B::Storage>> {
+    pub fn dequantize_f16(&self, _: &QB::Device) -> Result<Tensor<QB::Storage>> {
         // In the CUDA case, we have a specialized kernel as this can be useful for volta
         // architectures. https://github.com/huggingface/candle/issues/2136
 
@@ -713,11 +718,11 @@ impl crate::CustomOp1<MetalStorage> for QTensor<QMetalStorage> {
     }
 }
 
-impl<B: QuantizedBackend> crate::Module<B::Storage> for QMatMul<B>
+impl<QB: QuantizedBackend> crate::Module<QB::Storage> for QMatMul<QB>
 where
-    QTensor<B>: CustomOp1<B::Storage>,
+    QTensor<QB>: CustomOp1<QB::Storage>,
 {
-    fn forward(&self, xs: &Tensor<B::Storage>) -> Result<Tensor<B::Storage>> {
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         match self {
             Self::QTensor(t) => xs.apply_op1_no_bwd(t.as_ref()),
             Self::Tensor(w) => {

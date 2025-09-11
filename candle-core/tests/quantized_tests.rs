@@ -2,7 +2,7 @@ use candle_core::{
     backend::BackendStorage,
     bail,
     cpu_backend::CpuDevice,
-    quantized::{self, GgmlDType, QCpuStorage, QTensor, QuantizedBackend, QuantizedDevice},
+    quantized::{self, GgmlDType, QCpuStorage, QTensor, QuantizedBackend},
     test_quantized_device,
     test_utils::{to_vec2_round, ExpectedResults},
     CpuStorage, CudaStorage, DType, IndexOp, MetalStorage, Module, Result, Tensor,
@@ -18,15 +18,15 @@ const GGML_MAX_QUANTIZATION_TOTAL_ERROR_2BITS: f32 = 0.0075;
 const GGML_MAX_QUANTIZATION_TOTAL_ERROR_3BITS: f32 = 0.0040;
 const GGML_MAX_DOT_PRODUCT_ERROR: f32 = 0.02;
 
-fn test_matmul<B, QB>(
-    device: &B::Device,
+fn test_matmul<QB>(
+    device: &QB::Device,
     (b, m, n, k): (usize, usize, usize, usize),
     dtype: GgmlDType,
 ) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device>,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device>,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let lhs = (0..(m * k))
         .map(|v| v as f32 / (m * k) as f32)
@@ -35,8 +35,8 @@ where
         .map(|v| v as f32 / (n * k) as f32)
         .collect::<Vec<_>>();
 
-    let lhs: Tensor<B> = Tensor::from_slice(&lhs, (m, k), device)?;
-    let rhs: Tensor<B> = Tensor::from_slice(&rhs, (k, n), device)?;
+    let lhs: Tensor<QB::Storage> = Tensor::from_slice(&lhs, (m, k), device)?;
+    let rhs: Tensor<QB::Storage> = Tensor::from_slice(&rhs, (k, n), device)?;
     let mm = lhs.matmul(&rhs)?;
     let qtensor = quantized::QTensor::quantize(&rhs.t()?, dtype)?;
     let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
@@ -93,11 +93,11 @@ fn test_matmul_mm() -> Result<()> {
     Ok(())
 }
 
-fn quantized_matmul<B, QB>(device: &B::Device) -> Result<()>
+fn quantized_matmul<QB>(device: &QB::Device) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device> + 'static,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device> + 'static,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let (m, k, n) = (3, 64, 4);
     let lhs_s = (0..(m * k)).map(|v| v as f32).collect::<Vec<_>>();
@@ -155,7 +155,7 @@ where
             ],
         ),
     ]);
-    let expected = expected_results.get::<B>().unwrap();
+    let expected = expected_results.get::<QB::Storage>().unwrap();
     let actual = to_vec2_round(&res, 0)?;
     assert_eq!(expected, &actual);
 
@@ -163,11 +163,11 @@ where
     Ok(())
 }
 
-fn quantized_matmul_neg<B, QB>(device: &B::Device) -> Result<()>
+fn quantized_matmul_neg<QB>(device: &QB::Device) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device> + 'static,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device> + 'static,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let (m, k, n) = (3, 64, 4);
     let lhs_s = (0..(m * k))
@@ -231,7 +231,7 @@ where
     ]);
 
     assert_eq!(
-        expected_results.get::<B>().unwrap(),
+        expected_results.get::<QB::Storage>().unwrap(),
         to_vec2_round(&res, 0)?.as_slice(),
     );
     let lhs2 = Tensor::stack(&[&lhs, &lhs], 0)?;
@@ -243,11 +243,11 @@ where
     Ok(())
 }
 
-fn qmm_batch<B, QB>(device: &B::Device) -> Result<()>
+fn qmm_batch<QB>(device: &QB::Device) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device> + 'static,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device> + 'static,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let (lhs, rhs, _mm) = get_random_tensors(2, 256, 6, device)?;
     let rhs = quantized::QTensor::quantize(&rhs, GgmlDType::Q2K)?;
@@ -271,7 +271,7 @@ where
     assert_eq!(mm4.shape().dims(), [12, 6]);
     let diff4 = (mm4.i(..6)? - &mm3)?.abs()?.sum_all()?.to_vec0::<f32>()?;
     //if dev.is_cuda() {
-    if TypeId::of::<B>() == TypeId::of::<CudaStorage>() {
+    if TypeId::of::<QB::Storage>() == TypeId::of::<CudaStorage>() {
         // We use a different kernel for sizes from 1 to 8 on cuda which explains
         // the difference here.
         assert!(0. < diff4 && diff4 < 1e-4);
@@ -290,17 +290,17 @@ test_quantized_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal);
 test_quantized_device!(quantized_matmul_neg, qmm_n_cpu, qmm_n_cuda, qmm_n_metal);
 test_quantized_device!(qmm_batch, qmm_b_cpu, qmm_b_cuda, qmm_b_metal);
 
-fn quantize_q4_0<B, QB>(device: &B::Device) -> Result<()>
+fn quantize_q4_0<QB>(device: &QB::Device) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device> + 'static,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device>,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
 
-    let src: Tensor<B> = Tensor::from_slice(&src, (32 * 4,), device)?;
+    let src: Tensor<QB::Storage> = Tensor::from_slice(&src, (32 * 4,), device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, GgmlDType::Q4_0)?;
-    let dst = quant.dequantize(device)?;
+    let dst: Tensor<QB::Storage> = quant.dequantize(device)?;
     let dst_f16 = quant.dequantize_f16(device)?;
     let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
         .to_dtype(DType::F32)?
@@ -329,14 +329,14 @@ where
     Ok(())
 }
 
-fn quantize_q4_1<B, QB>(device: &QB::Device) -> Result<()>
+fn quantize_q4_1<QB>(device: &QB::Device) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device> + 'static,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device>,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
-    let src: Tensor<B> = Tensor::from_slice(&src, (32 * 4,), device)?;
+    let src: Tensor<QB::Storage> = Tensor::from_slice(&src, (32 * 4,), device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, GgmlDType::Q4_1)?;
     let dst = quant.dequantize(device)?;
     let dst_f16 = quant.dequantize_f16(device)?;
@@ -367,14 +367,14 @@ where
     Ok(())
 }
 
-fn quantize_q5_0<B, QB>(device: &B::Device) -> Result<()>
+fn quantize_q5_0<QB>(device: &QB::Device) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device> + 'static,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device>,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
-    let src: Tensor<B> = Tensor::from_slice(&src, (32 * 4,), device)?;
+    let src: Tensor<QB::Storage> = Tensor::from_slice(&src, (32 * 4,), device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, GgmlDType::Q5_0)?;
     let dst = quant.dequantize(device)?;
     let dst_f16 = quant.dequantize_f16(device)?;
@@ -405,14 +405,14 @@ where
     Ok(())
 }
 
-fn quantize_q5_1<B, QB>(device: &B::Device) -> Result<()>
+fn quantize_q5_1<QB>(device: &QB::Device) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device> + 'static,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device>,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
-    let src: Tensor<B> = Tensor::from_slice(&src, (32 * 4,), device)?;
+    let src: Tensor<QB::Storage> = Tensor::from_slice(&src, (32 * 4,), device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, GgmlDType::Q5_1)?;
     let dst = quant.dequantize(device)?;
     let dst_f16 = quant.dequantize_f16(device)?;
@@ -500,18 +500,18 @@ fn calculate_rmse(a: &[f32], b: &[f32]) -> f32 {
 
 /// Similar to the GGML quantization unit test:
 /// https://github.com/ggerganov/llama.cpp/blob/master/tests/test-quantize-fns.cpp#L43-L50
-fn ggml_quantization_error_test<B, QB>(
+fn ggml_quantization_error_test<QB>(
     dtype: GgmlDType,
-    device: &B::Device,
+    device: &QB::Device,
     max_error: f32,
 ) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device> + 'static,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device>,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let src = create_ggml_like_vector(0.0);
-    let src: Tensor<B> = Tensor::from_slice(&src, (GGML_TEST_SIZE,), device)?;
+    let src: Tensor<QB::Storage> = Tensor::from_slice(&src, (GGML_TEST_SIZE,), device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, dtype)?;
     let dst = quant.dequantize(device)?;
     let dst_f16 = quant.dequantize_f16(device)?;
@@ -532,15 +532,15 @@ where
     Ok(())
 }
 
-fn quantize_q2k<B, QB>(device: &B::Device) -> Result<()>
+fn quantize_q2k<QB>(device: &QB::Device) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device> + 'static,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device>,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let dtype = GgmlDType::Q2K;
 
-    let src: Tensor<B> = get_test_vector2(0.5, 1024, device)?;
+    let src: Tensor<QB::Storage> = get_test_vector2(0.5, 1024, device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, dtype)?;
     let dst = quant.dequantize(device)?;
     let dst_f16 = quant.dequantize_f16(device)?;
@@ -566,7 +566,7 @@ where
         [-0.499, -0.366, -0.249, 0.0, 0.295, 0.492]
     );
 
-    let src_big: Tensor<B> = get_test_vector2(128.0, 1024, device)?;
+    let src_big: Tensor<QB::Storage> = get_test_vector2(128.0, 1024, device)?;
     let quant_big: QTensor<QB> = QTensor::quantize(&src_big, dtype)?;
     let dst_big = quant_big.dequantize(device)?;
     let dst_big_f16 = quant_big.dequantize_f16(device)?;
@@ -585,14 +585,14 @@ where
     Ok(())
 }
 
-fn quantize_q3k<B, QB>(device: &B::Device) -> Result<()>
+fn quantize_q3k<QB>(device: &QB::Device) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device> + 'static,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device>,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let dtype = GgmlDType::Q3K;
-    let src: Tensor<B> = get_test_vector2(0.5, 1024, device)?;
+    let src: Tensor<QB::Storage> = get_test_vector2(0.5, 1024, device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, dtype)?;
     let dst = quant.dequantize(device)?;
     let dst_f16 = quant.dequantize_f16(device)?;
@@ -618,7 +618,7 @@ where
         [-0.493, -0.37, -0.243, -0.0, 0.292, 0.492]
     );
 
-    let src_big: Tensor<B> = get_test_vector2(128.0, 1024, device)?;
+    let src_big: Tensor<QB::Storage> = get_test_vector2(128.0, 1024, device)?;
     let quant_big: QTensor<QB> = QTensor::quantize(&src_big, dtype)?;
     let dst_big = quant_big.dequantize(device)?;
     let dst_big_f16 = quant_big.dequantize_f16(device)?;
@@ -637,14 +637,14 @@ where
     Ok(())
 }
 
-fn quantize_q4k<B, QB>(device: &B::Device) -> Result<()>
+fn quantize_q4k<QB>(device: &QB::Device) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device> + 'static,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device>,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let dtype = GgmlDType::Q4K;
-    let src: Tensor<B> = get_test_vector2(0.5, 1024, device)?;
+    let src: Tensor<QB::Storage> = get_test_vector2(0.5, 1024, device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, dtype)?;
     let dst = quant.dequantize(device)?;
     let dst_f16 = quant.dequantize_f16(device)?;
@@ -670,7 +670,7 @@ where
         [-0.5, -0.373, -0.25, 0.0, 0.288, 0.498]
     );
 
-    let src_big: Tensor<B> = get_test_vector2(128.0, 1024, device)?;
+    let src_big: Tensor<QB::Storage> = get_test_vector2(128.0, 1024, device)?;
     let quant_big: QTensor<QB> = QTensor::quantize(&src_big, dtype)?;
     let dst_big = quant_big.dequantize(device)?;
     let dst_big_f16 = quant_big.dequantize_f16(device)?;
@@ -689,14 +689,14 @@ where
     Ok(())
 }
 
-fn quantize_q5k<B, QB>(device: &B::Device) -> Result<()>
+fn quantize_q5k<QB>(device: &QB::Device) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device> + 'static,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device>,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let dtype = GgmlDType::Q5K;
-    let src: Tensor<B> = get_test_vector2(0.5, 1024, device)?;
+    let src: Tensor<QB::Storage> = get_test_vector2(0.5, 1024, device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, dtype)?;
     let dst = quant.dequantize(device)?;
     let dst_f16 = quant.dequantize_f16(device)?;
@@ -722,7 +722,7 @@ where
         [-0.5, -0.373, -0.25, 0.0, 0.279, 0.499]
     );
 
-    let src_big: Tensor<B> = get_test_vector2(128.0, 1024, device)?;
+    let src_big: Tensor<QB::Storage> = get_test_vector2(128.0, 1024, device)?;
     let quant_big: QTensor<QB> = QTensor::quantize(&src_big, dtype)?;
     let dst_big = quant_big.dequantize(device)?;
     let dst_big_f16 = quant_big.dequantize_f16(device)?;
@@ -741,14 +741,14 @@ where
     Ok(())
 }
 
-fn quantize_q6k<B, QB>(device: &B::Device) -> Result<()>
+fn quantize_q6k<QB>(device: &QB::Device) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device> + 'static,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device>,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let dtype = GgmlDType::Q6K;
-    let src: Tensor<B> = get_test_vector2(0.5, 1024, device)?;
+    let src: Tensor<QB::Storage> = get_test_vector2(0.5, 1024, device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, dtype)?;
     let dst = quant.dequantize(device)?;
     let dst_f16 = quant.dequantize_f16(device)?;
@@ -774,7 +774,7 @@ where
         [-0.497, -0.372, -0.25, -0.0, 0.284, 0.5]
     );
 
-    let src_big: Tensor<B> = get_test_vector2(128.0, 1024, device)?;
+    let src_big: Tensor<QB::Storage> = get_test_vector2(128.0, 1024, device)?;
     let quant_big: QTensor<QB> = QTensor::quantize(&src_big, dtype)?;
     let dst_big = quant_big.dequantize(device)?;
     let dst_big_f16 = quant_big.dequantize_f16(device)?;
@@ -793,14 +793,14 @@ where
     Ok(())
 }
 
-fn quantize_q8k<B, QB>(device: &B::Device) -> Result<()>
+fn quantize_q8k<QB>(device: &QB::Device) -> Result<()>
 where
-    B: BackendStorage<Device = QB::Device> + 'static,
-    QB: QuantizedBackend<Storage = B>,
-    QTensor<QB>: candle_core::CustomOp1<B>,
+    QB: QuantizedBackend,
+    QB::Storage: BackendStorage<Device = QB::Device>,
+    QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
 {
     let dtype = GgmlDType::Q8K;
-    let src: Tensor<B> = get_test_vector2(0.5, 1024, device)?;
+    let src: Tensor<QB::Storage> = get_test_vector2(0.5, 1024, device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, dtype)?;
     let dst = quant.dequantize(device)?;
     let dst_f16 = quant.dequantize_f16(device)?;
@@ -826,7 +826,7 @@ where
         [-0.5, -0.375, -0.25, -0.0, 0.281, 0.499]
     );
 
-    let src_big: Tensor<B> = get_test_vector2(128.0, 1024, device)?;
+    let src_big: Tensor<QB::Storage> = get_test_vector2(128.0, 1024, device)?;
     let quant_big: QTensor<QB> = QTensor::quantize(&src_big, dtype)?;
     let dst_big = quant_big.dequantize(device)?;
     let dst_big_f16 = quant_big.dequantize_f16(device)?;
@@ -1027,14 +1027,13 @@ macro_rules! quantized_matmul {
     // TODO: Switch to generating the two last arguments automatically once concat_idents is
     // stable. https://github.com/rust-lang/rust/issues/29599
     ($fn_name: ident, $fn_name_cpu: ident, $fn_name_cuda: ident, $fn_name_metal: ident, $dtype: expr) => {
-        fn $fn_name<B: BackendStorage, QB: QuantizedBackend<Storage = B, Device = B::Device>>(
-            device: &B::Device,
-        ) -> Result<()>
+        fn $fn_name<QB>(device: &QB::Device) -> Result<()>
         where
-            <B as BackendStorage>::Device: QuantizedDevice<QB>,
-            QTensor<QB>: candle_core::CustomOp1<B>,
+            QB: QuantizedBackend,
+            QB::Storage: BackendStorage<Device = QB::Device>,
+            QTensor<QB>: candle_core::CustomOp1<QB::Storage>,
         {
-            test_matmul::<B, QB>(device, (1, 3, 4, 256), $dtype)?;
+            test_matmul::<QB>(device, (1, 3, 4, 256), $dtype)?;
             Ok(())
         }
 
