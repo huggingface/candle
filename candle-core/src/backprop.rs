@@ -129,8 +129,6 @@ impl Tensor {
                     | Op::Permute(node, _)
                     | Op::Narrow(node, _, _, _)
                     | Op::Unary(node, _)
-                    | Op::Elu(node, _)
-                    | Op::Powf(node, _)
                     | Op::CustomOp1(node, _) => {
                         let (tg, nodes) = walk(node, nodes, already_seen);
                         track_grad |= tg;
