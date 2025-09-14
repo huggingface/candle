@@ -109,23 +109,19 @@ pub fn conv2d<B: BackendStorage>(
 
 // QMatMul wrapper adding some tracing.
 #[derive(Clone)]
-pub struct QMatMul<B: BackendStorage, QB: QuantizedBackend> {
-    inner: candle::quantized::QMatMul<B, QB>,
+pub struct QMatMul<QB: QuantizedBackend> {
+    inner: candle::quantized::QMatMul<QB>,
     span: tracing::Span,
 }
 
-impl<B, QB> QMatMul<B, QB>
-where
-    B: BackendStorage,
-    QB: QuantizedBackend<Storage = B>,
-{
+impl<QB: QuantizedBackend> QMatMul<QB> {
     pub fn new(
         out_dim: usize,
         in_dim: usize,
         vb: crate::quantized_var_builder::VarBuilder<QB>,
     ) -> Result<Self> {
         let ws = vb.get((in_dim, out_dim), "weight")?;
-        let inner = candle::quantized::QMatMul::<B, QB>::from_arc(ws)?;
+        let inner = candle::quantized::QMatMul::<QB>::from_arc(ws)?;
         let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
         Ok(Self { inner, span })
     }
@@ -137,17 +133,17 @@ where
     }
 }
 
-impl<B: BackendStorage, QB: QuantizedBackend> Module<B> for QMatMul<B, QB>
+impl<QB: QuantizedBackend> Module<QB::Storage> for QMatMul<QB>
 where
-    candle::quantized::QMatMul<B, QB>: Module<B>,
+    candle::quantized::QMatMul<QB>: Module<QB::Storage>,
 {
-    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let _enter = self.span.enter();
         self.inner.forward(xs)
     }
 }
 
-impl<B: BackendStorage, QB: QuantizedBackend> std::fmt::Debug for QMatMul<B, QB> {
+impl<QB: QuantizedBackend> std::fmt::Debug for QMatMul<QB> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "QMatMul")
     }

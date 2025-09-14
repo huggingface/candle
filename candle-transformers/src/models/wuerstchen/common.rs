@@ -1,4 +1,4 @@
-use candle::{DType, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 // https://github.com/huggingface/diffusers/blob/19edca82f1ff194c07317369a92b470dbae97f34/src/diffusers/pipelines/wuerstchen/modeling_wuerstchen_common.py#L22
@@ -13,8 +13,8 @@ impl WLayerNorm {
     }
 }
 
-impl Module for WLayerNorm {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for WLayerNorm {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = xs.permute((0, 2, 3, 1))?;
 
         let x_dtype = xs.dtype();
@@ -45,8 +45,8 @@ impl LayerNormNoWeights {
     }
 }
 
-impl Module for LayerNormNoWeights {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for LayerNormNoWeights {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let x_dtype = xs.dtype();
         let internal_dtype = match x_dtype {
             DType::F16 | DType::BF16 => DType::F32,
@@ -63,17 +63,17 @@ impl Module for LayerNormNoWeights {
 }
 
 #[derive(Debug)]
-pub struct TimestepBlock {
-    mapper: candle_nn::Linear,
+pub struct TimestepBlock<B: BackendStorage> {
+    mapper: candle_nn::Linear<B>,
 }
 
-impl TimestepBlock {
-    pub fn new(c: usize, c_timestep: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> TimestepBlock<B> {
+    pub fn new(c: usize, c_timestep: usize, vb: VarBuilder<B>) -> Result<Self> {
         let mapper = candle_nn::linear(c_timestep, c * 2, vb.pp("mapper"))?;
         Ok(Self { mapper })
     }
 
-    pub fn forward(&self, xs: &Tensor, t: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, t: &Tensor<B>) -> Result<Tensor<B>> {
         let ab = self
             .mapper
             .forward(t)?
@@ -85,21 +85,21 @@ impl TimestepBlock {
 }
 
 #[derive(Debug)]
-pub struct GlobalResponseNorm {
-    gamma: Tensor,
-    beta: Tensor,
+pub struct GlobalResponseNorm<B: BackendStorage> {
+    gamma: Tensor<B>,
+    beta: Tensor<B>,
 }
 
-impl GlobalResponseNorm {
-    pub fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> GlobalResponseNorm<B> {
+    pub fn new(dim: usize, vb: VarBuilder<B>) -> Result<Self> {
         let gamma = vb.get((1, 1, 1, dim), "gamma")?;
         let beta = vb.get((1, 1, 1, dim), "beta")?;
         Ok(Self { gamma, beta })
     }
 }
 
-impl Module for GlobalResponseNorm {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for GlobalResponseNorm<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let agg_norm = xs.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
         let stand_div_norm =
             agg_norm.broadcast_div(&(agg_norm.mean_keepdim(D::Minus1)? + 1e-6)?)?;
@@ -111,16 +111,16 @@ impl Module for GlobalResponseNorm {
 }
 
 #[derive(Debug)]
-pub struct ResBlock {
-    depthwise: candle_nn::Conv2d,
+pub struct ResBlock<B: BackendStorage> {
+    depthwise: candle_nn::Conv2d<B>,
     norm: WLayerNorm,
-    channelwise_lin1: candle_nn::Linear,
-    channelwise_grn: GlobalResponseNorm,
-    channelwise_lin2: candle_nn::Linear,
+    channelwise_lin1: candle_nn::Linear<B>,
+    channelwise_grn: GlobalResponseNorm<B>,
+    channelwise_lin2: candle_nn::Linear<B>,
 }
 
-impl ResBlock {
-    pub fn new(c: usize, c_skip: usize, ksize: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> ResBlock<B> {
+    pub fn new(c: usize, c_skip: usize, ksize: usize, vb: VarBuilder<B>) -> Result<Self> {
         let cfg = candle_nn::Conv2dConfig {
             padding: ksize / 2,
             groups: c,
@@ -140,7 +140,7 @@ impl ResBlock {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, x_skip: Option<&Tensor>) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, x_skip: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let x_res = xs;
         let xs = match x_skip {
             None => xs.clone(),
@@ -161,21 +161,21 @@ impl ResBlock {
 }
 use super::attention_processor::Attention;
 #[derive(Debug)]
-pub struct AttnBlock {
+pub struct AttnBlock<B: BackendStorage> {
     self_attn: bool,
     norm: WLayerNorm,
-    attention: Attention,
-    kv_mapper_lin: candle_nn::Linear,
+    attention: Attention<B>,
+    kv_mapper_lin: candle_nn::Linear<B>,
 }
 
-impl AttnBlock {
+impl<B: BackendStorage> AttnBlock<B> {
     pub fn new(
         c: usize,
         c_cond: usize,
         nhead: usize,
         self_attn: bool,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let norm = WLayerNorm::new(c)?;
         let attention = Attention::new(c, nhead, c / nhead, use_flash_attn, vb.pp("attention"))?;
@@ -188,7 +188,7 @@ impl AttnBlock {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, kv: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, kv: &Tensor<B>) -> Result<Tensor<B>> {
         let kv = candle_nn::ops::silu(kv)?.apply(&self.kv_mapper_lin)?;
         let norm_xs = self.norm.forward(xs)?;
         let kv = if self.self_attn {

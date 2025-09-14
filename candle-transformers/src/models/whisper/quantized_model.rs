@@ -1,22 +1,16 @@
 use super::Config;
 use crate::quantized_nn::{layer_norm, linear, linear_no_bias, Embedding, Linear};
 pub use crate::quantized_var_builder::VarBuilder;
-use candle::{
-    quantized::QuantizedBackend, BackendStorage, Condition, IndexOp, IsSame, Result, Tensor, True,
-    D,
-};
+use candle::{quantized::QuantizedBackend, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv1d, Conv1dConfig, LayerNorm, Module};
 
-fn conv1d<B: BackendStorage, QB: QuantizedBackend>(
+fn conv1d<QB: QuantizedBackend>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     config: Conv1dConfig,
     vb: VarBuilder<QB>,
-) -> Result<Conv1d<B>>
-where
-    IsSame<B, QB::Storage>: Condition<Value = True>,
-{
+) -> Result<Conv1d<QB::Storage>> {
     let weight = vb
         .get((out_channels, in_channels, kernel_size), "weight")?
         .dequantize(vb.device())?;
@@ -26,20 +20,23 @@ where
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L62
 #[derive(Debug, Clone)]
-struct MultiHeadAttention<B: BackendStorage> {
-    query: Linear<B>,
-    key: Linear<B>,
-    value: Linear<B>,
-    out: Linear<B>,
+struct MultiHeadAttention<QB: QuantizedBackend> {
+    query: Linear<QB>,
+    key: Linear<QB>,
+    value: Linear<QB>,
+    out: Linear<QB>,
     n_head: usize,
     span: tracing::Span,
     softmax_span: tracing::Span,
     matmul_span: tracing::Span,
-    kv_cache: Option<(Tensor<B>, Tensor<B>)>,
+    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
 }
 
-impl<B: BackendStorage> MultiHeadAttention<B> {
-    fn load(n_state: usize, n_head: usize, vb: VarBuilder<B>) -> Result<Self> {
+impl<QB: QuantizedBackend> MultiHeadAttention<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn load(n_state: usize, n_head: usize, vb: VarBuilder<QB>) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "multi-head-attn");
         let softmax_span = tracing::span!(tracing::Level::TRACE, "multi-head-attn-softmax");
         let matmul_span = tracing::span!(tracing::Level::TRACE, "multi-head-attn-matmul");
@@ -62,11 +59,11 @@ impl<B: BackendStorage> MultiHeadAttention<B> {
 
     fn forward(
         &mut self,
-        x: &Tensor<B>,
-        xa: Option<&Tensor<B>>,
-        mask: Option<&Tensor<B>>,
+        x: &Tensor<QB::Storage>,
+        xa: Option<&Tensor<QB::Storage>>,
+        mask: Option<&Tensor<QB::Storage>>,
         flush_cache: bool,
-    ) -> Result<Tensor<B>> {
+    ) -> Result<Tensor<QB::Storage>> {
         let _enter = self.span.enter();
         let q = self.query.forward(x)?;
         let (k, v) = match xa {
@@ -94,7 +91,7 @@ impl<B: BackendStorage> MultiHeadAttention<B> {
         Ok(out)
     }
 
-    fn reshape_head(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
+    fn reshape_head(&self, x: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let (n_batch, n_ctx, n_state) = x.dims3()?;
         let target_dims = &[n_batch, n_ctx, self.n_head, n_state / self.n_head];
         x.reshape(target_dims)?.transpose(1, 2)
@@ -102,11 +99,11 @@ impl<B: BackendStorage> MultiHeadAttention<B> {
 
     fn qkv_attention(
         &self,
-        q: &Tensor<B>,
-        k: &Tensor<B>,
-        v: &Tensor<B>,
-        mask: Option<&Tensor<B>>,
-    ) -> Result<Tensor<B>> {
+        q: &Tensor<QB::Storage>,
+        k: &Tensor<QB::Storage>,
+        v: &Tensor<QB::Storage>,
+        mask: Option<&Tensor<QB::Storage>>,
+    ) -> Result<Tensor<QB::Storage>> {
         let (_, n_ctx, n_state) = q.dims3()?;
         let scale = ((n_state / self.n_head) as f64).powf(-0.25);
         let q = (self.reshape_head(q)? * scale)?;
@@ -140,18 +137,21 @@ impl<B: BackendStorage> MultiHeadAttention<B> {
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L111
 #[derive(Debug, Clone)]
-struct ResidualAttentionBlock<B: BackendStorage> {
-    attn: MultiHeadAttention<B>,
-    attn_ln: LayerNorm<B>,
-    cross_attn: Option<(MultiHeadAttention<B>, LayerNorm<B>)>,
-    mlp_linear1: Linear<B>,
-    mlp_linear2: Linear<B>,
-    mlp_ln: LayerNorm<B>,
+struct ResidualAttentionBlock<QB: QuantizedBackend> {
+    attn: MultiHeadAttention<QB>,
+    attn_ln: LayerNorm<QB::Storage>,
+    cross_attn: Option<(MultiHeadAttention<QB>, LayerNorm<QB::Storage>)>,
+    mlp_linear1: Linear<QB>,
+    mlp_linear2: Linear<QB>,
+    mlp_ln: LayerNorm<QB::Storage>,
     span: tracing::Span,
 }
 
-impl<B: BackendStorage> ResidualAttentionBlock<B> {
-    fn load(n_state: usize, n_head: usize, ca: bool, vb: VarBuilder<B>) -> Result<Self> {
+impl<QB: QuantizedBackend> ResidualAttentionBlock<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn load(n_state: usize, n_head: usize, ca: bool, vb: VarBuilder<QB>) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "residual-attn");
         let attn = MultiHeadAttention::load(n_state, n_head, vb.pp("self_attn"))?;
         let attn_ln = layer_norm(n_state, 1e-5, vb.pp("self_attn_layer_norm"))?;
@@ -179,11 +179,11 @@ impl<B: BackendStorage> ResidualAttentionBlock<B> {
 
     fn forward(
         &mut self,
-        x: &Tensor<B>,
-        xa: Option<&Tensor<B>>,
-        mask: Option<&Tensor<B>>,
+        x: &Tensor<QB::Storage>,
+        xa: Option<&Tensor<QB::Storage>>,
+        mask: Option<&Tensor<QB::Storage>>,
         flush_kv_cache: bool,
-    ) -> Result<Tensor<B>> {
+    ) -> Result<Tensor<QB::Storage>> {
         let _enter = self.span.enter();
         let attn = self
             .attn
@@ -208,11 +208,11 @@ impl<B: BackendStorage> ResidualAttentionBlock<B> {
     }
 }
 
-fn sinusoids<B: BackendStorage>(
+fn sinusoids<QB: QuantizedBackend>(
     length: usize,
     channels: usize,
-    device: &B::Device,
-) -> Result<Tensor<B>> {
+    device: &QB::Device,
+) -> Result<Tensor<QB::Storage>> {
     let max_timescale = 10000f32;
     let log_timescale_increment = max_timescale.ln() / (channels / 2 - 1) as f32;
     let inv_timescales: Vec<_> = (0..channels / 2)
@@ -230,19 +230,22 @@ fn sinusoids<B: BackendStorage>(
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L143
 #[derive(Debug, Clone)]
-pub struct AudioEncoder<B: BackendStorage> {
-    conv1: Conv1d<B>,
-    conv2: Conv1d<B>,
-    positional_embedding: Tensor<B>,
-    blocks: Vec<ResidualAttentionBlock<B>>,
-    ln_post: LayerNorm<B>,
+pub struct AudioEncoder<QB: QuantizedBackend> {
+    conv1: Conv1d<QB::Storage>,
+    conv2: Conv1d<QB::Storage>,
+    positional_embedding: Tensor<QB::Storage>,
+    blocks: Vec<ResidualAttentionBlock<QB>>,
+    ln_post: LayerNorm<QB::Storage>,
     span: tracing::Span,
     conv1_span: tracing::Span,
     conv2_span: tracing::Span,
 }
 
-impl<B: BackendStorage> AudioEncoder<B> {
-    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
+impl<QB: QuantizedBackend> AudioEncoder<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn load(vb: VarBuilder<QB>, cfg: &Config) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "audio-encoder");
         let conv1_span = tracing::span!(tracing::Level::TRACE, "conv1");
         let conv2_span = tracing::span!(tracing::Level::TRACE, "conv2");
@@ -265,7 +268,7 @@ impl<B: BackendStorage> AudioEncoder<B> {
         };
         let conv1 = conv1d(cfg.num_mel_bins, n_state, 3, cfg1, vb.pp("conv1"))?;
         let conv2 = conv1d(n_state, n_state, 3, cfg2, vb.pp("conv2"))?;
-        let positional_embedding = sinusoids(n_ctx, n_state, vb.device())?;
+        let positional_embedding = sinusoids::<QB>(n_ctx, n_state, vb.device())?;
         let blocks = (0..cfg.encoder_layers)
             .map(|i| {
                 ResidualAttentionBlock::load(n_state, n_head, false, vb.pp(format!("layers.{i}")))
@@ -284,7 +287,11 @@ impl<B: BackendStorage> AudioEncoder<B> {
         })
     }
 
-    pub fn forward(&mut self, x: &Tensor<B>, flush_kv_cache: bool) -> Result<Tensor<B>> {
+    pub fn forward(
+        &mut self,
+        x: &Tensor<QB::Storage>,
+        flush_kv_cache: bool,
+    ) -> Result<Tensor<QB::Storage>> {
         let _enter = self.span.enter();
         let x = {
             let _enter = self.conv1_span.enter();
@@ -314,18 +321,21 @@ impl<B: BackendStorage> AudioEncoder<B> {
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L176
 #[derive(Debug, Clone)]
-pub struct TextDecoder<B: BackendStorage> {
-    token_embedding: Embedding<B>,
-    positional_embedding: Tensor<B>,
-    blocks: Vec<ResidualAttentionBlock<B>>,
-    ln: LayerNorm<B>,
-    mask: Tensor<B>,
+pub struct TextDecoder<QB: QuantizedBackend> {
+    token_embedding: Embedding<QB>,
+    positional_embedding: Tensor<QB::Storage>,
+    blocks: Vec<ResidualAttentionBlock<QB>>,
+    ln: LayerNorm<QB::Storage>,
+    mask: Tensor<QB::Storage>,
     span: tracing::Span,
     span_final: tracing::Span,
 }
 
-impl<B: BackendStorage> TextDecoder<B> {
-    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
+impl<QB: QuantizedBackend> TextDecoder<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn load(vb: VarBuilder<QB>, cfg: &Config) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "text-decoder");
         let span_final = tracing::span!(tracing::Level::TRACE, "text-decoder-final");
         let n_state = cfg.d_model;
@@ -358,10 +368,10 @@ impl<B: BackendStorage> TextDecoder<B> {
 
     pub fn forward(
         &mut self,
-        x: &Tensor<B>,
-        xa: &Tensor<B>,
+        x: &Tensor<QB::Storage>,
+        xa: &Tensor<QB::Storage>,
         flush_kv_cache: bool,
-    ) -> Result<Tensor<B>> {
+    ) -> Result<Tensor<QB::Storage>> {
         let _enter = self.span.enter();
         let last = x.dim(D::Minus1)?;
         let token_embedding = self.token_embedding.forward(x)?;
@@ -373,7 +383,7 @@ impl<B: BackendStorage> TextDecoder<B> {
         self.ln.forward(&x)
     }
 
-    pub fn final_linear(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
+    pub fn final_linear(&self, x: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let b_size = x.dim(0)?;
         let w = self.token_embedding.embeddings().broadcast_left(b_size)?;
         let logits = {
@@ -392,14 +402,17 @@ impl<B: BackendStorage> TextDecoder<B> {
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L221
 #[derive(Debug, Clone)]
-pub struct Whisper<B: BackendStorage> {
-    pub encoder: AudioEncoder<B>,
-    pub decoder: TextDecoder<B>,
+pub struct Whisper<QB: QuantizedBackend> {
+    pub encoder: AudioEncoder<QB>,
+    pub decoder: TextDecoder<QB>,
     pub config: Config,
 }
 
-impl<B: BackendStorage> Whisper<B> {
-    pub fn load(vb: &VarBuilder<B>, config: Config) -> Result<Self> {
+impl<QB: QuantizedBackend> Whisper<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    pub fn load(vb: &VarBuilder<QB>, config: Config) -> Result<Self> {
         let encoder = AudioEncoder::load(vb.pp("model.encoder"), &config)?;
         let decoder = TextDecoder::load(vb.pp("model.decoder"), &config)?;
         Ok(Self {
