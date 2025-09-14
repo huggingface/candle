@@ -11,7 +11,7 @@ pub fn gumbel_softmax<B: BackendStorage, D: candle::shape::Dim>(
     } else {
         // Cast to f32, doing the Gumbel softmax in bf16 is a bit unstable.
         let logits = logits.to_dtype(candle::DType::F32)?;
-        let minus_g = logits.rand_like(1e-7, 0.999)?.log()?.neg()?.log()?;
+        let minus_g = logits.rand_like(1e-7f32, 0.999f32)?.log()?.neg()?.log()?;
         if temperature == 1.0 {
             let sampled = (logits - minus_g)?.argmax(dim)?;
             Ok(sampled)

@@ -438,7 +438,6 @@ impl SimpleBackend for candle::safetensors::SliceSafetensors<'_> {
 impl<'a, BS> VarBuilder<'a, BS>
 where
     BS: BackendStorage + 'a,
-    BS::Device: TryConvertStorage<CpuStorage, BS>,
 {
     /// Initializes a `VarBuilder` using a custom backend.
     ///

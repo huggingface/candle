@@ -29,7 +29,7 @@
 //! ```
 //!
 //! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
-use candle::{BackendStorage, DType, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, Module, ModuleT, Result, Tensor, D};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerNormConfig {
@@ -133,6 +133,12 @@ impl<B: BackendStorage> Module<B> for LayerNorm<B> {
             None => Ok(x),
             Some(bias) => x.broadcast_add(bias),
         }
+    }
+}
+
+impl<B: BackendStorage> ModuleT<B> for LayerNorm<B> {
+    fn forward_t(&self, x: &Tensor<B>, _train: bool) -> Result<Tensor<B>> {
+        self.forward(x)
     }
 }
 

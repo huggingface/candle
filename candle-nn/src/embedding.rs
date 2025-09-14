@@ -36,15 +36,11 @@ impl<B: BackendStorage> crate::Module<B> for Embedding<B> {
     }
 }
 
-pub fn embedding<B>(
+pub fn embedding<B: BackendStorage>(
     in_size: usize,
     out_size: usize,
     vb: crate::VarBuilder<B>,
-) -> Result<Embedding<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<Embedding<B>> {
     let embeddings = vb.get_with_hints(
         (in_size, out_size),
         "weight",
