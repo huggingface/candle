@@ -13,7 +13,7 @@
 //! - [Very Deep Convolutional Networks for Large-Scale Image Recognition](https://arxiv.org/abs/1409.1556)
 //!
 
-use candle::{ModuleT, Result, Tensor};
+use candle::{BackendStorage, ModuleT, Result, Tensor};
 use candle_nn::{FuncT, VarBuilder};
 
 // Enum representing the different VGG models
@@ -25,8 +25,8 @@ pub enum Models {
 
 // Struct representing a VGG model
 #[derive(Debug)]
-pub struct Vgg<'a> {
-    blocks: Vec<FuncT<'a>>,
+pub struct Vgg<'a, B: BackendStorage> {
+    blocks: Vec<FuncT<'a, B>>,
 }
 
 // Struct representing the configuration for the pre-logit layer
@@ -37,9 +37,9 @@ struct PreLogitConfig {
 }
 
 // Implementation of the VGG model
-impl<'a> Vgg<'a> {
+impl<'a, B: BackendStorage + 'a> Vgg<'a, B> {
     // Function to create a new VGG model
-    pub fn new(vb: VarBuilder<'a>, model: Models) -> Result<Self> {
+    pub fn new(vb: VarBuilder<'a, B>, model: Models) -> Result<Self> {
         let blocks = match model {
             Models::Vgg13 => vgg13_blocks(vb)?,
             Models::Vgg16 => vgg16_blocks(vb)?,
@@ -50,8 +50,8 @@ impl<'a> Vgg<'a> {
 }
 
 // Implementation of the forward pass for the VGG model
-impl ModuleT for Vgg<'_> {
-    fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
+impl<B: BackendStorage> ModuleT<B> for Vgg<'_, B> {
+    fn forward_t(&self, xs: &Tensor<B>, train: bool) -> Result<Tensor<B>> {
         let mut xs = xs.unsqueeze(0)?;
         for block in self.blocks.iter() {
             xs = xs.apply_t(block, train)?;
@@ -62,7 +62,10 @@ impl ModuleT for Vgg<'_> {
 
 // Function to create a conv2d block
 // The block is composed of two conv2d layers followed by a max pool layer
-fn conv2d_block(convs: &[(usize, usize, &str)], vb: &VarBuilder) -> Result<FuncT<'static>> {
+fn conv2d_block<'a, B: BackendStorage + 'a>(
+    convs: &[(usize, usize, &str)],
+    vb: &VarBuilder<'a, B>,
+) -> Result<FuncT<'a, B>> {
     let layers = convs
         .iter()
         .map(|&(in_c, out_c, name)| {
@@ -92,12 +95,12 @@ fn conv2d_block(convs: &[(usize, usize, &str)], vb: &VarBuilder) -> Result<FuncT
 
 // Function to create a fully connected layer
 // The layer is composed of two linear layers followed by a dropout layer
-fn fully_connected(
+fn fully_connected<'a, B: BackendStorage + 'a>(
     num_classes: usize,
     pre_logit_1: PreLogitConfig,
     pre_logit_2: PreLogitConfig,
-    vb: VarBuilder,
-) -> Result<FuncT> {
+    vb: VarBuilder<'a, B>,
+) -> Result<FuncT<'a, B>> {
     let lin = get_weights_and_biases(
         &vb.pp("pre_logits.fc1"),
         pre_logit_1.in_dim,
@@ -125,12 +128,12 @@ fn fully_connected(
 
 // Function to get the weights and biases for a layer
 // This is required because the weights and biases are stored in different format than our linear layer expects
-fn get_weights_and_biases(
-    vs: &VarBuilder,
+fn get_weights_and_biases<B: BackendStorage>(
+    vs: &VarBuilder<B>,
     in_dim: (usize, usize, usize, usize),
     target_in: usize,
     target_out: usize,
-) -> Result<candle_nn::Linear> {
+) -> Result<candle_nn::Linear<B>> {
     let init_ws = candle_nn::init::DEFAULT_KAIMING_NORMAL;
     let ws = vs.get_with_hints(in_dim, "weight", init_ws)?;
     let ws = ws.reshape((target_in, target_out))?;
@@ -143,7 +146,7 @@ fn get_weights_and_biases(
     Ok(candle_nn::Linear::new(ws, Some(bs)))
 }
 
-fn vgg13_blocks(vb: VarBuilder) -> Result<Vec<FuncT>> {
+fn vgg13_blocks<'a, B: BackendStorage + 'a>(vb: VarBuilder<'a, B>) -> Result<Vec<FuncT<'a, B>>> {
     let num_classes = 1000;
     let blocks = vec![
         conv2d_block(&[(3, 64, "features.0"), (64, 64, "features.2")], &vb)?,
@@ -169,7 +172,7 @@ fn vgg13_blocks(vb: VarBuilder) -> Result<Vec<FuncT>> {
     Ok(blocks)
 }
 
-fn vgg16_blocks(vb: VarBuilder) -> Result<Vec<FuncT>> {
+fn vgg16_blocks<'a, B: BackendStorage + 'a>(vb: VarBuilder<'a, B>) -> Result<Vec<FuncT<'a, B>>> {
     let num_classes = 1000;
     let blocks = vec![
         conv2d_block(&[(3, 64, "features.0"), (64, 64, "features.2")], &vb)?,
@@ -216,7 +219,7 @@ fn vgg16_blocks(vb: VarBuilder) -> Result<Vec<FuncT>> {
     Ok(blocks)
 }
 
-fn vgg19_blocks(vb: VarBuilder) -> Result<Vec<FuncT>> {
+fn vgg19_blocks<'a, B: BackendStorage + 'a>(vb: VarBuilder<'a, B>) -> Result<Vec<FuncT<'a, B>>> {
     let num_classes = 1000;
     let blocks = vec![
         conv2d_block(&[(3, 64, "features.0"), (64, 64, "features.2")], &vb)?,

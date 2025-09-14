@@ -1,4 +1,4 @@
-use candle::{DType, Device, Error, Tensor};
+use candle::{BackendStorage, DType, Error, Tensor};
 
 use crate::models::whisper::audio::{log_mel_spectrogram_, Float};
 
@@ -14,7 +14,11 @@ pub fn pcm_to_mel<T: Float>(samples: &[T], filters: &[T]) -> Vec<T> {
 }
 
 /// Process audio using exact WhisperFeatureExtractor algorithm then apply VoxtralProcessor chunking
-pub fn extract_features(audio: &[f32], filters: &[f32], device: &Device) -> Result<Tensor, Error> {
+pub fn extract_features<B: BackendStorage>(
+    audio: &[f32],
+    filters: &[f32],
+    device: &B::Device,
+) -> Result<Tensor<B>, Error> {
     const N_MELS: usize = super::N_MELS;
 
     // Use the exact WhisperFeatureExtractor algorithm
@@ -27,7 +31,7 @@ pub fn extract_features(audio: &[f32], filters: &[f32], device: &Device) -> Resu
     let n_len = mel_vec.len() / n_mel;
 
     // Create tensor with shape (n_mel, n_len) then add batch dimension
-    let mel_tensor = Tensor::from_vec(mel_vec, (n_mel, n_len), device)?;
+    let mel_tensor: Tensor<B> = Tensor::from_vec(mel_vec, (n_mel, n_len), device)?;
     let mel_tensor = mel_tensor.unsqueeze(0)?; // Add batch dimension -> (1, n_mel, n_len)
 
     // Convert tensor back to Vec<f32> for compatibility with existing code

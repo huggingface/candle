@@ -82,7 +82,7 @@ impl VoxtralEncoderConfig {
 /// Custom cache for multimodal inputs
 #[derive(Debug, Clone)]
 pub struct VoxtralCache<B: BackendStorage> {
-    cache: VoxtralLlamaCache,
+    cache: VoxtralLlamaCache<B>,
     audio_processed: bool,
     cached_audio_embeds: Option<Tensor<B>>,
     cached_audio_positions: Option<Vec<(usize, usize)>>,
@@ -737,8 +737,8 @@ pub struct VoxtralForConditionalGeneration<B: BackendStorage> {
     text_config: VoxtralLlamaConfig,
 }
 
-impl VoxtralForConditionalGeneration {
-    pub fn new(cfg: &VoxtralConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> VoxtralForConditionalGeneration<B> {
+    pub fn new(cfg: &VoxtralConfig, vb: VarBuilder<B>) -> Result<Self> {
         let audio_tower = VoxtralEncoder::new(&cfg.audio_config, vb.pp("audio_tower"))?;
         let language_model = VoxtralLlama::load(vb.pp("language_model"), &cfg.text_config)?;
         let multi_modal_projector =
@@ -770,7 +770,7 @@ impl VoxtralForConditionalGeneration {
     }
 
     /// Process audio features through encoder and projector
-    pub fn get_audio_embeds(&self, input_features: &Tensor) -> Result<Tensor> {
+    pub fn get_audio_embeds(&self, input_features: &Tensor<B>) -> Result<Tensor<B>> {
         let audio_outputs = self.audio_tower.forward(input_features)?;
 
         // Following HF implementation: reshape to (-1, config.intermediate_size) before projection
@@ -807,10 +807,10 @@ impl VoxtralForConditionalGeneration {
     /// Process long audio sequences efficiently
     pub fn get_audio_embeds_chunked(
         &self,
-        input_features: &Tensor,
+        input_features: &Tensor<B>,
         chunk_size: usize,
         overlap: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let audio_outputs =
             self.audio_tower
                 .process_long_audio(input_features, chunk_size, overlap)?;
@@ -839,11 +839,11 @@ impl VoxtralForConditionalGeneration {
     /// Forward pass with audio features and text input
     pub fn forward(
         &self,
-        input_ids: &Tensor,
-        input_features: Option<&Tensor>,
-        cache: &mut VoxtralCache,
+        input_ids: &Tensor<B>,
+        input_features: Option<&Tensor<B>>,
+        cache: &mut VoxtralCache<B>,
         index_pos: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         // Get text embeddings
         let mut inputs_embeds = self.language_model.embed(input_ids)?;
 
@@ -876,9 +876,9 @@ impl VoxtralForConditionalGeneration {
     /// Generate text given audio input
     pub fn generate(
         &self,
-        input_ids: &Tensor,
-        input_features: Option<&Tensor>,
-        config: VoxtralGenerationConfig,
+        input_ids: &Tensor<B>,
+        input_features: Option<&Tensor<B>>,
+        config: VoxtralGenerationConfig<B>,
     ) -> Result<Vec<u32>> {
         // Validate inputs
         if config.max_new_tokens == 0 {
@@ -1049,7 +1049,11 @@ impl VoxtralForConditionalGeneration {
 }
 
 /// Sample from top-p probability distribution
-fn sample_top_p(probs: &Tensor, top_p: f64, _device: &Device) -> Result<u32> {
+fn sample_top_p<B: BackendStorage>(
+    probs: &Tensor<B>,
+    top_p: f64,
+    _device: &B::Device,
+) -> Result<u32> {
     let (sorted_probs, sorted_indices) = probs.sort_last_dim(false)?;
     let cumsum = sorted_probs.cumsum(D::Minus1)?;
     let mask = cumsum.le(top_p)?;
