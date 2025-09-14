@@ -4,32 +4,34 @@
 //!
 //! Based on the [llama2.c](https://github.com/karpathy/llama2.c) implementation
 
+use std::collections::HashMap;
+
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle::{DType, Device, IndexOp, Result, Shape, Tensor};
-use candle_nn::VarBuilder;
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Result, Shape, Tensor};
+use candle_nn::{var_builder::SimpleBackend, VarBuilder};
 
 use super::llama2_c::Config;
 
-pub struct TransformerWeights {
+pub struct TransformerWeights<B: BackendStorage> {
     // token embedding table
-    token_embedding_table: Tensor, // (vocab_size, dim)
+    token_embedding_table: Tensor<B>, // (vocab_size, dim)
     // weights for rmsnorms
-    rms_att_weight: Tensor, // (layer, dim) rmsnorm weights
-    rms_ffn_weight: Tensor, // (layer, dim)
+    rms_att_weight: Tensor<B>, // (layer, dim) rmsnorm weights
+    rms_ffn_weight: Tensor<B>, // (layer, dim)
     // weights for matmuls
-    wq: Tensor, // (layer, dim, dim)
-    wk: Tensor, // (layer, dim, dim)
-    wv: Tensor, // (layer, dim, dim)
-    wo: Tensor, // (layer, dim, dim)
+    wq: Tensor<B>, // (layer, dim, dim)
+    wk: Tensor<B>, // (layer, dim, dim)
+    wv: Tensor<B>, // (layer, dim, dim)
+    wo: Tensor<B>, // (layer, dim, dim)
     // weights for ffn
-    w1: Tensor, // (layer, hidden_dim, dim)
-    w2: Tensor, // (layer, dim, hidden_dim)
-    w3: Tensor, // (layer, hidden_dim, dim)
+    w1: Tensor<B>, // (layer, hidden_dim, dim)
+    w2: Tensor<B>, // (layer, dim, hidden_dim)
+    w3: Tensor<B>, // (layer, hidden_dim, dim)
     // final rmsnorm
-    rms_final_weight: Tensor, // (dim,)
+    rms_final_weight: Tensor<B>, // (dim,)
     // freq_cis for RoPE relatively positional embeddings
-    freq_cis_real: Tensor, // (seq_len, head_size/2)
-    freq_cis_imag: Tensor, // (seq_len, head_size/2)
+    freq_cis_real: Tensor<B>, // (seq_len, head_size/2)
+    freq_cis_imag: Tensor<B>, // (seq_len, head_size/2)
 }
 
 fn read_i32<R: std::io::Read>(r: &mut R) -> Result<i32> {
@@ -38,11 +40,11 @@ fn read_i32<R: std::io::Read>(r: &mut R) -> Result<i32> {
     Ok(i32::from_le_bytes(buf))
 }
 
-fn read_tensor<R: std::io::Read, S: Into<Shape>>(
+fn read_tensor<B: BackendStorage, R: std::io::Read, S: Into<Shape>>(
     r: &mut R,
     shape: S,
-    dev: &Device,
-) -> Result<Tensor> {
+    dev: &B::Device,
+) -> Result<Tensor<B>> {
     let shape = shape.into();
     let mut data_t = vec![0f32; shape.elem_count()];
     r.read_f32_into::<LittleEndian>(&mut data_t)?;
@@ -76,8 +78,11 @@ impl Config {
     }
 }
 
-impl TransformerWeights {
-    pub fn from_reader<R: std::io::Read>(r: &mut R, c: &Config, dev: &Device) -> Result<Self> {
+impl<B: BackendStorage + 'static> TransformerWeights<B>
+where
+    HashMap<String, Tensor<B>>: SimpleBackend,
+{
+    pub fn from_reader<R: std::io::Read>(r: &mut R, c: &Config, dev: &B::Device) -> Result<Self> {
         let token_embedding_table = read_tensor(r, (c.vocab_size, c.dim), dev)?;
         let rms_att_weight = read_tensor(r, (c.n_layers, c.dim), dev)?;
         let wq = read_tensor(r, (c.n_layers, c.dim, c.dim), dev)?;
@@ -109,16 +114,16 @@ impl TransformerWeights {
         })
     }
 
-    pub fn var_builder(&self, cfg: &Config, device: &Device) -> Result<VarBuilder<'static>> {
+    pub fn var_builder(&self, cfg: &Config, device: &B::Device) -> Result<VarBuilder<'static, B>> {
         // TODO: As of 2023-08-04, gemm is slower than expected when multiplying a matrix of
         // size (1, k) with the transpose of a matrix of size (k, n) as it ends up transposing the
         // second matrix back. We detect this case here and as a temporary hack make the weight
         // matrix column major rather than row major. This ends up speeding up text generation from
         // 120 token/s to 220 token/s on a Ryzen 2600X.
         let tr = device.is_cpu() && !candle::utils::has_mkl();
-        let tr = |x: Tensor| if tr { x.t()?.contiguous()?.t() } else { Ok(x) };
+        let tr = |x: Tensor<B>| if tr { x.t()?.contiguous()?.t() } else { Ok(x) };
         let mut ws = std::collections::HashMap::new();
-        let mut insert = |name: &str, t: Tensor| {
+        let mut insert = |name: &str, t: Tensor<B>| {
             ws.insert(name.to_string(), t);
         };
         insert("rot.freq_cis_real", self.freq_cis_real.clone());

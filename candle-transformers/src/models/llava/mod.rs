@@ -14,7 +14,7 @@ use crate::models::clip::vision_model::{ClipVisionConfig, ClipVisionTransformer}
 use crate::models::llama::{Cache, Llama};
 use crate::models::with_tracing::linear;
 
-use candle::{bail, Context, Device, IndexOp, Result, Tensor};
+use candle::{bail, BackendStorage, Context, IndexOp, Result, Tensor};
 use candle_nn::{seq, Activation, Module, Sequential, VarBuilder};
 use fancy_regex::Regex;
 use utils::get_anyres_image_grid_shape;
@@ -36,7 +36,10 @@ fn mlp_gelu_match(mm_projector_type: &str) -> Option<usize> {
     }
 }
 
-fn unpad_image(tensor: &Tensor, original_size: &(u32, u32)) -> Result<Tensor> {
+fn unpad_image<B: BackendStorage>(
+    tensor: &Tensor<B>,
+    original_size: &(u32, u32),
+) -> Result<Tensor<B>> {
     assert_eq!(tensor.dims().len(), 3);
     let (original_width, original_height) = *original_size;
     let tensor_dims = tensor.dims();
@@ -59,18 +62,18 @@ fn unpad_image(tensor: &Tensor, original_size: &(u32, u32)) -> Result<Tensor> {
 
 pub struct IdentityMap {}
 
-impl Module for IdentityMap {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for IdentityMap {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         Ok(x.clone())
     }
 }
 
-pub struct MMProjector {
-    pub modules: Sequential,
+pub struct MMProjector<B: BackendStorage> {
+    pub modules: Sequential<B>,
 }
 
-impl MMProjector {
-    pub fn load(vb: &VarBuilder, config: &LLaVAConfig) -> Result<Self> {
+impl<B: BackendStorage + 'static> MMProjector<B> {
+    pub fn load(vb: &VarBuilder<B>, config: &LLaVAConfig) -> Result<Self> {
         if config.mm_projector_type == "linear" {
             let vb_prefix = if config.hf {
                 "multi_modal_projector.linear_1"
@@ -123,21 +126,21 @@ impl MMProjector {
         }
     }
 
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         self.modules.forward(x)
     }
 }
 
-pub struct ClipVisionTower {
-    model: ClipVisionTransformer,
+pub struct ClipVisionTower<B: BackendStorage> {
+    model: ClipVisionTransformer<B>,
     select_layer: isize,
     select_feature_method: String,
     pub config: ClipVisionConfig,
 }
 
-impl ClipVisionTower {
+impl<B: BackendStorage> ClipVisionTower<B> {
     pub fn new(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         select_layer: isize,
         select_feature_method: &str,
         config: &Option<ClipVisionConfig>,
@@ -160,7 +163,7 @@ impl ClipVisionTower {
         })
     }
 
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let result = self.model.output_hidden_states(x)?;
         let index = result.len() as isize + self.select_layer;
         let result = result[index as usize].clone();
@@ -176,18 +179,18 @@ impl ClipVisionTower {
     }
 }
 
-pub struct LLaVA {
-    pub clip_vision_tower: ClipVisionTower,
-    pub image_newline: Tensor,
-    pub mm_projector: MMProjector,
-    pub llama: Llama,
+pub struct LLaVA<B: BackendStorage> {
+    pub clip_vision_tower: ClipVisionTower<B>,
+    pub image_newline: Tensor<B>,
+    pub mm_projector: MMProjector<B>,
+    pub llama: Llama<B>,
     config: LLaVAConfig,
-    device: Device,
+    device: B::Device,
 }
 
-impl LLaVA {
+impl<B: BackendStorage + 'static> LLaVA<B> {
     pub fn load(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         config: &LLaVAConfig,
         clip_vision_config: Option<ClipVisionConfig>,
     ) -> Result<Self> {
@@ -229,7 +232,7 @@ impl LLaVA {
         })
     }
 
-    pub fn encode_images(&self, x: &Tensor) -> Result<Tensor> {
+    pub fn encode_images(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let image_features = self.clip_vision_tower.forward(x)?;
         let image_features = self.mm_projector.forward(&image_features)?;
         Ok(image_features)
@@ -237,10 +240,10 @@ impl LLaVA {
     // currently only for single image, 4 dim tensor
     pub fn prepare_inputs_labels_for_multimodal(
         &self,
-        input_ids: &Tensor,
-        images: &[Tensor],
+        input_ids: &Tensor<B>,
+        images: &[Tensor<B>],
         image_sizes: &[(u32, u32)],
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         //TODO: process of multiple images/ new line
         // 576: 336(input size)/14(patch size)=24 24*24+1(class)=577 577-1=576
         let concat_images = Tensor::cat(images, 0)?;
@@ -263,7 +266,7 @@ impl LLaVA {
             image_features
                 .iter()
                 .map(|x| x.flatten(0, 1))
-                .collect::<Result<Vec<Tensor>>>()?
+                .collect::<Result<Vec<Tensor<B>>>>()?
         } else if mm_patch_merge_type.starts_with("spatial") {
             let mut new_image_features = Vec::new();
             for (image_idx, image_feature) in image_features.iter().enumerate() {
@@ -402,10 +405,10 @@ impl LLaVA {
 
     pub fn forward(
         &self,
-        input_embeds: &Tensor,
+        input_embeds: &Tensor<B>,
         position_id: usize,
-        cache: &mut Cache,
-    ) -> Result<Tensor> {
+        cache: &mut Cache<B>,
+    ) -> Result<Tensor<B>> {
         self.llama
             .forward_input_embed(input_embeds, position_id, cache)
     }
