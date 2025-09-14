@@ -3,23 +3,33 @@
 //!
 //! Noise schedulers can be used to set the trade-off between
 //! inference speed and quality.
-use candle::{Result, Tensor};
+use candle::{BackendStorage, CpuStorage, Result, Tensor};
 
-pub trait SchedulerConfig: std::fmt::Debug + Send + Sync {
-    fn build(&self, inference_steps: usize) -> Result<Box<dyn Scheduler>>;
+pub trait SchedulerConfig<B: BackendStorage>: std::fmt::Debug + Send + Sync {
+    fn build(&self, inference_steps: usize) -> Result<Box<dyn Scheduler<B>>>;
 }
 
 /// This trait represents a scheduler for the diffusion process.
-pub trait Scheduler {
+pub trait Scheduler<B: BackendStorage> {
     fn timesteps(&self) -> &[usize];
 
-    fn add_noise(&self, original: &Tensor, noise: Tensor, timestep: usize) -> Result<Tensor>;
+    fn add_noise(
+        &self,
+        original: &Tensor<B>,
+        noise: Tensor<B>,
+        timestep: usize,
+    ) -> Result<Tensor<B>>;
 
     fn init_noise_sigma(&self) -> f64;
 
-    fn scale_model_input(&self, sample: Tensor, _timestep: usize) -> Result<Tensor>;
+    fn scale_model_input(&self, sample: Tensor<B>, _timestep: usize) -> Result<Tensor<B>>;
 
-    fn step(&mut self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor>;
+    fn step(
+        &mut self,
+        model_output: &Tensor<B>,
+        timestep: usize,
+        sample: &Tensor<B>,
+    ) -> Result<Tensor<B>>;
 }
 
 /// This represents how beta ranges from its minimum value to the maximum
@@ -62,7 +72,10 @@ impl Default for TimestepSpacing {
 ///
 /// Contains a function `alpha_bar` that takes an argument `t` and transforms it to the cumulative product of `(1-beta)`
 /// up to that part of the diffusion process.
-pub(crate) fn betas_for_alpha_bar(num_diffusion_timesteps: usize, max_beta: f64) -> Result<Tensor> {
+pub(crate) fn betas_for_alpha_bar(
+    num_diffusion_timesteps: usize,
+    max_beta: f64,
+) -> Result<Tensor<CpuStorage>> {
     let alpha_bar = |time_step: usize| {
         f64::cos((time_step as f64 + 0.008) / 1.008 * std::f64::consts::FRAC_PI_2).powi(2)
     };
@@ -73,5 +86,5 @@ pub(crate) fn betas_for_alpha_bar(num_diffusion_timesteps: usize, max_beta: f64)
         betas.push((1.0 - alpha_bar(t2) / alpha_bar(t1)).min(max_beta));
     }
     let betas_len = betas.len();
-    Tensor::from_vec(betas, betas_len, &candle::Device::Cpu)
+    Tensor::from_vec(betas, betas_len, &candle::CpuDevice)
 }

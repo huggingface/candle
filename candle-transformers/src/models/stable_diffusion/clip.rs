@@ -4,7 +4,7 @@
 //! pairs of images with related texts.
 //!
 //! - [CLIP](https://github.com/openai/CLIP)
-use candle::{DType, Device, Result, Tensor, D};
+use candle::{BackendStorage, DType, Result, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
 
@@ -15,8 +15,8 @@ pub enum Activation {
     GeluErf,
 }
 
-impl Module for Activation {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Activation {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         match self {
             Activation::QuickGelu => xs * nn::ops::sigmoid(&(xs * 1.702f64)?)?,
             Activation::Gelu => xs.gelu(),
@@ -144,14 +144,14 @@ impl Config {
 // CLIP Text Model
 // https://github.com/huggingface/transformers/blob/674f750a57431222fa2832503a108df3badf1564/src/transformers/models/clip/modeling_clip.py
 #[derive(Debug)]
-struct ClipTextEmbeddings {
-    token_embedding: candle_nn::Embedding,
-    position_embedding: candle_nn::Embedding,
-    position_ids: Tensor,
+struct ClipTextEmbeddings<B: BackendStorage> {
+    token_embedding: candle_nn::Embedding<B>,
+    position_embedding: candle_nn::Embedding<B>,
+    position_ids: Tensor<B>,
 }
 
-impl ClipTextEmbeddings {
-    fn new(vs: candle_nn::VarBuilder, c: &Config) -> Result<Self> {
+impl<B: BackendStorage> ClipTextEmbeddings<B> {
+    fn new(vs: candle_nn::VarBuilder<B>, c: &Config) -> Result<Self> {
         let token_embedding =
             candle_nn::embedding(c.vocab_size, c.embed_dim, vs.pp("token_embedding"))?;
         let position_embedding = candle_nn::embedding(
@@ -169,8 +169,8 @@ impl ClipTextEmbeddings {
     }
 }
 
-impl Module for ClipTextEmbeddings {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ClipTextEmbeddings<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let token_embedding = self.token_embedding.forward(xs)?;
         let position_embedding = self.position_embedding.forward(&self.position_ids)?;
         token_embedding.broadcast_add(&position_embedding)
@@ -178,18 +178,18 @@ impl Module for ClipTextEmbeddings {
 }
 
 #[derive(Debug)]
-struct ClipAttention {
-    k_proj: candle_nn::Linear,
-    v_proj: candle_nn::Linear,
-    q_proj: candle_nn::Linear,
-    out_proj: candle_nn::Linear,
+struct ClipAttention<B: BackendStorage> {
+    k_proj: candle_nn::Linear<B>,
+    v_proj: candle_nn::Linear<B>,
+    q_proj: candle_nn::Linear<B>,
+    out_proj: candle_nn::Linear<B>,
     head_dim: usize,
     scale: f64,
     num_attention_heads: usize,
 }
 
-impl ClipAttention {
-    fn new(vs: candle_nn::VarBuilder, c: &Config) -> Result<Self> {
+impl<B: BackendStorage> ClipAttention<B> {
+    fn new(vs: candle_nn::VarBuilder<B>, c: &Config) -> Result<Self> {
         let embed_dim = c.embed_dim;
         let num_attention_heads = c.num_attention_heads;
         let k_proj = candle_nn::linear(embed_dim, embed_dim, vs.pp("k_proj"))?;
@@ -209,13 +209,13 @@ impl ClipAttention {
         })
     }
 
-    fn shape(&self, xs: &Tensor, seq_len: usize, bsz: usize) -> Result<Tensor> {
+    fn shape(&self, xs: &Tensor<B>, seq_len: usize, bsz: usize) -> Result<Tensor<B>> {
         xs.reshape((bsz, seq_len, self.num_attention_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()
     }
 
-    fn forward(&self, xs: &Tensor, causal_attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, causal_attention_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let in_dtype = xs.dtype();
         let (bsz, seq_len, embed_dim) = xs.dims3()?;
         let query_states = (self.q_proj.forward(xs)? * self.scale)?;
@@ -252,14 +252,14 @@ impl ClipAttention {
 }
 
 #[derive(Debug)]
-struct ClipMlp {
-    fc1: candle_nn::Linear,
-    fc2: candle_nn::Linear,
+struct ClipMlp<B: BackendStorage> {
+    fc1: candle_nn::Linear<B>,
+    fc2: candle_nn::Linear<B>,
     activation: Activation,
 }
 
-impl ClipMlp {
-    fn new(vs: candle_nn::VarBuilder, c: &Config) -> Result<Self> {
+impl<B: BackendStorage> ClipMlp<B> {
+    fn new(vs: candle_nn::VarBuilder<B>, c: &Config) -> Result<Self> {
         let fc1 = candle_nn::linear(c.embed_dim, c.intermediate_size, vs.pp("fc1"))?;
         let fc2 = candle_nn::linear(c.intermediate_size, c.embed_dim, vs.pp("fc2"))?;
         Ok(ClipMlp {
@@ -268,25 +268,23 @@ impl ClipMlp {
             activation: c.activation,
         })
     }
-}
 
-impl ClipMlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = self.fc1.forward(xs)?;
         self.fc2.forward(&self.activation.forward(&xs)?)
     }
 }
 
 #[derive(Debug)]
-struct ClipEncoderLayer {
-    self_attn: ClipAttention,
-    layer_norm1: candle_nn::LayerNorm,
-    mlp: ClipMlp,
-    layer_norm2: candle_nn::LayerNorm,
+struct ClipEncoderLayer<B: BackendStorage> {
+    self_attn: ClipAttention<B>,
+    layer_norm1: candle_nn::LayerNorm<B>,
+    mlp: ClipMlp<B>,
+    layer_norm2: candle_nn::LayerNorm<B>,
 }
 
-impl ClipEncoderLayer {
-    fn new(vs: candle_nn::VarBuilder, c: &Config) -> Result<Self> {
+impl<B: BackendStorage> ClipEncoderLayer<B> {
+    fn new(vs: candle_nn::VarBuilder<B>, c: &Config) -> Result<Self> {
         let self_attn = ClipAttention::new(vs.pp("self_attn"), c)?;
         let layer_norm1 = candle_nn::layer_norm(c.embed_dim, 1e-5, vs.pp("layer_norm1"))?;
         let mlp = ClipMlp::new(vs.pp("mlp"), c)?;
@@ -299,7 +297,7 @@ impl ClipEncoderLayer {
         })
     }
 
-    fn forward(&self, xs: &Tensor, causal_attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, causal_attention_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = self.layer_norm1.forward(xs)?;
         let xs = self.self_attn.forward(&xs, causal_attention_mask)?;
@@ -313,14 +311,14 @@ impl ClipEncoderLayer {
 }
 
 #[derive(Debug)]
-struct ClipEncoder {
-    layers: Vec<ClipEncoderLayer>,
+struct ClipEncoder<B: BackendStorage> {
+    layers: Vec<ClipEncoderLayer<B>>,
 }
 
-impl ClipEncoder {
-    fn new(vs: candle_nn::VarBuilder, c: &Config) -> Result<Self> {
+impl<B: BackendStorage> ClipEncoder<B> {
+    fn new(vs: candle_nn::VarBuilder<B>, c: &Config) -> Result<Self> {
         let vs = vs.pp("layers");
-        let mut layers: Vec<ClipEncoderLayer> = Vec::new();
+        let mut layers: Vec<ClipEncoderLayer<B>> = Vec::new();
         for index in 0..c.num_hidden_layers {
             let layer = ClipEncoderLayer::new(vs.pp(index.to_string()), c)?;
             layers.push(layer)
@@ -328,7 +326,7 @@ impl ClipEncoder {
         Ok(ClipEncoder { layers })
     }
 
-    fn forward(&self, xs: &Tensor, causal_attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, causal_attention_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
             xs = layer.forward(&xs, causal_attention_mask)?;
@@ -339,14 +337,14 @@ impl ClipEncoder {
 
 /// A CLIP transformer based model.
 #[derive(Debug)]
-pub struct ClipTextTransformer {
-    embeddings: ClipTextEmbeddings,
-    encoder: ClipEncoder,
-    final_layer_norm: candle_nn::LayerNorm,
+pub struct ClipTextTransformer<B: BackendStorage> {
+    embeddings: ClipTextEmbeddings<B>,
+    encoder: ClipEncoder<B>,
+    final_layer_norm: candle_nn::LayerNorm<B>,
 }
 
-impl ClipTextTransformer {
-    pub fn new(vs: candle_nn::VarBuilder, c: &Config) -> Result<Self> {
+impl<B: BackendStorage> ClipTextTransformer<B> {
+    pub fn new(vs: candle_nn::VarBuilder<B>, c: &Config) -> Result<Self> {
         let vs = vs.pp("text_model");
         let embeddings = ClipTextEmbeddings::new(vs.pp("embeddings"), c)?;
         let encoder = ClipEncoder::new(vs.pp("encoder"), c)?;
@@ -363,8 +361,8 @@ impl ClipTextTransformer {
         bsz: usize,
         seq_len: usize,
         mask_after: usize,
-        device: &Device,
-    ) -> Result<Tensor> {
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
         let mask: Vec<_> = (0..seq_len)
             .flat_map(|i| {
                 (0..seq_len).map(move |j| {
@@ -380,7 +378,7 @@ impl ClipTextTransformer {
         mask.broadcast_as((bsz, seq_len, seq_len))
     }
 
-    pub fn forward_with_mask(&self, xs: &Tensor, mask_after: usize) -> Result<Tensor> {
+    pub fn forward_with_mask(&self, xs: &Tensor<B>, mask_after: usize) -> Result<Tensor<B>> {
         let (bsz, seq_len) = xs.dims2()?;
         let xs = self.embeddings.forward(xs)?;
         let causal_attention_mask =
@@ -391,10 +389,10 @@ impl ClipTextTransformer {
 
     pub fn forward_until_encoder_layer(
         &self,
-        xs: &Tensor,
+        xs: &Tensor<B>,
         mask_after: usize,
         until_layer: isize,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let (bsz, seq_len) = xs.dims2()?;
         let xs = self.embeddings.forward(xs)?;
         let causal_attention_mask =
@@ -421,8 +419,8 @@ impl ClipTextTransformer {
     }
 }
 
-impl Module for ClipTextTransformer {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ClipTextTransformer<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         self.forward_with_mask(xs, usize::MAX)
     }
 }

@@ -10,7 +10,7 @@
 use super::schedulers::{
     betas_for_alpha_bar, BetaSchedule, PredictionType, Scheduler, SchedulerConfig, TimestepSpacing,
 };
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 
 /// The configuration for the DDIM scheduler.
 #[derive(Debug, Clone, Copy)]
@@ -50,8 +50,8 @@ impl Default for DDIMSchedulerConfig {
     }
 }
 
-impl SchedulerConfig for DDIMSchedulerConfig {
-    fn build(&self, inference_steps: usize) -> Result<Box<dyn Scheduler>> {
+impl<B: BackendStorage> SchedulerConfig<B> for DDIMSchedulerConfig {
+    fn build(&self, inference_steps: usize) -> Result<Box<dyn Scheduler<B>>> {
         Ok(Box::new(DDIMScheduler::new(inference_steps, *self)?))
     }
 }
@@ -125,9 +125,14 @@ impl DDIMScheduler {
     }
 }
 
-impl Scheduler for DDIMScheduler {
+impl<B: BackendStorage> Scheduler<B> for DDIMScheduler {
     /// Performs a backward step during inference.
-    fn step(&mut self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor> {
+    fn step(
+        &mut self,
+        model_output: &Tensor<B>,
+        timestep: usize,
+        sample: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let timestep = if timestep >= self.alphas_cumprod.len() {
             timestep - 1
         } else {
@@ -183,7 +188,7 @@ impl Scheduler for DDIMScheduler {
 
     ///  Ensures interchangeability with schedulers that need to scale the denoising model input
     /// depending on the current timestep.
-    fn scale_model_input(&self, sample: Tensor, _timestep: usize) -> Result<Tensor> {
+    fn scale_model_input(&self, sample: Tensor<B>, _timestep: usize) -> Result<Tensor<B>> {
         Ok(sample)
     }
 
@@ -191,7 +196,12 @@ impl Scheduler for DDIMScheduler {
         self.timesteps.as_slice()
     }
 
-    fn add_noise(&self, original: &Tensor, noise: Tensor, timestep: usize) -> Result<Tensor> {
+    fn add_noise(
+        &self,
+        original: &Tensor<B>,
+        noise: Tensor<B>,
+        timestep: usize,
+    ) -> Result<Tensor<B>> {
         let timestep = if timestep >= self.alphas_cumprod.len() {
             timestep - 1
         } else {

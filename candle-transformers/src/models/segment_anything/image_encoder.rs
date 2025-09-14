@@ -1,20 +1,20 @@
-use candle::{DType, IndexOp, Result, Tensor};
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor};
 use candle_nn::{layer_norm, LayerNorm, Module, VarBuilder};
 
 #[derive(Debug)]
-struct PatchEmbed {
-    proj: candle_nn::Conv2d,
+struct PatchEmbed<B: BackendStorage> {
+    proj: candle_nn::Conv2d<B>,
     span: tracing::Span,
 }
 
-impl PatchEmbed {
+impl<B: BackendStorage> PatchEmbed<B> {
     fn new(
         in_chans: usize,
         embed_dim: usize,
         k_size: usize,
         stride: usize,
         padding: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let cfg = candle_nn::Conv2dConfig {
             stride,
@@ -27,8 +27,8 @@ impl PatchEmbed {
     }
 }
 
-impl Module for PatchEmbed {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for PatchEmbed<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         xs.apply(&self.proj)?.permute((0, 2, 3, 1))
     }
@@ -42,7 +42,7 @@ impl Module for PatchEmbed {
 // Ideally we would perform this operation in place but this is not supported in candle at the
 // moment. We should also investigate using f16 rather than f32.
 struct Add3(usize, usize, usize, usize, usize);
-impl candle::CustomOp3 for Add3 {
+impl<B: BackendStorage> candle::CustomOp3<B> for Add3 {
     fn name(&self) -> &'static str {
         "add3"
     }
@@ -99,26 +99,26 @@ impl candle::CustomOp3 for Add3 {
 }
 
 #[derive(Debug)]
-struct Attention {
-    qkv: super::Linear,
-    proj: super::Linear,
+struct Attention<B: BackendStorage> {
+    qkv: super::Linear<B>,
+    proj: super::Linear<B>,
     num_heads: usize,
     scale: f64,
-    rel_pos_hw: Option<(Tensor, Tensor)>,
+    rel_pos_hw: Option<(Tensor<B>, Tensor<B>)>,
     span: tracing::Span,
     span_matmul: tracing::Span,
     span_rel_pos: tracing::Span,
     span_softmax: tracing::Span,
 }
 
-impl Attention {
+impl<B: BackendStorage> Attention<B> {
     fn new(
         dim: usize,
         num_heads: usize,
         qkv_bias: bool,
         use_rel_pos: bool,
         input_size: (usize, usize),
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "attention");
         let span_matmul = tracing::span!(tracing::Level::TRACE, "attn-matmul");
@@ -150,11 +150,11 @@ impl Attention {
 
     fn add_decomposed_rel_pos(
         &self,
-        attn: Tensor,
-        q: &Tensor,
+        attn: Tensor<B>,
+        q: &Tensor<B>,
         (q_h, q_w): (usize, usize),
         (k_h, k_w): (usize, usize),
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         match &self.rel_pos_hw {
             Some((rel_pos_h, rel_pos_w)) => {
                 let r_h = get_rel_pos(q_h, k_h, rel_pos_h)?;
@@ -170,21 +170,26 @@ impl Attention {
                     .matmul(&r_w.broadcast_left(b)?.t()?.contiguous()?)? // bwhc,bwck -> bwhk
                     .transpose(1, 2)?
                     .contiguous()?;
-                if attn.device().is_cpu() {
-                    let op = Add3(b, q_h, q_w, k_h, k_w);
-                    attn.apply_op3_no_bwd(&rel_h, &rel_w, &op)
-                } else {
-                    (attn.reshape((b, q_h, q_w, k_h, k_w))?
-                        + rel_h.unsqueeze(4)?.broadcast_add(&rel_w.unsqueeze(3)?)?)?
-                    .reshape((b, q_h * q_w, k_h * k_w))
-                }
+                // TODO: Fix
+                //if attn.device().is_cpu() {
+                //    let op = Add3(b, q_h, q_w, k_h, k_w);
+                //    attn.apply_op3_no_bwd(&rel_h, &rel_w, &op)
+                //} else {
+                (attn.reshape((b, q_h, q_w, k_h, k_w))?
+                    + rel_h.unsqueeze(4)?.broadcast_add(&rel_w.unsqueeze(3)?)?)?
+                .reshape((b, q_h * q_w, k_h * k_w))
+                //}
             }
             None => Ok(attn),
         }
     }
 }
 
-fn get_rel_pos(q_size: usize, k_size: usize, rel_pos: &Tensor) -> Result<Tensor> {
+fn get_rel_pos<B: BackendStorage>(
+    q_size: usize,
+    k_size: usize,
+    rel_pos: &Tensor<B>,
+) -> Result<Tensor<B>> {
     let max_rel_dist = 2 * usize::max(q_size, k_size) - 1;
     let dev = rel_pos.device();
     let rel_pos_resized = if rel_pos.dim(0)? != max_rel_dist {
@@ -209,8 +214,8 @@ fn get_rel_pos(q_size: usize, k_size: usize, rel_pos: &Tensor) -> Result<Tensor>
         .reshape((d1, d2, ()))
 }
 
-impl Module for Attention {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Attention<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (b, h, w, c) = xs.dims4()?;
         let qkv = self
@@ -247,16 +252,16 @@ impl Module for Attention {
 }
 
 #[derive(Debug)]
-struct Block {
-    norm1: LayerNorm,
-    attn: Attention,
-    norm2: LayerNorm,
-    mlp: super::MlpBlock,
+struct Block<B: BackendStorage> {
+    norm1: LayerNorm<B>,
+    attn: Attention<B>,
+    norm2: LayerNorm<B>,
+    mlp: super::MlpBlock<B>,
     window_size: usize,
     span: tracing::Span,
 }
 
-impl Block {
+impl<B: BackendStorage> Block<B> {
     fn new(
         dim: usize,
         num_heads: usize,
@@ -264,7 +269,7 @@ impl Block {
         use_rel_pos: bool,
         window_size: usize,
         input_size: (usize, usize),
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let norm1 = layer_norm(dim, 1e-6, vb.pp("norm1"))?;
         let norm2 = layer_norm(dim, 1e-6, vb.pp("norm2"))?;
@@ -294,7 +299,10 @@ impl Block {
     }
 }
 
-fn window_partition(xs: Tensor, window_size: usize) -> Result<(Tensor, (usize, usize))> {
+fn window_partition<B: BackendStorage>(
+    xs: Tensor<B>,
+    window_size: usize,
+) -> Result<(Tensor<B>, (usize, usize))> {
     let (b, h, w, c) = xs.dims4()?;
     let pad_h = (window_size - h % window_size) % window_size;
     let pad_w = (window_size - w % window_size) % window_size;
@@ -324,12 +332,12 @@ fn window_partition(xs: Tensor, window_size: usize) -> Result<(Tensor, (usize, u
     Ok((windows, (h_p, w_p)))
 }
 
-fn window_unpartition(
-    windows: Tensor,
+fn window_unpartition<B: BackendStorage>(
+    windows: Tensor<B>,
     window_size: usize,
     (h_p, w_p): (usize, usize),
     (h, w): (usize, usize),
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     let b = windows.dim(0)? / (h_p * w_p / window_size / window_size);
     let xs = windows
         .reshape((
@@ -348,8 +356,8 @@ fn window_unpartition(
     Ok(xs)
 }
 
-impl Module for Block {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Block<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let shortcut = xs;
         let xs = self.norm1.forward(xs)?;
@@ -371,18 +379,18 @@ impl Module for Block {
 }
 
 #[derive(Debug)]
-pub struct ImageEncoderViT {
-    patch_embed: PatchEmbed,
-    blocks: Vec<Block>,
-    neck_conv1: candle_nn::Conv2d,
-    neck_ln1: super::LayerNorm2d,
-    neck_conv2: candle_nn::Conv2d,
-    neck_ln2: super::LayerNorm2d,
-    pos_embed: Option<Tensor>,
+pub struct ImageEncoderViT<B: BackendStorage> {
+    patch_embed: PatchEmbed<B>,
+    blocks: Vec<Block<B>>,
+    neck_conv1: candle_nn::Conv2d<B>,
+    neck_ln1: super::LayerNorm2d<B>,
+    neck_conv2: candle_nn::Conv2d<B>,
+    neck_ln2: super::LayerNorm2d<B>,
+    pos_embed: Option<Tensor<B>>,
     span: tracing::Span,
 }
 
-impl ImageEncoderViT {
+impl<B: BackendStorage> ImageEncoderViT<B> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         img_size: usize,
@@ -397,7 +405,7 @@ impl ImageEncoderViT {
         use_abs_pos: bool,
         window_size: usize,
         global_attn_indexes: &[usize],
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let patch_embed = PatchEmbed::new(
             in_chans,
@@ -463,8 +471,8 @@ impl ImageEncoderViT {
     }
 }
 
-impl Module for ImageEncoderViT {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ImageEncoderViT<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let xs = self.patch_embed.forward(xs)?;
         let mut xs = match &self.pos_embed {

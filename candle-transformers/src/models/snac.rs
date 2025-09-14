@@ -6,7 +6,7 @@
 /// Multi-Scale Neural Audio Codec (SNAC) compresses audio into discrete codes at a low bitrate.
 /// For more information, read the paper: https://arxiv.org/abs/2410.14411
 ///
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{
     linear_b, Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, LayerNorm, Linear,
     VarBuilder,
@@ -28,11 +28,11 @@ pub struct Config {
 }
 
 // Equivalent to torch.repeat_interleave
-pub fn repeat_interleave<D: candle::shape::Dim>(
-    img: &Tensor,
+pub fn repeat_interleave<B: BackendStorage, D: candle::shape::Dim>(
+    img: &Tensor<B>,
     repeats: usize,
     dim: D,
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     if repeats == 1 {
         return Ok(img.clone());
     }
@@ -43,13 +43,13 @@ pub fn repeat_interleave<D: candle::shape::Dim>(
     img.broadcast_as(dims)?.flatten(dim, dim + 1)
 }
 
-pub fn conv1d_weight_norm(
+pub fn conv1d_weight_norm<B: BackendStorage>(
     in_c: usize,
     out_c: usize,
     kernel_size: usize,
     config: candle_nn::Conv1dConfig,
-    vb: VarBuilder,
-) -> Result<Conv1d> {
+    vb: VarBuilder<B>,
+) -> Result<Conv1d<B>> {
     let weight_g = vb.get((out_c, 1, 1), "parametrizations.weight.original0")?;
     let weight_v = {
         let name = "parametrizations.weight.original1";
@@ -64,13 +64,13 @@ pub fn conv1d_weight_norm(
     Ok(Conv1d::new(weight, Some(bias), config))
 }
 
-pub fn conv1d_weight_norm_no_bias(
+pub fn conv1d_weight_norm_no_bias<B: BackendStorage>(
     in_c: usize,
     out_c: usize,
     kernel_size: usize,
     config: candle_nn::Conv1dConfig,
-    vb: VarBuilder,
-) -> Result<Conv1d> {
+    vb: VarBuilder<B>,
+) -> Result<Conv1d<B>> {
     let weight_g = vb.get((out_c, 1, 1), "parametrizations.weight.original0")?;
     let weight_v = {
         let name = "parametrizations.weight.original1";
@@ -84,14 +84,14 @@ pub fn conv1d_weight_norm_no_bias(
     Ok(Conv1d::new(weight, None, config))
 }
 
-pub fn conv_transpose1d_weight_norm(
+pub fn conv_transpose1d_weight_norm<B: BackendStorage>(
     in_c: usize,
     out_c: usize,
     kernel_size: usize,
     bias: bool,
     config: candle_nn::ConvTranspose1dConfig,
-    vb: VarBuilder,
-) -> Result<ConvTranspose1d> {
+    vb: VarBuilder<B>,
+) -> Result<ConvTranspose1d<B>> {
     let weight_g = vb.get((in_c, 1, 1), "parametrizations.weight.original0")?;
     let weight_v = vb.get(
         (in_c, out_c, kernel_size),
@@ -110,15 +110,15 @@ pub fn conv_transpose1d_weight_norm(
 // https://github.com/hubertsiuzdak/snac/blob/main/snac/attention.py
 #[allow(unused)]
 #[derive(Debug, Clone)]
-struct SinusoidalEmbeddings {
-    inv_freq: Tensor,
-    scale: Tensor,
+struct SinusoidalEmbeddings<B: BackendStorage> {
+    inv_freq: Tensor<B>,
+    scale: Tensor<B>,
     scale_base: f32,
     use_xpos: bool,
 }
 
-impl SinusoidalEmbeddings {
-    fn new(dim: usize, scale_base: f32, use_xpos: bool, dev: &Device) -> Result<Self> {
+impl<B: BackendStorage> SinusoidalEmbeddings<B> {
+    fn new(dim: usize, scale_base: f32, use_xpos: bool, dev: &B::Device) -> Result<Self> {
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
             .map(|i| 1f32 / 10_000f32.powf(i as f32 / dim as f32))
@@ -141,22 +141,22 @@ impl SinusoidalEmbeddings {
 
 #[allow(unused)]
 #[derive(Debug, Clone)]
-struct LocalMHA {
-    norm: LayerNorm,
-    to_qkv: Linear,
-    to_out: Linear,
+struct LocalMHA<B: BackendStorage> {
+    norm: LayerNorm<B>,
+    to_qkv: Linear<B>,
+    to_out: Linear<B>,
     num_heads: usize,
     head_dim: usize,
-    rel_pos: Option<SinusoidalEmbeddings>,
+    rel_pos: Option<SinusoidalEmbeddings<B>>,
 }
 
-impl LocalMHA {
+impl<B: BackendStorage> LocalMHA<B> {
     fn new(
         dim: usize,
         window_size: usize,
         dim_head: usize,
         use_rotary_pos_emb: bool,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let norm = candle_nn::layer_norm(dim, 1e-5, vb.pp("norm"))?;
         let to_qkv = linear_b(dim, dim * 3, false, vb.pp("to_qkv"))?;
@@ -179,8 +179,8 @@ impl LocalMHA {
     }
 }
 
-impl Module for LocalMHA {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for LocalMHA<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (b, c, t) = xs.dims3()?;
         let residual = xs.clone();
         let xs = xs.transpose(1, 2)?.apply(&self.norm)?;
@@ -220,19 +220,19 @@ impl Module for LocalMHA {
 }
 
 #[derive(Debug, Clone)]
-struct Snake1d {
-    alpha: Tensor,
+struct Snake1d<B: BackendStorage> {
+    alpha: Tensor<B>,
 }
 
-impl Snake1d {
-    pub fn new(channels: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Snake1d<B> {
+    pub fn new(channels: usize, vb: VarBuilder<B>) -> Result<Self> {
         let alpha = vb.get((1, channels, 1), "alpha")?;
         Ok(Self { alpha })
     }
 }
 
-impl Module for Snake1d {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Snake1d<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs_shape = xs.shape();
         let xs = xs.flatten_from(2)?;
         let sin = self.alpha.broadcast_mul(&xs)?.sin()?;
@@ -242,20 +242,20 @@ impl Module for Snake1d {
 }
 
 #[derive(Debug, Clone)]
-struct ResidualUnit {
-    snake1: Snake1d,
-    conv1: Conv1d,
-    snake2: Snake1d,
-    conv2: Conv1d,
+struct ResidualUnit<B: BackendStorage> {
+    snake1: Snake1d<B>,
+    conv1: Conv1d<B>,
+    snake2: Snake1d<B>,
+    conv2: Conv1d<B>,
 }
 
-impl ResidualUnit {
+impl<B: BackendStorage> ResidualUnit<B> {
     fn new(
         dim: usize,
         dilation: usize,
         kernel: usize,
         groups: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let pad = ((kernel - 1) * dilation) / 2;
         let vb = vb.pp("block");
@@ -278,8 +278,8 @@ impl ResidualUnit {
     }
 }
 
-impl Module for ResidualUnit {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ResidualUnit<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let ys = xs
             .apply(&self.snake1)?
             .apply(&self.conv1)?
@@ -295,19 +295,19 @@ impl Module for ResidualUnit {
 }
 
 #[derive(Debug, Clone)]
-struct NoiseBlock {
-    linear: Conv1d,
+struct NoiseBlock<B: BackendStorage> {
+    linear: Conv1d<B>,
 }
 
-impl NoiseBlock {
-    fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> NoiseBlock<B> {
+    fn new(dim: usize, vb: VarBuilder<B>) -> Result<Self> {
         let linear = conv1d_weight_norm_no_bias(dim, dim, 1, Default::default(), vb.pp("linear"))?;
         Ok(Self { linear })
     }
 }
 
-impl Module for NoiseBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for NoiseBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (b, _c, t) = xs.dims3()?;
         let noise = Tensor::randn(0f32, 1f32, (b, 1, t), xs.device())?;
         let h = xs.apply(&self.linear)?;
@@ -318,23 +318,23 @@ impl Module for NoiseBlock {
 }
 
 #[derive(Debug, Clone)]
-struct DecoderBlock {
-    snake1: Snake1d,
-    conv_tr1: ConvTranspose1d,
-    noise: Option<NoiseBlock>,
-    res1: ResidualUnit,
-    res2: ResidualUnit,
-    res3: ResidualUnit,
+struct DecoderBlock<B: BackendStorage> {
+    snake1: Snake1d<B>,
+    conv_tr1: ConvTranspose1d<B>,
+    noise: Option<NoiseBlock<B>>,
+    res1: ResidualUnit<B>,
+    res2: ResidualUnit<B>,
+    res3: ResidualUnit<B>,
 }
 
-impl DecoderBlock {
+impl<B: BackendStorage> DecoderBlock<B> {
     fn new(
         in_dim: usize,
         out_dim: usize,
         stride: usize,
         noise: bool,
         groups: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let vb = vb.pp("block");
         let snake1 = Snake1d::new(in_dim, vb.pp(0))?;
@@ -366,8 +366,8 @@ impl DecoderBlock {
     }
 }
 
-impl Module for DecoderBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for DecoderBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.snake1)?
             .apply(&self.conv_tr1)?
             .apply(&self.noise.as_ref())?
@@ -378,21 +378,21 @@ impl Module for DecoderBlock {
 }
 
 #[derive(Debug, Clone)]
-struct EncoderBlock {
-    res1: ResidualUnit,
-    res2: ResidualUnit,
-    res3: ResidualUnit,
-    snake1: Snake1d,
-    conv1: Conv1d,
+struct EncoderBlock<B: BackendStorage> {
+    res1: ResidualUnit<B>,
+    res2: ResidualUnit<B>,
+    res3: ResidualUnit<B>,
+    snake1: Snake1d<B>,
+    conv1: Conv1d<B>,
 }
 
-impl EncoderBlock {
+impl<B: BackendStorage> EncoderBlock<B> {
     fn new(
         out_dim: usize,
         in_dim: Option<usize>,
         stride: usize,
         groups: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let vb = vb.pp("block");
         let in_dim = in_dim.unwrap_or(out_dim / 2);
@@ -416,8 +416,8 @@ impl EncoderBlock {
     }
 }
 
-impl candle::Module for EncoderBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for EncoderBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.res1)?
             .apply(&self.res2)?
             .apply(&self.res3)?
@@ -427,15 +427,15 @@ impl candle::Module for EncoderBlock {
 }
 
 #[derive(Debug, Clone)]
-pub struct Encoder {
-    conv1: Conv1d,
-    blocks: Vec<EncoderBlock>,
-    local_mha: Option<LocalMHA>,
-    conv2: Conv1d,
+pub struct Encoder<B: BackendStorage> {
+    conv1: Conv1d<B>,
+    blocks: Vec<EncoderBlock<B>>,
+    local_mha: Option<LocalMHA<B>>,
+    conv2: Conv1d<B>,
 }
 
-impl candle::Module for Encoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for Encoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = xs.apply(&self.conv1)?;
         for block in self.blocks.iter() {
             xs = xs.apply(block)?
@@ -444,13 +444,13 @@ impl candle::Module for Encoder {
     }
 }
 
-impl Encoder {
+impl<B: BackendStorage> Encoder<B> {
     fn new(
         mut d_model: usize,
         strides: &[usize],
         depthwise: bool,
         attn_window_size: Option<usize>,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let vb = vb.pp("block");
         let mut idx = 0;
@@ -494,21 +494,21 @@ impl Encoder {
 }
 
 #[derive(Debug, Clone)]
-enum ConvInit {
-    Depthwise(Conv1d, Conv1d),
-    Standard(Conv1d),
+enum ConvInit<B: BackendStorage> {
+    Depthwise(Conv1d<B>, Conv1d<B>),
+    Standard(Conv1d<B>),
 }
 
 #[derive(Debug, Clone)]
-pub struct Decoder {
-    conv1: ConvInit,
-    local_mha: Option<LocalMHA>,
-    blocks: Vec<DecoderBlock>,
-    snake1: Snake1d,
-    conv2: Conv1d,
+pub struct Decoder<B: BackendStorage> {
+    conv1: ConvInit<B>,
+    local_mha: Option<LocalMHA<B>>,
+    blocks: Vec<DecoderBlock<B>>,
+    snake1: Snake1d<B>,
+    conv2: Conv1d<B>,
 }
 
-impl Decoder {
+impl<B: BackendStorage> Decoder<B> {
     #[allow(clippy::too_many_arguments)]
     fn new(
         in_c: usize,
@@ -518,7 +518,7 @@ impl Decoder {
         depthwise: bool,
         attn_window_size: Option<usize>,
         d_out: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let vb = vb.pp("model");
         let mut idx = 0;
@@ -573,8 +573,8 @@ impl Decoder {
     }
 }
 
-impl candle::Module for Decoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for Decoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = match &self.conv1 {
             ConvInit::Standard(c) => xs.apply(c)?,
             ConvInit::Depthwise(c1, c2) => xs.apply(c1)?.apply(c2)?,
@@ -586,27 +586,27 @@ impl candle::Module for Decoder {
     }
 }
 
-fn normalize(v: &Tensor) -> Result<Tensor> {
+fn normalize<B: BackendStorage>(v: &Tensor<B>) -> Result<Tensor<B>> {
     v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?)
 }
 
 // https://github.com/hubertsiuzdak/snac/blob/main/snac/vq.py
 #[allow(unused)]
 #[derive(Clone, Debug)]
-struct VectorQuantizer {
-    in_proj: Conv1d,
-    out_proj: Conv1d,
-    codebook: candle_nn::Embedding,
+struct VectorQuantizer<B: BackendStorage> {
+    in_proj: Conv1d<B>,
+    out_proj: Conv1d<B>,
+    codebook: candle_nn::Embedding<B>,
     stride: usize,
 }
 
-impl VectorQuantizer {
+impl<B: BackendStorage> VectorQuantizer<B> {
     fn new(
         in_dim: usize,
         cb_size: usize,
         cb_dim: usize,
         stride: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let in_proj = conv1d_weight_norm(in_dim, cb_dim, 1, Default::default(), vb.pp("in_proj"))?;
         let out_proj =
@@ -620,7 +620,7 @@ impl VectorQuantizer {
         })
     }
 
-    fn decode_latents(&self, latents: &Tensor) -> Result<(Tensor, Tensor)> {
+    fn decode_latents(&self, latents: &Tensor<B>) -> Result<(Tensor<B>, Tensor<B>)> {
         let (b, d, t) = latents.dims3()?;
         let encodings = latents.transpose(1, 2)?.reshape((b * t, d))?;
         let encodings = normalize(&encodings)?;
@@ -636,7 +636,7 @@ impl VectorQuantizer {
         Ok((z_q, indices))
     }
 
-    fn encode(&self, z: &Tensor) -> Result<(Tensor, Tensor)> {
+    fn encode(&self, z: &Tensor<B>) -> Result<(Tensor<B>, Tensor<B>)> {
         let z = if self.stride > 1 {
             let (b, c, t) = z.dims3()?;
             z.reshape((b, c, 1, t))?
@@ -656,27 +656,27 @@ impl VectorQuantizer {
         Ok((z_q, indices))
     }
 
-    fn embed_code(&self, embed_id: &Tensor) -> Result<Tensor> {
+    fn embed_code(&self, embed_id: &Tensor<B>) -> Result<Tensor<B>> {
         embed_id.apply(&self.codebook)
     }
 
-    fn decode_code(&self, embed_id: &Tensor) -> Result<Tensor> {
+    fn decode_code(&self, embed_id: &Tensor<B>) -> Result<Tensor<B>> {
         self.embed_code(embed_id)?.transpose(1, 2)
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct ResidualVectorQuantizer {
-    quantizers: Vec<VectorQuantizer>,
+pub struct ResidualVectorQuantizer<B: BackendStorage> {
+    quantizers: Vec<VectorQuantizer<B>>,
 }
 
-impl ResidualVectorQuantizer {
+impl<B: BackendStorage> ResidualVectorQuantizer<B> {
     fn new(
         input_dim: usize,
         cb_size: usize,
         cb_dim: usize,
         vq_strides: &[usize],
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let vb = &vb.pp("quantizers");
         let quantizers = vq_strides
@@ -687,7 +687,7 @@ impl ResidualVectorQuantizer {
         Ok(Self { quantizers })
     }
 
-    fn encode(&self, z: &Tensor) -> Result<(Tensor, Vec<Tensor>)> {
+    fn encode(&self, z: &Tensor<B>) -> Result<(Tensor<B>, Vec<Tensor<B>>)> {
         let mut residual = z.clone();
         let mut z_q = z.zeros_like()?;
         let mut codes = Vec::with_capacity(self.quantizers.len());
@@ -701,7 +701,7 @@ impl ResidualVectorQuantizer {
     }
 
     #[allow(clippy::wrong_self_convention)]
-    fn from_codes(&self, codes: &[&Tensor]) -> Result<Tensor> {
+    fn from_codes(&self, codes: &[&Tensor<B>]) -> Result<Tensor<B>> {
         let mut sum = None;
         for (quantizer, codes) in self.quantizers.iter().zip(codes.iter()) {
             let z_p_i = quantizer.decode_code(codes)?;
@@ -735,16 +735,16 @@ fn lcm(a: usize, b: usize) -> usize {
 
 // https://github.com/hubertsiuzdak/snac/blob/main/snac/snac.py
 #[derive(Debug, Clone)]
-pub struct Model {
-    pub encoder: Encoder,
-    pub quantizer: ResidualVectorQuantizer,
-    pub decoder: Decoder,
+pub struct Model<B: BackendStorage> {
+    pub encoder: Encoder<B>,
+    pub quantizer: ResidualVectorQuantizer<B>,
+    pub decoder: Decoder<B>,
     pub hop_length: usize,
     pub config: Config,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let encoder = Encoder::new(
             cfg.encoder_dim,
             &cfg.encoder_rates,
@@ -780,7 +780,7 @@ impl Model {
         })
     }
 
-    fn preprocess(&self, audio_data: &Tensor) -> Result<Tensor> {
+    fn preprocess(&self, audio_data: &Tensor<B>) -> Result<Tensor<B>> {
         let len = audio_data.dim(D::Minus1)?;
         let lcm = lcm(
             self.config.vq_strides[0],
@@ -792,14 +792,14 @@ impl Model {
         Ok(audio_data)
     }
 
-    pub fn encode(&self, audio_data: &Tensor) -> Result<Vec<Tensor>> {
+    pub fn encode(&self, audio_data: &Tensor<B>) -> Result<Vec<Tensor<B>>> {
         let audio_data = self.preprocess(audio_data)?;
         let z = self.encoder.forward(&audio_data)?;
         let (_, codes) = self.quantizer.encode(&z)?;
         Ok(codes)
     }
 
-    pub fn decode(&self, audio_codes: &[&Tensor]) -> Result<Tensor> {
+    pub fn decode(&self, audio_codes: &[&Tensor<B>]) -> Result<Tensor<B>> {
         let audio_values = self.quantizer.from_codes(audio_codes)?;
         audio_values.apply(&self.decoder)
     }

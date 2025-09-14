@@ -501,7 +501,7 @@ impl<B: BackendStorage> SegformerMLP<B> {
     }
 }
 
-impl<B: BackendStorage> Module for SegformerMLP<B> {
+impl<B: BackendStorage> Module<B> for SegformerMLP<B> {
     fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         self.proj.forward(x)
     }

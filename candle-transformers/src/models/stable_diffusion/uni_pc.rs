@@ -22,7 +22,7 @@ use super::{
     schedulers::{Scheduler, SchedulerConfig},
     utils::{interp, linspace},
 };
-use candle::{BackendStorage, Error, IndexOp, Result, Tensor};
+use candle::{BackendStorage, CpuStorage, Error, IndexOp, Result, Tensor};
 
 #[derive(Debug, Clone, Copy)]
 pub enum SigmaSchedule {
@@ -132,7 +132,7 @@ impl TimestepSchedule {
     ) -> Result<Vec<usize>> {
         match self {
             Self::FromSigmas => {
-                let sigmas: Tensor = linspace(1., 0., num_inference_steps)?
+                let sigmas: Tensor<CpuStorage> = linspace(1., 0., num_inference_steps)?
                     .to_vec1()?
                     .into_iter()
                     .map(|t| sigma_schedule.sigma_t(t))
@@ -236,8 +236,8 @@ impl Default for UniPCSchedulerConfig {
     }
 }
 
-impl SchedulerConfig for UniPCSchedulerConfig {
-    fn build(&self, inference_steps: usize) -> Result<Box<dyn Scheduler>> {
+impl<B: BackendStorage + 'static> SchedulerConfig<B> for UniPCSchedulerConfig {
+    fn build(&self, inference_steps: usize) -> Result<Box<dyn Scheduler<B>>> {
         Ok(Box::new(EdmDpmMultistepScheduler::new(
             self.clone(),
             inference_steps,
@@ -598,7 +598,7 @@ impl<B: BackendStorage> EdmDpmMultistepScheduler<B> {
     }
 }
 
-impl<B: BackendStorage> Scheduler for EdmDpmMultistepScheduler<B> {
+impl<B: BackendStorage> Scheduler<B> for EdmDpmMultistepScheduler<B> {
     fn step(
         &mut self,
         model_output: &Tensor<B>,

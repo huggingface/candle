@@ -1,5 +1,5 @@
 use super::schedulers::{betas_for_alpha_bar, BetaSchedule, PredictionType};
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DDPMVarianceType {
@@ -48,15 +48,16 @@ impl Default for DDPMSchedulerConfig {
     }
 }
 
-pub struct DDPMScheduler {
+pub struct DDPMScheduler<B: BackendStorage> {
     alphas_cumprod: Vec<f64>,
     init_noise_sigma: f64,
     timesteps: Vec<usize>,
     step_ratio: usize,
     pub config: DDPMSchedulerConfig,
+    marker: std::marker::PhantomData<B>,
 }
 
-impl DDPMScheduler {
+impl<B: BackendStorage> DDPMScheduler<B> {
     pub fn new(inference_steps: usize, config: DDPMSchedulerConfig) -> Result<Self> {
         let betas = match config.beta_schedule {
             BetaSchedule::ScaledLinear => super::utils::linspace(
@@ -91,6 +92,7 @@ impl DDPMScheduler {
             timesteps,
             step_ratio,
             config,
+            marker: std::marker::PhantomData,
         })
     }
 
@@ -129,11 +131,16 @@ impl DDPMScheduler {
 
     ///  Ensures interchangeability with schedulers that need to scale the denoising model input
     /// depending on the current timestep.
-    pub fn scale_model_input(&self, sample: Tensor, _timestep: usize) -> Tensor {
+    pub fn scale_model_input(&self, sample: Tensor<B>, _timestep: usize) -> Tensor<B> {
         sample
     }
 
-    pub fn step(&self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor> {
+    pub fn step(
+        &self,
+        model_output: &Tensor<B>,
+        timestep: usize,
+        sample: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let prev_t = timestep as isize - self.step_ratio as isize;
 
         // https://github.com/huggingface/diffusers/blob/df2b548e893ccb8a888467c2508756680df22821/src/diffusers/schedulers/scheduling_ddpm.py#L272
@@ -191,10 +198,10 @@ impl DDPMScheduler {
 
     pub fn add_noise(
         &self,
-        original_samples: &Tensor,
-        noise: Tensor,
+        original_samples: &Tensor<B>,
+        noise: Tensor<B>,
         timestep: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         (original_samples * self.alphas_cumprod[timestep].sqrt())?
             + noise * (1. - self.alphas_cumprod[timestep]).sqrt()
     }

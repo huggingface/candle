@@ -30,7 +30,7 @@
 //! > Original; Prompt with `--point 0.6,0.55`; Prompt with `--point 0.6,0.6 --point 0.6,0.55`
 //!
 pub use crate::models::with_tracing::Linear;
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 
 pub mod image_encoder;
@@ -40,7 +40,12 @@ pub mod sam;
 pub mod tiny_vit;
 pub mod transformer;
 
-pub fn linear(vb: VarBuilder, in_dim: usize, out_dim: usize, bias: bool) -> Result<Linear> {
+pub fn linear<B: BackendStorage>(
+    vb: VarBuilder<B>,
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+) -> Result<Linear<B>> {
     if bias {
         crate::models::with_tracing::linear(in_dim, out_dim, vb)
     } else {
@@ -49,15 +54,15 @@ pub fn linear(vb: VarBuilder, in_dim: usize, out_dim: usize, bias: bool) -> Resu
 }
 
 #[derive(Debug)]
-pub struct LayerNorm2d {
-    weight: Tensor,
-    bias: Tensor,
+pub struct LayerNorm2d<B: BackendStorage> {
+    weight: Tensor<B>,
+    bias: Tensor<B>,
     num_channels: usize,
     eps: f64,
 }
 
-impl LayerNorm2d {
-    pub fn new(num_channels: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> LayerNorm2d<B> {
+    pub fn new(num_channels: usize, eps: f64, vb: VarBuilder<B>) -> Result<Self> {
         let weight = vb.get(num_channels, "weight")?;
         let bias = vb.get(num_channels, "bias")?;
         Ok(Self {
@@ -69,8 +74,8 @@ impl LayerNorm2d {
     }
 }
 
-impl Module for LayerNorm2d {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for LayerNorm2d<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let u = xs.mean_keepdim(1)?;
         let xs = xs.broadcast_sub(&u)?;
         let s = xs.sqr()?.mean_keepdim(1)?;
@@ -81,19 +86,19 @@ impl Module for LayerNorm2d {
 }
 
 #[derive(Debug)]
-pub struct MlpBlock {
-    lin1: Linear,
-    lin2: Linear,
+pub struct MlpBlock<B: BackendStorage> {
+    lin1: Linear<B>,
+    lin2: Linear<B>,
     activation: candle_nn::Activation,
     span: tracing::Span,
 }
 
-impl MlpBlock {
+impl<B: BackendStorage> MlpBlock<B> {
     pub fn new(
         embedding_dim: usize,
         mlp_dim: usize,
         activation: candle_nn::Activation,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let lin1 = linear(vb.pp("lin1"), embedding_dim, mlp_dim, true)?;
         let lin2 = linear(vb.pp("lin2"), mlp_dim, embedding_dim, true)?;
@@ -107,8 +112,8 @@ impl MlpBlock {
     }
 }
 
-impl Module for MlpBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for MlpBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         xs.apply(&self.lin1)?
             .apply(&self.activation)?

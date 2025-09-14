@@ -1,23 +1,23 @@
-use candle::{IndexOp, Result, Tensor};
+use candle::{BackendStorage, IndexOp, Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 
 use super::transformer::TwoWayTransformer;
 
 #[derive(Debug)]
-struct MlpMaskDecoder {
-    layers: Vec<super::Linear>,
+struct MlpMaskDecoder<B: BackendStorage> {
+    layers: Vec<super::Linear<B>>,
     sigmoid_output: bool,
     span: tracing::Span,
 }
 
-impl MlpMaskDecoder {
+impl<B: BackendStorage> MlpMaskDecoder<B> {
     fn new(
         input_dim: usize,
         hidden_dim: usize,
         output_dim: usize,
         num_layers: usize,
         sigmoid_output: bool,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let mut layers = Vec::with_capacity(num_layers);
         let vb = vb.pp("layers");
@@ -40,8 +40,8 @@ impl MlpMaskDecoder {
     }
 }
 
-impl Module for MlpMaskDecoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for MlpMaskDecoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut xs = xs.clone();
         for (i, layer) in self.layers.iter().enumerate() {
@@ -59,26 +59,26 @@ impl Module for MlpMaskDecoder {
 }
 
 #[derive(Debug)]
-pub struct MaskDecoder {
-    iou_token: candle_nn::Embedding,
-    mask_tokens: candle_nn::Embedding,
-    iou_prediction_head: MlpMaskDecoder,
-    output_upscaling_conv1: candle_nn::ConvTranspose2d,
-    output_upscaling_ln: super::LayerNorm2d,
-    output_upscaling_conv2: candle_nn::ConvTranspose2d,
+pub struct MaskDecoder<B: BackendStorage> {
+    iou_token: candle_nn::Embedding<B>,
+    mask_tokens: candle_nn::Embedding<B>,
+    iou_prediction_head: MlpMaskDecoder<B>,
+    output_upscaling_conv1: candle_nn::ConvTranspose2d<B>,
+    output_upscaling_ln: super::LayerNorm2d<B>,
+    output_upscaling_conv2: candle_nn::ConvTranspose2d<B>,
     num_mask_tokens: usize,
-    output_hypernetworks_mlps: Vec<MlpMaskDecoder>,
-    transformer: TwoWayTransformer,
+    output_hypernetworks_mlps: Vec<MlpMaskDecoder<B>>,
+    transformer: TwoWayTransformer<B>,
     span: tracing::Span,
 }
 
-impl MaskDecoder {
+impl<B: BackendStorage> MaskDecoder<B> {
     pub fn new(
         transformer_dim: usize,
         num_multimask_outputs: usize,
         iou_head_depth: usize,
         iou_head_hidden_dim: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let num_mask_tokens = num_multimask_outputs + 1;
         let iou_prediction_head = MlpMaskDecoder::new(
@@ -149,12 +149,12 @@ impl MaskDecoder {
 
     pub fn forward(
         &self,
-        image_embeddings: &Tensor,
-        image_pe: &Tensor,
-        sparse_prompt_embeddings: &Tensor,
-        dense_prompt_embeddings: &Tensor,
+        image_embeddings: &Tensor<B>,
+        image_pe: &Tensor<B>,
+        sparse_prompt_embeddings: &Tensor<B>,
+        dense_prompt_embeddings: &Tensor<B>,
         multimask_output: bool,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let _enter = self.span.enter();
         let (masks, iou_pred) = self.predict_masks(
             image_embeddings,
@@ -177,11 +177,11 @@ impl MaskDecoder {
 
     fn predict_masks(
         &self,
-        image_embeddings: &Tensor,
-        image_pe: &Tensor,
-        sparse_prompt_embeddings: &Tensor,
-        dense_prompt_embeddings: &Tensor,
-    ) -> Result<(Tensor, Tensor)> {
+        image_embeddings: &Tensor<B>,
+        image_pe: &Tensor<B>,
+        sparse_prompt_embeddings: &Tensor<B>,
+        dense_prompt_embeddings: &Tensor<B>,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         // Concatenate output tokens.
         let output_tokens = Tensor::cat(
             &[self.iou_token.embeddings(), self.mask_tokens.embeddings()],
@@ -231,7 +231,11 @@ impl MaskDecoder {
 }
 
 // Equivalent to torch.repeat_interleave
-fn repeat_interleave(img: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
+fn repeat_interleave<B: BackendStorage>(
+    img: &Tensor<B>,
+    repeats: usize,
+    dim: usize,
+) -> Result<Tensor<B>> {
     let img = img.unsqueeze(dim + 1)?;
     let mut dims = img.dims().to_vec();
     dims[dim + 1] = repeats;
