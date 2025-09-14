@@ -9,7 +9,7 @@ use crate::models::with_tracing::{linear, Embedding as E, Linear};
 /// MixFormer model.
 /// https://huggingface.co/microsoft/phi-1_5
 /// https://arxiv.org/abs/2309.05463
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use serde::Deserialize;
 
@@ -116,24 +116,24 @@ impl Config {
 }
 
 #[derive(Debug, Clone)]
-struct Embedding {
-    wte: E,
+struct Embedding<B: BackendStorage> {
+    wte: E<B>,
 }
 
-impl Embedding {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Embedding<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let wte = E::new(cfg.vocab_size, cfg.n_embd, vb.pp("wte"))?;
         Ok(Self { wte })
     }
 }
 
-impl Module for Embedding {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Embedding<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         self.wte.forward(xs)
     }
 }
 
-fn get_mask(size: usize, dtype: DType, device: &Device) -> Result<Tensor> {
+fn get_mask<B: BackendStorage>(size: usize, dtype: DType, device: &B::Device) -> Result<Tensor<B>> {
     let mask: Vec<_> = (0..size)
         .flat_map(|i| (0..size).map(move |j| if j > i { f32::NEG_INFINITY } else { 0. }))
         .collect();
@@ -141,13 +141,13 @@ fn get_mask(size: usize, dtype: DType, device: &Device) -> Result<Tensor> {
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+struct RotaryEmbedding<B: BackendStorage> {
+    sin: Tensor<B>,
+    cos: Tensor<B>,
 }
 
-impl RotaryEmbedding {
-    fn new(dim: usize, max_seq_len: usize, dtype: DType, dev: &Device) -> Result<Self> {
+impl<B: BackendStorage> RotaryEmbedding<B> {
+    fn new(dim: usize, max_seq_len: usize, dtype: DType, dev: &B::Device) -> Result<Self> {
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
             .map(|i| 1f32 / 10000f32.powf(i as f32 / dim as f32))
@@ -166,9 +166,9 @@ impl RotaryEmbedding {
 
     fn apply_rotary_emb_qkv(
         &self,
-        qkv: &Tensor,
+        qkv: &Tensor<B>,
         seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor, Tensor)> {
+    ) -> Result<(Tensor<B>, Tensor<B>, Tensor<B>)> {
         let (_b_size, seqlen, three, _, _headdim) = qkv.dims5()?;
         if three != 3 {
             candle::bail!("unexpected shape for qkv {:?}", qkv.shape())
@@ -192,15 +192,15 @@ impl RotaryEmbedding {
 
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
-struct MLP {
-    fc1: Linear,
-    fc2: Linear,
+struct MLP<B: BackendStorage> {
+    fc1: Linear<B>,
+    fc2: Linear<B>,
     act: Activation,
     span: tracing::Span,
 }
 
-impl MLP {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MLP<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let n_inner = cfg.n_inner.unwrap_or(4 * cfg.n_embd);
         let fc1 = linear(cfg.n_embd, n_inner, vb.pp("fc1"))?;
         let fc2 = linear(n_inner, cfg.n_embd, vb.pp("fc2"))?;
@@ -213,29 +213,29 @@ impl MLP {
     }
 }
 
-impl Module for MLP {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for MLP<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         xs.apply(&self.fc1)?.apply(&self.act)?.apply(&self.fc2)
     }
 }
 
 #[derive(Debug, Clone)]
-struct CausalLMHead {
-    ln: candle_nn::LayerNorm,
-    linear: Linear,
+struct CausalLMHead<B: BackendStorage> {
+    ln: candle_nn::LayerNorm<B>,
+    linear: Linear<B>,
 }
 
-impl CausalLMHead {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> CausalLMHead<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let ln = candle_nn::layer_norm(cfg.n_embd, cfg.layer_norm_epsilon, vb.pp("ln"))?;
         let linear = linear(cfg.n_embd, cfg.vocab_size, vb.pp("linear"))?;
         Ok(Self { ln, linear })
     }
 }
 
-impl Module for CausalLMHead {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for CausalLMHead<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.ln)?
             .apply(&self.linear)?
             .to_dtype(DType::F32)
@@ -244,11 +244,11 @@ impl Module for CausalLMHead {
 
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
-struct MHA {
-    wqkv: Linear,
-    out_proj: Linear,
-    rotary_emb: RotaryEmbedding,
-    kv_cache: Option<(Tensor, Tensor)>,
+struct MHA<B: BackendStorage> {
+    wqkv: Linear<B>,
+    out_proj: Linear<B>,
+    rotary_emb: RotaryEmbedding<B>,
+    kv_cache: Option<(Tensor<B>, Tensor<B>)>,
     head_dim: usize,
     softmax_scale: f64,
     span: tracing::Span,
@@ -257,8 +257,8 @@ struct MHA {
     span_softmax: tracing::Span,
 }
 
-impl MHA {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MHA<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let head_dim = cfg.n_embd / cfg.n_head;
         let op_size = cfg.n_embd;
         let wqkv = linear(cfg.n_embd, 3 * op_size, vb.pp("Wqkv"))?;
@@ -280,7 +280,7 @@ impl MHA {
         })
     }
 
-    fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&mut self, xs: &Tensor<B>, mask: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
         let qkv = self
@@ -342,15 +342,15 @@ impl MHA {
 }
 
 #[derive(Debug, Clone)]
-struct ParallelBlock {
-    ln: candle_nn::LayerNorm,
-    mixer: MHA,
-    mlp: MLP,
+struct ParallelBlock<B: BackendStorage> {
+    ln: candle_nn::LayerNorm<B>,
+    mixer: MHA<B>,
+    mlp: MLP<B>,
     span: tracing::Span,
 }
 
-impl ParallelBlock {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> ParallelBlock<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let ln = candle_nn::layer_norm(cfg.n_embd, cfg.layer_norm_epsilon, vb.pp("ln"))?;
         let mixer = MHA::new(cfg, vb.pp("mixer"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
@@ -362,7 +362,7 @@ impl ParallelBlock {
         })
     }
 
-    fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&mut self, xs: &Tensor<B>, mask: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let residual = xs;
         let xs = xs.apply(&self.ln)?;
@@ -377,15 +377,15 @@ impl ParallelBlock {
 }
 
 #[derive(Debug, Clone)]
-pub struct MixFormerSequentialForCausalLM {
-    embedding: Embedding,
-    blocks: Vec<ParallelBlock>,
-    head: CausalLMHead,
+pub struct MixFormerSequentialForCausalLM<B: BackendStorage> {
+    embedding: Embedding<B>,
+    blocks: Vec<ParallelBlock<B>>,
+    head: CausalLMHead<B>,
     span: tracing::Span,
 }
 
-impl MixFormerSequentialForCausalLM {
-    pub fn new_v2(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MixFormerSequentialForCausalLM<B> {
+    pub fn new_v2(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb_head = vb.pp("lm_head");
         let vb = vb.pp("transformer");
         let embedding = Embedding::new(cfg, vb.pp("embd"))?;
@@ -403,7 +403,7 @@ impl MixFormerSequentialForCausalLM {
         })
     }
 
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb = vb.pp("layers");
         let embedding = Embedding::new(cfg, vb.pp(0))?;
         let mut blocks = Vec::new();
@@ -420,7 +420,7 @@ impl MixFormerSequentialForCausalLM {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.embedding)?;
@@ -437,10 +437,10 @@ impl MixFormerSequentialForCausalLM {
 
     pub fn forward_with_img(
         &mut self,
-        bos_token: &Tensor,
-        xs: &Tensor,
-        img_embeds: &Tensor,
-    ) -> Result<Tensor> {
+        bos_token: &Tensor<B>,
+        xs: &Tensor<B>,
+        img_embeds: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let xs = xs.apply(&self.embedding)?;
         let bos_token = bos_token.apply(&self.embedding)?;

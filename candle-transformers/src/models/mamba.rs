@@ -6,7 +6,7 @@
 //! A fast implementation of mamba for inference only.
 //! Based on Laurent Mazare's rust implementation: [mamba.rs](https://github.com/LaurentMazare/mamba.rs)
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{RmsNorm, VarBuilder};
 
 const D_CONV: usize = 4;
@@ -35,14 +35,14 @@ impl Config {
     }
 }
 
-pub struct State {
-    pub hs: Vec<Tensor>,
-    pub prev_xs: Vec<[Tensor; D_CONV]>,
+pub struct State<B: BackendStorage> {
+    pub hs: Vec<Tensor<B>>,
+    pub prev_xs: Vec<[Tensor<B>; D_CONV]>,
     pub pos: usize,
 }
 
-impl State {
-    pub fn new(batch_size: usize, cfg: &Config, dtype: DType, device: &Device) -> Result<Self> {
+impl<B: BackendStorage> State<B> {
+    pub fn new(batch_size: usize, cfg: &Config, dtype: DType, device: &B::Device) -> Result<Self> {
         let mut hs = Vec::with_capacity(cfg.n_layer);
         let mut prev_xs = Vec::with_capacity(cfg.n_layer);
         for _i in 0..cfg.n_layer {
@@ -60,22 +60,22 @@ impl State {
 }
 
 #[derive(Clone, Debug)]
-pub struct MambaBlock {
-    in_proj: Linear,
-    conv1d_bias: Tensor,
-    conv1d_weights: [Tensor; D_CONV],
-    x_proj: Linear,
-    dt_proj: Linear,
-    a_log: Tensor,
-    d: Tensor,
-    out_proj: Linear,
+pub struct MambaBlock<B: BackendStorage> {
+    in_proj: Linear<B>,
+    conv1d_bias: Tensor<B>,
+    conv1d_weights: [Tensor<B>; D_CONV],
+    x_proj: Linear<B>,
+    dt_proj: Linear<B>,
+    a_log: Tensor<B>,
+    d: Tensor<B>,
+    out_proj: Linear<B>,
     dt_rank: usize,
     layer_index: usize,
     d_inner: usize,
 }
 
-impl MambaBlock {
-    pub fn new(layer_index: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MambaBlock<B> {
+    pub fn new(layer_index: usize, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let d_inner = cfg.d_inner();
         let dt_rank = cfg.dt_rank();
         let in_proj = linear_no_bias(cfg.d_model, d_inner * 2, vb.pp("in_proj"))?;
@@ -107,7 +107,7 @@ impl MambaBlock {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, state: &mut State<B>) -> Result<Tensor<B>> {
         let (b_sz, _dim) = xs.dims2()?;
         let li = self.layer_index;
         let mut xs = xs.apply(&self.in_proj)?.chunk(2, D::Minus1)?;
@@ -158,35 +158,35 @@ impl MambaBlock {
 }
 
 #[derive(Clone, Debug)]
-pub struct ResidualBlock {
-    mixer: MambaBlock,
-    norm: RmsNorm,
+pub struct ResidualBlock<B: BackendStorage> {
+    mixer: MambaBlock<B>,
+    norm: RmsNorm<B>,
 }
 
-impl ResidualBlock {
-    pub fn new(layer_index: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> ResidualBlock<B> {
+    pub fn new(layer_index: usize, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let norm = candle_nn::rms_norm(cfg.d_model, 1e-5, vb.pp("norm"))?;
         let mixer = MambaBlock::new(layer_index, cfg, vb.pp("mixer"))?;
         Ok(Self { mixer, norm })
     }
 
-    fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, state: &mut State<B>) -> Result<Tensor<B>> {
         self.mixer.forward(&xs.apply(&self.norm)?, state)? + xs
     }
 }
 
 // https://github.com/johnma2006/mamba-minimal/blob/61f01953ca153f8c4a850d7111beecbf4be9cee1/model.py#L56
 #[derive(Clone, Debug)]
-pub struct Model {
-    embedding: candle_nn::Embedding,
-    layers: Vec<ResidualBlock>,
-    norm_f: RmsNorm,
-    lm_head: Linear,
+pub struct Model<B: BackendStorage> {
+    embedding: candle_nn::Embedding<B>,
+    layers: Vec<ResidualBlock<B>>,
+    norm_f: RmsNorm<B>,
+    lm_head: Linear<B>,
     dtype: DType,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let embedding = candle_nn::embedding(cfg.vocab_size(), cfg.d_model, vb.pp("embedding"))?;
         let mut layers = Vec::with_capacity(cfg.n_layer);
         let vb_l = vb.pp("layers");
@@ -205,7 +205,7 @@ impl Model {
         })
     }
 
-    pub fn forward(&self, input_ids: &Tensor, state: &mut State) -> Result<Tensor> {
+    pub fn forward(&self, input_ids: &Tensor<B>, state: &mut State<B>) -> Result<Tensor<B>> {
         let _b_size = input_ids.dims1()?;
         let mut xs = self.embedding.forward(input_ids)?;
         for layer in self.layers.iter() {

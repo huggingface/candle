@@ -2,7 +2,7 @@
 // This source code is licensed under the license found in the
 // LICENSE file in the root directory of this source tree.
 
-use candle::{streaming, Module, Result, StreamTensor, StreamingModule, Tensor};
+use candle::{streaming, BackendStorage, Module, Result, StreamTensor, StreamingModule, Tensor};
 use candle_nn::VarBuilder;
 
 use super::conv::{StreamableConv1d, StreamableConvTranspose1d};
@@ -30,15 +30,15 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone)]
-pub struct SeaNetResnetBlock {
-    block: Vec<StreamableConv1d>,
-    shortcut: Option<StreamableConv1d>,
+pub struct SeaNetResnetBlock<B: BackendStorage> {
+    block: Vec<StreamableConv1d<B>>,
+    shortcut: Option<StreamableConv1d<B>>,
     activation: candle_nn::Activation,
-    skip_op: candle::StreamingBinOp,
+    skip_op: candle::StreamingBinOp<B>,
     span: tracing::Span,
 }
 
-impl SeaNetResnetBlock {
+impl<B: BackendStorage> SeaNetResnetBlock<B> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         dim: usize,
@@ -49,7 +49,7 @@ impl SeaNetResnetBlock {
         pad_mode: super::conv::PadMode,
         compress: usize,
         true_skip: bool,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let mut block = Vec::with_capacity(k_sizes_and_dilations.len());
         let hidden = dim / compress;
@@ -104,8 +104,8 @@ impl SeaNetResnetBlock {
     }
 }
 
-impl Module for SeaNetResnetBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for SeaNetResnetBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut ys = xs.clone();
         for block in self.block.iter() {
@@ -118,7 +118,7 @@ impl Module for SeaNetResnetBlock {
     }
 }
 
-impl StreamingModule for SeaNetResnetBlock {
+impl<B: BackendStorage> StreamingModule<B> for SeaNetResnetBlock<B> {
     fn reset_state(&mut self) {
         for block in self.block.iter_mut() {
             block.reset_state()
@@ -128,7 +128,7 @@ impl StreamingModule for SeaNetResnetBlock {
         }
     }
 
-    fn step(&mut self, xs: &StreamTensor) -> Result<StreamTensor> {
+    fn step(&mut self, xs: &StreamTensor<B>) -> Result<StreamTensor<B>> {
         let _enter = self.span.enter();
         let mut ys = xs.clone();
         for block in self.block.iter_mut() {
@@ -142,22 +142,22 @@ impl StreamingModule for SeaNetResnetBlock {
 }
 
 #[derive(Debug, Clone)]
-struct EncoderLayer {
-    residuals: Vec<SeaNetResnetBlock>,
-    downsample: StreamableConv1d,
+struct EncoderLayer<B: BackendStorage> {
+    residuals: Vec<SeaNetResnetBlock<B>>,
+    downsample: StreamableConv1d<B>,
 }
 
 #[derive(Debug, Clone)]
-pub struct SeaNetEncoder {
-    init_conv1d: StreamableConv1d,
+pub struct SeaNetEncoder<B: BackendStorage> {
+    init_conv1d: StreamableConv1d<B>,
     activation: candle_nn::Activation,
-    layers: Vec<EncoderLayer>,
-    final_conv1d: StreamableConv1d,
+    layers: Vec<EncoderLayer<B>>,
+    final_conv1d: StreamableConv1d<B>,
     span: tracing::Span,
 }
 
-impl SeaNetEncoder {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SeaNetEncoder<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         if cfg.lstm > 0 {
             candle::bail!("seanet lstm is not supported")
         }
@@ -261,8 +261,8 @@ impl SeaNetEncoder {
     }
 }
 
-impl Module for SeaNetEncoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for SeaNetEncoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut xs = xs.apply(&self.init_conv1d)?;
         for layer in self.layers.iter() {
@@ -275,7 +275,7 @@ impl Module for SeaNetEncoder {
     }
 }
 
-impl StreamingModule for SeaNetEncoder {
+impl<B: BackendStorage> StreamingModule<B> for SeaNetEncoder<B> {
     fn reset_state(&mut self) {
         self.init_conv1d.reset_state();
         self.layers.iter_mut().for_each(|v| {
@@ -285,7 +285,7 @@ impl StreamingModule for SeaNetEncoder {
         self.final_conv1d.reset_state();
     }
 
-    fn step(&mut self, xs: &StreamTensor) -> Result<StreamTensor> {
+    fn step(&mut self, xs: &StreamTensor<B>) -> Result<StreamTensor<B>> {
         let _enter = self.span.enter();
         let mut xs = self.init_conv1d.step(xs)?;
         for layer in self.layers.iter_mut() {
@@ -299,23 +299,23 @@ impl StreamingModule for SeaNetEncoder {
 }
 
 #[derive(Debug, Clone)]
-struct DecoderLayer {
-    upsample: StreamableConvTranspose1d,
-    residuals: Vec<SeaNetResnetBlock>,
+struct DecoderLayer<B: BackendStorage> {
+    upsample: StreamableConvTranspose1d<B>,
+    residuals: Vec<SeaNetResnetBlock<B>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct SeaNetDecoder {
-    init_conv1d: StreamableConv1d,
+pub struct SeaNetDecoder<B: BackendStorage> {
+    init_conv1d: StreamableConv1d<B>,
     activation: candle_nn::Activation,
-    layers: Vec<DecoderLayer>,
-    final_conv1d: StreamableConv1d,
+    layers: Vec<DecoderLayer<B>>,
+    final_conv1d: StreamableConv1d<B>,
     final_activation: Option<candle_nn::Activation>,
     span: tracing::Span,
 }
 
-impl SeaNetDecoder {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SeaNetDecoder<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         if cfg.lstm > 0 {
             candle::bail!("seanet lstm is not supported")
         }
@@ -417,8 +417,8 @@ impl SeaNetDecoder {
     }
 }
 
-impl Module for SeaNetDecoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for SeaNetDecoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut xs = xs.apply(&self.init_conv1d)?;
         for layer in self.layers.iter() {
@@ -436,7 +436,7 @@ impl Module for SeaNetDecoder {
     }
 }
 
-impl StreamingModule for SeaNetDecoder {
+impl<B: BackendStorage> StreamingModule<B> for SeaNetDecoder<B> {
     fn reset_state(&mut self) {
         self.init_conv1d.reset_state();
         self.layers.iter_mut().for_each(|v| {
@@ -446,7 +446,7 @@ impl StreamingModule for SeaNetDecoder {
         self.final_conv1d.reset_state();
     }
 
-    fn step(&mut self, xs: &StreamTensor) -> Result<StreamTensor> {
+    fn step(&mut self, xs: &StreamTensor<B>) -> Result<StreamTensor<B>> {
         let _enter = self.span.enter();
         let mut xs = self.init_conv1d.step(xs)?;
         for layer in self.layers.iter_mut() {

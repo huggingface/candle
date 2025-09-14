@@ -4,11 +4,15 @@
 //! - [GitHub](https://github.com/metavoiceio/metavoice-src)
 //! - [Website](https://studio.metavoice.ai/)
 
-use candle::{DType, Device, Error as E, IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, Error as E, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{embedding, linear_b, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 
 // Equivalent to torch.repeat_interleave
-pub(crate) fn repeat_interleave(img: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
+pub(crate) fn repeat_interleave<B: BackendStorage>(
+    img: &Tensor<B>,
+    repeats: usize,
+    dim: usize,
+) -> Result<Tensor<B>> {
     let img = img.unsqueeze(dim + 1)?;
     let mut dims = img.dims().to_vec();
     dims[dim + 1] = repeats;
@@ -44,16 +48,16 @@ pub mod speaker_encoder {
         }
     }
 
-    pub struct Model {
-        lstms: Vec<candle_nn::LSTM>,
-        linear: Linear,
+    pub struct Model<B: BackendStorage> {
+        lstms: Vec<candle_nn::LSTM<B>>,
+        linear: Linear<B>,
         cfg: Config,
     }
 
     type Slice = (usize, usize);
 
-    impl Model {
-        pub fn new(cfg: Config, vb: VarBuilder) -> Result<Self> {
+    impl<B: BackendStorage> Model<B> {
+        pub fn new(cfg: Config, vb: VarBuilder<B>) -> Result<Self> {
             let mut lstms = Vec::with_capacity(cfg.model_num_layers);
             let vb_l = vb.pp("lstm");
             for layer_idx in 0..cfg.model_num_layers {
@@ -123,8 +127,8 @@ pub mod speaker_encoder {
             mel_filters: &[f32],
             rate: f64,
             min_c: f64,
-            device: &Device,
-        ) -> Result<Tensor> {
+            device: &B::Device,
+        ) -> Result<Tensor<B>> {
             let (wav_slices, mel_slices) = self.compute_partial_slices(wav.len(), rate, min_c);
             let max_wave_length = match wav_slices.last() {
                 Some(v) => v.1,
@@ -157,8 +161,8 @@ pub mod speaker_encoder {
         }
     }
 
-    impl Module for Model {
-        fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    impl<B: BackendStorage> Module<B> for Model<B> {
+        fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
             use candle_nn::RNN;
 
             // This is different from the Python transformers version as candle LSTM is batch first.
@@ -355,9 +359,9 @@ pub mod gpt {
         Swiglu,
     }
 
-    enum Norm {
-        RMSNorm(candle_nn::RmsNorm),
-        LayerNorm(candle_nn::LayerNorm),
+    enum Norm<B: BackendStorage> {
+        RMSNorm(candle_nn::RmsNorm<B>),
+        LayerNorm(candle_nn::LayerNorm<B>),
     }
 
     // https://github.com/metavoiceio/metavoice-src/blob/11550bb4e8a1ad032cc1556cc924f7a4e767cbfa/fam/llm/model.py#L27
@@ -402,8 +406,8 @@ pub mod gpt {
         }
     }
 
-    impl Norm {
-        fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    impl<B: BackendStorage> Norm<B> {
+        fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
             match cfg.norm_type {
                 NormType::RMSNorm => {
                     let rms_norm = candle_nn::rms_norm(cfg.n_embd, cfg.rmsnorm_eps, vb)?;
@@ -421,8 +425,8 @@ pub mod gpt {
         }
     }
 
-    impl Module for Norm {
-        fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    impl<B: BackendStorage> Module<B> for Norm<B> {
+        fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
             match self {
                 Self::RMSNorm(m) => m.forward(xs),
                 Self::LayerNorm(m) => m.forward(xs),
@@ -431,15 +435,15 @@ pub mod gpt {
     }
 
     // https://github.com/metavoiceio/metavoice-src/blob/11550bb4e8a1ad032cc1556cc924f7a4e767cbfa/fam/llm/layers/attn.py#L18
-    struct SelfAttention {
-        c_attn: Linear,
-        c_proj: Linear,
+    struct SelfAttention<B: BackendStorage> {
+        c_attn: Linear<B>,
+        c_proj: Linear<B>,
         n_head: usize,
         span: tracing::Span,
     }
 
-    impl SelfAttention {
-        fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    impl<B: BackendStorage> SelfAttention<B> {
+        fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
             // The different attention variants are likely to be identical but still we only accept
             // TorchAttn for now.
             if cfg.attn_kernel_type != AttnKernelType::TorchAttn {
@@ -459,8 +463,8 @@ pub mod gpt {
         }
     }
 
-    impl Module for SelfAttention {
-        fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    impl<B: BackendStorage> Module<B> for SelfAttention<B> {
+        fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
             let _enter = self.span.enter();
             let (b, t, c) = xs.dims3()?;
             let c_x = xs
@@ -482,22 +486,22 @@ pub mod gpt {
 
     // https://github.com/metavoiceio/metavoice-src/blob/11550bb4e8a1ad032cc1556cc924f7a4e767cbfa/fam/llm/layers/layers.py#L43
     #[allow(clippy::upper_case_acronyms)]
-    enum MLP {
+    enum MLP<B: BackendStorage> {
         Gelu {
-            c_fc: Linear,
-            c_proj: Linear,
+            c_fc: Linear<B>,
+            c_proj: Linear<B>,
             span: tracing::Span,
         },
         Swiglu {
-            w1: Linear,
-            w3: Linear,
-            c_proj: Linear,
+            w1: Linear<B>,
+            w3: Linear<B>,
+            c_proj: Linear<B>,
             span: tracing::Span,
         },
     }
 
-    impl MLP {
-        fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    impl<B: BackendStorage> MLP<B> {
+        fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
             let hidden_dim = 4 * cfg.n_embd;
             let slf = match cfg.nonlinearity_type {
                 NonLinearityType::Gelu => {
@@ -532,8 +536,8 @@ pub mod gpt {
         }
     }
 
-    impl Module for MLP {
-        fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    impl<B: BackendStorage> Module<B> for MLP<B> {
+        fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
             match self {
                 Self::Gelu { c_fc, c_proj, span } => {
                     let _enter = span.enter();
@@ -555,16 +559,16 @@ pub mod gpt {
     }
 
     // https://github.com/metavoiceio/metavoice-src/blob/11550bb4e8a1ad032cc1556cc924f7a4e767cbfa/fam/llm/layers/combined.py#L7
-    struct Block {
-        ln_1: Norm,
-        ln_2: Norm,
-        attn: SelfAttention,
-        mlp: MLP,
+    struct Block<B: BackendStorage> {
+        ln_1: Norm<B>,
+        ln_2: Norm<B>,
+        attn: SelfAttention<B>,
+        mlp: MLP<B>,
         span: tracing::Span,
     }
 
-    impl Block {
-        fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    impl<B: BackendStorage> Block<B> {
+        fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
             let ln_1 = Norm::new(cfg, vb.pp("ln_1"))?;
             let ln_2 = Norm::new(cfg, vb.pp("ln_2"))?;
             let attn = SelfAttention::new(cfg, vb.pp("attn"))?;
@@ -579,8 +583,8 @@ pub mod gpt {
         }
     }
 
-    impl Module for Block {
-        fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    impl<B: BackendStorage> Module<B> for Block<B> {
+        fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
             let _enter = self.span.enter();
             let xs = (xs + xs.apply(&self.ln_1)?.apply(&self.attn))?;
             let xs = (&xs + xs.apply(&self.ln_2)?.apply(&self.mlp))?;
@@ -590,19 +594,19 @@ pub mod gpt {
 
     // https://github.com/metavoiceio/metavoice-src/blob/11550bb4e8a1ad032cc1556cc924f7a4e767cbfa/fam/llm/model.py#L79
     #[allow(clippy::upper_case_acronyms)]
-    pub struct Model {
-        wtes: Vec<candle_nn::Embedding>,
-        wpe: candle_nn::Embedding,
-        h: Vec<Block>,
-        ln_f: Norm,
-        lm_heads: Vec<Linear>,
+    pub struct Model<B: BackendStorage> {
+        wtes: Vec<candle_nn::Embedding<B>>,
+        wpe: candle_nn::Embedding<B>,
+        h: Vec<Block<B>>,
+        ln_f: Norm<B>,
+        lm_heads: Vec<Linear<B>>,
         cfg: Config,
         dtype: DType,
         span: tracing::Span,
     }
 
-    impl Model {
-        pub fn new(cfg: Config, vb: VarBuilder) -> Result<Self> {
+    impl<B: BackendStorage> Model<B> {
+        pub fn new(cfg: Config, vb: VarBuilder<B>) -> Result<Self> {
             let vb_t = vb.pp("transformer");
             let ln_f = Norm::new(&cfg, vb_t.pp("ln_f"))?;
             let mut wtes = Vec::with_capacity(cfg.vocab_sizes.len());
@@ -642,7 +646,7 @@ pub mod gpt {
             &self.cfg
         }
 
-        pub fn forward(&self, idx: &Tensor) -> Result<Vec<Tensor>> {
+        pub fn forward(&self, idx: &Tensor<B>) -> Result<Vec<Tensor<B>>> {
             let _enter = self.span.enter();
             let device = idx.device();
             let (b, _num_hierarchies, t) = idx.dims3()?;
@@ -723,15 +727,15 @@ pub mod transformer {
     }
 
     #[derive(Debug, Clone)]
-    struct FeedForward {
-        w1: Linear,
-        w2: Linear,
-        w3: Linear,
+    struct FeedForward<B: BackendStorage> {
+        w1: Linear<B>,
+        w2: Linear<B>,
+        w3: Linear<B>,
         span: tracing::Span,
     }
 
-    impl FeedForward {
-        fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    impl<B: BackendStorage> FeedForward<B> {
+        fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
             let i_size = cfg.intermediate_size();
             let w1 = linear_b(cfg.dim, i_size, false, vb.pp("swiglu.w1"))?;
             let w2 = linear_b(i_size, cfg.dim, false, vb.pp("w2"))?;
@@ -745,8 +749,8 @@ pub mod transformer {
         }
     }
 
-    impl Module for FeedForward {
-        fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    impl<B: BackendStorage> Module<B> for FeedForward<B> {
+        fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
             let _enter = self.span.enter();
             let swiglu = (candle_nn::ops::silu(&xs.apply(&self.w1)?)? * xs.apply(&self.w3))?;
             swiglu.apply(&self.w2)
@@ -754,20 +758,20 @@ pub mod transformer {
     }
 
     #[derive(Debug, Clone)]
-    struct Attention {
-        wqkv: Linear,
-        wo: Linear,
+    struct Attention<B: BackendStorage> {
+        wqkv: Linear<B>,
+        wo: Linear<B>,
         dim: usize,
         kv_size: usize,
         n_local_heads: usize,
         head_dim: usize,
         n_head: usize,
-        kv_cache: Option<(Tensor, Tensor)>,
+        kv_cache: Option<(Tensor<B>, Tensor<B>)>,
         span: tracing::Span,
     }
 
-    impl Attention {
-        fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    impl<B: BackendStorage> Attention<B> {
+        fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
             let n_local_heads = cfg.n_local_heads();
             let head_dim = cfg.head_dim();
             let total_head_dim = (cfg.n_head + 2 * n_local_heads) * head_dim;
@@ -786,7 +790,7 @@ pub mod transformer {
             })
         }
 
-        fn forward(&mut self, xs: &Tensor, _pos: usize, mask: &Tensor) -> Result<Tensor> {
+        fn forward(&mut self, xs: &Tensor<B>, _pos: usize, mask: &Tensor<B>) -> Result<Tensor<B>> {
             let _enter = self.span.enter();
             let (b_sz, seqlen, _) = xs.dims3()?;
 
@@ -836,16 +840,16 @@ pub mod transformer {
     }
 
     #[derive(Debug, Clone)]
-    struct Block {
-        attention: Attention,
-        feed_forward: FeedForward,
-        ffn_norm: RmsNorm,
-        attention_norm: RmsNorm,
+    struct Block<B: BackendStorage> {
+        attention: Attention<B>,
+        feed_forward: FeedForward<B>,
+        ffn_norm: RmsNorm<B>,
+        attention_norm: RmsNorm<B>,
         span: tracing::Span,
     }
 
-    impl Block {
-        fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    impl<B: BackendStorage> Block<B> {
+        fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
             let attention = Attention::new(cfg, vb.pp("attention"))?;
             let feed_forward = FeedForward::new(cfg, vb.pp("feed_forward"))?;
             let ffn_norm = rms_norm(cfg.dim, cfg.norm_eps, vb.pp("ffn_norm"))?;
@@ -859,7 +863,7 @@ pub mod transformer {
             })
         }
 
-        fn forward(&mut self, xs: &Tensor, pos: usize, mask: &Tensor) -> Result<Tensor> {
+        fn forward(&mut self, xs: &Tensor<B>, pos: usize, mask: &Tensor<B>) -> Result<Tensor<B>> {
             let _enter = self.span.enter();
             let hs = xs.apply(&self.attention_norm)?;
             let hs = (xs + self.attention.forward(&hs, pos, mask))?;
@@ -872,19 +876,19 @@ pub mod transformer {
     }
 
     #[derive(Debug, Clone)]
-    pub struct Model {
-        tok_embeddings: Embedding,
-        pos_embeddings: Embedding,
-        speaker_cond_pos: Linear,
-        layers: Vec<Block>,
-        norm: RmsNorm,
-        output: Linear,
-        spk_cond_mask: Tensor,
+    pub struct Model<B: BackendStorage> {
+        tok_embeddings: Embedding<B>,
+        pos_embeddings: Embedding<B>,
+        speaker_cond_pos: Linear<B>,
+        layers: Vec<Block<B>>,
+        norm: RmsNorm<B>,
+        output: Linear<B>,
+        spk_cond_mask: Tensor<B>,
         span: tracing::Span,
     }
 
-    impl Model {
-        pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    impl<B: BackendStorage> Model<B> {
+        pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
             let tok_embeddings = embedding(cfg.vocab_size, cfg.dim, vb.pp("tok_embeddings"))?;
             let pos_embeddings = embedding(cfg.block_size, cfg.dim, vb.pp("pos_embeddings"))?;
             let speaker_cond_pos = linear_b(
@@ -927,7 +931,12 @@ pub mod transformer {
             }
         }
 
-        pub fn forward(&mut self, xs: &Tensor, spk_emb: &Tensor, pos: usize) -> Result<Tensor> {
+        pub fn forward(
+            &mut self,
+            xs: &Tensor<B>,
+            spk_emb: &Tensor<B>,
+            pos: usize,
+        ) -> Result<Tensor<B>> {
             let _enter = self.span.enter();
             let (_b_sz, seqlen) = xs.dims2()?;
             let mask: Vec<_> = (0..seqlen)

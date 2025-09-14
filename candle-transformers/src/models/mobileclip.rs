@@ -16,15 +16,15 @@
 
 use super::fastvit;
 use super::openclip::text_model;
-use candle::{Result, Tensor, D};
+use candle::{BackendStorage, Result, Tensor, D};
 use candle_nn::{Func, VarBuilder};
 
 #[derive(Clone, Debug)]
-pub struct MobileClipModel {
-    text_model: text_model::OpenClipTextTransformer,
-    vision_model: Func<'static>,
-    text_projection: Tensor,
-    logit_scale: Tensor,
+pub struct MobileClipModel<B: BackendStorage> {
+    text_model: text_model::OpenClipTextTransformer<B>,
+    vision_model: Func<'static, B>,
+    text_projection: Tensor<B>,
+    logit_scale: Tensor<B>,
 }
 
 #[derive(Clone, Debug)]
@@ -55,8 +55,8 @@ impl MobileClipConfig {
     }
 }
 
-impl MobileClipModel {
-    pub fn new(vs: VarBuilder, c: &MobileClipConfig) -> Result<Self> {
+impl<B: BackendStorage + 'static> MobileClipModel<B> {
+    pub fn new(vs: VarBuilder<B>, c: &MobileClipConfig) -> Result<Self> {
         let vision_model = fastvit::fastvit(&c.vision_config, 512, vs.pp("visual.trunk"))?;
         let text_model = text_model::OpenClipTextTransformer::new(vs.pp("text"), &c.text_config)?;
         let text_projection = vs.get(
@@ -72,17 +72,21 @@ impl MobileClipModel {
         })
     }
 
-    pub fn get_text_features(&self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn get_text_features(&self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         input_ids
             .apply(&self.text_model)?
             .matmul(&self.text_projection)
     }
 
-    pub fn get_image_features(&self, pixel_values: &Tensor) -> Result<Tensor> {
+    pub fn get_image_features(&self, pixel_values: &Tensor<B>) -> Result<Tensor<B>> {
         pixel_values.apply(&self.vision_model)
     }
 
-    pub fn forward(&self, pixel_values: &Tensor, input_ids: &Tensor) -> Result<(Tensor, Tensor)> {
+    pub fn forward(
+        &self,
+        pixel_values: &Tensor<B>,
+        input_ids: &Tensor<B>,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let image_features = self.get_image_features(pixel_values)?;
         let text_features = self.get_text_features(input_ids)?;
         let image_features_normalized = div_l2_norm(&image_features)?;
@@ -95,7 +99,7 @@ impl MobileClipModel {
     }
 }
 
-pub fn div_l2_norm(v: &Tensor) -> Result<Tensor> {
+pub fn div_l2_norm<B: BackendStorage>(v: &Tensor<B>) -> Result<Tensor<B>> {
     let l2_norm = v.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?;
     v.broadcast_div(&l2_norm)
 }
