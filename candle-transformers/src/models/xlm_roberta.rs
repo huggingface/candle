@@ -1,5 +1,5 @@
 use crate::models::with_tracing::{linear, Linear};
-use candle::{tensor::TryToDevice, BackendStorage, CpuStorage, DType, Module, Result, Tensor};
+use candle::{BackendStorage, DType, Module, Result, Tensor};
 use candle_nn::{
     embedding, layer_norm, ops::softmax_last_dim, Activation, Embedding, LayerNorm, VarBuilder,
 };
@@ -62,10 +62,7 @@ impl<B: BackendStorage> XLMRobertaEmbeddings<B> {
         })
     }
 
-    fn forward(&self, input_ids: &Tensor<B>, token_type_ids: &Tensor<B>) -> Result<Tensor<B>>
-    where
-        Tensor<B>: TryToDevice<CpuStorage, B>,
-    {
+    fn forward(&self, input_ids: &Tensor<B>, token_type_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (_bsize, _) = input_ids.dims2()?;
         let input_embeddings = self.word_embeddings.forward(input_ids)?;
@@ -442,7 +439,7 @@ impl<B: BackendStorage> XLMRobertaForMaskedLM<B> {
         past_key_value: Option<(&Tensor<B>, &Tensor<B>)>,
         encoder_hidden_states: Option<&Tensor<B>>,
         encoder_attention_mask: Option<&Tensor<B>>,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let hidden_states = self.roberta.forward(
             input_ids,
             attention_mask,
