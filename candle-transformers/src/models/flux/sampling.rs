@@ -1,27 +1,27 @@
-use candle::{Device, Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 
-pub fn get_noise(
+pub fn get_noise<B: BackendStorage>(
     num_samples: usize,
     height: usize,
     width: usize,
-    device: &Device,
-) -> Result<Tensor> {
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let height = height.div_ceil(16) * 2;
     let width = width.div_ceil(16) * 2;
     Tensor::randn(0f32, 1., (num_samples, 16, height, width), device)
 }
 
 #[derive(Debug, Clone)]
-pub struct State {
-    pub img: Tensor,
-    pub img_ids: Tensor,
-    pub txt: Tensor,
-    pub txt_ids: Tensor,
-    pub vec: Tensor,
+pub struct State<B: BackendStorage> {
+    pub img: Tensor<B>,
+    pub img_ids: Tensor<B>,
+    pub txt: Tensor<B>,
+    pub txt_ids: Tensor<B>,
+    pub vec: Tensor<B>,
 }
 
-impl State {
-    pub fn new(t5_emb: &Tensor, clip_emb: &Tensor, img: &Tensor) -> Result<Self> {
+impl<B: BackendStorage> State<B> {
+    pub fn new(t5_emb: &Tensor<B>, clip_emb: &Tensor<B>, img: &Tensor<B>) -> Result<Self> {
         let dtype = img.dtype();
         let (bs, c, h, w) = img.dims4()?;
         let dev = img.device();
@@ -82,7 +82,7 @@ pub fn get_schedule(num_steps: usize, shift: Option<(usize, f64, f64)>) -> Vec<f
     }
 }
 
-pub fn unpack(xs: &Tensor, height: usize, width: usize) -> Result<Tensor> {
+pub fn unpack<B: BackendStorage>(xs: &Tensor<B>, height: usize, width: usize) -> Result<Tensor<B>> {
     let (b, _h_w, c_ph_pw) = xs.dims3()?;
     let height = height.div_ceil(16);
     let width = width.div_ceil(16);
@@ -92,16 +92,16 @@ pub fn unpack(xs: &Tensor, height: usize, width: usize) -> Result<Tensor> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn denoise<M: super::WithForward>(
+pub fn denoise<B: BackendStorage, M: super::WithForward<B>>(
     model: &M,
-    img: &Tensor,
-    img_ids: &Tensor,
-    txt: &Tensor,
-    txt_ids: &Tensor,
-    vec_: &Tensor,
+    img: &Tensor<B>,
+    img_ids: &Tensor<B>,
+    txt: &Tensor<B>,
+    txt_ids: &Tensor<B>,
+    vec_: &Tensor<B>,
     timesteps: &[f64],
     guidance: f64,
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     let b_sz = img.dim(0)?;
     let dev = img.device();
     let guidance = Tensor::full(guidance as f32, b_sz, dev)?;

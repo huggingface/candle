@@ -1,4 +1,4 @@
-use candle::{Result, Tensor, D};
+use candle::{BackendStorage, Result, Tensor, D};
 use candle_nn::{conv2d, group_norm, Conv2d, GroupNorm, VarBuilder};
 
 // https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/modules/autoencoder.py#L9
@@ -47,7 +47,11 @@ impl Config {
     }
 }
 
-fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+fn scaled_dot_product_attention<B: BackendStorage>(
+    q: &Tensor<B>,
+    k: &Tensor<B>,
+    v: &Tensor<B>,
+) -> Result<Tensor<B>> {
     let dim = q.dim(D::Minus1)?;
     let scale_factor = 1.0 / (dim as f64).sqrt();
     let attn_weights = (q.matmul(&k.t()?)? * scale_factor)?;
@@ -55,16 +59,16 @@ fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Te
 }
 
 #[derive(Debug, Clone)]
-struct AttnBlock {
-    q: Conv2d,
-    k: Conv2d,
-    v: Conv2d,
-    proj_out: Conv2d,
-    norm: GroupNorm,
+struct AttnBlock<B: BackendStorage> {
+    q: Conv2d<B>,
+    k: Conv2d<B>,
+    v: Conv2d<B>,
+    proj_out: Conv2d<B>,
+    norm: GroupNorm<B>,
 }
 
-impl AttnBlock {
-    fn new(in_c: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> AttnBlock<B> {
+    fn new(in_c: usize, vb: VarBuilder<B>) -> Result<Self> {
         let q = conv2d(in_c, in_c, 1, Default::default(), vb.pp("q"))?;
         let k = conv2d(in_c, in_c, 1, Default::default(), vb.pp("k"))?;
         let v = conv2d(in_c, in_c, 1, Default::default(), vb.pp("v"))?;
@@ -80,8 +84,8 @@ impl AttnBlock {
     }
 }
 
-impl candle::Module for AttnBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for AttnBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let init_xs = xs;
         let xs = xs.apply(&self.norm)?;
         let q = xs.apply(&self.q)?;
@@ -98,16 +102,16 @@ impl candle::Module for AttnBlock {
 }
 
 #[derive(Debug, Clone)]
-struct ResnetBlock {
-    norm1: GroupNorm,
-    conv1: Conv2d,
-    norm2: GroupNorm,
-    conv2: Conv2d,
-    nin_shortcut: Option<Conv2d>,
+struct ResnetBlock<B: BackendStorage> {
+    norm1: GroupNorm<B>,
+    conv1: Conv2d<B>,
+    norm2: GroupNorm<B>,
+    conv2: Conv2d<B>,
+    nin_shortcut: Option<Conv2d<B>>,
 }
 
-impl ResnetBlock {
-    fn new(in_c: usize, out_c: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> ResnetBlock<B> {
+    fn new(in_c: usize, out_c: usize, vb: VarBuilder<B>) -> Result<Self> {
         let conv_cfg = candle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
@@ -137,8 +141,8 @@ impl ResnetBlock {
     }
 }
 
-impl candle::Module for ResnetBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for ResnetBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let h = xs
             .apply(&self.norm1)?
             .apply(&candle_nn::Activation::Swish)?
@@ -154,12 +158,12 @@ impl candle::Module for ResnetBlock {
 }
 
 #[derive(Debug, Clone)]
-struct Downsample {
-    conv: Conv2d,
+struct Downsample<B: BackendStorage> {
+    conv: Conv2d<B>,
 }
 
-impl Downsample {
-    fn new(in_c: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Downsample<B> {
+    fn new(in_c: usize, vb: VarBuilder<B>) -> Result<Self> {
         let conv_cfg = candle_nn::Conv2dConfig {
             stride: 2,
             ..Default::default()
@@ -169,8 +173,8 @@ impl Downsample {
     }
 }
 
-impl candle::Module for Downsample {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for Downsample<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = xs.pad_with_zeros(D::Minus1, 0, 1)?;
         let xs = xs.pad_with_zeros(D::Minus2, 0, 1)?;
         xs.apply(&self.conv)
@@ -178,12 +182,12 @@ impl candle::Module for Downsample {
 }
 
 #[derive(Debug, Clone)]
-struct Upsample {
-    conv: Conv2d,
+struct Upsample<B: BackendStorage> {
+    conv: Conv2d<B>,
 }
 
-impl Upsample {
-    fn new(in_c: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Upsample<B> {
+    fn new(in_c: usize, vb: VarBuilder<B>) -> Result<Self> {
         let conv_cfg = candle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
@@ -193,32 +197,32 @@ impl Upsample {
     }
 }
 
-impl candle::Module for Upsample {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for Upsample<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (_, _, h, w) = xs.dims4()?;
         xs.upsample_nearest2d(h * 2, w * 2)?.apply(&self.conv)
     }
 }
 
 #[derive(Debug, Clone)]
-struct DownBlock {
-    block: Vec<ResnetBlock>,
-    downsample: Option<Downsample>,
+struct DownBlock<B: BackendStorage> {
+    block: Vec<ResnetBlock<B>>,
+    downsample: Option<Downsample<B>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct Encoder {
-    conv_in: Conv2d,
-    mid_block_1: ResnetBlock,
-    mid_attn_1: AttnBlock,
-    mid_block_2: ResnetBlock,
-    norm_out: GroupNorm,
-    conv_out: Conv2d,
-    down: Vec<DownBlock>,
+pub struct Encoder<B: BackendStorage> {
+    conv_in: Conv2d<B>,
+    mid_block_1: ResnetBlock<B>,
+    mid_attn_1: AttnBlock<B>,
+    mid_block_2: ResnetBlock<B>,
+    norm_out: GroupNorm<B>,
+    conv_out: Conv2d<B>,
+    down: Vec<DownBlock<B>>,
 }
 
-impl Encoder {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Encoder<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let conv_cfg = candle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
@@ -270,8 +274,8 @@ impl Encoder {
     }
 }
 
-impl candle_nn::Module for Encoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle_nn::Module<B> for Encoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut h = xs.apply(&self.conv_in)?;
         for block in self.down.iter() {
             for b in block.block.iter() {
@@ -291,24 +295,24 @@ impl candle_nn::Module for Encoder {
 }
 
 #[derive(Debug, Clone)]
-struct UpBlock {
-    block: Vec<ResnetBlock>,
-    upsample: Option<Upsample>,
+struct UpBlock<B: BackendStorage> {
+    block: Vec<ResnetBlock<B>>,
+    upsample: Option<Upsample<B>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct Decoder {
-    conv_in: Conv2d,
-    mid_block_1: ResnetBlock,
-    mid_attn_1: AttnBlock,
-    mid_block_2: ResnetBlock,
-    norm_out: GroupNorm,
-    conv_out: Conv2d,
-    up: Vec<UpBlock>,
+pub struct Decoder<B: BackendStorage> {
+    conv_in: Conv2d<B>,
+    mid_block_1: ResnetBlock<B>,
+    mid_attn_1: AttnBlock<B>,
+    mid_block_2: ResnetBlock<B>,
+    norm_out: GroupNorm<B>,
+    conv_out: Conv2d<B>,
+    up: Vec<UpBlock<B>>,
 }
 
-impl Decoder {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Decoder<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let conv_cfg = candle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
@@ -355,8 +359,8 @@ impl Decoder {
     }
 }
 
-impl candle_nn::Module for Decoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle_nn::Module<B> for Decoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let h = xs.apply(&self.conv_in)?;
         let mut h = h
             .apply(&self.mid_block_1)?
@@ -388,8 +392,8 @@ impl DiagonalGaussian {
     }
 }
 
-impl candle_nn::Module for DiagonalGaussian {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle_nn::Module<B> for DiagonalGaussian {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let chunks = xs.chunk(2, self.chunk_dim)?;
         if self.sample {
             let std = (&chunks[1] * 0.5)?.exp()?;
@@ -401,16 +405,16 @@ impl candle_nn::Module for DiagonalGaussian {
 }
 
 #[derive(Debug, Clone)]
-pub struct AutoEncoder {
-    encoder: Encoder,
-    decoder: Decoder,
+pub struct AutoEncoder<B: BackendStorage> {
+    encoder: Encoder<B>,
+    decoder: Decoder<B>,
     reg: DiagonalGaussian,
     shift_factor: f64,
     scale_factor: f64,
 }
 
-impl AutoEncoder {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> AutoEncoder<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
         let decoder = Decoder::new(cfg, vb.pp("decoder"))?;
         let reg = DiagonalGaussian::new(true, 1)?;
@@ -423,18 +427,18 @@ impl AutoEncoder {
         })
     }
 
-    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let z = xs.apply(&self.encoder)?.apply(&self.reg)?;
         (z - self.shift_factor)? * self.scale_factor
     }
-    pub fn decode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = ((xs / self.scale_factor)? + self.shift_factor)?;
         xs.apply(&self.decoder)
     }
 }
 
-impl candle::Module for AutoEncoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for AutoEncoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         self.decode(&self.encode(xs)?)
     }
 }

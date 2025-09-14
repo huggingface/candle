@@ -26,14 +26,19 @@
 //!   <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.jpg" alt="" width=640>
 //! </div>
 //!
-use candle::{IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 
 const IMG_SIZE: usize = 448;
 const PATCH_SIZE: usize = 14;
 const NUM_CLASSES: usize = 1000;
 
-fn linear(vb: VarBuilder, in_dim: usize, out_dim: usize, bias: bool) -> Result<Linear> {
+fn linear<B: BackendStorage>(
+    vb: VarBuilder<B>,
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+) -> Result<Linear<B>> {
     if bias {
         candle_nn::linear(in_dim, out_dim, vb)
     } else {
@@ -42,24 +47,24 @@ fn linear(vb: VarBuilder, in_dim: usize, out_dim: usize, bias: bool) -> Result<L
 }
 
 #[derive(Debug)]
-struct Attention {
-    q: Linear,
-    k: Linear,
-    v: Linear,
-    proj: Linear,
-    rot_pos_embed: Tensor,
+struct Attention<B: BackendStorage> {
+    q: Linear<B>,
+    k: Linear<B>,
+    v: Linear<B>,
+    proj: Linear<B>,
+    rot_pos_embed: Tensor<B>,
     num_heads: usize,
     scale: f64,
 }
 
-impl Attention {
+impl<B: BackendStorage> Attention<B> {
     fn new(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         dim: usize,
         num_heads: usize,
         qkv_bias: bool,
         proj_bias: bool,
-        rot_pos_embed: &Tensor,
+        rot_pos_embed: &Tensor<B>,
     ) -> Result<Self> {
         let q = linear(vb.pp("q_proj"), dim, dim, qkv_bias)?;
         let k = linear(vb.pp("k_proj"), dim, dim, false)?; // no bias for Key
@@ -77,11 +82,8 @@ impl Attention {
             scale,
         })
     }
-}
-
-impl Attention {
     // See: https://github.com/huggingface/pytorch-image-models/blob/main/timm/layers/pos_embed_sincos.py#L210
-    fn apply_rot_embed_cat(x: &Tensor, emb: &Tensor) -> Result<Tensor> {
+    fn apply_rot_embed_cat(x: &Tensor<B>, emb: &Tensor<B>) -> Result<Tensor<B>> {
         let cos_emb = emb.i((0.., 64..128))?; //.transpose(0, 1)?;
         let sin_emb = emb.i((0.., 0..64))?; //.transpose(0, 1)?;
         let index_even: [u32; 32] = (0u32..=63)
@@ -105,8 +107,8 @@ impl Attention {
     }
 }
 
-impl Module for Attention {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Attention<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (b, n, c) = xs.dims3()?;
         let qkv = Tensor::cat(
             &[
@@ -149,15 +151,20 @@ impl Module for Attention {
 }
 
 #[derive(Debug)]
-struct Mlp {
-    fc1_g: Linear,
-    fc1_x: Linear,
-    norm: LayerNorm,
-    fc2: Linear,
+struct Mlp<B: BackendStorage> {
+    fc1_g: Linear<B>,
+    fc1_x: Linear<B>,
+    norm: LayerNorm<B>,
+    fc2: Linear<B>,
 }
 
-impl Mlp {
-    fn new(vb: VarBuilder, in_features: usize, hidden_features: usize, bias: bool) -> Result<Self> {
+impl<B: BackendStorage> Mlp<B> {
+    fn new(
+        vb: VarBuilder<B>,
+        in_features: usize,
+        hidden_features: usize,
+        bias: bool,
+    ) -> Result<Self> {
         let out_features = in_features;
         let fc1_g = linear(vb.pp("fc1_g"), in_features, hidden_features, bias)?;
         let fc1_x = linear(vb.pp("fc1_x"), in_features, hidden_features, bias)?;
@@ -172,8 +179,8 @@ impl Mlp {
     }
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Mlp<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs_g = self.fc1_g.forward(xs)?.silu()?;
         let xs = self.fc1_x.forward(xs)?;
         let xs = self.norm.forward(&(xs_g.mul(&xs)?))?;
@@ -182,15 +189,20 @@ impl Module for Mlp {
 }
 
 #[derive(Debug)]
-struct Block {
-    norm1: LayerNorm,
-    attn: Attention,
-    norm2: LayerNorm,
-    mlp: Mlp,
+struct Block<B: BackendStorage> {
+    norm1: LayerNorm<B>,
+    attn: Attention<B>,
+    norm2: LayerNorm<B>,
+    mlp: Mlp<B>,
 }
 
-impl Block {
-    fn new(vb: VarBuilder, dim: usize, num_heads: usize, rot_pos_embed: &Tensor) -> Result<Self> {
+impl<B: BackendStorage> Block<B> {
+    fn new(
+        vb: VarBuilder<B>,
+        dim: usize,
+        num_heads: usize,
+        rot_pos_embed: &Tensor<B>,
+    ) -> Result<Self> {
         let norm1 = layer_norm(dim, 1e-6, vb.pp("norm1"))?;
         let attn = Attention::new(vb.pp("attn"), dim, num_heads, true, true, rot_pos_embed)?;
         let norm2 = layer_norm(dim, 1e-6, vb.pp("norm2"))?;
@@ -205,8 +217,8 @@ impl Block {
     }
 }
 
-impl Module for Block {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Block<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = &self.attn.forward(&self.norm1.forward(xs)?)?;
         let xs = (xs + residual)?;
@@ -217,15 +229,15 @@ impl Module for Block {
 }
 
 #[derive(Debug)]
-struct PatchEmbed {
-    proj: candle_nn::Conv2d,
+struct PatchEmbed<B: BackendStorage> {
+    proj: candle_nn::Conv2d<B>,
     patch_size: (usize, usize),
     num_patches: usize,
 }
 
-impl PatchEmbed {
+impl<B: BackendStorage> PatchEmbed<B> {
     fn new(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         img_size: usize,
         patch_size: usize,
         in_chans: usize,
@@ -245,8 +257,8 @@ impl PatchEmbed {
     }
 }
 
-impl Module for PatchEmbed {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for PatchEmbed<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (_b, _c, h, w) = xs.dims4()?;
         let (patch_h, patch_w) = self.patch_size;
         if (h % patch_h) != 0 {
@@ -263,17 +275,22 @@ impl Module for PatchEmbed {
 }
 
 #[derive(Debug)]
-pub struct EVA2VisionTransformer {
-    patch_embed: PatchEmbed,
-    cls_token: Tensor,
-    pos_embed: Tensor,
-    blocks: Vec<Block>,
-    norm: LayerNorm,
-    head: Linear,
+pub struct EVA2VisionTransformer<B: BackendStorage> {
+    patch_embed: PatchEmbed<B>,
+    cls_token: Tensor<B>,
+    pos_embed: Tensor<B>,
+    blocks: Vec<Block<B>>,
+    norm: LayerNorm<B>,
+    head: Linear<B>,
 }
 
-impl EVA2VisionTransformer {
-    pub fn new(vb: VarBuilder, depth: usize, embed_dim: usize, num_heads: usize) -> Result<Self> {
+impl<B: BackendStorage> EVA2VisionTransformer<B> {
+    pub fn new(
+        vb: VarBuilder<B>,
+        depth: usize,
+        embed_dim: usize,
+        num_heads: usize,
+    ) -> Result<Self> {
         let patch_embed =
             PatchEmbed::new(vb.pp("patch_embed"), IMG_SIZE, PATCH_SIZE, 3, embed_dim)?;
         let cls_token = vb.get((1, 1, embed_dim), "cls_token")?;
@@ -297,11 +314,11 @@ impl EVA2VisionTransformer {
 
     fn interpolate_pos_encoding(
         &self,
-        xs: &Tensor,
+        xs: &Tensor<B>,
         w: usize,
         h: usize,
         num_prefix_tokens: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let npatch = xs.dim(1)? - 1;
         let n = self.pos_embed.dim(1)? - 1;
         let sqrt_n = (n as f64).sqrt();
@@ -328,7 +345,7 @@ impl EVA2VisionTransformer {
         Tensor::cat(&[&prefix_tokens_pos_embed, &patch_pos_embed], 1)
     }
 
-    fn prepare_tokens_with_mask(&self, xs: &Tensor) -> Result<Tensor> {
+    fn prepare_tokens_with_mask(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (_b, _nc, w, h) = xs.dims4()?;
         if (w != IMG_SIZE) || (h != IMG_SIZE) {
             panic!("Error: The input tensor should have the shape: Bx3x518x518.");
@@ -341,9 +358,9 @@ impl EVA2VisionTransformer {
 
     fn get_intermediate_layers_not_chunked(
         &self,
-        xs: &Tensor,
+        xs: &Tensor<B>,
         blocks_to_take: &[usize],
-    ) -> Result<Vec<Tensor>> {
+    ) -> Result<Vec<Tensor<B>>> {
         let mut xs = self.prepare_tokens_with_mask(xs)?;
         let mut output = Vec::new();
         for (i, blk) in self.blocks.iter().enumerate() {
@@ -364,12 +381,12 @@ impl EVA2VisionTransformer {
 
     pub fn get_intermediate_layers(
         &self,
-        xs: &Tensor,
+        xs: &Tensor<B>,
         blocks_to_take: &[usize],
         reshape: bool,
         return_class_token: bool,
         norm: bool,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let outputs = self.get_intermediate_layers_not_chunked(xs, blocks_to_take)?;
         let outputs = if norm {
             outputs
@@ -418,8 +435,8 @@ impl EVA2VisionTransformer {
     }
 }
 
-impl Module for EVA2VisionTransformer {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for EVA2VisionTransformer<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = self.prepare_tokens_with_mask(xs)?;
         for blk in self.blocks.iter() {
             xs = blk.forward(&xs)?
@@ -430,10 +447,10 @@ impl Module for EVA2VisionTransformer {
     }
 }
 
-pub fn vit_base(vb: VarBuilder) -> Result<EVA2VisionTransformer> {
+pub fn vit_base<B: BackendStorage>(vb: VarBuilder<B>) -> Result<EVA2VisionTransformer<B>> {
     EVA2VisionTransformer::new(vb, 12, 768, 12)
 }
 
-pub fn vit_large(vb: VarBuilder) -> Result<EVA2VisionTransformer> {
+pub fn vit_large<B: BackendStorage>(vb: VarBuilder<B>) -> Result<EVA2VisionTransformer<B>> {
     EVA2VisionTransformer::new(vb, 24, 1024, 16)
 }

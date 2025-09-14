@@ -3,7 +3,7 @@
 //! See:
 //! - ["EfficientBERT: Progressively Searching Multilayer Perceptron Architectures for BERT"](https://arxiv.org/abs/2201.00462)
 //!
-use candle::{Context, Result, Tensor, D};
+use candle::{BackendStorage, Context, Result, Tensor, D};
 use candle_nn as nn;
 use nn::{Module, VarBuilder};
 
@@ -86,15 +86,15 @@ impl MBConvConfig {
 
 /// Conv2D with same padding.
 #[derive(Debug)]
-struct Conv2DSame {
-    conv2d: nn::Conv2d,
+struct Conv2DSame<B: BackendStorage> {
+    conv2d: nn::Conv2d<B>,
     s: usize,
     k: usize,
 }
 
-impl Conv2DSame {
+impl<B: BackendStorage> Conv2DSame<B> {
     fn new(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         i: usize,
         o: usize,
         k: usize,
@@ -120,8 +120,8 @@ impl Conv2DSame {
     }
 }
 
-impl Module for Conv2DSame {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Conv2DSame<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let s = self.s;
         let k = self.k;
         let (_, _, ih, iw) = xs.dims4()?;
@@ -140,15 +140,15 @@ impl Module for Conv2DSame {
 }
 
 #[derive(Debug)]
-struct ConvNormActivation {
-    conv2d: Conv2DSame,
-    bn2d: nn::BatchNorm,
+struct ConvNormActivation<B: BackendStorage> {
+    conv2d: Conv2DSame<B>,
+    bn2d: nn::BatchNorm<B>,
     activation: bool,
 }
 
-impl ConvNormActivation {
+impl<B: BackendStorage> ConvNormActivation<B> {
     fn new(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         i: usize,
         o: usize,
         k: usize,
@@ -172,8 +172,8 @@ impl ConvNormActivation {
     }
 }
 
-impl Module for ConvNormActivation {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ConvNormActivation<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = self.conv2d.forward(xs)?.apply_t(&self.bn2d, false)?;
         if self.activation {
             swish(&xs)
@@ -184,21 +184,21 @@ impl Module for ConvNormActivation {
 }
 
 #[derive(Debug)]
-struct SqueezeExcitation {
-    fc1: Conv2DSame,
-    fc2: Conv2DSame,
+struct SqueezeExcitation<B: BackendStorage> {
+    fc1: Conv2DSame<B>,
+    fc2: Conv2DSame<B>,
 }
 
-impl SqueezeExcitation {
-    fn new(vb: VarBuilder, in_channels: usize, squeeze_channels: usize) -> Result<Self> {
+impl<B: BackendStorage> SqueezeExcitation<B> {
+    fn new(vb: VarBuilder<B>, in_channels: usize, squeeze_channels: usize) -> Result<Self> {
         let fc1 = Conv2DSame::new(vb.pp("fc1"), in_channels, squeeze_channels, 1, 1, 1, true)?;
         let fc2 = Conv2DSame::new(vb.pp("fc2"), squeeze_channels, in_channels, 1, 1, 1, true)?;
         Ok(Self { fc1, fc2 })
     }
 }
 
-impl Module for SqueezeExcitation {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for SqueezeExcitation<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let residual = xs;
         // equivalent to adaptive_avg_pool2d([1, 1])
         let xs = xs.mean_keepdim(D::Minus2)?.mean_keepdim(D::Minus1)?;
@@ -211,16 +211,16 @@ impl Module for SqueezeExcitation {
 }
 
 #[derive(Debug)]
-struct MBConv {
-    expand_cna: Option<ConvNormActivation>,
-    depthwise_cna: ConvNormActivation,
-    squeeze_excitation: SqueezeExcitation,
-    project_cna: ConvNormActivation,
+struct MBConv<B: BackendStorage> {
+    expand_cna: Option<ConvNormActivation<B>>,
+    depthwise_cna: ConvNormActivation<B>,
+    squeeze_excitation: SqueezeExcitation<B>,
+    project_cna: ConvNormActivation<B>,
     config: MBConvConfig,
 }
 
-impl MBConv {
-    fn new(vb: VarBuilder, c: MBConvConfig) -> Result<Self> {
+impl<B: BackendStorage> MBConv<B> {
+    fn new(vb: VarBuilder<B>, c: MBConvConfig) -> Result<Self> {
         let vb = vb.pp("block");
         let exp = make_divisible(c.input_channels as f64 * c.expand_ratio, 8);
         let expand_cna = if exp != c.input_channels {
@@ -254,8 +254,8 @@ impl MBConv {
     }
 }
 
-impl Module for MBConv {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for MBConv<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let use_res_connect =
             self.config.stride == 1 && self.config.input_channels == self.config.out_channels;
         let ys = match &self.expand_cna {
@@ -273,20 +273,20 @@ impl Module for MBConv {
     }
 }
 
-fn swish(s: &Tensor) -> Result<Tensor> {
+fn swish<B: BackendStorage>(s: &Tensor<B>) -> Result<Tensor<B>> {
     s * nn::ops::sigmoid(s)?
 }
 
 #[derive(Debug)]
-pub struct EfficientNet {
-    init_cna: ConvNormActivation,
-    blocks: Vec<MBConv>,
-    final_cna: ConvNormActivation,
-    classifier: nn::Linear,
+pub struct EfficientNet<B: BackendStorage> {
+    init_cna: ConvNormActivation<B>,
+    blocks: Vec<MBConv<B>>,
+    final_cna: ConvNormActivation<B>,
+    classifier: nn::Linear<B>,
 }
 
-impl EfficientNet {
-    pub fn new(p: VarBuilder, configs: Vec<MBConvConfig>, nclasses: usize) -> Result<Self> {
+impl<B: BackendStorage> EfficientNet<B> {
+    pub fn new(p: VarBuilder<B>, configs: Vec<MBConvConfig>, nclasses: usize) -> Result<Self> {
         let f_p = p.pp("features");
         let first_in_c = configs[0].input_channels;
         let last_out_c = configs.last().context("no last")?.out_channels;
@@ -321,8 +321,8 @@ impl EfficientNet {
     }
 }
 
-impl Module for EfficientNet {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for EfficientNet<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = self.init_cna.forward(xs)?;
         for block in self.blocks.iter() {
             xs = block.forward(&xs)?

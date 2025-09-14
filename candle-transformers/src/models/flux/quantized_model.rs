@@ -1,22 +1,26 @@
 use super::model::{attention, timestep_embedding, Config, EmbedNd};
 use crate::quantized_nn::{linear, linear_b, Linear};
 use crate::quantized_var_builder::VarBuilder;
-use candle::{DType, IndexOp, Result, Tensor, D};
+use candle::quantized::QuantizedBackend;
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::{LayerNorm, RmsNorm};
 
-fn layer_norm(dim: usize, vb: VarBuilder) -> Result<LayerNorm> {
+fn layer_norm<QB: QuantizedBackend>(
+    dim: usize,
+    vb: VarBuilder<QB>,
+) -> Result<LayerNorm<QB::Storage>> {
     let ws = Tensor::ones(dim, DType::F32, vb.device())?;
     Ok(LayerNorm::new_no_bias(ws, 1e-6))
 }
 
 #[derive(Debug, Clone)]
-pub struct MlpEmbedder {
-    in_layer: Linear,
-    out_layer: Linear,
+pub struct MlpEmbedder<QB: QuantizedBackend> {
+    in_layer: Linear<QB>,
+    out_layer: Linear<QB>,
 }
 
-impl MlpEmbedder {
-    fn new(in_sz: usize, h_sz: usize, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> MlpEmbedder<QB> {
+    fn new(in_sz: usize, h_sz: usize, vb: VarBuilder<QB>) -> Result<Self> {
         let in_layer = linear(in_sz, h_sz, vb.pp("in_layer"))?;
         let out_layer = linear(h_sz, h_sz, vb.pp("out_layer"))?;
         Ok(Self {
@@ -26,20 +30,23 @@ impl MlpEmbedder {
     }
 }
 
-impl candle::Module for MlpEmbedder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> candle::Module<QB::Storage> for MlpEmbedder<QB>
+where
+    Linear<QB>: candle::Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         xs.apply(&self.in_layer)?.silu()?.apply(&self.out_layer)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct QkNorm {
-    query_norm: RmsNorm,
-    key_norm: RmsNorm,
+pub struct QkNorm<QB: QuantizedBackend> {
+    query_norm: RmsNorm<QB::Storage>,
+    key_norm: RmsNorm<QB::Storage>,
 }
 
-impl QkNorm {
-    fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> QkNorm<QB> {
+    fn new(dim: usize, vb: VarBuilder<QB>) -> Result<Self> {
         let query_norm = vb.get(dim, "query_norm.scale")?.dequantize(vb.device())?;
         let query_norm = RmsNorm::new(query_norm, 1e-6);
         let key_norm = vb.get(dim, "key_norm.scale")?.dequantize(vb.device())?;
@@ -51,35 +58,38 @@ impl QkNorm {
     }
 }
 
-struct ModulationOut {
-    shift: Tensor,
-    scale: Tensor,
-    gate: Tensor,
+struct ModulationOut<B: BackendStorage> {
+    shift: Tensor<B>,
+    scale: Tensor<B>,
+    gate: Tensor<B>,
 }
 
-impl ModulationOut {
-    fn scale_shift(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> ModulationOut<B> {
+    fn scale_shift(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.broadcast_mul(&(&self.scale + 1.)?)?
             .broadcast_add(&self.shift)
     }
 
-    fn gate(&self, xs: &Tensor) -> Result<Tensor> {
+    fn gate(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         self.gate.broadcast_mul(xs)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Modulation1 {
-    lin: Linear,
+struct Modulation1<QB: QuantizedBackend> {
+    lin: Linear<QB>,
 }
 
-impl Modulation1 {
-    fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Modulation1<QB>
+where
+    Linear<QB>: candle::Module<QB::Storage>,
+{
+    fn new(dim: usize, vb: VarBuilder<QB>) -> Result<Self> {
         let lin = linear(dim, 3 * dim, vb.pp("lin"))?;
         Ok(Self { lin })
     }
 
-    fn forward(&self, vec_: &Tensor) -> Result<ModulationOut> {
+    fn forward(&self, vec_: &Tensor<QB::Storage>) -> Result<ModulationOut<QB::Storage>> {
         let ys = vec_
             .silu()?
             .apply(&self.lin)?
@@ -97,17 +107,23 @@ impl Modulation1 {
 }
 
 #[derive(Debug, Clone)]
-struct Modulation2 {
-    lin: Linear,
+struct Modulation2<QB: QuantizedBackend> {
+    lin: Linear<QB>,
 }
 
-impl Modulation2 {
-    fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Modulation2<QB>
+where
+    Linear<QB>: candle::Module<QB::Storage>,
+{
+    fn new(dim: usize, vb: VarBuilder<QB>) -> Result<Self> {
         let lin = linear(dim, 6 * dim, vb.pp("lin"))?;
         Ok(Self { lin })
     }
 
-    fn forward(&self, vec_: &Tensor) -> Result<(ModulationOut, ModulationOut)> {
+    fn forward(
+        &self,
+        vec_: &Tensor<QB::Storage>,
+    ) -> Result<(ModulationOut<QB::Storage>, ModulationOut<QB::Storage>)> {
         let ys = vec_
             .silu()?
             .apply(&self.lin)?
@@ -131,15 +147,18 @@ impl Modulation2 {
 }
 
 #[derive(Debug, Clone)]
-pub struct SelfAttention {
-    qkv: Linear,
-    norm: QkNorm,
-    proj: Linear,
+pub struct SelfAttention<QB: QuantizedBackend> {
+    qkv: Linear<QB>,
+    norm: QkNorm<QB>,
+    proj: Linear<QB>,
     num_heads: usize,
 }
 
-impl SelfAttention {
-    fn new(dim: usize, num_heads: usize, qkv_bias: bool, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> SelfAttention<QB>
+where
+    Linear<QB>: candle::Module<QB::Storage>,
+{
+    fn new(dim: usize, num_heads: usize, qkv_bias: bool, vb: VarBuilder<QB>) -> Result<Self> {
         let head_dim = dim / num_heads;
         let qkv = linear_b(dim, dim * 3, qkv_bias, vb.pp("qkv"))?;
         let norm = QkNorm::new(head_dim, vb.pp("norm"))?;
@@ -152,7 +171,14 @@ impl SelfAttention {
         })
     }
 
-    fn qkv(&self, xs: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
+    fn qkv(
+        &self,
+        xs: &Tensor<QB::Storage>,
+    ) -> Result<(
+        Tensor<QB::Storage>,
+        Tensor<QB::Storage>,
+        Tensor<QB::Storage>,
+    )> {
         let qkv = xs.apply(&self.qkv)?;
         let (b, l, _khd) = qkv.dims3()?;
         let qkv = qkv.reshape((b, l, 3, self.num_heads, ()))?;
@@ -165,48 +191,58 @@ impl SelfAttention {
     }
 
     #[allow(unused)]
-    fn forward(&self, xs: &Tensor, pe: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor<QB::Storage>,
+        pe: &Tensor<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>> {
         let (q, k, v) = self.qkv(xs)?;
         attention(&q, &k, &v, pe)?.apply(&self.proj)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    lin1: Linear,
-    lin2: Linear,
+struct Mlp<QB: QuantizedBackend> {
+    lin1: Linear<QB>,
+    lin2: Linear<QB>,
 }
 
-impl Mlp {
-    fn new(in_sz: usize, mlp_sz: usize, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Mlp<QB> {
+    fn new(in_sz: usize, mlp_sz: usize, vb: VarBuilder<QB>) -> Result<Self> {
         let lin1 = linear(in_sz, mlp_sz, vb.pp("0"))?;
         let lin2 = linear(mlp_sz, in_sz, vb.pp("2"))?;
         Ok(Self { lin1, lin2 })
     }
 }
 
-impl candle::Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> candle::Module<QB::Storage> for Mlp<QB>
+where
+    Linear<QB>: candle::Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         xs.apply(&self.lin1)?.gelu()?.apply(&self.lin2)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct DoubleStreamBlock {
-    img_mod: Modulation2,
-    img_norm1: LayerNorm,
-    img_attn: SelfAttention,
-    img_norm2: LayerNorm,
-    img_mlp: Mlp,
-    txt_mod: Modulation2,
-    txt_norm1: LayerNorm,
-    txt_attn: SelfAttention,
-    txt_norm2: LayerNorm,
-    txt_mlp: Mlp,
+pub struct DoubleStreamBlock<QB: QuantizedBackend> {
+    img_mod: Modulation2<QB>,
+    img_norm1: LayerNorm<QB::Storage>,
+    img_attn: SelfAttention<QB>,
+    img_norm2: LayerNorm<QB::Storage>,
+    img_mlp: Mlp<QB>,
+    txt_mod: Modulation2<QB>,
+    txt_norm1: LayerNorm<QB::Storage>,
+    txt_attn: SelfAttention<QB>,
+    txt_norm2: LayerNorm<QB::Storage>,
+    txt_mlp: Mlp<QB>,
 }
 
-impl DoubleStreamBlock {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> DoubleStreamBlock<QB>
+where
+    Linear<QB>: candle::Module<QB::Storage>,
+{
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let h_sz = cfg.hidden_size;
         let mlp_sz = (h_sz as f64 * cfg.mlp_ratio) as usize;
         let img_mod = Modulation2::new(h_sz, vb.pp("img_mod"))?;
@@ -235,11 +271,11 @@ impl DoubleStreamBlock {
 
     fn forward(
         &self,
-        img: &Tensor,
-        txt: &Tensor,
-        vec_: &Tensor,
-        pe: &Tensor,
-    ) -> Result<(Tensor, Tensor)> {
+        img: &Tensor<QB::Storage>,
+        txt: &Tensor<QB::Storage>,
+        vec_: &Tensor<QB::Storage>,
+        pe: &Tensor<QB::Storage>,
+    ) -> Result<(Tensor<QB::Storage>, Tensor<QB::Storage>)> {
         let (img_mod1, img_mod2) = self.img_mod.forward(vec_)?; // shift, scale, gate
         let (txt_mod1, txt_mod2) = self.txt_mod.forward(vec_)?; // shift, scale, gate
         let img_modulated = img.apply(&self.img_norm1)?;
@@ -279,19 +315,22 @@ impl DoubleStreamBlock {
 }
 
 #[derive(Debug, Clone)]
-pub struct SingleStreamBlock {
-    linear1: Linear,
-    linear2: Linear,
-    norm: QkNorm,
-    pre_norm: LayerNorm,
-    modulation: Modulation1,
+pub struct SingleStreamBlock<QB: QuantizedBackend> {
+    linear1: Linear<QB>,
+    linear2: Linear<QB>,
+    norm: QkNorm<QB>,
+    pre_norm: LayerNorm<QB::Storage>,
+    modulation: Modulation1<QB>,
     h_sz: usize,
     mlp_sz: usize,
     num_heads: usize,
 }
 
-impl SingleStreamBlock {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> SingleStreamBlock<QB>
+where
+    Linear<QB>: candle::Module<QB::Storage>,
+{
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let h_sz = cfg.hidden_size;
         let mlp_sz = (h_sz as f64 * cfg.mlp_ratio) as usize;
         let head_dim = h_sz / cfg.num_heads;
@@ -312,7 +351,12 @@ impl SingleStreamBlock {
         })
     }
 
-    fn forward(&self, xs: &Tensor, vec_: &Tensor, pe: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor<QB::Storage>,
+        vec_: &Tensor<QB::Storage>,
+        pe: &Tensor<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>> {
         let mod_ = self.modulation.forward(vec_)?;
         let x_mod = mod_.scale_shift(&xs.apply(&self.pre_norm)?)?;
         let x_mod = x_mod.apply(&self.linear1)?;
@@ -332,14 +376,17 @@ impl SingleStreamBlock {
 }
 
 #[derive(Debug, Clone)]
-pub struct LastLayer {
-    norm_final: LayerNorm,
-    linear: Linear,
-    ada_ln_modulation: Linear,
+pub struct LastLayer<QB: QuantizedBackend> {
+    norm_final: LayerNorm<QB::Storage>,
+    linear: Linear<QB>,
+    ada_ln_modulation: Linear<QB>,
 }
 
-impl LastLayer {
-    fn new(h_sz: usize, p_sz: usize, out_c: usize, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> LastLayer<QB>
+where
+    Linear<QB>: candle::Module<QB::Storage>,
+{
+    fn new(h_sz: usize, p_sz: usize, out_c: usize, vb: VarBuilder<QB>) -> Result<Self> {
         let norm_final = layer_norm(h_sz, vb.pp("norm_final"))?;
         let linear_ = linear(h_sz, p_sz * p_sz * out_c, vb.pp("linear"))?;
         let ada_ln_modulation = linear(h_sz, 2 * h_sz, vb.pp("adaLN_modulation.1"))?;
@@ -350,7 +397,11 @@ impl LastLayer {
         })
     }
 
-    fn forward(&self, xs: &Tensor, vec: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor<QB::Storage>,
+        vec: &Tensor<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>> {
         let chunks = vec.silu()?.apply(&self.ada_ln_modulation)?.chunk(2, 1)?;
         let (shift, scale) = (&chunks[0], &chunks[1]);
         let xs = xs
@@ -362,20 +413,23 @@ impl LastLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Flux {
-    img_in: Linear,
-    txt_in: Linear,
-    time_in: MlpEmbedder,
-    vector_in: MlpEmbedder,
-    guidance_in: Option<MlpEmbedder>,
+pub struct Flux<QB: QuantizedBackend> {
+    img_in: Linear<QB>,
+    txt_in: Linear<QB>,
+    time_in: MlpEmbedder<QB>,
+    vector_in: MlpEmbedder<QB>,
+    guidance_in: Option<MlpEmbedder<QB>>,
     pe_embedder: EmbedNd,
-    double_blocks: Vec<DoubleStreamBlock>,
-    single_blocks: Vec<SingleStreamBlock>,
-    final_layer: LastLayer,
+    double_blocks: Vec<DoubleStreamBlock<QB>>,
+    single_blocks: Vec<SingleStreamBlock<QB>>,
+    final_layer: LastLayer<QB>,
 }
 
-impl Flux {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Flux<QB>
+where
+    Linear<QB>: candle::Module<QB::Storage>,
+{
+    pub fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let img_in = linear(cfg.in_channels, cfg.hidden_size, vb.pp("img_in"))?;
         let txt_in = linear(cfg.context_in_dim, cfg.hidden_size, vb.pp("txt_in"))?;
         let mut double_blocks = Vec::with_capacity(cfg.depth);
@@ -416,18 +470,21 @@ impl Flux {
     }
 }
 
-impl super::WithForward for Flux {
+impl<QB: QuantizedBackend> super::WithForward<QB::Storage> for Flux<QB>
+where
+    Linear<QB>: candle::Module<QB::Storage>,
+{
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
-        img: &Tensor,
-        img_ids: &Tensor,
-        txt: &Tensor,
-        txt_ids: &Tensor,
-        timesteps: &Tensor,
-        y: &Tensor,
-        guidance: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        img: &Tensor<QB::Storage>,
+        img_ids: &Tensor<QB::Storage>,
+        txt: &Tensor<QB::Storage>,
+        txt_ids: &Tensor<QB::Storage>,
+        timesteps: &Tensor<QB::Storage>,
+        y: &Tensor<QB::Storage>,
+        guidance: Option<&Tensor<QB::Storage>>,
+    ) -> Result<Tensor<QB::Storage>> {
         if txt.rank() != 3 {
             candle::bail!("unexpected shape for txt {:?}", txt.shape())
         }
