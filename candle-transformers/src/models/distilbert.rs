@@ -4,13 +4,17 @@
 //! - ["DistilBERT, a distilled version of BERT: smaller, faster, cheaper and lighter"](https://arxiv.org/abs/1910.01108)
 //!
 use super::with_tracing::{layer_norm, linear, LayerNorm, Linear};
-use candle::{DType, Device, Result, Tensor};
+use candle::{BackendStorage, DType, Result, Tensor};
 use candle_nn::{Embedding, Module, VarBuilder};
 use serde::Deserialize;
 
 pub const DTYPE: DType = DType::F32;
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+fn masked_fill<B: BackendStorage>(
+    on_false: &Tensor<B>,
+    mask: &Tensor<B>,
+    on_true: f32,
+) -> Result<Tensor<B>> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true, on_false)?;
@@ -36,8 +40,8 @@ impl HiddenActLayer {
     }
 }
 
-impl Module for HiddenActLayer {
-    fn forward(&self, xs: &Tensor) -> candle::Result<Tensor> {
+impl<B: BackendStorage> Module<B> for HiddenActLayer {
+    fn forward(&self, xs: &Tensor<B>) -> candle::Result<Tensor<B>> {
         let _enter = self.span.enter();
         match self.act {
             // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/activations.py#L213
@@ -91,15 +95,15 @@ impl Default for Config {
     }
 }
 
-struct Embeddings {
-    word_embeddings: Embedding,
-    position_embeddings: Embedding,
-    layer_norm: LayerNorm,
+struct Embeddings<B: BackendStorage> {
+    word_embeddings: Embedding<B>,
+    position_embeddings: Embedding<B>,
+    layer_norm: LayerNorm<B>,
     span: tracing::Span,
 }
 
-impl Embeddings {
-    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> Embeddings<B> {
+    fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let word_embeddings =
             candle_nn::embedding(config.vocab_size, config.dim, vb.pp("word_embeddings"))?;
         let position_embeddings = candle_nn::embedding(
@@ -116,7 +120,7 @@ impl Embeddings {
         })
     }
 
-    fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+    fn forward(&self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (_bsize, seq_len) = input_ids.dims2()?;
         let input_embeddings = self.word_embeddings.forward(input_ids)?;
@@ -130,18 +134,18 @@ impl Embeddings {
     }
 }
 
-struct MultiHeadSelfAttention {
-    q_lin: Linear,
-    k_lin: Linear,
-    v_lin: Linear,
-    out_lin: Linear,
+struct MultiHeadSelfAttention<B: BackendStorage> {
+    q_lin: Linear<B>,
+    k_lin: Linear<B>,
+    v_lin: Linear<B>,
+    out_lin: Linear<B>,
     n_heads: usize,
     attention_head_size: usize,
     span: tracing::Span,
 }
 
-impl MultiHeadSelfAttention {
-    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> MultiHeadSelfAttention<B> {
+    fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let attention_head_size = config.dim / config.n_heads;
         let all_head_size = config.n_heads * attention_head_size;
         let dim = config.dim;
@@ -161,8 +165,8 @@ impl MultiHeadSelfAttention {
     }
 }
 
-impl MultiHeadSelfAttention {
-    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> MultiHeadSelfAttention<B> {
+    fn forward(&self, hidden_states: &Tensor<B>, attention_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (bs, q_length, _dim) = hidden_states.dims3()?;
 
@@ -181,7 +185,7 @@ impl MultiHeadSelfAttention {
             .reshape((bs, q_length, self.n_heads, dim_per_head))?
             .transpose(1, 2)?;
 
-        let q: Tensor = (q / (dim_per_head as f64).sqrt())?;
+        let q: Tensor<B> = (q / (dim_per_head as f64).sqrt())?;
         let scores = q.matmul(&k.transpose(2, 3)?.contiguous()?)?;
         let mask = attention_mask.broadcast_as(scores.shape())?;
 
@@ -200,15 +204,15 @@ impl MultiHeadSelfAttention {
 }
 
 #[allow(clippy::upper_case_acronyms)]
-struct FFN {
-    lin1: Linear,
-    lin2: Linear,
+struct FFN<B: BackendStorage> {
+    lin1: Linear<B>,
+    lin2: Linear<B>,
     activation: HiddenActLayer,
     span: tracing::Span,
 }
 
-impl FFN {
-    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> FFN<B> {
+    fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let lin1 = linear(config.dim, config.hidden_dim, vb.pp("lin1"))?;
         let lin2 = linear(config.hidden_dim, config.dim, vb.pp("lin2"))?;
         Ok(Self {
@@ -220,8 +224,8 @@ impl FFN {
     }
 }
 
-impl Module for FFN {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for FFN<B> {
+    fn forward(&self, hidden_states: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         hidden_states
             .apply(&self.lin1)?
@@ -230,16 +234,16 @@ impl Module for FFN {
     }
 }
 
-struct TransformerBlock {
-    attention: MultiHeadSelfAttention,
-    sa_layer_norm: LayerNorm,
-    ffn: FFN,
-    output_layer_norm: LayerNorm,
+struct TransformerBlock<B: BackendStorage> {
+    attention: MultiHeadSelfAttention<B>,
+    sa_layer_norm: LayerNorm<B>,
+    ffn: FFN<B>,
+    output_layer_norm: LayerNorm<B>,
     span: tracing::Span,
 }
 
-impl TransformerBlock {
-    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> TransformerBlock<B> {
+    fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let attention = MultiHeadSelfAttention::load(vb.pp("attention"), config)?;
         let sa_layer_norm = layer_norm(config.dim, 1e-12, vb.pp("sa_layer_norm"))?;
         let ffn = FFN::load(vb.pp("ffn"), config)?;
@@ -252,10 +256,8 @@ impl TransformerBlock {
             span: tracing::span!(tracing::Level::TRACE, "layer"),
         })
     }
-}
 
-impl TransformerBlock {
-    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor<B>, attention_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let sa_output = self.attention.forward(hidden_states, attention_mask)?;
         // TODO: Support cross-attention?
@@ -272,13 +274,13 @@ impl TransformerBlock {
 }
 
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L556
-struct Transformer {
-    layers: Vec<TransformerBlock>,
+struct Transformer<B: BackendStorage> {
+    layers: Vec<TransformerBlock<B>>,
     span: tracing::Span,
 }
 
-impl Transformer {
-    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> Transformer<B> {
+    fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let layers = (0..config.n_layers)
             .map(|index| TransformerBlock::load(vb.pp(format!("layer.{index}")), config))
             .collect::<Result<Vec<_>>>()?;
@@ -287,8 +289,8 @@ impl Transformer {
     }
 }
 
-impl Transformer {
-    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Transformer<B> {
+    fn forward(&self, hidden_states: &Tensor<B>, attention_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut hidden_states = hidden_states.clone();
         // Use a loop rather than a fold as it's easier to modify when adding debug/...
@@ -299,15 +301,15 @@ impl Transformer {
     }
 }
 
-pub struct DistilBertModel {
-    embeddings: Embeddings,
-    transformer: Transformer,
-    pub device: Device,
+pub struct DistilBertModel<B: BackendStorage> {
+    embeddings: Embeddings<B>,
+    transformer: Transformer<B>,
+    pub device: B::Device,
     span: tracing::Span,
 }
 
-impl DistilBertModel {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DistilBertModel<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let (embeddings, transformer) = match (
             Embeddings::load(vb.pp("embeddings"), config),
             Transformer::load(vb.pp("transformer"), config),
@@ -336,7 +338,7 @@ impl DistilBertModel {
         })
     }
 
-    pub fn forward(&self, input_ids: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, input_ids: &Tensor<B>, attention_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let embedding_output = self.embeddings.forward(input_ids)?;
         let sequence_output = self
@@ -346,14 +348,14 @@ impl DistilBertModel {
     }
 }
 
-struct DistilBertPredictionHeadTransform {
-    dense: Linear,
+struct DistilBertPredictionHeadTransform<B: BackendStorage> {
+    dense: Linear<B>,
     activation: HiddenActLayer,
-    layer_norm: LayerNorm,
+    layer_norm: LayerNorm<B>,
 }
 
-impl DistilBertPredictionHeadTransform {
-    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DistilBertPredictionHeadTransform<B> {
+    fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let dense = linear(config.dim, config.dim, vb.pp("vocab_transform"))?;
         let activation = HiddenActLayer::new(config.activation);
         let layer_norm = layer_norm(config.dim, 1e-12, vb.pp("vocab_layer_norm"))?;
@@ -365,8 +367,8 @@ impl DistilBertPredictionHeadTransform {
     }
 }
 
-impl Module for DistilBertPredictionHeadTransform {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for DistilBertPredictionHeadTransform<B> {
+    fn forward(&self, hidden_states: &Tensor<B>) -> Result<Tensor<B>> {
         let hidden_states = self
             .activation
             .forward(&self.dense.forward(hidden_states)?)?;
@@ -375,13 +377,13 @@ impl Module for DistilBertPredictionHeadTransform {
 }
 
 // https://github.com/huggingface/transformers/blob/1bd604d11c405dfb8b78bda4062d88fc75c17de0/src/transformers/models/bert/modeling_bert.py#L769C1-L790C1
-pub struct DistilBertLMPredictionHead {
-    transform: DistilBertPredictionHeadTransform,
-    decoder: Linear,
+pub struct DistilBertLMPredictionHead<B: BackendStorage> {
+    transform: DistilBertPredictionHeadTransform<B>,
+    decoder: Linear<B>,
 }
 
-impl DistilBertLMPredictionHead {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DistilBertLMPredictionHead<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let transform = DistilBertPredictionHeadTransform::load(vb.clone(), config)?;
 
         // distil_bert_uncased uses the word embeddings for the vocab projector weight, but has a separate vocab_projector bias
@@ -407,44 +409,44 @@ impl DistilBertLMPredictionHead {
     }
 }
 
-impl Module for DistilBertLMPredictionHead {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for DistilBertLMPredictionHead<B> {
+    fn forward(&self, hidden_states: &Tensor<B>) -> Result<Tensor<B>> {
         self.decoder
             .forward(&self.transform.forward(hidden_states)?)
     }
 }
 
 // https://github.com/huggingface/transformers/blob/1bd604d11c405dfb8b78bda4062d88fc75c17de0/src/transformers/models/bert/modeling_bert.py#L792
-pub struct DistilBertOnlyMLMHead {
-    predictions: DistilBertLMPredictionHead,
+pub struct DistilBertOnlyMLMHead<B: BackendStorage> {
+    predictions: DistilBertLMPredictionHead<B>,
 }
 
-impl DistilBertOnlyMLMHead {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DistilBertOnlyMLMHead<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let predictions = DistilBertLMPredictionHead::load(vb.clone(), config)?;
         Ok(Self { predictions })
     }
 }
 
-impl Module for DistilBertOnlyMLMHead {
-    fn forward(&self, sequence_output: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for DistilBertOnlyMLMHead<B> {
+    fn forward(&self, sequence_output: &Tensor<B>) -> Result<Tensor<B>> {
         self.predictions.forward(sequence_output)
     }
 }
 
-pub struct DistilBertForMaskedLM {
-    pub bert: DistilBertModel,
-    cls: DistilBertOnlyMLMHead,
+pub struct DistilBertForMaskedLM<B: BackendStorage> {
+    pub bert: DistilBertModel<B>,
+    cls: DistilBertOnlyMLMHead<B>,
 }
 
-impl DistilBertForMaskedLM {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> DistilBertForMaskedLM<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let bert = DistilBertModel::load(vb.pp("distilbert"), config)?;
         let cls = DistilBertOnlyMLMHead::load(vb.clone(), config)?;
         Ok(Self { bert, cls })
     }
 
-    pub fn forward(&self, input_ids: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, input_ids: &Tensor<B>, attention_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let sequence_output = self.bert.forward(input_ids, attention_mask)?;
         self.cls.forward(&sequence_output)
     }

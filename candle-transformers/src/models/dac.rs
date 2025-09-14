@@ -5,7 +5,7 @@
 /// An efficient neural codec for compressing/decompressing audio
 ///
 use crate::models::encodec;
-use candle::{IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, VarBuilder};
 
 #[derive(serde::Deserialize, Debug, Clone)]
@@ -19,19 +19,19 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone)]
-pub struct Snake1d {
-    alpha: Tensor,
+pub struct Snake1d<B: BackendStorage> {
+    alpha: Tensor<B>,
 }
 
-impl Snake1d {
-    pub fn new(channels: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Snake1d<B> {
+    pub fn new(channels: usize, vb: VarBuilder<B>) -> Result<Self> {
         let alpha = vb.get((1, channels, 1), "alpha")?;
         Ok(Self { alpha })
     }
 }
 
-impl candle::Module for Snake1d {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for Snake1d<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs_shape = xs.shape();
         let xs = xs.flatten_from(2)?;
         let sin = self.alpha.broadcast_mul(&xs)?.sin()?;
@@ -41,15 +41,15 @@ impl candle::Module for Snake1d {
 }
 
 #[derive(Debug, Clone)]
-pub struct ResidualUnit {
-    snake1: Snake1d,
-    conv1: Conv1d,
-    snake2: Snake1d,
-    conv2: Conv1d,
+pub struct ResidualUnit<B: BackendStorage> {
+    snake1: Snake1d<B>,
+    conv1: Conv1d<B>,
+    snake2: Snake1d<B>,
+    conv2: Conv1d<B>,
 }
 
-impl ResidualUnit {
-    pub fn new(dim: usize, dilation: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> ResidualUnit<B> {
+    pub fn new(dim: usize, dilation: usize, vb: VarBuilder<B>) -> Result<Self> {
         let pad = ((7 - 1) * dilation) / 2;
         let vb = vb.pp("block");
         let snake1 = Snake1d::new(dim, vb.pp(0))?;
@@ -70,8 +70,8 @@ impl ResidualUnit {
     }
 }
 
-impl candle::Module for ResidualUnit {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for ResidualUnit<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let ys = xs
             .apply(&self.snake1)?
             .apply(&self.conv1)?
@@ -87,16 +87,16 @@ impl candle::Module for ResidualUnit {
 }
 
 #[derive(Debug, Clone)]
-pub struct EncoderBlock {
-    res1: ResidualUnit,
-    res2: ResidualUnit,
-    res3: ResidualUnit,
-    snake1: Snake1d,
-    conv1: Conv1d,
+pub struct EncoderBlock<B: BackendStorage> {
+    res1: ResidualUnit<B>,
+    res2: ResidualUnit<B>,
+    res3: ResidualUnit<B>,
+    snake1: Snake1d<B>,
+    conv1: Conv1d<B>,
 }
 
-impl EncoderBlock {
-    pub fn new(dim: usize, stride: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> EncoderBlock<B> {
+    pub fn new(dim: usize, stride: usize, vb: VarBuilder<B>) -> Result<Self> {
         let vb = vb.pp("block");
         let res1 = ResidualUnit::new(dim / 2, 1, vb.pp(0))?;
         let res2 = ResidualUnit::new(dim / 2, 3, vb.pp(1))?;
@@ -118,8 +118,8 @@ impl EncoderBlock {
     }
 }
 
-impl candle::Module for EncoderBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for EncoderBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.res1)?
             .apply(&self.res2)?
             .apply(&self.res3)?
@@ -129,15 +129,15 @@ impl candle::Module for EncoderBlock {
 }
 
 #[derive(Debug, Clone)]
-pub struct Encoder {
-    conv1: Conv1d,
-    blocks: Vec<EncoderBlock>,
-    snake1: Snake1d,
-    conv2: Conv1d,
+pub struct Encoder<B: BackendStorage> {
+    conv1: Conv1d<B>,
+    blocks: Vec<EncoderBlock<B>>,
+    snake1: Snake1d<B>,
+    conv2: Conv1d<B>,
 }
 
-impl candle::Module for Encoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for Encoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = xs.apply(&self.conv1)?;
         for block in self.blocks.iter() {
             xs = xs.apply(block)?
@@ -146,12 +146,12 @@ impl candle::Module for Encoder {
     }
 }
 
-impl Encoder {
+impl<B: BackendStorage> Encoder<B> {
     pub fn new(
         mut d_model: usize,
         strides: &[usize],
         d_latent: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let vb = vb.pp("block");
         let cfg1 = Conv1dConfig {
@@ -182,16 +182,16 @@ impl Encoder {
 }
 
 #[derive(Debug, Clone)]
-pub struct DecoderBlock {
-    snake1: Snake1d,
-    conv_tr1: ConvTranspose1d,
-    res1: ResidualUnit,
-    res2: ResidualUnit,
-    res3: ResidualUnit,
+pub struct DecoderBlock<B: BackendStorage> {
+    snake1: Snake1d<B>,
+    conv_tr1: ConvTranspose1d<B>,
+    res1: ResidualUnit<B>,
+    res2: ResidualUnit<B>,
+    res3: ResidualUnit<B>,
 }
 
-impl DecoderBlock {
-    pub fn new(in_dim: usize, out_dim: usize, stride: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> DecoderBlock<B> {
+    pub fn new(in_dim: usize, out_dim: usize, stride: usize, vb: VarBuilder<B>) -> Result<Self> {
         let vb = vb.pp("block");
         let snake1 = Snake1d::new(in_dim, vb.pp(0))?;
         let cfg = ConvTranspose1dConfig {
@@ -220,8 +220,8 @@ impl DecoderBlock {
     }
 }
 
-impl candle_nn::Module for DecoderBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for DecoderBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.snake1)?
             .apply(&self.conv_tr1)?
             .apply(&self.res1)?
@@ -231,20 +231,20 @@ impl candle_nn::Module for DecoderBlock {
 }
 
 #[derive(Debug, Clone)]
-pub struct Decoder {
-    conv1: Conv1d,
-    blocks: Vec<DecoderBlock>,
-    snake1: Snake1d,
-    conv2: Conv1d,
+pub struct Decoder<B: BackendStorage> {
+    conv1: Conv1d<B>,
+    blocks: Vec<DecoderBlock<B>>,
+    snake1: Snake1d<B>,
+    conv2: Conv1d<B>,
 }
 
-impl Decoder {
+impl<B: BackendStorage> Decoder<B> {
     pub fn new(
         in_c: usize,
         mut channels: usize,
         rates: &[usize],
         d_out: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let vb = vb.pp("model");
         let cfg1 = Conv1dConfig {
@@ -269,8 +269,8 @@ impl Decoder {
     }
 }
 
-impl candle::Module for Decoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for Decoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = xs.apply(&self.conv1)?;
         for block in self.blocks.iter() {
             xs = xs.apply(block)?
@@ -281,14 +281,14 @@ impl candle::Module for Decoder {
 
 #[allow(unused)]
 #[derive(Clone, Debug)]
-pub struct VectorQuantizer {
-    in_proj: Conv1d,
-    out_proj: Conv1d,
-    codebook: candle_nn::Embedding,
+pub struct VectorQuantizer<B: BackendStorage> {
+    in_proj: Conv1d<B>,
+    out_proj: Conv1d<B>,
+    codebook: candle_nn::Embedding<B>,
 }
 
-impl VectorQuantizer {
-    pub fn new(in_dim: usize, cb_size: usize, cb_dim: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> VectorQuantizer<B> {
+    pub fn new(in_dim: usize, cb_size: usize, cb_dim: usize, vb: VarBuilder<B>) -> Result<Self> {
         let in_proj =
             encodec::conv1d_weight_norm(in_dim, cb_dim, 1, Default::default(), vb.pp("in_proj"))?;
         let out_proj =
@@ -301,27 +301,27 @@ impl VectorQuantizer {
         })
     }
 
-    pub fn embed_code(&self, embed_id: &Tensor) -> Result<Tensor> {
+    pub fn embed_code(&self, embed_id: &Tensor<B>) -> Result<Tensor<B>> {
         embed_id.apply(&self.codebook)
     }
 
-    pub fn decode_code(&self, embed_id: &Tensor) -> Result<Tensor> {
+    pub fn decode_code(&self, embed_id: &Tensor<B>) -> Result<Tensor<B>> {
         self.embed_code(embed_id)?.transpose(1, 2)
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct ResidualVectorQuantizer {
-    quantizers: Vec<VectorQuantizer>,
+pub struct ResidualVectorQuantizer<B: BackendStorage> {
+    quantizers: Vec<VectorQuantizer<B>>,
 }
 
-impl ResidualVectorQuantizer {
+impl<B: BackendStorage> ResidualVectorQuantizer<B> {
     pub fn new(
         input_dim: usize,
         n_codebooks: usize,
         cb_size: usize,
         cb_dim: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let vb = &vb.pp("quantizers");
         let quantizers = (0..n_codebooks)
@@ -331,7 +331,7 @@ impl ResidualVectorQuantizer {
     }
 
     #[allow(clippy::wrong_self_convention)]
-    pub fn from_codes(&self, codes: &Tensor) -> Result<Tensor> {
+    pub fn from_codes(&self, codes: &Tensor<B>) -> Result<Tensor<B>> {
         let mut sum = None;
         for (idx, quantizer) in self.quantizers.iter().enumerate() {
             let z_p_i = quantizer.decode_code(&codes.i((.., idx))?)?;
@@ -350,14 +350,14 @@ impl ResidualVectorQuantizer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    pub encoder: Encoder,
-    pub quantizer: ResidualVectorQuantizer,
-    pub decoder: Decoder,
+pub struct Model<B: BackendStorage> {
+    pub encoder: Encoder<B>,
+    pub quantizer: ResidualVectorQuantizer<B>,
+    pub decoder: Decoder<B>,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let encoder = Encoder::new(64, &[2, 4, 8, 8], cfg.latent_dim, vb.pp("encoder"))?;
         let quantizer = ResidualVectorQuantizer::new(
             cfg.latent_dim,
@@ -374,7 +374,7 @@ impl Model {
         })
     }
 
-    pub fn decode_codes(&self, audio_codes: &Tensor) -> Result<Tensor> {
+    pub fn decode_codes(&self, audio_codes: &Tensor<B>) -> Result<Tensor<B>> {
         let audio_values = self.quantizer.from_codes(audio_codes)?;
         audio_values.apply(&self.decoder)
     }

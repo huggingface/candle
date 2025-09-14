@@ -28,7 +28,7 @@ impl HiddenActLayer {
         Self { act, span }
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward<B: BackendStorage>(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         match self.act {
             // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/activations.py#L213
@@ -156,7 +156,7 @@ impl<B: BackendStorage> DebertaV2Embeddings<B> {
             None
         };
 
-        let token_type_embeddings: Option<Embedding> = if config.type_vocab_size > 0 {
+        let token_type_embeddings: Option<Embedding<B>> = if config.type_vocab_size > 0 {
             Some(candle_nn::embedding(
                 config.type_vocab_size,
                 config.hidden_size,
@@ -166,7 +166,7 @@ impl<B: BackendStorage> DebertaV2Embeddings<B> {
             None
         };
 
-        let embed_proj: Option<candle_nn::Linear> = if embedding_size != config.hidden_size {
+        let embed_proj: Option<candle_nn::Linear<B>> = if embedding_size != config.hidden_size {
             Some(candle_nn::linear_no_bias(
                 embedding_size,
                 config.hidden_size,
@@ -364,8 +364,8 @@ impl<B: BackendStorage> DebertaV2DisentangledSelfAttention<B> {
         let mut pos_ebd_size: isize = 0;
         let position_buckets = config.position_buckets.unwrap_or(-1);
         let mut pos_dropout: Option<StableDropout> = None;
-        let mut pos_key_proj: Option<candle_nn::Linear> = None;
-        let mut pos_query_proj: Option<candle_nn::Linear> = None;
+        let mut pos_key_proj: Option<candle_nn::Linear<B>> = None;
+        let mut pos_query_proj: Option<candle_nn::Linear<B>> = None;
 
         if relative_attention {
             if max_relative_positions < 1 {
@@ -420,12 +420,12 @@ impl<B: BackendStorage> DebertaV2DisentangledSelfAttention<B> {
 
     pub fn forward(
         &self,
-        hidden_states: &Tensor,
-        attention_mask: &Tensor,
-        query_states: Option<&Tensor>,
-        relative_pos: Option<&Tensor>,
-        rel_embeddings: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        hidden_states: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+        query_states: Option<&Tensor<B>>,
+        relative_pos: Option<&Tensor<B>>,
+        rel_embeddings: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let query_states = match query_states {
             Some(qs) => qs,
             None => hidden_states,
@@ -435,7 +435,7 @@ impl<B: BackendStorage> DebertaV2DisentangledSelfAttention<B> {
         let key_layer = self.transpose_for_scores(&self.key_proj.forward(query_states)?)?;
         let value_layer = self.transpose_for_scores(&self.value_proj.forward(query_states)?)?;
 
-        let mut rel_att: Option<Tensor> = None;
+        let mut rel_att: Option<Tensor<B>> = None;
 
         let mut scale_factor: usize = 1;
 
@@ -452,7 +452,7 @@ impl<B: BackendStorage> DebertaV2DisentangledSelfAttention<B> {
             Tensor::new(&[(q_size * scale_factor) as f32], &self.device)?.sqrt()?
         };
 
-        let mut attention_scores: Tensor = {
+        let mut attention_scores: Tensor<B> = {
             let key_layer_transposed = key_layer.t()?;
             let div = key_layer_transposed
                 .broadcast_div(scale.to_dtype(query_layer.dtype())?.as_ref())?;
@@ -528,7 +528,7 @@ impl<B: BackendStorage> DebertaV2DisentangledSelfAttention<B> {
         Ok(context_layer)
     }
 
-    fn transpose_for_scores(&self, xs: &Tensor) -> Result<Tensor> {
+    fn transpose_for_scores(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let dims = xs.dims().to_vec();
         match dims.len() {
             3 => {
@@ -548,12 +548,12 @@ impl<B: BackendStorage> DebertaV2DisentangledSelfAttention<B> {
 
     fn disentangled_attention_bias(
         &self,
-        query_layer: Tensor,
-        key_layer: Tensor,
-        relative_pos: Option<&Tensor>,
-        rel_embeddings: Tensor,
+        query_layer: Tensor<B>,
+        key_layer: Tensor<B>,
+        relative_pos: Option<&Tensor<B>>,
+        rel_embeddings: Tensor<B>,
         scale_factor: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let mut relative_pos = relative_pos.map_or(
             build_relative_position(
                 query_layer.dim(D::Minus2)?,
@@ -579,8 +579,8 @@ impl<B: BackendStorage> DebertaV2DisentangledSelfAttention<B> {
             .narrow(0, 0, (att_span * 2) as usize)?
             .unsqueeze(0)?;
 
-        let mut pos_query_layer: Option<Tensor> = None;
-        let mut pos_key_layer: Option<Tensor> = None;
+        let mut pos_query_layer: Option<Tensor<B>> = None;
+        let mut pos_key_layer: Option<Tensor<B>> = None;
 
         let repeat_with = query_layer.dim(0)? / self.num_attention_heads;
         if self.share_att_key {
@@ -969,7 +969,7 @@ impl<B: BackendStorage> DebertaV2Encoder<B> {
 
         let position_buckets = config.position_buckets.unwrap_or(-1);
 
-        let mut rel_embeddings: Option<Embedding> = None;
+        let mut rel_embeddings: Option<Embedding<B>> = None;
 
         if relative_attention {
             if max_relative_positions < 1 {
@@ -996,7 +996,7 @@ impl<B: BackendStorage> DebertaV2Encoder<B> {
             None => "none".to_string(),
         };
 
-        let layer_norm: Option<LayerNorm> = if norm_rel_ebd == "layer_norm" {
+        let layer_norm: Option<LayerNorm<B>> = if norm_rel_ebd == "layer_norm" {
             Some(layer_norm(
                 config.hidden_size,
                 config.layer_norm_eps,
@@ -1006,7 +1006,7 @@ impl<B: BackendStorage> DebertaV2Encoder<B> {
             None
         };
 
-        let conv: Option<ConvLayer> = if config.conv_kernel_size.unwrap_or(0) > 0 {
+        let conv: Option<ConvLayer<B>> = if config.conv_kernel_size.unwrap_or(0) > 0 {
             Some(ConvLayer::load(vb.pp("conv"), config)?)
         } else {
             None
@@ -1044,10 +1044,10 @@ impl<B: BackendStorage> DebertaV2Encoder<B> {
 
         let relative_pos = self.get_rel_pos(hidden_states, query_states, relative_pos)?;
 
-        let mut next_kv: Tensor = hidden_states.clone();
+        let mut next_kv: Tensor<B> = hidden_states.clone();
         let rel_embeddings = self.get_rel_embedding()?;
         let mut output_states = next_kv.to_owned();
-        let mut query_states: Option<Tensor> = query_states.cloned();
+        let mut query_states: Option<Tensor<B>> = query_states.cloned();
 
         for (i, layer_module) in self.layer.iter().enumerate() {
             // NOTE: The original python code branches here if this model is being
@@ -1226,7 +1226,7 @@ pub struct TextClassificationItem {
     pub score: f32,
 }
 
-pub struct DebertaV2NERModel<B: Backend> {
+pub struct DebertaV2NERModel<B: BackendStorage> {
     pub device: B::Device,
     deberta: DebertaV2Model<B>,
     dropout: candle_nn::Dropout,
@@ -1255,7 +1255,7 @@ impl<B: BackendStorage> DebertaV2NERModel<B> {
 
         let deberta = DebertaV2Model::load(vb.clone(), config)?;
         let dropout = candle_nn::Dropout::new(config.hidden_dropout_prob as f32);
-        let classifier: candle_nn::Linear = candle_nn::linear_no_bias(
+        let classifier: candle_nn::Linear<B> = candle_nn::linear_no_bias(
             config.hidden_size,
             id2label_len,
             vb.root().pp("classifier"),
@@ -1386,7 +1386,7 @@ pub(crate) fn build_relative_position<B: BackendStorage>(
     max_position: Option<isize>,
 ) -> Result<Tensor<B>> {
     let q_ids = Tensor::arange(0, query_size as i64, device)?.unsqueeze(0)?;
-    let k_ids: Tensor = Tensor::arange(0, key_size as i64, device)?.unsqueeze(D::Minus1)?;
+    let k_ids = Tensor::arange(0, key_size as i64, device)?.unsqueeze(D::Minus1)?;
     let mut rel_pos_ids = k_ids.broadcast_sub(&q_ids)?;
     let bucket_size = bucket_size.unwrap_or(-1);
     let max_position = max_position.unwrap_or(-1);

@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use candle::D::Minus1;
-use candle::{Module, Result, Tensor};
+use candle::{BackendStorage, Module, Result, Tensor};
 use candle_nn::ops::Identity;
 use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, conv_transpose2d, linear, seq, Activation, BatchNorm,
@@ -104,19 +104,19 @@ impl DepthAnythingV2Config {
     }
 }
 
-pub struct ResidualConvUnit {
+pub struct ResidualConvUnit<B: BackendStorage> {
     activation: Activation,
-    conv1: Conv2d,
-    conv2: Conv2d,
-    batch_norm1: Option<BatchNorm>,
-    batch_norm2: Option<BatchNorm>,
+    conv1: Conv2d<B>,
+    conv2: Conv2d<B>,
+    batch_norm1: Option<BatchNorm<B>>,
+    batch_norm2: Option<BatchNorm<B>>,
 }
 
-impl ResidualConvUnit {
+impl<B: BackendStorage> ResidualConvUnit<B> {
     pub fn new(
         conf: &DepthAnythingV2Config,
         activation: Activation,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         const KERNEL_SIZE: usize = 3;
         let conv_cfg = Conv2dConfig {
@@ -167,8 +167,8 @@ impl ResidualConvUnit {
     }
 }
 
-impl Module for ResidualConvUnit {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ResidualConvUnit<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let out = self.activation.forward(xs)?;
         let out = self.conv1.forward(&out)?;
         let out = if let Some(batch_norm1) = &self.batch_norm1 {
@@ -189,19 +189,19 @@ impl Module for ResidualConvUnit {
     }
 }
 
-pub struct FeatureFusionBlock {
-    res_conv_unit1: ResidualConvUnit,
-    res_conv_unit2: ResidualConvUnit,
-    output_conv: Conv2d,
+pub struct FeatureFusionBlock<B: BackendStorage> {
+    res_conv_unit1: ResidualConvUnit<B>,
+    res_conv_unit2: ResidualConvUnit<B>,
+    output_conv: Conv2d<B>,
     target_patch_size: usize,
 }
 
-impl FeatureFusionBlock {
+impl<B: BackendStorage> FeatureFusionBlock<B> {
     pub fn new(
         conf: &DepthAnythingV2Config,
         target_patch_size: usize,
         activation: Activation,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         const KERNEL_SIZE: usize = 1;
         let conv_cfg = Conv2dConfig {
@@ -230,8 +230,8 @@ impl FeatureFusionBlock {
     }
 }
 
-impl Module for FeatureFusionBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for FeatureFusionBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let out = self.res_conv_unit2.forward(xs)?;
         let out = out.interpolate2d(self.target_patch_size, self.target_patch_size)?;
 
@@ -239,21 +239,21 @@ impl Module for FeatureFusionBlock {
     }
 }
 
-pub struct Scratch {
-    layer1_rn: Conv2d,
-    layer2_rn: Conv2d,
-    layer3_rn: Conv2d,
-    layer4_rn: Conv2d,
-    refine_net1: FeatureFusionBlock,
-    refine_net2: FeatureFusionBlock,
-    refine_net3: FeatureFusionBlock,
-    refine_net4: FeatureFusionBlock,
-    output_conv1: Conv2d,
-    output_conv2: Sequential,
+pub struct Scratch<B: BackendStorage> {
+    layer1_rn: Conv2d<B>,
+    layer2_rn: Conv2d<B>,
+    layer3_rn: Conv2d<B>,
+    layer4_rn: Conv2d<B>,
+    refine_net1: FeatureFusionBlock<B>,
+    refine_net2: FeatureFusionBlock<B>,
+    refine_net3: FeatureFusionBlock<B>,
+    refine_net4: FeatureFusionBlock<B>,
+    output_conv1: Conv2d<B>,
+    output_conv2: Sequential<B>,
 }
 
-impl Scratch {
-    pub fn new(conf: &DepthAnythingV2Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage + 'static> Scratch<B> {
+    pub fn new(conf: &DepthAnythingV2Config, vb: VarBuilder<B>) -> Result<Self> {
         const KERNEL_SIZE: usize = 3;
         let conv_cfg = Conv2dConfig {
             padding: 1,
@@ -371,19 +371,19 @@ impl Scratch {
 
 const NUM_CHANNELS: usize = 4;
 
-pub struct DPTHead {
-    projections: Vec<Conv2d>,
-    resize_layers: Vec<Box<dyn Module>>,
-    readout_projections: Vec<Sequential>,
-    scratch: Scratch,
+pub struct DPTHead<B: BackendStorage> {
+    projections: Vec<Conv2d<B>>,
+    resize_layers: Vec<Box<dyn Module<B>>>,
+    readout_projections: Vec<Sequential<B>>,
+    scratch: Scratch<B>,
     use_class_token: bool,
     input_image_size: usize,
     target_patch_size: usize,
 }
 
-impl DPTHead {
-    pub fn new(conf: &DepthAnythingV2Config, vb: VarBuilder) -> Result<Self> {
-        let mut projections: Vec<Conv2d> = Vec::with_capacity(conf.out_channel_sizes.len());
+impl<B: BackendStorage + 'static> DPTHead<B> {
+    pub fn new(conf: &DepthAnythingV2Config, vb: VarBuilder<B>) -> Result<Self> {
+        let mut projections: Vec<Conv2d<B>> = Vec::with_capacity(conf.out_channel_sizes.len());
         for (conv_index, out_channel_size) in conf.out_channel_sizes.iter().enumerate() {
             projections.push(conv2d(
                 conf.in_channel_size,
@@ -394,7 +394,7 @@ impl DPTHead {
             )?);
         }
 
-        let resize_layers: Vec<Box<dyn Module>> = vec![
+        let resize_layers: Vec<Box<dyn Module<B>>> = vec![
             Box::new(conv_transpose2d(
                 conf.out_channel_sizes[0],
                 conf.out_channel_sizes[0],
@@ -465,9 +465,9 @@ impl DPTHead {
     }
 }
 
-impl Module for DPTHead {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut out: Vec<Tensor> = Vec::with_capacity(NUM_CHANNELS);
+impl<B: BackendStorage> Module<B> for DPTHead<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
+        let mut out: Vec<Tensor<B>> = Vec::with_capacity(NUM_CHANNELS);
         for i in 0..NUM_CHANNELS {
             let x = if self.use_class_token {
                 let x = xs.get(i)?.get(0)?;
@@ -532,17 +532,17 @@ impl Module for DPTHead {
     }
 }
 
-pub struct DepthAnythingV2 {
-    pretrained: Arc<DinoVisionTransformer>,
-    depth_head: DPTHead,
+pub struct DepthAnythingV2<B: BackendStorage> {
+    pretrained: Arc<DinoVisionTransformer<B>>,
+    depth_head: DPTHead<B>,
     conf: DepthAnythingV2Config,
 }
 
-impl DepthAnythingV2 {
+impl<B: BackendStorage + 'static> DepthAnythingV2<B> {
     pub fn new(
-        pretrained: Arc<DinoVisionTransformer>,
+        pretrained: Arc<DinoVisionTransformer<B>>,
         conf: DepthAnythingV2Config,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let depth_head = DPTHead::new(&conf, vb.pp("depth_head"))?;
 
@@ -554,8 +554,8 @@ impl DepthAnythingV2 {
     }
 }
 
-impl Module for DepthAnythingV2 {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for DepthAnythingV2<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let features = self.pretrained.get_intermediate_layers(
             xs,
             &self.conf.layer_ids_vits,

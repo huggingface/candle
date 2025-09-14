@@ -3,16 +3,18 @@
 use std::{f32::consts::PI, sync::Arc};
 
 use candle::{
-    shape::Dim, CpuStorage, CustomOp1, DType, Device, Error, IndexOp, Layout, Result, Shape,
-    Tensor, WithDType, D,
+    shape::Dim, BackendDevice, BackendStorage, CpuStorage, CustomOp1, DType, Error, IndexOp,
+    Layout, Result, Shape, Tensor, WithDType, D,
 };
 use candle_nn::{embedding, rms_norm, Activation, Embedding, Linear, Module, RmsNorm, VarBuilder};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 
-struct NonZero {}
+struct NonZero<B: BackendStorage> {
+    marker: std::marker::PhantomData<B>,
+}
 
-impl NonZero {
+impl<B: BackendStorage> NonZero<B> {
     // Sequential version
     fn nonzero<T: WithDType>(&self, vs: &[T], layout: &Layout) -> Vec<u32> {
         let n = layout.dims().len();
@@ -31,70 +33,99 @@ impl NonZero {
         }
         result
     }
-}
 
-impl CustomOp1 for NonZero {
-    fn name(&self) -> &'static str {
-        "nonzero"
-    }
-
-    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+    fn nonzero_cpu(&self, storage: &CpuStorage, layout: &Layout) -> Result<(Vec<u32>, Shape)> {
         if !layout.is_contiguous() {
             return Err(Error::RequiresContiguous { op: "nonzero" });
         }
         let result = match storage {
-            candle::CpuStorage::U8(vs) => self.nonzero(vs, layout),
-            candle::CpuStorage::U32(vs) => self.nonzero(vs, layout),
-            candle::CpuStorage::I64(vs) => self.nonzero(vs, layout),
-            candle::CpuStorage::BF16(vs) => self.nonzero(vs, layout),
-            candle::CpuStorage::F16(vs) => self.nonzero(vs, layout),
-            candle::CpuStorage::F32(vs) => self.nonzero(vs, layout),
-            candle::CpuStorage::F64(vs) => self.nonzero(vs, layout),
-            candle::CpuStorage::F8E4M3(vs) => self.nonzero(vs, layout),
+            CpuStorage::U8(vs) => self.nonzero(vs, layout),
+            CpuStorage::U32(vs) => self.nonzero(vs, layout),
+            CpuStorage::I64(vs) => self.nonzero(vs, layout),
+            CpuStorage::BF16(vs) => self.nonzero(vs, layout),
+            CpuStorage::F16(vs) => self.nonzero(vs, layout),
+            CpuStorage::F32(vs) => self.nonzero(vs, layout),
+            CpuStorage::F64(vs) => self.nonzero(vs, layout),
+            CpuStorage::F8E4M3(vs) => self.nonzero(vs, layout),
         };
         let index_len = layout.dims().len();
         let result_len = result.len() / index_len;
-        let result = CpuStorage::U32(result);
         let shape = Shape::from_dims(&[result_len, index_len]);
         Ok((result, shape))
     }
 }
 
-pub trait NonZeroOp {
-    fn nonzero(&self) -> Result<Tensor>;
-}
+impl<B: BackendStorage> CustomOp1<B> for NonZero<B> {
+    fn name(&self) -> &'static str {
+        "nonzero"
+    }
 
-impl NonZeroOp for Tensor {
-    fn nonzero(&self) -> Result<Tensor> {
-        if !self.is_contiguous() {
-            return Err(candle::Error::RequiresContiguous { op: "nonzero" });
-        }
-        let original_device = self.device();
-        self.to_device(&candle::Device::Cpu)?
-            .apply_op1_no_bwd(&NonZero {})?
-            .to_device(original_device)
+    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+        let (result, shape) = self.nonzero_cpu(storage, layout)?;
+        Ok((CpuStorage::U32(result), shape))
+    }
+
+    //#[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        storage: &candle::CudaStorage,
+        layout: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        let device = storage.device().as_ref().clone();
+        let cpu_storage = storage.to_cpu_storage()?;
+        let (result, shape) = self.nonzero_cpu(&cpu_storage, layout)?;
+        let storage = device.storage_from_slice(&result)?;
+        Ok((storage, shape))
+    }
+
+    //#[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        storage: &candle::MetalStorage,
+        layout: &Layout,
+    ) -> Result<(candle::MetalStorage, Shape)> {
+        let device = storage.device().as_ref().clone();
+        let cpu_storage = storage.to_cpu_storage()?;
+        let (result, shape) = self.nonzero_cpu(&cpu_storage, layout)?;
+        let storage = device.storage_from_slice(&result)?;
+        Ok((storage, shape))
     }
 }
 
-pub struct TopKOutput {
-    pub values: Tensor,
-    pub indices: Tensor,
+pub trait NonZeroOp<B: BackendStorage> {
+    fn nonzero(&self) -> Result<Tensor<B>>;
 }
 
-pub trait TopKLastDimOp {
+impl<B: BackendStorage> NonZeroOp<B> for Tensor<B> {
+    fn nonzero(&self) -> Result<Tensor<B>> {
+        if !self.is_contiguous() {
+            return Err(candle::Error::RequiresContiguous { op: "nonzero" });
+        }
+        self.apply_op1_no_bwd(&NonZero {
+            marker: std::marker::PhantomData,
+        })
+    }
+}
+
+pub struct TopKOutput<B: BackendStorage> {
+    pub values: Tensor<B>,
+    pub indices: Tensor<B>,
+}
+
+pub trait TopKLastDimOp<B: BackendStorage> {
     /// Topk in the last dim. `values` retains a gradient but `indices` has none w.r.t self.
     /// This expects a contiguous tensor.
     /// Note: this implements torch.topk with sorted=True.
-    fn topk(&self, topk: usize) -> Result<TopKOutput>;
+    fn topk(&self, topk: usize) -> Result<TopKOutput<B>>;
 
     /// Topk in the last dim. `values` retains a gradient but `indices` has none w.r.t self.
     /// This expects a contiguous tensor.
     /// Note: this implements torch.topk with sorted=False.
-    fn topk_unsorted(&self, topk: usize) -> Result<TopKOutput>;
+    fn topk_unsorted(&self, topk: usize) -> Result<TopKOutput<B>>;
 }
 
-impl TopKLastDimOp for Tensor {
-    fn topk(&self, topk: usize) -> Result<TopKOutput> {
+impl<B: BackendStorage> TopKLastDimOp<B> for Tensor<B> {
+    fn topk(&self, topk: usize) -> Result<TopKOutput<B>> {
         // Sorted descending
         let sorted_indices = self.arg_sort_last_dim(false)?;
         let topk_indices = sorted_indices.narrow(D::Minus1, 0, topk)?.contiguous()?;
@@ -104,7 +135,7 @@ impl TopKLastDimOp for Tensor {
         })
     }
 
-    fn topk_unsorted(&self, topk: usize) -> Result<TopKOutput> {
+    fn topk_unsorted(&self, topk: usize) -> Result<TopKOutput<B>> {
         // Sorted descending
         let sorted_indices_all = self.arg_sort_last_dim(false)?;
         let topk_indices_sorted = sorted_indices_all
@@ -123,12 +154,12 @@ impl TopKLastDimOp for Tensor {
     }
 }
 
-pub trait SplitOp {
-    fn split<D: Dim>(&self, splits: &[usize], dim: D) -> Result<Vec<Tensor>>;
+pub trait SplitOp<B: BackendStorage> {
+    fn split<D: Dim>(&self, splits: &[usize], dim: D) -> Result<Vec<Tensor<B>>>;
 }
 
-impl SplitOp for Tensor {
-    fn split<D: Dim>(&self, splits: &[usize], dim: D) -> Result<Vec<Tensor>> {
+impl<B: BackendStorage> SplitOp<B> for Tensor<B> {
+    fn split<D: Dim>(&self, splits: &[usize], dim: D) -> Result<Vec<Tensor<B>>> {
         let dim = dim.to_index(self.shape(), "split")?;
         let mut split_res = Vec::new();
         let mut index = 0;
@@ -179,7 +210,7 @@ fn bincount(values: &[u32], minlength: u32) -> Vec<u32> {
         )
 }
 
-impl BincountOp for Tensor {
+impl<B: BackendStorage> BincountOp for Tensor<B> {
     fn bincount(&self, minlength: u32) -> Result<Vec<u32>> {
         let values = self.to_vec1::<u32>()?;
 
@@ -187,7 +218,11 @@ impl BincountOp for Tensor {
     }
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+fn masked_fill<B: BackendStorage>(
+    on_false: &Tensor<B>,
+    mask: &Tensor<B>,
+    on_true: f32,
+) -> Result<Tensor<B>> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true, on_false)?;
@@ -284,9 +319,9 @@ pub enum ScaledRopeType {
 }
 
 #[derive(Debug, Clone)]
-pub struct DeepSeekV2RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+pub struct DeepSeekV2RotaryEmbedding<B: BackendStorage> {
+    sin: Tensor<B>,
+    cos: Tensor<B>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -316,8 +351,15 @@ pub struct DeepSeekV2RopeConfig {
     pub qk_rope_head_dim: usize,
 }
 
-impl DeepSeekV2RotaryEmbedding {
-    fn new_unscaled(cfg: &DeepSeekV2RopeConfig, dtype: DType, dev: &Device) -> Result<Self> {
+pub(crate) fn yarn_get_mscale(scale: f32, mscale: f32) -> f32 {
+    if scale <= 1. {
+        return 1.;
+    }
+    0.1 * mscale * scale.ln() + 1.
+}
+
+impl<B: BackendStorage> DeepSeekV2RotaryEmbedding<B> {
+    fn new_unscaled(cfg: &DeepSeekV2RopeConfig, dtype: DType, dev: &B::Device) -> Result<Self> {
         let max_seq_len = cfg.max_position_embeddings;
         let dim = cfg.qk_rope_head_dim;
 
@@ -362,7 +404,12 @@ impl DeepSeekV2RotaryEmbedding {
         (low.max(0.), high.min(dim as f32 - 1.))
     }
 
-    fn yarn_linear_ramp_mask(min: f32, mut max: f32, dim: usize, dev: &Device) -> Result<Tensor> {
+    fn yarn_linear_ramp_mask(
+        min: f32,
+        mut max: f32,
+        dim: usize,
+        dev: &B::Device,
+    ) -> Result<Tensor<B>> {
         if min == max {
             // https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite/blob/604d5664dddd88a0433dbae533b7fe9472482de0/modeling_deepseek.py#L255
             max += 0.001;
@@ -372,18 +419,11 @@ impl DeepSeekV2RotaryEmbedding {
         linear_func.clamp(0., 1.)
     }
 
-    pub(crate) fn yarn_get_mscale(scale: f32, mscale: f32) -> f32 {
-        if scale <= 1. {
-            return 1.;
-        }
-        0.1 * mscale * scale.ln() + 1.
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn new_yarn(
         cfg: &DeepSeekV2RopeConfig,
         dtype: DType,
-        dev: &Device,
+        dev: &B::Device,
         original_max_position_embeddings: usize,
         beta_fast: f32,
         beta_slow: f32,
@@ -422,15 +462,14 @@ impl DeepSeekV2RotaryEmbedding {
             .reshape((cfg.max_position_embeddings, 1))?;
         let freqs = t.matmul(&inv_freq)?;
 
-        let mscale =
-            Self::yarn_get_mscale(factor, mscale) / Self::yarn_get_mscale(factor, mscale_all_dim);
+        let mscale = yarn_get_mscale(factor, mscale) / yarn_get_mscale(factor, mscale_all_dim);
         let sin = (freqs.sin()? * mscale as f64)?.to_dtype(dtype)?;
         let cos = (freqs.cos()? * mscale as f64)?.to_dtype(dtype)?;
 
         Ok(Self { sin, cos })
     }
 
-    pub fn new(cfg: &DeepSeekV2RopeConfig, dtype: DType, dev: &Device) -> Result<Self> {
+    pub fn new(cfg: &DeepSeekV2RopeConfig, dtype: DType, dev: &B::Device) -> Result<Self> {
         match &cfg.rope_scaling {
             Some(DeepSeekV2RopeScaling::LinearOrDynamic {
                 scaling_type: _,
@@ -461,10 +500,10 @@ impl DeepSeekV2RotaryEmbedding {
 
     pub fn forward(
         &self,
-        q: &Tensor,
-        k: &Tensor,
+        q: &Tensor<B>,
+        k: &Tensor<B>,
         seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
 
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
@@ -490,20 +529,24 @@ impl DeepSeekV2Config {
             ..
         }) = self.rope_scaling
         {
-            let mscale = DeepSeekV2RotaryEmbedding::yarn_get_mscale(factor, mscale_all_dim);
+            let mscale = yarn_get_mscale(factor, mscale_all_dim);
             softmax_scale = softmax_scale * mscale * mscale;
         }
         softmax_scale
     }
 }
 
-enum QProj {
-    Plain(Linear),
-    Lora { a: Linear, norm: RmsNorm, b: Linear },
+enum QProj<B: BackendStorage> {
+    Plain(Linear<B>),
+    Lora {
+        a: Linear<B>,
+        norm: RmsNorm<B>,
+        b: Linear<B>,
+    },
 }
 
-impl QProj {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> QProj<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         match self {
             Self::Lora { a, norm, b } => b.forward(&norm.forward(&a.forward(xs)?)?),
             Self::Plain(lin) => lin.forward(xs),
@@ -511,24 +554,24 @@ impl QProj {
     }
 }
 
-struct Attention {
-    q: QProj,
-    kv_a_proj_with_mqa: Linear,
-    kv_a_layernorm: RmsNorm,
-    kv_b_proj: Linear,
-    o_proj: Linear,
-    rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
+struct Attention<B: BackendStorage> {
+    q: QProj<B>,
+    kv_a_proj_with_mqa: Linear<B>,
+    kv_a_layernorm: RmsNorm<B>,
+    kv_b_proj: Linear<B>,
+    o_proj: Linear<B>,
+    rotary_emb: Arc<DeepSeekV2RotaryEmbedding<B>>,
     cfg: DeepSeekV2Config,
     q_head_dim: usize,
     softmax_scale: f64,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: Option<(Tensor<B>, Tensor<B>)>,
 }
 
-impl Attention {
+impl<B: BackendStorage> Attention<B> {
     fn new(
-        rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
+        rotary_emb: Arc<DeepSeekV2RotaryEmbedding<B>>,
         cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let q_head_dim = cfg.q_head_dim();
         let q = match cfg.q_lora_rank {
@@ -590,10 +633,10 @@ impl Attention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<B>,
+        attention_mask: Option<&Tensor<B>>,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let (bs, seq_len, _) = xs.dims3()?;
 
         let q = {
@@ -677,17 +720,17 @@ impl Attention {
     }
 }
 
-struct Mlp {
-    gate: Linear,
-    up: Linear,
-    down: Linear,
+struct Mlp<B: BackendStorage> {
+    gate: Linear<B>,
+    up: Linear<B>,
+    down: Linear<B>,
     act: Activation,
 }
 
-impl Mlp {
+impl<B: BackendStorage> Mlp<B> {
     fn new(
         cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         hidden_size: Option<usize>,
         intermediate_size: Option<usize>,
     ) -> Result<Self> {
@@ -702,22 +745,22 @@ impl Mlp {
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let lhs = self.gate.forward(xs)?.apply(&self.act)?;
         let rhs = self.up.forward(xs)?;
         self.down.forward(&(&lhs * &rhs)?)
     }
 }
 
-struct MoeGate {
-    weight: Tensor,
+struct MoeGate<B: BackendStorage> {
+    weight: Tensor<B>,
     cfg: DeepSeekV2Config,
     top_k: usize,
     n_routed_experts: usize,
 }
 
-impl MoeGate {
-    fn new(cfg: &DeepSeekV2Config, vb: VarBuilder, n_routed_experts: usize) -> Result<Self> {
+impl<B: BackendStorage> MoeGate<B> {
+    fn new(cfg: &DeepSeekV2Config, vb: VarBuilder<B>, n_routed_experts: usize) -> Result<Self> {
         let weight = vb.get((n_routed_experts, cfg.hidden_size), "weight")?;
         Ok(Self {
             weight,
@@ -728,7 +771,7 @@ impl MoeGate {
     }
 
     /// (topk_idx, topk_weight)
-    fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<(Tensor<B>, Tensor<B>)> {
         let (bs, seq_len, h) = xs.dims3()?;
         // Compute gating score
         let xs = xs.reshape(((), h))?;
@@ -785,17 +828,16 @@ impl MoeGate {
     }
 }
 
-struct Moe {
-    experts: Vec<Mlp>,
-    shared_experts: Option<Mlp>,
-    gate: MoeGate,
+struct Moe<B: BackendStorage> {
+    experts: Vec<Mlp<B>>,
+    shared_experts: Option<Mlp<B>>,
+    gate: MoeGate<B>,
 }
 
-impl Moe {
+impl<B: BackendStorage> Moe<B> {
     fn new(
         cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
-
+        vb: VarBuilder<B>,
         n_shared_experts: Option<usize>,
         n_routed_experts: usize,
     ) -> Result<Self> {
@@ -823,7 +865,12 @@ impl Moe {
         })
     }
 
-    fn moe_infer(&self, xs: &Tensor, topk_ids: &Tensor, topk_weight: &Tensor) -> Result<Tensor> {
+    fn moe_infer(
+        &self,
+        xs: &Tensor<B>,
+        topk_ids: &Tensor<B>,
+        topk_weight: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let mut y = xs.zeros_like()?;
         let counts = topk_ids
             .flatten_all()?
@@ -853,7 +900,7 @@ impl Moe {
         Ok(y)
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let identity = xs.clone();
         let orig_shape = xs.shape();
         let (topk_idx, topk_weight) = self.gate.forward(xs)?;
@@ -869,13 +916,13 @@ impl Moe {
     }
 }
 
-enum MoeOrMlp {
-    Moe(Box<Moe>),
-    Mlp(Box<Mlp>),
+enum MoeOrMlp<B: BackendStorage> {
+    Moe(Box<Moe<B>>),
+    Mlp(Box<Mlp<B>>),
 }
 
-impl MoeOrMlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> MoeOrMlp<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         match self {
             Self::Mlp(mlp) => mlp.forward(xs),
             Self::Moe(moe) => moe.forward(xs),
@@ -883,18 +930,18 @@ impl MoeOrMlp {
     }
 }
 
-struct DecoderLayer {
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
-    attn: Attention,
-    moe_or_mlp: MoeOrMlp,
+struct DecoderLayer<B: BackendStorage> {
+    input_layernorm: RmsNorm<B>,
+    post_attention_layernorm: RmsNorm<B>,
+    attn: Attention<B>,
+    moe_or_mlp: MoeOrMlp<B>,
 }
 
-impl DecoderLayer {
+impl<B: BackendStorage> DecoderLayer<B> {
     fn new(
-        rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
+        rotary_emb: Arc<DeepSeekV2RotaryEmbedding<B>>,
         cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         layer_idx: usize,
     ) -> Result<Self> {
         let attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
@@ -932,10 +979,10 @@ impl DecoderLayer {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<B>,
+        attention_mask: Option<&Tensor<B>>,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
         let xs = self.attn.forward(&xs, attention_mask, seqlen_offset)?;
@@ -952,17 +999,17 @@ impl DecoderLayer {
     }
 }
 
-pub struct DeepSeekV2 {
-    lm_head: Linear,
-    embed_tokens: Embedding,
-    norm: RmsNorm,
-    layers: Vec<DecoderLayer>,
+pub struct DeepSeekV2<B: BackendStorage> {
+    lm_head: Linear<B>,
+    embed_tokens: Embedding<B>,
+    norm: RmsNorm<B>,
+    layers: Vec<DecoderLayer<B>>,
     dtype: DType,
-    device: Device,
+    device: B::Device,
 }
 
-impl DeepSeekV2 {
-    pub fn new(cfg: &DeepSeekV2Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> DeepSeekV2<B> {
+    pub fn new(cfg: &DeepSeekV2Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb_m = vb.pp("model");
 
         let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -1007,7 +1054,7 @@ impl DeepSeekV2 {
         b_size: usize,
         tgt_len: usize,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
             .collect();
@@ -1022,7 +1069,7 @@ impl DeepSeekV2 {
             .to_dtype(self.dtype)
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor<B>, seqlen_offset: usize) -> Result<Tensor<B>> {
         let (bs, seq_len) = input_ids.dims2()?;
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let attention_mask = if seq_len == 1 {
