@@ -119,7 +119,7 @@ impl Model {
             verbose_prompt,
         } = serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
 
-        let device = Device::Cpu;
+        let device = CpuDevice;
         let prompt = format!("\n\nQuestion: {prompt}\n\nAnswer:");
         match &mut self.model {
             SelectedModel::Moondream(m) => m.text_model.clear_kv_cache(),
@@ -202,9 +202,9 @@ impl Model {
             .resize_to_fill(378, 378, image::imageops::FilterType::Triangle); // Adjusted to 378x378
         let img = img.to_rgb8();
         let data = img.into_raw();
-        let data = Tensor::from_vec(data, (378, 378, 3), &Device::Cpu)?.permute((2, 0, 1))?;
-        let mean = Tensor::new(&[0.5f32, 0.5, 0.5], &Device::Cpu)?.reshape((3, 1, 1))?;
-        let std = Tensor::new(&[0.5f32, 0.5, 0.5], &Device::Cpu)?.reshape((3, 1, 1))?;
+        let data = Tensor::from_vec(data, (378, 378, 3), &CpuDevice)?.permute((2, 0, 1))?;
+        let mean = Tensor::new(&[0.5f32, 0.5, 0.5], &CpuDevice)?.reshape((3, 1, 1))?;
+        let std = Tensor::new(&[0.5f32, 0.5, 0.5], &CpuDevice)?.reshape((3, 1, 1))?;
         (data.to_dtype(candle::DType::F32)? / 255.)?
             .broadcast_sub(&mean)?
             .broadcast_div(&std)

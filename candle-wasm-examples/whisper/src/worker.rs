@@ -1,6 +1,6 @@
-use crate::languages::LANGUAGES;
+use crate::{languages::LANGUAGES, QWhisper, Tensor, Whisper};
 use anyhow::Error as E;
-use candle::{safetensors::Load, DType, Device, IndexOp, Tensor, D};
+use candle::{safetensors::Load, CpuDevice, DType, IndexOp, D};
 use candle_nn::{ops::softmax, VarBuilder};
 pub use candle_transformers::models::whisper::{self as m, Config};
 use rand::{distr::Distribution, rngs::StdRng, SeedableRng};
@@ -27,8 +27,8 @@ macro_rules! console_log {
 pub const DTYPE: DType = DType::F32;
 
 pub enum Model {
-    Normal(m::model::Whisper),
-    Quantized(m::quantized_model::Whisper),
+    Normal(Whisper),
+    Quantized(QWhisper),
 }
 
 // Maybe we should use some traits rather than doing the dispatch for all these.
@@ -108,7 +108,7 @@ impl Decoder {
         model: Model,
         tokenizer: Tokenizer,
         mel_filters: Vec<f32>,
-        device: &Device,
+        device: &CpuDevice,
         task: Option<Task>,
         language: Option<String>,
         is_multilingual: bool,
@@ -304,11 +304,11 @@ impl Decoder {
     }
 
     pub fn load(md: ModelData) -> anyhow::Result<Self> {
-        let device = Device::Cpu;
+        let device = CpuDevice;
         let tokenizer = Tokenizer::from_bytes(&md.tokenizer).map_err(E::msg)?;
 
         let mel_filters = safetensors::tensor::SafeTensors::deserialize(&md.mel_filters)?;
-        let mel_filters = mel_filters.tensor("mel_80")?.load(&device)?;
+        let mel_filters: Tensor = mel_filters.tensor("mel_80")?.load(&device)?;
         console_log!("loaded mel filters {:?}", mel_filters.shape());
         let mel_filters = mel_filters.flatten_all()?.to_vec1::<f32>()?;
         let config: Config = serde_json::from_slice(&md.config)?;
@@ -343,7 +343,7 @@ impl Decoder {
     }
 
     pub fn convert_and_run(&mut self, wav_input: &[u8]) -> anyhow::Result<Vec<Segment>> {
-        let device = Device::Cpu;
+        let device = CpuDevice;
         let mut wav_input = std::io::Cursor::new(wav_input);
         let wav_reader = hound::WavReader::new(&mut wav_input)?;
         let spec = wav_reader.spec();

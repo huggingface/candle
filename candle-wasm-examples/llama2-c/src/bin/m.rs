@@ -1,6 +1,7 @@
-use candle::{Device, Tensor};
+use candle::CpuDevice;
 use candle_transformers::generation::LogitsProcessor;
 use candle_wasm_example_llama2::worker::{Model as M, ModelData};
+use candle_wasm_example_llama2::Tensor;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -14,7 +15,7 @@ pub struct Model {
 impl Model {
     fn process(&mut self, tokens: &[u32]) -> candle::Result<String> {
         const REPEAT_LAST_N: usize = 64;
-        let dev = Device::Cpu;
+        let dev = CpuDevice;
         let input = Tensor::new(tokens, &dev)?.unsqueeze(0)?;
         let logits = self.inner.llama.forward(&input, tokens.len())?;
         let logits = logits.squeeze(0)?;
