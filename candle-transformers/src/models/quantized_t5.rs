@@ -19,7 +19,8 @@ use crate::models::t5::{deserialize_feed_forward_proj_activation, ActivationWith
 use crate::models::with_tracing::QMatMul;
 use crate::quantized_nn::Embedding;
 pub use crate::quantized_var_builder::VarBuilder;
-use candle::{DType, Device, Module, Result, Tensor, D};
+use candle::quantized::QuantizedBackend;
+use candle::{DType, Module, Result, Tensor, D};
 use candle_nn::Activation;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -40,14 +41,18 @@ fn default_tie_word_embeddings() -> bool {
     true
 }
 
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
+fn get_mask<QB: QuantizedBackend>(size: usize, device: &QB::Device) -> Result<Tensor<QB::Storage>> {
     let mask: Vec<_> = (0..size)
         .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
         .collect();
     Tensor::from_slice(&mask, (size, size), device)
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+fn masked_fill<QB: QuantizedBackend>(
+    on_false: &Tensor<QB::Storage>,
+    mask: &Tensor<QB::Storage>,
+    on_true: f32,
+) -> Result<Tensor<QB::Storage>> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true, on_false)?;
@@ -114,14 +119,14 @@ impl Default for Config {
 }
 
 #[derive(Debug, Clone)]
-struct T5LayerNorm {
-    weight: Tensor,
+struct T5LayerNorm<QB: QuantizedBackend> {
+    weight: Tensor<QB::Storage>,
     variance_epsilon: f64,
     span: tracing::Span,
 }
 
-impl T5LayerNorm {
-    fn load(h: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> T5LayerNorm<QB> {
+    fn load(h: usize, eps: f64, vb: VarBuilder<QB>) -> Result<Self> {
         let weight = vb.get(h, "weight")?.dequantize(vb.device())?;
         Ok(Self {
             weight,
@@ -131,8 +136,8 @@ impl T5LayerNorm {
     }
 }
 
-impl Module for T5LayerNorm {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for T5LayerNorm<QB> {
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let _enter = self.span.enter();
         let dtype = xs.dtype();
         let xs_f32 = xs.to_dtype(DType::F32)?;
@@ -146,15 +151,15 @@ impl Module for T5LayerNorm {
 }
 
 #[derive(Debug, Clone)]
-struct T5DenseActDense {
-    wi: QMatMul,
-    wo: QMatMul,
+struct T5DenseActDense<QB: QuantizedBackend> {
+    wi: QMatMul<QB>,
+    wo: QMatMul<QB>,
     act: Activation,
     span: tracing::Span,
 }
 
-impl T5DenseActDense {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<QB: QuantizedBackend> T5DenseActDense<QB> {
+    fn load(vb: VarBuilder<QB>, cfg: &Config) -> Result<Self> {
         let wi = QMatMul::new(cfg.d_model, cfg.d_ff, vb.pp("wi"))?;
         let wo = QMatMul::new(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
         Ok(Self {
@@ -166,8 +171,11 @@ impl T5DenseActDense {
     }
 }
 
-impl Module for T5DenseActDense {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for T5DenseActDense<QB>
+where
+    QMatMul<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let _enter = self.span.enter();
         let xs = self.wi.forward(xs)?;
         let xs = self.act.forward(&xs)?;
@@ -177,16 +185,16 @@ impl Module for T5DenseActDense {
 }
 
 #[derive(Debug, Clone)]
-struct T5DenseGatedActDense {
-    wi_0: QMatMul,
-    wi_1: QMatMul,
-    wo: QMatMul,
+struct T5DenseGatedActDense<QB: QuantizedBackend> {
+    wi_0: QMatMul<QB>,
+    wi_1: QMatMul<QB>,
+    wo: QMatMul<QB>,
     act: Activation,
     span: tracing::Span,
 }
 
-impl T5DenseGatedActDense {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<QB: QuantizedBackend> T5DenseGatedActDense<QB> {
+    fn load(vb: VarBuilder<QB>, cfg: &Config) -> Result<Self> {
         let wi_0 = QMatMul::new(cfg.d_model, cfg.d_ff, vb.pp("wi_0"))?;
         let wi_1 = QMatMul::new(cfg.d_model, cfg.d_ff, vb.pp("wi_1"))?;
         let wo = QMatMul::new(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
@@ -200,8 +208,11 @@ impl T5DenseGatedActDense {
     }
 }
 
-impl Module for T5DenseGatedActDense {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for T5DenseGatedActDense<QB>
+where
+    QMatMul<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let _enter = self.span.enter();
         let hidden_gelu = self.act.forward(&self.wi_0.forward(xs)?)?;
         let hidden_linear = self.wi_1.forward(xs)?;
@@ -212,15 +223,15 @@ impl Module for T5DenseGatedActDense {
 }
 
 #[derive(Debug, Clone)]
-struct T5LayerFF {
-    dense_act: Option<T5DenseActDense>,
-    gated_dense_act: Option<T5DenseGatedActDense>,
-    layer_norm: T5LayerNorm,
+struct T5LayerFF<QB: QuantizedBackend> {
+    dense_act: Option<T5DenseActDense<QB>>,
+    gated_dense_act: Option<T5DenseGatedActDense<QB>>,
+    layer_norm: T5LayerNorm<QB>,
     span: tracing::Span,
 }
 
-impl T5LayerFF {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<QB: QuantizedBackend> T5LayerFF<QB> {
+    fn load(vb: VarBuilder<QB>, cfg: &Config) -> Result<Self> {
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
         let (dense_act, gated_dense_act) = if cfg.feed_forward_proj.gated {
@@ -243,8 +254,11 @@ impl T5LayerFF {
     }
 }
 
-impl Module for T5LayerFF {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for T5LayerFF<QB>
+where
+    QMatMul<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let _enter = self.span.enter();
         let ys = self.layer_norm.forward(xs)?;
         let ys = match &self.dense_act {
@@ -257,30 +271,30 @@ impl Module for T5LayerFF {
 }
 
 #[derive(Debug, Clone)]
-struct T5Attention {
-    q: QMatMul,
-    k: QMatMul,
-    v: QMatMul,
-    o: QMatMul,
+struct T5Attention<QB: QuantizedBackend> {
+    q: QMatMul<QB>,
+    k: QMatMul<QB>,
+    v: QMatMul<QB>,
+    o: QMatMul<QB>,
     n_heads: usize,
     d_kv: usize,
-    relative_attention_bias: Option<Embedding>,
+    relative_attention_bias: Option<Embedding<QB>>,
     relative_attention_num_buckets: usize,
     relative_attention_max_distance: usize,
     inner_dim: usize,
     use_cache: bool,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
     span: tracing::Span,
     span_cache: tracing::Span,
     span_mm: tracing::Span,
     span_sm: tracing::Span,
 }
 
-impl T5Attention {
+impl<QB: QuantizedBackend> T5Attention<QB> {
     fn load(
         has_relative_attention_bias: bool,
         decoder: bool,
-        vb: VarBuilder,
+        vb: VarBuilder<QB>,
         cfg: &Config,
     ) -> Result<Self> {
         let inner_dim = cfg.num_heads * cfg.d_kv;
@@ -320,11 +334,14 @@ impl T5Attention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        position_bias: Option<&Tensor>,
-        key_value_states: Option<&Tensor>,
-        mask: Option<&Tensor>,
-    ) -> Result<(Tensor, Option<Tensor>)> {
+        xs: &Tensor<QB::Storage>,
+        position_bias: Option<&Tensor<QB::Storage>>,
+        key_value_states: Option<&Tensor<QB::Storage>>,
+        mask: Option<&Tensor<QB::Storage>>,
+    ) -> Result<(Tensor<QB::Storage>, Option<Tensor<QB::Storage>>)>
+    where
+        QMatMul<QB>: Module<QB::Storage>,
+    {
         // Performs Self-attention (if key_value_states is None) or attention
         // over source sentence (provided by key_value_states).
         let _enter = self.span.enter();
@@ -365,7 +382,7 @@ impl T5Attention {
         };
         let scores = match mask {
             None => scores,
-            Some(mask) => masked_fill(
+            Some(mask) => masked_fill::<QB>(
                 &scores,
                 &mask
                     .unsqueeze(0)?
@@ -452,14 +469,14 @@ impl T5Attention {
 }
 
 #[derive(Debug, Clone)]
-struct T5LayerSelfAttention {
-    self_attention: T5Attention,
-    layer_norm: T5LayerNorm,
+struct T5LayerSelfAttention<QB: QuantizedBackend> {
+    self_attention: T5Attention<QB>,
+    layer_norm: T5LayerNorm<QB>,
     span: tracing::Span,
 }
 
-impl T5LayerSelfAttention {
-    fn load(h: bool, d: bool, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<QB: QuantizedBackend> T5LayerSelfAttention<QB> {
+    fn load(h: bool, d: bool, vb: VarBuilder<QB>, cfg: &Config) -> Result<Self> {
         let self_attention = T5Attention::load(h, d, vb.pp("SelfAttention"), cfg)?;
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
@@ -472,10 +489,13 @@ impl T5LayerSelfAttention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        position_bias: Option<&Tensor>,
-        mask: Option<&Tensor>,
-    ) -> Result<(Tensor, Option<Tensor>)> {
+        xs: &Tensor<QB::Storage>,
+        position_bias: Option<&Tensor<QB::Storage>>,
+        mask: Option<&Tensor<QB::Storage>>,
+    ) -> Result<(Tensor<QB::Storage>, Option<Tensor<QB::Storage>>)>
+    where
+        QMatMul<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span.enter();
         let normed_xs = self.layer_norm.forward(xs)?;
         let (ys, position_bias) =
@@ -491,14 +511,14 @@ impl T5LayerSelfAttention {
 }
 
 #[derive(Debug, Clone)]
-struct T5LayerCrossAttention {
-    cross_attention: T5Attention,
-    layer_norm: T5LayerNorm,
+struct T5LayerCrossAttention<QB: QuantizedBackend> {
+    cross_attention: T5Attention<QB>,
+    layer_norm: T5LayerNorm<QB>,
     span: tracing::Span,
 }
 
-impl T5LayerCrossAttention {
-    fn load(decoder: bool, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<QB: QuantizedBackend> T5LayerCrossAttention<QB> {
+    fn load(decoder: bool, vb: VarBuilder<QB>, cfg: &Config) -> Result<Self> {
         let cross_attention = T5Attention::load(false, decoder, vb.pp("EncDecAttention"), cfg)?;
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
@@ -511,10 +531,13 @@ impl T5LayerCrossAttention {
 
     fn forward(
         &mut self,
-        hidden_states: &Tensor,
-        position_bias: Option<&Tensor>,
-        key_value_states: &Tensor,
-    ) -> Result<(Tensor, Option<Tensor>)> {
+        hidden_states: &Tensor<QB::Storage>,
+        position_bias: Option<&Tensor<QB::Storage>>,
+        key_value_states: &Tensor<QB::Storage>,
+    ) -> Result<(Tensor<QB::Storage>, Option<Tensor<QB::Storage>>)>
+    where
+        QMatMul<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span.enter();
         let normed_hidden_states = self.layer_norm.forward(hidden_states)?;
         let (ys, position_bias) = self.cross_attention.forward(
@@ -533,18 +556,18 @@ impl T5LayerCrossAttention {
 }
 
 #[derive(Debug, Clone)]
-struct T5Block {
-    self_attn: T5LayerSelfAttention,
-    cross_attn: Option<T5LayerCrossAttention>,
-    ff: T5LayerFF,
+struct T5Block<QB: QuantizedBackend> {
+    self_attn: T5LayerSelfAttention<QB>,
+    cross_attn: Option<T5LayerCrossAttention<QB>>,
+    ff: T5LayerFF<QB>,
     span: tracing::Span,
 }
 
-impl T5Block {
+impl<QB: QuantizedBackend> T5Block<QB> {
     fn load(
         has_relative_attention_bias: bool,
         decoder: bool,
-        vb: VarBuilder,
+        vb: VarBuilder<QB>,
         cfg: &Config,
     ) -> Result<Self> {
         let vb = vb.pp("layer");
@@ -567,10 +590,13 @@ impl T5Block {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        position_bias: Option<&Tensor>,
-        encoder_hidden_states: Option<&Tensor>,
-    ) -> Result<(Tensor, Option<Tensor>)> {
+        xs: &Tensor<QB::Storage>,
+        position_bias: Option<&Tensor<QB::Storage>>,
+        encoder_hidden_states: Option<&Tensor<QB::Storage>>,
+    ) -> Result<(Tensor<QB::Storage>, Option<Tensor<QB::Storage>>)>
+    where
+        QMatMul<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span.enter();
         // TODO: Cache masks
         let mask = match self.cross_attn.is_some() {
@@ -581,7 +607,7 @@ impl T5Block {
                 if mask_len <= 1 {
                     None
                 } else {
-                    Some(get_mask(mask_len, xs.device())?)
+                    Some(get_mask::<QB>(mask_len, xs.device())?)
                 }
             }
             false => None,
@@ -604,15 +630,20 @@ impl T5Block {
 }
 
 #[derive(Debug, Clone)]
-struct T5Stack {
-    block: Vec<T5Block>,
-    shared: Arc<Embedding>,
-    final_layer_norm: T5LayerNorm,
+struct T5Stack<QB: QuantizedBackend> {
+    block: Vec<T5Block<QB>>,
+    shared: Arc<Embedding<QB>>,
+    final_layer_norm: T5LayerNorm<QB>,
     span: tracing::Span,
 }
 
-impl T5Stack {
-    fn load(decoder: bool, vb: VarBuilder, shared: &Arc<Embedding>, cfg: &Config) -> Result<Self> {
+impl<QB: QuantizedBackend> T5Stack<QB> {
+    fn load(
+        decoder: bool,
+        vb: VarBuilder<QB>,
+        shared: &Arc<Embedding<QB>>,
+        cfg: &Config,
+    ) -> Result<Self> {
         let block = (0..cfg.num_layers)
             .map(|i| T5Block::load(i == 0, decoder, vb.pp(format!("block.{i}")), cfg))
             .collect::<Result<Vec<_>>>()?;
@@ -631,9 +662,12 @@ impl T5Stack {
 
     fn forward(
         &mut self,
-        input_ids: &Tensor,
-        encoder_hidden_states: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        input_ids: &Tensor<QB::Storage>,
+        encoder_hidden_states: Option<&Tensor<QB::Storage>>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        QMatMul<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span.enter();
         let input_embeds = self.shared.as_ref().forward(input_ids)?;
         let mut hidden_states = input_embeds;
@@ -654,14 +688,14 @@ impl T5Stack {
 }
 
 #[derive(Debug, Clone)]
-pub struct T5EncoderModel {
-    encoder: T5Stack,
-    device: Device,
+pub struct T5EncoderModel<QB: QuantizedBackend> {
+    encoder: T5Stack<QB>,
+    device: QB::Device,
     span: tracing::Span,
 }
 
-impl T5EncoderModel {
-    pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<QB: QuantizedBackend> T5EncoderModel<QB> {
+    pub fn load(vb: VarBuilder<QB>, cfg: &Config) -> Result<Self> {
         let shared_vb = if vb.contains_key("shared.weight") {
             vb.pp("shared")
         } else {
@@ -677,12 +711,15 @@ impl T5EncoderModel {
         })
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>>
+    where
+        QMatMul<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span.enter();
         self.encoder.forward(input_ids, None)
     }
 
-    pub fn device(&self) -> &Device {
+    pub fn device(&self) -> &QB::Device {
         &self.device
     }
 
@@ -692,20 +729,20 @@ impl T5EncoderModel {
 }
 
 #[derive(Debug, Clone)]
-pub struct T5ForConditionalGeneration {
-    encoder: T5Stack,
-    decoder: T5Stack,
+pub struct T5ForConditionalGeneration<QB: QuantizedBackend> {
+    encoder: T5Stack<QB>,
+    decoder: T5Stack<QB>,
     d_model: usize,
     tie_word_embeddings: bool,
-    lm_head: Option<QMatMul>,
-    shared: Arc<Embedding>,
-    device: Device,
+    lm_head: Option<QMatMul<QB>>,
+    shared: Arc<Embedding<QB>>,
+    device: QB::Device,
     span_decode: tracing::Span,
     span_decode_head: tracing::Span,
 }
 
-impl T5ForConditionalGeneration {
-    pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<QB: QuantizedBackend> T5ForConditionalGeneration<QB> {
+    pub fn load(vb: VarBuilder<QB>, cfg: &Config) -> Result<Self> {
         assert!(cfg.is_encoder_decoder);
         let d_model = cfg.d_model;
         let shared_vb = if vb.contains_key("shared.weight") {
@@ -748,15 +785,21 @@ impl T5ForConditionalGeneration {
         })
     }
 
-    pub fn encode(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn encode(&mut self, input_ids: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>>
+    where
+        QMatMul<QB>: Module<QB::Storage>,
+    {
         self.encoder.forward(input_ids, None)
     }
 
     pub fn decode(
         &mut self,
-        decoder_input_ids: &Tensor,
-        encoder_output: &Tensor,
-    ) -> Result<Tensor> {
+        decoder_input_ids: &Tensor<QB::Storage>,
+        encoder_output: &Tensor<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        QMatMul<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span_decode.enter();
         let decoder_output = self
             .decoder
@@ -783,12 +826,19 @@ impl T5ForConditionalGeneration {
         Ok(output)
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, decoder_input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        input_ids: &Tensor<QB::Storage>,
+        decoder_input_ids: &Tensor<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        QMatMul<QB>: Module<QB::Storage>,
+    {
         let encoder_output = self.encode(input_ids)?;
         self.decode(decoder_input_ids, &encoder_output)
     }
 
-    pub fn device(&self) -> &Device {
+    pub fn device(&self) -> &QB::Device {
         &self.device
     }
 

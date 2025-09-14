@@ -20,37 +20,37 @@ use crate::{
     quantized_nn::{layer_norm, linear_no_bias as linear, Embedding, Linear},
     quantized_var_builder::VarBuilder,
 };
-use candle::{IndexOp, Result, Tensor};
+use candle::{quantized::QuantizedBackend, IndexOp, Result, Tensor};
 use candle_nn::{GroupNorm, LayerNorm, Module};
 
 pub use crate::models::rwkv_v5::{Config, State, Tokenizer};
 
 #[derive(Debug, Clone)]
-struct SelfAttention {
-    key: Linear,
-    receptance: Linear,
-    value: Linear,
-    gate: Linear,
-    output: Linear,
-    ln_x: candle_nn::GroupNorm,
-    time_mix_x: Tensor,
-    time_mix_w: Tensor,
-    time_mix_key: Tensor,
-    time_mix_value: Tensor,
-    time_mix_receptance: Tensor,
-    time_decay: Tensor,
-    time_faaaa: Tensor,
-    time_mix_gate: Tensor,
-    time_decay_w1: Tensor,
-    time_decay_w2: Tensor,
-    time_mix_w1: Tensor,
-    time_mix_w2: Tensor,
+struct SelfAttention<QB: QuantizedBackend> {
+    key: Linear<QB>,
+    receptance: Linear<QB>,
+    value: Linear<QB>,
+    gate: Linear<QB>,
+    output: Linear<QB>,
+    ln_x: candle_nn::GroupNorm<QB::Storage>,
+    time_mix_x: Tensor<QB::Storage>,
+    time_mix_w: Tensor<QB::Storage>,
+    time_mix_key: Tensor<QB::Storage>,
+    time_mix_value: Tensor<QB::Storage>,
+    time_mix_receptance: Tensor<QB::Storage>,
+    time_decay: Tensor<QB::Storage>,
+    time_faaaa: Tensor<QB::Storage>,
+    time_mix_gate: Tensor<QB::Storage>,
+    time_decay_w1: Tensor<QB::Storage>,
+    time_decay_w2: Tensor<QB::Storage>,
+    time_mix_w1: Tensor<QB::Storage>,
+    time_mix_w2: Tensor<QB::Storage>,
     layer_id: usize,
     n_attn_heads: usize,
 }
 
-impl SelfAttention {
-    fn new(layer_id: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> SelfAttention<QB> {
+    fn new(layer_id: usize, cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let attn_hidden_size = cfg.attention_hidden_size;
         let key = linear(hidden_size, attn_hidden_size, vb.pp("key"))?;
@@ -132,7 +132,14 @@ impl SelfAttention {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        xs: &Tensor<QB::Storage>,
+        state: &mut State<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let h = self.n_attn_heads;
         let (b, t, s) = xs.dims3()?;
         let s = s / h;
@@ -191,7 +198,7 @@ impl SelfAttention {
                 .reshape(((), 1, 1))?
                 .reshape((self.n_attn_heads, (), 1))?;
 
-        let mut out: Vec<Tensor> = Vec::with_capacity(t);
+        let mut out: Vec<Tensor<QB::Storage>> = Vec::with_capacity(t);
         for t_ in 0..t {
             let rt = receptance.i((.., .., t_..t_ + 1))?.contiguous()?;
             let kt = key.i((.., .., .., t_..t_ + 1))?.contiguous()?;
@@ -211,17 +218,17 @@ impl SelfAttention {
 }
 
 #[derive(Debug, Clone)]
-struct FeedForward {
-    time_mix_key: Tensor,
-    time_mix_receptance: Tensor,
-    key: Linear,
-    receptance: Linear,
-    value: Linear,
+struct FeedForward<QB: QuantizedBackend> {
+    time_mix_key: Tensor<QB::Storage>,
+    time_mix_receptance: Tensor<QB::Storage>,
+    key: Linear<QB>,
+    receptance: Linear<QB>,
+    value: Linear<QB>,
     layer_id: usize,
 }
 
-impl FeedForward {
-    fn new(layer_id: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> FeedForward<QB> {
+    fn new(layer_id: usize, cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let int_size = cfg
             .intermediate_size
             .unwrap_or(((cfg.hidden_size as f64 * 3.5) as usize) / 32 * 32);
@@ -244,7 +251,14 @@ impl FeedForward {
         })
     }
 
-    fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor<QB::Storage>,
+        state: &mut State<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let shifted = state.per_layer[self.layer_id]
             .feed_forward
             .broadcast_sub(xs)?;
@@ -260,16 +274,16 @@ impl FeedForward {
 }
 
 #[derive(Debug, Clone)]
-struct Block {
-    pre_ln: Option<LayerNorm>,
-    ln1: LayerNorm,
-    ln2: LayerNorm,
-    attention: SelfAttention,
-    feed_forward: FeedForward,
+struct Block<QB: QuantizedBackend> {
+    pre_ln: Option<LayerNorm<QB::Storage>>,
+    ln1: LayerNorm<QB::Storage>,
+    ln2: LayerNorm<QB::Storage>,
+    attention: SelfAttention<QB>,
+    feed_forward: FeedForward<QB>,
 }
 
-impl Block {
-    fn new(layer_id: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Block<QB> {
+    fn new(layer_id: usize, cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let ln1 = layer_norm(cfg.hidden_size, cfg.layer_norm_epsilon, vb.pp("ln1"))?;
         let ln2 = layer_norm(cfg.hidden_size, cfg.layer_norm_epsilon, vb.pp("ln2"))?;
         let pre_ln = if layer_id == 0 {
@@ -289,7 +303,14 @@ impl Block {
         })
     }
 
-    fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor<QB::Storage>,
+        state: &mut State<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let xs = match self.pre_ln.as_ref() {
             None => xs.clone(),
             Some(pre_ln) => xs.apply(pre_ln)?,
@@ -303,17 +324,17 @@ impl Block {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    embeddings: Embedding,
-    blocks: Vec<Block>,
-    ln_out: LayerNorm,
-    head: Linear,
+pub struct Model<QB: QuantizedBackend> {
+    embeddings: Embedding<QB>,
+    blocks: Vec<Block<QB>>,
+    ln_out: LayerNorm<QB::Storage>,
+    head: Linear<QB>,
     rescale_every: usize,
     layers_are_rescaled: bool,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Model<QB> {
+    pub fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let vb_m = vb.pp("rwkv");
         let embeddings = Embedding::new(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embeddings"))?;
         let mut blocks = Vec::with_capacity(cfg.num_hidden_layers);
@@ -334,7 +355,14 @@ impl Model {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        xs: &Tensor<QB::Storage>,
+        state: &mut State<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let (_b_size, _seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.embeddings)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {

@@ -17,9 +17,14 @@ use crate::models::moondream::{Config, VisionConfig};
 use crate::models::quantized_mixformer::MixFormerSequentialForCausalLM as PhiModel;
 use crate::quantized_nn::{layer_norm, linear_b, Linear};
 use crate::quantized_var_builder::VarBuilder;
+use candle::quantized::QuantizedBackend;
 use candle::{IndexOp, Module, Result, Tensor, D};
 
-fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+fn scaled_dot_product_attention<QB: QuantizedBackend>(
+    q: &Tensor<QB::Storage>,
+    k: &Tensor<QB::Storage>,
+    v: &Tensor<QB::Storage>,
+) -> Result<Tensor<QB::Storage>> {
     let dim = q.dim(D::Minus1)?;
     let scale_factor = 1.0 / (dim as f64).sqrt();
     let attn_weights = (q.matmul(&k.t()?)? * scale_factor)?;
@@ -27,33 +32,36 @@ fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Te
 }
 
 #[derive(Debug, Clone)]
-struct LinearPatchEmbedding {
-    linear: Linear,
+struct LinearPatchEmbedding<QB: QuantizedBackend> {
+    linear: Linear<QB>,
 }
 
-impl LinearPatchEmbedding {
-    fn new(vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> LinearPatchEmbedding<QB> {
+    fn new(vb: VarBuilder<QB>) -> Result<Self> {
         let linear = linear_b(588, 1152, true, vb.pp("linear"))?;
         Ok(Self { linear })
     }
 }
 
-impl Module for LinearPatchEmbedding {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for LinearPatchEmbedding<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         xs.apply(&self.linear)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Attention {
+struct Attention<QB: QuantizedBackend> {
     num_heads: usize,
     head_dim: usize,
-    qkv: Linear,
-    proj: Linear,
+    qkv: Linear<QB>,
+    proj: Linear<QB>,
 }
 
-impl Attention {
-    pub fn new(vb: VarBuilder, dim: usize, num_heads: usize) -> Result<Self> {
+impl<QB: QuantizedBackend> Attention<QB> {
+    pub fn new(vb: VarBuilder<QB>, dim: usize, num_heads: usize) -> Result<Self> {
         let qkv = linear_b(dim, dim * 3, true, vb.pp("qkv"))?;
         let proj = linear_b(dim, dim, true, vb.pp("proj"))?;
         Ok(Self {
@@ -65,8 +73,11 @@ impl Attention {
     }
 }
 
-impl Module for Attention {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for Attention<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let (b, n, c) = xs.dims3()?;
         let qkv = xs
             .apply(&self.qkv)?
@@ -77,7 +88,7 @@ impl Module for Attention {
             qkv.i(1)?.contiguous()?,
             qkv.i(2)?.contiguous()?,
         );
-        scaled_dot_product_attention(&q, &k, &v)?
+        scaled_dot_product_attention::<QB>(&q, &k, &v)?
             .transpose(1, 2)?
             .reshape((b, n, c))?
             .apply(&self.proj)
@@ -85,15 +96,15 @@ impl Module for Attention {
 }
 
 #[derive(Debug, Clone)]
-struct VitBlock {
-    attn: Attention,
-    mlp: Mlp,
-    norm1: candle_nn::LayerNorm,
-    norm2: candle_nn::LayerNorm,
+struct VitBlock<QB: QuantizedBackend> {
+    attn: Attention<QB>,
+    mlp: Mlp<QB>,
+    norm1: candle_nn::LayerNorm<QB::Storage>,
+    norm2: candle_nn::LayerNorm<QB::Storage>,
 }
 
-impl VitBlock {
-    fn new(vb: VarBuilder, dim: usize, num_heads: usize, cfg: &VisionConfig) -> Result<Self> {
+impl<QB: QuantizedBackend> VitBlock<QB> {
+    fn new(vb: VarBuilder<QB>, dim: usize, num_heads: usize, cfg: &VisionConfig) -> Result<Self> {
         let attn = Attention::new(vb.pp("attn"), dim, num_heads)?;
         let mlp = Mlp::new(vb.pp("mlp"), dim, cfg.hidden_features, dim, cfg.act)?;
         let norm1 = layer_norm(dim, 1e-5, vb.pp("norm1"))?;
@@ -107,8 +118,11 @@ impl VitBlock {
     }
 }
 
-impl Module for VitBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for VitBlock<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let ys = xs.apply(&self.norm1)?.apply(&self.attn)?;
         let xs = (xs + &ys)?;
         let ys = xs.apply(&self.norm2)?.apply(&self.mlp)?;
@@ -118,15 +132,15 @@ impl Module for VitBlock {
 }
 
 #[derive(Debug, Clone)]
-struct VisionTransformer {
-    patch_embed: LinearPatchEmbedding,
-    pos_embed: Tensor,
-    blocks: Vec<VitBlock>,
-    norm: candle_nn::LayerNorm,
+struct VisionTransformer<QB: QuantizedBackend> {
+    patch_embed: LinearPatchEmbedding<QB>,
+    pos_embed: Tensor<QB::Storage>,
+    blocks: Vec<VitBlock<QB>>,
+    norm: candle_nn::LayerNorm<QB::Storage>,
 }
 
-impl VisionTransformer {
-    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> VisionTransformer<QB> {
+    fn new(cfg: &VisionConfig, vb: VarBuilder<QB>) -> Result<Self> {
         let patch_embed = LinearPatchEmbedding::new(vb.pp("patch_embed"))?;
         let pos_embed = vb
             .get((1, cfg.embed_len, cfg.embed_dim), "pos_embed")?
@@ -151,8 +165,11 @@ impl VisionTransformer {
     }
 }
 
-impl Module for VisionTransformer {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for VisionTransformer<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let mut xs = (&xs.apply(&self.patch_embed)? + &self.pos_embed)?;
         for block in self.blocks.iter() {
             xs = xs.apply(block)?;
@@ -162,33 +179,36 @@ impl Module for VisionTransformer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Encoder {
-    model: VisionTransformer,
+pub struct Encoder<QB: QuantizedBackend> {
+    model: VisionTransformer<QB>,
 }
 
-impl Encoder {
-    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Encoder<QB> {
+    fn new(cfg: &VisionConfig, vb: VarBuilder<QB>) -> Result<Self> {
         let model = VisionTransformer::new(cfg, vb.pp("model.visual"))?;
         Ok(Self { model })
     }
 }
 
-impl Module for Encoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for Encoder<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         xs.apply(&self.model)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    fc1: Linear,
+struct Mlp<QB: QuantizedBackend> {
+    fc1: Linear<QB>,
     act: candle_nn::Activation,
-    fc2: Linear,
+    fc2: Linear<QB>,
 }
 
-impl Mlp {
+impl<QB: QuantizedBackend> Mlp<QB> {
     fn new(
-        vb: VarBuilder,
+        vb: VarBuilder<QB>,
         in_features: usize,
         hidden_features: usize,
         out_features: usize,
@@ -200,19 +220,22 @@ impl Mlp {
     }
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for Mlp<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         xs.apply(&self.fc1)?.apply(&self.act)?.apply(&self.fc2)
     }
 }
 
 #[derive(Debug, Clone)]
-struct VisionProjection {
-    mlp: Mlp,
+struct VisionProjection<QB: QuantizedBackend> {
+    mlp: Mlp<QB>,
 }
 
-impl VisionProjection {
-    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> VisionProjection<QB> {
+    fn new(cfg: &VisionConfig, vb: VarBuilder<QB>) -> Result<Self> {
         let mlp = Mlp::new(
             vb.pp("mlp"),
             cfg.image_embedding_dim,
@@ -224,20 +247,23 @@ impl VisionProjection {
     }
 }
 
-impl Module for VisionProjection {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for VisionProjection<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         xs.apply(&self.mlp)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct VisionEncoder {
-    encoder: Encoder,
-    projection: VisionProjection,
+pub struct VisionEncoder<QB: QuantizedBackend> {
+    encoder: Encoder<QB>,
+    projection: VisionProjection<QB>,
 }
 
-impl VisionEncoder {
-    pub fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> VisionEncoder<QB> {
+    pub fn new(cfg: &VisionConfig, vb: VarBuilder<QB>) -> Result<Self> {
         let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
         let projection = VisionProjection::new(cfg, vb.pp("projection"))?;
         Ok(Self {
@@ -247,8 +273,11 @@ impl VisionEncoder {
     }
 }
 
-impl Module for VisionEncoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for VisionEncoder<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let (b, c, hp1, wp2) = xs.dims4()?;
         let (p1, p2) = (14, 14);
         let h = hp1 / p1;
@@ -261,13 +290,13 @@ impl Module for VisionEncoder {
     }
 }
 
-pub struct Model {
-    pub text_model: PhiModel,
-    pub vision_encoder: VisionEncoder,
+pub struct Model<QB: QuantizedBackend> {
+    pub text_model: PhiModel<QB>,
+    pub vision_encoder: VisionEncoder<QB>,
 }
 
-impl Model {
-    pub fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Model<QB> {
+    pub fn new(config: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let text_model = PhiModel::new_v2(&config.phi_config, vb.pp("text_model"))?;
         let vision_encoder = VisionEncoder::new(&config.vision_config, vb.pp("vision_encoder"))?;
         Ok(Self {
@@ -276,11 +305,11 @@ impl Model {
         })
     }
 
-    pub fn vision_encoder(&self) -> &VisionEncoder {
+    pub fn vision_encoder(&self) -> &VisionEncoder<QB> {
         &self.vision_encoder
     }
 
-    pub fn text_model(&mut self) -> &mut PhiModel {
+    pub fn text_model(&mut self) -> &mut PhiModel<QB> {
         &mut self.text_model
     }
 }

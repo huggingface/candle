@@ -18,21 +18,22 @@
 use crate::models::with_tracing::QMatMul;
 use crate::quantized_nn::{layer_norm, linear, Embedding, Linear};
 pub use crate::quantized_var_builder::VarBuilder;
+use candle::quantized::QuantizedBackend;
 use candle::{Module, Result, Tensor, D};
 use candle_nn::LayerNorm;
 
 pub type Config = super::blip_text::Config;
 
 #[derive(Debug, Clone)]
-struct TextEmbeddings {
-    word_embeddings: Embedding,
-    position_embeddings: Embedding,
-    layer_norm: LayerNorm,
-    position_ids: Tensor,
+struct TextEmbeddings<QB: QuantizedBackend> {
+    word_embeddings: Embedding<QB>,
+    position_embeddings: Embedding<QB>,
+    layer_norm: LayerNorm<QB::Storage>,
+    position_ids: Tensor<QB::Storage>,
 }
 
-impl TextEmbeddings {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> TextEmbeddings<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let word_embeddings =
             Embedding::new(cfg.vocab_size, cfg.hidden_size, vb.pp("word_embeddings"))?;
         let position_embeddings = Embedding::new(
@@ -51,7 +52,7 @@ impl TextEmbeddings {
         })
     }
 
-    fn forward(&self, xs: &Tensor, past_kv_len: usize) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<QB::Storage>, past_kv_len: usize) -> Result<Tensor<QB::Storage>> {
         let seq_len = xs.dim(1)?;
         let position_ids = self.position_ids.narrow(1, past_kv_len, seq_len)?;
         let embeddings = self.word_embeddings.forward(xs)?;
@@ -61,18 +62,18 @@ impl TextEmbeddings {
 }
 
 #[derive(Debug, Clone)]
-struct TextSelfAttention {
-    query: Linear,
-    key: Linear,
-    value: Linear,
+struct TextSelfAttention<QB: QuantizedBackend> {
+    query: Linear<QB>,
+    key: Linear<QB>,
+    value: Linear<QB>,
     attention_head_size: usize,
     num_attention_heads: usize,
     attention_scale: f64,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
 }
 
-impl TextSelfAttention {
-    fn new(cfg: &Config, is_cross_attention: bool, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> TextSelfAttention<QB> {
+    fn new(cfg: &Config, is_cross_attention: bool, vb: VarBuilder<QB>) -> Result<Self> {
         let num_attention_heads = cfg.num_attention_heads;
         let attention_head_size = cfg.hidden_size / num_attention_heads;
         let all_head_size = cfg.num_attention_heads * attention_head_size;
@@ -96,7 +97,7 @@ impl TextSelfAttention {
         })
     }
 
-    fn transpose_for_scores(&self, xs: &Tensor) -> Result<Tensor> {
+    fn transpose_for_scores(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let (b_size, seq_len, _) = xs.dims3()?;
         xs.reshape((
             b_size,
@@ -113,10 +114,13 @@ impl TextSelfAttention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        encoder_hidden_states: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        xs: &Tensor<QB::Storage>,
+        encoder_hidden_states: Option<&Tensor<QB::Storage>>,
+        attention_mask: Option<&Tensor<QB::Storage>>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let query = self
             .transpose_for_scores(&self.query.forward(xs)?)?
             .contiguous()?;
@@ -159,31 +163,38 @@ impl TextSelfAttention {
 }
 
 #[derive(Debug, Clone)]
-struct TextSelfOutput {
-    dense: Linear,
-    layer_norm: LayerNorm,
+struct TextSelfOutput<QB: QuantizedBackend> {
+    dense: Linear<QB>,
+    layer_norm: LayerNorm<QB::Storage>,
 }
 
-impl TextSelfOutput {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> TextSelfOutput<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let dense = linear(cfg.hidden_size, cfg.hidden_size, vb.pp("dense"))?;
         let layer_norm = layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("LayerNorm"))?;
         Ok(Self { dense, layer_norm })
     }
 
-    fn forward(&self, xs: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor<QB::Storage>,
+        input_tensor: &Tensor<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         (xs.apply(&self.dense) + input_tensor)?.apply(&self.layer_norm)
     }
 }
 
 #[derive(Debug, Clone)]
-struct TextAttention {
-    self_: TextSelfAttention,
-    output: TextSelfOutput,
+struct TextAttention<QB: QuantizedBackend> {
+    self_: TextSelfAttention<QB>,
+    output: TextSelfOutput<QB>,
 }
 
-impl TextAttention {
-    fn new(cfg: &Config, is_cross_attention: bool, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> TextAttention<QB> {
+    fn new(cfg: &Config, is_cross_attention: bool, vb: VarBuilder<QB>) -> Result<Self> {
         let self_ = TextSelfAttention::new(cfg, is_cross_attention, vb.pp("self"))?;
         let output = TextSelfOutput::new(cfg, vb.pp("output"))?;
         Ok(Self { self_, output })
@@ -195,10 +206,13 @@ impl TextAttention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        encoder_hidden_states: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        xs: &Tensor<QB::Storage>,
+        encoder_hidden_states: Option<&Tensor<QB::Storage>>,
+        attention_mask: Option<&Tensor<QB::Storage>>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let self_outputs = self
             .self_
             .forward(xs, encoder_hidden_states, attention_mask)?;
@@ -207,13 +221,13 @@ impl TextAttention {
 }
 
 #[derive(Debug, Clone)]
-struct TextIntermediate {
-    dense: Linear,
+struct TextIntermediate<QB: QuantizedBackend> {
+    dense: Linear<QB>,
     intermediate_act_fn: candle_nn::Activation,
 }
 
-impl TextIntermediate {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> TextIntermediate<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let dense = linear(cfg.hidden_size, cfg.intermediate_size, vb.pp("dense"))?;
         Ok(Self {
             dense,
@@ -222,40 +236,50 @@ impl TextIntermediate {
     }
 }
 
-impl Module for TextIntermediate {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for TextIntermediate<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         xs.apply(&self.dense)?.apply(&self.intermediate_act_fn)
     }
 }
 
 #[derive(Debug, Clone)]
-struct TextOutput {
-    dense: Linear,
-    layer_norm: LayerNorm,
+struct TextOutput<QB: QuantizedBackend> {
+    dense: Linear<QB>,
+    layer_norm: LayerNorm<QB::Storage>,
 }
 
-impl TextOutput {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> TextOutput<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let dense = linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("dense"))?;
         let layer_norm = layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("LayerNorm"))?;
         Ok(Self { dense, layer_norm })
     }
 
-    fn forward(&self, xs: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor<QB::Storage>,
+        input_tensor: &Tensor<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         (xs.apply(&self.dense)? + input_tensor)?.apply(&self.layer_norm)
     }
 }
 
 #[derive(Debug, Clone)]
-struct TextLayer {
-    attention: TextAttention,
-    cross_attention: Option<TextAttention>,
-    intermediate: TextIntermediate,
-    output: TextOutput,
+struct TextLayer<QB: QuantizedBackend> {
+    attention: TextAttention<QB>,
+    cross_attention: Option<TextAttention<QB>>,
+    intermediate: TextIntermediate<QB>,
+    output: TextOutput<QB>,
 }
 
-impl TextLayer {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> TextLayer<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let attention = TextAttention::new(cfg, false, vb.pp("attention"))?;
         let cross_attention = if cfg.is_decoder {
             Some(TextAttention::new(cfg, true, vb.pp("crossattention"))?)
@@ -281,10 +305,13 @@ impl TextLayer {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        encoder_hidden_states: &Tensor,
-        attention_mask: &Tensor,
-    ) -> Result<Tensor> {
+        xs: &Tensor<QB::Storage>,
+        encoder_hidden_states: &Tensor<QB::Storage>,
+        attention_mask: &Tensor<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let attention_output = self.attention.forward(xs, None, Some(attention_mask))?;
         let attention_output = match &mut self.cross_attention {
             Some(ca) => ca.forward(&attention_output, Some(encoder_hidden_states), None)?,
@@ -296,12 +323,12 @@ impl TextLayer {
 }
 
 #[derive(Debug, Clone)]
-struct TextEncoder {
-    layers: Vec<TextLayer>,
+struct TextEncoder<QB: QuantizedBackend> {
+    layers: Vec<TextLayer<QB>>,
 }
 
-impl TextEncoder {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> TextEncoder<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let vb = vb.pp("layer");
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for i in 0..cfg.num_hidden_layers {
@@ -317,10 +344,13 @@ impl TextEncoder {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        encoder_hidden_states: &Tensor,
-        attention_mask: &Tensor,
-    ) -> Result<Tensor> {
+        xs: &Tensor<QB::Storage>,
+        encoder_hidden_states: &Tensor<QB::Storage>,
+        attention_mask: &Tensor<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let mut xs = xs.clone();
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, encoder_hidden_states, attention_mask)?
@@ -330,19 +360,22 @@ impl TextEncoder {
 }
 
 #[derive(Debug, Clone)]
-pub struct TextPooler {
-    dense: Linear,
+pub struct TextPooler<QB: QuantizedBackend> {
+    dense: Linear<QB>,
 }
 
-impl TextPooler {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> TextPooler<QB> {
+    pub fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let dense = linear(cfg.hidden_size, cfg.hidden_size, vb.pp("dense"))?;
         Ok(Self { dense })
     }
 }
 
-impl Module for TextPooler {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for TextPooler<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         xs.narrow(D::Minus1, 0, 1)?
             .squeeze(D::Minus1)?
             .apply(&self.dense)?
@@ -351,14 +384,14 @@ impl Module for TextPooler {
 }
 
 #[derive(Debug, Clone)]
-struct TextPredictionHeadTransform {
-    dense: Linear,
+struct TextPredictionHeadTransform<QB: QuantizedBackend> {
+    dense: Linear<QB>,
     transform_act_fn: candle_nn::Activation,
-    layer_norm: LayerNorm,
+    layer_norm: LayerNorm<QB::Storage>,
 }
 
-impl TextPredictionHeadTransform {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> TextPredictionHeadTransform<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let dense = linear(cfg.hidden_size, cfg.hidden_size, vb.pp("dense"))?;
         let layer_norm = layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("LayerNorm"))?;
         Ok(Self {
@@ -369,8 +402,11 @@ impl TextPredictionHeadTransform {
     }
 }
 
-impl Module for TextPredictionHeadTransform {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for TextPredictionHeadTransform<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         xs.apply(&self.dense)?
             .apply(&self.transform_act_fn)?
             .apply(&self.layer_norm)
@@ -378,13 +414,13 @@ impl Module for TextPredictionHeadTransform {
 }
 
 #[derive(Debug, Clone)]
-struct TextLMPredictionHead {
-    transform: TextPredictionHeadTransform,
-    decoder: Linear,
+struct TextLMPredictionHead<QB: QuantizedBackend> {
+    transform: TextPredictionHeadTransform<QB>,
+    decoder: Linear<QB>,
 }
 
-impl TextLMPredictionHead {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> TextLMPredictionHead<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let transform = TextPredictionHeadTransform::new(cfg, vb.pp("transform"))?;
         let weight = QMatMul::new(cfg.hidden_size, cfg.vocab_size, vb.pp("decoder"))?;
         let bias = vb.get(cfg.vocab_size, "bias")?.dequantize(vb.device())?;
@@ -393,40 +429,46 @@ impl TextLMPredictionHead {
     }
 }
 
-impl Module for TextLMPredictionHead {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for TextLMPredictionHead<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         xs.apply(&self.transform)?.apply(&self.decoder)
     }
 }
 
 #[derive(Debug, Clone)]
-struct TextOnlyMLMHead {
-    predictions: TextLMPredictionHead,
+struct TextOnlyMLMHead<QB: QuantizedBackend> {
+    predictions: TextLMPredictionHead<QB>,
 }
 
-impl TextOnlyMLMHead {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> TextOnlyMLMHead<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let predictions = TextLMPredictionHead::new(cfg, vb.pp("predictions"))?;
         Ok(Self { predictions })
     }
 }
 
-impl Module for TextOnlyMLMHead {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for TextOnlyMLMHead<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         self.predictions.forward(xs)
     }
 }
 
 #[derive(Debug, Clone)]
-struct TextModel {
-    embeddings: TextEmbeddings,
-    encoder: TextEncoder,
+struct TextModel<QB: QuantizedBackend> {
+    embeddings: TextEmbeddings<QB>,
+    encoder: TextEncoder<QB>,
     past_kv_len: usize,
     // We do not need the pooler for caption generation
 }
 
-impl TextModel {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> TextModel<QB> {
+    pub fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let embeddings = TextEmbeddings::new(cfg, vb.pp("embeddings"))?;
         let encoder = TextEncoder::new(cfg, vb.pp("encoder"))?;
         Ok(Self {
@@ -438,10 +480,13 @@ impl TextModel {
 
     fn forward(
         &mut self,
-        input_ids: &Tensor,
-        encoder_hidden_states: &Tensor,
-        attention_mask: &Tensor,
-    ) -> Result<Tensor> {
+        input_ids: &Tensor<QB::Storage>,
+        encoder_hidden_states: &Tensor<QB::Storage>,
+        attention_mask: &Tensor<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let (_b_sz, seq_len) = input_ids.dims2()?;
         let embedding_output = self.embeddings.forward(input_ids, self.past_kv_len)?;
         let sequence_output =
@@ -459,13 +504,13 @@ impl TextModel {
 }
 
 #[derive(Debug, Clone)]
-pub struct TextLMHeadModel {
-    bert: TextModel,
-    cls: TextOnlyMLMHead,
+pub struct TextLMHeadModel<QB: QuantizedBackend> {
+    bert: TextModel<QB>,
+    cls: TextOnlyMLMHead<QB>,
 }
 
-impl TextLMHeadModel {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> TextLMHeadModel<QB> {
+    pub fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let bert = TextModel::new(cfg, vb.pp("bert"))?;
         let cls = TextOnlyMLMHead::new(cfg, vb.pp("cls"))?;
         Ok(Self { bert, cls })
@@ -473,9 +518,12 @@ impl TextLMHeadModel {
 
     pub fn forward(
         &mut self,
-        input_ids: &Tensor,
-        encoder_hidden_states: &Tensor,
-    ) -> Result<Tensor> {
+        input_ids: &Tensor<QB::Storage>,
+        encoder_hidden_states: &Tensor<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let seq_len = input_ids.dim(1)?;
         let mask: Vec<_> = (0..seq_len)
             .flat_map(|i| (0..seq_len).map(move |j| if j > i { f32::NEG_INFINITY } else { 0f32 }))

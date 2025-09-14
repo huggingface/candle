@@ -19,42 +19,48 @@
 use std::collections::HashMap;
 
 use crate::quantized_nn::RmsNorm;
-use candle::quantized::QTensor;
-use candle::quantized::{ggml_file, gguf_file};
-use candle::{DType, Device, IndexOp, Result, Tensor};
+use candle::quantized::{ggml_file, gguf_file, QCpuStorage, QCudaStorage};
+use candle::quantized::{QTensor, QuantizedBackend};
+use candle::{DType, IndexOp, MetalStorage, QMetalStorage, Result, Tensor};
 use candle_nn::{Embedding, Module};
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
 // QMatMul wrapper adding some tracing.
 #[derive(Debug, Clone)]
-struct QMatMul {
-    inner: candle::quantized::QMatMul,
+struct QMatMul<QB: QuantizedBackend> {
+    inner: candle::quantized::QMatMul<QB>,
     span: tracing::Span,
 }
 
-impl QMatMul {
-    fn from_qtensor(qtensor: QTensor) -> Result<Self> {
+impl<QB: QuantizedBackend> QMatMul<QB> {
+    fn from_qtensor(qtensor: QTensor<QB>) -> Result<Self> {
         let inner = candle::quantized::QMatMul::from_qtensor(qtensor)?;
         let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
         Ok(Self { inner, span })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>>
+    where
+        candle::quantized::QMatMul<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span.enter();
         self.inner.forward(xs)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    feed_forward_w1: QMatMul,
-    feed_forward_w2: QMatMul,
-    feed_forward_w3: QMatMul,
+struct Mlp<QB: QuantizedBackend> {
+    feed_forward_w1: QMatMul<QB>,
+    feed_forward_w2: QMatMul<QB>,
+    feed_forward_w3: QMatMul<QB>,
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for Mlp<QB>
+where
+    candle::quantized::QMatMul<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let w1 = self.feed_forward_w1.forward(xs)?;
         let w3 = self.feed_forward_w3.forward(xs)?;
         self.feed_forward_w2
@@ -63,17 +69,20 @@ impl Module for Mlp {
 }
 
 #[derive(Debug, Clone)]
-enum MlpOrMoe {
-    Mlp(Mlp),
+enum MlpOrMoe<QB: QuantizedBackend> {
+    Mlp(Mlp<QB>),
     MoE {
         n_expert_used: usize,
-        feed_forward_gate_inp: QMatMul,
-        experts: Vec<Mlp>,
+        feed_forward_gate_inp: QMatMul<QB>,
+        experts: Vec<Mlp<QB>>,
     },
 }
 
-impl Module for MlpOrMoe {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for MlpOrMoe<QB>
+where
+    candle::quantized::QMatMul<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         match self {
             Self::MoE {
                 feed_forward_gate_inp,
@@ -143,34 +152,110 @@ impl Module for MlpOrMoe {
 }
 
 #[derive(Debug, Clone)]
-struct LayerWeights {
-    attention_wq: QMatMul,
-    attention_wk: QMatMul,
-    attention_wv: QMatMul,
-    attention_wo: QMatMul,
-    attention_norm: RmsNorm,
-    mlp_or_moe: MlpOrMoe,
-    ffn_norm: RmsNorm,
+struct LayerWeights<QB: QuantizedBackend> {
+    attention_wq: QMatMul<QB>,
+    attention_wk: QMatMul<QB>,
+    attention_wv: QMatMul<QB>,
+    attention_wo: QMatMul<QB>,
+    attention_norm: RmsNorm<QB>,
+    mlp_or_moe: MlpOrMoe<QB>,
+    ffn_norm: RmsNorm<QB>,
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    cos: Tensor,
-    sin: Tensor,
-    neg_inf: Tensor,
-    kv_cache: Option<(Tensor, Tensor)>,
+    cos: Tensor<QB::Storage>,
+    sin: Tensor<QB::Storage>,
+    neg_inf: Tensor<QB::Storage>,
+    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
     span_attn: tracing::Span,
     span_rot: tracing::Span,
     span_mlp: tracing::Span,
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
+fn masked_fill<QB: QuantizedBackend>(
+    on_false: &Tensor<QB::Storage>,
+    mask: &Tensor<QB::Storage>,
+    on_true: &Tensor<QB::Storage>,
+) -> Result<Tensor<QB::Storage>> {
     let shape = mask.shape();
     let m = mask.where_cond(&on_true.broadcast_as(shape.dims())?, on_false)?;
     Ok(m)
 }
 
-impl LayerWeights {
-    fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+pub struct MQA<QB: QuantizedBackend>(std::marker::PhantomData<QB>);
+
+pub trait MQATrait<QB: QuantizedBackend> {
+    fn forward(
+        &self,
+        q: &Tensor<QB::Storage>,
+        k: Tensor<QB::Storage>,
+        v: Tensor<QB::Storage>,
+        mask: Option<&Tensor<QB::Storage>>,
+        neg_inf: &Tensor<QB::Storage>,
+        n_head: usize,
+        n_kv_head: usize,
+        head_dim: usize,
+        _seq_len: usize,
+    ) -> Result<Tensor<QB::Storage>> {
+        let k = crate::utils::repeat_kv(k, n_head / n_kv_head)?;
+        let v = crate::utils::repeat_kv(v, n_head / n_kv_head)?;
+
+        let att = (q.matmul(&k.t()?)? / (head_dim as f64).sqrt())?;
+        let att = match mask {
+            None => att,
+            Some(mask) => {
+                let mask = mask.broadcast_as(att.shape())?;
+                masked_fill::<QB>(&att, &mask, &neg_inf)?
+            }
+        };
+        let att = candle_nn::ops::softmax_last_dim(&att)?;
+        // Convert to contiguous as matmul doesn't support strided vs for now.
+        att.matmul(&v.contiguous()?)
+    }
+}
+
+impl MQATrait<QCpuStorage> for MQA<QCpuStorage> {}
+impl MQATrait<QCudaStorage> for MQA<QCudaStorage> {}
+impl MQATrait<QMetalStorage> for MQA<QMetalStorage> {
+    fn forward(
+        &self,
+        q: &Tensor<MetalStorage>,
+        k: Tensor<MetalStorage>,
+        v: Tensor<MetalStorage>,
+        mask: Option<&Tensor<MetalStorage>>,
+        neg_inf: &Tensor<MetalStorage>,
+        n_head: usize,
+        n_kv_head: usize,
+        head_dim: usize,
+        seq_len: usize,
+    ) -> Result<Tensor<MetalStorage>> {
+        if seq_len == 1 {
+            return candle_nn::ops::sdpa(&q, &k, &v, 1. / (head_dim as f32).sqrt(), 1.);
+        } else {
+            let k = crate::utils::repeat_kv(k, n_head / n_kv_head)?;
+            let v = crate::utils::repeat_kv(v, n_head / n_kv_head)?;
+
+            let att = (q.matmul(&k.t()?)? / (head_dim as f64).sqrt())?;
+            let att = match mask {
+                None => att,
+                Some(mask) => {
+                    let mask = mask.broadcast_as(att.shape())?;
+                    masked_fill::<QMetalStorage>(&att, &mask, &neg_inf)?
+                }
+            };
+            let att = candle_nn::ops::softmax_last_dim(&att)?;
+            // Convert to contiguous as matmul doesn't support strided vs for now.
+            att.matmul(&v.contiguous()?)
+        }
+    }
+}
+
+impl<QB: QuantizedBackend> LayerWeights<QB> {
+    fn apply_rotary_emb(
+        &self,
+        x: &Tensor<QB::Storage>,
+        index_pos: usize,
+    ) -> Result<Tensor<QB::Storage>> {
         let _enter = self.span_rot.enter();
         let (_b_sz, _n_head, seq_len, _n_embd) = x.dims4()?;
         let cos = self.cos.narrow(0, index_pos, seq_len)?;
@@ -182,10 +267,14 @@ impl LayerWeights {
 
     fn forward_attn(
         &mut self,
-        x: &Tensor,
-        mask: Option<&Tensor>,
+        x: &Tensor<QB::Storage>,
+        mask: Option<&Tensor<QB::Storage>>,
         index_pos: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        MQA<QB>: MQATrait<QB>,
+        candle::quantized::QMatMul<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
         let q = self.attention_wq.forward(x)?;
@@ -223,26 +312,18 @@ impl LayerWeights {
         };
         self.kv_cache = Some((k.clone(), v.clone()));
 
-        let y = if q.device().is_metal() && seq_len == 1 {
-            // SDPA will do MQA for us
-            candle_nn::ops::sdpa(&q, &k, &v, 1. / (self.head_dim as f32).sqrt(), 1.)?
-        } else {
-            // Support for MQA, useful for 70B models and mistral.
-            let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
-            let v = crate::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
-
-            let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-            let att = match mask {
-                None => att,
-                Some(mask) => {
-                    let mask = mask.broadcast_as(att.shape())?;
-                    masked_fill(&att, &mask, &self.neg_inf)?
-                }
-            };
-            let att = candle_nn::ops::softmax_last_dim(&att)?;
-            // Convert to contiguous as matmul doesn't support strided vs for now.
-            att.matmul(&v.contiguous()?)?
-        };
+        let mqa = MQA::<QB>(std::marker::PhantomData);
+        let y = mqa.forward(
+            &q,
+            k,
+            v,
+            mask,
+            &self.neg_inf,
+            self.n_head,
+            self.n_kv_head,
+            self.head_dim,
+            seq_len,
+        )?;
 
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.forward(&y)?;
@@ -251,21 +332,21 @@ impl LayerWeights {
 }
 
 #[derive(Debug, Clone)]
-pub struct ModelWeights {
-    tok_embeddings: Embedding,
-    layers: Vec<LayerWeights>,
-    norm: RmsNorm,
-    output: QMatMul,
-    masks: HashMap<usize, Tensor>,
+pub struct ModelWeights<QB: QuantizedBackend> {
+    tok_embeddings: Embedding<QB::Storage>,
+    layers: Vec<LayerWeights<QB>>,
+    norm: RmsNorm<QB>,
+    output: QMatMul<QB>,
+    masks: HashMap<usize, Tensor<QB::Storage>>,
     span: tracing::Span,
     span_output: tracing::Span,
 }
 
-fn precomput_freqs_cis(
+fn precomput_freqs_cis<QB: QuantizedBackend>(
     head_dim: usize,
     freq_base: f32,
-    device: &Device,
-) -> Result<(Tensor, Tensor)> {
+    device: &QB::Device,
+) -> Result<(Tensor<QB::Storage>, Tensor<QB::Storage>)> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
@@ -280,10 +361,10 @@ fn precomput_freqs_cis(
     Ok((cos, sin))
 }
 
-impl ModelWeights {
-    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
+impl<QB: QuantizedBackend> ModelWeights<QB> {
+    pub fn from_ggml(mut ct: ggml_file::Content<QB>, gqa: usize) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
-        let (cos, sin) = precomput_freqs_cis(head_dim, 10000., &ct.device)?;
+        let (cos, sin) = precomput_freqs_cis::<QB>(head_dim, 10000., &ct.device)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, &ct.device)?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
@@ -347,7 +428,7 @@ impl ModelWeights {
     pub fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
-        device: &Device,
+        device: &QB::Device,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle::bail!("cannot find {s} in metadata"),
@@ -372,7 +453,7 @@ impl ModelWeights {
         let rope_freq_base = md_get("llama.rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
-        let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device)?;
+        let (cos, sin) = precomput_freqs_cis::<QB>(rope_dim, rope_freq_base, device)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         let tok_embeddings_q = ct.tensor(reader, "token_embd.weight", device)?;
@@ -467,7 +548,7 @@ impl ModelWeights {
         })
     }
 
-    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
+    fn mask(&mut self, t: usize, device: &QB::Device) -> Result<Tensor<QB::Storage>> {
         if let Some(mask) = self.masks.get(&t) {
             Ok(mask.clone())
         } else {
@@ -480,7 +561,15 @@ impl ModelWeights {
         }
     }
 
-    pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        x: &Tensor<QB::Storage>,
+        index_pos: usize,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        MQA<QB>: MQATrait<QB>,
+        candle::quantized::QMatMul<QB>: Module<QB::Storage>,
+    {
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = if seq_len == 1 {
             None

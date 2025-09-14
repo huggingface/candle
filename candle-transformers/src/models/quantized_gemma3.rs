@@ -17,8 +17,9 @@
 use crate::quantized_nn::RmsNorm;
 use candle::quantized::gguf_file;
 use candle::quantized::QTensor;
+use candle::quantized::QuantizedBackend;
 use candle::D;
-use candle::{DType, Device, IndexOp, Result, Tensor};
+use candle::{DType, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, Module};
 
 pub const MAX_SEQ_LEN: usize = 131072; // Gemma 3 supports 128K context window
@@ -28,33 +29,39 @@ pub const DEFAULT_ROPE_FREQUENCY_SLIDING: f32 = 10_000.;
 pub const DEFAULT_ROPE_FREQUENCY_SCALE_FACTOR: f32 = 1.;
 
 #[derive(Debug, Clone)]
-struct QMatMul {
-    inner: candle::quantized::QMatMul,
+struct QMatMul<QB: QuantizedBackend> {
+    inner: candle::quantized::QMatMul<QB>,
     span: tracing::Span,
 }
 
-impl QMatMul {
-    fn from_qtensor(qtensor: QTensor) -> Result<Self> {
+impl<QB: QuantizedBackend> QMatMul<QB> {
+    fn from_qtensor(qtensor: QTensor<QB>) -> Result<Self> {
         let inner = candle::quantized::QMatMul::from_qtensor(qtensor)?;
         let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
         Ok(Self { inner, span })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>>
+    where
+        candle::quantized::QMatMul<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span.enter();
         self.inner.forward(xs)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    feed_forward_gate: QMatMul, // ffn_gate in GGUF
-    feed_forward_up: QMatMul,   // ffn_up in GGUF
-    feed_forward_down: QMatMul, // ffn_down in GGUF
+struct Mlp<QB: QuantizedBackend> {
+    feed_forward_gate: QMatMul<QB>, // ffn_gate in GGUF
+    feed_forward_up: QMatMul<QB>,   // ffn_up in GGUF
+    feed_forward_down: QMatMul<QB>, // ffn_down in GGUF
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for Mlp<QB>
+where
+    candle::quantized::QMatMul<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let gate = self.feed_forward_gate.forward(xs)?;
         let up = self.feed_forward_up.forward(xs)?;
         let silu = candle_nn::ops::silu(&gate)?;
@@ -64,13 +71,13 @@ impl Module for Mlp {
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+struct RotaryEmbedding<QB: QuantizedBackend> {
+    sin: Tensor<QB::Storage>,
+    cos: Tensor<QB::Storage>,
 }
 
-impl RotaryEmbedding {
-    fn new(head_dim: usize, rope_frequency: f32, device: &Device) -> Result<Self> {
+impl<QB: QuantizedBackend> RotaryEmbedding<QB> {
+    fn new(head_dim: usize, rope_frequency: f32, device: &QB::Device) -> Result<Self> {
         let theta: Vec<_> = (0..head_dim)
             .step_by(2)
             .map(|i| 1f32 / rope_frequency.powf(i as f32 / head_dim as f32))
@@ -87,10 +94,10 @@ impl RotaryEmbedding {
 
     fn apply_rotary_emb_qkv(
         &self,
-        q: &Tensor,
-        k: &Tensor,
+        q: &Tensor<QB::Storage>,
+        k: &Tensor<QB::Storage>,
         index_pos: usize,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor<QB::Storage>, Tensor<QB::Storage>)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, index_pos, seq_len)?;
         let sin = self.sin.narrow(0, index_pos, seq_len)?;
@@ -101,25 +108,25 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-struct LayerWeights {
+struct LayerWeights<QB: QuantizedBackend> {
     // Attention components
-    attention_wq: QMatMul,
-    attention_wk: QMatMul,
-    attention_wv: QMatMul,
-    attention_wo: QMatMul,
+    attention_wq: QMatMul<QB>,
+    attention_wk: QMatMul<QB>,
+    attention_wv: QMatMul<QB>,
+    attention_wo: QMatMul<QB>,
 
     // Specialized normalization for Q and K
-    attention_q_norm: RmsNorm,
-    attention_k_norm: RmsNorm,
+    attention_q_norm: RmsNorm<QB>,
+    attention_k_norm: RmsNorm<QB>,
 
     // Layer normalization
-    attention_norm: RmsNorm,      // Applied before attention
-    post_attention_norm: RmsNorm, // Applied after attention
-    ffn_norm: RmsNorm,            // Applied before feedforward
-    post_ffn_norm: RmsNorm,       // Applied after feedforward
+    attention_norm: RmsNorm<QB>,      // Applied before attention
+    post_attention_norm: RmsNorm<QB>, // Applied after attention
+    ffn_norm: RmsNorm<QB>,            // Applied before feedforward
+    post_ffn_norm: RmsNorm<QB>,       // Applied after feedforward
 
     // Feed-forward network
-    mlp: Mlp,
+    mlp: Mlp<QB>,
 
     // Attention parameters
     n_head: usize,    // Number of query heads
@@ -129,26 +136,26 @@ struct LayerWeights {
 
     sliding_window_size: Option<usize>,
 
-    rotary_embedding: RotaryEmbedding,
-    neg_inf: Tensor,
+    rotary_embedding: RotaryEmbedding<QB>,
+    neg_inf: Tensor<QB::Storage>,
 
     // Cache
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
 
     // Tracing
     span_attn: tracing::Span,
     span_mlp: tracing::Span,
 }
 
-impl LayerWeights {
+impl<QB: QuantizedBackend> LayerWeights<QB> {
     fn mask(
         &self,
         b_sz: usize,
         seq_len: usize,
         index_pos: usize,
         dtype: DType,
-        device: &Device,
-    ) -> Result<Tensor> {
+        device: &QB::Device,
+    ) -> Result<Tensor<QB::Storage>> {
         let mask: Vec<_> = if let Some(sliding_window_size) = self.sliding_window_size {
             (0..seq_len)
                 .flat_map(|i| {
@@ -179,10 +186,13 @@ impl LayerWeights {
 
     fn forward_attn(
         &mut self,
-        x: &Tensor,
-        mask: Option<&Tensor>,
+        x: &Tensor<QB::Storage>,
+        mask: Option<&Tensor<QB::Storage>>,
         index_pos: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        candle::quantized::QMatMul<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, _) = x.dims3()?;
 
@@ -247,21 +257,21 @@ impl LayerWeights {
 }
 
 #[derive(Debug, Clone)]
-pub struct ModelWeights {
-    tok_embeddings: Embedding,
+pub struct ModelWeights<QB: QuantizedBackend> {
+    tok_embeddings: Embedding<QB::Storage>,
     embedding_length: usize,
-    layers: Vec<LayerWeights>,
-    norm: RmsNorm,
-    output: QMatMul,
+    layers: Vec<LayerWeights<QB>>,
+    norm: RmsNorm<QB>,
+    output: QMatMul<QB>,
     span: tracing::Span,
     span_output: tracing::Span,
 }
 
-impl ModelWeights {
+impl<QB: QuantizedBackend> ModelWeights<QB> {
     pub fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
-        device: &Device,
+        device: &QB::Device,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle::bail!("cannot find {s} in metadata"),
@@ -301,7 +311,7 @@ impl ModelWeights {
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         // Load token embeddings and output projection
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings: QTensor<QB> = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
         let norm = RmsNorm::from_qtensor(
             ct.tensor(reader, "output_norm.weight", device)?,
@@ -422,7 +432,14 @@ impl ModelWeights {
         })
     }
 
-    pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        x: &Tensor<QB::Storage>,
+        index_pos: usize,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        candle::quantized::QMatMul<QB>: Module<QB::Storage>,
+    {
         let (b_sz, seq_len) = x.dims2()?;
         let _enter = self.span.enter();
 

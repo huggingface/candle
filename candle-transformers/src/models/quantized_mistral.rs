@@ -17,20 +17,20 @@
 
 use crate::quantized_nn::{linear_no_bias, Embedding, Linear, RmsNorm};
 pub use crate::quantized_var_builder::VarBuilder;
-use candle::{DType, Device, Module, Result, Tensor, D};
+use candle::{quantized::QuantizedBackend, DType, Module, Result, Tensor, D};
 use candle_nn::Activation;
 use std::sync::Arc;
 
 pub use crate::models::mistral::Config;
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+struct RotaryEmbedding<QB: QuantizedBackend> {
+    sin: Tensor<QB::Storage>,
+    cos: Tensor<QB::Storage>,
 }
 
-impl RotaryEmbedding {
-    fn new(cfg: &Config, dev: &Device) -> Result<Self> {
+impl<QB: QuantizedBackend> RotaryEmbedding<QB> {
+    fn new(cfg: &Config, dev: &QB::Device) -> Result<Self> {
         let rope_theta = cfg.rope_theta as f32;
         let dim = cfg.hidden_size / cfg.num_attention_heads;
         let max_seq_len = cfg.max_position_embeddings;
@@ -52,10 +52,10 @@ impl RotaryEmbedding {
 
     fn apply_rotary_emb_qkv(
         &self,
-        q: &Tensor,
-        k: &Tensor,
+        q: &Tensor<QB::Storage>,
+        k: &Tensor<QB::Storage>,
         seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor<QB::Storage>, Tensor<QB::Storage>)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
@@ -67,15 +67,15 @@ impl RotaryEmbedding {
 
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
-struct MLP {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+struct MLP<QB: QuantizedBackend> {
+    gate_proj: Linear<QB>,
+    up_proj: Linear<QB>,
+    down_proj: Linear<QB>,
     act_fn: Activation,
 }
 
-impl MLP {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> MLP<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
         let gate_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("gate_proj"))?;
@@ -90,8 +90,11 @@ impl MLP {
     }
 }
 
-impl Module for MLP {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for MLP<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let lhs = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
         let rhs = xs.apply(&self.up_proj)?;
         (lhs * rhs)?.apply(&self.down_proj)
@@ -99,22 +102,22 @@ impl Module for MLP {
 }
 
 #[derive(Debug, Clone)]
-struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+struct Attention<QB: QuantizedBackend> {
+    q_proj: Linear<QB>,
+    k_proj: Linear<QB>,
+    v_proj: Linear<QB>,
+    o_proj: Linear<QB>,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
     hidden_size: usize,
-    rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: Option<(Tensor, Tensor)>,
+    rotary_emb: Arc<RotaryEmbedding<QB>>,
+    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
 }
 
-impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Attention<QB> {
+    fn new(rotary_emb: Arc<RotaryEmbedding<QB>>, cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -141,10 +144,13 @@ impl Attention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<QB::Storage>,
+        attention_mask: Option<&Tensor<QB::Storage>>,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let query_states = self.q_proj.forward(xs)?;
@@ -203,15 +209,15 @@ impl Attention {
 }
 
 #[derive(Debug, Clone)]
-struct DecoderLayer {
-    self_attn: Attention,
-    mlp: MLP,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+struct DecoderLayer<QB: QuantizedBackend> {
+    self_attn: Attention<QB>,
+    mlp: MLP<QB>,
+    input_layernorm: RmsNorm<QB>,
+    post_attention_layernorm: RmsNorm<QB>,
 }
 
-impl DecoderLayer {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> DecoderLayer<QB> {
+    fn new(rotary_emb: Arc<RotaryEmbedding<QB>>, cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
@@ -231,10 +237,13 @@ impl DecoderLayer {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<QB::Storage>,
+        attention_mask: Option<&Tensor<QB::Storage>>,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
         let xs = self.self_attn.forward(&xs, attention_mask, seqlen_offset)?;
@@ -250,17 +259,17 @@ impl DecoderLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    embed_tokens: Embedding,
-    layers: Vec<DecoderLayer>,
-    norm: RmsNorm,
-    lm_head: Linear,
+pub struct Model<QB: QuantizedBackend> {
+    embed_tokens: Embedding<QB>,
+    layers: Vec<DecoderLayer<QB>>,
+    norm: RmsNorm<QB>,
+    lm_head: Linear<QB>,
     sliding_window: Option<usize>,
-    device: Device,
+    device: QB::Device,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Model<QB> {
+    pub fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             Embedding::new(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -287,7 +296,7 @@ impl Model {
         &self,
         tgt_len: usize,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<QB::Storage>> {
         let sliding_window = self.sliding_window.unwrap_or(tgt_len + 1);
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| {
@@ -311,7 +320,14 @@ impl Model {
             .to_dtype(DType::F32)
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        input_ids: &Tensor<QB::Storage>,
+        seqlen_offset: usize,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let (_b_size, seq_len) = input_ids.dims2()?;
         let attention_mask = if seq_len <= 1 {
             None
