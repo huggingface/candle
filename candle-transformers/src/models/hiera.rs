@@ -4,7 +4,7 @@
 //! - 💻 [Hiera](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/hiera.py)
 //! - 📝 [Paper](https://arxiv.org/abs/2306.00989). Hiera: A Hierarchical Vision Transformer without the Bells-and-Whistles
 
-use candle::{Result, D};
+use candle::{BackendStorage, Result, D};
 use candle_nn::{conv2d, layer_norm, linear, ops::softmax, Conv2dConfig, Func, VarBuilder};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -61,7 +61,10 @@ impl Config {
 
 const NUM_TOKENS: usize = 56 * 56;
 
-fn hiera_embeddings(channels: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn hiera_embeddings<B: BackendStorage + 'static>(
+    channels: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv_cfg = Conv2dConfig {
         stride: 4,
         padding: 3,
@@ -80,7 +83,7 @@ fn hiera_embeddings(channels: usize, vb: VarBuilder) -> Result<Func<'static>> {
     }))
 }
 
-fn hiera_unroll() -> Result<Func<'static>> {
+fn hiera_unroll<B: BackendStorage + 'static>() -> Result<Func<'static, B>> {
     Ok(Func::new(move |xs| {
         let mut xs = xs.clone();
         let (mut b, _, c) = xs.dims3()?;
@@ -101,7 +104,11 @@ fn hiera_unroll() -> Result<Func<'static>> {
     }))
 }
 
-fn hiera_mlp(in_channels: usize, out_channels: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn hiera_mlp<B: BackendStorage + 'static>(
+    in_channels: usize,
+    out_channels: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let fc1 = linear(in_channels, out_channels, vb.pp("fc1"))?;
     let fc2 = linear(out_channels, in_channels, vb.pp("fc2"))?;
 
@@ -111,15 +118,15 @@ fn hiera_mlp(in_channels: usize, out_channels: usize, vb: VarBuilder) -> Result<
     }))
 }
 
-fn hiera_attention(
+fn hiera_attention<B: BackendStorage + 'static>(
     in_channels: usize,
     out_channels: usize,
     heads: usize,
     q_stride: usize,
     window_size: usize,
     use_mask_attention: bool,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let head_dim = out_channels / heads;
 
     let scale = (head_dim as f64).powf(-0.5);
@@ -172,15 +179,15 @@ fn hiera_attention(
     }))
 }
 
-fn hiera_block(
+fn hiera_block<B: BackendStorage + 'static>(
     heads: usize,
     in_channels: usize,
     out_channels: usize,
     q_stride: usize,
     window_size: usize,
     use_mask_attention: bool,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let norm1 = layer_norm(in_channels, 1e-6, vb.pp("norm1"))?;
     let norm2 = layer_norm(out_channels, 1e-6, vb.pp("norm2"))?;
     let proj = linear(in_channels, out_channels, vb.pp("proj"));
@@ -212,7 +219,10 @@ fn hiera_block(
     }))
 }
 
-fn hiera_blocks(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
+fn hiera_blocks<B: BackendStorage + 'static>(
+    cfg: &Config,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let nblocks = cfg.stages.iter().sum();
     let mut blocks = Vec::with_capacity(nblocks);
 
@@ -256,7 +266,11 @@ fn hiera_blocks(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
     }))
 }
 
-fn hiera_head(outputs: usize, nclasses: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn hiera_head<B: BackendStorage + 'static>(
+    outputs: usize,
+    nclasses: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let norm = layer_norm(outputs, 1e-6, vb.pp("norm"))?;
     let linear = linear(outputs, nclasses, vb.pp("fc"))?;
     Ok(Func::new(move |xs| {
@@ -265,7 +279,11 @@ fn hiera_head(outputs: usize, nclasses: usize, vb: VarBuilder) -> Result<Func<'s
 }
 
 // Build a hiera model for a given configuration.
-fn hiera_model(cfg: &Config, nclasses: Option<usize>, vb: VarBuilder) -> Result<Func<'static>> {
+fn hiera_model<B: BackendStorage + 'static>(
+    cfg: &Config,
+    nclasses: Option<usize>,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let cls = match nclasses {
         None => None,
         Some(nclasses) => {
@@ -292,10 +310,17 @@ fn hiera_model(cfg: &Config, nclasses: Option<usize>, vb: VarBuilder) -> Result<
     }))
 }
 
-pub fn hiera(cfg: &Config, nclasses: usize, vb: VarBuilder) -> Result<Func<'static>> {
+pub fn hiera<B: BackendStorage + 'static>(
+    cfg: &Config,
+    nclasses: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     hiera_model(cfg, Some(nclasses), vb)
 }
 
-pub fn hiera_no_final_layer(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
+pub fn hiera_no_final_layer<B: BackendStorage + 'static>(
+    cfg: &Config,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     hiera_model(cfg, None, vb)
 }

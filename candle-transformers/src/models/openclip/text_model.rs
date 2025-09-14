@@ -1,7 +1,7 @@
 //! Text encoder as used in most OpenCLIP pretrained models
 //! https://github.com/mlfoundations/open_clip
 
-use candle::{DType, IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::{
     embedding, layer_norm, linear, ops::softmax_last_dim, Embedding, LayerNorm, Linear, Module,
     VarBuilder,
@@ -35,13 +35,13 @@ impl Config {
 }
 
 #[derive(Clone, Debug)]
-struct TextEmbeddings {
-    token_embedding: Embedding,
-    position_embedding: Tensor,
+struct TextEmbeddings<B: BackendStorage> {
+    token_embedding: Embedding<B>,
+    position_embedding: Tensor<B>,
 }
 
-impl TextEmbeddings {
-    fn new(vs: VarBuilder, c: &Config) -> Result<Self> {
+impl<B: BackendStorage> TextEmbeddings<B> {
+    fn new(vs: VarBuilder<B>, c: &Config) -> Result<Self> {
         let token_embedding = embedding(c.vocab_size, c.embed_dim, vs.pp("token_embedding"))?;
         let position_embedding = vs.get(
             (c.max_position_embeddings, c.embed_dim),
@@ -54,8 +54,8 @@ impl TextEmbeddings {
     }
 }
 
-impl Module for TextEmbeddings {
-    fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for TextEmbeddings<B> {
+    fn forward(&self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let seq_length = input_ids.dim(D::Minus1)?;
         let inputs_embeds = self.token_embedding.forward(input_ids)?;
 
@@ -66,18 +66,18 @@ impl Module for TextEmbeddings {
 }
 
 #[derive(Clone, Debug)]
-struct Attention {
-    k_proj: candle_nn::Linear,
-    v_proj: candle_nn::Linear,
-    q_proj: candle_nn::Linear,
-    out_proj: Linear,
+struct Attention<B: BackendStorage> {
+    k_proj: candle_nn::Linear<B>,
+    v_proj: candle_nn::Linear<B>,
+    q_proj: candle_nn::Linear<B>,
+    out_proj: Linear<B>,
     head_dim: usize,
     scale: f64,
     num_attention_heads: usize,
 }
 
-impl Attention {
-    fn new(vs: candle_nn::VarBuilder, c: &Config) -> Result<Self> {
+impl<B: BackendStorage> Attention<B> {
+    fn new(vs: candle_nn::VarBuilder<B>, c: &Config) -> Result<Self> {
         let embed_dim = c.embed_dim;
         let num_attention_heads = c.num_attention_heads;
 
@@ -110,14 +110,14 @@ impl Attention {
         })
     }
 
-    fn shape_multihead(&self, xs: &Tensor, bsz: usize, seq_len: usize) -> Result<Tensor> {
+    fn shape_multihead(&self, xs: &Tensor<B>, bsz: usize, seq_len: usize) -> Result<Tensor<B>> {
         xs.reshape((bsz, seq_len, self.num_attention_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?
             .to_dtype(DType::F32)
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let in_dtype = xs.dtype();
         let (bsz, seq_len, embed_dim) = xs.dims3()?;
 
@@ -141,13 +141,13 @@ impl Attention {
 }
 
 #[derive(Clone, Debug)]
-struct Mlp {
-    fc1: Linear,
-    fc2: Linear,
+struct Mlp<B: BackendStorage> {
+    fc1: Linear<B>,
+    fc2: Linear<B>,
 }
 
-impl Mlp {
-    fn new(vs: VarBuilder, c: &Config) -> Result<Self> {
+impl<B: BackendStorage> Mlp<B> {
+    fn new(vs: VarBuilder<B>, c: &Config) -> Result<Self> {
         let fc1 = linear(c.embed_dim, c.intermediate_size, vs.pp("c_fc"))?;
         let fc2 = linear(c.intermediate_size, c.embed_dim, vs.pp("c_proj"))?;
 
@@ -155,23 +155,23 @@ impl Mlp {
     }
 }
 
-impl Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Mlp<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = self.fc1.forward(xs)?;
         self.fc2.forward(&xs.gelu_erf()?)
     }
 }
 
 #[derive(Clone, Debug)]
-struct EncoderLayer {
-    self_attn: Attention,
-    layer_norm1: LayerNorm,
-    mlp: Mlp,
-    layer_norm2: LayerNorm,
+struct EncoderLayer<B: BackendStorage> {
+    self_attn: Attention<B>,
+    layer_norm1: LayerNorm<B>,
+    mlp: Mlp<B>,
+    layer_norm2: LayerNorm<B>,
 }
 
-impl EncoderLayer {
-    fn new(vs: VarBuilder, c: &Config) -> Result<Self> {
+impl<B: BackendStorage> EncoderLayer<B> {
+    fn new(vs: VarBuilder<B>, c: &Config) -> Result<Self> {
         let self_attn = Attention::new(vs.pp("attn"), c)?;
         let layer_norm1 = layer_norm(c.embed_dim, 1e-5, vs.pp("ln_1"))?;
         let mlp = Mlp::new(vs.pp("mlp"), c)?;
@@ -185,7 +185,7 @@ impl EncoderLayer {
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = self.layer_norm1.forward(xs)?;
         let xs = self.self_attn.forward(&xs)?;
@@ -200,14 +200,14 @@ impl EncoderLayer {
 }
 
 #[derive(Clone, Debug)]
-pub struct Encoder {
-    layers: Vec<EncoderLayer>,
+pub struct Encoder<B: BackendStorage> {
+    layers: Vec<EncoderLayer<B>>,
 }
 
-impl Encoder {
-    pub fn new(vs: VarBuilder, c: &Config) -> Result<Self> {
+impl<B: BackendStorage> Encoder<B> {
+    pub fn new(vs: VarBuilder<B>, c: &Config) -> Result<Self> {
         let vs = vs.pp("resblocks");
-        let mut layers: Vec<EncoderLayer> = Vec::new();
+        let mut layers: Vec<EncoderLayer<B>> = Vec::new();
         for index in 0..c.num_hidden_layers {
             let layer = EncoderLayer::new(vs.pp(index.to_string()), c)?;
             layers.push(layer)
@@ -215,7 +215,7 @@ impl Encoder {
         Ok(Encoder { layers })
     }
 
-    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
             xs = layer.forward(&xs)?;
@@ -226,14 +226,14 @@ impl Encoder {
 
 /// A text transformer as used in CLIP variants.
 #[derive(Clone, Debug)]
-pub struct OpenClipTextTransformer {
-    embeddings: TextEmbeddings,
-    encoder: Encoder,
-    final_layer_norm: LayerNorm,
+pub struct OpenClipTextTransformer<B: BackendStorage> {
+    embeddings: TextEmbeddings<B>,
+    encoder: Encoder<B>,
+    final_layer_norm: LayerNorm<B>,
 }
 
-impl OpenClipTextTransformer {
-    pub fn new(vs: VarBuilder, c: &Config) -> Result<Self> {
+impl<B: BackendStorage> OpenClipTextTransformer<B> {
+    pub fn new(vs: VarBuilder<B>, c: &Config) -> Result<Self> {
         let embeddings = TextEmbeddings::new(vs.clone(), c)?;
         let final_layer_norm = layer_norm(c.embed_dim, 1e-5, vs.pp("ln_final"))?;
         let encoder = Encoder::new(vs.pp("transformer"), c)?;
@@ -244,15 +244,15 @@ impl OpenClipTextTransformer {
         })
     }
 
-    pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let input_ids = self.embeddings.forward(input_ids)?;
         let input_ids = self.encoder.forward(&input_ids)?;
         self.final_layer_norm.forward(&input_ids)
     }
 }
 
-impl Module for OpenClipTextTransformer {
-    fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for OpenClipTextTransformer<B> {
+    fn forward(&self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let output = self.forward(input_ids)?;
         let sequence_max_indices = input_ids.argmax(D::Minus1)?.to_dtype(DType::I64)?;
 
