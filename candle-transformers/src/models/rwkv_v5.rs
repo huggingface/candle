@@ -195,7 +195,7 @@ impl<B: BackendStorage> SelfAttention<B> {
                 .reshape(((), 1, 1))?
                 .reshape((self.n_attn_heads, (), 1))?;
 
-        let mut out: Vec<Tensor> = Vec::with_capacity(t);
+        let mut out: Vec<Tensor<B>> = Vec::with_capacity(t);
         for t_ in 0..t {
             let rt = receptance.i((.., .., t_..t_ + 1))?.contiguous()?;
             let kt = key.i((.., .., .., t_..t_ + 1))?.contiguous()?;

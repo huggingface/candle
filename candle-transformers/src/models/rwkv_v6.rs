@@ -110,7 +110,7 @@ impl<B: BackendStorage> SelfAttention<B> {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor<B>, state: &mut State) -> Result<Tensor<B>> {
+    pub fn forward(&self, xs: &Tensor<B>, state: &mut State<B>) -> Result<Tensor<B>> {
         let h = self.n_attn_heads;
         let (b, t, s) = xs.dims3()?;
         let s = s / h;
@@ -169,7 +169,7 @@ impl<B: BackendStorage> SelfAttention<B> {
                 .reshape(((), 1, 1))?
                 .reshape((self.n_attn_heads, (), 1))?;
 
-        let mut out: Vec<Tensor> = Vec::with_capacity(t);
+        let mut out: Vec<Tensor<B>> = Vec::with_capacity(t);
         for t_ in 0..t {
             let rt = receptance.i((.., .., t_..t_ + 1))?.contiguous()?;
             let kt = key.i((.., .., .., t_..t_ + 1))?.contiguous()?;
@@ -218,7 +218,7 @@ impl<B: BackendStorage> FeedForward<B> {
         })
     }
 
-    fn forward(&self, xs: &Tensor<B>, state: &mut State) -> Result<Tensor<B>> {
+    fn forward(&self, xs: &Tensor<B>, state: &mut State<B>) -> Result<Tensor<B>> {
         let shifted = state.per_layer[self.layer_id]
             .feed_forward
             .broadcast_sub(xs)?;
