@@ -1,4 +1,4 @@
-use candle::{DType, Device, Tensor};
+use candle::{BackendStorage, CpuDevice, CpuStorage, DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::codegeex4_9b::*;
@@ -6,9 +6,9 @@ use clap::Parser;
 use hf_hub::{Repo, RepoType};
 use tokenizers::Tokenizer;
 
-struct TextGeneration {
-    model: Model,
-    device: Device,
+struct TextGeneration<B: BackendStorage> {
+    model: Model<B>,
+    device: B::Device,
     tokenizer: Tokenizer,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
@@ -17,10 +17,10 @@ struct TextGeneration {
     dtype: DType,
 }
 
-impl TextGeneration {
+impl<B: BackendStorage> TextGeneration<B> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
+        model: Model<B>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: f64,
@@ -28,7 +28,7 @@ impl TextGeneration {
         repeat_penalty: f32,
         repeat_last_n: usize,
         verbose: bool,
-        device: &Device,
+        device: &B::Device,
         dtype: DType,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, Some(temp), Some(top_p));
@@ -228,13 +228,19 @@ fn main() -> anyhow::Result<()> {
 
     let start = std::time::Instant::now();
     let config: Config = serde_json::from_slice(&std::fs::read(config_filename)?)?;
-    let device = candle_examples::device(args.cpu)?;
+    // let device = candle_examples::device(args.cpu)?;
+    // TODO: fix
+    let device = CpuDevice;
+    /*
     let dtype = if device.is_cuda() {
         DType::BF16
     } else {
         DType::F32
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+    */
+    let dtype = DType::F32;
+    let vb: VarBuilder<CpuStorage> =
+        unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
     let model = Model::new(&config, vb)?;
 
     println!("loaded the model in {:?}", start.elapsed());

@@ -7,7 +7,7 @@ extern crate accelerate_src;
 use anyhow::Error as E;
 use clap::Parser;
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendStorage, CpuDevice, CpuStorage, DType, Tensor};
 use candle_nn::{ops::softmax, VarBuilder};
 use candle_transformers::models::clip;
 
@@ -31,7 +31,11 @@ struct Args {
     sequences: Option<Vec<String>>,
 }
 
-fn load_image<T: AsRef<std::path::Path>>(path: T, image_size: usize) -> anyhow::Result<Tensor> {
+fn load_image<P: AsRef<std::path::Path>, B: BackendStorage>(
+    path: P,
+    image_size: usize,
+    device: &B::Device,
+) -> anyhow::Result<Tensor<B>> {
     let img = image::ImageReader::open(path)?.decode()?;
     let (height, width) = (image_size, image_size);
     let img = img.resize_to_fill(
@@ -41,20 +45,21 @@ fn load_image<T: AsRef<std::path::Path>>(path: T, image_size: usize) -> anyhow::
     );
     let img = img.to_rgb8();
     let img = img.into_raw();
-    let img = Tensor::from_vec(img, (height, width, 3), &Device::Cpu)?
+    let img = Tensor::from_vec(img, (height, width, 3), device)?
         .permute((2, 0, 1))?
         .to_dtype(DType::F32)?
         .affine(2. / 255., -1.)?;
     Ok(img)
 }
 
-fn load_images<T: AsRef<std::path::Path>>(
-    paths: &Vec<T>,
+fn load_images<P: AsRef<std::path::Path>, B: BackendStorage>(
+    paths: &Vec<P>,
     image_size: usize,
-) -> anyhow::Result<Tensor> {
+    device: &B::Device,
+) -> anyhow::Result<Tensor<B>> {
     let mut images = vec![];
     for path in paths {
-        let tensor = load_image(path, image_size)?;
+        let tensor = load_image(path, image_size, device)?;
         images.push(tensor);
     }
     let images = Tensor::stack(&images, 0)?;
@@ -79,7 +84,10 @@ pub fn main() -> anyhow::Result<()> {
     };
     let tokenizer = get_tokenizer(args.tokenizer)?;
     let config = clip::ClipConfig::vit_base_patch32();
-    let device = candle_examples::device(args.cpu)?;
+
+    // TODO: fix
+    let device = CpuDevice;
+
     let vec_imgs = match args.images {
         Some(imgs) => imgs,
         None => vec![
@@ -87,12 +95,13 @@ pub fn main() -> anyhow::Result<()> {
             "candle-examples/examples/yolo-v8/assets/bike.jpg".to_string(),
         ],
     };
-    let images = load_images(&vec_imgs, config.image_size)?.to_device(&device)?;
-    let vb = unsafe {
+    let images = load_images(&vec_imgs, config.image_size, &device)?;
+    let vb: VarBuilder<CpuStorage> = unsafe {
         VarBuilder::from_mmaped_safetensors(std::slice::from_ref(&model_file), DType::F32, &device)?
     };
     let model = clip::ClipModel::new(vb, &config)?;
-    let (input_ids, vec_seq) = tokenize_sequences(args.sequences, &tokenizer, &device)?;
+    let (input_ids, vec_seq) =
+        tokenize_sequences::<CpuStorage>(args.sequences, &tokenizer, &device)?;
     let (_logits_per_text, logits_per_image) = model.forward(&images, &input_ids)?;
     let softmax_image = softmax(&logits_per_image, 1)?;
     let softmax_image_vec = softmax_image.flatten_all()?.to_vec1::<f32>()?;
@@ -130,11 +139,11 @@ pub fn get_tokenizer(tokenizer: Option<String>) -> anyhow::Result<Tokenizer> {
     Tokenizer::from_file(tokenizer).map_err(E::msg)
 }
 
-pub fn tokenize_sequences(
+pub fn tokenize_sequences<B: BackendStorage>(
     sequences: Option<Vec<String>>,
     tokenizer: &Tokenizer,
-    device: &Device,
-) -> anyhow::Result<(Tensor, Vec<String>)> {
+    device: &B::Device,
+) -> anyhow::Result<(Tensor<B>, Vec<String>)> {
     let pad_id = *tokenizer
         .get_vocab(true)
         .get("<|endoftext|>")

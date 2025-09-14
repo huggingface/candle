@@ -9,7 +9,7 @@ use clap::Parser;
 
 use candle_transformers::models::csm::{Config, Model};
 
-use candle::{DType, IndexOp, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
@@ -98,11 +98,24 @@ struct Args {
     repeat_last_n: usize,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
-
-    let args = Args::parse();
 
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -169,17 +182,22 @@ fn main() -> Result<()> {
             serde_json::from_slice(&std::fs::read(config_file)?)?
         }
     };
-    let device = candle_examples::device(args.cpu)?;
+
     let (mut model, device) = {
-        let dtype = device.bf16_default_to_f32();
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+        let dtype = if B::Device::SUPPORTS_BF16 {
+            DType::BF16
+        } else {
+            DType::F32
+        };
+        let vb: VarBuilder<B> =
+            unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
         let model = Model::new(&config, vb)?;
         (model, device)
     };
     let mut mimi_model = {
         use candle_transformers::models::mimi;
         let vb =
-            unsafe { VarBuilder::from_mmaped_safetensors(&[mimi_filename], DType::F32, &device)? };
+            unsafe { VarBuilder::from_mmaped_safetensors(&[mimi_filename], DType::F32, device)? };
         let config = mimi::Config::v0_1(Some(32));
         mimi::Model::new(config, vb)?
     };
@@ -187,7 +205,7 @@ fn main() -> Result<()> {
 
     println!("loaded the model in {:?}", start.elapsed());
 
-    let voices = candle::safetensors::load(args.voices, &device)?;
+    let voices = candle::safetensors::load(args.voices, device)?;
     let mut lp = candle_transformers::generation::LogitsProcessor::new(
         args.seed,
         Some(args.temperature),

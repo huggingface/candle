@@ -1,11 +1,11 @@
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 
 // https://github.com/facebookresearch/audiocraft/blob/69fea8b290ad1b4b40d28f92d1dfc0ab01dbab85/audiocraft/data/audio_utils.py#L57
-pub fn normalize_loudness(
-    wav: &Tensor,
+pub fn normalize_loudness<B: BackendStorage>(
+    wav: &Tensor<B>,
     sample_rate: u32,
     loudness_compressor: bool,
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     let energy = wav.sqr()?.mean_all()?.sqrt()?.to_vec0::<f32>()?;
     if energy < 2e-3 {
         return Ok(wav.clone());

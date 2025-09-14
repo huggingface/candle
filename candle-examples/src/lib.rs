@@ -5,7 +5,7 @@ pub mod imagenet;
 pub mod token_output_stream;
 pub mod wav;
 use candle::utils::{cuda_is_available, metal_is_available};
-use candle::{Device, Result, Tensor};
+use candle::{BackendStorage, Device, Result, Tensor};
 
 pub fn device(cpu: bool) -> Result<Device> {
     if cpu {
@@ -29,10 +29,11 @@ pub fn device(cpu: bool) -> Result<Device> {
     }
 }
 
-pub fn load_image<P: AsRef<std::path::Path>>(
+pub fn load_image<B: BackendStorage, P: AsRef<std::path::Path>>(
     p: P,
     resize_longest: Option<usize>,
-) -> Result<(Tensor, usize, usize)> {
+    device: &B::Device,
+) -> Result<(Tensor<B>, usize, usize)> {
     let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?;
@@ -55,15 +56,16 @@ pub fn load_image<P: AsRef<std::path::Path>>(
     let (height, width) = (img.height() as usize, img.width() as usize);
     let img = img.to_rgb8();
     let data = img.into_raw();
-    let data = Tensor::from_vec(data, (height, width, 3), &Device::Cpu)?.permute((2, 0, 1))?;
+    let data = Tensor::from_vec(data, (height, width, 3), device)?.permute((2, 0, 1))?;
     Ok((data, initial_h, initial_w))
 }
 
-pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
+pub fn load_image_and_resize<P: AsRef<std::path::Path>, B: BackendStorage>(
     p: P,
     width: usize,
     height: usize,
-) -> Result<Tensor> {
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
@@ -74,7 +76,7 @@ pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
         );
     let img = img.to_rgb8();
     let data = img.into_raw();
-    Tensor::from_vec(data, (width, height, 3), &Device::Cpu)?.permute((2, 0, 1))
+    Tensor::from_vec(data, (width, height, 3), device)?.permute((2, 0, 1))
 }
 
 /// Saves an image to disk using the image crate, this expects an input with shape

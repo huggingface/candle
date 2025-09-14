@@ -6,7 +6,7 @@ extern crate accelerate_src;
 use candle_transformers::models::bert::{BertModel, Config, HiddenAct, DTYPE};
 
 use anyhow::{Error as E, Result};
-use candle::Tensor;
+use candle::{BackendStorage, CpuDevice, Tensor};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use hf_hub::{api::sync::Api, Repo, RepoType};
@@ -52,8 +52,10 @@ struct Args {
 }
 
 impl Args {
-    fn build_model_and_tokenizer(&self) -> Result<(BertModel, Tokenizer)> {
-        let device = candle_examples::device(self.cpu)?;
+    fn build_model_and_tokenizer<B: BackendStorage>(
+        &self,
+        device: &B::Device,
+    ) -> Result<(BertModel<B>, Tokenizer)> {
         let default_model = "sentence-transformers/all-MiniLM-L6-v2".to_string();
         let default_revision = "refs/pr/21".to_string();
         let (model_id, revision) = match (self.model_id.to_owned(), self.revision.to_owned()) {
@@ -81,9 +83,9 @@ impl Args {
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
         let vb = if self.use_pth {
-            VarBuilder::from_pth(&weights_filename, DTYPE, &device)?
+            VarBuilder::from_pth(&weights_filename, DTYPE, device)?
         } else {
-            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, &device)? }
+            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, device)? }
         };
         if self.approximate_gelu {
             config.hidden_act = HiddenAct::GeluApproximate;
@@ -108,7 +110,9 @@ fn main() -> Result<()> {
     };
     let start = std::time::Instant::now();
 
-    let (model, mut tokenizer) = args.build_model_and_tokenizer()?;
+    // TODO: fix
+    let device = CpuDevice;
+    let (model, mut tokenizer) = args.build_model_and_tokenizer(&device)?;
     let device = &model.device;
 
     if let Some(prompt) = args.prompt {

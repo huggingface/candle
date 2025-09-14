@@ -4,9 +4,11 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
+#[cfg(feature = "cuda")]
+use candle::CudaDevice;
 use clap::Parser;
 
-use candle::{DType, IndexOp, D};
+use candle::{BackendStorage, DType, IndexOp, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 use candle_transformers::models::convmixer;
 
@@ -23,12 +25,8 @@ struct Args {
     cpu: bool,
 }
 
-pub fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
-
-    let device = candle_examples::device(args.cpu)?;
-
-    let image = candle_examples::imagenet::load_image224(args.image)?.to_device(&device)?;
+fn run<B: BackendStorage + 'static>(args: Args, device: &B::Device) -> anyhow::Result<()> {
+    let image: Tensor<B> = candle_examples::imagenet::load_image224(args.image, device)?;
     println!("loaded image {image:?}");
 
     let model_file = match args.model {
@@ -39,7 +37,7 @@ pub fn main() -> anyhow::Result<()> {
         }
         Some(model) => model.into(),
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, device)? };
     let model = convmixer::c1024_20(1000, vb)?;
     println!("model built");
     let logits = model.forward(&image.unsqueeze(0)?)?;
@@ -54,6 +52,21 @@ pub fn main() -> anyhow::Result<()> {
             candle_examples::imagenet::CLASSES[category_idx],
             100. * pr
         );
+    }
+    Ok(())
+}
+
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
     }
     Ok(())
 }

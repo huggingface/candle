@@ -2,7 +2,7 @@ mod clip;
 mod sampling;
 mod vae;
 
-use candle::{DType, IndexOp, Tensor};
+use candle::{BackendDevice, DType, IndexOp, Tensor};
 use candle_transformers::models::mmdit::model::{Config as MMDiTConfig, MMDiT};
 
 use crate::clip::StableDiffusion3TripleClipWithTokenizer;

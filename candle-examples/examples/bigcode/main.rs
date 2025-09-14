@@ -9,27 +9,27 @@ use clap::Parser;
 
 use candle_transformers::models::bigcode::{Config, GPTBigCode};
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendStorage, CpuDevice, CpuStorage, DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-struct TextGeneration {
-    model: GPTBigCode,
-    device: Device,
+struct TextGeneration<B: BackendStorage> {
+    model: GPTBigCode<B>,
+    device: B::Device,
     tokenizer: Tokenizer,
     logits_processor: LogitsProcessor,
 }
 
-impl TextGeneration {
+impl<B: BackendStorage> TextGeneration<B> {
     fn new(
-        model: GPTBigCode,
+        model: GPTBigCode<B>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
         top_p: Option<f64>,
-        device: &Device,
+        device: &B::Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
@@ -139,8 +139,10 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let device = candle_examples::device(args.cpu)?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
+    // TODO: fix
+    let device = CpuDevice;
+    let vb: VarBuilder<CpuStorage> =
+        unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
     let config = Config::starcoder_1b();
     let model = GPTBigCode::load(vb, config)?;
     println!("loaded the model in {:?}", start.elapsed());

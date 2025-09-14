@@ -8,12 +8,12 @@ use clap::{Parser, ValueEnum};
 use std::io::Write;
 use tokenizers::Tokenizer;
 
-use candle::quantized::{ggml_file, gguf_file};
-use candle::Tensor;
+use candle::quantized::{ggml_file, gguf_file, QCpuStorage, QuantizedBackend};
+use candle::{BackendDevice, BackendStorage, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
-use candle_transformers::models::quantized_llama as model;
+use candle_transformers::models::quantized_llama::{self as model, MQATrait, MQA};
 use model::ModelWeights;
 
 const DEFAULT_PROMPT: &str = "My favorite theorem is ";
@@ -433,11 +433,27 @@ fn format_size(size_in_bytes: usize) -> String {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<QCpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::QCudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::QMetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<QB: QuantizedBackend>(args: Args, device: &QB::Device) -> anyhow::Result<()>
+where
+    MQA<QB>: MQATrait<QB>,
+{
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
-
-    let args = Args::parse();
 
     #[cfg(feature = "cuda")]
     candle::quantized::cuda::set_force_dmmv(args.force_dmmv);
@@ -468,7 +484,6 @@ fn main() -> anyhow::Result<()> {
     let model_path = args.model()?;
     let mut file = std::fs::File::open(&model_path)?;
     let start = std::time::Instant::now();
-    let device = candle_examples::device(args.cpu)?;
 
     let mut model = match model_path.extension().and_then(|v| v.to_str()) {
         Some("gguf") => {
@@ -485,11 +500,11 @@ fn main() -> anyhow::Result<()> {
                 &format_size(total_size_in_bytes),
                 start.elapsed().as_secs_f32(),
             );
-            ModelWeights::from_gguf(model, &mut file, &device)?
+            ModelWeights::from_gguf(model, &mut file, device)?
         }
         Some("ggml" | "bin") | Some(_) | None => {
-            let model = ggml_file::Content::read(&mut file, &device)
-                .map_err(|e| e.with_path(model_path))?;
+            let model: ggml_file::Content<QB> =
+                ggml_file::Content::read(&mut file, device).map_err(|e| e.with_path(model_path))?;
             let mut total_size_in_bytes = 0;
             for (_, tensor) in model.tensors.iter() {
                 let elem_count = tensor.shape().elem_count();
@@ -615,14 +630,14 @@ fn main() -> anyhow::Result<()> {
 
         let start_prompt_processing = std::time::Instant::now();
         let mut next_token = if !args.split_prompt {
-            let input = Tensor::new(prompt_tokens.as_slice(), &device)?.unsqueeze(0)?;
+            let input = Tensor::new(prompt_tokens.as_slice(), device)?.unsqueeze(0)?;
             let logits = model.forward(&input, 0)?;
             let logits = logits.squeeze(0)?;
             logits_processor.sample(&logits)?
         } else {
             let mut next_token = 0;
             for (pos, token) in prompt_tokens.iter().enumerate() {
-                let input = Tensor::new(&[*token], &device)?.unsqueeze(0)?;
+                let input = Tensor::new(&[*token], device)?.unsqueeze(0)?;
                 let logits = model.forward(&input, pos)?;
                 let logits = logits.squeeze(0)?;
                 next_token = logits_processor.sample(&logits)?
@@ -650,7 +665,7 @@ fn main() -> anyhow::Result<()> {
         let start_post_prompt = std::time::Instant::now();
         let mut sampled = 0;
         for index in 0..to_sample {
-            let input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
+            let input = Tensor::new(&[next_token], device)?.unsqueeze(0)?;
             let logits = model.forward(&input, prompt_tokens.len() + index)?;
             let logits = logits.squeeze(0)?;
             let logits = if args.repeat_penalty == 1. {

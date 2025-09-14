@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use anyhow::bail;
 use anyhow::{Error as E, Result};
-use candle::{Device, Tensor};
+use candle::{BackendStorage, Tensor};
 use candle_nn::ops::softmax;
 use candle_nn::VarBuilder;
 use candle_transformers::models::debertav2::{Config as DebertaV2Config, DebertaV2NERModel};
@@ -19,9 +19,9 @@ use clap::{ArgGroup, Parser, ValueEnum};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{Encoding, PaddingParams, Tokenizer};
 
-enum TaskType {
-    Ner(Box<DebertaV2NERModel>),
-    TextClassification(Box<DebertaV2SeqClassificationModel>),
+enum TaskType<B: BackendStorage> {
+    Ner(Box<DebertaV2NERModel<B>>),
+    TextClassification(Box<DebertaV2SeqClassificationModel<B>>),
 }
 
 #[derive(Parser, Debug, Clone, ValueEnum)]
@@ -91,11 +91,10 @@ struct Args {
 }
 
 impl Args {
-    fn build_model_and_tokenizer(
+    fn build_model_and_tokenizer<B: BackendStorage>(
         &self,
-    ) -> Result<(TaskType, DebertaV2Config, Tokenizer, Id2Label)> {
-        let device = candle_examples::device(self.cpu)?;
-
+        device: &B::Device,
+    ) -> Result<(TaskType<B>, DebertaV2Config, Tokenizer, Id2Label)> {
         // Get files from either the HuggingFace API, or from a specified local directory.
         let (config_filename, tokenizer_filename, weights_filename) = {
             match &self.model_path {
@@ -153,14 +152,14 @@ impl Args {
             VarBuilder::from_pth(
                 &weights_filename,
                 candle_transformers::models::debertav2::DTYPE,
-                &device,
+                device,
             )?
         } else {
             unsafe {
                 VarBuilder::from_mmaped_safetensors(
                     &[weights_filename],
                     candle_transformers::models::debertav2::DTYPE,
-                    &device,
+                    device,
                 )?
             }
         };
@@ -187,25 +186,38 @@ impl Args {
     }
 }
 
-fn get_device(model_type: &TaskType) -> &Device {
+fn get_device<B: BackendStorage>(model_type: &TaskType<B>) -> &B::Device {
     match model_type {
         TaskType::Ner(ner_model) => &ner_model.device,
         TaskType::TextClassification(classification_model) => &classification_model.device,
     }
 }
 
-struct ModelInput {
+struct ModelInput<B: BackendStorage> {
     encoding: Vec<Encoding>,
-    input_ids: Tensor,
-    attention_mask: Tensor,
-    token_type_ids: Tensor,
+    input_ids: Tensor<B>,
+    attention_mask: Tensor<B>,
+    token_type_ids: Tensor<B>,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
-
-    let args = Args::parse();
 
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -216,25 +228,25 @@ fn main() -> Result<()> {
     };
 
     let model_load_time = std::time::Instant::now();
-    let (task_type, _model_config, tokenizer, id2label) = args.build_model_and_tokenizer()?;
+    let (task_type, _model_config, tokenizer, id2label) = args.build_model_and_tokenizer(device)?;
 
     println!(
         "Loaded model and tokenizers in {:?}",
         model_load_time.elapsed()
     );
 
-    let device = get_device(&task_type);
+    let device = get_device::<B>(&task_type);
 
     let tokenize_time = std::time::Instant::now();
 
-    let model_input: ModelInput = {
+    let model_input: ModelInput<B> = {
         let tokenizer_encodings = tokenizer
             .encode_batch(args.sentences, true)
             .map_err(E::msg)?;
 
-        let mut encoding_stack: Vec<Tensor> = Vec::default();
-        let mut attention_mask_stack: Vec<Tensor> = Vec::default();
-        let mut token_type_id_stack: Vec<Tensor> = Vec::default();
+        let mut encoding_stack: Vec<Tensor<B>> = Vec::default();
+        let mut attention_mask_stack: Vec<Tensor<B>> = Vec::default();
+        let mut token_type_id_stack: Vec<Tensor<B>> = Vec::default();
 
         for encoding in &tokenizer_encodings {
             encoding_stack.push(Tensor::new(encoding.get_ids(), device)?);
@@ -350,12 +362,13 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn create_benchmark<F>(
+fn create_benchmark<B, F>(
     num_iters: usize,
-    model_input: ModelInput,
+    model_input: ModelInput<B>,
 ) -> impl Fn(F) -> Result<(), candle::Error>
 where
-    F: Fn(&Tensor, Tensor, Tensor) -> Result<(), candle::Error>,
+    B: BackendStorage,
+    F: Fn(&Tensor<B>, Tensor<B>, Tensor<B>) -> Result<(), candle::Error>,
 {
     move |code: F| -> Result<(), candle::Error> {
         println!("Running {num_iters} iterations...");

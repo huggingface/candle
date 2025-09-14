@@ -15,7 +15,7 @@ extern crate intel_mkl_src;
 use anyhow::{bail, Error as E, Result};
 use clap::{Parser, ValueEnum};
 
-use candle::{DType, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use hf_hub::{api::sync::Api, Repo, RepoType};
@@ -122,12 +122,26 @@ struct Args {
     repeat_last_n: usize,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
     use tokenizers::Tokenizer;
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -136,7 +150,6 @@ fn main() -> Result<()> {
         None
     };
 
-    let device = candle_examples::device(args.cpu)?;
     let dtype = match args.dtype.as_deref() {
         Some("f16") => DType::F16,
         Some("bf16") => DType::BF16,
@@ -202,9 +215,9 @@ fn main() -> Result<()> {
                 vec![api.get("model.safetensors")?]
             }
         };
-        let cache = model::Cache::new(!args.no_kv_cache, dtype, &config, &device)?;
+        let cache: model::Cache<B> = model::Cache::new(!args.no_kv_cache, dtype, &config, device)?;
 
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
         (Llama::load(vb, &config)?, tokenizer_filename, cache, config)
     };
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
@@ -251,7 +264,7 @@ fn main() -> Result<()> {
             start_gen = std::time::Instant::now()
         }
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-        let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
+        let input = Tensor::new(ctxt, device)?.unsqueeze(0)?;
         let logits = llama.forward(&input, context_index, &mut cache)?;
         let logits = logits.squeeze(0)?;
         let logits = if args.repeat_penalty == 1. {

@@ -9,33 +9,33 @@ use clap::{Parser, ValueEnum};
 
 use candle_transformers::models::based::Model;
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendStorage, CpuDevice, CpuStorage, DType, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-struct TextGeneration {
-    model: Model,
-    device: Device,
+struct TextGeneration<B: BackendStorage> {
+    model: Model<B>,
+    device: B::Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
 }
 
-impl TextGeneration {
+impl<B: BackendStorage> TextGeneration<B> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
+        model: Model<B>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
         top_p: Option<f64>,
         repeat_penalty: f32,
         repeat_last_n: usize,
-        device: &Device,
+        device: &B::Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
@@ -251,7 +251,10 @@ fn main() -> Result<()> {
         DType::F32
     };
 
-    let mut vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+    // TODO: fix
+    let device = CpuDevice;
+    let mut vb: VarBuilder<CpuStorage> =
+        unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
     if args.which == Which::W1b50b {
         vb = vb.pp("model");
     };

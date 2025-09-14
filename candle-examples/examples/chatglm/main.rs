@@ -9,15 +9,15 @@ use clap::Parser;
 
 use candle_transformers::models::chatglm::{Config, Model};
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendStorage, CpuDevice, CpuStorage, DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-struct TextGeneration {
-    model: Model,
-    device: Device,
+struct TextGeneration<B: BackendStorage> {
+    model: Model<B>,
+    device: B::Device,
     tokenizer: Tokenizer,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
@@ -25,10 +25,10 @@ struct TextGeneration {
     verbose_prompt: bool,
 }
 
-impl TextGeneration {
+impl<B: BackendStorage> TextGeneration<B> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
+        model: Model<B>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
@@ -36,7 +36,7 @@ impl TextGeneration {
         repeat_penalty: f32,
         repeat_last_n: usize,
         verbose_prompt: bool,
-        device: &Device,
+        device: &B::Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
@@ -215,8 +215,10 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let config = Config::glm3_6b();
-    let device = candle_examples::device(args.cpu)?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
+    // TODO: fix
+    let device = CpuDevice;
+    let vb: VarBuilder<CpuStorage> =
+        unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
     let model = Model::new(&config, vb)?;
 
     println!("loaded the model in {:?}", start.elapsed());

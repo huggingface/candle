@@ -14,7 +14,7 @@ mod cuda_kernels {
 
 use clap::Parser;
 
-use candle::{CpuStorage, CustomOp1, Layout, Result, Shape, Tensor};
+use candle::{BackendStorage, CpuStorage, CustomOp1, Layout, Result, Shape, Tensor};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -28,7 +28,7 @@ struct LayerNorm {
     eps: f32,
 }
 
-impl CustomOp1 for LayerNorm {
+impl<B: BackendStorage> CustomOp1<B> for LayerNorm {
     fn name(&self) -> &'static str {
         "layer-norm"
     }
@@ -89,10 +89,20 @@ impl CustomOp1 for LayerNorm {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let device = candle_examples::device(args.cpu)?;
-    let t = Tensor::arange(0f32, 14f32, &device)?.reshape((2, 7))?;
+
+    if args.cpu {
+        run::<candle::CpuStorage>(&candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(&candle::CudaDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(device: &B::Device) -> anyhow::Result<()> {
+    let t: Tensor<B> = Tensor::arange(0f32, 14f32, device)?.reshape((2, 7))?;
     println!("{t}");
     let t = t.apply_op1(LayerNorm { eps: 1e-5 })?;
     println!("{t}");

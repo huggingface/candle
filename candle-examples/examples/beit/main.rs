@@ -7,24 +7,26 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use clap::Parser;
-
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, CpuDevice, CpuStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 use candle_transformers::models::beit;
+use clap::Parser;
 
 /// Loads an image from disk using the image crate, this returns a tensor with shape
 /// (3, 384, 384). Beit special normalization is applied.
-pub fn load_image384_beit_norm<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
+pub fn load_image384_beit_norm<P: AsRef<std::path::Path>, B: BackendStorage>(
+    p: P,
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
         .resize_to_fill(384, 384, image::imageops::FilterType::Triangle);
     let img = img.to_rgb8();
     let data = img.into_raw();
-    let data = Tensor::from_vec(data, (384, 384, 3), &Device::Cpu)?.permute((2, 0, 1))?;
-    let mean = Tensor::new(&[0.5f32, 0.5, 0.5], &Device::Cpu)?.reshape((3, 1, 1))?;
-    let std = Tensor::new(&[0.5f32, 0.5, 0.5], &Device::Cpu)?.reshape((3, 1, 1))?;
+    let data = Tensor::from_vec(data, (384, 384, 3), device)?.permute((2, 0, 1))?;
+    let mean = Tensor::new(&[0.5f32, 0.5, 0.5], device)?.reshape((3, 1, 1))?;
+    let std = Tensor::new(&[0.5f32, 0.5, 0.5], device)?.reshape((3, 1, 1))?;
     (data.to_dtype(candle::DType::F32)? / 255.)?
         .broadcast_sub(&mean)?
         .broadcast_div(&std)
@@ -43,12 +45,10 @@ struct Args {
     cpu: bool,
 }
 
-pub fn main() -> anyhow::Result<()> {
+pub fn run<B: BackendStorage>(device: &B::Device) -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let device = candle_examples::device(args.cpu)?;
-
-    let image = load_image384_beit_norm(args.image)?.to_device(&device)?;
+    let image: Tensor<B> = load_image384_beit_norm(args.image, device)?;
     println!("loaded image {image:?}");
 
     let model_file = match args.model {
@@ -59,7 +59,7 @@ pub fn main() -> anyhow::Result<()> {
         }
         Some(model) => model.into(),
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, device)? };
     let model = beit::vit_base(vb)?;
     println!("model built");
     let logits = model.forward(&image.unsqueeze(0)?)?;
@@ -74,6 +74,20 @@ pub fn main() -> anyhow::Result<()> {
             candle_examples::imagenet::CLASSES[category_idx],
             100. * pr
         );
+    }
+    Ok(())
+}
+
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<CpuStorage>(&CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(&candle::CudaDevice::new(0)?)?;
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(&candle::MetalDevice::new(0)?)?;
     }
     Ok(())
 }
