@@ -5,17 +5,17 @@
 //! - 📝 [Arxiv](https://arxiv.org/abs/2201.09792)
 //! - 💻 [GitHub](https://github.com/locuslab/convmixer)
 //!
-use candle::Result;
+use candle::{BackendStorage, Result};
 use candle_nn::{batch_norm, Conv2dConfig, Module, VarBuilder};
 
 #[allow(clippy::many_single_char_names)]
-fn conv2d_same(
+fn conv2d_same<B: BackendStorage + 'static>(
     i: usize,
     o: usize,
     k: usize,
     c: Conv2dConfig,
-    vb: VarBuilder,
-) -> Result<impl Module> {
+    vb: VarBuilder<B>,
+) -> Result<impl Module<B>> {
     let conv2d = candle_nn::conv2d(i, o, k, c, vb)?;
     let s = c.stride;
     let module = candle_nn::func(move |xs| {
@@ -36,7 +36,11 @@ fn conv2d_same(
     Ok(module)
 }
 
-fn block(dim: usize, kernel_size: usize, vb: VarBuilder) -> Result<impl Module> {
+fn block<B: BackendStorage + 'static>(
+    dim: usize,
+    kernel_size: usize,
+    vb: VarBuilder<B>,
+) -> Result<impl Module<B>> {
     let conv2d_cfg = Conv2dConfig {
         groups: dim,
         ..Default::default()
@@ -52,14 +56,14 @@ fn block(dim: usize, kernel_size: usize, vb: VarBuilder) -> Result<impl Module> 
     }))
 }
 
-fn convmixer(
+fn convmixer<B: BackendStorage + 'static>(
     nclasses: usize,
     dim: usize,
     depth: usize,
     kernel_size: usize,
     patch_size: usize,
-    vb: VarBuilder,
-) -> Result<candle_nn::Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<candle_nn::Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         stride: patch_size,
         ..Default::default()
@@ -80,10 +84,16 @@ fn convmixer(
     }))
 }
 
-pub fn c1536_20(nclasses: usize, vb: VarBuilder) -> Result<candle_nn::Func<'static>> {
+pub fn c1536_20<B: BackendStorage + 'static>(
+    nclasses: usize,
+    vb: VarBuilder<B>,
+) -> Result<candle_nn::Func<'static, B>> {
     convmixer(nclasses, 1536, 20, 9, 7, vb)
 }
 
-pub fn c1024_20(nclasses: usize, vb: VarBuilder) -> Result<candle_nn::Func<'static>> {
+pub fn c1024_20<B: BackendStorage + 'static>(
+    nclasses: usize,
+    vb: VarBuilder<B>,
+) -> Result<candle_nn::Func<'static, B>> {
     convmixer(nclasses, 1024, 20, 9, 14, vb)
 }

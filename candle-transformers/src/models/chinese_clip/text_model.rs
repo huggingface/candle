@@ -6,7 +6,7 @@
 //! - 💻 [Chinese-CLIP](https://github.com/OFA-Sys/Chinese-CLIP)
 //! - 💻 [HF](https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py)
 
-use candle::{DType, Device, IndexOp, Module, Result, Tensor};
+use candle::{BackendStorage, DType, IndexOp, Module, Result, Tensor};
 use candle_nn as nn;
 
 use super::Activation;
@@ -91,19 +91,19 @@ impl ChineseClipTextConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct ChineseClipTextEmbeddings {
-    word_embeddings: nn::Embedding,
-    position_embeddings: nn::Embedding,
-    token_type_embeddings: nn::Embedding,
-    layer_norm: nn::LayerNorm,
+pub struct ChineseClipTextEmbeddings<B: BackendStorage> {
+    word_embeddings: nn::Embedding<B>,
+    position_embeddings: nn::Embedding<B>,
+    token_type_embeddings: nn::Embedding<B>,
+    layer_norm: nn::LayerNorm<B>,
     dropout: nn::Dropout,
     position_embedding_type: PositionEmbeddingType,
-    position_ids: Tensor,
-    token_type_ids: Tensor,
+    position_ids: Tensor<B>,
+    token_type_ids: Tensor<B>,
 }
 
-impl ChineseClipTextEmbeddings {
-    pub fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipTextEmbeddings<B> {
+    pub fn new(var: nn::VarBuilder<B>, config: &ChineseClipTextConfig) -> Result<Self> {
         let word_embeddings = nn::embedding(
             config.vocab_size,
             config.hidden_size,
@@ -119,7 +119,7 @@ impl ChineseClipTextEmbeddings {
             config.hidden_size,
             var.pp("token_type_embeddings"),
         )?;
-        let layer_norm = nn::layer_norm::<f64>(
+        let layer_norm = nn::layer_norm::<f64, B>(
             config.hidden_size,
             config.layer_norm_eps,
             var.pp("LayerNorm"),
@@ -142,7 +142,7 @@ impl ChineseClipTextEmbeddings {
         })
     }
 
-    fn forward(&self, xs: &Tensor, token_type_ids: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, token_type_ids: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let (_batch_size, seq_length) = xs.dims2()?;
         let position_ids = (0..seq_length as u32).collect::<Vec<_>>();
         let position_ids = self.position_ids.index_select(
@@ -176,15 +176,15 @@ impl ChineseClipTextEmbeddings {
 
 /// Copied from [`crate::models::bert::BertSelfOutput`] to [`ChineseClipTextSelfOutput`]
 #[derive(Clone, Debug)]
-struct ChineseClipTextSelfOutput {
-    dense: nn::Linear,
-    layer_norm: nn::LayerNorm,
+struct ChineseClipTextSelfOutput<B: BackendStorage> {
+    dense: nn::Linear<B>,
+    layer_norm: nn::LayerNorm<B>,
     dropout: nn::Dropout,
     span: tracing::Span,
 }
 
-impl ChineseClipTextSelfOutput {
-    fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipTextSelfOutput<B> {
+    fn new(var: nn::VarBuilder<B>, config: &ChineseClipTextConfig) -> Result<Self> {
         let dense = nn::linear(config.hidden_size, config.hidden_size, var.pp("dense"))?;
         let layer_norm = nn::layer_norm(
             config.hidden_size,
@@ -200,7 +200,7 @@ impl ChineseClipTextSelfOutput {
         })
     }
 
-    fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor<B>, input_tensor: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let hidden_states = self.dense.forward(hidden_states)?;
         let hidden_states = self.dropout.forward(&hidden_states, false)?;
@@ -210,10 +210,10 @@ impl ChineseClipTextSelfOutput {
 
 /// Copied from [`crate::models::bert::BertSelfAttention`] to [`ChineseClipTextSelfAttention`]
 #[derive(Clone, Debug)]
-struct ChineseClipTextSelfAttention {
-    query: nn::Linear,
-    key: nn::Linear,
-    value: nn::Linear,
+struct ChineseClipTextSelfAttention<B: BackendStorage> {
+    query: nn::Linear<B>,
+    key: nn::Linear<B>,
+    value: nn::Linear<B>,
     dropout: nn::Dropout,
     num_attention_heads: usize,
     attention_head_size: usize,
@@ -221,8 +221,8 @@ struct ChineseClipTextSelfAttention {
     span_softmax: tracing::Span,
 }
 
-impl ChineseClipTextSelfAttention {
-    fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipTextSelfAttention<B> {
+    fn new(var: nn::VarBuilder<B>, config: &ChineseClipTextConfig) -> Result<Self> {
         let attention_head_size = config.hidden_size / config.num_attention_heads;
         let all_head_size = config.num_attention_heads * attention_head_size;
         let dropout = nn::Dropout::new(config.hidden_dropout_prob);
@@ -242,7 +242,7 @@ impl ChineseClipTextSelfAttention {
         })
     }
 
-    fn transpose_for_scores(&self, xs: &Tensor) -> Result<Tensor> {
+    fn transpose_for_scores(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut new_x_shape = xs.dims().to_vec();
         new_x_shape.pop();
         new_x_shape.push(self.num_attention_heads);
@@ -251,7 +251,7 @@ impl ChineseClipTextSelfAttention {
         xs.contiguous()
     }
 
-    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor<B>, attention_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let query_layer = self.query.forward(hidden_states)?;
         let key_layer = self.key.forward(hidden_states)?;
@@ -279,14 +279,14 @@ impl ChineseClipTextSelfAttention {
 
 /// Copied from [`crate::models::bert::BertAttention`] to [`ChineseClipTextAttention`]
 #[derive(Clone, Debug)]
-struct ChineseClipTextAttention {
-    self_attention: ChineseClipTextSelfAttention,
-    self_output: ChineseClipTextSelfOutput,
+struct ChineseClipTextAttention<B: BackendStorage> {
+    self_attention: ChineseClipTextSelfAttention<B>,
+    self_output: ChineseClipTextSelfOutput<B>,
     span: tracing::Span,
 }
 
-impl ChineseClipTextAttention {
-    fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipTextAttention<B> {
+    fn new(var: nn::VarBuilder<B>, config: &ChineseClipTextConfig) -> Result<Self> {
         let self_attention = ChineseClipTextSelfAttention::new(var.pp("self"), config)?;
         let self_output = ChineseClipTextSelfOutput::new(var.pp("output"), config)?;
         Ok(Self {
@@ -296,7 +296,7 @@ impl ChineseClipTextAttention {
         })
     }
 
-    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor<B>, attention_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let self_outputs = self.self_attention.forward(hidden_states, attention_mask)?;
         let attention_output = self.self_output.forward(&self_outputs, hidden_states)?;
@@ -308,14 +308,14 @@ type HiddenActLayer = Activation;
 
 /// Copied from [`crate::models::bert::BertIntermediate`] to [`ChineseClipTextIntermediate`]
 #[derive(Clone, Debug)]
-struct ChineseClipTextIntermediate {
-    dense: nn::Linear,
+struct ChineseClipTextIntermediate<B: BackendStorage> {
+    dense: nn::Linear<B>,
     intermediate_act: HiddenActLayer,
     span: tracing::Span,
 }
 
-impl ChineseClipTextIntermediate {
-    fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipTextIntermediate<B> {
+    fn new(var: nn::VarBuilder<B>, config: &ChineseClipTextConfig) -> Result<Self> {
         let dense = nn::linear(
             config.hidden_size,
             config.intermediate_size,
@@ -329,8 +329,8 @@ impl ChineseClipTextIntermediate {
     }
 }
 
-impl Module for ChineseClipTextIntermediate {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ChineseClipTextIntermediate<B> {
+    fn forward(&self, hidden_states: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let hidden_states = self.dense.forward(hidden_states)?;
         let ys = self.intermediate_act.forward(&hidden_states)?;
@@ -340,15 +340,15 @@ impl Module for ChineseClipTextIntermediate {
 
 /// Copied from [`crate::models::bert::BertOutput`] to [`ChineseClipTextOutput`]
 #[derive(Clone, Debug)]
-struct ChineseClipTextOutput {
-    dense: nn::Linear,
-    layer_norm: nn::LayerNorm,
+struct ChineseClipTextOutput<B: BackendStorage> {
+    dense: nn::Linear<B>,
+    layer_norm: nn::LayerNorm<B>,
     dropout: nn::Dropout,
     span: tracing::Span,
 }
 
-impl ChineseClipTextOutput {
-    fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipTextOutput<B> {
+    fn new(var: nn::VarBuilder<B>, config: &ChineseClipTextConfig) -> Result<Self> {
         let dense = nn::linear(
             config.intermediate_size,
             config.hidden_size,
@@ -368,7 +368,7 @@ impl ChineseClipTextOutput {
         })
     }
 
-    fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor<B>, input_tensor: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let hidden_states = self.dense.forward(hidden_states)?;
         let hidden_states = self.dropout.forward(&hidden_states, false)?;
@@ -378,15 +378,15 @@ impl ChineseClipTextOutput {
 
 /// Copied from [`crate::models::bert::BertLayer`] to [`ChineseClipTextLayer`]
 #[derive(Clone, Debug)]
-struct ChineseClipTextLayer {
-    attention: ChineseClipTextAttention,
-    intermediate: ChineseClipTextIntermediate,
-    output: ChineseClipTextOutput,
+struct ChineseClipTextLayer<B: BackendStorage> {
+    attention: ChineseClipTextAttention<B>,
+    intermediate: ChineseClipTextIntermediate<B>,
+    output: ChineseClipTextOutput<B>,
     span: tracing::Span,
 }
 
-impl ChineseClipTextLayer {
-    fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipTextLayer<B> {
+    fn new(var: nn::VarBuilder<B>, config: &ChineseClipTextConfig) -> Result<Self> {
         let attention = ChineseClipTextAttention::new(var.pp("attention"), config)?;
         let intermediate = ChineseClipTextIntermediate::new(var.pp("intermediate"), config)?;
         let output = ChineseClipTextOutput::new(var.pp("output"), config)?;
@@ -398,7 +398,7 @@ impl ChineseClipTextLayer {
         })
     }
 
-    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor<B>, attention_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let attention_output = self.attention.forward(hidden_states, attention_mask)?;
         // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L523
@@ -418,28 +418,28 @@ impl Tanh {
         Self {}
     }
 }
-impl Module for Tanh {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Tanh {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.tanh()
     }
 }
 
 #[derive(Clone, Debug)]
-struct ChineseClipTextPooler {
-    dense: nn::Linear,
+struct ChineseClipTextPooler<B: BackendStorage> {
+    dense: nn::Linear<B>,
     activation: Tanh,
 }
 
-impl ChineseClipTextPooler {
-    pub fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipTextPooler<B> {
+    pub fn new(var: nn::VarBuilder<B>, config: &ChineseClipTextConfig) -> Result<Self> {
         let dense = nn::linear(config.hidden_size, config.hidden_size, var.pp("dense"))?;
         let activation = Tanh::new();
         Ok(Self { dense, activation })
     }
 }
 
-impl Module for ChineseClipTextPooler {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ChineseClipTextPooler<B> {
+    fn forward(&self, hidden_states: &Tensor<B>) -> Result<Tensor<B>> {
         let first_token_tensor = hidden_states.i((.., 0))?;
         let pooled_output = self.dense.forward(&first_token_tensor)?;
         let pooled_output = self.activation.forward(&pooled_output)?;
@@ -448,13 +448,13 @@ impl Module for ChineseClipTextPooler {
 }
 
 #[derive(Clone, Debug)]
-struct ChineseClipTextEncoder {
-    layers: Vec<ChineseClipTextLayer>,
+struct ChineseClipTextEncoder<B: BackendStorage> {
+    layers: Vec<ChineseClipTextLayer<B>>,
     span: tracing::Span,
 }
 
-impl ChineseClipTextEncoder {
-    fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipTextEncoder<B> {
+    fn new(var: nn::VarBuilder<B>, config: &ChineseClipTextConfig) -> Result<Self> {
         let layers = (0..config.num_hidden_layers)
             .map(|index| ChineseClipTextLayer::new(var.pp(format!("layer.{index}")), config))
             .collect::<Result<Vec<_>>>()?;
@@ -462,7 +462,7 @@ impl ChineseClipTextEncoder {
         Ok(ChineseClipTextEncoder { layers, span })
     }
 
-    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor<B>, attention_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut hidden_states = hidden_states.clone();
         // Use a loop rather than a fold as it's easier to modify when adding debug/...
@@ -474,16 +474,16 @@ impl ChineseClipTextEncoder {
 }
 
 #[derive(Clone, Debug)]
-pub struct ChineseClipTextTransformer {
-    embeddings: ChineseClipTextEmbeddings,
-    encoder: ChineseClipTextEncoder,
-    pooler: Option<ChineseClipTextPooler>,
-    pub device: Device,
+pub struct ChineseClipTextTransformer<B: BackendStorage> {
+    embeddings: ChineseClipTextEmbeddings<B>,
+    encoder: ChineseClipTextEncoder<B>,
+    pooler: Option<ChineseClipTextPooler<B>>,
+    pub device: B::Device,
     span: tracing::Span,
 }
 
-impl ChineseClipTextTransformer {
-    pub fn new(var: nn::VarBuilder, config: &ChineseClipTextConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipTextTransformer<B> {
+    pub fn new(var: nn::VarBuilder<B>, config: &ChineseClipTextConfig) -> Result<Self> {
         let embeddings = ChineseClipTextEmbeddings::new(var.pp("embeddings"), config)?;
         let encoder = ChineseClipTextEncoder::new(var.pp("encoder"), config)?;
         // see: https://github.com/huggingface/transformers/blob/e40bb4845e0eefb52ec1e9cac9c2446ab36aef81/src/transformers/models/chinese_clip/modeling_chinese_clip.py#L1362
@@ -504,10 +504,10 @@ impl ChineseClipTextTransformer {
 
     pub fn forward(
         &self,
-        input_ids: &Tensor,
-        token_type_ids: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        input_ids: &Tensor<B>,
+        token_type_ids: Option<&Tensor<B>>,
+        attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let embedding_output = self.embeddings.forward(input_ids, token_type_ids)?;
         let attention_mask = match attention_mask {
@@ -528,7 +528,10 @@ impl ChineseClipTextTransformer {
     }
 }
 
-fn get_extended_attention_mask(attention_mask: &Tensor, dtype: DType) -> Result<Tensor> {
+fn get_extended_attention_mask<B: BackendStorage>(
+    attention_mask: &Tensor<B>,
+    dtype: DType,
+) -> Result<Tensor<B>> {
     let attention_mask = match attention_mask.rank() {
         3 => attention_mask.unsqueeze(1)?,
         2 => attention_mask.unsqueeze(1)?.unsqueeze(1)?,
