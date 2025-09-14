@@ -287,6 +287,10 @@ impl crate::backend::BackendDevice<CudaStorage> for CudaDevice {
         fail!()
     }
 
+    fn is_cpu(&self) -> bool {
+        false
+    }
+
     fn zeros(&self, _shape: &Shape, _dtype: DType) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }

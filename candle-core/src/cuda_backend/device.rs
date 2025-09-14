@@ -271,6 +271,8 @@ impl AsRef<CudaDevice> for CudaDevice {
 }
 
 impl BackendDevice<CudaStorage> for CudaDevice {
+    const SUPPORTS_BF16: bool = true;
+
     fn new(ordinal: usize) -> Result<Self> {
         let context = cudarc::driver::CudaContext::new(ordinal).w()?;
         let stream = context.default_stream().w()?;
@@ -306,6 +308,10 @@ impl BackendDevice<CudaStorage> for CudaDevice {
 
     fn same_device(&self, rhs: &Self) -> bool {
         self.id == rhs.id
+    }
+
+    fn is_cpu(&self) -> bool {
+        false
     }
 
     fn zeros(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {

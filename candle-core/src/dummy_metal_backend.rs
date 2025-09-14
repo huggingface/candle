@@ -147,10 +147,10 @@ mod dummy {
         fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
             Err(Error::NotCompiledWithMetalSupport)
         }
-
         fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
             Err(Error::NotCompiledWithMetalSupport)
         }
+
         fn upsample_nearest1d(&self, _: &Layout, _: usize) -> Result<Self> {
             Err(Error::NotCompiledWithMetalSupport)
         }
@@ -298,6 +298,10 @@ mod dummy {
 
         fn same_device(&self, _: &MetalDevice) -> bool {
             fail!()
+        }
+
+        fn is_cpu(&self) -> bool {
+            false
         }
 
         fn zeros(&self, _shape: &Shape, _dtype: DType) -> Result<MetalStorage> {

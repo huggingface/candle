@@ -2099,6 +2099,8 @@ impl MetalStorage {
 }
 
 impl BackendDevice<MetalStorage> for MetalDevice {
+    const SUPPORTS_BF16: bool = true;
+
     fn new(ordinal: usize) -> Result<Self> {
         let device = Device::all().swap_remove(ordinal);
         let command_queue = device.new_command_queue().map_err(MetalError::from)?;
@@ -2131,6 +2133,10 @@ impl BackendDevice<MetalStorage> for MetalDevice {
 
     fn same_device(&self, rhs: &Self) -> bool {
         self.id == rhs.id
+    }
+
+    fn is_cpu(&self) -> bool {
+        false
     }
 
     unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {

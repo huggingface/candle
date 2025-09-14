@@ -2743,6 +2743,10 @@ impl BackendDevice<CpuStorage> for CpuDevice {
         true
     }
 
+    fn is_cpu(&self) -> bool {
+        true
+    }
+
     fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<CpuStorage> {
         Ok(T::to_cpu_storage(s))
     }

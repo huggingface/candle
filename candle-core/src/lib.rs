@@ -171,3 +171,11 @@ impl<M: Module<B>, B: BackendStorage> Module<B> for Option<&M> {
 pub trait ModuleT<B: BackendStorage> {
     fn forward_t(&self, xs: &Tensor<B>, train: bool) -> Result<Tensor<B>>;
 }
+
+/*
+impl<M: Module<B>, B: BackendStorage> ModuleT<B> for M {
+    fn forward_t(&self, xs: &Tensor<B>, _train: bool) -> Result<Tensor<B>> {
+        self.forward(xs)
+    }
+}
+ */

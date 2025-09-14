@@ -35,6 +35,7 @@ pub mod simd128;
 pub mod utils;
 use half::{bf16, f16};
 
+pub use cuda::QCudaStorage;
 pub use k_quants::GgmlType;
 pub use metal::QMetalStorage;
 
@@ -143,8 +144,8 @@ impl QuantizedDevice<QStorage> for Device {
     }
 }
 
-pub trait QuantizedBackend: Sized {
-    type Storage: BackendStorage;
+pub trait QuantizedBackend: Sized + Send {
+    type Storage: BackendStorage<Device = Self::Device>;
     type Device: QuantizedDevice<Self> + BackendDevice<Self::Storage>;
 
     fn block_size(&self) -> usize;

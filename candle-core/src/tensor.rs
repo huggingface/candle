@@ -326,12 +326,14 @@ impl<B: BackendStorage> Tensor<B> {
         lo: f64,
         up: f64,
         s: S,
-        _: DType,
+        dtype: DType,
         device: &B::Device,
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_uniform(&s, DType::F64, lo, up)?;
+        let storage = device
+            .rand_uniform(&s, DType::F64, lo, up)?
+            .to_dtype(&Layout::contiguous(s.clone()), dtype)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }
@@ -367,12 +369,14 @@ impl<B: BackendStorage> Tensor<B> {
         mean: f64,
         std: f64,
         s: S,
-        _: DType,
+        dtype: DType,
         device: &B::Device,
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_normal(&s, DType::F64, mean, std)?;
+        let storage = device
+            .rand_normal(&s, DType::F64, mean, std)?
+            .to_dtype(&Layout::contiguous(s.clone()), dtype)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }

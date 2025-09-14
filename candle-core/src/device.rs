@@ -328,6 +328,14 @@ impl BackendDevice<Storage> for Device {
         }
     }
 
+    fn is_cpu(&self) -> bool {
+        match self {
+            Self::Cpu => true,
+            Self::Cuda(_) => false,
+            Self::Metal(_) => false,
+        }
+    }
+
     fn zeros(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
         match self {
             Device::Cpu => {

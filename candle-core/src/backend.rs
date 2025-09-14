@@ -2,13 +2,14 @@
 //!
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
+use std::fmt::Debug;
 
 #[cfg(feature = "cuda")]
 use crate::CudaDevice;
 #[cfg(feature = "metal")]
 use crate::{MetalDevice, MetalError};
 
-pub trait BackendStorage: Sized + Clone + Send + Sync {
+pub trait BackendStorage: Sized + Clone + Send + Sync + Debug {
     type Device: BackendDevice<Self>;
 
     fn try_clone(&self, _: &Layout) -> Result<Self>;
@@ -187,6 +188,8 @@ pub trait BackendDevice<B: BackendStorage>:
     fn same_device(&self, device: &Self) -> bool {
         self.location() == device.location()
     }
+
+    fn is_cpu(&self) -> bool;
 
     fn zeros(&self, _shape: &Shape, _dtype: DType) -> Result<B>;
 
