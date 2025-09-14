@@ -1,4 +1,4 @@
-use candle::{DType, Device, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, Module, Result, Tensor, D};
 use candle_nn::{linear_b, rms_norm, Linear, RmsNorm, VarBuilder};
 
 fn default_act() -> candle_nn::Activation {
@@ -69,18 +69,18 @@ impl Config {
 }
 
 #[derive(Debug, Clone)]
-struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+struct Attention<B: BackendStorage> {
+    q_proj: Linear<B>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    o_proj: Linear<B>,
     scale: f64,
     num_heads: usize,
     head_dim: usize,
 }
 
-impl Attention {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Attention<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let h = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let head_dim = cfg.head_dim();
@@ -102,11 +102,11 @@ impl Attention {
 
     fn forward(
         &self,
-        xs: &Tensor,
-        emb: &RotaryEmbedding,
-        subsampled_positions: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        emb: &RotaryEmbedding<B>,
+        subsampled_positions: Option<&Tensor<B>>,
+        attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let (b, patches, _) = xs.dims3()?;
         let query_states = xs.apply(&self.q_proj)?;
         let key_states = xs.apply(&self.k_proj)?;
@@ -136,15 +136,15 @@ impl Attention {
 }
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+struct Mlp<B: BackendStorage> {
+    gate_proj: Linear<B>,
+    up_proj: Linear<B>,
+    down_proj: Linear<B>,
     act_fn: candle_nn::Activation,
 }
 
-impl Mlp {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Mlp<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let (h, i) = (cfg.hidden_size, cfg.intermediate_size);
         let gate_proj = linear_b(h, i, false, vb.pp("gate_proj"))?;
         let up_proj = linear_b(h, i, false, vb.pp("up_proj"))?;
@@ -158,23 +158,23 @@ impl Mlp {
     }
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Mlp<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         (xs.apply(&self.gate_proj)?.apply(&self.act_fn)? * xs.apply(&self.up_proj))?
             .apply(&self.down_proj)
     }
 }
 
 #[derive(Debug, Clone)]
-struct AttentionLayer {
-    attention_norm: RmsNorm,
-    feed_forward: Mlp,
-    attention: Attention,
-    ffn_norm: RmsNorm,
+struct AttentionLayer<B: BackendStorage> {
+    attention_norm: RmsNorm<B>,
+    feed_forward: Mlp<B>,
+    attention: Attention<B>,
+    ffn_norm: RmsNorm<B>,
 }
 
-impl AttentionLayer {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> AttentionLayer<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let attention_norm = rms_norm(cfg.hidden_size, 1e-5, vb.pp("attention_norm"))?;
         let feed_forward = Mlp::new(cfg, vb.pp("feed_forward"))?;
         let attention = Attention::new(cfg, vb.pp("attention"))?;
@@ -189,11 +189,11 @@ impl AttentionLayer {
 
     fn forward(
         &self,
-        xs: &Tensor,
-        emb: &RotaryEmbedding,
-        subsampled_positions: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        emb: &RotaryEmbedding<B>,
+        subsampled_positions: Option<&Tensor<B>>,
+        attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = self.attention.forward(
             &xs.apply(&self.attention_norm)?,
@@ -209,12 +209,12 @@ impl AttentionLayer {
 }
 
 #[derive(Debug, Clone)]
-struct Transformer {
-    layers: Vec<AttentionLayer>,
+struct Transformer<B: BackendStorage> {
+    layers: Vec<AttentionLayer<B>>,
 }
 
-impl Transformer {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Transformer<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb = vb.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -226,11 +226,11 @@ impl Transformer {
 
     fn forward(
         &self,
-        xs: &Tensor,
-        emb: &RotaryEmbedding,
-        subsampled_positions: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        emb: &RotaryEmbedding<B>,
+        subsampled_positions: Option<&Tensor<B>>,
+        attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
             xs = layer.forward(&xs, emb, subsampled_positions, attention_mask)?
@@ -240,13 +240,13 @@ impl Transformer {
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
-    cos: Tensor,
-    sin: Tensor,
+struct RotaryEmbedding<B: BackendStorage> {
+    cos: Tensor<B>,
+    sin: Tensor<B>,
 }
 
-impl RotaryEmbedding {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> RotaryEmbedding<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let dtype = vb.dtype();
         let dev = vb.device();
         let dim = cfg.head_dim();
@@ -279,10 +279,10 @@ impl RotaryEmbedding {
 
     fn apply_rotary_emb_qkv(
         &self,
-        q: &Tensor,
-        k: &Tensor,
-        subsampled_positions: Option<&Tensor>,
-    ) -> Result<(Tensor, Tensor)> {
+        q: &Tensor<B>,
+        k: &Tensor<B>,
+        subsampled_positions: Option<&Tensor<B>>,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let (_b_sz, _h, _seq_len, _n_embd) = q.dims4()?;
         let (cos, sin) = match subsampled_positions {
             None => (&self.cos, &self.sin),
@@ -298,16 +298,16 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    patch_conv: candle_nn::Conv2d,
-    ln_pre: RmsNorm,
-    transformer: Transformer,
-    patch_positional_embedding: RotaryEmbedding,
+pub struct Model<B: BackendStorage> {
+    patch_conv: candle_nn::Conv2d<B>,
+    ln_pre: RmsNorm<B>,
+    transformer: Transformer<B>,
+    patch_positional_embedding: RotaryEmbedding<B>,
     max_image_width: u32,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let conv2d_cfg = candle_nn::Conv2dConfig {
             stride: cfg.patch_size,
             ..Default::default()
@@ -337,8 +337,8 @@ impl Model {
         &self,
         num_patches_h: usize,
         num_patches_w: usize,
-        device: &Device,
-    ) -> Result<Tensor> {
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
         let idx = Tensor::arange(0, num_patches_h as u32, device)?;
         let idy = Tensor::arange(0, num_patches_w as u32, device)?;
         let mesh = Tensor::meshgrid(&[idx, idy], false)?;
@@ -347,8 +347,8 @@ impl Model {
     }
 }
 
-impl Module for Model {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Model<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let patch_embeds = xs.apply(&self.patch_conv)?;
         let subsampled_positions = Some(self.position_ids_in_meshgrid(
             patch_embeds.dim(2)?,

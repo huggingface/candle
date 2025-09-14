@@ -17,7 +17,7 @@
 
 use crate::generation::LogitsProcessor;
 use crate::models::t5;
-use candle::{IndexOp, Result, Tensor};
+use candle::{BackendStorage, CpuStorage, IndexOp, Result, Tensor};
 use candle_nn::{layer_norm, linear_b as linear, Activation, LayerNorm, Linear, VarBuilder};
 
 #[derive(serde::Deserialize, Debug, Clone)]
@@ -52,13 +52,13 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone)]
-pub struct Attention {
-    k_proj: Linear,
-    v_proj: Linear,
-    q_proj: Linear,
-    out_proj: Linear,
+pub struct Attention<B: BackendStorage> {
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    q_proj: Linear<B>,
+    out_proj: Linear<B>,
     is_causal: bool,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: Option<(Tensor<B>, Tensor<B>)>,
     scaling: f64,
     num_heads: usize,
     num_kv_heads: usize,
@@ -66,12 +66,12 @@ pub struct Attention {
     head_dim: usize,
 }
 
-impl Attention {
+impl<B: BackendStorage> Attention<B> {
     fn new(
         num_kv_heads: usize,
         is_causal: bool,
         cfg: &DecoderConfig,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         if cfg.rope_embeddings {
             candle::bail!("rope embeddings are not supported");
@@ -100,10 +100,10 @@ impl Attention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        key_value_states: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        key_value_states: Option<&Tensor<B>>,
+        attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let (b_sz, tgt_len, _) = xs.dims3()?;
         let query_states = (xs.apply(&self.q_proj)? * self.scaling)?
             .reshape((b_sz, tgt_len, self.num_heads, self.head_dim))?
@@ -161,19 +161,19 @@ impl Attention {
 }
 
 #[derive(Debug, Clone)]
-pub struct DecoderLayer {
-    self_attn: Attention,
-    self_attn_layer_norm: LayerNorm,
-    encoder_attn: Attention,
-    encoder_attn_layer_norm: LayerNorm,
-    fc1: Linear,
-    fc2: Linear,
-    final_layer_norm: LayerNorm,
+pub struct DecoderLayer<B: BackendStorage> {
+    self_attn: Attention<B>,
+    self_attn_layer_norm: LayerNorm<B>,
+    encoder_attn: Attention<B>,
+    encoder_attn_layer_norm: LayerNorm<B>,
+    fc1: Linear<B>,
+    fc2: Linear<B>,
+    final_layer_norm: LayerNorm<B>,
     activation: Activation,
 }
 
-impl DecoderLayer {
-    fn new(cfg: &DecoderConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> DecoderLayer<B> {
+    fn new(cfg: &DecoderConfig, vb: VarBuilder<B>) -> Result<Self> {
         let kv_heads = cfg.num_key_value_heads.unwrap_or(cfg.num_attention_heads);
         let kv_heads_cross = cfg.num_cross_attention_key_value_heads.unwrap_or(kv_heads);
 
@@ -200,11 +200,11 @@ impl DecoderLayer {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
-        encoder_xs: &Tensor,
-        encoder_attention_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        attention_mask: Option<&Tensor<B>>,
+        encoder_xs: &Tensor<B>,
+        encoder_attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         // Self attention
         let residual = xs;
         let xs = xs.apply(&self.self_attn_layer_norm)?;
@@ -236,19 +236,19 @@ impl DecoderLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Decoder {
-    embed_tokens: Vec<candle_nn::Embedding>,
-    embed_positions: Tensor,
-    layers: Vec<DecoderLayer>,
-    layer_norm: LayerNorm,
+pub struct Decoder<B: BackendStorage> {
+    embed_tokens: Vec<candle_nn::Embedding<B>>,
+    embed_positions: Tensor<B>,
+    layers: Vec<DecoderLayer<B>>,
+    layer_norm: LayerNorm<B>,
     num_codebooks: usize,
     hidden_size: usize,
-    lm_heads: Vec<Linear>,
+    lm_heads: Vec<Linear<B>>,
     dtype: candle::DType,
 }
 
-impl Decoder {
-    pub fn new(cfg: &DecoderConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Decoder<B> {
+    pub fn new(cfg: &DecoderConfig, vb: VarBuilder<B>) -> Result<Self> {
         let vb_d = vb.pp("model.decoder");
         let mut embed_tokens = Vec::with_capacity(cfg.num_codebooks);
         let vb_e = vb_d.pp("embed_tokens");
@@ -288,13 +288,13 @@ impl Decoder {
 
     pub fn forward(
         &mut self,
-        input_ids: &Tensor,
-        prompt_hidden_states: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
-        encoder_xs: &Tensor,
-        encoder_attention_mask: Option<&Tensor>,
+        input_ids: &Tensor<B>,
+        prompt_hidden_states: Option<&Tensor<B>>,
+        attention_mask: Option<&Tensor<B>>,
+        encoder_xs: &Tensor<B>,
+        encoder_attention_mask: Option<&Tensor<B>>,
         seqlen_offset: usize,
-    ) -> Result<Vec<Tensor>> {
+    ) -> Result<Vec<Tensor<B>>> {
         let (b_sz, num_codebooks, seq_len) = input_ids.dims3()?;
         if num_codebooks != self.num_codebooks {
             candle::bail!("unexpected num codebooks in input {:?}", input_ids.shape())
@@ -336,18 +336,18 @@ impl Decoder {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    pub embed_prompts: candle_nn::Embedding,
-    pub enc_to_dec_proj: Option<Linear>,
-    pub decoder: Decoder,
-    pub text_encoder: t5::T5EncoderModel,
+pub struct Model<B: BackendStorage> {
+    pub embed_prompts: candle_nn::Embedding<B>,
+    pub enc_to_dec_proj: Option<Linear<B>>,
+    pub decoder: Decoder<B>,
+    pub text_encoder: t5::T5EncoderModel<B>,
     pub decoder_start_token_id: u32,
     pub pad_token_id: u32,
-    pub audio_encoder: crate::models::dac::Model,
+    pub audio_encoder: crate::models::dac::Model<B>,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let text_encoder = t5::T5EncoderModel::load(vb.pp("text_encoder"), &cfg.text_encoder)?;
         let decoder = Decoder::new(&cfg.decoder, vb.pp("decoder"))?;
         let embed_prompts = candle_nn::embedding(
@@ -382,11 +382,11 @@ impl Model {
     /// Note that the returned tensor uses the CPU device.
     pub fn generate(
         &mut self,
-        prompt_tokens: &Tensor,
-        description_tokens: &Tensor,
+        prompt_tokens: &Tensor<B>,
+        description_tokens: &Tensor<B>,
         mut lp: LogitsProcessor,
         max_steps: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<CpuStorage>> {
         self.decoder.clear_kv_cache();
         self.text_encoder.clear_kv_cache();
         let encoded = self.text_encoder.forward(description_tokens)?;
@@ -447,7 +447,7 @@ impl Model {
         all_audio_tokens.iter_mut().for_each(|v| {
             v.resize(min_len, 0);
         });
-        let all_audio_tokens = Tensor::new(all_audio_tokens, &candle::Device::Cpu)?;
+        let all_audio_tokens = Tensor::new(all_audio_tokens, &candle::CpuDevice)?;
         Ok(all_audio_tokens)
     }
 
@@ -455,8 +455,8 @@ impl Model {
         &self,
         q_len: usize,
         kv_len: usize,
-        device: &candle::Device,
-    ) -> Result<Tensor> {
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
         let mask: Vec<_> = (0..q_len)
             .flat_map(|i| {
                 (0..kv_len).map(move |j| {
