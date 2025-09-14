@@ -1,5 +1,6 @@
 #![allow(clippy::redundant_closure_call)]
 #![allow(clippy::useless_conversion)]
+use ::candle::{BackendDevice, BackendStorage, CpuDevice, CudaDevice, DefaultStorage, MetalDevice};
 use float8::F8E4M3;
 use half::{bf16, f16};
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -17,7 +18,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use ::candle::{quantized::QTensor, DType, Device, Module, Tensor, WithDType};
+use ::candle::{quantized::QTensor, DType, Module, WithDType};
 
 mod utils;
 use utils::wrap_err;
@@ -27,6 +28,9 @@ use shape::{PyShape, PyShapeWithHole};
 
 #[cfg(feature = "onnx")]
 mod onnx;
+
+type Tensor = ::candle::Tensor<DefaultStorage>;
+type Device = <::candle::DefaultStorage as BackendStorage>::Device;
 
 #[derive(Clone, Debug)]
 #[pyclass(name = "Tensor")]
@@ -38,6 +42,22 @@ impl std::ops::Deref for PyTensor {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl PyTensor {
+    fn get_device(&self) -> PyResult<PyDevice> {
+        let device = CUDA_DEVICE.lock().unwrap();
+        if let Some(d) = device.as_ref() {
+            return Ok(PyDevice::Cuda(d.clone()));
+        };
+
+        let device = METAL_DEVICE.lock().unwrap();
+        if let Some(d) = device.as_ref() {
+            return Ok(PyDevice::Metal(d.clone()));
+        };
+
+        Ok(PyDevice::Cpu(CpuDevice))
     }
 }
 
@@ -70,56 +90,42 @@ impl PyDType {
     }
 }
 
-static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
-static METAL_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+static CUDA_DEVICE: std::sync::Mutex<Option<CudaDevice>> = std::sync::Mutex::new(None);
+static METAL_DEVICE: std::sync::Mutex<Option<MetalDevice>> = std::sync::Mutex::new(None);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PyDevice {
-    Cpu,
-    Cuda,
-    Metal,
+fn get_cuda_device() -> PyResult<CudaDevice> {
+    let mut device = CUDA_DEVICE.lock().unwrap();
+    if let Some(device) = device.as_ref() {
+        return Ok(device.clone());
+    };
+    let d = CudaDevice::new(0).map_err(wrap_err)?;
+    *device = Some(d.clone());
+    Ok(d)
 }
 
-impl PyDevice {
-    fn from_device(device: &Device) -> Self {
-        match device {
-            Device::Cpu => Self::Cpu,
-            Device::Cuda(_) => Self::Cuda,
-            Device::Metal(_) => Self::Metal,
-        }
-    }
-
-    fn as_device(&self) -> PyResult<Device> {
-        match self {
-            Self::Cpu => Ok(Device::Cpu),
-            Self::Cuda => {
-                let mut device = CUDA_DEVICE.lock().unwrap();
-                if let Some(device) = device.as_ref() {
-                    return Ok(device.clone());
-                };
-                let d = Device::new_cuda(0).map_err(wrap_err)?;
-                *device = Some(d.clone());
-                Ok(d)
-            }
-            Self::Metal => {
-                let mut device = METAL_DEVICE.lock().unwrap();
-                if let Some(device) = device.as_ref() {
-                    return Ok(device.clone());
-                };
-                let d = Device::new_metal(0).map_err(wrap_err)?;
-                *device = Some(d.clone());
-                Ok(d)
-            }
-        }
-    }
+fn get_metal_device() -> PyResult<MetalDevice> {
+    let mut device = METAL_DEVICE.lock().unwrap();
+    if let Some(device) = device.as_ref() {
+        return Ok(device.clone());
+    };
+    let d = MetalDevice::new(0).map_err(wrap_err)?;
+    *device = Some(d.clone());
+    Ok(d)
+}
+#[derive(Clone, Debug)]
+enum PyDevice {
+    Cpu(CpuDevice),
+    Cuda(CudaDevice),
+    Metal(MetalDevice),
 }
 
 impl<'source> FromPyObject<'source> for PyDevice {
     fn extract_bound(ob: &Bound<'source, PyAny>) -> PyResult<Self> {
         let device: String = ob.extract()?;
         let device = match device.as_str() {
-            "cpu" => PyDevice::Cpu,
-            "cuda" => PyDevice::Cuda,
+            "cpu" => PyDevice::Cpu(CpuDevice),
+            "cuda" => PyDevice::Cuda(get_cuda_device()?),
+            "metal" => PyDevice::Metal(get_metal_device()?),
             _ => Err(PyTypeError::new_err(format!("invalid device '{device}'")))?,
         };
         Ok(device)
@@ -129,9 +135,9 @@ impl<'source> FromPyObject<'source> for PyDevice {
 impl ToPyObject for PyDevice {
     fn to_object(&self, py: Python<'_>) -> PyObject {
         let str = match self {
-            PyDevice::Cpu => "cpu",
-            PyDevice::Cuda => "cuda",
-            PyDevice::Metal => "metal",
+            PyDevice::Cpu(_) => "cpu",
+            PyDevice::Cuda(_) => "cuda",
+            PyDevice::Metal(_) => "metal",
         };
         str.to_object(py)
     }
@@ -236,34 +242,34 @@ impl PyTensor {
     // TODO: Handle arbitrary input dtype and shape.
     /// Creates a new tensor from a Python value. The value can be a scalar or array-like object.
     fn new(py: Python<'_>, data: PyObject) -> PyResult<Self> {
-        use Device::Cpu;
+        use ::candle::CpuDevice;
         let tensor = if let Ok(vs) = data.extract::<u32>(py) {
-            Tensor::new(vs, &Cpu).map_err(wrap_err)?
+            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<i64>(py) {
-            Tensor::new(vs, &Cpu).map_err(wrap_err)?
+            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<f32>(py) {
-            Tensor::new(vs, &Cpu).map_err(wrap_err)?
+            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<u32>>(py) {
             let len = vs.len();
-            Tensor::from_vec(vs, len, &Cpu).map_err(wrap_err)?
+            Tensor::from_vec(vs, len, &CpuDevice).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<i64>>(py) {
             let len = vs.len();
-            Tensor::from_vec(vs, len, &Cpu).map_err(wrap_err)?
+            Tensor::from_vec(vs, len, &CpuDevice).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<f32>>(py) {
             let len = vs.len();
-            Tensor::from_vec(vs, len, &Cpu).map_err(wrap_err)?
+            Tensor::from_vec(vs, len, &CpuDevice).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<Vec<u32>>>(py) {
-            Tensor::new(vs, &Cpu).map_err(wrap_err)?
+            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<Vec<i64>>>(py) {
-            Tensor::new(vs, &Cpu).map_err(wrap_err)?
+            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<Vec<f32>>>(py) {
-            Tensor::new(vs, &Cpu).map_err(wrap_err)?
+            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<Vec<Vec<u32>>>>(py) {
-            Tensor::new(vs, &Cpu).map_err(wrap_err)?
+            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<Vec<Vec<i64>>>>(py) {
-            Tensor::new(vs, &Cpu).map_err(wrap_err)?
+            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<Vec<Vec<f32>>>>(py) {
-            Tensor::new(vs, &Cpu).map_err(wrap_err)?
+            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
         } else if let Ok(TorchTensor(numpy)) = data.extract::<TorchTensor>(py) {
             return PyTensor::new(py, numpy);
         } else {
@@ -363,7 +369,7 @@ impl PyTensor {
     /// Gets the tensor's device.
     /// &RETURNS&: Device
     fn device(&self, py: Python<'_>) -> PyObject {
-        PyDevice::from_device(self.0.device()).to_object(py)
+        self.get_device().unwrap().to_object(py)
     }
 
     #[getter]
@@ -563,7 +569,7 @@ impl PyTensor {
                 }
                 Ok((
                     Indexer::IndexSelect(
-                        Tensor::from_vec(indexes, list.len(), &Device::Cpu).map_err(wrap_err)?,
+                        Tensor::from_vec(indexes, list.len(), &CpuDevice).map_err(wrap_err)?,
                     ),
                     current_dim + 1,
                 ))
@@ -1039,20 +1045,30 @@ impl PyTensor {
                 ));
             }
             dtype = Some(other.dtype());
-            device = Some(PyDevice::from_device(other.0.device()));
+            device = Some(other.get_device()?);
         }
-
-        let result = match (device, dtype) {
-            (Some(device), Some(dtype)) => self
-                .0
-                .to_device(&device.as_device()?)
-                .map_err(wrap_err)?
-                .to_dtype(dtype.0)
-                .map_err(wrap_err)?,
-            (Some(device), None) => self.0.to_device(&device.as_device()?).map_err(wrap_err)?,
-            (None, Some(dtype)) => self.0.to_dtype(dtype.0).map_err(wrap_err)?,
-            (None, None) => return Err(PyTypeError::new_err("No valid dtype or device specified")),
+        let mut changed = false;
+        let result = match dtype {
+            Some(dtype) => {
+                changed = true;
+                self.0.to_dtype(dtype.0).map_err(wrap_err)?
+            }
+            None => self.0.clone(),
         };
+
+        let result = match device {
+            Some(PyDevice::Cpu(cpu)) => {
+                changed = true;
+                result.to_device(&cpu).map_err(wrap_err)?
+            }
+            // TODO: fix
+            //Some(PyDevice::Cuda(cuda)) => result.to_device(&cuda).map_err(wrap_err)?,
+            //Some(PyDevice::Metal(metal)) => result.to_device(&metal).map_err(wrap_err)?,
+            _ => result,
+        };
+        if !changed {
+            return Err(PyTypeError::new_err("No valid dtype or device specified"));
+        }
 
         Ok(PyTensor(result))
     }
@@ -1069,8 +1085,11 @@ impl PyTensor {
     /// Move the tensor to a new device.
     /// &RETURNS&: Tensor
     fn to_device(&self, device: PyDevice) -> PyResult<Self> {
-        let device = device.as_device()?;
-        Ok(PyTensor(self.0.to_device(&device).map_err(wrap_err)?))
+        let result = match device {
+            PyDevice::Cpu(cpu) => self.0.to_device(&cpu).map_err(wrap_err)?,
+            _ => todo!(),
+        };
+        Ok(PyTensor(result))
     }
 
     #[pyo3(text_signature = "(self, quantized_dtype:str)")]
@@ -1140,8 +1159,8 @@ fn tensor(py: Python<'_>, data: PyObject) -> PyResult<PyTensor> {
 /// Creates a new tensor with random values.
 /// &RETURNS&: Tensor
 fn rand(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<PyTensor> {
-    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    let tensor = Tensor::rand(0f32, 1f32, shape, &device).map_err(wrap_err)?;
+    // TODO: let device = device.unwrap_or(PyDevice::Cpu(CpuDevice)).as_device()?;
+    let tensor = Tensor::rand(0f32, 1f32, shape, &CpuDevice).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
@@ -1150,8 +1169,8 @@ fn rand(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<P
 /// Creates a new tensor with random values from a normal distribution.
 /// &RETURNS&: Tensor
 fn randn(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<PyTensor> {
-    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    let tensor = Tensor::randn(0f32, 1f32, shape, &device).map_err(wrap_err)?;
+    // TODO: let device = device.unwrap_or(PyDevice::Cpu(CpuDevice)).as_device()?;
+    let tensor = Tensor::randn(0f32, 1f32, shape, &CpuDevice).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
@@ -1169,8 +1188,8 @@ fn ones(
         None => DType::F32,
         Some(dtype) => PyDType::from_pyobject(dtype, py)?.0,
     };
-    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    let tensor = Tensor::ones(shape, dtype, &device).map_err(wrap_err)?;
+    // TODO: let device = device.unwrap_or(PyDevice::Cpu(CpuDevice)).as_device()?;
+    let tensor = Tensor::ones(shape, dtype, &CpuDevice).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
@@ -1188,8 +1207,8 @@ fn zeros(
         None => DType::F32,
         Some(dtype) => PyDType::from_pyobject(dtype, py)?.0,
     };
-    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    let tensor = Tensor::zeros(shape, dtype, &device).map_err(wrap_err)?;
+    // TODO: let device = device.unwrap_or(PyDevice::Cpu(CpuDevice)).as_device()?;
+    let tensor = Tensor::zeros(shape, dtype, &CpuDevice).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
@@ -1238,9 +1257,9 @@ impl PyQTensor {
     }
 
     /// Dequantizes the tensor.
-    /// &RETURNS&: Tensor  
+    /// &RETURNS&: Tensor
     fn dequantize(&self) -> PyResult<PyTensor> {
-        let tensor = self.0.dequantize(&Device::Cpu).map_err(wrap_err)?;
+        let tensor = self.0.dequantize(&CpuDevice).map_err(wrap_err)?;
         Ok(PyTensor(tensor))
     }
 
@@ -1259,7 +1278,7 @@ impl PyQTensor {
 /// Loads a safetensors file. Returns a dictionary mapping tensor names to tensors.
 /// &RETURNS&: Dict[str,Tensor]
 fn load_safetensors(path: &str, py: Python<'_>) -> PyResult<PyObject> {
-    let res = ::candle::safetensors::load(path, &Device::Cpu).map_err(wrap_err)?;
+    let res = ::candle::safetensors::load(path, &CpuDevice).map_err(wrap_err)?;
     let res = res
         .into_iter()
         .map(|(key, value)| (key, PyTensor(value).into_py(py)))
@@ -1293,9 +1312,9 @@ fn load_ggml(
     py: Python<'_>,
 ) -> PyResult<(PyObject, PyObject, PyObject)> {
     let mut file = std::fs::File::open(path)?;
-    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
+    // TODO: let device = device.unwrap_or(PyDevice::Cpu(CpuDevice)).as_device()?;
     let ggml =
-        ::candle::quantized::ggml_file::Content::read(&mut file, &device).map_err(wrap_err)?;
+        ::candle::quantized::ggml_file::Content::read(&mut file, &CpuDevice).map_err(wrap_err)?;
     let tensors = ggml
         .tensors
         .into_iter()
@@ -1333,7 +1352,9 @@ fn load_gguf(
     device: Option<PyDevice>,
     py: Python<'_>,
 ) -> PyResult<(PyObject, PyObject)> {
-    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
+    // TODO: let device = device.unwrap_or(PyDevice::Cpu(CpuDevice)).as_device()?;
+    let device = CpuDevice;
+
     use ::candle::quantized::gguf_file;
     fn gguf_value_to_pyobject(v: &gguf_file::Value, py: Python<'_>) -> PyResult<PyObject> {
         let v: PyObject = match v {
