@@ -16,6 +16,7 @@ prost = "0.12.1"
 
 [build-dependencies]
 prost-build = "0.12.1"
+protobuf-src = "2.1.1"
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
