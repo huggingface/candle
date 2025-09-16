@@ -176,7 +176,7 @@ pub trait SnacTtsModel {
 pub struct SnacTtsPipeline<T: SnacTtsModel> {
     tts_model: T,
     codec: SnacTtsCodec,
-    config: TtsConfig,
+    _config: TtsConfig,
 }
 
 impl<T: SnacTtsModel> SnacTtsPipeline<T> {
@@ -186,7 +186,7 @@ impl<T: SnacTtsModel> SnacTtsPipeline<T> {
         Self {
             tts_model,
             codec,
-            config,
+            _config: config,
         }
     }
 
@@ -227,6 +227,17 @@ impl<T: SnacTtsModel> SnacTtsPipeline<T> {
     }
 }
 
+impl SnacTtsCodec {
+    /// Get codec information
+    pub fn codec_info(&self) -> CodecInfo {
+        CodecInfo {
+            sample_rate: self.sample_rate(),
+            num_codebooks: self.num_codebooks(),
+            compression_ratio: self.model.config.get_compression_ratio(),
+        }
+    }
+}
+
 /// Information about the audio codec
 #[derive(Debug, Clone)]
 pub struct CodecInfo {
@@ -246,7 +257,7 @@ pub mod utils {
         
         // For voice cloning, typically we'd use the first few frames as the prompt
         let voice_frames = 50; // ~2 seconds at 24kHz with typical compression
-        let (batch_size, num_codebooks, seq_len) = tokens.dims3()?;
+        let (_batch_size, _num_codebooks, seq_len) = tokens.dims3()?;
         let prompt_len = voice_frames.min(seq_len);
         
         tokens.narrow(2, 0, prompt_len)

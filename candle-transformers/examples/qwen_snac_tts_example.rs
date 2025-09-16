@@ -21,7 +21,7 @@ use hf_hub::api::sync::Api;
 use tokenizers::Tokenizer;
 
 struct QwenSnacTts {
-    qwen_model: qwen2::Qwen,
+    qwen_model: qwen2::Model,
     tokenizer: Tokenizer,
     snac_codec: snac_tts_integration::SnacTtsCodec,
     device: Device,
@@ -30,7 +30,7 @@ struct QwenSnacTts {
 
 impl QwenSnacTts {
     fn new(
-        qwen_model: qwen2::Qwen,
+        qwen_model: qwen2::Model,
         tokenizer: Tokenizer,
         snac_codec: snac_tts_integration::SnacTtsCodec,
         device: Device,
@@ -88,7 +88,7 @@ impl QwenSnacTts {
         
         // Generate random tokens as a placeholder
         // Real implementation would use: self.qwen_model.forward(&text_tokens)?
-        let dummy_tokens = Tensor::randint(0u32, 4096u32, shape, &self.device)?;
+        let dummy_tokens = Tensor::rand(0f32, 4096f32, shape, &self.device)?.to_dtype(candle::DType::U32)?;
         
         println!("Generated {} audio token sequences of length {}", num_codebooks, seq_length);
         
@@ -97,7 +97,7 @@ impl QwenSnacTts {
 }
 
 /// Load Qwen model for TTS
-fn load_qwen_model(model_path: &str, device: &Device) -> Result<(qwen2::Qwen, Tokenizer)> {
+fn load_qwen_model(model_path: &str, device: &Device) -> Result<(qwen2::Model, Tokenizer)> {
     println!("Loading Qwen model from: {}", model_path);
     
     // Load tokenizer
@@ -115,7 +115,7 @@ fn load_qwen_model(model_path: &str, device: &Device) -> Result<(qwen2::Qwen, To
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F16, device)? };
     
     // Create model
-    let model = qwen2::Qwen::load(&vb, &config)?;
+    let model = qwen2::Model::load(&vb, &config)?;
     
     Ok((model, tokenizer))
 }
