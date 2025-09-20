@@ -116,6 +116,12 @@ impl<T: crate::NdArray> ExpectedResults<T> {
         self.inner.get(&TypeId::of::<U>())
     }
 }
+impl<T: crate::NdArray> Default for ExpectedResults<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Into<TypeId>, U: crate::NdArray> FromIterator<(T, U)> for ExpectedResults<U> {
     fn from_iter<I: IntoIterator<Item = (T, U)>>(iter: I) -> Self {
         ExpectedResults {
