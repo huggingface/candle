@@ -112,6 +112,7 @@ fn get_metal_device() -> PyResult<MetalDevice> {
     *device = Some(d.clone());
     Ok(d)
 }
+
 #[derive(Clone, Debug)]
 enum PyDevice {
     Cpu(CpuDevice),
@@ -242,34 +243,34 @@ impl PyTensor {
     // TODO: Handle arbitrary input dtype and shape.
     /// Creates a new tensor from a Python value. The value can be a scalar or array-like object.
     fn new(py: Python<'_>, data: PyObject) -> PyResult<Self> {
-        use ::candle::CpuDevice;
+        let device = Device::new(0).map_err(wrap_err)?;
         let tensor = if let Ok(vs) = data.extract::<u32>(py) {
-            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
+            Tensor::new(vs, &device).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<i64>(py) {
-            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
+            Tensor::new(vs, &device).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<f32>(py) {
-            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
+            Tensor::new(vs, &device).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<u32>>(py) {
             let len = vs.len();
-            Tensor::from_vec(vs, len, &CpuDevice).map_err(wrap_err)?
+            Tensor::from_vec(vs, len, &device).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<i64>>(py) {
             let len = vs.len();
-            Tensor::from_vec(vs, len, &CpuDevice).map_err(wrap_err)?
+            Tensor::from_vec(vs, len, &device).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<f32>>(py) {
             let len = vs.len();
-            Tensor::from_vec(vs, len, &CpuDevice).map_err(wrap_err)?
+            Tensor::from_vec(vs, len, &device).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<Vec<u32>>>(py) {
-            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
+            Tensor::new(vs, &device).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<Vec<i64>>>(py) {
-            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
+            Tensor::new(vs, &device).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<Vec<f32>>>(py) {
-            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
+            Tensor::new(vs, &device).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<Vec<Vec<u32>>>>(py) {
-            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
+            Tensor::new(vs, &device).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<Vec<Vec<i64>>>>(py) {
-            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
+            Tensor::new(vs, &device).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<Vec<Vec<f32>>>>(py) {
-            Tensor::new(vs, &CpuDevice).map_err(wrap_err)?
+            Tensor::new(vs, &device).map_err(wrap_err)?
         } else if let Ok(TorchTensor(numpy)) = data.extract::<TorchTensor>(py) {
             return PyTensor::new(py, numpy);
         } else {
@@ -341,14 +342,14 @@ impl PyTensor {
     /// Gets the tensor's shape.
     /// &RETURNS&: Tuple[int]
     fn shape(&self, py: Python<'_>) -> PyObject {
-        PyTuple::new_bound(py, self.0.dims()).to_object(py)
+        PyTuple::new_bound(py, self.dims()).to_object(py)
     }
 
     #[getter]
     /// Gets the tensor's element count.
     /// &RETURNS&: int
     fn nelement(&self) -> usize {
-        self.0.elem_count()
+        self.elem_count()
     }
 
     #[getter]
@@ -567,9 +568,10 @@ impl PyTensor {
                     let index = item.extract::<i64>()?;
                     indexes.push(index);
                 }
+                let device = Device::new(0).map_err(wrap_err)?;
                 Ok((
                     Indexer::IndexSelect(
-                        Tensor::from_vec(indexes, list.len(), &CpuDevice).map_err(wrap_err)?,
+                        Tensor::from_vec(indexes, list.len(), &device).map_err(wrap_err)?,
                     ),
                     current_dim + 1,
                 ))
@@ -640,12 +642,7 @@ impl PyTensor {
                     out
                 }
                 Indexer::IndexSelect(indexes) => {
-                    let out = x
-                        .index_select(
-                            &indexes.to_device(x.device()).map_err(wrap_err)?,
-                            current_dim,
-                        )
-                        .map_err(wrap_err)?;
+                    let out = x.index_select(&indexes, current_dim).map_err(wrap_err)?;
                     current_dim += 1;
                     out
                 }
@@ -1057,11 +1054,11 @@ impl PyTensor {
         };
 
         let result = match device {
-            Some(PyDevice::Cpu(cpu)) => {
-                changed = true;
-                result.to_device(&cpu).map_err(wrap_err)?
-            }
             // TODO: fix
+            //Some(PyDevice::Cpu(cpu)) => {
+            //    changed = true;
+            //    result.to_device(&cpu).map_err(wrap_err)?
+            //}
             //Some(PyDevice::Cuda(cuda)) => result.to_device(&cuda).map_err(wrap_err)?,
             //Some(PyDevice::Metal(metal)) => result.to_device(&metal).map_err(wrap_err)?,
             _ => result,
@@ -1086,7 +1083,7 @@ impl PyTensor {
     /// &RETURNS&: Tensor
     fn to_device(&self, device: PyDevice) -> PyResult<Self> {
         let result = match device {
-            PyDevice::Cpu(cpu) => self.0.to_device(&cpu).map_err(wrap_err)?,
+            //PyDevice::Cpu(cpu) => self.0.to_device(&cpu).map_err(wrap_err)?,
             _ => todo!(),
         };
         Ok(PyTensor(result))
@@ -1160,7 +1157,8 @@ fn tensor(py: Python<'_>, data: PyObject) -> PyResult<PyTensor> {
 /// &RETURNS&: Tensor
 fn rand(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<PyTensor> {
     // TODO: let device = device.unwrap_or(PyDevice::Cpu(CpuDevice)).as_device()?;
-    let tensor = Tensor::rand(0f32, 1f32, shape, &CpuDevice).map_err(wrap_err)?;
+    let device = Device::new(0).map_err(wrap_err)?;
+    let tensor = Tensor::rand(0f32, 1f32, shape, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
@@ -1170,7 +1168,8 @@ fn rand(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<P
 /// &RETURNS&: Tensor
 fn randn(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<PyTensor> {
     // TODO: let device = device.unwrap_or(PyDevice::Cpu(CpuDevice)).as_device()?;
-    let tensor = Tensor::randn(0f32, 1f32, shape, &CpuDevice).map_err(wrap_err)?;
+    let device = Device::new(0).map_err(wrap_err)?;
+    let tensor = Tensor::randn(0f32, 1f32, shape, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
@@ -1189,7 +1188,8 @@ fn ones(
         Some(dtype) => PyDType::from_pyobject(dtype, py)?.0,
     };
     // TODO: let device = device.unwrap_or(PyDevice::Cpu(CpuDevice)).as_device()?;
-    let tensor = Tensor::ones(shape, dtype, &CpuDevice).map_err(wrap_err)?;
+    let device = Device::new(0).map_err(wrap_err)?;
+    let tensor = Tensor::ones(shape, dtype, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
@@ -1208,7 +1208,8 @@ fn zeros(
         Some(dtype) => PyDType::from_pyobject(dtype, py)?.0,
     };
     // TODO: let device = device.unwrap_or(PyDevice::Cpu(CpuDevice)).as_device()?;
-    let tensor = Tensor::zeros(shape, dtype, &CpuDevice).map_err(wrap_err)?;
+    let device = Device::new(0).map_err(wrap_err)?;
+    let tensor = Tensor::zeros(shape, dtype, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
@@ -1259,7 +1260,8 @@ impl PyQTensor {
     /// Dequantizes the tensor.
     /// &RETURNS&: Tensor
     fn dequantize(&self) -> PyResult<PyTensor> {
-        let tensor = self.0.dequantize(&CpuDevice).map_err(wrap_err)?;
+        let device = Device::new(0).map_err(wrap_err)?;
+        let tensor = self.0.dequantize(&device).map_err(wrap_err)?;
         Ok(PyTensor(tensor))
     }
 
@@ -1278,7 +1280,8 @@ impl PyQTensor {
 /// Loads a safetensors file. Returns a dictionary mapping tensor names to tensors.
 /// &RETURNS&: Dict[str,Tensor]
 fn load_safetensors(path: &str, py: Python<'_>) -> PyResult<PyObject> {
-    let res = ::candle::safetensors::load(path, &CpuDevice).map_err(wrap_err)?;
+    let device = Device::new(0).map_err(wrap_err)?;
+    let res = ::candle::safetensors::load(path, &device).map_err(wrap_err)?;
     let res = res
         .into_iter()
         .map(|(key, value)| (key, PyTensor(value).into_py(py)))
@@ -1313,8 +1316,9 @@ fn load_ggml(
 ) -> PyResult<(PyObject, PyObject, PyObject)> {
     let mut file = std::fs::File::open(path)?;
     // TODO: let device = device.unwrap_or(PyDevice::Cpu(CpuDevice)).as_device()?;
+    let device = Device::new(0).map_err(wrap_err)?;
     let ggml =
-        ::candle::quantized::ggml_file::Content::read(&mut file, &CpuDevice).map_err(wrap_err)?;
+        ::candle::quantized::ggml_file::Content::read(&mut file, &device).map_err(wrap_err)?;
     let tensors = ggml
         .tensors
         .into_iter()
@@ -1353,7 +1357,7 @@ fn load_gguf(
     py: Python<'_>,
 ) -> PyResult<(PyObject, PyObject)> {
     // TODO: let device = device.unwrap_or(PyDevice::Cpu(CpuDevice)).as_device()?;
-    let device = CpuDevice;
+    let device = Device::new(0).map_err(wrap_err)?;
 
     use ::candle::quantized::gguf_file;
     fn gguf_value_to_pyobject(v: &gguf_file::Value, py: Python<'_>) -> PyResult<PyObject> {

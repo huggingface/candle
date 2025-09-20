@@ -1,4 +1,3 @@
-use ::candle::Tensor;
 use pyo3::prelude::*;
 
 #[derive(Clone, Debug)]
@@ -71,7 +70,7 @@ impl PyShapeWithHole {
     }
 
     /// Convert a relative shape to an absolute shape e.g. (1, -1) -> (1, 12)
-    pub fn to_absolute(&self, t: &Tensor) -> PyResult<PyShape> {
+    pub fn to_absolute(&self, t: &crate::Tensor) -> PyResult<PyShape> {
         if self.is_absolute() {
             return Ok(PyShape(
                 self.0.iter().map(|x| *x as usize).collect::<Vec<usize>>(),
