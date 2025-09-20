@@ -60,7 +60,10 @@ impl<QB: QuantizedBackend> TextEmbeddings<QB> {
         (embeddings + position_embeddings)?.apply(&self.layer_norm)
     }
 }
-
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 #[derive(Debug, Clone)]
 struct TextSelfAttention<QB: QuantizedBackend> {
     query: Linear<QB>,
@@ -69,7 +72,7 @@ struct TextSelfAttention<QB: QuantizedBackend> {
     attention_head_size: usize,
     num_attention_heads: usize,
     attention_scale: f64,
-    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
+    kv_cache: Option<KVCache<QB>>,
 }
 
 impl<QB: QuantizedBackend> TextSelfAttention<QB> {

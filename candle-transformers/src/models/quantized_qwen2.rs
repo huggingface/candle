@@ -40,6 +40,10 @@ where
     }
 }
 
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 #[derive(Debug, Clone)]
 struct LayerWeights<QB: QuantizedBackend> {
     attention_wq: QMatMul<QB>,
@@ -58,7 +62,7 @@ struct LayerWeights<QB: QuantizedBackend> {
     cos: Tensor<QB::Storage>,
     sin: Tensor<QB::Storage>,
     neg_inf: Tensor<QB::Storage>,
-    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
+    kv_cache: Option<KVCache<QB>>,
     span_attn: tracing::Span,
     span_rot: tracing::Span,
     span_mlp: tracing::Span,
@@ -171,12 +175,16 @@ pub struct ModelWeights<QB: QuantizedBackend> {
     span_output: tracing::Span,
 }
 
+type CosSin<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 fn precomput_freqs_cis<QB: QuantizedBackend>(
     head_dim: usize,
     freq_base: f32,
     context_length: usize,
     device: &QB::Device,
-) -> Result<(Tensor<QB::Storage>, Tensor<QB::Storage>)> {
+) -> Result<CosSin<QB>> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))

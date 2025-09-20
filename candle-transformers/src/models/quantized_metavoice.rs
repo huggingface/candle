@@ -61,6 +61,10 @@ pub mod transformer {
         }
     }
 
+    type KVCache<QB> = (
+        Tensor<<QB as QuantizedBackend>::Storage>,
+        Tensor<<QB as QuantizedBackend>::Storage>,
+    );
     #[derive(Debug, Clone)]
     struct Attention<QB: QuantizedBackend> {
         wqkv: Linear<QB>,
@@ -70,7 +74,7 @@ pub mod transformer {
         n_local_heads: usize,
         head_dim: usize,
         n_head: usize,
-        kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
+        kv_cache: Option<KVCache<QB>>,
         span: tracing::Span,
     }
 

@@ -25,11 +25,15 @@ use candle_nn::LayerNorm;
 
 pub use super::mpt::Config;
 
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 #[derive(Debug, Clone)]
 struct GroupedQueryAttention<QB: QuantizedBackend> {
     wqkv: Linear<QB>,
     out_proj: Linear<QB>,
-    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
+    kv_cache: Option<KVCache<QB>>,
     softmax_scale: f64,
     head_dim: usize,
     d_model: usize,

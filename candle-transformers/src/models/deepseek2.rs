@@ -3,8 +3,8 @@
 use std::{f32::consts::PI, sync::Arc};
 
 use candle::{
-    shape::Dim, BackendDevice, BackendStorage, CpuStorage, CustomOp1, DType, Error, IndexOp,
-    Layout, Result, Shape, Tensor, WithDType, D,
+    shape::Dim, BackendStorage, CpuStorage, CustomOp1, DType, Error, IndexOp, Layout, Result,
+    Shape, Tensor, WithDType, D,
 };
 use candle_nn::{embedding, rms_norm, Activation, Embedding, Linear, Module, RmsNorm, VarBuilder};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -65,12 +65,13 @@ impl<B: BackendStorage> CustomOp1<B> for NonZero<B> {
         Ok((CpuStorage::U32(result), shape))
     }
 
-    //#[cfg(feature = "cuda")]
+    #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
         storage: &candle::CudaStorage,
         layout: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
+        use candle::BackendDevice;
         let device = storage.device().as_ref().clone();
         let cpu_storage = storage.to_cpu_storage()?;
         let (result, shape) = self.nonzero_cpu(&cpu_storage, layout)?;
@@ -78,17 +79,22 @@ impl<B: BackendStorage> CustomOp1<B> for NonZero<B> {
         Ok((storage, shape))
     }
 
-    //#[cfg(feature = "metal")]
+    #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
         storage: &candle::MetalStorage,
         layout: &Layout,
     ) -> Result<(candle::MetalStorage, Shape)> {
+        use candle::BackendDevice;
         let device = storage.device().as_ref().clone();
         let cpu_storage = storage.to_cpu_storage()?;
         let (result, shape) = self.nonzero_cpu(&cpu_storage, layout)?;
-        let storage = device.storage_from_slice(&result)?;
-        Ok((storage, shape))
+        if !result.is_empty() {
+            let storage = device.storage_from_slice(&result)?;
+            return Ok((storage, shape));
+        } else {
+            Ok((storage.clone(), shape))
+        }
     }
 }
 
@@ -416,7 +422,7 @@ impl<B: BackendStorage> DeepSeekV2RotaryEmbedding<B> {
         }
         let linear_func =
             ((Tensor::arange(0f32, dim as f32, dev)? - min as f64)? / (max as f64 - min as f64))?;
-        linear_func.clamp(0., 1.)
+        linear_func.clamp(0.0f32, 1.0f32)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -879,7 +885,7 @@ impl<B: BackendStorage> Moe<B> {
             if counts[i] == 0 {
                 continue;
             }
-            let idx_top = topk_ids.eq(i as f64)?.nonzero()?.t()?;
+            let idx_top = topk_ids.eq(i as f32)?.nonzero()?.t()?;
             let idx = &idx_top.i(0)?.contiguous()?;
             let top = &idx_top.i(1)?.contiguous()?;
 
@@ -1010,34 +1016,60 @@ pub struct DeepSeekV2<B: BackendStorage> {
 
 impl<B: BackendStorage> DeepSeekV2<B> {
     pub fn new(cfg: &DeepSeekV2Config, vb: VarBuilder<B>) -> Result<Self> {
-        let vb_m = vb.pp("model");
+        fn embed_linear_norm<B: BackendStorage>(
+            cfg: &DeepSeekV2Config,
+            vb: &VarBuilder<B>,
+        ) -> Result<(Embedding<B>, Linear<B>, RmsNorm<B>)> {
+            let embed_tokens = embedding(
+                cfg.vocab_size,
+                cfg.hidden_size,
+                vb.pp("model").pp("embed_tokens"),
+            )?;
+            let lm_head = if !cfg.tie_word_embeddings {
+                candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
+            } else {
+                candle_nn::Linear::new(embed_tokens.embeddings().clone(), None)
+            };
+            let norm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model").pp("norm"))?;
 
-        let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let lm_head = if !cfg.tie_word_embeddings {
-            candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
-        } else {
-            candle_nn::Linear::new(embed_tokens.embeddings().clone(), None)
-        };
-        let norm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
-
-        let rope_cfg = DeepSeekV2RopeConfig {
-            rope_scaling: cfg.rope_scaling.clone(),
-            max_position_embeddings: cfg.max_position_embeddings,
-            rope_theta: cfg.rope_theta,
-            qk_rope_head_dim: cfg.qk_rope_head_dim,
-        };
-        let rotary_emb = Arc::new(DeepSeekV2RotaryEmbedding::new(
-            &rope_cfg,
-            vb.dtype(),
-            vb.device(),
-        )?);
-
-        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
-        let vb_l = vb_m.pp("layers");
-        for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx), layer_idx)?;
-            layers.push(layer)
+            Ok((embed_tokens, lm_head, norm))
         }
+
+        fn get_layers<B: BackendStorage>(
+            cfg: &DeepSeekV2Config,
+            vb: &VarBuilder<B>,
+        ) -> Result<Vec<DecoderLayer<B>>> {
+            let rope_cfg = DeepSeekV2RopeConfig {
+                rope_scaling: cfg.rope_scaling.clone(),
+                max_position_embeddings: cfg.max_position_embeddings,
+                rope_theta: cfg.rope_theta,
+                qk_rope_head_dim: cfg.qk_rope_head_dim,
+            };
+            let rotary_emb = Arc::new(DeepSeekV2RotaryEmbedding::new(
+                &rope_cfg,
+                vb.dtype(),
+                vb.device(),
+            )?);
+
+            //let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+            let vb_l = vb.pp("model").pp("layers");
+
+            use rayon::prelude::*;
+            let layers: Vec<DecoderLayer<B>> = (0..cfg.num_hidden_layers)
+                .into_par_iter()
+                .map(|layer_idx| {
+                    DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx), layer_idx)
+                        .unwrap()
+                })
+                .collect();
+
+            Ok(layers)
+        }
+
+        let ((embed_tokens, lm_head, norm), layers) = rayon::join(
+            || embed_linear_norm(cfg, &vb).unwrap(),
+            || get_layers(cfg, &vb).unwrap(),
+        );
 
         Ok(Self {
             lm_head,
@@ -1079,14 +1111,7 @@ impl<B: BackendStorage> DeepSeekV2<B> {
             Some(mask)
         };
         for layer in &mut self.layers {
-            xs = layer.forward(
-                &xs,
-                attention_mask
-                    .as_ref()
-                    .map(|m| m.to_device(xs.device()).unwrap())
-                    .as_ref(),
-                seqlen_offset,
-            )?;
+            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?;
         }
         let xs = xs.apply(&self.norm)?;
         let xs = xs.i((.., seq_len - 1, ..))?.contiguous()?;

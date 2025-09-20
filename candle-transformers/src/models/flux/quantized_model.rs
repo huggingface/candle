@@ -111,6 +111,11 @@ struct Modulation2<QB: QuantizedBackend> {
     lin: Linear<QB>,
 }
 
+type Modulation2Out<QB> = (
+    ModulationOut<<QB as QuantizedBackend>::Storage>,
+    ModulationOut<<QB as QuantizedBackend>::Storage>,
+);
+
 impl<QB: QuantizedBackend> Modulation2<QB>
 where
     Linear<QB>: candle::Module<QB::Storage>,
@@ -120,10 +125,7 @@ where
         Ok(Self { lin })
     }
 
-    fn forward(
-        &self,
-        vec_: &Tensor<QB::Storage>,
-    ) -> Result<(ModulationOut<QB::Storage>, ModulationOut<QB::Storage>)> {
+    fn forward(&self, vec_: &Tensor<QB::Storage>) -> Result<Modulation2Out<QB>> {
         let ys = vec_
             .silu()?
             .apply(&self.lin)?
@@ -154,6 +156,11 @@ pub struct SelfAttention<QB: QuantizedBackend> {
     num_heads: usize,
 }
 
+type Qkv<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 impl<QB: QuantizedBackend> SelfAttention<QB>
 where
     Linear<QB>: candle::Module<QB::Storage>,
@@ -171,14 +178,7 @@ where
         })
     }
 
-    fn qkv(
-        &self,
-        xs: &Tensor<QB::Storage>,
-    ) -> Result<(
-        Tensor<QB::Storage>,
-        Tensor<QB::Storage>,
-        Tensor<QB::Storage>,
-    )> {
+    fn qkv(&self, xs: &Tensor<QB::Storage>) -> Result<Qkv<QB>> {
         let qkv = xs.apply(&self.qkv)?;
         let (b, l, _khd) = qkv.dims3()?;
         let qkv = qkv.reshape((b, l, 3, self.num_heads, ()))?;
@@ -238,6 +238,10 @@ pub struct DoubleStreamBlock<QB: QuantizedBackend> {
     txt_mlp: Mlp<QB>,
 }
 
+type DoubleStreamFwd<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 impl<QB: QuantizedBackend> DoubleStreamBlock<QB>
 where
     Linear<QB>: candle::Module<QB::Storage>,
@@ -275,7 +279,7 @@ where
         txt: &Tensor<QB::Storage>,
         vec_: &Tensor<QB::Storage>,
         pe: &Tensor<QB::Storage>,
-    ) -> Result<(Tensor<QB::Storage>, Tensor<QB::Storage>)> {
+    ) -> Result<DoubleStreamFwd<QB>> {
         let (img_mod1, img_mod2) = self.img_mod.forward(vec_)?; // shift, scale, gate
         let (txt_mod1, txt_mod2) = self.txt_mod.forward(vec_)?; // shift, scale, gate
         let img_modulated = img.apply(&self.img_norm1)?;

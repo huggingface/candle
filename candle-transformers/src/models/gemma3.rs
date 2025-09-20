@@ -445,6 +445,8 @@ pub struct Model<B: BackendStorage> {
     sliding_window: usize,
 }
 
+type AttentionMasks<B> = (Option<Tensor<B>>, Option<Tensor<B>>);
+
 impl<B: BackendStorage> Model<B> {
     pub fn new(use_flash_attn: bool, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb_m = vb.pp("model");
@@ -482,7 +484,7 @@ impl<B: BackendStorage> Model<B> {
         batch_size: usize,
         seq_len: usize,
         seqlen_offset: usize,
-    ) -> Result<(Option<Tensor<B>>, Option<Tensor<B>>)> {
+    ) -> Result<AttentionMasks<B>> {
         if seq_len <= 1 {
             return Ok((None, None));
         }

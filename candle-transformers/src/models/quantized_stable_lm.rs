@@ -61,6 +61,10 @@ where
     }
 }
 
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 #[derive(Debug, Clone)]
 struct Attention<QB: QuantizedBackend> {
     q_proj: Linear<QB>,
@@ -73,7 +77,7 @@ struct Attention<QB: QuantizedBackend> {
     head_dim: usize,
     hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding<QB::Storage>>,
-    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
+    kv_cache: Option<KVCache<QB>>,
     use_cache: bool,
     rotary_ndims: usize,
     span: tracing::Span,

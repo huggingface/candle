@@ -89,6 +89,10 @@ struct RotaryEmbedding<QB: QuantizedBackend> {
     cos: Tensor<QB::Storage>,
 }
 
+type RotaryEmbedResult<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 impl<QB: QuantizedBackend> RotaryEmbedding<QB> {
     fn new(
         dtype: DType,
@@ -121,7 +125,7 @@ impl<QB: QuantizedBackend> RotaryEmbedding<QB> {
         q: &Tensor<QB::Storage>,
         k: &Tensor<QB::Storage>,
         offset: usize,
-    ) -> Result<(Tensor<QB::Storage>, Tensor<QB::Storage>)> {
+    ) -> Result<RotaryEmbedResult<QB>> {
         let (_, _, seq_len, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
         let sin = self.sin.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;

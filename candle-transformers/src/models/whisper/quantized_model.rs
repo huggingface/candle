@@ -18,6 +18,10 @@ fn conv1d<QB: QuantizedBackend>(
     Ok(Conv1d::new(weight, Some(bias), config))
 }
 
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L62
 #[derive(Debug, Clone)]
 struct MultiHeadAttention<QB: QuantizedBackend> {
@@ -29,7 +33,7 @@ struct MultiHeadAttention<QB: QuantizedBackend> {
     span: tracing::Span,
     softmax_span: tracing::Span,
     matmul_span: tracing::Span,
-    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
+    kv_cache: Option<KVCache<QB>>,
 }
 
 impl<QB: QuantizedBackend> MultiHeadAttention<QB>

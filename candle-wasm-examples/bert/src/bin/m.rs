@@ -1,7 +1,7 @@
-use candle::{DType, Device, Tensor};
+use candle::{CpuDevice, DType};
 use candle_nn::VarBuilder;
-use candle_transformers::models::bert::{BertModel, Config};
-use candle_wasm_example_bert::console_log;
+use candle_transformers::models::bert::Config;
+use candle_wasm_example_bert::{console_log, BertModel, Tensor};
 use tokenizers::{PaddingParams, Tokenizer};
 use wasm_bindgen::prelude::*;
 
@@ -17,7 +17,7 @@ impl Model {
     pub fn load(weights: Vec<u8>, tokenizer: Vec<u8>, config: Vec<u8>) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
-        let device = &Device::Cpu;
+        let device = &CpuDevice;
         let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, device)?;
         let config: Config = serde_json::from_slice(&config)?;
         let tokenizer =
@@ -33,7 +33,7 @@ impl Model {
         let sentences = input.sentences;
         let normalize_embeddings = input.normalize_embeddings;
 
-        let device = &Device::Cpu;
+        let device = &CpuDevice;
         if let Some(pp) = self.tokenizer.get_padding_mut() {
             pp.strategy = tokenizers::PaddingStrategy::BatchLongest
         } else {

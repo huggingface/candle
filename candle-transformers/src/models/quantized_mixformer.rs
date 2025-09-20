@@ -62,6 +62,12 @@ struct RotaryEmbedding<QB: QuantizedBackend> {
     cos: Tensor<QB::Storage>,
 }
 
+type Qkv<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
+
 impl<QB: QuantizedBackend> RotaryEmbedding<QB> {
     fn new(dim: usize, max_seq_len: usize, dev: &QB::Device) -> Result<Self> {
         let inv_freq: Vec<_> = (0..dim)
@@ -84,11 +90,7 @@ impl<QB: QuantizedBackend> RotaryEmbedding<QB> {
         &self,
         qkv: &Tensor<QB::Storage>,
         seqlen_offset: usize,
-    ) -> Result<(
-        Tensor<QB::Storage>,
-        Tensor<QB::Storage>,
-        Tensor<QB::Storage>,
-    )> {
+    ) -> Result<Qkv<QB>> {
         let (_b_size, seqlen, three, _, _headdim) = qkv.dims5()?;
         if three != 3 {
             candle::bail!("unexpected shape for qkv {:?}", qkv.shape())
@@ -181,13 +183,17 @@ where
     }
 }
 
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MHA<QB: QuantizedBackend> {
     wqkv: Linear<QB>,
     out_proj: Linear<QB>,
     rotary_emb: RotaryEmbedding<QB>,
-    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
+    kv_cache: Option<KVCache<QB>>,
     head_dim: usize,
     n_head: usize,
     softmax_scale: f64,

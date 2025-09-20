@@ -1,4 +1,4 @@
-use candle::{BackendStorage, DType, IndexOp, Result, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Result, Tensor};
 use candle_nn::{layer_norm, LayerNorm, Module, VarBuilder};
 
 #[derive(Debug)]
@@ -170,15 +170,14 @@ impl<B: BackendStorage> Attention<B> {
                     .matmul(&r_w.broadcast_left(b)?.t()?.contiguous()?)? // bwhc,bwck -> bwhk
                     .transpose(1, 2)?
                     .contiguous()?;
-                // TODO: Fix
-                //if attn.device().is_cpu() {
-                //    let op = Add3(b, q_h, q_w, k_h, k_w);
-                //    attn.apply_op3_no_bwd(&rel_h, &rel_w, &op)
-                //} else {
-                (attn.reshape((b, q_h, q_w, k_h, k_w))?
-                    + rel_h.unsqueeze(4)?.broadcast_add(&rel_w.unsqueeze(3)?)?)?
-                .reshape((b, q_h * q_w, k_h * k_w))
-                //}
+                if attn.device().is_cpu() {
+                    let op = Add3(b, q_h, q_w, k_h, k_w);
+                    attn.apply_op3_no_bwd(&rel_h, &rel_w, &op)
+                } else {
+                    (attn.reshape((b, q_h, q_w, k_h, k_w))?
+                        + rel_h.unsqueeze(4)?.broadcast_add(&rel_w.unsqueeze(3)?)?)?
+                    .reshape((b, q_h * q_w, k_h * k_w))
+                }
             }
             None => Ok(attn),
         }

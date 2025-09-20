@@ -76,6 +76,10 @@ struct RotaryEmbedding<QB: QuantizedBackend> {
     cos: Tensor<QB::Storage>,
 }
 
+type RotaryEmbedResult<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 impl<QB: QuantizedBackend> RotaryEmbedding<QB> {
     fn new(head_dim: usize, rope_frequency: f32, device: &QB::Device) -> Result<Self> {
         let theta: Vec<_> = (0..head_dim)
@@ -97,7 +101,7 @@ impl<QB: QuantizedBackend> RotaryEmbedding<QB> {
         q: &Tensor<QB::Storage>,
         k: &Tensor<QB::Storage>,
         index_pos: usize,
-    ) -> Result<(Tensor<QB::Storage>, Tensor<QB::Storage>)> {
+    ) -> Result<RotaryEmbedResult<QB>> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, index_pos, seq_len)?;
         let sin = self.sin.narrow(0, index_pos, seq_len)?;
@@ -106,6 +110,11 @@ impl<QB: QuantizedBackend> RotaryEmbedding<QB> {
         Ok((q_embed, k_embed))
     }
 }
+
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 
 #[derive(Debug, Clone)]
 struct LayerWeights<QB: QuantizedBackend> {
@@ -140,7 +149,7 @@ struct LayerWeights<QB: QuantizedBackend> {
     neg_inf: Tensor<QB::Storage>,
 
     // Cache
-    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
+    kv_cache: Option<KVCache<QB>>,
 
     // Tracing
     span_attn: tracing::Span,

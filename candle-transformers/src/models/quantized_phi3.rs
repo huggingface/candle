@@ -24,15 +24,11 @@ use candle::BackendStorage;
 use candle::CudaStorage;
 #[cfg(feature = "flash-attn")]
 use candle::CudaStorage;
-#[cfg(feature = "flash-attn")]
-use candle::CudaStorage;
-#[cfg(feature = "flash-attn")]
-use candle::CudaStorage;
 use candle::{DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{kv_cache::KvCache, Embedding, RmsNorm};
 
 #[derive(Debug, Clone)]
-struct QLinear<QB: QuantizedBackend> {
+pub struct QLinear<QB: QuantizedBackend> {
     inner: candle::quantized::QMatMul<QB>,
     span: tracing::Span,
 }
@@ -230,12 +226,16 @@ pub struct ModelWeights<QB: QuantizedBackend> {
     span_output: tracing::Span,
 }
 
+type CosSin<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 fn precomput_freqs_cis<QB: QuantizedBackend>(
     head_dim: usize,
     max_seq_len: usize,
     freq_base: f32,
     device: &QB::Device,
-) -> Result<(Tensor<QB::Storage>, Tensor<QB::Storage>)> {
+) -> Result<CosSin<QB>> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))

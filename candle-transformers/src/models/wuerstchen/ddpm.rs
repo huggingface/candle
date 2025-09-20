@@ -1,4 +1,4 @@
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 
 #[derive(Debug, Clone)]
 pub struct DDPMWSchedulerConfig {
@@ -73,11 +73,20 @@ impl DDPMWScheduler {
 
     ///  Ensures interchangeability with schedulers that need to scale the denoising model input
     /// depending on the current timestep.
-    pub fn scale_model_input(&self, sample: Tensor, _timestep: usize) -> Tensor {
+    pub fn scale_model_input<B: BackendStorage>(
+        &self,
+        sample: Tensor<B>,
+        _timestep: usize,
+    ) -> Tensor<B> {
         sample
     }
 
-    pub fn step(&self, model_output: &Tensor, ts: f64, sample: &Tensor) -> Result<Tensor> {
+    pub fn step<B: BackendStorage>(
+        &self,
+        model_output: &Tensor<B>,
+        ts: f64,
+        sample: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let prev_t = self.previous_timestep(ts);
 
         let alpha_cumprod = self.alpha_cumprod(ts);

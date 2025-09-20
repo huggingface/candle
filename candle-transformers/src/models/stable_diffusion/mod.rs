@@ -465,7 +465,7 @@ impl<B: BackendStorage> StableDiffusionConfig<B> {
         dtype: DType,
     ) -> Result<vae::AutoEncoderKL<B>> {
         let vs_ae =
-            unsafe { nn::VarBuilder::from_mmaped_safetensors(&[vae_weights], dtype, device)? };
+            unsafe { nn::VarBuilder::<B>::from_mmaped_safetensors(&[vae_weights], dtype, device)? };
         // https://huggingface.co/runwayml/stable-diffusion-v1-5/blob/main/vae/config.json
         let autoencoder = vae::AutoEncoderKL::new(vs_ae, 3, 3, self.autoencoder.clone())?;
         Ok(autoencoder)
@@ -479,9 +479,10 @@ impl<B: BackendStorage> StableDiffusionConfig<B> {
         use_flash_attn: bool,
         dtype: DType,
     ) -> Result<unet_2d::UNet2DConditionModel<B>> {
-        let vs_unet =
-            unsafe { nn::VarBuilder::from_mmaped_safetensors(&[unet_weights], dtype, device)? };
-        let unet = unet_2d::UNet2DConditionModel::new(
+        let vs_unet = unsafe {
+            nn::VarBuilder::<B>::from_mmaped_safetensors(&[unet_weights], dtype, device)?
+        };
+        let unet = unet_2d::UNet2DConditionModel::<B>::new(
             vs_unet,
             in_channels,
             4,

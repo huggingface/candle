@@ -151,6 +151,10 @@ where
     }
 }
 
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 #[derive(Debug, Clone)]
 struct LayerWeights<QB: QuantizedBackend> {
     attention_wq: QMatMul<QB>,
@@ -166,7 +170,7 @@ struct LayerWeights<QB: QuantizedBackend> {
     cos: Tensor<QB::Storage>,
     sin: Tensor<QB::Storage>,
     neg_inf: Tensor<QB::Storage>,
-    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
+    kv_cache: Option<KVCache<QB>>,
     span_attn: tracing::Span,
     span_rot: tracing::Span,
     span_mlp: tracing::Span,
@@ -185,6 +189,7 @@ fn masked_fill<QB: QuantizedBackend>(
 pub struct MQA<QB: QuantizedBackend>(std::marker::PhantomData<QB>);
 
 pub trait MQATrait<QB: QuantizedBackend> {
+    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         q: &Tensor<QB::Storage>,
@@ -205,7 +210,7 @@ pub trait MQATrait<QB: QuantizedBackend> {
             None => att,
             Some(mask) => {
                 let mask = mask.broadcast_as(att.shape())?;
-                masked_fill::<QB>(&att, &mask, &neg_inf)?
+                masked_fill::<QB>(&att, &mask, neg_inf)?
             }
         };
         let att = candle_nn::ops::softmax_last_dim(&att)?;
@@ -230,7 +235,7 @@ impl MQATrait<QMetalStorage> for MQA<QMetalStorage> {
         seq_len: usize,
     ) -> Result<Tensor<MetalStorage>> {
         if seq_len == 1 {
-            return candle_nn::ops::sdpa(&q, &k, &v, 1. / (head_dim as f32).sqrt(), 1.);
+            candle_nn::ops::sdpa(q, &k, &v, 1. / (head_dim as f32).sqrt(), 1.)
         } else {
             let k = crate::utils::repeat_kv(k, n_head / n_kv_head)?;
             let v = crate::utils::repeat_kv(v, n_head / n_kv_head)?;
@@ -240,7 +245,7 @@ impl MQATrait<QMetalStorage> for MQA<QMetalStorage> {
                 None => att,
                 Some(mask) => {
                     let mask = mask.broadcast_as(att.shape())?;
-                    masked_fill::<QMetalStorage>(&att, &mask, &neg_inf)?
+                    masked_fill::<QMetalStorage>(&att, &mask, neg_inf)?
                 }
             };
             let att = candle_nn::ops::softmax_last_dim(&att)?;
@@ -342,11 +347,15 @@ pub struct ModelWeights<QB: QuantizedBackend> {
     span_output: tracing::Span,
 }
 
+type CosSin<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 fn precomput_freqs_cis<QB: QuantizedBackend>(
     head_dim: usize,
     freq_base: f32,
     device: &QB::Device,
-) -> Result<(Tensor<QB::Storage>, Tensor<QB::Storage>)> {
+) -> Result<CosSin<QB>> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))

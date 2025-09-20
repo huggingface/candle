@@ -179,6 +179,10 @@ impl<QB: QuantizedBackend> RecurrentBlock<QB> {
     }
 }
 
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 #[derive(Debug, Clone)]
 struct SdpaAttention<QB: QuantizedBackend> {
     q_proj: Linear<QB>,
@@ -189,7 +193,7 @@ struct SdpaAttention<QB: QuantizedBackend> {
     n_kv_heads: usize,
     head_dim: usize,
     hidden_size: usize,
-    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
+    kv_cache: Option<KVCache<QB>>,
     rotary_emb: Arc<RotaryEmbedding<QB::Storage>>,
 }
 

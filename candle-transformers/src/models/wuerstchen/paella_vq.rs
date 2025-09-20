@@ -61,18 +61,20 @@ impl<B: BackendStorage> Module<B> for MixingResidualBlock<B> {
     }
 }
 
+type DownBLocks<B> = Vec<(Option<candle_nn::Conv2d<B>>, MixingResidualBlock<B>)>;
+type UpBLocks<B> = Vec<(
+    Vec<MixingResidualBlock<B>>,
+    Option<candle_nn::ConvTranspose2d<B>>,
+)>;
 #[derive(Debug)]
 pub struct PaellaVQ<B: BackendStorage> {
     in_block_conv: candle_nn::Conv2d<B>,
     out_block_conv: candle_nn::Conv2d<B>,
-    down_blocks: Vec<(Option<candle_nn::Conv2d<B>>, MixingResidualBlock<B>)>,
+    down_blocks: DownBLocks<B>,
     down_blocks_conv: candle_nn::Conv2d<B>,
     down_blocks_bn: candle_nn::BatchNorm<B>,
     up_blocks_conv: candle_nn::Conv2d<B>,
-    up_blocks: Vec<(
-        Vec<MixingResidualBlock<B>>,
-        Option<candle_nn::ConvTranspose2d<B>>,
-    )>,
+    up_blocks: UpBLocks<B>,
 }
 
 impl<B: BackendStorage> PaellaVQ<B> {

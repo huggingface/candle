@@ -29,6 +29,10 @@ struct RotaryEmbedding<QB: QuantizedBackend> {
     cos: Tensor<QB::Storage>,
 }
 
+type RotaryEmbedResult<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 impl<QB: QuantizedBackend> RotaryEmbedding<QB> {
     fn new(cfg: &Config, dev: &QB::Device) -> Result<Self> {
         let rope_theta = cfg.rope_theta as f32;
@@ -55,7 +59,7 @@ impl<QB: QuantizedBackend> RotaryEmbedding<QB> {
         q: &Tensor<QB::Storage>,
         k: &Tensor<QB::Storage>,
         seqlen_offset: usize,
-    ) -> Result<(Tensor<QB::Storage>, Tensor<QB::Storage>)> {
+    ) -> Result<RotaryEmbedResult<QB>> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
@@ -101,6 +105,10 @@ where
     }
 }
 
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 #[derive(Debug, Clone)]
 struct Attention<QB: QuantizedBackend> {
     q_proj: Linear<QB>,
@@ -113,7 +121,7 @@ struct Attention<QB: QuantizedBackend> {
     head_dim: usize,
     hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding<QB>>,
-    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
+    kv_cache: Option<KVCache<QB>>,
 }
 
 impl<QB: QuantizedBackend> Attention<QB> {

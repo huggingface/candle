@@ -270,6 +270,10 @@ where
     }
 }
 
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 #[derive(Debug, Clone)]
 struct T5Attention<QB: QuantizedBackend> {
     q: QMatMul<QB>,
@@ -283,13 +287,16 @@ struct T5Attention<QB: QuantizedBackend> {
     relative_attention_max_distance: usize,
     inner_dim: usize,
     use_cache: bool,
-    kv_cache: Option<(Tensor<QB::Storage>, Tensor<QB::Storage>)>,
+    kv_cache: Option<KVCache<QB>>,
     span: tracing::Span,
     span_cache: tracing::Span,
     span_mm: tracing::Span,
     span_sm: tracing::Span,
 }
-
+type AttentionPosBias<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Option<Tensor<<QB as QuantizedBackend>::Storage>>,
+);
 impl<QB: QuantizedBackend> T5Attention<QB> {
     fn load(
         has_relative_attention_bias: bool,
@@ -338,7 +345,7 @@ impl<QB: QuantizedBackend> T5Attention<QB> {
         position_bias: Option<&Tensor<QB::Storage>>,
         key_value_states: Option<&Tensor<QB::Storage>>,
         mask: Option<&Tensor<QB::Storage>>,
-    ) -> Result<(Tensor<QB::Storage>, Option<Tensor<QB::Storage>>)>
+    ) -> Result<AttentionPosBias<QB>>
     where
         QMatMul<QB>: Module<QB::Storage>,
     {
@@ -492,7 +499,7 @@ impl<QB: QuantizedBackend> T5LayerSelfAttention<QB> {
         xs: &Tensor<QB::Storage>,
         position_bias: Option<&Tensor<QB::Storage>>,
         mask: Option<&Tensor<QB::Storage>>,
-    ) -> Result<(Tensor<QB::Storage>, Option<Tensor<QB::Storage>>)>
+    ) -> Result<AttentionPosBias<QB>>
     where
         QMatMul<QB>: Module<QB::Storage>,
     {
@@ -534,7 +541,7 @@ impl<QB: QuantizedBackend> T5LayerCrossAttention<QB> {
         hidden_states: &Tensor<QB::Storage>,
         position_bias: Option<&Tensor<QB::Storage>>,
         key_value_states: &Tensor<QB::Storage>,
-    ) -> Result<(Tensor<QB::Storage>, Option<Tensor<QB::Storage>>)>
+    ) -> Result<AttentionPosBias<QB>>
     where
         QMatMul<QB>: Module<QB::Storage>,
     {
@@ -593,7 +600,7 @@ impl<QB: QuantizedBackend> T5Block<QB> {
         xs: &Tensor<QB::Storage>,
         position_bias: Option<&Tensor<QB::Storage>>,
         encoder_hidden_states: Option<&Tensor<QB::Storage>>,
-    ) -> Result<(Tensor<QB::Storage>, Option<Tensor<QB::Storage>>)>
+    ) -> Result<AttentionPosBias<QB>>
     where
         QMatMul<QB>: Module<QB::Storage>,
     {
