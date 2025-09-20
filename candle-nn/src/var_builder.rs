@@ -96,7 +96,6 @@ pub trait SimpleBackend: Send + Sync {
 impl<B> Backend<B> for Box<dyn SimpleBackend + '_>
 where
     B: BackendStorage,
-    B::Device: TryConvertStorage<CpuStorage, B>,
 {
     type Hints = crate::Init;
     fn get(
@@ -498,9 +497,9 @@ where
         paths: &[P],
         dtype: DType,
         device: &BS::Device,
-    ) -> Result<Self> {
+    ) -> Result<VarBuilder<'a, BS>> {
         let tensors = candle::safetensors::MmapedSafetensors::multi(paths)?;
-        Ok(Self::from_backend(Box::new(tensors), dtype, device))
+        Ok(VarBuilder::from_backend(Box::new(tensors), dtype, device))
     }
 
     /// Initializes a `VarBuilder` from a binary buffer in the safetensor format.
@@ -578,18 +577,12 @@ where
     /// assert!(!vb.contains_tensor("baz"));
     /// # Ok::<(), candle::Error>(())
     /// ```
-    pub fn rename_f<F: Fn(&str) -> String + Sync + Send + 'static>(self, f: F) -> Self
-    where
-        CpuDevice: TryConvertStorage<BS, CpuStorage>,
-    {
+    pub fn rename_f<F: Fn(&str) -> String + Sync + Send + 'static>(self, f: F) -> Self {
         let f: Box<dyn Fn(&str) -> String + Sync + Send + 'static> = Box::new(f);
         self.rename(f)
     }
 
-    pub fn rename<R: Renamer + Send + Sync + 'a>(self, renamer: R) -> Self
-    where
-        CpuDevice: TryConvertStorage<BS, CpuStorage>,
-    {
+    pub fn rename<R: Renamer + Send + Sync + 'a>(self, renamer: R) -> Self {
         let dtype = self.dtype();
         let device: BS::Device = self.device().clone();
         let path = self.path.clone();
@@ -756,14 +749,12 @@ impl<R, BS> SimpleBackend for Rename<'_, R, BS>
 where
     R: Renamer + Sync + Send,
     BS: BackendStorage,
-    CpuDevice: TryConvertStorage<BS, CpuStorage>,
 {
     fn get(&self, s: Shape, name: &str, h: crate::Init, dtype: DType) -> Result<CpuTensor> {
         let name = self.renamer.rename(name);
-        Ok(self
-            .inner
+        self.inner
             .get_with_hints_dtype(s, &name, h, dtype)?
-            .to_device(&CpuDevice)?)
+            .to_cpu()
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
@@ -789,7 +780,7 @@ where
         _: &BS::Device,
     ) -> Result<Tensor<BS>> {
         let name = self.renamer.rename(name);
-        Ok(self.inner.get_with_hints_dtype(s, &name, h, dtype)?)
+        self.inner.get_with_hints_dtype(s, &name, h, dtype)
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
@@ -802,7 +793,6 @@ impl<'a, R, BS> Rename<'a, R, BS>
 where
     R: Renamer,
     BS: BackendStorage,
-    BS::Device: TryConvertStorage<CpuStorage, BS>,
 {
     pub fn new(inner: VarBuilder<'a, BS>, renamer: R) -> Self {
         Self { inner, renamer }
