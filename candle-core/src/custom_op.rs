@@ -5,6 +5,11 @@ use crate::tensor::from_storage;
 use crate::{BackendStorage, CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Tensor};
 use std::sync::Arc;
 
+/// The results of calling backward on custom ops
+type Op1BwdResult<B> = Option<Tensor<B>>;
+type Op2BwdResult<B> = (Option<Tensor<B>>, Option<Tensor<B>>);
+type Op3BwdResult<B> = (Option<Tensor<B>>, Option<Tensor<B>>, Option<Tensor<B>>);
+
 /// Unary ops that can be defined in user-land.
 pub trait CustomOp1<B: BackendStorage> {
     // Box<dyn> does not support const yet, so use a function to get the name.
@@ -42,7 +47,7 @@ pub trait CustomOp1<B: BackendStorage> {
         _arg: &Tensor<B>,
         _res: &Tensor<B>,
         _grad_res: &Tensor<B>,
-    ) -> Result<Option<Tensor<B>>> {
+    ) -> Result<Op1BwdResult<B>> {
         Err(crate::Error::BackwardNotSupported { op: self.name() })
     }
 }
@@ -94,7 +99,7 @@ pub trait CustomOp2<B: BackendStorage> {
         _arg2: &Tensor<B>,
         _res: &Tensor<B>,
         _grad_res: &Tensor<B>,
-    ) -> Result<(Option<Tensor<B>>, Option<Tensor<B>>)> {
+    ) -> Result<Op2BwdResult<B>> {
         Err(crate::Error::BackwardNotSupported { op: self.name() })
     }
 }
@@ -153,7 +158,7 @@ pub trait CustomOp3<B: BackendStorage> {
         _arg3: &Tensor<B>,
         _res: &Tensor<B>,
         _grad_res: &Tensor<B>,
-    ) -> Result<(Option<Tensor<B>>, Option<Tensor<B>>, Option<Tensor<B>>)> {
+    ) -> Result<Op3BwdResult<B>> {
         Err(crate::Error::BackwardNotSupported { op: self.name() })
     }
 }
