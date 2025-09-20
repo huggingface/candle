@@ -6,7 +6,7 @@ extern crate accelerate_src;
 use candle_transformers::models::bert::{BertModel, Config, HiddenAct, DTYPE};
 
 use anyhow::{Error as E, Result};
-use candle::{BackendStorage, CpuDevice, Tensor};
+use candle::{BackendDevice, BackendStorage, Tensor};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use hf_hub::{api::sync::Api, Repo, RepoType};
@@ -94,12 +94,24 @@ impl Args {
         Ok((model, tokenizer))
     }
 }
+pub fn main() -> Result<()> {
+    let args = Args::parse();
 
-fn main() -> Result<()> {
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args)?;
+    }
+    Ok(())
+}
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         println!("tracing...");
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -110,10 +122,9 @@ fn main() -> Result<()> {
     };
     let start = std::time::Instant::now();
 
-    // TODO: fix
-    let device = CpuDevice;
-    let (model, mut tokenizer) = args.build_model_and_tokenizer(&device)?;
-    let device = &model.device;
+    let device = B::Device::new(0)?;
+    let (model, mut tokenizer): (BertModel<B>, Tokenizer) =
+        args.build_model_and_tokenizer(&device)?;
 
     if let Some(prompt) = args.prompt {
         let tokenizer = tokenizer
@@ -125,7 +136,7 @@ fn main() -> Result<()> {
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
-        let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
+        let token_ids = Tensor::new(&tokens[..], &device)?.unsqueeze(0)?;
         let token_type_ids = token_ids.zeros_like()?;
         println!("Loaded and encoded {:?}", start.elapsed());
         for idx in 0..args.n {
@@ -164,14 +175,14 @@ fn main() -> Result<()> {
             .iter()
             .map(|tokens| {
                 let tokens = tokens.get_ids().to_vec();
-                Ok(Tensor::new(tokens.as_slice(), device)?)
+                Ok(Tensor::new(tokens.as_slice(), &device)?)
             })
             .collect::<Result<Vec<_>>>()?;
         let attention_mask = tokens
             .iter()
             .map(|tokens| {
                 let tokens = tokens.get_attention_mask().to_vec();
-                Ok(Tensor::new(tokens.as_slice(), device)?)
+                Ok(Tensor::new(tokens.as_slice(), &device)?)
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -211,6 +222,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-pub fn normalize_l2(v: &Tensor) -> Result<Tensor> {
+pub fn normalize_l2<B: BackendStorage>(v: &Tensor<B>) -> Result<Tensor<B>> {
     Ok(v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?)?)
 }

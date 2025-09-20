@@ -12,22 +12,22 @@ use candle_transformers::models::qwen2_moe::{Config as ConfigMoe, Model as Model
 use candle_transformers::models::qwen3::{Config as Config3, ModelForCausalLM as Model3};
 use candle_transformers::models::qwen3_moe::{Config as ConfigMoe3, ModelForCausalLM as ModelMoe3};
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-enum Model {
-    Base(ModelBase),
-    Moe(ModelMoe),
-    Base3(Model3),
-    Moe3(ModelMoe3),
+enum Model<B: BackendStorage> {
+    Base(ModelBase<B>),
+    Moe(ModelMoe<B>),
+    Base3(Model3<B>),
+    Moe3(ModelMoe3<B>),
 }
 
-impl Model {
-    fn forward(&mut self, xs: &Tensor, s: usize) -> candle::Result<Tensor> {
+impl<B: BackendStorage> Model<B> {
+    fn forward(&mut self, xs: &Tensor<B>, s: usize) -> candle::Result<Tensor<B>> {
         match self {
             Self::Moe(ref mut m) => m.forward(xs, s),
             Self::Base(ref mut m) => m.forward(xs, s),
@@ -37,26 +37,26 @@ impl Model {
     }
 }
 
-struct TextGeneration {
-    model: Model,
-    device: Device,
+struct TextGeneration<B: BackendStorage> {
+    model: Model<B>,
+    device: B::Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
 }
 
-impl TextGeneration {
+impl<B: BackendStorage> TextGeneration<B> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
+        model: Model<B>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
         top_p: Option<f64>,
         repeat_penalty: f32,
         repeat_last_n: usize,
-        device: &Device,
+        device: &B::Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
@@ -231,11 +231,25 @@ struct Args {
     model: WhichModel,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -325,13 +339,14 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let config_file = repo.get("config.json")?;
-    let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() || device.is_metal() {
+
+    let dtype = if B::Device::SUPPORTS_BF16 {
         DType::BF16
     } else {
         DType::F32
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+    let vb: VarBuilder<B> =
+        unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
     let model = match args.model {
         WhichModel::MoeA27b => {
             let config: ConfigMoe = serde_json::from_slice(&std::fs::read(config_file)?)?;

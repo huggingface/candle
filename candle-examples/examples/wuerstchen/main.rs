@@ -4,11 +4,12 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+use candle::BackendStorage;
 use candle_transformers::models::stable_diffusion;
 use candle_transformers::models::wuerstchen;
 
 use anyhow::{Error as E, Result};
-use candle::{DType, Device, IndexOp, Tensor};
+use candle::{BackendDevice, DType, IndexOp, Tensor};
 use clap::Parser;
 use tokenizers::Tokenizer;
 
@@ -149,14 +150,14 @@ fn output_filename(
     }
 }
 
-fn encode_prompt(
+fn encode_prompt<B: BackendStorage>(
     prompt: &str,
     uncond_prompt: Option<&str>,
     tokenizer: std::path::PathBuf,
     clip_weights: std::path::PathBuf,
     clip_config: stable_diffusion::clip::Config,
-    device: &Device,
-) -> Result<Tensor> {
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
     let pad_id = match &clip_config.pad_with {
         Some(padding) => *tokenizer.get_vocab(true).get(padding.as_str()).unwrap(),
@@ -200,14 +201,39 @@ fn encode_prompt(
     }
 }
 
-fn run(args: Args) -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
     let Args {
         prompt,
         uncond_prompt,
-        cpu,
+
         height,
         width,
         tokenizer,
@@ -229,11 +255,11 @@ fn run(args: Args) -> Result<()> {
         None
     };
 
-    let device = candle_examples::device(cpu)?;
+    let device = B::Device::new(0)?;
     let height = height.unwrap_or(1024);
     let width = width.unwrap_or(1024);
 
-    let prior_text_embeddings = {
+    let prior_text_embeddings: Tensor<B> = {
         let tokenizer = ModelFile::PriorTokenizer.get(args.prior_tokenizer)?;
         let weights = ModelFile::PriorClip.get(args.prior_clip_weights)?;
         encode_prompt(
@@ -377,9 +403,4 @@ fn run(args: Args) -> Result<()> {
         candle_examples::save_image(&image, image_filename)?
     }
     Ok(())
-}
-
-fn main() -> Result<()> {
-    let args = Args::parse();
-    run(args)
 }

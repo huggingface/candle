@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use anyhow::bail;
 use anyhow::{Error as E, Result};
-use candle::{BackendStorage, Tensor};
+use candle::{BackendDevice, BackendStorage, Tensor};
 use candle_nn::ops::softmax;
 use candle_nn::VarBuilder;
 use candle_transformers::models::debertav2::{Config as DebertaV2Config, DebertaV2NERModel};
@@ -200,22 +200,32 @@ struct ModelInput<B: BackendStorage> {
     token_type_ids: Tensor<B>,
 }
 
-pub fn main() -> anyhow::Result<()> {
+pub fn main() -> Result<()> {
     let args = Args::parse();
 
     if args.cpu {
-        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
     } else {
-        #[cfg(feature = "cuda")]
-        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
-
-        #[cfg(feature = "metal")]
-        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
     }
     Ok(())
 }
 
-fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
@@ -227,8 +237,10 @@ fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
         None
     };
 
+    let device = B::Device::new(0)?;
     let model_load_time = std::time::Instant::now();
-    let (task_type, _model_config, tokenizer, id2label) = args.build_model_and_tokenizer(device)?;
+    let (task_type, _model_config, tokenizer, id2label) =
+        args.build_model_and_tokenizer(&device)?;
 
     println!(
         "Loaded model and tokenizers in {:?}",

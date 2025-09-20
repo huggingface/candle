@@ -7,7 +7,7 @@ extern crate accelerate_src;
 extern crate intel_mkl_src;
 
 use anyhow::{Error as E, Result};
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use clap::Parser;
@@ -16,9 +16,9 @@ use tokenizers::Tokenizer;
 
 use candle_transformers::models::falcon::{Config, Falcon};
 
-struct TextGeneration {
-    model: Falcon,
-    device: Device,
+struct TextGeneration<B: BackendStorage> {
+    model: Falcon<B>,
+    device: B::Device,
     tokenizer: Tokenizer,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
@@ -32,13 +32,13 @@ struct GenerationOptions {
     repeat_last_n: usize,
 }
 
-impl TextGeneration {
+impl<B: BackendStorage> TextGeneration<B> {
     fn new(
-        model: Falcon,
+        model: Falcon<B>,
         tokenizer: Tokenizer,
         generation_options: GenerationOptions,
         seed: u64,
-        device: &Device,
+        device: &B::Device,
     ) -> Self {
         let logits_processor =
             LogitsProcessor::new(seed, generation_options.temp, generation_options.top_p);
@@ -153,10 +153,22 @@ struct Args {
     repeat_last_n: usize,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     let args = Args::parse();
 
-    let device = candle_examples::device(args.cpu)?;
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     let start = std::time::Instant::now();
     let api = Api::new()?;
     let repo = api.repo(Repo::with_revision(
@@ -170,6 +182,7 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
+    let device = B::Device::new(0)?;
     let dtype = if args.use_f32 {
         DType::F32
     } else {
@@ -178,7 +191,7 @@ fn main() -> Result<()> {
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
     let config = Config::falcon7b();
     config.validate()?;
-    let model = Falcon::load(vb, config)?;
+    let model: Falcon<B> = Falcon::load(vb, config)?;
     println!("loaded the model in {:?}", start.elapsed());
 
     let generation_options = GenerationOptions {

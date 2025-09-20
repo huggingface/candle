@@ -7,7 +7,7 @@ extern crate accelerate_src;
 use anyhow::Error as E;
 use clap::{Parser, ValueEnum};
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn::{ops::softmax, VarBuilder};
 use candle_transformers::models::mobileclip;
 
@@ -55,10 +55,11 @@ struct Args {
     which: Which,
 }
 
-fn load_images<T: AsRef<std::path::Path>>(
-    paths: &Vec<T>,
+fn load_images<P: AsRef<std::path::Path>, B: BackendStorage>(
+    paths: &Vec<P>,
     image_size: usize,
-) -> anyhow::Result<Tensor> {
+    device: &B::Device,
+) -> anyhow::Result<Tensor<B>> {
     let mut images = vec![];
     for path in paths {
         let tensor = candle_examples::imagenet::load_image_with_std_mean(
@@ -66,6 +67,7 @@ fn load_images<T: AsRef<std::path::Path>>(
             image_size,
             &[0.0, 0.0, 0.0],
             &[1.0, 1.0, 1.0],
+            device,
         )?;
         images.push(tensor);
     }
@@ -76,6 +78,29 @@ fn load_images<T: AsRef<std::path::Path>>(
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage + 'static>(args: Args) -> anyhow::Result<()> {
     let model_name = args.which.model_name();
     let api = hf_hub::api::sync::Api::new()?;
     let api = api.model(model_name);
@@ -87,7 +112,7 @@ pub fn main() -> anyhow::Result<()> {
     let tokenizer = api.get("tokenizer.json")?;
     let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
     let config = &args.which.config();
-    let device = candle_examples::device(args.cpu)?;
+    let device = B::Device::new(0)?;
     let vec_imgs = match args.images {
         Some(imgs) => imgs,
         None => vec![
@@ -95,7 +120,7 @@ pub fn main() -> anyhow::Result<()> {
             "candle-examples/examples/yolo-v8/assets/bike.jpg".to_string(),
         ],
     };
-    let images = load_images(&vec_imgs, config.image_size)?.to_device(&device)?;
+    let images = load_images(&vec_imgs, config.image_size, &device)?;
     let vb = if args.use_pth {
         VarBuilder::from_pth(&model_file, DType::F32, &device)?
     } else {
@@ -108,7 +133,7 @@ pub fn main() -> anyhow::Result<()> {
         }
     };
 
-    let model = mobileclip::MobileClipModel::new(vb, config)?;
+    let model: mobileclip::MobileClipModel<B> = mobileclip::MobileClipModel::new(vb, config)?;
     let (input_ids, vec_seq) = tokenize_sequences(args.sequences, &tokenizer, &device)?;
     let (_logits_per_text, logits_per_image) = model.forward(&images, &input_ids)?;
     let softmax_image = softmax(&logits_per_image, 1)?;
@@ -134,11 +159,11 @@ pub fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn tokenize_sequences(
+pub fn tokenize_sequences<B: BackendStorage>(
     sequences: Option<Vec<String>>,
     tokenizer: &Tokenizer,
-    device: &Device,
-) -> anyhow::Result<(Tensor, Vec<String>)> {
+    device: &B::Device,
+) -> anyhow::Result<(Tensor<B>, Vec<String>)> {
     // let pad_id = *tokenizer
     // .get_vocab(true)
     // .get("<|endoftext|>")

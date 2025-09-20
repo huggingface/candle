@@ -7,22 +7,23 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::Parser;
 
-use candle::{DType, Device, Tensor};
+use candle::{quantized::QuantizedBackend, BackendDevice, DType, Module, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::{
     generation::LogitsProcessor,
     models::{moondream, quantized_moondream},
+    quantized_nn::Linear,
 };
 use tokenizers::Tokenizer;
 
-enum Model {
-    Moondream(moondream::Model),
-    Quantized(quantized_moondream::Model),
+enum Model<QB: QuantizedBackend> {
+    Moondream(moondream::Model<QB::Storage>),
+    Quantized(quantized_moondream::Model<QB>),
 }
 
-struct TextGeneration {
-    model: Model,
-    device: Device,
+struct TextGeneration<QB: QuantizedBackend> {
+    model: Model<QB>,
+    device: QB::Device,
     tokenizer: Tokenizer,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
@@ -30,10 +31,10 @@ struct TextGeneration {
     verbose_prompt: bool,
 }
 
-impl TextGeneration {
+impl<QB: QuantizedBackend> TextGeneration<QB> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
+        model: Model<QB>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
@@ -41,7 +42,7 @@ impl TextGeneration {
         repeat_penalty: f32,
         repeat_last_n: usize,
         verbose_prompt: bool,
-        device: &Device,
+        device: &QB::Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
@@ -55,7 +56,15 @@ impl TextGeneration {
         }
     }
 
-    fn run(&mut self, prompt: &str, image_embeds: &Tensor, sample_len: usize) -> Result<()> {
+    fn run(
+        &mut self,
+        prompt: &str,
+        image_embeds: &Tensor<QB::Storage>,
+        sample_len: usize,
+    ) -> Result<()>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         use std::io::Write;
         println!("starting the inference loop");
         let tokens = self.tokenizer.encode(prompt, true).map_err(E::msg)?;
@@ -207,16 +216,19 @@ struct Args {
 
 /// Loads an image from disk using the image crate, this returns a tensor with shape
 /// (3, 378, 378).
-pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> candle::Result<Tensor> {
+pub fn load_image<P: AsRef<std::path::Path>, QB: QuantizedBackend>(
+    p: P,
+    device: &QB::Device,
+) -> candle::Result<Tensor<QB::Storage>> {
     let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
         .resize_to_fill(378, 378, image::imageops::FilterType::Triangle); // Adjusted to 378x378
     let img = img.to_rgb8();
     let data = img.into_raw();
-    let data = Tensor::from_vec(data, (378, 378, 3), &Device::Cpu)?.permute((2, 0, 1))?;
-    let mean = Tensor::new(&[0.5f32, 0.5, 0.5], &Device::Cpu)?.reshape((3, 1, 1))?;
-    let std = Tensor::new(&[0.5f32, 0.5, 0.5], &Device::Cpu)?.reshape((3, 1, 1))?;
+    let data = Tensor::from_vec(data, (378, 378, 3), device)?.permute((2, 0, 1))?;
+    let mean = Tensor::new(&[0.5f32, 0.5, 0.5], device)?.reshape((3, 1, 1))?;
+    let std = Tensor::new(&[0.5f32, 0.5, 0.5], device)?.reshape((3, 1, 1))?;
     (data.to_dtype(candle::DType::F32)? / 255.)?
         .broadcast_sub(&mean)?
         .broadcast_div(&std)
@@ -224,10 +236,37 @@ pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> candle::Result<Tensor> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::QCpuStorage>(args).await?;
+    } else if candle::utils::cuda_is_available() {
+        #[cfg(feature = "cuda")]
+        run::<candle::QCudaStorage>(args).await?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::QMetalStorage>(args).await?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::QCpuStorage>(args).await?;
+    }
+    Ok(())
+}
+
+async fn run<QB: QuantizedBackend>(args: Args) -> anyhow::Result<()>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
-
-    let args = Args::parse();
 
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -293,19 +332,19 @@ async fn main() -> anyhow::Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let device = candle_examples::device(args.cpu)?;
+    let device = QB::Device::new(0)?;
     let config = moondream::Config::v2();
     let dtype = if args.quantized {
         if args.f16 {
             anyhow::bail!("Quantized model does not support f16");
         }
         DType::F32
-    } else if device.is_cuda() || args.f16 {
+    } else if args.f16 {
         DType::F16
     } else {
         DType::F32
     };
-    let model = if args.quantized {
+    let model: Model<QB> = if args.quantized {
         let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
             &model_file,
             &device,
@@ -320,9 +359,7 @@ async fn main() -> anyhow::Result<()> {
     println!("loaded the model in {:?}", start.elapsed());
 
     let start = std::time::Instant::now();
-    let image = load_image(args.image)?
-        .to_device(&device)?
-        .to_dtype(dtype)?;
+    let image = load_image::<_, QB>(args.image, &device)?.to_dtype(dtype)?;
     let image_embeds = image.unsqueeze(0)?;
     let image_embeds = match model {
         Model::Moondream(ref m) => image_embeds.apply(m.vision_encoder())?,

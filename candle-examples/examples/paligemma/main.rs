@@ -9,35 +9,35 @@ use clap::Parser;
 
 use candle_transformers::models::paligemma::{Config, Model};
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-struct TextGeneration {
-    model: Model,
-    image: Tensor,
-    device: Device,
+struct TextGeneration<B: BackendStorage> {
+    model: Model<B>,
+    image: Tensor<B>,
+    device: B::Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
 }
 
-impl TextGeneration {
+impl<B: BackendStorage> TextGeneration<B> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
-        image: Tensor,
+        model: Model<B>,
+        image: Tensor<B>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
         top_p: Option<f64>,
         repeat_penalty: f32,
         repeat_last_n: usize,
-        device: &Device,
+        device: &B::Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
@@ -174,7 +174,11 @@ struct Args {
     image: String,
 }
 
-fn load_image<T: AsRef<std::path::Path>>(path: T, image_size: usize) -> anyhow::Result<Tensor> {
+fn load_image<P: AsRef<std::path::Path>, B: BackendStorage>(
+    path: P,
+    image_size: usize,
+    device: &B::Device,
+) -> anyhow::Result<Tensor<B>> {
     let img = image::ImageReader::open(path)?.decode()?;
     let (height, width) = (image_size, image_size);
     let img = img.resize_to_fill(
@@ -184,18 +188,32 @@ fn load_image<T: AsRef<std::path::Path>>(path: T, image_size: usize) -> anyhow::
     );
     let img = img.to_rgb8();
     let img = img.into_raw();
-    let img = Tensor::from_vec(img, (height, width, 3), &Device::Cpu)?
+    let img = Tensor::from_vec(img, (height, width, 3), device)?
         .permute((2, 0, 1))?
         .to_dtype(DType::F32)?
         .affine(2. / 255., -1.)?;
     Ok(img)
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -242,21 +260,19 @@ fn main() -> Result<()> {
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
-    let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
+    let dtype = if B::Device::SUPPORTS_BF16 {
         DType::BF16
     } else {
         DType::F32
     };
     let config = Config::paligemma_3b_224();
-    let image = load_image(&args.image, config.vision_config.image_size)?
-        .to_device(&device)?
+    let image = load_image(&args.image, config.vision_config.image_size, device)?
         .to_dtype(dtype)?
         .unsqueeze(0)?;
     println!("loaded image with shape {image:?}");
     let start = std::time::Instant::now();
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-    let model = Model::new(&config, vb)?;
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
+    let model: Model<B> = Model::new(&config, vb)?;
     println!("loaded the model in {:?}", start.elapsed());
 
     let mut pipeline = TextGeneration::new(

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Error as E, Result};
-use candle::Tensor;
+use candle::{BackendDevice, BackendStorage, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{self, BertForMaskedLM, Config};
 use clap::Parser;
@@ -43,8 +43,22 @@ struct Args {
     prompt: Option<String>,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     let api = Api::new()?;
     let model_id = match &args.model_id {
         Some(model_id) => model_id.to_string(),
@@ -83,7 +97,7 @@ fn main() -> Result<()> {
     let config: Config = serde_json::from_str(&config)?;
     let mut tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
-    let device = candle_examples::device(args.cpu)?;
+    let device = B::Device::new(0)?;
     let dtype = bert::DTYPE;
 
     let vb = if weights_filename.ends_with("model.safetensors") {
@@ -92,7 +106,7 @@ fn main() -> Result<()> {
         println!("Loading weights from pytorch_model.bin");
         VarBuilder::from_pth(&weights_filename, dtype, &device).unwrap()
     };
-    let model = BertForMaskedLM::load(vb, &config)?;
+    let model: BertForMaskedLM<B> = BertForMaskedLM::load(vb, &config)?;
 
     if let Some(prompt) = args.prompt {
         let tokenizer = tokenizer
@@ -205,6 +219,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-pub fn normalize_l2(v: &Tensor) -> Result<Tensor> {
+pub fn normalize_l2<B: BackendStorage>(v: &Tensor<B>) -> Result<Tensor<B>> {
     Ok(v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?)?)
 }

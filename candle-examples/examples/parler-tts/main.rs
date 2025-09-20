@@ -7,7 +7,7 @@ extern crate accelerate_src;
 use anyhow::Error as E;
 use clap::Parser;
 
-use candle::{DType, IndexOp, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::parler_tts::{Config, Model};
 use tokenizers::Tokenizer;
@@ -99,11 +99,34 @@ enum Which {
     MiniV1,
 }
 
-fn main() -> anyhow::Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> anyhow::Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
-
-    let args = Args::parse();
 
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -124,6 +147,7 @@ fn main() -> anyhow::Result<()> {
         args.temperature, args.repeat_penalty, args.repeat_last_n
     );
 
+    let device = B::Device::new(0)?;
     let start = std::time::Instant::now();
     let api = hf_hub::api::sync::Api::new()?;
     let model_id = match args.model_id {
@@ -163,10 +187,9 @@ fn main() -> anyhow::Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let device = candle_examples::device(args.cpu)?;
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, DType::F32, &device)? };
     let config: Config = serde_json::from_reader(std::fs::File::open(config)?)?;
-    let mut model = Model::new(&config, vb)?;
+    let mut model: Model<B> = Model::new(&config, vb)?;
     println!("loaded the model in {:?}", start.elapsed());
 
     let description_tokens = tokenizer

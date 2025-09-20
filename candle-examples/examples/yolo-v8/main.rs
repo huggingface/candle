@@ -7,7 +7,7 @@ extern crate accelerate_src;
 mod model;
 use model::{Multiples, YoloV8, YoloV8Pose};
 
-use candle::{DType, Device, IndexOp, Result, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 use candle_transformers::object_detection::{non_maximum_suppression, Bbox, KeyPoint};
 use clap::{Parser, ValueEnum};
@@ -52,8 +52,8 @@ const KP_CONNECTIONS: [(usize, usize); 16] = [
 // Model architecture from https://github.com/ultralytics/ultralytics/issues/189
 // https://github.com/tinygrad/tinygrad/blob/master/examples/yolov8.py
 
-pub fn report_detect(
-    pred: &Tensor,
+pub fn report_detect<B: BackendStorage>(
+    pred: &Tensor<B>,
     img: DynamicImage,
     w: usize,
     h: usize,
@@ -61,7 +61,7 @@ pub fn report_detect(
     nms_threshold: f32,
     legend_size: u32,
 ) -> Result<DynamicImage> {
-    let pred = pred.to_device(&Device::Cpu)?;
+    let pred = pred.to_cpu()?;
     let (pred_size, npreds) = pred.dims2()?;
     let nclasses = pred_size - 4;
     // The bounding boxes grouped by (maximum) class index.
@@ -147,15 +147,15 @@ pub fn report_detect(
     Ok(DynamicImage::ImageRgb8(img))
 }
 
-pub fn report_pose(
-    pred: &Tensor,
+pub fn report_pose<B: BackendStorage>(
+    pred: &Tensor<B>,
     img: DynamicImage,
     w: usize,
     h: usize,
     confidence_threshold: f32,
     nms_threshold: f32,
 ) -> Result<DynamicImage> {
-    let pred = pred.to_device(&Device::Cpu)?;
+    let pred = pred.to_cpu()?;
     let (pred_size, npreds) = pred.dims2()?;
     if pred_size != 17 * 3 + 4 + 1 {
         candle::bail!("unexpected pred-size {pred_size}");
@@ -316,10 +316,10 @@ impl Args {
     }
 }
 
-pub trait Task: Module + Sized {
-    fn load(vb: VarBuilder, multiples: Multiples) -> Result<Self>;
+pub trait Task<B: BackendStorage>: Module<B> + Sized {
+    fn load(vb: VarBuilder<B>, multiples: Multiples) -> Result<Self>;
     fn report(
-        pred: &Tensor,
+        pred: &Tensor<B>,
         img: DynamicImage,
         w: usize,
         h: usize,
@@ -329,13 +329,13 @@ pub trait Task: Module + Sized {
     ) -> Result<DynamicImage>;
 }
 
-impl Task for YoloV8 {
-    fn load(vb: VarBuilder, multiples: Multiples) -> Result<Self> {
+impl<B: BackendStorage> Task<B> for YoloV8<B> {
+    fn load(vb: VarBuilder<B>, multiples: Multiples) -> Result<Self> {
         YoloV8::load(vb, multiples, /* num_classes=*/ 80)
     }
 
     fn report(
-        pred: &Tensor,
+        pred: &Tensor<B>,
         img: DynamicImage,
         w: usize,
         h: usize,
@@ -355,13 +355,13 @@ impl Task for YoloV8 {
     }
 }
 
-impl Task for YoloV8Pose {
-    fn load(vb: VarBuilder, multiples: Multiples) -> Result<Self> {
+impl<B: BackendStorage> Task<B> for YoloV8Pose<B> {
+    fn load(vb: VarBuilder<B>, multiples: Multiples) -> Result<Self> {
         YoloV8Pose::load(vb, multiples, /* num_classes=*/ 1, (17, 3))
     }
 
     fn report(
-        pred: &Tensor,
+        pred: &Tensor<B>,
         img: DynamicImage,
         w: usize,
         h: usize,
@@ -373,8 +373,8 @@ impl Task for YoloV8Pose {
     }
 }
 
-pub fn run<T: Task>(args: Args) -> anyhow::Result<()> {
-    let device = candle_examples::device(args.cpu)?;
+pub fn run<T: Task<B>, B: BackendStorage>(args: Args) -> anyhow::Result<()> {
+    let device = B::Device::new(0)?;
     // Create the model and load the weights from the file.
     let multiples = match args.which {
         Which::N => Multiples::n(),
@@ -453,9 +453,37 @@ pub fn main() -> anyhow::Result<()> {
         None
     };
 
-    match args.task {
-        YoloTask::Detect => run::<YoloV8>(args)?,
-        YoloTask::Pose => run::<YoloV8Pose>(args)?,
+    if args.cpu {
+        match args.task {
+            YoloTask::Detect => run::<YoloV8<candle::CpuStorage>, _>(args)?,
+            YoloTask::Pose => run::<YoloV8Pose<candle::CpuStorage>, _>(args)?,
+        }
+    } else if candle::utils::cuda_is_available() {
+        match args.task {
+            YoloTask::Detect => run::<YoloV8<candle::CudaStorage>, _>(args)?,
+            YoloTask::Pose => run::<YoloV8Pose<candle::CudaStorage>, _>(args)?,
+        }
+    } else if candle::utils::metal_is_available() {
+        match args.task {
+            YoloTask::Detect => run::<YoloV8<candle::MetalStorage>, _>(args)?,
+            YoloTask::Pose => run::<YoloV8Pose<candle::MetalStorage>, _>(args)?,
+        }
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        match args.task {
+            YoloTask::Detect => run::<YoloV8<candle::CpuStorage>, _>(args)?,
+            YoloTask::Pose => run::<YoloV8Pose<candle::CpuStorage>, _>(args)?,
+        }
     }
+
     Ok(())
 }

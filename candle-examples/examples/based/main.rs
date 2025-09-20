@@ -9,7 +9,7 @@ use clap::{Parser, ValueEnum};
 
 use candle_transformers::models::based::Model;
 
-use candle::{BackendStorage, CpuDevice, CpuStorage, DType, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
@@ -180,11 +180,25 @@ struct Args {
     which: Which,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -192,6 +206,7 @@ fn main() -> Result<()> {
     } else {
         None
     };
+
     println!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
         candle::utils::with_avx(),
@@ -244,22 +259,20 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let config = serde_json::from_reader(std::fs::File::open(config_file)?)?;
-    let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
+
+    let device = B::Device::new(0)?;
+    let dtype = if B::Device::SUPPORTS_BF16 {
         DType::BF16
     } else {
         DType::F32
     };
 
-    // TODO: fix
-    let device = CpuDevice;
-    let mut vb: VarBuilder<CpuStorage> =
-        unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+    let mut vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
     if args.which == Which::W1b50b {
         vb = vb.pp("model");
     };
 
-    let model = Model::new(&config, vb)?;
+    let model: Model<B> = Model::new(&config, vb)?;
 
     println!("loaded the model in {:?}", start.elapsed());
 

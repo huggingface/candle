@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use candle_transformers::models::t5;
 
 use anyhow::{Error as E, Result};
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use clap::{Parser, ValueEnum};
@@ -97,15 +97,15 @@ struct Args {
     which: Which,
 }
 
-struct T5ModelBuilder {
-    device: Device,
+struct T5ModelBuilder<B: BackendStorage> {
+    device: B::Device,
     config: t5::Config,
     weights_filename: Vec<PathBuf>,
 }
 
-impl T5ModelBuilder {
+impl<B: BackendStorage> T5ModelBuilder<B> {
     pub fn load(args: &Args) -> Result<(Self, Tokenizer)> {
-        let device = candle_examples::device(args.cpu)?;
+        let device = B::Device::new(0)?;
         let (default_model, default_revision) = match args.which {
             Which::T5Base => ("t5-base", "main"),
             Which::T5Small => ("t5-small", "refs/pr/15"),
@@ -170,14 +170,14 @@ impl T5ModelBuilder {
         ))
     }
 
-    pub fn build_encoder(&self) -> Result<t5::T5EncoderModel> {
+    pub fn build_encoder(&self) -> Result<t5::T5EncoderModel<B>> {
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&self.weights_filename, DTYPE, &self.device)?
         };
         Ok(t5::T5EncoderModel::load(vb, &self.config)?)
     }
 
-    pub fn build_conditional_generation(&self) -> Result<t5::T5ForConditionalGeneration> {
+    pub fn build_conditional_generation(&self) -> Result<t5::T5ForConditionalGeneration<B>> {
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&self.weights_filename, DTYPE, &self.device)?
         };
@@ -185,11 +185,34 @@ impl T5ModelBuilder {
     }
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
-
-    let args = Args::parse();
 
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -199,7 +222,7 @@ fn main() -> Result<()> {
         None
     };
 
-    let (builder, mut tokenizer) = T5ModelBuilder::load(&args)?;
+    let (builder, mut tokenizer): (T5ModelBuilder<B>, Tokenizer) = T5ModelBuilder::load(&args)?;
     let device = &builder.device;
     let tokenizer = tokenizer
         .with_padding(None)
@@ -348,6 +371,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-pub fn normalize_l2(v: &Tensor) -> Result<Tensor> {
+pub fn normalize_l2<B: BackendStorage>(v: &Tensor<B>) -> Result<Tensor<B>> {
     Ok(v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?)?)
 }

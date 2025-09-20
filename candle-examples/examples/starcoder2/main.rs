@@ -9,33 +9,33 @@ use clap::Parser;
 
 use candle_transformers::models::starcoder2::Model;
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-struct TextGeneration {
-    model: Model,
-    device: Device,
+struct TextGeneration<B: BackendStorage> {
+    model: Model<B>,
+    device: B::Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
 }
 
-impl TextGeneration {
+impl<B: BackendStorage> TextGeneration<B> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
+        model: Model<B>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
         top_p: Option<f64>,
         repeat_penalty: f32,
         repeat_last_n: usize,
-        device: &Device,
+        device: &B::Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
@@ -169,12 +169,35 @@ struct Args {
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
 }
+pub fn main() -> Result<()> {
+    let args = Args::parse();
 
-fn main() -> Result<()> {
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -227,14 +250,14 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let config = serde_json::from_reader(std::fs::File::open(config_file)?)?;
-    let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
+    let device = B::Device::new(0)?;
+    let dtype = if B::Device::SUPPORTS_BF16 {
         DType::BF16
     } else {
         DType::F32
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-    let model = Model::new(&config, vb)?;
+    let model: Model<B> = Model::new(&config, vb)?;
 
     println!("loaded the model in {:?}", start.elapsed());
 

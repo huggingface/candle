@@ -6,10 +6,10 @@ extern crate accelerate_src;
 use std::io::Write;
 use std::path::PathBuf;
 
-use candle_transformers::models::quantized_t5 as t5;
+use candle_transformers::models::{quantized_t5 as t5, with_tracing::QMatMul};
 
 use anyhow::{Error as E, Result};
-use candle::{Device, Tensor};
+use candle::{quantized::QuantizedBackend, BackendDevice, Module, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use clap::{Parser, ValueEnum};
 use hf_hub::{api::sync::Api, api::sync::ApiRepo, Repo, RepoType};
@@ -74,15 +74,15 @@ struct Args {
     which: Which,
 }
 
-struct T5ModelBuilder {
-    device: Device,
+struct T5ModelBuilder<QB: QuantizedBackend> {
+    device: QB::Device,
     config: t5::Config,
     weights_filename: PathBuf,
 }
 
-impl T5ModelBuilder {
+impl<QB: QuantizedBackend> T5ModelBuilder<QB> {
     pub fn load(args: &Args) -> Result<(Self, Tokenizer)> {
-        let device = Device::Cpu;
+        let device = QB::Device::new(0)?;
         let default_model = "lmz/candle-quantized-t5".to_string();
         let (model_id, revision) = match (args.model_id.to_owned(), args.revision.to_owned()) {
             (Some(model_id), Some(revision)) => (model_id, revision),
@@ -123,7 +123,7 @@ impl T5ModelBuilder {
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
         Ok((
             Self {
-                device,
+                device: device.clone(),
                 config,
                 weights_filename,
             },
@@ -131,9 +131,8 @@ impl T5ModelBuilder {
         ))
     }
 
-    pub fn build_model(&self) -> Result<t5::T5ForConditionalGeneration> {
-        let device = Device::Cpu;
-        let vb = t5::VarBuilder::from_gguf(&self.weights_filename, &device)?;
+    pub fn build_model(&self) -> Result<t5::T5ForConditionalGeneration<QB>> {
+        let vb = t5::VarBuilder::from_gguf(&self.weights_filename, &self.device)?;
         Ok(t5::T5ForConditionalGeneration::load(vb, &self.config)?)
     }
 
@@ -147,11 +146,36 @@ impl T5ModelBuilder {
     }
 }
 
-fn main() -> Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if candle::utils::cuda_is_available() {
+        #[cfg(feature = "cuda")]
+        run::<candle::QCudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::QMetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::QCpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<QB: QuantizedBackend>(args: Args) -> anyhow::Result<()>
+where
+    QMatMul<QB>: Module<QB::Storage>,
+{
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
-
-    let args = Args::parse();
 
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -161,7 +185,7 @@ fn main() -> Result<()> {
         None
     };
 
-    let (builder, mut tokenizer) = T5ModelBuilder::load(&args)?;
+    let (builder, mut tokenizer) = T5ModelBuilder::<QB>::load(&args)?;
     let device = &builder.device;
     let tokenizer = tokenizer
         .with_padding(None)

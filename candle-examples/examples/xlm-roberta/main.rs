@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Error as E, Result};
-use candle::{Device, Tensor};
+use candle::{BackendDevice, BackendStorage, Tensor};
 use candle_nn::ops::softmax;
 use candle_nn::VarBuilder;
 use candle_transformers::models::xlm_roberta::{
@@ -69,8 +69,32 @@ struct Args {
     prompt: Option<String>,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     let api = Api::new()?;
     let model_id = match &args.model_id {
         Some(model_id) => model_id.to_string(),
@@ -127,7 +151,7 @@ fn main() -> Result<()> {
     let config: Config = serde_json::from_str(&config)?;
     let mut tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
-    let device = candle_examples::device(args.cpu)?;
+    let device = B::Device::new(0)?;
 
     let vb = if weights_filename.ends_with("model.safetensors") {
         unsafe {
@@ -154,7 +178,7 @@ fn main() -> Result<()> {
                 "I'm a <mask> boy.".to_string(),
                 "I'm <mask> in berlin.".to_string(),
             ];
-            let model = XLMRobertaForMaskedLM::new(&config, vb)?;
+            let model: XLMRobertaForMaskedLM<B> = XLMRobertaForMaskedLM::new(&config, vb)?;
 
             let input_ids = tokenize_batch(&tokenizer, TokenizeInput::Single(&prompt), &device)?;
             let attention_mask =
@@ -266,11 +290,11 @@ pub enum TokenizeInput<'a> {
     Pairs(&'a [(String, String)]),
 }
 
-pub fn tokenize_batch(
+pub fn tokenize_batch<B: BackendStorage>(
     tokenizer: &Tokenizer,
     input: TokenizeInput,
-    device: &Device,
-) -> anyhow::Result<Tensor> {
+    device: &B::Device,
+) -> anyhow::Result<Tensor<B>> {
     let tokens = match input {
         TokenizeInput::Single(text_batch) => tokenizer
             .encode_batch(text_batch.to_vec(), true)
@@ -291,11 +315,11 @@ pub fn tokenize_batch(
     Ok(Tensor::stack(&token_ids, 0)?)
 }
 
-pub fn get_attention_mask(
+pub fn get_attention_mask<B: BackendStorage>(
     tokenizer: &Tokenizer,
     input: TokenizeInput,
-    device: &Device,
-) -> anyhow::Result<Tensor> {
+    device: &B::Device,
+) -> anyhow::Result<Tensor<B>> {
     let tokens = match input {
         TokenizeInput::Single(text_batch) => tokenizer
             .encode_batch(text_batch.to_vec(), true)

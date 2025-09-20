@@ -7,7 +7,7 @@ extern crate accelerate_src;
 use anyhow::Error as E;
 use clap::Parser;
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn::{ops::softmax, VarBuilder};
 use candle_transformers::models::siglip;
 
@@ -63,7 +63,11 @@ struct Args {
     image_size: Option<usize>,
 }
 
-fn load_image<T: AsRef<std::path::Path>>(path: T, image_size: usize) -> anyhow::Result<Tensor> {
+fn load_image<P: AsRef<std::path::Path>, B: BackendStorage>(
+    path: P,
+    image_size: usize,
+    device: &B::Device,
+) -> anyhow::Result<Tensor<B>> {
     let img = image::ImageReader::open(path)?.decode()?;
     let (height, width) = (image_size, image_size);
     let img = img.resize_to_fill(
@@ -73,20 +77,21 @@ fn load_image<T: AsRef<std::path::Path>>(path: T, image_size: usize) -> anyhow::
     );
     let img = img.to_rgb8();
     let img = img.into_raw();
-    let img = Tensor::from_vec(img, (height, width, 3), &Device::Cpu)?
+    let img = Tensor::from_vec(img, (height, width, 3), device)?
         .permute((2, 0, 1))?
         .to_dtype(DType::F32)?
         .affine(2. / 255., -1.)?;
     Ok(img)
 }
 
-fn load_images<T: AsRef<std::path::Path>>(
+fn load_images<T: AsRef<std::path::Path>, B: BackendStorage>(
     paths: &Vec<T>,
     image_size: usize,
-) -> anyhow::Result<Tensor> {
+    device: &B::Device,
+) -> anyhow::Result<Tensor<B>> {
     let mut images = vec![];
     for path in paths {
-        let tensor = load_image(path, image_size)?;
+        let tensor = load_image(path, image_size, device)?;
         images.push(tensor);
     }
     let images = Tensor::stack(&images, 0)?;
@@ -95,6 +100,22 @@ fn load_images<T: AsRef<std::path::Path>>(
 
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> anyhow::Result<()> {
+    let device = B::Device::new(0)?;
+
     let hf_repo = match args.hf_repo.as_ref() {
         Some(hf_repo) => hf_repo,
         None => match args.which {
@@ -126,7 +147,6 @@ pub fn main() -> anyhow::Result<()> {
     };
     let tokenizer = get_tokenizer(hf_repo, args.tokenizer)?;
     let config: siglip::Config = serde_json::from_slice(&std::fs::read(config_file)?)?;
-    let device = candle_examples::device(args.cpu)?;
     let vec_imgs = match args.images {
         Some(imgs) => imgs,
         None => vec![
@@ -137,12 +157,12 @@ pub fn main() -> anyhow::Result<()> {
     let images = load_images(
         &vec_imgs,
         args.image_size.unwrap_or(config.vision_config.image_size),
-    )?
-    .to_device(&device)?;
+        &device,
+    )?;
     let vb = unsafe {
         VarBuilder::from_mmaped_safetensors(std::slice::from_ref(&model_file), DType::F32, &device)?
     };
-    let model = siglip::Model::new(&config, vb)?;
+    let model: siglip::Model<B> = siglip::Model::new(&config, vb)?;
     let (input_ids, vec_seq) = tokenize_sequences(&config, args.sequences, &tokenizer, &device)?;
     let (_logits_per_text, logits_per_image) = model.forward(&images, &input_ids)?;
     let softmax_image = softmax(&logits_per_image, 1)?;
@@ -178,12 +198,12 @@ pub fn get_tokenizer(hf_repo: &str, tokenizer: Option<String>) -> anyhow::Result
     Tokenizer::from_file(tokenizer).map_err(E::msg)
 }
 
-pub fn tokenize_sequences(
+pub fn tokenize_sequences<B: BackendStorage>(
     config: &siglip::Config,
     sequences: Option<Vec<String>>,
     tokenizer: &Tokenizer,
-    device: &Device,
-) -> anyhow::Result<(Tensor, Vec<String>)> {
+    device: &B::Device,
+) -> anyhow::Result<(Tensor<B>, Vec<String>)> {
     let pad_id = config.text_config.pad_token_id;
     let vec_seq = match sequences {
         Some(seq) => seq,

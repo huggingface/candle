@@ -8,7 +8,7 @@ extern crate accelerate_src;
 use candle::CudaDevice;
 use clap::Parser;
 
-use candle::{BackendStorage, DType, IndexOp, Tensor, D};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 use candle_transformers::models::convmixer;
 
@@ -25,8 +25,9 @@ struct Args {
     cpu: bool,
 }
 
-fn run<B: BackendStorage + 'static>(args: Args, device: &B::Device) -> anyhow::Result<()> {
-    let image: Tensor<B> = candle_examples::imagenet::load_image224(args.image, device)?;
+fn run<B: BackendStorage + 'static>(args: Args) -> anyhow::Result<()> {
+    let device = B::Device::new(0)?;
+    let image: Tensor<B> = candle_examples::imagenet::load_image224(args.image, &device)?;
     println!("loaded image {image:?}");
 
     let model_file = match args.model {
@@ -37,7 +38,7 @@ fn run<B: BackendStorage + 'static>(args: Args, device: &B::Device) -> anyhow::R
         }
         Some(model) => model.into(),
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, device)? };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
     let model = convmixer::c1024_20(1000, vb)?;
     println!("model built");
     let logits = model.forward(&image.unsqueeze(0)?)?;
@@ -60,13 +61,24 @@ pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     if args.cpu {
-        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
-    } else {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
         #[cfg(feature = "cuda")]
-        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
-
-        #[cfg(feature = "metal")]
-        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
     }
     Ok(())
 }

@@ -5,36 +5,38 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
+use candle::quantized::QuantizedBackend;
+use candle_transformers::quantized_nn::Linear;
 use clap::Parser;
 
 use candle_transformers::models::mistral::{Config, Model as Mistral};
 use candle_transformers::models::quantized_mistral::Model as QMistral;
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, DType, Module, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-enum Model {
-    Mistral(Mistral),
-    Quantized(QMistral),
+enum Model<QB: QuantizedBackend> {
+    Mistral(Mistral<QB::Storage>),
+    Quantized(QMistral<QB>),
 }
 
-struct TextGeneration {
-    model: Model,
-    device: Device,
+struct TextGeneration<QB: QuantizedBackend> {
+    model: Model<QB>,
+    device: QB::Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
 }
 
-impl TextGeneration {
+impl<QB: QuantizedBackend> TextGeneration<QB> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
+        model: Model<QB>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
@@ -42,7 +44,7 @@ impl TextGeneration {
         top_k: Option<usize>,
         repeat_penalty: f32,
         repeat_last_n: usize,
-        device: &Device,
+        device: &QB::Device,
     ) -> Self {
         let logits_processor = {
             let temperature = temp.unwrap_or(0.);
@@ -69,7 +71,10 @@ impl TextGeneration {
         }
     }
 
-    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()> {
+    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         use std::io::Write;
         self.tokenizer.clear();
         let mut tokens = self
@@ -227,11 +232,28 @@ struct Args {
     force_dmmv: bool,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::QCpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::QCudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::QMetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<QB: QuantizedBackend>(args: Args, device: &QB::Device) -> Result<()>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     #[cfg(feature = "cuda")]
     candle::quantized::cuda::set_force_dmmv(args.force_dmmv);
 
@@ -317,20 +339,19 @@ fn main() -> Result<()> {
             }
         }
     };
-    let device = candle_examples::device(args.cpu)?;
     let (model, device) = if args.quantized {
         let filename = &filenames[0];
-        let vb =
-            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, &device)?;
+        let vb: candle_transformers::quantized_var_builder::VarBuilder<QB> =
+            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, device)?;
         let model = QMistral::new(&config, vb)?;
         (Model::Quantized(model), device)
     } else {
-        let dtype = if device.is_cuda() {
+        let dtype = if QB::Device::SUPPORTS_BF16 {
             DType::BF16
         } else {
             DType::F32
         };
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
         let model = Mistral::new(&config, vb)?;
         (Model::Mistral(model), device)
     };

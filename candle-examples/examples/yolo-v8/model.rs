@@ -1,4 +1,4 @@
-use candle::{DType, IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::{batch_norm, conv2d, conv2d_no_bias, Conv2d, Conv2dConfig, Module, VarBuilder};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -64,22 +64,22 @@ impl Upsample {
     }
 }
 
-impl Module for Upsample {
-    fn forward(&self, xs: &Tensor) -> candle::Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Upsample {
+    fn forward(&self, xs: &Tensor<B>) -> candle::Result<Tensor<B>> {
         let (_b_size, _channels, h, w) = xs.dims4()?;
         xs.upsample_nearest2d(self.scale_factor * h, self.scale_factor * w)
     }
 }
 
 #[derive(Debug)]
-struct ConvBlock {
-    conv: Conv2d,
+struct ConvBlock<B: BackendStorage> {
+    conv: Conv2d<B>,
     span: tracing::Span,
 }
 
-impl ConvBlock {
+impl<B: BackendStorage> ConvBlock<B> {
     fn load(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         c1: usize,
         c2: usize,
         k: usize,
@@ -103,8 +103,8 @@ impl ConvBlock {
     }
 }
 
-impl Module for ConvBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ConvBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let xs = self.conv.forward(xs)?;
         candle_nn::ops::silu(&xs)
@@ -112,15 +112,15 @@ impl Module for ConvBlock {
 }
 
 #[derive(Debug)]
-struct Bottleneck {
-    cv1: ConvBlock,
-    cv2: ConvBlock,
+struct Bottleneck<B: BackendStorage> {
+    cv1: ConvBlock<B>,
+    cv2: ConvBlock<B>,
     residual: bool,
     span: tracing::Span,
 }
 
-impl Bottleneck {
-    fn load(vb: VarBuilder, c1: usize, c2: usize, shortcut: bool) -> Result<Self> {
+impl<B: BackendStorage> Bottleneck<B> {
+    fn load(vb: VarBuilder<B>, c1: usize, c2: usize, shortcut: bool) -> Result<Self> {
         let channel_factor = 1.;
         let c_ = (c2 as f64 * channel_factor) as usize;
         let cv1 = ConvBlock::load(vb.pp("cv1"), c1, c_, 3, 1, None)?;
@@ -135,8 +135,8 @@ impl Bottleneck {
     }
 }
 
-impl Module for Bottleneck {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Bottleneck<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let ys = self.cv2.forward(&self.cv1.forward(xs)?)?;
         if self.residual {
@@ -148,15 +148,15 @@ impl Module for Bottleneck {
 }
 
 #[derive(Debug)]
-struct C2f {
-    cv1: ConvBlock,
-    cv2: ConvBlock,
-    bottleneck: Vec<Bottleneck>,
+struct C2f<B: BackendStorage> {
+    cv1: ConvBlock<B>,
+    cv2: ConvBlock<B>,
+    bottleneck: Vec<Bottleneck<B>>,
     span: tracing::Span,
 }
 
-impl C2f {
-    fn load(vb: VarBuilder, c1: usize, c2: usize, n: usize, shortcut: bool) -> Result<Self> {
+impl<B: BackendStorage> C2f<B> {
+    fn load(vb: VarBuilder<B>, c1: usize, c2: usize, n: usize, shortcut: bool) -> Result<Self> {
         let c = (c2 as f64 * 0.5) as usize;
         let cv1 = ConvBlock::load(vb.pp("cv1"), c1, 2 * c, 1, 1, None)?;
         let cv2 = ConvBlock::load(vb.pp("cv2"), (2 + n) * c, c2, 1, 1, None)?;
@@ -174,8 +174,8 @@ impl C2f {
     }
 }
 
-impl Module for C2f {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for C2f<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let ys = self.cv1.forward(xs)?;
         let mut ys = ys.chunk(2, 1)?;
@@ -188,15 +188,15 @@ impl Module for C2f {
 }
 
 #[derive(Debug)]
-struct Sppf {
-    cv1: ConvBlock,
-    cv2: ConvBlock,
+struct Sppf<B: BackendStorage> {
+    cv1: ConvBlock<B>,
+    cv2: ConvBlock<B>,
     k: usize,
     span: tracing::Span,
 }
 
-impl Sppf {
-    fn load(vb: VarBuilder, c1: usize, c2: usize, k: usize) -> Result<Self> {
+impl<B: BackendStorage> Sppf<B> {
+    fn load(vb: VarBuilder<B>, c1: usize, c2: usize, k: usize) -> Result<Self> {
         let c_ = c1 / 2;
         let cv1 = ConvBlock::load(vb.pp("cv1"), c1, c_, 1, 1, None)?;
         let cv2 = ConvBlock::load(vb.pp("cv2"), c_ * 4, c2, 1, 1, None)?;
@@ -209,8 +209,8 @@ impl Sppf {
     }
 }
 
-impl Module for Sppf {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Sppf<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (_, _, _, _) = xs.dims4()?;
         let xs = self.cv1.forward(xs)?;
@@ -231,14 +231,14 @@ impl Module for Sppf {
 }
 
 #[derive(Debug)]
-struct Dfl {
-    conv: Conv2d,
+struct Dfl<B: BackendStorage> {
+    conv: Conv2d<B>,
     num_classes: usize,
     span: tracing::Span,
 }
 
-impl Dfl {
-    fn load(vb: VarBuilder, num_classes: usize) -> Result<Self> {
+impl<B: BackendStorage> Dfl<B> {
+    fn load(vb: VarBuilder<B>, num_classes: usize) -> Result<Self> {
         let conv = conv2d_no_bias(num_classes, 1, 1, Default::default(), vb.pp("conv"))?;
         Ok(Self {
             conv,
@@ -248,8 +248,8 @@ impl Dfl {
     }
 }
 
-impl Module for Dfl {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Dfl<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (b_sz, _channels, anchors) = xs.dims3()?;
         let xs = xs
@@ -261,22 +261,22 @@ impl Module for Dfl {
 }
 
 #[derive(Debug)]
-struct DarkNet {
-    b1_0: ConvBlock,
-    b1_1: ConvBlock,
-    b2_0: C2f,
-    b2_1: ConvBlock,
-    b2_2: C2f,
-    b3_0: ConvBlock,
-    b3_1: C2f,
-    b4_0: ConvBlock,
-    b4_1: C2f,
-    b5: Sppf,
+struct DarkNet<B: BackendStorage> {
+    b1_0: ConvBlock<B>,
+    b1_1: ConvBlock<B>,
+    b2_0: C2f<B>,
+    b2_1: ConvBlock<B>,
+    b2_2: C2f<B>,
+    b3_0: ConvBlock<B>,
+    b3_1: C2f<B>,
+    b4_0: ConvBlock<B>,
+    b4_1: C2f<B>,
+    b5: Sppf<B>,
     span: tracing::Span,
 }
 
-impl DarkNet {
-    fn load(vb: VarBuilder, m: Multiples) -> Result<Self> {
+impl<B: BackendStorage> DarkNet<B> {
+    fn load(vb: VarBuilder<B>, m: Multiples) -> Result<Self> {
         let (w, r, d) = (m.width, m.ratio, m.depth);
         let b1_0 = ConvBlock::load(vb.pp("b1.0"), 3, (64. * w) as usize, 3, 2, Some(1))?;
         let b1_1 = ConvBlock::load(
@@ -360,7 +360,7 @@ impl DarkNet {
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<(Tensor<B>, Tensor<B>, Tensor<B>)> {
         let _enter = self.span.enter();
         let x1 = self.b1_1.forward(&self.b1_0.forward(xs)?)?;
         let x2 = self
@@ -374,19 +374,19 @@ impl DarkNet {
 }
 
 #[derive(Debug)]
-struct YoloV8Neck {
+struct YoloV8Neck<B: BackendStorage> {
     up: Upsample,
-    n1: C2f,
-    n2: C2f,
-    n3: ConvBlock,
-    n4: C2f,
-    n5: ConvBlock,
-    n6: C2f,
+    n1: C2f<B>,
+    n2: C2f<B>,
+    n3: ConvBlock<B>,
+    n4: C2f<B>,
+    n5: ConvBlock<B>,
+    n6: C2f<B>,
     span: tracing::Span,
 }
 
-impl YoloV8Neck {
-    fn load(vb: VarBuilder, m: Multiples) -> Result<Self> {
+impl<B: BackendStorage> YoloV8Neck<B> {
+    fn load(vb: VarBuilder<B>, m: Multiples) -> Result<Self> {
         let up = Upsample::new(2)?;
         let (w, r, d) = (m.width, m.ratio, m.depth);
         let n = (3. * d).round() as usize;
@@ -446,7 +446,12 @@ impl YoloV8Neck {
         })
     }
 
-    fn forward(&self, p3: &Tensor, p4: &Tensor, p5: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
+    fn forward(
+        &self,
+        p3: &Tensor<B>,
+        p4: &Tensor<B>,
+        p5: &Tensor<B>,
+    ) -> Result<(Tensor<B>, Tensor<B>, Tensor<B>)> {
         let _enter = self.span.enter();
         let x = self
             .n1
@@ -465,30 +470,30 @@ impl YoloV8Neck {
 }
 
 #[derive(Debug)]
-struct DetectionHead {
-    dfl: Dfl,
-    cv2: [(ConvBlock, ConvBlock, Conv2d); 3],
-    cv3: [(ConvBlock, ConvBlock, Conv2d); 3],
+struct DetectionHead<B: BackendStorage> {
+    dfl: Dfl<B>,
+    cv2: [(ConvBlock<B>, ConvBlock<B>, Conv2d<B>); 3],
+    cv3: [(ConvBlock<B>, ConvBlock<B>, Conv2d<B>); 3],
     ch: usize,
     no: usize,
     span: tracing::Span,
 }
 
 #[derive(Debug)]
-struct PoseHead {
-    detect: DetectionHead,
-    cv4: [(ConvBlock, ConvBlock, Conv2d); 3],
+struct PoseHead<B: BackendStorage> {
+    detect: DetectionHead<B>,
+    cv4: [(ConvBlock<B>, ConvBlock<B>, Conv2d<B>); 3],
     kpt: (usize, usize),
     span: tracing::Span,
 }
 
-fn make_anchors(
-    xs0: &Tensor,
-    xs1: &Tensor,
-    xs2: &Tensor,
+fn make_anchors<B: BackendStorage>(
+    xs0: &Tensor<B>,
+    xs1: &Tensor<B>,
+    xs2: &Tensor<B>,
     (s0, s1, s2): (usize, usize, usize),
     grid_cell_offset: f64,
-) -> Result<(Tensor, Tensor)> {
+) -> Result<(Tensor<B>, Tensor<B>)> {
     let dev = xs0.device();
     let mut anchor_points = vec![];
     let mut stride_tensor = vec![];
@@ -512,7 +517,11 @@ fn make_anchors(
     let stride_tensor = Tensor::cat(stride_tensor.as_slice(), 0)?.unsqueeze(1)?;
     Ok((anchor_points, stride_tensor))
 }
-fn dist2bbox(distance: &Tensor, anchor_points: &Tensor) -> Result<Tensor> {
+
+fn dist2bbox<B: BackendStorage>(
+    distance: &Tensor<B>,
+    anchor_points: &Tensor<B>,
+) -> Result<Tensor<B>> {
     let chunks = distance.chunk(2, 1)?;
     let lt = &chunks[0];
     let rb = &chunks[1];
@@ -523,14 +532,14 @@ fn dist2bbox(distance: &Tensor, anchor_points: &Tensor) -> Result<Tensor> {
     Tensor::cat(&[c_xy, wh], 1)
 }
 
-struct DetectionHeadOut {
-    pred: Tensor,
-    anchors: Tensor,
-    strides: Tensor,
+struct DetectionHeadOut<B: BackendStorage> {
+    pred: Tensor<B>,
+    anchors: Tensor<B>,
+    strides: Tensor<B>,
 }
 
-impl DetectionHead {
-    fn load(vb: VarBuilder, nc: usize, filters: (usize, usize, usize)) -> Result<Self> {
+impl<B: BackendStorage> DetectionHead<B> {
+    fn load(vb: VarBuilder<B>, nc: usize, filters: (usize, usize, usize)) -> Result<Self> {
         let ch = 16;
         let dfl = Dfl::load(vb.pp("dfl"), ch)?;
         let c1 = usize::max(filters.0, nc);
@@ -557,11 +566,11 @@ impl DetectionHead {
     }
 
     fn load_cv3(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         c1: usize,
         nc: usize,
         filter: usize,
-    ) -> Result<(ConvBlock, ConvBlock, Conv2d)> {
+    ) -> Result<(ConvBlock<B>, ConvBlock<B>, Conv2d<B>)> {
         let block0 = ConvBlock::load(vb.pp("0"), filter, c1, 3, 1, None)?;
         let block1 = ConvBlock::load(vb.pp("1"), c1, c1, 3, 1, None)?;
         let conv = conv2d(c1, nc, 1, Default::default(), vb.pp("2"))?;
@@ -569,18 +578,23 @@ impl DetectionHead {
     }
 
     fn load_cv2(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         c2: usize,
         ch: usize,
         filter: usize,
-    ) -> Result<(ConvBlock, ConvBlock, Conv2d)> {
+    ) -> Result<(ConvBlock<B>, ConvBlock<B>, Conv2d<B>)> {
         let block0 = ConvBlock::load(vb.pp("0"), filter, c2, 3, 1, None)?;
         let block1 = ConvBlock::load(vb.pp("1"), c2, c2, 3, 1, None)?;
         let conv = conv2d(c2, 4 * ch, 1, Default::default(), vb.pp("2"))?;
         Ok((block0, block1, conv))
     }
 
-    fn forward(&self, xs0: &Tensor, xs1: &Tensor, xs2: &Tensor) -> Result<DetectionHeadOut> {
+    fn forward(
+        &self,
+        xs0: &Tensor<B>,
+        xs1: &Tensor<B>,
+        xs2: &Tensor<B>,
+    ) -> Result<DetectionHeadOut<B>> {
         let _enter = self.span.enter();
         let forward_cv = |xs, i: usize| {
             let xs_2 = self.cv2[i].0.forward(xs)?;
@@ -600,7 +614,7 @@ impl DetectionHead {
         let anchors = anchors.transpose(0, 1)?.unsqueeze(0)?;
         let strides = strides.transpose(0, 1)?;
 
-        let reshape = |xs: &Tensor| {
+        let reshape = |xs: &Tensor<B>| {
             let d = xs.dim(0)?;
             let el = xs.elem_count();
             xs.reshape((d, self.no, el / (d * self.no)))
@@ -624,11 +638,11 @@ impl DetectionHead {
     }
 }
 
-impl PoseHead {
+impl<B: BackendStorage> PoseHead<B> {
     // kpt: keypoints, (17, 3)
     // nc: num-classes, 80
     fn load(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         nc: usize,
         kpt: (usize, usize),
         filters: (usize, usize, usize),
@@ -650,21 +664,21 @@ impl PoseHead {
     }
 
     fn load_cv4(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         c1: usize,
         nc: usize,
         filter: usize,
-    ) -> Result<(ConvBlock, ConvBlock, Conv2d)> {
+    ) -> Result<(ConvBlock<B>, ConvBlock<B>, Conv2d<B>)> {
         let block0 = ConvBlock::load(vb.pp("0"), filter, c1, 3, 1, None)?;
         let block1 = ConvBlock::load(vb.pp("1"), c1, c1, 3, 1, None)?;
         let conv = conv2d(c1, nc, 1, Default::default(), vb.pp("2"))?;
         Ok((block0, block1, conv))
     }
 
-    fn forward(&self, xs0: &Tensor, xs1: &Tensor, xs2: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs0: &Tensor<B>, xs1: &Tensor<B>, xs2: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let d = self.detect.forward(xs0, xs1, xs2)?;
-        let forward_cv = |xs: &Tensor, i: usize| {
+        let forward_cv = |xs: &Tensor<B>, i: usize| {
             let (b_sz, _, h, w) = xs.dims4()?;
             let xs = self.cv4[i].0.forward(xs)?;
             let xs = self.cv4[i].1.forward(&xs)?;
@@ -687,15 +701,15 @@ impl PoseHead {
 }
 
 #[derive(Debug)]
-pub struct YoloV8 {
-    net: DarkNet,
-    fpn: YoloV8Neck,
-    head: DetectionHead,
+pub struct YoloV8<B: BackendStorage> {
+    net: DarkNet<B>,
+    fpn: YoloV8Neck<B>,
+    head: DetectionHead<B>,
     span: tracing::Span,
 }
 
-impl YoloV8 {
-    pub fn load(vb: VarBuilder, m: Multiples, num_classes: usize) -> Result<Self> {
+impl<B: BackendStorage> YoloV8<B> {
+    pub fn load(vb: VarBuilder<B>, m: Multiples, num_classes: usize) -> Result<Self> {
         let net = DarkNet::load(vb.pp("net"), m)?;
         let fpn = YoloV8Neck::load(vb.pp("fpn"), m)?;
         let head = DetectionHead::load(vb.pp("head"), num_classes, m.filters())?;
@@ -708,8 +722,8 @@ impl YoloV8 {
     }
 }
 
-impl Module for YoloV8 {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for YoloV8<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (xs1, xs2, xs3) = self.net.forward(xs)?;
         let (xs1, xs2, xs3) = self.fpn.forward(&xs1, &xs2, &xs3)?;
@@ -718,16 +732,16 @@ impl Module for YoloV8 {
 }
 
 #[derive(Debug)]
-pub struct YoloV8Pose {
-    net: DarkNet,
-    fpn: YoloV8Neck,
-    head: PoseHead,
+pub struct YoloV8Pose<B: BackendStorage> {
+    net: DarkNet<B>,
+    fpn: YoloV8Neck<B>,
+    head: PoseHead<B>,
     span: tracing::Span,
 }
 
-impl YoloV8Pose {
+impl<B: BackendStorage> YoloV8Pose<B> {
     pub fn load(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         m: Multiples,
         num_classes: usize,
         kpt: (usize, usize),
@@ -744,8 +758,8 @@ impl YoloV8Pose {
     }
 }
 
-impl Module for YoloV8Pose {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for YoloV8Pose<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (xs1, xs2, xs3) = self.net.forward(xs)?;
         let (xs1, xs2, xs3) = self.fpn.forward(&xs1, &xs2, &xs3)?;

@@ -1,4 +1,4 @@
-use candle::{DType, Device, Tensor};
+use candle::{CpuDevice, CpuStorage, DType, QCpuStorage, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::mixformer::{Config, MixFormerSequentialForCausalLM as MixFormer};
@@ -10,8 +10,8 @@ use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
 
 enum SelectedModel {
-    MixFormer(MixFormer),
-    Quantized(QMixFormer),
+    MixFormer(MixFormer<CpuStorage>),
+    Quantized(QMixFormer<QCpuStorage>),
 }
 
 #[wasm_bindgen]
@@ -41,7 +41,7 @@ impl Model {
     ) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
-        let device = Device::Cpu;
+        let device = CpuDevice;
         let name: ModelName = serde_json::from_slice(&config)?;
         let config: Config = serde_json::from_slice(&config)?;
 
@@ -63,7 +63,7 @@ impl Model {
                 SelectedModel::Quantized(model)
             }
         } else {
-            let device = &Device::Cpu;
+            let device = &CpuDevice;
             let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, device)?;
             let model = MixFormer::new(&config, vb)?;
             SelectedModel::MixFormer(model)
@@ -126,7 +126,7 @@ impl Model {
 
 impl Model {
     fn process(&mut self, tokens: &[u32]) -> candle::Result<String> {
-        let dev = Device::Cpu;
+        let dev = CpuDevice;
         let input = Tensor::new(tokens, &dev)?.unsqueeze(0)?;
         let logits = match &mut self.model {
             SelectedModel::MixFormer(m) => m.forward(&input)?,

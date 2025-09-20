@@ -9,7 +9,7 @@ use clap::Parser;
 
 use candle_transformers::models::bigcode::{Config, GPTBigCode};
 
-use candle::{BackendStorage, CpuDevice, CpuStorage, DType, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
@@ -117,9 +117,32 @@ struct Args {
     weight_file: Option<String>,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     let args = Args::parse();
 
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     let start = std::time::Instant::now();
     let api = Api::new()?;
     let repo = api.repo(Repo::with_revision(
@@ -139,9 +162,8 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    // TODO: fix
-    let device = CpuDevice;
-    let vb: VarBuilder<CpuStorage> =
+    let device = B::Device::new(0)?;
+    let vb: VarBuilder<B> =
         unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
     let config = Config::starcoder_1b();
     let model = GPTBigCode::load(vb, config)?;

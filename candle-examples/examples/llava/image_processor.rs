@@ -1,6 +1,6 @@
 use std::cmp::min;
 
-use candle::{bail, DType, Device, Result, Tensor};
+use candle::{bail, BackendStorage, DType, Result, Tensor};
 use candle_transformers::models::llava::{
     config::{HFPreProcessorConfig, LLaVAConfig},
     utils::select_best_resolution,
@@ -131,31 +131,46 @@ impl ImageProcessor {
         image.crop_imm(left, top, crop_size, crop_size)
     }
 
-    pub fn to_tensor(&self, image: &DynamicImage) -> Result<Tensor> {
+    pub fn to_tensor<B: BackendStorage>(
+        &self,
+        image: &DynamicImage,
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
         let img = image.to_rgb8().into_raw();
         let (width, height) = image.dimensions();
-        Tensor::from_vec(img, (height as usize, width as usize, 3), &Device::Cpu)?
-            .to_dtype(DType::F32) // only for internal compute
+        Tensor::from_vec(img, (height as usize, width as usize, 3), device)?.to_dtype(DType::F32)
+        // only for internal compute
     }
 
-    pub fn rescale(&self, tensor: &Tensor) -> Result<Tensor> {
+    pub fn rescale<B: BackendStorage>(&self, tensor: &Tensor<B>) -> Result<Tensor<B>> {
         let rescale_factor = self.rescale_factor as f64;
         tensor.affine(rescale_factor, 0.0)
     }
 
-    pub fn normalize(&self, tensor: &Tensor) -> Result<Tensor> {
+    pub fn normalize<B: BackendStorage>(
+        &self,
+        tensor: &Tensor<B>,
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
         let image_mean = self.image_mean.clone();
         let image_std = self.image_std.clone();
-        let mean = Tensor::from_vec(image_mean, (3,), &Device::Cpu)?;
-        let std = Tensor::from_vec(image_std, (3,), &Device::Cpu)?;
+        let mean = Tensor::from_vec(image_mean, (3,), device)?;
+        let std = Tensor::from_vec(image_std, (3,), device)?;
         tensor.broadcast_sub(&mean)?.broadcast_div(&std)
     }
 
-    pub fn to_channel_dimension_format(&self, tensor: &Tensor) -> Result<Tensor> {
+    pub fn to_channel_dimension_format<B: BackendStorage>(
+        &self,
+        tensor: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         tensor.permute((2, 0, 1))
     }
 
-    pub fn preprocess(&self, image: &DynamicImage) -> Result<Tensor> {
+    pub fn preprocess<B: BackendStorage>(
+        &self,
+        image: &DynamicImage,
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
         let image = if self.do_resize {
             self.resize(image)
         } else {
@@ -166,14 +181,14 @@ impl ImageProcessor {
         } else {
             image
         };
-        let tensor = self.to_tensor(&image)?;
+        let tensor = self.to_tensor(&image, device)?;
         let tensor = if self.do_rescale {
             self.rescale(&tensor)?
         } else {
             tensor
         };
         let tensor = if self.do_normalize {
-            self.normalize(&tensor)?
+            self.normalize(&tensor, device)?
         } else {
             tensor
         };
@@ -197,23 +212,28 @@ pub fn calculate_middle(image_size: (u32, u32), center_size: (u32, u32)) -> (u32
     (left, top)
 }
 
-pub fn process_image(
+pub fn process_image<B: BackendStorage>(
     image: &DynamicImage,
     processor: &ImageProcessor,
     llava_config: &LLaVAConfig,
-) -> candle::Result<Tensor> {
+    device: &B::Device,
+) -> candle::Result<Tensor<B>> {
     if llava_config.image_aspect_ratio == *"square" {
-        processor.preprocess(image)?.unsqueeze(0)
+        processor.preprocess(image, device)?.unsqueeze(0)
     } else if llava_config.image_aspect_ratio == *"anyres" {
-        process_anyres_image(image, processor, &llava_config.image_grid_pinpoints)
+        process_anyres_image(image, processor, &llava_config.image_grid_pinpoints, device)
     } else if llava_config.image_aspect_ratio == *"pad" {
-        process_pad_image(image, processor)
+        process_pad_image(image, processor, device)
     } else {
         bail!("Invalid image aspect ratio")
     }
 }
 
-fn process_pad_image(image: &DynamicImage, processor: &ImageProcessor) -> Result<Tensor> {
+fn process_pad_image<B: BackendStorage>(
+    image: &DynamicImage,
+    processor: &ImageProcessor,
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let mean_color = processor
         .image_mean
         .iter()
@@ -221,14 +241,15 @@ fn process_pad_image(image: &DynamicImage, processor: &ImageProcessor) -> Result
         .collect::<Vec<u8>>();
     let mean_color = Rgb::from([mean_color[0], mean_color[1], mean_color[2]]);
     let image_padded = expand2square(image, mean_color);
-    processor.preprocess(&image_padded)
+    processor.preprocess(&image_padded, device)
 }
 
-fn process_anyres_image(
+fn process_anyres_image<B: BackendStorage>(
     image: &DynamicImage,
     processor: &ImageProcessor,
     grid_pinpoints: &[(u32, u32)],
-) -> Result<Tensor> {
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let original_size = image.dimensions();
     let best_resolution = select_best_resolution(original_size, grid_pinpoints);
     let image_padded = resize_and_pad_image(image, best_resolution);
@@ -243,8 +264,8 @@ fn process_anyres_image(
     }
     let tensors = patches
         .iter()
-        .map(|patch| processor.preprocess(patch))
-        .collect::<Result<Vec<Tensor>>>()?;
+        .map(|patch| processor.preprocess(patch, device))
+        .collect::<Result<Vec<Tensor<B>>>>()?;
     Tensor::stack(&tensors, 0)
 }
 

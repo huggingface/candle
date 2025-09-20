@@ -9,26 +9,26 @@ use clap::Parser;
 
 use candle_transformers::models::deepseek2::{DeepSeekV2, DeepSeekV2Config};
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-struct TextGeneration {
-    model: DeepSeekV2,
-    device: Device,
+struct TextGeneration<B: BackendStorage> {
+    model: DeepSeekV2<B>,
+    device: B::Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
 }
 
-impl TextGeneration {
+impl<B: BackendStorage> TextGeneration<B> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: DeepSeekV2,
+        model: DeepSeekV2<B>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
@@ -36,7 +36,7 @@ impl TextGeneration {
         top_k: Option<usize>,
         repeat_penalty: f32,
         repeat_last_n: usize,
-        device: &Device,
+        device: &B::Device,
     ) -> Self {
         let logits_processor = {
             let temperature = temp.unwrap_or(0.);
@@ -198,11 +198,24 @@ struct Args {
     repeat_last_n: usize,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
-
-    let args = Args::parse();
 
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -252,15 +265,17 @@ fn main() -> Result<()> {
         let config_file = repo.get("config.json")?;
         serde_json::from_slice(&std::fs::read(config_file)?)?
     };
-    let device = candle_examples::device(args.cpu)?;
     let (model, device) = {
-        let dtype = if device.is_cpu() {
-            DType::F16
-        } else {
+        let dtype = if B::Device::SUPPORTS_BF16 {
             DType::BF16
+        } else {
+            DType::F16
         };
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-        let model = DeepSeekV2::new(&config, vb)?;
+        println!("loading the model at {:?}", start.elapsed());
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
+        println!("VarBuilder {:?}", start.elapsed());
+        let model: DeepSeekV2<B> = DeepSeekV2::new(&config, vb)?;
+        println!("model {:?}", start.elapsed());
         (model, device)
     };
 

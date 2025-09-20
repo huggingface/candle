@@ -5,6 +5,8 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::Result;
+use candle::quantized::QuantizedBackend;
+use candle_transformers::quantized_nn::Linear;
 use clap::Parser;
 use std::io::Write;
 
@@ -13,7 +15,7 @@ use candle_transformers::models::encodec;
 use candle_transformers::models::metavoice::{adapters, gpt, tokenizers, transformer};
 use candle_transformers::models::quantized_metavoice::transformer as qtransformer;
 
-use candle::{DType, IndexOp, Tensor};
+use candle::{BackendDevice, DType, IndexOp, Module, Tensor};
 use candle_nn::VarBuilder;
 use hf_hub::api::sync::Api;
 use rand::{distr::Distribution, SeedableRng};
@@ -27,9 +29,9 @@ enum ArgDType {
     Bf16,
 }
 
-enum Transformer {
-    Normal(transformer::Model),
-    Quantized(qtransformer::Model),
+enum Transformer<QB: QuantizedBackend> {
+    Normal(transformer::Model<QB::Storage>),
+    Quantized(qtransformer::Model<QB>),
 }
 
 #[derive(Parser, Debug)]
@@ -89,11 +91,39 @@ struct Args {
     dtype: ArgDType,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::QCpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        #[cfg(feature = "cuda")]
+        run::<candle::QCudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::QMetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::QCpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<QB: QuantizedBackend>(args: Args) -> Result<()>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -108,7 +138,6 @@ fn main() -> Result<()> {
         candle::utils::with_simd128(),
         candle::utils::with_f16c()
     );
-    let device = candle_examples::device(args.cpu)?;
     let api = Api::new()?;
     let repo = api.model("lmz/candle-metavoice".to_string());
     let first_stage_meta = match &args.first_stage_meta {
@@ -136,6 +165,9 @@ fn main() -> Result<()> {
             .model("facebook/encodec_24khz".to_string())
             .get("model.safetensors")?,
     };
+
+    let device = QB::Device::new(0)?;
+
     let dtype = match args.dtype {
         ArgDType::F32 => DType::F32,
         ArgDType::F16 => DType::F16,
@@ -148,33 +180,30 @@ fn main() -> Result<()> {
             Some(w) => std::path::PathBuf::from(w),
             None => repo.get("first_stage_q4k.gguf")?,
         };
-        let vb =
+        let vb: candle_transformers::quantized_var_builder::VarBuilder<QB> =
             candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, &device)?;
-        let first_stage_model = qtransformer::Model::new(&first_stage_config, vb)?;
+        let first_stage_model: qtransformer::Model<QB> =
+            qtransformer::Model::new(&first_stage_config, vb)?;
         Transformer::Quantized(first_stage_model)
     } else {
         let first_stage_weights = match &args.first_stage_weights {
             Some(w) => std::path::PathBuf::from(w),
             None => repo.get("first_stage.safetensors")?,
         };
-        let first_stage_vb =
+        let first_stage_vb: VarBuilder<QB::Storage> =
             unsafe { VarBuilder::from_mmaped_safetensors(&[first_stage_weights], dtype, &device)? };
-        let first_stage_model = transformer::Model::new(&first_stage_config, first_stage_vb)?;
+        let first_stage_model: transformer::Model<QB::Storage> =
+            transformer::Model::new(&first_stage_config, first_stage_vb)?;
         Transformer::Normal(first_stage_model)
     };
 
-    let second_stage_vb =
+    let second_stage_vb: VarBuilder<QB::Storage> =
         unsafe { VarBuilder::from_mmaped_safetensors(&[second_stage_weights], dtype, &device)? };
     let second_stage_config = gpt::Config::cfg1b_v0_1();
     let second_stage_model = gpt::Model::new(second_stage_config.clone(), second_stage_vb)?;
 
-    let encodec_device = if device.is_metal() {
-        &candle::Device::Cpu
-    } else {
-        &device
-    };
-    let encodec_vb =
-        unsafe { VarBuilder::from_mmaped_safetensors(&[encodec_weights], dtype, encodec_device)? };
+    let encodec_vb: VarBuilder<QB::Storage> =
+        unsafe { VarBuilder::from_mmaped_safetensors(&[encodec_weights], dtype, &device)? };
     let encodec_config = encodec::Config::default();
     let encodec_model = encodec::Model::new(&encodec_config, encodec_vb)?;
 
@@ -186,12 +215,11 @@ fn main() -> Result<()> {
         Some(w) => std::path::PathBuf::from(w),
         None => repo.get("spk_emb.safetensors")?,
     };
-    let spk_emb = candle::safetensors::load(&spk_emb_file, &candle::Device::Cpu)?;
+    let spk_emb = candle::safetensors::load(&spk_emb_file, &device)?;
     let spk_emb = match spk_emb.get("spk_emb") {
         None => anyhow::bail!("missing spk_emb tensor in {spk_emb_file:?}"),
         Some(spk_emb) => spk_emb.to_dtype(dtype)?,
     };
-    let spk_emb = spk_emb.to_device(&device)?;
     let mut logits_processor = LogitsProcessor::new(args.seed, Some(args.temperature), Some(0.95));
 
     // First stage generation.
@@ -264,7 +292,7 @@ fn main() -> Result<()> {
     let codes = codes.i(0)?.to_vec2::<u32>()?;
     let (text_ids, audio_ids) = tilted_encodec.decode(&codes);
     println!("text_ids len: {:?}", text_ids.len());
-    let audio_ids = Tensor::new(audio_ids, encodec_device)?.unsqueeze(0)?;
+    let audio_ids = Tensor::new(audio_ids, &device)?.unsqueeze(0)?;
     println!("audio_ids shape: {:?}", audio_ids.shape());
     let pcm = encodec_model.decode(&audio_ids)?;
     println!("output pcm shape: {:?}", pcm.shape());

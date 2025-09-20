@@ -8,8 +8,8 @@ use clap::{Parser, ValueEnum};
 use std::io::Write;
 use tokenizers::Tokenizer;
 
-use candle::quantized::{ggml_file, gguf_file, QCpuStorage, QuantizedBackend};
-use candle::{BackendDevice, BackendStorage, Tensor};
+use candle::quantized::{ggml_file, gguf_file, QMatMul, QuantizedBackend};
+use candle::{BackendDevice, Module, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -437,20 +437,32 @@ pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     if args.cpu {
-        run::<QCpuStorage>(args, &candle::CpuDevice)?;
-    } else {
+        run::<candle::QCpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
         #[cfg(feature = "cuda")]
-        run::<candle::QCudaStorage>(args, &candle::CudaDevice::new(0)?)?;
-
-        #[cfg(feature = "metal")]
-        run::<candle::QMetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+        run::<candle::QCudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::QMetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::QCpuStorage>(args)?;
     }
     Ok(())
 }
 
-fn run<QB: QuantizedBackend>(args: Args, device: &QB::Device) -> anyhow::Result<()>
+fn run<QB: QuantizedBackend>(args: Args) -> anyhow::Result<()>
 where
     MQA<QB>: MQATrait<QB>,
+    QMatMul<QB>: Module<QB::Storage>,
 {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
@@ -481,6 +493,8 @@ where
         args.temperature, args.repeat_penalty, args.repeat_last_n
     );
 
+    let device = QB::Device::new(0)?;
+
     let model_path = args.model()?;
     let mut file = std::fs::File::open(&model_path)?;
     let start = std::time::Instant::now();
@@ -500,11 +514,11 @@ where
                 &format_size(total_size_in_bytes),
                 start.elapsed().as_secs_f32(),
             );
-            ModelWeights::from_gguf(model, &mut file, device)?
+            ModelWeights::from_gguf(model, &mut file, &device)?
         }
         Some("ggml" | "bin") | Some(_) | None => {
-            let model: ggml_file::Content<QB> =
-                ggml_file::Content::read(&mut file, device).map_err(|e| e.with_path(model_path))?;
+            let model: ggml_file::Content<QB> = ggml_file::Content::read(&mut file, &device)
+                .map_err(|e| e.with_path(model_path))?;
             let mut total_size_in_bytes = 0;
             for (_, tensor) in model.tensors.iter() {
                 let elem_count = tensor.shape().elem_count();
@@ -630,14 +644,14 @@ where
 
         let start_prompt_processing = std::time::Instant::now();
         let mut next_token = if !args.split_prompt {
-            let input = Tensor::new(prompt_tokens.as_slice(), device)?.unsqueeze(0)?;
+            let input = Tensor::new(prompt_tokens.as_slice(), &device)?.unsqueeze(0)?;
             let logits = model.forward(&input, 0)?;
             let logits = logits.squeeze(0)?;
             logits_processor.sample(&logits)?
         } else {
             let mut next_token = 0;
             for (pos, token) in prompt_tokens.iter().enumerate() {
-                let input = Tensor::new(&[*token], device)?.unsqueeze(0)?;
+                let input = Tensor::new(&[*token], &device)?.unsqueeze(0)?;
                 let logits = model.forward(&input, pos)?;
                 let logits = logits.squeeze(0)?;
                 next_token = logits_processor.sample(&logits)?
@@ -665,7 +679,7 @@ where
         let start_post_prompt = std::time::Instant::now();
         let mut sampled = 0;
         for index in 0..to_sample {
-            let input = Tensor::new(&[next_token], device)?.unsqueeze(0)?;
+            let input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
             let logits = model.forward(&input, prompt_tokens.len() + index)?;
             let logits = logits.squeeze(0)?;
             let logits = if args.repeat_penalty == 1. {
