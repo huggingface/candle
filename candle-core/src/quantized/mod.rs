@@ -133,7 +133,7 @@ impl QuantizedDevice<QStorage> for Device {
     }
 
     fn load_quantized<T: GgmlType + Send + Sync + Debug + 'static>(
-        self: &Self,
+        &self,
         data: &[T],
     ) -> Result<QStorage> {
         match self {
@@ -502,11 +502,9 @@ impl<QB: QuantizedBackend> QTensor<QB> {
     }
 
     // TODO: fix qtensor.dequantize impl
-    pub fn dequantize(&self, device: &QB::Device) -> Result<Tensor<QB::Storage>>
+    pub fn dequantize(&self, _: &QB::Device) -> Result<Tensor<QB::Storage>>
     where
         QB::Storage: BackendStorage<Device = QB::Device>,
-        //QB::Device: TryConvertStorage<B::Storage, QB::Storage>,
-        //<B::Storage as BackendStorage>::Device: QuantizedDevice<B>,
     {
         let storage = self.storage.dequantize(self.shape.elem_count())?;
         //let storage: QB::Storage = device.convert(storage)?;
@@ -526,10 +524,8 @@ impl<QB: QuantizedBackend> QTensor<QB> {
         let s = self.storage.dequantize(self.shape.elem_count())?;
         let none = crate::op::BackpropOp::none();
 
-        Ok(
-            crate::tensor::from_storage(s, self.shape.clone(), none, false)
-                .to_dtype(crate::DType::F16)?,
-        )
+        crate::tensor::from_storage(s, self.shape.clone(), none, false).to_dtype(crate::DType::F16)
+
         /*
         match &self.storage {
             QStorage::Cuda(s) => {

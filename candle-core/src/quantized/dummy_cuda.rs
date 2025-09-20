@@ -20,7 +20,7 @@ mod dummy {
         }
 
         fn load_quantized<T: GgmlType + Send + Sync + 'static>(
-            self: &Self,
+            &self,
             _data: &[T],
         ) -> Result<QCudaStorage> {
             Err(Error::NotCompiledWithCudaSupport)
