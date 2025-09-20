@@ -73,7 +73,7 @@ pub type DefaultStorage = crate::MetalStorage;
 ///
 /// Tensors are reference counted with [`Arc`] so cloning them is cheap.
 #[derive(Clone)]
-pub struct Tensor<B = DefaultStorage>(Arc<Tensor_<B>>)
+pub struct Tensor<B>(Arc<Tensor_<B>>)
 where
     B: BackendStorage;
 
@@ -215,7 +215,7 @@ impl<B: BackendStorage> Tensor<B> {
     ) -> Result<Self> {
         let none = BackpropOp::none();
         let shape = shape.into();
-        let mut storage: B = unsafe { device.alloc_uninit(&shape, dtype)?.into() };
+        let mut storage = unsafe { device.alloc_uninit(&shape, dtype)? };
         let layout = Layout::contiguous(shape.clone());
         storage.const_set(crate::scalar::Scalar::one(dtype), &layout)?;
         Ok(from_storage(storage, shape, none, is_variable))
@@ -2280,6 +2280,22 @@ impl<B: BackendStorage> Tensor<B> {
             is_variable: false,
             dtype: self.dtype,
             device: device.clone(),
+        };
+        Ok(Tensor(Arc::new(tensor_)))
+    }
+
+    /// If the tensor is cpu only a shallow copy is performed.
+    pub fn to_cpu(&self) -> Result<Tensor<crate::CpuStorage>> {
+        let storage = self.storage().clone().to_cpu_storage()?;
+        let op = BackpropOp::none();
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: Arc::new(RwLock::new(storage)),
+            layout: self.layout.clone(),
+            op,
+            is_variable: false,
+            dtype: self.dtype,
+            device: crate::CpuDevice,
         };
         Ok(Tensor(Arc::new(tensor_)))
     }
