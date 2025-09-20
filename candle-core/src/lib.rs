@@ -101,7 +101,7 @@ pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
 pub use error::{Context, Error, Result};
 pub use indexer::{IndexOp, TensorIndexer};
 pub use layout::Layout;
-pub use quantized::QMetalStorage;
+pub use quantized::{QCpuStorage, QCudaStorage, QMetalStorage};
 pub use shape::{Shape, D};
 pub use storage::Storage;
 pub use streaming::{StreamTensor, StreamingBinOp, StreamingModule};
