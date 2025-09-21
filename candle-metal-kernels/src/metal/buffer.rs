@@ -41,7 +41,7 @@ impl Buffer {
     }
 }
 
-pub type BufferMap = HashMap<(usize, MTLResourceOptions), Vec<Arc<Buffer>>>;
+pub type BufferMap = HashMap<usize, Vec<Arc<Buffer>>>;
 
 impl<'a> Into<&'a MetalResource> for &'a Buffer {
     fn into(self) -> &'a MetalResource {
