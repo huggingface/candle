@@ -5,8 +5,8 @@ use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvT
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 use candle_metal_kernels::{
-    metal::{Buffer, Commands, Device, MTLResourceOptions},
-    BufferOffset, CallConvTranspose2dCfg, Kernels,
+    metal::{Buffer, Commands, Device},
+    BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
 };
 use objc2_foundation::NSRange;
 use std::collections::HashMap;
@@ -2058,7 +2058,7 @@ impl BackendDevice for MetalDevice {
                 .new_buffer_with_data(
                     [299792458u64].as_ptr() as *const c_void,
                     4,
-                    MTLResourceOptions::StorageModeManaged,
+                    RESOURCE_OPTIONS,
                 )
                 .map_err(MetalError::from)?,
         ));
@@ -2217,7 +2217,7 @@ impl BackendDevice for MetalDevice {
         let seed_buffer = self.seed.try_lock().map_err(MetalError::from)?;
         let contents = seed_buffer.data();
         unsafe {
-            std::ptr::copy([seed].as_ptr(), contents as *mut u64, 1);
+            std::ptr::copy_nonoverlapping([seed].as_ptr(), contents as *mut u64, 1);
         }
         seed_buffer.did_modify_range(NSRange::new(0, 8));
 

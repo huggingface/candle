@@ -58,7 +58,7 @@ pub struct MetalDevice {
     pub(crate) seed: Arc<Mutex<Buffer>>,
 }
 
-const RESOURCE_OPTIONS: MTLResourceOptions =
+pub const RESOURCE_OPTIONS: MTLResourceOptions =
     objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModeShared.bits());
 //| MTLResourceOptions::HazardTrackingModeUntracked.bits(),
 //);
@@ -187,7 +187,6 @@ impl MetalDevice {
 
         let new_buffer = Arc::new(new_buffer);
         subbuffers.push(new_buffer.clone());
-
         /*
         let new_buffer = self.allocate_buffer_with_data(data, "new_buffer_with_data")?;
         */
@@ -230,7 +229,7 @@ impl MetalDevice {
         let mut buffers = self.buffers.write().map_err(MetalError::from)?;
         if let Some(b) = find_available_buffer(size, &buffers) {
             unsafe {
-                std::ptr::copy(data.as_ptr(), b.data() as *mut T, 1);
+                std::ptr::copy_nonoverlapping(data.as_ptr(), b.data() as *mut T, data.len());
             }
             b.did_modify_range(NSRange::new(0, size));
             // Cloning also ensures we increment the strong count
