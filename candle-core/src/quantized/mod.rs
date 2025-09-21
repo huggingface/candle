@@ -1,7 +1,7 @@
 //! Code for GGML and GGUF files
 use crate::{
-    BackendDevice, BackendStorage, Context, CpuDevice, CpuStorage, CustomOp1, DType, Device,
-    MetalStorage, Result, Shape, Storage, Tensor,
+    BackendDevice, BackendStorage, Context, CpuDevice, CpuStorage, CudaStorage, CustomOp1, DType,
+    Device, MetalStorage, Result, Shape, Storage, Tensor,
 };
 use k_quants::*;
 use std::borrow::Cow;
@@ -46,7 +46,7 @@ pub type DefaultQStorage = cuda::QCudaStorage;
 #[cfg(feature = "metal")]
 pub type DefaultQStorage = metal::QMetalStorage;
 
-pub struct QTensor<B = DefaultQStorage>
+pub struct QTensor<B>
 where
     B: QuantizedBackend,
 {
@@ -712,6 +712,101 @@ impl crate::CustomOp1<MetalStorage> for QTensor<QMetalStorage> {
         _: &crate::Layout,
     ) -> Result<(crate::CudaStorage, Shape)> {
         crate::bail!("Invalid storage")
+    }
+}
+
+impl crate::CustomOp1<CudaStorage> for QTensor<QCudaStorage> {
+    fn name(&self) -> &'static str {
+        "qmatmul"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _: &crate::CpuStorage,
+        _: &crate::Layout,
+    ) -> Result<(crate::CpuStorage, Shape)> {
+        crate::bail!("Invalid storage")
+    }
+
+    fn metal_fwd(
+        &self,
+        _: &crate::MetalStorage,
+        _: &crate::Layout,
+    ) -> Result<(crate::MetalStorage, Shape)> {
+        crate::bail!("Invalid storage")
+    }
+
+    fn cuda_fwd(
+        &self,
+        storage: &crate::CudaStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::CudaStorage, Shape)> {
+        self.storage.fwd(&self.shape, storage, layout)
+    }
+}
+
+impl crate::CustomOp1<Storage> for QTensor<QStorage> {
+    fn name(&self) -> &'static str {
+        "qmatmul"
+    }
+
+    fn cpu_fwd(
+        &self,
+        storage: &crate::CpuStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::CpuStorage, Shape)> {
+        if !layout.is_contiguous() {
+            crate::bail!("input tensor is not contiguous {layout:?}")
+        }
+        let src_shape = layout.shape();
+        // self is transposed so n is first then k.
+        let (n, k) = self.shape.dims2()?;
+        if src_shape.rank() < 2 {
+            crate::bail!("input tensor has only one dimension {layout:?}")
+        }
+        let mut dst_shape = src_shape.dims().to_vec();
+        let last_k = dst_shape.pop().context("empty dst_shape")?;
+        if last_k != k {
+            crate::bail!("input tensor {layout:?} incompatible with {:?}", self.shape)
+        }
+        dst_shape.push(n);
+        let dst_shape = Shape::from(dst_shape);
+        #[allow(clippy::infallible_destructuring_match)]
+        let self_storage = match &self.storage {
+            QStorage::Cpu(storage) => storage,
+            QStorage::Metal(_) | QStorage::Cuda(_) => crate::bail!("Invalid storage"),
+        };
+        let slice = storage.as_slice::<f32>()?;
+        let slice = &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
+        let mut dst_storage = vec![0f32; dst_shape.elem_count()];
+        self_storage
+            .0
+            .matmul_t((dst_shape.elem_count() / n, k, n), slice, &mut dst_storage)?;
+        Ok((crate::CpuStorage::F32(dst_storage), dst_shape))
+    }
+
+    fn metal_fwd(
+        &self,
+        storage: &crate::MetalStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::MetalStorage, Shape)> {
+        let self_storage = match &self.storage {
+            QStorage::Metal(metal) => metal,
+            _ => unreachable!("Cannot call metal matmul on non metal QTensor"),
+        };
+        self_storage.fwd(&self.shape, storage, layout)
+    }
+
+    fn cuda_fwd(
+        &self,
+        storage: &crate::CudaStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::CudaStorage, Shape)> {
+        let self_storage = match &self.storage {
+            QStorage::Cuda(cuda) => cuda,
+            _ => unreachable!("Cannot call cuda matmul on non cuda QTensor"),
+        };
+        self_storage.fwd(&self.shape, storage, layout)
     }
 }
 
