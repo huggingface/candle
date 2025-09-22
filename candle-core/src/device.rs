@@ -306,11 +306,11 @@ impl Device {
 impl BackendDevice<Storage> for Device {
     fn new(ordinal: usize) -> Result<Self> {
         if cfg!(feature = "metal") {
-            Ok(Device::Cpu)
+            Device::new_metal(ordinal)
         } else if cfg!(feature = "cuda") {
             Device::new_cuda(ordinal)
         } else {
-            Device::new_metal(ordinal)
+            Ok(Device::Cpu)
         }
     }
 
