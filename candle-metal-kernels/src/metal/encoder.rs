@@ -109,7 +109,7 @@ impl BlitCommandEncoder {
 
     pub fn set_label(&self, label: &str) {
         use objc2_metal::MTLCommandEncoder as _;
-        self.raw.setLabel(Some(&NSString::from_str(&label)))
+        self.raw.setLabel(Some(&NSString::from_str(label)))
     }
 
     pub fn copy_from_buffer(

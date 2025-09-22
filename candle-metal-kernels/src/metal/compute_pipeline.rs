@@ -14,11 +14,13 @@ impl ComputePipeline {
         ComputePipeline { raw }
     }
 
-    pub fn as_ref(&self) -> &ProtocolObject<dyn MTLComputePipelineState> {
-        &self.raw
-    }
-
     pub fn max_total_threads_per_threadgroup(&self) -> usize {
         self.raw.maxTotalThreadsPerThreadgroup()
+    }
+}
+
+impl AsRef<ProtocolObject<dyn MTLComputePipelineState>> for ComputePipeline {
+    fn as_ref(&self) -> &ProtocolObject<dyn MTLComputePipelineState> {
+        &self.raw
     }
 }

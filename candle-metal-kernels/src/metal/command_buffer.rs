@@ -8,13 +8,12 @@ pub struct CommandBuffer {
     raw: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
 }
 
+unsafe impl Send for CommandBuffer {}
+unsafe impl Sync for CommandBuffer {}
+
 impl CommandBuffer {
     pub fn new(raw: Retained<ProtocolObject<dyn MTLCommandBuffer>>) -> Self {
         Self { raw }
-    }
-
-    fn as_ref(&self) -> &ProtocolObject<dyn MTLCommandBuffer> {
-        &*self.raw
     }
 
     pub fn compute_command_encoder(&self) -> ComputeCommandEncoder {
@@ -40,7 +39,7 @@ impl CommandBuffer {
     }
 
     pub fn set_label(&self, label: &str) {
-        self.as_ref().setLabel(Some(&NSString::from_str(&label)))
+        self.as_ref().setLabel(Some(&NSString::from_str(label)))
     }
 
     pub fn status(&self) -> MTLCommandBufferStatus {
@@ -49,5 +48,11 @@ impl CommandBuffer {
 
     pub fn wait_until_completed(&self) {
         unsafe { self.raw.waitUntilCompleted() }
+    }
+}
+
+impl AsRef<ProtocolObject<dyn MTLCommandBuffer>> for CommandBuffer {
+    fn as_ref(&self) -> &ProtocolObject<dyn MTLCommandBuffer> {
+        &self.raw
     }
 }
