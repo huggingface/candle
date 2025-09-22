@@ -1,6 +1,7 @@
 use candle_core::{
-    test_device, test_utils, BackendStorage, CpuDevice, CpuStorage, DType, IndexOp, Result, Tensor,
-    D,
+    test_device,
+    test_utils::{self, is_same_storage},
+    BackendStorage, CpuDevice, CpuStorage, DType, IndexOp, MetalStorage, Result, Tensor, D,
 };
 
 #[allow(unused_imports)]
@@ -9,6 +10,7 @@ use candle_core::BackendDevice;
 use candle_core::{CudaDevice, CudaStorage};
 #[cfg(feature = "metal")]
 use candle_core::{MetalDevice, MetalStorage};
+use float8::F8E4M3;
 
 fn zeros<B: BackendStorage>(device: &B::Device) -> Result<()> {
     let tensor: Tensor<B> = Tensor::zeros((5, 2), DType::F32, device)?;
@@ -18,7 +20,7 @@ fn zeros<B: BackendStorage>(device: &B::Device) -> Result<()> {
     Ok(())
 }
 
-fn ones<B: BackendStorage>(device: &B::Device) -> Result<()> {
+fn ones<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
     assert_eq!(
         Tensor::<B>::ones((2, 3), DType::U8, device)?.to_vec2::<u8>()?,
         [[1, 1, 1], [1, 1, 1]],
@@ -35,14 +37,12 @@ fn ones<B: BackendStorage>(device: &B::Device) -> Result<()> {
         Tensor::<B>::ones((2, 3), DType::F32, device)?.to_vec2::<f32>()?,
         [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
     );
-    /* TODO: Fix
-    if !device.is_metal() {
+    if !is_same_storage::<B, MetalStorage>() {
         assert_eq!(
-            Tensor::ones((2, 3), DType::F64, device)?.to_vec2::<f64>()?,
+            Tensor::<B>::ones((2, 3), DType::F64, device)?.to_vec2::<f64>()?,
             [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
         );
     }
-    */
     assert_eq!(
         Tensor::<B>::ones((2, 3), DType::F16, device)?.to_vec2::<half::f16>()?,
         [
@@ -73,10 +73,9 @@ fn ones<B: BackendStorage>(device: &B::Device) -> Result<()> {
             ]
         ],
     );
-    /* TODO: Fix
-    if !device.is_metal() {
+    if !is_same_storage::<B, MetalStorage>() {
         assert_eq!(
-            Tensor::ones((2, 3), DType::F8E4M3, device)?.to_vec2::<F8E4M3>()?,
+            Tensor::<B>::ones((2, 3), DType::F8E4M3, device)?.to_vec2::<F8E4M3>()?,
             [
                 [
                     F8E4M3::from_f32(1.),
@@ -91,7 +90,6 @@ fn ones<B: BackendStorage>(device: &B::Device) -> Result<()> {
             ],
         );
     }
-    */
     Ok(())
 }
 
@@ -123,7 +121,7 @@ fn const_set<B: BackendStorage>(device: &B::Device) -> Result<()> {
     Ok(())
 }
 
-fn arange<B: BackendStorage>(device: &B::Device) -> Result<()> {
+fn arange<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
     assert_eq!(
         Tensor::<B>::arange(0u8, 5u8, device)?.to_vec1::<u8>()?,
         [0, 1, 2, 3, 4],
@@ -141,10 +139,9 @@ fn arange<B: BackendStorage>(device: &B::Device) -> Result<()> {
         [5, 4, 3, 2, 1],
     );
 
-    /* TODO: Fix
-    if !device.is_metal() {
+    if !is_same_storage::<B, MetalStorage>() {
         assert_eq!(
-            Tensor::arange_step(
+            Tensor::<B>::arange_step(
                 F8E4M3::from_f32(0.),
                 F8E4M3::from_f32(5.),
                 F8E4M3::from_f32(2.),
@@ -158,7 +155,6 @@ fn arange<B: BackendStorage>(device: &B::Device) -> Result<()> {
             ],
         );
     }
-    */
 
     Ok(())
 }

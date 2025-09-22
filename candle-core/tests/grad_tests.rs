@@ -1,7 +1,11 @@
 #![allow(clippy::approx_constant)]
+use std::any::TypeId;
+
 use anyhow::{Context, Result};
 use candle_core::{
-    test_device, test_utils, BackendStorage, CpuDevice, CpuStorage, DType, Shape, Tensor, Var,
+    test_device,
+    test_utils::{self, is_same_storage},
+    BackendStorage, CpuDevice, CpuStorage, DType, Shape, Tensor, Var,
 };
 
 #[allow(unused_imports)]
@@ -88,7 +92,7 @@ fn grad_descent<B: BackendStorage>(device: &B::Device) -> Result<()> {
     Ok(())
 }
 
-fn unary_grad<B: BackendStorage>(device: &B::Device) -> Result<()> {
+fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
     let x: Var<B> = Var::new(&[3f32, 1., 4., 0.15], device)?;
     let x = x.as_tensor();
     let y = (x.log()? + 1.)?;
@@ -293,10 +297,8 @@ fn unary_grad<B: BackendStorage>(device: &B::Device) -> Result<()> {
         test_utils::to_vec1_round(grad_x, 4)?,
         [1.0881, 0.9277, 1.0527, 0.5747],
     );
-
-    /* TODO: Fix
-    if device.is_cpu() {
-        let x = Var::new(&[[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]]], device)?;
+    if is_same_storage::<B, CpuStorage>() {
+        let x: Var<B> = Var::new(&[[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]]], device)?;
         let y = x.interpolate1d(12)?.reshape(36)?;
 
         let z = Tensor::new(
@@ -317,7 +319,6 @@ fn unary_grad<B: BackendStorage>(device: &B::Device) -> Result<()> {
             [[[10_f32, 26., 42.], [58., 74., 90.], [106., 122., 138.]]]
         );
     }
-     */
 
     // manually checked: see comments
     let x: Var<B> = Var::new(&[[[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]]]], device)?;

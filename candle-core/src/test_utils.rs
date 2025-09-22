@@ -135,3 +135,7 @@ impl<T: crate::NdArray, const N: usize> From<[(TypeId, T); N]> for ExpectedResul
         ExpectedResults::from_iter(arr)
     }
 }
+
+pub fn is_same_storage<B1: BackendStorage + 'static, B2: BackendStorage + 'static>() -> bool {
+    TypeId::of::<B1>() == TypeId::of::<B2>()
+}
