@@ -6,10 +6,10 @@ use candle_core::{
 
 #[allow(unused_imports)]
 use candle_core::BackendDevice;
+#[cfg(feature = "metal")]
+use candle_core::MetalDevice;
 #[cfg(feature = "cuda")]
 use candle_core::{CudaDevice, CudaStorage};
-#[cfg(feature = "metal")]
-use candle_core::{MetalDevice, MetalStorage};
 use float8::F8E4M3;
 
 fn zeros<B: BackendStorage>(device: &B::Device) -> Result<()> {

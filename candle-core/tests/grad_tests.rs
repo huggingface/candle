@@ -1,6 +1,4 @@
 #![allow(clippy::approx_constant)]
-use std::any::TypeId;
-
 use anyhow::{Context, Result};
 use candle_core::{
     test_device,
