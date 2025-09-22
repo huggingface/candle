@@ -1,7 +1,7 @@
 use candle::Result;
 use prost::Message;
 
-pub type Tensor = candle::Tensor<candle::CpuStorage>;
+pub type Tensor = candle::Tensor<candle::Storage>;
 pub type Value = Tensor;
 
 pub mod onnx {

@@ -1,5 +1,5 @@
 use candle::test_utils::to_vec2_round;
-use candle::{CpuDevice, DType, NdArray, Result};
+use candle::{DType, Device, NdArray, Result};
 use candle_onnx::onnx::attribute_proto::AttributeType;
 use candle_onnx::onnx::tensor_proto::DataType;
 use candle_onnx::onnx::tensor_shape_proto::{dimension, Dimension};
@@ -69,8 +69,8 @@ fn test_add_operation() -> Result<()> {
     }));
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
-    inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &CpuDevice)?);
-    inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &CpuDevice)?);
+    inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
+    inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
     assert_eq!(eval.len(), 1);
@@ -109,8 +109,8 @@ fn test_sub_operation() -> Result<()> {
     }));
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
-    inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &CpuDevice)?);
-    inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &CpuDevice)?);
+    inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
+    inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
     assert_eq!(eval.len(), 1);
@@ -149,8 +149,8 @@ fn test_mul_operation() -> Result<()> {
     }));
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
-    inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &CpuDevice)?);
-    inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &CpuDevice)?);
+    inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
+    inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
     assert_eq!(eval.len(), 1);
@@ -189,8 +189,8 @@ fn test_div_operation() -> Result<()> {
     }));
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
-    inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &CpuDevice)?);
-    inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &CpuDevice)?);
+    inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
+    inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
     assert_eq!(eval.len(), 1);
@@ -228,7 +228,7 @@ fn test_exp_operation() -> Result<()> {
         quantization_annotation: vec![],
     }));
 
-    let x = Tensor::from_vec(vec![-1.0f32, 0.0f32, 1.0f32, 2.0f32], &[2, 2], &CpuDevice)?;
+    let x = Tensor::from_vec(vec![-1.0f32, 0.0f32, 1.0f32, 2.0f32], &[2, 2], &Device::Cpu)?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
@@ -275,8 +275,8 @@ fn test_equal_operation() -> Result<()> {
     }));
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
-    inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &CpuDevice)?);
-    inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &CpuDevice)?);
+    inputs.insert(INPUT_X.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
+    inputs.insert(INPUT_Y.to_string(), Tensor::new(&[2.], &Device::Cpu)?);
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
     assert_eq!(eval.len(), 1);
@@ -316,7 +316,7 @@ fn test_not_operation() -> Result<()> {
     }));
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
-    inputs.insert(INPUT_X.to_string(), Tensor::new(&[0.], &CpuDevice)?);
+    inputs.insert(INPUT_X.to_string(), Tensor::new(&[0.], &Device::Cpu)?);
 
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
     assert_eq!(eval.len(), 1);
@@ -362,7 +362,7 @@ fn test_matmul_operation() -> Result<()> {
             //
             vec![1.0f32, 2.0f32, 3.0f32, 4.0f32],
             &[2, 2],
-            &CpuDevice,
+            &Device::Cpu,
         )?,
     );
     inputs.insert(
@@ -371,7 +371,7 @@ fn test_matmul_operation() -> Result<()> {
             //
             vec![5.0f32, 6.0f32, 7.0f32, 8.0f32],
             &[2, 2],
-            &CpuDevice,
+            &Device::Cpu,
         )?,
     );
 
@@ -427,13 +427,13 @@ fn test_reshape_operation() -> Result<()> {
         //
         vec![1.0f32, 2.0f32, 3.0f32, 4.0f32],
         &[2, 2],
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let y = Tensor::from_vec(
         //
         vec![4i64],
         &[1],
-        &CpuDevice,
+        &Device::Cpu,
     )?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
@@ -494,7 +494,7 @@ fn test_logsoftmax_operation() -> Result<()> {
         //
         vec![1.0f32, 2.0f32, 3.0f32, 4.0f32],
         &[2, 2],
-        &CpuDevice,
+        &Device::Cpu,
     )?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
@@ -557,7 +557,7 @@ fn test_softmax_operation() -> Result<()> {
         //
         vec![1.0f32, 2.0f32, 3.0f32, 4.0f32],
         &[2, 2],
-        &CpuDevice,
+        &Device::Cpu,
     )?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
@@ -620,7 +620,7 @@ fn test_transpose_operation() -> Result<()> {
         //
         vec![1.0f32, 2.0f32, 3.0f32, 4.0f32],
         &[2, 2],
-        &CpuDevice,
+        &Device::Cpu,
     )?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
@@ -679,7 +679,7 @@ fn test_dropout_operation() -> Result<()> {
         //
         vec![1.0f32, 2.0f32, 3.0f32, 4.0f32],
         &[2, 2],
-        &CpuDevice,
+        &Device::Cpu,
     )?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
@@ -759,7 +759,7 @@ fn test_flatten_operation() -> Result<()> {
             1.0f32, 2.0f32, 3.0f32, 4.0f32, 5.0f32, 6.0f32, 7.0f32, 8.0f32,
         ],
         &[2, 2, 2],
-        &CpuDevice,
+        &Device::Cpu,
     )?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
@@ -868,7 +868,7 @@ fn test_constant_of_shape() -> Result<()> {
         let mut attribute = vec![];
 
         if let Some(value) = value {
-            let tensor = Tensor::new(value, &CpuDevice)?;
+            let tensor = Tensor::new(value, &Device::Cpu)?;
 
             let (value, data_type) = match tensor.dtype() {
                 DType::U8 => (
@@ -957,7 +957,7 @@ fn test_constant_of_shape() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(input, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(input, &Device::Cpu)?);
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
@@ -967,7 +967,7 @@ fn test_constant_of_shape() -> Result<()> {
             .expect("Output 'z' not found")
             .to_dtype(DType::F64)?;
 
-        let expected = Tensor::new(expected, &CpuDevice)?.to_dtype(DType::F64)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?.to_dtype(DType::F64)?;
         match expected.dims().len() {
             0 => assert_eq!(z.to_vec0::<f64>()?, expected.to_vec0::<f64>()?),
             1 => assert_eq!(z.to_vec1::<f64>()?, expected.to_vec1::<f64>()?),
@@ -1017,9 +1017,9 @@ fn test_unsqueeze() -> Result<()> {
             3.0f32, 4.0f32, //
         ],
         &[2, 2],
-        &CpuDevice,
+        &Device::Cpu,
     )?;
-    let y = Tensor::from_vec(vec![-1i64], &[1], &CpuDevice)?;
+    let y = Tensor::from_vec(vec![-1i64], &[1], &Device::Cpu)?;
 
     let inputs = HashMap::from_iter([(INPUT_X.to_string(), x.clone()), (INPUT_Y.to_string(), y)]);
 
@@ -1147,15 +1147,15 @@ fn test_gather_operation() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &CpuDevice)?);
-        inputs.insert(INPUT_Y.to_string(), Tensor::new(indices, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
+        inputs.insert(INPUT_Y.to_string(), Tensor::new(indices, &Device::Cpu)?);
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-        let expected = Tensor::new(expected, &CpuDevice)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?;
         match expected.dims().len() {
             0 => assert_eq!(z.to_vec0::<f64>()?, expected.to_vec0::<f64>()?),
             1 => assert_eq!(z.to_vec1::<f64>()?, expected.to_vec1::<f64>()?),
@@ -1304,14 +1304,14 @@ fn test_gather_elements() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &CpuDevice)?);
-        inputs.insert(INPUT_Y.to_string(), Tensor::new(indices, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
+        inputs.insert(INPUT_Y.to_string(), Tensor::new(indices, &Device::Cpu)?);
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
-        let expected = Tensor::new(expected, &CpuDevice)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?;
         match expected.dims().len() {
             0 => assert_eq!(z.to_vec0::<f64>()?, expected.to_vec0::<f64>()?),
             1 => assert_eq!(z.to_vec1::<f64>()?, expected.to_vec1::<f64>()?),
@@ -1356,7 +1356,7 @@ fn test_size_operation() -> Result<()> {
         sparse_initializer: vec![],
         quantization_annotation: vec![],
     }));
-    let x = Tensor::from_vec(vec![1.0f32, 2.0f32, 3.0f32, 4.0f32], &[2, 2], &CpuDevice)?;
+    let x = Tensor::from_vec(vec![1.0f32, 2.0f32, 3.0f32, 4.0f32], &[2, 2], &Device::Cpu)?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
@@ -1401,7 +1401,7 @@ fn test_shape_operation() -> Result<()> {
         sparse_initializer: vec![],
         quantization_annotation: vec![],
     }));
-    let x = Tensor::from_vec(vec![1.0f32, 2.0f32, 3.0f32, 4.0f32], &[2, 2], &CpuDevice)?;
+    let x = Tensor::from_vec(vec![1.0f32, 2.0f32, 3.0f32, 4.0f32], &[2, 2], &Device::Cpu)?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
@@ -1459,7 +1459,11 @@ fn test_abs_operation() -> Result<()> {
         sparse_initializer: vec![],
         quantization_annotation: vec![],
     }));
-    let x = Tensor::from_vec(vec![-1.0f32, 2.0f32, -3.0f32, 4.0f32], &[2, 2], &CpuDevice)?;
+    let x = Tensor::from_vec(
+        vec![-1.0f32, 2.0f32, -3.0f32, 4.0f32],
+        &[2, 2],
+        &Device::Cpu,
+    )?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
@@ -1513,7 +1517,7 @@ fn test_cos_operation() -> Result<()> {
         sparse_initializer: vec![],
         quantization_annotation: vec![],
     }));
-    let x = Tensor::from_vec(vec![0.0f32, 1.0f32, 2.0f32, 3.0f32], &[2, 2], &CpuDevice)?;
+    let x = Tensor::from_vec(vec![0.0f32, 1.0f32, 2.0f32, 3.0f32], &[2, 2], &Device::Cpu)?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
@@ -1563,7 +1567,7 @@ fn test_sin_operation() -> Result<()> {
         sparse_initializer: vec![],
         quantization_annotation: vec![],
     }));
-    let x = Tensor::from_vec(vec![0.0f32, 1.0f32, 2.0f32, 3.0f32], &[2, 2], &CpuDevice)?;
+    let x = Tensor::from_vec(vec![0.0f32, 1.0f32, 2.0f32, 3.0f32], &[2, 2], &Device::Cpu)?;
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
@@ -1610,7 +1614,7 @@ fn test_neg_operation() -> Result<()> {
         sparse_initializer: vec![],
         quantization_annotation: vec![],
     }));
-    let x = Tensor::from_vec(vec![1.0f32, 2.0f32, 3.0f32, 4.0f32], &[2, 2], &CpuDevice)?;
+    let x = Tensor::from_vec(vec![1.0f32, 2.0f32, 3.0f32, 4.0f32], &[2, 2], &Device::Cpu)?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
@@ -1667,7 +1671,7 @@ fn test_tanh_operation() -> Result<()> {
         sparse_initializer: vec![],
         quantization_annotation: vec![],
     }));
-    let x = Tensor::from_vec(vec![0.0f32, 1.0f32, 2.0f32, 3.0f32], &[2, 2], &CpuDevice)?;
+    let x = Tensor::from_vec(vec![0.0f32, 1.0f32, 2.0f32, 3.0f32], &[2, 2], &Device::Cpu)?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
@@ -1724,7 +1728,7 @@ fn test_sigmoid_operation() -> Result<()> {
         sparse_initializer: vec![],
         quantization_annotation: vec![],
     }));
-    let x = Tensor::from_vec(vec![0.0f32, 1.0f32, 2.0f32, 3.0f32], &[2, 2], &CpuDevice)?;
+    let x = Tensor::from_vec(vec![0.0f32, 1.0f32, 2.0f32, 3.0f32], &[2, 2], &Device::Cpu)?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
@@ -1781,7 +1785,7 @@ fn test_gelu_operation() -> Result<()> {
         sparse_initializer: vec![],
         quantization_annotation: vec![],
     }));
-    let x = Tensor::from_vec(vec![0.0f32, 1.0f32, 2.0f32, 3.0f32], &[2, 2], &CpuDevice)?;
+    let x = Tensor::from_vec(vec![0.0f32, 1.0f32, 2.0f32, 3.0f32], &[2, 2], &Device::Cpu)?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
@@ -1831,7 +1835,11 @@ fn test_relu_operation() -> Result<()> {
         sparse_initializer: vec![],
         quantization_annotation: vec![],
     }));
-    let x = Tensor::from_vec(vec![-1.0f32, 1.0f32, -2.0f32, 3.0f32], &[2, 2], &CpuDevice)?;
+    let x = Tensor::from_vec(
+        vec![-1.0f32, 1.0f32, -2.0f32, 3.0f32],
+        &[2, 2],
+        &Device::Cpu,
+    )?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
@@ -1885,9 +1893,13 @@ fn test_prelu_operation() -> Result<()> {
         sparse_initializer: vec![],
         quantization_annotation: vec![],
     }));
-    let x: Tensor = Tensor::from_vec(vec![-1.0f32, 1.0f32, -2.0f32, 3.0f32], &[2, 2], &CpuDevice)?;
+    let x: Tensor = Tensor::from_vec(
+        vec![-1.0f32, 1.0f32, -2.0f32, 3.0f32],
+        &[2, 2],
+        &Device::Cpu,
+    )?;
 
-    let y: Tensor = Tensor::from_vec(vec![1.0f32, 1.1f32, 1.2f32, 1.3f32], &[2, 2], &CpuDevice)?;
+    let y: Tensor = Tensor::from_vec(vec![1.0f32, 1.1f32, 1.2f32, 1.3f32], &[2, 2], &Device::Cpu)?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
@@ -2374,12 +2386,12 @@ fn test_reduce_max() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        let input_tensor = Tensor::new(data, &CpuDevice)?;
+        let input_tensor = Tensor::new(data, &Device::Cpu)?;
         let input_dtype = input_tensor.dtype();
         inputs.insert(INPUT_X.to_string(), input_tensor);
         if !backward_comp {
             if let Some(a) = axes {
-                inputs.insert(INPUT_Y.to_string(), Tensor::new(a, &CpuDevice)?);
+                inputs.insert(INPUT_Y.to_string(), Tensor::new(a, &Device::Cpu)?);
             }
         }
 
@@ -2388,7 +2400,7 @@ fn test_reduce_max() -> Result<()> {
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-        let expected = Tensor::new(expected, &CpuDevice)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?;
 
         match expected.dims().len() {
             0 => {
@@ -2893,12 +2905,12 @@ fn test_reduce_min() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        let input_tensor = Tensor::new(data, &CpuDevice)?;
+        let input_tensor = Tensor::new(data, &Device::Cpu)?;
         let input_dtype = input_tensor.dtype();
         inputs.insert(INPUT_X.to_string(), input_tensor);
         if !backward_comp {
             if let Some(a) = axes {
-                inputs.insert(INPUT_Y.to_string(), Tensor::new(a, &CpuDevice)?);
+                inputs.insert(INPUT_Y.to_string(), Tensor::new(a, &Device::Cpu)?);
             }
         }
 
@@ -2907,7 +2919,7 @@ fn test_reduce_min() -> Result<()> {
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-        let expected = Tensor::new(expected, &CpuDevice)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?;
 
         match expected.dims().len() {
             0 => {
@@ -3101,14 +3113,14 @@ fn test_reduce_mean() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-        let expected = Tensor::new(expected, &CpuDevice)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?;
         match expected.dims().len() {
             0 => assert_eq!(z.to_vec0::<f64>()?, expected.to_vec0::<f64>()?),
             1 => assert_eq!(z.to_vec1::<f64>()?, expected.to_vec1::<f64>()?),
@@ -3155,14 +3167,14 @@ fn test_sqrt() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-        let expected = Tensor::new(expected, &CpuDevice)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?;
         match expected.dims().len() {
             0 => assert_eq!(z.to_vec0::<f64>()?, expected.to_vec0::<f64>()?),
             1 => assert_eq!(z.to_vec1::<f64>()?, expected.to_vec1::<f64>()?),
@@ -3511,9 +3523,9 @@ fn test_range() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(start, &CpuDevice)?);
-        inputs.insert(INPUT_Y.to_string(), Tensor::new(limit, &CpuDevice)?);
-        inputs.insert(INPUT_A.to_string(), Tensor::new(delta, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(start, &Device::Cpu)?);
+        inputs.insert(INPUT_Y.to_string(), Tensor::new(limit, &Device::Cpu)?);
+        inputs.insert(INPUT_A.to_string(), Tensor::new(delta, &Device::Cpu)?);
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
@@ -3523,7 +3535,7 @@ fn test_range() -> Result<()> {
             .expect("Output 'z' not found")
             .to_dtype(DType::F64)?;
 
-        let expected = Tensor::new(expected, &CpuDevice)?.to_dtype(DType::F64)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?.to_dtype(DType::F64)?;
         match expected.dims().len() {
             0 => assert_eq!(z.to_vec0::<f64>()?, expected.to_vec0::<f64>()?),
             1 => assert_eq!(z.to_vec1::<f64>()?, expected.to_vec1::<f64>()?),
@@ -3573,8 +3585,8 @@ fn test_greater() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(a, &CpuDevice)?);
-        inputs.insert(INPUT_Y.to_string(), Tensor::new(b, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(a, &Device::Cpu)?);
+        inputs.insert(INPUT_Y.to_string(), Tensor::new(b, &Device::Cpu)?);
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
@@ -3584,7 +3596,7 @@ fn test_greater() -> Result<()> {
             .expect("Output 'z' not found")
             .to_dtype(DType::F64)?;
 
-        let expected = Tensor::new(expected, &CpuDevice)?.to_dtype(DType::F64)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?.to_dtype(DType::F64)?;
         match expected.dims().len() {
             0 => assert_eq!(z.to_vec0::<f64>()?, expected.to_vec0::<f64>()?),
             1 => assert_eq!(z.to_vec1::<f64>()?, expected.to_vec1::<f64>()?),
@@ -3634,8 +3646,8 @@ fn test_less() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(a, &CpuDevice)?);
-        inputs.insert(INPUT_Y.to_string(), Tensor::new(b, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(a, &Device::Cpu)?);
+        inputs.insert(INPUT_Y.to_string(), Tensor::new(b, &Device::Cpu)?);
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
@@ -3645,7 +3657,7 @@ fn test_less() -> Result<()> {
             .expect("Output 'z' not found")
             .to_dtype(DType::F64)?;
 
-        let expected = Tensor::new(expected, &CpuDevice)?.to_dtype(DType::F64)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?.to_dtype(DType::F64)?;
         match expected.dims().len() {
             0 => assert_eq!(z.to_vec0::<f64>()?, expected.to_vec0::<f64>()?),
             1 => assert_eq!(z.to_vec1::<f64>()?, expected.to_vec1::<f64>()?),
@@ -3692,14 +3704,14 @@ fn test_log() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-        let expected = Tensor::new(expected, &CpuDevice)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?;
         match expected.dims().len() {
             0 => assert_eq!(z.to_vec0::<f64>()?, expected.to_vec0::<f64>()?),
             1 => assert_eq!(z.to_vec1::<f64>()?, expected.to_vec1::<f64>()?),
@@ -3755,16 +3767,16 @@ fn test_min() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(a, &CpuDevice)?);
-        inputs.insert(INPUT_Y.to_string(), Tensor::new(b, &CpuDevice)?);
-        inputs.insert(INPUT_A.to_string(), Tensor::new(c, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(a, &Device::Cpu)?);
+        inputs.insert(INPUT_Y.to_string(), Tensor::new(b, &Device::Cpu)?);
+        inputs.insert(INPUT_A.to_string(), Tensor::new(c, &Device::Cpu)?);
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-        let expected = Tensor::new(expected, &CpuDevice)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?;
         match expected.dims().len() {
             0 => assert_eq!(z.to_vec0::<f64>()?, expected.to_vec0::<f64>()?),
             1 => assert_eq!(z.to_vec1::<f64>()?, expected.to_vec1::<f64>()?),
@@ -3833,9 +3845,9 @@ fn test_where() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(condition, &CpuDevice)?);
-        inputs.insert(INPUT_Y.to_string(), Tensor::new(x, &CpuDevice)?);
-        inputs.insert(INPUT_A.to_string(), Tensor::new(y, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(condition, &Device::Cpu)?);
+        inputs.insert(INPUT_Y.to_string(), Tensor::new(x, &Device::Cpu)?);
+        inputs.insert(INPUT_A.to_string(), Tensor::new(y, &Device::Cpu)?);
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
@@ -3845,7 +3857,7 @@ fn test_where() -> Result<()> {
             .expect("Output 'z' not found")
             .to_dtype(DType::F64)?;
 
-        let expected = Tensor::new(expected, &CpuDevice)?.to_dtype(DType::F64)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?.to_dtype(DType::F64)?;
         match expected.dims().len() {
             0 => assert_eq!(z.to_vec0::<f64>()?, expected.to_vec0::<f64>()?),
             1 => assert_eq!(z.to_vec1::<f64>()?, expected.to_vec1::<f64>()?),
@@ -3904,7 +3916,7 @@ fn test_floor() -> Result<()> {
             2.0,
         ],
         &[10],
-        &CpuDevice,
+        &Device::Cpu,
     )?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
@@ -3980,7 +3992,7 @@ fn test_ceil() -> Result<()> {
             2.0,
         ],
         &[10],
-        &CpuDevice,
+        &Device::Cpu,
     )?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
@@ -4177,11 +4189,11 @@ fn test_argmin() -> Result<()> {
             quantization_annotation: vec![],
         }));
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-        let expected = Tensor::new(expected, &CpuDevice)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?;
         match expected.dims().len() {
             1 => assert_eq!(z.to_vec1::<i64>()?, expected.to_vec1::<i64>()?),
             2 => assert_eq!(z.to_vec2::<i64>()?, expected.to_vec2::<i64>()?),
@@ -4359,11 +4371,11 @@ fn test_argmax() -> Result<()> {
             quantization_annotation: vec![],
         }));
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-        let expected = Tensor::new(expected, &CpuDevice)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?;
         match expected.dims().len() {
             1 => assert_eq!(z.to_vec1::<i64>()?, expected.to_vec1::<i64>()?),
             2 => assert_eq!(z.to_vec2::<i64>()?, expected.to_vec2::<i64>()?),
@@ -4434,11 +4446,11 @@ fn test_leakyrelu() -> Result<()> {
             quantization_annotation: vec![],
         }));
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-        let expected = Tensor::new(expected, &CpuDevice)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?;
         for both in z
             .to_vec1::<f64>()?
             .iter()
@@ -4553,7 +4565,7 @@ fn test_if() -> Result<()> {
 
     for cond in [1u8, 0] {
         let inputs =
-            HashMap::from_iter([("cond".to_string(), Tensor::full(cond, (1,), &CpuDevice)?)]);
+            HashMap::from_iter([("cond".to_string(), Tensor::full(cond, (1,), &Device::Cpu)?)]);
         let outputs = candle_onnx::simple_eval(&manual_graph, inputs)?;
         let expected = if cond != 0 { &x } else { &y };
         let Some(res) = outputs.get("res") else {
@@ -4572,9 +4584,9 @@ fn test_pad() -> Result<()> {
             4.0, 5.0, 6.0, //
         ],
         (2, 3),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
-    let pads = Tensor::from_vec(vec![0i64, 1, 0, 0], (4,), &CpuDevice)?;
+    let pads = Tensor::from_vec(vec![0i64, 1, 0, 0], (4,), &Device::Cpu)?;
     let mode = "reflect";
 
     let expected = Tensor::from_vec(
@@ -4583,7 +4595,7 @@ fn test_pad() -> Result<()> {
             5.0, 4.0, 5.0, 6.0, //
         ],
         (2, 4),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
 
     let model = create_model_proto_with_graph(Some(GraphProto {
@@ -4679,23 +4691,23 @@ fn test_slice() -> Result<()> {
         HashMap::from_iter([
             (
                 "data".to_string(),
-                Tensor::from_vec(vec![1i64, 2, 3, 4, 5, 6, 7, 8], (2, 4), &CpuDevice)?,
+                Tensor::from_vec(vec![1i64, 2, 3, 4, 5, 6, 7, 8], (2, 4), &Device::Cpu)?,
             ),
             (
                 "starts".to_string(),
-                Tensor::from_vec(vec![1i64, 0], (2,), &CpuDevice)?,
+                Tensor::from_vec(vec![1i64, 0], (2,), &Device::Cpu)?,
             ),
             (
                 "ends".to_string(),
-                Tensor::from_vec(vec![2i64, 3], (2,), &CpuDevice)?,
+                Tensor::from_vec(vec![2i64, 3], (2,), &Device::Cpu)?,
             ),
             (
                 "axes".to_string(),
-                Tensor::from_vec(vec![0i64, 1], (2,), &CpuDevice)?,
+                Tensor::from_vec(vec![0i64, 1], (2,), &Device::Cpu)?,
             ),
             (
                 "steps".to_string(),
-                Tensor::from_vec(vec![1i64, 2], (2,), &CpuDevice)?,
+                Tensor::from_vec(vec![1i64, 2], (2,), &Device::Cpu)?,
             ),
         ]),
     )?;
@@ -4743,15 +4755,15 @@ fn test_slice() -> Result<()> {
         HashMap::from_iter([
             (
                 "data".to_string(),
-                Tensor::from_vec(vec![1i64, 2, 3, 4, 5, 6, 7, 8], (2, 4), &CpuDevice)?,
+                Tensor::from_vec(vec![1i64, 2, 3, 4, 5, 6, 7, 8], (2, 4), &Device::Cpu)?,
             ),
             (
                 "starts".to_string(),
-                Tensor::from_vec(vec![0i64, 1], (2,), &CpuDevice)?,
+                Tensor::from_vec(vec![0i64, 1], (2,), &Device::Cpu)?,
             ),
             (
                 "ends".to_string(),
-                Tensor::from_vec(vec![-1i64, 1000], (2,), &CpuDevice)?,
+                Tensor::from_vec(vec![-1i64, 1000], (2,), &Device::Cpu)?,
             ),
         ]),
     )?;
@@ -4793,7 +4805,7 @@ fn test_lstm() -> Result<()> {
     output, (hn, cn) = rnn(input, (h0, c0))
 
     def fmt_tensor(t):
-        return "Tensor::from_vec::<_, f32>(vec!"+  str(t.flatten().tolist()) + ", (" + "".join([str(n)+"," for n in t.shape])+"), &CpuDevice)?"
+        return "Tensor::from_vec::<_, f32>(vec!"+  str(t.flatten().tolist()) + ", (" + "".join([str(n)+"," for n in t.shape])+"), &Device::Cpu)?"
 
     print("let input_size = ", input_size, ";")
     print("let hidden_size = ", hidden_size, ";")
@@ -4880,7 +4892,7 @@ fn test_lstm() -> Result<()> {
             -0.831_255_26,
         ],
         (20, 3),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let weight_hh_l0 = Tensor::from_vec::<_, f32>(
         vec![
@@ -4986,7 +4998,7 @@ fn test_lstm() -> Result<()> {
             0.947_338_9,
         ],
         (20, 5),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let bias_ih_l0 = Tensor::from_vec::<_, f32>(
         vec![
@@ -5012,7 +5024,7 @@ fn test_lstm() -> Result<()> {
             -1.796_243,
         ],
         (20,),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let bias_hh_l0 = Tensor::from_vec::<_, f32>(
         vec![
@@ -5038,7 +5050,7 @@ fn test_lstm() -> Result<()> {
             -0.051_417_42,
         ],
         (20,),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let input = Tensor::from_vec::<_, f32>(
         vec![
@@ -5056,7 +5068,7 @@ fn test_lstm() -> Result<()> {
             -1.161_862_1,
         ],
         (4, 1, 3),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let h0 = Tensor::from_vec::<_, f32>(
         vec![
@@ -5067,7 +5079,7 @@ fn test_lstm() -> Result<()> {
             -0.492_925_05,
         ],
         (1, 1, 5),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let c0 = Tensor::from_vec::<_, f32>(
         vec![
@@ -5078,7 +5090,7 @@ fn test_lstm() -> Result<()> {
             0.173_668_24,
         ],
         (1, 1, 5),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let output = Tensor::from_vec::<_, f32>(
         vec![
@@ -5104,7 +5116,7 @@ fn test_lstm() -> Result<()> {
             0.271_313_4,
         ],
         (4, 1, 5),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let hn = Tensor::from_vec::<_, f32>(
         vec![
@@ -5115,7 +5127,7 @@ fn test_lstm() -> Result<()> {
             0.271_313_4,
         ],
         (1, 1, 5),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let cn = Tensor::from_vec::<_, f32>(
         vec![
@@ -5126,7 +5138,7 @@ fn test_lstm() -> Result<()> {
             0.825_292_47,
         ],
         (1, 1, 5),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     // end of generated values
 
@@ -5254,7 +5266,7 @@ fn test_rnn() -> Result<()> {
     output, hn = rnn(input, hx)
 
     def fmt_tensor(t):
-        return "Tensor::from_vec::<_, f32>(vec!"+  str(t.flatten().tolist()) + ", (" + "".join([str(n)+"," for n in t.shape])+"), &CpuDevice)?"
+        return "Tensor::from_vec::<_, f32>(vec!"+  str(t.flatten().tolist()) + ", (" + "".join([str(n)+"," for n in t.shape])+"), &Device::Cpu)?"
 
     print("let input_size = ", input_size, ";")
     print("let hidden_size = ", hidden_size, ";")
@@ -5334,7 +5346,7 @@ fn test_rnn() -> Result<()> {
             -0.9889599084854126,
         ],
         (5, 3),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let weight_hh_l0 = Tensor::from_vec::<_, f32>(
         vec![
@@ -5365,7 +5377,7 @@ fn test_rnn() -> Result<()> {
             -0.1721901297569275,
         ],
         (5, 5),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let bias_ih_l0 = Tensor::from_vec::<_, f32>(
         vec![
@@ -5376,7 +5388,7 @@ fn test_rnn() -> Result<()> {
             -0.6060903072357178,
         ],
         (5,),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let bias_hh_l0 = Tensor::from_vec::<_, f32>(
         vec![
@@ -5387,7 +5399,7 @@ fn test_rnn() -> Result<()> {
             0.5332217216491699,
         ],
         (5,),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let input = Tensor::from_vec::<_, f32>(
         vec![
@@ -5405,7 +5417,7 @@ fn test_rnn() -> Result<()> {
             -0.17943637073040009,
         ],
         (4, 1, 3),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let hx = Tensor::from_vec::<_, f32>(
         vec![
@@ -5416,7 +5428,7 @@ fn test_rnn() -> Result<()> {
             -0.060138583183288574,
         ],
         (1, 1, 5),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let output = Tensor::from_vec::<_, f32>(
         vec![
@@ -5442,7 +5454,7 @@ fn test_rnn() -> Result<()> {
             -0.973706841468811,
         ],
         (4, 1, 5),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let hn = Tensor::from_vec::<_, f32>(
         vec![
@@ -5453,7 +5465,7 @@ fn test_rnn() -> Result<()> {
             -0.973706841468811,
         ],
         (1, 1, 5),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
 
     let w = weight_ih_l0.reshape((number_directions, hidden_size, input_size))?;
@@ -5528,10 +5540,10 @@ fn test_expand_dim_changed() -> Result<()> {
     }));
 
     // Input tensor with shape [3, 1]
-    let data = Tensor::from_vec(vec![1.0f32, 2.0f32, 3.0f32], (3, 1), &CpuDevice)?;
+    let data = Tensor::from_vec(vec![1.0f32, 2.0f32, 3.0f32], (3, 1), &Device::Cpu)?;
 
     // New shape tensor: [2, 1, 6]
-    let new_shape = Tensor::from_vec(vec![2i64, 1, 6], (3,), &CpuDevice)?;
+    let new_shape = Tensor::from_vec(vec![2i64, 1, 6], (3,), &Device::Cpu)?;
 
     // Expected output after expansion
     let expected = Tensor::from_vec(
@@ -5542,7 +5554,7 @@ fn test_expand_dim_changed() -> Result<()> {
             3.0f32, 3.0f32, 3.0f32,
         ],
         (2, 3, 6),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
 
     // Execute the model evaluation
@@ -5600,10 +5612,10 @@ fn test_expand_dim_unchanged() -> Result<()> {
     let manual_graph = make_graph_helper("Expand", &["data", "new_shape"], &["expanded"], vec![]);
 
     // Input tensor with shape [3, 1] and dtype f32
-    let data = Tensor::from_vec(vec![1.0f32, 2.0f32, 3.0f32], (3, 1), &CpuDevice)?;
+    let data = Tensor::from_vec(vec![1.0f32, 2.0f32, 3.0f32], (3, 1), &Device::Cpu)?;
 
     // New shape tensor: [3, 4]
-    let new_shape = Tensor::from_vec(vec![3i64, 4], (2,), &CpuDevice)?;
+    let new_shape = Tensor::from_vec(vec![3i64, 4], (2,), &Device::Cpu)?;
 
     // Expected output after expansion, dtype f32
     let expected = Tensor::from_vec(
@@ -5612,7 +5624,7 @@ fn test_expand_dim_unchanged() -> Result<()> {
             3.0f32,
         ],
         (3, 4),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
 
     // Execute the model evaluation
@@ -5645,7 +5657,7 @@ fn test_split_equal_parts_1d_opset13() -> Result<()> {
     let input = Tensor::from_vec(
         vec![1.0f32, 2.0f32, 3.0f32, 4.0f32, 5.0f32, 6.0f32],
         (6,),
-        &CpuDevice,
+        &Device::Cpu,
     )?;
     let mut inputs = HashMap::new();
     inputs.insert("input".to_string(), input);
@@ -5666,7 +5678,7 @@ fn test_split_equal_parts_1d_opset13() -> Result<()> {
     }
 
     {
-        let splits = Tensor::from_vec(vec![2i64, 4], (2,), &CpuDevice)?;
+        let splits = Tensor::from_vec(vec![2i64, 4], (2,), &Device::Cpu)?;
         inputs.insert("split".to_string(), splits);
 
         let manual_graph =
@@ -5720,9 +5732,9 @@ fn test_reduce_sum_default_axes_keepdims() -> Result<()> {
                 1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
             ],
             (3, 2, 2),
-            &CpuDevice,
+            &Device::Cpu,
         )?;
-        // let axes = Tensor::from_vec(Vec::<i64>::new(), (0,), &CpuDevice)?;
+        // let axes = Tensor::from_vec(Vec::<i64>::new(), (0,), &Device::Cpu)?;
 
         let mut inputs = HashMap::new();
         inputs.insert("data".to_string(), data);
@@ -5732,7 +5744,7 @@ fn test_reduce_sum_default_axes_keepdims() -> Result<()> {
         assert_eq!(eval.len(), 1);
 
         let reduced = eval.get("reduced").expect("Output 'reduced' not found");
-        let expected = Tensor::from_vec(vec![78.0f32], (1, 1, 1), &CpuDevice)?;
+        let expected = Tensor::from_vec(vec![78.0f32], (1, 1, 1), &Device::Cpu)?;
 
         assert_eq!(reduced.to_vec3::<f32>()?, expected.to_vec3::<f32>()?);
     }
@@ -5743,7 +5755,7 @@ fn test_reduce_sum_default_axes_keepdims() -> Result<()> {
                 -5.2f32, 7.8, -3.1, 9.4, 2.6, -8.7, 4.3, -1.9, 6.5, -0.8, -7.2, 3.6,
             ],
             (3, 2, 2),
-            &CpuDevice,
+            &Device::Cpu,
         )?;
 
         let mut inputs = HashMap::new();
@@ -5772,9 +5784,9 @@ fn test_reduce_sum_do_not_keep_dims() -> Result<()> {
                 1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
             ],
             (3, 2, 2),
-            &CpuDevice,
+            &Device::Cpu,
         )?;
-        let axes = Tensor::from_vec(vec![1i64], (1,), &CpuDevice)?;
+        let axes = Tensor::from_vec(vec![1i64], (1,), &Device::Cpu)?;
 
         let mut inputs = HashMap::new();
         inputs.insert("data".to_string(), data);
@@ -5787,7 +5799,7 @@ fn test_reduce_sum_do_not_keep_dims() -> Result<()> {
         let expected = Tensor::from_vec(
             vec![4.0f32, 6.0, 12.0, 14.0, 20.0, 22.0],
             (3, 2),
-            &CpuDevice,
+            &Device::Cpu,
         )?;
 
         assert_eq!(reduced.to_vec2::<f32>()?, expected.to_vec2::<f32>()?);
@@ -5801,9 +5813,9 @@ fn test_reduce_sum_do_not_keep_dims() -> Result<()> {
                 -5.2f32, 7.8, -3.1, 9.4, 2.6, -8.7, 4.3, -1.9, 6.5, -0.8, -7.2, 3.6,
             ],
             (3, 2, 2),
-            &CpuDevice,
+            &Device::Cpu,
         )?;
-        let axes = Tensor::from_vec(vec![1i64], (1,), &CpuDevice)?;
+        let axes = Tensor::from_vec(vec![1i64], (1,), &Device::Cpu)?;
 
         let mut inputs = HashMap::new();
         inputs.insert("data".to_string(), data.clone());
@@ -6155,8 +6167,8 @@ fn test_xor() -> Result<()> {
         }));
 
         let inputs: HashMap<String, Tensor> = HashMap::from([
-            (INPUT_X.to_string(), Tensor::new(input, &CpuDevice)?),
-            (INPUT_Y.to_string(), Tensor::new(other, &CpuDevice)?),
+            (INPUT_X.to_string(), Tensor::new(input, &Device::Cpu)?),
+            (INPUT_Y.to_string(), Tensor::new(other, &Device::Cpu)?),
         ]);
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
@@ -6164,7 +6176,7 @@ fn test_xor() -> Result<()> {
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
 
-        let expected = Tensor::new(expected, &CpuDevice)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?;
 
         match expected.dims().len() {
             0 => {
@@ -6224,7 +6236,7 @@ fn test_sign_operation() -> Result<()> {
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(
         INPUT_X.to_string(),
-        Tensor::new(vec![-2f32, -1., 0., 1., 2.], &CpuDevice)?,
+        Tensor::new(vec![-2f32, -1., 0., 1., 2.], &Device::Cpu)?,
     );
     let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
 
@@ -6260,7 +6272,7 @@ fn test_selu_operator() -> Result<()> {
             ..Default::default()
         }));
 
-        let input = Tensor::from_vec(vec![-1.0f32, 0.0, 1.0, 2.0], (2, 2), &CpuDevice)?;
+        let input = Tensor::from_vec(vec![-1.0f32, 0.0, 1.0, 2.0], (2, 2), &Device::Cpu)?;
         let mut inputs = HashMap::new();
         inputs.insert("input".to_string(), input);
 
@@ -6304,7 +6316,7 @@ fn test_selu_operator() -> Result<()> {
             ..Default::default()
         }));
 
-        let input = Tensor::from_vec(vec![-1.0f32, 0.0, 1.0, 2.0], (2, 2), &CpuDevice)?;
+        let input = Tensor::from_vec(vec![-1.0f32, 0.0, 1.0, 2.0], (2, 2), &Device::Cpu)?;
         let mut inputs = HashMap::new();
         inputs.insert("input".to_string(), input);
         let eval = simple_eval(&custom_graph, inputs)?;
@@ -6336,7 +6348,7 @@ fn test_selu_operator() -> Result<()> {
 
         let expected = vec![-1.758, -1.7463, 0.0, 10.507];
 
-        let input = Tensor::from_vec(vec![-10.0f32, -5.0, 0.0, 10.0], (2, 2), &CpuDevice)?;
+        let input = Tensor::from_vec(vec![-10.0f32, -5.0, 0.0, 10.0], (2, 2), &Device::Cpu)?;
         let mut inputs = HashMap::new();
         inputs.insert("input".to_string(), input);
         let eval = simple_eval(&manual_graph, inputs)?;
@@ -6385,7 +6397,7 @@ fn test_selu_operator() -> Result<()> {
             ..Default::default()
         }));
 
-        let input = Tensor::from_vec(vec![-1.0f32, 0.0, 1.0], (3,), &CpuDevice)?;
+        let input = Tensor::from_vec(vec![-1.0f32, 0.0, 1.0], (3,), &Device::Cpu)?;
         let mut inputs = HashMap::new();
         inputs.insert("input".to_string(), input);
 
@@ -6420,7 +6432,7 @@ fn test_selu_operator() -> Result<()> {
             ..Default::default()
         }));
 
-        let input = Tensor::from_vec(vec![] as Vec<f32>, (0, 2), &CpuDevice)?;
+        let input = Tensor::from_vec(vec![] as Vec<f32>, (0, 2), &Device::Cpu)?;
         let mut inputs = HashMap::new();
         inputs.insert("input".to_string(), input);
         let eval = simple_eval(&manual_graph, inputs)?;
@@ -6452,7 +6464,7 @@ fn test_hard_swish() -> candle::Result<()> {
             ..Default::default()
         }));
         let input_data = vec![-4.0f32, -3.0, 0.0, 2.0, 3.0, 5.0];
-        let input_tensor = Tensor::from_vec(input_data.clone(), (input_data.len(),), &CpuDevice)?;
+        let input_tensor = Tensor::from_vec(input_data.clone(), (input_data.len(),), &Device::Cpu)?;
         let mut inputs = HashMap::new();
         inputs.insert(INPUT_X.to_string(), input_tensor);
 
@@ -6489,7 +6501,7 @@ fn test_hard_swish() -> candle::Result<()> {
             ..Default::default()
         }));
         let input_data = vec![-4.0f32, -2.0, 0.0, 2.0, 4.0];
-        let input_tensor = Tensor::from_vec(input_data.clone(), (input_data.len(),), &CpuDevice)?;
+        let input_tensor = Tensor::from_vec(input_data.clone(), (input_data.len(),), &Device::Cpu)?;
         let mut inputs = HashMap::new();
         inputs.insert(INPUT_X.to_string(), input_tensor);
 
@@ -6579,15 +6591,15 @@ fn test_scatternd_operation() -> Result<()> {
         }));
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
-        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &CpuDevice)?);
-        inputs.insert(INPUT_Y.to_string(), Tensor::new(indices, &CpuDevice)?);
-        inputs.insert(INPUT_A.to_string(), Tensor::new(updates, &CpuDevice)?);
+        inputs.insert(INPUT_X.to_string(), Tensor::new(data, &Device::Cpu)?);
+        inputs.insert(INPUT_Y.to_string(), Tensor::new(indices, &Device::Cpu)?);
+        inputs.insert(INPUT_A.to_string(), Tensor::new(updates, &Device::Cpu)?);
 
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
 
         let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
-        let expected = Tensor::new(expected, &CpuDevice)?;
+        let expected = Tensor::new(expected, &Device::Cpu)?;
 
         match expected.dims().len() {
             1 => assert_eq!(z.to_vec1::<f32>()?, expected.to_vec1::<f32>()?),
@@ -6639,7 +6651,7 @@ fn test_trilu_operation() -> Result<()> {
                 4i64, 7, 3, 7, 9, 1, 2, 8, 6, 9, 9, 4, 0, 8, 7, 4, 3, 4, 2, 4,
             ],
             &[4, 5],
-            &CpuDevice,
+            &Device::Cpu,
         )?;
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
@@ -6702,10 +6714,10 @@ fn test_trilu_operation() -> Result<()> {
         let x = Tensor::from_vec(
             vec![1i64, 4, 9, 7, 1, 9, 2, 8, 8, 4, 3, 9, 7, 4, 2],
             &[3, 5],
-            &CpuDevice,
+            &Device::Cpu,
         )?;
 
-        let k = Tensor::from_vec(vec![1i64], (), &CpuDevice)?;
+        let k = Tensor::from_vec(vec![1i64], (), &Device::Cpu)?;
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
         inputs.insert(INPUT_X.to_string(), x);
@@ -6758,10 +6770,10 @@ fn test_trilu_operation() -> Result<()> {
                 4i64, 7, 3, 7, 9, 1, 2, 8, 6, 9, 9, 4, 0, 8, 7, 4, 3, 4, 2, 4,
             ],
             &[4, 5],
-            &CpuDevice,
+            &Device::Cpu,
         )?;
 
-        let k = Tensor::from_vec(vec![-1i64], (), &CpuDevice)?;
+        let k = Tensor::from_vec(vec![-1i64], (), &Device::Cpu)?;
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
         inputs.insert(INPUT_X.to_string(), x);
@@ -6836,7 +6848,7 @@ fn test_trilu_operation() -> Result<()> {
                 4i64, 7, 3, 7, 9, 1, 2, 8, 6, 9, 9, 4, 1, 8, 7, 4, 3, 4, 2, 4,
             ],
             &[4, 5],
-            &CpuDevice,
+            &Device::Cpu,
         )?;
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
@@ -6912,10 +6924,10 @@ fn test_trilu_operation() -> Result<()> {
                 4i64, 7, 3, 7, 9, 1, 2, 8, 6, 9, 9, 4, 1, 8, 7, 4, 3, 4, 2, 4,
             ],
             &[4, 5],
-            &CpuDevice,
+            &Device::Cpu,
         )?;
 
-        let k = Tensor::from_vec(vec![-1i64], (), &CpuDevice)?;
+        let k = Tensor::from_vec(vec![-1i64], (), &Device::Cpu)?;
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
         inputs.insert(INPUT_X.to_string(), x);
@@ -6990,10 +7002,10 @@ fn test_trilu_operation() -> Result<()> {
                 4i64, 7, 3, 7, 9, 1, 2, 8, 6, 9, 9, 4, 1, 8, 7, 4, 3, 4, 2, 4,
             ],
             &[4, 5],
-            &CpuDevice,
+            &Device::Cpu,
         )?;
 
-        let k = Tensor::from_vec(vec![2i64], (), &CpuDevice)?;
+        let k = Tensor::from_vec(vec![2i64], (), &Device::Cpu)?;
 
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
         inputs.insert(INPUT_X.to_string(), x);
@@ -7022,8 +7034,8 @@ fn test_trilu_operation() -> Result<()> {
 fn test_one_hot() -> Result<()> {
     // Tests based on: https://github.com/onnx/onnx/blob/main/docs/Operators.md#OneHot
     {
-        let depth_value = Tensor::new(3i64, &CpuDevice)?; // depth = 3
-        let values_tensor = Tensor::from_vec(vec![0.0f32, 1.0], (2,), &CpuDevice)?; // off = 0.0, on = 1.0
+        let depth_value = Tensor::new(3i64, &Device::Cpu)?; // depth = 3
+        let values_tensor = Tensor::from_vec(vec![0.0f32, 1.0], (2,), &Device::Cpu)?; // off = 0.0, on = 1.0
 
         let manual_graph = create_model_proto_with_graph(Some(GraphProto {
             node: vec![NodeProto {
@@ -7061,7 +7073,7 @@ fn test_one_hot() -> Result<()> {
         let mut inputs: HashMap<String, Tensor> = HashMap::new();
         inputs.insert(
             INPUT_X.to_string(),
-            Tensor::new(vec![0i64, 1, 2], &CpuDevice)?,
+            Tensor::new(vec![0i64, 1, 2], &Device::Cpu)?,
         );
         inputs.insert("depth".to_string(), depth_value);
         inputs.insert("values".to_string(), values_tensor);
@@ -7080,9 +7092,9 @@ fn test_one_hot() -> Result<()> {
     }
     {
         // Test with axis
-        let indices = Tensor::from_vec(vec![1i64, 9, 2, 4], (2, 2), &CpuDevice)?;
-        let depth = Tensor::new(10i64, &CpuDevice)?;
-        let values = Tensor::from_vec(vec![1.0f32, 3.0], (2,), &CpuDevice)?;
+        let indices = Tensor::from_vec(vec![1i64, 9, 2, 4], (2, 2), &Device::Cpu)?;
+        let depth = Tensor::new(10i64, &Device::Cpu)?;
+        let values = Tensor::from_vec(vec![1.0f32, 3.0], (2,), &Device::Cpu)?;
 
         let graph = create_model_proto_with_graph(Some(GraphProto {
             node: vec![NodeProto {
@@ -7115,9 +7127,9 @@ fn test_one_hot() -> Result<()> {
     }
     {
         // Test with negative axis
-        let indices = Tensor::from_vec(vec![1i64, 9, 2, 4], (2, 2), &CpuDevice)?;
-        let depth = Tensor::new(10i64, &CpuDevice)?;
-        let values = Tensor::from_vec(vec![1.0f32, 3.0], (2,), &CpuDevice)?;
+        let indices = Tensor::from_vec(vec![1i64, 9, 2, 4], (2, 2), &Device::Cpu)?;
+        let depth = Tensor::new(10i64, &Device::Cpu)?;
+        let values = Tensor::from_vec(vec![1.0f32, 3.0], (2,), &Device::Cpu)?;
 
         let graph = create_model_proto_with_graph(Some(GraphProto {
             node: vec![NodeProto {
@@ -7150,9 +7162,9 @@ fn test_one_hot() -> Result<()> {
     }
     {
         // Test with negative indices
-        let indices = Tensor::from_vec(vec![0i64, -7, -8], (3,), &CpuDevice)?;
-        let depth = Tensor::new(10i64, &CpuDevice)?;
-        let values = Tensor::from_vec(vec![1.0f32, 3.0], (2,), &CpuDevice)?;
+        let indices = Tensor::from_vec(vec![0i64, -7, -8], (3,), &Device::Cpu)?;
+        let depth = Tensor::new(10i64, &Device::Cpu)?;
+        let values = Tensor::from_vec(vec![1.0f32, 3.0], (2,), &Device::Cpu)?;
 
         let graph = create_model_proto_with_graph(Some(GraphProto {
             node: vec![NodeProto {
@@ -7185,9 +7197,9 @@ fn test_one_hot() -> Result<()> {
     }
     {
         // Test without axis
-        let indices = Tensor::from_vec(vec![0i64, 7, 8], (3,), &CpuDevice)?;
-        let depth = Tensor::new(12i64, &CpuDevice)?;
-        let values = Tensor::from_vec(vec![2f32, 5.0], (2,), &CpuDevice)?;
+        let indices = Tensor::from_vec(vec![0i64, 7, 8], (3,), &Device::Cpu)?;
+        let depth = Tensor::new(12i64, &Device::Cpu)?;
+        let values = Tensor::from_vec(vec![2f32, 5.0], (2,), &Device::Cpu)?;
 
         let graph = create_model_proto_with_graph(Some(GraphProto {
             node: vec![NodeProto {
