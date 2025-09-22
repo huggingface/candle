@@ -299,7 +299,7 @@ fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
         args.top_p,
         args.repeat_penalty,
         args.repeat_last_n,
-        &device,
+        device,
     );
     pipeline.run(&args.prompt, args.sample_len)?;
     Ok(())

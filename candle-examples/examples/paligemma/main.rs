@@ -284,7 +284,7 @@ fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
         args.top_p,
         args.repeat_penalty,
         args.repeat_last_n,
-        &device,
+        device,
     );
     let prompt = format!("{}\n", args.prompt);
     pipeline.run(&prompt, args.sample_len)?;

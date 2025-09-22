@@ -312,7 +312,7 @@ fn run<B: BackendStorage>(args: Args, device: &B::Device) -> anyhow::Result<()> 
 
     println!("loaded the model in {:?}", start.elapsed());
 
-    let mut pipeline = TextGeneration::new(model, tokenizer, args, &device, eos_tokens);
+    let mut pipeline = TextGeneration::new(model, tokenizer, args, device, eos_tokens);
     pipeline.run()?;
     Ok(())
 }

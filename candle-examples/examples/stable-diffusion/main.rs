@@ -482,7 +482,7 @@ fn mask_preprocess<P: AsRef<std::path::Path>, B: BackendStorage>(
 
 /// Generates the mask latents, scaled mask and mask_4 for inpainting. Returns a tuple of None if inpainting is not
 /// being used.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn inpainting_tensors<B: BackendStorage>(
     sd_version: StableDiffusionVersion,
     mask_path: Option<String>,

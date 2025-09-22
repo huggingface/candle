@@ -345,7 +345,7 @@ where
         args.top_k,
         args.repeat_penalty,
         args.repeat_last_n,
-        &device,
+        device,
     );
     pipeline.run(&args.prompt, args.sample_len)?;
     Ok(())

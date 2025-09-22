@@ -114,6 +114,7 @@ pub fn load_tokenizer() -> anyhow::Result<Tokenizer> {
     Tokenizer::from_file(tokenizer_file).map_err(anyhow::Error::msg)
 }
 
+#[allow(clippy::type_complexity)]
 pub fn tokenize_sequences<B: BackendStorage>(
     sequences: Option<Vec<String>>,
     tokenizer: &Tokenizer,
