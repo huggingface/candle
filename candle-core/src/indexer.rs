@@ -52,7 +52,7 @@ impl<B: BackendStorage> Tensor<B> {
                     if indexes.rank() != 1 {
                         crate::bail!("multi-dimensional tensor indexing is not supported")
                     }
-                    let out = x.index_select(&indexes, current_dim)?;
+                    let out = x.index_select(indexes, current_dim)?;
                     current_dim += 1;
                     out
                 }

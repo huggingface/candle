@@ -2263,9 +2263,9 @@ impl<B: BackendStorage> Tensor<B> {
     }
 
     /// If the target device is the same as the tensor device, only a shallow copy is performed.
-    pub fn to_device<U: BackendStorage>(&self, device: &U::Device) -> Result<Tensor<U>>
+    pub fn to_device<U>(&self, device: &U::Device) -> Result<Tensor<U>>
     where
-        U: TryConvertStorage<B>,
+        U: BackendStorage + TryConvertStorage<B>,
     {
         let storage = self.storage().clone();
         let storage = U::convert(storage, device)?;
