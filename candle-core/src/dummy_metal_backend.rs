@@ -34,8 +34,8 @@ mod dummy {
         };
     }
 
-    impl TryConvertStorage<CpuStorage, MetalStorage> for MetalDevice {
-        fn convert(&self, _storage: CpuStorage) -> Result<MetalStorage> {
+    impl TryConvertStorage<CpuStorage> for MetalStorage {
+        fn convert(_storage: CpuStorage, _device: &MetalDevice) -> Result<MetalStorage> {
             Err(Error::NotCompiledWithMetalSupport)
         }
     }

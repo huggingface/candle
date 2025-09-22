@@ -175,9 +175,7 @@ pub trait BackendStorage: Sized + Clone + Send + Sync + Debug {
     ) -> Result<()>;
 }
 
-pub trait BackendDevice<B: BackendStorage>:
-    crate::convert::TryConvertStorage<CpuStorage, B> + Sized + std::fmt::Debug + Clone + Send + Sync
-{
+pub trait BackendDevice<B: BackendStorage>: Sized + std::fmt::Debug + Clone + Send + Sync {
     const SUPPORTS_BF16: bool = false;
 
     // TODO: Make the usize generic and part of a generic DeviceLocation.

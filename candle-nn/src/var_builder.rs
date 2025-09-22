@@ -19,8 +19,7 @@ type CpuTensor = Tensor<CpuStorage>;
 pub struct VarBuilderArgs<'a, B, BS>
 where
     B: Backend<BS>,
-    BS: BackendStorage,
-    BS::Device: TryConvertStorage<CpuStorage, BS>,
+    BS: BackendStorage + TryConvertStorage<CpuStorage>,
 {
     data: Arc<TensorData<B, BS>>,
     path: Vec<String>,
@@ -31,8 +30,7 @@ where
 impl<B, BS> Clone for VarBuilderArgs<'_, B, BS>
 where
     B: Backend<BS>,
-    BS: BackendStorage,
-    BS::Device: TryConvertStorage<CpuStorage, BS>,
+    BS: BackendStorage + TryConvertStorage<CpuStorage>,
 {
     fn clone(&self) -> Self {
         Self {
@@ -52,8 +50,7 @@ pub type VarBuilder<'a, BS: BackendStorage> = VarBuilderArgs<'a, Box<dyn SimpleB
 struct TensorData<B, BS>
 where
     B: Backend<BS>,
-    BS: BackendStorage,
-    BS::Device: TryConvertStorage<CpuStorage, BS>,
+    BS: BackendStorage + TryConvertStorage<CpuStorage>,
 {
     backend: B,
     pub device: BS::Device,
@@ -68,8 +65,7 @@ where
 pub trait Backend<B>
 where
     Self: Send + Sync,
-    B: BackendStorage,
-    B::Device: TryConvertStorage<CpuStorage, B>,
+    B: BackendStorage + TryConvertStorage<CpuStorage>,
 {
     type Hints: Default;
 
@@ -88,14 +84,15 @@ where
 
 pub trait SimpleBackend: Send + Sync {
     /// Retrieve a tensor based on a target name and shape.
-    fn get(&self, s: Shape, name: &str, h: crate::Init, dtype: DType) -> Result<CpuTensor>;
+    fn get(&self, s: Shape, name: &str, h: crate::Init, dtype: DType)
+        -> Result<Tensor<CpuStorage>>;
 
     fn contains_tensor(&self, name: &str) -> bool;
 }
 
 impl<B> Backend<B> for Box<dyn SimpleBackend + '_>
 where
-    B: BackendStorage,
+    B: BackendStorage + TryConvertStorage<CpuStorage>,
 {
     type Hints = crate::Init;
     fn get(
@@ -117,8 +114,7 @@ where
 impl<B, BS> VarBuilderArgs<'_, B, BS>
 where
     B: Backend<BS>,
-    BS: BackendStorage,
-    BS::Device: TryConvertStorage<CpuStorage, BS>,
+    BS: BackendStorage + TryConvertStorage<CpuStorage>,
 {
     pub fn new_with_args(backend: B, dtype: DType, dev: &BS::Device) -> Self {
         let data = TensorData {
@@ -290,6 +286,72 @@ impl SimpleBackend for VarMap<CpuStorage> {
         self.data().lock().unwrap().contains_key(name)
     }
 }
+/*
+impl SimpleBackend<candle::Storage> for Zeros {
+    fn get(
+        &self,
+        s: Shape,
+        _: &str,
+        _: crate::Init,
+        dtype: DType,
+    ) -> Result<Tensor<candle::Storage>> {
+        Tensor::zeros(s, dtype, &candle::Device::Cpu)
+    }
+
+    fn contains_tensor(&self, _name: &str) -> bool {
+        true
+    }
+}
+
+impl SimpleBackend<candle::Storage> for HashMap<String, Tensor<candle::Storage>> {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        _: crate::Init,
+        dtype: DType,
+    ) -> Result<Tensor<candle::Storage>> {
+        let tensor = self
+            .get(name)
+            .ok_or_else(|| {
+                Error::CannotFindTensor {
+                    path: name.to_string(),
+                }
+                .bt()
+            })?
+            .clone();
+        if tensor.shape() != &s {
+            Err(candle::Error::UnexpectedShape {
+                msg: format!("shape mismatch for {name}"),
+                expected: s,
+                got: tensor.shape().clone(),
+            }
+            .bt())?
+        }
+        tensor.to_dtype(dtype)
+    }
+
+    fn contains_tensor(&self, name: &str) -> bool {
+        self.contains_key(name)
+    }
+}
+
+impl SimpleBackend<candle::Storage> for VarMap<candle::Storage> {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        h: crate::Init,
+        dtype: DType,
+    ) -> Result<Tensor<candle::Storage>> {
+        VarMap::get(self, s, name, h, dtype, &candle::Device::Cpu)
+    }
+
+    fn contains_tensor(&self, name: &str) -> bool {
+        self.data().lock().unwrap().contains_key(name)
+    }
+}
+ */
 
 #[allow(dead_code)]
 pub struct SafeTensorWithRouting<'a> {
@@ -436,7 +498,7 @@ impl SimpleBackend for candle::safetensors::SliceSafetensors<'_> {
 
 impl<'a, BS> VarBuilder<'a, BS>
 where
-    BS: BackendStorage + 'a,
+    BS: BackendStorage + TryConvertStorage<CpuStorage> + 'a,
 {
     /// Initializes a `VarBuilder` using a custom backend.
     ///
@@ -601,7 +663,8 @@ where
 pub struct ShardedSafeTensors(candle::safetensors::MmapedSafetensors);
 
 #[allow(type_alias_bounds)]
-pub type ShardedVarBuilder<'a, BS: BackendStorage> = VarBuilderArgs<'a, ShardedSafeTensors, BS>;
+pub type ShardedVarBuilder<'a, BS: BackendStorage + TryConvertStorage<CpuStorage>> =
+    VarBuilderArgs<'a, ShardedSafeTensors, BS>;
 
 impl ShardedSafeTensors {
     /// Initializes a `VarBuilder` that retrieves tensors stored in a collection of safetensors
@@ -616,8 +679,7 @@ impl ShardedSafeTensors {
         dev: &BS::Device,
     ) -> Result<ShardedVarBuilder<'static, BS>>
     where
-        BS: BackendStorage,
-        BS::Device: TryConvertStorage<BS, CpuStorage>,
+        BS: BackendStorage + TryConvertStorage<CpuStorage>,
     {
         let tensors = candle::safetensors::MmapedSafetensors::multi(paths)?;
         let backend = ShardedSafeTensors(tensors);
@@ -655,8 +717,7 @@ impl Default for Shard {
 /// `get_sharded("tensor", 1, 0, 2)` means `tensor.i((.., ..512))`
 impl<B> Backend<B> for ShardedSafeTensors
 where
-    B: BackendStorage,
-    B::Device: TryConvertStorage<CpuStorage, B>,
+    B: BackendStorage + TryConvertStorage<CpuStorage>,
 {
     type Hints = Shard;
 
@@ -738,8 +799,7 @@ pub trait Renamer {
 pub struct Rename<'a, R, BS>
 where
     R: Renamer,
-    BS: BackendStorage,
-    BS::Device: TryConvertStorage<CpuStorage, BS>,
+    BS: BackendStorage + TryConvertStorage<CpuStorage>,
 {
     inner: VarBuilder<'a, BS>,
     renamer: R,
@@ -748,7 +808,7 @@ where
 impl<R, BS> SimpleBackend for Rename<'_, R, BS>
 where
     R: Renamer + Sync + Send,
-    BS: BackendStorage,
+    BS: BackendStorage + TryConvertStorage<CpuStorage>,
 {
     fn get(&self, s: Shape, name: &str, h: crate::Init, dtype: DType) -> Result<CpuTensor> {
         let name = self.renamer.rename(name);
@@ -766,8 +826,7 @@ where
 impl<R, BS> Backend<BS> for Rename<'_, R, BS>
 where
     R: Renamer + Sync + Send,
-    BS: BackendStorage,
-    BS::Device: TryConvertStorage<CpuStorage, BS>,
+    BS: BackendStorage + TryConvertStorage<CpuStorage>,
 {
     type Hints = crate::Init;
 
@@ -792,7 +851,7 @@ where
 impl<'a, R, BS> Rename<'a, R, BS>
 where
     R: Renamer,
-    BS: BackendStorage,
+    BS: BackendStorage + TryConvertStorage<CpuStorage>,
 {
     pub fn new(inner: VarBuilder<'a, BS>, renamer: R) -> Self {
         Self { inner, renamer }

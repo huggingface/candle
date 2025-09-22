@@ -124,10 +124,9 @@ macro_rules! binary_op_scalar {
         pub fn $fn_name<T: TensorOrScalar<B>>(&self, rhs: T) -> Result<Self> {
             let rhs = match rhs.to_tensor_scalar()? {
                 crate::scalar::TensorScalar::Tensor(rhs) => rhs,
-                crate::scalar::TensorScalar::Scalar(rhs) => rhs
-                    .to_dtype(self.dtype())?
-                    .to_device(self.device())?
-                    .broadcast_as(self.shape())?,
+                crate::scalar::TensorScalar::Scalar(rhs) => {
+                    rhs.to_dtype(self.dtype())?.broadcast_as(self.shape())?
+                }
             };
             let shape = self.same_shape_binary_op(&rhs, stringify!($fn_name))?;
             if self.elem_count() == 0 {
@@ -1119,13 +1118,12 @@ impl<B: BackendStorage> Tensor<B> {
     /// comparison operation is specified by the `op` argument.
     ///
     /// The returned tensor has the same shape as the original tensors and uses `u8` elements.
-    pub fn cmp<T: TensorOrScalar<B>>(&self, rhs: T, op: CmpOp) -> Result<Self> where {
+    pub fn cmp<T: TensorOrScalar<B>>(&self, rhs: T, op: CmpOp) -> Result<Self> {
         let rhs = match rhs.to_tensor_scalar()? {
             crate::scalar::TensorScalar::Tensor(rhs) => rhs,
-            crate::scalar::TensorScalar::Scalar(rhs) => rhs
-                .to_dtype(self.dtype())?
-                .to_device(self.device())?
-                .broadcast_as(self.shape())?,
+            crate::scalar::TensorScalar::Scalar(rhs) => {
+                rhs.to_dtype(self.dtype())?.broadcast_as(self.shape())?
+            }
         };
         let shape = self.same_shape_binary_op(&rhs, "cmp")?;
         let storage = self
@@ -2267,10 +2265,10 @@ impl<B: BackendStorage> Tensor<B> {
     /// If the target device is the same as the tensor device, only a shallow copy is performed.
     pub fn to_device<U: BackendStorage>(&self, device: &U::Device) -> Result<Tensor<U>>
     where
-        U::Device: TryConvertStorage<B, U>,
+        U: TryConvertStorage<B>,
     {
         let storage = self.storage().clone();
-        let storage = device.convert(storage)?;
+        let storage = U::convert(storage, device)?;
         let op = BackpropOp::none();
         let tensor_ = Tensor_ {
             id: TensorId::new(),
@@ -2296,6 +2294,22 @@ impl<B: BackendStorage> Tensor<B> {
             is_variable: false,
             dtype: self.dtype,
             device: crate::CpuDevice,
+        };
+        Ok(Tensor(Arc::new(tensor_)))
+    }
+
+    /// If the tensor is cpu only a shallow copy is performed.
+    pub fn from_cpu(&self, t: Tensor<crate::CpuStorage>) -> Result<Self> {
+        let storage = self.device.storage_from_cpu_storage(&t.storage())?;
+        let op = BackpropOp::none();
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: Arc::new(RwLock::new(storage)),
+            layout: self.layout.clone(),
+            op,
+            is_variable: false,
+            dtype: self.dtype,
+            device: self.device.clone(),
         };
         Ok(Tensor(Arc::new(tensor_)))
     }

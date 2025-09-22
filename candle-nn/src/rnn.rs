@@ -129,11 +129,7 @@ pub struct LSTM<B: BackendStorage> {
     dtype: DType,
 }
 
-impl<B> LSTM<B>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+impl<B: BackendStorage> LSTM<B> {
     /// Creates a LSTM layer.
     pub fn new(
         in_dim: usize,
@@ -190,16 +186,12 @@ where
 }
 
 /// Creates a LSTM layer.
-pub fn lstm<B>(
+pub fn lstm<B: BackendStorage>(
     in_dim: usize,
     hidden_dim: usize,
     config: LSTMConfig,
     vb: crate::VarBuilder<B>,
-) -> Result<LSTM<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<LSTM<B>> {
     LSTM::new(in_dim, hidden_dim, config, vb)
 }
 
@@ -310,7 +302,6 @@ pub struct GRU<B: BackendStorage> {
 impl<B> GRU<B>
 where
     B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
 {
     /// Creates a GRU layer.
     pub fn new(

@@ -1,7 +1,10 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{self, CmpOp, ReduceOp};
 use crate::scalar::Scalar;
-use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
+use crate::{
+    CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape,
+    TryConvertStorage,
+};
 use crate::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 
 // We do not want to implement Clone on Storage as cloning may fail because of
@@ -28,6 +31,36 @@ impl From<CudaStorage> for Storage {
 impl From<MetalStorage> for Storage {
     fn from(storage: MetalStorage) -> Self {
         Storage::Metal(storage)
+    }
+}
+
+impl TryConvertStorage<CpuStorage> for Storage {
+    fn convert(storage: CpuStorage, device: &Device) -> Result<Self> {
+        device.storage_from_cpu_storage(&storage)
+    }
+}
+
+impl TryConvertStorage<CudaStorage> for Storage {
+    fn convert(storage: CudaStorage, device: &Device) -> Result<Self> {
+        match device {
+            Device::Cpu => Ok(Storage::Cpu(storage.to_cpu_storage()?)),
+            Device::Cuda(_) => Ok(storage.into()),
+            _ => Err(crate::Error::Msg(
+                "Device does not support CUDA storage".into(),
+            )),
+        }
+    }
+}
+
+impl TryConvertStorage<MetalStorage> for Storage {
+    fn convert(storage: MetalStorage, device: &Device) -> Result<Self> {
+        match device {
+            Device::Cpu => Ok(Storage::Cpu(storage.to_cpu_storage()?)),
+            Device::Metal(_) => Ok(storage.into()),
+            _ => Err(crate::Error::Msg(
+                "Device does not support Metal storage".into(),
+            )),
+        }
     }
 }
 

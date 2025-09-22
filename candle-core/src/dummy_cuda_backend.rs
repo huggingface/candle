@@ -2,7 +2,7 @@
 //!
 #![allow(dead_code)]
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{BackendDevice, CpuStorage, DType, Error, Layout, Result, Shape, TryConvertStorage};
+use crate::{CpuStorage, DType, Error, Layout, Result, Shape, TryConvertStorage};
 
 #[derive(Debug, Clone)]
 pub struct CudaDevice;
@@ -28,9 +28,9 @@ impl CudaDevice {
     }
 }
 
-impl TryConvertStorage<CpuStorage, CudaStorage> for CudaDevice {
-    fn convert(&self, storage: CpuStorage) -> Result<CudaStorage> {
-        self.storage_from_cpu_storage(&storage)
+impl TryConvertStorage<CpuStorage> for CudaStorage {
+    fn convert(_storage: CpuStorage, _device: &CudaDevice) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
     }
 }
 

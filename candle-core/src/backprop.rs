@@ -704,10 +704,13 @@ impl<B: BackendStorage> Tensor<B> {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
-                    Op::ToDevice(arg) => {
+                    Op::ToDevice(_arg) => {
+                        /*
+                        TODO: fix
                         let sum_grad = grads.or_insert(arg)?;
                         let arg_grad = grad.to_device(sum_grad.device())?;
                         *sum_grad = sum_grad.add(&arg_grad)?
+                         */
                     }
                     Op::Transpose(arg, dim1, dim2) => {
                         let arg_grad = grad.transpose(*dim1, *dim2)?;
