@@ -1,6 +1,6 @@
 use crate::{BackendDevice, DType, Result, TryConvertStorage};
 use candle_metal_kernels::{
-    metal_utils::{
+    metal::{
         Buffer, BufferMap, CommandBuffer, Commands, ComputePipeline, Device, MTLResourceOptions,
     },
     Kernels,
@@ -79,7 +79,7 @@ impl AsRef<MetalDevice> for MetalDevice {
 }
 
 impl MetalDevice {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     pub fn compile(
         &self,
         func_name: &'static str,
@@ -129,7 +129,7 @@ impl MetalDevice {
         if flushed {
             self.drop_unused_buffers()?
         }
-        Ok(command_buffer)
+        Ok(command_buffer.clone())
     }
 
     pub fn wait_until_completed(&self) -> Result<()> {

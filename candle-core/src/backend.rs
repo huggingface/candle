@@ -256,7 +256,7 @@ impl UgDevice for CudaDevice {
 
 #[cfg(all(feature = "metal", not(target_arch = "wasm32")))]
 impl UgDevice for MetalDevice {
-    type UgFunction = candle_metal_kernels::metal_utils::ComputePipeline;
+    type UgFunction = candle_metal_kernels::metal::ComputePipeline;
 
     fn compile(
         &self,

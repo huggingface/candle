@@ -2,7 +2,7 @@ use super::{GgmlDType, QStorage};
 use crate::backend::BackendStorage;
 use crate::quantized::{GgmlType, QuantizedBackend, QuantizedDevice};
 use crate::{DType, MetalDevice, MetalStorage, Result, Shape, D};
-use candle_metal_kernels::metal_utils::Buffer;
+use candle_metal_kernels::metal::Buffer;
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::sync::Arc;

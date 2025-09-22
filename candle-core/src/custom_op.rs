@@ -406,7 +406,7 @@ where
     B::Device: UgDevice,
 {
     #[allow(unused)]
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     pub fn new(
         name: &'static str,
         kernel: ug::lang::ssa::Kernel,

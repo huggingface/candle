@@ -257,6 +257,10 @@ pub fn hard_sigmoid<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
     ((xs + 3.0)? / 6.0)?.clamp(0f32, 1f32)
 }
 
+pub fn mish<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
+    xs * (1.0 + xs.exp()?)?.log()?.tanh()
+}
+
 pub fn leaky_relu<B: BackendStorage>(xs: &Tensor<B>, negative_slope: f64) -> Result<Tensor<B>> {
     let zeros = xs.zeros_like()?;
     xs.maximum(&zeros)? + xs.minimum(&zeros)? * negative_slope

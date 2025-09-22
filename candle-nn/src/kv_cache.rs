@@ -66,7 +66,7 @@ impl<B: BackendStorage> Cache<B> {
             self.all_data = Some(ad)
         };
         let ad = self.all_data.as_mut().unwrap();
-        if self.current_seq_len + seq_len > self.max_seq_len {
+        while self.current_seq_len + seq_len > self.max_seq_len {
             let mut shape = src.dims().to_vec();
             shape[self.dim] = self.grow_by;
             let next_ad = Tensor::zeros(shape, src.dtype(), src.device())?;

@@ -5,7 +5,7 @@ use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvT
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 use candle_metal_kernels::{
-    metal_utils::{Buffer, Commands, Device, MTLResourceOptions},
+    metal::{Buffer, Commands, Device, MTLResourceOptions},
     BufferOffset, CallConvTranspose2dCfg, Kernels,
 };
 use objc2_foundation::NSRange;
@@ -1889,7 +1889,7 @@ impl MetalStorage {
         let lhs = buffer_o(&self.buffer, lhs_l, self.dtype);
         let rhs = buffer_o(&rhs.buffer, rhs_l, rhs.dtype);
         let (buffer, dtype) = if lhs_l.is_contiguous() && rhs_l.is_contiguous() && &op[..1] != "b" {
-            use candle_metal_kernels::binary::contiguous;
+            use candle_metal_kernels::kernels::binary::contiguous;
 
             let (kernel_name, dtype) = match (op, self.dtype) {
                 ("add", DType::F32) => (contiguous::add::FLOAT, self.dtype),
@@ -1976,7 +1976,7 @@ impl MetalStorage {
             .map_err(MetalError::from)?;
             (buffer, dtype)
         } else {
-            use candle_metal_kernels::binary::strided;
+            use candle_metal_kernels::kernels::binary::strided;
 
             let (kernel_name, dtype) = match (op, self.dtype) {
                 ("badd", DType::F32) => (strided::add::FLOAT, self.dtype),

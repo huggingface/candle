@@ -1708,6 +1708,27 @@ test_device!(asort, asort_cpu, asort_gpu, asort_metal);
 test_device!(var, var_cpu, var_gpu, var_metal);
 test_device!(zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal);
 
+fn tensor_send_sync<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
+    let tensor: Tensor<B> = Tensor::new(vec![1.0f32, 2.0, 3.0], device)?;
+
+    for _ in 0..10 {
+        let tensor = tensor.clone();
+        std::thread::spawn(move || {
+            let new = tensor.add(&tensor).unwrap();
+            let result: Vec<f32> = new.to_vec1().unwrap();
+            assert_eq!(result, vec![2.0f32, 4.0, 6.0]);
+        });
+    }
+
+    Ok(())
+}
+test_device!(
+    tensor_send_sync,
+    tensor_send_sync_cpu,
+    tensor_send_sync_gpu,
+    tensor_send_sync_metal
+);
+
 // There was originally a bug on the CPU implementation for randn
 // https://github.com/huggingface/candle/issues/381
 #[test]
