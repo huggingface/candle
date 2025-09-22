@@ -652,7 +652,7 @@ impl PyTensor {
                     out
                 }
                 Indexer::IndexSelect(indexes) => {
-                    let out = x.index_select(&indexes, current_dim).map_err(wrap_err)?;
+                    let out = x.index_select(indexes, current_dim).map_err(wrap_err)?;
                     current_dim += 1;
                     out
                 }

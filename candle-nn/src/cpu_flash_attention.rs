@@ -89,23 +89,23 @@ where
     // Inline CPU slice extraction for q, k, v, and optional mask
     let (q_guard, q_layout) = q.storage_and_layout();
     let q_data: &[T] = {
-        let data = &*q_guard.as_slice::<T>()?;
+        let data = q_guard.as_slice::<T>()?;
         &data[q_layout.start_offset()..]
     };
     let (k_guard, k_layout) = k.storage_and_layout();
     let k_data: &[T] = {
-        let data = &*k_guard.as_slice::<T>()?;
+        let data = k_guard.as_slice::<T>()?;
         &data[k_layout.start_offset()..]
     };
     let (v_guard, v_layout) = v.storage_and_layout();
     let v_data: &[T] = {
-        let data = &*v_guard.as_slice::<T>()?;
+        let data = v_guard.as_slice::<T>()?;
         &data[v_layout.start_offset()..]
     };
     let mask_guard = mask.map(|mask| mask.storage_and_layout().0);
     let mask_data: Option<&[T]> = if let Some(mask_guard) = &mask_guard {
         let mask = mask.as_ref().unwrap();
-        let data = &*mask_guard.as_slice::<T>()?;
+        let data = mask_guard.as_slice::<T>()?;
         Some(&data[mask.layout().start_offset()..])
     } else {
         None
