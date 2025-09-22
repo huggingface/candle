@@ -501,13 +501,8 @@ impl<QB: QuantizedBackend> QTensor<QB> {
         &self.shape
     }
 
-    // TODO: fix qtensor.dequantize impl
-    pub fn dequantize(&self, _: &QB::Device) -> Result<Tensor<QB::Storage>>
-    where
-        QB::Storage: BackendStorage<Device = QB::Device>,
-    {
+    pub fn dequantize(&self) -> Result<Tensor<QB::Storage>> {
         let storage = self.storage.dequantize(self.shape.elem_count())?;
-        //let storage: QB::Storage = device.convert(storage)?;
         let none = crate::op::BackpropOp::none();
         Ok(crate::tensor::from_storage(
             storage,
@@ -517,7 +512,7 @@ impl<QB: QuantizedBackend> QTensor<QB> {
         ))
     }
 
-    pub fn dequantize_f16(&self, _: &QB::Device) -> Result<Tensor<QB::Storage>> {
+    pub fn dequantize_f16(&self) -> Result<Tensor<QB::Storage>> {
         // In the CUDA case, we have a specialized kernel as this can be useful for volta
         // architectures. https://github.com/huggingface/candle/issues/2136
 
@@ -527,6 +522,7 @@ impl<QB: QuantizedBackend> QTensor<QB> {
         crate::tensor::from_storage(s, self.shape.clone(), none, false).to_dtype(crate::DType::F16)
 
         /*
+        TODO: fix cuda specific kernel
         match &self.storage {
             QStorage::Cuda(s) => {
                 let s = s.dequantize_f16(self.shape.elem_count())?;
@@ -587,7 +583,6 @@ impl<B: QuantizedBackend> QMatMul<B> {
             _ => DEQUANTIZE_ALL.with(|b| *b),
         };
         let t = if dequantize {
-            // TODO: fix qtensor.dequantize impl
             let storage = qtensor.storage.dequantize(qtensor.shape.elem_count())?;
             let tensor = Tensor::from_storage(
                 storage,
@@ -600,7 +595,7 @@ impl<B: QuantizedBackend> QMatMul<B> {
             //let tensor: Tensor<B::Storage> = qtensor.dequantize(&device)?;
             //Self::Tensor(tensor)
         } else if DEQUANTIZE_ALL_F16.with(|b| *b) {
-            let tensor = qtensor.dequantize_f16(&qtensor.device())?;
+            let tensor = qtensor.dequantize_f16()?;
             Self::TensorF16(tensor)
         } else {
             Self::QTensor(qtensor)
@@ -614,7 +609,7 @@ impl<B: QuantizedBackend> QMatMul<B> {
 
     pub fn dequantize_f16(&self) -> Result<Tensor<B::Storage>> {
         match self {
-            Self::QTensor(t) => t.dequantize_f16(&t.device()),
+            Self::QTensor(t) => t.dequantize_f16(),
             Self::Tensor(t) => t.to_dtype(DType::F16),
             Self::TensorF16(t) => Ok(t.clone()),
         }

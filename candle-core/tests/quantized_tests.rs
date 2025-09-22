@@ -300,8 +300,8 @@ where
 
     let src: Tensor<QB::Storage> = Tensor::from_slice(&src, (32 * 4,), device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, GgmlDType::Q4_0)?;
-    let dst: Tensor<QB::Storage> = quant.dequantize(device)?;
-    let dst_f16 = quant.dequantize_f16(device)?;
+    let dst: Tensor<QB::Storage> = quant.dequantize()?;
+    let dst_f16 = quant.dequantize_f16()?;
     let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -338,8 +338,8 @@ where
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
     let src: Tensor<QB::Storage> = Tensor::from_slice(&src, (32 * 4,), device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, GgmlDType::Q4_1)?;
-    let dst = quant.dequantize(device)?;
-    let dst_f16 = quant.dequantize_f16(device)?;
+    let dst = quant.dequantize()?;
+    let dst_f16 = quant.dequantize_f16()?;
     let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -376,8 +376,8 @@ where
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
     let src: Tensor<QB::Storage> = Tensor::from_slice(&src, (32 * 4,), device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, GgmlDType::Q5_0)?;
-    let dst = quant.dequantize(device)?;
-    let dst_f16 = quant.dequantize_f16(device)?;
+    let dst = quant.dequantize()?;
+    let dst_f16 = quant.dequantize_f16()?;
     let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -414,8 +414,8 @@ where
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
     let src: Tensor<QB::Storage> = Tensor::from_slice(&src, (32 * 4,), device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, GgmlDType::Q5_1)?;
-    let dst = quant.dequantize(device)?;
-    let dst_f16 = quant.dequantize_f16(device)?;
+    let dst = quant.dequantize()?;
+    let dst_f16 = quant.dequantize_f16()?;
     let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -513,8 +513,8 @@ where
     let src = create_ggml_like_vector(0.0);
     let src: Tensor<QB::Storage> = Tensor::from_slice(&src, (GGML_TEST_SIZE,), device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, dtype)?;
-    let dst = quant.dequantize(device)?;
-    let dst_f16 = quant.dequantize_f16(device)?;
+    let dst = quant.dequantize()?;
+    let dst_f16 = quant.dequantize_f16()?;
     let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -542,8 +542,8 @@ where
 
     let src: Tensor<QB::Storage> = get_test_vector2(0.5, 1024, device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, dtype)?;
-    let dst = quant.dequantize(device)?;
-    let dst_f16 = quant.dequantize_f16(device)?;
+    let dst = quant.dequantize()?;
+    let dst_f16 = quant.dequantize_f16()?;
     let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -568,8 +568,8 @@ where
 
     let src_big: Tensor<QB::Storage> = get_test_vector2(128.0, 1024, device)?;
     let quant_big: QTensor<QB> = QTensor::quantize(&src_big, dtype)?;
-    let dst_big = quant_big.dequantize(device)?;
-    let dst_big_f16 = quant_big.dequantize_f16(device)?;
+    let dst_big = quant_big.dequantize()?;
+    let dst_big_f16 = quant_big.dequantize_f16()?;
     let diff = (dst_big.to_dtype(DType::F16)? - dst_big_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -594,8 +594,8 @@ where
     let dtype = GgmlDType::Q3K;
     let src: Tensor<QB::Storage> = get_test_vector2(0.5, 1024, device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, dtype)?;
-    let dst = quant.dequantize(device)?;
-    let dst_f16 = quant.dequantize_f16(device)?;
+    let dst = quant.dequantize()?;
+    let dst_f16 = quant.dequantize_f16()?;
     let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -620,8 +620,8 @@ where
 
     let src_big: Tensor<QB::Storage> = get_test_vector2(128.0, 1024, device)?;
     let quant_big: QTensor<QB> = QTensor::quantize(&src_big, dtype)?;
-    let dst_big = quant_big.dequantize(device)?;
-    let dst_big_f16 = quant_big.dequantize_f16(device)?;
+    let dst_big = quant_big.dequantize()?;
+    let dst_big_f16 = quant_big.dequantize_f16()?;
     let diff = (dst_big.to_dtype(DType::F16)? - dst_big_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -646,8 +646,8 @@ where
     let dtype = GgmlDType::Q4K;
     let src: Tensor<QB::Storage> = get_test_vector2(0.5, 1024, device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, dtype)?;
-    let dst = quant.dequantize(device)?;
-    let dst_f16 = quant.dequantize_f16(device)?;
+    let dst = quant.dequantize()?;
+    let dst_f16 = quant.dequantize_f16()?;
     let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -672,8 +672,8 @@ where
 
     let src_big: Tensor<QB::Storage> = get_test_vector2(128.0, 1024, device)?;
     let quant_big: QTensor<QB> = QTensor::quantize(&src_big, dtype)?;
-    let dst_big = quant_big.dequantize(device)?;
-    let dst_big_f16 = quant_big.dequantize_f16(device)?;
+    let dst_big = quant_big.dequantize()?;
+    let dst_big_f16 = quant_big.dequantize_f16()?;
     let diff = (dst_big.to_dtype(DType::F16)? - dst_big_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -698,8 +698,8 @@ where
     let dtype = GgmlDType::Q5K;
     let src: Tensor<QB::Storage> = get_test_vector2(0.5, 1024, device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, dtype)?;
-    let dst = quant.dequantize(device)?;
-    let dst_f16 = quant.dequantize_f16(device)?;
+    let dst = quant.dequantize()?;
+    let dst_f16 = quant.dequantize_f16()?;
     let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -724,8 +724,8 @@ where
 
     let src_big: Tensor<QB::Storage> = get_test_vector2(128.0, 1024, device)?;
     let quant_big: QTensor<QB> = QTensor::quantize(&src_big, dtype)?;
-    let dst_big = quant_big.dequantize(device)?;
-    let dst_big_f16 = quant_big.dequantize_f16(device)?;
+    let dst_big = quant_big.dequantize()?;
+    let dst_big_f16 = quant_big.dequantize_f16()?;
     let diff = (dst_big.to_dtype(DType::F16)? - dst_big_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -750,8 +750,8 @@ where
     let dtype = GgmlDType::Q6K;
     let src: Tensor<QB::Storage> = get_test_vector2(0.5, 1024, device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, dtype)?;
-    let dst = quant.dequantize(device)?;
-    let dst_f16 = quant.dequantize_f16(device)?;
+    let dst = quant.dequantize()?;
+    let dst_f16 = quant.dequantize_f16()?;
     let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -776,8 +776,8 @@ where
 
     let src_big: Tensor<QB::Storage> = get_test_vector2(128.0, 1024, device)?;
     let quant_big: QTensor<QB> = QTensor::quantize(&src_big, dtype)?;
-    let dst_big = quant_big.dequantize(device)?;
-    let dst_big_f16 = quant_big.dequantize_f16(device)?;
+    let dst_big = quant_big.dequantize()?;
+    let dst_big_f16 = quant_big.dequantize_f16()?;
     let diff = (dst_big.to_dtype(DType::F16)? - dst_big_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -802,8 +802,8 @@ where
     let dtype = GgmlDType::Q8K;
     let src: Tensor<QB::Storage> = get_test_vector2(0.5, 1024, device)?;
     let quant: QTensor<QB> = QTensor::quantize(&src, dtype)?;
-    let dst = quant.dequantize(device)?;
-    let dst_f16 = quant.dequantize_f16(device)?;
+    let dst = quant.dequantize()?;
+    let dst_f16 = quant.dequantize_f16()?;
     let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
         .to_dtype(DType::F32)?
         .abs()?
@@ -828,8 +828,8 @@ where
 
     let src_big: Tensor<QB::Storage> = get_test_vector2(128.0, 1024, device)?;
     let quant_big: QTensor<QB> = QTensor::quantize(&src_big, dtype)?;
-    let dst_big = quant_big.dequantize(device)?;
-    let dst_big_f16 = quant_big.dequantize_f16(device)?;
+    let dst_big = quant_big.dequantize()?;
+    let dst_big_f16 = quant_big.dequantize_f16()?;
     let diff = (dst_big.to_dtype(DType::F16)? - dst_big_f16)?
         .to_dtype(DType::F32)?
         .abs()?
