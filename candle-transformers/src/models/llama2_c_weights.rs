@@ -80,7 +80,7 @@ impl Config {
 
 impl<B: BackendStorage + 'static> TransformerWeights<B>
 where
-    HashMap<String, Tensor<B>>: SimpleBackend,
+    HashMap<String, Tensor<B>>: SimpleBackend<B>,
 {
     pub fn from_reader<R: std::io::Read>(r: &mut R, c: &Config, dev: &B::Device) -> Result<Self> {
         let token_embedding_table = read_tensor(r, (c.vocab_size, c.dim), dev)?;

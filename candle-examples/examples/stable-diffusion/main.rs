@@ -515,7 +515,7 @@ fn inpainting_tensors<B: BackendStorage>(
             let mask = mask.interpolate2d(w, h)?;
             // shape: [1, 4, 128, 128]
             let mask_latents = vae.encode(&masked_img)?;
-            let mask_latents = (mask_latents.sample()? * vae_scale)?.to_device(device)?;
+            let mask_latents = (mask_latents.sample()? * vae_scale)?;
 
             let mask_4 = mask.as_ref().repeat(&[1, 4, 1, 1])?;
             let (mask_latents, mask) = if use_guide_scale {
@@ -709,7 +709,7 @@ fn run<B: BackendStorage>(args: Args) -> Result<()> {
         let timesteps = scheduler.timesteps().to_vec();
         let latents = match &init_latent_dist {
             Some(init_latent_dist) => {
-                let latents = (init_latent_dist.sample()? * vae_scale)?.to_device(&device)?;
+                let latents = (init_latent_dist.sample()? * vae_scale)?;
                 if t_start < timesteps.len() {
                     let noise = latents.randn_like(0f64, 1f64)?;
                     scheduler.add_noise(&latents, noise, timesteps[t_start])?
@@ -756,8 +756,7 @@ fn run<B: BackendStorage>(args: Args) -> Result<()> {
                     1,
                 )?,
                 _ => latent_model_input,
-            }
-            .to_device(&device)?;
+            };
 
             let noise_pred =
                 unet.forward(&latent_model_input, timestep as f64, &text_embeddings)?;

@@ -217,7 +217,7 @@ fn run<B: BackendStorage>(args: Args) -> anyhow::Result<()> {
     let codes = codes.unsqueeze(0)?;
     let pcm = model
         .audio_encoder
-        .decode_codes(&codes.to_device(&device)?)?;
+        .decode_codes(&Tensor::from_cpu(codes, &device)?)?;
     println!("{pcm}");
     let pcm = pcm.i((0, 0))?;
     let pcm = candle_examples::audio::normalize_loudness(&pcm, 24_000, true)?;

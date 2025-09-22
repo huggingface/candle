@@ -1,17 +1,11 @@
 //! Implementation of Backend traits for Metal
 //!
-use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
-use candle_metal_kernels::{
-    metal::{Buffer, Commands, Device, MTLResourceOptions},
-    BufferOffset, CallConvTranspose2dCfg, Kernels,
-};
-use objc2_foundation::NSRange;
-use std::collections::HashMap;
-use std::ffi::c_void;
-use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
+use crate::{BackendDevice, BackendStorage, TryConvertStorage};
+use crate::{CpuStorage, DType, Layout, Result, Shape};
+use candle_metal_kernels::{metal::Buffer, BufferOffset, CallConvTranspose2dCfg};
+use std::sync::{Arc, PoisonError, TryLockError};
 
 mod device;
 pub use device::{DeviceId, MetalDevice};
@@ -2099,13 +2093,13 @@ impl MetalStorage {
 }
 
 impl TryConvertStorage<CpuStorage> for MetalStorage {
-    fn convert(storage: CpuStorage, device: &Self::Device) -> Result<Self, Error> {
+    fn convert(storage: CpuStorage, device: &Self::Device) -> Result<Self> {
         device.storage_from_cpu_storage_owned(storage)
     }
 }
 
 impl TryConvertStorage<MetalStorage> for MetalStorage {
-    fn convert(storage: MetalStorage, _: &Self::Device) -> Result<Self, Error> {
+    fn convert(storage: MetalStorage, _: &Self::Device) -> Result<Self> {
         // TODO: if multi gpu hits metal support transferring between metal devices
         Ok(storage)
     }

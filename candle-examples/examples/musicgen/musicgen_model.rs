@@ -321,7 +321,7 @@ impl<B: BackendStorage> MusicgenDecoder<B> {
             inputs_embeds = (inputs_embeds + codebook.forward(&inp)?)?
         }
         let inputs_embeds = inputs_embeds;
-        let positions = self.embed_positions.forward(&input)?.to_device(dev)?;
+        let positions = self.embed_positions.forward(&input)?;
         let mut xs = inputs_embeds.broadcast_add(&positions)?;
         let attention_mask = self.prepare_decoder_attention_mask(b_sz, seq_len)?;
         for decoder_layer in self.layers.iter_mut() {

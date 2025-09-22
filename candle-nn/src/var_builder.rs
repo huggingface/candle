@@ -4,13 +4,11 @@
 //! from a pre-trained checkpoint, e.g. using `VarBuilder::from_mmaped_safetensors`, or initialized
 //! for training, e.g. using `VarBuilder::from_varmap`.
 use crate::VarMap;
+use candle::BackendStorage;
 use candle::{safetensors::Load, DType, Error, Result, Shape, Tensor};
-use candle::{BackendStorage, CpuDevice, CpuStorage, TryConvertStorage};
 use safetensors::{slice::IndexOp, tensor::SafeTensors};
 use std::collections::HashMap;
 use std::sync::Arc;
-
-type CpuTensor = Tensor<CpuStorage>;
 
 /// A structure used to retrieve variables, these variables can either come from storage or be
 /// generated via some form of initialization.
@@ -19,7 +17,7 @@ type CpuTensor = Tensor<CpuStorage>;
 pub struct VarBuilderArgs<'a, B, BS>
 where
     B: Backend<BS>,
-    BS: BackendStorage + TryConvertStorage<CpuStorage>,
+    BS: BackendStorage,
 {
     data: Arc<TensorData<B, BS>>,
     path: Vec<String>,
@@ -30,7 +28,7 @@ where
 impl<B, BS> Clone for VarBuilderArgs<'_, B, BS>
 where
     B: Backend<BS>,
-    BS: BackendStorage + TryConvertStorage<CpuStorage>,
+    BS: BackendStorage,
 {
     fn clone(&self) -> Self {
         Self {
@@ -45,12 +43,13 @@ where
 /// A simple `VarBuilder`, this is less generic than `VarBuilderArgs` but should cover most common
 /// use cases.
 #[allow(type_alias_bounds)]
-pub type VarBuilder<'a, BS: BackendStorage> = VarBuilderArgs<'a, Box<dyn SimpleBackend + 'a>, BS>;
+pub type VarBuilder<'a, BS: BackendStorage> =
+    VarBuilderArgs<'a, Box<dyn SimpleBackend<BS> + 'a>, BS>;
 
 struct TensorData<B, BS>
 where
     B: Backend<BS>,
-    BS: BackendStorage + TryConvertStorage<CpuStorage>,
+    BS: BackendStorage,
 {
     backend: B,
     pub device: BS::Device,
@@ -65,7 +64,7 @@ where
 pub trait Backend<B>
 where
     Self: Send + Sync,
-    B: BackendStorage + TryConvertStorage<CpuStorage>,
+    B: BackendStorage,
 {
     type Hints: Default;
 
@@ -82,17 +81,23 @@ where
     fn contains_tensor(&self, name: &str) -> bool;
 }
 
-pub trait SimpleBackend: Send + Sync {
+pub trait SimpleBackend<B: BackendStorage>: Send + Sync {
     /// Retrieve a tensor based on a target name and shape.
-    fn get(&self, s: Shape, name: &str, h: crate::Init, dtype: DType)
-        -> Result<Tensor<CpuStorage>>;
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        h: crate::Init,
+        dtype: DType,
+        device: &B::Device,
+    ) -> Result<Tensor<B>>;
 
     fn contains_tensor(&self, name: &str) -> bool;
 }
 
-impl<B> Backend<B> for Box<dyn SimpleBackend + '_>
+impl<B> Backend<B> for Box<dyn SimpleBackend<B> + '_>
 where
-    B: BackendStorage + TryConvertStorage<CpuStorage>,
+    B: BackendStorage,
 {
     type Hints = crate::Init;
     fn get(
@@ -101,9 +106,9 @@ where
         name: &str,
         h: Self::Hints,
         dtype: DType,
-        dev: &B::Device,
+        device: &B::Device,
     ) -> Result<Tensor<B>> {
-        self.as_ref().get(s, name, h, dtype)?.to_device(dev)
+        self.as_ref().get(s, name, h, dtype, device)
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
@@ -114,12 +119,12 @@ where
 impl<B, BS> VarBuilderArgs<'_, B, BS>
 where
     B: Backend<BS>,
-    BS: BackendStorage + TryConvertStorage<CpuStorage>,
+    BS: BackendStorage,
 {
-    pub fn new_with_args(backend: B, dtype: DType, dev: &BS::Device) -> Self {
+    pub fn new_with_args(backend: B, dtype: DType, device: &BS::Device) -> Self {
         let data = TensorData {
             backend,
-            device: dev.clone(),
+            device: device.clone(),
         };
         Self {
             data: Arc::new(data),
@@ -240,9 +245,16 @@ where
 
 struct Zeros;
 
-impl SimpleBackend for Zeros {
-    fn get(&self, s: Shape, _: &str, _: crate::Init, dtype: DType) -> Result<CpuTensor> {
-        Tensor::zeros(s, dtype, &CpuDevice)
+impl<B: BackendStorage> SimpleBackend<B> for Zeros {
+    fn get(
+        &self,
+        s: Shape,
+        _: &str,
+        _: crate::Init,
+        dtype: DType,
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
+        Tensor::zeros(s, dtype, device)
     }
 
     fn contains_tensor(&self, _name: &str) -> bool {
@@ -250,8 +262,15 @@ impl SimpleBackend for Zeros {
     }
 }
 
-impl SimpleBackend for HashMap<String, CpuTensor> {
-    fn get(&self, s: Shape, name: &str, _: crate::Init, dtype: DType) -> Result<CpuTensor> {
+impl<B: BackendStorage> SimpleBackend<B> for HashMap<String, Tensor<B>> {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        _: crate::Init,
+        dtype: DType,
+        _device: &B::Device,
+    ) -> Result<Tensor<B>> {
         let tensor = self
             .get(name)
             .ok_or_else(|| {
@@ -277,9 +296,16 @@ impl SimpleBackend for HashMap<String, CpuTensor> {
     }
 }
 
-impl SimpleBackend for VarMap<CpuStorage> {
-    fn get(&self, s: Shape, name: &str, h: crate::Init, dtype: DType) -> Result<CpuTensor> {
-        VarMap::get(self, s, name, h, dtype, &CpuDevice)
+impl<B: BackendStorage> SimpleBackend<B> for VarMap<B> {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        h: crate::Init,
+        dtype: DType,
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
+        VarMap::get(self, s, name, h, dtype, device)
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
@@ -359,8 +385,15 @@ pub struct SafeTensorWithRouting<'a> {
     safetensors: Vec<SafeTensors<'a>>,
 }
 
-impl SimpleBackend for SafeTensorWithRouting<'_> {
-    fn get(&self, s: Shape, path: &str, _: crate::Init, dtype: DType) -> Result<CpuTensor> {
+impl<B: BackendStorage> SimpleBackend<B> for SafeTensorWithRouting<'_> {
+    fn get(
+        &self,
+        s: Shape,
+        path: &str,
+        _: crate::Init,
+        dtype: DType,
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
         let index = self.routing.get(path).ok_or_else(|| {
             Error::CannotFindTensor {
                 path: path.to_string(),
@@ -369,7 +402,7 @@ impl SimpleBackend for SafeTensorWithRouting<'_> {
         })?;
         let tensor = self.safetensors[*index]
             .tensor(path)?
-            .load(&CpuDevice)?
+            .load(device)?
             .to_dtype(dtype)?;
         if tensor.shape() != &s {
             Err(candle::Error::UnexpectedShape {
@@ -387,8 +420,15 @@ impl SimpleBackend for SafeTensorWithRouting<'_> {
     }
 }
 
-impl SimpleBackend for candle::npy::NpzTensors {
-    fn get(&self, s: Shape, path: &str, _: crate::Init, dtype: DType) -> Result<CpuTensor> {
+impl<B: BackendStorage> SimpleBackend<B> for candle::npy::NpzTensors {
+    fn get(
+        &self,
+        s: Shape,
+        path: &str,
+        _: crate::Init,
+        dtype: DType,
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
         let tensor = match self.get(path)? {
             None => Err(Error::CannotFindTensor {
                 path: path.to_string(),
@@ -405,7 +445,7 @@ impl SimpleBackend for candle::npy::NpzTensors {
             }
             .bt())?
         }
-        Ok(tensor)
+        Tensor::from_cpu(tensor, device)
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
@@ -413,8 +453,15 @@ impl SimpleBackend for candle::npy::NpzTensors {
     }
 }
 
-impl SimpleBackend for candle::pickle::PthTensors {
-    fn get(&self, s: Shape, path: &str, _: crate::Init, dtype: DType) -> Result<CpuTensor> {
+impl<B: BackendStorage> SimpleBackend<B> for candle::pickle::PthTensors {
+    fn get(
+        &self,
+        s: Shape,
+        path: &str,
+        _: crate::Init,
+        dtype: DType,
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
         let tensor = match self.get(path)? {
             None => Err(Error::CannotFindTensor {
                 path: path.to_string(),
@@ -431,7 +478,7 @@ impl SimpleBackend for candle::pickle::PthTensors {
             }
             .bt())?
         }
-        Ok(tensor)
+        Tensor::from_cpu(tensor, device)
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
@@ -439,9 +486,16 @@ impl SimpleBackend for candle::pickle::PthTensors {
     }
 }
 
-impl SimpleBackend for candle::safetensors::MmapedSafetensors {
-    fn get(&self, s: Shape, name: &str, _: crate::Init, dtype: DType) -> Result<CpuTensor> {
-        let tensor = self.load(name, &CpuDevice)?.to_dtype(dtype)?;
+impl<B: BackendStorage> SimpleBackend<B> for candle::safetensors::MmapedSafetensors {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        _: crate::Init,
+        dtype: DType,
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
+        let tensor = self.load(name, device)?.to_dtype(dtype)?;
         if tensor.shape() != &s {
             Err(candle::Error::UnexpectedShape {
                 msg: format!("shape mismatch for {name}"),
@@ -458,9 +512,16 @@ impl SimpleBackend for candle::safetensors::MmapedSafetensors {
     }
 }
 
-impl SimpleBackend for candle::safetensors::BufferedSafetensors {
-    fn get(&self, s: Shape, name: &str, _: crate::Init, dtype: DType) -> Result<CpuTensor> {
-        let tensor = self.load(name, &CpuDevice)?.to_dtype(dtype)?;
+impl<B: BackendStorage> SimpleBackend<B> for candle::safetensors::BufferedSafetensors {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        _: crate::Init,
+        dtype: DType,
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
+        let tensor = self.load(name, device)?.to_dtype(dtype)?;
         if tensor.shape() != &s {
             Err(candle::Error::UnexpectedShape {
                 msg: format!("shape mismatch for {name}"),
@@ -477,9 +538,16 @@ impl SimpleBackend for candle::safetensors::BufferedSafetensors {
     }
 }
 
-impl SimpleBackend for candle::safetensors::SliceSafetensors<'_> {
-    fn get(&self, s: Shape, name: &str, _: crate::Init, dtype: DType) -> Result<CpuTensor> {
-        let tensor = self.load(name, &CpuDevice)?.to_dtype(dtype)?;
+impl<B: BackendStorage> SimpleBackend<B> for candle::safetensors::SliceSafetensors<'_> {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        _: crate::Init,
+        dtype: DType,
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
+        let tensor = self.load(name, device)?.to_dtype(dtype)?;
         if tensor.shape() != &s {
             Err(candle::Error::UnexpectedShape {
                 msg: format!("shape mismatch for {name}"),
@@ -498,7 +566,7 @@ impl SimpleBackend for candle::safetensors::SliceSafetensors<'_> {
 
 impl<'a, BS> VarBuilder<'a, BS>
 where
-    BS: BackendStorage + TryConvertStorage<CpuStorage> + 'a,
+    BS: BackendStorage + 'a,
 {
     /// Initializes a `VarBuilder` using a custom backend.
     ///
@@ -506,7 +574,7 @@ where
     /// constructor is provided to allow downstream users to define their own
     /// backends.
     pub fn from_backend(
-        backend: Box<dyn SimpleBackend + 'a>,
+        backend: Box<dyn SimpleBackend<BS> + 'a>,
         dtype: DType,
         device: &BS::Device,
     ) -> Self {
@@ -531,7 +599,7 @@ where
     /// returned if no tensor is available under the requested path or on shape mismatches.
     pub fn from_tensors(ts: HashMap<String, Tensor<BS>>, dtype: DType, device: &BS::Device) -> Self
     where
-        HashMap<String, Tensor<BS>>: SimpleBackend,
+        HashMap<String, Tensor<BS>>: SimpleBackend<BS>,
     {
         Self::from_backend(Box::new(ts), dtype, device)
     }
@@ -544,7 +612,7 @@ where
     /// method on `varmap`, this can be used to start model training from an existing checkpoint.
     pub fn from_varmap(varmap: &VarMap<BS>, dtype: DType, device: &BS::Device) -> Self
     where
-        VarMap<BS>: SimpleBackend,
+        VarMap<BS>: SimpleBackend<BS>,
     {
         Self::from_backend(Box::new(varmap.clone()), dtype, device)
     }
@@ -649,7 +717,7 @@ where
         let device: BS::Device = self.device().clone();
         let path = self.path.clone();
         let backend = Rename::new(self, renamer);
-        let backend: Box<dyn SimpleBackend + 'a> = Box::new(backend);
+        let backend: Box<dyn SimpleBackend<BS> + 'a> = Box::new(backend);
         let data = TensorData { backend, device };
         Self {
             data: Arc::new(data),
@@ -663,8 +731,7 @@ where
 pub struct ShardedSafeTensors(candle::safetensors::MmapedSafetensors);
 
 #[allow(type_alias_bounds)]
-pub type ShardedVarBuilder<'a, BS: BackendStorage + TryConvertStorage<CpuStorage>> =
-    VarBuilderArgs<'a, ShardedSafeTensors, BS>;
+pub type ShardedVarBuilder<'a, BS: BackendStorage> = VarBuilderArgs<'a, ShardedSafeTensors, BS>;
 
 impl ShardedSafeTensors {
     /// Initializes a `VarBuilder` that retrieves tensors stored in a collection of safetensors
@@ -679,7 +746,7 @@ impl ShardedSafeTensors {
         dev: &BS::Device,
     ) -> Result<ShardedVarBuilder<'static, BS>>
     where
-        BS: BackendStorage + TryConvertStorage<CpuStorage>,
+        BS: BackendStorage,
     {
         let tensors = candle::safetensors::MmapedSafetensors::multi(paths)?;
         let backend = ShardedSafeTensors(tensors);
@@ -717,7 +784,7 @@ impl Default for Shard {
 /// `get_sharded("tensor", 1, 0, 2)` means `tensor.i((.., ..512))`
 impl<B> Backend<B> for ShardedSafeTensors
 where
-    B: BackendStorage + TryConvertStorage<CpuStorage>,
+    B: BackendStorage,
 {
     type Hints = Shard;
 
@@ -727,13 +794,19 @@ where
         path: &str,
         h: Self::Hints,
         dtype: DType,
-        dev: &B::Device,
+        device: &B::Device,
     ) -> Result<Tensor<B>> {
         if h.world_size == 1 {
             // There is no sharding to be applied here so we use the default backend to speed
             // things up.
-            return SimpleBackend::get(&self.0, target_shape, path, Default::default(), dtype)?
-                .to_device(dev);
+            return SimpleBackend::get(
+                &self.0,
+                target_shape,
+                path,
+                Default::default(),
+                dtype,
+                device,
+            );
         }
 
         let Shard {
@@ -780,7 +853,7 @@ where
 
         let view_dtype: DType = view_dtype.try_into()?;
         let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
-        Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)
+        Tensor::from_raw_buffer(&raw, view_dtype, &shape, device)?.to_dtype(dtype)
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
@@ -799,22 +872,27 @@ pub trait Renamer {
 pub struct Rename<'a, R, BS>
 where
     R: Renamer,
-    BS: BackendStorage + TryConvertStorage<CpuStorage>,
+    BS: BackendStorage,
 {
     inner: VarBuilder<'a, BS>,
     renamer: R,
 }
 
-impl<R, BS> SimpleBackend for Rename<'_, R, BS>
+impl<R, BS> SimpleBackend<BS> for Rename<'_, R, BS>
 where
     R: Renamer + Sync + Send,
-    BS: BackendStorage + TryConvertStorage<CpuStorage>,
+    BS: BackendStorage,
 {
-    fn get(&self, s: Shape, name: &str, h: crate::Init, dtype: DType) -> Result<CpuTensor> {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        h: crate::Init,
+        dtype: DType,
+        _device: &BS::Device,
+    ) -> Result<Tensor<BS>> {
         let name = self.renamer.rename(name);
-        self.inner
-            .get_with_hints_dtype(s, &name, h, dtype)?
-            .to_cpu()
+        self.inner.get_with_hints_dtype(s, &name, h, dtype)
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
@@ -826,7 +904,7 @@ where
 impl<R, BS> Backend<BS> for Rename<'_, R, BS>
 where
     R: Renamer + Sync + Send,
-    BS: BackendStorage + TryConvertStorage<CpuStorage>,
+    BS: BackendStorage,
 {
     type Hints = crate::Init;
 
@@ -851,7 +929,7 @@ where
 impl<'a, R, BS> Rename<'a, R, BS>
 where
     R: Renamer,
-    BS: BackendStorage + TryConvertStorage<CpuStorage>,
+    BS: BackendStorage,
 {
     pub fn new(inner: VarBuilder<'a, BS>, renamer: R) -> Self {
         Self { inner, renamer }

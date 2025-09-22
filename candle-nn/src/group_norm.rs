@@ -73,16 +73,12 @@ impl<B: BackendStorage> crate::Module<B> for GroupNorm<B> {
     }
 }
 
-pub fn group_norm<B>(
+pub fn group_norm<B: BackendStorage>(
     num_groups: usize,
     num_channels: usize,
     eps: f64,
     vb: crate::VarBuilder<B>,
-) -> Result<GroupNorm<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<GroupNorm<B>> {
     let weight = vb.get_with_hints(num_channels, "weight", crate::Init::Const(1.))?;
     let bias = vb.get_with_hints(num_channels, "bias", crate::Init::Const(0.))?;
     GroupNorm::new(weight, bias, num_channels, num_groups, eps)

@@ -146,7 +146,6 @@ pub fn layer_norm<C, B>(size: usize, config: C, vb: crate::VarBuilder<B>) -> Res
 where
     C: Into<LayerNormConfig>,
     B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
 {
     let config = config.into();
     let weight = vb.get_with_hints(size, "weight", crate::Init::Const(1.))?;
@@ -163,15 +162,11 @@ where
     })
 }
 
-pub fn layer_norm_no_bias<B>(
+pub fn layer_norm_no_bias<B: BackendStorage>(
     size: usize,
     eps: f64,
     vb: crate::VarBuilder<B>,
-) -> Result<LayerNorm<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<LayerNorm<B>> {
     let config = LayerNormConfig {
         eps,
         remove_mean: true,
@@ -209,11 +204,11 @@ impl<B: BackendStorage> Module<B> for RmsNorm<B> {
     }
 }
 
-pub fn rms_norm<B>(size: usize, eps: f64, vb: crate::VarBuilder<B>) -> Result<RmsNorm<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+pub fn rms_norm<B: BackendStorage>(
+    size: usize,
+    eps: f64,
+    vb: crate::VarBuilder<B>,
+) -> Result<RmsNorm<B>> {
     let config = LayerNormConfig {
         eps,
         remove_mean: false,

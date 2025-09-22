@@ -75,9 +75,8 @@ impl<B: BackendStorage> XLMRobertaEmbeddings<B> {
             let cumsum = mask.cumsum(1)?;
             let position_ids = (cumsum * mask)?
                 .broadcast_add(
-                    &Tensor::try_from(self.padding_idx)?
-                        .to_dtype(input_embeddings.dtype())?
-                        .to_device::<B>(input_embeddings.device())?,
+                    &Tensor::new(self.padding_idx, input_embeddings.device())?
+                        .to_dtype(input_embeddings.dtype())?,
                 )?
                 .to_dtype(candle::DType::U32)?;
             embeddings = embeddings.broadcast_add(&position_embeddings.forward(&position_ids)?)?;
@@ -380,8 +379,7 @@ impl<B: BackendStorage> XLMRobertaModel<B> {
         encoder_attention_mask: Option<&Tensor<B>>,
     ) -> Result<Tensor<B>> {
         let hidden_states = self.embeddings.forward(input_ids, token_type_ids)?;
-        let attention_mask = prepare_4d_attention_mask(attention_mask, DType::F32, None)?
-            .to_device(hidden_states.device())?;
+        let attention_mask = prepare_4d_attention_mask(attention_mask, DType::F32, None)?;
         let hidden_states = self.encoder.forward(
             &hidden_states,
             &attention_mask,

@@ -304,17 +304,13 @@ impl<B: BackendStorage> crate::Module<B> for ConvTranspose2d<B> {
     }
 }
 
-pub fn conv1d<B>(
+pub fn conv1d<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: Conv1dConfig,
     vb: crate::VarBuilder<B>,
-) -> Result<Conv1d<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<Conv1d<B>> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints(
         (out_channels, in_channels / cfg.groups, kernel_size),
@@ -330,17 +326,13 @@ where
     Ok(Conv1d::new(ws, Some(bs), cfg))
 }
 
-pub fn conv1d_no_bias<B>(
+pub fn conv1d_no_bias<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: Conv1dConfig,
     vb: crate::VarBuilder<B>,
-) -> Result<Conv1d<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<Conv1d<B>> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints(
         (out_channels, in_channels / cfg.groups, kernel_size),
@@ -350,17 +342,13 @@ where
     Ok(Conv1d::new(ws, None, cfg))
 }
 
-pub fn conv_transpose1d<B>(
+pub fn conv_transpose1d<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: ConvTranspose1dConfig,
     vb: crate::VarBuilder<B>,
-) -> Result<ConvTranspose1d<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<ConvTranspose1d<B>> {
     let bound = 1. / (out_channels as f64 * kernel_size as f64).sqrt();
     let init = crate::Init::Uniform {
         lo: -bound,
@@ -375,17 +363,13 @@ where
     Ok(ConvTranspose1d::new(ws, Some(bs), cfg))
 }
 
-pub fn conv_transpose1d_no_bias<B>(
+pub fn conv_transpose1d_no_bias<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: ConvTranspose1dConfig,
     vb: crate::VarBuilder<B>,
-) -> Result<ConvTranspose1d<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<ConvTranspose1d<B>> {
     let bound = 1. / (out_channels as f64 * kernel_size as f64).sqrt();
     let init = crate::Init::Uniform {
         lo: -bound,
@@ -399,17 +383,13 @@ where
     Ok(ConvTranspose1d::new(ws, None, cfg))
 }
 
-pub fn conv2d<B>(
+pub fn conv2d<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: Conv2dConfig,
     vb: crate::VarBuilder<B>,
-) -> Result<Conv2d<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<Conv2d<B>> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints(
         (
@@ -430,17 +410,13 @@ where
     Ok(Conv2d::new(ws, Some(bs), cfg))
 }
 
-pub fn conv2d_no_bias<B>(
+pub fn conv2d_no_bias<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: Conv2dConfig,
     vb: crate::VarBuilder<B>,
-) -> Result<Conv2d<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<Conv2d<B>> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints(
         (
@@ -455,17 +431,13 @@ where
     Ok(Conv2d::new(ws, None, cfg))
 }
 
-pub fn conv_transpose2d<B>(
+pub fn conv_transpose2d<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: ConvTranspose2dConfig,
     vb: crate::VarBuilder<B>,
-) -> Result<ConvTranspose2d<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<ConvTranspose2d<B>> {
     let bound = 1. / (out_channels as f64).sqrt() / kernel_size as f64;
     let init = crate::Init::Uniform {
         lo: -bound,
@@ -480,17 +452,13 @@ where
     Ok(ConvTranspose2d::new(ws, Some(bs), cfg))
 }
 
-pub fn conv_transpose2d_no_bias<B>(
+pub fn conv_transpose2d_no_bias<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: ConvTranspose2dConfig,
     vb: crate::VarBuilder<B>,
-) -> Result<ConvTranspose2d<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<ConvTranspose2d<B>> {
     let bound = 1. / (out_channels as f64).sqrt() / kernel_size as f64;
     let init = crate::Init::Uniform {
         lo: -bound,

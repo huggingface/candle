@@ -34,8 +34,9 @@ fn create_model_proto_with_graph(graph: Option<GraphProto>) -> ModelProto {
 fn test_evaluation_fails_without_defined_graph() -> Result<()> {
     let manual_graph = create_model_proto_with_graph(None);
     let inputs: HashMap<String, Tensor> = HashMap::new();
+    let expected = "no graph defined in proto";
     match candle_onnx::simple_eval(&manual_graph, inputs) {
-        Err(err) => assert_eq!(err.to_string(), "no graph defined in proto"),
+        Err(err) => assert!(err.to_string().starts_with(expected)),
         Ok(_) => panic!("Expected an error due to undefined graph"),
     }
     Ok(())

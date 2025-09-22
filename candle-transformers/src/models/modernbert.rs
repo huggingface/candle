@@ -393,8 +393,7 @@ impl<B: BackendStorage> ModernBert<B> {
 
     pub fn forward(&self, xs: &Tensor<B>, mask: &Tensor<B>) -> Result<Tensor<B>> {
         let seq_len = xs.shape().dims()[1];
-        let global_attention_mask =
-            prepare_4d_attention_mask(mask, DType::F32, None)?.to_device(xs.device())?;
+        let global_attention_mask = prepare_4d_attention_mask(mask, DType::F32, None)?;
         let local_attention_mask =
             get_local_attention_mask(seq_len, self.local_attention_size / 2, xs.device())?;
         let mut xs = xs.apply(&self.word_embeddings)?.apply(&self.norm)?;

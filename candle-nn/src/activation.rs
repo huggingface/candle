@@ -101,11 +101,10 @@ impl<B: BackendStorage> candle::Module<B> for PReLU<B> {
 ///   `Some` for a 1D vector with the appropriate number of channels. When applying the `forward`
 ///   function, the input tensor shape `s` should either be one dimension with this number of
 ///   channels or if `s.len() >= 2` it should have `s[1]` equal to this number.
-pub fn prelu<B>(num_channels: Option<usize>, vs: crate::VarBuilder<B>) -> Result<PReLU<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+pub fn prelu<B: BackendStorage>(
+    num_channels: Option<usize>,
+    vs: crate::VarBuilder<B>,
+) -> Result<PReLU<B>> {
     let init_ws = crate::init::Init::Const(0.25);
     // When using a scalar weight, the PyTorch encoding is to use a 1d vector of length 1.
     let ws = vs.get_with_hints((num_channels.unwrap_or(1),), "weight", init_ws)?;

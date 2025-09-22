@@ -552,7 +552,7 @@ impl<B: BackendStorage> StreamingModule<B> for ConvTrUpsample1d<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle::IndexOp;
+    use candle::{CpuStorage, IndexOp};
 
     fn run_conv1d(
         k_size: usize,
@@ -564,7 +564,7 @@ mod tests {
     ) -> Result<()> {
         // TODO: We should ensure for the seed to be constant when running these tests.
         let dev = &candle::CpuDevice;
-        let vm = candle_nn::VarMap::new();
+        let vm: candle_nn::VarMap<CpuStorage> = candle_nn::VarMap::new();
         let vb = VarBuilder::from_varmap(&vm, candle::DType::F32, dev);
         let conv1d = StreamableConv1d::new(
             /* in_c */ 2,
@@ -614,7 +614,7 @@ mod tests {
     ) -> Result<()> {
         // TODO: We should ensure for the seed to be constant when running these tests.
         let dev = &candle::CpuDevice;
-        let vm = candle_nn::VarMap::new();
+        let vm: candle_nn::VarMap<candle::CpuStorage> = candle_nn::VarMap::new();
         let vb = VarBuilder::from_varmap(&vm, candle::DType::F32, dev);
         let conv1d = StreamableConvTranspose1d::new(
             /* in_c */ 2, /* out_c */ 3, /* k_size */ k_size,

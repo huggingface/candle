@@ -2299,17 +2299,17 @@ impl<B: BackendStorage> Tensor<B> {
     }
 
     /// If the tensor is cpu only a shallow copy is performed.
-    pub fn from_cpu(&self, t: Tensor<crate::CpuStorage>) -> Result<Self> {
-        let storage = self.device.storage_from_cpu_storage(&t.storage())?;
+    pub fn from_cpu(tensor: Tensor<crate::CpuStorage>, device: &B::Device) -> Result<Self> {
+        let storage = device.storage_from_cpu_storage(&tensor.storage())?;
         let op = BackpropOp::none();
         let tensor_ = Tensor_ {
             id: TensorId::new(),
             storage: Arc::new(RwLock::new(storage)),
-            layout: self.layout.clone(),
+            layout: tensor.layout.clone(),
             op,
             is_variable: false,
-            dtype: self.dtype,
-            device: self.device.clone(),
+            dtype: tensor.dtype,
+            device: device.clone(),
         };
         Ok(Tensor(Arc::new(tensor_)))
     }

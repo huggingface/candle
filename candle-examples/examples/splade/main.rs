@@ -124,9 +124,8 @@ fn run<B: BackendStorage>(args: Args) -> Result<()> {
 
         let ys = model.forward(&token_ids, &token_type_ids, None)?;
         let vec = Tensor::log(
-            &Tensor::try_from(1.0)?
+            &Tensor::new(1.0, &device)?
                 .to_dtype(dtype)?
-                .to_device(&device)?
                 .broadcast_add(&ys.relu()?)?,
         )?
         .max(1)?;
@@ -189,9 +188,8 @@ fn run<B: BackendStorage>(args: Args) -> Result<()> {
 
         let ys = model.forward(&token_ids, &token_type_ids, Some(&attention_mask))?;
         let vector = Tensor::log(
-            &Tensor::try_from(1.0)?
+            &Tensor::new(1.0, &device)?
                 .to_dtype(dtype)?
-                .to_device(&device)?
                 .broadcast_add(&ys.relu()?)?,
         )?;
         let vector = vector

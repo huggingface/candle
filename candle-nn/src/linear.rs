@@ -83,11 +83,11 @@ impl<B: BackendStorage> super::Module<B> for Linear<B> {
 /// Create or initialize a new linear layer.
 ///
 /// This uses some default names for weights and biases, namely `"weight"` and `"bias"`.
-pub fn linear<B>(in_dim: usize, out_dim: usize, vb: crate::VarBuilder<B>) -> Result<Linear<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+pub fn linear<B: BackendStorage>(
+    in_dim: usize,
+    out_dim: usize,
+    vb: crate::VarBuilder<B>,
+) -> Result<Linear<B>> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
     let bound = 1. / (in_dim as f64).sqrt();
@@ -100,30 +100,22 @@ where
 }
 
 /// Create or initialize a new linear layer without biases.
-pub fn linear_no_bias<B>(
+pub fn linear_no_bias<B: BackendStorage>(
     in_dim: usize,
     out_dim: usize,
     vb: crate::VarBuilder<B>,
-) -> Result<Linear<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<Linear<B>> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
     Ok(Linear::new(ws, None))
 }
 
-pub fn linear_b<B>(
+pub fn linear_b<B: BackendStorage>(
     in_dim: usize,
     out_dim: usize,
     bias: bool,
     vb: crate::VarBuilder<B>,
-) -> Result<Linear<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<Linear<B>> {
     if bias {
         linear(in_dim, out_dim, vb)
     } else {

@@ -205,8 +205,7 @@ impl<B: BackendStorage + 'static> LLaVA<B> {
                     &config.mm_vision_select_feature,
                     &clip_vision_config,
                 )?,
-                vb.get(&[config.hidden_size], "image_newline")?
-                    .to_device(&device)?,
+                vb.get(&[config.hidden_size], "image_newline")?,
                 Llama::load(vb.pp("language_model"), &llama_config)?,
             )
         } else {
@@ -217,8 +216,7 @@ impl<B: BackendStorage + 'static> LLaVA<B> {
                     &config.mm_vision_select_feature,
                     &clip_vision_config,
                 )?,
-                vb.get(&[config.hidden_size], "model.image_newline")?
-                    .to_device(&device)?,
+                vb.get(&[config.hidden_size], "model.image_newline")?,
                 Llama::load(vb, &llama_config)?,
             )
         };

@@ -306,7 +306,6 @@ pub fn batch_norm<B, C>(
 where
     C: Into<BatchNormConfig>,
     B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
 {
     use crate::Init;
     let config = config.into();

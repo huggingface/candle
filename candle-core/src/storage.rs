@@ -34,6 +34,31 @@ impl From<MetalStorage> for Storage {
     }
 }
 
+impl TryConvertStorage<Storage> for Storage {
+    fn convert(storage: Storage, device: &Device) -> Result<Self> {
+        match (storage, device) {
+            (Storage::Cpu(s), Device::Cpu) => Ok(s.into()),
+            (Storage::Cuda(s), Device::Cuda(_)) => Ok(s.into()),
+            (Storage::Metal(s), Device::Metal(_)) => Ok(s.into()),
+            (Storage::Cpu(s), Device::Cuda(d)) => {
+                d.storage_from_cpu_storage_owned(s).map(Into::into)
+            }
+            (Storage::Cpu(s), Device::Metal(d)) => {
+                d.storage_from_cpu_storage_owned(s).map(Into::into)
+            }
+            (Storage::Cuda(s), Device::Cpu) => s.to_cpu_storage().map(Into::into),
+            (Storage::Metal(s), Device::Cpu) => s.to_cpu_storage().map(Into::into),
+            // Unlikely, but easy to implement
+            (Storage::Metal(s), Device::Cuda(d)) => d
+                .storage_from_cpu_storage_owned(s.to_cpu_storage()?)
+                .map(Into::into),
+            (Storage::Cuda(s), Device::Metal(d)) => d
+                .storage_from_cpu_storage_owned(s.to_cpu_storage()?)
+                .map(Into::into),
+        }
+    }
+}
+
 impl TryConvertStorage<CpuStorage> for Storage {
     fn convert(storage: CpuStorage, device: &Device) -> Result<Self> {
         device.storage_from_cpu_storage(&storage)

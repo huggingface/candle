@@ -299,10 +299,7 @@ pub struct GRU<B: BackendStorage> {
     dtype: DType,
 }
 
-impl<B> GRU<B>
-where
-    B: BackendStorage,
-{
+impl<B: BackendStorage> GRU<B> {
     /// Creates a GRU layer.
     pub fn new(
         in_dim: usize,
@@ -345,16 +342,12 @@ where
     }
 }
 
-pub fn gru<B>(
+pub fn gru<B: BackendStorage>(
     in_dim: usize,
     hidden_dim: usize,
     config: GRUConfig,
     vb: crate::VarBuilder<B>,
-) -> Result<GRU<B>>
-where
-    B: BackendStorage,
-    B::Device: candle::TryConvertStorage<candle::CpuStorage, B>,
-{
+) -> Result<GRU<B>> {
     GRU::new(in_dim, hidden_dim, config, vb)
 }
 

@@ -1,7 +1,5 @@
 //! Implement conversion traits for tensors
-use crate::{
-    BackendDevice, BackendStorage, CudaStorage, DType, Error, MetalStorage, Tensor, WithDType,
-};
+use crate::{BackendStorage, CudaStorage, DType, Error, MetalStorage, Tensor, WithDType};
 use crate::{CpuDevice, CpuStorage};
 use float8::F8E4M3;
 use half::{bf16, f16, slice::HalfFloatSliceExt};

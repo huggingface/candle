@@ -1,12 +1,16 @@
-use crate::{BackendDevice, DType, Result, TryConvertStorage};
+use crate::{
+    BackendDevice, BackendStorage, CpuStorage, CpuStorageRef, DType, MetalStorage, Result, Shape,
+};
 use candle_metal_kernels::{
     metal::{
         Buffer, BufferMap, CommandBuffer, Commands, ComputePipeline, Device, MTLResourceOptions,
     },
     Kernels,
 };
-use objc2_foundation::NSURL;
+use objc2_foundation::{NSRange, NSURL};
 use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
+use std::collections::HashMap;
+use std::ffi::c_void;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
