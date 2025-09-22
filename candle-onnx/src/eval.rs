@@ -1,12 +1,11 @@
 use crate::onnx::attribute_proto::AttributeType;
 use crate::onnx::tensor_proto::DataType;
 use crate::onnx::{self, GraphProto};
+use crate::{Tensor, Value};
 use candle::Module;
-use candle::{bail, DType, Device, Result, Tensor};
+use candle::{bail, CpuDevice, DType, Result};
 use candle_nn::activation::PReLU;
 use std::collections::{HashMap, HashSet};
-
-pub type Value = Tensor;
 
 pub fn dtype(dt: DataType) -> Option<DType> {
     match dt {
@@ -120,7 +119,7 @@ impl AttrOwned for Tensor {
             dims.push(*dim as usize)
         }
 
-        Tensor::from_raw_buffer(&tensor_proto.raw_data, dtype, &dims, &Device::Cpu)
+        Tensor::from_raw_buffer(&tensor_proto.raw_data, dtype, &dims, &CpuDevice)
     }
 }
 
@@ -198,27 +197,22 @@ pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
                 let data: &[i32] =
                     unsafe { std::slice::from_raw_parts(t.raw_data.as_ptr() as *const i32, len) };
                 let data = data.iter().map(|v| *v as i64).collect::<Vec<_>>();
-                Tensor::from_vec(data, len, &Device::Cpu)
+                Tensor::from_vec(data, len, &CpuDevice)
             } else {
                 let data = t.int32_data.iter().map(|v| *v as i64).collect::<Vec<_>>();
-                Tensor::from_vec(data, t.int32_data.len(), &Device::Cpu)
+                Tensor::from_vec(data, t.int32_data.len(), &CpuDevice)
             }
         }
         Ok(dt) => match dtype(dt) {
             Some(dt) => {
                 if dt == DType::F32 && !t.float_data.is_empty() {
-                    Tensor::from_slice(&t.float_data, dims.as_slice(), &Device::Cpu)
+                    Tensor::from_slice(&t.float_data, dims.as_slice(), &CpuDevice)
                 } else if dt == DType::F64 && !t.double_data.is_empty() {
-                    Tensor::from_slice(&t.double_data, dims.as_slice(), &Device::Cpu)
+                    Tensor::from_slice(&t.double_data, dims.as_slice(), &CpuDevice)
                 } else if dt == DType::I64 && !t.int64_data.is_empty() {
-                    Tensor::from_slice(&t.int64_data, dims.as_slice(), &Device::Cpu)
+                    Tensor::from_slice(&t.int64_data, dims.as_slice(), &CpuDevice)
                 } else {
-                    Tensor::from_raw_buffer(
-                        t.raw_data.as_slice(),
-                        dt,
-                        dims.as_slice(),
-                        &Device::Cpu,
-                    )
+                    Tensor::from_raw_buffer(t.raw_data.as_slice(), dt, dims.as_slice(), &CpuDevice)
                 }
             }
             None => {
@@ -580,7 +574,7 @@ fn simple_eval_(
                 let value = get_attr_opt_owned::<Tensor>(node, "value")?.unwrap_or(Tensor::zeros(
                     (),
                     DType::F32,
-                    &Device::Cpu,
+                    &CpuDevice,
                 )?);
 
                 let shape_vec: Vec<usize> = input
@@ -760,7 +754,7 @@ fn simple_eval_(
                             start.to_vec0::<$t>()?,
                             limit.to_vec0::<$t>()?,
                             delta.to_vec0::<$t>()?,
-                            &Device::Cpu,
+                            &CpuDevice,
                         )?
                     };
                 }
@@ -1627,11 +1621,11 @@ fn simple_eval_(
                 let output = if random_type == "RandomUniform" {
                     let low: f32 = get_attr_opt(node, "low")?.copied().unwrap_or(0.0);
                     let high: f32 = get_attr_opt(node, "high")?.copied().unwrap_or(1.0);
-                    Tensor::rand(low, high, shape, &Device::Cpu)?.to_dtype(dtype)?
+                    Tensor::rand(low, high, shape, &CpuDevice)?.to_dtype(dtype)?
                 } else {
                     let mean: f32 = get_attr_opt(node, "mean")?.copied().unwrap_or(0.0);
                     let scale: f32 = get_attr_opt(node, "scale")?.copied().unwrap_or(1.0);
-                    Tensor::randn(mean, scale, shape, &Device::Cpu)?.to_dtype(dtype)?
+                    Tensor::randn(mean, scale, shape, &CpuDevice)?.to_dtype(dtype)?
                 };
                 values.insert(node.output[0].clone(), output);
             }
@@ -1716,8 +1710,8 @@ fn simple_eval_(
                 let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(1.0);
                 let beta = get_attr_opt::<f32>(node, "beta")?.copied().unwrap_or(1.0);
 
-                let alpha = Tensor::full(alpha, a.shape(), &Device::Cpu)?;
-                let beta = Tensor::full(beta, c.shape(), &Device::Cpu)?;
+                let alpha = Tensor::full(alpha, a.shape(), &CpuDevice)?;
+                let beta = Tensor::full(beta, c.shape(), &CpuDevice)?;
 
                 let trans_a = get_attr_opt::<i64>(node, "transA")?.copied().unwrap_or(0);
                 let trans_b = get_attr_opt::<i64>(node, "transB")?.copied().unwrap_or(0);
@@ -2320,7 +2314,6 @@ fn simple_eval_(
 
                 let indices_shape = indices.dims();
                 let data_shape = data.dims();
-                let updates_shape = updates.dims();
 
                 // Last dimension of indices represents the depth of indexing
                 let k = indices_shape.last().unwrap().clone();
