@@ -158,6 +158,7 @@ pub enum Op {
     ToDType(Tensor),
     Copy(Tensor),
     Broadcast(Tensor),
+    Unfold(Tensor, usize, usize, usize),
     Narrow(Tensor, usize, usize, usize),
     SliceScatter0(Tensor, Tensor, usize),
     Reshape(Tensor),

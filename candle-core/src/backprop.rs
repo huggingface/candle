@@ -122,6 +122,7 @@ impl Tensor {
                     | Op::MaxPool2D { arg: node, .. }
                     | Op::Copy(node)
                     | Op::Broadcast(node)
+                    | Op::Unfold(node, _, _, _)
                     | Op::Cmp(node, _)
                     | Op::Reduce(node, ReduceOp::Min | ReduceOp::Sum | ReduceOp::Max, _)
                     | Op::ToDevice(node)
@@ -494,6 +495,9 @@ impl Tensor {
                         }
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad.broadcast_as(sum_grad.dims())?)?;
+                    }
+                    Op::Unfold(_, _, _, _) => {
+                        todo!()
                     }
                     Op::Reduce(arg, ReduceOp::Sum, reduced_dims) => {
                         let grad = broadcast_back(arg, &grad, reduced_dims)?;

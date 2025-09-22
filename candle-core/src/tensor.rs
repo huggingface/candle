@@ -1,5 +1,6 @@
 //! Tensors are N-dimensional matrixes of elements using a single data type.
 #![allow(clippy::redundant_closure_call)]
+
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BackpropOp, BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::scalar::TensorOrScalar;
@@ -2267,6 +2268,64 @@ impl Tensor {
     /// An alias for broadcast_as.
     pub fn expand<S: Into<Shape>>(&self, shape: S) -> Result<Self> {
         self.broadcast_as(shape)
+    }
+
+    /// Unfold windows along a dimension.
+    ///
+    /// Returns a view of the tensor with all complete windows of size `size` in dimension `dim`;
+    /// where windows are advanced by `step` at each index.
+    ///
+    /// The number of windows is `max(0, (shape[dim] - size).ceil_div(step))`.
+    ///
+    /// The new view will have the unfolded dimension replaced by two dimensions;
+    /// one in the position of the original dimension, with size equal to the number of windows,
+    /// and one appended to the right-most position, with size equal to `size`.
+    ///
+    /// # Arguments
+    ///
+    /// * `dim` - the dimension to unfold.
+    /// * `size` - the size of each unfolded window.
+    /// * `stride` - the step between each window.
+    ///
+    /// # Returns
+    ///
+    /// A tensor view with the shape ``[pre=..., windows, post=..., size]``.
+    pub fn unfold(&self, dim: usize, size: usize, step: usize) -> Result<Self> {
+        let mut shape = self.layout.shape().dims().to_vec();
+        let mut strides = self.layout.stride().to_vec();
+
+        let d_shape = shape[dim];
+        let d_stride = strides[dim];
+
+        let tmp = d_shape + step;
+        let windows = if tmp < size {
+            0
+        } else {
+            (tmp - size) / step
+        };
+
+        shape[dim] = windows;
+        shape.push(size);
+
+        strides[dim] = step * d_stride;
+        strides.push(d_stride);
+
+        let unfold_layout = Layout::new(
+            shape.into(),
+            strides,
+            self.layout.start_offset(),
+        );
+
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: self.storage.clone(),
+            layout: unfold_layout,
+            op: BackpropOp::new1(self, |t| Op::Unfold(t, dim, size, step)),
+            is_variable: false,
+            dtype: self.dtype,
+            device: self.device.clone(),
+        };
+        Ok(Tensor(Arc::new(tensor_)))
     }
 
     /// Casts the input tensor to the target `dtype`.

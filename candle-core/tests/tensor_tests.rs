@@ -767,6 +767,23 @@ fn broadcast(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn unfold(device: &Device) -> Result<()> {
+    let data = &[
+        [0f32, 1., 2., 3., 4.],
+        [5f32, 6., 7., 8., 9.],
+    ];
+    let tensor = Tensor::new(data, device)?;
+    let actual = tensor.unfold(1, 3, 2)?;
+    assert_eq!(
+        actual.to_vec3::<f32>()?,
+        &[
+            [[0f32, 1., 2.], [2f32, 3., 4.]],
+            [[5f32, 6., 7.], [7f32, 8., 9.]],
+        ]
+    );
+    Ok(())
+}
+
 fn slice_set(device: &Device) -> Result<()> {
     let (b, h, max_t, d) = (2, 4, 7, 3);
     let cache = Tensor::zeros((b, h, max_t, d), DType::F32, device)?;
@@ -1655,6 +1672,7 @@ test_device!(add_mul, add_mul_cpu, add_mul_gpu, add_mul_metal);
 test_device!(tensor_2d, tensor_2d_cpu, tensor_2d_gpu, tensor_2d_metal);
 test_device!(narrow, narrow_cpu, narrow_gpu, narrow_metal);
 test_device!(broadcast, broadcast_cpu, broadcast_gpu, broadcast_metal);
+test_device!(unfold, unfold_cpu, unfold_gpu, unfold_metal);
 test_device!(slice_set, ss_cpu, ss_gpu, ss_metal);
 test_device!(cat, cat_cpu, cat_gpu, cat_metal);
 test_device!(sum, sum_cpu, sum_gpu, sum_metal);
