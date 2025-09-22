@@ -7,7 +7,7 @@ extern crate accelerate_src;
 use anyhow::Error as E;
 use clap::Parser;
 
-use candle::{BackendStorage, CpuDevice, CpuStorage, DType, Tensor};
+use candle::{BackendDevice, BackendStorage, CpuStorage, DType, Tensor};
 use candle_nn::{ops::softmax, VarBuilder};
 use candle_transformers::models::clip;
 
@@ -68,6 +68,30 @@ fn load_images<P: AsRef<std::path::Path>, B: BackendStorage>(
 
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> anyhow::Result<()> {
     let model_file = match args.model {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
@@ -85,9 +109,7 @@ pub fn main() -> anyhow::Result<()> {
     let tokenizer = get_tokenizer(args.tokenizer)?;
     let config = clip::ClipConfig::vit_base_patch32();
 
-    // TODO: fix
-    let device = CpuDevice;
-
+    let device = B::Device::new(0)?;
     let vec_imgs = match args.images {
         Some(imgs) => imgs,
         None => vec![

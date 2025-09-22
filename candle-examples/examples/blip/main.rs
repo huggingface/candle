@@ -5,12 +5,8 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::Error as E;
-use candle::quantized::QCpuStorage;
 use candle::quantized::QuantizedBackend;
-use candle::BackendStorage;
-use candle::CpuDevice;
-use candle::CpuStorage;
-use candle::Module;
+use candle::{BackendDevice, BackendStorage, Module};
 use candle_transformers::quantized_nn::Linear;
 use clap::Parser;
 
@@ -90,6 +86,32 @@ pub fn load_image<P: AsRef<std::path::Path>, B: BackendStorage>(
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
+    if args.cpu {
+        run::<candle::QCpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::QCudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::QMetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::QCpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<QB: QuantizedBackend>(args: Args) -> anyhow::Result<()>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
     let model_file = match args.model {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
@@ -122,14 +144,12 @@ pub fn main() -> anyhow::Result<()> {
 
     let config = blip::Config::image_captioning_large();
 
-    // TODO: fix
-    let device = CpuDevice;
-    let (image_embeds, device, mut model) = if args.quantized {
-        let device = CpuDevice;
-        let image: Tensor<CpuStorage> = load_image(args.image, &device)?;
+    let device = QB::Device::new(0)?;
+    let (image_embeds, device, mut model): (_, _, Model<QB>) = if args.quantized {
+        let image: Tensor<QB::Storage> = load_image(args.image, &device)?;
         println!("loaded image {image:?}");
 
-        let vb: quantized_blip::VarBuilder<QCpuStorage> =
+        let vb: quantized_blip::VarBuilder<QB> =
             quantized_blip::VarBuilder::from_gguf(model_file, &device)?;
         let model = quantized_blip::BlipForConditionalGeneration::new(&config, vb)?;
         let image_embeds = image.unsqueeze(0)?.apply(model.vision_model())?;
@@ -138,7 +158,7 @@ pub fn main() -> anyhow::Result<()> {
         let image = load_image(args.image, &device)?;
         println!("loaded image {image:?}");
 
-        let vb =
+        let vb: VarBuilder<QB::Storage> =
             unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
         let model = blip::BlipForConditionalGeneration::new(&config, vb)?;
         let image_embeds = image.unsqueeze(0)?.apply(model.vision_model())?;

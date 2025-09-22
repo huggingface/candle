@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle::{BackendStorage, CpuDevice, CpuStorage, DType, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn as nn;
 use candle_transformers::models::chinese_clip::{ChineseClipConfig, ChineseClipModel};
 use clap::Parser;
@@ -28,14 +28,36 @@ struct Args {
     sequences: Option<Vec<String>>,
 }
 
-fn main() -> anyhow::Result<()> {
+pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
-    // TODO: fix
-    let device = CpuDevice;
-    let var: nn::VarBuilder<CpuStorage> = load_weights(args.model, &device)?;
+    let device = B::Device::new(0)?;
+    let var: nn::VarBuilder<B> = load_weights(args.model, &device)?;
     let clip_model = ChineseClipModel::new(var, &ChineseClipConfig::clip_vit_base_patch16())?;
     tracing::info!("Transformer loaded. ");
 
