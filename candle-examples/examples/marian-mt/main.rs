@@ -7,7 +7,7 @@ extern crate accelerate_src;
 use anyhow::Error as E;
 use clap::{Parser, ValueEnum};
 
-use candle::{DType, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::models::marian;
@@ -70,8 +70,32 @@ struct Args {
 }
 
 pub fn main() -> anyhow::Result<()> {
-    use hf_hub::api::sync::Api;
     let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> anyhow::Result<()> {
+    use hf_hub::api::sync::Api;
 
     let config = match (args.which, args.language_pair) {
         (Which::Base, LanguagePair::FrEn) => marian::Config::opus_mt_fr_en(),
@@ -140,7 +164,7 @@ pub fn main() -> anyhow::Result<()> {
     };
     let mut tokenizer_dec = TokenOutputStream::new(tokenizer_dec);
 
-    let device = candle_examples::device(args.cpu)?;
+    let device = B::Device::new(0)?;
     let vb = {
         let model = match args.model {
             Some(model) => std::path::PathBuf::from(model),
@@ -189,7 +213,7 @@ pub fn main() -> anyhow::Result<()> {
         };
         unsafe { VarBuilder::from_mmaped_safetensors(&[&model], DType::F32, &device)? }
     };
-    let mut model = marian::MTModel::new(&config, vb)?;
+    let mut model: marian::MTModel<B> = marian::MTModel::new(&config, vb)?;
 
     let mut logits_processor =
         candle_transformers::generation::LogitsProcessor::new(1337, None, None);

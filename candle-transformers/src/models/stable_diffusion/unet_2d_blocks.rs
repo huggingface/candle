@@ -5,19 +5,19 @@ use super::attention::{
 };
 use super::resnet::{ResnetBlock2D, ResnetBlock2DConfig};
 use crate::models::with_tracing::{conv2d, Conv2d};
-use candle::{Module, Result, Tensor, D};
+use candle::{BackendStorage, Module, Result, Tensor, D};
 use candle_nn as nn;
 
 #[derive(Debug)]
-struct Downsample2D {
-    conv: Option<Conv2d>,
+struct Downsample2D<B: BackendStorage> {
+    conv: Option<Conv2d<B>>,
     padding: usize,
     span: tracing::Span,
 }
 
-impl Downsample2D {
+impl<B: BackendStorage> Downsample2D<B> {
     fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         use_conv: bool,
         out_channels: usize,
@@ -43,8 +43,8 @@ impl Downsample2D {
     }
 }
 
-impl Module for Downsample2D {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Downsample2D<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         match &self.conv {
             None => xs.avg_pool2d(2),
@@ -64,13 +64,13 @@ impl Module for Downsample2D {
 
 // This does not support the conv-transpose mode.
 #[derive(Debug)]
-struct Upsample2D {
-    conv: Conv2d,
+struct Upsample2D<B: BackendStorage> {
+    conv: Conv2d<B>,
     span: tracing::Span,
 }
 
-impl Upsample2D {
-    fn new(vs: nn::VarBuilder, in_channels: usize, out_channels: usize) -> Result<Self> {
+impl<B: BackendStorage> Upsample2D<B> {
+    fn new(vs: nn::VarBuilder<B>, in_channels: usize, out_channels: usize) -> Result<Self> {
         let config = nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
@@ -81,8 +81,8 @@ impl Upsample2D {
     }
 }
 
-impl Upsample2D {
-    fn forward(&self, xs: &Tensor, size: Option<(usize, usize)>) -> Result<Tensor> {
+impl<B: BackendStorage> Upsample2D<B> {
+    fn forward(&self, xs: &Tensor<B>, size: Option<(usize, usize)>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let xs = match size {
             None => {
@@ -119,16 +119,16 @@ impl Default for DownEncoderBlock2DConfig {
 }
 
 #[derive(Debug)]
-pub struct DownEncoderBlock2D {
-    resnets: Vec<ResnetBlock2D>,
-    downsampler: Option<Downsample2D>,
+pub struct DownEncoderBlock2D<B: BackendStorage> {
+    resnets: Vec<ResnetBlock2D<B>>,
+    downsampler: Option<Downsample2D<B>>,
     span: tracing::Span,
     pub config: DownEncoderBlock2DConfig,
 }
 
-impl DownEncoderBlock2D {
+impl<B: BackendStorage> DownEncoderBlock2D<B> {
     pub fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         out_channels: usize,
         config: DownEncoderBlock2DConfig,
@@ -172,8 +172,8 @@ impl DownEncoderBlock2D {
     }
 }
 
-impl Module for DownEncoderBlock2D {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for DownEncoderBlock2D<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut xs = xs.clone();
         for resnet in self.resnets.iter() {
@@ -208,16 +208,16 @@ impl Default for UpDecoderBlock2DConfig {
 }
 
 #[derive(Debug)]
-pub struct UpDecoderBlock2D {
-    resnets: Vec<ResnetBlock2D>,
-    upsampler: Option<Upsample2D>,
+pub struct UpDecoderBlock2D<B: BackendStorage> {
+    resnets: Vec<ResnetBlock2D<B>>,
+    upsampler: Option<Upsample2D<B>>,
     span: tracing::Span,
     pub config: UpDecoderBlock2DConfig,
 }
 
-impl UpDecoderBlock2D {
+impl<B: BackendStorage> UpDecoderBlock2D<B> {
     pub fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         out_channels: usize,
         config: UpDecoderBlock2DConfig,
@@ -256,8 +256,8 @@ impl UpDecoderBlock2D {
     }
 }
 
-impl Module for UpDecoderBlock2D {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for UpDecoderBlock2D<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut xs = xs.clone();
         for resnet in self.resnets.iter() {
@@ -293,16 +293,16 @@ impl Default for UNetMidBlock2DConfig {
 }
 
 #[derive(Debug)]
-pub struct UNetMidBlock2D {
-    resnet: ResnetBlock2D,
-    attn_resnets: Vec<(AttentionBlock, ResnetBlock2D)>,
+pub struct UNetMidBlock2D<B: BackendStorage> {
+    resnet: ResnetBlock2D<B>,
+    attn_resnets: Vec<(AttentionBlock<B>, ResnetBlock2D<B>)>,
     span: tracing::Span,
     pub config: UNetMidBlock2DConfig,
 }
 
-impl UNetMidBlock2D {
+impl<B: BackendStorage> UNetMidBlock2D<B> {
     pub fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         temb_channels: Option<usize>,
         config: UNetMidBlock2DConfig,
@@ -345,7 +345,7 @@ impl UNetMidBlock2D {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, temb: Option<&Tensor>) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, temb: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut xs = self.resnet.forward(xs, temb)?;
         for (attn, resnet) in self.attn_resnets.iter() {
@@ -386,16 +386,16 @@ impl Default for UNetMidBlock2DCrossAttnConfig {
 }
 
 #[derive(Debug)]
-pub struct UNetMidBlock2DCrossAttn {
-    resnet: ResnetBlock2D,
-    attn_resnets: Vec<(SpatialTransformer, ResnetBlock2D)>,
+pub struct UNetMidBlock2DCrossAttn<B: BackendStorage> {
+    resnet: ResnetBlock2D<B>,
+    attn_resnets: Vec<(SpatialTransformer<B>, ResnetBlock2D<B>)>,
     span: tracing::Span,
     pub config: UNetMidBlock2DCrossAttnConfig,
 }
 
-impl UNetMidBlock2DCrossAttn {
+impl<B: BackendStorage> UNetMidBlock2DCrossAttn<B> {
     pub fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         temb_channels: Option<usize>,
         use_flash_attn: bool,
@@ -450,10 +450,10 @@ impl UNetMidBlock2DCrossAttn {
 
     pub fn forward(
         &self,
-        xs: &Tensor,
-        temb: Option<&Tensor>,
-        encoder_hidden_states: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        temb: Option<&Tensor<B>>,
+        encoder_hidden_states: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut xs = self.resnet.forward(xs, temb)?;
         for (attn, resnet) in self.attn_resnets.iter() {
@@ -489,16 +489,16 @@ impl Default for DownBlock2DConfig {
 }
 
 #[derive(Debug)]
-pub struct DownBlock2D {
-    resnets: Vec<ResnetBlock2D>,
-    downsampler: Option<Downsample2D>,
+pub struct DownBlock2D<B: BackendStorage> {
+    resnets: Vec<ResnetBlock2D<B>>,
+    downsampler: Option<Downsample2D<B>>,
     span: tracing::Span,
     pub config: DownBlock2DConfig,
 }
 
-impl DownBlock2D {
+impl<B: BackendStorage> DownBlock2D<B> {
     pub fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         out_channels: usize,
         temb_channels: Option<usize>,
@@ -539,7 +539,11 @@ impl DownBlock2D {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, temb: Option<&Tensor>) -> Result<(Tensor, Vec<Tensor>)> {
+    pub fn forward(
+        &self,
+        xs: &Tensor<B>,
+        temb: Option<&Tensor<B>>,
+    ) -> Result<(Tensor<B>, Vec<Tensor<B>>)> {
         let _enter = self.span.enter();
         let mut xs = xs.clone();
         let mut output_states = vec![];
@@ -584,16 +588,16 @@ impl Default for CrossAttnDownBlock2DConfig {
 }
 
 #[derive(Debug)]
-pub struct CrossAttnDownBlock2D {
-    downblock: DownBlock2D,
-    attentions: Vec<SpatialTransformer>,
+pub struct CrossAttnDownBlock2D<B: BackendStorage> {
+    downblock: DownBlock2D<B>,
+    attentions: Vec<SpatialTransformer<B>>,
     span: tracing::Span,
     pub config: CrossAttnDownBlock2DConfig,
 }
 
-impl CrossAttnDownBlock2D {
+impl<B: BackendStorage> CrossAttnDownBlock2D<B> {
     pub fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         out_channels: usize,
         temb_channels: Option<usize>,
@@ -639,10 +643,10 @@ impl CrossAttnDownBlock2D {
 
     pub fn forward(
         &self,
-        xs: &Tensor,
-        temb: Option<&Tensor>,
-        encoder_hidden_states: Option<&Tensor>,
-    ) -> Result<(Tensor, Vec<Tensor>)> {
+        xs: &Tensor<B>,
+        temb: Option<&Tensor<B>>,
+        encoder_hidden_states: Option<&Tensor<B>>,
+    ) -> Result<(Tensor<B>, Vec<Tensor<B>>)> {
         let _enter = self.span.enter();
         let mut output_states = vec![];
         let mut xs = xs.clone();
@@ -687,16 +691,16 @@ impl Default for UpBlock2DConfig {
 }
 
 #[derive(Debug)]
-pub struct UpBlock2D {
-    pub resnets: Vec<ResnetBlock2D>,
-    upsampler: Option<Upsample2D>,
+pub struct UpBlock2D<B: BackendStorage> {
+    pub resnets: Vec<ResnetBlock2D<B>>,
+    upsampler: Option<Upsample2D<B>>,
     span: tracing::Span,
     pub config: UpBlock2DConfig,
 }
 
-impl UpBlock2D {
+impl<B: BackendStorage> UpBlock2D<B> {
     pub fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         prev_output_channels: usize,
         out_channels: usize,
@@ -745,11 +749,11 @@ impl UpBlock2D {
 
     pub fn forward(
         &self,
-        xs: &Tensor,
-        res_xs: &[Tensor],
-        temb: Option<&Tensor>,
+        xs: &Tensor<B>,
+        res_xs: &[Tensor<B>],
+        temb: Option<&Tensor<B>>,
         upsample_size: Option<(usize, usize)>,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut xs = xs.clone();
         for (index, resnet) in self.resnets.iter().enumerate() {
@@ -789,16 +793,16 @@ impl Default for CrossAttnUpBlock2DConfig {
 }
 
 #[derive(Debug)]
-pub struct CrossAttnUpBlock2D {
-    pub upblock: UpBlock2D,
-    pub attentions: Vec<SpatialTransformer>,
+pub struct CrossAttnUpBlock2D<B: BackendStorage> {
+    pub upblock: UpBlock2D<B>,
+    pub attentions: Vec<SpatialTransformer<B>>,
     span: tracing::Span,
     pub config: CrossAttnUpBlock2DConfig,
 }
 
-impl CrossAttnUpBlock2D {
+impl<B: BackendStorage> CrossAttnUpBlock2D<B> {
     pub fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         prev_output_channels: usize,
         out_channels: usize,
@@ -846,12 +850,12 @@ impl CrossAttnUpBlock2D {
 
     pub fn forward(
         &self,
-        xs: &Tensor,
-        res_xs: &[Tensor],
-        temb: Option<&Tensor>,
+        xs: &Tensor<B>,
+        res_xs: &[Tensor<B>],
+        temb: Option<&Tensor<B>>,
         upsample_size: Option<(usize, usize)>,
-        encoder_hidden_states: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        encoder_hidden_states: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut xs = xs.clone();
         for (index, resnet) in self.upblock.resnets.iter().enumerate() {

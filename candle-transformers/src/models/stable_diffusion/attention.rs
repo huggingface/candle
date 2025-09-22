@@ -1,24 +1,26 @@
 //! Attention Based Building Blocks
-use candle::{DType, IndexOp, Result, Tensor, D};
+#[cfg(feature = "flash-attn")]
+use candle::CudaStorage;
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
 
 #[derive(Debug)]
-struct GeGlu {
-    proj: nn::Linear,
+struct GeGlu<B: BackendStorage> {
+    proj: nn::Linear<B>,
     span: tracing::Span,
 }
 
-impl GeGlu {
-    fn new(vs: nn::VarBuilder, dim_in: usize, dim_out: usize) -> Result<Self> {
+impl<B: BackendStorage> GeGlu<B> {
+    fn new(vs: nn::VarBuilder<B>, dim_in: usize, dim_out: usize) -> Result<Self> {
         let proj = nn::linear(dim_in, dim_out * 2, vs.pp("proj"))?;
         let span = tracing::span!(tracing::Level::TRACE, "geglu");
         Ok(Self { proj, span })
     }
 }
 
-impl Module for GeGlu {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for GeGlu<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let hidden_states_and_gate = self.proj.forward(xs)?.chunk(2, D::Minus1)?;
         &hidden_states_and_gate[0] * hidden_states_and_gate[1].gelu()?
@@ -27,18 +29,18 @@ impl Module for GeGlu {
 
 /// A feed-forward layer.
 #[derive(Debug)]
-struct FeedForward {
-    project_in: GeGlu,
-    linear: nn::Linear,
+struct FeedForward<B: BackendStorage> {
+    project_in: GeGlu<B>,
+    linear: nn::Linear<B>,
     span: tracing::Span,
 }
 
-impl FeedForward {
+impl<B: BackendStorage> FeedForward<B> {
     // The glu parameter in the python code is unused?
     // https://github.com/huggingface/diffusers/blob/d3d22ce5a894becb951eec03e663951b28d45135/src/diffusers/models/attention.py#L347
     /// Creates a new feed-forward layer based on some given input dimension, some
     /// output dimension, and a multiplier to be used for the intermediary layer.
-    fn new(vs: nn::VarBuilder, dim: usize, dim_out: Option<usize>, mult: usize) -> Result<Self> {
+    fn new(vs: nn::VarBuilder<B>, dim: usize, dim_out: Option<usize>, mult: usize) -> Result<Self> {
         let inner_dim = dim * mult;
         let dim_out = dim_out.unwrap_or(dim);
         let vs = vs.pp("net");
@@ -53,8 +55,8 @@ impl FeedForward {
     }
 }
 
-impl Module for FeedForward {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for FeedForward<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let xs = self.project_in.forward(xs)?;
         self.linear.forward(&xs)
@@ -63,26 +65,32 @@ impl Module for FeedForward {
 
 #[cfg(feature = "flash-attn")]
 fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
+    q: &Tensor<CudaStorage>,
+    k: &Tensor<CudaStorage>,
+    v: &Tensor<CudaStorage>,
     softmax_scale: f32,
     causal: bool,
-) -> Result<Tensor> {
+) -> Result<Tensor<CudaStorage>> {
     candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
 }
 
 #[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+fn flash_attn<B: BackendStorage>(
+    _: &Tensor<B>,
+    _: &Tensor<B>,
+    _: &Tensor<B>,
+    _: f32,
+    _: bool,
+) -> Result<Tensor<B>> {
     unimplemented!("compile with '--features flash-attn'")
 }
 
 #[derive(Debug)]
-pub struct CrossAttention {
-    to_q: nn::Linear,
-    to_k: nn::Linear,
-    to_v: nn::Linear,
-    to_out: nn::Linear,
+pub struct CrossAttention<B: BackendStorage> {
+    to_q: nn::Linear<B>,
+    to_k: nn::Linear<B>,
+    to_v: nn::Linear<B>,
+    to_out: nn::Linear<B>,
     heads: usize,
     scale: f64,
     slice_size: Option<usize>,
@@ -92,10 +100,10 @@ pub struct CrossAttention {
     use_flash_attn: bool,
 }
 
-impl CrossAttention {
+impl<B: BackendStorage> CrossAttention<B> {
     // Defaults should be heads = 8, dim_head = 64, context_dim = None
     pub fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         query_dim: usize,
         context_dim: Option<usize>,
         heads: usize,
@@ -128,14 +136,14 @@ impl CrossAttention {
         })
     }
 
-    fn reshape_heads_to_batch_dim(&self, xs: &Tensor) -> Result<Tensor> {
+    fn reshape_heads_to_batch_dim(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (batch_size, seq_len, dim) = xs.dims3()?;
         xs.reshape((batch_size, seq_len, self.heads, dim / self.heads))?
             .transpose(1, 2)?
             .reshape((batch_size * self.heads, seq_len, dim / self.heads))
     }
 
-    fn reshape_batch_dim_to_heads(&self, xs: &Tensor) -> Result<Tensor> {
+    fn reshape_batch_dim_to_heads(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (batch_size, seq_len, dim) = xs.dims3()?;
         xs.reshape((batch_size / self.heads, self.heads, seq_len, dim))?
             .transpose(1, 2)?
@@ -144,11 +152,11 @@ impl CrossAttention {
 
     fn sliced_attention(
         &self,
-        query: &Tensor,
-        key: &Tensor,
-        value: &Tensor,
+        query: &Tensor<B>,
+        key: &Tensor<B>,
+        value: &Tensor<B>,
         slice_size: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let batch_size_attention = query.dim(0)?;
         let mut hidden_states = Vec::with_capacity(batch_size_attention / slice_size);
         let in_dtype = query.dtype();
@@ -170,7 +178,12 @@ impl CrossAttention {
         self.reshape_batch_dim_to_heads(&hidden_states)
     }
 
-    fn attention(&self, query: &Tensor, key: &Tensor, value: &Tensor) -> Result<Tensor> {
+    fn attention(
+        &self,
+        query: &Tensor<B>,
+        key: &Tensor<B>,
+        value: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span_attn.enter();
         let xs = if self.use_flash_attn {
             let init_dtype = query.dtype();
@@ -205,7 +218,7 @@ impl CrossAttention {
         self.reshape_batch_dim_to_heads(&xs)
     }
 
-    pub fn forward(&self, xs: &Tensor, context: Option<&Tensor>) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, context: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let query = self.to_q.forward(xs)?;
         let context = context.unwrap_or(xs).contiguous()?;
@@ -232,19 +245,19 @@ impl CrossAttention {
 
 /// A basic Transformer block.
 #[derive(Debug)]
-struct BasicTransformerBlock {
-    attn1: CrossAttention,
-    ff: FeedForward,
-    attn2: CrossAttention,
-    norm1: nn::LayerNorm,
-    norm2: nn::LayerNorm,
-    norm3: nn::LayerNorm,
+struct BasicTransformerBlock<B: BackendStorage> {
+    attn1: CrossAttention<B>,
+    ff: FeedForward<B>,
+    attn2: CrossAttention<B>,
+    norm1: nn::LayerNorm<B>,
+    norm2: nn::LayerNorm<B>,
+    norm3: nn::LayerNorm<B>,
     span: tracing::Span,
 }
 
-impl BasicTransformerBlock {
+impl<B: BackendStorage> BasicTransformerBlock<B> {
     fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         dim: usize,
         n_heads: usize,
         d_head: usize,
@@ -286,7 +299,7 @@ impl BasicTransformerBlock {
         })
     }
 
-    fn forward(&self, xs: &Tensor, context: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, context: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let xs = (self.attn1.forward(&self.norm1.forward(xs)?, None)? + xs)?;
         let xs = (self.attn2.forward(&self.norm2.forward(&xs)?, context)? + xs)?;
@@ -316,25 +329,25 @@ impl Default for SpatialTransformerConfig {
 }
 
 #[derive(Debug)]
-enum Proj {
-    Conv2d(nn::Conv2d),
-    Linear(nn::Linear),
+enum Proj<B: BackendStorage> {
+    Conv2d(nn::Conv2d<B>),
+    Linear(nn::Linear<B>),
 }
 
 // Aka Transformer2DModel
 #[derive(Debug)]
-pub struct SpatialTransformer {
-    norm: nn::GroupNorm,
-    proj_in: Proj,
-    transformer_blocks: Vec<BasicTransformerBlock>,
-    proj_out: Proj,
+pub struct SpatialTransformer<B: BackendStorage> {
+    norm: nn::GroupNorm<B>,
+    proj_in: Proj<B>,
+    transformer_blocks: Vec<BasicTransformerBlock<B>>,
+    proj_out: Proj<B>,
     span: tracing::Span,
     pub config: SpatialTransformerConfig,
 }
 
-impl SpatialTransformer {
+impl<B: BackendStorage> SpatialTransformer<B> {
     pub fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         n_heads: usize,
         d_head: usize,
@@ -390,7 +403,7 @@ impl SpatialTransformer {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, context: Option<&Tensor>) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, context: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (batch, _channel, height, weight) = xs.dims4()?;
         let residual = xs;
@@ -455,12 +468,12 @@ impl Default for AttentionBlockConfig {
 }
 
 #[derive(Debug)]
-pub struct AttentionBlock {
-    group_norm: nn::GroupNorm,
-    query: nn::Linear,
-    key: nn::Linear,
-    value: nn::Linear,
-    proj_attn: nn::Linear,
+pub struct AttentionBlock<B: BackendStorage> {
+    group_norm: nn::GroupNorm<B>,
+    query: nn::Linear<B>,
+    key: nn::Linear<B>,
+    value: nn::Linear<B>,
+    proj_attn: nn::Linear<B>,
     channels: usize,
     num_heads: usize,
     span: tracing::Span,
@@ -472,7 +485,10 @@ pub struct AttentionBlock {
 // Linear layer may use a different dimension for the weight in the linear, which is
 // incompatible with the current implementation of the nn::linear constructor.
 // This is a workaround to handle the different dimensions.
-fn get_qkv_linear(channels: usize, vs: nn::VarBuilder) -> Result<nn::Linear> {
+fn get_qkv_linear<B: BackendStorage>(
+    channels: usize,
+    vs: nn::VarBuilder<B>,
+) -> Result<nn::Linear<B>> {
     match vs.get((channels, channels), "weight") {
         Ok(_) => nn::linear(channels, channels, vs),
         Err(_) => {
@@ -485,8 +501,12 @@ fn get_qkv_linear(channels: usize, vs: nn::VarBuilder) -> Result<nn::Linear> {
     }
 }
 
-impl AttentionBlock {
-    pub fn new(vs: nn::VarBuilder, channels: usize, config: AttentionBlockConfig) -> Result<Self> {
+impl<B: BackendStorage> AttentionBlock<B> {
+    pub fn new(
+        vs: nn::VarBuilder<B>,
+        channels: usize,
+        config: AttentionBlockConfig,
+    ) -> Result<Self> {
         let num_head_channels = config.num_head_channels.unwrap_or(channels);
         let num_heads = channels / num_head_channels;
         let group_norm =
@@ -514,15 +534,15 @@ impl AttentionBlock {
         })
     }
 
-    fn transpose_for_scores(&self, xs: Tensor) -> Result<Tensor> {
+    fn transpose_for_scores(&self, xs: Tensor<B>) -> Result<Tensor<B>> {
         let (batch, t, h_times_d) = xs.dims3()?;
         xs.reshape((batch, t, self.num_heads, h_times_d / self.num_heads))?
             .transpose(1, 2)
     }
 }
 
-impl Module for AttentionBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for AttentionBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let in_dtype = xs.dtype();
         let residual = xs;

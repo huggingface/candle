@@ -8,7 +8,7 @@ use candle_transformers::object_detection::{non_maximum_suppression, Bbox};
 mod darknet;
 
 use anyhow::Result;
-use candle::{DType, Device, Tensor};
+use candle::{DType, Tensor};
 use candle_nn::{Module, VarBuilder};
 use clap::Parser;
 use image::{DynamicImage, ImageBuffer};
@@ -36,14 +36,13 @@ pub fn draw_rect(
 }
 
 pub fn report(
-    pred: &Tensor,
+    pred: &Tensor<candle::CpuStorage>,
     img: DynamicImage,
     w: usize,
     h: usize,
     confidence_threshold: f32,
     nms_threshold: f32,
 ) -> Result<DynamicImage> {
-    let pred = pred.to_device(&Device::Cpu)?;
     let (npreds, pred_size) = pred.dims2()?;
     let nclasses = pred_size - 5;
     // The bounding boxes grouped by (maximum) class index.
@@ -147,7 +146,8 @@ pub fn main() -> Result<()> {
 
     // Create the model and load the weights from the file.
     let model = args.model()?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &Device::Cpu)? };
+    let vb =
+        unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &candle::CpuDevice)? };
     let config = args.config()?;
     let darknet = darknet::parse_config(config)?;
     let model = darknet.build_model(vb)?;
@@ -171,7 +171,8 @@ pub fn main() -> Result<()> {
                 )
                 .to_rgb8()
                 .into_raw();
-            Tensor::from_vec(data, (net_width, net_height, 3), &Device::Cpu)?.permute((2, 0, 1))?
+            Tensor::from_vec(data, (net_width, net_height, 3), &candle::CpuDevice)?
+                .permute((2, 0, 1))?
         };
         let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
         let predictions = model.forward(&image)?.squeeze(0)?;

@@ -1197,6 +1197,19 @@ impl CudaStorage {
     }
 }
 
+impl TryConvertStorage<CpuStorage> for CudaStorage {
+    fn convert(storage: CpuStorage, device: &Self::Device) -> Result<Self, Error> {
+        device.storage_from_cpu_storage_owned(storage)
+    }
+}
+
+impl TryConvertStorage<CudaStorage> for CudaStorage {
+    fn convert(storage: CudaStorage, _: &Self::Device) -> Result<Self, Error> {
+        // TODO: support transferring between CUDA devices
+        Ok(storage)
+    }
+}
+
 fn gemm_config<T>(
     alpha: T,
     beta: T,

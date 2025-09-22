@@ -21,16 +21,16 @@
 //! ```
 //!
 
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, linear_b as linear, Embedding, LayerNorm, Linear, Module, VarBuilder};
 
-fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
+fn layer_norm<B: BackendStorage>(size: usize, eps: f64, vb: VarBuilder<B>) -> Result<LayerNorm<B>> {
     let weight = vb.get(size, "weight")?;
     let bias = vb.get(size, "bias")?;
     Ok(LayerNorm::new(weight, bias, eps))
 }
 
-fn make_causal_mask(t: usize, device: &Device) -> Result<Tensor> {
+fn make_causal_mask<B: BackendStorage>(t: usize, device: &B::Device) -> Result<Tensor<B>> {
     let mask: Vec<_> = (0..t)
         .flat_map(|i| (0..t).map(move |j| u8::from(j <= i)))
         .collect();
@@ -117,10 +117,10 @@ impl Config {
     }
 }
 
-struct Attention {
-    c_attn: Linear,
-    c_proj: Linear,
-    kv_cache: Option<Tensor>,
+struct Attention<B: BackendStorage> {
+    c_attn: Linear<B>,
+    c_proj: Linear<B>,
+    kv_cache: Option<Tensor<B>>,
     use_cache: bool,
     embed_dim: usize,
     kv_dim: usize,
@@ -129,8 +129,8 @@ struct Attention {
     multi_query: bool,
 }
 
-impl Attention {
-    pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> Attention<B> {
+    pub fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let head_dim = hidden_size / cfg.num_attention_heads;
         let kv_heads = if cfg.multi_query {
@@ -156,11 +156,11 @@ impl Attention {
 
     fn attn(
         &self,
-        query: &Tensor,
-        key: &Tensor,
-        value: &Tensor,
-        attention_mask: &Tensor,
-    ) -> Result<Tensor> {
+        query: &Tensor<B>,
+        key: &Tensor<B>,
+        value: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         if query.dtype() != DType::F32 {
             // If we start supporting f16 models, we may need the upcasting scaling bits.
             // https://github.com/huggingface/transformers/blob/a0042379269bea9182c1f87e6b2eee4ba4c8cce8/src/transformers/models/gpt_bigcode/modeling_gpt_bigcode.py#L133
@@ -203,7 +203,11 @@ impl Attention {
         Ok(attn_output)
     }
 
-    fn forward(&mut self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        hidden_states: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let qkv = self.c_attn.forward(hidden_states)?;
         let (query, key_value) = if self.multi_query {
             let query = qkv.i((.., .., ..self.embed_dim))?;
@@ -244,19 +248,19 @@ impl Attention {
     }
 }
 
-struct Mlp {
-    c_fc: Linear,
-    c_proj: Linear,
+struct Mlp<B: BackendStorage> {
+    c_fc: Linear<B>,
+    c_proj: Linear<B>,
 }
 
-impl Mlp {
-    fn load(inner_dim: usize, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> Mlp<B> {
+    fn load(inner_dim: usize, vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let c_fc = linear(cfg.hidden_size, inner_dim, true, vb.pp("c_fc"))?;
         let c_proj = linear(inner_dim, cfg.hidden_size, true, vb.pp("c_proj"))?;
         Ok(Self { c_fc, c_proj })
     }
 
-    fn forward(&mut self, hidden_states: &Tensor) -> Result<Tensor> {
+    fn forward(&mut self, hidden_states: &Tensor<B>) -> Result<Tensor<B>> {
         let hidden_states = self.c_fc.forward(hidden_states)?.gelu()?;
         let hidden_states = self.c_proj.forward(&hidden_states)?;
         Ok(hidden_states)
@@ -264,15 +268,15 @@ impl Mlp {
 }
 
 // TODO: Add cross-attention?
-struct Block {
-    ln_1: LayerNorm,
-    attn: Attention,
-    ln_2: LayerNorm,
-    mlp: Mlp,
+struct Block<B: BackendStorage> {
+    ln_1: LayerNorm<B>,
+    attn: Attention<B>,
+    ln_2: LayerNorm<B>,
+    mlp: Mlp<B>,
 }
 
-impl Block {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> Block<B> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let inner_dim = cfg.n_inner.unwrap_or(4 * hidden_size);
         let ln_1 = layer_norm(hidden_size, cfg.layer_norm_epsilon, vb.pp("ln_1"))?;
@@ -287,7 +291,11 @@ impl Block {
         })
     }
 
-    fn forward(&mut self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        hidden_states: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let residual = hidden_states;
         let hidden_states = self.ln_1.forward(hidden_states)?;
         let attn_outputs = self.attn.forward(&hidden_states, attention_mask)?;
@@ -300,22 +308,22 @@ impl Block {
     }
 }
 
-pub struct GPTBigCode {
-    wte: Embedding,
-    wpe: Embedding,
-    blocks: Vec<Block>,
-    ln_f: LayerNorm,
-    lm_head: Linear,
-    bias: Tensor,
+pub struct GPTBigCode<B: BackendStorage> {
+    wte: Embedding<B>,
+    wpe: Embedding<B>,
+    blocks: Vec<Block<B>>,
+    ln_f: LayerNorm<B>,
+    lm_head: Linear<B>,
+    bias: Tensor<B>,
     config: Config,
 }
 
-impl GPTBigCode {
+impl<B: BackendStorage> GPTBigCode<B> {
     pub fn config(&self) -> &Config {
         &self.config
     }
 
-    pub fn load(vb: VarBuilder, cfg: Config) -> Result<Self> {
+    pub fn load(vb: VarBuilder<B>, cfg: Config) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let vb_t = vb.pp("transformer");
         let wte = embedding(cfg.vocab_size, hidden_size, vb_t.pp("wte"))?;
@@ -337,7 +345,7 @@ impl GPTBigCode {
         })
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, past_len: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor<B>, past_len: usize) -> Result<Tensor<B>> {
         let dev = input_ids.device();
         let (b_sz, seq_len) = input_ids.dims2()?;
 

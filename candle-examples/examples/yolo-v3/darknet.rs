@@ -1,4 +1,4 @@
-use candle::{DType, Device, IndexOp, Result, Tensor};
+use candle::{DType, IndexOp, Result, Tensor};
 use candle_nn::{batch_norm, conv2d, conv2d_no_bias, Func, Module, VarBuilder};
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -73,7 +73,7 @@ impl Accumulator {
     }
 }
 
-pub fn parse_config<T: AsRef<Path>>(path: T) -> Result<Darknet> {
+pub fn parse_config<P: AsRef<Path>>(path: P) -> Result<Darknet> {
     let file = File::open(path.as_ref())?;
     let mut acc = Accumulator::new();
     for line in BufReader::new(file).lines() {
@@ -108,13 +108,18 @@ pub fn parse_config<T: AsRef<Path>>(path: T) -> Result<Darknet> {
 }
 
 enum Bl {
-    Layer(Box<dyn candle_nn::Module + Send + Sync>),
+    Layer(Box<dyn candle_nn::Module<candle::CpuStorage> + Send + Sync>),
     Route(Vec<usize>),
     Shortcut(usize),
     Yolo(usize, Vec<(usize, usize)>),
 }
 
-fn conv(vb: VarBuilder, index: usize, p: usize, b: &Block) -> Result<(usize, Bl)> {
+fn conv(
+    vb: VarBuilder<candle::CpuStorage>,
+    index: usize,
+    p: usize,
+    b: &Block,
+) -> Result<(usize, Bl)> {
     let activation = b.get("activation")?;
     let filters = b.get("filters")?.parse::<usize>()?;
     let pad = b.get("pad")?.parse::<usize>()?;
@@ -214,11 +219,11 @@ fn yolo(p: usize, block: &Block) -> Result<(usize, Bl)> {
 }
 
 fn detect(
-    xs: &Tensor,
+    xs: &Tensor<candle::CpuStorage>,
     image_height: usize,
     classes: usize,
     anchors: &[(usize, usize)],
-) -> Result<Tensor> {
+) -> Result<Tensor<candle::CpuStorage>> {
     let (bsize, _channels, height, _width) = xs.dims4()?;
     let stride = image_height / height;
     let grid_size = image_height / stride;
@@ -229,7 +234,7 @@ fn detect(
         .transpose(1, 2)?
         .contiguous()?
         .reshape((bsize, grid_size * grid_size * nanchors, bbox_attrs))?;
-    let grid = Tensor::arange(0u32, grid_size as u32, &Device::Cpu)?;
+    let grid = Tensor::arange(0u32, grid_size as u32, &candle::CpuDevice)?;
     let a = grid.repeat((grid_size, 1))?;
     let b = a.t()?.contiguous()?;
     let x_offset = a.flatten_all()?.unsqueeze(1)?;
@@ -243,7 +248,7 @@ fn detect(
         .iter()
         .flat_map(|&(x, y)| vec![x as f32 / stride as f32, y as f32 / stride as f32].into_iter())
         .collect();
-    let anchors = Tensor::new(anchors.as_slice(), &Device::Cpu)?
+    let anchors = Tensor::new(anchors.as_slice(), &candle::CpuDevice)?
         .reshape((anchors.len() / 2, 2))?
         .repeat((grid_size * grid_size, 1))?
         .unsqueeze(0)?;
@@ -268,7 +273,10 @@ impl Darknet {
         Ok(image_width)
     }
 
-    pub fn build_model(&self, vb: VarBuilder) -> Result<Func<'_>> {
+    pub fn build_model(
+        &self,
+        vb: VarBuilder<candle::CpuStorage>,
+    ) -> Result<Func<'_, candle::CpuStorage>> {
         let mut blocks: Vec<(usize, Bl)> = vec![];
         let mut prev_channels: usize = 3;
         for (index, block) in self.blocks.iter().enumerate() {
@@ -285,8 +293,8 @@ impl Darknet {
         }
         let image_height = self.height()?;
         let func = candle_nn::func(move |xs| {
-            let mut prev_ys: Vec<Tensor> = vec![];
-            let mut detections: Vec<Tensor> = vec![];
+            let mut prev_ys: Vec<Tensor<candle::CpuStorage>> = vec![];
+            let mut detections: Vec<Tensor<candle::CpuStorage>> = vec![];
             for (_, b) in blocks.iter() {
                 let ys = match b {
                     Bl::Layer(l) => {
@@ -301,7 +309,7 @@ impl Darknet {
                     Bl::Yolo(classes, anchors) => {
                         let xs = prev_ys.last().unwrap_or(xs);
                         detections.push(detect(xs, image_height, *classes, anchors)?);
-                        Tensor::new(&[0u32], &Device::Cpu)?
+                        Tensor::new(&[0u32], &candle::CpuDevice)?
                     }
                 };
                 prev_ys.push(ys);

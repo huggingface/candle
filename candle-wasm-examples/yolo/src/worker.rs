@@ -1,6 +1,7 @@
 use crate::model::{report_detect, report_pose, Bbox, Multiples, YoloV8, YoloV8Pose};
-use candle::{DType, Device, Result, Tensor};
-use candle_nn::{Module, VarBuilder};
+use crate::{Tensor, VarBuilder};
+use candle::{CpuDevice, DType, Result};
+use candle_nn::Module;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use yew_agent::{HandlerId, Public, WorkerLink};
@@ -74,7 +75,7 @@ impl Model {
             Tensor::from_vec(
                 data,
                 (img.height() as usize, img.width() as usize, 3),
-                &Device::Cpu,
+                &CpuDevice,
             )?
             .permute((2, 0, 1))?
         };
@@ -103,7 +104,7 @@ impl Model {
                 "invalid model size: must be n, s, m, l or x".to_string(),
             ))?,
         };
-        let dev = &Device::Cpu;
+        let dev = &CpuDevice;
         let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, dev)?;
         let model = YoloV8::load(vb, multiples, 80)?;
         Ok(Self { model })
@@ -153,7 +154,7 @@ impl ModelPose {
             Tensor::from_vec(
                 data,
                 (img.height() as usize, img.width() as usize, 3),
-                &Device::Cpu,
+                &CpuDevice,
             )?
             .permute((2, 0, 1))?
         };
@@ -182,7 +183,7 @@ impl ModelPose {
                 "invalid model size: must be n, s, m, l or x".to_string(),
             ))?,
         };
-        let dev = &Device::Cpu;
+        let dev = &CpuDevice;
         let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, dev)?;
         let model = YoloV8Pose::load(vb, multiples, 1, (17, 3))?;
         Ok(Self { model })

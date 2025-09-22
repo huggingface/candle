@@ -2,11 +2,14 @@
 //!
 //! This implementation should be in line with the [PyTorch version](https://github.com/pytorch/pytorch/blob/7b419e8513a024e172eae767e24ec1b849976b13/torch/_tensor_str.py).
 //!
-use crate::{DType, Result, Tensor, WithDType};
+use crate::{
+    backend::{BackendDevice, BackendStorage},
+    DType, Result, Tensor, WithDType,
+};
 use float8::F8E4M3;
 use half::{bf16, f16};
 
-impl Tensor {
+impl<B: BackendStorage> Tensor<B> {
     fn fmt_dt<T: WithDType + std::fmt::Display>(
         &self,
         f: &mut std::fmt::Formatter,
@@ -52,7 +55,7 @@ impl Tensor {
     }
 }
 
-impl std::fmt::Debug for Tensor {
+impl<B: BackendStorage> std::fmt::Debug for Tensor<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self.dtype() {
             DType::U8 => self.fmt_dt::<u8>(f),
@@ -171,7 +174,7 @@ trait TensorFormatter {
 
     fn fmt<T: std::fmt::Write>(&self, v: Self::Elem, max_w: usize, f: &mut T) -> std::fmt::Result;
 
-    fn max_width(&self, to_display: &Tensor) -> usize {
+    fn max_width<B: BackendStorage>(&self, to_display: &Tensor<B>) -> usize {
         let mut max_width = 1;
         if let Ok(vs) = to_display.flatten_all().and_then(|t| t.to_vec1()) {
             for &v in vs.iter() {
@@ -191,9 +194,9 @@ trait TensorFormatter {
         Ok(())
     }
 
-    fn fmt_tensor(
+    fn fmt_tensor<B: BackendStorage>(
         &self,
-        t: &Tensor,
+        t: &Tensor<B>,
         indent: usize,
         max_w: usize,
         summarize: bool,
@@ -298,7 +301,7 @@ impl<S> FloatFormatter<S>
 where
     S: WithDType + num_traits::Float + std::fmt::Display,
 {
-    fn new(t: &Tensor, po: &PrinterOptions) -> Result<Self> {
+    fn new<B: BackendStorage>(t: &Tensor<B>, po: &PrinterOptions) -> Result<Self> {
         let mut int_mode = true;
         let mut sci_mode = false;
 
@@ -409,7 +412,7 @@ where
     }
 }
 
-fn get_summarized_data(t: &Tensor, edge_items: usize) -> Result<Tensor> {
+fn get_summarized_data<B: BackendStorage>(t: &Tensor<B>, edge_items: usize) -> Result<Tensor<B>> {
     let dims = t.dims();
     if dims.is_empty() {
         Ok(t.clone())
@@ -441,7 +444,7 @@ fn get_summarized_data(t: &Tensor, edge_items: usize) -> Result<Tensor> {
     }
 }
 
-impl std::fmt::Display for Tensor {
+impl<B: BackendStorage> std::fmt::Display for Tensor<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let po = PRINT_OPTS.lock().unwrap();
         let summarize = self.elem_count() > po.threshold;

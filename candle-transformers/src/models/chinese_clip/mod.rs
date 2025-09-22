@@ -6,7 +6,7 @@
 //! - 💻 [GH Link](https://github.com/OFA-Sys/Chinese-CLIP)
 //! - 💻 Transformers Python [reference implementation](https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py)
 //!
-use candle::{Module, Result, Tensor, D};
+use candle::{BackendStorage, Module, Result, Tensor, D};
 use candle_nn as nn;
 
 use text_model::ChineseClipTextTransformer;
@@ -35,8 +35,8 @@ impl From<String> for Activation {
     }
 }
 
-impl Module for Activation {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Activation {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         match self {
             Activation::QuickGelu => xs * nn::ops::sigmoid(&(xs * 1.702f64)?)?,
             Activation::Gelu => xs.gelu_erf(),
@@ -122,16 +122,16 @@ impl EncoderConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct ChineseClipModel {
-    text_model: ChineseClipTextTransformer,
-    vision_model: ChineseClipVisionTransformer,
-    visual_projection: nn::Linear,
-    text_projection: nn::Linear,
-    logit_scale: Tensor,
+pub struct ChineseClipModel<B: BackendStorage> {
+    text_model: ChineseClipTextTransformer<B>,
+    vision_model: ChineseClipVisionTransformer<B>,
+    visual_projection: nn::Linear<B>,
+    text_projection: nn::Linear<B>,
+    logit_scale: Tensor<B>,
 }
 
-impl ChineseClipModel {
-    pub fn new(vs: nn::VarBuilder, c: &ChineseClipConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipModel<B> {
+    pub fn new(vs: nn::VarBuilder<B>, c: &ChineseClipConfig) -> Result<Self> {
         let text_model = ChineseClipTextTransformer::new(vs.pp("text_model"), &c.text_config)?;
 
         let vision_model =
@@ -165,10 +165,10 @@ impl ChineseClipModel {
 
     pub fn get_text_features(
         &self,
-        input_ids: &Tensor,
-        token_type_ids: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        input_ids: &Tensor<B>,
+        token_type_ids: Option<&Tensor<B>>,
+        attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let output = self
             .text_model
             .forward(input_ids, token_type_ids, attention_mask)?
@@ -176,7 +176,7 @@ impl ChineseClipModel {
         self.text_projection.forward(&output)
     }
 
-    pub fn get_image_features(&self, pixel_values: &Tensor) -> Result<Tensor> {
+    pub fn get_image_features(&self, pixel_values: &Tensor<B>) -> Result<Tensor<B>> {
         pixel_values
             .apply(&self.vision_model)?
             .apply(&self.visual_projection)
@@ -184,11 +184,11 @@ impl ChineseClipModel {
 
     pub fn forward(
         &self,
-        pixel_values: &Tensor,
-        input_ids: &Tensor,
-        token_type_ids: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
-    ) -> Result<(Tensor, Tensor)> {
+        pixel_values: &Tensor<B>,
+        input_ids: &Tensor<B>,
+        token_type_ids: Option<&Tensor<B>>,
+        attention_mask: Option<&Tensor<B>>,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let image_features = self.get_image_features(pixel_values)?;
         let text_features = self.get_text_features(input_ids, token_type_ids, attention_mask)?;
 
@@ -203,7 +203,7 @@ impl ChineseClipModel {
     }
 }
 
-pub fn div_l2_norm(v: &Tensor) -> Result<Tensor> {
+pub fn div_l2_norm<B: BackendStorage>(v: &Tensor<B>) -> Result<Tensor<B>> {
     let l2_norm = v.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?;
     v.broadcast_div(&l2_norm)
 }

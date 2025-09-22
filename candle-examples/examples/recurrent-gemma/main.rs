@@ -5,25 +5,34 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
+use candle::quantized::{QCpuStorage, QuantizedBackend};
 use clap::Parser;
 
 use candle_transformers::models::quantized_recurrent_gemma::Model as QModel;
 use candle_transformers::models::recurrent_gemma::{Config, Model as BModel};
+use candle_transformers::quantized_nn::Linear;
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, DType, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-enum Model {
-    B(BModel),
-    Q(QModel),
+enum Model<QB: QuantizedBackend> {
+    B(BModel<QB::Storage>),
+    Q(QModel<QB>),
 }
 
-impl Model {
-    fn forward(&mut self, xs: &Tensor, pos: usize) -> candle::Result<Tensor> {
+impl<QB: QuantizedBackend> Model<QB>
+where
+    Linear<QB>: candle::Module<QB::Storage>,
+{
+    fn forward(
+        &mut self,
+        xs: &Tensor<QB::Storage>,
+        pos: usize,
+    ) -> candle::Result<Tensor<QB::Storage>> {
         match self {
             Self::B(m) => m.forward(xs, pos),
             Self::Q(m) => m.forward(xs, pos),
@@ -39,19 +48,19 @@ enum Which {
     Instruct2B,
 }
 
-struct TextGeneration {
-    model: Model,
-    device: Device,
+struct TextGeneration<QB: QuantizedBackend> {
+    model: Model<QB>,
+    device: QB::Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
 }
 
-impl TextGeneration {
+impl<QB: QuantizedBackend> TextGeneration<QB> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
+        model: Model<QB>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
@@ -59,7 +68,7 @@ impl TextGeneration {
         top_k: usize,
         repeat_penalty: f32,
         repeat_last_n: usize,
-        device: &Device,
+        device: &QB::Device,
     ) -> Self {
         let sampling = match temp {
             None => candle_transformers::generation::Sampling::ArgMax,
@@ -86,7 +95,10 @@ impl TextGeneration {
         }
     }
 
-    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()> {
+    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()>
+    where
+        Linear<QB>: candle::Module<QB::Storage>,
+    {
         use std::io::Write;
         self.tokenizer.clear();
         let mut tokens = self
@@ -215,11 +227,28 @@ struct Args {
     quantized: bool,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<QCpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::quantized::QCudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::QMetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<QB: QuantizedBackend>(args: Args, device: &QB::Device) -> Result<()>
+where
+    Linear<QB>: candle::Module<QB::Storage>,
+{
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -286,20 +315,22 @@ fn main() -> Result<()> {
     let config: Config = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
 
     let start = std::time::Instant::now();
-    let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
+
+    let dtype = if QB::Device::SUPPORTS_BF16 {
         DType::BF16
     } else {
         DType::F32
     };
     let model = if args.quantized {
-        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
-            &filenames[0],
-            &device,
-        )?;
+        let vb: candle_transformers::quantized_var_builder::VarBuilder<QB> =
+            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
+                &filenames[0],
+                device,
+            )?;
         Model::Q(QModel::new(&config, vb.pp("model"))?)
     } else {
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+        let vb: VarBuilder<QB::Storage> =
+            unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
         Model::B(BModel::new(&config, vb.pp("model"))?)
     };
 
@@ -314,7 +345,7 @@ fn main() -> Result<()> {
         args.top_k,
         args.repeat_penalty,
         args.repeat_last_n,
-        &device,
+        device,
     );
     pipeline.run(&args.prompt, args.sample_len)?;
     Ok(())

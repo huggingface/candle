@@ -1,21 +1,23 @@
-use candle::{Module, Result, Tensor, D};
+#[cfg(feature = "flash-attn")]
+use candle::CudaStorage;
+use candle::{BackendStorage, Module, Result, Tensor, D};
 use candle_nn as nn;
 
 use super::projections::{AttnProjections, Mlp, Qkv, QkvOnlyAttnProjections};
 
-pub struct ModulateIntermediates {
-    gate_msa: Tensor,
-    shift_mlp: Tensor,
-    scale_mlp: Tensor,
-    gate_mlp: Tensor,
+pub struct ModulateIntermediates<B: BackendStorage> {
+    gate_msa: Tensor<B>,
+    shift_mlp: Tensor<B>,
+    scale_mlp: Tensor<B>,
+    gate_mlp: Tensor<B>,
 }
 
-pub struct DiTBlock {
+pub struct DiTBlock<B: BackendStorage> {
     norm1: LayerNormNoAffine,
-    attn: AttnProjections,
+    attn: AttnProjections<B>,
     norm2: LayerNormNoAffine,
-    mlp: Mlp,
-    ada_ln_modulation: nn::Sequential,
+    mlp: Mlp<B>,
+    ada_ln_modulation: nn::Sequential<B>,
 }
 
 pub struct LayerNormNoAffine {
@@ -28,14 +30,14 @@ impl LayerNormNoAffine {
     }
 }
 
-impl Module for LayerNormNoAffine {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for LayerNormNoAffine {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         nn::LayerNorm::new_no_bias(Tensor::ones_like(x)?, self.eps).forward(x)
     }
 }
 
-impl DiTBlock {
-    pub fn new(hidden_size: usize, num_heads: usize, vb: nn::VarBuilder) -> Result<Self> {
+impl<B: BackendStorage + 'static> DiTBlock<B> {
+    pub fn new(hidden_size: usize, num_heads: usize, vb: nn::VarBuilder<B>) -> Result<Self> {
         let norm1 = LayerNormNoAffine::new(1e-6);
         let attn = AttnProjections::new(hidden_size, num_heads, vb.pp("attn"))?;
         let norm2 = LayerNormNoAffine::new(1e-6);
@@ -57,7 +59,11 @@ impl DiTBlock {
         })
     }
 
-    pub fn pre_attention(&self, x: &Tensor, c: &Tensor) -> Result<(Qkv, ModulateIntermediates)> {
+    pub fn pre_attention(
+        &self,
+        x: &Tensor<B>,
+        c: &Tensor<B>,
+    ) -> Result<(Qkv<B>, ModulateIntermediates<B>)> {
         let modulation = self.ada_ln_modulation.forward(c)?;
         let chunks = modulation.chunk(6, D::Minus1)?;
         let (shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp) = (
@@ -86,10 +92,10 @@ impl DiTBlock {
 
     pub fn post_attention(
         &self,
-        attn: &Tensor,
-        x: &Tensor,
-        mod_interm: &ModulateIntermediates,
-    ) -> Result<Tensor> {
+        attn: &Tensor<B>,
+        x: &Tensor<B>,
+        mod_interm: &ModulateIntermediates<B>,
+    ) -> Result<Tensor<B>> {
         let attn_out = self.attn.post_attention(attn)?;
         let x = x.add(&attn_out.broadcast_mul(&mod_interm.gate_msa.unsqueeze(1)?)?)?;
 
@@ -102,25 +108,25 @@ impl DiTBlock {
     }
 }
 
-pub struct SelfAttnModulateIntermediates {
-    gate_msa: Tensor,
-    shift_mlp: Tensor,
-    scale_mlp: Tensor,
-    gate_mlp: Tensor,
-    gate_msa2: Tensor,
+pub struct SelfAttnModulateIntermediates<B: BackendStorage> {
+    gate_msa: Tensor<B>,
+    shift_mlp: Tensor<B>,
+    scale_mlp: Tensor<B>,
+    gate_mlp: Tensor<B>,
+    gate_msa2: Tensor<B>,
 }
 
-pub struct SelfAttnDiTBlock {
+pub struct SelfAttnDiTBlock<B: BackendStorage> {
     norm1: LayerNormNoAffine,
-    attn: AttnProjections,
-    attn2: AttnProjections,
+    attn: AttnProjections<B>,
+    attn2: AttnProjections<B>,
     norm2: LayerNormNoAffine,
-    mlp: Mlp,
-    ada_ln_modulation: nn::Sequential,
+    mlp: Mlp<B>,
+    ada_ln_modulation: nn::Sequential<B>,
 }
 
-impl SelfAttnDiTBlock {
-    pub fn new(hidden_size: usize, num_heads: usize, vb: nn::VarBuilder) -> Result<Self> {
+impl<B: BackendStorage + 'static> SelfAttnDiTBlock<B> {
+    pub fn new(hidden_size: usize, num_heads: usize, vb: nn::VarBuilder<B>) -> Result<Self> {
         let norm1 = LayerNormNoAffine::new(1e-6);
         let attn = AttnProjections::new(hidden_size, num_heads, vb.pp("attn"))?;
         let attn2 = AttnProjections::new(hidden_size, num_heads, vb.pp("attn2"))?;
@@ -146,9 +152,9 @@ impl SelfAttnDiTBlock {
 
     pub fn pre_attention(
         &self,
-        x: &Tensor,
-        c: &Tensor,
-    ) -> Result<(Qkv, Qkv, SelfAttnModulateIntermediates)> {
+        x: &Tensor<B>,
+        c: &Tensor<B>,
+    ) -> Result<(Qkv<B>, Qkv<B>, SelfAttnModulateIntermediates<B>)> {
         let modulation = self.ada_ln_modulation.forward(c)?;
         let chunks = modulation.chunk(9, D::Minus1)?;
         let (
@@ -195,11 +201,11 @@ impl SelfAttnDiTBlock {
 
     pub fn post_attention(
         &self,
-        attn: &Tensor,
-        attn2: &Tensor,
-        x: &Tensor,
-        mod_interm: &SelfAttnModulateIntermediates,
-    ) -> Result<Tensor> {
+        attn: &Tensor<B>,
+        attn2: &Tensor<B>,
+        x: &Tensor<B>,
+        mod_interm: &SelfAttnModulateIntermediates<B>,
+    ) -> Result<Tensor<B>> {
         let attn_out = self.attn.post_attention(attn)?;
         let x = x.add(&attn_out.broadcast_mul(&mod_interm.gate_msa.unsqueeze(1)?)?)?;
         let attn_out2 = self.attn2.post_attention(attn2)?;
@@ -213,14 +219,14 @@ impl SelfAttnDiTBlock {
     }
 }
 
-pub struct QkvOnlyDiTBlock {
+pub struct QkvOnlyDiTBlock<B: BackendStorage> {
     norm1: LayerNormNoAffine,
-    attn: QkvOnlyAttnProjections,
-    ada_ln_modulation: nn::Sequential,
+    attn: QkvOnlyAttnProjections<B>,
+    ada_ln_modulation: nn::Sequential<B>,
 }
 
-impl QkvOnlyDiTBlock {
-    pub fn new(hidden_size: usize, num_heads: usize, vb: nn::VarBuilder) -> Result<Self> {
+impl<B: BackendStorage + 'static> QkvOnlyDiTBlock<B> {
+    pub fn new(hidden_size: usize, num_heads: usize, vb: nn::VarBuilder<B>) -> Result<Self> {
         let norm1 = LayerNormNoAffine::new(1e-6);
         let attn = QkvOnlyAttnProjections::new(hidden_size, num_heads, vb.pp("attn"))?;
         let n_mods = 2;
@@ -237,7 +243,7 @@ impl QkvOnlyDiTBlock {
         })
     }
 
-    pub fn pre_attention(&self, x: &Tensor, c: &Tensor) -> Result<Qkv> {
+    pub fn pre_attention(&self, x: &Tensor<B>, c: &Tensor<B>) -> Result<Qkv<B>> {
         let modulation = self.ada_ln_modulation.forward(c)?;
         let chunks = modulation.chunk(2, D::Minus1)?;
         let (shift_msa, scale_msa) = (chunks[0].clone(), chunks[1].clone());
@@ -248,18 +254,18 @@ impl QkvOnlyDiTBlock {
     }
 }
 
-pub struct FinalLayer {
+pub struct FinalLayer<B: BackendStorage> {
     norm_final: LayerNormNoAffine,
-    linear: nn::Linear,
-    ada_ln_modulation: nn::Sequential,
+    linear: nn::Linear<B>,
+    ada_ln_modulation: nn::Sequential<B>,
 }
 
-impl FinalLayer {
+impl<B: BackendStorage + 'static> FinalLayer<B> {
     pub fn new(
         hidden_size: usize,
         patch_size: usize,
         out_channels: usize,
-        vb: nn::VarBuilder,
+        vb: nn::VarBuilder<B>,
     ) -> Result<Self> {
         let norm_final = LayerNormNoAffine::new(1e-6);
         let linear = nn::linear(
@@ -280,7 +286,7 @@ impl FinalLayer {
         })
     }
 
-    pub fn forward(&self, x: &Tensor, c: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, x: &Tensor<B>, c: &Tensor<B>) -> Result<Tensor<B>> {
         let modulation = self.ada_ln_modulation.forward(c)?;
         let chunks = modulation.chunk(2, D::Minus1)?;
         let (shift, scale) = (chunks[0].clone(), chunks[1].clone());
@@ -293,30 +299,39 @@ impl FinalLayer {
     }
 }
 
-fn modulate(x: &Tensor, shift: &Tensor, scale: &Tensor) -> Result<Tensor> {
+fn modulate<B: BackendStorage>(
+    x: &Tensor<B>,
+    shift: &Tensor<B>,
+    scale: &Tensor<B>,
+) -> Result<Tensor<B>> {
     let shift = shift.unsqueeze(1)?;
     let scale = scale.unsqueeze(1)?;
     let scale_plus_one = scale.add(&Tensor::ones_like(&scale)?)?;
     shift.broadcast_add(&x.broadcast_mul(&scale_plus_one)?)
 }
 
-pub trait JointBlock {
-    fn forward(&self, context: &Tensor, x: &Tensor, c: &Tensor) -> Result<(Tensor, Tensor)>;
+pub trait JointBlock<B: BackendStorage> {
+    fn forward(
+        &self,
+        context: &Tensor<B>,
+        x: &Tensor<B>,
+        c: &Tensor<B>,
+    ) -> Result<(Tensor<B>, Tensor<B>)>;
 }
 
-pub struct MMDiTJointBlock {
-    x_block: DiTBlock,
-    context_block: DiTBlock,
+pub struct MMDiTJointBlock<B: BackendStorage> {
+    x_block: DiTBlock<B>,
+    context_block: DiTBlock<B>,
     num_heads: usize,
     use_flash_attn: bool,
 }
 
-impl MMDiTJointBlock {
+impl<B: BackendStorage + 'static> MMDiTJointBlock<B> {
     pub fn new(
         hidden_size: usize,
         num_heads: usize,
         use_flash_attn: bool,
-        vb: nn::VarBuilder,
+        vb: nn::VarBuilder<B>,
     ) -> Result<Self> {
         let x_block = DiTBlock::new(hidden_size, num_heads, vb.pp("x_block"))?;
         let context_block = DiTBlock::new(hidden_size, num_heads, vb.pp("context_block"))?;
@@ -330,8 +345,13 @@ impl MMDiTJointBlock {
     }
 }
 
-impl JointBlock for MMDiTJointBlock {
-    fn forward(&self, context: &Tensor, x: &Tensor, c: &Tensor) -> Result<(Tensor, Tensor)> {
+impl<B: BackendStorage + 'static> JointBlock<B> for MMDiTJointBlock<B> {
+    fn forward(
+        &self,
+        context: &Tensor<B>,
+        x: &Tensor<B>,
+        c: &Tensor<B>,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let (context_qkv, context_interm) = self.context_block.pre_attention(context, c)?;
         let (x_qkv, x_interm) = self.x_block.pre_attention(x, c)?;
         let (context_attn, x_attn) =
@@ -344,19 +364,19 @@ impl JointBlock for MMDiTJointBlock {
     }
 }
 
-pub struct MMDiTXJointBlock {
-    x_block: SelfAttnDiTBlock,
-    context_block: DiTBlock,
+pub struct MMDiTXJointBlock<B: BackendStorage> {
+    x_block: SelfAttnDiTBlock<B>,
+    context_block: DiTBlock<B>,
     num_heads: usize,
     use_flash_attn: bool,
 }
 
-impl MMDiTXJointBlock {
+impl<B: BackendStorage + 'static> MMDiTXJointBlock<B> {
     pub fn new(
         hidden_size: usize,
         num_heads: usize,
         use_flash_attn: bool,
-        vb: nn::VarBuilder,
+        vb: nn::VarBuilder<B>,
     ) -> Result<Self> {
         let x_block = SelfAttnDiTBlock::new(hidden_size, num_heads, vb.pp("x_block"))?;
         let context_block = DiTBlock::new(hidden_size, num_heads, vb.pp("context_block"))?;
@@ -370,8 +390,13 @@ impl MMDiTXJointBlock {
     }
 }
 
-impl JointBlock for MMDiTXJointBlock {
-    fn forward(&self, context: &Tensor, x: &Tensor, c: &Tensor) -> Result<(Tensor, Tensor)> {
+impl<B: BackendStorage + 'static> JointBlock<B> for MMDiTXJointBlock<B> {
+    fn forward(
+        &self,
+        context: &Tensor<B>,
+        x: &Tensor<B>,
+        c: &Tensor<B>,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let (context_qkv, context_interm) = self.context_block.pre_attention(context, c)?;
         let (x_qkv, x_qkv2, x_interm) = self.x_block.pre_attention(x, c)?;
         let (context_attn, x_attn) =
@@ -387,19 +412,19 @@ impl JointBlock for MMDiTXJointBlock {
     }
 }
 
-pub struct ContextQkvOnlyJointBlock {
-    x_block: DiTBlock,
-    context_block: QkvOnlyDiTBlock,
+pub struct ContextQkvOnlyJointBlock<B: BackendStorage> {
+    x_block: DiTBlock<B>,
+    context_block: QkvOnlyDiTBlock<B>,
     num_heads: usize,
     use_flash_attn: bool,
 }
 
-impl ContextQkvOnlyJointBlock {
+impl<B: BackendStorage + 'static> ContextQkvOnlyJointBlock<B> {
     pub fn new(
         hidden_size: usize,
         num_heads: usize,
         use_flash_attn: bool,
-        vb: nn::VarBuilder,
+        vb: nn::VarBuilder<B>,
     ) -> Result<Self> {
         let x_block = DiTBlock::new(hidden_size, num_heads, vb.pp("x_block"))?;
         let context_block = QkvOnlyDiTBlock::new(hidden_size, num_heads, vb.pp("context_block"))?;
@@ -411,7 +436,7 @@ impl ContextQkvOnlyJointBlock {
         })
     }
 
-    pub fn forward(&self, context: &Tensor, x: &Tensor, c: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, context: &Tensor<B>, x: &Tensor<B>, c: &Tensor<B>) -> Result<Tensor<B>> {
         let context_qkv = self.context_block.pre_attention(context, c)?;
         let (x_qkv, x_interm) = self.x_block.pre_attention(x, c)?;
 
@@ -424,12 +449,12 @@ impl ContextQkvOnlyJointBlock {
 
 // A QKV-attention that is compatible with the interface of candle_flash_attn::flash_attn
 // Flash attention regards q, k, v dimensions as (batch_size, seqlen, nheads, headdim)
-fn flash_compatible_attention(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
+fn flash_compatible_attention<B: BackendStorage>(
+    q: &Tensor<B>,
+    k: &Tensor<B>,
+    v: &Tensor<B>,
     softmax_scale: f32,
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     let q_dims_for_matmul = q.transpose(1, 2)?.dims().to_vec();
     let rank = q_dims_for_matmul.len();
     let q = q.transpose(1, 2)?.flatten_to(rank - 3)?;
@@ -442,26 +467,32 @@ fn flash_compatible_attention(
 
 #[cfg(feature = "flash-attn")]
 fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
+    q: &Tensor<CudaStorage>,
+    k: &Tensor<CudaStorage>,
+    v: &Tensor<CudaStorage>,
     softmax_scale: f32,
     causal: bool,
-) -> Result<Tensor> {
+) -> Result<Tensor<CudaStorage>> {
     candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
 }
 
 #[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+fn flash_attn<B: BackendStorage>(
+    _: &Tensor<B>,
+    _: &Tensor<B>,
+    _: &Tensor<B>,
+    _: f32,
+    _: bool,
+) -> Result<Tensor<B>> {
     unimplemented!("compile with '--features flash-attn'")
 }
 
-fn joint_attn(
-    context_qkv: &Qkv,
-    x_qkv: &Qkv,
+fn joint_attn<B: BackendStorage>(
+    context_qkv: &Qkv<B>,
+    x_qkv: &Qkv<B>,
     num_heads: usize,
     use_flash_attn: bool,
-) -> Result<(Tensor, Tensor)> {
+) -> Result<(Tensor<B>, Tensor<B>)> {
     let qkv = Qkv {
         q: Tensor::cat(&[&context_qkv.q, &x_qkv.q], 1)?,
         k: Tensor::cat(&[&context_qkv.k, &x_qkv.k], 1)?,
@@ -477,7 +508,11 @@ fn joint_attn(
     Ok((context_attn, x_attn))
 }
 
-fn attn(qkv: &Qkv, num_heads: usize, use_flash_attn: bool) -> Result<Tensor> {
+fn attn<B: BackendStorage>(
+    qkv: &Qkv<B>,
+    num_heads: usize,
+    use_flash_attn: bool,
+) -> Result<Tensor<B>> {
     let batch_size = qkv.q.dim(0)?;
     let seqlen = qkv.q.dim(1)?;
     let qkv = Qkv {

@@ -1,8 +1,15 @@
-use candle::{test_device, Device, IndexOp, Result, Tensor};
-use candle_core as candle;
+use candle::{test_device, BackendStorage, IndexOp, Result, Tensor};
+use candle_core::{self as candle, CpuDevice, CpuStorage};
 
-fn contiguous(device: &Device) -> Result<()> {
-    let tensor = Tensor::arange(0u32, 24u32, device)?.reshape((2, 3, 4))?;
+#[allow(unused_imports)]
+use candle_core::BackendDevice;
+#[cfg(feature = "cuda")]
+use candle_core::{CudaDevice, CudaStorage};
+#[cfg(feature = "metal")]
+use candle_core::{MetalDevice, MetalStorage};
+
+fn contiguous<B: BackendStorage>(device: &B::Device) -> Result<()> {
+    let tensor: Tensor<B> = Tensor::arange(0u32, 24u32, device)?.reshape((2, 3, 4))?;
     assert_eq!(
         tensor.to_vec3::<u32>()?,
         &[
@@ -53,8 +60,8 @@ test_device!(contiguous, contiguous_cpu, contiguous_gpu, contiguous_metal);
 
 #[test]
 fn strided_blocks() -> Result<()> {
-    use candle::Device::Cpu;
-    let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;
+    type CpuTensor = Tensor<CpuStorage>;
+    let tensor = CpuTensor::arange(0u32, 24u32, &CpuDevice)?.reshape((2, 3, 4))?;
     match tensor.strided_blocks() {
         candle::StridedBlocks::SingleBlock { start_offset, len } => {
             assert_eq!(start_offset, 0);
@@ -64,7 +71,7 @@ fn strided_blocks() -> Result<()> {
             panic!("unexpected block structure")
         }
     };
-    let tensor = Tensor::arange(0u32, 26u32, &Cpu)?
+    let tensor = CpuTensor::arange(0u32, 26u32, &CpuDevice)?
         .i(2..)?
         .reshape((2, 3, 4))?;
     match tensor.strided_blocks() {
@@ -76,7 +83,7 @@ fn strided_blocks() -> Result<()> {
             panic!("unexpected block structure")
         }
     };
-    let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;
+    let tensor = CpuTensor::arange(0u32, 24u32, &CpuDevice)?.reshape((2, 3, 4))?;
     let tensor = tensor.i(1)?;
     match tensor.strided_blocks() {
         candle::StridedBlocks::SingleBlock { start_offset, len } => {
@@ -87,7 +94,7 @@ fn strided_blocks() -> Result<()> {
             panic!("unexpected block structure")
         }
     };
-    let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;
+    let tensor = CpuTensor::arange(0u32, 24u32, &CpuDevice)?.reshape((2, 3, 4))?;
     let tensor = tensor.i((.., 1))?.contiguous()?;
     match tensor.strided_blocks() {
         candle::StridedBlocks::SingleBlock { start_offset, len } => {
@@ -99,7 +106,7 @@ fn strided_blocks() -> Result<()> {
             panic!("unexpected block structure")
         }
     };
-    let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;
+    let tensor = CpuTensor::arange(0u32, 24u32, &CpuDevice)?.reshape((2, 3, 4))?;
     let tensor = tensor.i((.., 1))?;
     match tensor.strided_blocks() {
         candle::StridedBlocks::SingleBlock { .. } => {
@@ -113,7 +120,7 @@ fn strided_blocks() -> Result<()> {
             assert_eq!(block_start_index.collect::<Vec<_>>(), &[4, 16])
         }
     };
-    let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;
+    let tensor = CpuTensor::arange(0u32, 24u32, &CpuDevice)?.reshape((2, 3, 4))?;
     match tensor.t()?.strided_blocks() {
         candle::StridedBlocks::SingleBlock { .. } => {
             panic!("unexpected block structure")
@@ -132,7 +139,7 @@ fn strided_blocks() -> Result<()> {
             )
         }
     };
-    let tensor = Tensor::arange(0u32, 24u32, &Cpu)?.reshape((2, 3, 4))?;
+    let tensor = CpuTensor::arange(0u32, 24u32, &CpuDevice)?.reshape((2, 3, 4))?;
     match tensor.transpose(0, 1)?.strided_blocks() {
         candle::StridedBlocks::SingleBlock { .. } => {
             panic!("unexpected block structure")

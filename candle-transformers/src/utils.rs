@@ -1,8 +1,12 @@
 //! Apply penalty and repeat_kv
 
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 
-pub fn apply_repeat_penalty(logits: &Tensor, penalty: f32, context: &[u32]) -> Result<Tensor> {
+pub fn apply_repeat_penalty<B: BackendStorage>(
+    logits: &Tensor<B>,
+    penalty: f32,
+    context: &[u32],
+) -> Result<Tensor<B>> {
     let device = logits.device();
     let mut logits = logits.to_dtype(candle::DType::F32)?.to_vec1::<f32>()?;
     let mut already_seen = std::collections::HashSet::new();
@@ -25,7 +29,7 @@ pub fn apply_repeat_penalty(logits: &Tensor, penalty: f32, context: &[u32]) -> R
 
 /// Repeats a key or value tensor for grouped query attention
 /// The input tensor should have a shape `(batch, num_kv_heads, seq_len, head_dim)`,
-pub fn repeat_kv(xs: Tensor, n_rep: usize) -> Result<Tensor> {
+pub fn repeat_kv<B: BackendStorage>(xs: Tensor<B>, n_rep: usize) -> Result<Tensor<B>> {
     if n_rep == 1 {
         Ok(xs)
     } else {

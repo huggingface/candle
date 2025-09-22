@@ -1,5 +1,5 @@
 use anyhow::{Ok, Result};
-use candle::{DType, IndexOp, Tensor};
+use candle::{BackendStorage, DType, IndexOp, Tensor};
 
 use candle_transformers::models::flux;
 use candle_transformers::models::mmdit::model::MMDiT;
@@ -12,17 +12,17 @@ pub struct SkipLayerGuidanceConfig {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn euler_sample(
-    mmdit: &MMDiT,
-    y: &Tensor,
-    context: &Tensor,
+pub fn euler_sample<B: BackendStorage + 'static>(
+    mmdit: &MMDiT<B>,
+    y: &Tensor<B>,
+    context: &Tensor<B>,
     num_inference_steps: usize,
     cfg_scale: f64,
     time_shift: f64,
     height: usize,
     width: usize,
     slg_config: Option<SkipLayerGuidanceConfig>,
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     let mut x = flux::sampling::get_noise(1, height, width, y.device())?.to_dtype(DType::F16)?;
     let sigmas = (0..=num_inference_steps)
         .map(|x| x as f64 / num_inference_steps as f64)
@@ -77,7 +77,7 @@ fn time_snr_shift(alpha: f64, t: f64) -> f64 {
     alpha * t / (1.0 + (alpha - 1.0) * t)
 }
 
-fn apply_cfg(cfg_scale: f64, noise_pred: &Tensor) -> Result<Tensor> {
+fn apply_cfg<B: BackendStorage>(cfg_scale: f64, noise_pred: &Tensor<B>) -> Result<Tensor<B>> {
     Ok(((cfg_scale * noise_pred.narrow(0, 0, 1)?)?
         - ((cfg_scale - 1.0) * noise_pred.narrow(0, 1, 1)?)?)?)
 }

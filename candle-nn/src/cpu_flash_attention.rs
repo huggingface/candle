@@ -1,11 +1,13 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle::{Device, Result, Storage, Tensor, WithDType};
+use candle::{CpuDevice, CpuStorage, Result, Tensor, WithDType};
 use std::sync::LazyLock;
 use std::{f32, iter::Sum};
 
 use rayon::prelude::*;
 use rayon::ThreadPool;
+
+type CpuTensor = Tensor<CpuStorage>;
 
 #[cfg(target_os = "macos")]
 /// Elevate the thread QoS so macOS prefers running it on Performance (P) cores.
@@ -73,49 +75,38 @@ fn vec_dot<T: WithDType + Sum + Copy + std::ops::Mul<Output = T>>(a: &[T], b: &[
 ///
 /// **Output shape:** (bs, qhead, seq, v_hidden)
 pub fn run_flash_attn_cpu<T>(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    mask: Option<&Tensor>,
+    q: &CpuTensor,
+    k: &CpuTensor,
+    v: &CpuTensor,
+    mask: Option<&CpuTensor>,
     softmax_scale: f32,
     max_bias: Option<f32>,
     softcap: Option<f32>,
-) -> Result<Tensor>
+) -> Result<CpuTensor>
 where
     T: WithDType + Sum + num_traits::real::Real,
 {
     // Inline CPU slice extraction for q, k, v, and optional mask
     let (q_guard, q_layout) = q.storage_and_layout();
-    let q_data: &[T] = if let Storage::Cpu(cpu) = &*q_guard {
-        let data = cpu.as_slice::<T>()?;
+    let q_data: &[T] = {
+        let data = q_guard.as_slice::<T>()?;
         &data[q_layout.start_offset()..]
-    } else {
-        return Err(candle::Error::Msg("Expected CPU storage for q".into()));
     };
     let (k_guard, k_layout) = k.storage_and_layout();
-    let k_data: &[T] = if let Storage::Cpu(cpu) = &*k_guard {
-        let data = cpu.as_slice::<T>()?;
+    let k_data: &[T] = {
+        let data = k_guard.as_slice::<T>()?;
         &data[k_layout.start_offset()..]
-    } else {
-        return Err(candle::Error::Msg("Expected CPU storage for k".into()));
     };
     let (v_guard, v_layout) = v.storage_and_layout();
-    let v_data: &[T] = if let Storage::Cpu(cpu) = &*v_guard {
-        let data = cpu.as_slice::<T>()?;
+    let v_data: &[T] = {
+        let data = v_guard.as_slice::<T>()?;
         &data[v_layout.start_offset()..]
-    } else {
-        return Err(candle::Error::Msg("Expected CPU storage for v".into()));
     };
     let mask_guard = mask.map(|mask| mask.storage_and_layout().0);
     let mask_data: Option<&[T]> = if let Some(mask_guard) = &mask_guard {
         let mask = mask.as_ref().unwrap();
-
-        if let Storage::Cpu(cpu) = &**mask_guard {
-            let data = cpu.as_slice::<T>()?;
-            Some(&data[mask.layout().start_offset()..])
-        } else {
-            return Err(candle::Error::Msg("Expected CPU storage for mask".into()));
-        }
+        let data = mask_guard.as_slice::<T>()?;
+        Some(&data[mask.layout().start_offset()..])
     } else {
         None
     };
@@ -178,7 +169,7 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
     scale: f32,
     max_bias: f32,
     logit_softcap: f32,
-) -> Result<Tensor> {
+) -> Result<CpuTensor> {
     // Shapes: (B, 1, H, D)
     let (b, _q_len, h, d) = (
         qshape[0], qshape[1], // == 1
@@ -332,7 +323,7 @@ fn flash_attn_cpu_single_q<T: WithDType + Sum + num_traits::real::Real>(
     });
 
     let out_shape = (b, h, 1usize, dv);
-    Tensor::from_vec(out, out_shape, &Device::Cpu)
+    Tensor::from_vec(out, out_shape, &CpuDevice)
 }
 
 /// Main forward flash-attention CPU routine.
@@ -352,7 +343,7 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
     scale: f32,
     max_bias: f32,
     logit_softcap: f32,
-) -> Result<Tensor> {
+) -> Result<CpuTensor> {
     let (b, q_len, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
     let kv_len = kshape[1];
     // --- Head broadcasting factors ----------------------------------------------------
@@ -481,5 +472,5 @@ fn flash_attn_cpu<T: WithDType + Sum + num_traits::real::Real>(
 
     // Build output tensor with shape (B, H, S, D) to match standard (permute 0,2,1,3)
     let out_shape = (b, h, q_len, dv);
-    Tensor::from_vec(out, out_shape, &Device::Cpu)
+    Tensor::from_vec(out, out_shape, &CpuDevice)
 }

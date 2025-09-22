@@ -1,6 +1,6 @@
 //! Helper functions for the tinystories dataset. This uses the pre-tokenized version as generated
 //! by the tools from https://github.com/karpathy/llama2.c
-use candle::{Device, Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 
 pub struct Dataset {
     valid_tokens: Vec<memmap2::Mmap>,
@@ -49,17 +49,17 @@ impl Dataset {
     }
 }
 
-pub struct DatasetRandomIter<'a> {
+pub struct DatasetRandomIter<'a, B: BackendStorage> {
     all_tokens: &'a [memmap2::Mmap],
     tokens: Vec<&'a memmap2::Mmap>,
     current_tokens: &'a memmap2::Mmap,
     indexes_in_bytes: Vec<usize>,
     seq_len: usize,
-    device: Device,
+    device: B::Device,
 }
 
-impl<'a> DatasetRandomIter<'a> {
-    pub fn new(ds: &'a Dataset, valid: bool, seq_len: usize, device: Device) -> Self {
+impl<'a, B: BackendStorage> DatasetRandomIter<'a, B> {
+    pub fn new(ds: &'a Dataset, valid: bool, seq_len: usize, device: B::Device) -> Self {
         use rand::rng;
         use rand::seq::SliceRandom;
 
@@ -87,8 +87,8 @@ impl<'a> DatasetRandomIter<'a> {
     }
 }
 
-impl Iterator for DatasetRandomIter<'_> {
-    type Item = Result<(Tensor, Tensor)>;
+impl<B: BackendStorage> Iterator for DatasetRandomIter<'_, B> {
+    type Item = Result<(Tensor<B>, Tensor<B>)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         use byteorder::{LittleEndian, ReadBytesExt};

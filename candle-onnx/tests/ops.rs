@@ -1,11 +1,12 @@
 use candle::test_utils::to_vec2_round;
-use candle::{DType, Device, NdArray, Result, Tensor};
+use candle::{DType, Device, NdArray, Result};
 use candle_onnx::onnx::attribute_proto::AttributeType;
 use candle_onnx::onnx::tensor_proto::DataType;
 use candle_onnx::onnx::tensor_shape_proto::{dimension, Dimension};
 use candle_onnx::onnx::{type_proto, TensorProto, TensorShapeProto, TypeProto};
 use candle_onnx::onnx::{AttributeProto, GraphProto, ModelProto, NodeProto, ValueInfoProto};
 use candle_onnx::simple_eval;
+use candle_onnx::Tensor;
 use std::collections::HashMap;
 
 const INPUT_X: &str = "x";
@@ -33,8 +34,9 @@ fn create_model_proto_with_graph(graph: Option<GraphProto>) -> ModelProto {
 fn test_evaluation_fails_without_defined_graph() -> Result<()> {
     let manual_graph = create_model_proto_with_graph(None);
     let inputs: HashMap<String, Tensor> = HashMap::new();
+    let expected = "no graph defined in proto";
     match candle_onnx::simple_eval(&manual_graph, inputs) {
-        Err(err) => assert_eq!(err.to_string(), "no graph defined in proto"),
+        Err(err) => assert!(err.to_string().starts_with(expected)),
         Ok(_) => panic!("Expected an error due to undefined graph"),
     }
     Ok(())
@@ -6442,6 +6444,7 @@ fn test_selu_operator() -> Result<()> {
     Ok(())
 }
 
+#[test]
 fn test_hard_swish() -> candle::Result<()> {
     {
         let manual_graph = create_model_proto_with_graph(Some(GraphProto {

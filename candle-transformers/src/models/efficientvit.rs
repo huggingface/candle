@@ -35,7 +35,7 @@
 //!   <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.jpg" alt="" width=640>
 //! </div>
 //!
-use candle::{Result, Tensor, D};
+use candle::{BackendStorage, Result, Tensor, D};
 use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, linear, ops::sigmoid, ops::softmax, Conv2dConfig, Func,
     VarBuilder,
@@ -101,11 +101,11 @@ impl Config {
     }
 }
 
-fn efficientvit_stemblock(
+fn efficientvit_stemblock<B: BackendStorage + 'static>(
     in_channels: usize,
     out_channels: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         stride: 2,
         padding: 1,
@@ -121,7 +121,10 @@ fn efficientvit_stemblock(
     }))
 }
 
-fn efficientvit_stem(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn efficientvit_stem<B: BackendStorage + 'static>(
+    dim: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv1 = efficientvit_stemblock(3, dim / 8, vb.pp("conv1"))?;
     let conv2 = efficientvit_stemblock(dim / 8, dim / 4, vb.pp("conv2"))?;
     let conv3 = efficientvit_stemblock(dim / 4, dim / 2, vb.pp("conv3"))?;
@@ -141,13 +144,13 @@ fn efficientvit_stem(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
     }))
 }
 
-fn depthwise_conv(
+fn depthwise_conv<B: BackendStorage + 'static>(
     channels: usize,
     kernel: usize,
     stride: usize,
     padding: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         stride,
         padding,
@@ -161,11 +164,11 @@ fn depthwise_conv(
     Ok(Func::new(move |xs| xs.apply(&conv)?.apply_t(&bn, false)))
 }
 
-fn pointwise_conv(
+fn pointwise_conv<B: BackendStorage + 'static>(
     in_channels: usize,
     out_channels: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         ..Default::default()
     };
@@ -176,7 +179,11 @@ fn pointwise_conv(
     Ok(Func::new(move |xs| xs.apply(&conv)?.apply_t(&bn, false)))
 }
 
-fn conv_mlp(in_channels: usize, out_channels: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn conv_mlp<B: BackendStorage + 'static>(
+    in_channels: usize,
+    out_channels: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let pw1 = pointwise_conv(in_channels, out_channels, vb.pp("pw1"))?;
     let pw2 = pointwise_conv(out_channels, in_channels, vb.pp("pw2"))?;
 
@@ -190,12 +197,12 @@ fn conv_mlp(in_channels: usize, out_channels: usize, vb: VarBuilder) -> Result<F
 const RESOLUTIONS: [usize; 3] = [14, 7, 4];
 
 // Attention block
-fn efficientvit_attn(
+fn efficientvit_attn<B: BackendStorage + 'static>(
     cfg: &Config,
     stage: usize,
     in_channels: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let cga = cascaded_group_attn(cfg, stage, in_channels, vb)?;
 
     Ok(Func::new(move |xs| {
@@ -237,12 +244,12 @@ fn efficientvit_attn(
 }
 
 // Cascaded group attention
-fn cascaded_group_attn(
+fn cascaded_group_attn<B: BackendStorage + 'static>(
     cfg: &Config,
     stage: usize,
     in_channels: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let heads = cfg.heads[stage];
     let key_dim = 16;
 
@@ -307,11 +314,11 @@ fn cascaded_group_attn(
 }
 
 // Used by the downsampling layer
-fn squeeze_and_excitation(
+fn squeeze_and_excitation<B: BackendStorage + 'static>(
     in_channels: usize,
     squeeze_channels: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         ..Default::default()
     };
@@ -328,7 +335,11 @@ fn squeeze_and_excitation(
 }
 
 // Used by the downsampling layer
-fn patchmerge(in_channels: usize, out_channels: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn patchmerge<B: BackendStorage + 'static>(
+    in_channels: usize,
+    out_channels: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let dim = in_channels;
     let hid_dim = in_channels * 4;
     let conv1 = pointwise_conv(dim, hid_dim, vb.pp("conv1"))?;
@@ -348,7 +359,7 @@ fn patchmerge(in_channels: usize, out_channels: usize, vb: VarBuilder) -> Result
 }
 
 // Used by the downsampling layer
-fn res(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn res<B: BackendStorage + 'static>(dim: usize, vb: VarBuilder<B>) -> Result<Func<'static, B>> {
     let dw = depthwise_conv(dim, 3, 1, 1, vb.pp("0.m"))?;
     let mlp = conv_mlp(dim, dim * 2, vb.pp("1.m"))?;
     Ok(Func::new(move |xs| {
@@ -360,11 +371,11 @@ fn res(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
 }
 
 // Downsampling
-fn efficientvit_downsample(
+fn efficientvit_downsample<B: BackendStorage + 'static>(
     in_channels: usize,
     out_channels: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let res1 = res(in_channels, vb.pp("res1"))?;
     let res2 = res(out_channels, vb.pp("res2"))?;
     let patchmerge = patchmerge(in_channels, out_channels, vb.pp("patchmerge"))?;
@@ -374,12 +385,12 @@ fn efficientvit_downsample(
     }))
 }
 
-fn efficientvit_block(
+fn efficientvit_block<B: BackendStorage + 'static>(
     cfg: &Config,
     stage: usize,
     dim: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let dw0 = depthwise_conv(dim, 3, 1, 1, vb.pp("dw0.m"))?;
     let dw1 = depthwise_conv(dim, 3, 1, 1, vb.pp("dw1.m"))?;
     let ffn0 = conv_mlp(dim, dim * 2, vb.pp("ffn0.m"))?;
@@ -397,7 +408,11 @@ fn efficientvit_block(
 }
 
 // Each stage is made of blocks. There is a downsampling layer between stages.
-fn efficientvit_stage(cfg: &Config, stage: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn efficientvit_stage<B: BackendStorage + 'static>(
+    cfg: &Config,
+    stage: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let nblocks = cfg.blocks[stage];
     let mut blocks = Vec::with_capacity(nblocks + 1);
 
@@ -435,7 +450,11 @@ fn efficientvit_stage(cfg: &Config, stage: usize, vb: VarBuilder) -> Result<Func
 }
 
 // Classification head.
-fn efficientvit_head(outputs: usize, nclasses: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn efficientvit_head<B: BackendStorage + 'static>(
+    outputs: usize,
+    nclasses: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let norm = batch_norm(outputs, 1e-6, vb.pp("bn"))?;
     let linear = linear(outputs, nclasses, vb.pp("linear"))?;
     Ok(Func::new(move |xs| {
@@ -444,11 +463,11 @@ fn efficientvit_head(outputs: usize, nclasses: usize, vb: VarBuilder) -> Result<
 }
 
 // Build a efficientvit model for a given configuration.
-fn efficientvit_model(
+fn efficientvit_model<B: BackendStorage + 'static>(
     config: &Config,
     nclasses: Option<usize>,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let cls = match nclasses {
         None => None,
         Some(nclasses) => {
@@ -481,10 +500,17 @@ fn efficientvit_model(
     }))
 }
 
-pub fn efficientvit(cfg: &Config, nclasses: usize, vb: VarBuilder) -> Result<Func<'static>> {
+pub fn efficientvit<B: BackendStorage + 'static>(
+    cfg: &Config,
+    nclasses: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     efficientvit_model(cfg, Some(nclasses), vb)
 }
 
-pub fn efficientvit_no_final_layer(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
+pub fn efficientvit_no_final_layer<B: BackendStorage + 'static>(
+    cfg: &Config,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     efficientvit_model(cfg, None, vb)
 }

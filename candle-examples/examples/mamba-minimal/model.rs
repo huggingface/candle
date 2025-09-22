@@ -1,7 +1,7 @@
 /// This follows the lines of:
 /// https://github.com/johnma2006/mamba-minimal/blob/master/model.py
 /// Simple, minimal implementation of Mamba in one file of PyTorch.
-use candle::{IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{RmsNorm, VarBuilder};
 
 use candle_transformers::models::with_tracing::{linear, linear_no_bias, Linear};
@@ -39,19 +39,19 @@ impl Config {
 
 // https://github.com/johnma2006/mamba-minimal/blob/61f01953ca153f8c4a850d7111beecbf4be9cee1/model.py#L177
 #[derive(Clone, Debug)]
-pub struct MambaBlock {
-    in_proj: Linear,
-    conv1d: candle_nn::Conv1d,
-    x_proj: Linear,
-    dt_proj: Linear,
-    a_log: Tensor,
-    d: Tensor,
-    out_proj: Linear,
+pub struct MambaBlock<B: BackendStorage> {
+    in_proj: Linear<B>,
+    conv1d: candle_nn::Conv1d<B>,
+    x_proj: Linear<B>,
+    dt_proj: Linear<B>,
+    a_log: Tensor<B>,
+    d: Tensor<B>,
+    out_proj: Linear<B>,
     dt_rank: usize,
 }
 
-impl MambaBlock {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MambaBlock<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let d_inner = cfg.d_inner();
         let d_conv = cfg.d_conv();
         let d_state = cfg.d_state();
@@ -80,7 +80,7 @@ impl MambaBlock {
         })
     }
 
-    fn ssm(&self, xs: &Tensor) -> Result<Tensor> {
+    fn ssm(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (_d_in, n) = self.a_log.dims2()?;
         let a = self.a_log.to_dtype(candle::DType::F32)?.exp()?.neg()?;
         let d = self.d.to_dtype(candle::DType::F32)?;
@@ -97,14 +97,14 @@ impl MambaBlock {
 }
 
 // https://github.com/johnma2006/mamba-minimal/blob/61f01953ca153f8c4a850d7111beecbf4be9cee1/model.py#L275
-fn selective_scan(
-    u: &Tensor,
-    delta: &Tensor,
-    a: &Tensor,
-    b: &Tensor,
-    c: &Tensor,
-    d: &Tensor,
-) -> Result<Tensor> {
+fn selective_scan<B: BackendStorage>(
+    u: &Tensor<B>,
+    delta: &Tensor<B>,
+    a: &Tensor<B>,
+    b: &Tensor<B>,
+    c: &Tensor<B>,
+    d: &Tensor<B>,
+) -> Result<Tensor<B>> {
     let (b_sz, l, d_in) = u.dims3()?;
     let n = a.dim(1)?;
     let delta = delta.t()?.reshape((b_sz, d_in, l, 1))?; // b d_in l 1
@@ -123,9 +123,9 @@ fn selective_scan(
     ys + u.broadcast_mul(d)
 }
 
-impl Module for MambaBlock {
+impl<B: BackendStorage> Module<B> for MambaBlock<B> {
     // https://github.com/johnma2006/mamba-minimal/blob/61f01953ca153f8c4a850d7111beecbf4be9cee1/model.py#L206
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (_b_sz, seq_len, _dim) = xs.dims3()?;
         let xs_and_res = xs.apply(&self.in_proj)?.chunk(2, D::Minus1)?;
         let (xs, res) = (&xs_and_res[0], &xs_and_res[1]);
@@ -142,36 +142,36 @@ impl Module for MambaBlock {
 
 // https://github.com/johnma2006/mamba-minimal/blob/61f01953ca153f8c4a850d7111beecbf4be9cee1/model.py#L143
 #[derive(Clone, Debug)]
-pub struct ResidualBlock {
-    mixer: MambaBlock,
-    norm: RmsNorm,
+pub struct ResidualBlock<B: BackendStorage> {
+    mixer: MambaBlock<B>,
+    norm: RmsNorm<B>,
 }
 
-impl ResidualBlock {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> ResidualBlock<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let norm = candle_nn::rms_norm(cfg.d_model, 1e-5, vb.pp("norm"))?;
         let mixer = MambaBlock::new(cfg, vb.pp("mixer"))?;
         Ok(Self { mixer, norm })
     }
 }
 
-impl Module for ResidualBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ResidualBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.norm)?.apply(&self.mixer)? + xs
     }
 }
 
 // https://github.com/johnma2006/mamba-minimal/blob/61f01953ca153f8c4a850d7111beecbf4be9cee1/model.py#L56
 #[derive(Clone, Debug)]
-pub struct Model {
-    embedding: candle_nn::Embedding,
-    layers: Vec<ResidualBlock>,
-    norm_f: RmsNorm,
-    lm_head: Linear,
+pub struct Model<B: BackendStorage> {
+    embedding: candle_nn::Embedding<B>,
+    layers: Vec<ResidualBlock<B>>,
+    norm_f: RmsNorm<B>,
+    lm_head: Linear<B>,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let embedding = candle_nn::embedding(cfg.vocab_size(), cfg.d_model, vb.pp("embedding"))?;
         let mut layers = Vec::with_capacity(cfg.n_layer);
         let vb_l = vb.pp("layers");
@@ -190,8 +190,8 @@ impl Model {
     }
 }
 
-impl Module for Model {
-    fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Model<B> {
+    fn forward(&self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let (_b_size, seq_len) = input_ids.dims2()?;
         let mut xs = self.embedding.forward(input_ids)?;
         for layer in self.layers.iter() {

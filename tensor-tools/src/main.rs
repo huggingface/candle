@@ -1,5 +1,7 @@
-use candle::quantized::{gguf_file, GgmlDType, QTensor};
-use candle::{Device, Result};
+use candle::quantized::{
+    gguf_file, GgmlDType, QCpuStorage, QTensor, QuantizedBackend, QuantizedDevice,
+};
+use candle::{BackendStorage, CpuDevice, CpuStorage, Result, Tensor};
 use clap::{Parser, Subcommand, ValueEnum};
 use rayon::prelude::*;
 
@@ -11,13 +13,19 @@ enum QuantizationMode {
 }
 
 impl QuantizationMode {
-    fn quantize(&self, name: &str, tensor: QTensor, dtype: GgmlDType) -> Result<QTensor> {
+    fn quantize<QB: QuantizedBackend>(
+        &self,
+        name: &str,
+        tensor: QTensor<QB>,
+        dtype: GgmlDType,
+        _device: &QB::Device,
+    ) -> Result<QTensor<QB>> {
         match self {
             Self::Llama => {
                 // Same behavior as the llama.cpp quantization.
                 let should_quantize = name.ends_with(".weight") && tensor.rank() == 2;
                 if should_quantize {
-                    let tensor = tensor.dequantize(&Device::Cpu)?;
+                    let tensor: Tensor<QB::Storage> = tensor.dequantize()?;
                     if name == "output.weight" {
                         QTensor::quantize(&tensor, GgmlDType::Q6K)
                     } else {
@@ -168,13 +176,13 @@ struct Args {
     command: Command,
 }
 
-fn run_print(
+fn run_print<QB: QuantizedBackend>(
     file: &std::path::PathBuf,
     names: Vec<String>,
     format: Option<Format>,
     full: bool,
     line_width: Option<usize>,
-    device: &Device,
+    device: &QB::Device,
 ) -> Result<()> {
     if full {
         candle::display::set_print_options_full();
@@ -223,7 +231,7 @@ fn run_print(
                 println!("==== {name} ====");
                 match tensors.get(name) {
                     Some(tensor_view) => {
-                        let tensor = tensor_view.load(device)?;
+                        let tensor: Tensor<QB::Storage> = tensor_view.load(device)?;
                         println!("{tensor}")
                     }
                     None => println!("not found"),
@@ -256,7 +264,8 @@ fn run_print(
         }
         Format::Ggml => {
             let mut file = std::fs::File::open(file)?;
-            let content = candle::quantized::ggml_file::Content::read(&mut file, device)?;
+            let content: candle::quantized::ggml_file::Content<QB> =
+                candle::quantized::ggml_file::Content::read(&mut file, device)?;
             let names = if names.is_empty() {
                 content.tensors.keys().map(|v| v.to_string()).collect()
             } else {
@@ -266,7 +275,7 @@ fn run_print(
                 println!("==== {name} ====");
                 match content.tensors.get(name) {
                     Some(tensor) => {
-                        let tensor = tensor.dequantize(device)?;
+                        let tensor = tensor.dequantize()?;
                         println!("{tensor}")
                     }
                     None => println!("not found"),
@@ -283,9 +292,10 @@ fn run_print(
             };
             for name in names.iter() {
                 println!("==== {name} ====");
-                match content.tensor(&mut file, name, device) {
+                let t: Result<QTensor<QB>> = content.tensor(&mut file, name, device);
+                match t {
                     Ok(tensor) => {
-                        let tensor = tensor.dequantize(device)?;
+                        let tensor = tensor.dequantize()?;
                         println!("{tensor}")
                     }
                     Err(_) => println!("not found"),
@@ -296,11 +306,11 @@ fn run_print(
     Ok(())
 }
 
-fn run_ls(
+fn run_ls<QB: QuantizedBackend>(
     file: &std::path::PathBuf,
     format: Option<Format>,
     verbose: bool,
-    device: &Device,
+    device: &QB::Device,
 ) -> Result<()> {
     let format = match format {
         Some(format) => format,
@@ -367,7 +377,8 @@ fn run_ls(
         }
         Format::Ggml => {
             let mut file = std::fs::File::open(file)?;
-            let content = candle::quantized::ggml_file::Content::read(&mut file, device)?;
+            let content: candle::quantized::ggml_file::Content<QB> =
+                candle::quantized::ggml_file::Content::read(&mut file, device)?;
             let mut tensors = content.tensors.into_iter().collect::<Vec<_>>();
             tensors.sort_by(|a, b| a.0.cmp(&b.0));
             for (name, qtensor) in tensors.iter() {
@@ -401,9 +412,9 @@ fn run_quantize_safetensors(
     q: Quantization,
 ) -> Result<()> {
     let mut out_file = std::fs::File::create(out_file)?;
-    let mut tensors = std::collections::HashMap::new();
+    let mut tensors = std::collections::HashMap::<String, Tensor<CpuStorage>>::new();
     for in_file in in_files.iter() {
-        let in_tensors = candle::safetensors::load(in_file, &Device::Cpu)?;
+        let in_tensors = candle::safetensors::load(in_file, &CpuDevice)?;
         tensors.extend(in_tensors)
     }
     println!("tensors: {}", tensors.len());
@@ -416,7 +427,7 @@ fn run_quantize_safetensors(
         .map(|(name, tensor)| {
             let should_quantize = tensor.rank() == 2 && tensor.dim(1)? % block_size == 0;
             println!("  quantizing {name} {tensor:?} {should_quantize}");
-            let tensor = if should_quantize {
+            let tensor: QTensor<QCpuStorage> = if should_quantize {
                 QTensor::quantize(&tensor, dtype)?
             } else {
                 QTensor::quantize(&tensor, GgmlDType::F32)?
@@ -432,29 +443,32 @@ fn run_quantize_safetensors(
     Ok(())
 }
 
-fn run_dequantize(
+fn run_dequantize<QB: QuantizedBackend>(
     in_file: std::path::PathBuf,
     out_file: std::path::PathBuf,
-    device: &Device,
-) -> Result<()> {
+    device: &QB::Device,
+) -> Result<()>
+where
+    <QB::Storage as BackendStorage>::Device: QuantizedDevice<QB>,
+{
     let mut in_file = std::fs::File::open(in_file)?;
     let content = gguf_file::Content::read(&mut in_file)?;
     let mut tensors = std::collections::HashMap::new();
     for (tensor_name, _) in content.tensor_infos.iter() {
-        let tensor = content.tensor(&mut in_file, tensor_name, device)?;
-        let tensor = tensor.dequantize(device)?;
+        let tensor: QTensor<QB> = content.tensor(&mut in_file, tensor_name, device)?;
+        let tensor: Tensor<QB::Storage> = tensor.dequantize()?;
         tensors.insert(tensor_name.to_string(), tensor);
     }
     candle::safetensors::save(&tensors, out_file)?;
     Ok(())
 }
 
-fn run_quantize(
+fn run_quantize<QB: QuantizedBackend>(
     in_files: &[std::path::PathBuf],
     out_file: std::path::PathBuf,
     q: Quantization,
     qmode: QuantizationMode,
-    device: &Device,
+    device: &QB::Device,
 ) -> Result<()> {
     if in_files.is_empty() {
         candle::bail!("no specified input files")
@@ -487,8 +501,8 @@ fn run_quantize(
         .map(|(name, _)| {
             println!("  quantizing {name}");
             let mut in_file = std::fs::File::open(&in_files[0])?;
-            let tensor = content.tensor(&mut in_file, name, device)?;
-            let tensor = qmode.quantize(name, tensor, dtype)?;
+            let tensor: QTensor<QB> = content.tensor(&mut in_file, name, device)?;
+            let tensor = qmode.quantize(name, tensor, dtype, device)?;
             Ok((name, tensor))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -508,7 +522,7 @@ fn run_quantize(
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let device = Device::Cpu;
+    let device = CpuDevice;
     match args.command {
         Command::Ls {
             files,
@@ -520,7 +534,7 @@ fn main() -> anyhow::Result<()> {
                 if multiple_files {
                     println!("--- {file:?} ---");
                 }
-                run_ls(file, format.clone(), verbose, &device)?
+                run_ls::<QCpuStorage>(file, format.clone(), verbose, &device)?
             }
         }
         Command::Print {
@@ -529,14 +543,16 @@ fn main() -> anyhow::Result<()> {
             format,
             full,
             line_width,
-        } => run_print(&file, names, format, full, line_width, &device)?,
+        } => run_print::<QCpuStorage>(&file, names, format, full, line_width, &device)?,
         Command::Quantize {
             in_file,
             out_file,
             quantization,
             mode,
-        } => run_quantize(&in_file, out_file, quantization, mode, &device)?,
-        Command::Dequantize { in_file, out_file } => run_dequantize(in_file, out_file, &device)?,
+        } => run_quantize::<QCpuStorage>(&in_file, out_file, quantization, mode, &device)?,
+        Command::Dequantize { in_file, out_file } => {
+            run_dequantize::<QCpuStorage>(in_file, out_file, &device)?
+        }
     }
     Ok(())
 }

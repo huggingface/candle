@@ -1,6 +1,6 @@
 // Adapted from:
 // https://github.com/ChaoningZhang/MobileSAM/blob/master/mobile_sam/modeling/tiny_vit_sam.py
-use candle::{IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv2dConfig, Module, VarBuilder};
 
 const MBCONV_EXPAND_RATIO: usize = 4;
@@ -10,14 +10,20 @@ const IMG_SIZE: usize = 1024;
 const IN_CHANNELS: usize = 3;
 
 #[derive(Debug)]
-struct Conv2dBN {
-    c: candle_nn::Conv2d,
-    bn: candle_nn::BatchNorm,
+struct Conv2dBN<B: BackendStorage> {
+    c: candle_nn::Conv2d<B>,
+    bn: candle_nn::BatchNorm<B>,
     span: tracing::Span,
 }
 
-impl Conv2dBN {
-    fn new(in_: usize, out: usize, ks: usize, cfg: Conv2dConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Conv2dBN<B> {
+    fn new(
+        in_: usize,
+        out: usize,
+        ks: usize,
+        cfg: Conv2dConfig,
+        vb: VarBuilder<B>,
+    ) -> Result<Self> {
         let c = candle_nn::conv2d_no_bias(in_, out, ks, cfg, vb.pp("c"))?;
         let bn = candle_nn::batch_norm(out, 1e-5, vb.pp("bn"))?;
         let span = tracing::span!(tracing::Level::TRACE, "conv2d-bn");
@@ -25,22 +31,22 @@ impl Conv2dBN {
     }
 }
 
-impl Module for Conv2dBN {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Conv2dBN<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         xs.apply(&self.c)?.apply_t(&self.bn, false)
     }
 }
 
 #[derive(Debug)]
-struct PatchEmbed {
-    conv1: Conv2dBN,
-    conv2: Conv2dBN,
+struct PatchEmbed<B: BackendStorage> {
+    conv1: Conv2dBN<B>,
+    conv2: Conv2dBN<B>,
     span: tracing::Span,
 }
 
-impl PatchEmbed {
-    fn new(in_chans: usize, embed_dim: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> PatchEmbed<B> {
+    fn new(in_chans: usize, embed_dim: usize, vb: VarBuilder<B>) -> Result<Self> {
         let cfg = candle_nn::Conv2dConfig {
             stride: 2,
             padding: 1,
@@ -53,23 +59,23 @@ impl PatchEmbed {
     }
 }
 
-impl Module for PatchEmbed {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for PatchEmbed<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         xs.apply(&self.conv1)?.gelu()?.apply(&self.conv2)
     }
 }
 
 #[derive(Debug)]
-struct MBConv {
-    conv1: Conv2dBN,
-    conv2: Conv2dBN,
-    conv3: Conv2dBN,
+struct MBConv<B: BackendStorage> {
+    conv1: Conv2dBN<B>,
+    conv2: Conv2dBN<B>,
+    conv3: Conv2dBN<B>,
     span: tracing::Span,
 }
 
-impl MBConv {
-    fn new(in_: usize, out: usize, expand_ratio: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MBConv<B> {
+    fn new(in_: usize, out: usize, expand_ratio: usize, vb: VarBuilder<B>) -> Result<Self> {
         let hidden = in_ * expand_ratio;
         let cfg2 = candle_nn::Conv2dConfig {
             padding: 1,
@@ -89,8 +95,8 @@ impl MBConv {
     }
 }
 
-impl Module for MBConv {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for MBConv<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let shortcut = xs;
         let xs = xs
@@ -104,20 +110,20 @@ impl Module for MBConv {
 }
 
 #[derive(Debug)]
-struct PatchMerging {
-    conv1: Conv2dBN,
-    conv2: Conv2dBN,
-    conv3: Conv2dBN,
+struct PatchMerging<B: BackendStorage> {
+    conv1: Conv2dBN<B>,
+    conv2: Conv2dBN<B>,
+    conv3: Conv2dBN<B>,
     input_resolution: (usize, usize),
     span: tracing::Span,
 }
 
-impl PatchMerging {
+impl<B: BackendStorage> PatchMerging<B> {
     fn new(
         input_resolution: (usize, usize),
         dim: usize,
         out: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let stride = if [320, 448, 576].contains(&out) { 1 } else { 2 };
         let cfg2 = candle_nn::Conv2dConfig {
@@ -140,8 +146,8 @@ impl PatchMerging {
     }
 }
 
-impl Module for PatchMerging {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for PatchMerging<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let xs = if xs.rank() == 3 {
             let (h, w) = self.input_resolution;
@@ -161,13 +167,13 @@ impl Module for PatchMerging {
 }
 
 #[derive(Debug)]
-struct ConvLayer {
-    blocks: Vec<MBConv>,
-    downsample: Option<PatchMerging>,
+struct ConvLayer<B: BackendStorage> {
+    blocks: Vec<MBConv<B>>,
+    downsample: Option<PatchMerging<B>>,
     span: tracing::Span,
 }
 
-impl ConvLayer {
+impl<B: BackendStorage> ConvLayer<B> {
     fn new(
         dim: usize,
         out: usize,
@@ -175,7 +181,7 @@ impl ConvLayer {
         depth: usize,
         downsample: bool,
         conv_expand_ratio: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let vb_b = vb.pp("blocks");
         let mut blocks = Vec::with_capacity(depth);
@@ -198,8 +204,8 @@ impl ConvLayer {
     }
 }
 
-impl Module for ConvLayer {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ConvLayer<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut xs = xs.clone();
         for block in self.blocks.iter() {
@@ -213,15 +219,15 @@ impl Module for ConvLayer {
 }
 
 #[derive(Debug)]
-struct Mlp {
-    norm: candle_nn::LayerNorm,
-    fc1: super::Linear,
-    fc2: super::Linear,
+struct Mlp<B: BackendStorage> {
+    norm: candle_nn::LayerNorm<B>,
+    fc1: super::Linear<B>,
+    fc2: super::Linear<B>,
     span: tracing::Span,
 }
 
-impl Mlp {
-    fn new(in_: usize, hidden: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Mlp<B> {
+    fn new(in_: usize, hidden: usize, vb: VarBuilder<B>) -> Result<Self> {
         let norm = candle_nn::layer_norm(in_, 1e-5, vb.pp("norm"))?;
         let fc1 = super::linear(vb.pp("fc1"), in_, hidden, true)?;
         let fc2 = super::linear(vb.pp("fc2"), hidden, in_, true)?;
@@ -235,8 +241,8 @@ impl Mlp {
     }
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Mlp<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         xs.apply(&self.norm)?
             .apply(&self.fc1)?
@@ -246,11 +252,11 @@ impl Module for Mlp {
 }
 
 #[derive(Debug)]
-struct Attention {
-    norm: candle_nn::LayerNorm,
-    qkv: super::Linear,
-    proj: super::Linear,
-    ab: Tensor,
+struct Attention<B: BackendStorage> {
+    norm: candle_nn::LayerNorm<B>,
+    qkv: super::Linear<B>,
+    proj: super::Linear<B>,
+    ab: Tensor<B>,
     key_dim: usize,
     num_heads: usize,
     d: usize,
@@ -261,14 +267,14 @@ struct Attention {
     span_softmax: tracing::Span,
 }
 
-impl Attention {
+impl<B: BackendStorage> Attention<B> {
     fn new(
         dim: usize,
         key_dim: usize,
         num_heads: usize,
         attn_ratio: usize,
         resolution: (usize, usize),
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let d = attn_ratio * key_dim;
         let dh = d * num_heads;
@@ -317,8 +323,8 @@ impl Attention {
     }
 }
 
-impl Module for Attention {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Attention<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (b, n, _) = xs.dims3()?;
         let xs = xs.apply(&self.norm)?;
@@ -355,22 +361,22 @@ impl Module for Attention {
 }
 
 #[derive(Debug)]
-struct TinyViTBlock {
-    attn: Attention,
-    local_conv: Conv2dBN,
-    mlp: Mlp,
+struct TinyViTBlock<B: BackendStorage> {
+    attn: Attention<B>,
+    local_conv: Conv2dBN<B>,
+    mlp: Mlp<B>,
     window_size: usize,
     input_resolution: (usize, usize),
     span: tracing::Span,
 }
 
-impl TinyViTBlock {
+impl<B: BackendStorage> TinyViTBlock<B> {
     fn new(
         dim: usize,
         input_resolution: (usize, usize),
         num_heads: usize,
         window_size: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let head_dim = dim / num_heads;
         let attn = Attention::new(
@@ -400,8 +406,8 @@ impl TinyViTBlock {
     }
 }
 
-impl Module for TinyViTBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for TinyViTBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (h, w) = self.input_resolution;
         let (b, l, c) = xs.dims3()?;
@@ -459,13 +465,13 @@ impl Module for TinyViTBlock {
 }
 
 #[derive(Debug)]
-struct BasicLayer {
-    blocks: Vec<TinyViTBlock>,
-    downsample: Option<PatchMerging>,
+struct BasicLayer<B: BackendStorage> {
+    blocks: Vec<TinyViTBlock<B>>,
+    downsample: Option<PatchMerging<B>>,
     span: tracing::Span,
 }
 
-impl BasicLayer {
+impl<B: BackendStorage> BasicLayer<B> {
     #[allow(clippy::too_many_arguments)]
     fn new(
         dim: usize,
@@ -475,7 +481,7 @@ impl BasicLayer {
         window_size: usize,
         downsample: bool,
         out: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let vb_b = vb.pp("blocks");
         let mut blocks = Vec::with_capacity(depth);
@@ -504,8 +510,8 @@ impl BasicLayer {
     }
 }
 
-impl Module for BasicLayer {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for BasicLayer<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut xs = xs.clone();
         for block in self.blocks.iter() {
@@ -519,28 +525,28 @@ impl Module for BasicLayer {
 }
 
 #[derive(Debug)]
-pub struct TinyViT {
-    patch_embed: PatchEmbed,
-    layer0: ConvLayer,
-    layers: Vec<BasicLayer>,
+pub struct TinyViT<B: BackendStorage> {
+    patch_embed: PatchEmbed<B>,
+    layer0: ConvLayer<B>,
+    layers: Vec<BasicLayer<B>>,
     // norm_head: candle_nn::LayerNorm,
     // head: candle_nn::Linear,
-    neck_conv1: candle_nn::Conv2d,
-    neck_ln1: super::LayerNorm2d,
-    neck_conv2: candle_nn::Conv2d,
-    neck_ln2: super::LayerNorm2d,
+    neck_conv1: candle_nn::Conv2d<B>,
+    neck_ln1: super::LayerNorm2d<B>,
+    neck_conv2: candle_nn::Conv2d<B>,
+    neck_ln2: super::LayerNorm2d<B>,
     span: tracing::Span,
     span_neck: tracing::Span,
 }
 
-impl TinyViT {
+impl<B: BackendStorage> TinyViT<B> {
     pub fn new(
         embed_dims: &[usize],
         depths: &[usize],
         num_heads: &[usize],
         window_sizes: &[usize],
         _num_classes: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let patch_embed = PatchEmbed::new(IN_CHANNELS, embed_dims[0], vb.pp("patch_embed"))?;
         let patches_resolution = IMG_SIZE / 4;
@@ -602,8 +608,8 @@ impl TinyViT {
     }
 }
 
-impl Module for TinyViT {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for TinyViT<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let xs = self.patch_embed.forward(xs)?;
         let mut xs = self.layer0.forward(&xs)?;
@@ -621,7 +627,7 @@ impl Module for TinyViT {
     }
 }
 
-pub fn tiny_vit_5m(vb: VarBuilder) -> Result<TinyViT> {
+pub fn tiny_vit_5m<B: BackendStorage>(vb: VarBuilder<B>) -> Result<TinyViT<B>> {
     TinyViT::new(
         /* embed_dims */ &[64, 128, 160, 320],
         /* depths */ &[2, 2, 6, 2],

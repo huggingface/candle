@@ -1,5 +1,4 @@
-use candle::Device;
-use candle::Module;
+use candle::{BackendDevice, BackendStorage, Module, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::segformer::{
     Config, ImageClassificationModel, SemanticSegmentationModel,
@@ -56,16 +55,16 @@ enum Commands {
     Classify(ClassificationArgs),
 }
 
-fn get_vb_and_config(
+fn get_vb_and_config<'a, B: BackendStorage + 'a>(
     model_name: String,
-    device: &Device,
-) -> anyhow::Result<(VarBuilder<'_>, Config)> {
+    device: &B::Device,
+) -> anyhow::Result<(VarBuilder<'a, B>, Config)> {
     println!("loading model {model_name} via huggingface hub");
     let api = hf_hub::api::sync::Api::new()?;
     let api = api.model(model_name.clone());
     let model_file = api.get("model.safetensors")?;
     println!("model {model_name} downloaded and loaded");
-    let vb =
+    let vb: VarBuilder<'a, B> =
         unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], candle::DType::F32, device)? };
     let config = std::fs::read_to_string(api.get("config.json")?)?;
     let config: Config = serde_json::from_str(&config)?;
@@ -79,7 +78,10 @@ struct LabelItem {
     color: String,
 }
 
-fn segmentation_task(args: SegmentationArgs, device: &Device) -> anyhow::Result<()> {
+fn segmentation_task<B: BackendStorage>(
+    args: SegmentationArgs,
+    device: &B::Device,
+) -> anyhow::Result<()> {
     let label_file = std::fs::read_to_string(&args.label_path)?;
     let label_items: Vec<LabelItem> = serde_json::from_str(&label_file)?;
     let label_colors: HashMap<u32, Rgb<u8>> = label_items
@@ -95,9 +97,8 @@ fn segmentation_task(args: SegmentationArgs, device: &Device) -> anyhow::Result<
         })
         .collect();
 
-    let image = candle_examples::imagenet::load_image224(args.image)?
-        .unsqueeze(0)?
-        .to_device(device)?;
+    let image: Tensor<B> =
+        candle_examples::imagenet::load_image224(args.image, device)?.unsqueeze(0)?;
     let (vb, config) = get_vb_and_config(args.model_name, device)?;
     let num_labels = label_items.len();
 
@@ -126,10 +127,12 @@ fn segmentation_task(args: SegmentationArgs, device: &Device) -> anyhow::Result<
     Ok(())
 }
 
-fn classification_task(args: ClassificationArgs, device: &Device) -> anyhow::Result<()> {
-    let image = candle_examples::imagenet::load_image224(args.image)?
-        .unsqueeze(0)?
-        .to_device(device)?;
+fn classification_task<B: BackendStorage>(
+    args: ClassificationArgs,
+    device: &B::Device,
+) -> anyhow::Result<()> {
+    let image: Tensor<B> =
+        candle_examples::imagenet::load_image224(args.image, device)?.unsqueeze(0)?;
     let (vb, config) = get_vb_and_config(args.model_name, device)?;
     let num_labels = 7;
     let model = ImageClassificationModel::new(&config, num_labels, vb)?;
@@ -148,11 +151,25 @@ fn classification_task(args: ClassificationArgs, device: &Device) -> anyhow::Res
 
 pub fn main() -> anyhow::Result<()> {
     let args = CliArgs::parse();
-    let device = candle_examples::device(args.cpu)?;
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: CliArgs) -> anyhow::Result<()> {
+    let device = B::Device::new(0)?;
     if let Commands::Segment(args) = args.command {
-        segmentation_task(args, &device)?
+        segmentation_task::<B>(args, &device)?
     } else if let Commands::Classify(args) = args.command {
-        classification_task(args, &device)?
+        classification_task::<B>(args, &device)?
     }
     Ok(())
 }

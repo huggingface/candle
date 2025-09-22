@@ -9,24 +9,26 @@ extern crate accelerate_src;
 
 use clap::Parser;
 
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 use candle_transformers::models::eva2;
 
 /// Loads an image from disk using the image crate, this returns a tensor with shape
 /// (3, 448, 448). OpenAI normalization is applied.
-pub fn load_image448_openai_norm<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
+pub fn load_image448_openai_norm<P: AsRef<std::path::Path>, B: BackendStorage>(
+    p: P,
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
         .resize_to_fill(448, 448, image::imageops::FilterType::Triangle);
     let img = img.to_rgb8();
     let data = img.into_raw();
-    let data = Tensor::from_vec(data, (448, 448, 3), &Device::Cpu)?.permute((2, 0, 1))?;
-    let mean =
-        Tensor::new(&[0.48145466f32, 0.4578275, 0.40821073], &Device::Cpu)?.reshape((3, 1, 1))?;
-    let std = Tensor::new(&[0.26862954f32, 0.261_302_6, 0.275_777_1], &Device::Cpu)?
-        .reshape((3, 1, 1))?;
+    let data = Tensor::from_vec(data, (448, 448, 3), device)?.permute((2, 0, 1))?;
+    let mean = Tensor::new(&[0.48145466f32, 0.4578275, 0.40821073], device)?.reshape((3, 1, 1))?;
+    let std =
+        Tensor::new(&[0.26862954f32, 0.261_302_6, 0.275_777_1], device)?.reshape((3, 1, 1))?;
     (data.to_dtype(candle::DType::F32)? / 255.)?
         .broadcast_sub(&mean)?
         .broadcast_div(&std)
@@ -48,9 +50,31 @@ struct Args {
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let device = candle_examples::device(args.cpu)?;
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
 
-    let image = load_image448_openai_norm(args.image)?.to_device(&device)?;
+fn run<B: BackendStorage>(args: Args) -> anyhow::Result<()> {
+    let device = B::Device::new(0)?;
+    let image: Tensor<B> = load_image448_openai_norm(args.image, &device)?;
     println!("loaded image {image:?}");
 
     let model_file = match args.model {

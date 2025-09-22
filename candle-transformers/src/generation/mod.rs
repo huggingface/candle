@@ -3,7 +3,7 @@
 //! Functionality for modeling sampling strategies and logits processing in text generation
 //! with support for temperature-based sampling, top-k filtering, nucleus sampling (top-p),
 //! and combinations thereof.
-use candle::{Context, DType, Error, Result, Tensor};
+use candle::{BackendStorage, Context, DType, Error, Result, Tensor};
 use rand::{distr::Distribution, SeedableRng};
 
 #[derive(Clone, PartialEq, Debug)]
@@ -40,7 +40,7 @@ impl LogitsProcessor {
         Self::from_sampling(seed, sampling)
     }
 
-    fn sample_argmax(&mut self, logits: Tensor) -> Result<u32> {
+    fn sample_argmax<B: BackendStorage>(&mut self, logits: Tensor<B>) -> Result<u32> {
         let logits_v: Vec<f32> = logits.to_vec1()?;
         let next_token = logits_v
             .iter()
@@ -51,7 +51,11 @@ impl LogitsProcessor {
         Ok(next_token)
     }
 
-    fn sample_gumbel_softmax(&mut self, logits: &Tensor, temperature: f64) -> Result<u32> {
+    fn sample_gumbel_softmax<B: BackendStorage>(
+        &mut self,
+        logits: &Tensor<B>,
+        temperature: f64,
+    ) -> Result<u32> {
         let sampled = candle_nn::sampling::gumbel_softmax(logits, temperature, candle::D::Minus1)?;
         sampled.to_vec0::<u32>()
     }
@@ -118,11 +122,15 @@ impl LogitsProcessor {
         }
     }
 
-    pub fn sample(&mut self, logits: &Tensor) -> Result<u32> {
+    pub fn sample<B: BackendStorage>(&mut self, logits: &Tensor<B>) -> Result<u32> {
         self.sample_f(logits, |_| {})
     }
 
-    pub fn sample_f(&mut self, logits: &Tensor, f: impl FnOnce(&mut [f32])) -> Result<u32> {
+    pub fn sample_f<B: BackendStorage>(
+        &mut self,
+        logits: &Tensor<B>,
+        f: impl FnOnce(&mut [f32]),
+    ) -> Result<u32> {
         let logits = logits.to_dtype(DType::F32)?;
         let prs = |temperature: f64| -> Result<Vec<f32>> {
             let logits = (&logits / temperature)?;

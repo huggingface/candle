@@ -1,6 +1,6 @@
 //! The shape of a tensor is a tuple with the size of each of its dimensions.
 #![allow(clippy::redundant_closure_call)]
-use crate::{Error, Result};
+use crate::{BackendStorage, Error, Result};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Shape(Vec<usize>);
@@ -87,7 +87,7 @@ macro_rules! extract_dims {
             }
         }
 
-        impl crate::Tensor {
+        impl<B: BackendStorage> crate::Tensor<B> {
             pub fn $fn_name(&self) -> Result<$out_type> {
                 self.shape().$fn_name()
             }

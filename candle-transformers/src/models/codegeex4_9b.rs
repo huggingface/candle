@@ -7,7 +7,7 @@
 //!
 
 use crate::models::with_tracing::{linear_b as linear, Linear};
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 fn default_one() -> usize {
@@ -67,12 +67,12 @@ impl Config {
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
-    cache: Tensor,
+struct RotaryEmbedding<B: BackendStorage> {
+    cache: Tensor<B>,
 }
 
-impl RotaryEmbedding {
-    fn new(cfg: &Config, dtype: DType, dev: &Device) -> Result<Self> {
+impl<B: BackendStorage> RotaryEmbedding<B> {
+    fn new(cfg: &Config, dtype: DType, dev: &B::Device) -> Result<Self> {
         let rotary_dim = cfg.kv_channels;
         let n_elem = rotary_dim / 2;
         let base = 10_000f64 * cfg.rope_ratio as f64;
@@ -91,7 +91,7 @@ impl RotaryEmbedding {
         Ok(Self { cache })
     }
 
-    fn apply(&self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+    fn apply(&self, xs: &Tensor<B>, seqlen_offset: usize) -> Result<Tensor<B>> {
         let (seqlen, _b, np, _hn) = xs.dims4()?;
         let cache = self.cache.narrow(0, seqlen_offset, seqlen)?;
         let rot_dim = cache.dim(D::Minus2)? * 2;
@@ -125,7 +125,12 @@ struct CoreAttention {
     dtype: DType,
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32, dtype: DType) -> Result<Tensor> {
+fn masked_fill<B: BackendStorage>(
+    on_false: &Tensor<B>,
+    mask: &Tensor<B>,
+    on_true: f32,
+    dtype: DType,
+) -> Result<Tensor<B>> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true.to_dtype(dtype)?, on_false)?;
@@ -148,13 +153,13 @@ impl CoreAttention {
         })
     }
 
-    fn forward(
+    fn forward<B: BackendStorage>(
         &self,
-        query_layer: &Tensor,
-        key_layer: &Tensor,
-        value_layer: &Tensor,
-        attention_mask: &Option<Tensor>,
-    ) -> Result<Tensor> {
+        query_layer: &Tensor<B>,
+        key_layer: &Tensor<B>,
+        value_layer: &Tensor<B>,
+        attention_mask: &Option<Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let output_size = (
             query_layer.dim(1)?, // b
             query_layer.dim(2)?, // np
@@ -205,19 +210,19 @@ impl CoreAttention {
 }
 
 #[derive(Debug, Clone)]
-struct SelfAttention {
-    query_key_value: Linear,
+struct SelfAttention<B: BackendStorage> {
+    query_key_value: Linear<B>,
     core_attention: CoreAttention,
-    dense: Linear,
+    dense: Linear<B>,
     multi_query_attention: bool,
     num_attention_heads_per_partition: usize,
     num_multi_query_groups_per_partition: usize,
     hidden_size_per_attention_head: usize,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: Option<(Tensor<B>, Tensor<B>)>,
 }
 
-impl SelfAttention {
-    fn new(layer_number: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SelfAttention<B> {
+    fn new(layer_number: usize, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let projection_size = cfg.kv_channels * cfg.num_attention_heads;
         let hidden_size_per_attention_head = projection_size / cfg.num_attention_heads;
         let qkv_hidden_size = if cfg.multi_query_attention {
@@ -256,10 +261,10 @@ impl SelfAttention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: &Option<Tensor>,
-        rotary_emb: &RotaryEmbedding,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        attention_mask: &Option<Tensor<B>>,
+        rotary_emb: &RotaryEmbedding<B>,
+    ) -> Result<Tensor<B>> {
         let mixed_x_layer = xs.apply(&self.query_key_value)?;
         if !self.multi_query_attention {
             candle::bail!("only multi_query_attention=true is supported")
@@ -354,13 +359,13 @@ impl SelfAttention {
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone)]
-struct MLP {
-    dense_h_to_4h: Linear,
-    dense_4h_to_h: Linear,
+struct MLP<B: BackendStorage> {
+    dense_h_to_4h: Linear<B>,
+    dense_4h_to_h: Linear<B>,
 }
 
-impl MLP {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MLP<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let dense_h_to_4h = linear(
             cfg.hidden_size,
             cfg.ffn_hidden_size * 2,
@@ -380,8 +385,8 @@ impl MLP {
     }
 }
 
-impl Module for MLP {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for MLP<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.dense_h_to_4h)?
             .apply(&candle_nn::Activation::Swiglu)?
             .apply(&self.dense_4h_to_h)
@@ -389,16 +394,16 @@ impl Module for MLP {
 }
 
 #[derive(Debug, Clone)]
-struct Block {
-    input_layernorm: candle_nn::LayerNorm,
-    self_attention: SelfAttention,
-    post_attention_layernorm: candle_nn::LayerNorm,
-    mlp: MLP,
+struct Block<B: BackendStorage> {
+    input_layernorm: candle_nn::LayerNorm<B>,
+    self_attention: SelfAttention<B>,
+    post_attention_layernorm: candle_nn::LayerNorm<B>,
+    mlp: MLP<B>,
     apply_residual_connection_post_layernorm: bool,
 }
 
-impl Block {
-    fn new(layer_number: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Block<B> {
+    fn new(layer_number: usize, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let input_layernorm = if cfg.rmsnorm {
             candle_nn::rms_norm(
                 cfg.hidden_size,
@@ -444,10 +449,10 @@ impl Block {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: &Option<Tensor>,
-        rotary_emb: &RotaryEmbedding,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        attention_mask: &Option<Tensor<B>>,
+        rotary_emb: &RotaryEmbedding<B>,
+    ) -> Result<Tensor<B>> {
         let layernorm_output = xs.apply(&self.input_layernorm)?;
         let attention_output =
             self.self_attention
@@ -470,14 +475,14 @@ impl Block {
 }
 
 #[derive(Debug, Clone)]
-struct Transformer {
-    layers: Vec<Block>,
-    final_layernorm: Option<candle_nn::LayerNorm>,
-    rotary_emb: RotaryEmbedding,
+struct Transformer<B: BackendStorage> {
+    layers: Vec<Block<B>>,
+    final_layernorm: Option<candle_nn::LayerNorm<B>>,
+    rotary_emb: RotaryEmbedding<B>,
 }
 
-impl Transformer {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Transformer<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb_l = vb.pp("layers");
         let mut layers = Vec::with_capacity(cfg.num_layers);
         for layer_index in 0..cfg.num_layers {
@@ -517,7 +522,7 @@ impl Transformer {
         }
     }
 
-    fn forward(&mut self, xs: &Tensor, attention_mask: &Option<Tensor>) -> Result<Tensor> {
+    fn forward(&mut self, xs: &Tensor<B>, attention_mask: &Option<Tensor<B>>) -> Result<Tensor<B>> {
         let mut xs = xs.clone();
         for block in self.layers.iter_mut() {
             xs = block.forward(&xs, attention_mask, &self.rotary_emb)?
@@ -530,13 +535,13 @@ impl Transformer {
 }
 
 #[derive(Debug, Clone)]
-struct Embedding {
-    word_embeddings: candle_nn::Embedding,
+struct Embedding<B: BackendStorage> {
+    word_embeddings: candle_nn::Embedding<B>,
     fp32_residual_connection: bool,
 }
 
-impl Embedding {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Embedding<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let word_embeddings = candle_nn::embedding(
             cfg.padded_vocab_size,
             cfg.hidden_size,
@@ -549,8 +554,8 @@ impl Embedding {
     }
 }
 
-impl Module for Embedding {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Embedding<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = self.word_embeddings.forward(xs)?.transpose(0, 1)?; // b,s,h -> s,b,h
         if self.fp32_residual_connection {
             xs.to_dtype(candle::DType::F32)
@@ -561,21 +566,21 @@ impl Module for Embedding {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    embedding: Embedding,
-    encoder: Transformer,
-    output_layer: Linear,
+pub struct Model<B: BackendStorage> {
+    embedding: Embedding<B>,
+    encoder: Transformer<B>,
+    output_layer: Linear<B>,
 }
 
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
+fn get_mask<B: BackendStorage>(size: usize, device: &B::Device) -> Result<Tensor<B>> {
     let mask: Vec<_> = (0..size)
         .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
         .collect();
     Tensor::from_slice(&mask, (size, size), device)
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb = vb.pp("transformer");
         let embedding = Embedding::new(cfg, vb.pp("embedding"))?;
         let encoder = Transformer::new(cfg, vb.pp("encoder"))?;
@@ -597,7 +602,7 @@ impl Model {
         self.encoder.reset_kv_cache()
     }
 
-    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (_b_size, seq_len) = xs.dims2()?;
         let input_embeds = xs.apply(&self.embedding)?;
         let attention_mask = if seq_len <= 1 {

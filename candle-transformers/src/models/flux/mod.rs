@@ -21,20 +21,20 @@
 //! </div>
 //!
 
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 
-pub trait WithForward {
+pub trait WithForward<B: BackendStorage> {
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
-        img: &Tensor,
-        img_ids: &Tensor,
-        txt: &Tensor,
-        txt_ids: &Tensor,
-        timesteps: &Tensor,
-        y: &Tensor,
-        guidance: Option<&Tensor>,
-    ) -> Result<Tensor>;
+        img: &Tensor<B>,
+        img_ids: &Tensor<B>,
+        txt: &Tensor<B>,
+        txt_ids: &Tensor<B>,
+        timesteps: &Tensor<B>,
+        y: &Tensor<B>,
+        guidance: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>>;
 }
 
 pub mod autoencoder;

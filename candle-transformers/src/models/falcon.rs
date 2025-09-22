@@ -4,13 +4,13 @@
 //!
 //! Based on implementation from [Huggingface Transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/falcon)
 
-use candle::{DType, Device, Result, Tensor, D};
+use candle::{BackendStorage, DType, Result, Tensor, D};
 use candle_nn::{embedding, linear_b as linear, Embedding, LayerNorm, Linear, Module, VarBuilder};
 use serde::Deserialize;
 
 const MAX_SEQ_LEN: usize = 5000;
 
-fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
+fn layer_norm<B: BackendStorage>(size: usize, eps: f64, vb: VarBuilder<B>) -> Result<LayerNorm<B>> {
     let (weight, bias) = match (vb.get(size, "weight"), vb.get(size, "bias")) {
         (Ok(weight), Ok(bias)) => (weight, bias),
         (Err(err), _) | (_, Err(err)) => {
@@ -118,7 +118,7 @@ impl Config {
     }
 }
 
-fn rotate_half(x: &Tensor) -> Result<Tensor> {
+fn rotate_half<B: BackendStorage>(x: &Tensor<B>) -> Result<Tensor<B>> {
     let l = x.dim(D::Minus1)?;
     let x1 = x.narrow(D::Minus1, 0, l / 2)?;
     let x2 = x.narrow(D::Minus1, l / 2, l - l / 2)?;
@@ -127,13 +127,13 @@ fn rotate_half(x: &Tensor) -> Result<Tensor> {
 }
 
 #[derive(Debug, Clone)]
-struct FalconRotaryEmbedding {
-    inv_freq: Tensor,
-    cache: Option<(usize, Tensor, Tensor)>,
+struct FalconRotaryEmbedding<B: BackendStorage> {
+    inv_freq: Tensor<B>,
+    cache: Option<(usize, Tensor<B>, Tensor<B>)>,
 }
 
-impl FalconRotaryEmbedding {
-    fn load(device: &Device, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> FalconRotaryEmbedding<B> {
+    fn load(device: &B::Device, cfg: &Config) -> Result<Self> {
         let head_dim = cfg.head_dim();
         let inv_freq: Vec<_> = (0..head_dim)
             .step_by(2)
@@ -148,9 +148,9 @@ impl FalconRotaryEmbedding {
     fn cos_sin(
         &mut self,
         seq_len: usize,
-        device: &Device,
+        device: &B::Device,
         dtype: DType,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         match &self.cache {
             Some((s, cos, sin)) if *s == seq_len => {
                 return Ok((cos.clone(), sin.clone()));
@@ -169,10 +169,10 @@ impl FalconRotaryEmbedding {
 
     fn forward(
         &mut self,
-        query: &Tensor,
-        key: &Tensor,
+        query: &Tensor<B>,
+        key: &Tensor<B>,
         past_kv_len: usize,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let (_batch, seq_len, _head_dim) = query.dims3()?;
         let (cos, sin) = self.cos_sin(MAX_SEQ_LEN, query.device(), query.dtype())?;
         let cos = cos.narrow(0, past_kv_len, seq_len)?;
@@ -183,7 +183,11 @@ impl FalconRotaryEmbedding {
     }
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+fn masked_fill<B: BackendStorage>(
+    on_false: &Tensor<B>,
+    mask: &Tensor<B>,
+    on_true: f32,
+) -> Result<Tensor<B>> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?
         .to_dtype(on_false.dtype())?
@@ -193,11 +197,11 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 #[derive(Debug, Clone)]
-struct FalconAttention {
-    query_key_value: Linear,
-    dense: Linear,
-    maybe_rotary: Option<FalconRotaryEmbedding>,
-    kv_cache: Option<(Tensor, Tensor)>,
+struct FalconAttention<B: BackendStorage> {
+    query_key_value: Linear<B>,
+    dense: Linear<B>,
+    maybe_rotary: Option<FalconRotaryEmbedding<B>>,
+    kv_cache: Option<(Tensor<B>, Tensor<B>)>,
     inv_norm_factor: f64,
     multi_query: bool,
     use_cache: bool,
@@ -206,8 +210,8 @@ struct FalconAttention {
     n_head_kv: usize,
 }
 
-impl FalconAttention {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> FalconAttention<B> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let maybe_rotary = if cfg.rotary() {
             let rotary = FalconRotaryEmbedding::load(vb.device(), cfg)?;
             Some(rotary)
@@ -237,7 +241,7 @@ impl FalconAttention {
         })
     }
 
-    fn split_heads(&self, fused_qkv: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
+    fn split_heads(&self, fused_qkv: &Tensor<B>) -> Result<(Tensor<B>, Tensor<B>, Tensor<B>)> {
         let (b_sz, seq_len, _) = fused_qkv.dims3()?;
         if !self.multi_query {
             let fused_qkv = fused_qkv.reshape((b_sz, seq_len, self.num_heads, 3, self.head_dim))?;
@@ -256,7 +260,12 @@ impl FalconAttention {
         }
     }
 
-    fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, past_kv_len: usize) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        x: &Tensor<B>,
+        mask: Option<&Tensor<B>>,
+        past_kv_len: usize,
+    ) -> Result<Tensor<B>> {
         let fused_qkv = self.query_key_value.forward(x)?;
         let head_dim = self.head_dim;
         let (query, key, value) = self.split_heads(&fused_qkv)?;
@@ -328,13 +337,13 @@ impl FalconAttention {
 }
 
 #[derive(Debug, Clone)]
-struct FalconMlp {
-    dense_h_to_4h: Linear,
-    dense_4h_to_h: Linear,
+struct FalconMlp<B: BackendStorage> {
+    dense_h_to_4h: Linear<B>,
+    dense_4h_to_h: Linear<B>,
 }
 
-impl FalconMlp {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> FalconMlp<B> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let h = cfg.hidden_size;
         let b = cfg.bias;
         let dense_h_to_4h = linear(h, 4 * h, b, vb.pp("dense_h_to_4h"))?;
@@ -345,7 +354,7 @@ impl FalconMlp {
         })
     }
 
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let x = self.dense_h_to_4h.forward(x)?.gelu()?;
         let x = self.dense_4h_to_h.forward(&x)?;
         Ok(x)
@@ -353,16 +362,16 @@ impl FalconMlp {
 }
 
 #[derive(Debug, Clone)]
-struct FalconDecoderLayer {
-    inp_layernorm: LayerNorm,
-    self_attention: FalconAttention,
-    post_attention_layernorm: Option<LayerNorm>,
-    mlp: FalconMlp,
+struct FalconDecoderLayer<B: BackendStorage> {
+    inp_layernorm: LayerNorm<B>,
+    self_attention: FalconAttention<B>,
+    post_attention_layernorm: Option<LayerNorm<B>>,
+    mlp: FalconMlp<B>,
     parallel_attn: bool,
 }
 
-impl FalconDecoderLayer {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> FalconDecoderLayer<B> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let mlp = FalconMlp::load(vb.pp("mlp"), cfg)?;
         let inp_layernorm = layer_norm(
             cfg.hidden_size,
@@ -389,7 +398,12 @@ impl FalconDecoderLayer {
         })
     }
 
-    fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, past_kv_len: usize) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        x: &Tensor<B>,
+        mask: Option<&Tensor<B>>,
+        past_kv_len: usize,
+    ) -> Result<Tensor<B>> {
         let residual = x.clone();
         let ln_attn = self.inp_layernorm.forward(x)?;
         let attn_output = self.self_attention.forward(&ln_attn, mask, past_kv_len)?;
@@ -419,35 +433,39 @@ impl FalconDecoderLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Falcon {
-    word_embeddings: Embedding,
-    blocks: Vec<FalconDecoderLayer>,
-    ln_f: LayerNorm,
-    lm_head: Linear,
+pub struct Falcon<B: BackendStorage> {
+    word_embeddings: Embedding<B>,
+    blocks: Vec<FalconDecoderLayer<B>>,
+    ln_f: LayerNorm<B>,
+    lm_head: Linear<B>,
     config: Config,
 }
 
-fn make_causal_mask(t: usize) -> Result<Tensor> {
+fn make_causal_mask<B: BackendStorage>(t: usize, device: &B::Device) -> Result<Tensor<B>> {
     let mask: Vec<_> = (0..t)
         .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
         .collect();
-    let mask = Tensor::from_slice(&mask, (t, t), &Device::Cpu)?;
+    let mask = Tensor::from_slice(&mask, (t, t), device)?;
     Ok(mask)
 }
 
-fn prepare_attn_mask(b_sz: usize, seq_len: usize) -> Result<Tensor> {
+fn prepare_attn_mask<B: BackendStorage>(
+    b_sz: usize,
+    seq_len: usize,
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     // let mask = Tensor::ones((b_sz, seq_len), DType::U32, &Device::Cpu)?;
-    let mask = make_causal_mask(seq_len)?;
+    let mask = make_causal_mask(seq_len, device)?;
     let mask = mask.broadcast_as((b_sz, 1, seq_len, seq_len))?;
     Ok(mask)
 }
 
-impl Falcon {
+impl<B: BackendStorage> Falcon<B> {
     pub fn config(&self) -> &Config {
         &self.config
     }
 
-    pub fn load(vb: VarBuilder, cfg: Config) -> Result<Self> {
+    pub fn load(vb: VarBuilder<B>, cfg: Config) -> Result<Self> {
         let word_embeddings = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -471,7 +489,7 @@ impl Falcon {
         })
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let (b_sz, seq_len) = input_ids.dims2()?;
         let mut hidden_state = self.word_embeddings.forward(input_ids)?;
         let past_kv_len = match &self.blocks[0].self_attention.kv_cache {
@@ -481,7 +499,7 @@ impl Falcon {
         let causal_mask = if seq_len <= 1 {
             None
         } else {
-            Some(prepare_attn_mask(b_sz, seq_len)?.to_device(input_ids.device())?)
+            Some(prepare_attn_mask(b_sz, seq_len, input_ids.device())?)
         };
         for block in self.blocks.iter_mut() {
             hidden_state = block.forward(&hidden_state, causal_mask.as_ref(), past_kv_len)?;

@@ -5,7 +5,7 @@
 //!
 //! Implementation based on [timm model](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/fastvit.py)
 
-use candle::{Context, DType, Result, Tensor, D};
+use candle::{BackendStorage, Context, DType, Result, Tensor, D};
 use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, linear, linear_no_bias, ops::sigmoid, ops::softmax,
     BatchNorm, Conv2d, Conv2dConfig, Func, VarBuilder,
@@ -116,13 +116,13 @@ impl Config {
     }
 }
 
-fn conv_norm(
+fn conv_norm<B: BackendStorage + 'static>(
     in_channels: usize,
     out_channels: usize,
     kernel: usize,
     stride: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         stride,
         padding: kernel / 2,
@@ -139,7 +139,11 @@ fn conv_norm(
     }))
 }
 
-fn conv_mlp(dim: usize, exp_ratio: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn conv_mlp<B: BackendStorage + 'static>(
+    dim: usize,
+    exp_ratio: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         ..Default::default()
     };
@@ -154,11 +158,11 @@ fn conv_mlp(dim: usize, exp_ratio: usize, vb: VarBuilder) -> Result<Func<'static
     }))
 }
 
-fn squeeze_and_excitation(
+fn squeeze_and_excitation<B: BackendStorage + 'static>(
     in_channels: usize,
     squeeze_channels: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         ..Default::default()
     };
@@ -177,7 +181,10 @@ fn squeeze_and_excitation(
 // fuses a convolutional kernel and a batchnorm layer into a convolutional layer
 // based on the _fuse_bn_tensor method in timm
 // see https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/byobnet.py#L602
-fn fuse_conv_bn(weights: &Tensor, bn: BatchNorm) -> Result<(Tensor, Tensor)> {
+fn fuse_conv_bn<B: BackendStorage>(
+    weights: &Tensor<B>,
+    bn: BatchNorm<B>,
+) -> Result<(Tensor<B>, Tensor<B>)> {
     let (gamma, beta) = bn.weight_and_bias().context("no weight-bias")?;
     let mu = bn.running_mean();
     let sigma = (bn.running_var() + bn.eps())?.sqrt();
@@ -188,15 +195,15 @@ fn fuse_conv_bn(weights: &Tensor, bn: BatchNorm) -> Result<(Tensor, Tensor)> {
     Ok((weights, bias))
 }
 
-fn mobileone_block(
+fn mobileone_block<B: BackendStorage + 'static>(
     in_channels: usize,
     out_channels: usize,
     kernel: usize,
     stride: usize,
     group_size: usize,
     use_act: bool,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let groups = if group_size == 0 {
         1
     } else {
@@ -292,7 +299,11 @@ fn mobileone_block(
     }))
 }
 
-fn repmixer(dim: usize, kernel: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn repmixer<B: BackendStorage + 'static>(
+    dim: usize,
+    kernel: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let gamma = vb.get((dim, 1, 1), "layer_scale.gamma")?;
     let norm = mobileone_block(dim, dim, kernel, 1, 1, false, vb.pp("norm"))?;
     let mixer = mobileone_block(dim, dim, kernel, 1, 1, false, vb.pp("mixer"))?;
@@ -306,7 +317,11 @@ fn repmixer(dim: usize, kernel: usize, vb: VarBuilder) -> Result<Func<'static>> 
     }))
 }
 
-fn repmixer_block(dim: usize, exp_ratio: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn repmixer_block<B: BackendStorage + 'static>(
+    dim: usize,
+    exp_ratio: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let gamma = vb.get((dim, 1, 1), "layer_scale.gamma")?;
     let token_mixer = repmixer(dim, 3, vb.pp("token_mixer"))?;
     let mlp = conv_mlp(dim, exp_ratio, vb.pp("mlp"))?;
@@ -320,7 +335,10 @@ fn repmixer_block(dim: usize, exp_ratio: usize, vb: VarBuilder) -> Result<Func<'
     }))
 }
 
-fn positional_encoding(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn positional_encoding<B: BackendStorage + 'static>(
+    dim: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         stride: 1,
         padding: 3,
@@ -336,7 +354,10 @@ fn positional_encoding(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
     }))
 }
 
-fn attention(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn attention<B: BackendStorage + 'static>(
+    dim: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let qkv = linear_no_bias(dim, dim * 3, vb.pp("qkv"))?;
     let proj = linear(dim, dim, vb.pp("proj"))?;
     let head_dim = 32;
@@ -371,7 +392,11 @@ fn attention(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
     }))
 }
 
-fn attention_block(dim: usize, exp_ratio: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn attention_block<B: BackendStorage + 'static>(
+    dim: usize,
+    exp_ratio: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let gamma1 = vb.get((dim, 1, 1), "layer_scale_1.gamma")?;
     let gamma2 = vb.get((dim, 1, 1), "layer_scale_2.gamma")?;
     let norm = batch_norm(dim, 1e-5, vb.pp("norm"))?;
@@ -395,7 +420,11 @@ fn attention_block(dim: usize, exp_ratio: usize, vb: VarBuilder) -> Result<Func<
     }))
 }
 
-fn fastvit_stage(cfg: &Config, idx: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn fastvit_stage<B: BackendStorage + 'static>(
+    cfg: &Config,
+    idx: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let nblocks = cfg.blocks[idx];
     let mut blocks = Vec::with_capacity(nblocks);
 
@@ -426,12 +455,12 @@ fn fastvit_stage(cfg: &Config, idx: usize, vb: VarBuilder) -> Result<Func<'stati
     }))
 }
 
-fn fastvit_patch_embed(
+fn fastvit_patch_embed<B: BackendStorage + 'static>(
     in_channels: usize,
     out_channels: usize,
     use_act: bool,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let lk = conv_norm(in_channels, out_channels, 7, 2, vb.pp("proj.0.large_conv"))?;
     let sk = conv_norm(in_channels, out_channels, 3, 2, vb.pp("proj.0.small_conv"))?;
     let se = squeeze_and_excitation(out_channels, out_channels / 4, vb.pp("proj.0.se"));
@@ -450,7 +479,11 @@ fn fastvit_patch_embed(
     }))
 }
 
-fn fastvit_stem(in_channels: usize, out_channels: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn fastvit_stem<B: BackendStorage + 'static>(
+    in_channels: usize,
+    out_channels: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let mb0 = mobileone_block(in_channels, out_channels, 3, 2, 0, true, vb.pp(0))?;
     let mb1 = mobileone_block(out_channels, out_channels, 3, 2, 1, true, vb.pp(1))?;
     let mb2 = mobileone_block(out_channels, out_channels, 1, 1, 0, true, vb.pp(2))?;
@@ -461,7 +494,11 @@ fn fastvit_stem(in_channels: usize, out_channels: usize, vb: VarBuilder) -> Resu
 }
 
 // Build a fastvit model for a given configuration.
-fn fastvit_model(cfg: &Config, nclasses: Option<usize>, vb: VarBuilder) -> Result<Func<'static>> {
+fn fastvit_model<B: BackendStorage + 'static>(
+    cfg: &Config,
+    nclasses: Option<usize>,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let cls = match nclasses {
         None => None,
         Some(nclasses) => {
@@ -502,10 +539,17 @@ fn fastvit_model(cfg: &Config, nclasses: Option<usize>, vb: VarBuilder) -> Resul
     }))
 }
 
-pub fn fastvit(cfg: &Config, nclasses: usize, vb: VarBuilder) -> Result<Func<'static>> {
+pub fn fastvit<B: BackendStorage + 'static>(
+    cfg: &Config,
+    nclasses: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     fastvit_model(cfg, Some(nclasses), vb)
 }
 
-pub fn fastvit_no_final_layer(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
+pub fn fastvit_no_final_layer<B: BackendStorage + 'static>(
+    cfg: &Config,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     fastvit_model(cfg, None, vb)
 }

@@ -1,5 +1,12 @@
+use candle::{CpuStorage, QCpuStorage};
 use wasm_bindgen::prelude::*;
 pub mod token_output_stream;
+use candle_transformers::models::blip;
+use candle_transformers::models::quantized_blip;
+
+pub type Tensor = candle::Tensor<CpuStorage>;
+pub type BlipForConditionalGeneration = blip::BlipForConditionalGeneration<CpuStorage>;
+pub type QBlipForConditionalGeneration = quantized_blip::BlipForConditionalGeneration<QCpuStorage>;
 
 #[wasm_bindgen]
 extern "C" {

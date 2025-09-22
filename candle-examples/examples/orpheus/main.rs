@@ -7,7 +7,7 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::Parser;
 
-use candle::{DType, Device, IndexOp, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::llama::{Cache, Llama, LlamaConfig};
 use candle_transformers::models::snac::{Config as SnacConfig, Model as SnacModel};
@@ -119,11 +119,24 @@ enum Which {
     ThreeB0_1Ft,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
-
-    let args = Args::parse();
 
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -140,24 +153,24 @@ fn main() -> Result<()> {
         candle::utils::with_f16c()
     );
     let prompt = args.prompt.clone();
-    let mut model = Model::load(args)?;
+    let mut model: Model<B> = Model::load(args, device)?;
     model.run(&prompt)?;
     Ok(())
 }
 
-struct Model {
-    model: Llama,
+struct Model<B: BackendStorage> {
+    model: Llama<B>,
     tokenizer: Tokenizer,
     logits_processor: candle_transformers::generation::LogitsProcessor,
-    cache: Cache,
-    device: Device,
+    cache: Cache<B>,
+    device: B::Device,
     verbose_prompt: bool,
-    snac: SnacModel,
+    snac: SnacModel<B>,
     out_file: String,
     voice: Voice,
 }
 
-fn load_snac(device: &Device) -> Result<SnacModel> {
+fn load_snac<B: BackendStorage>(device: &B::Device) -> Result<SnacModel<B>> {
     let api = hf_hub::api::sync::Api::new()?;
     let m = api.model("hubertsiuzdak/snac_24khz".to_string());
     let config = m.get("config.json")?;
@@ -165,12 +178,12 @@ fn load_snac(device: &Device) -> Result<SnacModel> {
     let m = api.model("lmz/candle-snac".to_string());
     let model = m.get("snac_24khz.safetensors")?;
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, device)? };
-    let model = SnacModel::new(&config, vb)?;
+    let model: SnacModel<B> = SnacModel::new(&config, vb)?;
     Ok(model)
 }
 
-impl Model {
-    fn load(args: Args) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    fn load(args: Args, device: &B::Device) -> Result<Self> {
         let start = std::time::Instant::now();
         let api = hf_hub::api::sync::Api::new()?;
         let model_id = match args.model_id {
@@ -208,9 +221,12 @@ impl Model {
         let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
 
         let start = std::time::Instant::now();
-        let device = candle_examples::device(args.cpu)?;
-        let dtype = device.bf16_default_to_f32();
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, dtype, &device)? };
+        let dtype = if B::Device::SUPPORTS_BF16 {
+            DType::BF16
+        } else {
+            DType::F32
+        };
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, dtype, device)? };
         let config: LlamaConfig = serde_json::from_reader(std::fs::File::open(config)?)?;
         let config = config.into_config(args.use_flash_attn);
         let model = Llama::load(vb, &config)?;
@@ -231,14 +247,14 @@ impl Model {
         };
 
         println!("loaded the model in {:?}", start.elapsed());
-        let cache = Cache::new(true, dtype, &config, &device)?;
-        let snac = load_snac(&device)?;
+        let cache = Cache::new(true, dtype, &config, device)?;
+        let snac = load_snac(device)?;
         Ok(Self {
             model,
             tokenizer,
             logits_processor,
             cache,
-            device,
+            device: device.clone(),
             verbose_prompt: args.verbose_prompt,
             snac,
             voice: args.voice,

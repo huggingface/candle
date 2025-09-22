@@ -1,4 +1,4 @@
-use candle::{DType, Device, Result, Tensor, D};
+use candle::{BackendStorage, DType, Result, Tensor, D};
 use candle_nn::{
     embedding, layer_norm, linear_no_bias, Activation, Embedding, LayerNorm, Linear, Module,
     VarBuilder,
@@ -81,21 +81,25 @@ impl Config {
     }
 }
 
-fn get_embedding(num_embeddings: usize, embedding_dim: usize) -> Result<Tensor> {
+fn get_embedding<B: BackendStorage>(
+    num_embeddings: usize,
+    embedding_dim: usize,
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let half_dim = embedding_dim / 2;
     let emb = f64::ln(10000.) / (half_dim - 1) as f64;
     let xs: Vec<_> = (0..num_embeddings).map(|v| v as f32).collect();
-    let xs = Tensor::from_vec(xs, (num_embeddings, 1), &Device::Cpu)?;
+    let xs = Tensor::from_vec(xs, (num_embeddings, 1), device)?;
     let ys: Vec<_> = (0..half_dim)
         .map(|v| f64::exp(v as f64 * -emb) as f32)
         .collect();
-    let ys = Tensor::from_vec(ys, (1, half_dim), &Device::Cpu)?;
+    let ys = Tensor::from_vec(ys, (1, half_dim), device)?;
     let shape = (num_embeddings, half_dim);
     let emb = (xs.broadcast_as(shape)? * ys.broadcast_as(shape)?)?;
     let emb =
         Tensor::cat(&[&emb.cos()?, &emb.sin()?], 1)?.reshape((num_embeddings, 2 * half_dim))?;
     let emb = if embedding_dim % 2 == 1 {
-        let zeros = Tensor::zeros((num_embeddings, 1), DType::F32, &Device::Cpu)?;
+        let zeros = Tensor::zeros((num_embeddings, 1), DType::F32, device)?;
         Tensor::cat(&[&emb, &zeros], 1)?
     } else {
         emb
@@ -104,17 +108,17 @@ fn get_embedding(num_embeddings: usize, embedding_dim: usize) -> Result<Tensor> 
 }
 
 #[derive(Debug)]
-struct MusicgenSinusoidalPositionalEmbedding {
+struct MusicgenSinusoidalPositionalEmbedding<B: BackendStorage> {
     num_positions: usize,
     embedding_dim: usize,
-    weights: Tensor,
+    weights: Tensor<B>,
 }
 
-impl MusicgenSinusoidalPositionalEmbedding {
-    fn load(_vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> MusicgenSinusoidalPositionalEmbedding<B> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let num_positions = cfg.max_position_embeddings;
         let embedding_dim = cfg.hidden_size;
-        let weights = get_embedding(num_positions, embedding_dim)?;
+        let weights = get_embedding(num_positions, embedding_dim, vb.device())?;
         Ok(Self {
             num_positions,
             embedding_dim,
@@ -122,29 +126,29 @@ impl MusicgenSinusoidalPositionalEmbedding {
         })
     }
 
-    fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    fn forward(&mut self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let (_b_sz, _codebooks, seq_len) = input_ids.dims3()?;
         if seq_len > self.weights.dim(0)? {
-            self.weights = get_embedding(seq_len, self.embedding_dim)?
+            self.weights = get_embedding(seq_len, self.embedding_dim, input_ids.device())?
         }
         self.weights.narrow(0, 0, seq_len)
     }
 }
 
 #[derive(Debug)]
-struct MusicgenAttention {
+struct MusicgenAttention<B: BackendStorage> {
     scaling: f64,
     is_decoder: bool,
     num_heads: usize,
     head_dim: usize,
-    k_proj: Linear,
-    v_proj: Linear,
-    q_proj: Linear,
-    out_proj: Linear,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    q_proj: Linear<B>,
+    out_proj: Linear<B>,
 }
 
-impl MusicgenAttention {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> MusicgenAttention<B> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let h = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let head_dim = h / num_heads;
@@ -166,10 +170,10 @@ impl MusicgenAttention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        kv_states: Option<&Tensor>,
-        attention_mask: &Tensor,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        kv_states: Option<&Tensor<B>>,
+        attention_mask: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let (b_sz, tgt_len, _) = xs.dims3()?;
         let query_states = (self.q_proj.forward(xs)? * self.scaling)?;
 
@@ -200,19 +204,19 @@ impl MusicgenAttention {
 }
 
 #[derive(Debug)]
-struct MusicgenDecoderLayer {
-    self_attn: MusicgenAttention,
-    self_attn_layer_norm: LayerNorm,
-    encoder_attn: MusicgenAttention,
-    encoder_attn_layer_norm: LayerNorm,
-    fc1: Linear,
-    fc2: Linear,
-    final_layer_norm: LayerNorm,
+struct MusicgenDecoderLayer<B: BackendStorage> {
+    self_attn: MusicgenAttention<B>,
+    self_attn_layer_norm: LayerNorm<B>,
+    encoder_attn: MusicgenAttention<B>,
+    encoder_attn_layer_norm: LayerNorm<B>,
+    fc1: Linear<B>,
+    fc2: Linear<B>,
+    final_layer_norm: LayerNorm<B>,
     activation_fn: Activation,
 }
 
-impl MusicgenDecoderLayer {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> MusicgenDecoderLayer<B> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let h = cfg.hidden_size;
         let self_attn = MusicgenAttention::load(vb.pp("self_attn"), cfg)?;
         let self_attn_layer_norm = layer_norm(h, 1e-5, vb.pp("self_attn_layer_norm"))?;
@@ -235,10 +239,10 @@ impl MusicgenDecoderLayer {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: &Tensor,
-        encoder_hidden_states: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+        encoder_hidden_states: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let residual = xs.clone();
         let xs = self.self_attn_layer_norm.forward(xs)?;
         let xs = self.self_attn.forward(&xs, None, attention_mask)?;
@@ -264,18 +268,18 @@ impl MusicgenDecoderLayer {
 }
 
 #[derive(Debug)]
-struct MusicgenDecoder {
-    embed_tokens: Vec<Embedding>,
-    embed_positions: MusicgenSinusoidalPositionalEmbedding,
-    layers: Vec<MusicgenDecoderLayer>,
-    layer_norm: LayerNorm,
+struct MusicgenDecoder<B: BackendStorage> {
+    embed_tokens: Vec<Embedding<B>>,
+    embed_positions: MusicgenSinusoidalPositionalEmbedding<B>,
+    layers: Vec<MusicgenDecoderLayer<B>>,
+    layer_norm: LayerNorm<B>,
     embed_scale: f64,
     num_codebooks: usize,
     d_model: usize,
 }
 
-impl MusicgenDecoder {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> MusicgenDecoder<B> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let h = cfg.hidden_size;
         let embed_scale = if cfg.scale_embedding {
             (h as f64).sqrt()
@@ -302,11 +306,11 @@ impl MusicgenDecoder {
         })
     }
 
-    fn prepare_decoder_attention_mask(&self, _b_sz: usize, _seq_len: usize) -> Result<Tensor> {
+    fn prepare_decoder_attention_mask(&self, _b_sz: usize, _seq_len: usize) -> Result<Tensor<B>> {
         todo!()
     }
 
-    fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    fn forward(&mut self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let dev = input_ids.device();
         let (b_sz_times_codebooks, seq_len) = input_ids.dims2()?;
         let b_sz = b_sz_times_codebooks / self.num_codebooks;
@@ -317,7 +321,7 @@ impl MusicgenDecoder {
             inputs_embeds = (inputs_embeds + codebook.forward(&inp)?)?
         }
         let inputs_embeds = inputs_embeds;
-        let positions = self.embed_positions.forward(&input)?.to_device(dev)?;
+        let positions = self.embed_positions.forward(&input)?;
         let mut xs = inputs_embeds.broadcast_add(&positions)?;
         let attention_mask = self.prepare_decoder_attention_mask(b_sz, seq_len)?;
         for decoder_layer in self.layers.iter_mut() {
@@ -329,15 +333,15 @@ impl MusicgenDecoder {
 }
 
 #[derive(Debug)]
-pub struct MusicgenForCausalLM {
-    decoder: MusicgenDecoder,
-    lm_heads: Vec<Linear>,
+pub struct MusicgenForCausalLM<B: BackendStorage> {
+    decoder: MusicgenDecoder<B>,
+    lm_heads: Vec<Linear<B>>,
     num_codebooks: usize,
     vocab_size: usize,
 }
 
-impl MusicgenForCausalLM {
-    pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> MusicgenForCausalLM<B> {
+    pub fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let h = cfg.hidden_size;
         let decoder = MusicgenDecoder::load(vb.pp("model.decoder"), cfg)?;
         let lm_heads = (0..cfg.num_codebooks)
@@ -351,7 +355,7 @@ impl MusicgenForCausalLM {
         })
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let (b_sz, seq_len) = input_ids.dims2()?;
         let hidden_states = self.decoder.forward(input_ids)?;
         let lm_logits = self
@@ -369,10 +373,10 @@ impl MusicgenForCausalLM {
 }
 
 #[derive(Debug)]
-pub struct MusicgenForConditionalGeneration {
-    pub text_encoder: t5::T5EncoderModel,
-    pub audio_encoder: encodec::Model,
-    pub decoder: MusicgenForCausalLM,
+pub struct MusicgenForConditionalGeneration<B: BackendStorage> {
+    pub text_encoder: t5::T5EncoderModel<B>,
+    pub audio_encoder: encodec::Model<B>,
+    pub decoder: MusicgenForCausalLM<B>,
     cfg: GenConfig,
 }
 
@@ -420,12 +424,12 @@ impl GenConfig {
     }
 }
 
-impl MusicgenForConditionalGeneration {
+impl<B: BackendStorage> MusicgenForConditionalGeneration<B> {
     pub fn config(&self) -> &GenConfig {
         &self.cfg
     }
 
-    pub fn load(vb: VarBuilder, cfg: GenConfig) -> Result<Self> {
+    pub fn load(vb: VarBuilder<B>, cfg: GenConfig) -> Result<Self> {
         let text_encoder = t5::T5EncoderModel::load(vb.pp("text_encoder"), &cfg.t5)?;
         let audio_encoder = encodec::Model::new(&cfg.encodec, vb.pp("audio_encoder"))?;
         let decoder = MusicgenForCausalLM::load(vb.pp("decoder"), &cfg.musicgen)?;

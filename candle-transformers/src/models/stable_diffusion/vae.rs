@@ -8,7 +8,7 @@ use super::unet_2d_blocks::{
     DownEncoderBlock2D, DownEncoderBlock2DConfig, UNetMidBlock2D, UNetMidBlock2DConfig,
     UpDecoderBlock2D, UpDecoderBlock2DConfig,
 };
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 use candle_nn as nn;
 use candle_nn::Module;
 
@@ -33,19 +33,19 @@ impl Default for EncoderConfig {
 }
 
 #[derive(Debug)]
-struct Encoder {
-    conv_in: nn::Conv2d,
-    down_blocks: Vec<DownEncoderBlock2D>,
-    mid_block: UNetMidBlock2D,
-    conv_norm_out: nn::GroupNorm,
-    conv_out: nn::Conv2d,
+struct Encoder<B: BackendStorage> {
+    conv_in: nn::Conv2d<B>,
+    down_blocks: Vec<DownEncoderBlock2D<B>>,
+    mid_block: UNetMidBlock2D<B>,
+    conv_norm_out: nn::GroupNorm<B>,
+    conv_out: nn::Conv2d<B>,
     #[allow(dead_code)]
     config: EncoderConfig,
 }
 
-impl Encoder {
+impl<B: BackendStorage> Encoder<B> {
     fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         out_channels: usize,
         config: EncoderConfig,
@@ -130,8 +130,8 @@ impl Encoder {
     }
 }
 
-impl Encoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Encoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = xs.apply(&self.conv_in)?;
         for down_block in self.down_blocks.iter() {
             xs = xs.apply(down_block)?
@@ -163,19 +163,19 @@ impl Default for DecoderConfig {
 }
 
 #[derive(Debug)]
-struct Decoder {
-    conv_in: nn::Conv2d,
-    up_blocks: Vec<UpDecoderBlock2D>,
-    mid_block: UNetMidBlock2D,
-    conv_norm_out: nn::GroupNorm,
-    conv_out: nn::Conv2d,
+struct Decoder<B: BackendStorage> {
+    conv_in: nn::Conv2d<B>,
+    up_blocks: Vec<UpDecoderBlock2D<B>>,
+    mid_block: UNetMidBlock2D<B>,
+    conv_norm_out: nn::GroupNorm<B>,
+    conv_out: nn::Conv2d<B>,
     #[allow(dead_code)]
     config: DecoderConfig,
 }
 
-impl Decoder {
+impl<B: BackendStorage> Decoder<B> {
     fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         out_channels: usize,
         config: DecoderConfig,
@@ -257,8 +257,8 @@ impl Decoder {
     }
 }
 
-impl Decoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Decoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = self.mid_block.forward(&self.conv_in.forward(xs)?, None)?;
         for up_block in self.up_blocks.iter() {
             xs = up_block.forward(&xs)?
@@ -292,13 +292,13 @@ impl Default for AutoEncoderKLConfig {
     }
 }
 
-pub struct DiagonalGaussianDistribution {
-    mean: Tensor,
-    std: Tensor,
+pub struct DiagonalGaussianDistribution<B: BackendStorage> {
+    mean: Tensor<B>,
+    std: Tensor<B>,
 }
 
-impl DiagonalGaussianDistribution {
-    pub fn new(parameters: &Tensor) -> Result<Self> {
+impl<B: BackendStorage> DiagonalGaussianDistribution<B> {
+    pub fn new(parameters: &Tensor<B>) -> Result<Self> {
         let mut parameters = parameters.chunk(2, 1)?.into_iter();
         let mean = parameters.next().unwrap();
         let logvar = parameters.next().unwrap();
@@ -306,7 +306,7 @@ impl DiagonalGaussianDistribution {
         Ok(DiagonalGaussianDistribution { mean, std })
     }
 
-    pub fn sample(&self) -> Result<Tensor> {
+    pub fn sample(&self) -> Result<Tensor<B>> {
         let sample = self.mean.randn_like(0., 1.);
         &self.mean + &self.std * sample
     }
@@ -316,17 +316,17 @@ impl DiagonalGaussianDistribution {
 // This implementation is specific to the config used in stable-diffusion-v1-5
 // https://huggingface.co/runwayml/stable-diffusion-v1-5/blob/main/vae/config.json
 #[derive(Debug)]
-pub struct AutoEncoderKL {
-    encoder: Encoder,
-    decoder: Decoder,
-    quant_conv: Option<nn::Conv2d>,
-    post_quant_conv: Option<nn::Conv2d>,
+pub struct AutoEncoderKL<B: BackendStorage> {
+    encoder: Encoder<B>,
+    decoder: Decoder<B>,
+    quant_conv: Option<nn::Conv2d<B>>,
+    post_quant_conv: Option<nn::Conv2d<B>>,
     pub config: AutoEncoderKLConfig,
 }
 
-impl AutoEncoderKL {
+impl<B: BackendStorage> AutoEncoderKL<B> {
     pub fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         out_channels: usize,
         config: AutoEncoderKLConfig,
@@ -383,7 +383,7 @@ impl AutoEncoderKL {
     }
 
     /// Returns the distribution in the latent space.
-    pub fn encode(&self, xs: &Tensor) -> Result<DiagonalGaussianDistribution> {
+    pub fn encode(&self, xs: &Tensor<B>) -> Result<DiagonalGaussianDistribution<B>> {
         let xs = self.encoder.forward(xs)?;
         let parameters = match &self.quant_conv {
             None => xs,
@@ -393,7 +393,7 @@ impl AutoEncoderKL {
     }
 
     /// Takes as input some sampled values.
-    pub fn decode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = match &self.post_quant_conv {
             None => xs,
             Some(post_quant_conv) => &post_quant_conv.forward(xs)?,

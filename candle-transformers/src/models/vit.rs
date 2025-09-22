@@ -16,7 +16,7 @@
 //!
 
 use crate::models::with_tracing::{conv2d, linear, linear_no_bias, Conv2d, Linear};
-use candle::{IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/vit/configuration_vit.py
@@ -68,13 +68,13 @@ impl Config {
 }
 
 #[derive(Debug, Clone)]
-struct PatchEmbeddings {
+struct PatchEmbeddings<B: BackendStorage> {
     num_patches: usize,
-    projection: Conv2d,
+    projection: Conv2d<B>,
 }
 
-impl PatchEmbeddings {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> PatchEmbeddings<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let image_size = cfg.image_size;
         let patch_size = cfg.patch_size;
         let num_patches = (image_size / patch_size) * (image_size / patch_size);
@@ -96,8 +96,8 @@ impl PatchEmbeddings {
     }
 }
 
-impl Module for PatchEmbeddings {
-    fn forward(&self, pixel_values: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for PatchEmbeddings<B> {
+    fn forward(&self, pixel_values: &Tensor<B>) -> Result<Tensor<B>> {
         let (_b_size, _num_channels, _height, _width) = pixel_values.dims4()?;
         self.projection
             .forward(pixel_values)?
@@ -107,16 +107,16 @@ impl Module for PatchEmbeddings {
 }
 
 #[derive(Debug, Clone)]
-pub struct Embeddings {
-    cls_token: Tensor,
-    mask_token: Option<Tensor>,
-    patch_embeddings: PatchEmbeddings,
-    position_embeddings: Tensor,
+pub struct Embeddings<B: BackendStorage> {
+    cls_token: Tensor<B>,
+    mask_token: Option<Tensor<B>>,
+    patch_embeddings: PatchEmbeddings<B>,
+    position_embeddings: Tensor<B>,
     hidden_size: usize,
 }
 
-impl Embeddings {
-    pub fn new(cfg: &Config, use_mask_token: bool, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Embeddings<B> {
+    pub fn new(cfg: &Config, use_mask_token: bool, vb: VarBuilder<B>) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let cls_token = vb.get((1, 1, hidden_size), "cls_token")?;
         let mask_token = if use_mask_token {
@@ -139,19 +139,19 @@ impl Embeddings {
 
     fn interpolate_pos_encoding(
         &self,
-        _embeddings: &Tensor,
+        _embeddings: &Tensor<B>,
         _height: usize,
         _width: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         todo!()
     }
 
     pub fn forward(
         &self,
-        pixel_values: &Tensor,
-        bool_masked_pos: Option<&Tensor>,
+        pixel_values: &Tensor<B>,
+        bool_masked_pos: Option<&Tensor<B>>,
         interpolate_pos_encoding: bool,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let (b_size, _num_channels, height, width) = pixel_values.dims4()?;
         let embeddings = self.patch_embeddings.forward(pixel_values)?;
         let embeddings = match (bool_masked_pos, &self.mask_token) {
@@ -178,16 +178,16 @@ impl Embeddings {
 }
 
 #[derive(Debug, Clone)]
-struct SelfAttention {
-    query: Linear,
-    key: Linear,
-    value: Linear,
+struct SelfAttention<B: BackendStorage> {
+    query: Linear<B>,
+    key: Linear<B>,
+    value: Linear<B>,
     num_attention_heads: usize,
     attention_head_size: usize,
 }
 
-impl SelfAttention {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SelfAttention<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let attention_head_size = cfg.hidden_size / cfg.num_attention_heads;
         let num_attention_heads = cfg.num_attention_heads;
         let all_head_size = num_attention_heads * attention_head_size;
@@ -210,7 +210,7 @@ impl SelfAttention {
         })
     }
 
-    fn transpose_for_scores(&self, xs: &Tensor) -> Result<Tensor> {
+    fn transpose_for_scores(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (b_size, seq_len, _) = xs.dims3()?;
         xs.reshape((
             b_size,
@@ -222,8 +222,8 @@ impl SelfAttention {
     }
 }
 
-impl Module for SelfAttention {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for SelfAttention<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let query = self.query.forward(xs)?;
         let key = self.key.forward(xs)?;
         let value = self.value.forward(xs)?;
@@ -244,51 +244,51 @@ impl Module for SelfAttention {
 }
 
 #[derive(Debug, Clone)]
-struct SelfOutput {
-    dense: Linear,
+struct SelfOutput<B: BackendStorage> {
+    dense: Linear<B>,
 }
 
-impl SelfOutput {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SelfOutput<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let dense = linear(cfg.hidden_size, cfg.hidden_size, vb.pp("dense"))?;
         Ok(Self { dense })
     }
 }
 
-impl Module for SelfOutput {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for SelfOutput<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.dense)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Attention {
-    attention: SelfAttention,
-    output: SelfOutput,
+struct Attention<B: BackendStorage> {
+    attention: SelfAttention<B>,
+    output: SelfOutput<B>,
 }
 
-impl Attention {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Attention<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let attention = SelfAttention::new(cfg, vb.pp("attention"))?;
         let output = SelfOutput::new(cfg, vb.pp("output"))?;
         Ok(Self { attention, output })
     }
 }
 
-impl Module for Attention {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Attention<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.attention)?.apply(&self.output)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Intermediate {
-    dense: Linear,
+struct Intermediate<B: BackendStorage> {
+    dense: Linear<B>,
     intermediate_act_fn: candle_nn::Activation,
 }
 
-impl Intermediate {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Intermediate<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let dense = linear(cfg.hidden_size, cfg.intermediate_size, vb.pp("dense"))?;
         Ok(Self {
             dense,
@@ -297,39 +297,39 @@ impl Intermediate {
     }
 }
 
-impl Module for Intermediate {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Intermediate<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.dense)?.apply(&self.intermediate_act_fn)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Output {
-    dense: Linear,
+struct Output<B: BackendStorage> {
+    dense: Linear<B>,
 }
 
-impl Output {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Output<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let dense = linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("dense"))?;
         Ok(Self { dense })
     }
 
-    fn forward(&self, xs: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, input_tensor: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.dense)? + input_tensor
     }
 }
 
 #[derive(Debug, Clone)]
-struct Layer {
-    attention: Attention,
-    intermediate: Intermediate,
-    output: Output,
-    layernorm_before: LayerNorm,
-    layernorm_after: LayerNorm,
+struct Layer<B: BackendStorage> {
+    attention: Attention<B>,
+    intermediate: Intermediate<B>,
+    output: Output<B>,
+    layernorm_before: LayerNorm<B>,
+    layernorm_after: LayerNorm<B>,
 }
 
-impl Layer {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Layer<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let attention = Attention::new(cfg, vb.pp("attention"))?;
         let intermediate = Intermediate::new(cfg, vb.pp("intermediate"))?;
         let output = Output::new(cfg, vb.pp("output"))?;
@@ -346,8 +346,8 @@ impl Layer {
     }
 }
 
-impl Module for Layer {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Layer<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = (xs.apply(&self.layernorm_before)?.apply(&self.attention)? + xs)?;
         let ys = xs.apply(&self.layernorm_after)?.apply(&self.intermediate)?;
         self.output.forward(&ys, &xs)
@@ -355,12 +355,12 @@ impl Module for Layer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Encoder {
-    layers: Vec<Layer>,
+pub struct Encoder<B: BackendStorage> {
+    layers: Vec<Layer<B>>,
 }
 
-impl Encoder {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Encoder<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb = vb.pp("layer");
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for i in 0..cfg.num_hidden_layers {
@@ -371,8 +371,8 @@ impl Encoder {
     }
 }
 
-impl Module for Encoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Encoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
             xs = xs.apply(layer)?
@@ -382,16 +382,16 @@ impl Module for Encoder {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    embeddings: Embeddings,
-    encoder: Encoder,
-    layernorm: LayerNorm,
+pub struct Model<B: BackendStorage> {
+    embeddings: Embeddings<B>,
+    encoder: Encoder<B>,
+    layernorm: LayerNorm<B>,
     // no need for pooling layer for image classification
-    classifier: Linear,
+    classifier: Linear<B>,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, num_labels: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, num_labels: usize, vb: VarBuilder<B>) -> Result<Self> {
         let vb_v = vb.pp("vit");
         let embeddings = Embeddings::new(cfg, false, vb_v.pp("embeddings"))?;
         let encoder = Encoder::new(cfg, vb_v.pp("encoder"))?;
@@ -405,7 +405,7 @@ impl Model {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let embedding_output = self.embeddings.forward(xs, None, false)?;
         let encoder_outputs = self.encoder.forward(&embedding_output)?;
         encoder_outputs

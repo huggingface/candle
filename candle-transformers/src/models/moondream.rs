@@ -37,7 +37,7 @@
 
 use crate::models::mixformer::{Config as PhiConfig, MixFormerSequentialForCausalLM as PhiModel};
 use crate::models::with_tracing::{layer_norm, linear_b, LayerNorm, Linear};
-use candle::{IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -55,7 +55,11 @@ impl Config {
     }
 }
 
-fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+fn scaled_dot_product_attention<B: BackendStorage>(
+    q: &Tensor<B>,
+    k: &Tensor<B>,
+    v: &Tensor<B>,
+) -> Result<Tensor<B>> {
     let dim = q.dim(D::Minus1)?;
     let scale_factor = 1.0 / (dim as f64).sqrt();
     let attn_weights = (q.matmul(&k.t()?)? * scale_factor)?;
@@ -92,34 +96,34 @@ impl VisionConfig {
 }
 
 #[derive(Debug, Clone)]
-struct LinearPatchEmbedding {
-    linear: Linear,
+struct LinearPatchEmbedding<B: BackendStorage> {
+    linear: Linear<B>,
 }
 
-impl LinearPatchEmbedding {
-    fn new(vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> LinearPatchEmbedding<B> {
+    fn new(vb: VarBuilder<B>) -> Result<Self> {
         let linear = linear_b(588, 1152, true, vb.pp("linear"))?;
         Ok(Self { linear })
     }
 }
 
-impl Module for LinearPatchEmbedding {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for LinearPatchEmbedding<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.linear)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Attention {
+struct Attention<B: BackendStorage> {
     num_heads: usize,
     head_dim: usize,
-    qkv: Linear,
-    proj: Linear,
+    qkv: Linear<B>,
+    proj: Linear<B>,
     span: tracing::Span,
 }
 
-impl Attention {
-    pub fn new(vb: VarBuilder, dim: usize, num_heads: usize) -> Result<Self> {
+impl<B: BackendStorage> Attention<B> {
+    pub fn new(vb: VarBuilder<B>, dim: usize, num_heads: usize) -> Result<Self> {
         let qkv = linear_b(dim, dim * 3, true, vb.pp("qkv"))?;
         let proj = linear_b(dim, dim, true, vb.pp("proj"))?;
         Ok(Self {
@@ -132,8 +136,8 @@ impl Attention {
     }
 }
 
-impl Module for Attention {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Attention<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (b, n, c) = xs.dims3()?;
         let qkv = xs
@@ -153,16 +157,16 @@ impl Module for Attention {
 }
 
 #[derive(Debug, Clone)]
-struct VitBlock {
-    attn: Attention,
-    mlp: Mlp,
-    norm1: LayerNorm,
-    norm2: LayerNorm,
+struct VitBlock<B: BackendStorage> {
+    attn: Attention<B>,
+    mlp: Mlp<B>,
+    norm1: LayerNorm<B>,
+    norm2: LayerNorm<B>,
     span: tracing::Span,
 }
 
-impl VitBlock {
-    fn new(vb: VarBuilder, dim: usize, num_heads: usize, cfg: &VisionConfig) -> Result<Self> {
+impl<B: BackendStorage> VitBlock<B> {
+    fn new(vb: VarBuilder<B>, dim: usize, num_heads: usize, cfg: &VisionConfig) -> Result<Self> {
         let attn = Attention::new(vb.pp("attn"), dim, num_heads)?;
         let mlp = Mlp::new(vb.pp("mlp"), dim, cfg.hidden_features, dim, cfg.act)?;
         let norm1 = layer_norm(dim, 1e-5, vb.pp("norm1"))?;
@@ -177,8 +181,8 @@ impl VitBlock {
     }
 }
 
-impl Module for VitBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for VitBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let ys = xs.apply(&self.norm1)?.apply(&self.attn)?;
         let xs = (xs + &ys)?;
@@ -189,16 +193,16 @@ impl Module for VitBlock {
 }
 
 #[derive(Debug, Clone)]
-struct VisionTransformer {
-    patch_embed: LinearPatchEmbedding,
-    pos_embed: Tensor,
-    blocks: Vec<VitBlock>,
-    norm: LayerNorm,
+struct VisionTransformer<B: BackendStorage> {
+    patch_embed: LinearPatchEmbedding<B>,
+    pos_embed: Tensor<B>,
+    blocks: Vec<VitBlock<B>>,
+    norm: LayerNorm<B>,
     span: tracing::Span,
 }
 
-impl VisionTransformer {
-    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> VisionTransformer<B> {
+    fn new(cfg: &VisionConfig, vb: VarBuilder<B>) -> Result<Self> {
         let patch_embed = LinearPatchEmbedding::new(vb.pp("patch_embed"))?;
         let pos_embed = vb.get((1, cfg.embed_len, cfg.embed_dim), "pos_embed")?;
         let blocks = (0..cfg.num_blocks)
@@ -222,8 +226,8 @@ impl VisionTransformer {
     }
 }
 
-impl Module for VisionTransformer {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for VisionTransformer<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let mut xs = (&xs.apply(&self.patch_embed)? + &self.pos_embed)?;
         for block in self.blocks.iter() {
@@ -234,34 +238,34 @@ impl Module for VisionTransformer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Encoder {
-    model: VisionTransformer,
+pub struct Encoder<B: BackendStorage> {
+    model: VisionTransformer<B>,
 }
 
-impl Encoder {
-    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Encoder<B> {
+    fn new(cfg: &VisionConfig, vb: VarBuilder<B>) -> Result<Self> {
         let model = VisionTransformer::new(cfg, vb.pp("model.visual"))?;
         Ok(Self { model })
     }
 }
 
-impl Module for Encoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Encoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.model)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    fc1: Linear,
+struct Mlp<B: BackendStorage> {
+    fc1: Linear<B>,
     act: candle_nn::Activation,
-    fc2: Linear,
+    fc2: Linear<B>,
     span: tracing::Span,
 }
 
-impl Mlp {
+impl<B: BackendStorage> Mlp<B> {
     fn new(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         in_features: usize,
         hidden_features: usize,
         out_features: usize,
@@ -278,20 +282,20 @@ impl Mlp {
     }
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Mlp<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         xs.apply(&self.fc1)?.apply(&self.act)?.apply(&self.fc2)
     }
 }
 
 #[derive(Debug, Clone)]
-struct VisionProjection {
-    mlp: Mlp,
+struct VisionProjection<B: BackendStorage> {
+    mlp: Mlp<B>,
 }
 
-impl VisionProjection {
-    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> VisionProjection<B> {
+    fn new(cfg: &VisionConfig, vb: VarBuilder<B>) -> Result<Self> {
         let mlp = Mlp::new(
             vb.pp("mlp"),
             cfg.image_embedding_dim,
@@ -303,20 +307,20 @@ impl VisionProjection {
     }
 }
 
-impl Module for VisionProjection {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for VisionProjection<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.mlp)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct VisionEncoder {
-    encoder: Encoder,
-    projection: VisionProjection,
+pub struct VisionEncoder<B: BackendStorage> {
+    encoder: Encoder<B>,
+    projection: VisionProjection<B>,
 }
 
-impl VisionEncoder {
-    pub fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> VisionEncoder<B> {
+    pub fn new(cfg: &VisionConfig, vb: VarBuilder<B>) -> Result<Self> {
         let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
         let projection = VisionProjection::new(cfg, vb.pp("projection"))?;
         Ok(Self {
@@ -326,8 +330,8 @@ impl VisionEncoder {
     }
 }
 
-impl Module for VisionEncoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for VisionEncoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (b, c, hp1, wp2) = xs.dims4()?;
         let (p1, p2) = (14, 14);
         let h = hp1 / p1;
@@ -341,13 +345,13 @@ impl Module for VisionEncoder {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    pub text_model: PhiModel,
-    pub vision_encoder: VisionEncoder,
+pub struct Model<B: BackendStorage> {
+    pub text_model: PhiModel<B>,
+    pub vision_encoder: VisionEncoder<B>,
 }
 
-impl Model {
-    pub fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(config: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let text_model = PhiModel::new_v2(&config.phi_config, vb.pp("text_model"))?;
         let vision_encoder = VisionEncoder::new(&config.vision_config, vb.pp("vision_encoder"))?;
         Ok(Self {
@@ -356,11 +360,11 @@ impl Model {
         })
     }
 
-    pub fn vision_encoder(&self) -> &VisionEncoder {
+    pub fn vision_encoder(&self) -> &VisionEncoder<B> {
         &self.vision_encoder
     }
 
-    pub fn text_model(&mut self) -> &mut PhiModel {
+    pub fn text_model(&mut self) -> &mut PhiModel<B> {
         &mut self.text_model
     }
 }

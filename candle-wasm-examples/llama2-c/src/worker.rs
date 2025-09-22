@@ -1,7 +1,7 @@
 use crate::model::{Cache, Config, Llama};
+use crate::{Tensor, VarBuilder};
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle::{DType, Device, IndexOp, Result, Shape, Tensor};
-use candle_nn::VarBuilder;
+use candle::{CpuDevice, DType, IndexOp, Result, Shape};
 use candle_transformers::generation::LogitsProcessor;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
@@ -40,7 +40,7 @@ fn read_i32<R: std::io::Read>(r: &mut R) -> Result<i32> {
 fn read_tensor<R: std::io::Read, S: Into<Shape>>(
     r: &mut R,
     shape: S,
-    dev: &Device,
+    dev: &CpuDevice,
 ) -> Result<Tensor> {
     let shape = shape.into();
     let mut data_t = vec![0f32; shape.elem_count()];
@@ -65,7 +65,7 @@ impl Model {
         top_p: f64,
         prompt: String,
     ) -> Result<()> {
-        let dev = Device::Cpu;
+        let dev = CpuDevice;
         let temp = if temp <= 0. { None } else { Some(temp) };
         let top_p = if top_p <= 0. || top_p >= 1.0 {
             None
@@ -158,7 +158,7 @@ struct TransformerWeights {
 }
 
 impl TransformerWeights {
-    fn from_reader<R: std::io::Read>(r: &mut R, c: &Config, dev: &Device) -> Result<Self> {
+    fn from_reader<R: std::io::Read>(r: &mut R, c: &Config, dev: &CpuDevice) -> Result<Self> {
         let token_embedding_table = read_tensor(r, (c.vocab_size, c.dim), dev)?;
         let rms_att_weight = read_tensor(r, (c.n_layers, c.dim), dev)?;
         let wq = read_tensor(r, (c.n_layers, c.dim, c.dim), dev)?;
@@ -190,7 +190,7 @@ impl TransformerWeights {
         })
     }
 
-    fn var_builder(&self, cfg: &Config, device: &Device) -> Result<VarBuilder<'_>> {
+    fn var_builder(&self, cfg: &Config, device: &CpuDevice) -> Result<VarBuilder<'_>> {
         let mut ws = std::collections::HashMap::new();
         let mut insert = |name: &str, t: Tensor| {
             ws.insert(name.to_string(), t);
@@ -248,7 +248,7 @@ impl TransformerWeights {
 
 impl Model {
     pub fn load(md: ModelData) -> Result<Self> {
-        let dev = Device::Cpu;
+        let dev = CpuDevice;
         let mut model = std::io::Cursor::new(md.model);
         let config = Config::from_reader(&mut model)?;
         let weights = TransformerWeights::from_reader(&mut model, &config, &dev)?;

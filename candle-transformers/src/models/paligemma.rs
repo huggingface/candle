@@ -15,7 +15,7 @@
 //!
 
 use crate::models::{gemma, siglip};
-use candle::{Module, Result, Tensor};
+use candle::{BackendStorage, Module, Result, Tensor};
 use candle_nn::{linear, Linear, VarBuilder};
 
 #[derive(serde::Deserialize, Clone, Debug)]
@@ -75,12 +75,12 @@ impl Config {
 }
 
 #[derive(Clone, Debug)]
-pub struct MultiModalProjector {
-    linear: Linear,
+pub struct MultiModalProjector<B: BackendStorage> {
+    linear: Linear<B>,
 }
 
-impl MultiModalProjector {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MultiModalProjector<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let linear = linear(
             cfg.vision_config.hidden_size,
             cfg.projection_dim,
@@ -90,22 +90,22 @@ impl MultiModalProjector {
     }
 }
 
-impl Module for MultiModalProjector {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for MultiModalProjector<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.linear)
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct Model {
+pub struct Model<B: BackendStorage> {
     pos: usize,
-    vision_tower: siglip::VisionModel,
-    multi_modal_projector: MultiModalProjector,
-    language_model: gemma::Model,
+    vision_tower: siglip::VisionModel<B>,
+    multi_modal_projector: MultiModalProjector<B>,
+    language_model: gemma::Model<B>,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vision_tower = siglip::VisionModel::new(
             &cfg.vision_config,
             false,
@@ -121,7 +121,7 @@ impl Model {
         })
     }
 
-    pub fn setup(&mut self, pixel_values: &Tensor, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn setup(&mut self, pixel_values: &Tensor<B>, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         self.clear_kv_cache();
         let image_features = self
             .vision_tower
@@ -134,14 +134,14 @@ impl Model {
         self.language_model.forward_embeds(&input_embeds, None, 0)
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let pos = self.pos;
         let seq_len = input_ids.dim(1)?;
         self.pos = pos + seq_len;
         self.language_model.forward(input_ids, pos)
     }
 
-    pub fn forward_without_projection(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward_without_projection(&mut self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         self.clear_kv_cache();
         let input_embeds = self.language_model.embed_tokens().forward(input_ids)?;
         self.language_model
@@ -149,9 +149,9 @@ impl Model {
     }
     pub fn setup_without_projection(
         &mut self,
-        pixel_values: &Tensor,
-        input_ids: &Tensor,
-    ) -> Result<Tensor> {
+        pixel_values: &Tensor<B>,
+        input_ids: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         self.clear_kv_cache();
         let image_features = self
             .vision_tower

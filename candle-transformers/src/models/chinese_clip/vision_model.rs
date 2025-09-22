@@ -6,7 +6,7 @@
 //! - 💻 [Chinese-CLIP](https://github.com/OFA-Sys/Chinese-CLIP)
 //! - 💻 [GH](https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/chinese_clip/modeling_chinese_clip.py_
 
-use candle::{Context, DType, IndexOp, Module, Result, Shape, Tensor, D};
+use candle::{BackendStorage, Context, DType, IndexOp, Module, Result, Shape, Tensor, D};
 use candle_nn as nn;
 
 use super::{Activation, EncoderConfig};
@@ -70,15 +70,15 @@ impl ChineseClipVisionConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct ChineseClipVisionEmbeddings {
-    patch_embedding: nn::Conv2d,
-    position_ids: Tensor,
-    class_embedding: Tensor,
-    position_embedding: nn::Embedding,
+pub struct ChineseClipVisionEmbeddings<B: BackendStorage> {
+    patch_embedding: nn::Conv2d<B>,
+    position_ids: Tensor<B>,
+    class_embedding: Tensor<B>,
+    position_embedding: nn::Embedding<B>,
 }
 
-impl ChineseClipVisionEmbeddings {
-    pub fn new(var: nn::VarBuilder, config: &ChineseClipVisionConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipVisionEmbeddings<B> {
+    pub fn new(var: nn::VarBuilder<B>, config: &ChineseClipVisionConfig) -> Result<Self> {
         let embed_dim = config.hidden_size;
         // originally nn.Parameter
         let class_embedding = if var.contains_tensor("class_embedding") {
@@ -113,8 +113,8 @@ impl ChineseClipVisionEmbeddings {
     }
 }
 
-impl Module for ChineseClipVisionEmbeddings {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ChineseClipVisionEmbeddings<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let batch_size = xs.shape().dims();
         let patch_embeds = self
             .patch_embedding
@@ -130,18 +130,18 @@ impl Module for ChineseClipVisionEmbeddings {
 }
 
 #[derive(Clone, Debug)]
-struct ChineseClipVisionAttention {
-    k_proj: nn::Linear,
-    v_proj: nn::Linear,
-    q_proj: nn::Linear,
-    out_proj: nn::Linear,
+struct ChineseClipVisionAttention<B: BackendStorage> {
+    k_proj: nn::Linear<B>,
+    v_proj: nn::Linear<B>,
+    q_proj: nn::Linear<B>,
+    out_proj: nn::Linear<B>,
     head_dim: usize,
     scale: f64,
     num_attention_heads: usize,
 }
 
-impl ChineseClipVisionAttention {
-    fn new(var: nn::VarBuilder, config: &EncoderConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipVisionAttention<B> {
+    fn new(var: nn::VarBuilder<B>, config: &EncoderConfig) -> Result<Self> {
         let embed_dim = config.embed_dim();
         let num_attention_heads = config.num_attention_heads();
         let k_proj = nn::linear(embed_dim, embed_dim, var.pp("k_proj"))?;
@@ -162,13 +162,17 @@ impl ChineseClipVisionAttention {
         })
     }
 
-    fn shape(&self, xs: &Tensor, seq_len: usize, bsz: usize) -> Result<Tensor> {
+    fn shape(&self, xs: &Tensor<B>, seq_len: usize, bsz: usize) -> Result<Tensor<B>> {
         xs.reshape((bsz, seq_len, self.num_attention_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()
     }
 
-    fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor<B>,
+        causal_attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let in_dtype = xs.dtype();
         let (bsz, seq_len, embed_dim) = xs.dims3()?;
 
@@ -211,14 +215,14 @@ impl ChineseClipVisionAttention {
 }
 
 #[derive(Clone, Debug)]
-struct ChineseClipVisionMlp {
-    fc1: nn::Linear,
-    fc2: nn::Linear,
+struct ChineseClipVisionMlp<B: BackendStorage> {
+    fc1: nn::Linear<B>,
+    fc2: nn::Linear<B>,
     activation: Activation,
 }
 
-impl ChineseClipVisionMlp {
-    fn new(var: nn::VarBuilder, config: &EncoderConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipVisionMlp<B> {
+    fn new(var: nn::VarBuilder<B>, config: &EncoderConfig) -> Result<Self> {
         let fc1 = nn::linear(
             config.embed_dim(),
             config.intermediate_size(),
@@ -238,23 +242,23 @@ impl ChineseClipVisionMlp {
     }
 }
 
-impl ChineseClipVisionMlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> ChineseClipVisionMlp<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = self.fc1.forward(xs)?;
         self.fc2.forward(&self.activation.forward(&xs)?)
     }
 }
 
 #[derive(Clone, Debug)]
-struct ChineseClipVisionEncoderLayer {
-    self_attn: ChineseClipVisionAttention,
-    layer_norm1: nn::LayerNorm,
-    mlp: ChineseClipVisionMlp,
-    layer_norm2: nn::LayerNorm,
+struct ChineseClipVisionEncoderLayer<B: BackendStorage> {
+    self_attn: ChineseClipVisionAttention<B>,
+    layer_norm1: nn::LayerNorm<B>,
+    mlp: ChineseClipVisionMlp<B>,
+    layer_norm2: nn::LayerNorm<B>,
 }
 
-impl ChineseClipVisionEncoderLayer {
-    fn new(var: nn::VarBuilder, config: &EncoderConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipVisionEncoderLayer<B> {
+    fn new(var: nn::VarBuilder<B>, config: &EncoderConfig) -> Result<Self> {
         let self_attn = ChineseClipVisionAttention::new(var.pp("self_attn"), config)?;
         let layer_norm1 = nn::layer_norm(
             config.embed_dim(),
@@ -276,7 +280,11 @@ impl ChineseClipVisionEncoderLayer {
         })
     }
 
-    fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor<B>,
+        causal_attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = self.layer_norm1.forward(xs)?;
         let xs = self.self_attn.forward(&xs, causal_attention_mask)?;
@@ -290,14 +298,14 @@ impl ChineseClipVisionEncoderLayer {
 }
 
 #[derive(Clone, Debug)]
-pub struct ChineseClipVisionEncoder {
-    layers: Vec<ChineseClipVisionEncoderLayer>,
+pub struct ChineseClipVisionEncoder<B: BackendStorage> {
+    layers: Vec<ChineseClipVisionEncoderLayer<B>>,
 }
 
-impl ChineseClipVisionEncoder {
-    pub fn new(var: nn::VarBuilder, config: &EncoderConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipVisionEncoder<B> {
+    pub fn new(var: nn::VarBuilder<B>, config: &EncoderConfig) -> Result<Self> {
         let vs = var.pp("layers");
-        let mut layers: Vec<ChineseClipVisionEncoderLayer> = Vec::new();
+        let mut layers: Vec<ChineseClipVisionEncoderLayer<B>> = Vec::new();
         for index in 0..config.num_hidden_layers() {
             let layer = ChineseClipVisionEncoderLayer::new(vs.pp(index.to_string()), config)?;
             layers.push(layer)
@@ -305,7 +313,11 @@ impl ChineseClipVisionEncoder {
         Ok(ChineseClipVisionEncoder { layers })
     }
 
-    pub fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        xs: &Tensor<B>,
+        causal_attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
             xs = layer.forward(&xs, causal_attention_mask)?;
@@ -316,9 +328,9 @@ impl ChineseClipVisionEncoder {
     // required by LLaVA
     pub fn output_hidden_states(
         &self,
-        xs: &Tensor,
-        causal_attention_mask: Option<&Tensor>,
-    ) -> Result<Vec<Tensor>> {
+        xs: &Tensor<B>,
+        causal_attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Vec<Tensor<B>>> {
         let mut xs = xs.clone();
         let mut hidden_states = Vec::new();
         for layer in self.layers.iter() {
@@ -330,15 +342,15 @@ impl ChineseClipVisionEncoder {
 }
 
 #[derive(Clone, Debug)]
-pub struct ChineseClipVisionTransformer {
-    embeddings: ChineseClipVisionEmbeddings,
-    encoder: ChineseClipVisionEncoder,
-    pre_layer_norm: nn::LayerNorm,
-    final_layer_norm: nn::LayerNorm,
+pub struct ChineseClipVisionTransformer<B: BackendStorage> {
+    embeddings: ChineseClipVisionEmbeddings<B>,
+    encoder: ChineseClipVisionEncoder<B>,
+    pre_layer_norm: nn::LayerNorm<B>,
+    final_layer_norm: nn::LayerNorm<B>,
 }
 
-impl ChineseClipVisionTransformer {
-    pub fn new(var: nn::VarBuilder, config: &ChineseClipVisionConfig) -> Result<Self> {
+impl<B: BackendStorage> ChineseClipVisionTransformer<B> {
+    pub fn new(var: nn::VarBuilder<B>, config: &ChineseClipVisionConfig) -> Result<Self> {
         let embed_dim = config.hidden_size;
         let embeddings = ChineseClipVisionEmbeddings::new(var.pp("embeddings"), config)?;
         let pre_layer_norm =
@@ -357,7 +369,7 @@ impl ChineseClipVisionTransformer {
         })
     }
     // required by LLaVA
-    pub fn output_hidden_states(&self, pixel_values: &Tensor) -> Result<Vec<Tensor>> {
+    pub fn output_hidden_states(&self, pixel_values: &Tensor<B>) -> Result<Vec<Tensor<B>>> {
         let hidden_states = pixel_values
             .apply(&self.embeddings)?
             .apply(&self.pre_layer_norm)?;
@@ -370,8 +382,8 @@ impl ChineseClipVisionTransformer {
     }
 }
 
-impl Module for ChineseClipVisionTransformer {
-    fn forward(&self, pixel_values: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ChineseClipVisionTransformer<B> {
+    fn forward(&self, pixel_values: &Tensor<B>) -> Result<Tensor<B>> {
         let hidden_states = pixel_values
             .apply(&self.embeddings)?
             .apply(&self.pre_layer_norm)?;

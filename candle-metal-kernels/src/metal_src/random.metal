@@ -225,6 +225,7 @@ UNIFORM_OP(NAME, T)         \
 NORMAL_OP(NAME, T)          \
 
 RANDOM_OPS(f32, float)
+RANDOM_OPS(f64, ulong)
 RANDOM_OPS(f16, half)
 
 #if __METAL_VERSION__ >= 310

@@ -3,7 +3,7 @@
 // LICENSE file in the root directory of this source tree.
 
 use super::{conv, quantization, seanet, transformer};
-use candle::{DType, Device, Module, Result, StreamTensor, StreamingModule, Tensor};
+use candle::{BackendStorage, DType, Module, Result, StreamTensor, StreamingModule, Tensor};
 use candle_nn::VarBuilder;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -89,19 +89,19 @@ impl Config {
 }
 
 #[derive(Debug, Clone)]
-pub struct Encodec {
-    encoder: seanet::SeaNetEncoder,
-    decoder: seanet::SeaNetDecoder,
-    encoder_transformer: transformer::ProjectedTransformer,
-    decoder_transformer: transformer::ProjectedTransformer,
-    downsample: conv::ConvDownsample1d,
-    upsample: conv::ConvTrUpsample1d,
-    quantizer: quantization::SplitResidualVectorQuantizer,
+pub struct Encodec<B: BackendStorage> {
+    encoder: seanet::SeaNetEncoder<B>,
+    decoder: seanet::SeaNetDecoder<B>,
+    encoder_transformer: transformer::ProjectedTransformer<B>,
+    decoder_transformer: transformer::ProjectedTransformer<B>,
+    downsample: conv::ConvDownsample1d<B>,
+    upsample: conv::ConvTrUpsample1d<B>,
+    quantizer: quantization::SplitResidualVectorQuantizer<B>,
     config: Config,
 }
 
-impl Encodec {
-    pub fn new(cfg: Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Encodec<B> {
+    pub fn new(cfg: Config, vb: VarBuilder<B>) -> Result<Self> {
         let dim = cfg.seanet.dimension;
         let encoder = seanet::SeaNetEncoder::new(&cfg.seanet, vb.pp("encoder"))?;
         let decoder = seanet::SeaNetDecoder::new(&cfg.seanet, vb.pp("decoder"))?;
@@ -161,7 +161,7 @@ impl Encodec {
         &self.config
     }
 
-    pub fn encode_pre_quantize(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode_pre_quantize(&mut self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = self.encoder.forward(xs)?;
         self.encoder_transformer.reset_state();
         let xs = self.encoder_transformer.forward(&xs)?;
@@ -169,7 +169,7 @@ impl Encodec {
         xs.apply(&self.downsample)
     }
 
-    pub fn encode(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode(&mut self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = self.encoder.forward(xs)?;
         self.encoder_transformer.reset_state();
         let xs = self.encoder_transformer.forward(&xs)?;
@@ -179,7 +179,7 @@ impl Encodec {
         Ok(codes)
     }
 
-    pub fn encode_step(&mut self, xs: &StreamTensor) -> Result<StreamTensor> {
+    pub fn encode_step(&mut self, xs: &StreamTensor<B>) -> Result<StreamTensor<B>> {
         let xs = self.encoder.step(xs)?;
         let xs = self.encoder_transformer.step(&xs)?;
         let xs = self.downsample.step(&xs)?;
@@ -192,7 +192,7 @@ impl Encodec {
         }
     }
 
-    pub fn decode(&mut self, codes: &Tensor) -> Result<Tensor> {
+    pub fn decode(&mut self, codes: &Tensor<B>) -> Result<Tensor<B>> {
         let emb = self.quantizer.decode(codes)?;
         let emb = emb.apply(&self.upsample)?;
         self.decoder_transformer.reset_state();
@@ -201,7 +201,7 @@ impl Encodec {
         self.decoder.forward(out)
     }
 
-    pub fn decode_step(&mut self, codes: &StreamTensor) -> Result<StreamTensor> {
+    pub fn decode_step(&mut self, codes: &StreamTensor<B>) -> Result<StreamTensor<B>> {
         let emb = match codes.as_option() {
             Some(codes) => StreamTensor::from_tensor(self.quantizer.decode(codes)?),
             None => StreamTensor::empty(),
@@ -220,7 +220,11 @@ impl Encodec {
     }
 }
 
-pub fn load(model_file: &str, num_codebooks: Option<usize>, dev: &Device) -> Result<Encodec> {
+pub fn load<B: BackendStorage>(
+    model_file: &str,
+    num_codebooks: Option<usize>,
+    dev: &B::Device,
+) -> Result<Encodec<B>> {
     let vb =
         unsafe { candle_nn::VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, dev)? };
     let cfg = Config::v0_1(num_codebooks);

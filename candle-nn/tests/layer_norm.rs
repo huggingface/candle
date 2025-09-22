@@ -5,13 +5,13 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::Result;
-use candle::{test_utils, Device, Tensor};
+use candle::{test_utils, CpuDevice, CpuStorage, Tensor};
 use candle_nn::{LayerNorm, Module};
 
 #[test]
 fn layer_norm() -> Result<()> {
-    let device = &Device::Cpu;
-    let w = Tensor::new(&[3f32], device)?;
+    let device = &CpuDevice;
+    let w: Tensor<CpuStorage> = Tensor::new(&[3f32], device)?;
     let b = Tensor::new(&[0.5f32], device)?;
     let ln2 = LayerNorm::new(Tensor::cat(&[&w, &w], 0)?, Tensor::cat(&[&b, &b], 0)?, 1e-8);
     let ln3 = LayerNorm::new(

@@ -17,26 +17,30 @@
 
 use crate::quantized_nn::{linear_b as linear, Embedding, Linear};
 pub use crate::quantized_var_builder::VarBuilder;
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{quantized::QuantizedBackend, DType, IndexOp, Module, Result, Tensor, D};
 use std::sync::Arc;
 
 use crate::models::recurrent_gemma::{Config, Rglru, RmsNorm, RotaryEmbedding, TemporalBlockType};
 
-fn rms_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<RmsNorm> {
-    let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
+fn rms_norm<QB: QuantizedBackend>(
+    size: usize,
+    eps: f64,
+    vb: VarBuilder<QB>,
+) -> Result<RmsNorm<QB::Storage>> {
+    let weight = vb.get(size, "weight")?.dequantize()?;
     Ok(RmsNorm::from_weight(weight, eps))
 }
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+struct Mlp<QB: QuantizedBackend> {
+    gate_proj: Linear<QB>,
+    up_proj: Linear<QB>,
+    down_proj: Linear<QB>,
     act_fn: candle_nn::Activation,
 }
 
-impl Mlp {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Mlp<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let h = cfg.hidden_size;
         let intermediate_size = cfg.intermediate_size / 2;
         let gate_proj = linear(h, intermediate_size, true, vb.pp("gate_proj"))?;
@@ -51,14 +55,17 @@ impl Mlp {
     }
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for Mlp<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let gate = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
         (gate * xs.apply(&self.up_proj))?.apply(&self.down_proj)
     }
 }
 
-fn rglru(cfg: &Config, vb: VarBuilder) -> Result<Rglru> {
+fn rglru<QB: QuantizedBackend>(cfg: &Config, vb: VarBuilder<QB>) -> Result<Rglru<QB::Storage>> {
     let h = cfg.hidden_size;
     let lru_width = cfg.lru_width.unwrap_or(h);
     let n_heads = cfg.num_attention_heads;
@@ -70,11 +77,11 @@ fn rglru(cfg: &Config, vb: VarBuilder) -> Result<Rglru> {
         vb.get((n_heads, block_width, block_width), "recurrent_gate_weight")?;
     let recurrent_gate_bias = vb.get((n_heads, block_width), "recurrent_gate_bias")?;
     Ok(Rglru {
-        recurrent_param: recurrent_param.dequantize(vb.device())?,
-        input_gate_bias: input_gate_bias.dequantize(vb.device())?,
-        input_gate_weight: input_gate_weight.dequantize(vb.device())?,
-        recurrent_gate_bias: recurrent_gate_bias.dequantize(vb.device())?,
-        recurrent_gate_weight: recurrent_gate_weight.dequantize(vb.device())?,
+        recurrent_param: recurrent_param.dequantize()?,
+        input_gate_bias: input_gate_bias.dequantize()?,
+        input_gate_weight: input_gate_weight.dequantize()?,
+        recurrent_gate_bias: recurrent_gate_bias.dequantize()?,
+        recurrent_gate_weight: recurrent_gate_weight.dequantize()?,
         block_width,
         n_heads,
         recurrent_states: None,
@@ -82,19 +89,19 @@ fn rglru(cfg: &Config, vb: VarBuilder) -> Result<Rglru> {
 }
 
 #[derive(Debug, Clone)]
-struct RecurrentBlock {
-    linear_y: Linear,
-    linear_x: Linear,
-    linear_out: Linear,
-    conv_1d: candle_nn::Conv1d,
-    conv1d_state: Option<Tensor>,
+struct RecurrentBlock<QB: QuantizedBackend> {
+    linear_y: Linear<QB>,
+    linear_x: Linear<QB>,
+    linear_out: Linear<QB>,
+    conv_1d: candle_nn::Conv1d<QB::Storage>,
+    conv1d_state: Option<Tensor<QB::Storage>>,
     conv1d_width: usize,
-    rg_lru: Rglru,
+    rg_lru: Rglru<QB::Storage>,
     act_fn: candle_nn::Activation,
 }
 
-impl RecurrentBlock {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> RecurrentBlock<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let h = cfg.hidden_size;
         let lru_width = cfg.lru_width.unwrap_or(h);
         let linear_y = linear(h, lru_width, true, vb.pp("linear_y"))?;
@@ -104,8 +111,8 @@ impl RecurrentBlock {
         let conv_1d = {
             let ws = vb
                 .get((lru_width, 1, cfg.conv1d_width), "conv_1d.weight")?
-                .dequantize(vb.device())?;
-            let bs = vb.get(lru_width, "conv_1d.bias")?.dequantize(vb.device())?;
+                .dequantize()?;
+            let bs = vb.get(lru_width, "conv_1d.bias")?.dequantize()?;
             let config = candle_nn::Conv1dConfig {
                 groups: lru_width,
                 padding: cfg.conv1d_width - 1,
@@ -126,7 +133,10 @@ impl RecurrentBlock {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor<QB::Storage>, pos: usize) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let (_b_sz, seq_len, _) = xs.dims3()?;
 
         let y_branch = xs.apply(&self.linear_y)?.apply(&self.act_fn)?;
@@ -169,22 +179,30 @@ impl RecurrentBlock {
     }
 }
 
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 #[derive(Debug, Clone)]
-struct SdpaAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+struct SdpaAttention<QB: QuantizedBackend> {
+    q_proj: Linear<QB>,
+    k_proj: Linear<QB>,
+    v_proj: Linear<QB>,
+    o_proj: Linear<QB>,
     n_heads: usize,
     n_kv_heads: usize,
     head_dim: usize,
     hidden_size: usize,
-    kv_cache: Option<(Tensor, Tensor)>,
-    rotary_emb: Arc<RotaryEmbedding>,
+    kv_cache: Option<KVCache<QB>>,
+    rotary_emb: Arc<RotaryEmbedding<QB::Storage>>,
 }
 
-impl SdpaAttention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> SdpaAttention<QB> {
+    fn new(
+        rotary_emb: Arc<RotaryEmbedding<QB::Storage>>,
+        cfg: &Config,
+        vb: VarBuilder<QB>,
+    ) -> Result<Self> {
         let h = cfg.hidden_size;
         let n_heads = cfg.num_attention_heads;
         let n_kv_heads = cfg.num_key_value_heads;
@@ -207,17 +225,20 @@ impl SdpaAttention {
         })
     }
 
-    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
+    fn repeat_kv(&self, x: Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let n_rep = self.n_heads / self.n_kv_heads;
         crate::utils::repeat_kv(x, n_rep)
     }
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<QB::Storage>,
+        attention_mask: Option<&Tensor<QB::Storage>>,
         pos: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let (bsz, q_len, _) = xs.dims3()?;
 
         let query_states = xs.apply(&self.q_proj)?;
@@ -275,18 +296,21 @@ impl SdpaAttention {
 }
 
 #[derive(Debug, Clone)]
-enum TemporalBlock {
-    Recurrent(RecurrentBlock),
-    Attention(SdpaAttention),
+enum TemporalBlock<QB: QuantizedBackend> {
+    Recurrent(RecurrentBlock<QB>),
+    Attention(SdpaAttention<QB>),
 }
 
-impl TemporalBlock {
+impl<QB: QuantizedBackend> TemporalBlock<QB> {
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<QB::Storage>,
+        attention_mask: Option<&Tensor<QB::Storage>>,
         pos: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         match self {
             Self::Recurrent(b) => b.forward(xs, pos),
             Self::Attention(b) => b.forward(xs, attention_mask, pos),
@@ -295,19 +319,19 @@ impl TemporalBlock {
 }
 
 #[derive(Debug, Clone)]
-struct DecoderLayer {
-    temporal_pre_norm: RmsNorm,
-    channel_pre_norm: RmsNorm,
-    temporal_block: TemporalBlock,
-    mlp_block: Mlp,
+struct DecoderLayer<QB: QuantizedBackend> {
+    temporal_pre_norm: RmsNorm<QB::Storage>,
+    channel_pre_norm: RmsNorm<QB::Storage>,
+    temporal_block: TemporalBlock<QB>,
+    mlp_block: Mlp<QB>,
 }
 
-impl DecoderLayer {
+impl<QB: QuantizedBackend> DecoderLayer<QB> {
     fn new(
         block_idx: usize,
-        rotary_emb: Arc<RotaryEmbedding>,
+        rotary_emb: Arc<RotaryEmbedding<QB::Storage>>,
         cfg: &Config,
-        vb: VarBuilder,
+        vb: VarBuilder<QB>,
     ) -> Result<Self> {
         let h = cfg.hidden_size;
         let temporal_pre_norm = rms_norm(h, cfg.rms_norm_eps, vb.pp("temporal_pre_norm"))?;
@@ -333,10 +357,13 @@ impl DecoderLayer {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<QB::Storage>,
+        attention_mask: Option<&Tensor<QB::Storage>>,
         pos: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let residual = xs;
         let xs = xs.apply(&self.temporal_pre_norm)?;
         let xs = self.temporal_block.forward(&xs, attention_mask, pos)?;
@@ -348,18 +375,18 @@ impl DecoderLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    embed_tokens: Embedding,
-    layers: Vec<DecoderLayer>,
-    final_norm: RmsNorm,
-    lm_head: Linear,
+pub struct Model<QB: QuantizedBackend> {
+    embed_tokens: Embedding<QB>,
+    layers: Vec<DecoderLayer<QB>>,
+    final_norm: RmsNorm<QB::Storage>,
+    lm_head: Linear<QB>,
     hidden_size: usize,
     logits_soft_cap: f64,
-    device: Device,
+    device: QB::Device,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Model<QB> {
+    pub fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let embed_tokens = Embedding::new(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?;
         let rotary_emb = Arc::new(RotaryEmbedding::new(DType::F32, cfg, vb.device())?);
         let vb_b = vb.pp("layers");
@@ -391,7 +418,7 @@ impl Model {
         b_size: usize,
         tgt_len: usize,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<QB::Storage>> {
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
             .collect();
@@ -406,7 +433,10 @@ impl Model {
             .to_dtype(DType::F32)
     }
 
-    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor<QB::Storage>, pos: usize) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let (b_size, seq_len) = xs.dims2()?;
         let attention_mask = if seq_len <= 1 {
             None

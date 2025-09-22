@@ -7,7 +7,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle::DType;
+use candle::{BackendDevice, BackendStorage, DType};
 use candle_nn::VarBuilder;
 use candle_transformers::models::segment_anything::sam;
 use clap::Parser;
@@ -52,10 +52,24 @@ struct Args {
 }
 
 pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> anyhow::Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -64,11 +78,9 @@ pub fn main() -> anyhow::Result<()> {
         None
     };
 
-    let device = candle_examples::device(args.cpu)?;
-
+    let device = B::Device::new(0)?;
     let (image, initial_h, initial_w) =
-        candle_examples::load_image(&args.image, Some(sam::IMAGE_SIZE))?;
-    let image = image.to_device(&device)?;
+        candle_examples::load_image(&args.image, Some(sam::IMAGE_SIZE), &device)?;
     println!("loaded image {image:?}");
 
     let model = match args.model {
@@ -85,7 +97,7 @@ pub fn main() -> anyhow::Result<()> {
         }
     };
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
-    let sam = if args.use_tiny {
+    let sam: sam::Sam<B> = if args.use_tiny {
         sam::Sam::new_tiny(vb)? // tiny vit_t
     } else {
         sam::Sam::new(768, 12, 12, &[2, 5, 8, 11], vb)? // sam_vit_b

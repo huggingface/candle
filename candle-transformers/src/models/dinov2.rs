@@ -37,14 +37,19 @@
 //! ```
 //!
 
-use candle::{IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 
 const IMG_SIZE: usize = 518;
 const PATCH_SIZE: usize = 14;
 const NUM_CLASSES: usize = 1000;
 
-fn linear(vb: VarBuilder, in_dim: usize, out_dim: usize, bias: bool) -> Result<Linear> {
+fn linear<B: BackendStorage>(
+    vb: VarBuilder<B>,
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+) -> Result<Linear<B>> {
     if bias {
         candle_nn::linear(in_dim, out_dim, vb)
     } else {
@@ -53,16 +58,16 @@ fn linear(vb: VarBuilder, in_dim: usize, out_dim: usize, bias: bool) -> Result<L
 }
 
 #[derive(Debug)]
-struct Attention {
-    qkv: Linear,
-    proj: Linear,
+struct Attention<B: BackendStorage> {
+    qkv: Linear<B>,
+    proj: Linear<B>,
     num_heads: usize,
     scale: f64,
 }
 
-impl Attention {
+impl<B: BackendStorage> Attention<B> {
     fn new(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         dim: usize,
         num_heads: usize,
         qkv_bias: bool,
@@ -80,8 +85,8 @@ impl Attention {
     }
 }
 
-impl Module for Attention {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Attention<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (b, n, c) = xs.dims3()?;
         let qkv = self
             .qkv
@@ -100,31 +105,36 @@ impl Module for Attention {
 }
 
 #[derive(Debug)]
-struct LayerScale {
-    gamma: Tensor,
+struct LayerScale<B: BackendStorage> {
+    gamma: Tensor<B>,
 }
 
-impl LayerScale {
-    fn new(vb: VarBuilder, dim: usize) -> Result<Self> {
+impl<B: BackendStorage> LayerScale<B> {
+    fn new(vb: VarBuilder<B>, dim: usize) -> Result<Self> {
         let gamma = vb.get(dim, "gamma")?;
         Ok(Self { gamma })
     }
 }
 
-impl Module for LayerScale {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for LayerScale<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.broadcast_mul(&self.gamma)
     }
 }
 
 #[derive(Debug)]
-struct Mlp {
-    fc1: Linear,
-    fc2: Linear,
+struct Mlp<B: BackendStorage> {
+    fc1: Linear<B>,
+    fc2: Linear<B>,
 }
 
-impl Mlp {
-    fn new(vb: VarBuilder, in_features: usize, hidden_features: usize, bias: bool) -> Result<Self> {
+impl<B: BackendStorage> Mlp<B> {
+    fn new(
+        vb: VarBuilder<B>,
+        in_features: usize,
+        hidden_features: usize,
+        bias: bool,
+    ) -> Result<Self> {
         let out_features = in_features;
         let fc1 = linear(vb.pp("fc1"), in_features, hidden_features, bias)?;
         let fc2 = linear(vb.pp("fc2"), hidden_features, out_features, bias)?;
@@ -132,25 +142,25 @@ impl Mlp {
     }
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Mlp<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = self.fc1.forward(xs)?.gelu()?;
         self.fc2.forward(&xs)
     }
 }
 
 #[derive(Debug)]
-struct Block {
-    norm1: LayerNorm,
-    attn: Attention,
-    ls1: LayerScale,
-    norm2: LayerNorm,
-    mlp: Mlp,
-    ls2: LayerScale,
+struct Block<B: BackendStorage> {
+    norm1: LayerNorm<B>,
+    attn: Attention<B>,
+    ls1: LayerScale<B>,
+    norm2: LayerNorm<B>,
+    mlp: Mlp<B>,
+    ls2: LayerScale<B>,
 }
 
-impl Block {
-    fn new(vb: VarBuilder, dim: usize, num_heads: usize) -> Result<Self> {
+impl<B: BackendStorage> Block<B> {
+    fn new(vb: VarBuilder<B>, dim: usize, num_heads: usize) -> Result<Self> {
         let norm1 = layer_norm(dim, 1e-5, vb.pp("norm1"))?;
         let attn = Attention::new(vb.pp("attn"), dim, num_heads, true, true)?;
         let ls1 = LayerScale::new(vb.pp("ls1"), dim)?;
@@ -168,8 +178,8 @@ impl Block {
     }
 }
 
-impl Module for Block {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Block<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = self
             .ls1
@@ -184,15 +194,15 @@ impl Module for Block {
 }
 
 #[derive(Debug)]
-struct PatchEmbed {
-    proj: candle_nn::Conv2d,
+struct PatchEmbed<B: BackendStorage> {
+    proj: candle_nn::Conv2d<B>,
     patch_size: (usize, usize),
     num_patches: usize,
 }
 
-impl PatchEmbed {
+impl<B: BackendStorage> PatchEmbed<B> {
     fn new(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         img_size: usize,
         patch_size: usize,
         in_chans: usize,
@@ -212,8 +222,8 @@ impl PatchEmbed {
     }
 }
 
-impl Module for PatchEmbed {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for PatchEmbed<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (_b, _c, h, w) = xs.dims4()?;
         let (patch_h, patch_w) = self.patch_size;
         if (h % patch_h) != 0 {
@@ -230,17 +240,22 @@ impl Module for PatchEmbed {
 }
 
 #[derive(Debug)]
-pub struct DinoVisionTransformer {
-    patch_embed: PatchEmbed,
-    cls_token: Tensor,
-    pos_embed: Tensor,
-    blocks: Vec<Block>,
-    norm: LayerNorm,
-    head: Linear,
+pub struct DinoVisionTransformer<B: BackendStorage> {
+    patch_embed: PatchEmbed<B>,
+    cls_token: Tensor<B>,
+    pos_embed: Tensor<B>,
+    blocks: Vec<Block<B>>,
+    norm: LayerNorm<B>,
+    head: Linear<B>,
 }
 
-impl DinoVisionTransformer {
-    pub fn new(vb: VarBuilder, depth: usize, embed_dim: usize, num_heads: usize) -> Result<Self> {
+impl<B: BackendStorage> DinoVisionTransformer<B> {
+    pub fn new(
+        vb: VarBuilder<B>,
+        depth: usize,
+        embed_dim: usize,
+        num_heads: usize,
+    ) -> Result<Self> {
         let patch_embed =
             PatchEmbed::new(vb.pp("patch_embed"), IMG_SIZE, PATCH_SIZE, 3, embed_dim)?;
         let cls_token = vb.get((1, 1, embed_dim), "cls_token")?;
@@ -265,7 +280,7 @@ impl DinoVisionTransformer {
         })
     }
 
-    fn interpolate_pos_encoding(&self, xs: &Tensor, w: usize, h: usize) -> Result<Tensor> {
+    fn interpolate_pos_encoding(&self, xs: &Tensor<B>, w: usize, h: usize) -> Result<Tensor<B>> {
         let npatch = xs.dim(1)? - 1;
         let n = self.pos_embed.dim(1)? - 1;
         let sqrt_n = (n as f64).sqrt();
@@ -291,7 +306,7 @@ impl DinoVisionTransformer {
         Tensor::cat(&[&class_pos_embed, &patch_pos_embed], 1)
     }
 
-    fn prepare_tokens_with_mask(&self, xs: &Tensor) -> Result<Tensor> {
+    fn prepare_tokens_with_mask(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (_b, _nc, w, h) = xs.dims4()?;
         let xs = self.patch_embed.forward(xs)?;
         let xs = Tensor::cat(&[&self.cls_token, &xs], 1)?;
@@ -300,9 +315,9 @@ impl DinoVisionTransformer {
 
     fn get_intermediate_layers_not_chunked(
         &self,
-        xs: &Tensor,
+        xs: &Tensor<B>,
         blocks_to_take: &[usize],
-    ) -> Result<Vec<Tensor>> {
+    ) -> Result<Vec<Tensor<B>>> {
         let mut xs = self.prepare_tokens_with_mask(xs)?;
         let mut output = Vec::new();
         for (i, blk) in self.blocks.iter().enumerate() {
@@ -323,12 +338,12 @@ impl DinoVisionTransformer {
 
     pub fn get_intermediate_layers(
         &self,
-        xs: &Tensor,
+        xs: &Tensor<B>,
         blocks_to_take: &[usize],
         reshape: bool,
         return_class_token: bool,
         norm: bool,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let outputs = self.get_intermediate_layers_not_chunked(xs, blocks_to_take)?;
         let outputs = if norm {
             outputs
@@ -377,8 +392,8 @@ impl DinoVisionTransformer {
     }
 }
 
-impl Module for DinoVisionTransformer {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for DinoVisionTransformer<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = self.prepare_tokens_with_mask(xs)?;
         for blk in self.blocks.iter() {
             xs = blk.forward(&xs)?
@@ -391,6 +406,6 @@ impl Module for DinoVisionTransformer {
     }
 }
 
-pub fn vit_small(vb: VarBuilder) -> Result<DinoVisionTransformer> {
+pub fn vit_small<B: BackendStorage>(vb: VarBuilder<B>) -> Result<DinoVisionTransformer<B>> {
     DinoVisionTransformer::new(vb, 12, 384, 6)
 }

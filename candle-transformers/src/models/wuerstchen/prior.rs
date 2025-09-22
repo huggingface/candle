@@ -1,26 +1,26 @@
 use super::common::{AttnBlock, ResBlock, TimestepBlock};
-use candle::{DType, Result, Tensor, D};
+use candle::{BackendStorage, DType, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 #[derive(Debug)]
-struct Block {
-    res_block: ResBlock,
-    ts_block: TimestepBlock,
-    attn_block: AttnBlock,
+struct Block<B: BackendStorage> {
+    res_block: ResBlock<B>,
+    ts_block: TimestepBlock<B>,
+    attn_block: AttnBlock<B>,
 }
 
 #[derive(Debug)]
-pub struct WPrior {
-    projection: candle_nn::Conv2d,
-    cond_mapper_lin1: candle_nn::Linear,
-    cond_mapper_lin2: candle_nn::Linear,
-    blocks: Vec<Block>,
+pub struct WPrior<B: BackendStorage> {
+    projection: candle_nn::Conv2d<B>,
+    cond_mapper_lin1: candle_nn::Linear<B>,
+    cond_mapper_lin2: candle_nn::Linear<B>,
+    blocks: Vec<Block<B>>,
     out_ln: super::common::WLayerNorm,
-    out_conv: candle_nn::Conv2d,
+    out_conv: candle_nn::Conv2d<B>,
     c_r: usize,
 }
 
-impl WPrior {
+impl<B: BackendStorage> WPrior<B> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         c_in: usize,
@@ -30,7 +30,7 @@ impl WPrior {
         depth: usize,
         nhead: usize,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let projection = candle_nn::conv2d(c_in, c, 1, Default::default(), vb.pp("projection"))?;
         let cond_mapper_lin1 = candle_nn::linear(c_cond, c, vb.pp("cond_mapper.0"))?;
@@ -66,7 +66,7 @@ impl WPrior {
         })
     }
 
-    pub fn gen_r_embedding(&self, r: &Tensor) -> Result<Tensor> {
+    pub fn gen_r_embedding(&self, r: &Tensor<B>) -> Result<Tensor<B>> {
         const MAX_POSITIONS: usize = 10000;
         let r = (r * MAX_POSITIONS as f64)?;
         let half_dim = self.c_r / 2;
@@ -84,7 +84,7 @@ impl WPrior {
         emb.to_dtype(r.dtype())
     }
 
-    pub fn forward(&self, xs: &Tensor, r: &Tensor, c: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, r: &Tensor<B>, c: &Tensor<B>) -> Result<Tensor<B>> {
         let x_in = xs;
         let mut xs = xs.apply(&self.projection)?;
         let c_embed = c

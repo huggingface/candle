@@ -4,20 +4,20 @@
 //! These tensors can be loaded from disk using `from_gguf` or from an in-memory
 //! buffer using `from_gguf_buffer`.
 
-use candle::quantized::QTensor;
-use candle::{Device, Result, Shape};
+use candle::quantized::{QTensor, QuantizedBackend};
+use candle::{Result, Shape};
 use std::sync::Arc;
 
 // VarBuilder specialized for QTensors
 #[derive(Clone)]
-pub struct VarBuilder {
-    data: Arc<std::collections::HashMap<String, Arc<QTensor>>>,
+pub struct VarBuilder<QB: QuantizedBackend> {
+    data: Arc<std::collections::HashMap<String, Arc<QTensor<QB>>>>,
     path: Vec<String>,
-    device: Device,
+    device: QB::Device,
 }
 
-impl VarBuilder {
-    pub fn from_gguf<P: AsRef<std::path::Path>>(p: P, device: &Device) -> Result<Self> {
+impl<QB: QuantizedBackend> VarBuilder<QB> {
+    pub fn from_gguf<P: AsRef<std::path::Path>>(p: P, device: &QB::Device) -> Result<Self> {
         let mut file = std::fs::File::open(p)?;
         let content = candle::quantized::gguf_file::Content::read(&mut file)?;
         let mut data = std::collections::HashMap::new();
@@ -32,7 +32,7 @@ impl VarBuilder {
         })
     }
 
-    pub fn from_gguf_buffer(buffer: &[u8], device: &Device) -> Result<Self> {
+    pub fn from_gguf_buffer(buffer: &[u8], device: &QB::Device) -> Result<Self> {
         let mut cursor = std::io::Cursor::new(buffer);
         let content = candle::quantized::gguf_file::Content::read(&mut cursor)?;
         let mut data = std::collections::HashMap::new();
@@ -65,7 +65,7 @@ impl VarBuilder {
         }
     }
 
-    pub fn get<S: Into<Shape>>(&self, s: S, name: &str) -> Result<Arc<QTensor>> {
+    pub fn get<S: Into<Shape>>(&self, s: S, name: &str) -> Result<Arc<QTensor<QB>>> {
         let path = self.path(name);
         match self.data.get(&path) {
             None => {
@@ -84,7 +84,7 @@ impl VarBuilder {
         }
     }
 
-    pub fn get_no_shape(&self, name: &str) -> Result<Arc<QTensor>> {
+    pub fn get_no_shape(&self, name: &str) -> Result<Arc<QTensor<QB>>> {
         let path = self.path(name);
         match self.data.get(&path) {
             None => {
@@ -94,7 +94,7 @@ impl VarBuilder {
         }
     }
 
-    pub fn device(&self) -> &Device {
+    pub fn device(&self) -> &QB::Device {
         &self.device
     }
 

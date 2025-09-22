@@ -1,18 +1,22 @@
-use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
-use candle_core::{DType, Device, Tensor};
+use crate::benchmarks::{bench_device, BenchDevice};
+use candle_core::{BackendStorage, DType, Tensor};
 use criterion::{black_box, criterion_group, Criterion, Throughput};
 use std::time::Instant;
 
-fn run(a: &Tensor) {
+fn run<B: BackendStorage>(a: &Tensor<B>) {
     a.sqrt().unwrap();
 }
-
-fn run_unary_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
+fn run_unary_benchmark<B: BackendStorage<Device = D>, D: BenchDevice<B>>(
+    c: &mut Criterion,
+    device: &D,
+    dtype: DType,
+    name: &str,
+) {
     let b = 1;
     let m = 1024;
     let k = 1024;
 
-    let tensor = Tensor::arange(0.0f32, (b * m * k) as f32, device)
+    let tensor: Tensor<B> = Tensor::arange(0.0f32, (b * m * k) as f32, device)
         .unwrap()
         .to_dtype(dtype)
         .unwrap()
@@ -29,7 +33,7 @@ fn run_unary_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &
             for _i in 0..iters {
                 run(black_box(&tensor));
             }
-            device.sync().unwrap();
+            device.synchronize().unwrap();
             start.elapsed()
         })
     });
@@ -37,12 +41,10 @@ fn run_unary_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let handler = BenchDeviceHandler::new().unwrap();
-    for device in handler.devices {
-        for dtype in [DType::F32, DType::BF16, DType::F16] {
-            let name = format!("sqrt_{:?}", dtype);
-            run_unary_benchmark(c, &device, dtype, &name);
-        }
+    let device = bench_device();
+    for dtype in [DType::F32, DType::BF16, DType::F16] {
+        let name = format!("sqrt_{:?}", dtype);
+        run_unary_benchmark(c, &device, dtype, &name);
     }
 }
 

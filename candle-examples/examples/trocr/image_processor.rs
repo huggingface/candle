@@ -2,7 +2,7 @@ use image::{DynamicImage, ImageBuffer};
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use candle::{DType, Device, Result, Tensor};
+use candle::{BackendStorage, DType, Result, Tensor};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ProcessorConfig {
@@ -50,7 +50,11 @@ impl ViTImageProcessor {
         }
     }
 
-    pub fn preprocess(&self, images: Vec<&str>) -> Result<Tensor> {
+    pub fn preprocess<B: BackendStorage>(
+        &self,
+        images: Vec<&str>,
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
         let height = self.height as usize;
         let width = self.width as usize;
         let channels = 3;
@@ -66,10 +70,10 @@ impl ViTImageProcessor {
             images
         };
 
-        let normalized_images: Vec<Tensor> = if self.do_normalize {
+        let normalized_images: Vec<Tensor<B>> = if self.do_normalize {
             resized_images
                 .iter()
-                .map(|image| self.normalize(image.clone(), None, None).unwrap())
+                .map(|image| self.normalize(image.clone(), None, None, device).unwrap())
                 .collect()
         } else {
             let resized_images: Vec<ImageBuffer<image::Rgb<u8>, Vec<u8>>> =
@@ -81,12 +85,12 @@ impl ViTImageProcessor {
 
             data.iter()
                 .map(|image| {
-                    Tensor::from_vec(image.clone(), (height, width, channels), &Device::Cpu)
+                    Tensor::from_vec(image.clone(), (height, width, channels), device)
                         .unwrap()
                         .permute((2, 0, 1))
                         .unwrap()
                 })
-                .collect::<Vec<Tensor>>()
+                .collect::<Vec<Tensor<B>>>()
         };
 
         Tensor::stack(&normalized_images, 0)
@@ -108,12 +112,13 @@ impl ViTImageProcessor {
         Ok(resized_image)
     }
 
-    fn normalize(
+    fn normalize<B: BackendStorage>(
         &self,
         image: image::DynamicImage,
         mean: Option<Vec<f32>>,
         std: Option<Vec<f32>>,
-    ) -> Result<Tensor> {
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
         let mean = match mean {
             Some(mean) => mean,
             None => self.image_mean.clone(),
@@ -124,8 +129,8 @@ impl ViTImageProcessor {
             None => self.image_std.clone(),
         };
 
-        let mean = Tensor::from_vec(mean, (3, 1, 1), &Device::Cpu)?;
-        let std = Tensor::from_vec(std, (3, 1, 1), &Device::Cpu)?;
+        let mean = Tensor::from_vec(mean, (3, 1, 1), device)?;
+        let std = Tensor::from_vec(std, (3, 1, 1), device)?;
 
         let image = image.to_rgb8();
         let data = image.into_raw();
@@ -135,7 +140,7 @@ impl ViTImageProcessor {
         let channels = 3;
 
         let data =
-            Tensor::from_vec(data, &[height, width, channels], &Device::Cpu)?.permute((2, 0, 1))?;
+            Tensor::from_vec(data, &[height, width, channels], device)?.permute((2, 0, 1))?;
 
         (data.to_dtype(DType::F32)? / 255.)?
             .broadcast_sub(&mean)?
