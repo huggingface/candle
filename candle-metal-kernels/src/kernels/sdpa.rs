@@ -462,7 +462,7 @@ pub fn call_sdpa_vector_2pass(
             }
         };
 
-        let b = (q_shape[0] * q_shape[1]) as usize;
+        let b = q_shape[0] * q_shape[1];
 
         let pipeline = kernels.load_pipeline(device, Source::Sdpa, name_pass2)?;
         let encoder = ep.encoder();
