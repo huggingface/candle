@@ -17,7 +17,7 @@ pub struct Embedding<QB: QuantizedBackend> {
 
 impl<QB: QuantizedBackend> Embedding<QB> {
     pub fn new(d1: usize, d2: usize, vb: VarBuilder<QB>) -> Result<Self> {
-        let embeddings = vb.get((d1, d2), "weight")?.dequantize(vb.device())?;
+        let embeddings = vb.get((d1, d2), "weight")?.dequantize()?;
         let inner = candle_nn::Embedding::new(embeddings, d2);
         let span = tracing::span!(tracing::Level::TRACE, "embedding");
         Ok(Self { inner, span })
@@ -75,7 +75,7 @@ pub fn linear_b<QB: QuantizedBackend>(
     vb: VarBuilder<QB>,
 ) -> Result<Linear<QB>> {
     let bias = if bias {
-        Some(vb.get(out_dim, "bias")?.dequantize(vb.device())?)
+        Some(vb.get(out_dim, "bias")?.dequantize()?)
     } else {
         None
     };
@@ -88,7 +88,7 @@ pub fn linear<QB: QuantizedBackend>(
     out_dim: usize,
     vb: VarBuilder<QB>,
 ) -> Result<Linear<QB>> {
-    let bias = vb.get(out_dim, "bias")?.dequantize(vb.device())?;
+    let bias = vb.get(out_dim, "bias")?.dequantize()?;
     let weight = QMatMul::new(in_dim, out_dim, vb)?;
     Ok(Linear {
         weight,
@@ -101,8 +101,8 @@ pub fn layer_norm<QB: QuantizedBackend>(
     eps: f64,
     vb: VarBuilder<QB>,
 ) -> Result<candle_nn::LayerNorm<QB::Storage>> {
-    let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
-    let bias = vb.get(size, "bias")?.dequantize(vb.device())?;
+    let weight = vb.get(size, "weight")?.dequantize()?;
+    let bias = vb.get(size, "bias")?.dequantize()?;
     Ok(candle_nn::LayerNorm::new(weight, bias, eps))
 }
 
@@ -111,7 +111,7 @@ pub fn layer_norm_no_bias<QB: QuantizedBackend>(
     eps: f64,
     vb: VarBuilder<QB>,
 ) -> Result<candle_nn::LayerNorm<QB::Storage>> {
-    let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
+    let weight = vb.get(size, "weight")?.dequantize()?;
     Ok(candle_nn::LayerNorm::new_no_bias(weight, eps))
 }
 
@@ -134,13 +134,13 @@ pub struct RmsNorm<QB: QuantizedBackend> {
 impl<QB: QuantizedBackend> RmsNorm<QB> {
     pub fn new(size: usize, eps: f64, vb: VarBuilder<QB>) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
-        let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
+        let weight = vb.get(size, "weight")?.dequantize()?;
         Ok(Self { weight, eps, span })
     }
 
     pub fn from_qtensor(weight: QTensor<QB>, eps: f64) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
-        let weight = weight.dequantize(&weight.device())?;
+        let weight = weight.dequantize()?;
         Ok(Self { weight, eps, span })
     }
 }

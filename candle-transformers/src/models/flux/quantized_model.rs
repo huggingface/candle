@@ -47,9 +47,9 @@ pub struct QkNorm<QB: QuantizedBackend> {
 
 impl<QB: QuantizedBackend> QkNorm<QB> {
     fn new(dim: usize, vb: VarBuilder<QB>) -> Result<Self> {
-        let query_norm = vb.get(dim, "query_norm.scale")?.dequantize(vb.device())?;
+        let query_norm = vb.get(dim, "query_norm.scale")?.dequantize()?;
         let query_norm = RmsNorm::new(query_norm, 1e-6);
-        let key_norm = vb.get(dim, "key_norm.scale")?.dequantize(vb.device())?;
+        let key_norm = vb.get(dim, "key_norm.scale")?.dequantize()?;
         let key_norm = RmsNorm::new(key_norm, 1e-6);
         Ok(Self {
             query_norm,

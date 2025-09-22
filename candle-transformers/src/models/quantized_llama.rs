@@ -376,7 +376,7 @@ impl<QB: QuantizedBackend> ModelWeights<QB> {
         let (cos, sin) = precomput_freqs_cis::<QB>(head_dim, 10000., &ct.device)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, &ct.device)?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
-        let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
+        let tok_embeddings = tok_embeddings.dequantize()?;
         let norm = RmsNorm::from_qtensor(ct.remove("norm.weight")?, 1e-5)?;
         let output = ct.remove("output.weight")?;
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
@@ -466,7 +466,7 @@ impl<QB: QuantizedBackend> ModelWeights<QB> {
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         let tok_embeddings_q = ct.tensor(reader, "token_embd.weight", device)?;
-        let tok_embeddings = tok_embeddings_q.dequantize(device)?;
+        let tok_embeddings = tok_embeddings_q.dequantize()?;
         let norm = RmsNorm::from_qtensor(
             ct.tensor(reader, "output_norm.weight", device)?,
             rms_norm_eps,

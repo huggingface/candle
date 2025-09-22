@@ -7,7 +7,7 @@ extern crate accelerate_src;
 use anyhow::Error as E;
 use clap::Parser;
 
-use candle::{BackendDevice, BackendStorage, CpuStorage, DType, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn::{ops::softmax, VarBuilder};
 use candle_transformers::models::clip;
 
@@ -118,12 +118,11 @@ fn run<B: BackendStorage>(args: Args) -> anyhow::Result<()> {
         ],
     };
     let images = load_images(&vec_imgs, config.image_size, &device)?;
-    let vb: VarBuilder<CpuStorage> = unsafe {
+    let vb: VarBuilder<B> = unsafe {
         VarBuilder::from_mmaped_safetensors(std::slice::from_ref(&model_file), DType::F32, &device)?
     };
     let model = clip::ClipModel::new(vb, &config)?;
-    let (input_ids, vec_seq) =
-        tokenize_sequences::<CpuStorage>(args.sequences, &tokenizer, &device)?;
+    let (input_ids, vec_seq) = tokenize_sequences::<B>(args.sequences, &tokenizer, &device)?;
     let (_logits_per_text, logits_per_image) = model.forward(&images, &input_ids)?;
     let softmax_image = softmax(&logits_per_image, 1)?;
     let softmax_image_vec = softmax_image.flatten_all()?.to_vec1::<f32>()?;

@@ -27,7 +27,7 @@ fn rms_norm<QB: QuantizedBackend>(
     eps: f64,
     vb: VarBuilder<QB>,
 ) -> Result<RmsNorm<QB::Storage>> {
-    let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
+    let weight = vb.get(size, "weight")?.dequantize()?;
     Ok(RmsNorm::from_weight(weight, eps))
 }
 
@@ -77,11 +77,11 @@ fn rglru<QB: QuantizedBackend>(cfg: &Config, vb: VarBuilder<QB>) -> Result<Rglru
         vb.get((n_heads, block_width, block_width), "recurrent_gate_weight")?;
     let recurrent_gate_bias = vb.get((n_heads, block_width), "recurrent_gate_bias")?;
     Ok(Rglru {
-        recurrent_param: recurrent_param.dequantize(vb.device())?,
-        input_gate_bias: input_gate_bias.dequantize(vb.device())?,
-        input_gate_weight: input_gate_weight.dequantize(vb.device())?,
-        recurrent_gate_bias: recurrent_gate_bias.dequantize(vb.device())?,
-        recurrent_gate_weight: recurrent_gate_weight.dequantize(vb.device())?,
+        recurrent_param: recurrent_param.dequantize()?,
+        input_gate_bias: input_gate_bias.dequantize()?,
+        input_gate_weight: input_gate_weight.dequantize()?,
+        recurrent_gate_bias: recurrent_gate_bias.dequantize()?,
+        recurrent_gate_weight: recurrent_gate_weight.dequantize()?,
         block_width,
         n_heads,
         recurrent_states: None,
@@ -111,8 +111,8 @@ impl<QB: QuantizedBackend> RecurrentBlock<QB> {
         let conv_1d = {
             let ws = vb
                 .get((lru_width, 1, cfg.conv1d_width), "conv_1d.weight")?
-                .dequantize(vb.device())?;
-            let bs = vb.get(lru_width, "conv_1d.bias")?.dequantize(vb.device())?;
+                .dequantize()?;
+            let bs = vb.get(lru_width, "conv_1d.bias")?.dequantize()?;
             let config = candle_nn::Conv1dConfig {
                 groups: lru_width,
                 padding: cfg.conv1d_width - 1,

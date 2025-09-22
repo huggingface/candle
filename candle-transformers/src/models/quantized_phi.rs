@@ -43,7 +43,7 @@ impl<QB: QuantizedBackend> QLinear<QB> {
         let w = ct.tensor(r, &format!("{name}.weight"), device)?;
         let b: QTensor<QB> = ct.tensor(r, &format!("{name}.bias"), device)?;
         let inner = candle::quantized::QMatMul::from_qtensor(w)?;
-        let bias = b.dequantize(device)?;
+        let bias = b.dequantize()?;
         Ok(Self { inner, bias, span })
     }
 }
@@ -221,8 +221,8 @@ fn layer_norm<QB: QuantizedBackend>(
     b: QTensor<QB>,
     eps: f64,
 ) -> Result<LayerNorm<QB::Storage>> {
-    let w = w.dequantize(&w.device())?;
-    let b = b.dequantize(&b.device())?;
+    let w = w.dequantize()?;
+    let b = b.dequantize()?;
     let ln = LayerNorm::new(w, b, eps);
     Ok(ln)
 }
@@ -249,7 +249,7 @@ impl<QB: QuantizedBackend> ModelWeights<QB> {
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         let tok_embeddings: QTensor<QB> = ct.tensor(reader, "token_embd.weight", device)?;
-        let tok_embeddings = tok_embeddings.dequantize(device)?;
+        let tok_embeddings = tok_embeddings.dequantize()?;
         let output_norm = layer_norm::<QB>(
             ct.tensor(reader, "output_norm.weight", device)?,
             ct.tensor(reader, "output_norm.bias", device)?,

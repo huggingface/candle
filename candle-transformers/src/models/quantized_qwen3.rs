@@ -366,7 +366,7 @@ impl<QB: QuantizedBackend> ModelWeights<QB> {
         };
 
         let embed_tensor = gg.tensor("token_embd.weight")?;
-        let embed_tokens = Embedding::new(embed_tensor.dequantize(device)?, hidden_size);
+        let embed_tokens = Embedding::new(embed_tensor.dequantize()?, hidden_size);
 
         let rotary = Arc::new(RotaryEmbedding::new(
             dtype,

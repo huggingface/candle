@@ -1270,7 +1270,7 @@ impl PyQTensor {
     /// Dequantizes the tensor.
     /// &RETURNS&: Tensor
     fn dequantize(&self) -> PyResult<PyTensor> {
-        let tensor = self.0.dequantize(&Device::Cpu).map_err(wrap_err)?;
+        let tensor = self.0.dequantize().map_err(wrap_err)?;
         Ok(PyTensor(tensor))
     }
 

@@ -426,7 +426,7 @@ impl<QB: QuantizedBackend> TextLMPredictionHead<QB> {
     fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let transform = TextPredictionHeadTransform::new(cfg, vb.pp("transform"))?;
         let weight = QMatMul::new(cfg.hidden_size, cfg.vocab_size, vb.pp("decoder"))?;
-        let bias = vb.get(cfg.vocab_size, "bias")?.dequantize(vb.device())?;
+        let bias = vb.get(cfg.vocab_size, "bias")?.dequantize()?;
         let decoder = Linear::from_weights(weight, Some(bias));
         Ok(Self { transform, decoder })
     }

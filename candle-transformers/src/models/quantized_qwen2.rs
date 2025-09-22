@@ -225,7 +225,7 @@ impl<QB: QuantizedBackend> ModelWeights<QB> {
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         let tok_embeddings: QTensor<QB> = ct.tensor(reader, "token_embd.weight", device)?;
-        let tok_embeddings = tok_embeddings.dequantize(device)?;
+        let tok_embeddings = tok_embeddings.dequantize()?;
         let norm = RmsNorm::from_qtensor(
             ct.tensor(reader, "output_norm.weight", device)?,
             rms_norm_eps,
@@ -285,9 +285,9 @@ impl<QB: QuantizedBackend> ModelWeights<QB> {
                 attention_wq: QMatMul::from_qtensor(attention_wq)?,
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
-                attention_bq: attention_bq.dequantize(device)?,
-                attention_bk: attention_bk.dequantize(device)?,
-                attention_bv: attention_bv.dequantize(device)?,
+                attention_bq: attention_bq.dequantize()?,
+                attention_bk: attention_bk.dequantize()?,
+                attention_bv: attention_bv.dequantize()?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
                 attention_norm: RmsNorm::from_qtensor(attention_norm, rms_norm_eps)?,
                 cos: cos.clone(),

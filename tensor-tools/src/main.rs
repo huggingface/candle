@@ -18,14 +18,14 @@ impl QuantizationMode {
         name: &str,
         tensor: QTensor<QB>,
         dtype: GgmlDType,
-        device: &QB::Device,
+        _device: &QB::Device,
     ) -> Result<QTensor<QB>> {
         match self {
             Self::Llama => {
                 // Same behavior as the llama.cpp quantization.
                 let should_quantize = name.ends_with(".weight") && tensor.rank() == 2;
                 if should_quantize {
-                    let tensor: Tensor<QB::Storage> = tensor.dequantize(device)?;
+                    let tensor: Tensor<QB::Storage> = tensor.dequantize()?;
                     if name == "output.weight" {
                         QTensor::quantize(&tensor, GgmlDType::Q6K)
                     } else {
@@ -275,7 +275,7 @@ fn run_print<QB: QuantizedBackend>(
                 println!("==== {name} ====");
                 match content.tensors.get(name) {
                     Some(tensor) => {
-                        let tensor = tensor.dequantize(device)?;
+                        let tensor = tensor.dequantize()?;
                         println!("{tensor}")
                     }
                     None => println!("not found"),
@@ -295,7 +295,7 @@ fn run_print<QB: QuantizedBackend>(
                 let t: Result<QTensor<QB>> = content.tensor(&mut file, name, device);
                 match t {
                     Ok(tensor) => {
-                        let tensor = tensor.dequantize(device)?;
+                        let tensor = tensor.dequantize()?;
                         println!("{tensor}")
                     }
                     Err(_) => println!("not found"),
@@ -456,7 +456,7 @@ where
     let mut tensors = std::collections::HashMap::new();
     for (tensor_name, _) in content.tensor_infos.iter() {
         let tensor: QTensor<QB> = content.tensor(&mut in_file, tensor_name, device)?;
-        let tensor: Tensor<QB::Storage> = tensor.dequantize(device)?;
+        let tensor: Tensor<QB::Storage> = tensor.dequantize()?;
         tensors.insert(tensor_name.to_string(), tensor);
     }
     candle::safetensors::save(&tensors, out_file)?;

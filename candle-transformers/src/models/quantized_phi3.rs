@@ -78,7 +78,7 @@ where
 }
 
 fn rms_norm<QB: QuantizedBackend>(w: QTensor<QB>, eps: f64) -> Result<RmsNorm<QB::Storage>> {
-    let w = w.dequantize(&w.device())?;
+    let w = w.dequantize()?;
     let rms = RmsNorm::new(w, eps);
     Ok(rms)
 }
@@ -279,7 +279,7 @@ impl<QB: QuantizedBackend> ModelWeights<QB> {
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         let tok_embeddings: QTensor<QB> = ct.tensor(reader, "token_embd.weight", device)?;
-        let tok_embeddings = tok_embeddings.dequantize(device)?;
+        let tok_embeddings = tok_embeddings.dequantize()?;
         let output_norm =
             rms_norm::<QB>(ct.tensor(reader, "output_norm.weight", device)?, rms_eps)?;
         let output = QLinear::new(&ct, reader, "output", device)?;

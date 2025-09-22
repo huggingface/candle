@@ -13,8 +13,8 @@ fn conv1d<QB: QuantizedBackend>(
 ) -> Result<Conv1d<QB::Storage>> {
     let weight = vb
         .get((out_channels, in_channels, kernel_size), "weight")?
-        .dequantize(vb.device())?;
-    let bias = vb.get(out_channels, "bias")?.dequantize(vb.device())?;
+        .dequantize()?;
+    let bias = vb.get(out_channels, "bias")?.dequantize()?;
     Ok(Conv1d::new(weight, Some(bias), config))
 }
 
@@ -348,7 +348,7 @@ where
         let token_embedding = Embedding::new(cfg.vocab_size, n_state, vb.pp("embed_tokens"))?;
         let positional_embedding = vb
             .get((n_ctx, n_state), "embed_positions.weight")?
-            .dequantize(vb.device())?;
+            .dequantize()?;
         let blocks = (0..cfg.decoder_layers)
             .map(|i| {
                 ResidualAttentionBlock::load(n_state, n_head, true, vb.pp(format!("layers.{i}")))

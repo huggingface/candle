@@ -127,7 +127,7 @@ struct T5LayerNorm<QB: QuantizedBackend> {
 
 impl<QB: QuantizedBackend> T5LayerNorm<QB> {
     fn load(h: usize, eps: f64, vb: VarBuilder<QB>) -> Result<Self> {
-        let weight = vb.get(h, "weight")?.dequantize(vb.device())?;
+        let weight = vb.get(h, "weight")?.dequantize()?;
         Ok(Self {
             weight,
             variance_epsilon: eps,

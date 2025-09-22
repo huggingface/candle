@@ -34,7 +34,7 @@ impl<QB: QuantizedBackend> VisionEmbeddings<QB> {
     fn new(cfg: &VisionConfig, vb: VarBuilder<QB>) -> Result<Self> {
         let class_embedding = vb
             .get((1, 1, cfg.hidden_size), "class_embedding")?
-            .dequantize(vb.device())?;
+            .dequantize()?;
         let conv_cfg = Conv2dConfig {
             stride: cfg.patch_size,
             ..Default::default()
@@ -45,10 +45,8 @@ impl<QB: QuantizedBackend> VisionEmbeddings<QB> {
                 (cfg.hidden_size, 3, cfg.patch_size, cfg.patch_size),
                 "weight",
             )?
-            .dequantize(vb.device())?;
-        let pe_bias = pe_vb
-            .get(cfg.hidden_size, "bias")?
-            .dequantize(vb.device())?;
+            .dequantize()?;
+        let pe_bias = pe_vb.get(cfg.hidden_size, "bias")?.dequantize()?;
 
         let patch_embedding = Conv2d::new(pe_weight, Some(pe_bias), conv_cfg);
         let num_patches1 = cfg.image_size / cfg.patch_size;
@@ -56,7 +54,7 @@ impl<QB: QuantizedBackend> VisionEmbeddings<QB> {
         let num_positions = num_patches + 1;
         let position_embedding = vb
             .get((1, num_positions, cfg.hidden_size), "position_embedding")?
-            .dequantize(vb.device())?;
+            .dequantize()?;
         Ok(Self {
             class_embedding,
             patch_embedding,

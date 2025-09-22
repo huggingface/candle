@@ -144,7 +144,7 @@ impl<QB: QuantizedBackend> VisionTransformer<QB> {
         let patch_embed = LinearPatchEmbedding::new(vb.pp("patch_embed"))?;
         let pos_embed = vb
             .get((1, cfg.embed_len, cfg.embed_dim), "pos_embed")?
-            .dequantize(vb.device())?;
+            .dequantize()?;
         let blocks = (0..cfg.num_blocks)
             .map(|i| {
                 VitBlock::new(

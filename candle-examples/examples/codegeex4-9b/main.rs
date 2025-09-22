@@ -1,4 +1,4 @@
-use candle::{BackendDevice, BackendStorage, CpuStorage, DType, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::codegeex4_9b::*;

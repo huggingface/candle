@@ -53,8 +53,8 @@ impl<QB: QuantizedBackend> SelfAttention<QB> {
         let output = linear(attn_hidden_size, hidden_size, vb.pp("output"))?;
 
         let vb_x = vb.pp("ln_x");
-        let ln_x_weight = vb_x.get(hidden_size, "weight")?.dequantize(vb.device())?;
-        let ln_x_bias = vb_x.get(hidden_size, "bias")?.dequantize(vb.device())?;
+        let ln_x_weight = vb_x.get(hidden_size, "weight")?.dequantize()?;
+        let ln_x_bias = vb_x.get(hidden_size, "bias")?.dequantize()?;
 
         let ln_x = GroupNorm::new(
             ln_x_weight,
@@ -66,23 +66,23 @@ impl<QB: QuantizedBackend> SelfAttention<QB> {
 
         let time_mix_key = vb
             .get((1, 1, cfg.hidden_size), "time_mix_key")?
-            .dequantize(vb.device())?;
+            .dequantize()?;
         let time_mix_value = vb
             .get((1, 1, cfg.hidden_size), "time_mix_value")?
-            .dequantize(vb.device())?;
+            .dequantize()?;
         let time_mix_receptance = vb
             .get((1, 1, cfg.hidden_size), "time_mix_receptance")?
-            .dequantize(vb.device())?;
+            .dequantize()?;
         let n_attn_heads = cfg.hidden_size / cfg.head_size;
         let time_decay = vb
             .get((n_attn_heads, cfg.head_size), "time_decay")?
-            .dequantize(vb.device())?;
+            .dequantize()?;
         let time_faaaa = vb
             .get((n_attn_heads, cfg.head_size), "time_faaaa")?
-            .dequantize(vb.device())?;
+            .dequantize()?;
         let time_mix_gate = vb
             .get((1, 1, cfg.hidden_size), "time_mix_gate")?
-            .dequantize(vb.device())?;
+            .dequantize()?;
         Ok(Self {
             key,
             value,
@@ -190,10 +190,10 @@ impl<QB: QuantizedBackend> FeedForward<QB> {
         let value = linear(int_size, cfg.hidden_size, vb.pp("value"))?;
         let time_mix_key = vb
             .get((1, 1, cfg.hidden_size), "time_mix_key")?
-            .dequantize(vb.device())?;
+            .dequantize()?;
         let time_mix_receptance = vb
             .get((1, 1, cfg.hidden_size), "time_mix_receptance")?
-            .dequantize(vb.device())?;
+            .dequantize()?;
         Ok(Self {
             key,
             receptance,

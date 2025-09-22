@@ -321,7 +321,7 @@ impl<QB: QuantizedBackend> ModelWeights<QB> {
 
         // Load token embeddings and output projection
         let tok_embeddings: QTensor<QB> = ct.tensor(reader, "token_embd.weight", device)?;
-        let tok_embeddings = tok_embeddings.dequantize(device)?;
+        let tok_embeddings = tok_embeddings.dequantize()?;
         let norm = RmsNorm::from_qtensor(
             ct.tensor(reader, "output_norm.weight", device)?,
             rms_norm_eps,
