@@ -2032,7 +2032,7 @@ impl MetalStorage {
 
     pub(crate) fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
         let size = self.count * self.dtype.size_in_bytes();
-        let buffer = self.device.new_buffer_managed(size)?;
+        let buffer = self.device.allocate_buffer(size, "to_cpu")?;
         {
             let command_buffer = self.device.command_buffer()?;
             command_buffer.set_label("to_cpu");

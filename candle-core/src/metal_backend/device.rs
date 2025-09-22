@@ -58,6 +58,7 @@ pub struct MetalDevice {
     pub(crate) seed: Arc<Mutex<Buffer>>,
 }
 
+// Resource options used for creating buffers. Shared storage mode allows both CPU and GPU to access the buffer.
 pub const RESOURCE_OPTIONS: MTLResourceOptions =
     objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModeShared.bits());
 //| MTLResourceOptions::HazardTrackingModeUntracked.bits(),
@@ -146,8 +147,6 @@ impl MetalDevice {
     }
 
     /// Creates a new buffer (not necessarily zeroed).
-    /// The buffer is [MTLPrivate](https://developer.apple.com/documentation/metal/mtlstoragemode)
-    /// This means the buffer data cannot be read on the CPU directly.
     ///
     /// [`name`] is only used to keep track of the resource origin in case of bugs
     pub fn new_buffer(
@@ -160,18 +159,7 @@ impl MetalDevice {
         self.allocate_buffer(size, name)
     }
 
-    /// Creates a new buffer (not necessarily zeroed).
-    /// The buffer is [MTLManaged](https://developer.apple.com/documentation/metal/mtlstoragemode)
-    /// This means the buffer can be read on the CPU but will require manual
-    /// synchronization when the CPU memory is modified
-    /// Used as a bridge to gather data back from the GPU
-    pub fn new_buffer_managed(&self, size: usize) -> Result<Arc<Buffer>> {
-        // we don't do managed anymore
-        self.allocate_buffer(size, "shared")
-    }
-
     /// Creates a new buffer from data.
-    /// The buffer is [MTLManaged](https://developer.apple.com/documentation/metal/mtlstoragemode)
     ///
     /// Does not require synchronization, as [newBufferWithBytes](https://developer.apple.com/documentation/metal/mtldevice/1433429-newbufferwithbytes)
     /// allocates the buffer and copies over the existing data before returning the MTLBuffer.
@@ -204,7 +192,7 @@ impl MetalDevice {
     }
 
     /// The critical allocator algorithm
-    fn allocate_buffer(&self, size: usize, name: &str) -> Result<Arc<Buffer>> {
+    pub fn allocate_buffer(&self, size: usize, name: &str) -> Result<Arc<Buffer>> {
         let mut buffers = self.buffers.write().map_err(MetalError::from)?;
         if let Some(b) = find_available_buffer(size, &buffers) {
             // Cloning also ensures we increment the strong count
