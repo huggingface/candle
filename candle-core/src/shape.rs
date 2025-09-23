@@ -3,6 +3,7 @@
 use crate::{Error, Result};
 
 #[derive(Clone, PartialEq, Eq)]
+#[derive(Hash)]
 pub struct Shape(Vec<usize>);
 
 pub const SCALAR: Shape = Shape(vec![]);
