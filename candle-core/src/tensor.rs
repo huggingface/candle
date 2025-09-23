@@ -2298,11 +2298,7 @@ impl Tensor {
         let d_stride = strides[dim];
 
         let tmp = d_shape + step;
-        let windows = if tmp < size {
-            0
-        } else {
-            (tmp - size) / step
-        };
+        let windows = if tmp < size { 0 } else { (tmp - size) / step };
 
         shape[dim] = windows;
         shape.push(size);
@@ -2310,17 +2306,13 @@ impl Tensor {
         strides[dim] = step * d_stride;
         strides.push(d_stride);
 
-        let unfold_layout = Layout::new(
-            shape.into(),
-            strides,
-            self.layout.start_offset(),
-        );
+        let unfold_layout = Layout::new(shape.into(), strides, self.layout.start_offset());
 
         let tensor_ = Tensor_ {
             id: TensorId::new(),
             storage: self.storage.clone(),
             layout: unfold_layout,
-            op: BackpropOp::new1(self, |t| Op::Unfold(t, dim, size, step)),
+            op: BackpropOp::new1(self, |arg| Op::Unfold(arg, dim, size, step)),
             is_variable: false,
             dtype: self.dtype,
             device: self.device.clone(),

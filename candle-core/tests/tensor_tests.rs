@@ -768,10 +768,7 @@ fn broadcast(device: &Device) -> Result<()> {
 }
 
 fn unfold(device: &Device) -> Result<()> {
-    let data = &[
-        [0f32, 1., 2., 3., 4.],
-        [5f32, 6., 7., 8., 9.],
-    ];
+    let data = &[[0f32, 1., 2., 3., 4.], [5f32, 6., 7., 8., 9.]];
     let tensor = Tensor::new(data, device)?;
     let actual = tensor.unfold(1, 3, 2)?;
     assert_eq!(
