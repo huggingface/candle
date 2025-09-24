@@ -1324,8 +1324,8 @@ impl BackendStorage for CudaStorage {
         }
     }
 
-    fn device(&self) -> &CudaDevice {
-        &self.device
+    fn device(&self) -> CudaDevice {
+        self.device.clone()
     }
 
     fn const_set(&mut self, s: crate::scalar::Scalar, layout: &Layout) -> Result<()> {

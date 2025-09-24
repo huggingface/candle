@@ -87,8 +87,8 @@ impl BackendStorage for MetalStorage {
         self.dtype
     }
 
-    fn device(&self) -> impl AsRef<MetalDevice> {
-        &self.device
+    fn device(&self) -> MetalDevice {
+        self.device.clone()
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {

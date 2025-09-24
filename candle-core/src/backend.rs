@@ -16,7 +16,7 @@ pub trait BackendStorage: Sized + Clone + Send + Sync + Debug {
 
     fn dtype(&self) -> DType;
 
-    fn device(&self) -> impl AsRef<Self::Device>;
+    fn device(&self) -> Self::Device;
 
     // Maybe this should return a Cow instead so that no copy is done on the cpu case.
     fn to_cpu_storage(&self) -> Result<CpuStorage>;
@@ -189,29 +189,41 @@ pub trait BackendDevice<B: BackendStorage>: Sized + std::fmt::Debug + Clone + Se
 
     fn is_cpu(&self) -> bool;
 
-    fn zeros(&self, _shape: &Shape, _dtype: DType) -> Result<B>;
+    fn zeros(&self, shape: &Shape, dtype: DType) -> Result<B>;
 
     /// # Safety
     /// This function is unsafe as it doesn't initialize the underlying data store.
     /// The caller should ensure that the data is properly initialized as early as possible
     /// after this call.
-    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<B>;
+    unsafe fn alloc_uninit(&self, _hape: &Shape, dtype: DType) -> Result<B>;
 
-    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<B>;
+    fn storage_from_slice<T: crate::WithDType>(&self, data: &[T]) -> Result<B>;
 
-    fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<B>;
+    fn storage_from_cpu_storage(&self, cpu_storage: &CpuStorage) -> Result<B>;
 
-    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<B>;
+    fn storage_from_cpu_storage_owned(&self, cpu_storage: CpuStorage) -> Result<B>;
 
     fn storage<A: crate::NdArray>(&self, array: A) -> Result<B>;
 
     fn storage_owned<S: crate::WithDType>(&self, data: Vec<S>) -> Result<B>;
 
-    fn rand_uniform<T: crate::FloatDType>(&self, _: &Shape, _: DType, _: T, _: T) -> Result<B>;
+    fn rand_uniform<T: crate::FloatDType>(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        low: T,
+        high: T,
+    ) -> Result<B>;
 
-    fn rand_normal<T: crate::FloatDType>(&self, _: &Shape, _: DType, _: T, _: T) -> Result<B>;
+    fn rand_normal<T: crate::FloatDType>(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        low: T,
+        high: T,
+    ) -> Result<B>;
 
-    fn set_seed(&self, _: u64) -> Result<()>;
+    fn set_seed(&self, seed: u64) -> Result<()>;
 
     /// Synchronize should block until all the operations on the device are completed.
     fn synchronize(&self) -> Result<()>;
