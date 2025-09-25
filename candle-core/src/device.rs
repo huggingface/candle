@@ -320,6 +320,14 @@ impl Device {
         }
     }
 
+    pub fn metal_if_available(ordinal: usize) -> Result<Self> {
+        if crate::utils::metal_is_available() {
+            Self::new_metal(ordinal)
+        } else {
+            Ok(Self::Cpu)
+        }
+    }
+
     pub(crate) fn rand_uniform_f64(
         &self,
         lo: f64,
