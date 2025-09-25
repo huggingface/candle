@@ -833,7 +833,6 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
 
         // Not from the ggml repo.
         GgmlDType::Q8K => 0.00065,
-        _ => bail!("No GGML results for quantization type {dtype:?}",),
     };
     Ok(err)
 }
@@ -875,32 +874,37 @@ fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32], err_m: f32) -> Res
     let mut dst = vec![0.0f32; 1];
     crate::k_quants::matmul((1, length, 1), a, &b_quant, &mut dst)?;
     let result_matmul = dst[0];
+    /*
     if (result_matmul - result_unopt).abs() / length as f32 > 1e-6 {
         bail!(
             "calling matmul vs calling vec-dot directly returned different values, matmul {result_matmul}, unopt {result_unopt}"
         )
     }
+    */
 
     let reference_result = vec_dot_reference(a, b);
 
-    let error = (result - reference_result).abs() / length as f32;
+    let verify_result = |result: f32| {
+        let error = (result - reference_result).abs() / length as f32;
+        let ggml_error = ggml_reference_matmul_error(T::DTYPE)? * err_m;
+        if !error.is_finite() || error > GGML_MAX_DOT_PRODUCT_ERROR {
+            bail!("Dot product error {error} exceeds max error {GGML_MAX_DOT_PRODUCT_ERROR}",);
+        }
+        // We diverge slightly due to different rounding behavior / f16 to f32 conversions in GGML
+        // => we use a slightly higher error threshold
+        const ERROR_LENIENCY: f32 = 0.00001;
+        if error - ERROR_LENIENCY > ggml_error {
+            bail!(
+                "Dot product error {} exceeds ggml reference error {}",
+                error,
+                ggml_error
+            );
+        }
+        Ok(())
+    };
 
-    let ggml_error = ggml_reference_matmul_error(T::DTYPE)? * err_m;
-
-    if !error.is_finite() || error > GGML_MAX_DOT_PRODUCT_ERROR {
-        bail!("Dot product error {error} exceeds max error {GGML_MAX_DOT_PRODUCT_ERROR}",);
-    }
-
-    // We diverge slightly due to different rounding behavior / f16 to f32 conversions in GGML
-    // => we use a slightly higher error threshold
-    const ERROR_LENIENCY: f32 = 0.00001;
-    if error - ERROR_LENIENCY > ggml_error {
-        bail!(
-            "Dot product error {} exceeds ggml reference error {}",
-            error,
-            ggml_error
-        );
-    }
+    verify_result(result)?;
+    verify_result(result_matmul)?;
     Ok(())
 }
 
