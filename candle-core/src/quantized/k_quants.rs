@@ -5,7 +5,7 @@ use super::utils::{
 use super::GgmlDType;
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
-use half::{bf16, f16};
+use half::{bf16, f16, slice::HalfFloatSliceExt};
 use rayon::prelude::*;
 
 // Default to QK_K 256 rather than 64.
@@ -22,6 +22,7 @@ pub const QK8_1: usize = 32;
 pub trait GgmlType: Sized + Clone + Send + Sync {
     const DTYPE: GgmlDType;
     const BLCK_SIZE: usize;
+    const DIRECT_COPY: bool = false;
     type VecDotType: GgmlType;
 
     // This is only safe for types that include immediate values such as float/int/...
@@ -30,6 +31,12 @@ pub trait GgmlType: Sized + Clone + Send + Sync {
     }
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()>;
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()>;
+
+    fn direct_copy(_xs: &[f32], _ys: &mut [Self]) -> Result<()> {
+        Err(crate::Error::Msg(
+            "direct_copy not implemented for this type".into(),
+        ))
+    }
 
     /// Dot product used as a building block for quantized mat-mul.
     /// n is the number of elements to be considered.
@@ -658,8 +665,24 @@ impl GgmlType for BlockQ8_1 {
         Self::vec_dot_unopt(n, xs, ys)
     }
 
-    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
-        unimplemented!("no support for vec-dot on Q8_1")
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        let qk = QK8_1;
+        if n % QK8_1 != 0 {
+            crate::bail!("vec_dot_q8_1_q8_1: {n} is not divisible by {qk}")
+        }
+
+        // Generic implementation.
+        let mut sumf = 0f32;
+        for (xs, ys) in xs.iter().zip(ys.iter()) {
+            let sum_i = xs
+                .qs
+                .iter()
+                .zip(ys.qs.iter())
+                .map(|(&x, &y)| x as i32 * y as i32)
+                .sum::<i32>();
+            sumf += sum_i as f32 * f16::to_f32(xs.d) * f16::to_f32(ys.d)
+        }
+        Ok(sumf)
     }
 
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
@@ -1838,7 +1861,7 @@ impl GgmlType for BlockQ8K {
     }
 }
 
-// https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L10605
+// https://github.com/ggml-org/llama.cpp/blob/aa3ee0eb0b80efca126cedf9bcb4fb5864b46ce3/ggml/src/ggml-cpu/ggml-cpu.c#L1205
 pub fn matmul<T: GgmlType>(
     mkn: (usize, usize, usize),
     lhs: &[f32],
@@ -1849,18 +1872,24 @@ pub fn matmul<T: GgmlType>(
     if m * k != lhs.len() {
         crate::bail!("unexpected lhs length {} {mkn:?}", lhs.len());
     }
-
     let k_in_lhs_blocks = k.div_ceil(T::BLCK_SIZE);
     let k_in_rhs_blocks = k.div_ceil(T::VecDotType::BLCK_SIZE);
-    // TODO: Do not make this copy if the DotType is f32.
+
     // TODO: Pre-allocate this.
     let mut lhs_b = vec![T::VecDotType::zeros(); m * k_in_lhs_blocks];
-    for row_idx in 0..m {
-        let lhs_b = &mut lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
-        let lhs = &lhs[row_idx * k..(row_idx + 1) * k];
-        T::VecDotType::from_float(lhs, lhs_b)?
-    }
-    let lhs_b = lhs_b.as_slice();
+
+    // f32, f16, and bf16 support direct copy
+    let lhs_b = if T::DIRECT_COPY {
+        T::VecDotType::direct_copy(lhs, &mut lhs_b[..])?;
+        lhs_b.as_slice()
+    } else {
+        for row_idx in 0..m {
+            let lhs_b_mut = &mut lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
+            let lhs = &lhs[row_idx * k..(row_idx + 1) * k];
+            T::VecDotType::from_float(lhs, lhs_b_mut)?
+        }
+        lhs_b.as_slice()
+    };
 
     for row_idx in 0..m {
         let lhs_row = &lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
@@ -1885,6 +1914,7 @@ pub fn matmul<T: GgmlType>(
 impl GgmlType for f32 {
     const DTYPE: GgmlDType = GgmlDType::F32;
     const BLCK_SIZE: usize = 1;
+    const DIRECT_COPY: bool = true;
     type VecDotType = f32;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -1918,11 +1948,16 @@ impl GgmlType for f32 {
         ys.copy_from_slice(xs);
         Ok(())
     }
+
+    fn direct_copy(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        Self::from_float(xs, ys)
+    }
 }
 
 impl GgmlType for f16 {
     const DTYPE: GgmlDType = GgmlDType::F16;
     const BLCK_SIZE: usize = 1;
+    const DIRECT_COPY: bool = true;
     type VecDotType = f16;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -1945,10 +1980,7 @@ impl GgmlType for f16 {
         if xs.len() != ys.len() {
             crate::bail!("size mismatch {} {}", xs.len(), ys.len());
         }
-        // TODO: vectorize
-        for (x, y) in xs.iter().zip(ys.iter_mut()) {
-            *y = f16::from_f32(*x)
-        }
+        ys.convert_from_f32_slice(xs);
         Ok(())
     }
 
@@ -1956,17 +1988,19 @@ impl GgmlType for f16 {
         if xs.len() != ys.len() {
             crate::bail!("size mismatch {} {}", xs.len(), ys.len());
         }
-        // TODO: vectorize
-        for (x, y) in xs.iter().zip(ys.iter_mut()) {
-            *y = x.to_f32()
-        }
+        xs.convert_to_f32_slice(ys);
         Ok(())
+    }
+
+    fn direct_copy(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        Self::from_float(xs, ys)
     }
 }
 
 impl GgmlType for bf16 {
     const DTYPE: GgmlDType = GgmlDType::BF16;
     const BLCK_SIZE: usize = 1;
+    const DIRECT_COPY: bool = true;
     type VecDotType = bf16;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -1989,10 +2023,7 @@ impl GgmlType for bf16 {
         if xs.len() != ys.len() {
             crate::bail!("size mismatch {} {}", xs.len(), ys.len());
         }
-        // TODO: vectorize
-        for (x, y) in xs.iter().zip(ys.iter_mut()) {
-            *y = bf16::from_f32(*x)
-        }
+        ys.convert_from_f32_slice(xs);
         Ok(())
     }
 
@@ -2000,10 +2031,11 @@ impl GgmlType for bf16 {
         if xs.len() != ys.len() {
             crate::bail!("size mismatch {} {}", xs.len(), ys.len());
         }
-        // TODO: vectorize
-        for (x, y) in xs.iter().zip(ys.iter_mut()) {
-            *y = x.to_f32()
-        }
+        xs.convert_to_f32_slice(ys);
         Ok(())
+    }
+
+    fn direct_copy(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        Self::from_float(xs, ys)
     }
 }

@@ -816,7 +816,9 @@ fn vec_dot_reference(a: &[f32], b: &[f32]) -> f32 {
 /// Returns the error achieved by the GGML matmul unit test.
 fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
     let err = match dtype {
+        GgmlDType::F32 => 0.000000,
         GgmlDType::F16 => 0.000010,
+        GgmlDType::BF16 => 0.000200,
         GgmlDType::Q2K => 0.004086,
         GgmlDType::Q3K => 0.016148,
         GgmlDType::Q4K => 0.002425,
@@ -827,6 +829,7 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
         GgmlDType::Q5_0 => 0.001353,
         GgmlDType::Q5_1 => 0.00149,
         GgmlDType::Q8_0 => 0.000092,
+        GgmlDType::Q8_1 => 0.000092,
 
         // Not from the ggml repo.
         GgmlDType::Q8K => 0.00065,
@@ -862,13 +865,23 @@ fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32], err_m: f32) -> Res
 
     let result = T::vec_dot(length, &a_quant, &b_quant)?;
     let result_unopt = T::vec_dot_unopt(length, &a_quant, &b_quant)?;
-    let reference_result = vec_dot_reference(a, b);
 
     if (result - result_unopt).abs() / length as f32 > 1e-6 {
         bail!(
             "the opt and unopt vec-dot returned different values, opt {result}, unopt {result_unopt}"
         )
     }
+
+    let mut dst = vec![0.0f32; 1];
+    crate::k_quants::matmul((1, length, 1), a, &b_quant, &mut dst)?;
+    let result_matmul = dst[0];
+    if (result_matmul - result_unopt).abs() / length as f32 > 1e-6 {
+        bail!(
+            "calling matmul vs calling vec-dot directly returned different values, matmul {result_matmul}, unopt {result_unopt}"
+        )
+    }
+
+    let reference_result = vec_dot_reference(a, b);
 
     let error = (result - reference_result).abs() / length as f32;
 
@@ -893,11 +906,15 @@ fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32], err_m: f32) -> Res
 
 #[test]
 fn quantized_mm() -> Result<()> {
+    ggml_matmul_error_test::<f32>()?;
+    ggml_matmul_error_test::<half::f16>()?;
+    ggml_matmul_error_test::<half::bf16>()?;
     ggml_matmul_error_test::<k_quants::BlockQ4_0>()?;
     ggml_matmul_error_test::<k_quants::BlockQ4_1>()?;
     ggml_matmul_error_test::<k_quants::BlockQ5_0>()?;
     ggml_matmul_error_test::<k_quants::BlockQ5_1>()?;
     ggml_matmul_error_test::<k_quants::BlockQ8_0>()?;
+    ggml_matmul_error_test::<k_quants::BlockQ8_1>()?;
     Ok(())
 }
 
@@ -973,15 +990,13 @@ quantized_matmul!(
     quantized_matmul_q8_0_metal,
     GgmlDType::Q8_0
 );
-// Not implemented in Ggml
-// quantized_matmul!(
-//     quantized_matmul_q8_1_bis,
-//     quantized_matmul_q8_1_cpu,
-//     quantized_matmul_q8_1_cuda,
-//     quantized_matmul_q8_1_metal,
-//     GgmlDType::Q8_1
-// );
-// TODO This is bugged (also bugged in GGML
+quantized_matmul!(
+    quantized_matmul_q8_1_bis,
+    quantized_matmul_q8_1_cpu,
+    quantized_matmul_q8_1_cuda,
+    quantized_matmul_q8_1_metal,
+    GgmlDType::Q8_1
+);
 quantized_matmul!(
     quantized_matmul_q2k_bis,
     quantized_matmul_q2k_cpu,
@@ -1018,13 +1033,13 @@ quantized_matmul!(
     GgmlDType::Q6K
 );
 // Not implemented on metal
-// quantized_matmul!(
-//     quantized_matmul_q8k_bis,
-//     quantized_matmul_q8k_cpu,
-//     quantized_matmul_q8k_cuda,
-//     quantized_matmul_q8k_metal,
-//     GgmlDType::Q8K
-// );
+quantized_matmul!(
+    quantized_matmul_q8k_bis,
+    quantized_matmul_q8k_cpu,
+    quantized_matmul_q8k_cuda,
+    quantized_matmul_q8k_metal,
+    GgmlDType::Q8K
+);
 
 #[test]
 fn quantized_matmul_q2k() -> Result<()> {
