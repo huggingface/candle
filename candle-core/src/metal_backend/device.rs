@@ -5,7 +5,7 @@ use candle_metal_kernels::{
     },
     Kernels,
 };
-use objc2_foundation::NSURL;
+use objc2_foundation::{NSRange, NSURL};
 use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
@@ -57,6 +57,12 @@ pub struct MetalDevice {
     /// Seed for random number generation.
     pub(crate) seed: Arc<Mutex<Buffer>>,
 }
+
+// Resource options used for creating buffers. Shared storage mode allows both CPU and GPU to access the buffer.
+pub const RESOURCE_OPTIONS: MTLResourceOptions =
+    objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModeShared.bits());
+//| MTLResourceOptions::HazardTrackingModeUntracked.bits(),
+//);
 
 impl std::fmt::Debug for MetalDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -141,8 +147,6 @@ impl MetalDevice {
     }
 
     /// Creates a new buffer (not necessarily zeroed).
-    /// The buffer is [MTLPrivate](https://developer.apple.com/documentation/metal/mtlstoragemode)
-    /// This means the buffer data cannot be read on the CPU directly.
     ///
     /// [`name`] is only used to keep track of the resource origin in case of bugs
     pub fn new_buffer(
@@ -152,20 +156,10 @@ impl MetalDevice {
         name: &str,
     ) -> Result<Arc<Buffer>> {
         let size = element_count * dtype.size_in_bytes();
-        self.allocate_buffer(size, MTLResourceOptions::StorageModePrivate, name)
-    }
-
-    /// Creates a new buffer (not necessarily zeroed).
-    /// The buffer is [MTLManaged](https://developer.apple.com/documentation/metal/mtlstoragemode)
-    /// This means the buffer can be read on the CPU but will require manual
-    /// synchronization when the CPU memory is modified
-    /// Used as a bridge to gather data back from the GPU
-    pub fn new_buffer_managed(&self, size: usize) -> Result<Arc<Buffer>> {
-        self.allocate_buffer(size, MTLResourceOptions::StorageModeManaged, "managed")
+        self.allocate_buffer(size, name)
     }
 
     /// Creates a new buffer from data.
-    /// The buffer is [MTLManaged](https://developer.apple.com/documentation/metal/mtlstoragemode)
     ///
     /// Does not require synchronization, as [newBufferWithBytes](https://developer.apple.com/documentation/metal/mtldevice/1433429-newbufferwithbytes)
     /// allocates the buffer and copies over the existing data before returning the MTLBuffer.
@@ -173,29 +167,22 @@ impl MetalDevice {
         let size = core::mem::size_of_val(data);
         let new_buffer = self
             .device
-            .new_buffer_with_data(
-                data.as_ptr().cast(),
-                size,
-                MTLResourceOptions::StorageModeManaged,
-            )
+            .new_buffer_with_data(data.as_ptr().cast(), size, RESOURCE_OPTIONS)
             .map_err(MetalError::from)?;
         let mut buffers = self.buffers.write().map_err(MetalError::from)?;
 
-        let subbuffers = buffers
-            .entry((size, MTLResourceOptions::StorageModeManaged))
-            .or_insert(vec![]);
+        let subbuffers = buffers.entry(size).or_insert(vec![]);
 
         let new_buffer = Arc::new(new_buffer);
         subbuffers.push(new_buffer.clone());
+        /*
+        let new_buffer = self.allocate_buffer_with_data(data, "new_buffer_with_data")?;
+        */
         Ok(new_buffer)
     }
 
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
-        let buffer = self.allocate_buffer(
-            size_in_bytes,
-            MTLResourceOptions::StorageModePrivate,
-            "allocate_zeros",
-        )?;
+        let buffer = self.allocate_buffer(size_in_bytes, "allocate_zeros")?;
         let command_buffer = self.command_buffer()?;
         command_buffer.set_label("zeros");
         let blit = command_buffer.blit_command_encoder();
@@ -205,24 +192,42 @@ impl MetalDevice {
     }
 
     /// The critical allocator algorithm
-    fn allocate_buffer(
-        &self,
-        size: usize,
-        option: MTLResourceOptions,
-        _name: &str,
-    ) -> Result<Arc<Buffer>> {
+    pub fn allocate_buffer(&self, size: usize, name: &str) -> Result<Arc<Buffer>> {
         let mut buffers = self.buffers.write().map_err(MetalError::from)?;
-        if let Some(b) = find_available_buffer(size, option, &buffers) {
+        if let Some(b) = find_available_buffer(size, &buffers) {
             // Cloning also ensures we increment the strong count
             return Ok(b.clone());
         }
 
         let size = buf_size(size);
-        let subbuffers = buffers.entry((size, option)).or_insert(vec![]);
+        let subbuffers = buffers.entry(size).or_insert(vec![]);
 
         let new_buffer = self
             .device
-            .new_buffer(size, option)
+            .new_buffer(size, RESOURCE_OPTIONS)
+            .map_err(MetalError::from)?;
+        let new_buffer = Arc::new(new_buffer);
+        subbuffers.push(new_buffer.clone());
+        Ok(new_buffer)
+    }
+
+    /// The critical allocator algorithm
+    fn allocate_buffer_with_data<T>(&self, data: &[T], name: &str) -> Result<Arc<Buffer>> {
+        let size = core::mem::size_of_val(data);
+        let mut buffers = self.buffers.write().map_err(MetalError::from)?;
+        if let Some(b) = find_available_buffer(size, &buffers) {
+            unsafe {
+                std::ptr::copy_nonoverlapping(data.as_ptr(), b.data() as *mut T, data.len());
+            }
+            b.did_modify_range(NSRange::new(0, size));
+            // Cloning also ensures we increment the strong count
+            return Ok(b.clone());
+        }
+        let subbuffers = buffers.entry(size).or_insert(vec![]);
+
+        let new_buffer = self
+            .device
+            .new_buffer_with_data(data.as_ptr().cast(), size, RESOURCE_OPTIONS)
             .map_err(MetalError::from)?;
         let new_buffer = Arc::new(new_buffer);
         subbuffers.push(new_buffer.clone());
@@ -257,15 +262,11 @@ fn buf_size(size: usize) -> usize {
     size.saturating_sub(1).next_power_of_two()
 }
 
-fn find_available_buffer(
-    size: usize,
-    option: MTLResourceOptions,
-    buffers: &BufferMap,
-) -> Option<Arc<Buffer>> {
+fn find_available_buffer(size: usize, buffers: &BufferMap) -> Option<Arc<Buffer>> {
     let mut best_buffer: Option<&Arc<Buffer>> = None;
     let mut best_buffer_size = usize::MAX;
-    for ((buffer_size, buffer_option), subbuffers) in buffers.iter() {
-        if buffer_size >= &size && buffer_size < &best_buffer_size && buffer_option == &option {
+    for (buffer_size, subbuffers) in buffers.iter() {
+        if buffer_size >= &size && buffer_size < &best_buffer_size {
             for sub in subbuffers {
                 if Arc::strong_count(sub) == 1 {
                     best_buffer = Some(sub);

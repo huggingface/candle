@@ -35,8 +35,9 @@ impl QMetalStorage {
 
     pub fn dequantize(&self, elem_count: usize) -> Result<MetalStorage> {
         use crate::quantized::k_quants::GgmlType;
-
-        let buffer = self.device.new_buffer_managed(self.buffer.length())?;
+        let buffer = self
+            .device
+            .allocate_buffer(self.buffer.length(), "dequantize")?;
         let command_buffer = self.device.command_buffer()?;
         command_buffer.set_label("to_cpu");
         let blit = command_buffer.blit_command_encoder();
@@ -284,7 +285,9 @@ impl QMetalStorage {
     }
 
     pub fn data(&self) -> Result<Vec<u8>> {
-        let buffer = self.device.new_buffer_managed(self.buffer.length())?;
+        let buffer = self
+            .device
+            .allocate_buffer(self.buffer.length(), "dequantize")?;
         {
             let command_buffer = self.device.command_buffer()?;
             command_buffer.set_label("to_cpu");
