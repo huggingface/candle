@@ -36,6 +36,8 @@ pub struct Config {
     pub classifier_config: Option<ClassifierConfig>,
 }
 
+impl crate::models::ModelConfig for Config {}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Copy, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ClassifierPooling {
@@ -429,6 +431,12 @@ impl ModernBertForMaskedLM {
             .apply(&self.head)?
             .apply(&self.decoder)?;
         Ok(xs)
+    }
+}
+
+impl crate::models::LoadableModel<Config> for ModernBertForMaskedLM {
+    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+        Self::load(vb, config)
     }
 }
 
