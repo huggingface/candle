@@ -10,7 +10,10 @@ use clap::Parser;
 use std::{ffi::OsString, path::PathBuf, sync::Arc};
 
 use candle::DType::{F32, U8};
-use candle::{DType, Device, Module, Result, Tensor};
+use candle::{
+    BackendDevice, BackendStorage, CpuStorage, DType, Device, Module, Result, Tensor,
+    TryConvertStorage,
+};
 use candle_examples::{load_image, load_image_and_resize, save_image};
 use candle_nn::VarBuilder;
 use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DepthAnythingV2Config};
@@ -47,42 +50,43 @@ struct Args {
     color_map: bool,
 }
 
-pub fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
-    let device = candle_examples::device(args.cpu)?;
-
+pub fn run<B: BackendStorage + TryConvertStorage<CpuStorage> + 'static>(
+    args: Args,
+    device: &B::Device,
+) -> Result<()> {
     let dinov2_model_file = match args.dinov2_model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
+            let api = hf_hub::api::sync::Api::new().unwrap();
             let api = api.model("lmz/candle-dino-v2".into());
-            api.get("dinov2_vits14.safetensors")?
+            api.get("dinov2_vits14.safetensors").unwrap()
         }
         Some(dinov2_model) => dinov2_model,
     };
     println!("Using file {:?}", dinov2_model_file);
 
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[dinov2_model_file], F32, &device)? };
-    let dinov2 = dinov2::vit_small(vb)?;
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[dinov2_model_file], F32, device)? };
+    let dinov2: dinov2::DinoVisionTransformer<B> = dinov2::vit_small(vb)?;
     println!("DinoV2 model built");
 
     let depth_anything_model_file = match args.depth_anything_v2_model {
         None => {
-            let api = hf_hub::api::sync::Api::new()?;
+            let api = hf_hub::api::sync::Api::new().unwrap();
             let api = api.model("jeroenvlek/depth-anything-v2-safetensors".into());
-            api.get("depth_anything_v2_vits.safetensors")?
+            api.get("depth_anything_v2_vits.safetensors").unwrap()
         }
         Some(depth_anything_model) => depth_anything_model,
     };
     println!("Using file {:?}", depth_anything_model_file);
 
     let vb = unsafe {
-        VarBuilder::from_mmaped_safetensors(&[depth_anything_model_file], DType::F32, &device)?
+        VarBuilder::from_mmaped_safetensors(&[depth_anything_model_file], DType::F32, device)?
     };
 
     let config = DepthAnythingV2Config::vit_small();
     let depth_anything = DepthAnythingV2::new(Arc::new(dinov2), config, vb)?;
 
-    let (original_height, original_width, image) = load_and_prep_image(&args.image, &device)?;
+    let (original_height, original_width, image) =
+        load_and_prep_image(&args.image, device).unwrap();
 
     println!("Loaded image {image:?}");
 
@@ -99,6 +103,21 @@ pub fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
 fn full_output_path(image_path: &PathBuf, output_dir: &Option<PathBuf>) -> PathBuf {
     let input_file_name = image_path.file_name().unwrap();
     let mut output_file_name = OsString::from("depth_");
@@ -112,40 +131,45 @@ fn full_output_path(image_path: &PathBuf, output_dir: &Option<PathBuf>) -> PathB
     output_path
 }
 
-fn load_and_prep_image(
+fn load_and_prep_image<B: BackendStorage + TryConvertStorage<CpuStorage>>(
     image_path: &PathBuf,
-    device: &Device,
-) -> anyhow::Result<(usize, usize, Tensor)> {
-    let (_original_image, original_height, original_width) = load_image(&image_path, None)?;
+    device: &B::Device,
+) -> anyhow::Result<(usize, usize, Tensor<B>)> {
+    let (_original_image, original_height, original_width): (Tensor<B>, usize, usize) =
+        load_image(&image_path, None, device)?;
 
-    let image = load_image_and_resize(&image_path, DINO_IMG_SIZE, DINO_IMG_SIZE)?
+    let image = load_image_and_resize(&image_path, DINO_IMG_SIZE, DINO_IMG_SIZE, device)?
         .unsqueeze(0)?
-        .to_dtype(F32)?
-        .to_device(&device)?;
+        .to_dtype(F32)?;
 
     let max_pixel_val = Tensor::try_from(255.0f32)?
-        .to_device(&device)?
+        .to_device(device)?
         .broadcast_as(image.shape())?;
     let image = (image / max_pixel_val)?;
-    let image = normalize_image(&image, &MAGIC_MEAN, &MAGIC_STD)?;
+    let image = normalize_image(&image, &MAGIC_MEAN, &MAGIC_STD, device)?;
 
     Ok((original_height, original_width, image))
 }
 
-fn normalize_image(image: &Tensor, mean: &[f32; 3], std: &[f32; 3]) -> Result<Tensor> {
+fn normalize_image<B: BackendStorage + TryConvertStorage<CpuStorage>>(
+    image: &Tensor<B>,
+    mean: &[f32; 3],
+    std: &[f32; 3],
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let mean_tensor =
-        Tensor::from_vec(mean.to_vec(), (3, 1, 1), &image.device())?.broadcast_as(image.shape())?;
+        Tensor::from_vec(mean.to_vec(), (3, 1, 1), device)?.broadcast_as(image.shape())?;
     let std_tensor =
-        Tensor::from_vec(std.to_vec(), (3, 1, 1), &image.device())?.broadcast_as(image.shape())?;
+        Tensor::from_vec(std.to_vec(), (3, 1, 1), device)?.broadcast_as(image.shape())?;
     image.sub(&mean_tensor)?.div(&std_tensor)
 }
 
-fn post_process_image(
-    image: &Tensor,
+fn post_process_image<B: BackendStorage + TryConvertStorage<CpuStorage>>(
+    image: &Tensor<B>,
     original_height: usize,
     original_width: usize,
     color_map: bool,
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     let out = image.interpolate2d(original_height, original_width)?;
     let out = scale_image(&out)?;
 
@@ -165,7 +189,9 @@ fn post_process_image(
     out.to_dtype(U8)
 }
 
-fn scale_image(depth: &Tensor) -> Result<Tensor> {
+fn scale_image<B: BackendStorage + TryConvertStorage<CpuStorage>>(
+    depth: &Tensor<B>,
+) -> Result<Tensor<B>> {
     let flat_values: Vec<f32> = depth.flatten_all()?.to_vec1()?;
 
     let min_val = flat_values.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
