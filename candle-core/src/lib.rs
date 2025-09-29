@@ -103,6 +103,7 @@ pub use indexer::{IndexOp, TensorIndexer};
 pub use layout::Layout;
 pub use quantized::{QCpuStorage, QCudaStorage, QMetalStorage};
 pub use shape::{Shape, D};
+pub use sort::ArgSort;
 pub use storage::Storage;
 pub use streaming::{StreamTensor, StreamingBinOp, StreamingModule};
 pub use strided_index::{StridedBlocks, StridedIndex};

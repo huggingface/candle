@@ -23,7 +23,7 @@ impl CustomOp1<CpuStorage> for Elu {
         "elu"
     }
 
-    fn cpu_fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
+    fn fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
         let storage = candle_core::map_dtype!(
             "elu",
             s,
@@ -65,7 +65,7 @@ impl CustomOp1<CpuStorage> for EluBackward {
         "elu-bwd"
     }
 
-    fn cpu_fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
+    fn fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
         let storage = candle_core::map_dtype!(
             "elu-bwd",
             s,
@@ -89,8 +89,8 @@ impl CustomOp1<CpuStorage> for EluWithBackward {
         "elu"
     }
 
-    fn cpu_fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
-        self.0.cpu_fwd(s, l)
+    fn fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
+        self.0.fwd(s, l)
     }
 
     fn bwd(

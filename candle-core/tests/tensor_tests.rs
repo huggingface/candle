@@ -195,7 +195,10 @@ fn clamp<B: BackendStorage>(device: &B::Device) -> Result<()> {
     Ok(())
 }
 
-fn asort<B: BackendStorage>(device: &B::Device) -> Result<()> {
+fn asort<B: BackendStorage>(device: &B::Device) -> Result<()>
+where
+    candle_core::ArgSort: candle_core::CustomOp1<B>,
+{
     let data = &[[3f32, 1., 4., 1.1, 5.], [2.1, 1., 7., 8., 2.]];
     let tensor: Tensor<B> = Tensor::new(data, device)?;
     let indexes = tensor.arg_sort_last_dim(true)?;

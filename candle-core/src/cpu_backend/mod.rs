@@ -2708,7 +2708,7 @@ impl BackendStorage for CpuStorage {
     }
 
     fn apply_op1(&self, l: &Layout, c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)> {
-        c.cpu_fwd(self, l)
+        c.fwd(self, l)
     }
 
     fn apply_op2(

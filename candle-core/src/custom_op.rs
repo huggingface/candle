@@ -15,29 +15,9 @@ pub trait CustomOp1<B: BackendStorage> {
     // Box<dyn> does not support const yet, so use a function to get the name.
     fn name(&self) -> &'static str;
 
-    /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
+    /// The forward pass. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
-    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)>;
-
-    /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
-    /// offsets etc so the associated layout should be used to access it.
-    fn cuda_fwd(&self, _storage: &CudaStorage, _layout: &Layout) -> Result<(CudaStorage, Shape)> {
-        Err(crate::Error::Cuda(
-            format!("no cuda implementation for {}", self.name()).into(),
-        ))
-    }
-
-    /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
-    /// offsets etc so the associated layout should be used to access it.
-    fn metal_fwd(
-        &self,
-        _storage: &MetalStorage,
-        _layout: &Layout,
-    ) -> Result<(MetalStorage, Shape)> {
-        Err(crate::Error::Metal(
-            format!("no metal implementation for {}", self.name()).into(),
-        ))
-    }
+    fn fwd(&self, storage: &B, layout: &Layout) -> Result<(B, Shape)>;
 
     /// This function takes as argument the argument `arg` used in the forward pass, the result
     /// produced by the forward operation `res` and the gradient of the result `grad_res`.

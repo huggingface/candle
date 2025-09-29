@@ -1,8 +1,8 @@
-use crate::{backend::BackendStorage, Result, Tensor};
+use crate::{backend::BackendStorage, CustomOp1, Result, Tensor};
 use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy)]
-struct ArgSort {
+pub struct ArgSort {
     asc: bool,
     last_dim: usize,
 }
@@ -109,12 +109,12 @@ mod cuda {
     }
 }
 
-impl<B: BackendStorage> crate::CustomOp1<B> for ArgSort {
+impl crate::CustomOp1<crate::CpuStorage> for ArgSort {
     fn name(&self) -> &'static str {
         "argsort"
     }
 
-    fn cpu_fwd(
+    fn fwd(
         &self,
         storage: &crate::CpuStorage,
         layout: &crate::Layout,
@@ -132,9 +132,15 @@ impl<B: BackendStorage> crate::CustomOp1<B> for ArgSort {
         let sort_indexes = crate::CpuStorage::U32(sort_indexes);
         Ok((sort_indexes, layout.shape().into()))
     }
+}
 
-    #[cfg(feature = "cuda")]
-    fn cuda_fwd(
+#[cfg(feature = "cuda")]
+impl crate::CustomOp1<crate::CudaStorage> for ArgSort {
+    fn name(&self) -> &'static str {
+        "argsort"
+    }
+
+    fn fwd(
         &self,
         storage: &crate::CudaStorage,
         layout: &crate::Layout,
@@ -149,9 +155,16 @@ impl<B: BackendStorage> crate::CustomOp1<B> for ArgSort {
         };
         Ok((dst, layout.shape().clone()))
     }
+}
 
-    #[cfg(feature = "metal")]
-    fn metal_fwd(
+#[cfg(feature = "metal")]
+impl crate::CustomOp1<crate::MetalStorage> for ArgSort {
+    fn name(&self) -> &'static str {
+        "argsort"
+    }
+
+    //#[cfg(feature = "metal")]
+    fn fwd(
         &self,
         storage: &crate::MetalStorage,
         layout: &crate::Layout,
@@ -213,7 +226,10 @@ impl<B: BackendStorage> crate::CustomOp1<B> for ArgSort {
     }
 }
 
-impl<B: BackendStorage> Tensor<B> {
+impl<B: BackendStorage> Tensor<B>
+where
+    ArgSort: CustomOp1<B>,
+{
     /// Returns the indices that sort the tensor along the last dimension.
     ///
     /// If `asc` is `true`, sorting is in ascending order. Otherwise sorting is performed in

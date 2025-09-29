@@ -5,7 +5,7 @@ mod dummy {
         Error, MetalDevice, MetalStorage, Result,
     };
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct QMetalStorage {
         dtype: GgmlDType,
         device: MetalDevice,

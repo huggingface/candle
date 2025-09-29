@@ -771,20 +771,7 @@ impl BackendStorage for Storage {
     }
 
     fn apply_op1(&self, l: &Layout, c: &dyn CustomOp1<Self>) -> Result<(Self, Shape)> {
-        match self {
-            Self::Cpu(storage) => {
-                let (storage, shape) = c.cpu_fwd(storage, l)?;
-                Ok((Self::Cpu(storage), shape))
-            }
-            Self::Cuda(storage) => {
-                let (storage, shape) = c.cuda_fwd(storage, l)?;
-                Ok((Self::Cuda(storage), shape))
-            }
-            Self::Metal(storage) => {
-                let (storage, shape) = c.metal_fwd(storage, l)?;
-                Ok((Self::Metal(storage), shape))
-            }
-        }
+        c.fwd(self, l)
     }
 
     fn apply_op2(

@@ -63,6 +63,12 @@ impl QCpuStorage {
     }
 }
 
+impl Clone for QCpuStorage {
+    fn clone(&self) -> Self {
+        QCpuStorage(self.0.dyn_clone())
+    }
+}
+
 #[derive(Debug)]
 pub enum QStorage {
     Cpu(QCpuStorage),
@@ -386,8 +392,23 @@ impl GgmlDType {
     }
 }
 
+pub trait DynClone {
+    fn dyn_clone<'s>(&self) -> Box<dyn QuantizedType + 's>
+    where
+        Self: 's;
+}
+
+impl<T: Clone + QuantizedType> DynClone for T {
+    fn dyn_clone<'s>(&self) -> Box<dyn QuantizedType + 's>
+    where
+        Self: 's,
+    {
+        Box::new(self.clone())
+    }
+}
+
 // A version of GgmlType without `vec_dot` so that it can be dyn boxed.
-pub trait QuantizedType: Send + Sync + std::fmt::Debug {
+pub trait QuantizedType: Send + Sync + std::fmt::Debug + DynClone {
     fn dtype(&self) -> GgmlDType;
     fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()>;
     fn dequantize(&self, elem_count: usize) -> Result<CpuStorage>;
@@ -632,11 +653,7 @@ impl crate::CustomOp1<CpuStorage> for QTensor<QCpuStorage> {
         "qmatmul"
     }
 
-    fn cpu_fwd(
-        &self,
-        storage: &crate::CpuStorage,
-        layout: &crate::Layout,
-    ) -> Result<(crate::CpuStorage, Shape)> {
+    fn fwd(&self, storage: &CpuStorage, layout: &crate::Layout) -> Result<(CpuStorage, Shape)> {
         if !layout.is_contiguous() {
             crate::bail!("input tensor is not contiguous {layout:?}")
         }
@@ -660,23 +677,7 @@ impl crate::CustomOp1<CpuStorage> for QTensor<QCpuStorage> {
         self.storage
             .0
             .matmul_t((dst_shape.elem_count() / n, k, n), slice, &mut dst_storage)?;
-        Ok((crate::CpuStorage::F32(dst_storage), dst_shape))
-    }
-
-    fn metal_fwd(
-        &self,
-        _: &crate::MetalStorage,
-        _: &crate::Layout,
-    ) -> Result<(crate::MetalStorage, Shape)> {
-        crate::bail!("Invalid storage")
-    }
-
-    fn cuda_fwd(
-        &self,
-        _: &crate::CudaStorage,
-        _: &crate::Layout,
-    ) -> Result<(crate::CudaStorage, Shape)> {
-        crate::bail!("Invalid storage")
+        Ok((CpuStorage::F32(dst_storage), dst_shape))
     }
 }
 
@@ -685,28 +686,12 @@ impl crate::CustomOp1<MetalStorage> for QTensor<QMetalStorage> {
         "qmatmul"
     }
 
-    fn cpu_fwd(
-        &self,
-        _: &crate::CpuStorage,
-        _: &crate::Layout,
-    ) -> Result<(crate::CpuStorage, Shape)> {
-        crate::bail!("Invalid storage")
-    }
-
-    fn metal_fwd(
+    fn fwd(
         &self,
         storage: &crate::MetalStorage,
         layout: &crate::Layout,
     ) -> Result<(crate::MetalStorage, Shape)> {
         self.storage.fwd(&self.shape, storage, layout)
-    }
-
-    fn cuda_fwd(
-        &self,
-        _: &crate::CudaStorage,
-        _: &crate::Layout,
-    ) -> Result<(crate::CudaStorage, Shape)> {
-        crate::bail!("Invalid storage")
     }
 }
 
@@ -715,27 +700,7 @@ impl crate::CustomOp1<CudaStorage> for QTensor<QCudaStorage> {
         "qmatmul"
     }
 
-    fn cpu_fwd(
-        &self,
-        _: &crate::CpuStorage,
-        _: &crate::Layout,
-    ) -> Result<(crate::CpuStorage, Shape)> {
-        crate::bail!("Invalid storage")
-    }
-
-    fn metal_fwd(
-        &self,
-        _: &crate::MetalStorage,
-        _: &crate::Layout,
-    ) -> Result<(crate::MetalStorage, Shape)> {
-        crate::bail!("Invalid storage")
-    }
-
-    fn cuda_fwd(
-        &self,
-        storage: &crate::CudaStorage,
-        layout: &crate::Layout,
-    ) -> Result<(crate::CudaStorage, Shape)> {
+    fn fwd(&self, storage: &CudaStorage, layout: &crate::Layout) -> Result<(CudaStorage, Shape)> {
         self.storage.fwd(&self.shape, storage, layout)
     }
 }
@@ -745,6 +710,26 @@ impl crate::CustomOp1<Storage> for QTensor<QStorage> {
         "qmatmul"
     }
 
+    fn fwd(&self, storage: &Storage, layout: &crate::Layout) -> Result<(Storage, Shape)> {
+        match (&self.storage, storage) {
+            (QStorage::Cpu(qs), Storage::Cpu(s)) => QTensor::new(qs.clone(), &self.shape)?
+                .fwd(s, layout)
+                .map(|(s, shape)| (Storage::Cpu(s), shape)),
+            (QStorage::Metal(qs), Storage::Metal(s)) => QTensor::new(qs.clone(), &self.shape)?
+                .fwd(s, layout)
+                .map(|(s, shape)| (Storage::Metal(s), shape)),
+            (QStorage::Cuda(qs), Storage::Cuda(s)) => QTensor::new(qs.clone(), &self.shape)?
+                .fwd(s, layout)
+                .map(|(s, shape)| (Storage::Cuda(s), shape)),
+            _ => Err(crate::Error::DeviceMismatchBinaryOp {
+                lhs: self.device().as_ref().location(),
+                rhs: storage.device().as_ref().location(),
+                op: "qmatmul",
+            }
+            .bt()),
+        }
+    }
+    /*
     fn cpu_fwd(
         &self,
         storage: &crate::CpuStorage,
@@ -803,6 +788,7 @@ impl crate::CustomOp1<Storage> for QTensor<QStorage> {
         };
         self_storage.fwd(&self.shape, storage, layout)
     }
+    */
 }
 
 impl<QB: QuantizedBackend> crate::Module<QB::Storage> for QMatMul<QB>
