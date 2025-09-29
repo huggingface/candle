@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="100%" height="100%" viewBox="0 0 600 700" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;">
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <rect x="250" y="60" width="100" height="50" style="fill:white;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,319.714,33.7468)">
+        <text x="-35.024px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">Input Layer</text>
+    </g>
+    <g transform="matrix(1,0,0,1,319.959,48.7079)">
+        <text x="-9.338px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">x_t</text>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <rect x="250" y="140" width="100" height="50" style="fill:white;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,319.714,113.747)">
+        <text x="-42.673px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">Input W<tspan x="5.315px 13.101px " y="0px 0px ">ei</tspan>ghts</text>
+    </g>
+    <g transform="matrix(1,0,0,1,319.714,130.534)">
+        <text x="-15.948px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">W_ih</text>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <rect x="250" y="220" width="100" height="50" style="fill:white;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,319.714,193.747)">
+        <text x="-33.072px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">Processed</text>
+        <text x="-15.569px" y="14px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">Input</text>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <rect x="100" y="140" width="100" height="50" style="fill:white;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,173.254,103.165)">
+        <text x="-27.234px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">Previous</text>
+    </g>
+    <g transform="matrix(1,0,0,1,172.739,117.181)">
+        <text x="-40.472px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">Hidden State</text>
+    </g>
+    <g transform="matrix(1,0,0,1,169.898,131.012)">
+        <text x="-20.631px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">h_{t-1}</text>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <rect x="100" y="220" width="100" height="50" style="fill:white;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,169.714,191.901)">
+        <text x="-49.287px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">Hidden W<tspan x="11.929px 19.715px " y="0px 0px ">ei</tspan>ghts</text>
+    </g>
+    <g transform="matrix(1,0,0,1,170.721,210.935)">
+        <text x="-18.286px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">W_hh</text>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <rect x="100" y="300" width="100" height="50" style="fill:white;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,170.704,270.849)">
+        <text x="-33.072px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">Processed</text>
+    </g>
+    <g transform="matrix(1,0,0,1,170.201,291.618)">
+        <text x="-22.183px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">Hidden</text>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <rect x="250" y="380" width="100" height="50" style="fill:white;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,319.714,353.747)">
+        <text x="-25.296px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">Addition</text>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <rect x="250" y="460" width="100" height="50" style="fill:white;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,319.714,433.747)">
+        <text x="-45.531px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">tanh <tspan x="-15.166px -5.828px " y="0px 0px ">Ac</tspan>tivation</text>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <rect x="250" y="540" width="100" height="50" style="fill:white;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,319.832,505.13)">
+        <text x="-14.003px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">New</text>
+        <text x="-40.472px" y="14px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">Hidden State</text>
+    </g>
+    <g transform="matrix(1,0,0,1,319.714,533.747)">
+        <text x="-9.731px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">h_t</text>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <rect x="250" y="620" width="100" height="50" style="fill:white;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,319.714,593.747)">
+        <text x="-40.469px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">Output Layer</text>
+    </g>
+    <g transform="matrix(1,0,0,1,319.714,613.747)">
+        <text x="-18.286px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">W_ho</text>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <rect x="250" y="700" width="100" height="50" style="fill:white;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,319.714,673.747)">
+        <text x="-21.014px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">Output</text>
+    </g>
+    <g transform="matrix(1,0,0,1,319.714,693.747)">
+        <text x="-9.338px" y="0px" style="font-family:'ArialMT', 'Arial', sans-serif;font-size:14px;">y_t</text>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <path d="M300,110L300,140" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <path d="M300,190L300,220" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <path d="M300,270L300,380" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <path d="M150,190L150,220" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <path d="M150,270L150,300" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <path d="M150,350L250,380" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1.72791,-0.286509,0.517866,0.958078,-358.724,224.575)">
+        <path d="M150,350L250,380" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:0.9px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <path d="M300,430L300,460" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <path d="M300,510L300,540" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <path d="M300,590L300,620" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,19.7137,-51.2532)">
+        <path d="M300,670L300,700" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(-0.262626,0,0,1.00774,172.18,-52.6115)">
+        <path d="M350,565L450,565L450,165L200,165" style="fill:none;fill-rule:nonzero;stroke:black;stroke-width:2px;"/>
+    </g>
+</svg>
