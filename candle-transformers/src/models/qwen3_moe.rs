@@ -206,7 +206,7 @@ impl DecoderLayer {
         let self_attn = Qwen3Attention::new(&cfg.into(), rotary, vb.pp("self_attn"))?;
 
         // Decide whether to use MoE or regular MLP based on layer_idx and decoder_sparse_step
-        let feed_forward = if cfg.num_experts > 0 && (layer_idx + 1) % cfg.decoder_sparse_step == 0
+        let feed_forward = if cfg.num_experts > 0 && (layer_idx + 1).is_multiple_of(cfg.decoder_sparse_step)
         {
             Qwen3FeedForward::MoE(Qwen3SparseMoeBlock::new(cfg, vb.pp("mlp"))?)
         } else {
