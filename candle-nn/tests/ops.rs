@@ -16,7 +16,10 @@ use candle::{CudaDevice, CudaStorage};
 #[cfg(feature = "metal")]
 use candle::{MetalDevice, MetalStorage};
 
-fn softmax<B: BackendStorage>(device: &B::Device) -> Result<()> {
+fn softmax<B: BackendStorage>(device: &B::Device) -> Result<()>
+where
+    candle_nn::ops::SoftmaxLastDim: candle::CustomOp1<B>,
+{
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
     let tensor: Tensor<B> = Tensor::new(data, device)?;
     let t0 = candle_nn::ops::softmax(&tensor.log()?, 0)?;
@@ -324,7 +327,10 @@ fn rope_thd<B: BackendStorage>(device: &B::Device) -> Result<()> {
     Ok(())
 }
 
-fn sigmoid<B: BackendStorage>(device: &B::Device) -> Result<()> {
+fn sigmoid<B: BackendStorage>(device: &B::Device) -> Result<()>
+where
+    candle_nn::ops::Sigmoid: candle::CustomOp1<B>,
+{
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
     let tensor: Tensor<B> = Tensor::new(data, device)?;
     let s1 = candle_nn::ops::sigmoid(&tensor)?;

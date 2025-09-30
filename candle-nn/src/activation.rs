@@ -26,7 +26,10 @@ pub enum Activation {
     GeluPytorchTanh,
 }
 
-impl<B: BackendStorage> super::Module<B> for Activation {
+impl<B: BackendStorage> super::Module<B> for Activation
+where
+    crate::ops::Sigmoid: candle::CustomOp1<B>,
+{
     fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         match self {
             Self::Gelu => xs.gelu_erf(),

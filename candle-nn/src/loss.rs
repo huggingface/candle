@@ -64,7 +64,10 @@ pub fn mse<B: BackendStorage>(inp: &Tensor<B>, target: &Tensor<B>) -> Result<Ten
 pub fn binary_cross_entropy_with_logit<B: BackendStorage>(
     inp: &Tensor<B>,
     target: &Tensor<B>,
-) -> Result<Tensor<B>> {
+) -> Result<Tensor<B>>
+where
+    crate::ops::Sigmoid: candle::CustomOp1<B>,
+{
     let inp = crate::ops::sigmoid(inp)?;
 
     let left_side = target * inp.log()?;

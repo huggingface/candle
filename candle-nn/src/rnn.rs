@@ -195,7 +195,10 @@ pub fn lstm<B: BackendStorage>(
     LSTM::new(in_dim, hidden_dim, config, vb)
 }
 
-impl<B: BackendStorage> RNN<B> for LSTM<B> {
+impl<B: BackendStorage> RNN<B> for LSTM<B>
+where
+    crate::ops::Sigmoid: candle::CustomOp1<B>,
+{
     type State = LSTMState<B>;
 
     fn zero_state(&self, batch_dim: usize) -> Result<Self::State> {
@@ -351,7 +354,10 @@ pub fn gru<B: BackendStorage>(
     GRU::new(in_dim, hidden_dim, config, vb)
 }
 
-impl<B: BackendStorage> RNN<B> for GRU<B> {
+impl<B: BackendStorage> RNN<B> for GRU<B>
+where
+    crate::ops::Sigmoid: candle::CustomOp1<B>,
+{
     type State = GRUState<B>;
 
     fn zero_state(&self, batch_dim: usize) -> Result<Self::State> {

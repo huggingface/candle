@@ -54,14 +54,14 @@ pub fn swiglu<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
     &xs[0].silu()? * &xs[1]
 }
 
-struct Sigmoid;
+pub struct Sigmoid;
 
-impl<B: BackendStorage> candle::CustomOp1<B> for Sigmoid {
+impl candle::CustomOp1<CpuStorage> for Sigmoid {
     fn name(&self) -> &'static str {
         "sigmoid"
     }
 
-    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+    fn fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
         use candle::backend::BackendStorage;
 
         fn fwd<T: num_traits::Float>(v: T) -> T {
@@ -84,14 +84,31 @@ impl<B: BackendStorage> candle::CustomOp1<B> for Sigmoid {
             }
             _ => Err(candle::Error::UnsupportedDTypeForOp(
                 storage.dtype(),
-                <Sigmoid as candle::CustomOp1<B>>::name(self),
+                <Sigmoid as candle::CustomOp1<CpuStorage>>::name(self),
             ))?,
         };
         Ok((storage, layout.shape().clone()))
     }
 
-    #[cfg(feature = "cuda")]
-    fn cuda_fwd(
+    fn bwd(
+        &self,
+        _arg: &Tensor<CpuStorage>,
+        res: &Tensor<CpuStorage>,
+        grad_res: &Tensor<CpuStorage>,
+    ) -> Result<Option<Tensor<CpuStorage>>> {
+        // d/dx sigmoid(x) = (1 - sigmoid(x)) * sigmoid(x)
+        let d_dx_sigmoid = res.ones_like()?.sub(res)?.mul(res)?;
+        Ok(Some(grad_res.mul(&d_dx_sigmoid)?))
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl candle::CustomOp1<candle::CudaStorage> for Sigmoid {
+    fn name(&self) -> &'static str {
+        "softmax-last-dim"
+    }
+
+    fn fwd(
         &self,
         storage: &candle::CudaStorage,
         layout: &Layout,
@@ -142,8 +159,25 @@ impl<B: BackendStorage> candle::CustomOp1<B> for Sigmoid {
         Ok((dst, layout.shape().clone()))
     }
 
-    #[cfg(feature = "metal")]
-    fn metal_fwd(
+    fn bwd(
+        &self,
+        _arg: &Tensor<candle::CudaStorage>,
+        res: &Tensor<candle::CudaStorage>,
+        grad_res: &Tensor<candle::CudaStorage>,
+    ) -> Result<Option<Tensor<candle::CudaStorage>>> {
+        // d/dx sigmoid(x) = (1 - sigmoid(x)) * sigmoid(x)
+        let d_dx_sigmoid = res.ones_like()?.sub(res)?.mul(res)?;
+        Ok(Some(grad_res.mul(&d_dx_sigmoid)?))
+    }
+}
+
+#[cfg(feature = "metal")]
+impl candle::CustomOp1<candle::MetalStorage> for Sigmoid {
+    fn name(&self) -> &'static str {
+        "softmax-last-dim"
+    }
+
+    fn fwd(
         &self,
         storage: &candle::MetalStorage,
         layout: &Layout,
@@ -238,17 +272,20 @@ impl<B: BackendStorage> candle::CustomOp1<B> for Sigmoid {
 
     fn bwd(
         &self,
-        _arg: &Tensor<B>,
-        res: &Tensor<B>,
-        grad_res: &Tensor<B>,
-    ) -> Result<Option<Tensor<B>>> {
+        _arg: &Tensor<candle::MetalStorage>,
+        res: &Tensor<candle::MetalStorage>,
+        grad_res: &Tensor<candle::MetalStorage>,
+    ) -> Result<Option<Tensor<candle::MetalStorage>>> {
         // d/dx sigmoid(x) = (1 - sigmoid(x)) * sigmoid(x)
         let d_dx_sigmoid = res.ones_like()?.sub(res)?.mul(res)?;
         Ok(Some(grad_res.mul(&d_dx_sigmoid)?))
     }
 }
 
-pub fn sigmoid<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
+pub fn sigmoid<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>>
+where
+    Sigmoid: candle::CustomOp1<B>,
+{
     xs.apply_op1(Sigmoid)
 }
 
@@ -316,14 +353,14 @@ impl<B: BackendStorage> candle::ModuleT<B> for Dropout {
     }
 }
 
-struct SoftmaxLastDim;
+pub struct SoftmaxLastDim;
 
-impl<B: BackendStorage> candle::CustomOp1<B> for SoftmaxLastDim {
+impl candle::CustomOp1<CpuStorage> for SoftmaxLastDim {
     fn name(&self) -> &'static str {
         "softmax-last-dim"
     }
 
-    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+    fn fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
         fn softmax<T: candle::WithDType + num_traits::Float>(
             src: &[T],
             layout: &Layout,
@@ -362,9 +399,15 @@ impl<B: BackendStorage> candle::CustomOp1<B> for SoftmaxLastDim {
             _ => candle::bail!("unsupported dtype for softmax {:?}", storage),
         }
     }
+}
 
-    #[cfg(feature = "cuda")]
-    fn cuda_fwd(
+#[cfg(feature = "cuda")]
+impl candle::CustomOp1<candle::CudaStorage> for SoftmaxLastDim {
+    fn name(&self) -> &'static str {
+        "softmax-last-dim"
+    }
+
+    fn fwd(
         &self,
         storage: &candle::CudaStorage,
         layout: &Layout,
@@ -419,8 +462,13 @@ impl<B: BackendStorage> candle::CustomOp1<B> for SoftmaxLastDim {
         };
         Ok((dst, layout.shape().clone()))
     }
+}
 
-    #[cfg(feature = "metal")]
+#[cfg(feature = "metal")]
+impl candle::CustomOp1<candle::MetalStorage> for SoftmaxLastDim {
+    fn name(&self) -> &'static str {
+        "softmax-last-dim"
+    }
     fn metal_fwd(
         &self,
         storage: &candle::MetalStorage,
@@ -463,7 +511,10 @@ impl<B: BackendStorage> candle::CustomOp1<B> for SoftmaxLastDim {
     }
 }
 
-pub fn softmax_last_dim<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
+pub fn softmax_last_dim<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>>
+where
+    SoftmaxLastDim: candle::CustomOp1<B>,
+{
     xs.apply_op1_no_bwd(&SoftmaxLastDim)
 }
 

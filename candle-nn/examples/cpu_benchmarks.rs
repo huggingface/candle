@@ -44,7 +44,7 @@ impl candle::CustomOp1<CpuStorage> for Im2Col {
         "im2col"
     }
 
-    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+    fn fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
         let &Self {
             h_k,
             w_k,
