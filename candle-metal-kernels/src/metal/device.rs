@@ -13,11 +13,13 @@ pub struct Device {
 unsafe impl Send for Device {}
 unsafe impl Sync for Device {}
 
-impl Device {
-    pub fn as_ref(&self) -> &ProtocolObject<dyn MTLDevice> {
-        &*self.raw
+impl AsRef<ProtocolObject<dyn MTLDevice>> for Device {
+    fn as_ref(&self) -> &ProtocolObject<dyn MTLDevice> {
+        &self.raw
     }
+}
 
+impl Device {
     pub fn registry_id(&self) -> u64 {
         self.as_ref().registryID()
     }

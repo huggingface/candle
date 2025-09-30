@@ -43,9 +43,9 @@ pub struct Function {
     raw: Retained<ProtocolObject<dyn MTLFunction>>,
 }
 
-impl Function {
-    pub fn as_ref(&self) -> &ProtocolObject<dyn MTLFunction> {
-        &*self.raw
+impl AsRef<ProtocolObject<dyn MTLFunction>> for Function {
+    fn as_ref(&self) -> &ProtocolObject<dyn MTLFunction> {
+        &self.raw
     }
 }
 
@@ -63,6 +63,12 @@ impl FunctionConstantValues {
     pub fn set_constant_value_at_index<T>(&self, value: &T, dtype: MTLDataType, index: usize) {
         let value = ptr::NonNull::new(value as *const T as *mut c_void).unwrap();
         unsafe { self.raw.setConstantValue_type_atIndex(value, dtype, index) }
+    }
+}
+
+impl Default for FunctionConstantValues {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
