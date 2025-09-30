@@ -206,12 +206,12 @@ impl DecoderLayer {
         let self_attn = Qwen3Attention::new(&cfg.into(), rotary, vb.pp("self_attn"))?;
 
         // Decide whether to use MoE or regular MLP based on layer_idx and decoder_sparse_step
-        let feed_forward = if cfg.num_experts > 0 && (layer_idx + 1).is_multiple_of(cfg.decoder_sparse_step)
-        {
-            Qwen3FeedForward::MoE(Qwen3SparseMoeBlock::new(cfg, vb.pp("mlp"))?)
-        } else {
-            Qwen3FeedForward::Mlp(Qwen3MLP::new(&cfg.into(), vb.pp("mlp"))?)
-        };
+        let feed_forward =
+            if cfg.num_experts > 0 && (layer_idx + 1).is_multiple_of(cfg.decoder_sparse_step) {
+                Qwen3FeedForward::MoE(Qwen3SparseMoeBlock::new(cfg, vb.pp("mlp"))?)
+            } else {
+                Qwen3FeedForward::Mlp(Qwen3MLP::new(&cfg.into(), vb.pp("mlp"))?)
+            };
 
         let ln1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let ln2 = RmsNorm::new(
