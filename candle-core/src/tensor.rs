@@ -172,7 +172,7 @@ pub(crate) fn from_storage<B: BackendStorage, S: Into<Shape>>(
     is_variable: bool,
 ) -> Tensor<B> {
     let dtype = storage.dtype();
-    let device = storage.device().as_ref().clone();
+    let device = storage.device().clone();
     let tensor_ = Tensor_ {
         id: TensorId::new(),
         storage: Arc::new(RwLock::new(storage)),
@@ -193,7 +193,7 @@ impl<B: BackendStorage> Tensor<B> {
         is_variable: bool,
     ) -> Self {
         let dtype = storage.dtype();
-        let device = storage.device().as_ref().clone();
+        let device = storage.device().clone();
         let tensor_ = Tensor_ {
             id: TensorId::new(),
             storage: Arc::new(RwLock::new(storage)),

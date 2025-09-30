@@ -22,6 +22,12 @@ impl<B: BackendStorage> From<B> for Lazy<B> {
     }
 }
 
+impl<B: BackendStorage> AsRef<B> for Lazy<B> {
+    fn as_ref(&self) -> &B {
+        &self.backend
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct LazyDevice<B: BackendStorage> {
     device: B::Device,
@@ -136,197 +142,252 @@ impl<B: BackendStorage> BackendStorage for Lazy<B> {
         self.backend.to_cpu_storage()
     }
 
-    fn affine(&self, _: &Layout, _: f64, _: f64) -> Result<Self> {
-        todo!()
+    fn affine(&self, layout: &Layout, a: f64, b: f64) -> Result<Self> {
+        self.backend.affine(layout, a, b).map(Into::into)
     }
 
-    fn powf(&self, _: &Layout, _: f64) -> Result<Self> {
-        todo!()
+    fn powf(&self, layout: &Layout, e: f64) -> Result<Self> {
+        self.backend.powf(layout, e).map(Into::into)
     }
 
-    fn elu(&self, _: &Layout, _: f64) -> Result<Self> {
-        todo!()
+    fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self> {
+        self.backend.elu(layout, alpha).map(Into::into)
     }
 
-    fn reduce_op(&self, _: crate::op::ReduceOp, _: &Layout, _: &[usize]) -> Result<Self> {
-        todo!()
+    fn reduce_op(
+        &self,
+        op: crate::op::ReduceOp,
+        layout: &Layout,
+        reduce_dims: &[usize],
+    ) -> Result<Self> {
+        self.backend
+            .reduce_op(op, layout, reduce_dims)
+            .map(Into::into)
     }
 
-    fn cmp(&self, _: crate::op::CmpOp, _: &Self, _: &Layout, _: &Layout) -> Result<Self> {
-        todo!()
+    fn cmp(
+        &self,
+        op: crate::op::CmpOp,
+        rhs: &Self,
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+    ) -> Result<Self> {
+        self.backend
+            .cmp(op, rhs.as_ref(), lhs_l, rhs_l)
+            .map(Into::into)
     }
 
-    fn to_dtype(&self, _: &Layout, _: DType) -> Result<Self> {
-        todo!()
+    fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
+        self.backend.to_dtype(layout, dtype).map(Into::into)
     }
 
-    fn unary_impl<UnOp: crate::op::UnaryOpT>(&self, _: &Layout) -> Result<Self> {
-        todo!()
+    fn unary_impl<U: crate::op::UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
+        self.backend.unary_impl::<U>(layout).map(Into::into)
     }
 
     fn binary_impl<BinOp: crate::op::BinaryOpT>(
         &self,
-        _: &Self,
-        _: &Layout,
-        _: &Layout,
+        rhs: &Self,
+        lhs_l: &Layout,
+        rhs_l: &Layout,
     ) -> Result<Self> {
-        todo!()
+        self.backend
+            .binary_impl::<BinOp>(rhs.as_ref(), lhs_l, rhs_l)
+            .map(Into::into)
     }
 
     fn where_cond(
         &self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-    ) -> crate::Result<Self> {
-        todo!()
+        layout: &Layout,
+        t: &Self,
+        t_l: &Layout,
+        f: &Self,
+        f_l: &Layout,
+    ) -> Result<Self> {
+        self.backend
+            .where_cond(layout, t.as_ref(), t_l, f.as_ref(), f_l)
+            .map(Into::into)
     }
 
     fn conv1d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConv1D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv1D,
     ) -> Result<Self> {
-        todo!()
+        self.backend
+            .conv1d(l, kernel.as_ref(), kernel_l, params)
+            .map(Into::into)
     }
 
     fn conv_transpose1d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConvTranspose1D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose1D,
     ) -> Result<Self> {
-        todo!()
+        self.backend
+            .conv_transpose1d(l, kernel.as_ref(), kernel_l, params)
+            .map(Into::into)
     }
 
     fn conv2d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConv2D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
-        todo!()
+        self.backend
+            .conv2d(l, kernel.as_ref(), kernel_l, params)
+            .map(Into::into)
     }
 
     fn conv_transpose2d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConvTranspose2D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose2D,
     ) -> Result<Self> {
-        todo!()
+        self.backend
+            .conv_transpose2d(l, kernel.as_ref(), kernel_l, params)
+            .map(Into::into)
     }
 
-    fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
-        todo!()
+    fn avg_pool2d(
+        &self,
+        layout: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+    ) -> Result<Self> {
+        self.backend
+            .avg_pool2d(layout, kernel_size, stride)
+            .map(Into::into)
     }
 
-    fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
-        todo!()
+    fn max_pool2d(
+        &self,
+        layout: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+    ) -> Result<Self> {
+        self.backend
+            .max_pool2d(layout, kernel_size, stride)
+            .map(Into::into)
     }
 
-    fn upsample_nearest1d(&self, _: &Layout, _: usize) -> Result<Self> {
-        todo!()
+    fn upsample_nearest1d(&self, layout: &Layout, sz: usize) -> Result<Self> {
+        self.backend.upsample_nearest1d(layout, sz).map(Into::into)
     }
 
-    fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
-        todo!()
+    fn upsample_nearest2d(&self, layout: &Layout, h: usize, w: usize) -> Result<Self> {
+        self.backend
+            .upsample_nearest2d(layout, h, w)
+            .map(Into::into)
     }
 
-    fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self> {
-        todo!()
+    fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
+        self.backend
+            .gather(l, ids.as_ref(), ids_l, dim)
+            .map(Into::into)
     }
 
     fn scatter_set(
         &mut self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<()> {
-        todo!()
+        self.backend
+            .scatter_set(l, ids.as_ref(), ids_l, src.as_ref(), src_l, dim)
     }
 
     fn scatter_add_set(
         &mut self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<()> {
-        todo!()
+        self.backend
+            .scatter_add_set(l, ids.as_ref(), ids_l, src.as_ref(), src_l, dim)
     }
 
-    fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self> {
-        todo!()
+    fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
+        self.backend
+            .index_select(ids.as_ref(), l, ids_l, dim)
+            .map(Into::into)
     }
 
     fn index_add(
         &self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<Self> {
-        todo!()
+        self.backend
+            .index_add(l, ids.as_ref(), ids_l, src.as_ref(), src_l, dim)
+            .map(Into::into)
     }
 
     fn matmul(
         &self,
-        _: &Self,
-        _: (usize, usize, usize, usize),
-        _: &Layout,
-        _: &Layout,
+        rhs: &Self,
+        bmnk: (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
     ) -> Result<Self> {
-        todo!()
+        self.backend
+            .matmul(rhs.as_ref(), bmnk, lhs_l, rhs_l)
+            .map(Into::into)
     }
 
-    fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()> {
-        todo!()
+    fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
+        self.backend
+            .copy_strided_src(&mut dst.backend, dst_offset, src_l)
     }
 
     fn copy2d(
         &self,
-        _: &mut Self,
-        _d1: usize,
-        _d2: usize,
-        _src_stride1: usize,
-        _dst_stride1: usize,
-        _src_offset: usize,
-        _dst_offset: usize,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_s: usize,
+        dst_s: usize,
+        src_o: usize,
+        dst_o: usize,
     ) -> Result<()> {
-        todo!()
+        self.backend
+            .copy2d(&mut dst.backend, d1, d2, src_s, dst_s, src_o, dst_o)
     }
 
-    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
-        todo!()
+    fn const_set(&mut self, s: crate::scalar::Scalar, l: &Layout) -> Result<()> {
+        self.backend.const_set(s, l)
     }
 
-    fn apply_op1(&self, _l: &Layout, _c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)> {
-        todo!()
+    fn apply_op1(&self, l: &Layout, c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)> {
+        todo!("{}", c.name());
     }
 
     fn apply_op2(
         &self,
-        _l1: &Layout,
-        _t2: &Self,
-        _l2: &Layout,
-        _c: &dyn crate::CustomOp2<Self>,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn crate::CustomOp2<Self>,
     ) -> Result<(Self, Shape)> {
-        todo!()
+        todo!("{}", c.name());
     }
 
     fn apply_op3(
@@ -338,32 +399,33 @@ impl<B: BackendStorage> BackendStorage for Lazy<B> {
         _l3: &Layout,
         _c: &dyn crate::CustomOp3<Self>,
     ) -> Result<(Self, Shape)> {
-        todo!()
+        todo!("{}", c.name());
     }
 
-    fn inplace_op1(&mut self, _l: &Layout, _c: &dyn crate::InplaceOp1) -> Result<()> {
-        todo!()
+    fn inplace_op1(&mut self, l: &Layout, c: &dyn crate::InplaceOp1) -> Result<()> {
+        self.backend.inplace_op1(l, c)
     }
 
     fn inplace_op2(
         &mut self,
-        _l1: &Layout,
-        _t2: &Self,
-        _l2: &Layout,
-        _c: &dyn crate::InplaceOp2,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn crate::InplaceOp2,
     ) -> Result<()> {
-        todo!()
+        self.backend.inplace_op2(l1, t2.as_ref(), l2, c)
     }
 
     fn inplace_op3(
         &mut self,
-        _l1: &Layout,
-        _t2: &Self,
-        _l2: &Layout,
-        _t3: &Self,
-        _l3: &Layout,
-        _c: &dyn crate::InplaceOp3,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn crate::InplaceOp3,
     ) -> Result<()> {
-        todo!()
+        self.backend
+            .inplace_op3(l1, t2.as_ref(), l2, t3.as_ref(), l3, c)
     }
 }

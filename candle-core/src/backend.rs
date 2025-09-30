@@ -21,157 +21,178 @@ pub trait BackendStorage: Sized + Clone + Send + Sync + Debug {
     // Maybe this should return a Cow instead so that no copy is done on the cpu case.
     fn to_cpu_storage(&self) -> Result<CpuStorage>;
 
-    fn affine(&self, _: &Layout, _: f64, _: f64) -> Result<Self>;
+    fn affine(&self, layout: &Layout, a: f64, b: f64) -> Result<Self>;
 
-    fn powf(&self, _: &Layout, _: f64) -> Result<Self>;
+    fn powf(&self, layout: &Layout, e: f64) -> Result<Self>;
 
-    fn elu(&self, _: &Layout, _: f64) -> Result<Self>;
+    fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self>;
 
-    fn reduce_op(&self, _: ReduceOp, _: &Layout, _: &[usize]) -> Result<Self>;
+    fn reduce_op(&self, op: ReduceOp, layout: &Layout, reduce_dims: &[usize]) -> Result<Self>;
 
-    fn cmp(&self, _: CmpOp, _: &Self, _: &Layout, _: &Layout) -> Result<Self>;
+    fn cmp(&self, op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self>;
 
-    fn to_dtype(&self, _: &Layout, _: DType) -> Result<Self>;
+    fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self>;
 
-    fn unary_impl<B: UnaryOpT>(&self, _: &Layout) -> Result<Self>;
+    fn unary_impl<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self>;
 
-    fn binary_impl<B: BinaryOpT>(&self, _: &Self, _: &Layout, _: &Layout) -> Result<Self>;
+    fn binary_impl<B: BinaryOpT>(&self, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout)
+        -> Result<Self>;
 
-    fn where_cond(&self, _: &Layout, _: &Self, _: &Layout, _: &Self, _: &Layout) -> Result<Self>;
+    fn where_cond(
+        &self,
+        layout: &Layout,
+        t: &Self,
+        t_l: &Layout,
+        f: &Self,
+        f_l: &Layout,
+    ) -> Result<Self>;
 
     fn conv1d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConv1D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv1D,
     ) -> Result<Self>;
 
     fn conv_transpose1d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConvTranspose1D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose1D,
     ) -> Result<Self>;
 
     fn conv2d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConv2D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv2D,
     ) -> Result<Self>;
 
     fn conv_transpose2d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConvTranspose2D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose2D,
     ) -> Result<Self>;
 
-    fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self>;
-    fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self>;
-    fn upsample_nearest1d(&self, _: &Layout, _: usize) -> Result<Self>;
-    fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self>;
+    fn avg_pool2d(
+        &self,
+        layout: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+    ) -> Result<Self>;
 
-    fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self>;
+    fn max_pool2d(
+        &self,
+        layout: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+    ) -> Result<Self>;
+
+    fn upsample_nearest1d(&self, layout: &Layout, sz: usize) -> Result<Self>;
+
+    fn upsample_nearest2d(&self, layout: &Layout, h: usize, w: usize) -> Result<Self>;
+
+    fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self>;
 
     fn scatter_set(
         &mut self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<()>;
 
     fn scatter_add_set(
         &mut self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<()>;
 
-    fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self>;
+    fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self>;
     fn index_add(
         &self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<Self>;
 
     fn matmul(
         &self,
-        _: &Self,
-        _: (usize, usize, usize, usize),
-        _: &Layout,
-        _: &Layout,
+        rhs: &Self,
+        bmnk: (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
     ) -> Result<Self>;
 
-    fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()>;
+    fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()>;
 
     #[allow(clippy::too_many_arguments)]
     // Similar to cudaMemcpy2D, though values are in elements and not in bytes.
     fn copy2d(
         &self,
-        _: &mut Self,
-        _d1: usize,
-        _d2: usize,
-        _src_stride1: usize,
-        _dst_stride1: usize,
-        _src_offset: usize,
-        _dst_offset: usize,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_s: usize,
+        dst_s: usize,
+        src_o: usize,
+        dst_o: usize,
     ) -> Result<()>;
 
-    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()>;
+    fn const_set(&mut self, s: crate::scalar::Scalar, l: &Layout) -> Result<()>;
 
-    fn apply_op1(&self, _l: &Layout, _c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)>;
+    fn apply_op1(&self, l: &Layout, c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)>;
 
     fn apply_op2(
         &self,
-        _l1: &Layout,
-        _t2: &Self,
-        _l2: &Layout,
-        _c: &dyn crate::CustomOp2<Self>,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn crate::CustomOp2<Self>,
     ) -> Result<(Self, Shape)>;
 
     fn apply_op3(
         &self,
-        _l1: &Layout,
-        _t2: &Self,
-        _l2: &Layout,
-        _t3: &Self,
-        _l3: &Layout,
-        _c: &dyn crate::CustomOp3<Self>,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn crate::CustomOp3<Self>,
     ) -> Result<(Self, Shape)>;
 
-    fn inplace_op1(&mut self, _l: &Layout, _c: &dyn crate::InplaceOp1) -> Result<()>;
+    fn inplace_op1(&mut self, l: &Layout, c: &dyn crate::InplaceOp1) -> Result<()>;
 
     fn inplace_op2(
         &mut self,
-        _l1: &Layout,
-        _t2: &Self,
-        _l2: &Layout,
-        _c: &dyn crate::InplaceOp2,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn crate::InplaceOp2,
     ) -> Result<()>;
 
     fn inplace_op3(
         &mut self,
-        _l1: &Layout,
-        _t2: &Self,
-        _l2: &Layout,
-        _t3: &Self,
-        _l3: &Layout,
-        _c: &dyn crate::InplaceOp3,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn crate::InplaceOp3,
     ) -> Result<()>;
 }
 

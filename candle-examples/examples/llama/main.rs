@@ -132,7 +132,7 @@ pub fn main() -> Result<()> {
         run::<candle::CudaStorage>(args)?;
 
         #[cfg(feature = "metal")]
-        run::<candle::MetalStorage>(args)?;
+        run::<candle::lazy::Lazy<candle::MetalStorage>>(args)?;
     }
     Ok(())
 }
