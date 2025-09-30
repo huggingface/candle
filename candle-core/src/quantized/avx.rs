@@ -440,7 +440,7 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
 
 #[inline(always)]
 pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Result<f32> {
-    if n % QK_K != 0 {
+    if !n.is_multiple_of(QK_K) {
         crate::bail!("vec_dot_q4k_q8k: {n} is not divisible by {QK_K}")
     }
     let mut utmp = [0u32; 4];
