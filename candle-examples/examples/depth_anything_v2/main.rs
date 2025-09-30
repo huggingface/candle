@@ -10,10 +10,7 @@ use clap::Parser;
 use std::{ffi::OsString, path::PathBuf, sync::Arc};
 
 use candle::DType::{F32, U8};
-use candle::{
-    BackendDevice, BackendStorage, CpuStorage, DType, Device, Module, Result, Tensor,
-    TryConvertStorage,
-};
+use candle::{BackendDevice, BackendStorage, DType, Module, Result, Tensor};
 use candle_examples::{load_image, load_image_and_resize, save_image};
 use candle_nn::VarBuilder;
 use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DepthAnythingV2Config};
@@ -50,10 +47,7 @@ struct Args {
     color_map: bool,
 }
 
-pub fn run<B: BackendStorage + TryConvertStorage<CpuStorage> + 'static>(
-    args: Args,
-    device: &B::Device,
-) -> Result<()> {
+fn run<B: BackendStorage + 'static>(args: Args, device: &B::Device) -> Result<()> {
     let dinov2_model_file = match args.dinov2_model {
         None => {
             let api = hf_hub::api::sync::Api::new().unwrap();
@@ -131,7 +125,7 @@ fn full_output_path(image_path: &PathBuf, output_dir: &Option<PathBuf>) -> PathB
     output_path
 }
 
-fn load_and_prep_image<B: BackendStorage + TryConvertStorage<CpuStorage>>(
+fn load_and_prep_image<B: BackendStorage>(
     image_path: &PathBuf,
     device: &B::Device,
 ) -> anyhow::Result<(usize, usize, Tensor<B>)> {
@@ -142,16 +136,14 @@ fn load_and_prep_image<B: BackendStorage + TryConvertStorage<CpuStorage>>(
         .unsqueeze(0)?
         .to_dtype(F32)?;
 
-    let max_pixel_val = Tensor::try_from(255.0f32)?
-        .to_device(device)?
-        .broadcast_as(image.shape())?;
+    let max_pixel_val = Tensor::new(255.0f32, device)?.broadcast_as(image.shape())?;
     let image = (image / max_pixel_val)?;
     let image = normalize_image(&image, &MAGIC_MEAN, &MAGIC_STD, device)?;
 
     Ok((original_height, original_width, image))
 }
 
-fn normalize_image<B: BackendStorage + TryConvertStorage<CpuStorage>>(
+fn normalize_image<B: BackendStorage>(
     image: &Tensor<B>,
     mean: &[f32; 3],
     std: &[f32; 3],
@@ -164,7 +156,7 @@ fn normalize_image<B: BackendStorage + TryConvertStorage<CpuStorage>>(
     image.sub(&mean_tensor)?.div(&std_tensor)
 }
 
-fn post_process_image<B: BackendStorage + TryConvertStorage<CpuStorage>>(
+fn post_process_image<B: BackendStorage>(
     image: &Tensor<B>,
     original_height: usize,
     original_width: usize,
@@ -181,31 +173,23 @@ fn post_process_image<B: BackendStorage + TryConvertStorage<CpuStorage>>(
         Tensor::cat(&rgb_slice, 0)?.squeeze(1)?
     };
 
-    let max_pixel_val = Tensor::try_from(255.0f32)?
-        .to_device(out.device())?
-        .broadcast_as(out.shape())?;
+    let max_pixel_val = Tensor::new(255.0f32, out.device())?.broadcast_as(out.shape())?;
     let out = (out * max_pixel_val)?;
 
     out.to_dtype(U8)
 }
 
-fn scale_image<B: BackendStorage + TryConvertStorage<CpuStorage>>(
-    depth: &Tensor<B>,
-) -> Result<Tensor<B>> {
+fn scale_image<B: BackendStorage>(depth: &Tensor<B>) -> Result<Tensor<B>> {
     let flat_values: Vec<f32> = depth.flatten_all()?.to_vec1()?;
 
     let min_val = flat_values.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
     let max_val = flat_values.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
 
-    let min_val_tensor = Tensor::try_from(*min_val)?
-        .to_device(depth.device())?
-        .broadcast_as(depth.shape())?;
+    let min_val_tensor = Tensor::new(*min_val, depth.device())?.broadcast_as(depth.shape())?;
     let depth = (depth - min_val_tensor)?;
 
     let range = max_val - min_val;
-    let range_tensor = Tensor::try_from(range)?
-        .to_device(depth.device())?
-        .broadcast_as(depth.shape())?;
+    let range_tensor = Tensor::new(range, depth.device())?.broadcast_as(depth.shape())?;
 
     depth / range_tensor
 }
