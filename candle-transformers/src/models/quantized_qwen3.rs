@@ -8,29 +8,29 @@
 //!
 use super::with_tracing::QMatMul;
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
-use candle::quantized::{gguf_file, QTensor};
-use candle::{DType, Device, Result, Tensor};
+use candle::quantized::{gguf_file, QTensor, QuantizedBackend};
+use candle::{DType, Result, Tensor};
 use candle_nn::{kv_cache::KvCache, Activation, Embedding, Module};
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
-struct Gguf<R: Read + Seek> {
+struct Gguf<QB: QuantizedBackend, R: Read + Seek> {
     ct: gguf_file::Content,
     reader: R,
-    device: Device,
+    device: QB::Device,
 }
 
-impl<R: Read + Seek> Gguf<R> {
-    fn new(ct: gguf_file::Content, reader: R, device: Device) -> Self {
+impl<QB: QuantizedBackend, R: Read + Seek> Gguf<QB, R> {
+    fn new(ct: gguf_file::Content, reader: R, device: QB::Device) -> Self {
         Self { ct, reader, device }
     }
 
-    fn qmatmul(&mut self, name: &str) -> Result<QMatMul> {
+    fn qmatmul(&mut self, name: &str) -> Result<QMatMul<QB>> {
         let ws = self.ct.tensor(&mut self.reader, name, &self.device)?;
         QMatMul::from_weights(ws.into())
     }
 
-    fn rms_norm(&mut self, name: &str, eps: f64) -> Result<RmsNorm> {
+    fn rms_norm(&mut self, name: &str, eps: f64) -> Result<RmsNorm<QB>> {
         let ws = self.ct.tensor(&mut self.reader, name, &self.device)?;
         RmsNorm::from_qtensor(ws, eps)
     }
@@ -39,22 +39,22 @@ impl<R: Read + Seek> Gguf<R> {
         &self.ct.metadata
     }
 
-    fn tensor(&mut self, name: &str) -> Result<QTensor> {
+    fn tensor(&mut self, name: &str) -> Result<QTensor<QB>> {
         self.ct.tensor(&mut self.reader, name, &self.device)
     }
 }
 
 #[derive(Debug, Clone)]
-struct MlpWeights {
-    gate_proj: QMatMul,
-    up_proj: QMatMul,
-    down_proj: QMatMul,
+struct MlpWeights<QB: QuantizedBackend> {
+    gate_proj: QMatMul<QB>,
+    up_proj: QMatMul<QB>,
+    down_proj: QMatMul<QB>,
     act_fn: Activation,
     span: tracing::Span,
 }
 
-impl MlpWeights {
-    fn new<R: Read + Seek>(gg: &mut Gguf<R>, prefix: &str) -> Result<Self> {
+impl<QB: QuantizedBackend> MlpWeights<QB> {
+    fn new<R: Read + Seek>(gg: &mut Gguf<QB, R>, prefix: &str) -> Result<Self> {
         let gate_proj = gg.qmatmul(&format!("{prefix}.ffn_gate.weight"))?;
         let up_proj = gg.qmatmul(&format!("{prefix}.ffn_up.weight"))?;
         let down_proj = gg.qmatmul(&format!("{prefix}.ffn_down.weight"))?;
@@ -70,8 +70,11 @@ impl MlpWeights {
     }
 }
 
-impl Module for MlpWeights {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for MlpWeights<QB>
+where
+    QMatMul<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, x: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let _enter = self.span.enter();
         let gate = self.gate_proj.forward(x)?.apply(&self.act_fn)?;
         let up = self.up_proj.forward(x)?;
@@ -81,18 +84,22 @@ impl Module for MlpWeights {
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+struct RotaryEmbedding<QB: QuantizedBackend> {
+    sin: Tensor<QB::Storage>,
+    cos: Tensor<QB::Storage>,
 }
 
-impl RotaryEmbedding {
+type RotaryEmbedResult<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
+impl<QB: QuantizedBackend> RotaryEmbedding<QB> {
     fn new(
         dtype: DType,
         head_dim: usize,
         max_position_embeddings: usize,
         rope_theta: f64,
-        dev: &Device,
+        dev: &QB::Device,
     ) -> Result<Self> {
         let dim = head_dim;
         let max_seq_len = max_position_embeddings;
@@ -113,7 +120,12 @@ impl RotaryEmbedding {
     }
 
     /// Apply RoPE (q, k shape: B x H x L x D)
-    fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
+    fn apply(
+        &self,
+        q: &Tensor<QB::Storage>,
+        k: &Tensor<QB::Storage>,
+        offset: usize,
+    ) -> Result<RotaryEmbedResult<QB>> {
         let (_, _, seq_len, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
         let sin = self.sin.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
@@ -124,30 +136,30 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-struct AttentionWeights {
-    q_proj: QMatMul,
-    k_proj: QMatMul,
-    v_proj: QMatMul,
-    o_proj: QMatMul,
-    q_norm: RmsNorm,
-    k_norm: RmsNorm,
+struct AttentionWeights<QB: QuantizedBackend> {
+    q_proj: QMatMul<QB>,
+    k_proj: QMatMul<QB>,
+    v_proj: QMatMul<QB>,
+    o_proj: QMatMul<QB>,
+    q_norm: RmsNorm<QB>,
+    k_norm: RmsNorm<QB>,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: KvCache,
+    rotary_emb: Arc<RotaryEmbedding<QB>>,
+    kv_cache: KvCache<QB::Storage>,
     span_attn: tracing::Span,
 }
 
-impl AttentionWeights {
+impl<QB: QuantizedBackend> AttentionWeights<QB> {
     fn new<R: Read + Seek>(
-        gg: &mut Gguf<R>,
+        gg: &mut Gguf<QB, R>,
         num_heads: usize,
         num_kv_heads: usize,
         head_dim: usize,
         rms_norm_eps: f64,
-        rotary_emb: Arc<RotaryEmbedding>,
+        rotary_emb: Arc<RotaryEmbedding<QB>>,
         prefix: &str,
     ) -> Result<Self> {
         let num_kv_groups = num_heads / num_kv_heads;
@@ -183,7 +195,15 @@ impl AttentionWeights {
         })
     }
 
-    fn forward(&mut self, x: &Tensor, attn_mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        x: &Tensor<QB::Storage>,
+        attn_mask: Option<&Tensor<QB::Storage>>,
+        offset: usize,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        QMatMul<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span_attn.enter();
         let (b, l, _) = x.dims3()?;
 
@@ -246,21 +266,21 @@ impl AttentionWeights {
 }
 
 #[derive(Debug, Clone)]
-struct LayerWeights {
-    self_attn: AttentionWeights,
-    mlp: MlpWeights,
-    ln1: RmsNorm,
-    ln2: RmsNorm,
+struct LayerWeights<QB: QuantizedBackend> {
+    self_attn: AttentionWeights<QB>,
+    mlp: MlpWeights<QB>,
+    ln1: RmsNorm<QB>,
+    ln2: RmsNorm<QB>,
 }
 
-impl LayerWeights {
+impl<QB: QuantizedBackend> LayerWeights<QB> {
     fn new<R: Read + Seek>(
-        gg: &mut Gguf<R>,
+        gg: &mut Gguf<QB, R>,
         num_attention_heads: usize,
         num_key_value_heads: usize,
         head_dim: usize,
         rms_norm_eps: f64,
-        rotary: Arc<RotaryEmbedding>,
+        rotary: Arc<RotaryEmbedding<QB>>,
         layer_idx: usize,
     ) -> Result<Self> {
         let prefix = format!("blk.{layer_idx}");
@@ -285,7 +305,15 @@ impl LayerWeights {
         })
     }
 
-    fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        x: &Tensor<QB::Storage>,
+        mask: Option<&Tensor<QB::Storage>>,
+        offset: usize,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        QMatMul<QB>: Module<QB::Storage>,
+    {
         let h = self.ln1.forward(x)?;
         let h = self.self_attn.forward(&h, mask, offset)?;
         let x = (x + h)?;
@@ -296,22 +324,22 @@ impl LayerWeights {
 }
 
 #[derive(Debug, Clone)]
-pub struct ModelWeights {
-    embed_tokens: Embedding,
-    layers: Vec<LayerWeights>,
-    norm: RmsNorm,
-    lm_head: QMatMul,
-    device: Device,
+pub struct ModelWeights<QB: QuantizedBackend> {
+    embed_tokens: Embedding<QB::Storage>,
+    layers: Vec<LayerWeights<QB>>,
+    norm: RmsNorm<QB>,
+    lm_head: QMatMul<QB>,
+    device: QB::Device,
     dtype: DType,
     span: tracing::Span,
     span_output: tracing::Span,
 }
 
-impl ModelWeights {
+impl<QB: QuantizedBackend> ModelWeights<QB> {
     pub fn from_gguf<R: Read + Seek>(
         ct: gguf_file::Content,
         reader: &mut R,
-        device: &Device,
+        device: &QB::Device,
     ) -> Result<Self> {
         let mut gg = Gguf::new(ct, reader, device.clone());
         let md_get = |s: &str| match gg.metadata().get(s) {
@@ -338,7 +366,7 @@ impl ModelWeights {
         };
 
         let embed_tensor = gg.tensor("token_embd.weight")?;
-        let embed_tokens = Embedding::new(embed_tensor.dequantize(device)?, hidden_size);
+        let embed_tokens = Embedding::new(embed_tensor.dequantize()?, hidden_size);
 
         let rotary = Arc::new(RotaryEmbedding::new(
             dtype,
@@ -388,7 +416,7 @@ impl ModelWeights {
         tgt: usize,
         offset: usize,
         sw: Option<usize>,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<QB::Storage>> {
         let minf = f32::NEG_INFINITY;
         let mask: Vec<_> = (0..tgt)
             .flat_map(|i| {
@@ -409,7 +437,14 @@ impl ModelWeights {
         Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
     }
 
-    pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        input: &Tensor<QB::Storage>,
+        offset: usize,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        QMatMul<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span.enter();
         let (b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;

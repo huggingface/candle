@@ -7,7 +7,7 @@
 //!
 
 use crate::models::clip::div_l2_norm;
-use candle::{IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, linear, LayerNorm, Linear, VarBuilder};
 
 fn default_text_vocab_size() -> usize {
@@ -289,16 +289,16 @@ impl Config {
 }
 
 #[derive(Clone, Debug)]
-struct MultiheadAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    out_proj: Linear,
+struct MultiheadAttention<B: BackendStorage> {
+    q_proj: Linear<B>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    out_proj: Linear<B>,
     num_heads: usize,
 }
 
-impl MultiheadAttention {
-    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MultiheadAttention<B> {
+    fn new(cfg: &VisionConfig, vb: VarBuilder<B>) -> Result<Self> {
         let h = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let w_in_proj = vb.get((3 * h, h), "in_proj_weight")?.chunk(3, 0)?;
@@ -316,20 +316,20 @@ impl MultiheadAttention {
         })
     }
 
-    fn separate_heads(&self, x: &Tensor) -> Result<Tensor> {
+    fn separate_heads(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let (b, n, c) = x.dims3()?;
         x.reshape((b, n, self.num_heads, c / self.num_heads))?
             .transpose(1, 2)?
             .contiguous()
     }
 
-    fn recombine_heads(&self, x: &Tensor) -> Result<Tensor> {
+    fn recombine_heads(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let (b, n_heads, n_tokens, c_per_head) = x.dims4()?;
         x.transpose(1, 2)?
             .reshape((b, n_tokens, n_heads * c_per_head))
     }
 
-    fn forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+    fn forward(&self, q: &Tensor<B>, k: &Tensor<B>, v: &Tensor<B>) -> Result<Tensor<B>> {
         let q = self.q_proj.forward(&q.contiguous()?)?;
         let k = self.k_proj.forward(&k.contiguous()?)?;
         let v = self.v_proj.forward(&v.contiguous()?)?;
@@ -348,15 +348,15 @@ impl MultiheadAttention {
 }
 
 #[derive(Debug, Clone)]
-struct MultiheadAttentionPoolingHead {
-    probe: Tensor,
-    attention: MultiheadAttention,
-    layernorm: LayerNorm,
-    mlp: Mlp,
+struct MultiheadAttentionPoolingHead<B: BackendStorage> {
+    probe: Tensor<B>,
+    attention: MultiheadAttention<B>,
+    layernorm: LayerNorm<B>,
+    mlp: Mlp<B>,
 }
 
-impl MultiheadAttentionPoolingHead {
-    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MultiheadAttentionPoolingHead<B> {
+    fn new(cfg: &VisionConfig, vb: VarBuilder<B>) -> Result<Self> {
         let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
         let layernorm = layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("layernorm"))?;
         let probe = vb.get((1, 1, cfg.hidden_size), "probe")?;
@@ -370,8 +370,8 @@ impl MultiheadAttentionPoolingHead {
     }
 }
 
-impl Module for MultiheadAttentionPoolingHead {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for MultiheadAttentionPoolingHead<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let batch_size = xs.dim(0)?;
         let probe = self.probe.repeat((batch_size, 1, 1))?;
         let xs = self.attention.forward(&probe, xs, xs)?;
@@ -382,18 +382,18 @@ impl Module for MultiheadAttentionPoolingHead {
 }
 
 #[derive(Debug, Clone)]
-struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    out_proj: Linear,
+struct Attention<B: BackendStorage> {
+    q_proj: Linear<B>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    out_proj: Linear<B>,
     num_heads: usize,
     head_dim: usize,
     scale: f64,
 }
 
-impl Attention {
-    fn new<C: TransformerConfig>(cfg: &C, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Attention<B> {
+    fn new<C: TransformerConfig>(cfg: &C, vb: VarBuilder<B>) -> Result<Self> {
         let embed_dim = cfg.hidden_size();
         let q_proj = linear(embed_dim, embed_dim, vb.pp("q_proj"))?;
         let k_proj = linear(embed_dim, embed_dim, vb.pp("k_proj"))?;
@@ -412,7 +412,7 @@ impl Attention {
         })
     }
 
-    fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, attention_mask: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let (batch_size, q_len, _) = xs.dims3()?;
         let query_states = xs.apply(&self.q_proj)?;
         let key_states = xs.apply(&self.k_proj)?;
@@ -441,14 +441,14 @@ impl Attention {
 
 // https://github.com/huggingface/transformers/blob/2e24ee4dfa39cc0bc264b89edbccc373c8337086/src/transformers/models/siglip/modeling_siglip.py#L599
 #[derive(Debug, Clone)]
-struct Mlp {
-    fc1: Linear,
-    fc2: Linear,
+struct Mlp<B: BackendStorage> {
+    fc1: Linear<B>,
+    fc2: Linear<B>,
     activation_fn: candle_nn::Activation,
 }
 
-impl Mlp {
-    fn new<C: TransformerConfig>(cfg: &C, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Mlp<B> {
+    fn new<C: TransformerConfig>(cfg: &C, vb: VarBuilder<B>) -> Result<Self> {
         let hidden_size = cfg.hidden_size();
         let intermediate_size = cfg.intermediate_size();
         let fc1 = candle_nn::linear(hidden_size, intermediate_size, vb.pp("fc1"))?;
@@ -461,8 +461,8 @@ impl Mlp {
     }
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &candle::Tensor) -> Result<candle::Tensor> {
+impl<B: BackendStorage> Module<B> for Mlp<B> {
+    fn forward(&self, xs: &candle::Tensor<B>) -> Result<candle::Tensor<B>> {
         xs.apply(&self.fc1)?
             .apply(&self.activation_fn)?
             .apply(&self.fc2)
@@ -471,15 +471,15 @@ impl Module for Mlp {
 
 // https://github.com/huggingface/transformers/blob/2e24ee4dfa39cc0bc264b89edbccc373c8337086/src/transformers/models/siglip/modeling_siglip.py#L614
 #[derive(Debug, Clone)]
-struct EncoderLayer {
-    self_attn: Attention,
-    layer_norm1: LayerNorm,
-    mlp: Mlp,
-    layer_norm2: LayerNorm,
+struct EncoderLayer<B: BackendStorage> {
+    self_attn: Attention<B>,
+    layer_norm1: LayerNorm<B>,
+    mlp: Mlp<B>,
+    layer_norm2: LayerNorm<B>,
 }
 
-impl EncoderLayer {
-    fn new<C: TransformerConfig>(cfg: &C, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> EncoderLayer<B> {
+    fn new<C: TransformerConfig>(cfg: &C, vb: VarBuilder<B>) -> Result<Self> {
         let hidden_size = cfg.hidden_size();
         let layer_norm_eps = cfg.layer_norm_eps();
         let self_attn = Attention::new(cfg, vb.pp("self_attn"))?;
@@ -494,7 +494,7 @@ impl EncoderLayer {
         })
     }
 
-    fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, attention_mask: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = xs.apply(&self.layer_norm1)?;
         let xs = self.self_attn.forward(&xs, attention_mask)?;
@@ -507,12 +507,12 @@ impl EncoderLayer {
 }
 
 #[derive(Debug, Clone)]
-struct Encoder {
-    layers: Vec<EncoderLayer>,
+struct Encoder<B: BackendStorage> {
+    layers: Vec<EncoderLayer<B>>,
 }
 
-impl Encoder {
-    fn new<C: TransformerConfig>(cfg: &C, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Encoder<B> {
+    fn new<C: TransformerConfig>(cfg: &C, vb: VarBuilder<B>) -> Result<Self> {
         let mut layers = vec![];
         let vb = vb.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers() {
@@ -522,7 +522,7 @@ impl Encoder {
         Ok(Self { layers })
     }
 
-    fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, attention_mask: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
             xs = layer.forward(&xs, attention_mask)?
@@ -532,15 +532,15 @@ impl Encoder {
 }
 
 #[derive(Debug, Clone)]
-struct VisionEmbeddings {
-    patch_embedding: candle_nn::Conv2d,
-    position_embedding: Tensor,
+struct VisionEmbeddings<B: BackendStorage> {
+    patch_embedding: candle_nn::Conv2d<B>,
+    position_embedding: Tensor<B>,
     patch_size: usize,
     base_num_patches_per_side: usize,
 }
 
-impl VisionEmbeddings {
-    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> VisionEmbeddings<B> {
+    fn new(cfg: &VisionConfig, vb: VarBuilder<B>) -> Result<Self> {
         let conv2d_cfg = candle_nn::Conv2dConfig {
             stride: cfg.patch_size,
             ..Default::default()
@@ -576,8 +576,8 @@ impl VisionEmbeddings {
     }
 }
 
-impl Module for VisionEmbeddings {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for VisionEmbeddings<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         //embed tokens
         let (_batch, _channels, _height, _width) = xs.dims4()?;
         let embeddings = xs.apply(&self.patch_embedding)?;
@@ -602,15 +602,15 @@ impl Module for VisionEmbeddings {
 }
 
 #[derive(Debug, Clone)]
-struct VisionTransformer {
-    embeddings: VisionEmbeddings,
-    encoder: Encoder,
-    post_layernorm: LayerNorm,
-    head: Option<MultiheadAttentionPoolingHead>,
+struct VisionTransformer<B: BackendStorage> {
+    embeddings: VisionEmbeddings<B>,
+    encoder: Encoder<B>,
+    post_layernorm: LayerNorm<B>,
+    head: Option<MultiheadAttentionPoolingHead<B>>,
 }
 
-impl VisionTransformer {
-    fn new(cfg: &VisionConfig, use_head: bool, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> VisionTransformer<B> {
+    fn new(cfg: &VisionConfig, use_head: bool, vb: VarBuilder<B>) -> Result<Self> {
         let embeddings = VisionEmbeddings::new(cfg, vb.pp("embeddings"))?;
         let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
         let post_layernorm =
@@ -629,8 +629,8 @@ impl VisionTransformer {
     }
 }
 
-impl Module for VisionTransformer {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for VisionTransformer<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = xs.apply(&self.embeddings)?;
         let xs = self.encoder.forward(&xs, None)?;
         let xs = xs.apply(&self.post_layernorm)?;
@@ -642,32 +642,32 @@ impl Module for VisionTransformer {
 }
 
 #[derive(Debug, Clone)]
-pub struct VisionModel {
-    vision_model: VisionTransformer,
+pub struct VisionModel<B: BackendStorage> {
+    vision_model: VisionTransformer<B>,
 }
 
-impl VisionModel {
-    pub fn new(cfg: &VisionConfig, use_head: bool, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> VisionModel<B> {
+    pub fn new(cfg: &VisionConfig, use_head: bool, vb: VarBuilder<B>) -> Result<Self> {
         let vision_model = VisionTransformer::new(cfg, use_head, vb)?;
         Ok(Self { vision_model })
     }
 }
 
-impl Module for VisionModel {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for VisionModel<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.vision_model)
     }
 }
 
 #[derive(Debug, Clone)]
-struct TextEmbeddings {
-    token_embedding: candle_nn::Embedding,
-    position_embedding: candle_nn::Embedding,
-    position_ids: Tensor,
+struct TextEmbeddings<B: BackendStorage> {
+    token_embedding: candle_nn::Embedding<B>,
+    position_embedding: candle_nn::Embedding<B>,
+    position_ids: Tensor<B>,
 }
 
-impl TextEmbeddings {
-    fn new(cfg: &TextConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> TextEmbeddings<B> {
+    fn new(cfg: &TextConfig, vb: VarBuilder<B>) -> Result<Self> {
         let token_embedding =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("token_embedding"))?;
         let position_embedding = candle_nn::embedding(
@@ -685,8 +685,8 @@ impl TextEmbeddings {
     }
 }
 
-impl Module for TextEmbeddings {
-    fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for TextEmbeddings<B> {
+    fn forward(&self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let seq_length = input_ids.dim(D::Minus1)?;
         let inputs_embeds = self.token_embedding.forward(input_ids)?;
         let position_ids = self.position_ids.narrow(1, 0, seq_length)?;
@@ -696,15 +696,15 @@ impl Module for TextEmbeddings {
 }
 
 #[derive(Debug, Clone)]
-pub struct TextTransformer {
-    embeddings: TextEmbeddings,
-    encoder: Encoder,
-    final_layer_norm: LayerNorm,
-    pub head: Linear,
+pub struct TextTransformer<B: BackendStorage> {
+    embeddings: TextEmbeddings<B>,
+    encoder: Encoder<B>,
+    final_layer_norm: LayerNorm<B>,
+    pub head: Linear<B>,
 }
 
-impl TextTransformer {
-    fn new(cfg: &TextConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> TextTransformer<B> {
+    fn new(cfg: &TextConfig, vb: VarBuilder<B>) -> Result<Self> {
         let embeddings = TextEmbeddings::new(cfg, vb.pp("embeddings"))?;
         let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
         let final_layer_norm = layer_norm(
@@ -721,8 +721,8 @@ impl TextTransformer {
         })
     }
 }
-impl Module for TextTransformer {
-    fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for TextTransformer<B> {
+    fn forward(&self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let (_bsz, seq_len) = input_ids.dims2()?;
         let input_ids = self.embeddings.forward(input_ids)?;
         let input_ids = self.encoder.forward(&input_ids, None)?;
@@ -735,33 +735,33 @@ impl Module for TextTransformer {
 }
 
 #[derive(Debug, Clone)]
-pub struct TextModel {
-    pub text_model: TextTransformer,
+pub struct TextModel<B: BackendStorage> {
+    pub text_model: TextTransformer<B>,
 }
 
-impl TextModel {
-    pub fn new(cfg: &TextConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> TextModel<B> {
+    pub fn new(cfg: &TextConfig, vb: VarBuilder<B>) -> Result<Self> {
         let text_model = TextTransformer::new(cfg, vb)?;
         Ok(Self { text_model })
     }
 }
 
-impl Module for TextModel {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for TextModel<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.text_model)
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct Model {
-    text_model: TextModel,
-    vision_model: VisionModel,
-    logit_bias: Tensor,
-    logit_scale: Tensor,
+pub struct Model<B: BackendStorage> {
+    text_model: TextModel<B>,
+    vision_model: VisionModel<B>,
+    logit_bias: Tensor<B>,
+    logit_scale: Tensor<B>,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let text_model = TextModel::new(&cfg.text_config, vb.pp("text_model"))?;
         let vision_model = VisionModel::new(&cfg.vision_config, true, vb.pp("vision_model"))?;
         let logit_scale = vb.get(&[1], "logit_scale")?;
@@ -774,15 +774,19 @@ impl Model {
         })
     }
 
-    pub fn get_text_features(&self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn get_text_features(&self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         input_ids.apply(&self.text_model)
     }
 
-    pub fn get_image_features(&self, pixel_values: &Tensor) -> Result<Tensor> {
+    pub fn get_image_features(&self, pixel_values: &Tensor<B>) -> Result<Tensor<B>> {
         pixel_values.apply(&self.vision_model)
     }
 
-    pub fn forward(&self, pixel_values: &Tensor, input_ids: &Tensor) -> Result<(Tensor, Tensor)> {
+    pub fn forward(
+        &self,
+        pixel_values: &Tensor<B>,
+        input_ids: &Tensor<B>,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let image_features = self.get_image_features(pixel_values)?;
         let text_features = self.get_text_features(input_ids)?;
         let image_features_normalized = div_l2_norm(&image_features)?;

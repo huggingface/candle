@@ -1,18 +1,16 @@
-use candle::{DType, Device, Tensor};
+use candle::{CpuDevice, DType};
 use candle_nn::VarBuilder;
-use candle_transformers::{
-    generation::LogitsProcessor,
-    models::{moondream, quantized_moondream},
-};
-use candle_wasm_example_moondream::console_log;
+use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::models::moondream::Config;
+use candle_wasm_example_moondream::{console_log, MoonDream, QMoonDream, QVarBuilder, Tensor};
 use js_sys::Date;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
 
 enum SelectedModel {
-    Moondream(moondream::Model),
-    Quantized(quantized_moondream::Model),
+    Moondream(MoonDream),
+    Quantized(QMoonDream),
 }
 
 #[wasm_bindgen]
@@ -50,8 +48,8 @@ impl Model {
     pub fn load(weights: Vec<u8>, tokenizer: Vec<u8>, quantized: bool) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
-        let device = Device::Cpu;
-        let config = moondream::Config::v2();
+        let device = CpuDevice;
+        let config = Config::v2();
 
         console_log!("config loaded in {:?}", Date::now());
         let tokenizer =
@@ -59,16 +57,14 @@ impl Model {
         let start = Date::now();
         console_log!("weights len: {:?}", weights.len());
         let model = if quantized {
-            let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf_buffer(
-                &weights, &device,
-            )?;
+            let vb = QVarBuilder::from_gguf_buffer(&weights, &device)?;
             console_log!("weights loaded");
-            let model = quantized_moondream::Model::new(&config, vb)?;
+            let model = QMoonDream::new(&config, vb)?;
             SelectedModel::Quantized(model)
         } else {
-            let device = &Device::Cpu;
-            let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, device)?;
-            let model = moondream::Model::new(&config, vb)?;
+            let device = CpuDevice;
+            let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, &device)?;
+            let model = MoonDream::new(&config, vb)?;
             SelectedModel::Moondream(model)
         };
         console_log!("model loaded in {:?}s", (Date::now() - start) / 1000.);
@@ -87,7 +83,7 @@ impl Model {
     }
 
     pub fn set_image_embeddings(&mut self, image: Vec<u8>) -> Result<(), JsError> {
-        let device = Device::Cpu;
+        let device = CpuDevice;
 
         console_log!("loading image as tensor");
         let start = Date::now();
@@ -119,7 +115,7 @@ impl Model {
             verbose_prompt,
         } = serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
 
-        let device = Device::Cpu;
+        let device = CpuDevice;
         let prompt = format!("\n\nQuestion: {prompt}\n\nAnswer:");
         match &mut self.model {
             SelectedModel::Moondream(m) => m.text_model.clear_kv_cache(),
@@ -202,9 +198,9 @@ impl Model {
             .resize_to_fill(378, 378, image::imageops::FilterType::Triangle); // Adjusted to 378x378
         let img = img.to_rgb8();
         let data = img.into_raw();
-        let data = Tensor::from_vec(data, (378, 378, 3), &Device::Cpu)?.permute((2, 0, 1))?;
-        let mean = Tensor::new(&[0.5f32, 0.5, 0.5], &Device::Cpu)?.reshape((3, 1, 1))?;
-        let std = Tensor::new(&[0.5f32, 0.5, 0.5], &Device::Cpu)?.reshape((3, 1, 1))?;
+        let data = Tensor::from_vec(data, (378, 378, 3), &CpuDevice)?.permute((2, 0, 1))?;
+        let mean = Tensor::new(&[0.5f32, 0.5, 0.5], &CpuDevice)?.reshape((3, 1, 1))?;
+        let std = Tensor::new(&[0.5f32, 0.5, 0.5], &CpuDevice)?.reshape((3, 1, 1))?;
         (data.to_dtype(candle::DType::F32)? / 255.)?
             .broadcast_sub(&mean)?
             .broadcast_div(&std)
@@ -222,7 +218,7 @@ impl Model {
             Some(token) => token,
             None => return Err(JsError::new("BOS token is not set.")),
         };
-        let device = Device::Cpu;
+        let device = CpuDevice;
         let context_size = if self.index > 0 { 1 } else { tokens.len() };
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
         let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;

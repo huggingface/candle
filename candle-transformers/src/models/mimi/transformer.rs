@@ -2,11 +2,20 @@
 // This source code is licensed under the license found in the
 // LICENSE file in the root directory of this source tree.
 
-use candle::{DType, Device, IndexOp, Module, Result, StreamTensor, StreamingModule, Tensor, D};
+#[cfg(feature = "flash-attn")]
+use candle::CudaStorage;
+use candle::{
+    BackendStorage, DType, IndexOp, Module, Result, StreamTensor, StreamingModule, Tensor, D,
+};
 use candle_nn::{linear_no_bias, Linear, VarBuilder};
 use std::sync::Arc;
 
-fn linear(in_d: usize, out_d: usize, bias: bool, vb: VarBuilder) -> Result<Linear> {
+fn linear<B: BackendStorage>(
+    in_d: usize,
+    out_d: usize,
+    bias: bool,
+    vb: VarBuilder<B>,
+) -> Result<Linear<B>> {
     if bias {
         candle_nn::linear(in_d, out_d, vb)
     } else {
@@ -48,14 +57,14 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone)]
-pub struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+pub struct RotaryEmbedding<B: BackendStorage> {
+    sin: Tensor<B>,
+    cos: Tensor<B>,
     span: tracing::Span,
 }
 
-impl RotaryEmbedding {
-    pub fn new(dim: usize, max_seq_len: usize, theta: f32, dev: &Device) -> Result<Self> {
+impl<B: BackendStorage> RotaryEmbedding<B> {
+    pub fn new(dim: usize, max_seq_len: usize, theta: f32, dev: &B::Device) -> Result<Self> {
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
             .map(|i| 1f32 / theta.powf(i as f32 / dim as f32))
@@ -73,7 +82,7 @@ impl RotaryEmbedding {
         })
     }
 
-    pub fn apply_rotary_emb(&self, qk: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+    pub fn apply_rotary_emb(&self, qk: &Tensor<B>, seqlen_offset: usize) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (_b_size, _nheads, seqlen, _headdim) = qk.dims4()?;
         let qk_dtype = qk.dtype();
@@ -84,42 +93,46 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-pub struct LayerScale {
-    scale: Tensor,
+pub struct LayerScale<B: BackendStorage> {
+    scale: Tensor<B>,
 }
 
-impl LayerScale {
-    pub fn new(d_model: usize, _init: f64, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> LayerScale<B> {
+    pub fn new(d_model: usize, _init: f64, vb: VarBuilder<B>) -> Result<Self> {
         let scale = vb.get(d_model, "scale")?;
         Ok(Self { scale })
     }
 }
 
-impl Module for LayerScale {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for LayerScale<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.broadcast_mul(&self.scale)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct StreamingMultiheadAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    out_proj: Linear,
+pub struct StreamingMultiheadAttention<B: BackendStorage> {
+    q_proj: Linear<B>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    out_proj: Linear<B>,
     kv_repeat: usize,
     num_heads: usize,
     context: usize,
-    neg_inf: Tensor,
-    rope: Option<Arc<RotaryEmbedding>>,
-    kv_cache: candle_nn::kv_cache::RotatingKvCache,
+    neg_inf: Tensor<B>,
+    rope: Option<Arc<RotaryEmbedding<B>>>,
+    kv_cache: candle_nn::kv_cache::RotatingKvCache<B>,
     pos: usize,
     use_flash_attn: bool,
     span: tracing::Span,
 }
 
-impl StreamingMultiheadAttention {
-    pub fn new(rope: &Option<Arc<RotaryEmbedding>>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> StreamingMultiheadAttention<B> {
+    pub fn new(
+        rope: &Option<Arc<RotaryEmbedding<B>>>,
+        cfg: &Config,
+        vb: VarBuilder<B>,
+    ) -> Result<Self> {
         let embed_dim = cfg.d_model;
         let num_kv = cfg.num_heads / cfg.kv_repeat;
         let kv_dim = num_kv * (embed_dim / cfg.num_heads);
@@ -145,7 +158,7 @@ impl StreamingMultiheadAttention {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor<B>, mask: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         if self.kv_repeat != 1 {
             candle::bail!("only kv-repeat = 1 is supported")
@@ -221,25 +234,25 @@ impl StreamingMultiheadAttention {
         self.kv_cache.reset()
     }
 
-    pub fn set_kv_cache(&mut self, kv_cache: candle_nn::kv_cache::RotatingKvCache) {
+    pub fn set_kv_cache(&mut self, kv_cache: candle_nn::kv_cache::RotatingKvCache<B>) {
         self.kv_cache = kv_cache
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct StreamingMultiheadCrossAttention {
-    in_proj_q: Linear,
-    in_proj_k: Linear,
-    in_proj_v: Linear,
-    out_proj: Linear,
+pub struct StreamingMultiheadCrossAttention<B: BackendStorage> {
+    in_proj_q: Linear<B>,
+    in_proj_k: Linear<B>,
+    in_proj_v: Linear<B>,
+    out_proj: Linear<B>,
     kv_repeat: usize,
     num_heads: usize,
-    neg_inf: Tensor,
+    neg_inf: Tensor<B>,
     span: tracing::Span,
 }
 
-impl StreamingMultiheadCrossAttention {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> StreamingMultiheadCrossAttention<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let embed_dim = cfg.d_model;
         let num_kv = cfg.num_heads / cfg.kv_repeat;
         let kv_dim = num_kv * (embed_dim / cfg.num_heads);
@@ -274,7 +287,12 @@ impl StreamingMultiheadCrossAttention {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, ca_src: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        xs: &Tensor<B>,
+        ca_src: &Tensor<B>,
+        mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         if self.kv_repeat != 1 {
             candle::bail!("only kv-repeat = 1 is supported")
@@ -318,24 +336,24 @@ impl StreamingMultiheadCrossAttention {
 }
 
 #[derive(Debug, Clone)]
-pub enum Mlp {
+pub enum Mlp<B: BackendStorage> {
     NoGating {
         span1: tracing::Span,
-        linear1: Linear,
+        linear1: Linear<B>,
         span2: tracing::Span,
-        linear2: Linear,
+        linear2: Linear<B>,
         span: tracing::Span,
     },
     Gating {
-        linear_in: Linear,
-        linear_out: Linear,
+        linear_in: Linear<B>,
+        linear_out: Linear<B>,
         activation: candle_nn::Activation,
         span: tracing::Span,
     },
 }
 
-impl Mlp {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Mlp<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let d_model = cfg.d_model;
         let span = tracing::span!(tracing::Level::TRACE, "mlp");
 
@@ -374,8 +392,8 @@ impl Mlp {
     }
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Mlp<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         match self {
             Self::NoGating {
                 linear1,
@@ -413,32 +431,32 @@ impl Module for Mlp {
 }
 
 #[derive(Debug, Clone)]
-pub struct RmsNorm {
-    pub(crate) alpha: Tensor,
+pub struct RmsNorm<B: BackendStorage> {
+    pub(crate) alpha: Tensor<B>,
     pub(crate) eps: f32,
 }
 
-impl RmsNorm {
-    pub fn new(d_model: usize, eps: f32, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> RmsNorm<B> {
+    pub fn new(d_model: usize, eps: f32, vb: VarBuilder<B>) -> Result<Self> {
         let alpha = vb.get((1, 1, d_model), "alpha")?.reshape(d_model)?;
         Ok(Self { alpha, eps })
     }
 }
 
-impl Module for RmsNorm {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for RmsNorm<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         candle_nn::ops::rms_norm(xs, &self.alpha, self.eps)
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum Norm {
-    LayerNorm(candle_nn::LayerNorm),
-    RmsNorm(RmsNorm),
+pub enum Norm<B: BackendStorage> {
+    LayerNorm(candle_nn::LayerNorm<B>),
+    RmsNorm(RmsNorm<B>),
 }
 
-impl Norm {
-    pub fn new(d_model: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Norm<B> {
+    pub fn new(d_model: usize, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let norm = match cfg.norm {
             super::NormType::LayerNorm => {
                 let norm = candle_nn::layer_norm(d_model, 1e-5, vb)?;
@@ -453,8 +471,8 @@ impl Norm {
     }
 }
 
-impl Module for Norm {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Norm<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         match self {
             Self::LayerNorm(m) => m.forward(xs),
             Self::RmsNorm(m) => m.forward(xs),
@@ -463,20 +481,24 @@ impl Module for Norm {
 }
 
 #[derive(Debug, Clone)]
-pub struct StreamingTransformerLayer {
-    self_attn: StreamingMultiheadAttention,
-    mlp: Mlp,
-    norm1: Norm,
-    norm2: Norm,
-    layer_scale_1: Option<LayerScale>,
-    layer_scale_2: Option<LayerScale>,
-    cross_attn: Option<(candle_nn::LayerNorm, StreamingMultiheadCrossAttention)>,
+pub struct StreamingTransformerLayer<B: BackendStorage> {
+    self_attn: StreamingMultiheadAttention<B>,
+    mlp: Mlp<B>,
+    norm1: Norm<B>,
+    norm2: Norm<B>,
+    layer_scale_1: Option<LayerScale<B>>,
+    layer_scale_2: Option<LayerScale<B>>,
+    cross_attn: Option<(candle_nn::LayerNorm<B>, StreamingMultiheadCrossAttention<B>)>,
     norm_first: bool,
     span: tracing::Span,
 }
 
-impl StreamingTransformerLayer {
-    pub fn new(rope: &Option<Arc<RotaryEmbedding>>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> StreamingTransformerLayer<B> {
+    pub fn new(
+        rope: &Option<Arc<RotaryEmbedding<B>>>,
+        cfg: &Config,
+        vb: VarBuilder<B>,
+    ) -> Result<Self> {
         if cfg.use_conv_block {
             candle::bail!("conv-block is not supported")
         }
@@ -532,10 +554,10 @@ impl StreamingTransformerLayer {
 
     pub fn forward(
         &mut self,
-        xs: &Tensor,
-        ca_src: Option<&Tensor>,
-        mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        ca_src: Option<&Tensor<B>>,
+        mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         if !self.norm_first {
             candle::bail!("only norm_first = true is supported")
@@ -567,20 +589,20 @@ impl StreamingTransformerLayer {
         self.self_attn.reset_kv_cache()
     }
 
-    pub fn set_kv_cache(&mut self, kv_cache: candle_nn::kv_cache::RotatingKvCache) {
+    pub fn set_kv_cache(&mut self, kv_cache: candle_nn::kv_cache::RotatingKvCache<B>) {
         self.self_attn.set_kv_cache(kv_cache)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct StreamingTransformer {
-    layers: Vec<StreamingTransformerLayer>,
+pub struct StreamingTransformer<B: BackendStorage> {
+    layers: Vec<StreamingTransformerLayer<B>>,
     positional_embedding: PositionalEmbedding,
     max_period: usize,
 }
 
-impl StreamingTransformer {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> StreamingTransformer<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb_l = vb.pp("layers");
         let rope = match cfg.positional_embedding {
             PositionalEmbedding::Rope => {
@@ -606,11 +628,11 @@ impl StreamingTransformer {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         self.forward_ca(xs, None)
     }
 
-    pub fn forward_ca(&mut self, xs: &Tensor, ca_src: Option<&Tensor>) -> Result<Tensor> {
+    pub fn forward_ca(&mut self, xs: &Tensor<B>, ca_src: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let (_b, t, c) = xs.dims3()?;
         let pos = self.layers[0].self_attn.kv_cache.current_seq_len();
         let mask = self.layers[0]
@@ -655,12 +677,12 @@ impl StreamingTransformer {
     }
 }
 
-impl StreamingModule for StreamingTransformer {
+impl<B: BackendStorage> StreamingModule<B> for StreamingTransformer<B> {
     fn reset_state(&mut self) {
         self.layers.iter_mut().for_each(|v| v.reset_kv_cache())
     }
 
-    fn step(&mut self, xs: &StreamTensor) -> Result<StreamTensor> {
+    fn step(&mut self, xs: &StreamTensor<B>) -> Result<StreamTensor<B>> {
         match xs.as_option() {
             None => Ok(StreamTensor::empty()),
             Some(xs) => Ok(StreamTensor::from_tensor(self.forward(xs)?)),
@@ -669,20 +691,20 @@ impl StreamingModule for StreamingTransformer {
 }
 
 #[derive(Debug, Clone)]
-pub struct ProjectedTransformer {
-    transformer: StreamingTransformer,
-    input_proj: Option<Linear>,
-    output_projs: Vec<Option<Linear>>,
+pub struct ProjectedTransformer<B: BackendStorage> {
+    transformer: StreamingTransformer<B>,
+    input_proj: Option<Linear<B>>,
+    output_projs: Vec<Option<Linear<B>>>,
     conv_layout: bool,
     span: tracing::Span,
 }
 
-impl ProjectedTransformer {
+impl<B: BackendStorage> ProjectedTransformer<B> {
     pub fn new(
         input_dim: usize,
         output_dims: &[usize],
         cfg: &Config,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let transformer = StreamingTransformer::new(cfg, vb.clone())?;
         let input_proj = if input_dim == cfg.d_model {
@@ -711,7 +733,7 @@ impl ProjectedTransformer {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor) -> Result<Vec<Tensor>> {
+    pub fn forward(&mut self, xs: &Tensor<B>) -> Result<Vec<Tensor<B>>> {
         let _enter = self.span.enter();
         let xs = if self.conv_layout {
             xs.transpose(1, 2)?
@@ -734,13 +756,13 @@ impl ProjectedTransformer {
     }
 }
 
-impl StreamingModule for ProjectedTransformer {
+impl<B: BackendStorage> StreamingModule<B> for ProjectedTransformer<B> {
     fn reset_state(&mut self) {
         self.transformer.reset_state()
     }
 
-    fn step(&mut self, xs: &StreamTensor) -> Result<StreamTensor> {
-        let xs = xs.apply(&|x: &Tensor| {
+    fn step(&mut self, xs: &StreamTensor<B>) -> Result<StreamTensor<B>> {
+        let xs = xs.apply(&|x: &Tensor<B>| {
             if self.conv_layout {
                 x.transpose(1, 2)
             } else {
@@ -750,7 +772,7 @@ impl StreamingModule for ProjectedTransformer {
         let xs = xs.apply(&self.input_proj.as_ref())?;
         let xs = self.transformer.step(&xs)?;
         let ys = xs.apply(&self.output_projs[0].as_ref())?;
-        ys.apply(&|y: &Tensor| {
+        ys.apply(&|y: &Tensor<B>| {
             if self.conv_layout {
                 y.transpose(1, 2)
             } else {
@@ -762,16 +784,22 @@ impl StreamingModule for ProjectedTransformer {
 
 #[cfg(feature = "flash-attn")]
 fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
+    q: &Tensor<CudaStorage>,
+    k: &Tensor<CudaStorage>,
+    v: &Tensor<CudaStorage>,
     softmax_scale: f32,
     causal: bool,
-) -> Result<Tensor> {
+) -> Result<Tensor<CudaStorage>> {
     candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
 }
 
 #[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+fn flash_attn<B: BackendStorage>(
+    _: &Tensor<B>,
+    _: &Tensor<B>,
+    _: &Tensor<B>,
+    _: f32,
+    _: bool,
+) -> Result<Tensor<B>> {
     unimplemented!("compile with '--features flash-attn'")
 }

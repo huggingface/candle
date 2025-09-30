@@ -1,4 +1,4 @@
-use candle::{DType, Device, Result, Tensor};
+use candle::{CpuDevice, CpuStorage, DType, Result, Tensor};
 use candle_nn::cpu_flash_attention::run_flash_attn_cpu;
 
 #[test]
@@ -9,9 +9,9 @@ fn cpu_flash_attn() -> Result<()> {
     let d = 4;
     let softmax_scale = 1.0f32 / (d as f32).sqrt();
 
-    let q = Tensor::randn(0f32, 1f32, (b, h, s, d), &Device::Cpu)?;
-    let k = Tensor::randn(0f32, 1f32, (b, h, s, d), &Device::Cpu)?;
-    let v = Tensor::randn(0f32, 1f32, (b, h, s, d), &Device::Cpu)?;
+    let q: Tensor<CpuStorage> = Tensor::randn(0f32, 1f32, (b, h, s, d), &CpuDevice)?;
+    let k = Tensor::randn(0f32, 1f32, (b, h, s, d), &CpuDevice)?;
+    let v = Tensor::randn(0f32, 1f32, (b, h, s, d), &CpuDevice)?;
 
     // SDPA needs (b,h,s,d)
     let ground_truth = {

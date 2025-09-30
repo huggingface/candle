@@ -8,12 +8,12 @@ use clap::{Parser, ValueEnum};
 use std::io::Write;
 use tokenizers::Tokenizer;
 
-use candle::quantized::gguf_file;
-use candle::Tensor;
+use candle::quantized::{gguf_file, QuantizedBackend};
+use candle::{BackendDevice, Module, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
-use candle_transformers::models::quantized_llama::ModelWeights as Phi3b;
+use candle_transformers::models::quantized_llama::{MQATrait, ModelWeights as Phi3b, MQA};
 use candle_transformers::models::quantized_phi::ModelWeights as Phi2;
 use candle_transformers::models::quantized_phi3::ModelWeights as Phi3;
 
@@ -158,14 +158,22 @@ fn format_size(size_in_bytes: usize) -> String {
     }
 }
 
-enum Model {
-    Phi2(Phi2),
-    Phi3(Phi3),
-    Phi3b(Phi3b),
+enum Model<QB: QuantizedBackend> {
+    Phi2(Phi2<QB>),
+    Phi3(Phi3<QB>),
+    Phi3b(Phi3b<QB>),
 }
 
-impl Model {
-    fn forward(&mut self, xs: &Tensor, pos: usize) -> candle::Result<Tensor> {
+impl<QB: QuantizedBackend> Model<QB> {
+    fn forward(
+        &mut self,
+        xs: &Tensor<QB::Storage>,
+        pos: usize,
+    ) -> candle::Result<Tensor<QB::Storage>>
+    where
+        candle::quantized::QMatMul<QB>: Module<QB::Storage>,
+        MQA<QB>: MQATrait<QB>,
+    {
         match self {
             Self::Phi2(m) => m.forward(xs, pos),
             Self::Phi3(m) => m.forward(xs, pos),
@@ -174,11 +182,31 @@ impl Model {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::QCpuStorage>(args)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::QCudaStorage>(args)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::QMetalStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<QB: QuantizedBackend>(args: Args) -> anyhow::Result<()>
+where
+    candle::quantized::QMatMul<QB>: Module<QB::Storage>,
+    MQA<QB>: MQATrait<QB>,
+{
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
+    let device = QB::Device::new(0)?;
+
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -202,9 +230,8 @@ fn main() -> anyhow::Result<()> {
     let model_path = args.model()?;
     let mut file = std::fs::File::open(&model_path)?;
     let start = std::time::Instant::now();
-    let device = candle_examples::device(args.cpu)?;
 
-    let mut model = {
+    let mut model: Model<QB> = {
         let model = gguf_file::Content::read(&mut file).map_err(|e| e.with_path(model_path))?;
         let mut total_size_in_bytes = 0;
         for (_, tensor) in model.tensor_infos.iter() {

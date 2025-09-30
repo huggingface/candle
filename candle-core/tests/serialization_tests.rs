@@ -1,4 +1,4 @@
-use candle_core::{DType, Result, Tensor};
+use candle_core::{cpu_backend::CpuDevice, CpuStorage, DType, Result, Tensor};
 
 struct TmpFile(std::path::PathBuf);
 
@@ -54,17 +54,17 @@ fn safetensors() -> Result<()> {
     use candle_core::safetensors::Load;
 
     let tmp_file = TmpFile::create("st");
-    let t = Tensor::arange(0f32, 24f32, &candle_core::Device::Cpu)?;
+    let t: Tensor<CpuStorage> = Tensor::arange(0f32, 24f32, &CpuDevice)?;
     t.save_safetensors("t", &tmp_file)?;
     // Load from file.
-    let st = candle_core::safetensors::load(&tmp_file, &candle_core::Device::Cpu)?;
+    let st = candle_core::safetensors::load(&tmp_file, &CpuDevice)?;
     let t2 = st.get("t").unwrap();
     let diff = (&t - t2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
     assert_eq!(diff, 0f32);
     // Load from bytes.
     let bytes = std::fs::read(tmp_file)?;
     let st = candle_core::safetensors::SliceSafetensors::new(&bytes)?;
-    let t2 = st.get("t").unwrap().load(&candle_core::Device::Cpu);
+    let t2 = st.get("t").unwrap().load(&CpuDevice);
     let diff = (&t - t2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
     assert_eq!(diff, 0f32);
     Ok(())

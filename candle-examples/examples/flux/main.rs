@@ -4,10 +4,13 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
-use candle_transformers::models::{clip, flux, t5};
+use candle_transformers::{
+    models::{clip, flux, t5},
+    quantized_nn::Linear,
+};
 
 use anyhow::{Error as E, Result};
-use candle::{IndexOp, Module, Tensor};
+use candle::{quantized::QuantizedBackend, BackendDevice, DType, IndexOp, Module, Tensor};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use tokenizers::Tokenizer;
@@ -60,13 +63,15 @@ enum Model {
     Dev,
 }
 
-fn run(args: Args) -> Result<()> {
+fn run<QB: QuantizedBackend>(args: Args, device: &QB::Device) -> Result<()>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
     let Args {
         prompt,
-        cpu,
         height,
         width,
         tracing,
@@ -94,11 +99,14 @@ fn run(args: Args) -> Result<()> {
         };
         api.repo(hf_hub::Repo::model(name.to_string()))
     };
-    let device = candle_examples::device(cpu)?;
     if let Some(seed) = args.seed {
         device.set_seed(seed)?;
     }
-    let dtype = device.bf16_default_to_f32();
+    let dtype = if QB::Device::SUPPORTS_BF16 {
+        DType::BF16
+    } else {
+        DType::F32
+    };
     let img = match decode_only {
         None => {
             let t5_emb = {
@@ -109,7 +117,7 @@ fn run(args: Args) -> Result<()> {
                 ));
                 let model_file = repo.get("model.safetensors")?;
                 let vb =
-                    unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)? };
+                    unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, device)? };
                 let config_filename = repo.get("config.json")?;
                 let config = std::fs::read_to_string(config_filename)?;
                 let config: t5::Config = serde_json::from_str(&config)?;
@@ -124,7 +132,7 @@ fn run(args: Args) -> Result<()> {
                     .get_ids()
                     .to_vec();
                 tokens.resize(256, 0);
-                let input_token_ids = Tensor::new(&tokens[..], &device)?.unsqueeze(0)?;
+                let input_token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
                 println!("{input_token_ids}");
                 model.forward(&input_token_ids)?
             };
@@ -135,7 +143,7 @@ fn run(args: Args) -> Result<()> {
                 ));
                 let model_file = repo.get("model.safetensors")?;
                 let vb =
-                    unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)? };
+                    unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, device)? };
                 // https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
                 let config = clip::text_model::ClipTextConfig {
                     vocab_size: 49408,
@@ -157,7 +165,7 @@ fn run(args: Args) -> Result<()> {
                     .map_err(E::msg)?
                     .get_ids()
                     .to_vec();
-                let input_token_ids = Tensor::new(&tokens[..], &device)?.unsqueeze(0)?;
+                let input_token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
                 println!("{input_token_ids}");
                 model.forward(&input_token_ids)?
             };
@@ -167,7 +175,7 @@ fn run(args: Args) -> Result<()> {
                     Model::Dev => flux::model::Config::dev(),
                     Model::Schnell => flux::model::Config::schnell(),
                 };
-                let img = flux::sampling::get_noise(1, height, width, &device)?.to_dtype(dtype)?;
+                let img = flux::sampling::get_noise(1, height, width, device)?.to_dtype(dtype)?;
                 let state = if quantized {
                     flux::sampling::State::new(
                         &t5_emb.to_dtype(candle::DType::F32)?,
@@ -193,10 +201,10 @@ fn run(args: Args) -> Result<()> {
                         Model::Dev => todo!(),
                     };
                     let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
-                        model_file, &device,
+                        model_file, device,
                     )?;
 
-                    let model = flux::quantized_model::Flux::new(&cfg, vb)?;
+                    let model = flux::quantized_model::Flux::<QB>::new(&cfg, vb)?;
                     flux::sampling::denoise(
                         &model,
                         &state.img,
@@ -214,7 +222,7 @@ fn run(args: Args) -> Result<()> {
                         Model::Dev => bf_repo.get("flux1-dev.safetensors")?,
                     };
                     let vb = unsafe {
-                        VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)?
+                        VarBuilder::from_mmaped_safetensors(&[model_file], dtype, device)?
                     };
                     let model = flux::model::Flux::new(&cfg, vb)?;
                     flux::sampling::denoise(
@@ -232,7 +240,7 @@ fn run(args: Args) -> Result<()> {
             flux::sampling::unpack(&img, height, width)?
         }
         Some(file) => {
-            let mut st = candle::safetensors::load(file, &device)?;
+            let mut st = candle::safetensors::load(file, device)?;
             st.remove("img").unwrap().to_dtype(dtype)?
         }
     };
@@ -240,7 +248,8 @@ fn run(args: Args) -> Result<()> {
 
     let img = {
         let model_file = bf_repo.get("ae.safetensors")?;
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, &device)? };
+        let vb: VarBuilder<QB::Storage> =
+            unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], dtype, device)? };
         let cfg = match model {
             Model::Dev => flux::autoencoder::Config::dev(),
             Model::Schnell => flux::autoencoder::Config::schnell(),
@@ -258,9 +267,20 @@ fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     let args = Args::parse();
-    #[cfg(feature = "cuda")]
-    candle::quantized::cuda::set_force_dmmv(args.use_dmmv);
-    run(args)
+
+    if args.cpu {
+        run::<candle::QCpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        {
+            run::<candle::QCudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+            candle::quantized::cuda::set_force_dmmv(args.use_dmmv);
+        }
+
+        #[cfg(feature = "metal")]
+        run::<candle::QMetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
 }

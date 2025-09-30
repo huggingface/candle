@@ -6,7 +6,7 @@
 //! - 💻 llama2.c [GH Link](https://github.com/karpathy/llama2.c)
 //!
 
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::linear_no_bias as linear;
 use candle_nn::{embedding, rms_norm, Embedding, Linear, Module, RmsNorm, VarBuilder};
 use std::collections::HashMap;
@@ -78,17 +78,17 @@ impl Config {
 }
 
 #[derive(Debug, Clone)]
-pub struct Cache {
-    masks: HashMap<usize, Tensor>,
+pub struct Cache<B: BackendStorage> {
+    masks: HashMap<usize, Tensor<B>>,
     pub use_kv_cache: bool,
-    pub kvs: Vec<Option<(Tensor, Tensor)>>,
-    pub cos: Tensor,
-    pub sin: Tensor,
-    device: Device,
+    pub kvs: Vec<Option<(Tensor<B>, Tensor<B>)>>,
+    pub cos: Tensor<B>,
+    pub sin: Tensor<B>,
+    device: B::Device,
 }
 
-impl Cache {
-    pub fn new(use_kv_cache: bool, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Cache<B> {
+    pub fn new(use_kv_cache: bool, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let n_elem = cfg.dim / cfg.n_heads;
         let theta: Vec<_> = (0..n_elem)
             .step_by(2)
@@ -120,7 +120,7 @@ impl Cache {
         })
     }
 
-    pub fn mask(&mut self, t: usize) -> Result<Tensor> {
+    pub fn mask(&mut self, t: usize) -> Result<Tensor<B>> {
         if let Some(mask) = self.masks.get(&t) {
             Ok(mask.clone())
         } else {
@@ -134,23 +134,28 @@ impl Cache {
     }
 }
 
-fn silu(xs: &Tensor) -> Result<Tensor> {
+fn silu<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
     xs / (xs.neg()?.exp()? + 1.0)?
 }
 
 #[derive(Debug, Clone)]
-struct CausalSelfAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+struct CausalSelfAttention<B: BackendStorage> {
+    q_proj: Linear<B>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    o_proj: Linear<B>,
     n_head: usize,
     n_key_value_head: usize,
     head_dim: usize,
 }
 
-impl CausalSelfAttention {
-    fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize, cache: &Cache) -> Result<Tensor> {
+impl<B: BackendStorage> CausalSelfAttention<B> {
+    fn apply_rotary_emb(
+        &self,
+        x: &Tensor<B>,
+        index_pos: usize,
+        cache: &Cache<B>,
+    ) -> Result<Tensor<B>> {
         let (b_sz, seq_len, h, n_embd) = x.dims4()?;
         let cos = cache.cos.i(index_pos..index_pos + seq_len)?;
         let sin = cache.sin.i(index_pos..index_pos + seq_len)?;
@@ -169,11 +174,11 @@ impl CausalSelfAttention {
 
     fn forward(
         &self,
-        x: &Tensor,
+        x: &Tensor<B>,
         index_pos: usize,
         block_idx: usize,
-        cache: &mut Cache,
-    ) -> Result<Tensor> {
+        cache: &mut Cache<B>,
+    ) -> Result<Tensor<B>> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
         let q = self.q_proj.forward(x)?;
         let k = self.k_proj.forward(x)?;
@@ -216,7 +221,7 @@ impl CausalSelfAttention {
         Ok(y)
     }
 
-    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
+    fn repeat_kv(&self, x: Tensor<B>) -> Result<Tensor<B>> {
         let n_rep = self.n_head / self.n_key_value_head;
         if n_rep == 1 {
             Ok(x)
@@ -230,7 +235,7 @@ impl CausalSelfAttention {
         }
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let size_in = cfg.dim;
         let size_q = (cfg.dim / cfg.n_heads) * cfg.n_heads;
         let size_kv = (cfg.dim / cfg.n_heads) * cfg.n_kv_heads;
@@ -250,7 +255,11 @@ impl CausalSelfAttention {
     }
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+fn masked_fill<B: BackendStorage>(
+    on_false: &Tensor<B>,
+    mask: &Tensor<B>,
+    on_true: f32,
+) -> Result<Tensor<B>> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true, on_false)?;
@@ -258,14 +267,14 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    c_fc1: Linear,
-    c_fc2: Linear,
-    c_proj: Linear,
+struct Mlp<B: BackendStorage> {
+    c_fc1: Linear<B>,
+    c_fc2: Linear<B>,
+    c_proj: Linear<B>,
 }
 
-impl Mlp {
-    fn new(c_fc1: Linear, c_fc2: Linear, c_proj: Linear) -> Self {
+impl<B: BackendStorage> Mlp<B> {
+    fn new(c_fc1: Linear<B>, c_fc2: Linear<B>, c_proj: Linear<B>) -> Self {
         Self {
             c_fc1,
             c_fc2,
@@ -273,12 +282,12 @@ impl Mlp {
         }
     }
 
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let x = (silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
         self.c_proj.forward(&x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let h_size = cfg.dim;
         let i_size = cfg.hidden_dim;
         let c_fc1 = linear(h_size, i_size, vb.pp("gate_proj"))?;
@@ -289,15 +298,20 @@ impl Mlp {
 }
 
 #[derive(Debug, Clone)]
-struct Block {
-    rms_1: RmsNorm,
-    attn: CausalSelfAttention,
-    rms_2: RmsNorm,
-    mlp: Mlp,
+struct Block<B: BackendStorage> {
+    rms_1: RmsNorm<B>,
+    attn: CausalSelfAttention<B>,
+    rms_2: RmsNorm<B>,
+    mlp: Mlp<B>,
 }
 
-impl Block {
-    fn new(rms_1: RmsNorm, attn: CausalSelfAttention, rms_2: RmsNorm, mlp: Mlp) -> Self {
+impl<B: BackendStorage> Block<B> {
+    fn new(
+        rms_1: RmsNorm<B>,
+        attn: CausalSelfAttention<B>,
+        rms_2: RmsNorm<B>,
+        mlp: Mlp<B>,
+    ) -> Self {
         Self {
             rms_1,
             attn,
@@ -308,11 +322,11 @@ impl Block {
 
     fn forward(
         &self,
-        x: &Tensor,
+        x: &Tensor<B>,
         index_pos: usize,
         block_idx: usize,
-        cache: &mut Cache,
-    ) -> Result<Tensor> {
+        cache: &mut Cache<B>,
+    ) -> Result<Tensor<B>> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
         let x = (self.attn.forward(&x, index_pos, block_idx, cache)? + residual)?;
@@ -321,7 +335,7 @@ impl Block {
         Ok(x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg)?;
         let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
         let input_layernorm = rms_norm(cfg.dim, cfg.norm_eps, vb.pp("input_layernorm"))?;
@@ -337,16 +351,21 @@ impl Block {
 }
 
 #[derive(Debug, Clone)]
-pub struct Llama {
-    wte: Embedding,
-    blocks: Vec<Block>,
-    ln_f: RmsNorm,
-    lm_head: Linear,
+pub struct Llama<B: BackendStorage> {
+    wte: Embedding<B>,
+    blocks: Vec<Block<B>>,
+    ln_f: RmsNorm<B>,
+    lm_head: Linear<B>,
     pub config: Config,
 }
 
-impl Llama {
-    pub fn forward(&self, x: &Tensor, index_pos: usize, cache: &mut Cache) -> Result<Tensor> {
+impl<B: BackendStorage> Llama<B> {
+    pub fn forward(
+        &self,
+        x: &Tensor<B>,
+        index_pos: usize,
+        cache: &mut Cache<B>,
+    ) -> Result<Tensor<B>> {
         let (_b_sz, _seq_len) = x.dims2()?;
         let mut x = self.wte.forward(x)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
@@ -357,7 +376,7 @@ impl Llama {
         logits.to_dtype(DType::F32)
     }
 
-    pub fn load(vb: VarBuilder, cfg: Config) -> Result<Self> {
+    pub fn load(vb: VarBuilder<B>, cfg: Config) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.dim, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.dim, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = rms_norm(cfg.dim, cfg.norm_eps, vb.pp("model.norm"))?;

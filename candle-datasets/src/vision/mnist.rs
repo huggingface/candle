@@ -2,11 +2,13 @@
 //!
 //! The files can be obtained from the following link:
 //! <http://yann.lecun.com/exdb/mnist/>
-use candle::{DType, Device, Error, Result, Tensor};
+use candle::{CpuDevice, CpuStorage, DType, Error, Result, Tensor};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::fs::File;
 use std::io::{self, BufReader, Read};
+
+type CpuTensor = Tensor<CpuStorage>;
 
 fn read_u32<T: Read>(reader: &mut T) -> std::io::Result<u32> {
     use byteorder::ReadBytesExt;
@@ -23,17 +25,17 @@ fn check_magic_number<T: Read>(reader: &mut T, expected: u32) -> Result<()> {
     Ok(())
 }
 
-fn read_labels(filename: &std::path::Path) -> Result<Tensor> {
+fn read_labels(filename: &std::path::Path) -> Result<CpuTensor> {
     let mut buf_reader = BufReader::new(File::open(filename)?);
     check_magic_number(&mut buf_reader, 2049)?;
     let samples = read_u32(&mut buf_reader)?;
     let mut data = vec![0u8; samples as usize];
     buf_reader.read_exact(&mut data)?;
     let samples = data.len();
-    Tensor::from_vec(data, samples, &Device::Cpu)
+    Tensor::from_vec(data, samples, &CpuDevice)
 }
 
-fn read_images(filename: &std::path::Path) -> Result<Tensor> {
+fn read_images(filename: &std::path::Path) -> Result<CpuTensor> {
     let mut buf_reader = BufReader::new(File::open(filename)?);
     check_magic_number(&mut buf_reader, 2051)?;
     let samples = read_u32(&mut buf_reader)? as usize;
@@ -42,7 +44,7 @@ fn read_images(filename: &std::path::Path) -> Result<Tensor> {
     let data_len = samples * rows * cols;
     let mut data = vec![0u8; data_len];
     buf_reader.read_exact(&mut data)?;
-    let tensor = Tensor::from_vec(data, (samples, rows * cols), &Device::Cpu)?;
+    let tensor = Tensor::from_vec(data, (samples, rows * cols), &CpuDevice)?;
     tensor.to_dtype(DType::F32)? / 255.
 }
 
@@ -61,7 +63,7 @@ pub fn load_dir<T: AsRef<std::path::Path>>(dir: T) -> Result<crate::vision::Data
     })
 }
 
-fn load_parquet(parquet: SerializedFileReader<std::fs::File>) -> Result<(Tensor, Tensor)> {
+fn load_parquet(parquet: SerializedFileReader<std::fs::File>) -> Result<(CpuTensor, CpuTensor)> {
     let samples = parquet.metadata().file_metadata().num_rows() as usize;
     let mut buffer_images: Vec<u8> = Vec::with_capacity(samples * 784);
     let mut buffer_labels: Vec<u8> = Vec::with_capacity(samples);
@@ -79,10 +81,10 @@ fn load_parquet(parquet: SerializedFileReader<std::fs::File>) -> Result<(Tensor,
             }
         }
     }
-    let images = (Tensor::from_vec(buffer_images, (samples, 784), &Device::Cpu)?
+    let images = (Tensor::from_vec(buffer_images, (samples, 784), &CpuDevice)?
         .to_dtype(DType::F32)?
         / 255.)?;
-    let labels = Tensor::from_vec(buffer_labels, (samples,), &Device::Cpu)?;
+    let labels = Tensor::from_vec(buffer_labels, (samples,), &CpuDevice)?;
     Ok((images, labels))
 }
 

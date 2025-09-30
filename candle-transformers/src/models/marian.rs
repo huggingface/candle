@@ -5,7 +5,7 @@
 //! - [GitHub](https://github.com/marian-nmt/marian)
 //!
 use super::with_tracing::{linear, Embedding, Linear};
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -204,12 +204,12 @@ impl Config {
 }
 
 #[derive(Debug, Clone)]
-struct SinusoidalPositionalEmbedding {
-    emb: Embedding,
+struct SinusoidalPositionalEmbedding<B: BackendStorage> {
+    emb: Embedding<B>,
 }
 
-impl SinusoidalPositionalEmbedding {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SinusoidalPositionalEmbedding<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let dev = vb.device();
         let dtype = vb.dtype();
         let num_positions = cfg.max_position_embeddings;
@@ -231,7 +231,7 @@ impl SinusoidalPositionalEmbedding {
         Ok(Self { emb })
     }
 
-    fn forward(&self, input_ids: &Tensor, past_kv_len: usize) -> Result<Tensor> {
+    fn forward(&self, input_ids: &Tensor<B>, past_kv_len: usize) -> Result<Tensor<B>> {
         let seq_len = input_ids.dim(1)?;
         Tensor::arange(
             past_kv_len as u32,
@@ -243,20 +243,20 @@ impl SinusoidalPositionalEmbedding {
 }
 
 #[derive(Debug, Clone)]
-struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    out_proj: Linear,
+struct Attention<B: BackendStorage> {
+    q_proj: Linear<B>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    out_proj: Linear<B>,
     scaling: f64,
     num_heads: usize,
     head_dim: usize,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: Option<(Tensor<B>, Tensor<B>)>,
     is_decoder: bool,
 }
 
-impl Attention {
-    fn new(cfg: &Config, is_decoder: bool, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Attention<B> {
+    fn new(cfg: &Config, is_decoder: bool, vb: VarBuilder<B>) -> Result<Self> {
         let num_heads = if is_decoder {
             cfg.decoder_attention_heads
         } else {
@@ -282,7 +282,7 @@ impl Attention {
         })
     }
 
-    fn _shape(&self, tensor: &Tensor, bsz: usize) -> Result<Tensor> {
+    fn _shape(&self, tensor: &Tensor<B>, bsz: usize) -> Result<Tensor<B>> {
         tensor
             .reshape((bsz, (), self.num_heads, self.head_dim))?
             .transpose(1, 2)?
@@ -291,10 +291,10 @@ impl Attention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        kv_states: Option<&Tensor>,
-        attn_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        kv_states: Option<&Tensor<B>>,
+        attn_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let (b_sz, tgt_len, _) = xs.dims3()?;
         let query_states = (xs.apply(&self.q_proj)? * self.scaling)?;
         let (key_states, value_states) = match kv_states {
@@ -346,17 +346,17 @@ impl Attention {
 }
 
 #[derive(Debug, Clone)]
-struct EncoderLayer {
-    self_attn: Attention,
-    self_attn_layer_norm: LayerNorm,
+struct EncoderLayer<B: BackendStorage> {
+    self_attn: Attention<B>,
+    self_attn_layer_norm: LayerNorm<B>,
     activation_fn: candle_nn::Activation,
-    fc1: Linear,
-    fc2: Linear,
-    final_layer_norm: LayerNorm,
+    fc1: Linear<B>,
+    fc2: Linear<B>,
+    final_layer_norm: LayerNorm<B>,
 }
 
-impl EncoderLayer {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> EncoderLayer<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let self_attn = Attention::new(cfg, true, vb.pp("self_attn"))?;
         let self_attn_layer_norm = layer_norm(cfg.d_model, 1e-5, vb.pp("self_attn_layer_norm"))?;
         let fc1 = linear(cfg.d_model, cfg.encoder_ffn_dim, vb.pp("fc1"))?;
@@ -372,7 +372,7 @@ impl EncoderLayer {
         })
     }
 
-    fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&mut self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = (self.self_attn.forward(xs, None, None)? + residual)?
             .apply(&self.self_attn_layer_norm)?;
@@ -390,19 +390,19 @@ impl EncoderLayer {
 }
 
 #[derive(Debug, Clone)]
-struct DecoderLayer {
-    self_attn: Attention,
-    self_attn_layer_norm: LayerNorm,
+struct DecoderLayer<B: BackendStorage> {
+    self_attn: Attention<B>,
+    self_attn_layer_norm: LayerNorm<B>,
     activation_fn: candle_nn::Activation,
-    encoder_attn: Attention,
-    encoder_attn_layer_norm: LayerNorm,
-    fc1: Linear,
-    fc2: Linear,
-    final_layer_norm: LayerNorm,
+    encoder_attn: Attention<B>,
+    encoder_attn_layer_norm: LayerNorm<B>,
+    fc1: Linear<B>,
+    fc2: Linear<B>,
+    final_layer_norm: LayerNorm<B>,
 }
 
-impl DecoderLayer {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> DecoderLayer<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let self_attn = Attention::new(cfg, true, vb.pp("self_attn"))?;
         let self_attn_layer_norm = layer_norm(cfg.d_model, 1e-5, vb.pp("self_attn_layer_norm"))?;
         let encoder_attn = Attention::new(cfg, true, vb.pp("encoder_attn"))?;
@@ -425,10 +425,10 @@ impl DecoderLayer {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        encoder_xs: Option<&Tensor>,
-        attn_mask: &Tensor,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        encoder_xs: Option<&Tensor<B>>,
+        attn_mask: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = (self.self_attn.forward(xs, None, Some(attn_mask))? + residual)?
             .apply(&self.self_attn_layer_norm)?;
@@ -456,15 +456,15 @@ impl DecoderLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Encoder {
-    embed_tokens: Embedding,
-    embed_positions: SinusoidalPositionalEmbedding,
-    layers: Vec<EncoderLayer>,
+pub struct Encoder<B: BackendStorage> {
+    embed_tokens: Embedding<B>,
+    embed_positions: SinusoidalPositionalEmbedding<B>,
+    layers: Vec<EncoderLayer<B>>,
     embed_scale: Option<f64>,
 }
 
-impl Encoder {
-    fn new(cfg: &Config, embed_tokens: &Embedding, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Encoder<B> {
+    fn new(cfg: &Config, embed_tokens: &Embedding<B>, vb: VarBuilder<B>) -> Result<Self> {
         let embed_positions = SinusoidalPositionalEmbedding::new(cfg, vb.pp("embed_positions"))?;
         let mut layers = Vec::with_capacity(cfg.encoder_layers);
         let vb_l = vb.pp("layers");
@@ -485,7 +485,7 @@ impl Encoder {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor, past_kv_len: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor<B>, past_kv_len: usize) -> Result<Tensor<B>> {
         let xs = xs.apply(&self.embed_tokens)?;
         let xs = match self.embed_scale {
             None => xs,
@@ -510,15 +510,15 @@ impl Encoder {
 }
 
 #[derive(Debug, Clone)]
-pub struct Decoder {
-    embed_tokens: Embedding,
-    embed_positions: SinusoidalPositionalEmbedding,
-    layers: Vec<DecoderLayer>,
+pub struct Decoder<B: BackendStorage> {
+    embed_tokens: Embedding<B>,
+    embed_positions: SinusoidalPositionalEmbedding<B>,
+    layers: Vec<DecoderLayer<B>>,
     embed_scale: Option<f64>,
 }
 
-impl Decoder {
-    fn new(cfg: &Config, embed_tokens: &Embedding, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Decoder<B> {
+    fn new(cfg: &Config, embed_tokens: &Embedding<B>, vb: VarBuilder<B>) -> Result<Self> {
         let embed_positions = SinusoidalPositionalEmbedding::new(cfg, vb.pp("embed_positions"))?;
         let mut layers = Vec::with_capacity(cfg.decoder_layers);
         let vb_l = vb.pp("layers");
@@ -541,11 +541,11 @@ impl Decoder {
 
     pub fn forward(
         &mut self,
-        xs: &Tensor,
-        encoder_xs: Option<&Tensor>,
+        xs: &Tensor<B>,
+        encoder_xs: Option<&Tensor<B>>,
         past_kv_len: usize,
-        attn_mask: &Tensor,
-    ) -> Result<Tensor> {
+        attn_mask: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let xs = xs.apply(&self.embed_tokens)?;
         let xs = match self.embed_scale {
             None => xs,
@@ -570,14 +570,14 @@ impl Decoder {
 }
 
 #[derive(Debug, Clone)]
-struct Model {
-    shared: Embedding,
-    encoder: Encoder,
-    decoder: Decoder,
+struct Model<B: BackendStorage> {
+    shared: Embedding<B>,
+    encoder: Encoder<B>,
+    decoder: Decoder<B>,
 }
 
-impl Model {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let shared = Embedding::new(cfg.vocab_size, cfg.d_model, vb.pp("shared"))?;
         let encoder = Encoder::new(cfg, &shared, vb.pp("encoder"))?;
         let decoder = Decoder::new(cfg, &shared, vb.pp("decoder"))?;
@@ -595,14 +595,14 @@ impl Model {
 }
 
 #[derive(Debug, Clone)]
-pub struct MTModel {
-    model: Model,
-    lm_head: Linear,
-    final_logits_bias: Tensor,
+pub struct MTModel<B: BackendStorage> {
+    model: Model<B>,
+    lm_head: Linear<B>,
+    final_logits_bias: Tensor<B>,
 }
 
-impl MTModel {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MTModel<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let target_vocab_size = cfg.decoder_vocab_size.unwrap_or(cfg.vocab_size);
         let final_logits_bias = vb.get((1, target_vocab_size), "final_logits_bias")?;
         let model = Model::new(cfg, vb.pp("model"))?;
@@ -614,20 +614,20 @@ impl MTModel {
         })
     }
 
-    pub fn encoder(&mut self) -> &mut Encoder {
+    pub fn encoder(&mut self) -> &mut Encoder<B> {
         &mut self.model.encoder
     }
 
-    pub fn decoder(&mut self) -> &mut Decoder {
+    pub fn decoder(&mut self) -> &mut Decoder<B> {
         &mut self.model.decoder
     }
 
     pub fn decode(
         &mut self,
-        xs: &Tensor,
-        encoder_xs: &Tensor,
+        xs: &Tensor<B>,
+        encoder_xs: &Tensor<B>,
         past_kv_len: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let seq_len = xs.dim(1)?;
         let mask: Vec<_> = (0..seq_len)
             .flat_map(|i| (0..seq_len).map(move |j| if j > i { f32::NEG_INFINITY } else { 0f32 }))

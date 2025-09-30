@@ -1,5 +1,5 @@
-use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
-use candle::{DType, Device, Module, Tensor};
+use crate::benchmarks::{bench_device, BenchDevice};
+use candle::{BackendStorage, DType, Module, Tensor};
 use candle_nn::{Conv2d, Conv2dConfig};
 use criterion::{black_box, criterion_group, Criterion};
 use std::time::Instant;
@@ -10,14 +10,23 @@ const M: usize = 128;
 const K: usize = 128;
 const K_SIZE: usize = 3;
 
-fn run(input: Tensor, weight: Tensor, bias: Tensor, config: Conv2dConfig) {
+fn run<B: BackendStorage>(
+    input: Tensor<B>,
+    weight: Tensor<B>,
+    bias: Tensor<B>,
+    config: Conv2dConfig,
+) {
     Conv2d::new(weight, Some(bias), config)
         .forward(&input)
         .unwrap();
 }
 
-fn run_conv2d_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
-    let weight = Tensor::ones((1, 1, K_SIZE, K_SIZE), dtype, device)
+fn run_conv2d_benchmark<B, D>(c: &mut Criterion, device: &D, dtype: DType, name: &str)
+where
+    B: BackendStorage<Device = D>,
+    D: BenchDevice<B>,
+{
+    let weight: Tensor<B> = Tensor::ones((1, 1, K_SIZE, K_SIZE), dtype, device)
         .unwrap()
         .to_dtype(dtype)
         .unwrap();
@@ -36,7 +45,7 @@ fn run_conv2d_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: 
                     Default::default(),
                 );
             }
-            device.sync().unwrap();
+            device.synchronize().unwrap();
             start.elapsed()
         })
     });
@@ -44,11 +53,9 @@ fn run_conv2d_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: 
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let device = BenchDeviceHandler::new().unwrap();
-    for d in device.devices {
-        run_conv2d_benchmark(c, &d, DType::F32, "conv2d_f32");
-        run_conv2d_benchmark(c, &d, DType::F16, "conv2d_f16");
-    }
+    let d = bench_device();
+    run_conv2d_benchmark(c, &d, DType::F32, "conv2d_f32");
+    run_conv2d_benchmark(c, &d, DType::F16, "conv2d_f16");
 }
 
 criterion_group!(benches, criterion_benchmark);

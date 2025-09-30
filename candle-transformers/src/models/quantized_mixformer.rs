@@ -13,7 +13,7 @@
 
 use crate::quantized_nn::{layer_norm, linear, Linear};
 pub use crate::quantized_var_builder::VarBuilder;
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{quantized::QuantizedBackend, DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Activation;
 
 pub use crate::models::mixformer::Config;
@@ -21,31 +21,35 @@ pub use crate::models::mixformer::Config;
 const MAX_SEQ_LEN: usize = 4096;
 
 #[derive(Debug, Clone)]
-struct Embedding {
-    wte: crate::quantized_nn::Embedding,
+struct Embedding<QB: QuantizedBackend> {
+    wte: crate::quantized_nn::Embedding<QB>,
 }
 
-impl Embedding {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Embedding<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let wte = crate::quantized_nn::Embedding::new(cfg.vocab_size, cfg.n_embd, vb.pp("wte"))?;
         Ok(Self { wte })
     }
 }
 
-impl Module for Embedding {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for Embedding<QB> {
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         self.wte.forward(xs)
     }
 }
 
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
+fn get_mask<QB: QuantizedBackend>(size: usize, device: &QB::Device) -> Result<Tensor<QB::Storage>> {
     let mask: Vec<_> = (0..size)
         .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
         .collect();
     Tensor::from_slice(&mask, (size, size), device)
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+fn masked_fill<QB: QuantizedBackend>(
+    on_false: &Tensor<QB::Storage>,
+    mask: &Tensor<QB::Storage>,
+    on_true: f32,
+) -> Result<Tensor<QB::Storage>> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true, on_false)?;
@@ -53,13 +57,19 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+struct RotaryEmbedding<QB: QuantizedBackend> {
+    sin: Tensor<QB::Storage>,
+    cos: Tensor<QB::Storage>,
 }
 
-impl RotaryEmbedding {
-    fn new(dim: usize, max_seq_len: usize, dev: &Device) -> Result<Self> {
+type Qkv<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
+
+impl<QB: QuantizedBackend> RotaryEmbedding<QB> {
+    fn new(dim: usize, max_seq_len: usize, dev: &QB::Device) -> Result<Self> {
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
             .map(|i| 1f32 / 10000f32.powf(i as f32 / dim as f32))
@@ -78,9 +88,9 @@ impl RotaryEmbedding {
 
     fn apply_rotary_emb_qkv(
         &self,
-        qkv: &Tensor,
+        qkv: &Tensor<QB::Storage>,
         seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor, Tensor)> {
+    ) -> Result<Qkv<QB>> {
         let (_b_size, seqlen, three, _, _headdim) = qkv.dims5()?;
         if three != 3 {
             candle::bail!("unexpected shape for qkv {:?}", qkv.shape())
@@ -120,14 +130,14 @@ impl RotaryEmbedding {
 
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
-struct MLP {
-    fc1: Linear,
-    fc2: Linear,
+struct MLP<QB: QuantizedBackend> {
+    fc1: Linear<QB>,
+    fc2: Linear<QB>,
     act: Activation,
 }
 
-impl MLP {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> MLP<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let n_inner = cfg.n_inner.unwrap_or(4 * cfg.n_embd);
         let fc1 = linear(cfg.n_embd, n_inner, vb.pp("fc1"))?;
         let fc2 = linear(n_inner, cfg.n_embd, vb.pp("fc2"))?;
@@ -139,49 +149,59 @@ impl MLP {
     }
 }
 
-impl Module for MLP {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for MLP<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         xs.apply(&self.fc1)?.apply(&self.act)?.apply(&self.fc2)
     }
 }
 
 #[derive(Debug, Clone)]
-struct CausalLMHead {
-    ln: candle_nn::LayerNorm,
-    linear: Linear,
+struct CausalLMHead<QB: QuantizedBackend> {
+    ln: candle_nn::LayerNorm<QB::Storage>,
+    linear: Linear<QB>,
 }
 
-impl CausalLMHead {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> CausalLMHead<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let ln = layer_norm(cfg.n_embd, cfg.layer_norm_epsilon, vb.pp("ln"))?;
         let linear = linear(cfg.n_embd, cfg.vocab_size, vb.pp("linear"))?;
         Ok(Self { ln, linear })
     }
 }
 
-impl Module for CausalLMHead {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for CausalLMHead<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         xs.apply(&self.ln)?
             .apply(&self.linear)?
             .to_dtype(DType::F32)
     }
 }
 
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
-struct MHA {
-    wqkv: Linear,
-    out_proj: Linear,
-    rotary_emb: RotaryEmbedding,
-    kv_cache: Option<(Tensor, Tensor)>,
+struct MHA<QB: QuantizedBackend> {
+    wqkv: Linear<QB>,
+    out_proj: Linear<QB>,
+    rotary_emb: RotaryEmbedding<QB>,
+    kv_cache: Option<KVCache<QB>>,
     head_dim: usize,
     n_head: usize,
     softmax_scale: f64,
     span: tracing::Span,
 }
 
-impl MHA {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> MHA<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let head_dim = cfg.n_embd / cfg.n_head;
         let op_size = cfg.n_embd;
         let wqkv = linear(cfg.n_embd, 3 * op_size, vb.pp("Wqkv"))?;
@@ -200,7 +220,14 @@ impl MHA {
         })
     }
 
-    fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        xs: &Tensor<QB::Storage>,
+        mask: Option<&Tensor<QB::Storage>>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span.enter();
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
         let qkv = self
@@ -232,7 +259,7 @@ impl MHA {
         // scores = scores + causal_mask.to(dtype=scores.dtype)
         let attn_weights = match mask {
             None => attn_weights,
-            Some(mask) => masked_fill(
+            Some(mask) => masked_fill::<QB>(
                 &attn_weights,
                 &mask.broadcast_left(b_size * self.n_head)?,
                 f32::NEG_INFINITY,
@@ -257,15 +284,15 @@ impl MHA {
 }
 
 #[derive(Debug, Clone)]
-struct ParallelBlock {
-    ln: candle_nn::LayerNorm,
-    mixer: MHA,
-    mlp: MLP,
+struct ParallelBlock<QB: QuantizedBackend> {
+    ln: candle_nn::LayerNorm<QB::Storage>,
+    mixer: MHA<QB>,
+    mlp: MLP<QB>,
     span: tracing::Span,
 }
 
-impl ParallelBlock {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> ParallelBlock<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let ln = layer_norm(cfg.n_embd, cfg.layer_norm_epsilon, vb.pp("ln"))?;
         let mixer = MHA::new(cfg, vb.pp("mixer"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
@@ -277,7 +304,14 @@ impl ParallelBlock {
         })
     }
 
-    fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        xs: &Tensor<QB::Storage>,
+        mask: Option<&Tensor<QB::Storage>>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span.enter();
         let residual = xs;
         let xs = xs.apply(&self.ln)?;
@@ -292,15 +326,15 @@ impl ParallelBlock {
 }
 
 #[derive(Debug, Clone)]
-pub struct MixFormerSequentialForCausalLM {
-    embedding: Embedding,
-    blocks: Vec<ParallelBlock>,
-    head: CausalLMHead,
+pub struct MixFormerSequentialForCausalLM<QB: QuantizedBackend> {
+    embedding: Embedding<QB>,
+    blocks: Vec<ParallelBlock<QB>>,
+    head: CausalLMHead<QB>,
     span: tracing::Span,
 }
 
-impl MixFormerSequentialForCausalLM {
-    pub fn new_v2(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> MixFormerSequentialForCausalLM<QB> {
+    pub fn new_v2(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let vb_head = vb.pp("lm_head");
         let vb = vb.pp("transformer");
         let embedding = Embedding::new(cfg, vb.pp("embd"))?;
@@ -318,7 +352,7 @@ impl MixFormerSequentialForCausalLM {
         })
     }
 
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let vb = vb.pp("layers");
         let embedding = Embedding::new(cfg, vb.pp(0))?;
         let mut blocks = Vec::new();
@@ -335,14 +369,17 @@ impl MixFormerSequentialForCausalLM {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span.enter();
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.embedding)?;
         let mask = if seq_len <= 1 {
             None
         } else {
-            Some(get_mask(seq_len, xs.device())?)
+            Some(get_mask::<QB>(seq_len, xs.device())?)
         };
         for block in self.blocks.iter_mut() {
             xs = block.forward(&xs, mask.as_ref())?;
@@ -352,10 +389,13 @@ impl MixFormerSequentialForCausalLM {
 
     pub fn forward_with_img(
         &mut self,
-        bos_token: &Tensor,
-        xs: &Tensor,
-        img_embeds: &Tensor,
-    ) -> Result<Tensor> {
+        bos_token: &Tensor<QB::Storage>,
+        xs: &Tensor<QB::Storage>,
+        img_embeds: &Tensor<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span.enter();
         let xs = xs.apply(&self.embedding)?;
         let bos_token = bos_token.apply(&self.embedding)?;
@@ -363,7 +403,7 @@ impl MixFormerSequentialForCausalLM {
         // https://github.com/vikhyat/moondream/blob/a9d788a20d1543fb1479edc54106e88cff7759d3/moondream/moondream.py#L43-L56
         let mut xs = Tensor::cat(&[bos_token, img_embeds.clone(), xs], 1)?;
         let (_b_size, seq_len, _embds) = xs.dims3()?;
-        let mask = Some(get_mask(seq_len, xs.device())?);
+        let mask = Some(get_mask::<QB>(seq_len, xs.device())?);
         for block in self.blocks.iter_mut() {
             xs = block.forward(&xs, mask.as_ref())?
         }

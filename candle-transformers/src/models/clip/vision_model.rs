@@ -6,7 +6,7 @@
 //! https://github.com/openai/CLIP
 //! https://github.com/huggingface/transformers/tree/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip
 
-use candle::{Context, IndexOp, Result, Shape, Tensor, D};
+use candle::{BackendStorage, Context, IndexOp, Result, Shape, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
 use nn::Conv2dConfig;
@@ -63,15 +63,15 @@ impl ClipVisionConfig {
 
 // https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L112
 #[derive(Clone, Debug)]
-struct ClipVisionEmbeddings {
-    patch_embedding: candle_nn::Conv2d,
-    position_ids: Tensor,
-    class_embedding: Tensor,
-    position_embedding: candle_nn::Embedding,
+struct ClipVisionEmbeddings<B: BackendStorage> {
+    patch_embedding: candle_nn::Conv2d<B>,
+    position_ids: Tensor<B>,
+    class_embedding: Tensor<B>,
+    position_embedding: candle_nn::Embedding<B>,
 }
 
-impl ClipVisionEmbeddings {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipVisionConfig) -> Result<Self> {
+impl<B: BackendStorage> ClipVisionEmbeddings<B> {
+    fn new(vs: candle_nn::VarBuilder<B>, c: &ClipVisionConfig) -> Result<Self> {
         // originally nn.Parameter
         let class_embedding = if vs.contains_tensor("class_embedding") {
             vs.get(c.embed_dim, "class_embedding")?
@@ -105,8 +105,8 @@ impl ClipVisionEmbeddings {
     }
 }
 
-impl Module for ClipVisionEmbeddings {
-    fn forward(&self, pixel_values: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ClipVisionEmbeddings<B> {
+    fn forward(&self, pixel_values: &Tensor<B>) -> Result<Tensor<B>> {
         let batch_size = pixel_values.shape().dims();
         let patch_embeds = self
             .patch_embedding
@@ -123,15 +123,15 @@ impl Module for ClipVisionEmbeddings {
 
 // https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L743
 #[derive(Clone, Debug)]
-pub struct ClipVisionTransformer {
-    embeddings: ClipVisionEmbeddings,
-    encoder: ClipEncoder,
-    pre_layer_norm: candle_nn::LayerNorm,
-    final_layer_norm: candle_nn::LayerNorm,
+pub struct ClipVisionTransformer<B: BackendStorage> {
+    embeddings: ClipVisionEmbeddings<B>,
+    encoder: ClipEncoder<B>,
+    pre_layer_norm: candle_nn::LayerNorm<B>,
+    final_layer_norm: candle_nn::LayerNorm<B>,
 }
 
-impl ClipVisionTransformer {
-    pub fn new(vs: candle_nn::VarBuilder, c: &ClipVisionConfig) -> Result<Self> {
+impl<B: BackendStorage> ClipVisionTransformer<B> {
+    pub fn new(vs: candle_nn::VarBuilder<B>, c: &ClipVisionConfig) -> Result<Self> {
         let embeddings = ClipVisionEmbeddings::new(vs.pp("embeddings"), c)?;
         let pre_layer_norm = candle_nn::layer_norm(c.embed_dim, 1e-5, vs.pp("pre_layrnorm"))?;
         let encoder = ClipEncoder::new(vs.pp("encoder"), &EncoderConfig::Vision(c.clone()))?;
@@ -144,7 +144,7 @@ impl ClipVisionTransformer {
         })
     }
     // required by LLaVA
-    pub fn output_hidden_states(&self, pixel_values: &Tensor) -> Result<Vec<Tensor>> {
+    pub fn output_hidden_states(&self, pixel_values: &Tensor<B>) -> Result<Vec<Tensor<B>>> {
         let hidden_states = pixel_values
             .apply(&self.embeddings)?
             .apply(&self.pre_layer_norm)?;
@@ -156,8 +156,8 @@ impl ClipVisionTransformer {
     }
 }
 
-impl Module for ClipVisionTransformer {
-    fn forward(&self, pixel_values: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ClipVisionTransformer<B> {
+    fn forward(&self, pixel_values: &Tensor<B>) -> Result<Tensor<B>> {
         let hidden_states = pixel_values
             .apply(&self.embeddings)?
             .apply(&self.pre_layer_norm)?;

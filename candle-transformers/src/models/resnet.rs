@@ -10,17 +10,17 @@
 //! This paper introduced ResNet, a deep neural network architecture that utilizes
 //! skip connections ("residual connections") to enable training of very deep networks.
 
-use candle::{Result, D};
+use candle::{BackendStorage, Result, D};
 use candle_nn::{batch_norm, Conv2d, Func, VarBuilder};
 
-fn conv2d(
+fn conv2d<B: BackendStorage>(
     c_in: usize,
     c_out: usize,
     ksize: usize,
     padding: usize,
     stride: usize,
-    vb: VarBuilder,
-) -> Result<Conv2d> {
+    vb: VarBuilder<B>,
+) -> Result<Conv2d<B>> {
     let conv2d_cfg = candle_nn::Conv2dConfig {
         stride,
         padding,
@@ -29,7 +29,12 @@ fn conv2d(
     candle_nn::conv2d_no_bias(c_in, c_out, ksize, conv2d_cfg, vb)
 }
 
-fn downsample(c_in: usize, c_out: usize, stride: usize, vb: VarBuilder) -> Result<Func> {
+fn downsample<'a, B: BackendStorage + 'a>(
+    c_in: usize,
+    c_out: usize,
+    stride: usize,
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     if stride != 1 || c_in != c_out {
         let conv = conv2d(c_in, c_out, 1, 0, stride, vb.pp(0))?;
         let bn = batch_norm(c_out, 1e-5, vb.pp(1))?;
@@ -39,7 +44,12 @@ fn downsample(c_in: usize, c_out: usize, stride: usize, vb: VarBuilder) -> Resul
     }
 }
 
-fn basic_block(c_in: usize, c_out: usize, stride: usize, vb: VarBuilder) -> Result<Func> {
+fn basic_block<'a, B: BackendStorage + 'a>(
+    c_in: usize,
+    c_out: usize,
+    stride: usize,
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     let conv1 = conv2d(c_in, c_out, 3, 1, stride, vb.pp("conv1"))?;
     let bn1 = batch_norm(c_out, 1e-5, vb.pp("bn1"))?;
     let conv2 = conv2d(c_out, c_out, 3, 1, 1, vb.pp("conv2"))?;
@@ -56,13 +66,13 @@ fn basic_block(c_in: usize, c_out: usize, stride: usize, vb: VarBuilder) -> Resu
     }))
 }
 
-fn basic_layer(
+fn basic_layer<'a, B: BackendStorage + 'a>(
     c_in: usize,
     c_out: usize,
     stride: usize,
     cnt: usize,
-    vb: VarBuilder,
-) -> Result<Func> {
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     let mut layers = Vec::with_capacity(cnt);
     for index in 0..cnt {
         let l_in = if index == 0 { c_in } else { c_out };
@@ -78,14 +88,14 @@ fn basic_layer(
     }))
 }
 
-fn resnet(
+fn resnet<'a, B: BackendStorage + 'a>(
     nclasses: Option<usize>,
     c1: usize,
     c2: usize,
     c3: usize,
     c4: usize,
-    vb: VarBuilder,
-) -> Result<Func> {
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     let conv1 = conv2d(3, 64, 7, 3, 2, vb.pp("conv1"))?;
     let bn1 = batch_norm(64, 1e-5, vb.pp("bn1"))?;
     let layer1 = basic_layer(64, 64, 1, c1, vb.pp("layer1"))?;
@@ -121,31 +131,41 @@ fn resnet(
 }
 
 /// Creates a ResNet-18 model.
-pub fn resnet18(num_classes: usize, vb: VarBuilder) -> Result<Func> {
+pub fn resnet18<'a, B: BackendStorage + 'a>(
+    num_classes: usize,
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     resnet(Some(num_classes), 2, 2, 2, 2, vb)
 }
 
-pub fn resnet18_no_final_layer(vb: VarBuilder) -> Result<Func> {
+pub fn resnet18_no_final_layer<'a, B: BackendStorage + 'a>(
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     resnet(None, 2, 2, 2, 2, vb)
 }
 
 /// Creates a ResNet-34 model.
-pub fn resnet34(num_classes: usize, vb: VarBuilder) -> Result<Func> {
+pub fn resnet34<'a, B: BackendStorage + 'a>(
+    num_classes: usize,
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     resnet(Some(num_classes), 3, 4, 6, 3, vb)
 }
 
-pub fn resnet34_no_final_layer(vb: VarBuilder) -> Result<Func> {
+pub fn resnet34_no_final_layer<'a, B: BackendStorage + 'a>(
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     resnet(None, 3, 4, 6, 3, vb)
 }
 
 // Bottleneck versions for ResNet 50, 101, and 152.
-fn bottleneck_block(
+fn bottleneck_block<'a, B: BackendStorage + 'a>(
     c_in: usize,
     c_out: usize,
     stride: usize,
     e: usize,
-    vb: VarBuilder,
-) -> Result<Func> {
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     let e_dim = e * c_out;
     let conv1 = conv2d(c_in, c_out, 1, 0, 1, vb.pp("conv1"))?;
     let bn1 = batch_norm(c_out, 1e-5, vb.pp("bn1"))?;
@@ -168,13 +188,13 @@ fn bottleneck_block(
     }))
 }
 
-fn bottleneck_layer(
+fn bottleneck_layer<'a, B: BackendStorage + 'a>(
     c_in: usize,
     c_out: usize,
     stride: usize,
     cnt: usize,
-    vb: VarBuilder,
-) -> Result<Func> {
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     let mut layers = Vec::with_capacity(cnt);
     for index in 0..cnt {
         let l_in = if index == 0 { c_in } else { 4 * c_out };
@@ -190,14 +210,14 @@ fn bottleneck_layer(
     }))
 }
 
-fn bottleneck_resnet(
+fn bottleneck_resnet<'a, B: BackendStorage + 'a>(
     nclasses: Option<usize>,
     c1: usize,
     c2: usize,
     c3: usize,
     c4: usize,
-    vb: VarBuilder,
-) -> Result<Func> {
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     let conv1 = conv2d(3, 64, 7, 3, 2, vb.pp("conv1"))?;
     let bn1 = batch_norm(64, 1e-5, vb.pp("bn1"))?;
     let layer1 = bottleneck_layer(64, 64, 1, c1, vb.pp("layer1"))?;
@@ -232,26 +252,41 @@ fn bottleneck_resnet(
     }))
 }
 
-pub fn resnet50(num_classes: usize, vb: VarBuilder) -> Result<Func> {
+pub fn resnet50<'a, B: BackendStorage + 'a>(
+    num_classes: usize,
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     bottleneck_resnet(Some(num_classes), 3, 4, 6, 3, vb)
 }
 
-pub fn resnet50_no_final_layer(vb: VarBuilder) -> Result<Func> {
+pub fn resnet50_no_final_layer<'a, B: BackendStorage + 'a>(
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     bottleneck_resnet(None, 3, 4, 6, 3, vb)
 }
 
-pub fn resnet101(num_classes: usize, vb: VarBuilder) -> Result<Func> {
+pub fn resnet101<'a, B: BackendStorage + 'a>(
+    num_classes: usize,
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     bottleneck_resnet(Some(num_classes), 3, 4, 23, 3, vb)
 }
 
-pub fn resnet101_no_final_layer(vb: VarBuilder) -> Result<Func> {
+pub fn resnet101_no_final_layer<'a, B: BackendStorage + 'a>(
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     bottleneck_resnet(None, 3, 4, 23, 3, vb)
 }
 
-pub fn resnet152(num_classes: usize, vb: VarBuilder) -> Result<Func> {
+pub fn resnet152<'a, B: BackendStorage + 'a>(
+    num_classes: usize,
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     bottleneck_resnet(Some(num_classes), 3, 8, 36, 3, vb)
 }
 
-pub fn resnet152_no_final_layer(vb: VarBuilder) -> Result<Func> {
+pub fn resnet152_no_final_layer<'a, B: BackendStorage + 'a>(
+    vb: VarBuilder<'a, B>,
+) -> Result<Func<'a, B>> {
     bottleneck_resnet(None, 3, 8, 36, 3, vb)
 }

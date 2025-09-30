@@ -1,12 +1,11 @@
 use crate::onnx::attribute_proto::AttributeType;
 use crate::onnx::tensor_proto::DataType;
 use crate::onnx::{self, GraphProto};
+use crate::{Tensor, Value};
 use candle::Module;
-use candle::{bail, DType, Device, Result, Tensor};
+use candle::{bail, DType, Device, Result};
 use candle_nn::activation::PReLU;
 use std::collections::{HashMap, HashSet};
-
-pub type Value = Tensor;
 
 pub fn dtype(dt: DataType) -> Option<DType> {
     match dt {
@@ -1889,7 +1888,7 @@ fn simple_eval_(
                 let r = r.index_select(&idx_ifco, 0)?;
                 let wb = wb.index_select(&idx_ifco, 0)?;
                 let rb = rb.index_select(&idx_ifco, 0)?;
-                let vmap = candle_nn::VarMap::new();
+                let vmap: candle_nn::VarMap<candle::Storage> = candle_nn::VarMap::new();
                 vmap.data().lock().unwrap().extend([
                     ("weight_ih_l0".to_string(), candle::Var::from_tensor(&w)?),
                     ("weight_hh_l0".to_string(), candle::Var::from_tensor(&r)?),
@@ -2320,7 +2319,6 @@ fn simple_eval_(
 
                 let indices_shape = indices.dims();
                 let data_shape = data.dims();
-                let updates_shape = updates.dims();
 
                 // Last dimension of indices represents the depth of indexing
                 let k = indices_shape.last().unwrap().clone();

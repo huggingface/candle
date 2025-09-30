@@ -1,12 +1,14 @@
 //! ML framework for Rust
 //!
 //! ```rust
-//! use candle_core::{Tensor, DType, Device};
+//! use candle_core::{CpuStorage, CpuDevice, DType};
+//! type Tensor = candle_core::Tensor<CpuStorage>;
+//!
 //! # use candle_core::Error;
 //! # fn main() -> Result<(), Error>{
 //!
-//! let a = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((2, 3))?;
-//! let b = Tensor::arange(0f32, 12f32, &Device::Cpu)?.reshape((3, 4))?;
+//! let a = Tensor::arange(0f32, 6f32, &CpuDevice)?.reshape((2, 3))?;
+//! let b = Tensor::arange(0f32, 12f32, &CpuDevice)?.reshape((3, 4))?;
 //! let c = a.matmul(&b)?;
 //!
 //! # Ok(())}
@@ -81,27 +83,31 @@ mod sort;
 mod storage;
 pub mod streaming;
 mod strided_index;
-mod tensor;
+pub mod tensor;
 mod tensor_cat;
 pub mod test_utils;
+pub mod util_traits;
 pub mod utils;
 mod variable;
 
+pub use backend::{BackendDevice, BackendStorage};
+pub use convert::TryConvertStorage;
+pub use cpu_backend::{CpuDevice, CpuStorage, CpuStorageRef};
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;
-
-pub use cpu_backend::{CpuStorage, CpuStorageRef};
 pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3, UgIOp1};
 pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
 pub use error::{Context, Error, Result};
 pub use indexer::{IndexOp, TensorIndexer};
 pub use layout::Layout;
+pub use quantized::{QCpuStorage, QCudaStorage, QMetalStorage};
 pub use shape::{Shape, D};
 pub use storage::Storage;
 pub use streaming::{StreamTensor, StreamingBinOp, StreamingModule};
 pub use strided_index::{StridedBlocks, StridedIndex};
-pub use tensor::{Tensor, TensorId};
+pub use tensor::{DefaultStorage, Tensor, TensorId};
+pub use util_traits::{Condition, False, IsSame, True};
 pub use variable::Var;
 
 #[cfg(feature = "cuda")]
@@ -141,18 +147,18 @@ impl ToUsize2 for (usize, usize) {
 }
 
 /// Defining a module with forward method using a single argument.
-pub trait Module {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor>;
+pub trait Module<B: BackendStorage> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>>;
 }
 
-impl<T: Fn(&Tensor) -> Result<Tensor>> Module for T {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage, T: Fn(&Tensor<B>) -> Result<Tensor<B>>> Module<B> for T {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         self(xs)
     }
 }
 
-impl<M: Module> Module for Option<&M> {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<M: Module<B>, B: BackendStorage> Module<B> for Option<&M> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         match self {
             None => Ok(xs.clone()),
             Some(m) => m.forward(xs),
@@ -162,12 +168,14 @@ impl<M: Module> Module for Option<&M> {
 
 /// A single forward method using a single single tensor argument and a flag to
 /// separate the training and evaluation behaviors.
-pub trait ModuleT {
-    fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor>;
+pub trait ModuleT<B: BackendStorage> {
+    fn forward_t(&self, xs: &Tensor<B>, train: bool) -> Result<Tensor<B>>;
 }
 
-impl<M: Module> ModuleT for M {
-    fn forward_t(&self, xs: &Tensor, _train: bool) -> Result<Tensor> {
+/*
+impl<M: Module<B>, B: BackendStorage> ModuleT<B> for M {
+    fn forward_t(&self, xs: &Tensor<B>, _train: bool) -> Result<Tensor<B>> {
         self.forward(xs)
     }
 }
+ */

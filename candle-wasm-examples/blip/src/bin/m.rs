@@ -1,17 +1,21 @@
-use candle::{DType, Device, Tensor};
+use candle::CpuDevice;
+use candle::DType;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::blip;
 use candle_transformers::models::quantized_blip;
 use candle_wasm_example_blip::console_log;
 use candle_wasm_example_blip::token_output_stream::TokenOutputStream;
+use candle_wasm_example_blip::{
+    BlipForConditionalGeneration, QBlipForConditionalGeneration, Tensor,
+};
 use js_sys::Date;
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
 
 enum SelectedModel {
-    M(blip::BlipForConditionalGeneration),
-    Q(quantized_blip::BlipForConditionalGeneration),
+    M(BlipForConditionalGeneration),
+    Q(QBlipForConditionalGeneration),
 }
 
 impl SelectedModel {
@@ -57,7 +61,7 @@ impl Model {
         let tokenizer = TokenOutputStream::new(tokenizer);
 
         let config: blip::Config = serde_json::from_slice(&config)?;
-        let device = Device::Cpu;
+        let device = CpuDevice;
 
         let start = Date::now();
         let model: SelectedModel = if quantized {
@@ -77,7 +81,7 @@ impl Model {
     pub fn generate_caption_from_image(&mut self, image: Vec<u8>) -> Result<String, JsError> {
         self.model.reset_kv_cache();
 
-        let device = Device::Cpu;
+        let device = CpuDevice;
         console_log!("loading image as tensor");
         let start = Date::now();
         let image: Tensor = self.load_image(image)?.to_device(&device)?;
@@ -123,7 +127,7 @@ impl Model {
 
 impl Model {
     fn load_image(&self, image: Vec<u8>) -> Result<Tensor, JsError> {
-        let device = &Device::Cpu;
+        let device = &CpuDevice;
         let img = image::ImageReader::new(std::io::Cursor::new(image))
             .with_guessed_format()?
             .decode()

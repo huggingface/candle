@@ -15,7 +15,7 @@ mod musicgen_model;
 use musicgen_model::{GenConfig, MusicgenForConditionalGeneration};
 
 use anyhow::{Error as E, Result};
-use candle::{DType, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use hf_hub::{api::sync::Api, Repo, RepoType};
@@ -44,11 +44,34 @@ struct Args {
     prompt: String,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     use tokenizers::Tokenizer;
 
-    let args = Args::parse();
-    let device = candle_examples::device(args.cpu)?;
     let tokenizer = match args.tokenizer {
         Some(tokenizer) => std::path::PathBuf::from(tokenizer),
         None => Api::new()?
@@ -71,9 +94,12 @@ fn main() -> Result<()> {
             ))
             .get("model.safetensors")?,
     };
+
+    let device = B::Device::new(0)?;
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DTYPE, &device)? };
     let config = GenConfig::small();
-    let mut model = MusicgenForConditionalGeneration::load(vb, config)?;
+    let mut model: MusicgenForConditionalGeneration<B> =
+        MusicgenForConditionalGeneration::load(vb, config)?;
 
     let tokens = tokenizer
         .encode(args.prompt.as_str(), true)

@@ -1,6 +1,6 @@
-use candle::{DType, Device, Tensor};
-use candle_nn::VarBuilder;
+use candle::{CpuDevice, DType};
 use candle_wasm_example_sam as sam;
+use candle_wasm_example_sam::{Tensor, VarBuilder};
 use wasm_bindgen::prelude::*;
 
 struct Embeddings {
@@ -22,7 +22,7 @@ impl Model {
     #[wasm_bindgen(constructor)]
     pub fn new(weights: Vec<u8>, use_tiny: bool) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
-        let dev = &Device::Cpu;
+        let dev = &CpuDevice;
         let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, dev)?;
         let sam = if use_tiny {
             sam::Sam::new_tiny(vb)? // tiny vit_t
@@ -58,7 +58,7 @@ impl Model {
             Tensor::from_vec(
                 data,
                 (img.height() as usize, img.width() as usize, 3),
-                &Device::Cpu,
+                &CpuDevice,
             )?
             .permute((2, 0, 1))?
         };

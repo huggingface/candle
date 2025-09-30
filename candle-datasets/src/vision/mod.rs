@@ -1,10 +1,12 @@
-use candle::Tensor;
+use candle::{CpuStorage, Tensor};
+
+type CpuTensor = Tensor<CpuStorage>;
 
 pub struct Dataset {
-    pub train_images: Tensor,
-    pub train_labels: Tensor,
-    pub test_images: Tensor,
-    pub test_labels: Tensor,
+    pub train_images: CpuTensor,
+    pub train_labels: CpuTensor,
+    pub test_images: CpuTensor,
+    pub test_labels: CpuTensor,
     pub labels: usize,
 }
 

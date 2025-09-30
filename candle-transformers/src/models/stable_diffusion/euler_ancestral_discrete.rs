@@ -9,7 +9,7 @@ use super::{
     },
     utils::interp,
 };
-use candle::{bail, Error, Result, Tensor};
+use candle::{bail, BackendStorage, Error, Result, Tensor};
 
 /// The configuration for the EulerAncestral Discrete scheduler.
 #[derive(Debug, Clone, Copy)]
@@ -46,8 +46,8 @@ impl Default for EulerAncestralDiscreteSchedulerConfig {
     }
 }
 
-impl SchedulerConfig for EulerAncestralDiscreteSchedulerConfig {
-    fn build(&self, inference_steps: usize) -> Result<Box<dyn Scheduler>> {
+impl<B: BackendStorage> SchedulerConfig<B> for EulerAncestralDiscreteSchedulerConfig {
+    fn build(&self, inference_steps: usize) -> Result<Box<dyn Scheduler<B>>> {
         Ok(Box::new(EulerAncestralDiscreteScheduler::new(
             inference_steps,
             *self,
@@ -147,7 +147,7 @@ impl EulerAncestralDiscreteScheduler {
     }
 }
 
-impl Scheduler for EulerAncestralDiscreteScheduler {
+impl<B: BackendStorage> Scheduler<B> for EulerAncestralDiscreteScheduler {
     fn timesteps(&self) -> &[usize] {
         self.timesteps.as_slice()
     }
@@ -156,7 +156,7 @@ impl Scheduler for EulerAncestralDiscreteScheduler {
     /// depending on the current timestep.
     ///
     /// Scales the denoising model input by `(sigma**2 + 1) ** 0.5` to match the K-LMS algorithm
-    fn scale_model_input(&self, sample: Tensor, timestep: usize) -> Result<Tensor> {
+    fn scale_model_input(&self, sample: Tensor<B>, timestep: usize) -> Result<Tensor<B>> {
         let step_index = match self.timesteps.iter().position(|&t| t == timestep) {
             Some(i) => i,
             None => bail!("timestep out of this schedulers bounds: {timestep}"),
@@ -171,7 +171,12 @@ impl Scheduler for EulerAncestralDiscreteScheduler {
     }
 
     /// Performs a backward step during inference.
-    fn step(&mut self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor> {
+    fn step(
+        &mut self,
+        model_output: &Tensor<B>,
+        timestep: usize,
+        sample: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let step_index = self
             .timesteps
             .iter()
@@ -206,7 +211,12 @@ impl Scheduler for EulerAncestralDiscreteScheduler {
         prev_sample + noise * sigma_up
     }
 
-    fn add_noise(&self, original: &Tensor, noise: Tensor, timestep: usize) -> Result<Tensor> {
+    fn add_noise(
+        &self,
+        original: &Tensor<B>,
+        noise: Tensor<B>,
+        timestep: usize,
+    ) -> Result<Tensor<B>> {
         let step_index = self
             .timesteps
             .iter()

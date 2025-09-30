@@ -1,19 +1,19 @@
 use anyhow::{Error as E, Ok, Result};
-use candle::{DType, IndexOp, Module, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Module, Tensor, D};
 use candle_transformers::models::{stable_diffusion, t5};
 use std::path::PathBuf;
 use tokenizers::tokenizer::Tokenizer;
 
-struct ClipWithTokenizer {
-    clip: stable_diffusion::clip::ClipTextTransformer,
+struct ClipWithTokenizer<B: BackendStorage> {
+    clip: stable_diffusion::clip::ClipTextTransformer<B>,
     config: stable_diffusion::clip::Config,
     tokenizer: Tokenizer,
     max_position_embeddings: usize,
 }
 
-impl ClipWithTokenizer {
+impl<B: BackendStorage> ClipWithTokenizer<B> {
     fn new(
-        vb: candle_nn::VarBuilder,
+        vb: candle_nn::VarBuilder<B>,
         config: stable_diffusion::clip::Config,
         tokenizer_path: &str,
         max_position_embeddings: usize,
@@ -37,8 +37,8 @@ impl ClipWithTokenizer {
     fn encode_text_to_embedding(
         &self,
         prompt: &str,
-        device: &candle::Device,
-    ) -> Result<(Tensor, Tensor)> {
+        device: &B::Device,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let pad_id = match &self.config.pad_with {
             Some(padding) => *self
                 .tokenizer
@@ -74,14 +74,14 @@ impl ClipWithTokenizer {
     }
 }
 
-struct T5WithTokenizer {
-    t5: t5::T5EncoderModel,
+struct T5WithTokenizer<B: BackendStorage> {
+    t5: t5::T5EncoderModel<B>,
     tokenizer: Tokenizer,
     max_position_embeddings: usize,
 }
 
-impl T5WithTokenizer {
-    fn new(vb: candle_nn::VarBuilder, max_position_embeddings: usize) -> Result<Self> {
+impl<B: BackendStorage> T5WithTokenizer<B> {
+    fn new(vb: candle_nn::VarBuilder<B>, max_position_embeddings: usize) -> Result<Self> {
         let api = hf_hub::api::sync::Api::new()?;
         let repo = api.repo(hf_hub::Repo::with_revision(
             "google/t5-v1_1-xxl".to_string(),
@@ -105,11 +105,7 @@ impl T5WithTokenizer {
         })
     }
 
-    fn encode_text_to_embedding(
-        &mut self,
-        prompt: &str,
-        device: &candle::Device,
-    ) -> Result<Tensor> {
+    fn encode_text_to_embedding(&mut self, prompt: &str, device: &B::Device) -> Result<Tensor<B>> {
         let mut tokens = self
             .tokenizer
             .encode(prompt, true)
@@ -123,19 +119,19 @@ impl T5WithTokenizer {
     }
 }
 
-pub struct StableDiffusion3TripleClipWithTokenizer {
-    clip_l: ClipWithTokenizer,
-    clip_g: ClipWithTokenizer,
-    clip_g_text_projection: candle_nn::Linear,
-    t5: T5WithTokenizer,
+pub struct StableDiffusion3TripleClipWithTokenizer<B: BackendStorage> {
+    clip_l: ClipWithTokenizer<B>,
+    clip_g: ClipWithTokenizer<B>,
+    clip_g_text_projection: candle_nn::Linear<B>,
+    t5: T5WithTokenizer<B>,
 }
 
-impl StableDiffusion3TripleClipWithTokenizer {
+impl<B: BackendStorage> StableDiffusion3TripleClipWithTokenizer<B> {
     pub fn new_split(
         clip_g_file: &PathBuf,
         clip_l_file: &PathBuf,
         t5xxl_file: &PathBuf,
-        device: &candle::Device,
+        device: &B::Device,
     ) -> Result<Self> {
         let vb_clip_g = unsafe {
             candle_nn::VarBuilder::from_mmaped_safetensors(&[clip_g_file], DType::F16, device)?
@@ -173,7 +169,7 @@ impl StableDiffusion3TripleClipWithTokenizer {
         })
     }
 
-    pub fn new(vb: candle_nn::VarBuilder) -> Result<Self> {
+    pub fn new(vb: candle_nn::VarBuilder<B>) -> Result<Self> {
         let max_position_embeddings = 77usize;
         let clip_l = ClipWithTokenizer::new(
             vb.pp("clip_l.transformer"),
@@ -204,8 +200,8 @@ impl StableDiffusion3TripleClipWithTokenizer {
     pub fn encode_text_to_embedding(
         &mut self,
         prompt: &str,
-        device: &candle::Device,
-    ) -> Result<(Tensor, Tensor)> {
+        device: &B::Device,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let (clip_l_embeddings, clip_l_embeddings_pooled) =
             self.clip_l.encode_text_to_embedding(prompt, device)?;
         let (clip_g_embeddings, clip_g_embeddings_pooled) =

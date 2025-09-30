@@ -5,6 +5,8 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
+use candle::quantized::QuantizedBackend;
+use candle_transformers::quantized_nn;
 use clap::{Parser, ValueEnum};
 
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -13,22 +15,22 @@ use candle_transformers::models::phi::{Config as PhiConfig, Model as Phi};
 use candle_transformers::models::phi3::{Config as Phi3Config, Model as Phi3};
 use candle_transformers::models::quantized_mixformer::MixFormerSequentialForCausalLM as QMixFormer;
 
-use candle::{DType, Device, IndexOp, Tensor};
+use candle::{BackendDevice, DType, IndexOp, Module, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-enum Model {
-    MixFormer(MixFormer),
-    Phi(Phi),
-    Phi3(Phi3),
-    Quantized(QMixFormer),
+enum Model<QB: QuantizedBackend> {
+    MixFormer(MixFormer<QB::Storage>),
+    Phi(Phi<QB::Storage>),
+    Phi3(Phi3<QB::Storage>),
+    Quantized(QMixFormer<QB>),
 }
 
-struct TextGeneration {
-    model: Model,
-    device: Device,
+struct TextGeneration<QB: QuantizedBackend> {
+    model: Model<QB>,
+    device: QB::Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
@@ -36,10 +38,10 @@ struct TextGeneration {
     verbose_prompt: bool,
 }
 
-impl TextGeneration {
+impl<QB: QuantizedBackend> TextGeneration<QB> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
+        model: Model<QB>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
@@ -47,7 +49,7 @@ impl TextGeneration {
         repeat_penalty: f32,
         repeat_last_n: usize,
         verbose_prompt: bool,
-        device: &Device,
+        device: &QB::Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
@@ -61,7 +63,10 @@ impl TextGeneration {
         }
     }
 
-    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()> {
+    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()>
+    where
+        quantized_nn::Linear<QB>: Module<QB::Storage>,
+    {
         use std::io::Write;
         println!("starting the inference loop");
         let tokens = self
@@ -223,11 +228,28 @@ struct Args {
     dtype: Option<String>,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::QCpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::QCudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::QMetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<QB: QuantizedBackend>(args: Args, device: &QB::Device) -> Result<()>
+where
+    quantized_nn::Linear<QB>: Module<QB::Storage>,
+{
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -352,13 +374,14 @@ fn main() -> Result<()> {
             panic!("use the quantized or quantized-phi examples for quantized phi-v3")
         }
     };
-    let device = candle_examples::device(args.cpu)?;
+
     let model = if args.quantized {
         let config = config();
-        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
-            &filenames[0],
-            &device,
-        )?;
+        let vb: candle_transformers::quantized_var_builder::VarBuilder<QB> =
+            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
+                &filenames[0],
+                device,
+            )?;
         let model = match args.model {
             WhichModel::V2 | WhichModel::V2Old => QMixFormer::new_v2(&config, vb)?,
             _ => QMixFormer::new(&config, vb)?,
@@ -368,17 +391,19 @@ fn main() -> Result<()> {
         let dtype = match args.dtype {
             Some(dtype) => std::str::FromStr::from_str(&dtype)?,
             None => {
-                if args.model == WhichModel::V3
+                if (args.model == WhichModel::V3
                     || args.model == WhichModel::V3Medium
-                    || args.model == WhichModel::V4Mini
+                    || args.model == WhichModel::V4Mini)
+                    && QB::Device::SUPPORTS_BF16
                 {
-                    device.bf16_default_to_f32()
+                    DType::BF16
                 } else {
                     DType::F32
                 }
             }
         };
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+        let vb: VarBuilder<QB::Storage> =
+            unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
         match args.model {
             WhichModel::V1 | WhichModel::V1_5 | WhichModel::V2 => {
                 let config_filename = repo.get("config.json")?;
@@ -420,21 +445,24 @@ fn main() -> Result<()> {
                 args.repeat_penalty,
                 args.repeat_last_n,
                 args.verbose_prompt,
-                &device,
+                device,
             );
             pipeline.run(&prompt, args.sample_len)?;
         }
-        (None, Some(mmlu_dir)) => mmlu(model, tokenizer, &device, mmlu_dir)?,
+        (None, Some(mmlu_dir)) => mmlu(model, tokenizer, device, mmlu_dir)?,
     }
     Ok(())
 }
 
-fn mmlu<P: AsRef<std::path::Path>>(
-    mut model: Model,
+fn mmlu<QB: QuantizedBackend, P: AsRef<std::path::Path>>(
+    mut model: Model<QB>,
     tokenizer: Tokenizer,
-    device: &Device,
+    device: &QB::Device,
     mmlu_dir: P,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    quantized_nn::Linear<QB>: Module<QB::Storage>,
+{
     for dir_entry in mmlu_dir.as_ref().read_dir()?.flatten() {
         let dir_entry = dir_entry.path();
         let theme = match dir_entry.file_stem().and_then(|v| v.to_str()) {

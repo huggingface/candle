@@ -1,5 +1,5 @@
 use crate::models::with_tracing::{linear, Linear};
-use candle::{DType, Module, Result, Tensor};
+use candle::{BackendStorage, DType, Module, Result, Tensor};
 use candle_nn::{
     embedding, layer_norm, ops::softmax_last_dim, Activation, Embedding, LayerNorm, VarBuilder,
 };
@@ -21,17 +21,17 @@ pub struct Config {
     pub pad_token_id: u32,
 }
 
-struct XLMRobertaEmbeddings {
-    word_embeddings: Embedding,
-    position_embeddings: Option<Embedding>,
-    token_type_embeddings: Embedding,
-    layer_norm: LayerNorm,
+struct XLMRobertaEmbeddings<B: BackendStorage> {
+    word_embeddings: Embedding<B>,
+    position_embeddings: Option<Embedding<B>>,
+    token_type_embeddings: Embedding<B>,
+    layer_norm: LayerNorm<B>,
     padding_idx: u32,
     span: tracing::Span,
 }
 
-impl XLMRobertaEmbeddings {
-    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> XLMRobertaEmbeddings<B> {
+    fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let word_embeddings = embedding(
             config.vocab_size,
             config.hidden_size,
@@ -62,7 +62,7 @@ impl XLMRobertaEmbeddings {
         })
     }
 
-    fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor) -> Result<Tensor> {
+    fn forward(&self, input_ids: &Tensor<B>, token_type_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (_bsize, _) = input_ids.dims2()?;
         let input_embeddings = self.word_embeddings.forward(input_ids)?;
@@ -75,9 +75,8 @@ impl XLMRobertaEmbeddings {
             let cumsum = mask.cumsum(1)?;
             let position_ids = (cumsum * mask)?
                 .broadcast_add(
-                    &Tensor::try_from(self.padding_idx)?
-                        .to_dtype(input_embeddings.dtype())?
-                        .to_device(input_embeddings.device())?,
+                    &Tensor::new(self.padding_idx, input_embeddings.device())?
+                        .to_dtype(input_embeddings.dtype())?,
                 )?
                 .to_dtype(candle::DType::U32)?;
             embeddings = embeddings.broadcast_add(&position_embeddings.forward(&position_ids)?)?;
@@ -87,17 +86,17 @@ impl XLMRobertaEmbeddings {
     }
 }
 
-struct XLMRobertaSelfAttention {
+struct XLMRobertaSelfAttention<B: BackendStorage> {
     num_attention_heads: usize,
     attention_head_size: usize,
     all_head_size: usize,
-    query: Linear,
-    key: Linear,
-    value: Linear,
+    query: Linear<B>,
+    key: Linear<B>,
+    value: Linear<B>,
 }
 
-impl XLMRobertaSelfAttention {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> XLMRobertaSelfAttention<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let attention_head_size = cfg.hidden_size / cfg.num_attention_heads;
         let all_head_size = cfg.num_attention_heads * attention_head_size;
         Ok(Self {
@@ -110,7 +109,7 @@ impl XLMRobertaSelfAttention {
         })
     }
 
-    fn transpose_for_scores(&self, x: &Tensor) -> Result<Tensor> {
+    fn transpose_for_scores(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let mut new_x_shape = x.dims().to_vec();
         new_x_shape[2] = self.num_attention_heads;
         new_x_shape.push(self.attention_head_size);
@@ -120,12 +119,12 @@ impl XLMRobertaSelfAttention {
 
     fn forward(
         &self,
-        hidden_states: &Tensor,
-        encoder_hidden_states: Option<&Tensor>,
-        attention_mask: &Tensor,
-        past_key_value: Option<(&Tensor, &Tensor)>,
-        encoder_attention_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        hidden_states: &Tensor<B>,
+        encoder_hidden_states: Option<&Tensor<B>>,
+        attention_mask: &Tensor<B>,
+        past_key_value: Option<(&Tensor<B>, &Tensor<B>)>,
+        encoder_attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let mixed_query_layer = self.query.forward(hidden_states)?;
         let is_cross_attention = encoder_hidden_states.is_some();
         let (key_layer, value_layer, attention_mask) = if is_cross_attention {
@@ -180,33 +179,33 @@ impl XLMRobertaSelfAttention {
     }
 }
 
-struct XLMRobertaSelfOutput {
-    dense: Linear,
-    layernorm: LayerNorm,
+struct XLMRobertaSelfOutput<B: BackendStorage> {
+    dense: Linear<B>,
+    layernorm: LayerNorm<B>,
 }
 
-impl XLMRobertaSelfOutput {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> XLMRobertaSelfOutput<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let dense = linear(cfg.hidden_size, cfg.hidden_size, vb.pp("dense"))?;
         let layernorm =
             candle_nn::layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("LayerNorm"))?;
         Ok(Self { dense, layernorm })
     }
 
-    fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor<B>, input_tensor: &Tensor<B>) -> Result<Tensor<B>> {
         let hidden_states = self.dense.forward(hidden_states)?;
         let hidden_states = self.layernorm.forward(&(hidden_states + input_tensor)?)?;
         Ok(hidden_states)
     }
 }
 
-struct XLMRobertaAttention {
-    output: XLMRobertaSelfOutput,
-    self_attention: XLMRobertaSelfAttention,
+struct XLMRobertaAttention<B: BackendStorage> {
+    output: XLMRobertaSelfOutput<B>,
+    self_attention: XLMRobertaSelfAttention<B>,
 }
 
-impl XLMRobertaAttention {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> XLMRobertaAttention<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let output = XLMRobertaSelfOutput::new(cfg, vb.pp("output"))?;
         let self_attention = XLMRobertaSelfAttention::new(cfg, vb.pp("self"))?;
         Ok(Self {
@@ -217,12 +216,12 @@ impl XLMRobertaAttention {
 
     fn forward(
         &self,
-        hidden_states: &Tensor,
-        attention_mask: &Tensor,
-        encoder_hidden_states: Option<&Tensor>,
-        encoder_attention_mask: Option<&Tensor>,
-        past_key_value: Option<(&Tensor, &Tensor)>,
-    ) -> Result<(Tensor, Tensor)> {
+        hidden_states: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+        encoder_hidden_states: Option<&Tensor<B>>,
+        encoder_attention_mask: Option<&Tensor<B>>,
+        past_key_value: Option<(&Tensor<B>, &Tensor<B>)>,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let self_outputs = self.self_attention.forward(
             hidden_states,
             encoder_hidden_states,
@@ -235,33 +234,33 @@ impl XLMRobertaAttention {
     }
 }
 
-struct XLMRobertaOutput {
-    dense: Linear,
-    layernorm: LayerNorm,
+struct XLMRobertaOutput<B: BackendStorage> {
+    dense: Linear<B>,
+    layernorm: LayerNorm<B>,
 }
 
-impl XLMRobertaOutput {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> XLMRobertaOutput<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let dense = linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("dense"))?;
         let layernorm =
             candle_nn::layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("LayerNorm"))?;
         Ok(Self { dense, layernorm })
     }
 
-    fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor<B>, input_tensor: &Tensor<B>) -> Result<Tensor<B>> {
         let hidden_states = self.dense.forward(hidden_states)?;
         let hidden_states = self.layernorm.forward(&(hidden_states + input_tensor)?)?;
         Ok(hidden_states)
     }
 }
 
-struct XLMRobertaIntermediate {
-    dense: Linear,
+struct XLMRobertaIntermediate<B: BackendStorage> {
+    dense: Linear<B>,
     intermediate_act_fn: Activation,
 }
 
-impl XLMRobertaIntermediate {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> XLMRobertaIntermediate<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let dense = linear(cfg.hidden_size, cfg.intermediate_size, vb.pp("dense"))?;
         let intermediate_act_fn = cfg.hidden_act;
         Ok(Self {
@@ -270,21 +269,21 @@ impl XLMRobertaIntermediate {
         })
     }
 
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor<B>) -> Result<Tensor<B>> {
         let hidden_states = self.dense.forward(hidden_states)?;
         let hidden_states = self.intermediate_act_fn.forward(&hidden_states)?;
         Ok(hidden_states)
     }
 }
 
-struct XLMRobertaLayer {
-    attention: XLMRobertaAttention,
-    intermediate: XLMRobertaIntermediate,
-    output: XLMRobertaOutput,
+struct XLMRobertaLayer<B: BackendStorage> {
+    attention: XLMRobertaAttention<B>,
+    intermediate: XLMRobertaIntermediate<B>,
+    output: XLMRobertaOutput<B>,
 }
 
-impl XLMRobertaLayer {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> XLMRobertaLayer<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let attention = XLMRobertaAttention::new(cfg, vb.pp("attention"))?;
         let intermediate = XLMRobertaIntermediate::new(cfg, vb.pp("intermediate"))?;
         let output = XLMRobertaOutput::new(cfg, vb.pp("output"))?;
@@ -297,12 +296,12 @@ impl XLMRobertaLayer {
 
     fn forward(
         &self,
-        hidden_states: &Tensor,
-        attention_mask: &Tensor,
-        encoder_hidden_states: Option<&Tensor>,
-        encoder_attention_mask: Option<&Tensor>,
-        past_key_value: Option<(&Tensor, &Tensor)>,
-    ) -> Result<(Tensor, Tensor)> {
+        hidden_states: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+        encoder_hidden_states: Option<&Tensor<B>>,
+        encoder_attention_mask: Option<&Tensor<B>>,
+        past_key_value: Option<(&Tensor<B>, &Tensor<B>)>,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let self_attention_outputs = self.attention.forward(
             hidden_states,
             attention_mask,
@@ -320,12 +319,12 @@ impl XLMRobertaLayer {
     }
 }
 
-struct XLMRobertaEncoder {
-    layers: Vec<XLMRobertaLayer>,
+struct XLMRobertaEncoder<B: BackendStorage> {
+    layers: Vec<XLMRobertaLayer<B>>,
 }
 
-impl XLMRobertaEncoder {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> XLMRobertaEncoder<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let layers = (0..cfg.num_hidden_layers)
             .map(|i| XLMRobertaLayer::new(cfg, vb.pp(format!("layer.{i}"))))
             .collect::<Result<Vec<_>>>()?;
@@ -334,12 +333,12 @@ impl XLMRobertaEncoder {
 
     fn forward(
         &self,
-        hidden_states: &Tensor,
-        attention_mask: &Tensor,
-        encoder_hidden_states: Option<&Tensor>,
-        encoder_attention_mask: Option<&Tensor>,
-        past_key_value: Option<(&Tensor, &Tensor)>,
-    ) -> Result<Tensor> {
+        hidden_states: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+        encoder_hidden_states: Option<&Tensor<B>>,
+        encoder_attention_mask: Option<&Tensor<B>>,
+        past_key_value: Option<(&Tensor<B>, &Tensor<B>)>,
+    ) -> Result<Tensor<B>> {
         let mut hidden_states = hidden_states.clone();
         for layer_module in self.layers.iter() {
             let layer_outputs = layer_module.forward(
@@ -355,13 +354,13 @@ impl XLMRobertaEncoder {
     }
 }
 
-pub struct XLMRobertaModel {
-    encoder: XLMRobertaEncoder,
-    embeddings: XLMRobertaEmbeddings,
+pub struct XLMRobertaModel<B: BackendStorage> {
+    encoder: XLMRobertaEncoder<B>,
+    embeddings: XLMRobertaEmbeddings<B>,
 }
 
-impl XLMRobertaModel {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> XLMRobertaModel<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let encoder = XLMRobertaEncoder::new(cfg, vb.pp("encoder"))?;
         let embeddings = XLMRobertaEmbeddings::load(vb.pp("embeddings"), cfg)?;
         Ok(Self {
@@ -372,16 +371,15 @@ impl XLMRobertaModel {
 
     pub fn forward(
         &self,
-        input_ids: &Tensor,
-        attention_mask: &Tensor,
-        token_type_ids: &Tensor,
-        past_key_value: Option<(&Tensor, &Tensor)>,
-        encoder_hidden_states: Option<&Tensor>,
-        encoder_attention_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        input_ids: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+        token_type_ids: &Tensor<B>,
+        past_key_value: Option<(&Tensor<B>, &Tensor<B>)>,
+        encoder_hidden_states: Option<&Tensor<B>>,
+        encoder_attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let hidden_states = self.embeddings.forward(input_ids, token_type_ids)?;
-        let attention_mask = prepare_4d_attention_mask(attention_mask, DType::F32, None)?
-            .to_device(hidden_states.device())?;
+        let attention_mask = prepare_4d_attention_mask(attention_mask, DType::F32, None)?;
         let hidden_states = self.encoder.forward(
             &hidden_states,
             &attention_mask,
@@ -393,20 +391,24 @@ impl XLMRobertaModel {
     }
 }
 
-struct XLMRobertaLMHead {
-    dense: Linear,
-    layer_norm: LayerNorm,
+struct XLMRobertaLMHead<B: BackendStorage> {
+    dense: Linear<B>,
+    layer_norm: LayerNorm<B>,
 }
 
-impl XLMRobertaLMHead {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> XLMRobertaLMHead<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let dense = linear(cfg.hidden_size, cfg.hidden_size, vb.pp("dense"))?;
         let layer_norm =
             candle_nn::layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("layer_norm"))?;
         Ok(Self { dense, layer_norm })
     }
 
-    fn forward(&self, hidden_states: &Tensor, shared_embeddings: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        hidden_states: &Tensor<B>,
+        shared_embeddings: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let hidden_states = self.dense.forward(hidden_states)?;
         let hidden_states = candle_nn::Activation::Gelu.forward(&hidden_states)?;
         let hidden_states = self.layer_norm.forward(&hidden_states)?;
@@ -415,13 +417,13 @@ impl XLMRobertaLMHead {
     }
 }
 
-pub struct XLMRobertaForMaskedLM {
-    roberta: XLMRobertaModel,
-    lm_head: XLMRobertaLMHead,
+pub struct XLMRobertaForMaskedLM<B: BackendStorage> {
+    roberta: XLMRobertaModel<B>,
+    lm_head: XLMRobertaLMHead<B>,
 }
 
-impl XLMRobertaForMaskedLM {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> XLMRobertaForMaskedLM<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let roberta = XLMRobertaModel::new(cfg, vb.pp("roberta"))?;
         let lm_head = XLMRobertaLMHead::new(cfg, vb.pp("lm_head"))?;
         Ok(Self { roberta, lm_head })
@@ -429,13 +431,13 @@ impl XLMRobertaForMaskedLM {
 
     pub fn forward(
         &self,
-        input_ids: &Tensor,
-        attention_mask: &Tensor,
-        token_type_ids: &Tensor,
-        past_key_value: Option<(&Tensor, &Tensor)>,
-        encoder_hidden_states: Option<&Tensor>,
-        encoder_attention_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        input_ids: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+        token_type_ids: &Tensor<B>,
+        past_key_value: Option<(&Tensor<B>, &Tensor<B>)>,
+        encoder_hidden_states: Option<&Tensor<B>>,
+        encoder_attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let hidden_states = self.roberta.forward(
             input_ids,
             attention_mask,
@@ -458,19 +460,19 @@ impl XLMRobertaForMaskedLM {
     }
 }
 
-struct XLMRobertaClassificationHead {
-    dense: Linear,
-    out_proj: Linear,
+struct XLMRobertaClassificationHead<B: BackendStorage> {
+    dense: Linear<B>,
+    out_proj: Linear<B>,
 }
 
-impl XLMRobertaClassificationHead {
-    fn new(num_labels: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> XLMRobertaClassificationHead<B> {
+    fn new(num_labels: usize, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let dense = linear(cfg.hidden_size, cfg.hidden_size, vb.pp("dense"))?;
         let out_proj = linear(cfg.hidden_size, num_labels, vb.pp("out_proj"))?;
         Ok(Self { dense, out_proj })
     }
 
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor<B>) -> Result<Tensor<B>> {
         let cls_states = hidden_states.get_on_dim(1, 0)?.contiguous()?;
         let hidden_states = self.dense.forward(&cls_states)?;
         // The activation used in the classification head is tanh, as per the original
@@ -481,13 +483,13 @@ impl XLMRobertaClassificationHead {
     }
 }
 
-pub struct XLMRobertaForSequenceClassification {
-    roberta: XLMRobertaModel,
-    classifier: XLMRobertaClassificationHead,
+pub struct XLMRobertaForSequenceClassification<B: BackendStorage> {
+    roberta: XLMRobertaModel<B>,
+    classifier: XLMRobertaClassificationHead<B>,
 }
 
-impl XLMRobertaForSequenceClassification {
-    pub fn new(num_labels: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> XLMRobertaForSequenceClassification<B> {
+    pub fn new(num_labels: usize, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let roberta = XLMRobertaModel::new(cfg, vb.pp("roberta"))?;
         let classifier = XLMRobertaClassificationHead::new(num_labels, cfg, vb.pp("classifier"))?;
         Ok(Self {
@@ -498,10 +500,10 @@ impl XLMRobertaForSequenceClassification {
 
     pub fn forward(
         &self,
-        input_ids: &Tensor,
-        attention_mask: &Tensor,
-        token_type_ids: &Tensor,
-    ) -> Result<Tensor> {
+        input_ids: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+        token_type_ids: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let hidden_states =
             self.roberta
                 .forward(input_ids, attention_mask, token_type_ids, None, None, None)?;
@@ -509,11 +511,11 @@ impl XLMRobertaForSequenceClassification {
     }
 }
 
-fn prepare_4d_attention_mask(
-    mask: &Tensor,
+fn prepare_4d_attention_mask<B: BackendStorage>(
+    mask: &Tensor<B>,
     dtype: DType,
     tgt_len: Option<usize>,
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     let bsz = mask.dim(0)?;
     let src_len = mask.dim(1)?;
     let tgt_len = tgt_len.unwrap_or(src_len);

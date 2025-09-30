@@ -762,7 +762,7 @@ impl PthTensors {
         &self.tensor_infos
     }
 
-    pub fn get(&self, name: &str) -> Result<Option<Tensor>> {
+    pub fn get(&self, name: &str) -> Result<Option<Tensor<crate::CpuStorage>>> {
         use std::io::Read;
         let tensor_info = match self.tensor_infos.get(name) {
             None => return Ok(None),
@@ -820,7 +820,7 @@ impl PthTensors {
 pub fn read_all_with_key<P: AsRef<std::path::Path>>(
     path: P,
     key: Option<&str>,
-) -> Result<Vec<(String, Tensor)>> {
+) -> Result<Vec<(String, Tensor<crate::CpuStorage>)>> {
     let pth = PthTensors::new(path, key)?;
     let tensor_names = pth.tensor_infos.keys();
     let mut tensors = Vec::with_capacity(tensor_names.len());
@@ -836,6 +836,8 @@ pub fn read_all_with_key<P: AsRef<std::path::Path>>(
 ///
 /// # Arguments
 /// * `path` - Path to the pth file.
-pub fn read_all<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<(String, Tensor)>> {
+pub fn read_all<P: AsRef<std::path::Path>>(
+    path: P,
+) -> Result<Vec<(String, Tensor<crate::CpuStorage>)>> {
     read_all_with_key(path, None)
 }

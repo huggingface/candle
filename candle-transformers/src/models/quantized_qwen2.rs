@@ -15,21 +15,24 @@
 
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::{
-    quantized::{gguf_file, QMatMul},
-    DType, Device, IndexOp, Result, Tensor,
+    quantized::{gguf_file, QMatMul, QTensor, QuantizedBackend},
+    DType, IndexOp, Result, Tensor,
 };
 use candle_nn::{Embedding, Module};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    feed_forward_w1: QMatMul,
-    feed_forward_w2: QMatMul,
-    feed_forward_w3: QMatMul,
+struct Mlp<QB: QuantizedBackend> {
+    feed_forward_w1: QMatMul<QB>,
+    feed_forward_w2: QMatMul<QB>,
+    feed_forward_w3: QMatMul<QB>,
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for Mlp<QB>
+where
+    QMatMul<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let w1 = self.feed_forward_w1.forward(xs)?;
         let w3 = self.feed_forward_w3.forward(xs)?;
         self.feed_forward_w2
@@ -37,38 +40,50 @@ impl Module for Mlp {
     }
 }
 
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 #[derive(Debug, Clone)]
-struct LayerWeights {
-    attention_wq: QMatMul,
-    attention_wk: QMatMul,
-    attention_wv: QMatMul,
-    attention_bq: Tensor,
-    attention_bk: Tensor,
-    attention_bv: Tensor,
-    attention_wo: QMatMul,
-    attention_norm: RmsNorm,
-    mlp: Mlp,
-    ffn_norm: RmsNorm,
+struct LayerWeights<QB: QuantizedBackend> {
+    attention_wq: QMatMul<QB>,
+    attention_wk: QMatMul<QB>,
+    attention_wv: QMatMul<QB>,
+    attention_bq: Tensor<QB::Storage>,
+    attention_bk: Tensor<QB::Storage>,
+    attention_bv: Tensor<QB::Storage>,
+    attention_wo: QMatMul<QB>,
+    attention_norm: RmsNorm<QB>,
+    mlp: Mlp<QB>,
+    ffn_norm: RmsNorm<QB>,
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    cos: Tensor,
-    sin: Tensor,
-    neg_inf: Tensor,
-    kv_cache: Option<(Tensor, Tensor)>,
+    cos: Tensor<QB::Storage>,
+    sin: Tensor<QB::Storage>,
+    neg_inf: Tensor<QB::Storage>,
+    kv_cache: Option<KVCache<QB>>,
     span_attn: tracing::Span,
     span_rot: tracing::Span,
     span_mlp: tracing::Span,
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
+fn masked_fill<QB: QuantizedBackend>(
+    on_false: &Tensor<QB::Storage>,
+    mask: &Tensor<QB::Storage>,
+    on_true: &Tensor<QB::Storage>,
+) -> Result<Tensor<QB::Storage>> {
     let shape = mask.shape();
     let m = mask.where_cond(&on_true.broadcast_as(shape.dims())?, on_false)?;
     Ok(m)
 }
 
-impl LayerWeights {
-    fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+impl<QB: QuantizedBackend> LayerWeights<QB> {
+    fn apply_rotary_emb(
+        &self,
+        x: &Tensor<QB::Storage>,
+        index_pos: usize,
+    ) -> Result<Tensor<QB::Storage>> {
         let _enter = self.span_rot.enter();
         let (_b_sz, _n_head, seq_len, _n_embd) = x.dims4()?;
         let cos = self.cos.narrow(0, index_pos, seq_len)?;
@@ -78,10 +93,13 @@ impl LayerWeights {
 
     fn forward_attn(
         &mut self,
-        x: &Tensor,
-        mask: Option<&Tensor>,
+        x: &Tensor<QB::Storage>,
+        mask: Option<&Tensor<QB::Storage>>,
         index_pos: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        QMatMul<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
 
@@ -135,7 +153,7 @@ impl LayerWeights {
             None => att,
             Some(mask) => {
                 let mask = mask.broadcast_as(att.shape())?;
-                masked_fill(&att, &mask, &self.neg_inf)?
+                masked_fill::<QB>(&att, &mask, &self.neg_inf)?
             }
         };
         let att = candle_nn::ops::softmax_last_dim(&att)?;
@@ -147,22 +165,26 @@ impl LayerWeights {
     }
 }
 
-pub struct ModelWeights {
-    tok_embeddings: Embedding,
-    layers: Vec<LayerWeights>,
-    norm: RmsNorm,
-    output: QMatMul,
-    masks: HashMap<usize, Tensor>,
+pub struct ModelWeights<QB: QuantizedBackend> {
+    tok_embeddings: Embedding<QB::Storage>,
+    layers: Vec<LayerWeights<QB>>,
+    norm: RmsNorm<QB>,
+    output: QMatMul<QB>,
+    masks: HashMap<usize, Tensor<QB::Storage>>,
     span: tracing::Span,
     span_output: tracing::Span,
 }
 
-fn precomput_freqs_cis(
+type CosSin<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
+fn precomput_freqs_cis<QB: QuantizedBackend>(
     head_dim: usize,
     freq_base: f32,
     context_length: usize,
-    device: &Device,
-) -> Result<(Tensor, Tensor)> {
+    device: &QB::Device,
+) -> Result<CosSin<QB>> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
@@ -177,11 +199,11 @@ fn precomput_freqs_cis(
     Ok((cos, sin))
 }
 
-impl ModelWeights {
+impl<QB: QuantizedBackend> ModelWeights<QB> {
     pub fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
-        device: &Device,
+        device: &QB::Device,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle::bail!("cannot find {s} in metadata"),
@@ -202,8 +224,8 @@ impl ModelWeights {
 
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
-        let tok_embeddings = tok_embeddings.dequantize(device)?;
+        let tok_embeddings: QTensor<QB> = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = tok_embeddings.dequantize()?;
         let norm = RmsNorm::from_qtensor(
             ct.tensor(reader, "output_norm.weight", device)?,
             rms_norm_eps,
@@ -216,7 +238,8 @@ impl ModelWeights {
             }
         };
 
-        let (cos, sin) = precomput_freqs_cis(head_dim, rope_freq_base, context_length, device)?;
+        let (cos, sin) =
+            precomput_freqs_cis::<QB>(head_dim, rope_freq_base, context_length, device)?;
 
         let mut layers = Vec::with_capacity(block_count);
 
@@ -226,9 +249,12 @@ impl ModelWeights {
             let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
             let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"), device)?;
 
-            let attention_bq = ct.tensor(reader, &format!("{prefix}.attn_q.bias"), device)?;
-            let attention_bk = ct.tensor(reader, &format!("{prefix}.attn_k.bias"), device)?;
-            let attention_bv = ct.tensor(reader, &format!("{prefix}.attn_v.bias"), device)?;
+            let attention_bq: QTensor<QB> =
+                ct.tensor(reader, &format!("{prefix}.attn_q.bias"), device)?;
+            let attention_bk: QTensor<QB> =
+                ct.tensor(reader, &format!("{prefix}.attn_k.bias"), device)?;
+            let attention_bv: QTensor<QB> =
+                ct.tensor(reader, &format!("{prefix}.attn_v.bias"), device)?;
 
             let attention_wo =
                 ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
@@ -259,9 +285,9 @@ impl ModelWeights {
                 attention_wq: QMatMul::from_qtensor(attention_wq)?,
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
-                attention_bq: attention_bq.dequantize(device)?,
-                attention_bk: attention_bk.dequantize(device)?,
-                attention_bv: attention_bv.dequantize(device)?,
+                attention_bq: attention_bq.dequantize()?,
+                attention_bk: attention_bk.dequantize()?,
+                attention_bv: attention_bv.dequantize()?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
                 attention_norm: RmsNorm::from_qtensor(attention_norm, rms_norm_eps)?,
                 cos: cos.clone(),
@@ -293,7 +319,7 @@ impl ModelWeights {
         })
     }
 
-    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
+    fn mask(&mut self, t: usize, device: &QB::Device) -> Result<Tensor<QB::Storage>> {
         if let Some(mask) = self.masks.get(&t) {
             Ok(mask.clone())
         } else {
@@ -306,7 +332,14 @@ impl ModelWeights {
         }
     }
 
-    pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        x: &Tensor<QB::Storage>,
+        index_pos: usize,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        QMatMul<QB>: Module<QB::Storage>,
+    {
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = if seq_len == 1 {
             None

@@ -10,7 +10,7 @@
 //!
 //! - [PyTorch Implementation](https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/mobilenetv3.py)
 
-use candle::{Result, Tensor, D};
+use candle::{BackendStorage, Result, Tensor, D};
 use candle_nn::{
     batch_norm, conv2d_no_bias, linear, ops::softmax, Activation, Conv2dConfig, Func, VarBuilder,
 };
@@ -290,13 +290,13 @@ impl Config {
     }
 }
 
-fn depthwise_conv(
+fn depthwise_conv<B: BackendStorage + 'static>(
     channels: usize,
     kernel: usize,
     stride: usize,
     padding: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         stride,
         padding,
@@ -310,11 +310,11 @@ fn depthwise_conv(
     Ok(Func::new(move |xs| xs.apply(&conv)?.apply_t(&bn, false)))
 }
 
-fn pointwise_conv(
+fn pointwise_conv<B: BackendStorage + 'static>(
     in_channels: usize,
     out_channels: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         ..Default::default()
     };
@@ -327,7 +327,7 @@ fn pointwise_conv(
 
 //Universal block that uses two pointwise convolutions and all combinations of two depthwise convolutions.
 #[allow(clippy::too_many_arguments)]
-fn universal_inverted_bottleneck_block(
+fn universal_inverted_bottleneck_block<B: BackendStorage + 'static>(
     cfg: &Config,
     in_channels: usize,
     out_channels: usize,
@@ -335,8 +335,8 @@ fn universal_inverted_bottleneck_block(
     start_kernel: usize,
     mid_kernel: usize,
     stride: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let act = cfg.activation;
     let skip_connection = (in_channels == out_channels) && (stride == 1);
 
@@ -390,14 +390,14 @@ fn universal_inverted_bottleneck_block(
 }
 
 // Convolutional block including norm and activation.
-fn conv_block(
+fn conv_block<B: BackendStorage + 'static>(
     cfg: &Config,
     in_channels: usize,
     out_channels: usize,
     kernel: usize,
     stride: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         stride,
         padding: kernel / 2,
@@ -413,15 +413,15 @@ fn conv_block(
     }))
 }
 
-fn edge_residual_block(
+fn edge_residual_block<B: BackendStorage + 'static>(
     cfg: &Config,
     in_channels: usize,
     out_channels: usize,
     kernel: usize,
     stride: usize,
     expand: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv_exp_cfg = Conv2dConfig {
         stride,
         padding: kernel / 2,
@@ -464,7 +464,7 @@ fn edge_residual_block(
     }))
 }
 
-fn reshape_kv(t: &Tensor) -> Result<Tensor> {
+fn reshape_kv<B: BackendStorage>(t: &Tensor<B>) -> Result<Tensor<B>> {
     let d = t.dims4()?;
     let t = t
         .reshape((d.0, d.1, ()))?
@@ -474,7 +474,11 @@ fn reshape_kv(t: &Tensor) -> Result<Tensor> {
     Ok(t)
 }
 
-fn reshape_query(t: &Tensor, heads: usize, kv_dim: usize) -> Result<Tensor> {
+fn reshape_query<B: BackendStorage>(
+    t: &Tensor<B>,
+    heads: usize,
+    kv_dim: usize,
+) -> Result<Tensor<B>> {
     let d = t.dims4()?;
 
     let t = t
@@ -484,7 +488,12 @@ fn reshape_query(t: &Tensor, heads: usize, kv_dim: usize) -> Result<Tensor> {
     Ok(t)
 }
 
-fn reshape_output(t: &Tensor, heads: usize, h: usize, w: usize) -> Result<Tensor> {
+fn reshape_output<B: BackendStorage>(
+    t: &Tensor<B>,
+    heads: usize,
+    h: usize,
+    w: usize,
+) -> Result<Tensor<B>> {
     let d = t.dims4()?;
     let t = t.transpose(1, 2)?;
     let t = t
@@ -496,7 +505,7 @@ fn reshape_output(t: &Tensor, heads: usize, h: usize, w: usize) -> Result<Tensor
 
 // Mobile multi-query attention
 #[allow(clippy::too_many_arguments)]
-fn mqa_block(
+fn mqa_block<B: BackendStorage + 'static>(
     in_channels: usize,
     out_channels: usize,
     heads: usize,
@@ -504,8 +513,8 @@ fn mqa_block(
     stride: usize,
     kv_dim: usize,
     kv_stride: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let down_conv2d_cfg = Conv2dConfig {
         stride: kv_stride,
         padding: kernel / 2,
@@ -626,7 +635,10 @@ fn mqa_block(
 }
 
 // Stem.
-fn mobilenetv4_stem(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
+fn mobilenetv4_stem<B: BackendStorage + 'static>(
+    cfg: &Config,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         stride: 2,
         padding: 1,
@@ -645,7 +657,10 @@ fn mobilenetv4_stem(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
 }
 
 // The blocks in all the 5 stages of the model.
-fn mobilenetv4_blocks(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
+fn mobilenetv4_blocks<B: BackendStorage + 'static>(
+    cfg: &Config,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let mut in_channels = cfg.stem_dim;
     let mut blocks = Vec::new();
 
@@ -742,12 +757,12 @@ fn mobilenetv4_blocks(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
 }
 
 // Classification head.
-fn mobilenetv4_head(
+fn mobilenetv4_head<B: BackendStorage + 'static>(
     cfg: &Config,
     outputs: usize,
     nclasses: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         ..Default::default()
     };
@@ -768,11 +783,11 @@ fn mobilenetv4_head(
 }
 
 // Build a mobilenetv4 model for a given configuration.
-fn mobilenetv4_model(
+fn mobilenetv4_model<B: BackendStorage + 'static>(
     cfg: &Config,
     nclasses: Option<usize>,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let cls = match nclasses {
         None => None,
         Some(nclasses) => {
@@ -796,10 +811,17 @@ fn mobilenetv4_model(
     }))
 }
 
-pub fn mobilenetv4(cfg: &Config, nclasses: usize, vb: VarBuilder) -> Result<Func<'static>> {
+pub fn mobilenetv4<B: BackendStorage + 'static>(
+    cfg: &Config,
+    nclasses: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     mobilenetv4_model(cfg, Some(nclasses), vb)
 }
 
-pub fn mobilenetv4_no_final_layer(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
+pub fn mobilenetv4_no_final_layer<B: BackendStorage + 'static>(
+    cfg: &Config,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     mobilenetv4_model(cfg, None, vb)
 }

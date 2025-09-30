@@ -1,24 +1,24 @@
-use candle::{Result, Tensor, D};
+use candle::{BackendStorage, Result, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
 
 #[derive(Debug)]
-pub struct TimestepEmbedding {
-    linear_1: nn::Linear,
-    linear_2: nn::Linear,
+pub struct TimestepEmbedding<B: BackendStorage> {
+    linear_1: nn::Linear<B>,
+    linear_2: nn::Linear<B>,
 }
 
-impl TimestepEmbedding {
+impl<B: BackendStorage> TimestepEmbedding<B> {
     // act_fn: "silu"
-    pub fn new(vs: nn::VarBuilder, channel: usize, time_embed_dim: usize) -> Result<Self> {
+    pub fn new(vs: nn::VarBuilder<B>, channel: usize, time_embed_dim: usize) -> Result<Self> {
         let linear_1 = nn::linear(channel, time_embed_dim, vs.pp("linear_1"))?;
         let linear_2 = nn::linear(time_embed_dim, time_embed_dim, vs.pp("linear_2"))?;
         Ok(Self { linear_1, linear_2 })
     }
 }
 
-impl Module for TimestepEmbedding {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for TimestepEmbedding<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = nn::ops::silu(&self.linear_1.forward(xs)?)?;
         self.linear_2.forward(&xs)
     }
@@ -41,8 +41,8 @@ impl Timesteps {
     }
 }
 
-impl Module for Timesteps {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Timesteps {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let half_dim = (self.num_channels / 2) as u32;
         let exponent = (Tensor::arange(0, half_dim, xs.device())?.to_dtype(candle::DType::F32)?
             * -f64::ln(10000.))?;

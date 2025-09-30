@@ -1,16 +1,16 @@
-use candle::{bail, DType, Module, Result, Tensor};
+use candle::{bail, BackendStorage, DType, Module, Result, Tensor};
 use candle_nn as nn;
 
-pub struct PatchEmbedder {
-    proj: nn::Conv2d,
+pub struct PatchEmbedder<B: BackendStorage> {
+    proj: nn::Conv2d<B>,
 }
 
-impl PatchEmbedder {
+impl<B: BackendStorage> PatchEmbedder<B> {
     pub fn new(
         patch_size: usize,
         in_channels: usize,
         embed_dim: usize,
-        vb: nn::VarBuilder,
+        vb: nn::VarBuilder<B>,
     ) -> Result<Self> {
         let proj = nn::conv2d(
             in_channels,
@@ -27,8 +27,8 @@ impl PatchEmbedder {
     }
 }
 
-impl Module for PatchEmbedder {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for PatchEmbedder<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let x = self.proj.forward(x)?;
 
         // flatten spatial dim and transpose to channels last
@@ -50,7 +50,12 @@ impl Unpatchifier {
         })
     }
 
-    pub fn unpatchify(&self, x: &Tensor, h: usize, w: usize) -> Result<Tensor> {
+    pub fn unpatchify<B: BackendStorage>(
+        &self,
+        x: &Tensor<B>,
+        h: usize,
+        w: usize,
+    ) -> Result<Tensor<B>> {
         let h = (h + 1) / self.patch_size;
         let w = (w + 1) / self.patch_size;
 
@@ -72,18 +77,18 @@ impl Unpatchifier {
     }
 }
 
-pub struct PositionEmbedder {
-    pos_embed: Tensor,
+pub struct PositionEmbedder<B: BackendStorage> {
+    pos_embed: Tensor<B>,
     patch_size: usize,
     pos_embed_max_size: usize,
 }
 
-impl PositionEmbedder {
+impl<B: BackendStorage> PositionEmbedder<B> {
     pub fn new(
         hidden_size: usize,
         patch_size: usize,
         pos_embed_max_size: usize,
-        vb: nn::VarBuilder,
+        vb: nn::VarBuilder<B>,
     ) -> Result<Self> {
         let pos_embed = vb.get(
             (1, pos_embed_max_size * pos_embed_max_size, hidden_size),
@@ -95,7 +100,7 @@ impl PositionEmbedder {
             pos_embed_max_size,
         })
     }
-    pub fn get_cropped_pos_embed(&self, h: usize, w: usize) -> Result<Tensor> {
+    pub fn get_cropped_pos_embed(&self, h: usize, w: usize) -> Result<Tensor<B>> {
         let h = (h + 1) / self.patch_size;
         let w = (w + 1) / self.patch_size;
 
@@ -114,16 +119,16 @@ impl PositionEmbedder {
     }
 }
 
-pub struct TimestepEmbedder {
-    mlp: nn::Sequential,
+pub struct TimestepEmbedder<B: BackendStorage> {
+    mlp: nn::Sequential<B>,
     frequency_embedding_size: usize,
 }
 
-impl TimestepEmbedder {
+impl<B: BackendStorage + 'static> TimestepEmbedder<B> {
     pub fn new(
         hidden_size: usize,
         frequency_embedding_size: usize,
-        vb: nn::VarBuilder,
+        vb: nn::VarBuilder<B>,
     ) -> Result<Self> {
         let mlp = nn::seq()
             .add(nn::linear(
@@ -140,7 +145,7 @@ impl TimestepEmbedder {
         })
     }
 
-    fn timestep_embedding(t: &Tensor, dim: usize, max_period: f64) -> Result<Tensor> {
+    fn timestep_embedding(t: &Tensor<B>, dim: usize, max_period: f64) -> Result<Tensor<B>> {
         if dim % 2 != 0 {
             bail!("Embedding dimension must be even")
         }
@@ -168,19 +173,19 @@ impl TimestepEmbedder {
     }
 }
 
-impl Module for TimestepEmbedder {
-    fn forward(&self, t: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage + 'static> Module<B> for TimestepEmbedder<B> {
+    fn forward(&self, t: &Tensor<B>) -> Result<Tensor<B>> {
         let t_freq = Self::timestep_embedding(t, self.frequency_embedding_size, 10000.0)?;
         self.mlp.forward(&t_freq)
     }
 }
 
-pub struct VectorEmbedder {
-    mlp: nn::Sequential,
+pub struct VectorEmbedder<B: BackendStorage> {
+    mlp: nn::Sequential<B>,
 }
 
-impl VectorEmbedder {
-    pub fn new(input_dim: usize, hidden_size: usize, vb: nn::VarBuilder) -> Result<Self> {
+impl<B: BackendStorage + 'static> VectorEmbedder<B> {
+    pub fn new(input_dim: usize, hidden_size: usize, vb: nn::VarBuilder<B>) -> Result<Self> {
         let mlp = nn::seq()
             .add(nn::linear(input_dim, hidden_size, vb.pp("mlp.0"))?)
             .add(nn::Activation::Silu)
@@ -190,8 +195,8 @@ impl VectorEmbedder {
     }
 }
 
-impl Module for VectorEmbedder {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for VectorEmbedder<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         self.mlp.forward(x)
     }
 }

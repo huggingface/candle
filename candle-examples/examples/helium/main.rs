@@ -12,7 +12,7 @@ use candle_transformers::models::llama::{
     Cache as CacheV1, Llama as ModelV1, LlamaConfig as ConfigV1, LlamaEosToks,
 };
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
@@ -20,13 +20,16 @@ use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 #[derive(Debug, Clone)]
-enum Model {
-    V1 { model: ModelV1, cache: CacheV1 },
-    Preview(ModelPreview),
+enum Model<B: BackendStorage> {
+    V1 {
+        model: ModelV1<B>,
+        cache: CacheV1<B>,
+    },
+    Preview(ModelPreview<B>),
 }
 
-impl Model {
-    fn forward(&mut self, input: &Tensor, start_pos: usize) -> Result<Tensor> {
+impl<B: BackendStorage> Model<B> {
+    fn forward(&mut self, input: &Tensor<B>, start_pos: usize) -> Result<Tensor<B>> {
         let model = match self {
             Model::V1 { model, cache } => model.forward(input, start_pos, cache)?,
             Model::Preview(m) => m.forward(input, start_pos)?,
@@ -57,9 +60,9 @@ impl Config {
     }
 }
 
-struct TextGeneration {
-    model: Model,
-    device: Device,
+struct TextGeneration<B: BackendStorage> {
+    model: Model<B>,
+    device: B::Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
@@ -67,10 +70,10 @@ struct TextGeneration {
     config: Config,
 }
 
-impl TextGeneration {
+impl<B: BackendStorage> TextGeneration<B> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
+        model: Model<B>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
@@ -79,7 +82,7 @@ impl TextGeneration {
         repeat_penalty: f32,
         repeat_last_n: usize,
         config: Config,
-        device: &Device,
+        device: &B::Device,
     ) -> Self {
         let logits_processor = {
             let temperature = temp.unwrap_or(0.);
@@ -246,11 +249,24 @@ struct Args {
     repeat_last_n: usize,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
-
-    let args = Args::parse();
 
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -311,15 +327,18 @@ fn main() -> Result<()> {
         Which::V1Preview => Config::Preview(serde_json::from_slice(&std::fs::read(config_file)?)?),
         Which::V1 => Config::V1(serde_json::from_slice(&std::fs::read(config_file)?)?),
     };
-    let device = candle_examples::device(args.cpu)?;
     let (model, device) = {
-        let dtype = device.bf16_default_to_f32();
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+        let dtype = if B::Device::SUPPORTS_BF16 {
+            DType::BF16
+        } else {
+            DType::F32
+        };
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
         let model = match &config {
             Config::V1(c) => {
                 let c = c.clone().into_config(false);
-                let model = ModelV1::load(vb, &c)?;
-                let cache = CacheV1::new(true, dtype, &c, &device)?;
+                let model: ModelV1<B> = ModelV1::load(vb, &c)?;
+                let cache = CacheV1::new(true, dtype, &c, device)?;
                 Model::V1 { model, cache }
             }
             Config::Preview(c) => Model::Preview(ModelPreview::new(c, vb)?),
@@ -339,7 +358,7 @@ fn main() -> Result<()> {
         args.repeat_penalty,
         args.repeat_last_n,
         config,
-        &device,
+        device,
     );
     pipeline.run(&args.prompt, args.sample_len)?;
     Ok(())

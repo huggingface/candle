@@ -4,7 +4,7 @@
 //!
 //! Based on implementation from [huggingface/transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/encodec/modeling_encodec.py)
 
-use candle::{DType, IndexOp, Layout, Module, Result, Shape, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Layout, Module, Result, Shape, Tensor, D};
 use candle_nn::{conv1d, Conv1d, ConvTranspose1d, VarBuilder};
 
 // Encodec Model
@@ -102,8 +102,8 @@ impl Config {
     }
 }
 
-fn get_extra_padding_for_conv1d(
-    xs: &Tensor,
+fn get_extra_padding_for_conv1d<B: BackendStorage>(
+    xs: &Tensor<B>,
     k_size: usize,
     stride: usize,
     padding_total: usize,
@@ -115,7 +115,12 @@ fn get_extra_padding_for_conv1d(
     Ok(ideal_len.saturating_sub(len))
 }
 
-fn pad1d(xs: &Tensor, pad_l: usize, pad_r: usize, mode: PadMode) -> Result<Tensor> {
+fn pad1d<B: BackendStorage>(
+    xs: &Tensor<B>,
+    pad_l: usize,
+    pad_r: usize,
+    mode: PadMode,
+) -> Result<Tensor<B>> {
     match mode {
         PadMode::Constant => xs.pad_with_zeros(D::Minus1, pad_l, pad_r),
         PadMode::Reflect => candle::bail!("pad-mode 'reflect' is not supported"),
@@ -126,13 +131,13 @@ fn pad1d(xs: &Tensor, pad_l: usize, pad_r: usize, mode: PadMode) -> Result<Tenso
 // Applies weight norm for inference by recomputing the weight tensor. This
 // does not apply to training.
 // https://pytorch.org/docs/stable/generated/torch.nn.utils.weight_norm.html
-pub fn conv1d_weight_norm(
+pub fn conv1d_weight_norm<B: BackendStorage>(
     in_c: usize,
     out_c: usize,
     kernel_size: usize,
     config: candle_nn::Conv1dConfig,
-    vb: VarBuilder,
-) -> Result<Conv1d> {
+    vb: VarBuilder<B>,
+) -> Result<Conv1d<B>> {
     let weight_g = vb.get((out_c, 1, 1), "weight_g")?;
     let weight_v = vb.get((out_c, in_c, kernel_size), "weight_v")?;
     let norm_v = weight_v.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
@@ -141,13 +146,13 @@ pub fn conv1d_weight_norm(
     Ok(Conv1d::new(weight, Some(bias), config))
 }
 
-pub fn conv1d_weight_norm_no_bias(
+pub fn conv1d_weight_norm_no_bias<B: BackendStorage>(
     in_c: usize,
     out_c: usize,
     kernel_size: usize,
     config: candle_nn::Conv1dConfig,
-    vb: VarBuilder,
-) -> Result<Conv1d> {
+    vb: VarBuilder<B>,
+) -> Result<Conv1d<B>> {
     let weight_g = vb.get((out_c, 1, 1), "weight_g")?;
     let weight_v = vb.get((out_c, in_c, kernel_size), "weight_v")?;
     let norm_v = weight_v.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
@@ -155,14 +160,14 @@ pub fn conv1d_weight_norm_no_bias(
     Ok(Conv1d::new(weight, None, config))
 }
 
-pub fn conv_transpose1d_weight_norm(
+pub fn conv_transpose1d_weight_norm<B: BackendStorage>(
     in_c: usize,
     out_c: usize,
     kernel_size: usize,
     bias: bool,
     config: candle_nn::ConvTranspose1dConfig,
-    vb: VarBuilder,
-) -> Result<ConvTranspose1d> {
+    vb: VarBuilder<B>,
+) -> Result<ConvTranspose1d<B>> {
     let weight_g = vb.get((in_c, 1, 1), "weight_g")?;
     let weight_v = vb.get((in_c, out_c, kernel_size), "weight_v")?;
     let norm_v = weight_v.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
@@ -177,7 +182,7 @@ pub fn conv_transpose1d_weight_norm(
 
 struct CodebookEncode;
 
-impl candle::CustomOp2 for CodebookEncode {
+impl<B: BackendStorage> candle::CustomOp2<B> for CodebookEncode {
     fn name(&self) -> &'static str {
         "cb"
     }
@@ -241,16 +246,16 @@ impl candle::CustomOp2 for CodebookEncode {
 // https://github.com/huggingface/transformers/blob/abaca9f9432a84cfaa95531de4c72334f38a42f2/src/transformers/models/encodec/modeling_encodec.py#L340
 #[allow(unused)]
 #[derive(Clone, Debug)]
-pub struct EuclideanCodebook {
-    inited: Tensor,
-    cluster_size: Tensor,
-    embed: candle_nn::Embedding,
-    embed_avg: Tensor,
-    c2: Tensor,
+pub struct EuclideanCodebook<B: BackendStorage> {
+    inited: Tensor<B>,
+    cluster_size: Tensor<B>,
+    embed: candle_nn::Embedding<B>,
+    embed_avg: Tensor<B>,
+    c2: Tensor<B>,
 }
 
-impl EuclideanCodebook {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> EuclideanCodebook<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let inited = vb.get(1, "inited")?;
         let cluster_size = vb.get(cfg.codebook_size, "cluster_size")?;
         let e_shape = (cfg.codebook_size, cfg.codebook_dim());
@@ -266,7 +271,7 @@ impl EuclideanCodebook {
         })
     }
 
-    pub fn encode_slow(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode_slow(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut target_shape = xs.dims().to_vec();
         target_shape.pop();
         let xs = xs.flatten_to(D::Minus2)?;
@@ -276,7 +281,7 @@ impl EuclideanCodebook {
         codes.reshape(target_shape)
     }
 
-    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut target_shape = xs.dims().to_vec();
         target_shape.pop();
         let xs = xs.flatten_to(D::Minus2)?;
@@ -285,29 +290,29 @@ impl EuclideanCodebook {
         codes.reshape(target_shape)
     }
 
-    pub fn decode(&self, embed_ind: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, embed_ind: &Tensor<B>) -> Result<Tensor<B>> {
         let quantize = self.embed.forward(embed_ind)?;
         Ok(quantize)
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct VectorQuantization {
-    codebook: EuclideanCodebook,
+pub struct VectorQuantization<B: BackendStorage> {
+    codebook: EuclideanCodebook<B>,
 }
 
-impl VectorQuantization {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> VectorQuantization<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let codebook = EuclideanCodebook::new(cfg, vb.pp("codebook"))?;
         Ok(Self { codebook })
     }
 
-    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = xs.transpose(1, 2)?;
         self.codebook.encode_slow(&xs)
     }
 
-    pub fn decode(&self, embed_ind: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, embed_ind: &Tensor<B>) -> Result<Tensor<B>> {
         let quantize = self.codebook.decode(embed_ind)?;
         let quantize = quantize.transpose(1, 2)?;
         Ok(quantize)
@@ -315,13 +320,13 @@ impl VectorQuantization {
 }
 
 #[derive(Clone, Debug)]
-pub struct ResidualVectorQuantizer {
-    layers: Vec<VectorQuantization>,
+pub struct ResidualVectorQuantizer<B: BackendStorage> {
+    layers: Vec<VectorQuantization<B>>,
     dtype: DType,
 }
 
-impl ResidualVectorQuantizer {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> ResidualVectorQuantizer<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb = &vb.pp("layers");
         let layers = (0..cfg.num_quantizers())
             .map(|i| VectorQuantization::new(cfg, vb.pp(i)))
@@ -332,7 +337,7 @@ impl ResidualVectorQuantizer {
         })
     }
 
-    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut codes = Vec::with_capacity(self.layers.len());
         let mut residual = xs.clone();
         for layer in self.layers.iter() {
@@ -344,7 +349,7 @@ impl ResidualVectorQuantizer {
         Tensor::stack(&codes, 0)
     }
 
-    pub fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, codes: &Tensor<B>) -> Result<Tensor<B>> {
         let mut quantized_out = Tensor::zeros((), self.dtype, codes.device())?;
         let ncodes = codes.dim(0)?;
         if ncodes > self.layers.len() {
@@ -364,12 +369,12 @@ impl ResidualVectorQuantizer {
 
 // https://github.com/huggingface/transformers/blob/abaca9f9432a84cfaa95531de4c72334f38a42f2/src/transformers/models/encodec/modeling_encodec.py#L226
 #[derive(Clone, Debug)]
-pub struct EncodecLSTM {
-    layers: Vec<candle_nn::LSTM>,
+pub struct EncodecLSTM<B: BackendStorage> {
+    layers: Vec<candle_nn::LSTM<B>>,
 }
 
-impl EncodecLSTM {
-    pub fn new(dim: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> EncodecLSTM<B> {
+    pub fn new(dim: usize, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb = &vb.pp("lstm");
         let mut layers = vec![];
         for layer_idx in 0..cfg.num_lstm_layers {
@@ -384,8 +389,8 @@ impl EncodecLSTM {
     }
 }
 
-impl Module for EncodecLSTM {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for EncodecLSTM<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         use candle_nn::RNN;
         // This is different from the Python transformers version as candle LSTM is batch first.
         let xs = xs.t()?;
@@ -401,18 +406,18 @@ impl Module for EncodecLSTM {
 }
 
 #[derive(Clone, Debug)]
-pub struct EncodecConvTranspose1d {
-    conv: ConvTranspose1d,
+pub struct EncodecConvTranspose1d<B: BackendStorage> {
+    conv: ConvTranspose1d<B>,
 }
 
-impl EncodecConvTranspose1d {
+impl<B: BackendStorage> EncodecConvTranspose1d<B> {
     fn new(
         in_c: usize,
         out_c: usize,
         k: usize,
         stride: usize,
         _cfg: &Config,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let cfg = candle_nn::ConvTranspose1dConfig {
             stride,
@@ -423,21 +428,21 @@ impl EncodecConvTranspose1d {
     }
 }
 
-impl Module for EncodecConvTranspose1d {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for EncodecConvTranspose1d<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.conv)
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct EncodecConv1d {
+pub struct EncodecConv1d<B: BackendStorage> {
     causal: bool,
-    conv: Conv1d,
-    norm: Option<candle_nn::GroupNorm>,
+    conv: Conv1d<B>,
+    norm: Option<candle_nn::GroupNorm<B>>,
     pad_mode: PadMode,
 }
 
-impl EncodecConv1d {
+impl<B: BackendStorage> EncodecConv1d<B> {
     pub fn new(
         in_c: usize,
         out_c: usize,
@@ -445,7 +450,7 @@ impl EncodecConv1d {
         stride: usize,
         dilation: usize,
         cfg: &Config,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let conv = match cfg.norm_type {
             NormType::WeightNorm => conv1d_weight_norm(
@@ -489,8 +494,8 @@ impl EncodecConv1d {
     }
 }
 
-impl Module for EncodecConv1d {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for EncodecConv1d<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (_b, _t, _c) = xs.dims3()?;
         let k_size = self.conv.weight().dim(D::Minus1)?;
         let conv_cfg = self.conv.config();
@@ -520,18 +525,18 @@ impl Module for EncodecConv1d {
 }
 
 #[derive(Clone, Debug)]
-pub struct EncodecResnetBlock {
-    block_conv1: EncodecConv1d,
-    block_conv2: EncodecConv1d,
-    shortcut: Option<EncodecConv1d>,
+pub struct EncodecResnetBlock<B: BackendStorage> {
+    block_conv1: EncodecConv1d<B>,
+    block_conv2: EncodecConv1d<B>,
+    shortcut: Option<EncodecConv1d<B>>,
 }
 
-impl EncodecResnetBlock {
+impl<B: BackendStorage> EncodecResnetBlock<B> {
     pub fn new(
         dim: usize,
         (dilation1, dilation2): (usize, usize),
         cfg: &Config,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let h = dim / cfg.compress;
         let mut layer = Layer::new(vb.pp("block"));
@@ -562,8 +567,8 @@ impl EncodecResnetBlock {
     }
 }
 
-impl Module for EncodecResnetBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for EncodecResnetBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let residual = xs.clone();
         let xs = xs.elu(1.)?;
         let xs = self.block_conv1.forward(&xs)?;
@@ -577,13 +582,13 @@ impl Module for EncodecResnetBlock {
     }
 }
 
-struct Layer<'a> {
-    vb: VarBuilder<'a>,
+struct Layer<'a, B: BackendStorage> {
+    vb: VarBuilder<'a, B>,
     cnt: usize,
 }
 
-impl<'a> Layer<'a> {
-    fn new(vb: VarBuilder<'a>) -> Self {
+impl<'a, B: BackendStorage> Layer<'a, B> {
+    fn new(vb: VarBuilder<'a, B>) -> Self {
         Self { vb, cnt: 0 }
     }
 
@@ -591,7 +596,7 @@ impl<'a> Layer<'a> {
         self.cnt += 1;
     }
 
-    fn next(&mut self) -> VarBuilder<'_> {
+    fn next(&mut self) -> VarBuilder<'_, B> {
         let vb = self.vb.pp(self.cnt.to_string());
         self.cnt += 1;
         vb
@@ -599,15 +604,15 @@ impl<'a> Layer<'a> {
 }
 
 #[derive(Clone, Debug)]
-pub struct Encoder {
-    init_conv: EncodecConv1d,
-    sampling_layers: Vec<(Vec<EncodecResnetBlock>, EncodecConv1d)>,
-    final_lstm: EncodecLSTM,
-    final_conv: EncodecConv1d,
+pub struct Encoder<B: BackendStorage> {
+    init_conv: EncodecConv1d<B>,
+    sampling_layers: Vec<(Vec<EncodecResnetBlock<B>>, EncodecConv1d<B>)>,
+    final_lstm: EncodecLSTM<B>,
+    final_conv: EncodecConv1d<B>,
 }
 
-impl Encoder {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Encoder<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let mut layer = Layer::new(vb.pp("layers"));
         let init_conv = EncodecConv1d::new(
             cfg.audio_channels,
@@ -665,8 +670,8 @@ impl Encoder {
     }
 }
 
-impl Module for Encoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Encoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = xs.apply(&self.init_conv)?;
         for (resnets, conv) in self.sampling_layers.iter() {
             for resnet in resnets.iter() {
@@ -681,15 +686,15 @@ impl Module for Encoder {
 }
 
 #[derive(Clone, Debug)]
-pub struct Decoder {
-    init_conv: EncodecConv1d,
-    init_lstm: EncodecLSTM,
-    sampling_layers: Vec<(EncodecConvTranspose1d, Vec<EncodecResnetBlock>)>,
-    final_conv: EncodecConv1d,
+pub struct Decoder<B: BackendStorage> {
+    init_conv: EncodecConv1d<B>,
+    init_lstm: EncodecLSTM<B>,
+    sampling_layers: Vec<(EncodecConvTranspose1d<B>, Vec<EncodecResnetBlock<B>>)>,
+    final_conv: EncodecConv1d<B>,
 }
 
-impl Decoder {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Decoder<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let mut layer = Layer::new(vb.pp("layers"));
         let mut scaling = usize::pow(2, cfg.upsampling_ratios.len() as u32);
         let init_conv = EncodecConv1d::new(
@@ -746,8 +751,8 @@ impl Decoder {
     }
 }
 
-impl Module for Decoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Decoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = xs.apply(&self.init_conv)?.apply(&self.init_lstm)?;
         for (conv, resnets) in self.sampling_layers.iter() {
             xs = xs.elu(1.)?.apply(conv)?;
@@ -760,14 +765,14 @@ impl Module for Decoder {
 }
 
 #[derive(Debug)]
-pub struct Model {
-    encoder: Encoder,
-    decoder: Decoder,
-    quantizer: ResidualVectorQuantizer,
+pub struct Model<B: BackendStorage> {
+    encoder: Encoder<B>,
+    decoder: Decoder<B>,
+    quantizer: ResidualVectorQuantizer<B>,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
         let decoder = Decoder::new(cfg, vb.pp("decoder"))?;
         let quantizer = ResidualVectorQuantizer::new(cfg, vb.pp("quantizer"))?;
@@ -778,13 +783,13 @@ impl Model {
         })
     }
 
-    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = self.encoder.forward(xs)?;
         let codes = self.quantizer.encode(&xs)?;
         codes.transpose(0, 1)
     }
 
-    pub fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, codes: &Tensor<B>) -> Result<Tensor<B>> {
         let (_b_sz, _codebooks, _seqlen) = codes.dims3()?;
         let codes = codes.transpose(0, 1)?;
         let embeddings = self.quantizer.decode(&codes)?;

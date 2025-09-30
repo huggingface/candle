@@ -5,7 +5,9 @@
 //! Implementation based on Hugging Face's [transformers](https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py)
 
 use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+#[cfg(feature = "flash-attn")]
+use candle::CudaStorage;
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use std::{collections::HashMap, f32::consts::PI};
 
@@ -143,13 +145,13 @@ impl Config {
 }
 
 #[derive(Debug, Clone)]
-pub struct Cache {
-    masks: HashMap<usize, Tensor>,
+pub struct Cache<B: BackendStorage> {
+    masks: HashMap<usize, Tensor<B>>,
     pub use_kv_cache: bool,
-    kvs: Vec<Option<(Tensor, Tensor)>>,
-    cos: Tensor,
-    sin: Tensor,
-    device: Device,
+    kvs: Vec<Option<(Tensor<B>, Tensor<B>)>>,
+    cos: Tensor<B>,
+    sin: Tensor<B>,
+    device: B::Device,
 }
 
 fn calculate_default_inv_freq(cfg: &Config) -> Vec<f32> {
@@ -160,8 +162,13 @@ fn calculate_default_inv_freq(cfg: &Config) -> Vec<f32> {
         .collect()
 }
 
-impl Cache {
-    pub fn new(use_kv_cache: bool, dtype: DType, config: &Config, device: &Device) -> Result<Self> {
+impl<B: BackendStorage> Cache<B> {
+    pub fn new(
+        use_kv_cache: bool,
+        dtype: DType,
+        config: &Config,
+        device: &B::Device,
+    ) -> Result<Self> {
         // precompute freqs_cis
         let theta = match &config.rope_scaling {
             None
@@ -215,7 +222,7 @@ impl Cache {
         })
     }
 
-    fn mask(&mut self, t: usize) -> Result<Tensor> {
+    fn mask(&mut self, t: usize) -> Result<Tensor<B>> {
         if let Some(mask) = self.masks.get(&t) {
             Ok(mask.clone())
         } else {
@@ -230,11 +237,11 @@ impl Cache {
 }
 
 #[derive(Debug, Clone)]
-struct CausalSelfAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+struct CausalSelfAttention<B: BackendStorage> {
+    q_proj: Linear<B>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    o_proj: Linear<B>,
     num_attention_heads: usize,
     num_key_value_heads: usize,
     head_dim: usize,
@@ -246,22 +253,33 @@ struct CausalSelfAttention {
 
 #[cfg(feature = "flash-attn")]
 fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
+    q: &Tensor<CudaStorage>,
+    k: &Tensor<CudaStorage>,
+    v: &Tensor<CudaStorage>,
     softmax_scale: f32,
     causal: bool,
-) -> Result<Tensor> {
+) -> Result<Tensor<CudaStorage>> {
     candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
 }
 
 #[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+fn flash_attn<B: BackendStorage>(
+    _: &Tensor<B>,
+    _: &Tensor<B>,
+    _: &Tensor<B>,
+    _: f32,
+    _: bool,
+) -> Result<Tensor<B>> {
     unimplemented!("compile with '--features flash-attn'")
 }
 
-impl CausalSelfAttention {
-    fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize, cache: &Cache) -> Result<Tensor> {
+impl<B: BackendStorage> CausalSelfAttention<B> {
+    fn apply_rotary_emb(
+        &self,
+        x: &Tensor<B>,
+        index_pos: usize,
+        cache: &Cache<B>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span_rot.enter();
         let (_b_sz, _, seq_len, _hidden_size) = x.dims4()?;
         let cos = cache.cos.narrow(0, index_pos, seq_len)?;
@@ -271,11 +289,11 @@ impl CausalSelfAttention {
 
     fn forward(
         &self,
-        x: &Tensor,
+        x: &Tensor<B>,
         index_pos: usize,
         block_idx: usize,
-        cache: &mut Cache,
-    ) -> Result<Tensor> {
+        cache: &mut Cache<B>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
         let q = self.q_proj.forward(x)?;
@@ -357,11 +375,11 @@ impl CausalSelfAttention {
         Ok(y)
     }
 
-    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
+    fn repeat_kv(&self, x: Tensor<B>) -> Result<Tensor<B>> {
         crate::utils::repeat_kv(x, self.num_attention_heads / self.num_key_value_heads)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "attn");
         let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
         let size_in = cfg.hidden_size;
@@ -387,7 +405,11 @@ impl CausalSelfAttention {
     }
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+fn masked_fill<B: BackendStorage>(
+    on_false: &Tensor<B>,
+    mask: &Tensor<B>,
+    on_true: f32,
+) -> Result<Tensor<B>> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true, on_false)?;
@@ -395,21 +417,21 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    c_fc1: Linear,
-    c_fc2: Linear,
-    c_proj: Linear,
+struct Mlp<B: BackendStorage> {
+    c_fc1: Linear<B>,
+    c_fc2: Linear<B>,
+    c_proj: Linear<B>,
     span: tracing::Span,
 }
 
-impl Mlp {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Mlp<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let x = (candle_nn::ops::silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
         self.c_proj.forward(&x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "mlp");
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
@@ -426,22 +448,22 @@ impl Mlp {
 }
 
 #[derive(Debug, Clone)]
-struct Block {
-    rms_1: RmsNorm,
-    attn: CausalSelfAttention,
-    rms_2: RmsNorm,
-    mlp: Mlp,
+struct Block<B: BackendStorage> {
+    rms_1: RmsNorm<B>,
+    attn: CausalSelfAttention<B>,
+    rms_2: RmsNorm<B>,
+    mlp: Mlp<B>,
     span: tracing::Span,
 }
 
-impl Block {
+impl<B: BackendStorage> Block<B> {
     fn forward(
         &self,
-        x: &Tensor,
+        x: &Tensor<B>,
         index_pos: usize,
         block_idx: usize,
-        cache: &mut Cache,
-    ) -> Result<Tensor> {
+        cache: &mut Cache<B>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let residual = x;
         let x = self.rms_1.forward(x)?;
@@ -451,7 +473,7 @@ impl Block {
         Ok(x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "block");
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg)?;
         let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
@@ -472,25 +494,25 @@ impl Block {
 }
 
 #[derive(Debug, Clone)]
-pub struct Llama {
-    wte: Embedding,
-    blocks: Vec<Block>,
-    ln_f: RmsNorm,
-    lm_head: Linear,
+pub struct Llama<B: BackendStorage> {
+    wte: Embedding<B>,
+    blocks: Vec<Block<B>>,
+    ln_f: RmsNorm<B>,
+    lm_head: Linear<B>,
 }
 
-impl Llama {
+impl<B: BackendStorage> Llama<B> {
     // required by LLaVA
-    pub fn embed(&self, x: &Tensor) -> Result<Tensor> {
+    pub fn embed(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         self.wte.forward(x)
     }
     // required by LLaVA
     pub fn forward_input_embed(
         &self,
-        input_embed: &Tensor,
+        input_embed: &Tensor<B>,
         index_pos: usize,
-        cache: &mut Cache,
-    ) -> Result<Tensor> {
+        cache: &mut Cache<B>,
+    ) -> Result<Tensor<B>> {
         let (_, seq_len, _) = input_embed.dims3()?;
         let mut x = input_embed.clone();
         for (block_idx, block) in self.blocks.iter().enumerate() {
@@ -502,7 +524,12 @@ impl Llama {
         logits.to_dtype(DType::F32)
     }
 
-    pub fn forward(&self, x: &Tensor, index_pos: usize, cache: &mut Cache) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        x: &Tensor<B>,
+        index_pos: usize,
+        cache: &mut Cache<B>,
+    ) -> Result<Tensor<B>> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mut x = self.wte.forward(x)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
@@ -514,7 +541,7 @@ impl Llama {
         logits.to_dtype(DType::F32)
     }
 
-    pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    pub fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = if cfg.tie_word_embeddings {
             Linear::from_weights(wte.embeddings().clone(), None)

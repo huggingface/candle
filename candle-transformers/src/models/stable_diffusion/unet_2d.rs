@@ -5,7 +5,7 @@
 use super::embeddings::{TimestepEmbedding, Timesteps};
 use super::unet_2d_blocks::*;
 use crate::models::with_tracing::{conv2d, Conv2d};
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 use candle_nn as nn;
 use candle_nn::Module;
 
@@ -75,34 +75,34 @@ impl Default for UNet2DConditionModelConfig {
 }
 
 #[derive(Debug)]
-pub(crate) enum UNetDownBlock {
-    Basic(DownBlock2D),
-    CrossAttn(CrossAttnDownBlock2D),
+pub(crate) enum UNetDownBlock<B: BackendStorage> {
+    Basic(DownBlock2D<B>),
+    CrossAttn(CrossAttnDownBlock2D<B>),
 }
 
 #[derive(Debug)]
-enum UNetUpBlock {
-    Basic(UpBlock2D),
-    CrossAttn(CrossAttnUpBlock2D),
+enum UNetUpBlock<B: BackendStorage> {
+    Basic(UpBlock2D<B>),
+    CrossAttn(CrossAttnUpBlock2D<B>),
 }
 
 #[derive(Debug)]
-pub struct UNet2DConditionModel {
-    conv_in: Conv2d,
+pub struct UNet2DConditionModel<B: BackendStorage> {
+    conv_in: Conv2d<B>,
     time_proj: Timesteps,
-    time_embedding: TimestepEmbedding,
-    down_blocks: Vec<UNetDownBlock>,
-    mid_block: UNetMidBlock2DCrossAttn,
-    up_blocks: Vec<UNetUpBlock>,
-    conv_norm_out: nn::GroupNorm,
-    conv_out: Conv2d,
+    time_embedding: TimestepEmbedding<B>,
+    down_blocks: Vec<UNetDownBlock<B>>,
+    mid_block: UNetMidBlock2DCrossAttn<B>,
+    up_blocks: Vec<UNetUpBlock<B>>,
+    conv_norm_out: nn::GroupNorm<B>,
+    conv_out: Conv2d<B>,
     span: tracing::Span,
     config: UNet2DConditionModelConfig,
 }
 
-impl UNet2DConditionModel {
+impl<B: BackendStorage> UNet2DConditionModel<B> {
     pub fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         out_channels: usize,
         use_flash_attn: bool,
@@ -298,22 +298,22 @@ impl UNet2DConditionModel {
 
     pub fn forward(
         &self,
-        xs: &Tensor,
+        xs: &Tensor<B>,
         timestep: f64,
-        encoder_hidden_states: &Tensor,
-    ) -> Result<Tensor> {
+        encoder_hidden_states: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         self.forward_with_additional_residuals(xs, timestep, encoder_hidden_states, None, None)
     }
 
     pub fn forward_with_additional_residuals(
         &self,
-        xs: &Tensor,
+        xs: &Tensor<B>,
         timestep: f64,
-        encoder_hidden_states: &Tensor,
-        down_block_additional_residuals: Option<&[Tensor]>,
-        mid_block_additional_residual: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        encoder_hidden_states: &Tensor<B>,
+        down_block_additional_residuals: Option<&[Tensor<B>]>,
+        mid_block_additional_residual: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let (bsize, _channels, height, width) = xs.dims4()?;
         let device = xs.device();
         let n_blocks = self.config.blocks.len();

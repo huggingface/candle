@@ -1,37 +1,37 @@
 //! Layers defined by closures.
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 use std::sync::Arc;
 
 /// A layer defined by a simple closure.
 #[derive(Clone)]
-pub struct Func<'a> {
+pub struct Func<'a, B: BackendStorage> {
     #[allow(clippy::type_complexity)]
-    f: Arc<dyn 'a + Fn(&Tensor) -> Result<Tensor> + Send + Sync>,
+    f: Arc<dyn 'a + Fn(&Tensor<B>) -> Result<Tensor<B>> + Send + Sync>,
 }
 
-impl std::fmt::Debug for Func<'_> {
+impl<B: BackendStorage> std::fmt::Debug for Func<'_, B> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "func")
     }
 }
 
-pub fn func<'a, F>(f: F) -> Func<'a>
+pub fn func<'a, F, B: BackendStorage>(f: F) -> Func<'a, B>
 where
-    F: 'a + Fn(&Tensor) -> Result<Tensor> + Send + Sync,
+    F: 'a + Fn(&Tensor<B>) -> Result<Tensor<B>> + Send + Sync,
 {
     Func { f: Arc::new(f) }
 }
 
-impl super::Module for Func<'_> {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> super::Module<B> for Func<'_, B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         (*self.f)(xs)
     }
 }
 
-impl<'a> Func<'a> {
+impl<'a, B: BackendStorage> Func<'a, B> {
     pub fn new<F>(f: F) -> Self
     where
-        F: 'a + Fn(&Tensor) -> Result<Tensor> + Send + Sync,
+        F: 'a + Fn(&Tensor<B>) -> Result<Tensor<B>> + Send + Sync,
     {
         Self { f: Arc::new(f) }
     }
@@ -39,34 +39,34 @@ impl<'a> Func<'a> {
 
 /// A layer defined by a simple closure.
 #[derive(Clone)]
-pub struct FuncT<'a> {
+pub struct FuncT<'a, B: BackendStorage> {
     #[allow(clippy::type_complexity)]
-    f: Arc<dyn 'a + Fn(&Tensor, bool) -> Result<Tensor> + Send + Sync>,
+    f: Arc<dyn 'a + Fn(&Tensor<B>, bool) -> Result<Tensor<B>> + Send + Sync>,
 }
 
-impl std::fmt::Debug for FuncT<'_> {
+impl<B: BackendStorage> std::fmt::Debug for FuncT<'_, B> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "func")
     }
 }
 
-pub fn func_t<'a, F>(f: F) -> FuncT<'a>
+pub fn func_t<'a, F, B: BackendStorage>(f: F) -> FuncT<'a, B>
 where
-    F: 'a + Fn(&Tensor, bool) -> Result<Tensor> + Send + Sync,
+    F: 'a + Fn(&Tensor<B>, bool) -> Result<Tensor<B>> + Send + Sync,
 {
     FuncT { f: Arc::new(f) }
 }
 
-impl super::ModuleT for FuncT<'_> {
-    fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
+impl<B: BackendStorage> super::ModuleT<B> for FuncT<'_, B> {
+    fn forward_t(&self, xs: &Tensor<B>, train: bool) -> Result<Tensor<B>> {
         (*self.f)(xs, train)
     }
 }
 
-impl<'a> FuncT<'a> {
+impl<'a, B: BackendStorage> FuncT<'a, B> {
     pub fn new<F>(f: F) -> Self
     where
-        F: 'a + Fn(&Tensor, bool) -> Result<Tensor> + Send + Sync,
+        F: 'a + Fn(&Tensor<B>, bool) -> Result<Tensor<B>> + Send + Sync,
     {
         Self { f: Arc::new(f) }
     }

@@ -2,15 +2,21 @@
 //!
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
+use std::fmt::Debug;
 
-pub trait BackendStorage: Sized {
-    type Device: BackendDevice;
+#[cfg(feature = "cuda")]
+use crate::CudaDevice;
+#[cfg(feature = "metal")]
+use crate::{MetalDevice, MetalError};
+
+pub trait BackendStorage: Sized + Clone + Send + Sync + Debug {
+    type Device: BackendDevice<Self>;
 
     fn try_clone(&self, _: &Layout) -> Result<Self>;
 
     fn dtype(&self) -> DType;
 
-    fn device(&self) -> &Self::Device;
+    fn device(&self) -> impl AsRef<Self::Device>;
 
     // Maybe this should return a Cow instead so that no copy is done on the cpu case.
     fn to_cpu_storage(&self) -> Result<CpuStorage>;
@@ -127,38 +133,148 @@ pub trait BackendStorage: Sized {
     ) -> Result<()>;
 
     fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()>;
+
+    fn apply_op1(&self, _l: &Layout, _c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)>;
+
+    fn apply_op2(
+        &self,
+        _l1: &Layout,
+        _t2: &Self,
+        _l2: &Layout,
+        _c: &dyn crate::CustomOp2<Self>,
+    ) -> Result<(Self, Shape)>;
+
+    fn apply_op3(
+        &self,
+        _l1: &Layout,
+        _t2: &Self,
+        _l2: &Layout,
+        _t3: &Self,
+        _l3: &Layout,
+        _c: &dyn crate::CustomOp3<Self>,
+    ) -> Result<(Self, Shape)>;
+
+    fn inplace_op1(&mut self, _l: &Layout, _c: &dyn crate::InplaceOp1) -> Result<()>;
+
+    fn inplace_op2(
+        &mut self,
+        _l1: &Layout,
+        _t2: &Self,
+        _l2: &Layout,
+        _c: &dyn crate::InplaceOp2,
+    ) -> Result<()>;
+
+    fn inplace_op3(
+        &mut self,
+        _l1: &Layout,
+        _t2: &Self,
+        _l2: &Layout,
+        _t3: &Self,
+        _l3: &Layout,
+        _c: &dyn crate::InplaceOp3,
+    ) -> Result<()>;
 }
 
-pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
-    type Storage: BackendStorage;
+pub trait BackendDevice<B: BackendStorage>: Sized + std::fmt::Debug + Clone + Send + Sync {
+    const SUPPORTS_BF16: bool = false;
 
     // TODO: Make the usize generic and part of a generic DeviceLocation.
     fn new(_: usize) -> Result<Self>;
 
     fn location(&self) -> crate::DeviceLocation;
 
-    fn same_device(&self, _: &Self) -> bool;
+    fn same_device(&self, device: &Self) -> bool {
+        self.location() == device.location()
+    }
 
-    fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage>;
+    fn is_cpu(&self) -> bool;
+
+    fn zeros(&self, _shape: &Shape, _dtype: DType) -> Result<B>;
 
     /// # Safety
     /// This function is unsafe as it doesn't initialize the underlying data store.
     /// The caller should ensure that the data is properly initialized as early as possible
     /// after this call.
-    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage>;
+    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<B>;
 
-    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<Self::Storage>;
+    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<B>;
 
-    fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage>;
+    fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<B>;
 
-    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<Self::Storage>;
+    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<B>;
 
-    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage>;
+    fn storage<A: crate::NdArray>(&self, array: A) -> Result<B>;
 
-    fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage>;
+    fn storage_owned<S: crate::WithDType>(&self, data: Vec<S>) -> Result<B>;
+
+    fn rand_uniform<T: crate::FloatDType>(&self, _: &Shape, _: DType, _: T, _: T) -> Result<B>;
+
+    fn rand_normal<T: crate::FloatDType>(&self, _: &Shape, _: DType, _: T, _: T) -> Result<B>;
 
     fn set_seed(&self, _: u64) -> Result<()>;
 
     /// Synchronize should block until all the operations on the device are completed.
     fn synchronize(&self) -> Result<()>;
+}
+
+pub trait UgDevice {
+    type UgFunction;
+
+    fn compile(
+        &self,
+        _func_name: &'static str,
+        _kernel: ug::lang::ssa::Kernel,
+    ) -> Result<Self::UgFunction>;
+}
+
+#[cfg(all(feature = "cuda", not(target_arch = "wasm32")))]
+impl UgDevice for CudaDevice {
+    type UgFunction = candle_core::cudarc::driver::CudaFunction;
+    fn compile(
+        &self,
+        func_name: &'static str,
+        kernel: ug::lang::ssa::Kernel,
+    ) -> Result<Self::UgFunction> {
+        let mut buf = vec![];
+        ug_cuda::code_gen::gen(&mut buf, func_name, &kernel)?;
+        let cuda_code = String::from_utf8(buf)?;
+        let opts = cudarc::nvrtc::CompileOptions {
+            use_fast_math: Some(true),
+            ..Default::default()
+        };
+        let ptx = cudarc::nvrtc::safe::compile_ptx_with_opts(cuda_code, opts).w()?;
+        let module = self.context().load_module(ptx).w()?;
+        let func = module.load_function(func_name).w()?;
+        Ok(CudaFunc {
+            func,
+            stream: self.stream().clone(),
+        })
+    }
+}
+
+#[cfg(all(feature = "metal", not(target_arch = "wasm32")))]
+impl UgDevice for MetalDevice {
+    type UgFunction = candle_metal_kernels::metal::ComputePipeline;
+
+    fn compile(
+        &self,
+        func_name: &'static str,
+        kernel: ug::lang::ssa::Kernel,
+    ) -> Result<Self::UgFunction> {
+        let mut buf = vec![];
+        ug_metal::code_gen::gen(&mut buf, func_name, &kernel)?;
+        let metal_code = String::from_utf8(buf)?;
+        let lib = self
+            .device
+            .new_library_with_source(&metal_code, None)
+            .map_err(MetalError::from)?;
+        let func = lib
+            .get_function(func_name, None)
+            .map_err(MetalError::from)?;
+        let pl = self
+            .device
+            .new_compute_pipeline_state_with_function(&func)
+            .map_err(MetalError::from)?;
+        Ok(pl)
+    }
 }

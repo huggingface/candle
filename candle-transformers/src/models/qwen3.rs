@@ -2,7 +2,7 @@ use crate::{
     models::with_tracing::{linear_b, linear_no_bias, Linear, RmsNorm},
     utils::repeat_kv,
 };
-use candle::{DType, Device, Module, Result, Tensor};
+use candle::{BackendStorage, DType, Module, Result, Tensor};
 use candle_nn::{kv_cache::KvCache, Activation, VarBuilder};
 use std::sync::Arc;
 
@@ -27,13 +27,13 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Qwen3RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+pub(crate) struct Qwen3RotaryEmbedding<B: BackendStorage> {
+    sin: Tensor<B>,
+    cos: Tensor<B>,
 }
 
-impl Qwen3RotaryEmbedding {
-    pub(crate) fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
+impl<B: BackendStorage> Qwen3RotaryEmbedding<B> {
+    pub(crate) fn new(dtype: DType, cfg: &Config, dev: &B::Device) -> Result<Self> {
         let dim = cfg.head_dim;
         let max_seq_len = cfg.max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
@@ -53,7 +53,12 @@ impl Qwen3RotaryEmbedding {
     }
 
     /// Apply RoPE (q, k shape: B x H x L x D)
-    pub(crate) fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
+    pub(crate) fn apply(
+        &self,
+        q: &Tensor<B>,
+        k: &Tensor<B>,
+        offset: usize,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let (_, _, seq_len, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?;
         let sin = self.sin.narrow(0, offset, seq_len)?;
@@ -64,15 +69,15 @@ impl Qwen3RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Qwen3MLP {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+pub(crate) struct Qwen3MLP<B: BackendStorage> {
+    gate_proj: Linear<B>,
+    up_proj: Linear<B>,
+    down_proj: Linear<B>,
     act_fn: Activation,
 }
 
-impl Qwen3MLP {
-    pub(crate) fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Qwen3MLP<B> {
+    pub(crate) fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         Ok(Self {
             gate_proj: linear_no_bias(cfg.hidden_size, cfg.intermediate_size, vb.pp("gate_proj"))?,
             up_proj: linear_no_bias(cfg.hidden_size, cfg.intermediate_size, vb.pp("up_proj"))?,
@@ -82,8 +87,8 @@ impl Qwen3MLP {
     }
 }
 
-impl Module for Qwen3MLP {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Qwen3MLP<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let lhs = x.apply(&self.gate_proj)?.apply(&self.act_fn)?;
         let rhs = x.apply(&self.up_proj)?;
         (lhs * rhs)?.apply(&self.down_proj)
@@ -91,15 +96,15 @@ impl Module for Qwen3MLP {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Qwen3Attention {
+pub(crate) struct Qwen3Attention<B: BackendStorage> {
     // projections
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: Linear<B>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    o_proj: Linear<B>,
     // norms
-    q_norm: RmsNorm,
-    k_norm: RmsNorm,
+    q_norm: RmsNorm<B>,
+    k_norm: RmsNorm<B>,
     // hyper params
     num_heads: usize,
     num_kv_heads: usize,
@@ -107,15 +112,15 @@ pub(crate) struct Qwen3Attention {
     head_dim: usize,
     hidden_size: usize,
     // utils
-    rotary_emb: Arc<Qwen3RotaryEmbedding>,
-    kv_cache: KvCache,
+    rotary_emb: Arc<Qwen3RotaryEmbedding<B>>,
+    kv_cache: KvCache<B>,
 }
 
-impl Qwen3Attention {
+impl<B: BackendStorage> Qwen3Attention<B> {
     pub(crate) fn new(
         cfg: &Config,
-        rotary_emb: Arc<Qwen3RotaryEmbedding>,
-        vb: VarBuilder,
+        rotary_emb: Arc<Qwen3RotaryEmbedding<B>>,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         if cfg.use_sliding_window {
             candle::bail!("sliding window is not supported")
@@ -180,10 +185,10 @@ impl Qwen3Attention {
 
     pub(crate) fn forward(
         &mut self,
-        x: &Tensor,
-        attn_mask: Option<&Tensor>,
+        x: &Tensor<B>,
+        attn_mask: Option<&Tensor<B>>,
         offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let (b, l, _) = x.dims3()?;
 
         // 1. Proj
@@ -241,15 +246,15 @@ impl Qwen3Attention {
 }
 
 #[derive(Debug, Clone)]
-struct DecoderLayer {
-    self_attn: Qwen3Attention,
-    mlp: Qwen3MLP,
-    ln1: RmsNorm,
-    ln2: RmsNorm,
+struct DecoderLayer<B: BackendStorage> {
+    self_attn: Qwen3Attention<B>,
+    mlp: Qwen3MLP<B>,
+    ln1: RmsNorm<B>,
+    ln2: RmsNorm<B>,
 }
 
-impl DecoderLayer {
-    fn new(cfg: &Config, rotary: Arc<Qwen3RotaryEmbedding>, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> DecoderLayer<B> {
+    fn new(cfg: &Config, rotary: Arc<Qwen3RotaryEmbedding<B>>, vb: VarBuilder<B>) -> Result<Self> {
         let self_attn = Qwen3Attention::new(cfg, rotary, vb.pp("self_attn"))?;
         let mlp = Qwen3MLP::new(cfg, vb.pp("mlp"))?;
         let ln1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
@@ -266,7 +271,12 @@ impl DecoderLayer {
         })
     }
 
-    fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        x: &Tensor<B>,
+        mask: Option<&Tensor<B>>,
+        offset: usize,
+    ) -> Result<Tensor<B>> {
         let h = self.ln1.forward(x)?;
         let h = self.self_attn.forward(&h, mask, offset)?;
         let x = (x + h)?;
@@ -281,16 +291,16 @@ impl DecoderLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    embed_tokens: candle_nn::Embedding,
-    layers: Vec<DecoderLayer>,
-    norm: RmsNorm,
-    device: Device,
+pub struct Model<B: BackendStorage> {
+    embed_tokens: candle_nn::Embedding<B>,
+    layers: Vec<DecoderLayer<B>>,
+    norm: RmsNorm<B>,
+    device: B::Device,
     dtype: DType,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let rotary = Arc::new(Qwen3RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?);
@@ -320,7 +330,7 @@ impl Model {
         tgt: usize,
         offset: usize,
         sw: Option<usize>,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let minf = f32::NEG_INFINITY;
         let mask: Vec<_> = (0..tgt)
             .flat_map(|i| {
@@ -341,7 +351,7 @@ impl Model {
         Tensor::from_slice(&mask, (b, 1, tgt, tgt + offset), &self.device)?.to_dtype(self.dtype)
     }
 
-    pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, input: &Tensor<B>, offset: usize) -> Result<Tensor<B>> {
         let (b, l) = input.dims2()?;
         let mut h = self.embed_tokens.forward(input)?;
 
@@ -359,13 +369,13 @@ impl Model {
 }
 
 #[derive(Debug, Clone)]
-pub struct ModelForCausalLM {
-    base: Model,
-    lm_head: Linear,
+pub struct ModelForCausalLM<B: BackendStorage> {
+    base: Model<B>,
+    lm_head: Linear<B>,
 }
 
-impl ModelForCausalLM {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> ModelForCausalLM<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let base = Model::new(cfg, vb.clone())?;
         let lm_head = if cfg.tie_word_embeddings {
             Linear::from_weights(base.embed_tokens.embeddings().clone(), None)
@@ -375,7 +385,7 @@ impl ModelForCausalLM {
         Ok(Self { base, lm_head })
     }
 
-    pub fn forward(&mut self, input: &Tensor, offset: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, input: &Tensor<B>, offset: usize) -> Result<Tensor<B>> {
         let (_, l) = input.dims2()?;
         self.base
             .forward(input, offset)?

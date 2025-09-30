@@ -7,24 +7,26 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use clap::Parser;
-
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 use candle_transformers::models::beit;
+use clap::Parser;
 
 /// Loads an image from disk using the image crate, this returns a tensor with shape
 /// (3, 384, 384). Beit special normalization is applied.
-pub fn load_image384_beit_norm<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
+pub fn load_image384_beit_norm<P: AsRef<std::path::Path>, B: BackendStorage>(
+    p: P,
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
         .resize_to_fill(384, 384, image::imageops::FilterType::Triangle);
     let img = img.to_rgb8();
     let data = img.into_raw();
-    let data = Tensor::from_vec(data, (384, 384, 3), &Device::Cpu)?.permute((2, 0, 1))?;
-    let mean = Tensor::new(&[0.5f32, 0.5, 0.5], &Device::Cpu)?.reshape((3, 1, 1))?;
-    let std = Tensor::new(&[0.5f32, 0.5, 0.5], &Device::Cpu)?.reshape((3, 1, 1))?;
+    let data = Tensor::from_vec(data, (384, 384, 3), device)?.permute((2, 0, 1))?;
+    let mean = Tensor::new(&[0.5f32, 0.5, 0.5], device)?.reshape((3, 1, 1))?;
+    let std = Tensor::new(&[0.5f32, 0.5, 0.5], device)?.reshape((3, 1, 1))?;
     (data.to_dtype(candle::DType::F32)? / 255.)?
         .broadcast_sub(&mean)?
         .broadcast_div(&std)
@@ -43,12 +45,9 @@ struct Args {
     cpu: bool,
 }
 
-pub fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
-
-    let device = candle_examples::device(args.cpu)?;
-
-    let image = load_image384_beit_norm(args.image)?.to_device(&device)?;
+fn run<B: BackendStorage>(args: Args) -> anyhow::Result<()> {
+    let device = B::Device::new(0)?;
+    let image: Tensor<B> = load_image384_beit_norm(args.image, &device)?;
     println!("loaded image {image:?}");
 
     let model_file = match args.model {
@@ -74,6 +73,31 @@ pub fn main() -> anyhow::Result<()> {
             candle_examples::imagenet::CLASSES[category_idx],
             100. * pr
         );
+    }
+    Ok(())
+}
+
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
     }
     Ok(())
 }

@@ -5,7 +5,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
-use candle::{DType, IndexOp, Shape, Tensor, D};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Shape, Tensor, D};
 use candle_nn::VarBuilder;
 use candle_transformers::models::nvembed_v2::model::Model;
 use clap::Parser;
@@ -43,7 +43,10 @@ struct Args {
 }
 
 impl Args {
-    fn build_model_and_tokenizer(&self) -> anyhow::Result<(Model, tokenizers::Tokenizer)> {
+    fn build_model_and_tokenizer<B: BackendStorage>(
+        &self,
+        device: &B::Device,
+    ) -> anyhow::Result<(Model<B>, tokenizers::Tokenizer)> {
         let model_name = match self.model.as_ref() {
             Some(model) => model.to_string(),
             None => "nvidia/NV-Embed-v2".to_string(),
@@ -65,8 +68,6 @@ impl Args {
             None => repo.get("tokenizer.json")?,
         };
 
-        let device = candle_examples::device(self.cpu)?;
-
         let mut tokenizer = tokenizers::Tokenizer::from_file(tokenizer_file).map_err(E::msg)?;
 
         let _ = tokenizer
@@ -81,19 +82,19 @@ impl Args {
                 ..Default::default()
             }));
 
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, DType::F32, &device) }?;
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&model_files, DType::F32, device) }?;
 
-        let nvembed_model = Model::new(vb);
-        Ok((nvembed_model?, tokenizer))
+        let nvembed_model: Model<B> = Model::new(vb)?;
+        Ok((nvembed_model, tokenizer))
     }
 }
 
-fn encode(
-    model: &mut Model,
+fn encode<B: BackendStorage>(
+    model: &mut Model<B>,
     tokenizer: &Tokenizer,
     examples: Vec<String>,
     instruction: &str,
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     let device = &model.device;
     let dtype = model.dtype;
 
@@ -125,7 +126,7 @@ fn encode(
     let input_ids = Tensor::stack(&input_ids_list, 0)?;
 
     // Mask out padding tokens for both embedding model and latent attention model
-    let attention_masks: Vec<Tensor> = encodings
+    let attention_masks: Vec<Tensor<B>> = encodings
         .iter()
         .map(|encoding| {
             Tensor::from_slice(
@@ -161,16 +162,40 @@ fn encode(
     div_l2_norm(&hiddens)
 }
 
-fn div_l2_norm(v: &Tensor) -> Result<Tensor> {
+fn div_l2_norm<B: BackendStorage>(v: &Tensor<B>) -> Result<Tensor<B>> {
     let l2_norm = v.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?;
     Ok(v.broadcast_div(&l2_norm)?)
 }
 
-fn main() -> anyhow::Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         println!("tracing...");
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -180,7 +205,8 @@ fn main() -> anyhow::Result<()> {
         None
     };
 
-    let (mut model, tokenizer) = args.build_model_and_tokenizer()?;
+    let device = B::Device::new(0)?;
+    let (mut model, tokenizer) = args.build_model_and_tokenizer::<B>(&device)?;
 
     if let Some(prompt) = args.prompt {
         let emb = encode(&mut model, &tokenizer, vec![prompt], "")?;

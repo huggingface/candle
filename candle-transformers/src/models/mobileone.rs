@@ -4,7 +4,7 @@
 //!
 //! See ["MobileOne: An Improved One millisecond Mobile Backbone"](https://arxiv.org/abs/2206.04040)
 
-use candle::{DType, Result, Tensor, D};
+use candle::{BackendStorage, DType, Result, Tensor, D};
 use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, linear, ops::sigmoid, BatchNorm, Conv2d, Conv2dConfig,
     Func, VarBuilder,
@@ -82,11 +82,11 @@ impl Config {
 }
 
 // SE blocks are used in the last stages of the s4 variant.
-fn squeeze_and_excitation(
+fn squeeze_and_excitation<B: BackendStorage + 'static>(
     in_channels: usize,
     squeeze_channels: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         ..Default::default()
     };
@@ -105,7 +105,10 @@ fn squeeze_and_excitation(
 // fuses a convolutional kernel and a batchnorm layer into a convolutional layer
 // based on the _fuse_bn_tensor method in timm
 // see https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/byobnet.py#L602
-fn fuse_conv_bn(weights: &Tensor, bn: BatchNorm) -> Result<(Tensor, Tensor)> {
+fn fuse_conv_bn<B: BackendStorage>(
+    weights: &Tensor<B>,
+    bn: BatchNorm<B>,
+) -> Result<(Tensor<B>, Tensor<B>)> {
     let (gamma, beta) = bn.weight_and_bias().unwrap();
     let mu = bn.running_mean();
     let sigma = (bn.running_var() + bn.eps())?.sqrt();
@@ -121,7 +124,7 @@ fn fuse_conv_bn(weights: &Tensor, bn: BatchNorm) -> Result<(Tensor, Tensor)> {
 // realized by a structural reparameterization technique, where convolutions
 // along with identity branches and batchnorm layers are fused into a single convolution.
 #[allow(clippy::too_many_arguments)]
-fn mobileone_block(
+fn mobileone_block<B: BackendStorage + 'static>(
     has_identity: bool,
     k: usize,
     dim: usize,
@@ -131,8 +134,8 @@ fn mobileone_block(
     kernel: usize,
     in_channels: usize,
     out_channels: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         stride,
         padding,
@@ -232,7 +235,11 @@ fn output_channels_per_stage(cfg: &Config, stage: usize) -> usize {
 
 // Each stage is made of blocks. The first layer always downsamples with stride 2.
 // All but the first block have a residual connection.
-fn mobileone_stage(cfg: &Config, idx: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn mobileone_stage<B: BackendStorage + 'static>(
+    cfg: &Config,
+    idx: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let nblocks = STAGES[idx].blocks;
     let mut blocks = Vec::with_capacity(nblocks);
 
@@ -287,11 +294,11 @@ fn mobileone_stage(cfg: &Config, idx: usize, vb: VarBuilder) -> Result<Func<'sta
 }
 
 // Build a mobileone model for a given configuration.
-fn mobileone_model(
+fn mobileone_model<B: BackendStorage + 'static>(
     config: &Config,
     nclasses: Option<usize>,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let cls = match nclasses {
         None => None,
         Some(nclasses) => {
@@ -325,10 +332,17 @@ fn mobileone_model(
     }))
 }
 
-pub fn mobileone(cfg: &Config, nclasses: usize, vb: VarBuilder) -> Result<Func<'static>> {
+pub fn mobileone<B: BackendStorage + 'static>(
+    cfg: &Config,
+    nclasses: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     mobileone_model(cfg, Some(nclasses), vb)
 }
 
-pub fn mobileone_no_final_layer(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
+pub fn mobileone_no_final_layer<B: BackendStorage + 'static>(
+    cfg: &Config,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     mobileone_model(cfg, None, vb)
 }

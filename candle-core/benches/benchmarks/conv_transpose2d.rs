@@ -1,11 +1,11 @@
-use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
-use candle_core::{DType, Device, Tensor};
+use crate::benchmarks::{bench_device, BenchDevice};
+use candle_core::{BackendStorage, DType, Tensor};
 use criterion::{black_box, criterion_group, Criterion, Throughput};
 use std::time::Instant;
 
-fn run(
-    x: &Tensor,
-    k: &Tensor,
+fn run<B: BackendStorage>(
+    x: &Tensor<B>,
+    k: &Tensor<B>,
     padding: usize,
     output_padding: usize,
     stride: usize,
@@ -15,8 +15,12 @@ fn run(
         .unwrap();
 }
 
-fn run_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
-    let t = Tensor::arange(0.0f32, 10000.0, device)
+fn run_benchmark<B, D>(c: &mut Criterion, device: &D, dtype: DType, name: &str)
+where
+    B: BackendStorage<Device = D>,
+    D: BenchDevice<B>,
+{
+    let t: Tensor<B> = Tensor::arange(0.0f32, 10000.0, device)
         .unwrap()
         .reshape((1, 4, 50, 50))
         .unwrap()
@@ -40,7 +44,7 @@ fn run_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
             for _i in 0..iters {
                 run(black_box(&t), black_box(&kernel), 1, 0, 1, 2);
             }
-            device.sync().unwrap();
+            device.synchronize().unwrap();
             start.elapsed()
         })
     });
@@ -48,12 +52,10 @@ fn run_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let handler = BenchDeviceHandler::new().unwrap();
-    for device in handler.devices {
-        run_benchmark(c, &device, DType::F32, "conv_transpose2d_f32");
-        run_benchmark(c, &device, DType::F16, "conv_transpose2d_f16");
-        run_benchmark(c, &device, DType::BF16, "conv_transpose2d_bf16");
-    }
+    let device = bench_device();
+    run_benchmark(c, &device, DType::F32, "conv_transpose2d_f32");
+    run_benchmark(c, &device, DType::F16, "conv_transpose2d_f16");
+    run_benchmark(c, &device, DType::BF16, "conv_transpose2d_bf16");
 }
 
 criterion_group!(benches, criterion_benchmark);

@@ -17,25 +17,30 @@
 use super::llama2_c::{Cache, Config};
 use crate::quantized_nn::{linear_no_bias as linear, Embedding, Linear, RmsNorm};
 pub use crate::quantized_var_builder::VarBuilder;
-use candle::{DType, IndexOp, Module, Result, Tensor, D};
+use candle::{quantized::QuantizedBackend, DType, IndexOp, Module, Result, Tensor, D};
 
-fn silu(xs: &Tensor) -> Result<Tensor> {
+fn silu<QB: QuantizedBackend>(xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
     xs / (xs.neg()?.exp()? + 1.0)?
 }
 
 #[derive(Debug, Clone)]
-struct CausalSelfAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+struct CausalSelfAttention<QB: QuantizedBackend> {
+    q_proj: Linear<QB>,
+    k_proj: Linear<QB>,
+    v_proj: Linear<QB>,
+    o_proj: Linear<QB>,
     n_head: usize,
     n_key_value_head: usize,
     head_dim: usize,
 }
 
-impl CausalSelfAttention {
-    fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize, cache: &Cache) -> Result<Tensor> {
+impl<QB: QuantizedBackend> CausalSelfAttention<QB> {
+    fn apply_rotary_emb(
+        &self,
+        x: &Tensor<QB::Storage>,
+        index_pos: usize,
+        cache: &Cache<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>> {
         let (b_sz, seq_len, h, n_embd) = x.dims4()?;
         let cos = cache.cos.i(index_pos..index_pos + seq_len)?;
         let sin = cache.sin.i(index_pos..index_pos + seq_len)?;
@@ -54,11 +59,14 @@ impl CausalSelfAttention {
 
     fn forward(
         &self,
-        x: &Tensor,
+        x: &Tensor<QB::Storage>,
         index_pos: usize,
         block_idx: usize,
-        cache: &mut Cache,
-    ) -> Result<Tensor> {
+        cache: &mut Cache<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
         let q = self.q_proj.forward(x)?;
         let k = self.k_proj.forward(x)?;
@@ -91,7 +99,7 @@ impl CausalSelfAttention {
             att
         } else {
             let mask = cache.mask(seq_len)?.broadcast_as(att.shape())?;
-            masked_fill(&att, &mask, f32::NEG_INFINITY)?
+            masked_fill::<QB>(&att, &mask, f32::NEG_INFINITY)?
         };
         let att = candle_nn::ops::softmax(&att, D::Minus1)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
@@ -101,7 +109,7 @@ impl CausalSelfAttention {
         Ok(y)
     }
 
-    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
+    fn repeat_kv(&self, x: Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let n_rep = self.n_head / self.n_key_value_head;
         if n_rep == 1 {
             Ok(x)
@@ -115,7 +123,7 @@ impl CausalSelfAttention {
         }
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder<QB>, cfg: &Config) -> Result<Self> {
         let size_in = cfg.dim;
         let size_q = (cfg.dim / cfg.n_heads) * cfg.n_heads;
         let size_kv = (cfg.dim / cfg.n_heads) * cfg.n_kv_heads;
@@ -135,7 +143,11 @@ impl CausalSelfAttention {
     }
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+fn masked_fill<QB: QuantizedBackend>(
+    on_false: &Tensor<QB::Storage>,
+    mask: &Tensor<QB::Storage>,
+    on_true: f32,
+) -> Result<Tensor<QB::Storage>> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true, on_false)?;
@@ -143,14 +155,14 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    c_fc1: Linear,
-    c_fc2: Linear,
-    c_proj: Linear,
+struct Mlp<QB: QuantizedBackend> {
+    c_fc1: Linear<QB>,
+    c_fc2: Linear<QB>,
+    c_proj: Linear<QB>,
 }
 
-impl Mlp {
-    fn new(c_fc1: Linear, c_fc2: Linear, c_proj: Linear) -> Self {
+impl<QB: QuantizedBackend> Mlp<QB> {
+    fn new(c_fc1: Linear<QB>, c_fc2: Linear<QB>, c_proj: Linear<QB>) -> Self {
         Self {
             c_fc1,
             c_fc2,
@@ -158,12 +170,15 @@ impl Mlp {
         }
     }
 
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = (silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
+    fn forward(&self, x: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
+        let x = (silu::<QB>(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
         self.c_proj.forward(&x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder<QB>, cfg: &Config) -> Result<Self> {
         let h_size = cfg.dim;
         let i_size = cfg.hidden_dim;
         let c_fc1 = linear(h_size, i_size, vb.pp("gate_proj"))?;
@@ -174,15 +189,20 @@ impl Mlp {
 }
 
 #[derive(Debug, Clone)]
-struct Block {
-    rms_1: RmsNorm,
-    attn: CausalSelfAttention,
-    rms_2: RmsNorm,
-    mlp: Mlp,
+struct Block<QB: QuantizedBackend> {
+    rms_1: RmsNorm<QB>,
+    attn: CausalSelfAttention<QB>,
+    rms_2: RmsNorm<QB>,
+    mlp: Mlp<QB>,
 }
 
-impl Block {
-    fn new(rms_1: RmsNorm, attn: CausalSelfAttention, rms_2: RmsNorm, mlp: Mlp) -> Self {
+impl<QB: QuantizedBackend> Block<QB> {
+    fn new(
+        rms_1: RmsNorm<QB>,
+        attn: CausalSelfAttention<QB>,
+        rms_2: RmsNorm<QB>,
+        mlp: Mlp<QB>,
+    ) -> Self {
         Self {
             rms_1,
             attn,
@@ -193,11 +213,14 @@ impl Block {
 
     fn forward(
         &self,
-        x: &Tensor,
+        x: &Tensor<QB::Storage>,
         index_pos: usize,
         block_idx: usize,
-        cache: &mut Cache,
-    ) -> Result<Tensor> {
+        cache: &mut Cache<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let residual = x;
         let x = self.rms_1.forward(x)?;
         let x = (self.attn.forward(&x, index_pos, block_idx, cache)? + residual)?;
@@ -206,7 +229,7 @@ impl Block {
         Ok(x)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder<QB>, cfg: &Config) -> Result<Self> {
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg)?;
         let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
         let input_layernorm = RmsNorm::new(cfg.dim, cfg.norm_eps, vb.pp("input_layernorm"))?;
@@ -222,16 +245,24 @@ impl Block {
 }
 
 #[derive(Debug, Clone)]
-pub struct QLlama {
-    wte: Embedding,
-    blocks: Vec<Block>,
-    ln_f: RmsNorm,
-    lm_head: Linear,
+pub struct QLlama<QB: QuantizedBackend> {
+    wte: Embedding<QB>,
+    blocks: Vec<Block<QB>>,
+    ln_f: RmsNorm<QB>,
+    lm_head: Linear<QB>,
     pub config: Config,
 }
 
-impl QLlama {
-    pub fn forward(&self, x: &Tensor, index_pos: usize, cache: &mut Cache) -> Result<Tensor> {
+impl<QB: QuantizedBackend> QLlama<QB> {
+    pub fn forward(
+        &self,
+        x: &Tensor<QB::Storage>,
+        index_pos: usize,
+        cache: &mut Cache<QB::Storage>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let (_b_sz, _seq_len) = x.dims2()?;
         let mut x = self.wte.forward(x)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
@@ -242,7 +273,7 @@ impl QLlama {
         logits.to_dtype(DType::F32)
     }
 
-    pub fn load(vb: VarBuilder, cfg: Config) -> Result<Self> {
+    pub fn load(vb: VarBuilder<QB>, cfg: Config) -> Result<Self> {
         let wte = Embedding::new(cfg.vocab_size, cfg.dim, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.dim, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::new(cfg.dim, cfg.norm_eps, vb.pp("model.norm"))?;

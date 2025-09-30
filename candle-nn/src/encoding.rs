@@ -1,6 +1,6 @@
 //! Encoding Utilities. (e.g., one-hot/cold encoding)
 
-use candle::{bail, DType, Result, Tensor, WithDType};
+use candle::{bail, BackendStorage, DType, Result, Tensor, WithDType};
 
 /// One-hot/cold encoding.
 ///
@@ -32,10 +32,11 @@ use candle::{bail, DType, Result, Tensor, WithDType};
 /// ## One-hot encoding
 ///
 /// ```rust
-/// use candle::{Shape, Tensor, Device};
+/// use candle::{Shape, CpuStorage, CpuDevice};
 /// use candle_nn::encoding::one_hot;
+/// type Tensor = candle::Tensor<CpuStorage>;
 ///
-/// let device = candle::Device::Cpu;
+/// let device = CpuDevice;
 ///
 /// let indices = Tensor::new(vec![vec![0i64, 2], vec![1, -1]], &device).unwrap();
 /// let depth = 4;
@@ -55,11 +56,11 @@ use candle::{bail, DType, Result, Tensor, WithDType};
 /// ## One-cold Encoding
 ///
 /// ```rust
-/// use candle::{Shape, Tensor, Device};
+/// use candle::{Shape, CpuDevice, CpuStorage};
 /// use candle_nn::encoding::one_hot;
+/// type Tensor = candle::Tensor<CpuStorage>;
 ///
-///
-/// let device = candle::Device::Cpu;
+/// let device = CpuDevice;
 /// let depth = 4;
 /// let indices = Tensor::new(vec![vec![0u8, 2], vec![1, 3]], &device).unwrap();
 /// let one_cold = one_hot(indices, depth, 0u8, 1u8).unwrap();
@@ -84,12 +85,12 @@ use candle::{bail, DType, Result, Tensor, WithDType};
 /// # API Design
 ///
 /// The api design for this method is loosely based on the [TensorFlow One-Hot](https://www.tensorflow.org/api_docs/python/tf/one_hot) method.
-pub fn one_hot<D: WithDType>(
-    indices: Tensor,
+pub fn one_hot<B: BackendStorage, D: WithDType>(
+    indices: Tensor<B>,
     depth: usize,
     on_value: D,
     off_value: D,
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     let mut target_shape = indices.dims().to_vec();
     target_shape.push(depth);
     let indices = indices.flatten_all()?;

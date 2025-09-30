@@ -9,7 +9,7 @@
 //! Tensors can also be serialized to safetensor format using the `save` function or
 //! `Tensor::save_safetensors` method.
 //!
-use crate::{DType, Device, Error, Result, Tensor, WithDType};
+use crate::{BackendStorage, DType, Error, Result, Tensor, WithDType};
 use float8::F8E4M3;
 use safetensors::tensor as st;
 use safetensors::tensor::SafeTensors;
@@ -49,7 +49,7 @@ impl TryFrom<st::Dtype> for DType {
     }
 }
 
-impl st::View for Tensor {
+impl<B: BackendStorage> st::View for Tensor<B> {
     fn dtype(&self) -> st::Dtype {
         self.dtype().into()
     }
@@ -70,7 +70,7 @@ impl st::View for Tensor {
     }
 }
 
-impl st::View for &Tensor {
+impl<B: BackendStorage> st::View for &Tensor<B> {
     fn dtype(&self) -> st::Dtype {
         (*self).dtype().into()
     }
@@ -91,14 +91,18 @@ impl st::View for &Tensor {
     }
 }
 
-impl Tensor {
+impl<B: BackendStorage> Tensor<B> {
     pub fn save_safetensors<P: AsRef<Path>>(&self, name: &str, filename: P) -> Result<()> {
         let data = [(name, self.clone())];
         Ok(st::serialize_to_file(data, &None, filename.as_ref())?)
     }
 }
 
-fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) -> Result<Tensor> {
+fn convert_slice<B: BackendStorage, T: WithDType>(
+    data: &[u8],
+    shape: &[usize],
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
     let elem_count = data.len() / size_in_bytes;
     if (data.as_ptr() as usize) % size_in_bytes == 0 {
@@ -123,12 +127,17 @@ fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) ->
     }
 }
 
-fn convert_slice_with_cast<T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>(
+fn convert_slice_with_cast<
+    B: BackendStorage,
+    T: Sized + Copy,
+    U: WithDType,
+    F: Fn(T) -> Result<U>,
+>(
     data: &[u8],
     shape: &[usize],
-    device: &Device,
+    device: &B::Device,
     conv: F,
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     let size_in_bytes = std::mem::size_of::<T>();
     let elem_count = data.len() / size_in_bytes;
     if (data.as_ptr() as usize) % size_in_bytes == 0 {
@@ -155,16 +164,19 @@ fn convert_slice_with_cast<T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>
     }
 }
 
-fn convert_with_cast_<T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>(
+fn convert_with_cast_<B: BackendStorage, T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>(
     view: &st::TensorView<'_>,
-    device: &Device,
+    device: &B::Device,
     conv: F,
-) -> Result<Tensor> {
-    convert_slice_with_cast::<T, U, F>(view.data(), view.shape(), device, conv)
+) -> Result<Tensor<B>> {
+    convert_slice_with_cast::<B, T, U, F>(view.data(), view.shape(), device, conv)
 }
 
-fn convert_<T: WithDType>(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
-    convert_slice::<T>(view.data(), view.shape(), device)
+fn convert_<B: BackendStorage, T: WithDType>(
+    view: &st::TensorView<'_>,
+    device: &B::Device,
+) -> Result<Tensor<B>> {
+    convert_slice::<B, T>(view.data(), view.shape(), device)
 }
 
 fn convert_back_<T: WithDType>(mut vs: Vec<T>) -> Vec<u8> {
@@ -181,62 +193,62 @@ fn convert_back_<T: WithDType>(mut vs: Vec<T>) -> Vec<u8> {
     unsafe { Vec::from_raw_parts(ptr, length, capacity) }
 }
 
-pub trait Load {
-    fn load(&self, device: &Device) -> Result<Tensor>;
+pub trait Load<B: BackendStorage> {
+    fn load(&self, device: &B::Device) -> Result<Tensor<B>>;
 }
 
-impl Load for st::TensorView<'_> {
-    fn load(&self, device: &Device) -> Result<Tensor> {
+impl<B: BackendStorage> Load<B> for st::TensorView<'_> {
+    fn load(&self, device: &B::Device) -> Result<Tensor<B>> {
         convert(self, device)
     }
 }
 
-impl Tensor {
+impl<B: BackendStorage> Tensor<B> {
     pub fn from_raw_buffer(
         data: &[u8],
         dtype: DType,
         shape: &[usize],
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         match dtype {
-            DType::U8 => convert_slice::<u8>(data, shape, device),
-            DType::U32 => convert_slice::<u32>(data, shape, device),
-            DType::I64 => convert_slice::<i64>(data, shape, device),
-            DType::BF16 => convert_slice::<half::bf16>(data, shape, device),
-            DType::F16 => convert_slice::<half::f16>(data, shape, device),
-            DType::F32 => convert_slice::<f32>(data, shape, device),
-            DType::F64 => convert_slice::<f64>(data, shape, device),
-            DType::F8E4M3 => convert_slice::<F8E4M3>(data, shape, device),
+            DType::U8 => convert_slice::<_, u8>(data, shape, device),
+            DType::U32 => convert_slice::<_, u32>(data, shape, device),
+            DType::I64 => convert_slice::<_, i64>(data, shape, device),
+            DType::BF16 => convert_slice::<_, half::bf16>(data, shape, device),
+            DType::F16 => convert_slice::<_, half::f16>(data, shape, device),
+            DType::F32 => convert_slice::<_, f32>(data, shape, device),
+            DType::F64 => convert_slice::<_, f64>(data, shape, device),
+            DType::F8E4M3 => convert_slice::<_, F8E4M3>(data, shape, device),
         }
     }
 }
 
-fn convert(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
+fn convert<B: BackendStorage>(view: &st::TensorView<'_>, device: &B::Device) -> Result<Tensor<B>> {
     match view.dtype() {
         st::Dtype::I8 => {
             let conv = |x| Ok(i64::from(x));
-            convert_with_cast_::<i8, i64, _>(view, device, conv)
+            convert_with_cast_::<_, i8, i64, _>(view, device, conv)
         }
-        st::Dtype::U8 => convert_::<u8>(view, device),
+        st::Dtype::U8 => convert_::<_, u8>(view, device),
         st::Dtype::U16 => {
             let conv = |x| Ok(u32::from(x));
-            convert_with_cast_::<u16, u32, _>(view, device, conv)
+            convert_with_cast_::<_, u16, u32, _>(view, device, conv)
         }
-        st::Dtype::U32 => convert_::<u32>(view, device),
+        st::Dtype::U32 => convert_::<_, u32>(view, device),
         st::Dtype::I32 => {
             let conv = |x| Ok(i64::from(x));
-            convert_with_cast_::<i32, i64, _>(view, device, conv)
+            convert_with_cast_::<_, i32, i64, _>(view, device, conv)
         }
-        st::Dtype::I64 => convert_::<i64>(view, device),
-        st::Dtype::BF16 => convert_::<half::bf16>(view, device),
-        st::Dtype::F16 => convert_::<half::f16>(view, device),
-        st::Dtype::F32 => convert_::<f32>(view, device),
-        st::Dtype::F64 => convert_::<f64>(view, device),
+        st::Dtype::I64 => convert_::<_, i64>(view, device),
+        st::Dtype::BF16 => convert_::<_, half::bf16>(view, device),
+        st::Dtype::F16 => convert_::<_, half::f16>(view, device),
+        st::Dtype::F32 => convert_::<_, f32>(view, device),
+        st::Dtype::F64 => convert_::<_, f64>(view, device),
         dtype => Err(Error::UnsupportedSafeTensorDtype(dtype)),
     }
 }
 
-fn convert_back(tensor: &Tensor) -> Result<Vec<u8>> {
+fn convert_back<B: BackendStorage>(tensor: &Tensor<B>) -> Result<Vec<u8>> {
     // TODO: This makes an unnecessary copy when the tensor is on the cpu.
     let tensor = tensor.flatten_all()?;
     match tensor.dtype() {
@@ -251,12 +263,18 @@ fn convert_back(tensor: &Tensor) -> Result<Vec<u8>> {
     }
 }
 
-pub fn load<P: AsRef<Path>>(filename: P, device: &Device) -> Result<HashMap<String, Tensor>> {
+pub fn load<P: AsRef<Path>, B: BackendStorage>(
+    filename: P,
+    device: &B::Device,
+) -> Result<HashMap<String, Tensor<B>>> {
     let data = std::fs::read(filename.as_ref())?;
     load_buffer(&data[..], device)
 }
 
-pub fn load_buffer(data: &[u8], device: &Device) -> Result<HashMap<String, Tensor>> {
+pub fn load_buffer<B: BackendStorage>(
+    data: &[u8],
+    device: &B::Device,
+) -> Result<HashMap<String, Tensor<B>>> {
     let st = safetensors::SafeTensors::deserialize(data)?;
     st.tensors()
         .into_iter()
@@ -264,8 +282,8 @@ pub fn load_buffer(data: &[u8], device: &Device) -> Result<HashMap<String, Tenso
         .collect()
 }
 
-pub fn save<K: AsRef<str> + Ord + std::fmt::Display, P: AsRef<Path>>(
-    tensors: &HashMap<K, Tensor>,
+pub fn save<B: BackendStorage, K: AsRef<str> + Ord + std::fmt::Display, P: AsRef<Path>>(
+    tensors: &HashMap<K, Tensor<B>>,
     filename: P,
 ) -> Result<()> {
     Ok(st::serialize_to_file(tensors, &None, filename.as_ref())?)
@@ -340,7 +358,7 @@ impl MmapedSafetensors {
         })
     }
 
-    pub fn load(&self, name: &str, dev: &Device) -> Result<Tensor> {
+    pub fn load<B: BackendStorage>(&self, name: &str, dev: &B::Device) -> Result<Tensor<B>> {
         self.get(name)?.load(dev)
     }
 
@@ -380,7 +398,7 @@ impl<'a> SliceSafetensors<'a> {
         Ok(Self { safetensors })
     }
 
-    pub fn load(&self, name: &str, dev: &Device) -> Result<Tensor> {
+    pub fn load<B: BackendStorage>(&self, name: &str, dev: &B::Device) -> Result<Tensor<B>> {
         self.safetensors.tensor(name)?.load(dev)
     }
 
@@ -410,7 +428,7 @@ impl BufferedSafetensors {
         Ok(Self { safetensors })
     }
 
-    pub fn load(&self, name: &str, dev: &Device) -> Result<Tensor> {
+    pub fn load<B: BackendStorage>(&self, name: &str, dev: &B::Device) -> Result<Tensor<B>> {
         self.get(name)?.load(dev)
     }
 
@@ -457,11 +475,12 @@ impl MmapedFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cpu_backend::{CpuDevice, CpuStorage};
     use std::collections::HashMap;
 
     #[test]
     fn save_single_tensor() {
-        let t = Tensor::zeros((2, 2), DType::F32, &Device::Cpu).unwrap();
+        let t: Tensor<CpuStorage> = Tensor::zeros((2, 2), DType::F32, &CpuDevice {}).unwrap();
         t.save_safetensors("t", "t.safetensors").unwrap();
         let bytes = std::fs::read("t.safetensors").unwrap();
         assert_eq!(bytes, b"@\0\0\0\0\0\0\0{\"t\":{\"dtype\":\"F32\",\"shape\":[2,2],\"data_offsets\":[0,16]}}       \0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
@@ -470,12 +489,12 @@ mod tests {
 
     #[test]
     fn save_load_multiple_tensors() {
-        let t = Tensor::zeros((2, 2), DType::F32, &Device::Cpu).unwrap();
-        let u = Tensor::zeros((1, 2), DType::F32, &Device::Cpu).unwrap();
+        let t: Tensor<CpuStorage> = Tensor::zeros((2, 2), DType::F32, &CpuDevice {}).unwrap();
+        let u = Tensor::zeros((1, 2), DType::F32, &CpuDevice {}).unwrap();
         let map: HashMap<_, _> = [("t", t), ("u", u)].into_iter().collect();
         save(&map, "multi.safetensors").unwrap();
 
-        let weights = load("multi.safetensors", &Device::Cpu).unwrap();
+        let weights = load::<_, CpuStorage>("multi.safetensors", &CpuDevice {}).unwrap();
         assert_eq!(weights.get("t").unwrap().dims(), &[2, 2]);
         assert_eq!(weights.get("u").unwrap().dims(), &[1, 2]);
         let bytes = std::fs::read("multi.safetensors").unwrap();
@@ -487,7 +506,7 @@ mod tests {
     fn load_i8() {
         let bytes = b"8\0\0\0\0\0\0\0{\"x\":{\"dtype\":\"I8\",\"shape\":[2],\"data_offsets\":[0,2]}}   \x01\x03";
         std::fs::write("test_i8.safetensors", bytes).unwrap();
-        let weights = load("test_i8.safetensors", &Device::Cpu).unwrap();
+        let weights = load::<_, CpuStorage>("test_i8.safetensors", &CpuDevice {}).unwrap();
         let tensor = weights.get("x").unwrap();
         assert_eq!(tensor.dims(), &[2]);
         assert_eq!(tensor.dtype(), DType::I64);

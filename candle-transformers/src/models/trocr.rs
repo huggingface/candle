@@ -15,7 +15,7 @@
 //!
 
 use crate::models::vit::{Config, Embeddings, Encoder};
-use candle::{DType, Result, Tensor};
+use candle::{BackendStorage, DType, Result, Tensor};
 use candle_nn::{
     embedding, layer_norm, linear_no_bias, Embedding, LayerNorm, Linear, Module, VarBuilder,
 };
@@ -85,13 +85,13 @@ impl Default for TrOCRConfig {
 }
 
 #[derive(Debug, Clone)]
-struct TrOCRLearnedPositionalEmbedding {
+struct TrOCRLearnedPositionalEmbedding<B: BackendStorage> {
     offset: usize,
-    weights: Embedding,
+    weights: Embedding<B>,
 }
 
-impl TrOCRLearnedPositionalEmbedding {
-    fn load(vb: VarBuilder, cfg: &TrOCRConfig) -> Result<Self> {
+impl<B: BackendStorage> TrOCRLearnedPositionalEmbedding<B> {
+    fn load(vb: VarBuilder<B>, cfg: &TrOCRConfig) -> Result<Self> {
         let offset: usize = 2;
         let num_embeddings = cfg.max_position_embeddings;
         let embedding_dim = cfg.d_model;
@@ -100,7 +100,7 @@ impl TrOCRLearnedPositionalEmbedding {
         Ok(Self { offset, weights })
     }
 
-    fn new_sinusoidal(vb: VarBuilder, cfg: &TrOCRConfig) -> Result<Self> {
+    fn new_sinusoidal(vb: VarBuilder<B>, cfg: &TrOCRConfig) -> Result<Self> {
         // https://github.com/huggingface/transformers/blob/58e3d23e97078f361a533b9ec4a6a2de674ea52a/src/transformers/models/trocr/modeling_trocr.py#L81
         let embedding_dim = cfg.d_model;
         let half_dim = embedding_dim / 2;
@@ -132,7 +132,7 @@ impl TrOCRLearnedPositionalEmbedding {
         })
     }
 
-    fn forward(&mut self, input_ids: &Tensor, past_key_values_length: u32) -> Result<Tensor> {
+    fn forward(&mut self, input_ids: &Tensor<B>, past_key_values_length: u32) -> Result<Tensor<B>> {
         let (b_sz, seq_len) = input_ids.dims2()?;
 
         let positions = Tensor::arange(
@@ -149,21 +149,21 @@ impl TrOCRLearnedPositionalEmbedding {
 }
 
 #[derive(Debug, Clone)]
-struct TrOCRAttention {
+struct TrOCRAttention<B: BackendStorage> {
     head_dim: usize,
     num_heads: usize,
     is_decoder: bool,
     scaling: f64,
-    k_proj: Linear,
-    v_proj: Linear,
-    q_proj: Linear,
-    out_proj: Linear,
-    kv_cache: Option<(Tensor, Tensor)>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    q_proj: Linear<B>,
+    out_proj: Linear<B>,
+    kv_cache: Option<(Tensor<B>, Tensor<B>)>,
 }
 
-impl TrOCRAttention {
+impl<B: BackendStorage> TrOCRAttention<B> {
     fn load(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         cfg: &TrOCRConfig,
         kdim: Option<usize>,
         vdim: Option<usize>,
@@ -196,7 +196,7 @@ impl TrOCRAttention {
         self.kv_cache = None
     }
 
-    fn _shape(&self, tensor: &Tensor, bsz: usize) -> Result<Tensor> {
+    fn _shape(&self, tensor: &Tensor<B>, bsz: usize) -> Result<Tensor<B>> {
         tensor
             .reshape((bsz, (), self.num_heads, self.head_dim))?
             .transpose(1, 2)?
@@ -205,10 +205,10 @@ impl TrOCRAttention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        kv_states: Option<&Tensor>,
-        attn_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        kv_states: Option<&Tensor<B>>,
+        attn_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let (b_sz, tgt_len, _) = xs.dims3()?;
         let query_states = (xs.apply(&self.q_proj)? * self.scaling)?;
         let (key_states, value_states) = match kv_states {
@@ -256,19 +256,19 @@ impl TrOCRAttention {
 }
 
 #[derive(Debug, Clone)]
-struct TrOCRDecoderLayer {
-    self_attn: TrOCRAttention,
+struct TrOCRDecoderLayer<B: BackendStorage> {
+    self_attn: TrOCRAttention<B>,
     activation_fn: candle_nn::Activation,
-    self_attn_layer_norm: LayerNorm,
-    encoder_attn: TrOCRAttention,
-    encoder_attn_layer_norm: LayerNorm,
-    fc1: Linear,
-    fc2: Linear,
-    final_layer_norm: LayerNorm,
+    self_attn_layer_norm: LayerNorm<B>,
+    encoder_attn: TrOCRAttention<B>,
+    encoder_attn_layer_norm: LayerNorm<B>,
+    fc1: Linear<B>,
+    fc2: Linear<B>,
+    final_layer_norm: LayerNorm<B>,
 }
 
-impl TrOCRDecoderLayer {
-    fn load(vb: VarBuilder, cfg: &TrOCRConfig) -> Result<Self> {
+impl<B: BackendStorage> TrOCRDecoderLayer<B> {
+    fn load(vb: VarBuilder<B>, cfg: &TrOCRConfig) -> Result<Self> {
         let embed_dim = cfg.d_model;
         let self_attn = TrOCRAttention::load(vb.pp("self_attn"), cfg, None, None)?;
         let self_attn_layer_norm = layer_norm(embed_dim, 1e-5, vb.pp("self_attn_layer_norm"))?;
@@ -301,10 +301,10 @@ impl TrOCRDecoderLayer {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: &Tensor,
-        encoder_hidden_states: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        attention_mask: &Tensor<B>,
+        encoder_hidden_states: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let residual = xs.clone();
         let xs = self.self_attn.forward(xs, None, Some(attention_mask))?;
         let xs = (xs + residual)?;
@@ -334,15 +334,15 @@ impl TrOCRDecoderLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct TrOCRDecoder {
-    layers: Vec<TrOCRDecoderLayer>,
+pub struct TrOCRDecoder<B: BackendStorage> {
+    layers: Vec<TrOCRDecoderLayer<B>>,
     embed_scale: Option<f64>,
-    embed_tokens: Embedding,
-    embed_positions: TrOCRLearnedPositionalEmbedding,
+    embed_tokens: Embedding<B>,
+    embed_positions: TrOCRLearnedPositionalEmbedding<B>,
 }
 
-impl TrOCRDecoder {
-    fn new(cfg: &TrOCRConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> TrOCRDecoder<B> {
+    fn new(cfg: &TrOCRConfig, vb: VarBuilder<B>) -> Result<Self> {
         let vb = vb.pp("decoder.model.decoder");
 
         let embed_tokens = embedding(cfg.vocab_size, cfg.d_model, vb.pp("embed_tokens"))?;
@@ -377,11 +377,11 @@ impl TrOCRDecoder {
 
     pub fn forward(
         &mut self,
-        xs: &Tensor,
-        encoder_xs: Option<&Tensor>,
+        xs: &Tensor<B>,
+        encoder_xs: Option<&Tensor<B>>,
         past_kv_len: usize,
-        attn_mask: &Tensor,
-    ) -> Result<Tensor> {
+        attn_mask: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let embed_pos = self.embed_positions.forward(xs, past_kv_len as u32)?;
         let xs = xs.apply(&self.embed_tokens)?;
 
@@ -400,14 +400,14 @@ impl TrOCRDecoder {
 }
 
 #[derive(Debug, Clone)]
-pub struct TrOCREncoder {
-    embeddings: Embeddings,
-    encoder: Encoder,
-    layernorm: LayerNorm,
+pub struct TrOCREncoder<B: BackendStorage> {
+    embeddings: Embeddings<B>,
+    encoder: Encoder<B>,
+    layernorm: LayerNorm<B>,
 }
 
-impl TrOCREncoder {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> TrOCREncoder<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb_v = vb.pp("encoder");
 
         let embeddings = Embeddings::new(cfg, false, vb_v.pp("embeddings"))?;
@@ -422,7 +422,7 @@ impl TrOCREncoder {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let embedding_output = self.embeddings.forward(xs, None, false)?;
         let encoder_outputs = self.encoder.forward(&embedding_output)?;
 
@@ -431,13 +431,13 @@ impl TrOCREncoder {
 }
 
 #[derive(Debug, Clone)]
-pub struct TrOCRForCausalLM {
-    decoder: TrOCRDecoder,
-    output_projection: Linear,
+pub struct TrOCRForCausalLM<B: BackendStorage> {
+    decoder: TrOCRDecoder<B>,
+    output_projection: Linear<B>,
 }
 
-impl TrOCRForCausalLM {
-    pub fn new(decoder_cfg: &TrOCRConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> TrOCRForCausalLM<B> {
+    pub fn new(decoder_cfg: &TrOCRConfig, vb: VarBuilder<B>) -> Result<Self> {
         let decoder = TrOCRDecoder::new(decoder_cfg, vb.clone())?;
         let output_projection = if decoder_cfg.tie_word_embeddings {
             candle_nn::Linear::new(decoder.embed_tokens.embeddings().clone(), None)
@@ -456,11 +456,11 @@ impl TrOCRForCausalLM {
 
     pub fn forward(
         &mut self,
-        xs: &Tensor,
-        encoder_xs: Option<&Tensor>,
+        xs: &Tensor<B>,
+        encoder_xs: Option<&Tensor<B>>,
         past_kv_len: usize,
-        attn_mask: &Tensor,
-    ) -> Result<Tensor> {
+        attn_mask: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let xs = self
             .decoder
             .forward(xs, encoder_xs, past_kv_len, attn_mask)?;
@@ -475,32 +475,32 @@ impl TrOCRForCausalLM {
 }
 
 #[derive(Debug, Clone)]
-pub struct TrOCRModel {
-    encoder: TrOCREncoder,
-    decoder: TrOCRForCausalLM,
+pub struct TrOCRModel<B: BackendStorage> {
+    encoder: TrOCREncoder<B>,
+    decoder: TrOCRForCausalLM<B>,
 }
 
-impl TrOCRModel {
-    pub fn new(encoder_cfg: &Config, decoder_cfg: &TrOCRConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> TrOCRModel<B> {
+    pub fn new(encoder_cfg: &Config, decoder_cfg: &TrOCRConfig, vb: VarBuilder<B>) -> Result<Self> {
         let encoder = TrOCREncoder::new(encoder_cfg, vb.clone())?;
         let decoder = TrOCRForCausalLM::new(decoder_cfg, vb)?;
         Ok(Self { encoder, decoder })
     }
 
-    pub fn encoder(&mut self) -> &mut TrOCREncoder {
+    pub fn encoder(&mut self) -> &mut TrOCREncoder<B> {
         &mut self.encoder
     }
 
-    pub fn decoder(&mut self) -> &mut TrOCRForCausalLM {
+    pub fn decoder(&mut self) -> &mut TrOCRForCausalLM<B> {
         &mut self.decoder
     }
 
     pub fn decode(
         &mut self,
-        xs: &Tensor,
-        encoder_xs: &Tensor,
+        xs: &Tensor<B>,
+        encoder_xs: &Tensor<B>,
         past_kv_len: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let seq_len = xs.dim(1)?;
         let mask: Vec<_> = (0..seq_len)
             .flat_map(|i| (0..seq_len).map(move |j| if j > i { f32::NEG_INFINITY } else { 0f32 }))

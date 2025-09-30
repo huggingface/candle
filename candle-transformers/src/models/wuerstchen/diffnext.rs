@@ -1,18 +1,18 @@
 use super::common::{AttnBlock, GlobalResponseNorm, LayerNormNoWeights, TimestepBlock, WLayerNorm};
-use candle::{DType, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 #[derive(Debug)]
-pub struct ResBlockStageB {
-    depthwise: candle_nn::Conv2d,
+pub struct ResBlockStageB<B: BackendStorage> {
+    depthwise: candle_nn::Conv2d<B>,
     norm: WLayerNorm,
-    channelwise_lin1: candle_nn::Linear,
-    channelwise_grn: GlobalResponseNorm,
-    channelwise_lin2: candle_nn::Linear,
+    channelwise_lin1: candle_nn::Linear<B>,
+    channelwise_grn: GlobalResponseNorm<B>,
+    channelwise_lin2: candle_nn::Linear<B>,
 }
 
-impl ResBlockStageB {
-    pub fn new(c: usize, c_skip: usize, ksize: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> ResBlockStageB<B> {
+    pub fn new(c: usize, c_skip: usize, ksize: usize, vb: VarBuilder<B>) -> Result<Self> {
         let cfg = candle_nn::Conv2dConfig {
             groups: c,
             padding: ksize / 2,
@@ -32,7 +32,7 @@ impl ResBlockStageB {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, x_skip: Option<&Tensor>) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, x_skip: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let x_res = xs;
         let xs = xs.apply(&self.depthwise)?.apply(&self.norm)?;
         let xs = match x_skip {
@@ -52,42 +52,42 @@ impl ResBlockStageB {
 }
 
 #[derive(Debug)]
-struct SubBlock {
-    res_block: ResBlockStageB,
-    ts_block: TimestepBlock,
-    attn_block: Option<AttnBlock>,
+struct SubBlock<B: BackendStorage> {
+    res_block: ResBlockStageB<B>,
+    ts_block: TimestepBlock<B>,
+    attn_block: Option<AttnBlock<B>>,
 }
 
 #[derive(Debug)]
-struct DownBlock {
+struct DownBlock<B: BackendStorage> {
     layer_norm: Option<WLayerNorm>,
-    conv: Option<candle_nn::Conv2d>,
-    sub_blocks: Vec<SubBlock>,
+    conv: Option<candle_nn::Conv2d<B>>,
+    sub_blocks: Vec<SubBlock<B>>,
 }
 
 #[derive(Debug)]
-struct UpBlock {
-    sub_blocks: Vec<SubBlock>,
+struct UpBlock<B: BackendStorage> {
+    sub_blocks: Vec<SubBlock<B>>,
     layer_norm: Option<WLayerNorm>,
-    conv: Option<candle_nn::ConvTranspose2d>,
+    conv: Option<candle_nn::ConvTranspose2d<B>>,
 }
 
 #[derive(Debug)]
-pub struct WDiffNeXt {
-    clip_mapper: candle_nn::Linear,
-    effnet_mappers: Vec<Option<candle_nn::Conv2d>>,
+pub struct WDiffNeXt<B: BackendStorage> {
+    clip_mapper: candle_nn::Linear<B>,
+    effnet_mappers: Vec<Option<candle_nn::Conv2d<B>>>,
     seq_norm: LayerNormNoWeights,
-    embedding_conv: candle_nn::Conv2d,
+    embedding_conv: candle_nn::Conv2d<B>,
     embedding_ln: WLayerNorm,
-    down_blocks: Vec<DownBlock>,
-    up_blocks: Vec<UpBlock>,
+    down_blocks: Vec<DownBlock<B>>,
+    up_blocks: Vec<UpBlock<B>>,
     clf_ln: WLayerNorm,
-    clf_conv: candle_nn::Conv2d,
+    clf_conv: candle_nn::Conv2d<B>,
     c_r: usize,
     patch_size: usize,
 }
 
-impl WDiffNeXt {
+impl<B: BackendStorage> WDiffNeXt<B> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         c_in: usize,
@@ -97,7 +97,7 @@ impl WDiffNeXt {
         clip_embd: usize,
         patch_size: usize,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         const C_HIDDEN: [usize; 4] = [320, 640, 1280, 1280];
         const BLOCKS: [usize; 4] = [4, 4, 14, 4];
@@ -282,7 +282,7 @@ impl WDiffNeXt {
         })
     }
 
-    fn gen_r_embedding(&self, r: &Tensor) -> Result<Tensor> {
+    fn gen_r_embedding(&self, r: &Tensor<B>) -> Result<Tensor<B>> {
         const MAX_POSITIONS: usize = 10000;
         let r = (r * MAX_POSITIONS as f64)?;
         let half_dim = self.c_r / 2;
@@ -300,17 +300,17 @@ impl WDiffNeXt {
         emb.to_dtype(r.dtype())
     }
 
-    fn gen_c_embeddings(&self, clip: &Tensor) -> Result<Tensor> {
+    fn gen_c_embeddings(&self, clip: &Tensor<B>) -> Result<Tensor<B>> {
         clip.apply(&self.clip_mapper)?.apply(&self.seq_norm)
     }
 
     pub fn forward(
         &self,
-        xs: &Tensor,
-        r: &Tensor,
-        effnet: &Tensor,
-        clip: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        r: &Tensor<B>,
+        effnet: &Tensor<B>,
+        clip: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         const EPS: f64 = 1e-3;
 
         let r_embed = self.gen_r_embedding(r)?;

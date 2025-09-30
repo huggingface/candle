@@ -3,26 +3,26 @@ use crate::models::{
     mistral::Config,
     with_tracing::{layer_norm, linear, linear_no_bias, LayerNorm, Linear},
 };
-use candle::{DType, Device, Result, Tensor, D};
+use candle::{BackendStorage, DType, Result, Tensor, D};
 use candle_nn::{ops::softmax_last_dim, LayerNormConfig, Module, VarBuilder};
 
 // Geglu and feedforward from candle-transformers/src/models/stable_diffusion/attention.rs
 #[derive(Debug)]
-struct GeGlu {
-    proj: Linear,
+struct GeGlu<B: BackendStorage> {
+    proj: Linear<B>,
     span: tracing::Span,
 }
 
-impl GeGlu {
-    fn new(vs: VarBuilder, dim_in: usize, dim_out: usize) -> Result<Self> {
+impl<B: BackendStorage> GeGlu<B> {
+    fn new(vs: VarBuilder<B>, dim_in: usize, dim_out: usize) -> Result<Self> {
         let proj = linear(dim_in, dim_out * 2, vs)?;
         let span = tracing::span!(tracing::Level::TRACE, "geglu");
         Ok(Self { proj, span })
     }
 }
 
-impl Module for GeGlu {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for GeGlu<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let hidden_states_and_gate = self.proj.forward(xs)?.chunk(2, D::Minus1)?;
         &hidden_states_and_gate[0] * hidden_states_and_gate[1].gelu()?
@@ -30,14 +30,14 @@ impl Module for GeGlu {
 }
 
 #[derive(Debug)]
-struct FeedForward {
-    project_in: GeGlu,
-    linear: Linear,
+struct FeedForward<B: BackendStorage> {
+    project_in: GeGlu<B>,
+    linear: Linear<B>,
     span: tracing::Span,
 }
 
-impl FeedForward {
-    fn new(vs: VarBuilder, dim: usize, dim_out: Option<usize>, mult: usize) -> Result<Self> {
+impl<B: BackendStorage> FeedForward<B> {
+    fn new(vs: VarBuilder<B>, dim: usize, dim_out: Option<usize>, mult: usize) -> Result<Self> {
         let inner_dim = dim * mult;
         let dim_out = dim_out.unwrap_or(dim);
         let vs = vs.pp("net");
@@ -52,8 +52,8 @@ impl FeedForward {
     }
 }
 
-impl Module for FeedForward {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for FeedForward<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let xs = self.project_in.forward(xs)?;
         self.linear.forward(&xs)
@@ -62,10 +62,10 @@ impl Module for FeedForward {
 
 // CrossAttention from candle-transformers/src/models/stable_diffusion/attention.rs
 #[derive(Debug)]
-struct CrossAttention {
-    to_q: Linear,
-    to_kv: Linear,
-    to_out: Linear,
+struct CrossAttention<B: BackendStorage> {
+    to_q: Linear<B>,
+    to_kv: Linear<B>,
+    to_out: Linear<B>,
     heads: usize,
     scale: f64,
     span: tracing::Span,
@@ -73,9 +73,9 @@ struct CrossAttention {
     span_softmax: tracing::Span,
 }
 
-impl CrossAttention {
+impl<B: BackendStorage> CrossAttention<B> {
     fn new(
-        vs: VarBuilder,
+        vs: VarBuilder<B>,
         query_dim: usize,
         context_dim: Option<usize>,
         heads: usize,
@@ -102,21 +102,26 @@ impl CrossAttention {
         })
     }
 
-    fn reshape_heads_to_batch_dim(&self, xs: &Tensor) -> Result<Tensor> {
+    fn reshape_heads_to_batch_dim(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (batch_size, seq_len, dim) = xs.dims3()?;
         xs.reshape((batch_size, seq_len, self.heads, dim / self.heads))?
             .transpose(1, 2)?
             .reshape((batch_size * self.heads, seq_len, dim / self.heads))
     }
 
-    fn reshape_batch_dim_to_heads(&self, xs: &Tensor) -> Result<Tensor> {
+    fn reshape_batch_dim_to_heads(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (batch_size, seq_len, dim) = xs.dims3()?;
         xs.reshape((batch_size / self.heads, self.heads, seq_len, dim))?
             .transpose(1, 2)?
             .reshape((batch_size / self.heads, seq_len, dim * self.heads))
     }
 
-    fn attention(&self, query: &Tensor, key: &Tensor, value: &Tensor) -> Result<Tensor> {
+    fn attention(
+        &self,
+        query: &Tensor<B>,
+        key: &Tensor<B>,
+        value: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span_attn.enter();
 
         let in_dtype = query.dtype();
@@ -133,7 +138,7 @@ impl CrossAttention {
         self.reshape_batch_dim_to_heads(&xs)
     }
 
-    fn forward(&self, xs: &Tensor, context: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, context: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let query = self.to_q.forward(xs)?;
         let context = context.unwrap_or(xs).contiguous()?;
@@ -152,20 +157,20 @@ impl CrossAttention {
 }
 
 #[derive(Debug)]
-pub struct Model {
-    embedding_model: EmbeddingModel,
-    cross_attn: CrossAttention,
-    cross_attn_norm: LayerNorm,
-    cross_attn_context_norm: LayerNorm,
-    ff: FeedForward,
-    ff_norm: LayerNorm,
-    latents: Tensor,
-    pub device: Device,
+pub struct Model<B: BackendStorage> {
+    embedding_model: EmbeddingModel<B>,
+    cross_attn: CrossAttention<B>,
+    cross_attn_norm: LayerNorm<B>,
+    cross_attn_context_norm: LayerNorm<B>,
+    ff: FeedForward<B>,
+    ff_norm: LayerNorm<B>,
+    latents: Tensor<B>,
+    pub device: B::Device,
     pub dtype: DType,
 }
 
-impl Model {
-    pub fn new(vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(vb: VarBuilder<B>) -> Result<Self> {
         // Embedding model
         let cfg = Config::config_7b_v0_1(false);
         let embedding_model = EmbeddingModel::new(&cfg, vb.pp("embedding_model"))?;
@@ -203,10 +208,10 @@ impl Model {
 
     pub fn forward(
         &mut self,
-        input_ids: &Tensor,
-        attn_mask: &Tensor,
-        pool_mask: &Tensor,
-    ) -> Result<Tensor> {
+        input_ids: &Tensor<B>,
+        attn_mask: &Tensor<B>,
+        pool_mask: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         // Embedding model
         let hiddens = self
             .embedding_model

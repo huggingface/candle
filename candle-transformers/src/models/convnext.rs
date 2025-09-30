@@ -13,7 +13,7 @@
 //!
 
 use candle::shape::ShapeWithOneHole;
-use candle::{Result, D};
+use candle::{BackendStorage, Result, D};
 use candle_nn::{conv2d, layer_norm, linear, Conv2dConfig, Func, VarBuilder};
 
 #[derive(Clone)]
@@ -106,14 +106,20 @@ impl Config {
 }
 
 // Layer norm for data in channels-last format.
-fn layer_norm_cl(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn layer_norm_cl<B: BackendStorage + 'static>(
+    dim: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let norm = layer_norm(dim, 1e-6, vb)?;
 
     Ok(Func::new(move |xs| xs.apply(&norm)))
 }
 
 // Layer norm for data in channels-first format.
-fn layer_norm_cf(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn layer_norm_cf<B: BackendStorage + 'static>(
+    dim: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let norm = layer_norm(dim, 1e-6, vb)?;
 
     Ok(Func::new(move |xs| {
@@ -127,7 +133,11 @@ fn layer_norm_cf(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
 
 // Global response normalization layer
 // Based on https://github.com/huggingface/pytorch-image-models/blob/main/timm/layers/grn.py
-fn convnext2_grn(dim: usize, channels_last: bool, vb: VarBuilder) -> Result<Func<'static>> {
+fn convnext2_grn<B: BackendStorage + 'static>(
+    dim: usize,
+    channels_last: bool,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let (shape, spatial_dim, channel_dim) = if channels_last {
         ((1, 1, 1, ()).into_shape(dim)?, [1, 2], 3)
     } else {
@@ -157,7 +167,10 @@ fn convnext2_grn(dim: usize, channels_last: bool, vb: VarBuilder) -> Result<Func
 }
 
 // Initial downsampling via a patchify layer.
-fn convnext_stem(out_channels: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn convnext_stem<B: BackendStorage + 'static>(
+    out_channels: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         stride: 4,
         ..Default::default()
@@ -169,7 +182,10 @@ fn convnext_stem(out_channels: usize, vb: VarBuilder) -> Result<Func<'static>> {
 }
 
 // Downsampling applied after the stages.
-fn convnext_downsample(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn convnext_downsample<B: BackendStorage + 'static>(
+    dim: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         stride: 2,
         ..Default::default()
@@ -181,7 +197,10 @@ fn convnext_downsample(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
 }
 
 // MLP block from the original paper with optional GRN layer (v2 models).
-fn convnext_mlp(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn convnext_mlp<B: BackendStorage + 'static>(
+    dim: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let fc1 = linear(dim, 4 * dim, vb.pp("fc1"))?;
     let fc2 = linear(4 * dim, dim, vb.pp("fc2"))?;
     let grn = convnext2_grn(4 * dim, true, vb.pp("grn"));
@@ -197,7 +216,10 @@ fn convnext_mlp(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
 }
 
 // MLP block using pointwise convolutions, with optional GRN layer (v2 models).
-fn convnext_conv_mlp(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn convnext_conv_mlp<B: BackendStorage + 'static>(
+    dim: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         ..Default::default()
     };
@@ -216,7 +238,11 @@ fn convnext_conv_mlp(dim: usize, vb: VarBuilder) -> Result<Func<'static>> {
 }
 
 // A block consisting of a depthwise convolution, a MLP and layer scaling (v1 models only).
-fn convnext_block(dim: usize, use_conv_mlp: bool, vb: VarBuilder) -> Result<Func<'static>> {
+fn convnext_block<B: BackendStorage + 'static>(
+    dim: usize,
+    use_conv_mlp: bool,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         groups: dim,
         padding: 3,
@@ -260,7 +286,11 @@ fn convnext_block(dim: usize, use_conv_mlp: bool, vb: VarBuilder) -> Result<Func
 }
 
 // Each stage contains blocks and a downsampling layer for the previous stage.
-fn convnext_stage(cfg: &Config, stage_idx: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn convnext_stage<B: BackendStorage + 'static>(
+    cfg: &Config,
+    stage_idx: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let nblocks = cfg.blocks[stage_idx];
     let mut blocks = Vec::with_capacity(nblocks);
 
@@ -288,18 +318,22 @@ fn convnext_stage(cfg: &Config, stage_idx: usize, vb: VarBuilder) -> Result<Func
 }
 
 // Classification head.
-fn convnext_head(outputs: usize, nclasses: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn convnext_head<B: BackendStorage + 'static>(
+    outputs: usize,
+    nclasses: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let norm = layer_norm_cl(outputs, vb.pp("norm"))?;
     let linear = linear(outputs, nclasses, vb.pp("fc"))?;
     Ok(Func::new(move |xs| xs.apply(&norm)?.apply(&linear)))
 }
 
 // Build a convnext model for a given configuration.
-fn convnext_model(
+fn convnext_model<B: BackendStorage + 'static>(
     config: &Config,
     nclasses: Option<usize>,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let head = match nclasses {
         None => None,
         Some(nclasses) => {
@@ -331,10 +365,17 @@ fn convnext_model(
     }))
 }
 
-pub fn convnext(cfg: &Config, nclasses: usize, vb: VarBuilder) -> Result<Func<'static>> {
+pub fn convnext<B: BackendStorage + 'static>(
+    cfg: &Config,
+    nclasses: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     convnext_model(cfg, Some(nclasses), vb)
 }
 
-pub fn convnext_no_final_layer(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
+pub fn convnext_no_final_layer<B: BackendStorage + 'static>(
+    cfg: &Config,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     convnext_model(cfg, None, vb)
 }

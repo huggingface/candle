@@ -6,7 +6,7 @@
 //! - See modernbert in [candle-examples](https://github.com/huggingface/candle/tree/main/candle-examples/) for runnable code
 //!
 
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::{
     embedding, layer_norm_no_bias, linear, linear_no_bias, ops::softmax, Embedding, LayerNorm,
     Linear, Module, VarBuilder,
@@ -52,13 +52,13 @@ pub struct ClassifierConfig {
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+struct RotaryEmbedding<B: BackendStorage> {
+    sin: Tensor<B>,
+    cos: Tensor<B>,
 }
 
-impl RotaryEmbedding {
-    fn new(dtype: DType, config: &Config, rope_theta: f64, dev: &Device) -> Result<Self> {
+impl<B: BackendStorage> RotaryEmbedding<B> {
+    fn new(dtype: DType, config: &Config, rope_theta: f64, dev: &B::Device) -> Result<Self> {
         let dim = config.hidden_size / config.num_attention_heads;
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
@@ -77,7 +77,7 @@ impl RotaryEmbedding {
         })
     }
 
-    fn apply_rotary_emb_qkv(&self, q: &Tensor, k: &Tensor) -> Result<(Tensor, Tensor)> {
+    fn apply_rotary_emb_qkv(&self, q: &Tensor<B>, k: &Tensor<B>) -> Result<(Tensor<B>, Tensor<B>)> {
         let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &self.cos, &self.sin)?;
         let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &self.cos, &self.sin)?;
         Ok((q_embed, k_embed))
@@ -85,16 +85,20 @@ impl RotaryEmbedding {
 }
 
 #[derive(Clone)]
-struct ModernBertAttention {
-    qkv: Linear,
-    proj: Linear,
+struct ModernBertAttention<B: BackendStorage> {
+    qkv: Linear<B>,
+    proj: Linear<B>,
     num_attention_heads: usize,
     attention_head_size: usize,
-    rotary_emb: Arc<RotaryEmbedding>,
+    rotary_emb: Arc<RotaryEmbedding<B>>,
 }
 
-impl ModernBertAttention {
-    fn load(vb: VarBuilder, config: &Config, rotary_emb: Arc<RotaryEmbedding>) -> Result<Self> {
+impl<B: BackendStorage> ModernBertAttention<B> {
+    fn load(
+        vb: VarBuilder<B>,
+        config: &Config,
+        rotary_emb: Arc<RotaryEmbedding<B>>,
+    ) -> Result<Self> {
         let num_attention_heads = config.num_attention_heads;
         let attention_head_size = config.hidden_size / config.num_attention_heads;
 
@@ -110,7 +114,7 @@ impl ModernBertAttention {
         })
     }
 
-    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, hidden_states: &Tensor<B>, attention_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = hidden_states.clone();
         let (b, seq_len, d) = xs.dims3()?;
         let qkv = xs
@@ -149,13 +153,13 @@ impl ModernBertAttention {
 }
 
 #[derive(Clone)]
-pub struct ModernBertMLP {
-    wi: Linear,
-    wo: Linear,
+pub struct ModernBertMLP<B: BackendStorage> {
+    wi: Linear<B>,
+    wo: Linear<B>,
 }
 
-impl ModernBertMLP {
-    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> ModernBertMLP<B> {
+    fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let wi = linear_no_bias(
             config.hidden_size,
             config.intermediate_size * 2,
@@ -166,8 +170,8 @@ impl ModernBertMLP {
     }
 }
 
-impl Module for ModernBertMLP {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ModernBertMLP<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = xs.apply(&self.wi)?;
         let xs = xs.chunk(2, D::Minus1)?;
         let xs = (&xs[0].gelu_erf()? * &xs[1])?.apply(&self.wo)?; // GeGLU
@@ -176,19 +180,19 @@ impl Module for ModernBertMLP {
 }
 
 #[derive(Clone)]
-pub struct ModernBertLayer {
-    attn: ModernBertAttention,
-    mlp: ModernBertMLP,
-    attn_norm: Option<LayerNorm>,
-    mlp_norm: LayerNorm,
+pub struct ModernBertLayer<B: BackendStorage> {
+    attn: ModernBertAttention<B>,
+    mlp: ModernBertMLP<B>,
+    attn_norm: Option<LayerNorm<B>>,
+    mlp_norm: LayerNorm<B>,
     uses_local_attention: bool,
 }
 
-impl ModernBertLayer {
+impl<B: BackendStorage> ModernBertLayer<B> {
     fn load(
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         config: &Config,
-        rotary_emb: Arc<RotaryEmbedding>,
+        rotary_emb: Arc<RotaryEmbedding<B>>,
         uses_local_attention: bool,
     ) -> Result<Self> {
         let attn = ModernBertAttention::load(vb.pp("attn"), config, rotary_emb)?;
@@ -212,10 +216,10 @@ impl ModernBertLayer {
 
     fn forward(
         &self,
-        xs: &Tensor,
-        global_attention_mask: &Tensor,
-        local_attention_mask: &Tensor,
-    ) -> Result<Tensor> {
+        xs: &Tensor<B>,
+        global_attention_mask: &Tensor<B>,
+        local_attention_mask: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let residual = xs.clone();
         let mut xs = xs.clone();
         if let Some(norm) = &self.attn_norm {
@@ -236,33 +240,33 @@ impl ModernBertLayer {
 }
 
 #[derive(Clone)]
-pub struct ModernBertHead {
-    dense: Linear,
-    norm: LayerNorm,
+pub struct ModernBertHead<B: BackendStorage> {
+    dense: Linear<B>,
+    norm: LayerNorm<B>,
 }
 
-impl ModernBertHead {
-    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> ModernBertHead<B> {
+    fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let dense = linear_no_bias(config.hidden_size, config.hidden_size, vb.pp("dense"))?;
         let norm = layer_norm_no_bias(config.hidden_size, config.layer_norm_eps, vb.pp("norm"))?;
         Ok(Self { dense, norm })
     }
 }
 
-impl Module for ModernBertHead {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ModernBertHead<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = xs.apply(&self.dense)?.gelu_erf()?.apply(&self.norm)?;
         Ok(xs)
     }
 }
 
 #[derive(Clone)]
-pub struct ModernBertDecoder {
-    decoder: Linear,
+pub struct ModernBertDecoder<B: BackendStorage> {
+    decoder: Linear<B>,
 }
 
-impl ModernBertDecoder {
-    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> ModernBertDecoder<B> {
+    fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         // The decoder weights are tied with the embeddings layer weights
         let decoder_weights = vb.get(
             (config.vocab_size, config.hidden_size),
@@ -274,19 +278,19 @@ impl ModernBertDecoder {
     }
 }
 
-impl Module for ModernBertDecoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ModernBertDecoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = xs.apply(&self.decoder)?;
         Ok(xs)
     }
 }
 
 // Global attention mask calculated from padded token inputs
-fn prepare_4d_attention_mask(
-    mask: &Tensor,
+fn prepare_4d_attention_mask<B: BackendStorage>(
+    mask: &Tensor<B>,
     dtype: DType,
     tgt_len: Option<usize>,
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     let bsz = mask.dim(0)?;
     let src_len = mask.dim(1)?;
     let tgt_len = tgt_len.unwrap_or(src_len);
@@ -303,11 +307,11 @@ fn prepare_4d_attention_mask(
 }
 
 // Attention mask caused by the sliding window
-fn get_local_attention_mask(
+fn get_local_attention_mask<B: BackendStorage>(
     seq_len: usize,
     max_distance: usize,
-    device: &Device,
-) -> Result<Tensor> {
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let mask: Vec<_> = (0..seq_len)
         .flat_map(|i| {
             (0..seq_len).map(move |j| {
@@ -324,16 +328,16 @@ fn get_local_attention_mask(
 
 // ModernBERT backbone
 #[derive(Clone)]
-pub struct ModernBert {
-    word_embeddings: Embedding,
-    norm: LayerNorm,
-    layers: Vec<ModernBertLayer>,
-    final_norm: LayerNorm,
+pub struct ModernBert<B: BackendStorage> {
+    word_embeddings: Embedding<B>,
+    norm: LayerNorm<B>,
+    layers: Vec<ModernBertLayer<B>>,
+    final_norm: LayerNorm<B>,
     local_attention_size: usize,
 }
 
-impl ModernBert {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> ModernBert<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let word_embeddings = embedding(
             config.vocab_size,
             config.hidden_size,
@@ -387,10 +391,9 @@ impl ModernBert {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, mask: &Tensor<B>) -> Result<Tensor<B>> {
         let seq_len = xs.shape().dims()[1];
-        let global_attention_mask =
-            prepare_4d_attention_mask(mask, DType::F32, None)?.to_device(xs.device())?;
+        let global_attention_mask = prepare_4d_attention_mask(mask, DType::F32, None)?;
         let local_attention_mask =
             get_local_attention_mask(seq_len, self.local_attention_size / 2, xs.device())?;
         let mut xs = xs.apply(&self.word_embeddings)?.apply(&self.norm)?;
@@ -404,14 +407,14 @@ impl ModernBert {
 
 // ModernBERT for the fill-mask task
 #[derive(Clone)]
-pub struct ModernBertForMaskedLM {
-    model: ModernBert,
-    decoder: ModernBertDecoder,
-    head: ModernBertHead,
+pub struct ModernBertForMaskedLM<B: BackendStorage> {
+    model: ModernBert<B>,
+    decoder: ModernBertDecoder<B>,
+    head: ModernBertHead<B>,
 }
 
-impl ModernBertForMaskedLM {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> ModernBertForMaskedLM<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let model = ModernBert::load(vb.clone(), config)?;
         let decoder = ModernBertDecoder::load(vb.clone(), config)?;
         let head = ModernBertHead::load(vb.pp("head"), config)?;
@@ -422,7 +425,7 @@ impl ModernBertForMaskedLM {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, mask: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = self
             .model
             .forward(xs, mask)?
@@ -433,12 +436,12 @@ impl ModernBertForMaskedLM {
 }
 
 #[derive(Clone)]
-pub struct ModernBertClassifier {
-    classifier: Linear,
+pub struct ModernBertClassifier<B: BackendStorage> {
+    classifier: Linear<B>,
 }
 
-impl ModernBertClassifier {
-    fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> ModernBertClassifier<B> {
+    fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         // The decoder weights are tied with the embeddings layer weights
         let classifier = linear(
             config.hidden_size,
@@ -453,23 +456,23 @@ impl ModernBertClassifier {
     }
 }
 
-impl Module for ModernBertClassifier {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ModernBertClassifier<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = xs.apply(&self.classifier)?;
         softmax(&xs, D::Minus1)
     }
 }
 
 #[derive(Clone)]
-pub struct ModernBertForSequenceClassification {
-    model: ModernBert,
-    head: ModernBertHead,
-    classifier: ModernBertClassifier,
+pub struct ModernBertForSequenceClassification<B: BackendStorage> {
+    model: ModernBert<B>,
+    head: ModernBertHead<B>,
+    classifier: ModernBertClassifier<B>,
     classifier_pooling: ClassifierPooling,
 }
 
-impl ModernBertForSequenceClassification {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+impl<B: BackendStorage> ModernBertForSequenceClassification<B> {
+    pub fn load(vb: VarBuilder<B>, config: &Config) -> Result<Self> {
         let model = ModernBert::load(vb.clone(), config)?;
         let classifier = ModernBertClassifier::load(vb.clone(), config)?;
         let head = ModernBertHead::load(vb.pp("head"), config)?;
@@ -485,7 +488,7 @@ impl ModernBertForSequenceClassification {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, mask: &Tensor<B>) -> Result<Tensor<B>> {
         let output = self.model.forward(xs, mask)?;
         let last_hidden_state = match self.classifier_pooling {
             ClassifierPooling::CLS => output.i((.., .., 0))?,

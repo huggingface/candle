@@ -60,26 +60,30 @@
 //! ```
 
 use crate::models::with_tracing::Embedding;
-use candle::{DType, Device, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use serde::Deserialize;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
-pub struct Linear {
-    weight: Tensor,
+pub struct Linear<B: BackendStorage> {
+    weight: Tensor<B>,
     span: tracing::Span,
 }
 
-pub fn linear_no_bias(d1: usize, d2: usize, vb: VarBuilder) -> Result<Linear> {
+pub fn linear_no_bias<B: BackendStorage>(
+    d1: usize,
+    d2: usize,
+    vb: VarBuilder<B>,
+) -> Result<Linear<B>> {
     let init_ws = candle_nn::init::DEFAULT_KAIMING_NORMAL;
     let weight = vb.get_with_hints((d2, d1), "weight", init_ws)?;
     let span = tracing::span!(tracing::Level::TRACE, "linear");
     Ok(Linear { weight, span })
 }
 
-impl Module for Linear {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Linear<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let weight = self.weight.to_dtype(xs.dtype())?;
         let w = match *xs.dims() {
@@ -107,14 +111,18 @@ fn default_tie_word_embeddings() -> bool {
     true
 }
 
-fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
+fn get_mask<B: BackendStorage>(size: usize, device: &B::Device) -> Result<Tensor<B>> {
     let mask: Vec<_> = (0..size)
         .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
         .collect();
     Tensor::from_slice(&mask, (size, size), device)
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+fn masked_fill<B: BackendStorage>(
+    on_false: &Tensor<B>,
+    mask: &Tensor<B>,
+    on_true: f32,
+) -> Result<Tensor<B>> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true, on_false)?;
@@ -243,14 +251,14 @@ impl Config {
 }
 
 #[derive(Debug, Clone)]
-struct T5LayerNorm {
-    weight: Tensor,
+struct T5LayerNorm<B: BackendStorage> {
+    weight: Tensor<B>,
     variance_epsilon: f64,
     span: tracing::Span,
 }
 
-impl T5LayerNorm {
-    fn load(h: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> T5LayerNorm<B> {
+    fn load(h: usize, eps: f64, vb: VarBuilder<B>) -> Result<Self> {
         let weight = vb.get(h, "weight")?;
         Ok(Self {
             weight,
@@ -260,8 +268,8 @@ impl T5LayerNorm {
     }
 }
 
-impl Module for T5LayerNorm {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for T5LayerNorm<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let dtype = xs.dtype();
         let xs_f32 = xs.to_dtype(DType::F32)?;
@@ -275,15 +283,15 @@ impl Module for T5LayerNorm {
 }
 
 #[derive(Debug, Clone)]
-struct T5DenseActDense {
-    wi: Linear,
-    wo: Linear,
+struct T5DenseActDense<B: BackendStorage> {
+    wi: Linear<B>,
+    wo: Linear<B>,
     act: Activation,
     span: tracing::Span,
 }
 
-impl T5DenseActDense {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> T5DenseActDense<B> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let wi = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi"))?;
         let wo = linear_no_bias(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
         Ok(Self {
@@ -295,8 +303,8 @@ impl T5DenseActDense {
     }
 }
 
-impl Module for T5DenseActDense {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for T5DenseActDense<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let xs = self.wi.forward(xs)?;
         let xs = self.act.forward(&xs)?;
@@ -306,16 +314,16 @@ impl Module for T5DenseActDense {
 }
 
 #[derive(Debug, Clone)]
-struct T5DenseGatedActDense {
-    wi_0: Linear,
-    wi_1: Linear,
-    wo: Linear,
+struct T5DenseGatedActDense<B: BackendStorage> {
+    wi_0: Linear<B>,
+    wi_1: Linear<B>,
+    wo: Linear<B>,
     act: Activation,
     span: tracing::Span,
 }
 
-impl T5DenseGatedActDense {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> T5DenseGatedActDense<B> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let wi_0 = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi_0"))?;
         let wi_1 = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi_1"))?;
         let wo = linear_no_bias(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
@@ -329,8 +337,8 @@ impl T5DenseGatedActDense {
     }
 }
 
-impl Module for T5DenseGatedActDense {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for T5DenseGatedActDense<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let hidden_gelu = self.act.forward(&self.wi_0.forward(xs)?)?;
         let hidden_linear = self.wi_1.forward(xs)?;
@@ -341,15 +349,15 @@ impl Module for T5DenseGatedActDense {
 }
 
 #[derive(Debug, Clone)]
-struct T5LayerFF {
-    dense_act: Option<T5DenseActDense>,
-    gated_dense_act: Option<T5DenseGatedActDense>,
-    layer_norm: T5LayerNorm,
+struct T5LayerFF<B: BackendStorage> {
+    dense_act: Option<T5DenseActDense<B>>,
+    gated_dense_act: Option<T5DenseGatedActDense<B>>,
+    layer_norm: T5LayerNorm<B>,
     span: tracing::Span,
 }
 
-impl T5LayerFF {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> T5LayerFF<B> {
+    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
         let (dense_act, gated_dense_act) = if cfg.feed_forward_proj.gated {
@@ -372,8 +380,8 @@ impl T5LayerFF {
     }
 }
 
-impl Module for T5LayerFF {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for T5LayerFF<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let ys = self.layer_norm.forward(xs)?;
         let ys = match &self.dense_act {
@@ -386,30 +394,30 @@ impl Module for T5LayerFF {
 }
 
 #[derive(Debug, Clone)]
-struct T5Attention {
-    q: Linear,
-    k: Linear,
-    v: Linear,
-    o: Linear,
+struct T5Attention<B: BackendStorage> {
+    q: Linear<B>,
+    k: Linear<B>,
+    v: Linear<B>,
+    o: Linear<B>,
     n_heads: usize,
     d_kv: usize,
-    relative_attention_bias: Option<Embedding>,
+    relative_attention_bias: Option<Embedding<B>>,
     relative_attention_num_buckets: usize,
     relative_attention_max_distance: usize,
     inner_dim: usize,
     use_cache: bool,
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: Option<(Tensor<B>, Tensor<B>)>,
     span: tracing::Span,
     span_cache: tracing::Span,
     span_mm: tracing::Span,
     span_sm: tracing::Span,
 }
 
-impl T5Attention {
+impl<B: BackendStorage> T5Attention<B> {
     fn load(
         has_relative_attention_bias: bool,
         decoder: bool,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         cfg: &Config,
     ) -> Result<Self> {
         let inner_dim = cfg.num_heads * cfg.d_kv;
@@ -449,11 +457,11 @@ impl T5Attention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        position_bias: Option<&Tensor>,
-        key_value_states: Option<&Tensor>,
-        mask: Option<&Tensor>,
-    ) -> Result<(Tensor, Option<Tensor>)> {
+        xs: &Tensor<B>,
+        position_bias: Option<&Tensor<B>>,
+        key_value_states: Option<&Tensor<B>>,
+        mask: Option<&Tensor<B>>,
+    ) -> Result<(Tensor<B>, Option<Tensor<B>>)> {
         // Performs Self-attention (if key_value_states is None) or attention
         // over source sentence (provided by key_value_states).
         let _enter = self.span.enter();
@@ -582,14 +590,14 @@ impl T5Attention {
 }
 
 #[derive(Debug, Clone)]
-struct T5LayerSelfAttention {
-    self_attention: T5Attention,
-    layer_norm: T5LayerNorm,
+struct T5LayerSelfAttention<B: BackendStorage> {
+    self_attention: T5Attention<B>,
+    layer_norm: T5LayerNorm<B>,
     span: tracing::Span,
 }
 
-impl T5LayerSelfAttention {
-    fn load(h: bool, d: bool, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> T5LayerSelfAttention<B> {
+    fn load(h: bool, d: bool, vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let self_attention = T5Attention::load(h, d, vb.pp("SelfAttention"), cfg)?;
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
@@ -602,10 +610,10 @@ impl T5LayerSelfAttention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        position_bias: Option<&Tensor>,
-        mask: Option<&Tensor>,
-    ) -> Result<(Tensor, Option<Tensor>)> {
+        xs: &Tensor<B>,
+        position_bias: Option<&Tensor<B>>,
+        mask: Option<&Tensor<B>>,
+    ) -> Result<(Tensor<B>, Option<Tensor<B>>)> {
         let _enter = self.span.enter();
         let normed_xs = self.layer_norm.forward(xs)?;
         let (ys, position_bias) =
@@ -621,14 +629,14 @@ impl T5LayerSelfAttention {
 }
 
 #[derive(Debug, Clone)]
-struct T5LayerCrossAttention {
-    cross_attention: T5Attention,
-    layer_norm: T5LayerNorm,
+struct T5LayerCrossAttention<B: BackendStorage> {
+    cross_attention: T5Attention<B>,
+    layer_norm: T5LayerNorm<B>,
     span: tracing::Span,
 }
 
-impl T5LayerCrossAttention {
-    fn load(decoder: bool, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> T5LayerCrossAttention<B> {
+    fn load(decoder: bool, vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let cross_attention = T5Attention::load(false, decoder, vb.pp("EncDecAttention"), cfg)?;
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
@@ -641,10 +649,10 @@ impl T5LayerCrossAttention {
 
     fn forward(
         &mut self,
-        hidden_states: &Tensor,
-        position_bias: Option<&Tensor>,
-        key_value_states: &Tensor,
-    ) -> Result<(Tensor, Option<Tensor>)> {
+        hidden_states: &Tensor<B>,
+        position_bias: Option<&Tensor<B>>,
+        key_value_states: &Tensor<B>,
+    ) -> Result<(Tensor<B>, Option<Tensor<B>>)> {
         let _enter = self.span.enter();
         let normed_hidden_states = self.layer_norm.forward(hidden_states)?;
         let (ys, position_bias) = self.cross_attention.forward(
@@ -663,18 +671,18 @@ impl T5LayerCrossAttention {
 }
 
 #[derive(Debug, Clone)]
-struct T5Block {
-    self_attn: T5LayerSelfAttention,
-    cross_attn: Option<T5LayerCrossAttention>,
-    ff: T5LayerFF,
+struct T5Block<B: BackendStorage> {
+    self_attn: T5LayerSelfAttention<B>,
+    cross_attn: Option<T5LayerCrossAttention<B>>,
+    ff: T5LayerFF<B>,
     span: tracing::Span,
 }
 
-impl T5Block {
+impl<B: BackendStorage> T5Block<B> {
     fn load(
         has_relative_attention_bias: bool,
         decoder: bool,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
         cfg: &Config,
     ) -> Result<Self> {
         let vb = vb.pp("layer");
@@ -697,10 +705,10 @@ impl T5Block {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        position_bias: Option<&Tensor>,
-        encoder_hidden_states: Option<&Tensor>,
-    ) -> Result<(Tensor, Option<Tensor>)> {
+        xs: &Tensor<B>,
+        position_bias: Option<&Tensor<B>>,
+        encoder_hidden_states: Option<&Tensor<B>>,
+    ) -> Result<(Tensor<B>, Option<Tensor<B>>)> {
         let _enter = self.span.enter();
         // TODO: Cache masks
         let mask = match self.cross_attn.is_some() {
@@ -734,15 +742,20 @@ impl T5Block {
 }
 
 #[derive(Debug, Clone)]
-struct T5Stack {
-    block: Vec<T5Block>,
-    shared: Arc<Embedding>,
-    final_layer_norm: T5LayerNorm,
+struct T5Stack<B: BackendStorage> {
+    block: Vec<T5Block<B>>,
+    shared: Arc<Embedding<B>>,
+    final_layer_norm: T5LayerNorm<B>,
     span: tracing::Span,
 }
 
-impl T5Stack {
-    fn load(decoder: bool, vb: VarBuilder, shared: &Arc<Embedding>, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> T5Stack<B> {
+    fn load(
+        decoder: bool,
+        vb: VarBuilder<B>,
+        shared: &Arc<Embedding<B>>,
+        cfg: &Config,
+    ) -> Result<Self> {
         let block = (0..cfg.num_layers)
             .map(|i| T5Block::load(i == 0, decoder, vb.pp(format!("block.{i}")), cfg))
             .collect::<Result<Vec<_>>>()?;
@@ -761,18 +774,18 @@ impl T5Stack {
 
     fn forward(
         &mut self,
-        input_ids: &Tensor,
-        encoder_hidden_states: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        input_ids: &Tensor<B>,
+        encoder_hidden_states: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         self.forward_dt(input_ids, encoder_hidden_states, None)
     }
 
     fn forward_dt(
         &mut self,
-        input_ids: &Tensor,
-        encoder_hidden_states: Option<&Tensor>,
+        input_ids: &Tensor<B>,
+        encoder_hidden_states: Option<&Tensor<B>>,
         dtype: Option<DType>,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let input_embeds = self.shared.as_ref().forward(input_ids)?;
         let input_embeds = match dtype {
@@ -797,14 +810,14 @@ impl T5Stack {
 }
 
 #[derive(Debug, Clone)]
-pub struct T5EncoderModel {
-    encoder: T5Stack,
-    device: Device,
+pub struct T5EncoderModel<B: BackendStorage> {
+    encoder: T5Stack<B>,
+    device: B::Device,
     span: tracing::Span,
 }
 
-impl T5EncoderModel {
-    pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> T5EncoderModel<B> {
+    pub fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let shared_vb = if vb.contains_tensor("shared.weight") {
             vb.pp("shared")
         } else if vb.contains_tensor("decoder.embed_tokens") {
@@ -822,17 +835,17 @@ impl T5EncoderModel {
         })
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         self.encoder.forward(input_ids, None)
     }
 
-    pub fn forward_dt(&mut self, input_ids: &Tensor, dtype: Option<DType>) -> Result<Tensor> {
+    pub fn forward_dt(&mut self, input_ids: &Tensor<B>, dtype: Option<DType>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         self.encoder.forward_dt(input_ids, None, dtype)
     }
 
-    pub fn device(&self) -> &Device {
+    pub fn device(&self) -> &B::Device {
         &self.device
     }
 
@@ -842,20 +855,20 @@ impl T5EncoderModel {
 }
 
 #[derive(Debug, Clone)]
-pub struct T5ForConditionalGeneration {
-    encoder: T5Stack,
-    decoder: T5Stack,
+pub struct T5ForConditionalGeneration<B: BackendStorage> {
+    encoder: T5Stack<B>,
+    decoder: T5Stack<B>,
     d_model: usize,
     tie_word_embeddings: bool,
-    lm_head: Option<Linear>,
-    shared: Arc<Embedding>,
-    device: Device,
+    lm_head: Option<Linear<B>>,
+    shared: Arc<Embedding<B>>,
+    device: B::Device,
     span_decode: tracing::Span,
     span_decode_head: tracing::Span,
 }
 
-impl T5ForConditionalGeneration {
-    pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> T5ForConditionalGeneration<B> {
+    pub fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         assert!(cfg.is_encoder_decoder);
         let d_model = cfg.d_model;
         let shared_vb = if vb.contains_tensor("shared.weight") {
@@ -902,15 +915,15 @@ impl T5ForConditionalGeneration {
         })
     }
 
-    pub fn encode(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn encode(&mut self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         self.encoder.forward(input_ids, None)
     }
 
     pub fn decode(
         &mut self,
-        decoder_input_ids: &Tensor,
-        encoder_output: &Tensor,
-    ) -> Result<Tensor> {
+        decoder_input_ids: &Tensor<B>,
+        encoder_output: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span_decode.enter();
         let decoder_output = self
             .decoder
@@ -937,12 +950,16 @@ impl T5ForConditionalGeneration {
         Ok(output)
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, decoder_input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        input_ids: &Tensor<B>,
+        decoder_input_ids: &Tensor<B>,
+    ) -> Result<Tensor<B>> {
         let encoder_output = self.encode(input_ids)?;
         self.decode(decoder_input_ids, &encoder_output)
     }
 
-    pub fn device(&self) -> &Device {
+    pub fn device(&self) -> &B::Device {
         &self.device
     }
 

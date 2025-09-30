@@ -2,40 +2,40 @@
 // weights and being modified by gradient descent.
 // We do not expose a public way to create variables as this would break the invariant that the
 // tensor within a variable is actually with `is_variable` set to `true`.
-use crate::{DType, Device, Error, Result, Shape, Tensor};
+use crate::{backend::BackendStorage, DType, Error, Result, Shape, Tensor};
 
 /// A variable is a wrapper around a tensor, however variables can have their content modified
 /// whereas tensors are immutable.
 #[derive(Clone, Debug)]
-pub struct Var(Tensor);
+pub struct Var<B: BackendStorage>(Tensor<B>);
 
-impl std::fmt::Display for Var {
+impl<B: BackendStorage> std::fmt::Display for Var<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.0, f)
     }
 }
 
-impl std::ops::Deref for Var {
-    type Target = Tensor;
+impl<B: BackendStorage> std::ops::Deref for Var<B> {
+    type Target = Tensor<B>;
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
     }
 }
 
-impl Var {
-    pub fn zeros<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
+impl<B: BackendStorage> Var<B> {
+    pub fn zeros<S: Into<Shape>>(shape: S, dtype: DType, device: &B::Device) -> Result<Self> {
         let inner = Tensor::zeros_impl(shape, dtype, device, true)?;
         Ok(Self(inner))
     }
 
-    pub fn ones<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
+    pub fn ones<S: Into<Shape>>(shape: S, dtype: DType, device: &B::Device) -> Result<Self> {
         let inner = Tensor::ones_impl(shape, dtype, device, true)?;
         Ok(Self(inner))
     }
 
     // Convert a tensor to a variable, if the tensor is already a variable then it is returned as is.
-    pub fn from_tensor(t: &Tensor) -> Result<Self> {
+    pub fn from_tensor(t: &Tensor<B>) -> Result<Self> {
         if t.is_variable() {
             Ok(Self(t.clone()))
         } else {
@@ -49,7 +49,7 @@ impl Var {
         up: f64,
         s: S,
         dtype: DType,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         let inner = Tensor::rand_f64_impl(lo, up, s, dtype, device, true)?;
         Ok(Self(inner))
@@ -60,7 +60,7 @@ impl Var {
         std: f64,
         s: S,
         dtype: DType,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         let inner = Tensor::randn_f64_impl(mean, std, s, dtype, device, true)?;
         Ok(Self(inner))
@@ -70,7 +70,7 @@ impl Var {
         lo: T,
         up: T,
         s: S,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         let inner = Tensor::rand_impl(lo, up, s, device, true)?;
         Ok(Self(inner))
@@ -80,7 +80,7 @@ impl Var {
         mean: T,
         std: T,
         s: S,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         let inner = Tensor::randn_impl(mean, std, s, device, true)?;
         Ok(Self(inner))
@@ -88,7 +88,7 @@ impl Var {
 
     /// Creates a new tensor on the specified device using the content and shape of the input.
     /// This is similar to `new` but the resulting tensor is a variable.
-    pub fn new<A: crate::device::NdArray>(array: A, device: &Device) -> Result<Self> {
+    pub fn new<A: crate::device::NdArray>(array: A, device: &B::Device) -> Result<Self> {
         let shape = array.shape()?;
         let inner = Tensor::new_impl(array, shape, device, true)?;
         Ok(Self(inner))
@@ -97,7 +97,7 @@ impl Var {
     pub fn from_vec<S: Into<Shape>, D: crate::WithDType>(
         data: Vec<D>,
         shape: S,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         let inner = Tensor::from_vec_impl(data, shape, device, true)?;
         Ok(Self(inner))
@@ -106,28 +106,28 @@ impl Var {
     pub fn from_slice<S: Into<Shape>, D: crate::WithDType>(
         array: &[D],
         shape: S,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         let inner = Tensor::new_impl(array, shape.into(), device, true)?;
         Ok(Self(inner))
     }
 
-    pub fn as_detached_tensor(&self) -> Tensor {
+    pub fn as_detached_tensor(&self) -> Tensor<B> {
         self.0.detach()
     }
 
-    pub fn as_tensor(&self) -> &Tensor {
+    pub fn as_tensor(&self) -> &Tensor<B> {
         &self.0
     }
 
     /// Consumes this `Var` and return the underlying tensor.
-    pub fn into_inner(self) -> Tensor {
+    pub fn into_inner(self) -> Tensor<B> {
         self.0
     }
 
     /// Sets the content of the inner tensor, this does not require a mutable reference as inner
     /// mutability is used.
-    pub fn set(&self, src: &Tensor) -> Result<()> {
+    pub fn set(&self, src: &Tensor<B>) -> Result<()> {
         if self.same_storage(src) {
             let msg = "cannot set a variable to a tensor that is derived from its value";
             Err(Error::CannotSetVar { msg }.bt())?

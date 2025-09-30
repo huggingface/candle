@@ -1,8 +1,8 @@
 //! Support for the [GGUF file format](https://github.com/philpax/ggml/blob/gguf-spec/docs/gguf.md).
 //!
 
-use super::{GgmlDType, QTensor};
-use crate::{Context, Device, Result};
+use super::{GgmlDType, QTensor, QuantizedBackend};
+use crate::{Context, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashMap;
 
@@ -54,12 +54,12 @@ pub struct TensorInfo {
 }
 
 impl TensorInfo {
-    pub fn read<R: std::io::Seek + std::io::Read>(
+    pub fn read<QB: QuantizedBackend, R: std::io::Seek + std::io::Read>(
         &self,
         reader: &mut R,
         tensor_data_offset: u64,
-        device: &Device,
-    ) -> Result<QTensor> {
+        device: &QB::Device,
+    ) -> Result<QTensor<QB>> {
         let tensor_elems = self.shape.elem_count();
         let block_size = self.ggml_dtype.block_size();
         if tensor_elems % block_size != 0 {
@@ -466,12 +466,12 @@ impl Content {
         })
     }
 
-    pub fn tensor<R: std::io::Seek + std::io::Read>(
+    pub fn tensor<QB: QuantizedBackend, R: std::io::Seek + std::io::Read>(
         &self,
         reader: &mut R,
         name: &str,
-        device: &Device,
-    ) -> Result<QTensor> {
+        device: &QB::Device,
+    ) -> Result<QTensor<QB>> {
         let tensor_info = match self.tensor_infos.get(name) {
             Some(tensor_info) => tensor_info,
             None => crate::bail!("cannot find tensor info for {name}"),
@@ -487,10 +487,10 @@ fn write_string<W: std::io::Write>(w: &mut W, str: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn write<W: std::io::Seek + std::io::Write>(
+pub fn write<QB: QuantizedBackend, W: std::io::Seek + std::io::Write>(
     w: &mut W,
     metadata: &[(&str, &Value)],
-    tensors: &[(&str, &QTensor)],
+    tensors: &[(&str, &QTensor<QB>)],
 ) -> Result<()> {
     w.write_u32::<LittleEndian>(0x46554747)?;
     w.write_u32::<LittleEndian>(2)?; // version 2.
