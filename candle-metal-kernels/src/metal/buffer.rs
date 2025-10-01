@@ -19,10 +19,6 @@ impl Buffer {
         Buffer { raw }
     }
 
-    pub fn as_ref(&self) -> &ProtocolObject<dyn MTLBuffer> {
-        &*self.raw
-    }
-
     pub fn contents(&self) -> *mut u8 {
         self.data()
     }
@@ -41,10 +37,16 @@ impl Buffer {
     }
 }
 
-pub type BufferMap = HashMap<usize, Vec<Arc<Buffer>>>;
-
-impl<'a> Into<&'a MetalResource> for &'a Buffer {
-    fn into(self) -> &'a MetalResource {
-        &ProtocolObject::from_ref(self.as_ref())
+impl AsRef<ProtocolObject<dyn MTLBuffer>> for Buffer {
+    fn as_ref(&self) -> &ProtocolObject<dyn MTLBuffer> {
+        &self.raw
     }
 }
+
+impl<'a> From<&'a Buffer> for &'a MetalResource {
+    fn from(val: &'a Buffer) -> Self {
+        ProtocolObject::from_ref(val.as_ref())
+    }
+}
+
+pub type BufferMap = HashMap<usize, Vec<Arc<Buffer>>>;
