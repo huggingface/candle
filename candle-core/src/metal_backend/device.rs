@@ -5,7 +5,7 @@ use candle_metal_kernels::{
     },
     Kernels,
 };
-use objc2_foundation::{NSRange, NSURL};
+use objc2_foundation::NSURL;
 use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
@@ -202,30 +202,6 @@ impl MetalDevice {
             .map_err(MetalError::from)?;
         let new_buffer = Arc::new(new_buffer);
         subbuffers.push(new_buffer.clone());
-        Ok(new_buffer)
-    }
-
-    /// Allocate a buffer with data, reusing existing buffers if possible
-    fn allocate_buffer_with_data<T>(&self, data: &[T], name: &str) -> Result<Arc<Buffer>> {
-        let size = core::mem::size_of_val(data);
-        let mut buffers = self.buffers.write().map_err(MetalError::from)?;
-        if let Some(b) = find_available_buffer(size, &buffers) {
-            unsafe {
-                std::ptr::copy_nonoverlapping(data.as_ptr(), b.data() as *mut T, data.len());
-            }
-            b.did_modify_range(NSRange::new(0, size));
-            // Cloning also ensures we increment the strong count
-            return Ok(b.clone());
-        }
-        let subbuffers = buffers.entry(size).or_insert(vec![]);
-
-        let new_buffer = self
-            .device
-            .new_buffer_with_data(data.as_ptr().cast(), size, RESOURCE_OPTIONS)
-            .map_err(MetalError::from)?;
-        let new_buffer = Arc::new(new_buffer);
-        subbuffers.push(new_buffer.clone());
-
         Ok(new_buffer)
     }
 
