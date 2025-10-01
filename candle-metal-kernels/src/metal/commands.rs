@@ -94,10 +94,10 @@ impl Commands {
                     command_buffer.commit();
                     command_buffer.wait_until_completed();
                 }
-                MTLCommandBufferStatus::Committed => {
+                MTLCommandBufferStatus::Committed | MTLCommandBufferStatus::Scheduled => {
                     command_buffer.wait_until_completed();
                 }
-                MTLCommandBufferStatus::Scheduled | MTLCommandBufferStatus::Completed => {}
+                MTLCommandBufferStatus::Completed => {}
                 _ => {}
             }
             *command_buffer = create_command_buffer(&self.command_queue)?;
