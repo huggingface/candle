@@ -388,7 +388,7 @@ fn quantize_q5_1(device: &Device) -> Result<()> {
 
 fn get_test_vector2(bound: f32, size: usize, device: &Device) -> Result<Tensor> {
     assert!(
-        size % crate::quantized::k_quants::QK_K == 0,
+        size.is_multiple_of(crate::quantized::k_quants::QK_K),
         "size must be a multiple of {}",
         crate::quantized::k_quants::QK_K
     );
