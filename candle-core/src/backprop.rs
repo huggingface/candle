@@ -122,6 +122,7 @@ impl Tensor {
                     | Op::MaxPool2D { arg: node, .. }
                     | Op::Copy(node)
                     | Op::Broadcast(node)
+                    | Op::Unfold(node, _, _, _)
                     | Op::Cmp(node, _)
                     | Op::Reduce(node, ReduceOp::Min | ReduceOp::Sum | ReduceOp::Max, _)
                     | Op::ToDevice(node)
@@ -494,6 +495,33 @@ impl Tensor {
                         }
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad.broadcast_as(sum_grad.dims())?)?;
+                    }
+                    &Op::Unfold(ref arg, dim, size, step) => {
+                        assert!(false, "never runs");
+
+                        let arg_dims = arg.dims();
+                        let node_dims = node.dims();
+
+                        println!("arg.id {:?}", arg.id());
+                        println!("node.id {:?}", node.id());
+
+                        let sum_grad = grads.or_insert(arg)?;
+                        let extra_dim = arg_dims.len();
+
+                        let windows = node_dims[dim];
+                        for widx in 0..windows {
+                            let window_slice = grad
+                                .get_on_dim(dim, widx)?
+                                .unsqueeze(dim)?
+                                .transpose(dim, extra_dim)?
+                                .squeeze(extra_dim)?;
+
+                            let start = widx * step;
+                            let end = start + size;
+
+                            let indexes = Tensor::arange(start as f32, end as f32, self.device())?;
+                            *sum_grad = sum_grad.index_add(&indexes, &window_slice, dim)?;
+                        }
                     }
                     Op::Reduce(arg, ReduceOp::Sum, reduced_dims) => {
                         let grad = broadcast_back(arg, &grad, reduced_dims)?;
