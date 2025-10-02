@@ -960,6 +960,10 @@ impl BackendStorage for MetalStorage {
         let command_buffer = self.device.command_buffer()?;
         let name = match self.dtype {
             DType::F32 => "im2col1d_f32",
+            DType::F16 => "im2col1d_f16",
+            DType::BF16 => "im2col1d_bf16",
+            DType::U8 => "im2col1d_u8",
+            DType::U32 => "im2col1d_u32",
             dtype => crate::bail!("Metal conv1d {dtype:?} not implemented"),
         };
         let src = buffer_o(&self.buffer, layout, self.dtype);
@@ -1039,6 +1043,8 @@ impl BackendStorage for MetalStorage {
 
             let name = match self.dtype {
                 DType::F32 => "col2im1d_f32",
+                DType::F16 => "col2im1d_f16",
+                DType::BF16 => "col2im1d_bf16",
                 DType::U32 => "col2im1d_u32",
                 DType::U8 => "col2im1d_u8",
                 dtype => crate::bail!("metal col2im1d {dtype:?} not implemented"),

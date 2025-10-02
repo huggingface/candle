@@ -61,7 +61,8 @@ pub fn call_mlx_gemm(
             lhs_stride: lhs_stride.to_vec(),
             rhs_stride: rhs_stride.to_vec(),
             mnk: (m, n, k),
-        })?;
+        }
+        .bt())?;
     };
     // rhs has shape b, k, n
     let (ldb, b_trans) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
@@ -73,7 +74,8 @@ pub fn call_mlx_gemm(
             lhs_stride: lhs_stride.to_vec(),
             rhs_stride: rhs_stride.to_vec(),
             mnk: (m, n, k),
-        })?;
+        }
+        .bt())?;
     };
     let (bm, bn, bk, wn, wm) = (32, 32, 16, 2, 2);
     // https://github.com/ml-explore/mlx/blob/02efb310cac667bc547d1b96f21596c221f84fe7/mlx/backend/metal/matmul.cpp#L422
