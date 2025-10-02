@@ -1863,14 +1863,13 @@ impl GgmlType for BlockQ8K {
 
 // https://github.com/ggml-org/llama.cpp/blob/aa3ee0eb0b80efca126cedf9bcb4fb5864b46ce3/ggml/src/ggml-cpu/ggml-cpu.c#L1205
 pub fn matmul<T: GgmlType>(
-    mkn: (usize, usize, usize),
+    (m, k, n): (usize, usize, usize),
     lhs: &[f32],
     rhs_t: &[T],
     dst: &mut [f32],
 ) -> Result<()> {
-    let (m, k, n) = mkn;
     if m * k != lhs.len() {
-        crate::bail!("unexpected lhs length {} {mkn:?}", lhs.len());
+        crate::bail!("unexpected lhs length {} ({m},{k},{n})", lhs.len());
     }
     let k_in_lhs_blocks = k.div_ceil(T::BLCK_SIZE);
     let k_in_rhs_blocks = k.div_ceil(T::VecDotType::BLCK_SIZE);

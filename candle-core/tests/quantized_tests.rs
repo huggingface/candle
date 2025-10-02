@@ -867,20 +867,19 @@ fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32], err_m: f32) -> Res
 
     if (result - result_unopt).abs() / length as f32 > 1e-6 {
         bail!(
-            "the opt and unopt vec-dot returned different values, opt {result}, unopt {result_unopt}"
+            "the opt and unopt vec-dot returned different values, opt: {result} vs unopt: {result_unopt}"
         )
     }
 
     let mut dst = vec![0.0f32; 1];
-    crate::k_quants::matmul((1, length, 1), a, &b_quant, &mut dst)?;
+    crate::k_quants::matmul((1, length, 1), b, &a_quant, &mut dst)?;
     let result_matmul = dst[0];
-    /*
-    if (result_matmul - result_unopt).abs() / length as f32 > 1e-6 {
+
+    if (result_matmul - result).abs() / length as f32 > 1e-6 {
         bail!(
-            "calling matmul vs calling vec-dot directly returned different values, matmul {result_matmul}, unopt {result_unopt}"
+            "calling matmul vs calling vec-dot directly returned different values, matmul: {result_matmul} vs vec-dot: {result}"
         )
     }
-    */
 
     let reference_result = vec_dot_reference(a, b);
 
