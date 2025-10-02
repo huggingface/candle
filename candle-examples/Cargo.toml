@@ -60,6 +60,9 @@ tokio = "1.43.0"
 anyhow = { workspace = true }
 bindgen_cuda = { version = "0.1.1", optional = true }
 
+# For bert_single_file_binary example, note hf-hub uses ureq under the hood.
+ureq = "2.10"
+
 [features]
 default = []
 accelerate = [
@@ -155,3 +158,7 @@ required-features = ["pdf2image"]
 [[example]]
 name = "voxtral"
 required-features = ["symphonia"]
+
+[[example]]
+name = "bert_single_file_binary"
+path = "examples/bert_single_file_binary/main.rs"
