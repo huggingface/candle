@@ -102,18 +102,28 @@ pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     if args.cpu {
-        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
     } else {
-        #[cfg(feature = "cuda")]
-        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
-
-        #[cfg(feature = "metal")]
-        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
     }
     Ok(())
 }
 
-fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
@@ -174,6 +184,7 @@ fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
+    let device = B::Device::new(0)?;
     let start = std::time::Instant::now();
     let config: Config = match args.config {
         Some(config_file) => serde_json::from_slice(&std::fs::read(config_file)?)?,
@@ -190,14 +201,14 @@ fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
             DType::F32
         };
         let vb: VarBuilder<B> =
-            unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
+            unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
         let model = Model::new(&config, vb)?;
         (model, device)
     };
     let mut mimi_model = {
         use candle_transformers::models::mimi;
         let vb =
-            unsafe { VarBuilder::from_mmaped_safetensors(&[mimi_filename], DType::F32, device)? };
+            unsafe { VarBuilder::from_mmaped_safetensors(&[mimi_filename], DType::F32, &device)? };
         let config = mimi::Config::v0_1(Some(32));
         mimi::Model::new(config, vb)?
     };
@@ -205,7 +216,7 @@ fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
 
     println!("loaded the model in {:?}", start.elapsed());
 
-    let voices = candle::safetensors::load(args.voices, device)?;
+    let voices = candle::safetensors::load(args.voices, &device)?;
     let mut lp = candle_transformers::generation::LogitsProcessor::new(
         args.seed,
         Some(args.temperature),
