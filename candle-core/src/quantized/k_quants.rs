@@ -1868,9 +1868,12 @@ pub fn matmul<T: GgmlType>(
     rhs_t: &[T],
     dst: &mut [f32],
 ) -> Result<()> {
+    debug_assert_eq!(T::BLCK_SIZE, T::VecDotType::BLCK_SIZE);
+
     if m * k != lhs.len() {
         crate::bail!("unexpected lhs length {} ({m},{k},{n})", lhs.len());
     }
+
     let k_in_lhs_blocks = k.div_ceil(T::BLCK_SIZE);
     let k_in_rhs_blocks = k.div_ceil(T::VecDotType::BLCK_SIZE);
 
@@ -2038,3 +2041,23 @@ impl GgmlType for bf16 {
         Self::from_float(xs, ys)
     }
 }
+
+macro_rules! verify_block_size {
+    ( $block_type:ident ) => {
+        const _: () =
+            assert!($block_type::BLCK_SIZE == <$block_type as GgmlType>::VecDotType::BLCK_SIZE);
+    };
+}
+
+macro_rules! verify_block_sizes {
+    ( $( $block_type:ident ),* ) => {
+        $(
+            verify_block_size!($block_type);
+        )*
+    };
+}
+
+verify_block_sizes!(
+    BlockQ4_0, BlockQ4_1, BlockQ5_0, BlockQ5_1, BlockQ8_0, BlockQ8_1, BlockQ2K, BlockQ3K, BlockQ4K,
+    BlockQ5K, BlockQ6K, BlockQ8K, f32, f16, bf16
+);
