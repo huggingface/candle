@@ -883,27 +883,26 @@ fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32], err_m: f32) -> Res
 
     let reference_result = vec_dot_reference(a, b);
 
-    let verify_result = |result: f32| {
+    let verify_result = |result: f32, source: &str| {
         let error = (result - reference_result).abs() / length as f32;
         let ggml_error = ggml_reference_matmul_error(T::DTYPE)? * err_m;
         if !error.is_finite() || error > GGML_MAX_DOT_PRODUCT_ERROR {
-            bail!("Dot product error {error} exceeds max error {GGML_MAX_DOT_PRODUCT_ERROR}",);
+            bail!("Dot product with dtype {:?} error {error} exceeds max error {GGML_MAX_DOT_PRODUCT_ERROR}. Source: {source}", T::DTYPE);
         }
         // We diverge slightly due to different rounding behavior / f16 to f32 conversions in GGML
         // => we use a slightly higher error threshold
         const ERROR_LENIENCY: f32 = 0.00001;
         if error - ERROR_LENIENCY > ggml_error {
             bail!(
-                "Dot product error {} exceeds ggml reference error {}",
-                error,
-                ggml_error
+                "Dot product with dtype {:?} error {error} exceeds ggml reference error {ggml_error}. Source: {source}",
+                T::DTYPE,
             );
         }
         Ok(())
     };
 
-    verify_result(result)?;
-    verify_result(result_matmul)?;
+    verify_result(result, "vec-dot")?;
+    verify_result(result_matmul, "matmul")?;
     Ok(())
 }
 
