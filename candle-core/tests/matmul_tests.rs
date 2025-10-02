@@ -36,12 +36,12 @@ fn matmul(device: &Device) -> Result<()> {
     let a_tt = a.t()?.contiguous()?.t()?;
     assert!(!a_tt.is_contiguous());
     assert_eq!(a.dims(), a_tt.dims());
-    assert_eq!(a_tt.stride(), &[6, 1, 2]);
+    assert_eq!(a_tt.stride().as_slice(), &[6, 1, 2]);
 
     let b_tt = b.t()?.contiguous()?.t()?;
     assert!(!b_tt.is_contiguous());
     assert_eq!(b.dims(), b_tt.dims());
-    assert_eq!(b_tt.stride(), &[6, 1, 3]);
+    assert_eq!(b_tt.stride().as_slice(), &[6, 1, 3]);
 
     assert_eq!(a_tt.matmul(&b)?.to_vec3::<f32>()?, &expected);
     assert_eq!(a.matmul(&b_tt)?.to_vec3::<f32>()?, &expected);

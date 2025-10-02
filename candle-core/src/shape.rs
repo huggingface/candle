@@ -1,11 +1,17 @@
 //! The shape of a tensor is a tuple with the size of each of its dimensions.
 #![allow(clippy::redundant_closure_call)]
-use crate::{Error, Result};
+use crate::{
+    layout::{Stride, MAX_DIMS},
+    Error, Result,
+};
+use arrayvec::ArrayVec;
+
+pub(crate) type ShapeVec = ArrayVec<usize, MAX_DIMS>;
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct Shape(Vec<usize>);
+pub struct Shape(ShapeVec);
 
-pub const SCALAR: Shape = Shape(vec![]);
+pub const SCALAR: Shape = Shape(ArrayVec::new_const());
 
 impl std::fmt::Debug for Shape {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -15,31 +21,31 @@ impl std::fmt::Debug for Shape {
 
 impl<const C: usize> From<&[usize; C]> for Shape {
     fn from(dims: &[usize; C]) -> Self {
-        Self(dims.to_vec())
+        Self(ShapeVec::try_from(dims.as_slice()).unwrap())
     }
 }
 
 impl From<&[usize]> for Shape {
     fn from(dims: &[usize]) -> Self {
-        Self(dims.to_vec())
+        Self(dims.try_into().unwrap())
     }
 }
 
 impl From<&Shape> for Shape {
     fn from(shape: &Shape) -> Self {
-        Self(shape.0.to_vec())
+        Self(shape.0.clone())
     }
 }
 
 impl From<()> for Shape {
     fn from(_: ()) -> Self {
-        Self(vec![])
+        SCALAR
     }
 }
 
 impl From<usize> for Shape {
     fn from(d1: usize) -> Self {
-        Self(vec![d1])
+        Self(ShapeVec::try_from([d1].as_slice()).unwrap())
     }
 }
 
@@ -47,7 +53,7 @@ macro_rules! impl_from_tuple {
     ($tuple:ty, $($index:tt),+) => {
         impl From<$tuple> for Shape {
             fn from(d: $tuple) -> Self {
-                Self(vec![$(d.$index,)+])
+                Self(ShapeVec::try_from([$(d.$index,)+].as_slice()).unwrap())
             }
         }
     }
@@ -62,7 +68,7 @@ impl_from_tuple!((usize, usize, usize, usize, usize, usize), 0, 1, 2, 3, 4, 5);
 
 impl From<Vec<usize>> for Shape {
     fn from(dims: Vec<usize>) -> Self {
-        Self(dims)
+        Self(ShapeVec::try_from(dims.as_slice()).unwrap())
     }
 }
 
@@ -104,7 +110,7 @@ macro_rules! extract_dims {
 
 impl Shape {
     pub fn from_dims(dims: &[usize]) -> Self {
-        Self(dims.to_vec())
+        Self(ShapeVec::try_from(dims).unwrap())
     }
 
     /// The rank is the number of dimensions, 0 for a scalar value, 1 for a vector, etc.
@@ -113,7 +119,7 @@ impl Shape {
     }
 
     pub fn into_dims(self) -> Vec<usize> {
-        self.0
+        self.0.to_vec()
     }
 
     /// The dimensions as a slice of `usize`.
@@ -134,23 +140,18 @@ impl Shape {
 
     /// The strides given in number of elements for a contiguous n-dimensional
     /// arrays using this shape.
-    pub(crate) fn stride_contiguous(&self) -> Vec<usize> {
-        let mut stride: Vec<_> = self
-            .0
-            .iter()
-            .rev()
-            .scan(1, |prod, u| {
-                let prod_pre_mult = *prod;
-                *prod *= u;
-                Some(prod_pre_mult)
-            })
-            .collect();
-        stride.reverse();
+    pub(crate) fn stride_contiguous(&self) -> Stride {
+        let mut stride = Stride::try_from(vec![0; self.rank()].as_slice()).unwrap();
+        let mut acc = 1;
+        for (i, &dim) in self.dims().iter().enumerate().rev() {
+            stride[i] = acc;
+            acc *= dim;
+        }
         stride
     }
 
     /// Returns true if the strides are C contiguous (aka row major).
-    pub fn is_contiguous(&self, stride: &[usize]) -> bool {
+    pub fn is_contiguous(&self, stride: &Stride) -> bool {
         if self.0.len() != stride.len() {
             return false;
         }
@@ -182,7 +183,7 @@ impl Shape {
     /// Modifies the shape by adding a list of additional dimensions at the end of the existing
     /// dimensions.
     pub fn extend(mut self, additional_dims: &[usize]) -> Self {
-        self.0.extend(additional_dims);
+        self.0.extend(additional_dims.to_vec());
         self
     }
 
@@ -607,13 +608,22 @@ mod tests {
     #[test]
     fn stride() {
         let shape = Shape::from(());
-        assert_eq!(shape.stride_contiguous(), Vec::<usize>::new());
+        assert_eq!(shape.stride_contiguous(), Stride::new());
         let shape = Shape::from(42);
-        assert_eq!(shape.stride_contiguous(), [1]);
+        assert_eq!(
+            shape.stride_contiguous(),
+            Stride::try_from([1].as_slice()).unwrap()
+        );
         let shape = Shape::from((42, 1337));
-        assert_eq!(shape.stride_contiguous(), [1337, 1]);
+        assert_eq!(
+            shape.stride_contiguous(),
+            Stride::try_from([1337, 1].as_slice()).unwrap()
+        );
         let shape = Shape::from((299, 792, 458));
-        assert_eq!(shape.stride_contiguous(), [458 * 792, 458, 1]);
+        assert_eq!(
+            shape.stride_contiguous(),
+            Stride::try_from([458 * 792, 458, 1].as_slice()).unwrap()
+        );
     }
 
     #[test]

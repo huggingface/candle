@@ -646,7 +646,7 @@ fn rebuild_args(args: Object) -> Result<(Layout, DType, String, usize)> {
     };
     let layout = Layout::new(
         crate::Shape::from(size),
-        stride,
+        crate::layout::Stride::try_from(stride.as_slice())?,
         offset * dtype.size_in_bytes(),
     );
     Ok((layout, dtype, path, storage_size))

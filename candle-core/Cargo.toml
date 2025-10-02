@@ -32,6 +32,7 @@ safetensors = { workspace = true }
 thiserror = { workspace = true }
 yoke = { workspace = true }
 zip = { workspace = true }
+arrayvec = "0.7.6"
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 ug = { workspace = true }

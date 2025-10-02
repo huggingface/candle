@@ -1,5 +1,6 @@
 //! Implementation of Backend Fns for CPU
 use crate::backend::{BackendDevice, BackendStorage};
+use crate::layout::Stride;
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
 use float8::F8E4M3;
@@ -2430,7 +2431,7 @@ impl BackendStorage for CpuStorage {
                 // This merges the last two dimensions of the kernel together.
                 let kernel_l_mm = Layout::new(
                     (b_size, c_in, k_size * c_out).into(),
-                    vec![0, k_size * c_out, 1],
+                    Stride::try_from([0, k_size * c_out, 1].as_slice()).unwrap(),
                     kernel_l.start_offset(),
                 );
                 self.matmul(

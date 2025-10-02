@@ -1,16 +1,20 @@
 //! Tensor Layouts including contiguous or sparse strides
 use crate::{Error, Result, Shape};
+use arrayvec::ArrayVec;
+
+pub(crate) const MAX_DIMS: usize = 6;
+pub(crate) type Stride = ArrayVec<usize, MAX_DIMS>;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Layout {
     shape: Shape,
     // The strides are given in number of elements and not in bytes.
-    stride: Vec<usize>,
+    stride: Stride,
     start_offset: usize,
 }
 
 impl Layout {
-    pub fn new(shape: Shape, stride: Vec<usize>, start_offset: usize) -> Self {
+    pub fn new(shape: Shape, stride: Stride, start_offset: usize) -> Self {
         Self {
             shape,
             stride,
@@ -46,7 +50,7 @@ impl Layout {
         &self.shape
     }
 
-    pub fn stride(&self) -> &[usize] {
+    pub fn stride(&self) -> &Stride {
         &self.stride
     }
 
@@ -116,7 +120,7 @@ impl Layout {
             }
             .bt())?
         }
-        let mut stride = self.stride().to_vec();
+        let mut stride = self.stride().clone();
         let mut dims = self.shape().dims().to_vec();
         dims.swap(dim1, dim2);
         stride.swap(dim1, dim2);
@@ -139,7 +143,7 @@ impl Layout {
         }
         let stride = self.stride();
         let dims = self.shape().dims();
-        let mut perm_stride = stride.to_vec();
+        let mut perm_stride = stride.clone();
         let mut perm_dims = dims.to_vec();
         for (i, &idx) in idxs.iter().enumerate() {
             perm_stride[i] = stride[idx];
@@ -162,7 +166,7 @@ impl Layout {
             .bt());
         }
         let added_dims = shape.rank() - self.shape().rank();
-        let mut stride = vec![0; added_dims];
+        let mut stride = Stride::try_from(vec![0; added_dims].as_slice())?;
         for (&dst_dim, (&src_dim, &src_stride)) in shape.dims()[added_dims..]
             .iter()
             .zip(self.dims().iter().zip(self.stride()))

@@ -51,6 +51,9 @@ pub enum Error {
         op: &'static str,
     },
 
+    #[error(transparent)]
+    ShapeCapacityError(#[from] arrayvec::CapacityError),
+
     // === Shape Errors ===
     #[error("unexpected rank, expected: {expected}, got: {got} ({shape:?})")]
     UnexpectedNumberOfDims {

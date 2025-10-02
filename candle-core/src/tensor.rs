@@ -1,6 +1,7 @@
 //! Tensors are N-dimensional matrixes of elements using a single data type.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::{BackendDevice, BackendStorage};
+use crate::layout::Stride;
 use crate::op::{BackpropOp, BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::scalar::TensorOrScalar;
 use crate::shape::{Dim, Dims, ShapeWithOneHole};
@@ -1883,7 +1884,7 @@ impl Tensor {
         &self.layout
     }
 
-    pub fn stride(&self) -> &[usize] {
+    pub fn stride(&self) -> &Stride {
         self.layout.stride()
     }
 
@@ -2399,7 +2400,7 @@ impl Tensor {
         let dim = dim.to_index(self.shape(), "squeeze")?;
         if dims[dim] == 1 {
             let mut dims = dims.to_vec();
-            let mut strides = self.stride().to_vec();
+            let mut strides = self.stride().clone();
             dims.remove(dim);
             strides.remove(dim);
             let tensor_ = Tensor_ {
@@ -2432,7 +2433,7 @@ impl Tensor {
     /// ```
     pub fn unsqueeze<D: Dim>(&self, dim: D) -> Result<Self> {
         let mut dims = self.dims().to_vec();
-        let mut strides = self.stride().to_vec();
+        let mut strides = self.stride().clone();
         let dim = dim.to_index_plus_one(self.shape(), "unsqueeze")?;
         // Cannot panic because to_index_plus_one already checks dimensions
         dims.insert(dim, 1);
