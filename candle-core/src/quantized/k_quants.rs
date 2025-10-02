@@ -667,7 +667,7 @@ impl GgmlType for BlockQ8_1 {
 
     fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         let qk = QK8_1;
-        if n % QK8_1 != 0 {
+        if !n.is_multiple_of(QK8_1) {
             crate::bail!("vec_dot_q8_1_q8_1: {n} is not divisible by {qk}")
         }
 
