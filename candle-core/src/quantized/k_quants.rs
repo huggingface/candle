@@ -1868,29 +1868,29 @@ pub fn matmul<T: GgmlType>(
     rhs_t: &[T],
     dst: &mut [f32],
 ) -> Result<()> {
-    debug_assert_eq!(T::BLCK_SIZE, T::VecDotType::BLCK_SIZE);
+    debug_assert_eq!(
+        T::BLCK_SIZE,
+        T::VecDotType::BLCK_SIZE,
+        "Mismatched block sizes"
+    );
 
     if m * k != lhs.len() {
         crate::bail!("unexpected lhs length {} ({m},{k},{n})", lhs.len());
     }
-
     let k_in_blocks = k.div_ceil(T::BLCK_SIZE);
 
     // TODO: Pre-allocate this.
     let mut lhs_b = vec![T::VecDotType::zeros(); m * k_in_blocks];
-
     // f32, f16, and bf16 support direct copy
-    let lhs_b = if T::DIRECT_COPY {
-        T::VecDotType::direct_copy(lhs, &mut lhs_b[..])?;
-        lhs_b.as_slice()
+    if T::DIRECT_COPY {
+        T::VecDotType::direct_copy(lhs, &mut lhs_b)?;
     } else {
         for row_idx in 0..m {
             let lhs_b_mut = &mut lhs_b[row_idx * k_in_blocks..(row_idx + 1) * k_in_blocks];
             let lhs = &lhs[row_idx * k..(row_idx + 1) * k];
             T::VecDotType::from_float(lhs, lhs_b_mut)?
         }
-        lhs_b.as_slice()
-    };
+    }
 
     for row_idx in 0..m {
         let lhs_row = &lhs_b[row_idx * k_in_blocks..(row_idx + 1) * k_in_blocks];
