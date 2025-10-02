@@ -1874,11 +1874,10 @@ pub fn matmul<T: GgmlType>(
         crate::bail!("unexpected lhs length {} ({m},{k},{n})", lhs.len());
     }
 
-    let k_in_lhs_blocks = k.div_ceil(T::BLCK_SIZE);
-    let k_in_rhs_blocks = k.div_ceil(T::VecDotType::BLCK_SIZE);
+    let k_in_blocks = k.div_ceil(T::BLCK_SIZE);
 
     // TODO: Pre-allocate this.
-    let mut lhs_b = vec![T::VecDotType::zeros(); m * k_in_lhs_blocks];
+    let mut lhs_b = vec![T::VecDotType::zeros(); m * k_in_blocks];
 
     // f32, f16, and bf16 support direct copy
     let lhs_b = if T::DIRECT_COPY {
@@ -1886,7 +1885,7 @@ pub fn matmul<T: GgmlType>(
         lhs_b.as_slice()
     } else {
         for row_idx in 0..m {
-            let lhs_b_mut = &mut lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
+            let lhs_b_mut = &mut lhs_b[row_idx * k_in_blocks..(row_idx + 1) * k_in_blocks];
             let lhs = &lhs[row_idx * k..(row_idx + 1) * k];
             T::VecDotType::from_float(lhs, lhs_b_mut)?
         }
@@ -1894,7 +1893,7 @@ pub fn matmul<T: GgmlType>(
     };
 
     for row_idx in 0..m {
-        let lhs_row = &lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
+        let lhs_row = &lhs_b[row_idx * k_in_blocks..(row_idx + 1) * k_in_blocks];
         let dst_row = &mut dst[row_idx * n..(row_idx + 1) * n];
 
         let result: Result<Vec<_>> = dst_row
@@ -1903,7 +1902,7 @@ pub fn matmul<T: GgmlType>(
             .with_min_len(128)
             .with_max_len(512)
             .map(|(col_idx, dst)| {
-                let rhs_col = &rhs_t[col_idx * k_in_rhs_blocks..(col_idx + 1) * k_in_rhs_blocks];
+                let rhs_col = &rhs_t[col_idx * k_in_blocks..(col_idx + 1) * k_in_blocks];
                 T::vec_dot(k, rhs_col, lhs_row).map(|value| *dst = value)
             })
             .collect();
