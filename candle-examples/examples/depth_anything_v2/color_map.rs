@@ -2,7 +2,7 @@ use enterpolation::linear::ConstEquidistantLinear;
 use enterpolation::Generator;
 use palette::LinSrgb;
 
-use candle::Tensor;
+use candle::{BackendStorage, Tensor};
 
 pub struct SpectralRColormap {
     gradient: ConstEquidistantLinear<f32, LinSrgb, 9>,
@@ -30,7 +30,7 @@ impl SpectralRColormap {
         self.gradient.gen(value)
     }
 
-    pub fn gray2color(&self, gray: &Tensor) -> candle::Result<Tensor> {
+    pub fn gray2color<B: BackendStorage>(&self, gray: &Tensor<B>) -> candle::Result<Tensor<B>> {
         println!("Gray: {:?}", gray.dims());
         let gray_values: Vec<f32> = gray.flatten_all()?.to_vec1()?;
         let rgb_values: Vec<f32> = gray_values
