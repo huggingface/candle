@@ -249,7 +249,7 @@ kernel void FN_NAME(  \
 ) {  \
   col2im1d<T>(dst_el, l_out, l_in, c_out, k_size, stride, src, dst, tid); \
 } \
- 
+
 #define UPSAMPLE_NEAREST2D_OP(TYPENAME, FN_NAME) \
 kernel void FN_NAME(  \
     constant size_t &w_out, \
@@ -487,7 +487,7 @@ METAL_FUNC void conv_transpose2d(
   const size_t c_in = input_dims[1];
   const size_t h_in = input_dims[2];
   const size_t w_in = input_dims[3];
-  
+
   if (tid >= input_dims[0] * c_out * w_out * h_out) {
     return;
   }
@@ -553,12 +553,20 @@ IM2COL_OP(bfloat, im2col_bf16)
 #endif
 
 COL2IM1D_OP(float, col2im1d_f32)
+COL2IM1D_OP(half, col2im1d_f16)
 COL2IM1D_OP(uint8_t, col2im1d_u8)
 COL2IM1D_OP(uint32_t, col2im1d_u32)
+#if defined(__HAVE_BFLOAT__)
+COL2IM1D_OP(bfloat, col2im1d_bf16)
+#endif
 
 IM2COL1D_OP(float, im2col1d_f32)
+IM2COL1D_OP(half, im2col1d_f16)
 IM2COL1D_OP(uint8_t, im2col1d_u8)
 IM2COL1D_OP(uint32_t, im2col1d_u32)
+#if defined(__HAVE_BFLOAT__)
+IM2COL1D_OP(bfloat, im2col1d_bf16)
+#endif
 
 UPSAMPLE_NEAREST2D_OP(float, upsample_nearest2d_f32)
 UPSAMPLE_NEAREST2D_OP(half, upsample_nearest2d_f16)

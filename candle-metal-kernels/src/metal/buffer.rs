@@ -43,10 +43,10 @@ impl AsRef<ProtocolObject<dyn MTLBuffer>> for Buffer {
     }
 }
 
-pub type BufferMap = HashMap<(usize, MTLResourceOptions), Vec<Arc<Buffer>>>;
-
 impl<'a> From<&'a Buffer> for &'a MetalResource {
     fn from(val: &'a Buffer) -> Self {
         ProtocolObject::from_ref(val.as_ref())
     }
 }
+
+pub type BufferMap = HashMap<usize, Vec<Arc<Buffer>>>;

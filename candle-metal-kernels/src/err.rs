@@ -31,6 +31,25 @@ pub enum MetalKernelError {
         variation: &'static str,
         got: SdpaDType,
     },
+    #[error("{inner}\n{backtrace}")]
+    WithBacktrace {
+        inner: Box<Self>,
+        backtrace: Box<std::backtrace::Backtrace>,
+    },
+}
+
+impl MetalKernelError {
+    pub fn bt(self) -> Self {
+        let backtrace = std::backtrace::Backtrace::capture();
+        match backtrace.status() {
+            std::backtrace::BacktraceStatus::Disabled
+            | std::backtrace::BacktraceStatus::Unsupported => self,
+            _ => Self::WithBacktrace {
+                inner: Box::new(self),
+                backtrace: Box::new(backtrace),
+            },
+        }
+    }
 }
 
 impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
