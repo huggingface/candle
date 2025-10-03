@@ -97,8 +97,15 @@ impl Commands {
                 MTLCommandBufferStatus::Committed | MTLCommandBufferStatus::Scheduled => {
                     command_buffer.wait_until_completed();
                 }
-                MTLCommandBufferStatus::Completed => {}
-                _ => {}
+                MTLCommandBufferStatus::Completed => {} // No action needed
+                MTLCommandBufferStatus::Error => {
+                    if let Some(error) = command_buffer.error() {
+                        return Err(MetalKernelError::CommandBufferError(error.to_string()));
+                    }
+                }
+                // All status variants covered.
+                // We need this final match arm because the statuses are implemented as integers, not an enum, in the objc2 framework.
+                _ => unreachable!(),
             }
             *command_buffer = create_command_buffer(&self.command_queue)?;
         } else {
