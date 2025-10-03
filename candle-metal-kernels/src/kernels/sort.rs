@@ -1,6 +1,6 @@
 use crate::utils::{BufferOffset, EncoderProvider};
 use crate::{set_params, DType, Kernels, MetalKernelError, Source};
-use crate::{Buffer, ComputeCommandEncoder, Device, MTLResourceOptions, MTLSize};
+use crate::{Buffer, ComputeCommandEncoder, Device, MTLSize, RESOURCE_OPTIONS};
 use objc2_metal::MTLResourceUsage;
 
 #[allow(clippy::too_many_arguments)]
@@ -69,14 +69,11 @@ fn multi_block_sort(
     // Do allocations
     let el_count = nrows * ncols;
     let bytes_len = el_count * dtype.size_in_bytes();
-    let mut dev_vals_0 = device.new_buffer(bytes_len, MTLResourceOptions::StorageModePrivate)?;
-    let mut dev_vals_1 = device.new_buffer(bytes_len, MTLResourceOptions::StorageModePrivate)?;
-    let mut dev_idxs_0 = device.new_buffer(el_count * 4, MTLResourceOptions::StorageModePrivate)?;
-    let mut dev_idxs_1 = device.new_buffer(el_count * 4, MTLResourceOptions::StorageModePrivate)?;
-    let mut block_partitions = device.new_buffer(
-        (nrows * (nblocks + 1)) * 4,
-        MTLResourceOptions::StorageModePrivate,
-    )?;
+    let mut dev_vals_0 = device.new_buffer(bytes_len, RESOURCE_OPTIONS)?;
+    let mut dev_vals_1 = device.new_buffer(bytes_len, RESOURCE_OPTIONS)?;
+    let mut dev_idxs_0 = device.new_buffer(el_count * 4, RESOURCE_OPTIONS)?;
+    let mut dev_idxs_1 = device.new_buffer(el_count * 4, RESOURCE_OPTIONS)?;
+    let mut block_partitions = device.new_buffer((nrows * (nblocks + 1)) * 4, RESOURCE_OPTIONS)?;
     // Prepare command encoder
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
