@@ -48,9 +48,10 @@ pub(crate) unsafe fn mul_sum_i8_pairs_float(x: __m256i, y: __m256i) -> __m256 {
 
 #[inline(always)]
 pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) -> f32 {
-    if !n.is_multiple_of(QK8_0) {
-        crate::bail!("vec_dot_q4_0_q8_0: {n} is not divisible by {QK8_0}")
-    }
+    debug_assert!(
+        n.is_multiple_of(QK8_0),
+        "vec_dot_q4_0_q8_0: {n} is not divisible by {QK8_0}"
+    );
     unsafe {
         let mut acc = _mm256_setzero_ps();
         for (x, y) in xs.iter().zip(ys.iter()) {
@@ -68,10 +69,10 @@ pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) ->
 
 #[inline(always)]
 pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) -> f32 {
-    let qk = QK8_0;
-    if !n.is_multiple_of(QK8_0) {
-        crate::bail!("vec_dot_q8_0_q8_0: {n} is not divisible by {qk}")
-    }
+    debug_assert!(
+        n.is_multiple_of(QK8_0),
+        "vec_dot_q8_0_q8_0: {n} is not divisible by {QK8_0}"
+    );
     unsafe {
         let mut acc = _mm256_setzero_ps();
         for (x, y) in xs.iter().zip(ys.iter()) {
