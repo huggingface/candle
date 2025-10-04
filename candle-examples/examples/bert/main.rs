@@ -177,9 +177,14 @@ fn main() -> Result<()> {
         println!("running inference on batch {:?}", token_ids.shape());
         let embeddings = model.forward(&token_ids, &token_type_ids, Some(&attention_mask))?;
         println!("generated embeddings {:?}", embeddings.shape());
-        // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
-        let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
-        let embeddings = (embeddings.sum(1)? / (n_tokens as f64))?;
+        // Apply avg-pooling by taking the mean embedding value for all tokens
+        // (after applying the attention mask from tokenization). This should
+        // produce the same numeric result as the `sentence_transformers` Python
+        // library.
+        let attention_mask_for_pooling = attention_mask.to_dtype(DTYPE)?.unsqueeze(2)?;
+        let sum_mask = attention_mask_for_pooling.sum(1)?;
+        let embeddings = (embeddings.broadcast_mul(&attention_mask_for_pooling)?).sum(1)?;
+        let embeddings = embeddings.broadcast_div(&sum_mask)?;
         let embeddings = if args.normalize_embeddings {
             normalize_l2(&embeddings)?
         } else {
