@@ -1,10 +1,13 @@
 use crate::linear_split;
 use crate::utils::{BufferOffset, EncoderProvider};
-use crate::{set_params, Buffer, ComputeCommandEncoder, Device, Kernels, MetalKernelError, Source};
+use crate::{
+    set_params, Buffer, ComputeCommandEncoder, ConstantValues, Device, Kernels, MetalKernelError,
+    Source, Value,
+};
 use objc2_metal::MTLResourceUsage;
 
 #[allow(clippy::too_many_arguments)]
-pub fn call_where_cond_strided(
+pub fn call_where_cond(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
@@ -12,13 +15,22 @@ pub fn call_where_cond_strided(
     shape: &[usize],
     cond: BufferOffset,
     cond_stride: &[usize],
+    cond_is_contiguous: bool,
     left: BufferOffset,
     left_stride: &[usize],
+    left_is_contiguous: bool,
     right: BufferOffset,
     right_stride: &[usize],
+    right_is_contiguous: bool,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Ternary, name)?;
+    let constants = Some(ConstantValues::new(vec![
+        (0, Value::Bool(cond_is_contiguous)),
+        (1, Value::Bool(left_is_contiguous)),
+        (2, Value::Bool(right_is_contiguous)),
+    ]));
+    let pipeline =
+        kernels.load_pipeline_with_constants(device, Source::Ternary, name, constants)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
