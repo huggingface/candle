@@ -1742,7 +1742,7 @@ impl Tensor {
 
     /// Returns an iterator over position of the elements in the storage when ranging over the
     /// index tuples in lexicographic order.
-    pub fn strided_index(&self) -> crate::StridedIndex<'_> {
+    pub fn strided_index(&self) -> crate::StridedIndex {
         self.layout.strided_index()
     }
 
@@ -1750,7 +1750,7 @@ impl Tensor {
     /// as well as the length of the contiguous blocks. For a contiguous tensor, the index iterator
     /// will only return the start offset and the size would be the number of elements in the
     /// tensor.
-    pub fn strided_blocks(&self) -> crate::StridedBlocks<'_> {
+    pub fn strided_blocks(&self) -> crate::StridedBlocks {
         self.layout.strided_blocks()
     }
 
