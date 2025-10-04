@@ -28,7 +28,7 @@ impl Which {
             Self::S3 => "s3",
             Self::S4 => "s4",
         };
-        format!("timm/mobileone_{}.apple_in1k", name)
+        format!("timm/mobileone_{name}.apple_in1k")
     }
 
     fn config(&self) -> mobileone::Config {
@@ -63,7 +63,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
 
-    let image = candle_examples::imagenet::load_image224(args.image)?;
+    let image = candle_examples::imagenet::load_image224(args.image)?.to_device(&device)?;
     println!("loaded image {image:?}");
 
     let model_file = match args.model {

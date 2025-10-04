@@ -8,13 +8,12 @@ use yew_agent::{Bridge, Bridged};
 async fn fetch_url(url: &str) -> Result<Vec<u8>, JsValue> {
     use web_sys::{Request, RequestCache, RequestInit, RequestMode, Response};
     let window = web_sys::window().ok_or("window")?;
-    let mut opts = RequestInit::new();
-    let opts = opts
-        .method("GET")
-        .mode(RequestMode::Cors)
-        .cache(RequestCache::NoCache);
+    let opts = RequestInit::new();
+    opts.set_method("GET");
+    opts.set_mode(RequestMode::Cors);
+    opts.set_cache(RequestCache::NoCache);
 
-    let request = Request::new_with_str_and_init(url, opts)?;
+    let request = Request::new_with_str_and_init(url, &opts)?;
 
     let resp_value = JsFuture::from(window.fetch_with_request(&request)).await?;
 
@@ -205,7 +204,7 @@ impl Component for App {
                         });
                         self.status = match dt {
                             None => "processing succeeded!".to_string(),
-                            Some(dt) => format!("processing succeeded in {:.2}s", dt,),
+                            Some(dt) => format!("processing succeeded in {dt:.2}s",),
                         };
                         self.current_decode = None;
                         if let Err(err) = draw_bboxes(bboxes) {

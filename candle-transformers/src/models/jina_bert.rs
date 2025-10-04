@@ -1,3 +1,9 @@
+//! # JinaBERT inference implementation
+//!
+//! Based on implementation from huggingface for Jina BERT and its variants
+//!
+//! See: [Jina Embeddings on HuggingFace](https://huggingface.co/jinaai/jina-embeddings-v2-base-en)
+
 use super::with_tracing::{linear, linear_no_bias, Embedding, Linear};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Module, VarBuilder};
@@ -45,6 +51,37 @@ impl Config {
             layer_norm_eps: 1e-12,
             pad_token_id: 0,
             position_embedding_type: PositionEmbeddingType::Alibi,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        vocab_size: usize,
+        hidden_size: usize,
+        num_hidden_layers: usize,
+        num_attention_heads: usize,
+        intermediate_size: usize,
+        hidden_act: candle_nn::Activation,
+        max_position_embeddings: usize,
+        type_vocab_size: usize,
+        initializer_range: f64,
+        layer_norm_eps: f64,
+        pad_token_id: usize,
+        position_embedding_type: PositionEmbeddingType,
+    ) -> Self {
+        Config {
+            vocab_size,
+            hidden_size,
+            num_hidden_layers,
+            num_attention_heads,
+            intermediate_size,
+            hidden_act,
+            max_position_embeddings,
+            type_vocab_size,
+            initializer_range,
+            layer_norm_eps,
+            pad_token_id,
+            position_embedding_type,
         }
     }
 }
@@ -313,7 +350,7 @@ impl BertEncoder {
             candle::bail!("only alibi is supported as a position-embedding-type")
         }
         let layers = (0..cfg.num_hidden_layers)
-            .map(|index| BertLayer::new(vb.pp(&format!("layer.{index}")), cfg))
+            .map(|index| BertLayer::new(vb.pp(format!("layer.{index}")), cfg))
             .collect::<Result<Vec<_>>>()?;
         let span = tracing::span!(tracing::Level::TRACE, "encoder");
         let alibi = build_alibi_bias(cfg)?.to_device(vb.device())?;

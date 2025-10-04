@@ -1,5 +1,21 @@
-/// https://huggingface.co/01-ai/Yi-6B/blob/main/modeling_yi.py
-use crate::models::with_tracing::{linear_no_bias, Linear};
+//! Yi model implementation.
+//!
+//! This candle implementation uses a pre-trained Yi decoder-only large language model for inference.
+//! The model was trained by 01.AI and follows a standard transformer architecture similar to LLaMA.
+//!
+//! Original code:
+//! - 💻 [Yi Model](https://huggingface.co/01-ai/Yi-6B)
+//! - 💻 [Yi Modeling Code](https://huggingface.co/01-ai/Yi-6B/blob/main/modeling_yi.py)
+//! - 📝 [Technical Report](https://arxiv.org/abs/2403.04652) Yi: Open Foundation Models by 01.AI
+//!
+//! Key characteristics:
+//! - Multi-head attention with rotary positional embeddings
+//! - RMS normalization
+//! - SwiGLU activation in feed-forward layers
+//! - Grouped-query attention for efficient inference
+//!
+
+use crate::models::with_tracing::{linear_no_bias, Linear, RmsNorm};
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
@@ -47,27 +63,6 @@ impl Config {
             rms_norm_eps: 1e-5,
             rope_theta: 5_000_000.,
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct RmsNorm {
-    inner: candle_nn::RmsNorm,
-    span: tracing::Span,
-}
-
-impl RmsNorm {
-    fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
-        let inner = candle_nn::rms_norm(size, eps, vb)?;
-        Ok(Self { inner, span })
-    }
-}
-
-impl Module for RmsNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(x)
     }
 }
 
@@ -196,18 +191,6 @@ impl Attention {
         })
     }
 
-    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_kv_groups;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
-    }
-
     fn forward(
         &mut self,
         xs: &Tensor,
@@ -244,8 +227,8 @@ impl Attention {
         };
         self.kv_cache = Some((key_states.clone(), value_states.clone()));
 
-        let key_states = self.repeat_kv(key_states)?;
-        let value_states = self.repeat_kv(value_states)?;
+        let key_states = crate::utils::repeat_kv(key_states, self.num_kv_groups)?;
+        let value_states = crate::utils::repeat_kv(value_states, self.num_kv_groups)?;
 
         let attn_output = {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);

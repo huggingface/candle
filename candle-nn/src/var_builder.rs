@@ -1,3 +1,5 @@
+//! A `VarBuilder` for variable retrieval from models
+//!
 //! A `VarBuilder` is used to retrieve variables used by a model. These variables can either come
 //! from a pre-trained checkpoint, e.g. using `VarBuilder::from_mmaped_safetensors`, or initialized
 //! for training, e.g. using `VarBuilder::from_varmap`.
@@ -14,14 +16,16 @@ use std::sync::Arc;
 pub struct VarBuilderArgs<'a, B: Backend> {
     data: Arc<TensorData<B>>,
     path: Vec<String>,
+    pub dtype: DType,
     _phantom: std::marker::PhantomData<&'a B>,
 }
 
-impl<'a, B: Backend> Clone for VarBuilderArgs<'a, B> {
+impl<B: Backend> Clone for VarBuilderArgs<'_, B> {
     fn clone(&self) -> Self {
         Self {
             data: self.data.clone(),
             path: self.path.clone(),
+            dtype: self.dtype,
             _phantom: self._phantom,
         }
     }
@@ -33,7 +37,6 @@ pub type VarBuilder<'a> = VarBuilderArgs<'a, Box<dyn SimpleBackend + 'a>>;
 
 struct TensorData<B: Backend> {
     backend: B,
-    pub dtype: DType,
     pub device: Device,
 }
 
@@ -73,7 +76,7 @@ pub trait SimpleBackend: Send + Sync {
     fn contains_tensor(&self, name: &str) -> bool;
 }
 
-impl<'a> Backend for Box<dyn SimpleBackend + 'a> {
+impl Backend for Box<dyn SimpleBackend + '_> {
     type Hints = crate::Init;
     fn get(
         &self,
@@ -91,16 +94,16 @@ impl<'a> Backend for Box<dyn SimpleBackend + 'a> {
     }
 }
 
-impl<'a, B: Backend> VarBuilderArgs<'a, B> {
+impl<B: Backend> VarBuilderArgs<'_, B> {
     pub fn new_with_args(backend: B, dtype: DType, dev: &Device) -> Self {
         let data = TensorData {
             backend,
-            dtype,
             device: dev.clone(),
         };
         Self {
             data: Arc::new(data),
             path: vec![],
+            dtype,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -115,6 +118,7 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         Self {
             data: self.data.clone(),
             path: vec![],
+            dtype: self.dtype,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -124,6 +128,7 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         Self {
             data: self.data.clone(),
             path: vec![prefix.to_string()],
+            dtype: self.dtype,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -136,6 +141,7 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         Self {
             data: self.data.clone(),
             path,
+            dtype: self.dtype,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -152,7 +158,17 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
 
     /// The dtype used by default.
     pub fn dtype(&self) -> DType {
-        self.data.dtype
+        self.dtype
+    }
+
+    /// Clone the VarBuilder tweaking its dtype
+    pub fn to_dtype(&self, dtype: DType) -> Self {
+        Self {
+            data: self.data.clone(),
+            path: self.path.clone(),
+            dtype,
+            _phantom: std::marker::PhantomData,
+        }
     }
 
     fn path(&self, tensor_name: &str) -> String {
@@ -178,15 +194,26 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         name: &str,
         hints: B::Hints,
     ) -> Result<Tensor> {
-        let path = self.path(name);
-        self.data
-            .backend
-            .get(s.into(), &path, hints, self.data.dtype, &self.data.device)
+        self.get_with_hints_dtype(s, name, hints, self.dtype)
     }
 
     /// Retrieve the tensor associated with the given name at the current path.
     pub fn get<S: Into<Shape>>(&self, s: S, name: &str) -> Result<Tensor> {
         self.get_with_hints(s, name, Default::default())
+    }
+
+    /// Retrieve the tensor associated with the given name & dtype at the current path.
+    pub fn get_with_hints_dtype<S: Into<Shape>>(
+        &self,
+        s: S,
+        name: &str,
+        hints: B::Hints,
+        dtype: DType,
+    ) -> Result<Tensor> {
+        let path = self.path(name);
+        self.data
+            .backend
+            .get(s.into(), &path, hints, dtype, &self.data.device)
     }
 }
 
@@ -253,12 +280,13 @@ impl SimpleBackend for VarMap {
     }
 }
 
-struct SafeTensorWithRouting<'a> {
+#[allow(dead_code)]
+pub struct SafeTensorWithRouting<'a> {
     routing: HashMap<String, usize>,
     safetensors: Vec<SafeTensors<'a>>,
 }
 
-impl<'a> SimpleBackend for SafeTensorWithRouting<'a> {
+impl SimpleBackend for SafeTensorWithRouting<'_> {
     fn get(
         &self,
         s: Shape,
@@ -322,7 +350,7 @@ impl SimpleBackend for candle::npy::NpzTensors {
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
-        self.get(name).map_or(false, |v| v.is_some())
+        self.get(name).is_ok_and(|v| v.is_some())
     }
 }
 
@@ -355,7 +383,7 @@ impl SimpleBackend for candle::pickle::PthTensors {
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
-        self.get(name).map_or(false, |v| v.is_some())
+        self.get(name).is_ok_and(|v| v.is_some())
     }
 }
 
@@ -411,29 +439,61 @@ impl SimpleBackend for candle::safetensors::BufferedSafetensors {
     }
 }
 
+impl SimpleBackend for candle::safetensors::SliceSafetensors<'_> {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        _: crate::Init,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor> {
+        let tensor = self.load(name, dev)?.to_dtype(dtype)?;
+        if tensor.shape() != &s {
+            Err(candle::Error::UnexpectedShape {
+                msg: format!("shape mismatch for {name}"),
+                expected: s,
+                got: tensor.shape().clone(),
+            }
+            .bt())?
+        }
+        Ok(tensor)
+    }
+
+    fn contains_tensor(&self, name: &str) -> bool {
+        self.get(name).is_ok()
+    }
+}
+
 impl<'a> VarBuilder<'a> {
-    fn new(backend: Box<dyn SimpleBackend + 'a>, dtype: DType, device: Device) -> Self {
-        let data = TensorData {
-            backend,
-            dtype,
-            device,
-        };
+    /// Initializes a `VarBuilder` using a custom backend.
+    ///
+    /// It is preferred to use one of the more specific constructors. This
+    /// constructor is provided to allow downstream users to define their own
+    /// backends.
+    pub fn from_backend(
+        backend: Box<dyn SimpleBackend + 'a>,
+        dtype: DType,
+        device: Device,
+    ) -> Self {
+        let data = TensorData { backend, device };
         Self {
             data: Arc::new(data),
             path: vec![],
+            dtype,
             _phantom: std::marker::PhantomData,
         }
     }
 
     /// Initializes a `VarBuilder` that uses zeros for any tensor.
     pub fn zeros(dtype: DType, dev: &Device) -> Self {
-        Self::new(Box::new(Zeros), dtype, dev.clone())
+        Self::from_backend(Box::new(Zeros), dtype, dev.clone())
     }
 
     /// Initializes a `VarBuilder` that retrieves tensors stored in a hashtable. An error is
     /// returned if no tensor is available under the requested path or on shape mismatches.
     pub fn from_tensors(ts: HashMap<String, Tensor>, dtype: DType, dev: &Device) -> Self {
-        Self::new(Box::new(ts), dtype, dev.clone())
+        Self::from_backend(Box::new(ts), dtype, dev.clone())
     }
 
     /// Initializes a `VarBuilder` using a `VarMap`. The requested tensors are created and
@@ -443,7 +503,7 @@ impl<'a> VarBuilder<'a> {
     /// Note that it is possible to load the tensor values after model creation using the `load`
     /// method on `varmap`, this can be used to start model training from an existing checkpoint.
     pub fn from_varmap(varmap: &VarMap, dtype: DType, dev: &Device) -> Self {
-        Self::new(Box::new(varmap.clone()), dtype, dev.clone())
+        Self::from_backend(Box::new(varmap.clone()), dtype, dev.clone())
     }
 
     /// Initializes a `VarBuilder` that retrieves tensors stored in a collection of safetensors
@@ -458,25 +518,85 @@ impl<'a> VarBuilder<'a> {
         dev: &Device,
     ) -> Result<Self> {
         let tensors = candle::safetensors::MmapedSafetensors::multi(paths)?;
-        Ok(Self::new(Box::new(tensors), dtype, dev.clone()))
+        Ok(Self::from_backend(Box::new(tensors), dtype, dev.clone()))
     }
 
-    /// Initializes a `VarBuilder` from a binary builder in the safetensor format.
+    /// Initializes a `VarBuilder` from a binary buffer in the safetensor format.
     pub fn from_buffered_safetensors(data: Vec<u8>, dtype: DType, dev: &Device) -> Result<Self> {
         let tensors = candle::safetensors::BufferedSafetensors::new(data)?;
-        Ok(Self::new(Box::new(tensors), dtype, dev.clone()))
+        Ok(Self::from_backend(Box::new(tensors), dtype, dev.clone()))
+    }
+
+    /// Initializes a `VarBuilder` from a binary slice in the safetensor format.
+    pub fn from_slice_safetensors(data: &'a [u8], dtype: DType, dev: &Device) -> Result<Self> {
+        let tensors = candle::safetensors::SliceSafetensors::new(data)?;
+        Ok(Self::from_backend(Box::new(tensors), dtype, dev.clone()))
     }
 
     /// Initializes a `VarBuilder` that retrieves tensors stored in a numpy npz file.
     pub fn from_npz<P: AsRef<std::path::Path>>(p: P, dtype: DType, dev: &Device) -> Result<Self> {
         let npz = candle::npy::NpzTensors::new(p)?;
-        Ok(Self::new(Box::new(npz), dtype, dev.clone()))
+        Ok(Self::from_backend(Box::new(npz), dtype, dev.clone()))
     }
 
     /// Initializes a `VarBuilder` that retrieves tensors stored in a pytorch pth file.
     pub fn from_pth<P: AsRef<std::path::Path>>(p: P, dtype: DType, dev: &Device) -> Result<Self> {
-        let pth = candle::pickle::PthTensors::new(p)?;
-        Ok(Self::new(Box::new(pth), dtype, dev.clone()))
+        let pth = candle::pickle::PthTensors::new(p, None)?;
+        Ok(Self::from_backend(Box::new(pth), dtype, dev.clone()))
+    }
+    /// Initializes a `VarBuilder` that retrieves tensors stored in a pytorch pth file.
+    /// similar to [`from_pth`] but requires a `state_key`.
+    pub fn from_pth_with_state<P: AsRef<std::path::Path>>(
+        p: P,
+        dtype: DType,
+        state_key: &str,
+        dev: &Device,
+    ) -> Result<Self> {
+        let pth = candle::pickle::PthTensors::new(p, Some(state_key))?;
+        Ok(Self::from_backend(Box::new(pth), dtype, dev.clone()))
+    }
+    /// Gets a VarBuilder that applies some renaming function on tensor it gets queried for before
+    /// passing the new names to the inner VarBuilder.
+    ///
+    /// ```rust
+    /// use candle::{Tensor, DType, Device};
+    ///
+    /// let a = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((2, 3))?;
+    /// let tensors: std::collections::HashMap<_, _> = [
+    ///     ("foo".to_string(), a),
+    /// ]
+    /// .into_iter()
+    /// .collect();
+    /// let vb = candle_nn::VarBuilder::from_tensors(tensors, DType::F32, &Device::Cpu);
+    /// assert!(vb.contains_tensor("foo"));
+    /// assert!(vb.get((2, 3), "foo").is_ok());
+    /// assert!(!vb.contains_tensor("bar"));
+    /// let vb = vb.rename_f(|f: &str| if f == "bar" { "foo".to_string() } else { f.to_string() });
+    /// assert!(vb.contains_tensor("bar"));
+    /// assert!(vb.contains_tensor("foo"));
+    /// assert!(vb.get((2, 3), "bar").is_ok());
+    /// assert!(vb.get((2, 3), "foo").is_ok());
+    /// assert!(!vb.contains_tensor("baz"));
+    /// # Ok::<(), candle::Error>(())
+    /// ```
+    pub fn rename_f<F: Fn(&str) -> String + Sync + Send + 'static>(self, f: F) -> Self {
+        let f: Box<dyn Fn(&str) -> String + Sync + Send + 'static> = Box::new(f);
+        self.rename(f)
+    }
+
+    pub fn rename<R: Renamer + Send + Sync + 'a>(self, renamer: R) -> Self {
+        let dtype = self.dtype();
+        let device = self.device().clone();
+        let path = self.path.clone();
+        let backend = Rename::new(self, renamer);
+        let backend: Box<dyn SimpleBackend + 'a> = Box::new(backend);
+        let data = TensorData { backend, device };
+        Self {
+            data: Arc::new(data),
+            dtype,
+            path,
+            _phantom: std::marker::PhantomData,
+        }
     }
 }
 
@@ -596,5 +716,51 @@ impl Backend for ShardedSafeTensors {
 
     fn contains_tensor(&self, name: &str) -> bool {
         self.0.get(name).is_ok()
+    }
+}
+
+/// This traits specifies a way to rename the queried names into names that are stored in an inner
+/// VarBuilder.
+pub trait Renamer {
+    /// This is applied to the name obtained by a name call and the resulting name is passed to the
+    /// inner VarBuilder.
+    fn rename(&self, v: &str) -> std::borrow::Cow<'_, str>;
+}
+
+pub struct Rename<'a, R: Renamer> {
+    inner: VarBuilder<'a>,
+    renamer: R,
+}
+
+impl<R: Renamer + Sync + Send> SimpleBackend for Rename<'_, R> {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        h: crate::Init,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor> {
+        let name = self.renamer.rename(name);
+        self.inner
+            .get_with_hints_dtype(s, &name, h, dtype)?
+            .to_device(dev)
+    }
+
+    fn contains_tensor(&self, name: &str) -> bool {
+        let name = self.renamer.rename(name);
+        self.inner.contains_tensor(&name)
+    }
+}
+
+impl<'a, R: Renamer> Rename<'a, R> {
+    pub fn new(inner: VarBuilder<'a>, renamer: R) -> Self {
+        Self { inner, renamer }
+    }
+}
+
+impl Renamer for Box<dyn Fn(&str) -> String + Sync + Send> {
+    fn rename(&self, v: &str) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Owned(self(v))
     }
 }

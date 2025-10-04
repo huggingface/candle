@@ -1,3 +1,4 @@
+#![allow(unused)]
 use candle::{
     quantized::{self, k_quants, GgmlDType, GgmlType},
     test_utils::to_vec2_round,
@@ -55,7 +56,7 @@ fn quantized_matmul_neg() -> Result<()> {
     Ok(())
 }
 
-/// Creates a vector simillarly to the one used in GGML unit tests: https://github.com/ggerganov/llama.cpp/blob/master/tests/test-quantize-fns.cpp#L26-L30
+/// Creates a vector similarly to the one used in GGML unit tests: https://github.com/ggerganov/llama.cpp/blob/master/tests/test-quantize-fns.cpp#L26-L30
 fn create_ggml_like_vector(offset: f32) -> Vec<f32> {
     const GGML_TEST_SIZE: usize = 32 * 128;
     (0..GGML_TEST_SIZE)

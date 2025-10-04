@@ -25,7 +25,7 @@ cudarc = { workspace = true, optional = true }
 half = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
 anyhow = { workspace = true }
-tokio = "1.29.1"
+tokio = "1.43.0"
 
 [dev-dependencies]
 byteorder = { workspace = true }
@@ -37,7 +37,6 @@ tokenizers = { workspace = true, features = ["onig"] }
 tracing = { workspace = true }
 tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }
-wav = { workspace = true }
 # Necessary to disambiguate with tokio in wasm examples which are 1.28.1
 parquet = { workspace = true }
 image = { workspace = true }

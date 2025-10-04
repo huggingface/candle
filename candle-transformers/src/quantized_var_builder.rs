@@ -1,8 +1,15 @@
+//! Varbuilder for Loading gguf files
+//!
+//! VarBuilder is a utility to store quantized tensors from a [GGUF model file](https://huggingface.co/docs/hub/gguf).
+//! These tensors can be loaded from disk using `from_gguf` or from an in-memory
+//! buffer using `from_gguf_buffer`.
+
 use candle::quantized::QTensor;
 use candle::{Device, Result, Shape};
 use std::sync::Arc;
 
 // VarBuilder specialized for QTensors
+#[derive(Clone)]
 pub struct VarBuilder {
     data: Arc<std::collections::HashMap<String, Arc<QTensor>>>,
     path: Vec<String>,
@@ -62,7 +69,7 @@ impl VarBuilder {
         let path = self.path(name);
         match self.data.get(&path) {
             None => {
-                candle::bail!("cannot find tensor {name}")
+                candle::bail!("cannot find tensor {path}")
             }
             Some(qtensor) => {
                 let shape = s.into();

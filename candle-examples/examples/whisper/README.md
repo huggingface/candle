@@ -12,7 +12,7 @@ file](https://huggingface.co/datasets/Narsil/candle-examples/resolve/main/sample
 from the hub.
 
 ```bash
- cargo run --example whisper --release
+ cargo run --example whisper --release --features="symphonia"
 
 > No audio file submitted: Downloading https://huggingface.co/datasets/Narsil/candle_demo/blob/main/samples_jfk.wav
 > loaded wav data: Header { audio_format: 1, channel_count: 1, sampling_rate: 16000, bytes_per_second: 32000, bytes_per_sample: 2, bits_per_sample: 16 }
@@ -34,6 +34,7 @@ from the hub.
 - `--timestamps`: enable the timestamp mode where some timestamps are reported
   for each recognized audio extracts.
 - `--model`: the model to be used. Models that do not end with `-en` are
-  multilingual models, other ones are English only models. The supported models
-  are `tiny`, `tiny.en`, `base`, `base.en`, `small`, `small.en`, `medium`,
-  `medium.en`, `large`, and `large-v2`.
+  multilingual models, other ones are English only models. The supported OpenAI 
+  Whisper models are `tiny`, `tiny.en`, `base`, `base.en`, `small`, `small.en`,
+  `medium`, `medium.en`, `large`, `large-v2` and `large-v3`. The supported 
+  Distil-Whisper models are `distil-medium.en`, `distil-large-v2` and `distil-large-v3`.

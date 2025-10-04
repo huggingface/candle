@@ -1,3 +1,5 @@
+//! Implementation of the Cuda backend when Cuda support has not been compiled in.
+//!
 #![allow(dead_code)]
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
@@ -14,6 +16,12 @@ macro_rules! fail {
     };
 }
 
+impl CudaDevice {
+    pub fn new_with_stream(_: usize) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+}
+
 impl crate::backend::BackendStorage for CudaStorage {
     type Device = CudaDevice;
 
@@ -27,6 +35,10 @@ impl crate::backend::BackendStorage for CudaStorage {
 
     fn device(&self) -> &Self::Device {
         fail!()
+    }
+
+    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
@@ -116,15 +128,27 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn scatter_add(
-        &self,
+    fn scatter_set(
+        &mut self,
         _: &Layout,
         _: &Self,
         _: &Layout,
         _: &Self,
         _: &Layout,
         _: usize,
-    ) -> Result<Self> {
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn scatter_add_set(
+        &mut self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: usize,
+    ) -> Result<()> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
@@ -151,6 +175,19 @@ impl crate::backend::BackendStorage for CudaStorage {
     }
 
     fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn copy2d(
+        &self,
+        _: &mut Self,
+        _: usize,
+        _: usize,
+        _: usize,
+        _: usize,
+        _: usize,
+        _: usize,
+    ) -> Result<()> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
@@ -193,11 +230,19 @@ impl crate::backend::BackendDevice for CudaDevice {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn ones_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
+    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
@@ -208,4 +253,38 @@ impl crate::backend::BackendDevice for CudaDevice {
     fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+
+    fn synchronize(&self) -> Result<()> {
+        Ok(())
+    }
 }
+
+/// This bool controls whether reduced precision reductions (e.g., with fp16 accumulation type) are
+/// allowed with f16 GEMMs.
+pub fn gemm_reduced_precision_f16() -> bool {
+    true
+}
+
+/// This bool controls whether reduced precision reductions (e.g., with fp16 accumulation type) are
+/// allowed with f16 GEMMs.
+pub fn set_gemm_reduced_precision_f16(_: bool) {}
+
+/// This bool controls whether reduced precision reductions (e.g., with fp16 accumulation type) are
+/// allowed with bf16 GEMMs.
+pub fn gemm_reduced_precision_bf16() -> bool {
+    true
+}
+
+/// This bool controls whether reduced precision reductions (e.g., with fp16 accumulation type) are
+/// allowed with bf16 GEMMs.
+pub fn set_gemm_reduced_precision_bf16(_: bool) {}
+
+/// This bool controls whether reduced precision reductions (e.g., with tf32 accumulation type) are
+/// allowed with f32 GEMMs.
+pub fn gemm_reduced_precision_f32() -> bool {
+    true
+}
+
+/// This bool controls whether reduced precision reductions (e.g., with tf32 accumulation type) are
+/// allowed with f32 GEMMs.
+pub fn set_gemm_reduced_precision_f32(_b: bool) {}

@@ -1,5 +1,7 @@
 # candle-quantized-t5
 
+Candle implementation for quantizing and running T5 translation models.
+
 ## Seq2Seq example
 
 This example uses a quantized version of the t5 model.
@@ -17,7 +19,7 @@ generate quantized weight files from the original safetensors file by using the
 `tensor-tools` command line utility via:
 
 ```bash
-$ cargo run --example tensor-tools --release -- quantize --quantization q6k PATH/TO/T5/model.safetensors /tmp/model.gguf
+$ cargo run --bin tensor-tools --release -- quantize --quantization q6k PATH/TO/T5/model.safetensors /tmp/model.gguf
 ```
 
 ## Using custom models

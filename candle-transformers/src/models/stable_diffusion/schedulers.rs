@@ -5,7 +5,7 @@
 //! inference speed and quality.
 use candle::{Result, Tensor};
 
-pub trait SchedulerConfig: std::fmt::Debug {
+pub trait SchedulerConfig: std::fmt::Debug + Send + Sync {
     fn build(&self, inference_steps: usize) -> Result<Box<dyn Scheduler>>;
 }
 
@@ -19,7 +19,7 @@ pub trait Scheduler {
 
     fn scale_model_input(&self, sample: Tensor, _timestep: usize) -> Result<Tensor>;
 
-    fn step(&self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor>;
+    fn step(&mut self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor>;
 }
 
 /// This represents how beta ranges from its minimum value to the maximum
@@ -43,7 +43,7 @@ pub enum PredictionType {
 
 /// Time step spacing for the diffusion process.
 ///
-/// "linspace", "leading", "trailing" corresponds to annotation of Table 2. of https://arxiv.org/abs/2305.08891
+/// "linspace", "leading", "trailing" corresponds to annotation of Table 2. of the [paper](https://arxiv.org/abs/2305.08891)
 #[derive(Debug, Clone, Copy)]
 pub enum TimestepSpacing {
     Leading,

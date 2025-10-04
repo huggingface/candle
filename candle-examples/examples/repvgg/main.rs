@@ -38,7 +38,7 @@ impl Which {
             Self::B2G4 => "b2g4",
             Self::B3G4 => "b3g4",
         };
-        format!("timm/repvgg_{}.rvgg_in1k", name)
+        format!("timm/repvgg_{name}.rvgg_in1k")
     }
 
     fn config(&self) -> repvgg::Config {
@@ -78,7 +78,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
 
-    let image = candle_examples::imagenet::load_image224(args.image)?;
+    let image = candle_examples::imagenet::load_image224(args.image)?.to_device(&device)?;
     println!("loaded image {image:?}");
 
     let model_file = match args.model {

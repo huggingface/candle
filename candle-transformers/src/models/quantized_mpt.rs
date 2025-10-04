@@ -1,3 +1,21 @@
+//! Quantized MPT model implementation.
+//!
+//! MPT (MPT-7B) is a causal transformer model series optimized for code generation.
+//! This implementation provides quantization for reduced memory and compute.
+//!
+//! Key characteristics:
+//! - Multi-Query Grouped Attention (MQA)
+//! - Support for KV-caching
+//! - Pre-computed ALiBi attention biases
+//! - Support for 8-bit quantization
+//!
+//! References:
+//! - [Replit Code Models](https://huggingface.co/replit/replit-code-v1_5-3b)
+//! - [MPT-7B Implementation](https://github.com/mosaicml/llm-foundry)
+//!
+/// MPT model used by replit-code-v1_5-3b
+/// https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/modeling_mpt.py
+///
 use crate::quantized_nn::{layer_norm_no_bias, linear_no_bias, Embedding, Linear};
 pub use crate::quantized_var_builder::VarBuilder;
 /// MPT model used by replit-code-v1_5-3b
@@ -71,8 +89,8 @@ impl GroupedQueryAttention {
         };
         self.kv_cache = Some((key.clone(), value.clone()));
         let query = query.contiguous()?;
-        let key = super::mpt::repeat_kv(key, self.n_heads / self.kv_n_heads)?.contiguous()?;
-        let value = super::mpt::repeat_kv(value, self.n_heads / self.kv_n_heads)?.contiguous()?;
+        let key = crate::utils::repeat_kv(key, self.n_heads / self.kv_n_heads)?.contiguous()?;
+        let value = crate::utils::repeat_kv(value, self.n_heads / self.kv_n_heads)?.contiguous()?;
         let attn_weights = (query.matmul(&key)? * self.softmax_scale)?;
         let attn_bias = {
             let s_q = query.dim(D::Minus2)?;

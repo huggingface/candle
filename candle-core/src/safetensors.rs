@@ -1,4 +1,16 @@
+//! Module to load `safetensor` files into CPU/GPU memory.
+//!
+//! There are multiple ways to load tensors from safetensor files:
+//! - `load` function for loading directly into memory and returning a HashMap of tensors
+//! - `MmapedSafetensors` for memory mapping files and avoiding full allocation
+//! - `SliceSafetensors` for working with in-memory buffers
+//! - `BufferedSafetensors` for owning a buffer of data
+//!
+//! Tensors can also be serialized to safetensor format using the `save` function or
+//! `Tensor::save_safetensors` method.
+//!
 use crate::{DType, Device, Error, Result, Tensor, WithDType};
+use float8::F8E4M3;
 use safetensors::tensor as st;
 use safetensors::tensor::SafeTensors;
 use std::borrow::Cow;
@@ -15,6 +27,7 @@ impl From<DType> for st::Dtype {
             DType::F16 => st::Dtype::F16,
             DType::F32 => st::Dtype::F32,
             DType::F64 => st::Dtype::F64,
+            DType::F8E4M3 => st::Dtype::F8_E4M3,
         }
     }
 }
@@ -30,6 +43,7 @@ impl TryFrom<st::Dtype> for DType {
             st::Dtype::F16 => Ok(DType::F16),
             st::Dtype::F32 => Ok(DType::F32),
             st::Dtype::F64 => Ok(DType::F64),
+            st::Dtype::F8_E4M3 => Ok(DType::F8E4M3),
             dtype => Err(Error::UnsupportedSafeTensorDtype(dtype)),
         }
     }
@@ -43,7 +57,7 @@ impl st::View for Tensor {
         self.shape().dims()
     }
 
-    fn data(&self) -> Cow<[u8]> {
+    fn data(&self) -> Cow<'_, [u8]> {
         // This copies data from GPU to CPU.
         // TODO: Avoid the unwrap here.
         Cow::Owned(convert_back(self).unwrap())
@@ -64,7 +78,7 @@ impl st::View for &Tensor {
         self.dims()
     }
 
-    fn data(&self) -> Cow<[u8]> {
+    fn data(&self) -> Cow<'_, [u8]> {
         // This copies data from GPU to CPU.
         // TODO: Avoid the unwrap here.
         Cow::Owned(convert_back(self).unwrap())
@@ -87,7 +101,7 @@ impl Tensor {
 fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) -> Result<Tensor> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
     let elem_count = data.len() / size_in_bytes;
-    if (data.as_ptr() as usize) % size_in_bytes == 0 {
+    if (data.as_ptr() as usize).is_multiple_of(size_in_bytes) {
         // SAFETY This is safe because we just checked that this
         // was correctly aligned.
         let data: &[T] =
@@ -117,7 +131,7 @@ fn convert_slice_with_cast<T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>
 ) -> Result<Tensor> {
     let size_in_bytes = std::mem::size_of::<T>();
     let elem_count = data.len() / size_in_bytes;
-    if (data.as_ptr() as usize) % size_in_bytes == 0 {
+    if (data.as_ptr() as usize).is_multiple_of(size_in_bytes) {
         // SAFETY This is safe because we just checked that this
         // was correctly aligned.
         let data: &[T] =
@@ -171,7 +185,7 @@ pub trait Load {
     fn load(&self, device: &Device) -> Result<Tensor>;
 }
 
-impl<'a> Load for st::TensorView<'a> {
+impl Load for st::TensorView<'_> {
     fn load(&self, device: &Device) -> Result<Tensor> {
         convert(self, device)
     }
@@ -192,12 +206,17 @@ impl Tensor {
             DType::F16 => convert_slice::<half::f16>(data, shape, device),
             DType::F32 => convert_slice::<f32>(data, shape, device),
             DType::F64 => convert_slice::<f64>(data, shape, device),
+            DType::F8E4M3 => convert_slice::<F8E4M3>(data, shape, device),
         }
     }
 }
 
 fn convert(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
     match view.dtype() {
+        st::Dtype::I8 => {
+            let conv = |x| Ok(i64::from(x));
+            convert_with_cast_::<i8, i64, _>(view, device, conv)
+        }
         st::Dtype::U8 => convert_::<u8>(view, device),
         st::Dtype::U16 => {
             let conv = |x| Ok(u32::from(x));
@@ -228,6 +247,7 @@ fn convert_back(tensor: &Tensor) -> Result<Vec<u8>> {
         DType::BF16 => Ok(convert_back_::<half::bf16>(tensor.to_vec1()?)),
         DType::F32 => Ok(convert_back_::<f32>(tensor.to_vec1()?)),
         DType::F64 => Ok(convert_back_::<f64>(tensor.to_vec1()?)),
+        DType::F8E4M3 => Ok(convert_back_::<F8E4M3>(tensor.to_vec1()?)),
     }
 }
 
@@ -349,6 +369,30 @@ impl MmapedSafetensors {
     }
 }
 
+pub struct SliceSafetensors<'a> {
+    safetensors: SafeTensors<'a>,
+}
+
+impl<'a> SliceSafetensors<'a> {
+    /// Creates a wrapper around a binary buffer and deserialize the safetensors header.
+    pub fn new(buffer: &'a [u8]) -> Result<Self> {
+        let safetensors = safetensors::SafeTensors::deserialize(buffer)?;
+        Ok(Self { safetensors })
+    }
+
+    pub fn load(&self, name: &str, dev: &Device) -> Result<Tensor> {
+        self.safetensors.tensor(name)?.load(dev)
+    }
+
+    pub fn tensors(&self) -> Vec<(String, st::TensorView<'_>)> {
+        self.safetensors.tensors()
+    }
+
+    pub fn get(&self, name: &str) -> Result<st::TensorView<'_>> {
+        Ok(self.safetensors.tensor(name)?)
+    }
+}
+
 pub struct BufferedSafetensors {
     safetensors: yoke::Yoke<SafeTensors_<'static>, Vec<u8>>,
 }
@@ -437,5 +481,18 @@ mod tests {
         let bytes = std::fs::read("multi.safetensors").unwrap();
         assert_eq!(bytes, b"x\0\0\0\0\0\0\0{\"t\":{\"dtype\":\"F32\",\"shape\":[2,2],\"data_offsets\":[0,16]},\"u\":{\"dtype\":\"F32\",\"shape\":[1,2],\"data_offsets\":[16,24]}}      \0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
         std::fs::remove_file("multi.safetensors").unwrap();
+    }
+
+    #[test]
+    fn load_i8() {
+        let bytes = b"8\0\0\0\0\0\0\0{\"x\":{\"dtype\":\"I8\",\"shape\":[2],\"data_offsets\":[0,2]}}   \x01\x03";
+        std::fs::write("test_i8.safetensors", bytes).unwrap();
+        let weights = load("test_i8.safetensors", &Device::Cpu).unwrap();
+        let tensor = weights.get("x").unwrap();
+        assert_eq!(tensor.dims(), &[2]);
+        assert_eq!(tensor.dtype(), DType::I64);
+        let data: Vec<i64> = tensor.to_vec1().unwrap();
+        assert_eq!(data, vec![1, 3]);
+        std::fs::remove_file("test_i8.safetensors").unwrap();
     }
 }

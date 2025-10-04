@@ -1,3 +1,42 @@
+//! Implementation of the DINOv2 models from Meta Research.
+//!
+//! This module implements the DINOv2 vision transformer model from Meta AI Research.
+//! DINOv2 is a self-supervised learning model that can learn visual features
+//! without using any labeled data. See: ["DINOv2: Learning Robust Visual Features without Supervision"](https://github.com/facebookresearch/dinov2)
+//!
+//! ## Running an example with color map and CUDA
+//!
+//! ```bash
+//! cargo run \
+//!   --features cuda,depth_anything_v2 \
+//!   --package candle-examples \
+//!   --example depth_anything_v2 \
+//!   -- --color-map \
+//!   --image candle-examples/examples/yolo-v8/assets/bike.jpg
+//! ```
+//!
+//! ## Running as an ImageNet classifier
+//!
+//! The model returns the probability for the image to belong to each of the 1000 ImageNet categories.
+//!
+//! <div align=center>
+//!   <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.jpg" alt="" width=640>
+//! </div>
+//!
+//! ```bash
+//! cargo run \
+//!   --example dinov2 \
+//!   --release \
+//!   -- --image candle-examples/examples/yolo-v8/assets/bike.jpg
+//!
+//! > mountain bike, all-terrain bike, off-roader: 43.67%
+//! > bicycle-built-for-two, tandem bicycle, tandem: 33.20%
+//! > crash helmet            : 13.23%
+//! > unicycle, monocycle     : 2.44%
+//! > maillot                 : 2.42%
+//! ```
+//!
+
 use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 
@@ -52,8 +91,8 @@ impl Module for Attention {
             .transpose(0, 1)? // 20134
             .transpose(2, 3)?; // 20314
         let q = (qkv.i(0)? * self.scale)?;
-        let k = qkv.i(1)?;
-        let v = qkv.i(2)?;
+        let k = qkv.i(1)?.contiguous()?;
+        let v = qkv.i(2)?.contiguous()?;
         let attn = candle_nn::ops::softmax(&q.matmul(&k.t()?)?, D::Minus1)?;
         let attn = attn.matmul(&v)?.transpose(1, 2)?.reshape((b, n, c))?;
         self.proj.forward(&attn)
@@ -214,7 +253,7 @@ impl DinoVisionTransformer {
         let norm = layer_norm(embed_dim, 1e-5, vb.pp("norm"))?;
         let vb_b = vb.pp("blocks");
         let blocks = (0..depth)
-            .map(|i| Block::new(vb_b.pp(&i.to_string()), embed_dim, num_heads))
+            .map(|i| Block::new(vb_b.pp(i.to_string()), embed_dim, num_heads))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             patch_embed,
@@ -257,6 +296,84 @@ impl DinoVisionTransformer {
         let xs = self.patch_embed.forward(xs)?;
         let xs = Tensor::cat(&[&self.cls_token, &xs], 1)?;
         &xs + &self.interpolate_pos_encoding(&xs, w, h)?
+    }
+
+    fn get_intermediate_layers_not_chunked(
+        &self,
+        xs: &Tensor,
+        blocks_to_take: &[usize],
+    ) -> Result<Vec<Tensor>> {
+        let mut xs = self.prepare_tokens_with_mask(xs)?;
+        let mut output = Vec::new();
+        for (i, blk) in self.blocks.iter().enumerate() {
+            xs = blk.forward(&xs)?;
+            if blocks_to_take.contains(&i) {
+                output.push(xs.clone());
+            }
+        }
+        if output.len() != blocks_to_take.len() {
+            candle::bail!(
+                "only {} / {} blocks found",
+                output.len(),
+                blocks_to_take.len()
+            );
+        }
+        Ok(output)
+    }
+
+    pub fn get_intermediate_layers(
+        &self,
+        xs: &Tensor,
+        blocks_to_take: &[usize],
+        reshape: bool,
+        return_class_token: bool,
+        norm: bool,
+    ) -> Result<Tensor> {
+        let outputs = self.get_intermediate_layers_not_chunked(xs, blocks_to_take)?;
+        let outputs = if norm {
+            outputs
+                .iter()
+                .map(|out| self.norm.forward(out))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            outputs
+        };
+        let class_tokens = outputs
+            .iter()
+            .map(|out| out.i((.., 0)))
+            .collect::<Result<Vec<_>>>()?;
+        let outputs = outputs
+            .iter()
+            .map(|out| out.i((.., 1..)))
+            .collect::<Result<Vec<_>>>()?;
+
+        let outputs = if reshape {
+            let (b, _c, w, h) = xs.dims4()?;
+            let patch_size = self.patch_embed.patch_size.0;
+            let num_channels = outputs[0].elem_count() / (b * (w / patch_size) * (h / patch_size));
+            outputs
+                .iter()
+                .map(|out| {
+                    out.reshape((b, w / patch_size, h / patch_size, num_channels))?
+                        .transpose(2, 3)?
+                        .transpose(1, 2)
+                })
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            outputs
+        };
+
+        let outputs = if return_class_token {
+            outputs
+                .iter()
+                .zip(class_tokens.iter())
+                .map(|(out, class_token)| Tensor::cat(&[out, class_token], D::Minus1))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            outputs
+        };
+
+        Tensor::stack(&outputs[..], 0)
     }
 }
 

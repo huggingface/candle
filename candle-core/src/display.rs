@@ -1,7 +1,9 @@
-/// Pretty printing of tensors
-/// This implementation should be in line with the PyTorch version.
-/// https://github.com/pytorch/pytorch/blob/7b419e8513a024e172eae767e24ec1b849976b13/torch/_tensor_str.py
+//! Pretty printing of tensors
+//!
+//! This implementation should be in line with the [PyTorch version](https://github.com/pytorch/pytorch/blob/7b419e8513a024e172eae767e24ec1b849976b13/torch/_tensor_str.py).
+//!
 use crate::{DType, Result, Tensor, WithDType};
+use float8::F8E4M3;
 use half::{bf16, f16};
 
 impl Tensor {
@@ -12,10 +14,10 @@ impl Tensor {
         let device_str = match self.device().location() {
             crate::DeviceLocation::Cpu => "".to_owned(),
             crate::DeviceLocation::Cuda { gpu_id } => {
-                format!(", cuda:{}", gpu_id)
+                format!(", cuda:{gpu_id}")
             }
             crate::DeviceLocation::Metal { gpu_id } => {
-                format!(", metal:{}", gpu_id)
+                format!(", metal:{gpu_id}")
             }
         };
 
@@ -60,17 +62,19 @@ impl std::fmt::Debug for Tensor {
             DType::F16 => self.fmt_dt::<f16>(f),
             DType::F32 => self.fmt_dt::<f32>(f),
             DType::F64 => self.fmt_dt::<f64>(f),
+            DType::F8E4M3 => self.fmt_dt::<F8E4M3>(f),
         }
     }
 }
 
 /// Options for Tensor pretty printing
+#[derive(Debug, Clone)]
 pub struct PrinterOptions {
-    precision: usize,
-    threshold: usize,
-    edge_items: usize,
-    line_width: usize,
-    sci_mode: Option<bool>,
+    pub precision: usize,
+    pub threshold: usize,
+    pub edge_items: usize,
+    pub line_width: usize,
+    pub sci_mode: Option<bool>,
 }
 
 static PRINT_OPTS: std::sync::Mutex<PrinterOptions> =
@@ -87,6 +91,10 @@ impl PrinterOptions {
             sci_mode: None,
         }
     }
+}
+
+pub fn print_options() -> &'static std::sync::Mutex<PrinterOptions> {
+    &PRINT_OPTS
 }
 
 pub fn set_print_options(options: PrinterOptions) {
@@ -115,6 +123,26 @@ pub fn set_print_options_full() {
         line_width: 80,
         sci_mode: None,
     }
+}
+
+pub fn set_line_width(line_width: usize) {
+    PRINT_OPTS.lock().unwrap().line_width = line_width
+}
+
+pub fn set_precision(precision: usize) {
+    PRINT_OPTS.lock().unwrap().precision = precision
+}
+
+pub fn set_edge_items(edge_items: usize) {
+    PRINT_OPTS.lock().unwrap().edge_items = edge_items
+}
+
+pub fn set_threshold(threshold: usize) {
+    PRINT_OPTS.lock().unwrap().threshold = threshold
+}
+
+pub fn set_sci_mode(sci_mode: Option<bool>) {
+    PRINT_OPTS.lock().unwrap().sci_mode = sci_mode
 }
 
 struct FmtSize {
@@ -472,15 +500,22 @@ impl std::fmt::Display for Tensor {
                     writeln!(f)?;
                 }
             }
+            DType::F8E4M3 => {
+                if let Ok(tf) = FloatFormatter::<F8E4M3>::new(&to_display, &po) {
+                    let max_w = tf.max_width(&to_display);
+                    tf.fmt_tensor(self, 1, max_w, summarize, &po, f)?;
+                    writeln!(f)?;
+                }
+            }
         };
 
         let device_str = match self.device().location() {
             crate::DeviceLocation::Cpu => "".to_owned(),
             crate::DeviceLocation::Cuda { gpu_id } => {
-                format!(", cuda:{}", gpu_id)
+                format!(", cuda:{gpu_id}")
             }
             crate::DeviceLocation::Metal { gpu_id } => {
-                format!(", metal:{}", gpu_id)
+                format!(", metal:{gpu_id}")
             }
         };
 

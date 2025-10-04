@@ -39,7 +39,7 @@ impl PyONNXTensorDescriptor {
     /// The shape of the tensor.
     /// &RETURNS&: Tuple[Union[int,str,Any]]
     fn shape(&self, py: Python) -> PyResult<Py<PyTuple>> {
-        let shape = PyList::empty(py);
+        let shape = PyList::empty_bound(py);
         if let Some(d) = &self.0.shape {
             for dim in d.dim.iter() {
                 if let Some(value) = &dim.value {

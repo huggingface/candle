@@ -1,15 +1,15 @@
+#include "kernels.h"
+#include "kernel_helpers.h"
 #include "flash_fwd_launch_template.h"
 
-void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split_kernel=false) {
-    FP16_SWITCH(!params.is_bf16, [&] {
-        FWD_HEADDIM_SWITCH(params.d, [&] {
-//            if (params.num_splits <= 1 && !force_split_kernel) {  // If we don't set it num_splits == 0
-            run_mha_fwd_<elem_type, kHeadDim>(params, stream);
-//            } else {
-//                run_mha_fwd_splitkv_dispatch<elem_type, kHeadDim>(params, stream);
-//            }
-        });
-    });
+void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
+  FP16_SWITCH(!params.is_bf16, [&] {
+      HEADDIM_SWITCH(params.d, [&] {
+          BOOL_SWITCH(params.is_causal, Is_causal, [&] {
+              run_mha_fwd_<elem_type, kHeadDim, Is_causal>(params, stream);
+          });
+      });
+  });
 }
 
 extern "C" void run_mha(
@@ -53,9 +53,12 @@ extern "C" void run_mha(
 
     int is_bf16,
     int is_causal,
+    int unpadded_lse,
 
     int window_size_left,
-    int window_size_right
+    int window_size_right,
+
+    float softcap
 ) {
     Flash_fwd_params params;
     // Reset the parameters
@@ -99,8 +102,16 @@ extern "C" void run_mha(
     params.d_rounded = d_rounded;
 
     // Set the different scale values.
-    params.scale_softmax = softmax_scale;
-    params.scale_softmax_log2 = softmax_scale * M_LOG2E;
+    if (softcap > 0.0) {
+        params.softcap = softmax_scale / softcap;
+        params.scale_softmax = softcap;
+        params.scale_softmax_log2 = softcap * M_LOG2E;
+    } else{
+        // Remove potential NaN
+        params.softcap = 0.0;
+        params.scale_softmax = softmax_scale;
+        params.scale_softmax_log2 = softmax_scale * M_LOG2E;
+    }
 
     params.p_dropout = 1.; // probability to keep
     params.p_dropout_in_uint8_t = uint8_t(std::floor(params.p_dropout * 255.0));
@@ -118,6 +129,7 @@ extern "C" void run_mha(
 
     params.is_seqlens_k_cumulative = true;
     params.num_splits = 1;
+    params.unpadded_lse = unpadded_lse;
 
     cudaStream_t stream = 0; // Use the default stream.
     run_mha_fwd(params, stream);

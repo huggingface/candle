@@ -141,28 +141,117 @@ impl<T> IndexOp<T> for Tensor
 where
     T: Into<TensorIndexer>,
 {
+    ///```rust
+    /// use candle_core::{Tensor, DType, Device, IndexOp};
+    /// let a = Tensor::new(&[
+    ///     [0., 1.],
+    ///     [2., 3.],
+    ///     [4., 5.]
+    /// ], &Device::Cpu)?;
+    ///
+    /// let b = a.i(0)?;
+    /// assert_eq!(b.shape().dims(), &[2]);
+    /// assert_eq!(b.to_vec1::<f64>()?, &[0., 1.]);
+    ///
+    /// let c = a.i(..2)?;
+    /// assert_eq!(c.shape().dims(), &[2, 2]);
+    /// assert_eq!(c.to_vec2::<f64>()?, &[
+    ///     [0., 1.],
+    ///     [2., 3.]
+    /// ]);
+    ///
+    /// let d = a.i(1..)?;
+    /// assert_eq!(d.shape().dims(), &[2, 2]);
+    /// assert_eq!(d.to_vec2::<f64>()?, &[
+    ///     [2., 3.],
+    ///     [4., 5.]
+    /// ]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     fn i(&self, index: T) -> Result<Tensor, Error> {
         self.index(&[index.into()])
     }
 }
 
+impl<A> IndexOp<(A,)> for Tensor
+where
+    A: Into<TensorIndexer>,
+{
+    ///```rust
+    /// use candle_core::{Tensor, DType, Device, IndexOp};
+    /// let a = Tensor::new(&[
+    ///     [0f32, 1.],
+    ///     [2.  , 3.],
+    ///     [4.  , 5.]
+    /// ], &Device::Cpu)?;
+    ///
+    /// let b = a.i((0,))?;
+    /// assert_eq!(b.shape().dims(), &[2]);
+    /// assert_eq!(b.to_vec1::<f32>()?, &[0., 1.]);
+    ///
+    /// let c = a.i((..2,))?;
+    /// assert_eq!(c.shape().dims(), &[2, 2]);
+    /// assert_eq!(c.to_vec2::<f32>()?, &[
+    ///     [0., 1.],
+    ///     [2., 3.]
+    /// ]);
+    ///
+    /// let d = a.i((1..,))?;
+    /// assert_eq!(d.shape().dims(), &[2, 2]);
+    /// assert_eq!(d.to_vec2::<f32>()?, &[
+    ///     [2., 3.],
+    ///     [4., 5.]
+    /// ]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    fn i(&self, (a,): (A,)) -> Result<Tensor, Error> {
+        self.index(&[a.into()])
+    }
+}
+#[allow(non_snake_case)]
+impl<A, B> IndexOp<(A, B)> for Tensor
+where
+    A: Into<TensorIndexer>,
+    B: Into<TensorIndexer>,
+{
+    ///```rust
+    /// use candle_core::{Tensor, DType, Device, IndexOp};
+    /// let a = Tensor::new(&[[0f32, 1., 2.], [3., 4., 5.], [6., 7., 8.]], &Device::Cpu)?;
+    ///
+    /// let b = a.i((1, 0))?;
+    /// assert_eq!(b.to_vec0::<f32>()?, 3.);
+    ///
+    /// let c = a.i((..2, 1))?;
+    /// assert_eq!(c.shape().dims(), &[2]);
+    /// assert_eq!(c.to_vec1::<f32>()?, &[1., 4.]);
+    ///
+    /// let d = a.i((2.., ..))?;
+    /// assert_eq!(d.shape().dims(), &[1, 3]);
+    /// assert_eq!(d.to_vec2::<f32>()?, &[[6., 7., 8.]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    fn i(&self, (a, b): (A, B)) -> Result<Tensor, Error> {
+        self.index(&[a.into(), b.into()])
+    }
+}
+
 macro_rules! index_op_tuple {
-    ($($t:ident),+) => {
+    ($doc:tt, $($t:ident),+) => {
         #[allow(non_snake_case)]
         impl<$($t),*> IndexOp<($($t,)*)> for Tensor
         where
             $($t: Into<TensorIndexer>,)*
         {
+            #[doc=$doc]
             fn i(&self, ($($t,)*): ($($t,)*)) -> Result<Tensor, Error> {
                 self.index(&[$($t.into(),)*])
             }
         }
     };
 }
-index_op_tuple!(A);
-index_op_tuple!(A, B);
-index_op_tuple!(A, B, C);
-index_op_tuple!(A, B, C, D);
-index_op_tuple!(A, B, C, D, E);
-index_op_tuple!(A, B, C, D, E, F);
-index_op_tuple!(A, B, C, D, E, F, G);
+
+index_op_tuple!("see [TensorIndex#method.i]", A, B, C);
+index_op_tuple!("see [TensorIndex#method.i]", A, B, C, D);
+index_op_tuple!("see [TensorIndex#method.i]", A, B, C, D, E);
+index_op_tuple!("see [TensorIndex#method.i]", A, B, C, D, E, F);
+index_op_tuple!("see [TensorIndex#method.i]", A, B, C, D, E, F, G);

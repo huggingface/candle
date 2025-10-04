@@ -1,5 +1,6 @@
+#![allow(clippy::approx_constant)]
 use anyhow::{Context, Result};
-use candle_core::{test_device, test_utils, Device, Shape, Tensor, Var};
+use candle_core::{test_device, test_utils, DType, Device, Shape, Tensor, Var};
 
 fn simple_grad(device: &Device) -> Result<()> {
     let x = Var::new(&[3f32, 1., 4.], device)?;
@@ -96,24 +97,24 @@ fn unary_grad(device: &Device) -> Result<()> {
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(
-        y.to_vec1::<f32>()?,
-        [20.085537, 2.7182817, 54.59815, 1.1618342]
+        test_utils::to_vec1_round(&y, 4)?,
+        [20.0855, 2.7183, 54.5982, 1.1618]
     );
     assert_eq!(
-        grad_x.to_vec1::<f32>()?,
-        [20.085537, 2.7182817, 54.59815, 1.1618342]
+        test_utils::to_vec1_round(grad_x, 4)?,
+        [20.0855, 2.7183, 54.5982, 1.1618]
     );
     let y = x.exp()?.sqr()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(
-        y.to_vec1::<f32>()?,
-        [403.4288, 7.3890557, 2980.9578, 1.3498588]
+        test_utils::to_vec1_round(&y, 3)?,
+        [403.429, 7.389, 2980.958, 1.35]
     );
     // exp(x)^2 = exp(2*x)
     assert_eq!(
-        grad_x.to_vec1::<f32>()?,
-        [806.8576, 14.778111, 5961.9155, 2.6997175]
+        test_utils::to_vec1_round(grad_x, 2)?,
+        [806.86, 14.78, 5961.92, 2.7]
     );
     let y = x.sin()?;
     let grads = y.backward()?;
@@ -261,6 +262,7 @@ fn unary_grad(device: &Device) -> Result<()> {
     let y = elu_x.elu(2.)?;
     let grads = y.backward()?;
     let grad_x = grads.get(&elu_x).context("no grad for x")?;
+
     assert_eq!(
         test_utils::to_vec1_round(&y, 4)?,
         [-1.2642, 0.0000, -1.7293, 3.0000]
@@ -270,19 +272,51 @@ fn unary_grad(device: &Device) -> Result<()> {
         [0.7358, 2.0000, 0.2707, 1.0000]
     );
 
+    // testing compared to pytorch nn.Silu()
+    let y = x.silu()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    assert_eq!(
+        test_utils::to_vec1_round(&y, 4)?,
+        [2.8577, 0.7311, 3.9281, 0.0806]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(grad_x, 4)?,
+        [1.0881, 0.9277, 1.0527, 0.5747],
+    );
+
+    if device.is_cpu() {
+        let x = Var::new(&[[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]]], device)?;
+        let y = x.interpolate1d(12)?.reshape(36)?;
+
+        let z = Tensor::new(
+            &[
+                1_f32, 02., 03., 04., 05., 06., 07., 08., 09., 10., 11., 12., 13., 14., 15., 16.,
+                17., 18., 19., 20., 21., 22., 23., 24., 25., 26., 27., 28., 29., 30., 31., 32.,
+                33., 34., 35., 36.,
+            ],
+            device,
+        )?;
+
+        let loss = y.unsqueeze(1)?.transpose(0, 1)?.matmul(&z.unsqueeze(1)?)?;
+        let grads = loss.backward()?;
+        let grad_x = grads.get(&x).context("no grad for x")?;
+
+        assert_eq!(
+            test_utils::to_vec3_round(grad_x, 4)?,
+            [[[10_f32, 26., 42.], [58., 74., 90.], [106., 122., 138.]]]
+        );
+    }
+
     // manually checked: see comments
     let x = Var::new(&[[[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]]]], device)?;
     let y = x.interpolate2d(6, 6)?.reshape(36)?;
 
-    #[rustfmt::skip]
     let z = Tensor::new(
         &[
-            1_f32, 02., 03., 04., 05., 06.,
-            07.,   08., 09., 10., 11., 12.,
-            13.,   14., 15., 16., 17., 18.,
-            19.,   20., 21., 22., 23., 24.,
-            25.,   26., 27., 28., 29., 30.,
-            31.,   32., 33., 34., 35., 36.,
+            1_f32, 02., 03., 04., 05., 06., 07., 08., 09., 10., 11., 12., 13., 14., 15., 16., 17.,
+            18., 19., 20., 21., 22., 23., 24., 25., 26., 27., 28., 29., 30., 31., 32., 33., 34.,
+            35., 36.,
         ],
         device,
     )?;
@@ -313,15 +347,11 @@ fn unary_grad(device: &Device) -> Result<()> {
     let x = Var::new(&[[[[1f32, 2.], [4., 5.]]]], device)?;
     let y = x.interpolate2d(6, 6)?.reshape(36)?;
 
-    #[rustfmt::skip]
     let z = Tensor::new(
         &[
-            1_f32, 02., 03., 04., 05., 06.,
-            07.,   08., 09., 10., 11., 12.,
-            13.,   14., 15., 16., 17., 18.,
-            19.,   20., 21., 22., 23., 24.,
-            25.,   26., 27., 28., 29., 30.,
-            31.,   32., 33., 34., 35., 36.,
+            1_f32, 02., 03., 04., 05., 06., 07., 08., 09., 10., 11., 12., 13., 14., 15., 16., 17.,
+            18., 19., 20., 21., 22., 23., 24., 25., 26., 27., 28., 29., 30., 31., 32., 33., 34.,
+            35., 36.,
         ],
         device,
     )?;
@@ -472,6 +502,36 @@ fn binary_grad(device: &Device) -> Result<()> {
     assert_eq!(ss.to_vec2::<f32>()?, [[9., 1., 16.], [4., 49., 1.]]);
     assert_eq!(grad_x.to_vec1::<f32>()?, [6.0, 2.0, -8.0, 0.0, 0.0, 0.0]);
     assert_eq!(grad_y.to_vec1::<f32>()?, [4.0, 14.0, 2.0]);
+    Ok(())
+}
+
+#[test]
+fn test_flip_backprop() -> Result<()> {
+    let device = &Device::Cpu;
+
+    // Create a tensor (leaf node) that requires gradients
+    let x = Var::ones((2, 2), DType::F64, device)?;
+    let weights = Tensor::arange(1.0, 5.0, device)?.reshape((2, 2))?;
+
+    let y = x.matmul(&weights)?;
+    let expected_y = Tensor::from_vec(vec![4.0, 6.0, 4.0, 6.0], (2, 2), device)?;
+    candle_core::test_utils::assert_tensor_eq(&y, &expected_y)?;
+
+    let z = y.flip(&[1])?;
+    let expected_z = Tensor::from_vec(vec![6.0, 4.0, 6.0, 4.0], (2, 2), device)?;
+    candle_core::test_utils::assert_tensor_eq(&z, &expected_z)?;
+
+    let loss = z.sum_all()?;
+
+    let grad_store = loss.backward()?;
+    let grad_x = grad_store.get_id(x.id()).unwrap();
+
+    let flipped_weights = weights.flip(&[1])?;
+    let dloss_dy = Tensor::ones((2, 2), DType::F64, device)?;
+    // dloss/dx = dloss/dy @ dy/dx = ones @ weight.flip.T
+    let expected_grad = dloss_dy.matmul(&flipped_weights.t()?)?;
+    candle_core::test_utils::assert_tensor_eq(grad_x, &expected_grad)?;
+
     Ok(())
 }
 

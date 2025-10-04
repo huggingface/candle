@@ -1,3 +1,4 @@
+//! Useful functions for checking features.
 use std::str::FromStr;
 
 pub fn get_num_threads() -> usize {
@@ -28,7 +29,7 @@ pub fn metal_is_available() -> bool {
 }
 
 pub fn with_avx() -> bool {
-    cfg!(target_feature = "avx")
+    cfg!(target_feature = "avx2")
 }
 
 pub fn with_neon() -> bool {

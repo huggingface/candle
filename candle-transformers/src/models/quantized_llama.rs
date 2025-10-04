@@ -1,31 +1,30 @@
+//! Quantized llama model implementation.
+//!
+//! This provides a quantized implementation of the llama language model architecture.
+//! The model implements parameter efficient quantization for reduced memory usage
+//! while maintaining model quality.
+//!
+//! Key characteristics:
+//! - Transformer decoder architecture
+//! - Support for 2/3/4/8-bit quantization
+//! - Optimized memory usage through quantization
+//! - Configurable model sizes and parameter counts
+//!
+//! - 💻 [GH Link](https://github.com/facebookresearch/llama)
+//! - 📝 [Paper](https://arxiv.org/abs/2302.13971)
+//!
+//! ![](https://raw.githubusercontent.com/huggingface/candle/main/candle-examples/examples/quantized/assets/aoc.gif)
+//!
+
 use std::collections::HashMap;
 
+use crate::quantized_nn::RmsNorm;
 use candle::quantized::QTensor;
 use candle::quantized::{ggml_file, gguf_file};
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Embedding, Module};
 
 pub const MAX_SEQ_LEN: usize = 4096;
-
-#[derive(Debug, Clone)]
-struct RmsNorm {
-    inner: candle_nn::LayerNorm,
-    span: tracing::Span,
-}
-
-impl RmsNorm {
-    fn new(scale: QTensor, eps: f32) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
-        let scale = scale.dequantize(&Device::Cpu)?;
-        let inner = candle_nn::LayerNorm::rms_norm(scale, eps as f64);
-        Ok(Self { inner, span })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(x)
-    }
-}
 
 // QMatMul wrapper adding some tracing.
 #[derive(Debug, Clone)]
@@ -157,50 +156,36 @@ struct LayerWeights {
     head_dim: usize,
     cos: Tensor,
     sin: Tensor,
+    neg_inf: Tensor,
     kv_cache: Option<(Tensor, Tensor)>,
     span_attn: tracing::Span,
     span_rot: tracing::Span,
     span_mlp: tracing::Span,
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
     let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
-    let m = mask.where_cond(&on_true, on_false)?;
+    let m = mask.where_cond(&on_true.broadcast_as(shape.dims())?, on_false)?;
     Ok(m)
 }
 
 impl LayerWeights {
     fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let _enter = self.span_rot.enter();
-        let (b_sz, n_head, seq_len, n_embd) = x.dims4()?;
-        let cos = self
-            .cos
-            .narrow(0, index_pos, seq_len)?
-            .reshape((seq_len, n_embd / 2, 1))?;
-        let sin = self
-            .sin
-            .narrow(0, index_pos, seq_len)?
-            .reshape((seq_len, n_embd / 2, 1))?;
-        let cos = cos.broadcast_as((b_sz, 1, seq_len, n_embd / 2, 1))?;
-        let sin = sin.broadcast_as((b_sz, 1, seq_len, n_embd / 2, 1))?;
-        // This mimics the llama.cpp behavior.
-        // https://github.com/ggerganov/llama.cpp/blob/1f0bccb27929e261744c979bc75114955da49e98/ggml.c#L12104-L12105
-        // The x0 and x1 value are interleaved on the n_embd (= head_dim) dimension.
-        // The resulting y0 and y1 are also interleaved with:
-        //   y0 = x0*cos - x1*sin
-        //   y1 = x0*sin + x1*cos
-        let x = x.reshape((b_sz, n_head, seq_len, n_embd / 2, 2))?;
-        let x0 = x.narrow(D::Minus1, 0, 1)?;
-        let x1 = x.narrow(D::Minus1, 1, 1)?;
-        let y0 = (x0.broadcast_mul(&cos)? - x1.broadcast_mul(&sin)?)?;
-        let y1 = (x0.broadcast_mul(&sin)? + x1.broadcast_mul(&cos)?)?;
-        let rope = Tensor::cat(&[y0, y1], D::Minus1)?;
-        let rope = rope.flatten_from(D::Minus2)?;
-        Ok(rope)
+        let (_b_sz, _n_head, seq_len, _n_embd) = x.dims4()?;
+        let cos = self.cos.narrow(0, index_pos, seq_len)?;
+        let sin = self.sin.narrow(0, index_pos, seq_len)?;
+        // The call to contiguous below is only necessary when processing the prompt.
+        // When the seq_len is 1 in the inference loop, this is a no-op.
+        candle_nn::rotary_emb::rope_i(&x.contiguous()?, &cos, &sin)
     }
 
-    fn forward_attn(&mut self, x: &Tensor, mask: &Tensor, index_pos: usize) -> Result<Tensor> {
+    fn forward_attn(
+        &mut self,
+        x: &Tensor,
+        mask: Option<&Tensor>,
+        index_pos: usize,
+    ) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
         let q = self.attention_wq.forward(x)?;
@@ -215,7 +200,11 @@ impl LayerWeights {
             .transpose(1, 2)?;
         let v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            // This call to contiguous ensures that the fast kernel can be called below. It's
+            // actually a no-op except when processing the initial prompt so has no significant
+            // impact on performance.
+            .contiguous()?;
 
         let q = self.apply_rotary_emb(&q, index_pos)?;
         let k = self.apply_rotary_emb(&k, index_pos)?;
@@ -226,41 +215,38 @@ impl LayerWeights {
                 if index_pos == 0 {
                     (k, v)
                 } else {
-                    let k = Tensor::cat(&[k_cache, &k], 2)?.contiguous()?;
-                    let v = Tensor::cat(&[v_cache, &v], 2)?.contiguous()?;
+                    let k = Tensor::cat(&[k_cache, &k], 2)?;
+                    let v = Tensor::cat(&[v_cache, &v], 2)?;
                     (k, v)
                 }
             }
         };
         self.kv_cache = Some((k.clone(), v.clone()));
 
-        // Support for MQA, useful for 70B models.
-        let k = self.repeat_kv(k)?;
-        let v = self.repeat_kv(v)?;
+        let y = if q.device().is_metal() && seq_len == 1 {
+            // SDPA will do MQA for us
+            candle_nn::ops::sdpa(&q, &k, &v, 1. / (self.head_dim as f32).sqrt(), 1.)?
+        } else {
+            // Support for MQA, useful for 70B models and mistral.
+            let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
+            let v = crate::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
 
-        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-        let mask = mask.broadcast_as(att.shape())?;
-        let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
-        let att = candle_nn::ops::softmax_last_dim(&att)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
-        let y = att.matmul(&v.contiguous()?)?;
+            let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+            let att = match mask {
+                None => att,
+                Some(mask) => {
+                    let mask = mask.broadcast_as(att.shape())?;
+                    masked_fill(&att, &mask, &self.neg_inf)?
+                }
+            };
+            let att = candle_nn::ops::softmax_last_dim(&att)?;
+            // Convert to contiguous as matmul doesn't support strided vs for now.
+            att.matmul(&v.contiguous()?)?
+        };
+
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.forward(&y)?;
         Ok(y)
-    }
-
-    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
-        let n_rep = self.n_head / self.n_kv_head;
-        if n_rep == 1 {
-            Ok(x)
-        } else {
-            let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
-            let x = x
-                .unsqueeze(2)?
-                .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
-            Ok(x)
-        }
     }
 }
 
@@ -275,13 +261,17 @@ pub struct ModelWeights {
     span_output: tracing::Span,
 }
 
-fn precomput_freqs_cis(head_dim: usize, freq_base: f32) -> Result<(Tensor, Tensor)> {
+fn precomput_freqs_cis(
+    head_dim: usize,
+    freq_base: f32,
+    device: &Device,
+) -> Result<(Tensor, Tensor)> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
         .collect();
-    let theta = Tensor::new(theta.as_slice(), &Device::Cpu)?;
-    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, &Device::Cpu)?
+    let theta = Tensor::new(theta.as_slice(), device)?;
+    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
         .to_dtype(DType::F32)?
         .reshape((MAX_SEQ_LEN, 1))?
         .matmul(&theta.reshape((1, theta.elem_count()))?)?;
@@ -292,12 +282,12 @@ fn precomput_freqs_cis(head_dim: usize, freq_base: f32) -> Result<(Tensor, Tenso
 
 impl ModelWeights {
     pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
-        let cpu = &Device::Cpu;
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
-        let (cos, sin) = precomput_freqs_cis(head_dim, 10000.)?;
+        let (cos, sin) = precomput_freqs_cis(head_dim, 10000., &ct.device)?;
+        let neg_inf = Tensor::new(f32::NEG_INFINITY, &ct.device)?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
-        let tok_embeddings = tok_embeddings.dequantize(cpu)?;
-        let norm = RmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
+        let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
+        let norm = RmsNorm::from_qtensor(ct.remove("norm.weight")?, 1e-5)?;
         let output = ct.remove("output.weight")?;
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
         for layer_idx in 0..ct.hparams.n_layer {
@@ -326,14 +316,15 @@ impl ModelWeights {
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
-                attention_norm: RmsNorm::new(attention_norm, 1e-5)?,
+                attention_norm: RmsNorm::from_qtensor(attention_norm, 1e-5)?,
                 mlp_or_moe,
-                ffn_norm: RmsNorm::new(ffn_norm, 1e-5)?,
+                ffn_norm: RmsNorm::from_qtensor(ffn_norm, 1e-5)?,
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
                 cos: cos.clone(),
                 sin: sin.clone(),
+                neg_inf: neg_inf.clone(),
                 kv_cache: None,
                 span_attn,
                 span_rot,
@@ -358,7 +349,6 @@ impl ModelWeights {
         reader: &mut R,
         device: &Device,
     ) -> Result<Self> {
-        let cpu = &Device::Cpu;
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle::bail!("cannot find {s} in metadata"),
             Some(v) => Ok(v),
@@ -377,20 +367,24 @@ impl ModelWeights {
         let embedding_length = md_get("llama.embedding_length")?.to_u32()? as usize;
         let rope_dim = md_get("llama.rope.dimension_count")?.to_u32()? as usize;
         // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
-        let rms_norm_eps = md_get("llama.attention.layer_norm_rms_epsilon")?.to_f32()?;
+        let rms_norm_eps = md_get("llama.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
 
         let rope_freq_base = md_get("llama.rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
-        let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base)?;
+        let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device)?;
+        let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
-        let tok_embeddings = tok_embeddings.dequantize(cpu)?;
-        let norm = RmsNorm::new(
+        let tok_embeddings_q = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = tok_embeddings_q.dequantize(device)?;
+        let norm = RmsNorm::from_qtensor(
             ct.tensor(reader, "output_norm.weight", device)?,
             rms_norm_eps,
         )?;
-        let output = ct.tensor(reader, "output.weight", device)?;
+        let output = match ct.tensor(reader, "output.weight", device) {
+            Ok(tensor) => tensor,
+            Err(_) => tok_embeddings_q,
+        };
         let mut layers = Vec::with_capacity(block_count);
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
@@ -445,14 +439,15 @@ impl ModelWeights {
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
-                attention_norm: RmsNorm::new(attention_norm, rms_norm_eps)?,
+                attention_norm: RmsNorm::from_qtensor(attention_norm, rms_norm_eps)?,
                 mlp_or_moe,
-                ffn_norm: RmsNorm::new(ffn_norm, rms_norm_eps)?,
+                ffn_norm: RmsNorm::from_qtensor(ffn_norm, rms_norm_eps)?,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
                 cos: cos.clone(),
                 sin: sin.clone(),
+                neg_inf: neg_inf.clone(),
                 kv_cache: None,
                 span_attn,
                 span_rot,
@@ -472,14 +467,14 @@ impl ModelWeights {
         })
     }
 
-    fn mask(&mut self, t: usize) -> Result<Tensor> {
+    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
         if let Some(mask) = self.masks.get(&t) {
             Ok(mask.clone())
         } else {
             let mask: Vec<_> = (0..t)
                 .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
                 .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), &Device::Cpu)?;
+            let mask = Tensor::from_slice(&mask, (t, t), device)?;
             self.masks.insert(t, mask.clone());
             Ok(mask)
         }
@@ -487,14 +482,18 @@ impl ModelWeights {
 
     pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
-        let mask = self.mask(seq_len)?;
+        let mask = if seq_len == 1 {
+            None
+        } else {
+            Some(self.mask(seq_len, x.device())?)
+        };
         let _enter = self.span.enter();
         let mut layer_in = self.tok_embeddings.forward(x)?;
         for layer in self.layers.iter_mut() {
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
-            let attn = layer.forward_attn(&x, &mask, index_pos)?;
+            let attn = layer.forward_attn(&x, mask.as_ref(), index_pos)?;
             let x = (attn + residual)?;
 
             // MLP

@@ -1,6 +1,8 @@
 use crate::backend::BackendStorage;
-use crate::op::{self, CmpOp, CustomOp1, CustomOp2, CustomOp3, ReduceOp};
+use crate::op::{self, CmpOp, ReduceOp};
+use crate::scalar::Scalar;
 use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
+use crate::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 
 // We do not want to implement Clone on Storage as cloning may fail because of
 // out of memory. Instead try_clone should be used.
@@ -43,9 +45,19 @@ impl Storage {
     }
 
     pub(crate) fn same_device(&self, rhs: &Self, op: &'static str) -> Result<()> {
-        let lhs = self.device().location();
-        let rhs = rhs.device().location();
-        if lhs != rhs {
+        let lhs_device = self.device();
+        let rhs_device = rhs.device();
+        let lhs = lhs_device.location();
+        let rhs = rhs_device.location();
+        let same_device = if self.device().is_metal() {
+            // On metal, we require the device to be exactly the same rather than
+            // having the same location. In cuda this is not necessary as all CudaDevice on the
+            // same GPU will use the same cuda stream.
+            lhs_device.same_device(&rhs_device)
+        } else {
+            lhs == rhs
+        };
+        if !same_device {
             Err(Error::DeviceMismatchBinaryOp { lhs, rhs, op }.bt())
         } else {
             Ok(())
@@ -59,6 +71,14 @@ impl Storage {
             Err(Error::DTypeMismatchBinaryOp { lhs, rhs, op }.bt())
         } else {
             Ok(())
+        }
+    }
+
+    pub(crate) fn const_set(&mut self, v: Scalar, l: &Layout) -> Result<()> {
+        match self {
+            Storage::Cpu(storage) => storage.const_set(v, l),
+            Storage::Cuda(storage) => storage.const_set(v, l),
+            Storage::Metal(storage) => storage.const_set(v, l),
         }
     }
 
@@ -252,6 +272,51 @@ impl Storage {
         }
     }
 
+    pub(crate) fn inplace_op1(&mut self, l: &Layout, c: &dyn InplaceOp1) -> Result<()> {
+        match self {
+            Self::Cpu(storage) => c.cpu_fwd(storage, l),
+            Self::Cuda(storage) => c.cuda_fwd(storage, l),
+            Self::Metal(storage) => c.metal_fwd(storage, l),
+        }
+    }
+
+    pub(crate) fn inplace_op2(
+        &mut self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn InplaceOp2,
+    ) -> Result<()> {
+        self.same_device(t2, c.name())?;
+        match (self, t2) {
+            (Self::Cpu(s1), Self::Cpu(s2)) => c.cpu_fwd(s1, l1, s2, l2),
+            (Self::Cuda(s1), Self::Cuda(s2)) => c.cuda_fwd(s1, l1, s2, l2),
+            (Self::Metal(s1), Self::Metal(s2)) => c.metal_fwd(s1, l1, s2, l2),
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn inplace_op3(
+        &mut self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn InplaceOp3,
+    ) -> Result<()> {
+        self.same_device(t2, c.name())?;
+        self.same_device(t3, c.name())?;
+        match (self, t2, t3) {
+            (Self::Cpu(s1), Self::Cpu(s2), Self::Cpu(s3)) => c.cpu_fwd(s1, l1, s2, l2, s3, l3),
+            (Self::Cuda(s1), Self::Cuda(s2), Self::Cuda(s3)) => c.cuda_fwd(s1, l1, s2, l2, s3, l3),
+            (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
+                c.metal_fwd(s1, l1, s2, l2, s3, l3)
+            }
+            _ => unreachable!(),
+        }
+    }
+
     pub(crate) fn unary_impl<B: op::UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {
@@ -351,6 +416,10 @@ impl Storage {
             (Storage::Cuda(inp), Storage::Cuda(kernel)) => {
                 let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Cuda(s))
+            }
+            (Storage::Metal(inp), Storage::Metal(kernel)) => {
+                let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
+                Ok(Self::Metal(s))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -559,32 +628,56 @@ impl Storage {
         }
     }
 
-    pub(crate) fn scatter_add(
-        &self,
+    pub(crate) fn scatter_set(
+        &mut self,
         l: &Layout,
         indexes: &Self,
         indexes_l: &Layout,
         source: &Self,
         source_l: &Layout,
         d: usize,
-    ) -> Result<Self> {
+    ) -> Result<()> {
+        self.same_device(indexes, "scatter-set")?;
+        self.same_device(source, "scatter-set")?;
+        match (self, indexes, source) {
+            (Self::Cpu(s), Self::Cpu(indexes), Self::Cpu(source)) => {
+                s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
+            (Self::Cuda(s), Self::Cuda(indexes), Self::Cuda(source)) => {
+                s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
+            (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
+                s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+
+    pub(crate) fn scatter_add(
+        &mut self,
+        l: &Layout,
+        indexes: &Self,
+        indexes_l: &Layout,
+        source: &Self,
+        source_l: &Layout,
+        d: usize,
+    ) -> Result<()> {
         self.same_device(indexes, "scatter-add")?;
         self.same_device(source, "scatter-add")?;
         match (self, indexes, source) {
             (Self::Cpu(s), Self::Cpu(indexes), Self::Cpu(source)) => {
-                let storage = s.scatter_add(l, indexes, indexes_l, source, source_l, d)?;
-                Ok(Self::Cpu(storage))
+                s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             (Self::Cuda(s), Self::Cuda(indexes), Self::Cuda(source)) => {
-                let storage = s.scatter_add(l, indexes, indexes_l, source, source_l, d)?;
-                Ok(Self::Cuda(storage))
+                s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
-                let storage = s.scatter_add(l, indexes, indexes_l, source, source_l, d)?;
-                Ok(Self::Metal(storage))
+                s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             _ => unreachable!(),
         }
+        Ok(())
     }
 
     pub(crate) fn index_add(
@@ -693,6 +786,34 @@ impl Storage {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
                 op: "copy",
+            }
+            .bt()),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn copy2d(
+        &self,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_s: usize,
+        dst_s: usize,
+        src_o: usize,
+        dst_o: usize,
+    ) -> Result<()> {
+        match (self, dst) {
+            (Self::Cpu(src), Self::Cpu(dst)) => src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o),
+            (Self::Cuda(src), Self::Cuda(dst)) => {
+                Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
+            }
+            (Self::Metal(src), Self::Metal(dst)) => {
+                Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
+            }
+            (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
+                lhs: lhs.device().location(),
+                rhs: rhs.device().location(),
+                op: "copy2d",
             }
             .bt()),
         }

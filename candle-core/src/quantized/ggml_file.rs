@@ -1,7 +1,5 @@
 //! Support for the GGML file format.
 
-#[cfg(feature = "metal")]
-use super::metal::load_quantized_metal;
 use super::{k_quants, GgmlDType, QStorage};
 use crate::{Device, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
@@ -130,18 +128,13 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
     let data = unsafe { std::slice::from_raw_parts(raw_data_ptr as *const T, n_blocks) };
     let data: QStorage = match device {
         Device::Cpu => QStorage::Cpu(Box::new(data.to_vec())),
-        #[cfg(feature = "metal")]
-        Device::Metal(metal) => load_quantized_metal(metal, data)?,
-        #[cfg(not(feature = "metal"))]
-        Device::Metal(_metal) => {
-            crate::bail!("Metal backend requires `metal` feature")
-        }
-        device => unimplemented!("Implement quantized tensor for device {device:?}"),
+        Device::Metal(metal) => super::metal::load_quantized(metal, data)?,
+        Device::Cuda(cuda) => super::cuda::load_quantized(cuda, data)?,
     };
     super::QTensor::new(data, dims)
 }
 
-/// Creates a [Tensor] from a raw GGML tensor.
+/// Creates a Tensor from a raw GGML tensor.
 pub fn qtensor_from_ggml(
     ggml_dtype: GgmlDType,
     raw_data: &[u8],
@@ -160,6 +153,7 @@ pub fn qtensor_from_ggml(
     match ggml_dtype {
         GgmlDType::F32 => from_raw_data::<f32>(raw_data, size_in_bytes, dims, device),
         GgmlDType::F16 => from_raw_data::<half::f16>(raw_data, size_in_bytes, dims, device),
+        GgmlDType::BF16 => from_raw_data::<half::bf16>(raw_data, size_in_bytes, dims, device),
         GgmlDType::Q4_0 => {
             from_raw_data::<k_quants::BlockQ4_0>(raw_data, size_in_bytes, dims, device)
         }
@@ -233,6 +227,7 @@ pub struct Content {
     pub hparams: HParams,
     pub vocab: Vocab,
     pub tensors: HashMap<String, super::QTensor>,
+    pub device: Device,
 }
 
 impl Content {
@@ -252,11 +247,13 @@ impl Content {
             let (name, tensor) = read_one_tensor(reader, magic, device)?;
             tensors.insert(name, tensor);
         }
+        let device = device.clone();
         Ok(Self {
             magic,
             hparams,
             vocab,
             tensors,
+            device,
         })
     }
 

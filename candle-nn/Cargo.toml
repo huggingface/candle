@@ -19,16 +19,25 @@ num-traits = { workspace = true }
 rayon = { workspace = true }
 safetensors = { workspace = true }
 serde = { workspace = true }
-metal = { workspace = true, optional = true }
+objc2-metal = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
+libc = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+rand = { workspace = true }
+rand_distr = { workspace = true }
+criterion = { workspace = true }
 
 [features]
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
+cudnn = ["candle/cudnn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
-metal = ["candle/metal", "dep:candle-metal-kernels", "dep:metal"]
+metal = ["candle/metal", "dep:candle-metal-kernels", "dep:objc2-metal"]
+
+[[bench]]
+name = "bench_main"
+harness = false
