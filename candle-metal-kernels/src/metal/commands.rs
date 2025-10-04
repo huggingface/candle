@@ -85,9 +85,18 @@ impl Commands {
     }
 
     pub fn wait_until_completed(&mut self) -> Result<(), MetalKernelError> {
-        let mut command_buffers = self.command_buffers.lock()?;
-        // Only wait for the current command buffer if it exists
-        if let Some(command_buffer) = command_buffers.get_mut() {
+        let command_buffer = {
+            let mut command_buffers = self.command_buffers.lock()?;
+
+            if let Some(command_buffer) = command_buffers.get_mut() {
+                let current_command_buffer = command_buffer.clone();
+                *command_buffer = create_command_buffer(&self.command_queue)?;
+                Some(current_command_buffer)
+            } else {
+                None
+            }
+        };
+        if let Some(command_buffer) = command_buffer {
             // Only commit and wait if it needed
             match command_buffer.status() {
                 MTLCommandBufferStatus::NotEnqueued | MTLCommandBufferStatus::Enqueued => {
@@ -107,12 +116,12 @@ impl Commands {
                 // We need this final match arm because the statuses are implemented as integers, not an enum, in the objc2 framework.
                 _ => unreachable!(),
             }
-            *command_buffer = create_command_buffer(&self.command_queue)?;
         } else {
+            // No command buffer to wait for, so we create one
             let command_buffer = create_command_buffer(&self.command_queue)?;
+            let mut command_buffers = self.command_buffers.lock()?;
             command_buffers.insert(command_buffer);
         }
-
         Ok(())
     }
 }
