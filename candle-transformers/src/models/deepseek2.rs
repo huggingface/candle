@@ -10,61 +10,61 @@ use candle_nn::{embedding, rms_norm, Activation, Embedding, Linear, Module, RmsN
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 
-struct NonZero<B: BackendStorage> {
-    marker: std::marker::PhantomData<B>,
+fn nonzero<T: WithDType>(vs: &[T], layout: &Layout) -> Vec<u32> {
+    let n = layout.dims().len();
+    let mut result = Vec::new();
+    let mut indices = vec![0u32; n];
+    for (i, v) in vs.iter().enumerate() {
+        if !v.is_zero() {
+            let mut idx = i;
+            for (dim_index, dim) in layout.dims().iter().enumerate().rev() {
+                let d = idx % dim;
+                indices[dim_index] = u32::try_from(d).unwrap();
+                idx /= dim;
+            }
+            result.extend_from_slice(&indices);
+        }
+    }
+    result
 }
 
-impl<B: BackendStorage> NonZero<B> {
-    // Sequential version
-    fn nonzero<T: WithDType>(&self, vs: &[T], layout: &Layout) -> Vec<u32> {
-        let n = layout.dims().len();
-        let mut result = Vec::new();
-        let mut indices = vec![0u32; n];
-        for (i, v) in vs.iter().enumerate() {
-            if !v.is_zero() {
-                let mut idx = i;
-                for (dim_index, dim) in layout.dims().iter().enumerate().rev() {
-                    let d = idx % dim;
-                    indices[dim_index] = u32::try_from(d).unwrap();
-                    idx /= dim;
-                }
-                result.extend_from_slice(&indices);
-            }
-        }
-        result
-    }
+trait NonZeroTrait: Sized {
+    fn nonzero(&self, layout: &Layout) -> Result<(Self, Shape)>;
+}
 
-    fn nonzero_cpu(&self, storage: &CpuStorage, layout: &Layout) -> Result<(Vec<u32>, Shape)> {
+impl NonZeroTrait for CpuStorage {
+    fn nonzero(&self, layout: &Layout) -> Result<(Self, Shape)> {
         if !layout.is_contiguous() {
             return Err(Error::RequiresContiguous { op: "nonzero" });
         }
-        let result = match storage {
-            CpuStorage::U8(vs) => self.nonzero(vs, layout),
-            CpuStorage::U32(vs) => self.nonzero(vs, layout),
-            CpuStorage::I64(vs) => self.nonzero(vs, layout),
-            CpuStorage::BF16(vs) => self.nonzero(vs, layout),
-            CpuStorage::F16(vs) => self.nonzero(vs, layout),
-            CpuStorage::F32(vs) => self.nonzero(vs, layout),
-            CpuStorage::F64(vs) => self.nonzero(vs, layout),
-            CpuStorage::F8E4M3(vs) => self.nonzero(vs, layout),
+        let result = match self {
+            CpuStorage::U8(vs) => nonzero(vs, layout),
+            CpuStorage::U32(vs) => nonzero(vs, layout),
+            CpuStorage::I64(vs) => nonzero(vs, layout),
+            CpuStorage::BF16(vs) => nonzero(vs, layout),
+            CpuStorage::F16(vs) => nonzero(vs, layout),
+            CpuStorage::F32(vs) => nonzero(vs, layout),
+            CpuStorage::F64(vs) => nonzero(vs, layout),
+            CpuStorage::F8E4M3(vs) => nonzero(vs, layout),
         };
         let index_len = layout.dims().len();
         let result_len = result.len() / index_len;
         let shape = Shape::from_dims(&[result_len, index_len]);
-        Ok((result, shape))
+        Ok((CpuStorage::U32(result), shape))
     }
 }
 
-impl<B: BackendStorage> CustomOp1<B> for NonZero<B> {
+struct NonZero {}
+
+impl CustomOp1<CpuStorage> for NonZero {
     fn name(&self) -> &'static str {
         "nonzero"
     }
 
     fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
-        let (result, shape) = self.nonzero_cpu(storage, layout)?;
-        Ok((CpuStorage::U32(result), shape))
+        storage.nonzero(layout)
     }
-
+    /*
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
@@ -79,7 +79,6 @@ impl<B: BackendStorage> CustomOp1<B> for NonZero<B> {
         Ok((storage, shape))
     }
 
-    #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
         storage: &candle::MetalStorage,
@@ -88,14 +87,15 @@ impl<B: BackendStorage> CustomOp1<B> for NonZero<B> {
         use candle::BackendDevice;
         let device = storage.device().as_ref().clone();
         let cpu_storage = storage.to_cpu_storage()?;
-        let (result, shape) = self.nonzero_cpu(&cpu_storage, layout)?;
+        let (result, shape) = cpu_storage.nonzero(layout)?;
         if !result.is_empty() {
-            let storage = device.storage_from_slice(&result)?;
+            let storage = device.storage_from_cpu_storage(&result)?;
             return Ok((storage, shape));
         } else {
-            Ok((storage.clone(), shape))
+            Ok((storage.clone(), layout.shape().clone()))
         }
     }
+     */
 }
 
 pub trait NonZeroOp<B: BackendStorage> {
@@ -107,9 +107,10 @@ impl<B: BackendStorage> NonZeroOp<B> for Tensor<B> {
         if !self.is_contiguous() {
             return Err(candle::Error::RequiresContiguous { op: "nonzero" });
         }
-        self.apply_op1_no_bwd(&NonZero {
-            marker: std::marker::PhantomData,
-        })
+        let device = self.device();
+        let result = self.to_cpu()?.apply_op1_no_bwd(&NonZero {})?;
+        let tensor = Tensor::from_cpu(result, device)?;
+        Ok(tensor)
     }
 }
 
@@ -960,7 +961,7 @@ impl<B: BackendStorage> DecoderLayer<B> {
         )?;
         let moe_or_mlp = if cfg.n_routed_experts.is_some()
             && layer_idx >= cfg.first_k_dense_replace
-            && layer_idx % cfg.moe_layer_freq == 0
+            && layer_idx.is_multiple_of(cfg.moe_layer_freq)
         {
             MoeOrMlp::Moe(
                 Moe::new(
@@ -1016,60 +1017,32 @@ pub struct DeepSeekV2<B: BackendStorage> {
 
 impl<B: BackendStorage> DeepSeekV2<B> {
     pub fn new(cfg: &DeepSeekV2Config, vb: VarBuilder<B>) -> Result<Self> {
-        fn embed_linear_norm<B: BackendStorage>(
-            cfg: &DeepSeekV2Config,
-            vb: &VarBuilder<B>,
-        ) -> Result<(Embedding<B>, Linear<B>, RmsNorm<B>)> {
-            let embed_tokens = embedding(
-                cfg.vocab_size,
-                cfg.hidden_size,
-                vb.pp("model").pp("embed_tokens"),
-            )?;
-            let lm_head = if !cfg.tie_word_embeddings {
-                candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
-            } else {
-                candle_nn::Linear::new(embed_tokens.embeddings().clone(), None)
-            };
-            let norm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model").pp("norm"))?;
+        let vb_m = vb.pp("model");
+        let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+        let lm_head = if !cfg.tie_word_embeddings {
+            candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
+        } else {
+            candle_nn::Linear::new(embed_tokens.embeddings().clone(), None)
+        };
+        let norm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let rope_cfg = DeepSeekV2RopeConfig {
+            rope_scaling: cfg.rope_scaling.clone(),
+            max_position_embeddings: cfg.max_position_embeddings,
+            rope_theta: cfg.rope_theta,
+            qk_rope_head_dim: cfg.qk_rope_head_dim,
+        };
+        let rotary_emb = Arc::new(DeepSeekV2RotaryEmbedding::new(
+            &rope_cfg,
+            vb.dtype(),
+            vb.device(),
+        )?);
 
-            Ok((embed_tokens, lm_head, norm))
+        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        let vb_l = vb_m.pp("layers");
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx), layer_idx)?;
+            layers.push(layer)
         }
-
-        fn get_layers<B: BackendStorage>(
-            cfg: &DeepSeekV2Config,
-            vb: &VarBuilder<B>,
-        ) -> Result<Vec<DecoderLayer<B>>> {
-            let rope_cfg = DeepSeekV2RopeConfig {
-                rope_scaling: cfg.rope_scaling.clone(),
-                max_position_embeddings: cfg.max_position_embeddings,
-                rope_theta: cfg.rope_theta,
-                qk_rope_head_dim: cfg.qk_rope_head_dim,
-            };
-            let rotary_emb = Arc::new(DeepSeekV2RotaryEmbedding::new(
-                &rope_cfg,
-                vb.dtype(),
-                vb.device(),
-            )?);
-
-            //let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
-            let vb_l = vb.pp("model").pp("layers");
-
-            use rayon::prelude::*;
-            let layers: Vec<DecoderLayer<B>> = (0..cfg.num_hidden_layers)
-                .into_par_iter()
-                .map(|layer_idx| {
-                    DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx), layer_idx)
-                        .unwrap()
-                })
-                .collect();
-
-            Ok(layers)
-        }
-
-        let ((embed_tokens, lm_head, norm), layers) = rayon::join(
-            || embed_linear_norm(cfg, &vb).unwrap(),
-            || get_layers(cfg, &vb).unwrap(),
-        );
 
         Ok(Self {
             lm_head,

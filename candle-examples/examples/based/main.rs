@@ -185,12 +185,22 @@ pub fn main() -> Result<()> {
 
     if args.cpu {
         run::<candle::CpuStorage>(args)?;
-    } else {
-        #[cfg(feature = "cuda")]
+    } else if candle::utils::cuda_is_available() {
         run::<candle::CudaStorage>(args)?;
-
-        #[cfg(feature = "metal")]
+    } else if candle::utils::metal_is_available() {
         run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
     }
     Ok(())
 }
@@ -259,7 +269,6 @@ fn run<B: BackendStorage>(args: Args) -> Result<()> {
 
     let start = std::time::Instant::now();
     let config = serde_json::from_reader(std::fs::File::open(config_file)?)?;
-
     let device = B::Device::new(0)?;
     let dtype = if B::Device::SUPPORTS_BF16 {
         DType::BF16

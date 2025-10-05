@@ -954,6 +954,10 @@ impl BackendStorage for MetalStorage {
         let command_buffer = self.device.command_buffer()?;
         let name = match self.dtype {
             DType::F32 => "im2col1d_f32",
+            DType::F16 => "im2col1d_f16",
+            DType::BF16 => "im2col1d_bf16",
+            DType::U8 => "im2col1d_u8",
+            DType::U32 => "im2col1d_u32",
             dtype => crate::bail!("Metal conv1d {dtype:?} not implemented"),
         };
         let src = buffer_o(&self.buffer, layout, self.dtype);
@@ -1036,6 +1040,8 @@ impl BackendStorage for MetalStorage {
 
             let name = match self.dtype {
                 DType::F32 => "col2im1d_f32",
+                DType::F16 => "col2im1d_f16",
+                DType::BF16 => "col2im1d_bf16",
                 DType::U32 => "col2im1d_u32",
                 DType::U8 => "col2im1d_u8",
                 dtype => crate::bail!("metal col2im1d {dtype:?} not implemented"),
@@ -1400,6 +1406,12 @@ impl BackendStorage for MetalStorage {
         let dtype = self.dtype;
         let buffer = self.device.new_buffer(dst_el, dtype, "gather")?;
         let name = match (ids.dtype, self.dtype) {
+            (DType::U8, DType::U8) => "gather_u8_u8",
+            (DType::U8, DType::F32) => "gather_u8_f32",
+            (DType::U8, DType::F16) => "gather_u8_f16",
+            (DType::U8, DType::BF16) => "gather_u8_bf16",
+            (DType::U8, DType::U32) => "gather_u8_u32",
+            (DType::U8, DType::I64) => "gather_u8_i64",
             (DType::U32, DType::F32) => "gather_u32_f32",
             (DType::U32, DType::F16) => "gather_u32_f16",
             (DType::U32, DType::BF16) => "gather_u32_bf16",
@@ -2077,8 +2089,7 @@ impl MetalStorage {
 
     pub(crate) fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
         let size = self.count * self.dtype.size_in_bytes();
-
-        let buffer = self.device.new_buffer_managed(size)?;
+        let buffer = self.device.allocate_buffer(size)?;
         {
             let command_buffer = self.device.command_buffer()?;
             command_buffer.set_label("to_cpu");
