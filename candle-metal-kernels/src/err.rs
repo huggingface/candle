@@ -10,6 +10,8 @@ pub enum MetalKernelError {
     LoadLibraryError(String),
     #[error("Error while loading function: {0}")]
     LoadFunctionError(String),
+    #[error("Unsupported dtype {0} for operation {1}")]
+    UnsupportedDTypeForOp(&'static str, &'static str),
     #[error("Failed to create compute function")]
     FailedToCreateComputeFunction,
     #[error("Failed to create metal resource: {0}")]
