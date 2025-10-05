@@ -21,7 +21,7 @@ impl<B: BackendStorage> GroupNorm<B> {
         num_groups: usize,
         eps: f64,
     ) -> Result<Self> {
-        if num_channels % num_groups != 0 {
+        if !num_channels.is_multiple_of(num_groups) {
             candle::bail!(
                 "GroupNorm: num_groups ({num_groups}) must divide num_channels ({num_channels})"
             )

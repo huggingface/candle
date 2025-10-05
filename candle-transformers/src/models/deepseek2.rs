@@ -960,7 +960,7 @@ impl<B: BackendStorage> DecoderLayer<B> {
         )?;
         let moe_or_mlp = if cfg.n_routed_experts.is_some()
             && layer_idx >= cfg.first_k_dense_replace
-            && layer_idx % cfg.moe_layer_freq == 0
+            && layer_idx.is_multiple_of(cfg.moe_layer_freq)
         {
             MoeOrMlp::Moe(
                 Moe::new(

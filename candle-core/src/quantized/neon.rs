@@ -24,7 +24,7 @@ unsafe fn vdotq_s32(a: int8x16_t, b: int8x16_t) -> int32x4_t {
 pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) -> Result<f32> {
     let qk = QK8_0;
     let nb = n / qk;
-    if n % QK8_0 != 0 {
+    if !n.is_multiple_of(QK8_0) {
         crate::bail!("vec_dot_q4_0_q8_0: {n} is not divisible by {qk}")
     }
 
@@ -66,7 +66,7 @@ pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) ->
 #[inline(always)]
 pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) -> Result<f32> {
     let qk = QK8_0;
-    if n % QK8_0 != 0 {
+    if !n.is_multiple_of(QK8_0) {
         crate::bail!("vec_dot_q8_0_q8_0: {n} is not divisible by {qk}")
     }
     let nb = n / QK8_0;
@@ -99,7 +99,7 @@ pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) ->
 #[inline(always)]
 pub(crate) fn vec_dot_q8k_q8k(n: usize, xs: &[BlockQ8K], ys: &[BlockQ8K]) -> Result<f32> {
     let qk = QK_K;
-    if n % QK_K != 0 {
+    if !n.is_multiple_of(QK_K) {
         crate::bail!("vec_dot_q8k_q8k: {n} is not divisible by {qk}")
     }
 
@@ -124,7 +124,7 @@ pub(crate) fn vec_dot_q8k_q8k(n: usize, xs: &[BlockQ8K], ys: &[BlockQ8K]) -> Res
 
 #[inline(always)]
 pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Result<f32> {
-    if n % QK_K != 0 {
+    if !n.is_multiple_of(QK_K) {
         crate::bail!("vec_dot_q6k_q8k: {n} is not divisible by {QK_K}")
     }
     let mut sum = 0f32;
@@ -232,7 +232,7 @@ pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Res
 
 #[inline(always)]
 pub(crate) fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K]) -> Result<f32> {
-    if n % QK_K != 0 {
+    if !n.is_multiple_of(QK_K) {
         crate::bail!("vec_dot_q5k_q8k: {n} is not divisible by {QK_K}")
     }
     let mut sumf = 0f32;
@@ -316,7 +316,7 @@ pub(crate) fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K]) -> Res
 
 #[inline(always)]
 pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Result<f32> {
-    if n % QK_K != 0 {
+    if !n.is_multiple_of(QK_K) {
         crate::bail!("vec_dot_q4k_q8k: {n} is not divisible by {QK_K}")
     }
     let mut sumf = 0f32;
@@ -396,7 +396,7 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
 
 #[inline(always)]
 pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Result<f32> {
-    if n % QK_K != 0 {
+    if !n.is_multiple_of(QK_K) {
         crate::bail!("vec_dot_q3k_q8k: {n} is not divisible by {QK_K}")
     }
     let mut sumf = 0f32;
@@ -519,7 +519,7 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
 
 #[inline(always)]
 pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> Result<f32> {
-    if n % QK_K != 0 {
+    if !n.is_multiple_of(QK_K) {
         crate::bail!("vec_dot_q2k_q8k: {n} is not divisible by {QK_K}")
     }
     let mut sumf = 0f32;

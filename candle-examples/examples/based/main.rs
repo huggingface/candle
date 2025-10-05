@@ -269,7 +269,6 @@ fn run<B: BackendStorage>(args: Args) -> Result<()> {
 
     let start = std::time::Instant::now();
     let config = serde_json::from_reader(std::fs::File::open(config_file)?)?;
-
     let device = B::Device::new(0)?;
     let dtype = if B::Device::SUPPORTS_BF16 {
         DType::BF16
