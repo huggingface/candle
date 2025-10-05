@@ -8,6 +8,6 @@ This example first instantiates the DINOv2 model and then proceeds to create Dep
 ## Running an example with color map and CUDA
 
 ```bash
-cargo run --features cuda,depth_anything_v2 --package candle-examples --example depth_anything_v2 -- --color-map --image candle-examples/examples/yolo-v8/assets/bike.jpg 
+cargo run --features metal,depth_anything_v2 --package candle-examples --example depth_anything_v2 -- --color-map --image candle-examples/examples/yolo-v8/assets/bike.jpg 
 ```
 

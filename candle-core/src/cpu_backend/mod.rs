@@ -1616,6 +1616,23 @@ fn elu<T: num_traits::Float>(v: T, alpha: T) -> T {
 }
 
 impl CpuStorage {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::U8(s) => s.len(),
+            Self::U32(s) => s.len(),
+            Self::I64(s) => s.len(),
+            Self::BF16(s) => s.len(),
+            Self::F16(s) => s.len(),
+            Self::F32(s) => s.len(),
+            Self::F64(s) => s.len(),
+            Self::F8E4M3(s) => s.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn as_slice<D: WithDType>(&self) -> Result<&[D]> {
         D::cpu_storage_as_slice(self)
     }

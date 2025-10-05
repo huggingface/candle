@@ -62,7 +62,7 @@ impl TensorInfo {
     ) -> Result<QTensor<QB>> {
         let tensor_elems = self.shape.elem_count();
         let block_size = self.ggml_dtype.block_size();
-        if tensor_elems % block_size != 0 {
+        if !tensor_elems.is_multiple_of(block_size) {
             crate::bail!(
             "the number of elements {tensor_elems} is not divisible by the block size {block_size}"
         )
