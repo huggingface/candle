@@ -271,11 +271,8 @@ fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
         } else {
             DType::F16
         };
-        println!("loading the model at {:?}", start.elapsed());
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
-        println!("VarBuilder {:?}", start.elapsed());
         let model: DeepSeekV2<B> = DeepSeekV2::new(&config, vb)?;
-        println!("model {:?}", start.elapsed());
         (model, device)
     };
 

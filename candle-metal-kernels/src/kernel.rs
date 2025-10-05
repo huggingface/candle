@@ -134,8 +134,7 @@ impl Kernels {
     ) -> Result<Function, MetalKernelError> {
         let func = self
             .load_library(device, source)?
-            .get_function(name, constants)
-            .map_err(|e| MetalKernelError::LoadFunctionError(e.to_string()))?;
+            .get_function(name, constants)?;
         Ok(func)
     }
 
