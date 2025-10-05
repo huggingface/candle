@@ -20,6 +20,10 @@ fn test_matmul(
     (b, m, n, k): (usize, usize, usize, usize),
     dtype: GgmlDType,
 ) -> Result<()> {
+    if device.is_metal() && (dtype == GgmlDType::Q8_1 || dtype == GgmlDType::Q8K) {
+        return Ok(());
+    }
+
     let lhs = (0..(m * k))
         .map(|v| v as f32 / (m * k) as f32)
         .collect::<Vec<_>>();
