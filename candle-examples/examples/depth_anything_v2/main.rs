@@ -47,40 +47,40 @@ struct Args {
     color_map: bool,
 }
 
-fn run<B: BackendStorage + 'static>(args: Args, device: &B::Device) -> Result<()> {
+fn run<B: BackendStorage + 'static>(args: Args) -> anyhow::Result<()> {
     let dinov2_model_file = match args.dinov2_model {
         None => {
-            let api = hf_hub::api::sync::Api::new().unwrap();
+            let api = hf_hub::api::sync::Api::new()?;
             let api = api.model("lmz/candle-dino-v2".into());
-            api.get("dinov2_vits14.safetensors").unwrap()
+            api.get("dinov2_vits14.safetensors")?
         }
         Some(dinov2_model) => dinov2_model,
     };
     println!("Using file {:?}", dinov2_model_file);
 
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[dinov2_model_file], F32, device)? };
+    let device = B::Device::new(0)?;
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[dinov2_model_file], F32, &device)? };
     let dinov2: dinov2::DinoVisionTransformer<B> = dinov2::vit_small(vb)?;
     println!("DinoV2 model built");
 
     let depth_anything_model_file = match args.depth_anything_v2_model {
         None => {
-            let api = hf_hub::api::sync::Api::new().unwrap();
+            let api = hf_hub::api::sync::Api::new()?;
             let api = api.model("jeroenvlek/depth-anything-v2-safetensors".into());
-            api.get("depth_anything_v2_vits.safetensors").unwrap()
+            api.get("depth_anything_v2_vits.safetensors")?
         }
         Some(depth_anything_model) => depth_anything_model,
     };
     println!("Using file {:?}", depth_anything_model_file);
 
     let vb = unsafe {
-        VarBuilder::from_mmaped_safetensors(&[depth_anything_model_file], DType::F32, device)?
+        VarBuilder::from_mmaped_safetensors(&[depth_anything_model_file], DType::F32, &device)?
     };
 
     let config = DepthAnythingV2Config::vit_small();
     let depth_anything = DepthAnythingV2::new(Arc::new(dinov2), config, vb)?;
 
-    let (original_height, original_width, image) =
-        load_and_prep_image(&args.image, device).unwrap();
+    let (original_height, original_width, image) = load_and_prep_image(&args.image, &device)?;
 
     println!("Loaded image {image:?}");
 
@@ -101,13 +101,13 @@ pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     if args.cpu {
-        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+        run::<candle::CpuStorage>(args)?;
     } else {
         #[cfg(feature = "cuda")]
-        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+        run::<candle::CudaStorage>(args)?;
 
         #[cfg(feature = "metal")]
-        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+        run::<candle::MetalStorage>(args)?;
     }
     Ok(())
 }
