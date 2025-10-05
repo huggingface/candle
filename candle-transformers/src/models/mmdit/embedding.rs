@@ -146,7 +146,7 @@ impl<B: BackendStorage + 'static> TimestepEmbedder<B> {
     }
 
     fn timestep_embedding(t: &Tensor<B>, dim: usize, max_period: f64) -> Result<Tensor<B>> {
-        if dim % 2 != 0 {
+        if !dim.is_multiple_of(2) {
             bail!("Embedding dimension must be even")
         }
 

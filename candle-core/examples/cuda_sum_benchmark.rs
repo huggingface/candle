@@ -15,7 +15,7 @@ use candle_core::{
 type CudaTensor = Tensor<CudaStorage>;
 
 fn cos_sin<B: BackendStorage>(n: usize, device: &B::Device) -> Result<Tensor<B>> {
-    let thetas: Vec<_> = (0..n).map(|i| (i as f32 / n as f32)).collect();
+    let thetas: Vec<_> = (0..n).map(|i| i as f32 / n as f32).collect();
     let xs: Vec<_> = thetas.iter().map(|t| t.cos().abs()).collect();
     let ys: Vec<_> = thetas.iter().map(|t| t.sin().abs()).collect();
     let xs = Tensor::from_vec(xs, (n, 1), device)?;

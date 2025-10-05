@@ -99,12 +99,22 @@ pub fn main() -> Result<()> {
 
     if args.cpu {
         run::<candle::CpuStorage>(args)?;
-    } else {
-        #[cfg(feature = "cuda")]
+    } else if candle::utils::cuda_is_available() {
         run::<candle::CudaStorage>(args)?;
-
-        #[cfg(feature = "metal")]
+    } else if candle::utils::metal_is_available() {
         run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
     }
     Ok(())
 }

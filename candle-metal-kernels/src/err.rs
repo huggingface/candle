@@ -2,12 +2,16 @@ use crate::kernels::sdpa::SdpaDType;
 
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
-    #[error("Could not lock kernel map: {0}")]
+    #[error("Command buffer had following error: {0}")]
+    CommandBufferError(String),
+    #[error("Could not lock resource: {0}")]
     LockError(String),
     #[error("Error while loading library: {0}")]
     LoadLibraryError(String),
     #[error("Error while loading function: {0}")]
     LoadFunctionError(String),
+    #[error("Unsupported dtype {0} for operation {1}")]
+    UnsupportedDTypeForOp(&'static str, &'static str),
     #[error("Failed to create compute function")]
     FailedToCreateComputeFunction,
     #[error("Failed to create metal resource: {0}")]
@@ -31,6 +35,25 @@ pub enum MetalKernelError {
         variation: &'static str,
         got: SdpaDType,
     },
+    #[error("{inner}\n{backtrace}")]
+    WithBacktrace {
+        inner: Box<Self>,
+        backtrace: Box<std::backtrace::Backtrace>,
+    },
+}
+
+impl MetalKernelError {
+    pub fn bt(self) -> Self {
+        let backtrace = std::backtrace::Backtrace::capture();
+        match backtrace.status() {
+            std::backtrace::BacktraceStatus::Disabled
+            | std::backtrace::BacktraceStatus::Unsupported => self,
+            _ => Self::WithBacktrace {
+                inner: Box::new(self),
+                backtrace: Box::new(backtrace),
+            },
+        }
+    }
 }
 
 impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
