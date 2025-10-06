@@ -4,10 +4,6 @@ use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-// For build_bert_single_file_binary()
-use std::fs::{self, File};
-use std::io::copy;
-
 struct KernelDirectories {
     kernel_glob: &'static str,
     rust_target: &'static str,
@@ -42,6 +38,5 @@ fn main() -> Result<()> {
             bindings.write(safe_target).unwrap()
         }
     }
-
     Ok(())
 }
