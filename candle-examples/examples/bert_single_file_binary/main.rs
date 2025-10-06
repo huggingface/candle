@@ -171,9 +171,13 @@ fn main() -> Result<()> {
 }
 
 pub fn build_model_and_tokenizer_from_bytes(device: &Device) -> Result<(BertModel, Tokenizer)> {
-    let config_data = include_bytes!("files/config.json");
-    let tokenizer_data = include_bytes!("files/tokenizer.json");
-    let weights_data = include_bytes!("files/model.safetensors");
+    let config_data = include_bytes!("../../bert_single_file_binary_builder/files/config.json");
+
+    let tokenizer_data =
+        include_bytes!("../../bert_single_file_binary_builder/files/tokenizer.json");
+
+    let weights_data =
+        include_bytes!("../../bert_single_file_binary_builder/files/model.safetensors");
 
     let config_string = std::str::from_utf8(config_data)?;
     let config: BertConfig = serde_json::from_str(config_string)?;
@@ -189,7 +193,6 @@ pub fn init_model_and_tokenizer(
     var_builder: VarBuilder,
 ) -> Result<(BertModel, Tokenizer)> {
     if let Some(pp) = tokenizer.get_padding_mut() {
-        // TODO: is pp used anywhere?
         pp.strategy = tokenizers::PaddingStrategy::BatchLongest
     } else {
         let pp = PaddingParams {
