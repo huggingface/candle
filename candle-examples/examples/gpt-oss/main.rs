@@ -35,8 +35,12 @@ struct Args {
     sample_len: usize,
 
     /// The model repository to use on HuggingFace.
-    #[arg(long, default_value = "microsoft/DialoGPT-medium")]
-    model_id: String,
+    #[arg(long)]
+    model_id: Option<String>,
+
+    /// Model revision to use.
+    #[arg(long)]
+    revision: Option<String>,
 
     /// The tokenizer config repository to use on HuggingFace.
     #[arg(long)]
@@ -86,8 +90,15 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
-    let model_id = args.model_id.clone();
+    let model_id = args.model_id.unwrap_or_else(|| {
+        // Default to a GPT-style model for demonstration
+        "gpt2".to_string()
+    });
     let repo = api.model(model_id.clone());
+    let repo = match args.revision {
+        Some(rev) => repo.revision(rev),
+        None => repo,
+    };
 
     let tokenizer_filename = match (args.tokenizer_repo, args.tokenizer_file) {
         (Some(repo), _) => {
@@ -127,7 +138,7 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
     let mut tos = TokenOutputStream::new(tokenizer);
 
-    let prompt = args.prompt.as_ref().map_or("Hello", |p| p.as_str());
+    let prompt = args.prompt.as_ref().map_or("Hello, I am a GPT-OSS model", |p| p.as_str());
     let tokens = tos
         .tokenizer()
         .encode(prompt, true)
@@ -139,7 +150,13 @@ fn main() -> Result<()> {
         anyhow::bail!("Empty prompts are not supported in the GPT-OSS model.")
     }
 
-    println!("starting the inference loop");
+    println!("Model: {}", model_id);
+    println!("Loaded model in {:.2}s", start.elapsed().as_secs_f32());
+
+    println!("\nStarting text generation...");
+    println!("Prompt: {}", prompt);
+    println!("Generated text:");
+    println!("{}", "=".repeat(50));
     print!("{}", prompt);
     let mut tokens = tokens;
     let mut generated_tokens = 0usize;
@@ -189,8 +206,11 @@ fn main() -> Result<()> {
     std::io::Write::flush(&mut std::io::stdout())?;
 
     let dt = start_gen.elapsed();
+    println!("\n{}", "=".repeat(50));
     println!(
-        "\n{generated_tokens} tokens generated ({:.2} token/s)",
+        "Generated {} tokens in {:.2}s ({:.2} token/s)",
+        generated_tokens,
+        dt.as_secs_f64(),
         generated_tokens as f64 / dt.as_secs_f64(),
     );
 
