@@ -416,9 +416,8 @@ impl MultiLayerPercepton {
         let _enter = self.span.enter();
         let projected = self.input_linear.forward(x)?;
         let mut chunks = projected.chunk(2, D::Minus1)?;
-        let right = chunks.pop().expect("mlp chunk right");
-        let left = chunks.pop().expect("mlp chunk left");
-        let gated = (candle_nn::ops::silu(&left)? * right)?;
+        let (left, right) = (&chunks[0], &chunks[1]);
+        let gated = (candle_nn::ops::silu(left)? * right)?;
         self.output_linear.forward(&gated)
     }
 
