@@ -230,7 +230,7 @@ impl Attention {
             let attn = flash_attn(&qf, &kf, &vf, scale, true)?.transpose(1, 2)?; // (b, h, q, d)
             return attn
                 .transpose(1, 2)?
-                .reshape((b, qlen, ()))?
+                .reshape((b, qlen, self.num_heads * self.head_dim))?
                 .apply(&self.o_proj);
         }
 
@@ -263,7 +263,7 @@ impl Attention {
 
         let attn = scores.matmul(&v)?; // (b,h,q,d)
         attn.transpose(1, 2)?
-            .reshape((b, qlen, ()))?
+            .reshape((b, qlen, self.num_heads * self.head_dim))?
             .apply(&self.o_proj)
     }
 }
@@ -320,32 +320,13 @@ impl TopKRouter {
         )?;
         // softmax over top-k slice
         let top_probs = candle_nn::ops::softmax_last_dim(&top_vals)?;
-        // scatter probs back into (N,E)
-        let n = logits.dim(0)?;
-        let e = self.num_experts;
-        let zeros = Tensor::zeros((n, e), logits.dtype(), logits.device())?;
-        // zeros.scatter_add(dim, index, src) places src into zeros at given indices.
-        // Candle's scatter API varies; we implement via onehot * probs sum:
-        let onehot = one_hot(&top_idx, e)?; // (N,K,E)
-        let probs_full = onehot
-            .matmul(&top_probs.unsqueeze(D::Minus1)?)? // (N,K,1)
-            .squeeze(D::Minus1)?; // (N,K)
-                                  // Sum along K into (N,E)
-        let router_scores = zeros.scatter_add(D::Minus1, &top_idx, &top_probs)?; // preferred fast path
-                                                                                 // If your Candle doesn't have scatter_add, comment the line above and uncomment this:
-                                                                                 // let router_scores = sum_along_k_into_e(&probs_full, &top_idx, e)?;
-        Ok((router_scores, top_idx))
+        
+        // Simplified: return top_probs and top_idx directly
+        // The expert routing logic will handle the sparse indexing
+        Ok((top_probs, top_idx))
     }
 }
 
-// simple one-hot helper: indices (N,K) -> (N,K,E) onehot
-fn one_hot(indices: &Tensor, depth: usize) -> Result<Tensor> {
-    let (n, k) = indices.dims2()?;
-    let dev = indices.device();
-    let zeros = Tensor::zeros((n, k, depth), DType::F32, dev)?;
-    let ones = Tensor::ones((n, k), DType::F32, dev)?;
-    zeros.scatter_add(D::Minus1, indices, &ones) // shape (n,k,depth)
-}
 
 #[derive(Debug, Clone)]
 struct Experts {
@@ -378,7 +359,7 @@ impl Experts {
         })
     }
 
-    // xs: (B,T,H). router_scores: (B*T,E). top_idx: (B*T,K)
+    // xs: (B,T,H). router_scores: (B*T,K). top_idx: (B*T,K)
     // Returns: (B,T,H)
     fn forward(&self, xs: &Tensor, router_scores: &Tensor, top_idx: &Tensor) -> Result<Tensor> {
         let (b, t, h) = xs.dims3()?;
@@ -395,74 +376,50 @@ impl Experts {
         let dev = xs.device();
         let mut out = Tensor::zeros((n, h), xs.dtype(), dev)?;
 
-        // top_idx: (N,K), router_scores: (N,E)
+        // Simplified approach: process each token and its top-k experts
         let (n_, k_) = top_idx.dims2()?;
         debug_assert_eq!(n, n_);
-        let e = self.gate_up.dim(0)?;
-
-        // Extract routing weights per expert with (N,E)
-        // We'll iterate experts and pick tokens with non-zero score.
-        // To do that without boolean masking ops, we get index lists by thresholding.
-        // For speed, assume top-k small; gather per-expert token positions using equality tests.
-        for expert in 0..e {
-            // mask_tokens (N, K) where top_idx == expert
-            let expert_idx = Tensor::full(1i64, (1,), DType::I64, dev)?.broadcast_to((n, k_))?;
-            let expert_id = Tensor::from_vec(vec![expert as i64; n * k_], (n, k_), dev)?;
-            let hit = top_idx.equal(&expert_id)?; // (N,K) bool
-
-            let any = hit.any(D::Minus1)?; // (N,)
-                                           // Get token indices where any==true
-            let token_idx = where_true_indices(&any)?; // (M,) i64
-            if token_idx.dim(0)? == 0 {
-                continue;
+        
+        for token_idx in 0..n {
+            let x_tok = x.i(token_idx)?; // (H,)
+            let mut token_output = Tensor::zeros(h, xs.dtype(), dev)?;
+            
+            for k in 0..k_ {
+                let expert_id = top_idx.i((token_idx, k))?.to_scalar::<i64>()? as usize;
+                let expert_weight = router_scores.i((token_idx, k))?;
+                
+                // Expert computation
+                let w = self.gate_up.i(expert_id)?;
+                let b = self.gate_up_bias.i(expert_id)?;
+                let w_down = self.down.i(expert_id)?;
+                let b_down = self.down_bias.i(expert_id)?;
+                
+                let gate_up = x_tok.matmul(&w)? + b?;
+                let gate = gate_up.narrow(D::Minus1, 0, self.expert_dim)?;
+                let up = gate_up.narrow(D::Minus1, self.expert_dim, self.expert_dim)?;
+                
+                // GLU activation
+                let alpha = 1.702f64;
+                let limit = 7.0f64;
+                let gate = gate.clamp(-limit, limit)?;
+                let up = up.clamp(-limit, limit)?;
+                let glu = (&gate * (&gate * alpha)?.sigmoid()?)?;
+                let ff = ((&up + 1.0)? * glu)?;
+                
+                let expert_out = ff.matmul(&w_down)? + b_down?;
+                let weighted_out = expert_out.broadcast_mul(&expert_weight)?;
+                
+                token_output = (&token_output + &weighted_out)?;
             }
-
-            // Gather x[M,H]
-            let x_tok = x.index_select(&token_idx, 0)?; // (M,H)
-
-            // Expert params
-            let w = self.gate_up.i(expert)?;
-            let b = self.gate_up_bias.i(expert)?;
-            let w_down = self.down.i(expert)?;
-            let b_down = self.down_bias.i(expert)?;
-
-            // gate_up: (M,2D)
-            let gate_up = x_tok.matmul(&w)? + b?;
-            let (gate, up) = {
-                let d2 = self.expert_dim * 2;
-                let g = gate_up.narrow(D::Minus1, 0, self.expert_dim)?;
-                let u = gate_up.narrow(D::Minus1, self.expert_dim, self.expert_dim)?;
-                (g, u)
-            };
-            // GELU-like GLU from reference: glu = gate * sigmoid(alpha*gate)
-            // alpha=1.702, clamp limits ±7.0 in HF ref.
-            let alpha = 1.702f64;
-            let limit = 7.0f64;
-            let gate = gate.clamp(-limit, limit)?;
-            let up = up.clamp(-limit, limit)?;
-            let glu = (&gate * (&gate * alpha)?.sigmoid()?)?;
-            let ff = ((&up + 1.0)? * glu)?; // (M,D)
-
-            let y = ff.matmul(&w_down)? + b_down?; // (M,H)
-
-            // Scale by routing prob for this expert: gather p_tok (M,)
-            let p_all = router_scores.i((.., expert))?; // (N,)
-            let p_tok = p_all.index_select(&token_idx, 0)?; // (M,)
-            let y = y.broadcast_mul(&p_tok.unsqueeze(D::Minus1)?)?;
-
-            // Accumulate: out.index_add_(0, token_idx, y)
-            out = out.index_add(&token_idx, 0, &y)?;
+            
+            // Update output for this token
+            out = out.slice_assign(&[token_idx..token_idx+1], &token_output.unsqueeze(0)?)?;
         }
 
         out.reshape((b, t, h))
     }
 }
 
-// helper: where(a) for 1D bool -> indices (I64)
-fn where_true_indices(mask_1d: &Tensor) -> Result<Tensor> {
-    // Convert bool -> i64 indices via nonzero
-    mask_1d.nonzero()
-}
 
 // -------------------- Decoder Layer --------------------
 
