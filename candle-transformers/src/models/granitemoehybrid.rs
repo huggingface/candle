@@ -216,9 +216,11 @@ impl GraniteMoeHybridCache {
         if let Some(mask) = self.masks.get(&t) {
             Ok(mask.clone())
         } else {
-            let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
-                .collect();
+            let mut mask: Vec<u8> = Vec::with_capacity(t * t);
+            (0..t).for_each(|i| {
+                mask.extend(core::iter::repeat(0).take(i + 1));
+                mask.extend(core::iter::repeat(1).take(t - i - 1));
+            });
             let mask = Tensor::from_slice(&mask, (t, t), &self.device)?;
             self.masks.insert(t, mask.clone());
             Ok(mask)
