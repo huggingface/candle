@@ -922,7 +922,7 @@ impl BackendStorage for MetalStorage {
         let src = buffer_o(&self.buffer, layout, self.dtype);
         let t = buffer_o(&t.buffer, t_l, t.dtype);
         let f = buffer_o(&f.buffer, f_l, f.dtype);
-        candle_metal_kernels::call_where_cond_strided(
+        candle_metal_kernels::call_where_cond(
             &device.device,
             &command_buffer,
             &device.kernels,
@@ -930,10 +930,13 @@ impl BackendStorage for MetalStorage {
             dims,
             src,
             layout.stride(),
+            layout.is_contiguous(),
             t,
             t_l.stride(),
+            t_l.is_contiguous(),
             f,
             f_l.stride(),
+            f_l.is_contiguous(),
             &buffer,
         )
         .map_err(MetalError::from)?;
