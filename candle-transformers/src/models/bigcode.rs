@@ -24,6 +24,12 @@
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, linear_b as linear, Embedding, LayerNorm, Linear, Module, VarBuilder};
 
+// TEAM-003/TEAM-004: Imports for checkpoint extraction (llorch-cpud multi-reference validation)
+#[cfg(feature = "llorch_validate")]
+use ndarray;
+#[cfg(feature = "llorch_validate")]
+use ndarray_npy::WriteNpyExt;
+
 fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
     let weight = vb.get(size, "weight")?;
     let bias = vb.get(size, "bias")?;
@@ -112,6 +118,22 @@ impl Config {
             n_inner: Some(24576),
             num_attention_heads: 48,
             multi_query: true,
+            use_cache: true,
+        }
+    }
+
+    // TEAM-004: Added GPT-2 configuration for checkpoint extraction
+    #[allow(dead_code)]
+    pub fn gpt2() -> Self {
+        Self {
+            vocab_size: 50257,
+            max_position_embeddings: 1024,
+            num_hidden_layers: 12,
+            hidden_size: 768,
+            layer_norm_epsilon: 1e-5,
+            n_inner: Some(3072),
+            num_attention_heads: 12,
+            multi_query: false,  // GPT-2 uses standard multi-head attention
             use_cache: true,
         }
     }
@@ -285,13 +307,23 @@ impl Mlp {
     fn forward(&mut self, hidden_states: &Tensor) -> Result<Tensor> {
         let hidden_states = self.c_fc.forward(hidden_states)?.gelu()?;
         let hidden_states = self.c_proj.forward(&hidden_states)?;
-        // CHECKPOINT 6: FFN Output (uncomment to validate)
-        // if std::env::var("VALIDATE").is_ok() {
-        //     println!("[CHECKPOINT 6] FFN output shape: {:?}", hidden_states.shape());
-        //     if let Ok(ffn_sample) = hidden_states.i((0, 0, ..5))?.to_vec1::<f32>() {
-        //         println!("[CHECKPOINT 6] Output sample: {:?}", ffn_sample);
-        //     }
-        // }
+        // CHECKPOINT 6: FFN Output
+        // TEAM-003: Added checkpoint extraction for llorch-cpud multi-reference validation
+        #[cfg(feature = "llorch_validate")]
+        if std::env::var("LLORCH_VALIDATE").is_ok() {
+            let data = hidden_states.flatten_all()?.to_vec1::<f32>()?;
+            let dims = hidden_states.dims();
+            if dims.len() == 3 && dims[0] == 1 {
+                // Remove batch dimension for comparison
+                let array = ndarray::Array2::from_shape_vec((dims[1], dims[2]), data[..dims[1]*dims[2]].to_vec())
+                    .map_err(|e| candle::Error::Msg(format!("Shape error: {}", e)))?;
+                let file = std::fs::File::create("/tmp/candle_checkpoints/checkpoint_06_ffn.npy")
+                    .map_err(|e| candle::Error::Msg(format!("IO error: {}", e)))?;
+                ndarray_npy::WriteNpyExt::write_npy(&array, file)
+                    .map_err(|e| candle::Error::Msg(format!("NPY error: {}", e)))?;
+                eprintln!("✅ Checkpoint 6: FFN saved [{}x{}]", dims[1], dims[2]);
+            }
+        }
         Ok(hidden_states)
     }
 }
@@ -323,13 +355,25 @@ impl Block {
     fn forward(&mut self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let residual = hidden_states;
         let hidden_states = self.ln_1.forward(hidden_states)?;
-        // CHECKPOINT 1: Layer Normalization Output (uncomment to validate)
-        // if std::env::var("VALIDATE").is_ok() {
-        //     println!("[CHECKPOINT 1] LayerNorm output shape: {:?}", hidden_states.shape());
-        //     if let Ok(ln_sample) = hidden_states.i((0, 0, ..5))?.to_vec1::<f32>() {
-        //         println!("[CHECKPOINT 1] Output sample: {:?}", ln_sample);
-        //     }
-        // }
+        // CHECKPOINT 1: Layer Normalization Output
+        // TEAM-003: Added checkpoint extraction for llorch-cpud multi-reference validation
+        #[cfg(feature = "llorch_validate")]
+        if std::env::var("LLORCH_VALIDATE").is_ok() {
+            let data = hidden_states.flatten_all()?.to_vec1::<f32>()?;
+            let dims = hidden_states.dims();
+            if dims.len() == 3 && dims[0] == 1 {
+                // Remove batch dimension for comparison
+                let array = ndarray::Array2::from_shape_vec((dims[1], dims[2]), data[..dims[1]*dims[2]].to_vec())
+                    .map_err(|e| candle::Error::Msg(format!("Shape error: {}", e)))?;
+                std::fs::create_dir_all("/tmp/candle_checkpoints")
+                    .map_err(|e| candle::Error::Msg(format!("IO error: {}", e)))?;
+                let file = std::fs::File::create("/tmp/candle_checkpoints/checkpoint_01_ln1_output.npy")
+                    .map_err(|e| candle::Error::Msg(format!("IO error: {}", e)))?;
+                ndarray_npy::WriteNpyExt::write_npy(&array, file)
+                    .map_err(|e| candle::Error::Msg(format!("NPY error: {}", e)))?;
+                eprintln!("✅ Checkpoint 1: LayerNorm saved [{}x{}]", dims[1], dims[2]);
+            }
+        }
         let attn_outputs = self.attn.forward(&hidden_states, attention_mask)?;
         let hidden_states = (&attn_outputs + residual)?;
         let residual = &hidden_states;

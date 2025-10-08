@@ -120,6 +120,9 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // TEAM-004: Check model type before moving model_id
+    let is_gpt2 = args.model_id.contains("gpt2");
+
     let start = std::time::Instant::now();
     let api = Api::new()?;
     let repo = api.repo(Repo::with_revision(
@@ -141,7 +144,12 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
-    let config = Config::starcoder_1b();
+    // TEAM-004: Support GPT-2 configuration for checkpoint extraction
+    let config = if is_gpt2 {
+        Config::gpt2()
+    } else {
+        Config::starcoder_1b()
+    };
     let model = GPTBigCode::load(vb, config)?;
     println!("loaded the model in {:?}", start.elapsed());
 

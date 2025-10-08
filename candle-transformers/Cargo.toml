@@ -10,6 +10,9 @@ license.workspace = true
 readme = "README.md"
 
 [dependencies]
+# TEAM-003: Added for multi-reference validation (llorch-cpud)
+ndarray = { version = "0.16", optional = true }
+ndarray-npy = { version = "0.9", optional = true }
 accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
 candle = { workspace = true }
@@ -33,3 +36,5 @@ cudnn = ["candle/cudnn", "candle-nn/cudnn"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl"]
 metal = ["candle/metal", "candle-nn/metal"]
+# TEAM-003: Feature for checkpoint extraction (llorch-cpud multi-reference validation)
+llorch_validate = ["ndarray", "ndarray-npy"]
