@@ -401,7 +401,7 @@ impl QCudaStorage {
         fn deq<T: GgmlType>(buffer: &[u8], n: usize, dst: &mut [f32]) -> Result<()> {
             let slice = unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const T, n) };
             let vec = slice.to_vec();
-            T::to_float(&vec, dst)
+            Ok(T::to_float(&vec, dst))
         }
 
         let fast_kernel = matches!(
