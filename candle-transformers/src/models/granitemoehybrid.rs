@@ -6,6 +6,7 @@
 use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
+use std::iter::repeat_n;
 use std::{collections::HashMap, f32::consts::PI};
 
 pub const DEFAULT_MAX_SEQ_LEN: usize = 4096;
@@ -218,8 +219,10 @@ impl GraniteMoeHybridCache {
         } else {
             let mut mask: Vec<u8> = Vec::with_capacity(t * t);
             (0..t).for_each(|i| {
-                mask.extend(core::iter::repeat(0).take(i + 1));
-                mask.extend(core::iter::repeat(1).take(t - i - 1));
+                //mask.extend(core::iter::repeat(0).take(i + 1));
+                mask.extend(repeat_n(0, i + 1));
+                //mask.extend(core::iter::repeat(1).take(t - i - 1));
+                mask.extend(repeat_n(1, t - i - 1));
             });
             let mask = Tensor::from_slice(&mask, (t, t), &self.device)?;
             self.masks.insert(t, mask.clone());
@@ -415,7 +418,7 @@ impl MultiLayerPercepton {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let projected = self.input_linear.forward(x)?;
-        let mut chunks = projected.chunk(2, D::Minus1)?;
+        let chunks = projected.chunk(2, D::Minus1)?;
         let (left, right) = (&chunks[0], &chunks[1]);
         let gated = (candle_nn::ops::silu(left)? * right)?;
         self.output_linear.forward(&gated)
