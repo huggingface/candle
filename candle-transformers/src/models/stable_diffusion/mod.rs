@@ -501,14 +501,13 @@ impl StableDiffusionConfig {
     ) -> Result<unet_2d::UNet2DConditionModel> {
         let vs_unet =
             unsafe { nn::VarBuilder::from_mmaped_safetensors(unet_weight_files, dtype, device)? };
-        let unet = unet_2d::UNet2DConditionModel::new(
+        unet_2d::UNet2DConditionModel::new(
             vs_unet,
             in_channels,
             4,
             use_flash_attn,
             self.unet.clone(),
-        )?;
-        Ok(unet)
+        )
     }
 
     pub fn build_scheduler(&self, n_steps: usize) -> Result<Box<dyn Scheduler>> {
