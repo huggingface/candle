@@ -186,6 +186,13 @@ impl Attention {
 
         let attn_weights =
             (query.matmul(&key.contiguous()?)? * scale_factor)?.reshape(attn_shape)?;
+        // CHECKPOINT 4: Attention Scores (uncomment to validate)
+        // if std::env::var("VALIDATE").is_ok() {
+        //     println!("[CHECKPOINT 4] Attention scores shape: {:?}", attn_weights.shape());
+        //     if let Ok(scores_sample) = attn_weights.i((0, 0, 0, ..5))?.to_vec1::<f32>() {
+        //         println!("[CHECKPOINT 4] Scores sample (head 0): {:?}", scores_sample);
+        //     }
+        // }
         let attention_mask = attention_mask.broadcast_as(attn_shape)?;
         let mask_value =
             Tensor::new(f32::NEG_INFINITY, query.device())?.broadcast_as(attn_shape)?;
@@ -204,10 +211,17 @@ impl Attention {
     }
 
     fn forward(&mut self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+        // CHECKPOINT 2: QKV Projection (uncomment to validate)
         let qkv = self.c_attn.forward(hidden_states)?;
         let (query, key_value) = if self.multi_query {
             let query = qkv.i((.., .., ..self.embed_dim))?;
             let key_value = qkv.i((.., .., self.embed_dim..self.embed_dim + 2 * self.kv_dim))?;
+            // if std::env::var("VALIDATE").is_ok() {
+            //     println!("[CHECKPOINT 2] QKV shapes: query={:?}, key_value={:?}", query.shape(), key_value.shape());
+            //     if let Ok(q_data) = query.i((0, 0, ..5))?.to_vec1::<f32>() {
+            //         println!("[CHECKPOINT 2] Query sample: {:?}", q_data);
+            //     }
+            // }
             (query, key_value)
         } else {
             let mut dims = qkv.dims().to_vec();
@@ -226,7 +240,12 @@ impl Attention {
                 // arbitrarily large sizes.
                 key_value = Tensor::cat(&[kv_cache, &key_value], D::Minus2)?.contiguous()?;
             }
-            self.kv_cache = Some(key_value.clone())
+            self.kv_cache = Some(key_value.clone());
+            // CHECKPOINT 3: KV Cache State (uncomment to validate)
+            // if std::env::var("VALIDATE").is_ok() && key_value.dim(D::Minus2)? == 1 {
+            //     println!("[CHECKPOINT 3] Cache state: shape={:?}", key_value.shape());
+            //     println!("[CHECKPOINT 3] Cache contains {} tokens", key_value.dim(D::Minus2)?);
+            // }
         }
 
         let key = key_value.narrow(D::Minus1, 0, self.head_dim)?;
@@ -240,6 +259,13 @@ impl Attention {
                 .reshape(hidden_states.shape())?
         };
         let attn_output = self.c_proj.forward(&attn_output)?;
+        // CHECKPOINT 5: Attention Output (uncomment to validate)
+        // if std::env::var("VALIDATE").is_ok() {
+        //     println!("[CHECKPOINT 5] Attention output shape: {:?}", attn_output.shape());
+        //     if let Ok(output_sample) = attn_output.i((0, 0, ..5))?.to_vec1::<f32>() {
+        //         println!("[CHECKPOINT 5] Output sample: {:?}", output_sample);
+        //     }
+        // }
         Ok(attn_output)
     }
 }
@@ -259,6 +285,13 @@ impl Mlp {
     fn forward(&mut self, hidden_states: &Tensor) -> Result<Tensor> {
         let hidden_states = self.c_fc.forward(hidden_states)?.gelu()?;
         let hidden_states = self.c_proj.forward(&hidden_states)?;
+        // CHECKPOINT 6: FFN Output (uncomment to validate)
+        // if std::env::var("VALIDATE").is_ok() {
+        //     println!("[CHECKPOINT 6] FFN output shape: {:?}", hidden_states.shape());
+        //     if let Ok(ffn_sample) = hidden_states.i((0, 0, ..5))?.to_vec1::<f32>() {
+        //         println!("[CHECKPOINT 6] Output sample: {:?}", ffn_sample);
+        //     }
+        // }
         Ok(hidden_states)
     }
 }
@@ -290,12 +323,26 @@ impl Block {
     fn forward(&mut self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let residual = hidden_states;
         let hidden_states = self.ln_1.forward(hidden_states)?;
+        // CHECKPOINT 1: Layer Normalization Output (uncomment to validate)
+        // if std::env::var("VALIDATE").is_ok() {
+        //     println!("[CHECKPOINT 1] LayerNorm output shape: {:?}", hidden_states.shape());
+        //     if let Ok(ln_sample) = hidden_states.i((0, 0, ..5))?.to_vec1::<f32>() {
+        //         println!("[CHECKPOINT 1] Output sample: {:?}", ln_sample);
+        //     }
+        // }
         let attn_outputs = self.attn.forward(&hidden_states, attention_mask)?;
         let hidden_states = (&attn_outputs + residual)?;
         let residual = &hidden_states;
         let hidden_states = self.ln_2.forward(&hidden_states)?;
         let hidden_states = self.mlp.forward(&hidden_states)?;
         let hidden_states = (&hidden_states + residual)?;
+        // CHECKPOINT 7: First Block Output (uncomment to validate)
+        // if std::env::var("VALIDATE").is_ok() {
+        //     println!("[CHECKPOINT 7] First block output shape: {:?}", hidden_states.shape());
+        //     if let Ok(block_sample) = hidden_states.i((0, 0, ..5))?.to_vec1::<f32>() {
+        //         println!("[CHECKPOINT 7] Output sample: {:?}", block_sample);
+        //     }
+        // }
         Ok(hidden_states)
     }
 }
@@ -358,10 +405,41 @@ impl GPTBigCode {
             hidden_states = block.forward(&hidden_states, &attention_mask)?;
         }
         let hidden_states = self.ln_f.forward(&hidden_states)?;
+        // CHECKPOINT 8: Full Logits (uncomment to validate - before narrowing)
+        // if std::env::var("VALIDATE").is_ok() {
+        //     println!("[CHECKPOINT 8] Hidden states before narrow: {:?}", hidden_states.shape());
+        // }
         let hidden_states = hidden_states
             .reshape((b_sz, seq_len, self.config.hidden_size))?
             .narrow(1, seq_len - 1, 1)?;
         let logits = self.lm_head.forward(&hidden_states)?.squeeze(1)?;
+        // CHECKPOINT 9: Selected Logits (uncomment to validate)
+        // if std::env::var("VALIDATE").is_ok() {
+        //     println!("[CHECKPOINT 9] Selected logits shape: {:?}", logits.shape());
+        //     if let Ok(logits_sample) = logits.i((0, ..5))?.to_vec1::<f32>() {
+        //         println!("[CHECKPOINT 9] Logits sample (first 5 vocab): {:?}", logits_sample);
+        //     }
+        //     if let Ok(argmax_idx) = logits.argmax(D::Minus1) {
+        //         if let Ok(idx_val) = argmax_idx.to_vec0::<u32>() {
+        //             println!("[CHECKPOINT 9] Max logit index: {}", idx_val);
+        //         }
+        //     }
+        // }
+        // CHECKPOINT 10: Argmax would happen in application code
+        // CHECKPOINT 11: Softmax probabilities would happen in application code
+        // These checkpoints are typically in the generation loop, not in the model forward pass
         Ok(logits)
     }
 }
+
+// CHECKPOINT 12: End-to-end validation
+// Add this to your application code that uses GPTBigCode:
+// Example validation in application:
+// ```
+// let output = model.forward(&input_ids, 0)?;
+// if std::env::var("VALIDATE").is_ok() {
+//     println!("[CHECKPOINT 12] End-to-end output: {:?}", output);
+//     // Compare with expected output for prompt "Hello."
+//     // Expected token for GPT-2 Medium: varies by implementation
+// }
+// ```
