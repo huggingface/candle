@@ -219,9 +219,7 @@ impl GraniteMoeHybridCache {
         } else {
             let mut mask: Vec<u8> = Vec::with_capacity(t * t);
             (0..t).for_each(|i| {
-                //mask.extend(core::iter::repeat(0).take(i + 1));
                 mask.extend(repeat_n(0, i + 1));
-                //mask.extend(core::iter::repeat(1).take(t - i - 1));
                 mask.extend(repeat_n(1, t - i - 1));
             });
             let mask = Tensor::from_slice(&mask, (t, t), &self.device)?;
@@ -547,11 +545,13 @@ impl GraniteMoeHybrid {
                 cfg.num_hidden_layers
             );
         }
-        let mut blocks = Vec::with_capacity(cfg.num_hidden_layers);
-        for (idx, layer_ty) in cfg.layer_types.iter().enumerate() {
-            match layer_ty {
+        let blocks = cfg
+            .layer_types
+            .iter()
+            .enumerate()
+            .map(|(idx, layer_ty)| match layer_ty {
                 GraniteMoeHybridLayerType::Attention => {
-                    blocks.push(Block::load(vb.pp(format!("model.layers.{idx}")), cfg)?);
+                    Block::load(vb.pp(format!("model.layers.{idx}")), cfg)
                 }
                 GraniteMoeHybridLayerType::Mamba => {
                     // TODO: Not supprting Mamba layers (blocks) for now,
@@ -560,8 +560,8 @@ impl GraniteMoeHybrid {
                         "mamba layers are not yet supported in GraniteMoeHybrid inference"
                     )
                 }
-            }
-        }
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
             word_token_embedding: wte,
