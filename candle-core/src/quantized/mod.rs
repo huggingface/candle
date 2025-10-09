@@ -175,7 +175,7 @@ impl QuantizedBackend for QCpuStorage {
     }
 
     fn quantize(&mut self, src: &Self::Storage) -> Result<()> {
-        self.0.from_float(src.as_slice::<f32>()?)?;
+        self.0.from_float(src.as_slice::<f32>()?);
         Ok(())
     }
 
@@ -395,7 +395,7 @@ pub trait QuantizedType: Send + Sync + std::fmt::Debug {
     fn as_ptr(&self) -> *const u8;
     fn block_size(&self) -> usize;
     #[allow(clippy::wrong_self_convention)]
-    fn from_float(&mut self, xs: &[f32]) -> Result<()>;
+    fn from_float(&mut self, xs: &[f32]);
     fn size(&self) -> usize;
 }
 
@@ -408,7 +408,7 @@ impl<T: k_quants::GgmlType + Send + Sync + std::fmt::Debug> QuantizedType for Ve
         self.len() * core::mem::size_of::<T>()
     }
 
-    fn from_float(&mut self, xs: &[f32]) -> Result<()> {
+    fn from_float(&mut self, xs: &[f32]) {
         T::from_float(xs, self)
     }
 
@@ -422,7 +422,7 @@ impl<T: k_quants::GgmlType + Send + Sync + std::fmt::Debug> QuantizedType for Ve
 
     fn dequantize(&self, elem_count: usize) -> Result<CpuStorage> {
         let mut ys = vec![0.0f32; elem_count];
-        T::to_float(self.as_slice(), &mut ys)?;
+        T::to_float(self.as_slice(), &mut ys);
         Ok(CpuStorage::F32(ys))
     }
 

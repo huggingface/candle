@@ -48,6 +48,7 @@ pub mod gemma3;
 pub mod glm4;
 pub mod glm4_new;
 pub mod granite;
+pub mod granitemoehybrid;
 pub mod helium;
 pub mod hiera;
 pub mod jina_bert;

@@ -301,6 +301,14 @@ impl Device {
             Ok(Self::Cpu)
         }
     }
+
+    pub fn metal_if_available(ordinal: usize) -> Result<Self> {
+        if crate::utils::metal_is_available() {
+            Self::new_metal(ordinal)
+        } else {
+            Ok(Self::Cpu)
+        }
+    }
 }
 
 impl BackendDevice<Storage> for Device {
