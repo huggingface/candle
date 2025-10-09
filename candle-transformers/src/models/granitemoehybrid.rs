@@ -1,4 +1,4 @@
-//! Granite is a Long Context Transformer Language Model.
+//! GraniteMoeHybrid is a Long Context Transformer Language Model.
 //!
 //! A high performance transformer model optimized for efficient processing
 //! of very long context sequences
@@ -6,12 +6,13 @@
 use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
 use candle::{BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
+use std::iter::repeat_n;
 use std::{collections::HashMap, f32::consts::PI};
 
 pub const DEFAULT_MAX_SEQ_LEN: usize = 4096;
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
-pub enum GraniteRopeType {
+pub enum GraniteMoeHybridRopeType {
     #[serde(rename = "granite")]
     Granite,
     #[default]
@@ -20,22 +21,16 @@ pub enum GraniteRopeType {
 }
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
-pub struct GraniteRopeConfig {
+pub struct GraniteMoeHybridRopeConfig {
     pub factor: f32,
     pub low_freq_factor: f32,
     pub high_freq_factor: f32,
     pub original_max_position_embeddings: usize,
-    pub rope_type: GraniteRopeType,
-}
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(untagged)]
-pub enum GraniteEosToks {
-    Single(u32),
-    Multiple(Vec<u32>),
+    pub rope_type: GraniteMoeHybridRopeType,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct GraniteConfig {
+pub struct GraniteMoeHybridConfig {
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub vocab_size: usize,
@@ -46,12 +41,24 @@ pub struct GraniteConfig {
     #[serde(default = "default_rope")]
     pub rope_theta: f32,
     pub bos_token_id: Option<u32>,
-    pub eos_token_id: Option<GraniteEosToks>,
-    pub rope_scaling: Option<GraniteRopeConfig>,
+    pub eos_token_id: Option<u32>,
+    pub rope_scaling: Option<GraniteMoeHybridRopeConfig>,
     pub max_position_embeddings: usize,
+    #[serde(default)]
+    pub layer_types: Vec<GraniteMoeHybridLayerType>,
+    #[serde(default = "default_one")]
+    pub attention_multiplier: f32,
+    #[serde(default = "default_one")]
+    pub embedding_multiplier: f32,
+    #[serde(default = "default_one")]
+    pub residual_multiplier: f32,
+    #[serde(default = "default_one")]
+    pub logits_scaling: f32,
+    #[serde(default)]
+    pub shared_intermediate_size: Option<usize>,
 }
 
-impl GraniteConfig {
+impl GraniteMoeHybridConfig {
     pub fn num_key_value_heads(&self) -> usize {
         self.num_key_value_heads.unwrap_or(self.num_attention_heads)
     }
@@ -61,30 +68,57 @@ fn default_rope() -> f32 {
     10_000.0
 }
 
-impl GraniteConfig {
-    pub fn into_config(self, use_flash_attn: bool) -> Config {
-        Config {
+fn default_one() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum GraniteMoeHybridLayerType {
+    #[default]
+    Attention,
+    Mamba,
+}
+
+impl GraniteMoeHybridConfig {
+    pub fn into_config(self, use_flash_attn: bool) -> GraniteMoeHybridInternalConfig {
+        let layer_types = if self.layer_types.is_empty() {
+            vec![GraniteMoeHybridLayerType::Attention; self.num_hidden_layers]
+        } else {
+            self.layer_types.clone()
+        };
+        let shared_intermediate_size = self
+            .shared_intermediate_size
+            .unwrap_or(self.intermediate_size);
+        GraniteMoeHybridInternalConfig {
             hidden_size: self.hidden_size,
             intermediate_size: self.intermediate_size,
+            shared_intermediate_size,
             vocab_size: self.vocab_size,
             num_hidden_layers: self.num_hidden_layers,
             num_attention_heads: self.num_attention_heads,
             num_key_value_heads: self.num_key_value_heads(),
+            use_flash_attn,
             rms_norm_eps: self.rms_norm_eps,
             rope_theta: self.rope_theta,
-            use_flash_attn,
             bos_token_id: self.bos_token_id,
             eos_token_id: self.eos_token_id,
             rope_scaling: self.rope_scaling,
             max_position_embeddings: self.max_position_embeddings,
+            layer_types,
+            attention_multiplier: self.attention_multiplier,
+            embedding_multiplier: self.embedding_multiplier,
+            residual_multiplier: self.residual_multiplier,
+            logits_scaling: self.logits_scaling,
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Config {
+pub struct GraniteMoeHybridInternalConfig {
     pub hidden_size: usize,
     pub intermediate_size: usize,
+    pub shared_intermediate_size: usize,
     pub vocab_size: usize,
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
@@ -93,13 +127,18 @@ pub struct Config {
     pub rms_norm_eps: f64,
     pub rope_theta: f32,
     pub bos_token_id: Option<u32>,
-    pub eos_token_id: Option<GraniteEosToks>,
-    pub rope_scaling: Option<GraniteRopeConfig>,
+    pub eos_token_id: Option<u32>,
+    pub rope_scaling: Option<GraniteMoeHybridRopeConfig>,
     pub max_position_embeddings: usize,
+    pub layer_types: Vec<GraniteMoeHybridLayerType>,
+    pub attention_multiplier: f32,
+    pub embedding_multiplier: f32,
+    pub residual_multiplier: f32,
+    pub logits_scaling: f32,
 }
 
 #[derive(Debug, Clone)]
-pub struct Cache<B: BackendStorage> {
+pub struct GraniteMoeHybridCache<B: BackendStorage> {
     masks: HashMap<usize, Tensor<B>>,
     pub use_kv_cache: bool,
     kvs: Vec<Option<(Tensor<B>, Tensor<B>)>>,
@@ -108,7 +147,7 @@ pub struct Cache<B: BackendStorage> {
     device: B::Device,
 }
 
-fn calculate_default_inv_freq(cfg: &Config) -> Vec<f32> {
+fn calculate_default_inv_freq(cfg: &GraniteMoeHybridInternalConfig) -> Vec<f32> {
     let head_dim = cfg.hidden_size / cfg.num_attention_heads;
     (0..head_dim)
         .step_by(2)
@@ -116,18 +155,18 @@ fn calculate_default_inv_freq(cfg: &Config) -> Vec<f32> {
         .collect()
 }
 
-impl<B: BackendStorage> Cache<B> {
+impl<B: BackendStorage> GraniteMoeHybridCache<B> {
     pub fn new(
         use_kv_cache: bool,
         dtype: DType,
-        config: &Config,
+        config: &GraniteMoeHybridInternalConfig,
         device: &B::Device,
     ) -> Result<Self> {
         // precompute freqs_cis
         let theta = match &config.rope_scaling {
             None
-            | Some(GraniteRopeConfig {
-                rope_type: GraniteRopeType::Default,
+            | Some(GraniteMoeHybridRopeConfig {
+                rope_type: GraniteMoeHybridRopeType::Default,
                 ..
             }) => calculate_default_inv_freq(config),
             Some(rope_scaling) => {
@@ -178,9 +217,11 @@ impl<B: BackendStorage> Cache<B> {
         if let Some(mask) = self.masks.get(&t) {
             Ok(mask.clone())
         } else {
-            let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
-                .collect();
+            let mut mask: Vec<u8> = Vec::with_capacity(t * t);
+            (0..t).for_each(|i| {
+                mask.extend(repeat_n(0, i + 1));
+                mask.extend(repeat_n(1, t - i - 1));
+            });
             let mask = Tensor::from_slice(&mask, (t, t), &self.device)?;
             self.masks.insert(t, mask.clone());
             Ok(mask)
@@ -201,16 +242,17 @@ struct CausalSelfAttention<B: BackendStorage> {
     span: tracing::Span,
     span_rot: tracing::Span,
     max_position_embeddings: usize,
+    attention_multiplier: f32,
 }
 
 #[cfg(feature = "flash-attn")]
 fn flash_attn(
-    q: &Tensor<CudaStorage>,
-    k: &Tensor<CudaStorage>,
-    v: &Tensor<CudaStorage>,
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
     softmax_scale: f32,
     causal: bool,
-) -> Result<Tensor<CudaStorage>> {
+) -> Result<Tensor> {
     candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
 }
 
@@ -230,7 +272,7 @@ impl<B: BackendStorage> CausalSelfAttention<B> {
         &self,
         x: &Tensor<B>,
         index_pos: usize,
-        cache: &Cache<B>,
+        cache: &GraniteMoeHybridCache<B>,
     ) -> Result<Tensor<B>> {
         let _enter = self.span_rot.enter();
         let (_b_sz, _, seq_len, _hidden_size) = x.dims4()?;
@@ -244,7 +286,7 @@ impl<B: BackendStorage> CausalSelfAttention<B> {
         x: &Tensor<B>,
         index_pos: usize,
         block_idx: usize,
-        cache: &mut Cache<B>,
+        cache: &mut GraniteMoeHybridCache<B>,
     ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
@@ -303,14 +345,15 @@ impl<B: BackendStorage> CausalSelfAttention<B> {
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
             let v = v.transpose(1, 2)?;
-            let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
-            flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?.transpose(1, 2)?
+            flash_attn(&q, &k, &v, self.attention_multiplier, seq_len > 1)?.transpose(1, 2)?
         } else {
             let in_dtype = q.dtype();
             let q = q.to_dtype(DType::F32)?;
             let k = k.to_dtype(DType::F32)?;
             let v = v.to_dtype(DType::F32)?;
-            let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+            let att = q
+                .matmul(&k.t()?)?
+                .affine(self.attention_multiplier as f64, 0.)?;
             let att = if seq_len == 1 {
                 att
             } else {
@@ -330,7 +373,7 @@ impl<B: BackendStorage> CausalSelfAttention<B> {
         crate::utils::repeat_kv(x, self.num_attention_heads / self.num_key_value_heads)
     }
 
-    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder<B>, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "attn");
         let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
         let size_in = cfg.hidden_size;
@@ -352,10 +395,12 @@ impl<B: BackendStorage> CausalSelfAttention<B> {
             span,
             span_rot,
             max_position_embeddings: cfg.max_position_embeddings,
+            attention_multiplier: cfg.attention_multiplier,
         })
     }
 }
 
+/// Utility function to fill elements of a tensor based on a boolean mask.
 fn masked_fill<B: BackendStorage>(
     on_false: &Tensor<B>,
     mask: &Tensor<B>,
@@ -367,44 +412,50 @@ fn masked_fill<B: BackendStorage>(
     Ok(m)
 }
 
+// A simple feed forward network with a gated activation
+// (GeLU, SiLU, etc.). The goal is to add non-linearity and
+// increase the model's capacity to learn complex patterns.
 #[derive(Debug, Clone)]
-struct Mlp<B: BackendStorage> {
-    c_fc1: Linear<B>,
-    c_fc2: Linear<B>,
-    c_proj: Linear<B>,
+struct MultiLayerPercepton<B: BackendStorage> {
+    input_linear: Linear<B>,
+    output_linear: Linear<B>,
     span: tracing::Span,
 }
 
-impl<B: BackendStorage> Mlp<B> {
+impl<B: BackendStorage> MultiLayerPercepton<B> {
     fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
-        let x = (candle_nn::ops::silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
-        self.c_proj.forward(&x)
+        let projected = self.input_linear.forward(x)?;
+        let chunks = projected.chunk(2, D::Minus1)?;
+        let (left, right) = (&chunks[0], &chunks[1]);
+        let gated = (candle_nn::ops::silu(left)? * right)?;
+        self.output_linear.forward(&gated)
     }
 
-    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder<B>, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "mlp");
         let h_size = cfg.hidden_size;
-        let i_size = cfg.intermediate_size;
-        let c_fc1 = linear(h_size, i_size, vb.pp("gate_proj"))?;
-        let c_fc2 = linear(h_size, i_size, vb.pp("up_proj"))?;
-        let c_proj = linear(i_size, h_size, vb.pp("down_proj"))?;
+        let inter_size = cfg.shared_intermediate_size;
+        let input_linear = linear(h_size, inter_size * 2, vb.pp("shared_mlp.input_linear"))?;
+        let output_linear = linear(inter_size, h_size, vb.pp("shared_mlp.output_linear"))?;
         Ok(Self {
-            c_fc1,
-            c_fc2,
-            c_proj,
+            input_linear,
+            output_linear,
             span,
         })
     }
 }
 
+// A Block is a actually a Transformer layer, consisting of
+// a self-attention mechanism followed by a feed-forward neural network (MLP).
 #[derive(Debug, Clone)]
 struct Block<B: BackendStorage> {
     rms_1: RmsNorm<B>,
     attn: CausalSelfAttention<B>,
     rms_2: RmsNorm<B>,
-    mlp: Mlp<B>,
+    multi_layer_percepton: MultiLayerPercepton<B>,
     span: tracing::Span,
+    residual_scale: f32,
 }
 
 impl<B: BackendStorage> Block<B> {
@@ -413,21 +464,28 @@ impl<B: BackendStorage> Block<B> {
         x: &Tensor<B>,
         index_pos: usize,
         block_idx: usize,
-        cache: &mut Cache<B>,
+        cache: &mut GraniteMoeHybridCache<B>,
     ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let residual = x;
         let x = self.rms_1.forward(x)?;
-        let x = (self.attn.forward(&x, index_pos, block_idx, cache)? + residual)?;
+        let attn = self.attn.forward(&x, index_pos, block_idx, cache)?;
+        let attn = scale_tensor(attn, self.residual_scale)?;
+        let x = (attn + residual)?;
         let residual = &x;
-        let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        let multi_layer_percepton_out = self
+            .multi_layer_percepton
+            .forward(&self.rms_2.forward(&x)?)?;
+        let multi_layer_percepton_out =
+            scale_tensor(multi_layer_percepton_out, self.residual_scale)?;
+        let x = (multi_layer_percepton_out + residual)?;
         Ok(x)
     }
 
-    fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder<B>, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "block");
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg)?;
-        let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
+        let multi_layer_percepton = MultiLayerPercepton::load(vb.clone(), cfg)?;
         let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let rms_2 = RmsNorm::new(
             cfg.hidden_size,
@@ -438,51 +496,101 @@ impl<B: BackendStorage> Block<B> {
             rms_1,
             attn,
             rms_2,
-            mlp,
+            multi_layer_percepton,
             span,
+            residual_scale: cfg.residual_multiplier,
         })
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Granite<B: BackendStorage> {
-    wte: Embedding<B>,
+pub struct GraniteMoeHybrid<B: BackendStorage> {
+    word_token_embedding: Embedding<B>,
     blocks: Vec<Block<B>>,
     ln_f: RmsNorm<B>,
-    lm_head: Linear<B>,
+    logits_scale: f32,
+    embedding_scale: f32,
 }
 
-impl<B: BackendStorage> Granite<B> {
+impl<B: BackendStorage> GraniteMoeHybrid<B> {
     pub fn forward(
         &self,
         x: &Tensor<B>,
         index_pos: usize,
-        cache: &mut Cache<B>,
+        cache: &mut GraniteMoeHybridCache<B>,
     ) -> Result<Tensor<B>> {
         let (_b_sz, seq_len) = x.dims2()?;
-        let mut x = self.wte.forward(x)?;
-        for (block_idx, block) in self.blocks.iter().enumerate() {
-            x = block.forward(&x, index_pos, block_idx, cache)?;
-        }
+        let x = self.word_token_embedding.forward(x)?;
+        let x = scale_tensor(x, self.embedding_scale)?;
+        let x = self
+            .blocks
+            .iter()
+            .enumerate()
+            .try_fold(x, |x, (block_idx, block)| {
+                block.forward(&x, index_pos, block_idx, cache)
+            })?;
+        // Final normalization
         let x = self.ln_f.forward(&x)?;
         let x = x.i((.., seq_len - 1, ..))?.contiguous()?;
-        let logits = self.lm_head.forward(&x)?;
-        logits.to_dtype(DType::F32)
+        // Project to vocabulary size
+        let logits = x.matmul(&self.word_token_embedding.embeddings().t()?)?;
+        let logits = logits.to_dtype(DType::F32)?;
+        // Scale the logits if needed (that's also different from Granite 1)
+        let scaled_logits = if (self.logits_scale - 1.0).abs() < f32::EPSILON {
+            logits
+        } else {
+            logits.affine(self.logits_scale as f64, 0.)?
+        };
+
+        Ok(scaled_logits)
     }
 
-    pub fn load(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
+    pub fn load(vb: VarBuilder<B>, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
-        let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
-        let blocks: Vec<_> = (0..cfg.num_hidden_layers)
-            .map(|i| Block::load(vb.pp(format!("model.layers.{i}")), cfg).unwrap())
-            .collect();
+        if cfg.layer_types.len() != cfg.num_hidden_layers {
+            candle::bail!(
+                "layer_types length {} does not match num_hidden_layers {}",
+                cfg.layer_types.len(),
+                cfg.num_hidden_layers
+            );
+        }
+        let blocks = cfg
+            .layer_types
+            .iter()
+            .enumerate()
+            .map(|(idx, layer_ty)| match layer_ty {
+                GraniteMoeHybridLayerType::Attention => {
+                    Block::load(vb.pp(format!("model.layers.{idx}")), cfg)
+                }
+                GraniteMoeHybridLayerType::Mamba => {
+                    // TODO: Not supprting Mamba layers (blocks) for now,
+                    // so we only iterate over attention layers.
+                    candle::bail!(
+                        "mamba layers are not yet supported in GraniteMoeHybrid inference"
+                    )
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
-            wte,
+            word_token_embedding: wte,
             blocks,
             ln_f,
-            lm_head,
+            logits_scale: if cfg.logits_scaling == 0.0 {
+                1.0
+            } else {
+                1.0 / cfg.logits_scaling
+            },
+            embedding_scale: cfg.embedding_multiplier,
         })
+    }
+}
+
+fn scale_tensor<B: BackendStorage>(tensor: Tensor<B>, scale: f32) -> Result<Tensor<B>> {
+    if (scale - 1.0).abs() < f32::EPSILON {
+        Ok(tensor)
+    } else {
+        tensor.affine(scale as f64, 0.)
     }
 }

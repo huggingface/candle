@@ -45,63 +45,63 @@ impl QuantizedBackend for QMetalStorage {
         match self.dtype {
             GgmlDType::F32 => {
                 let vec: Vec<f32> = read_to_vec(&buffer, block_len);
-                f32::to_float(&vec, &mut out)?;
+                f32::to_float(&vec, &mut out);
             }
             GgmlDType::F16 => {
                 let vec: Vec<half::f16> = read_to_vec(&buffer, block_len);
-                half::f16::to_float(&vec, &mut out)?;
+                half::f16::to_float(&vec, &mut out);
             }
             GgmlDType::BF16 => {
                 let vec: Vec<half::bf16> = read_to_vec(&buffer, block_len);
-                half::bf16::to_float(&vec, &mut out)?;
+                half::bf16::to_float(&vec, &mut out);
             }
             GgmlDType::Q4_0 => {
                 let vec: Vec<crate::quantized::BlockQ4_0> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ4_0::to_float(&vec, &mut out)?;
+                crate::quantized::BlockQ4_0::to_float(&vec, &mut out);
             }
             GgmlDType::Q4_1 => {
                 let vec: Vec<crate::quantized::BlockQ4_1> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ4_1::to_float(&vec, &mut out)?;
+                crate::quantized::BlockQ4_1::to_float(&vec, &mut out);
             }
             GgmlDType::Q5_0 => {
                 let vec: Vec<crate::quantized::BlockQ5_0> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ5_0::to_float(&vec, &mut out)?;
+                crate::quantized::BlockQ5_0::to_float(&vec, &mut out);
             }
             GgmlDType::Q5_1 => {
                 let vec: Vec<crate::quantized::BlockQ5_1> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ5_1::to_float(&vec, &mut out)?;
+                crate::quantized::BlockQ5_1::to_float(&vec, &mut out);
             }
             GgmlDType::Q8_0 => {
                 let vec: Vec<crate::quantized::BlockQ8_0> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ8_0::to_float(&vec, &mut out)?;
+                crate::quantized::BlockQ8_0::to_float(&vec, &mut out);
             }
             GgmlDType::Q8_1 => {
                 let vec: Vec<crate::quantized::BlockQ8_1> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ8_1::to_float(&vec, &mut out)?;
+                crate::quantized::BlockQ8_1::to_float(&vec, &mut out);
             }
             GgmlDType::Q2K => {
                 let vec: Vec<crate::quantized::BlockQ2K> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ2K::to_float(&vec, &mut out)?;
+                crate::quantized::BlockQ2K::to_float(&vec, &mut out);
             }
             GgmlDType::Q3K => {
                 let vec: Vec<crate::quantized::BlockQ3K> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ3K::to_float(&vec, &mut out)?;
+                crate::quantized::BlockQ3K::to_float(&vec, &mut out);
             }
             GgmlDType::Q4K => {
                 let vec: Vec<crate::quantized::BlockQ4K> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ4K::to_float(&vec, &mut out)?;
+                crate::quantized::BlockQ4K::to_float(&vec, &mut out);
             }
             GgmlDType::Q5K => {
                 let vec: Vec<crate::quantized::BlockQ5K> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ5K::to_float(&vec, &mut out)?;
+                crate::quantized::BlockQ5K::to_float(&vec, &mut out);
             }
             GgmlDType::Q6K => {
                 let vec: Vec<crate::quantized::BlockQ6K> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ6K::to_float(&vec, &mut out)?;
+                crate::quantized::BlockQ6K::to_float(&vec, &mut out);
             }
             GgmlDType::Q8K => {
                 let vec: Vec<crate::quantized::BlockQ8K> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ8K::to_float(&vec, &mut out)?;
+                crate::quantized::BlockQ8K::to_float(&vec, &mut out);
             }
         }
 
