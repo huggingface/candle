@@ -505,6 +505,21 @@ fn binary_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn unfold_grad(device: &Device) -> Result<()> {
+    let data = &[[0f32, 1., 2., 3., 4.], [5f32, 6., 7., 8., 9.]];
+    let x = Tensor::new(data, device)?;
+    let unf = x.unfold(1, 3, 1)?;
+    let y = (&unf + 1.)?;
+    let grads = y.backward()?;
+    println!("grads: {:?}", grads);
+    println!("x.id: {:?}", x.id());
+    println!("unf.id: {:?}", unf.id());
+    println!("y.id: {:?}", x.id());
+    let _grad_tensor = grads.get(&x).context("no grad for tensor")?;
+
+    Ok(())
+}
+
 #[test]
 fn test_flip_backprop() -> Result<()> {
     let device = &Device::Cpu;
@@ -555,6 +570,7 @@ test_device!(
     grad_descent_metal
 );
 test_device!(unary_grad, unary_grad_cpu, unary_grad_gpu, unary_grad_metal);
+test_device!(unfold_grad, unfold_grad_cpu, unfold_grad_gpu, unfold_grad_metal);
 test_device!(
     binary_grad,
     binary_grad_cpu,
