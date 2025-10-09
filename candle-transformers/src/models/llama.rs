@@ -144,7 +144,8 @@ impl Config {
 
 #[derive(Debug, Clone)]
 pub struct Cache {
-    masks: HashMap<usize, Tensor>,
+    // TEAM-020: Changed to tuple key (seq_len, seqlen_offset) for proper mask caching
+    masks: HashMap<(usize, usize), Tensor>,
     pub use_kv_cache: bool,
     kvs: Vec<Option<(Tensor, Tensor)>>,
     cos: Tensor,
@@ -215,15 +216,32 @@ impl Cache {
         })
     }
 
-    fn mask(&mut self, t: usize) -> Result<Tensor> {
-        if let Some(mask) = self.masks.get(&t) {
+    // TEAM-020: Fixed mask broadcasting for KV cache
+    // Based on candle-vllm fix: mask must account for cached tokens (seqlen_offset)
+    // to properly broadcast with attention scores shape [b, h, seq_len, kv_len]
+    fn mask(&mut self, t: usize, seqlen_offset: usize) -> Result<Tensor> {
+        let cache_key = (t, seqlen_offset);
+        if let Some(mask) = self.masks.get(&cache_key) {
             Ok(mask.clone())
         } else {
+            // Create base causal mask [t, t]
             let mask: Vec<_> = (0..t)
-                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
+                .flat_map(|i| (0..t).map(move |j| if j > i { f32::NEG_INFINITY } else { 0f32 }))
                 .collect();
             let mask = Tensor::from_slice(&mask, (t, t), &self.device)?;
-            self.masks.insert(t, mask.clone());
+            
+            // Concatenate zeros for KV cache offset (THE FIX!)
+            // This extends mask to [t, t + seqlen_offset] to match KV cache length
+            let mask = if seqlen_offset > 0 {
+                let mask0 = Tensor::zeros((t, seqlen_offset), DType::F32, &self.device)?;
+                Tensor::cat(&[&mask0, &mask], D::Minus1)?
+            } else {
+                mask
+            };
+            
+            // Expand to broadcast shape [1, 1, t, t + seqlen_offset]
+            let mask = mask.expand((1, 1, t, t + seqlen_offset))?;
+            self.masks.insert(cache_key, mask.clone());
             Ok(mask)
         }
     }
@@ -344,7 +362,12 @@ impl CausalSelfAttention {
             let att = if seq_len == 1 {
                 att
             } else {
-                let mask = cache.mask(seq_len)?.broadcast_as(att.shape())?;
+                // TEAM-020: Calculate seqlen_offset from KV cache length
+                // kv_len = cached_tokens + current_seq_len
+                // seqlen_offset = cached_tokens = kv_len - seq_len
+                let kv_len = k.dims()[2]; // k shape: [b, h, kv_len, head_dim]
+                let seqlen_offset = kv_len.saturating_sub(seq_len);
+                let mask = cache.mask(seq_len, seqlen_offset)?.broadcast_as(att.shape())?;
                 masked_fill(&att, &mask, f32::NEG_INFINITY)?
             };
 
