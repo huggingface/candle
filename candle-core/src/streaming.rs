@@ -1,6 +1,7 @@
 //! StreamTensror useful for streaming ops.
 //!
-use crate::{Result, Shape, Tensor};
+use crate::{backend::BackendStorage, Result, Shape, Tensor};
+use std::marker::PhantomData;
 
 pub trait Dim: crate::shape::Dim + Copy {}
 impl<T: crate::shape::Dim + Copy> Dim for T {}
@@ -8,9 +9,9 @@ impl<T: crate::shape::Dim + Copy> Dim for T {}
 /// A stream tensor is used in streaming module. It can either contain an actual tensor or be
 /// empty.
 #[derive(Clone)]
-pub struct StreamTensor(Option<Tensor>);
+pub struct StreamTensor<B: BackendStorage>(Option<Tensor<B>>);
 
-impl std::fmt::Debug for StreamTensor {
+impl<B: BackendStorage> std::fmt::Debug for StreamTensor<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
             Some(t) => write!(f, "{:?}", t.shape()),
@@ -19,30 +20,30 @@ impl std::fmt::Debug for StreamTensor {
     }
 }
 
-impl std::convert::From<Option<Tensor>> for StreamTensor {
-    fn from(value: Option<Tensor>) -> Self {
+impl<B: BackendStorage> std::convert::From<Option<Tensor<B>>> for StreamTensor<B> {
+    fn from(value: Option<Tensor<B>>) -> Self {
         Self(value)
     }
 }
 
-impl std::convert::From<Tensor> for StreamTensor {
-    fn from(value: Tensor) -> Self {
+impl<B: BackendStorage> std::convert::From<Tensor<B>> for StreamTensor<B> {
+    fn from(value: Tensor<B>) -> Self {
         Self(Some(value))
     }
 }
 
-impl std::convert::From<()> for StreamTensor {
+impl<B: BackendStorage> std::convert::From<()> for StreamTensor<B> {
     fn from(_value: ()) -> Self {
         Self(None)
     }
 }
 
-impl StreamTensor {
+impl<B: BackendStorage> StreamTensor<B> {
     pub fn empty() -> Self {
         Self(None)
     }
 
-    pub fn from_tensor(tensor: Tensor) -> Self {
+    pub fn from_tensor(tensor: Tensor<B>) -> Self {
         Self(Some(tensor))
     }
 
@@ -73,7 +74,7 @@ impl StreamTensor {
         self.0 = None
     }
 
-    pub fn narrow<D: Dim>(&self, dim: D, offset: usize, len: usize) -> Result<StreamTensor> {
+    pub fn narrow<D: Dim>(&self, dim: D, offset: usize, len: usize) -> Result<StreamTensor<B>> {
         let t = match &self.0 {
             None => None,
             Some(t) => {
@@ -113,11 +114,11 @@ impl StreamTensor {
         }
     }
 
-    pub fn as_option(&self) -> Option<&Tensor> {
+    pub fn as_option(&self) -> Option<&Tensor<B>> {
         self.0.as_ref()
     }
 
-    pub fn apply<M: crate::Module>(&self, m: &M) -> Result<Self> {
+    pub fn apply<M: crate::Module<B>>(&self, m: &M) -> Result<Self> {
         match &self.0 {
             None => Ok(Self::empty()),
             Some(t) => Ok(Self::from_tensor(t.apply(m)?)),
@@ -128,9 +129,9 @@ impl StreamTensor {
 /// Streaming modules take as input a stream tensor and return a stream tensor. They may perform
 /// some internal buffering so that enough data has been received for the module to be able to
 /// perform some operations.
-pub trait StreamingModule {
+pub trait StreamingModule<B: BackendStorage> {
     // TODO: Should we also have a flush method?
-    fn step(&mut self, xs: &StreamTensor) -> Result<StreamTensor>;
+    fn step(&mut self, xs: &StreamTensor<B>) -> Result<StreamTensor<B>>;
     fn reset_state(&mut self);
 }
 
@@ -143,14 +144,14 @@ pub enum BinOp {
 }
 
 #[derive(Debug, Clone)]
-pub struct StreamingBinOp {
-    prev_lhs: StreamTensor,
-    prev_rhs: StreamTensor,
+pub struct StreamingBinOp<B: BackendStorage> {
+    prev_lhs: StreamTensor<B>,
+    prev_rhs: StreamTensor<B>,
     pub op: BinOp,
     pub dim: crate::D,
 }
 
-impl StreamingBinOp {
+impl<B: BackendStorage> StreamingBinOp<B> {
     pub fn new(op: BinOp, dim: crate::D) -> Self {
         Self {
             prev_lhs: StreamTensor::empty(),
@@ -165,7 +166,7 @@ impl StreamingBinOp {
         self.prev_rhs.reset();
     }
 
-    pub fn forward(&self, lhs: &Tensor, rhs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, lhs: &Tensor<B>, rhs: &Tensor<B>) -> Result<Tensor<B>> {
         match self.op {
             BinOp::Add => Tensor::add(lhs, rhs),
             BinOp::Mul => Tensor::mul(lhs, rhs),
@@ -174,7 +175,11 @@ impl StreamingBinOp {
         }
     }
 
-    pub fn step(&mut self, lhs: &StreamTensor, rhs: &StreamTensor) -> Result<StreamTensor> {
+    pub fn step(
+        &mut self,
+        lhs: &StreamTensor<B>,
+        rhs: &StreamTensor<B>,
+    ) -> Result<StreamTensor<B>> {
         let lhs = StreamTensor::cat2(&self.prev_lhs, lhs, self.dim)?;
         let rhs = StreamTensor::cat2(&self.prev_rhs, rhs, self.dim)?;
         let lhs_len = lhs.seq_len(self.dim)?;
@@ -197,12 +202,12 @@ impl StreamingBinOp {
 }
 
 /// Simple wrapper that doesn't do any buffering.
-pub struct Map<T: crate::Module>(T);
+pub struct Map<B: BackendStorage, T: crate::Module<B>>(T, PhantomData<B>);
 
-impl<T: crate::Module> StreamingModule for Map<T> {
+impl<B: BackendStorage, T: crate::Module<B>> StreamingModule<B> for Map<B, T> {
     fn reset_state(&mut self) {}
 
-    fn step(&mut self, xs: &StreamTensor) -> Result<StreamTensor> {
+    fn step(&mut self, xs: &StreamTensor<B>) -> Result<StreamTensor<B>> {
         xs.apply(&self.0)
     }
 }

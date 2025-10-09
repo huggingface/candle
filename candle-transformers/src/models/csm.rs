@@ -7,7 +7,7 @@
 /// smaller audio decoder that produces Mimi audio codes.
 ///
 use crate::generation::LogitsProcessor;
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{embedding, linear_b, Embedding, Linear, RmsNorm, VarBuilder};
 use std::sync::Arc;
 
@@ -75,9 +75,9 @@ impl LlamaConfig {
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+struct RotaryEmbedding<B: BackendStorage> {
+    sin: Tensor<B>,
+    cos: Tensor<B>,
 }
 
 fn calculate_default_inv_freq(cfg: &LlamaConfig) -> Vec<f32> {
@@ -88,8 +88,8 @@ fn calculate_default_inv_freq(cfg: &LlamaConfig) -> Vec<f32> {
         .collect()
 }
 
-impl RotaryEmbedding {
-    fn new(dtype: DType, cfg: &LlamaConfig, dev: &Device) -> Result<Self> {
+impl<B: BackendStorage> RotaryEmbedding<B> {
+    fn new(dtype: DType, cfg: &LlamaConfig, dev: &B::Device) -> Result<Self> {
         let low_freq_factor = 1.0;
         let high_freq_factor = 4.0;
         let original_max_position_embeddings = 8192;
@@ -130,10 +130,10 @@ impl RotaryEmbedding {
 
     fn apply_rotary_emb_qkv(
         &self,
-        q: &Tensor,
-        k: &Tensor,
+        q: &Tensor<B>,
+        k: &Tensor<B>,
         seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
@@ -142,27 +142,35 @@ impl RotaryEmbedding {
         Ok((q_embed, k_embed))
     }
 }
-fn rms_norm(hidden_size: usize, eps: f64, vb: VarBuilder) -> Result<RmsNorm> {
+fn rms_norm<B: BackendStorage>(
+    hidden_size: usize,
+    eps: f64,
+    vb: VarBuilder<B>,
+) -> Result<RmsNorm<B>> {
     let weight = vb.get((hidden_size,), "scale")?;
     Ok(RmsNorm::new(weight, eps))
 }
 
 #[derive(Debug, Clone)]
-struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
-    rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: Option<(Tensor, Tensor)>,
+struct Attention<B: BackendStorage> {
+    q_proj: Linear<B>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    o_proj: Linear<B>,
+    rotary_emb: Arc<RotaryEmbedding<B>>,
+    kv_cache: Option<(Tensor<B>, Tensor<B>)>,
     num_heads: usize,
     head_dim: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
 }
 
-impl Attention {
-    fn new(cfg: &LlamaConfig, rotary_emb: Arc<RotaryEmbedding>, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Attention<B> {
+    fn new(
+        cfg: &LlamaConfig,
+        rotary_emb: Arc<RotaryEmbedding<B>>,
+        vb: VarBuilder<B>,
+    ) -> Result<Self> {
         let head_dim = cfg.embed_dim / cfg.num_heads;
         let kv_dim = cfg.num_kv_heads * head_dim;
 
@@ -186,10 +194,10 @@ impl Attention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<B>,
+        attention_mask: Option<&Tensor<B>>,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let query_states = self.q_proj.forward(xs)?;
@@ -249,14 +257,14 @@ impl Attention {
 }
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    w1: Linear,
-    w2: Linear,
-    w3: Linear,
+struct Mlp<B: BackendStorage> {
+    w1: Linear<B>,
+    w2: Linear<B>,
+    w3: Linear<B>,
 }
 
-impl Mlp {
-    fn new(cfg: &LlamaConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Mlp<B> {
+    fn new(cfg: &LlamaConfig, vb: VarBuilder<B>) -> Result<Self> {
         let w1 = linear_b(cfg.embed_dim, cfg.intermediate_dim, false, vb.pp("w1"))?;
         let w2 = linear_b(cfg.intermediate_dim, cfg.embed_dim, false, vb.pp("w2"))?;
         let w3 = linear_b(cfg.embed_dim, cfg.intermediate_dim, false, vb.pp("w3"))?;
@@ -264,8 +272,8 @@ impl Mlp {
     }
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Mlp<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let lhs = xs.apply(&self.w1)?.silu()?;
         let rhs = xs.apply(&self.w3)?;
         (lhs * rhs)?.apply(&self.w2)
@@ -273,15 +281,19 @@ impl Module for Mlp {
 }
 
 #[derive(Debug, Clone)]
-struct Layer {
-    mlp_norm: RmsNorm,
-    sa_norm: RmsNorm,
-    attn: Attention,
-    mlp: Mlp,
+struct Layer<B: BackendStorage> {
+    mlp_norm: RmsNorm<B>,
+    sa_norm: RmsNorm<B>,
+    attn: Attention<B>,
+    mlp: Mlp<B>,
 }
 
-impl Layer {
-    fn new(cfg: &LlamaConfig, rotary_emb: Arc<RotaryEmbedding>, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Layer<B> {
+    fn new(
+        cfg: &LlamaConfig,
+        rotary_emb: Arc<RotaryEmbedding<B>>,
+        vb: VarBuilder<B>,
+    ) -> Result<Self> {
         let mlp_norm = rms_norm(cfg.embed_dim, cfg.norm_eps, vb.pp("mlp_norm"))?;
         let sa_norm = rms_norm(cfg.embed_dim, cfg.norm_eps, vb.pp("sa_norm"))?;
         let attn = Attention::new(cfg, rotary_emb, vb.pp("attn"))?;
@@ -296,10 +308,10 @@ impl Layer {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<B>,
+        attention_mask: Option<&Tensor<B>>,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = self.sa_norm.forward(xs)?;
         let xs = self.attn.forward(&xs, attention_mask, seqlen_offset)?;
@@ -315,15 +327,15 @@ impl Layer {
 }
 
 #[derive(Debug, Clone)]
-pub struct LlamaModel {
-    layers: Vec<Layer>,
-    norm: RmsNorm,
-    device: Device,
+pub struct LlamaModel<B: BackendStorage> {
+    layers: Vec<Layer<B>>,
+    norm: RmsNorm<B>,
+    device: B::Device,
     dtype: DType,
 }
 
-impl LlamaModel {
-    pub fn new(cfg: &LlamaConfig, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> LlamaModel<B> {
+    pub fn new(cfg: &LlamaConfig, vb: VarBuilder<B>) -> Result<Self> {
         let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?);
         let mut layers = Vec::with_capacity(cfg.num_layers);
         let vb_l = vb.pp("layers");
@@ -350,7 +362,7 @@ impl LlamaModel {
         &self,
         tgt_len: usize,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
             .collect();
@@ -365,7 +377,7 @@ impl LlamaModel {
             .to_dtype(self.dtype)
     }
 
-    pub fn forward(&mut self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor<B>, seqlen_offset: usize) -> Result<Tensor<B>> {
         let (_b_size, seq_len, _embed_dim) = xs.dims3()?;
         let attention_mask = if seq_len <= 1 {
             None
@@ -383,19 +395,19 @@ impl LlamaModel {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    backbone: LlamaModel,
-    decoder: LlamaModel,
-    codebook0_head: Linear,
-    audio_embeddings: Embedding,
-    text_embeddings: Embedding,
-    projection: Linear,
-    audio_head: Tensor,
+pub struct Model<B: BackendStorage> {
+    backbone: LlamaModel<B>,
+    decoder: LlamaModel<B>,
+    codebook0_head: Linear<B>,
+    audio_embeddings: Embedding<B>,
+    text_embeddings: Embedding<B>,
+    projection: Linear<B>,
+    audio_head: Tensor<B>,
     config: Config,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let backbone_cfg = LlamaConfig::from_flavor(cfg.backbone_flavor);
         let backbone = LlamaModel::new(&backbone_cfg, vb.pp("backbone"))?;
         let decoder_cfg = LlamaConfig::from_flavor(cfg.decoder_flavor);
@@ -443,8 +455,8 @@ impl Model {
 
     pub fn generate_frame(
         &mut self,
-        tokens: &Tensor,
-        tokens_mask: &Tensor,
+        tokens: &Tensor<B>,
+        tokens_mask: &Tensor<B>,
         input_pos: usize,
         lp: &mut LogitsProcessor,
     ) -> Result<Vec<u32>> {
@@ -499,7 +511,7 @@ impl Model {
         Ok(all_samples)
     }
 
-    pub fn audio_tokens_and_mask(&self, mut frame: Vec<u32>) -> Result<(Tensor, Tensor)> {
+    pub fn audio_tokens_and_mask(&self, mut frame: Vec<u32>) -> Result<(Tensor<B>, Tensor<B>)> {
         let cb = self.config.audio_num_codebooks;
         let device = &self.backbone.device;
         let mut mask = vec![1u8; cb];
@@ -511,7 +523,7 @@ impl Model {
         Ok((tokens, mask))
     }
 
-    pub fn text_tokens_and_mask(&self, ids: &[u32]) -> Result<(Tensor, Tensor)> {
+    pub fn text_tokens_and_mask(&self, ids: &[u32]) -> Result<(Tensor<B>, Tensor<B>)> {
         let cb = self.config.audio_num_codebooks;
         let device = &self.backbone.device;
         let mut tokens = vec![];

@@ -1,15 +1,21 @@
-use crate::{shape::Dim, Context, Error, Result, Shape, Tensor};
+use crate::{
+    backend::{BackendDevice, BackendStorage},
+    shape::Dim,
+    Context, Error, Result, Shape, Tensor,
+};
 
-impl Tensor {
+impl<B: BackendStorage> Tensor<B> {
     /// Concatenates two or more tensors along a particular dimension.
     ///
     /// All tensors must of the same rank, and the output will have
     /// the same rank
     ///
     /// ```rust
-    /// # use candle_core::{Tensor, DType, Device};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
-    /// let b = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// # use candle_core::{CpuStorage, CpuDevice, DType};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
+    /// let b = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
     ///
     /// let c = Tensor::cat(&[&a, &b], 0)?;
     /// assert_eq!(c.shape().dims(), &[4, 3]);
@@ -18,7 +24,7 @@ impl Tensor {
     /// assert_eq!(c.shape().dims(), &[2, 6]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn cat<A: AsRef<Tensor>, D: Dim>(args: &[A], dim: D) -> Result<Self> {
+    pub fn cat<A: AsRef<Self>, D: Dim>(args: &[A], dim: D) -> Result<Self> {
         if args.is_empty() {
             Err(Error::OpRequiresAtLeastOneTensor { op: "cat" }.bt())?
         }
@@ -64,7 +70,7 @@ impl Tensor {
         } else if dim == 0 {
             Self::cat0(args)
         } else {
-            let args: Vec<Tensor> = args
+            let args: Vec<Self> = args
                 .iter()
                 .map(|a| a.as_ref().transpose(0, dim))
                 .collect::<Result<Vec<_>>>()?;
@@ -73,7 +79,7 @@ impl Tensor {
         }
     }
 
-    fn cat0<A: AsRef<Tensor>>(args: &[A]) -> Result<Self> {
+    fn cat0<A: AsRef<Self>>(args: &[A]) -> Result<Self> {
         if args.is_empty() {
             Err(Error::OpRequiresAtLeastOneTensor { op: "cat" }.bt())?
         }
@@ -148,7 +154,7 @@ impl Tensor {
         Ok(crate::tensor::from_storage(storage, shape, op, false))
     }
 
-    fn cat_contiguous<A: AsRef<Tensor>>(args: &[A], dim: usize) -> Result<Self> {
+    fn cat_contiguous<A: AsRef<Self>>(args: &[A], dim: usize) -> Result<Self> {
         if args.is_empty() {
             Err(Error::OpRequiresAtLeastOneTensor { op: "cat" }.bt())?
         }
@@ -242,7 +248,7 @@ impl Tensor {
     /// has to be greater than or equal to `offset` plus the `src` size.
     ///
     /// Note that this modifies `self` in place and as such is not compatible with
-    /// back-propagation.  
+    /// back-propagation.
     pub fn slice_set<D: Dim>(&self, src: &Self, dim: D, offset: usize) -> Result<()> {
         let dim = dim.to_index(self.shape(), "slice-set")?;
         if !self.is_contiguous() || !src.is_contiguous() {

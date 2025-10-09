@@ -1,19 +1,19 @@
 use super::common::LayerNormNoWeights;
-use candle::{Module, Result, Tensor};
+use candle::{BackendStorage, Module, Result, Tensor};
 use candle_nn::VarBuilder;
 
 #[derive(Debug)]
-pub struct MixingResidualBlock {
+pub struct MixingResidualBlock<B: BackendStorage> {
     norm1: LayerNormNoWeights,
-    depthwise_conv: candle_nn::Conv2d,
+    depthwise_conv: candle_nn::Conv2d<B>,
     norm2: LayerNormNoWeights,
-    channelwise_lin1: candle_nn::Linear,
-    channelwise_lin2: candle_nn::Linear,
+    channelwise_lin1: candle_nn::Linear<B>,
+    channelwise_lin2: candle_nn::Linear<B>,
     gammas: Vec<f32>,
 }
 
-impl MixingResidualBlock {
-    pub fn new(inp: usize, embed_dim: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MixingResidualBlock<B> {
+    pub fn new(inp: usize, embed_dim: usize, vb: VarBuilder<B>) -> Result<Self> {
         let norm1 = LayerNormNoWeights::new(inp)?;
         let norm2 = LayerNormNoWeights::new(inp)?;
         let cfg = candle_nn::Conv2dConfig {
@@ -35,8 +35,8 @@ impl MixingResidualBlock {
     }
 }
 
-impl Module for MixingResidualBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for MixingResidualBlock<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mods = &self.gammas;
         let x_temp = xs
             .permute((0, 2, 3, 1))?
@@ -61,19 +61,24 @@ impl Module for MixingResidualBlock {
     }
 }
 
+type DownBLocks<B> = Vec<(Option<candle_nn::Conv2d<B>>, MixingResidualBlock<B>)>;
+type UpBLocks<B> = Vec<(
+    Vec<MixingResidualBlock<B>>,
+    Option<candle_nn::ConvTranspose2d<B>>,
+)>;
 #[derive(Debug)]
-pub struct PaellaVQ {
-    in_block_conv: candle_nn::Conv2d,
-    out_block_conv: candle_nn::Conv2d,
-    down_blocks: Vec<(Option<candle_nn::Conv2d>, MixingResidualBlock)>,
-    down_blocks_conv: candle_nn::Conv2d,
-    down_blocks_bn: candle_nn::BatchNorm,
-    up_blocks_conv: candle_nn::Conv2d,
-    up_blocks: Vec<(Vec<MixingResidualBlock>, Option<candle_nn::ConvTranspose2d>)>,
+pub struct PaellaVQ<B: BackendStorage> {
+    in_block_conv: candle_nn::Conv2d<B>,
+    out_block_conv: candle_nn::Conv2d<B>,
+    down_blocks: DownBLocks<B>,
+    down_blocks_conv: candle_nn::Conv2d<B>,
+    down_blocks_bn: candle_nn::BatchNorm<B>,
+    up_blocks_conv: candle_nn::Conv2d<B>,
+    up_blocks: UpBLocks<B>,
 }
 
-impl PaellaVQ {
-    pub fn new(vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> PaellaVQ<B> {
+    pub fn new(vb: VarBuilder<B>) -> Result<Self> {
         const IN_CHANNELS: usize = 3;
         const OUT_CHANNELS: usize = 3;
         const LATENT_CHANNELS: usize = 4;
@@ -176,7 +181,7 @@ impl PaellaVQ {
         })
     }
 
-    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut xs = candle_nn::ops::pixel_unshuffle(xs, 2)?.apply(&self.in_block_conv)?;
         for down_block in self.down_blocks.iter() {
             if let Some(conv) = &down_block.0 {
@@ -188,7 +193,7 @@ impl PaellaVQ {
             .apply_t(&self.down_blocks_bn, false)
     }
 
-    pub fn decode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         // TODO: quantizer if we want to support `force_not_quantize=False`.
         let mut xs = xs.apply(&self.up_blocks_conv)?;
         for up_block in self.up_blocks.iter() {
@@ -204,8 +209,8 @@ impl PaellaVQ {
     }
 }
 
-impl Module for PaellaVQ {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for PaellaVQ<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         self.decode(&self.encode(xs)?)
     }
 }

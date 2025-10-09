@@ -20,33 +20,37 @@ use crate::quantized_nn::{layer_norm_no_bias, linear_no_bias, Embedding, Linear}
 pub use crate::quantized_var_builder::VarBuilder;
 /// MPT model used by replit-code-v1_5-3b
 /// https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/modeling_mpt.py
-use candle::{IndexOp, Module, Result, Tensor, D};
+use candle::{quantized::QuantizedBackend, IndexOp, Module, Result, Tensor, D};
 use candle_nn::LayerNorm;
 
 pub use super::mpt::Config;
 
+type KVCache<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
 #[derive(Debug, Clone)]
-struct GroupedQueryAttention {
-    wqkv: Linear,
-    out_proj: Linear,
-    kv_cache: Option<(Tensor, Tensor)>,
+struct GroupedQueryAttention<QB: QuantizedBackend> {
+    wqkv: Linear<QB>,
+    out_proj: Linear<QB>,
+    kv_cache: Option<KVCache<QB>>,
     softmax_scale: f64,
     head_dim: usize,
     d_model: usize,
     n_heads: usize,
     kv_n_heads: usize,
-    attn_bias: Tensor,
+    attn_bias: Tensor<QB::Storage>,
     span: tracing::Span,
 }
 
-impl GroupedQueryAttention {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> GroupedQueryAttention<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let head_dim = cfg.d_model / cfg.n_heads;
         let wqkv_size = cfg.d_model + 2 * cfg.kv_n_heads * head_dim;
         let wqkv = linear_no_bias(cfg.d_model, wqkv_size, vb.pp("Wqkv"))?;
         let softmax_scale = 1f64 / (head_dim as f64).sqrt();
         let out_proj = linear_no_bias(cfg.d_model, cfg.d_model, vb.pp("out_proj"))?;
-        let attn_bias = super::mpt::build_alibi_bias(cfg)?.to_device(vb.device())?;
+        let attn_bias = super::mpt::build_alibi_bias(cfg, vb.device())?;
         Ok(Self {
             wqkv,
             out_proj,
@@ -61,7 +65,14 @@ impl GroupedQueryAttention {
         })
     }
 
-    fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        xs: &Tensor<QB::Storage>,
+        mask: Option<&Tensor<QB::Storage>>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span.enter();
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
         let qkv = self.wqkv.forward(xs)?;
@@ -120,13 +131,13 @@ impl GroupedQueryAttention {
 }
 
 #[derive(Debug, Clone)]
-struct Ffn {
-    up_proj: Linear,
-    down_proj: Linear,
+struct Ffn<QB: QuantizedBackend> {
+    up_proj: Linear<QB>,
+    down_proj: Linear<QB>,
 }
 
-impl Ffn {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Ffn<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let hidden = cfg.d_model * cfg.expansion_ratio;
         let up_proj = linear_no_bias(cfg.d_model, hidden, vb.pp("up_proj"))?;
         let down_proj = linear_no_bias(hidden, cfg.d_model, vb.pp("down_proj"))?;
@@ -134,22 +145,25 @@ impl Ffn {
     }
 }
 
-impl Module for Ffn {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for Ffn<QB>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         xs.apply(&self.up_proj)?.gelu_erf()?.apply(&self.down_proj)
     }
 }
 
 #[derive(Debug, Clone)]
-struct MPTBlock {
-    norm1: LayerNorm, // Do we need the low-precision variant?
-    attn: GroupedQueryAttention,
-    norm2: LayerNorm,
-    ffn: Ffn,
+struct MPTBlock<QB: QuantizedBackend> {
+    norm1: LayerNorm<QB::Storage>, // Do we need the low-precision variant?
+    attn: GroupedQueryAttention<QB>,
+    norm2: LayerNorm<QB::Storage>,
+    ffn: Ffn<QB>,
 }
 
-impl MPTBlock {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> MPTBlock<QB> {
+    fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let norm1 = layer_norm_no_bias(cfg.d_model, 1e-5, vb.pp("norm_1"))?;
         let norm2 = layer_norm_no_bias(cfg.d_model, 1e-5, vb.pp("norm_2"))?;
         let attn = GroupedQueryAttention::new(cfg, vb.pp("attn"))?;
@@ -162,7 +176,14 @@ impl MPTBlock {
         })
     }
 
-    fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        xs: &Tensor<QB::Storage>,
+        mask: Option<&Tensor<QB::Storage>>,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let residual = xs;
         let xs = xs.apply(&self.norm1)?;
         let xs = self.attn.forward(&xs, mask)?;
@@ -174,14 +195,14 @@ impl MPTBlock {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    wte: Embedding,
-    blocks: Vec<MPTBlock>,
-    norm_f: LayerNorm,
+pub struct Model<QB: QuantizedBackend> {
+    wte: Embedding<QB>,
+    blocks: Vec<MPTBlock<QB>>,
+    norm_f: LayerNorm<QB::Storage>,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<QB: QuantizedBackend> Model<QB> {
+    pub fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
         let wte = Embedding::new(cfg.vocab_size, cfg.d_model, vb.pp("wte"))?;
         let vb_b = vb.pp("blocks");
         let mut blocks = Vec::with_capacity(cfg.n_layers);
@@ -197,7 +218,10 @@ impl Model {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.wte)?;
         let mask = if seq_len <= 1 {

@@ -15,7 +15,7 @@
 //!
 
 use crate::models::with_tracing::{conv2d, linear, Conv2d, Linear};
-use candle::{Context, Module, ModuleT, Result, Tensor, D};
+use candle::{BackendStorage, Context, Module, ModuleT, Result, Tensor, D};
 use candle_nn::{conv2d_no_bias, layer_norm, Activation, Conv2dConfig, VarBuilder};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -40,19 +40,19 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone)]
-struct SegformerOverlapPatchEmbeddings {
-    projection: Conv2d,
-    layer_norm: candle_nn::LayerNorm,
+struct SegformerOverlapPatchEmbeddings<B: BackendStorage> {
+    projection: Conv2d<B>,
+    layer_norm: candle_nn::LayerNorm<B>,
 }
 
-impl SegformerOverlapPatchEmbeddings {
+impl<B: BackendStorage> SegformerOverlapPatchEmbeddings<B> {
     fn new(
         config: &Config,
         patch_size: usize,
         stride: usize,
         num_channels: usize,
         hidden_size: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let projection = conv2d(
             num_channels,
@@ -74,8 +74,8 @@ impl SegformerOverlapPatchEmbeddings {
     }
 }
 
-impl Module for SegformerOverlapPatchEmbeddings {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for SegformerOverlapPatchEmbeddings<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let embeddings = self.projection.forward(x)?;
         let shape = embeddings.shape();
         // [B, C, H, W] -> [B, H * W, C]
@@ -88,23 +88,23 @@ impl Module for SegformerOverlapPatchEmbeddings {
 }
 
 #[derive(Debug, Clone)]
-struct SegformerEfficientSelfAttention {
+struct SegformerEfficientSelfAttention<B: BackendStorage> {
     num_attention_heads: usize,
     attention_head_size: usize,
-    query: Linear,
-    key: Linear,
-    value: Linear,
-    sr: Option<Conv2d>,
-    layer_norm: Option<layer_norm::LayerNorm>,
+    query: Linear<B>,
+    key: Linear<B>,
+    value: Linear<B>,
+    sr: Option<Conv2d<B>>,
+    layer_norm: Option<layer_norm::LayerNorm<B>>,
 }
 
-impl SegformerEfficientSelfAttention {
+impl<B: BackendStorage> SegformerEfficientSelfAttention<B> {
     fn new(
         config: &Config,
         hidden_size: usize,
         num_attention_heads: usize,
         sequence_reduction_ratio: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         if !hidden_size.is_multiple_of(num_attention_heads) {
             candle::bail!(
@@ -150,7 +150,7 @@ impl SegformerEfficientSelfAttention {
         })
     }
 
-    fn transpose_for_scores(&self, hidden_states: Tensor) -> Result<Tensor> {
+    fn transpose_for_scores(&self, hidden_states: Tensor<B>) -> Result<Tensor<B>> {
         let (batch, seq_length, _) = hidden_states.shape().dims3()?;
         let new_shape = &[
             batch,
@@ -164,8 +164,8 @@ impl SegformerEfficientSelfAttention {
     }
 }
 
-impl Module for SegformerEfficientSelfAttention {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for SegformerEfficientSelfAttention<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         // [B, C, H, W] -> [B, H * W, C]
         let hidden_states = x.flatten_from(2)?.permute((0, 2, 1))?;
         let query = self
@@ -197,36 +197,36 @@ impl Module for SegformerEfficientSelfAttention {
 }
 
 #[derive(Debug, Clone)]
-struct SegformerSelfOutput {
-    dense: Linear,
+struct SegformerSelfOutput<B: BackendStorage> {
+    dense: Linear<B>,
 }
 
-impl SegformerSelfOutput {
-    fn new(hidden_size: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SegformerSelfOutput<B> {
+    fn new(hidden_size: usize, vb: VarBuilder<B>) -> Result<Self> {
         let dense = linear(hidden_size, hidden_size, vb.pp("dense"))?;
         Ok(Self { dense })
     }
 }
 
-impl Module for SegformerSelfOutput {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for SegformerSelfOutput<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         self.dense.forward(x)
     }
 }
 
 #[derive(Debug, Clone)]
-struct SegformerAttention {
-    attention: SegformerEfficientSelfAttention,
-    output: SegformerSelfOutput,
+struct SegformerAttention<B: BackendStorage> {
+    attention: SegformerEfficientSelfAttention<B>,
+    output: SegformerSelfOutput<B>,
 }
 
-impl SegformerAttention {
+impl<B: BackendStorage> SegformerAttention<B> {
     fn new(
         config: &Config,
         hidden_size: usize,
         num_attention_heads: usize,
         sequence_reduction_ratio: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let attention = SegformerEfficientSelfAttention::new(
             config,
@@ -240,20 +240,20 @@ impl SegformerAttention {
     }
 }
 
-impl Module for SegformerAttention {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for SegformerAttention<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let attention_output = self.attention.forward(x)?;
         self.output.forward(&attention_output)
     }
 }
 
 #[derive(Debug, Clone)]
-struct SegformerDWConv {
-    dw_conv: Conv2d,
+struct SegformerDWConv<B: BackendStorage> {
+    dw_conv: Conv2d<B>,
 }
 
-impl SegformerDWConv {
-    fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SegformerDWConv<B> {
+    fn new(dim: usize, vb: VarBuilder<B>) -> Result<Self> {
         let dw_conv = conv2d(
             dim,
             dim,
@@ -270,27 +270,27 @@ impl SegformerDWConv {
     }
 }
 
-impl Module for SegformerDWConv {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for SegformerDWConv<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         self.dw_conv.forward(x)
     }
 }
 
 #[derive(Debug, Clone)]
-struct SegformerMixFFN {
-    dense1: Linear,
-    dw_conv: SegformerDWConv,
+struct SegformerMixFFN<B: BackendStorage> {
+    dense1: Linear<B>,
+    dw_conv: SegformerDWConv<B>,
     act: Activation,
-    dense2: Linear,
+    dense2: Linear<B>,
 }
 
-impl SegformerMixFFN {
+impl<B: BackendStorage> SegformerMixFFN<B> {
     fn new(
         config: &Config,
         in_features: usize,
         hidden_features: usize,
         out_features: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let dense1 = linear(in_features, hidden_features, vb.pp("dense1"))?;
         let dw_conv = SegformerDWConv::new(hidden_features, vb.pp("dwconv"))?;
@@ -305,8 +305,8 @@ impl SegformerMixFFN {
     }
 }
 
-impl Module for SegformerMixFFN {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for SegformerMixFFN<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let (batch, _, height, width) = x.shape().dims4()?;
         let hidden_states = self
             .dense1
@@ -329,21 +329,21 @@ impl Module for SegformerMixFFN {
 }
 
 #[derive(Debug, Clone)]
-struct SegformerLayer {
-    layer_norm_1: candle_nn::LayerNorm,
-    attention: SegformerAttention,
-    layer_norm_2: candle_nn::LayerNorm,
-    mlp: SegformerMixFFN,
+struct SegformerLayer<B: BackendStorage> {
+    layer_norm_1: candle_nn::LayerNorm<B>,
+    attention: SegformerAttention<B>,
+    layer_norm_2: candle_nn::LayerNorm<B>,
+    mlp: SegformerMixFFN<B>,
 }
 
-impl SegformerLayer {
+impl<B: BackendStorage> SegformerLayer<B> {
     fn new(
         config: &Config,
         hidden_size: usize,
         num_attention_heads: usize,
         sequence_reduction_ratio: usize,
         mlp_ratio: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let layer_norm_1 = layer_norm(hidden_size, config.layer_norm_eps, vb.pp("layer_norm_1"))?;
         let attention = SegformerAttention::new(
@@ -370,8 +370,8 @@ impl SegformerLayer {
     }
 }
 
-impl Module for SegformerLayer {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for SegformerLayer<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let shape = x.shape().dims4()?;
         // [B, C, H, W] -> [B, H * W, C]
         let hidden_states = x.flatten_from(2)?.permute((0, 2, 1))?;
@@ -389,19 +389,19 @@ impl Module for SegformerLayer {
 }
 
 #[derive(Debug, Clone)]
-struct SegformerEncoder {
+struct SegformerEncoder<B: BackendStorage> {
     /// config file
     config: Config,
     /// a list of embeddings
-    patch_embeddings: Vec<SegformerOverlapPatchEmbeddings>,
+    patch_embeddings: Vec<SegformerOverlapPatchEmbeddings<B>>,
     /// a list of attention blocks, each consisting of layers
-    blocks: Vec<Vec<SegformerLayer>>,
+    blocks: Vec<Vec<SegformerLayer<B>>>,
     /// a final list of layer norms
-    layer_norms: Vec<candle_nn::LayerNorm>,
+    layer_norms: Vec<candle_nn::LayerNorm<B>>,
 }
 
-impl SegformerEncoder {
-    fn new(config: Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SegformerEncoder<B> {
+    fn new(config: Config, vb: VarBuilder<B>) -> Result<Self> {
         let mut patch_embeddings = Vec::with_capacity(config.num_encoder_blocks);
         let mut blocks = Vec::with_capacity(config.num_encoder_blocks);
         let mut layer_norms = Vec::with_capacity(config.num_encoder_blocks);
@@ -452,8 +452,8 @@ impl SegformerEncoder {
     }
 }
 
-impl ModuleWithHiddenStates for SegformerEncoder {
-    fn forward(&self, x: &Tensor) -> Result<Vec<Tensor>> {
+impl<B: BackendStorage> ModuleWithHiddenStates<B> for SegformerEncoder<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Vec<Tensor<B>>> {
         let mut all_hidden_states = Vec::with_capacity(self.config.num_encoder_blocks);
         let mut hidden_states = x.clone();
         for i in 0..self.config.num_encoder_blocks {
@@ -472,51 +472,51 @@ impl ModuleWithHiddenStates for SegformerEncoder {
 }
 
 #[derive(Debug, Clone)]
-struct SegformerModel {
-    encoder: SegformerEncoder,
+struct SegformerModel<B: BackendStorage> {
+    encoder: SegformerEncoder<B>,
 }
 
-impl SegformerModel {
-    fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SegformerModel<B> {
+    fn new(config: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let encoder = SegformerEncoder::new(config.clone(), vb.pp("encoder"))?;
         Ok(Self { encoder })
     }
 }
 
-impl ModuleWithHiddenStates for SegformerModel {
-    fn forward(&self, x: &Tensor) -> Result<Vec<Tensor>> {
+impl<B: BackendStorage> ModuleWithHiddenStates<B> for SegformerModel<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Vec<Tensor<B>>> {
         self.encoder.forward(x)
     }
 }
 
 #[derive(Debug, Clone)]
-struct SegformerMLP {
-    proj: Linear,
+struct SegformerMLP<B: BackendStorage> {
+    proj: Linear<B>,
 }
 
-impl SegformerMLP {
-    fn new(config: &Config, input_dim: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SegformerMLP<B> {
+    fn new(config: &Config, input_dim: usize, vb: VarBuilder<B>) -> Result<Self> {
         let proj = linear(input_dim, config.decoder_hidden_size, vb.pp("proj"))?;
         Ok(Self { proj })
     }
 }
 
-impl Module for SegformerMLP {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for SegformerMLP<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         self.proj.forward(x)
     }
 }
 
 #[derive(Debug, Clone)]
-struct SegformerDecodeHead {
-    linear_c: Vec<SegformerMLP>,
-    linear_fuse: candle_nn::Conv2d,
-    batch_norm: candle_nn::BatchNorm,
-    classifier: candle_nn::Conv2d,
+struct SegformerDecodeHead<B: BackendStorage> {
+    linear_c: Vec<SegformerMLP<B>>,
+    linear_fuse: candle_nn::Conv2d<B>,
+    batch_norm: candle_nn::BatchNorm<B>,
+    classifier: candle_nn::Conv2d<B>,
 }
 
-impl SegformerDecodeHead {
-    fn new(config: &Config, num_labels: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SegformerDecodeHead<B> {
+    fn new(config: &Config, num_labels: usize, vb: VarBuilder<B>) -> Result<Self> {
         let mut linear_c = Vec::with_capacity(config.num_encoder_blocks);
         for i in 0..config.num_encoder_blocks {
             let hidden_size = config.hidden_sizes[i];
@@ -553,7 +553,7 @@ impl SegformerDecodeHead {
         })
     }
 
-    fn forward(&self, encoder_hidden_states: &[Tensor]) -> Result<Tensor> {
+    fn forward(&self, encoder_hidden_states: &[Tensor<B>]) -> Result<Tensor<B>> {
         if encoder_hidden_states.len() != self.linear_c.len() {
             candle::bail!(
                 "The number of encoder hidden states {} is not equal to the number of linear layers {}",
@@ -585,18 +585,18 @@ impl SegformerDecodeHead {
     }
 }
 
-trait ModuleWithHiddenStates {
-    fn forward(&self, xs: &Tensor) -> Result<Vec<Tensor>>;
+trait ModuleWithHiddenStates<B: BackendStorage> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Vec<Tensor<B>>>;
 }
 
 #[derive(Debug, Clone)]
-pub struct SemanticSegmentationModel {
-    segformer: SegformerModel,
-    decode_head: SegformerDecodeHead,
+pub struct SemanticSegmentationModel<B: BackendStorage> {
+    segformer: SegformerModel<B>,
+    decode_head: SegformerDecodeHead<B>,
 }
 
-impl SemanticSegmentationModel {
-    pub fn new(config: &Config, num_labels: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SemanticSegmentationModel<B> {
+    pub fn new(config: &Config, num_labels: usize, vb: VarBuilder<B>) -> Result<Self> {
         let segformer = SegformerModel::new(config, vb.pp("segformer"))?;
         let decode_head = SegformerDecodeHead::new(config, num_labels, vb.pp("decode_head"))?;
         Ok(Self {
@@ -606,21 +606,21 @@ impl SemanticSegmentationModel {
     }
 }
 
-impl Module for SemanticSegmentationModel {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let hidden_states = self.segformer.forward(x)?;
+impl<B: BackendStorage> Module<B> for SemanticSegmentationModel<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
+        let hidden_states = self.segformer.forward(xs)?;
         self.decode_head.forward(&hidden_states)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ImageClassificationModel {
-    segformer: SegformerModel,
-    classifier: Linear,
+pub struct ImageClassificationModel<B: BackendStorage> {
+    segformer: SegformerModel<B>,
+    classifier: Linear<B>,
 }
 
-impl ImageClassificationModel {
-    pub fn new(config: &Config, num_labels: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> ImageClassificationModel<B> {
+    pub fn new(config: &Config, num_labels: usize, vb: VarBuilder<B>) -> Result<Self> {
         let segformer = SegformerModel::new(config, vb.pp("segformer"))?;
         let classifier = linear(config.decoder_hidden_size, num_labels, vb.pp("classifier"))?;
         Ok(Self {
@@ -630,8 +630,8 @@ impl ImageClassificationModel {
     }
 }
 
-impl Module for ImageClassificationModel {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ImageClassificationModel<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let all_hidden_states = self.segformer.forward(x)?;
         let hidden_states = all_hidden_states.last().context("no last")?;
         let hidden_states = hidden_states.flatten_from(2)?.permute((0, 2, 1))?;

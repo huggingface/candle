@@ -5,7 +5,7 @@
 //! See: [Jina Embeddings on HuggingFace](https://huggingface.co/jinaai/jina-embeddings-v2-base-en)
 
 use super::with_tracing::{linear, linear_no_bias, Embedding, Linear};
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Module, VarBuilder};
 use serde::Deserialize;
 
@@ -87,16 +87,16 @@ impl Config {
 }
 
 #[derive(Clone, Debug)]
-struct BertEmbeddings {
-    word_embeddings: Embedding,
+struct BertEmbeddings<B: BackendStorage> {
+    word_embeddings: Embedding<B>,
     // no position_embeddings as we only support alibi.
-    token_type_embeddings: Embedding,
-    layer_norm: LayerNorm,
+    token_type_embeddings: Embedding<B>,
+    layer_norm: LayerNorm<B>,
     span: tracing::Span,
 }
 
-impl BertEmbeddings {
-    fn new(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> BertEmbeddings<B> {
+    fn new(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let word_embeddings =
             Embedding::new(cfg.vocab_size, cfg.hidden_size, vb.pp("word_embeddings"))?;
         let token_type_embeddings = Embedding::new(
@@ -114,8 +114,8 @@ impl BertEmbeddings {
     }
 }
 
-impl Module for BertEmbeddings {
-    fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for BertEmbeddings<B> {
+    fn forward(&self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (b_size, seq_len) = input_ids.dims2()?;
         let input_embeddings = self.word_embeddings.forward(input_ids)?;
@@ -129,18 +129,18 @@ impl Module for BertEmbeddings {
 }
 
 #[derive(Clone, Debug)]
-struct BertSelfAttention {
-    query: Linear,
-    key: Linear,
-    value: Linear,
+struct BertSelfAttention<B: BackendStorage> {
+    query: Linear<B>,
+    key: Linear<B>,
+    value: Linear<B>,
     num_attention_heads: usize,
     attention_head_size: usize,
     span: tracing::Span,
     span_softmax: tracing::Span,
 }
 
-impl BertSelfAttention {
-    fn new(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> BertSelfAttention<B> {
+    fn new(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let attention_head_size = cfg.hidden_size / cfg.num_attention_heads;
         let all_head_size = cfg.num_attention_heads * attention_head_size;
         let hidden_size = cfg.hidden_size;
@@ -158,7 +158,7 @@ impl BertSelfAttention {
         })
     }
 
-    fn transpose_for_scores(&self, xs: &Tensor) -> Result<Tensor> {
+    fn transpose_for_scores(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut x_shape = xs.dims().to_vec();
         x_shape.pop();
         x_shape.push(self.num_attention_heads);
@@ -166,7 +166,7 @@ impl BertSelfAttention {
         xs.reshape(x_shape)?.transpose(1, 2)?.contiguous()
     }
 
-    fn forward(&self, xs: &Tensor, bias: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, bias: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let query_layer = self.query.forward(xs)?;
         let key_layer = self.key.forward(xs)?;
@@ -191,14 +191,14 @@ impl BertSelfAttention {
 }
 
 #[derive(Clone, Debug)]
-struct BertSelfOutput {
-    dense: Linear,
-    layer_norm: LayerNorm,
+struct BertSelfOutput<B: BackendStorage> {
+    dense: Linear<B>,
+    layer_norm: LayerNorm<B>,
     span: tracing::Span,
 }
 
-impl BertSelfOutput {
-    fn new(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> BertSelfOutput<B> {
+    fn new(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let dense = linear(cfg.hidden_size, cfg.hidden_size, vb.pp("dense"))?;
         let layer_norm = layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("LayerNorm"))?;
         Ok(Self {
@@ -208,7 +208,7 @@ impl BertSelfOutput {
         })
     }
 
-    fn forward(&self, xs: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, input_tensor: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let xs = self.dense.forward(xs)?;
         self.layer_norm.forward(&(xs + input_tensor)?)
@@ -216,14 +216,14 @@ impl BertSelfOutput {
 }
 
 #[derive(Clone, Debug)]
-struct BertAttention {
-    self_attention: BertSelfAttention,
-    self_output: BertSelfOutput,
+struct BertAttention<B: BackendStorage> {
+    self_attention: BertSelfAttention<B>,
+    self_output: BertSelfOutput<B>,
     span: tracing::Span,
 }
 
-impl BertAttention {
-    fn new(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> BertAttention<B> {
+    fn new(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let self_attention = BertSelfAttention::new(vb.pp("self"), cfg)?;
         let self_output = BertSelfOutput::new(vb.pp("output"), cfg)?;
         Ok(Self {
@@ -233,7 +233,7 @@ impl BertAttention {
         })
     }
 
-    fn forward(&self, xs: &Tensor, bias: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, bias: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let self_outputs = self.self_attention.forward(xs, bias)?;
         let attention_output = self.self_output.forward(&self_outputs, xs)?;
@@ -242,16 +242,16 @@ impl BertAttention {
 }
 
 #[derive(Clone, Debug)]
-struct BertGLUMLP {
-    gated_layers: Linear,
+struct BertGLUMLP<B: BackendStorage> {
+    gated_layers: Linear<B>,
     act: candle_nn::Activation,
-    wo: Linear,
-    layernorm: LayerNorm,
+    wo: Linear<B>,
+    layernorm: LayerNorm<B>,
     intermediate_size: usize,
 }
 
-impl BertGLUMLP {
-    fn new(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> BertGLUMLP<B> {
+    fn new(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let gated_layers = linear_no_bias(
             cfg.hidden_size,
             cfg.intermediate_size * 2,
@@ -270,8 +270,8 @@ impl BertGLUMLP {
     }
 }
 
-impl Module for BertGLUMLP {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for BertGLUMLP<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = xs.apply(&self.gated_layers)?;
         let gated = xs.narrow(D::Minus1, 0, self.intermediate_size)?;
@@ -282,14 +282,14 @@ impl Module for BertGLUMLP {
 }
 
 #[derive(Clone, Debug)]
-struct BertLayer {
-    attention: BertAttention,
-    mlp: BertGLUMLP,
+struct BertLayer<B: BackendStorage> {
+    attention: BertAttention<B>,
+    mlp: BertGLUMLP<B>,
     span: tracing::Span,
 }
 
-impl BertLayer {
-    fn new(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> BertLayer<B> {
+    fn new(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let attention = BertAttention::new(vb.pp("attention"), cfg)?;
         let mlp = BertGLUMLP::new(vb.pp("mlp"), cfg)?;
         Ok(Self {
@@ -299,16 +299,16 @@ impl BertLayer {
         })
     }
 
-    fn forward(&self, xs: &Tensor, bias: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, bias: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         self.attention.forward(xs, bias)?.apply(&self.mlp)
     }
 }
 
-fn build_alibi_bias(cfg: &Config) -> Result<Tensor> {
+fn build_alibi_bias<B: BackendStorage>(cfg: &Config, device: &B::Device) -> Result<Tensor<B>> {
     let n_heads = cfg.num_attention_heads;
     let seq_len = cfg.max_position_embeddings;
-    let alibi_bias = Tensor::arange(0, seq_len as i64, &Device::Cpu)?.to_dtype(DType::F32)?;
+    let alibi_bias = Tensor::arange(0, seq_len as i64, device)?.to_dtype(DType::F32)?;
     let alibi_bias = {
         let a1 = alibi_bias.reshape((1, seq_len))?;
         let a2 = alibi_bias.reshape((seq_len, 1))?;
@@ -333,19 +333,19 @@ fn build_alibi_bias(cfg: &Config) -> Result<Tensor> {
             .cloned()
             .collect::<Vec<f32>>()
     };
-    let slopes = Tensor::new(slopes, &Device::Cpu)?.reshape((1, (), 1, 1))?;
+    let slopes = Tensor::new(slopes, device)?.reshape((1, (), 1, 1))?;
     alibi_bias.to_dtype(DType::F32)?.broadcast_mul(&slopes)
 }
 
 #[derive(Clone, Debug)]
-struct BertEncoder {
-    alibi: Tensor,
-    layers: Vec<BertLayer>,
+struct BertEncoder<B: BackendStorage> {
+    alibi: Tensor<B>,
+    layers: Vec<BertLayer<B>>,
     span: tracing::Span,
 }
 
-impl BertEncoder {
-    fn new(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> BertEncoder<B> {
+    fn new(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         if cfg.position_embedding_type != PositionEmbeddingType::Alibi {
             candle::bail!("only alibi is supported as a position-embedding-type")
         }
@@ -353,7 +353,7 @@ impl BertEncoder {
             .map(|index| BertLayer::new(vb.pp(format!("layer.{index}")), cfg))
             .collect::<Result<Vec<_>>>()?;
         let span = tracing::span!(tracing::Level::TRACE, "encoder");
-        let alibi = build_alibi_bias(cfg)?.to_device(vb.device())?;
+        let alibi = build_alibi_bias(cfg, vb.device())?;
         Ok(Self {
             alibi,
             layers,
@@ -362,8 +362,8 @@ impl BertEncoder {
     }
 }
 
-impl Module for BertEncoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for BertEncoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let seq_len = xs.dim(1)?;
         let alibi_bias = self.alibi.i((.., .., ..seq_len, ..seq_len))?;
@@ -376,15 +376,15 @@ impl Module for BertEncoder {
 }
 
 #[derive(Clone, Debug)]
-pub struct BertModel {
-    embeddings: BertEmbeddings,
-    encoder: BertEncoder,
-    pub device: Device,
+pub struct BertModel<B: BackendStorage> {
+    embeddings: BertEmbeddings<B>,
+    encoder: BertEncoder<B>,
+    pub device: B::Device,
     span: tracing::Span,
 }
 
-impl BertModel {
-    pub fn new(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+impl<B: BackendStorage> BertModel<B> {
+    pub fn new(vb: VarBuilder<B>, cfg: &Config) -> Result<Self> {
         let embeddings = BertEmbeddings::new(vb.pp("embeddings"), cfg)?;
         let encoder = BertEncoder::new(vb.pp("encoder"), cfg)?;
         Ok(Self {
@@ -396,8 +396,8 @@ impl BertModel {
     }
 }
 
-impl Module for BertModel {
-    fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for BertModel<B> {
+    fn forward(&self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let embedding_output = self.embeddings.forward(input_ids)?;
         let sequence_output = self.encoder.forward(&embedding_output)?;

@@ -2,12 +2,12 @@
 // This source code is licensed under the license found in the
 // LICENSE file in the root directory of this source tree.
 
-use candle::{IndexOp, Layout, Result, Shape, Tensor, D};
+use candle::{BackendStorage, IndexOp, Layout, Result, Shape, Tensor, D};
 use candle_nn::{linear, Linear, VarBuilder};
 
 struct CodebookEncode;
 
-impl candle::CustomOp2 for CodebookEncode {
+impl<B: BackendStorage> candle::CustomOp2<B> for CodebookEncode {
     fn name(&self) -> &'static str {
         "cb"
     }
@@ -70,20 +70,20 @@ impl candle::CustomOp2 for CodebookEncode {
 
 #[allow(unused)]
 #[derive(Debug, Clone)]
-pub struct EuclideanCodebook {
-    initialized: Tensor,
-    cluster_usage: Tensor,
-    embedding_sum: Tensor,
-    embedding: Tensor,
-    c2: Tensor,
+pub struct EuclideanCodebook<B: BackendStorage> {
+    initialized: Tensor<B>,
+    cluster_usage: Tensor<B>,
+    embedding_sum: Tensor<B>,
+    embedding: Tensor<B>,
+    c2: Tensor<B>,
     epsilon: f64,
     dim: usize,
     span_encode: tracing::Span,
     span_decode: tracing::Span,
 }
 
-impl EuclideanCodebook {
-    pub fn new(dim: usize, codebook_size: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> EuclideanCodebook<B> {
+    pub fn new(dim: usize, codebook_size: usize, vb: VarBuilder<B>) -> Result<Self> {
         let epsilon = 1e-5;
         let initialized = vb.get(1, "initialized")?;
         let cluster_usage = vb.get(codebook_size, "cluster_usage")?;
@@ -106,7 +106,7 @@ impl EuclideanCodebook {
         })
     }
 
-    pub fn encode_very_slow(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode_very_slow(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span_encode.enter();
         let mut target_shape = xs.dims().to_vec();
         target_shape.pop();
@@ -122,7 +122,7 @@ impl EuclideanCodebook {
         codes.reshape(target_shape)
     }
 
-    pub fn encode_slow(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode_slow(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span_encode.enter();
         let mut target_shape = xs.dims().to_vec();
         target_shape.pop();
@@ -133,7 +133,7 @@ impl EuclideanCodebook {
         codes.reshape(target_shape)
     }
 
-    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span_encode.enter();
         let mut target_shape = xs.dims().to_vec();
         target_shape.pop();
@@ -143,7 +143,7 @@ impl EuclideanCodebook {
         codes.reshape(target_shape)
     }
 
-    pub fn decode(&self, indexes: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, indexes: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span_decode.enter();
         // let ys = candle_nn::Embedding::new(self.embedding.clone(), self.dim).forward(xs)?;
         let mut final_dims = indexes.dims().to_vec();
@@ -157,18 +157,18 @@ impl EuclideanCodebook {
 
 #[allow(unused)]
 #[derive(Debug, Clone)]
-pub struct VectorQuantization {
-    project_in: Option<Linear>,
-    project_out: Option<Linear>,
-    codebook: EuclideanCodebook,
+pub struct VectorQuantization<B: BackendStorage> {
+    project_in: Option<Linear<B>>,
+    project_out: Option<Linear<B>>,
+    codebook: EuclideanCodebook<B>,
 }
 
-impl VectorQuantization {
+impl<B: BackendStorage> VectorQuantization<B> {
     pub fn new(
         dim: usize,
         codebook_size: usize,
         codebook_dim: Option<usize>,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let codebook_dim = codebook_dim.unwrap_or(dim);
         let (project_in, project_out) = if codebook_dim == dim {
@@ -186,12 +186,12 @@ impl VectorQuantization {
         })
     }
 
-    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = xs.t()?.apply(&self.project_in.as_ref())?;
         self.codebook.encode_slow(&xs)
     }
 
-    pub fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, codes: &Tensor<B>) -> Result<Tensor<B>> {
         let quantized = self.codebook.decode(codes)?;
         let quantized = match &self.project_out {
             None => quantized,
@@ -202,17 +202,17 @@ impl VectorQuantization {
 }
 
 #[derive(Debug, Clone)]
-pub struct ResidualVectorQuantization {
-    layers: Vec<VectorQuantization>,
+pub struct ResidualVectorQuantization<B: BackendStorage> {
+    layers: Vec<VectorQuantization<B>>,
 }
 
-impl ResidualVectorQuantization {
+impl<B: BackendStorage> ResidualVectorQuantization<B> {
     pub fn new(
         n_q: usize,
         dim: usize,
         codebook_size: usize,
         codebook_dim: Option<usize>,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let vb = vb.pp("layers");
         let mut layers = Vec::with_capacity(n_q);
@@ -223,7 +223,7 @@ impl ResidualVectorQuantization {
         Ok(Self { layers })
     }
 
-    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let mut codes = Vec::with_capacity(self.layers.len());
         let mut residual = xs.clone();
         for layer in self.layers.iter() {
@@ -235,7 +235,7 @@ impl ResidualVectorQuantization {
         Tensor::stack(&codes, 0)
     }
 
-    pub fn decode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         if self.layers.is_empty() {
             candle::bail!("empty layers in ResidualVectorQuantization")
         }
@@ -257,13 +257,13 @@ impl ResidualVectorQuantization {
 
 #[allow(unused)]
 #[derive(Debug, Clone)]
-pub struct ResidualVectorQuantizer {
-    vq: ResidualVectorQuantization,
-    input_proj: Option<candle_nn::Conv1d>,
-    output_proj: Option<candle_nn::Conv1d>,
+pub struct ResidualVectorQuantizer<B: BackendStorage> {
+    vq: ResidualVectorQuantization<B>,
+    input_proj: Option<candle_nn::Conv1d<B>>,
+    output_proj: Option<candle_nn::Conv1d<B>>,
 }
 
-impl ResidualVectorQuantizer {
+impl<B: BackendStorage> ResidualVectorQuantizer<B> {
     pub fn new(
         dim: usize,
         input_dim: Option<usize>,
@@ -271,7 +271,7 @@ impl ResidualVectorQuantizer {
         n_q: usize,
         bins: usize,
         force_projection: bool,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let input_dim = input_dim.unwrap_or(dim);
         let output_dim = output_dim.unwrap_or(dim);
@@ -311,12 +311,12 @@ impl ResidualVectorQuantizer {
         })
     }
 
-    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let codes = self.vq.encode(&xs.apply(&self.input_proj.as_ref())?)?;
         codes.transpose(0, 1)
     }
 
-    pub fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, codes: &Tensor<B>) -> Result<Tensor<B>> {
         // codes is [B, K, T], with T frames, K nb of codebooks, vq.decode expects [K, B, T].
         let codes = codes.transpose(0, 1)?;
         let quantized = self.vq.decode(&codes)?;
@@ -330,22 +330,22 @@ impl ResidualVectorQuantizer {
 // we do not use any codebook_offset at the moment. When reconstructing the codes, we could just
 // concatenate the indexes.
 #[derive(Debug, Clone)]
-pub struct SplitResidualVectorQuantizer {
-    rvq_first: ResidualVectorQuantizer,
-    rvq_rest: ResidualVectorQuantizer,
+pub struct SplitResidualVectorQuantizer<B: BackendStorage> {
+    rvq_first: ResidualVectorQuantizer<B>,
+    rvq_rest: ResidualVectorQuantizer<B>,
     n_q: usize,
     span_encode: tracing::Span,
     span_decode: tracing::Span,
 }
 
-impl SplitResidualVectorQuantizer {
+impl<B: BackendStorage> SplitResidualVectorQuantizer<B> {
     pub fn new(
         dim: usize,
         input_dim: Option<usize>,
         output_dim: Option<usize>,
         n_q: usize,
         bins: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let rvq_first = ResidualVectorQuantizer::new(
             dim,
@@ -376,7 +376,7 @@ impl SplitResidualVectorQuantizer {
         })
     }
 
-    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn encode(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span_encode.enter();
         let codes = self.rvq_first.encode(xs)?;
         if self.n_q > 1 {
@@ -390,7 +390,7 @@ impl SplitResidualVectorQuantizer {
         }
     }
 
-    pub fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, codes: &Tensor<B>) -> Result<Tensor<B>> {
         // codes is [B, K, T], with T frames, K nb of codebooks.
         let _enter = self.span_decode.enter();
         let quantized = self.rvq_first.decode(&codes.i((.., ..1))?)?;

@@ -25,7 +25,8 @@
 //! # Load multiple values from a npz file.
 //! values = np.loadz("test.npz")
 //! ```
-use crate::{DType, Device, Error, Result, Shape, Tensor};
+use crate::cpu_backend::CpuDevice;
+use crate::{CpuStorage, DType, Error, Result, Shape, Tensor};
 use byteorder::{LittleEndian, ReadBytesExt};
 use float8::F8E4M3;
 use half::{bf16, f16, slice::HalfFloatSliceExt};
@@ -198,62 +199,62 @@ impl Header {
     }
 }
 
-impl Tensor {
+impl Tensor<CpuStorage> {
     // TODO: Add the possibility to read directly to a device?
     pub(crate) fn from_reader<R: std::io::Read>(
         shape: Shape,
         dtype: DType,
         reader: &mut R,
-    ) -> Result<Self> {
+    ) -> Result<Tensor<CpuStorage>> {
         let elem_count = shape.elem_count();
         match dtype {
             DType::BF16 => {
                 let mut data_t = vec![bf16::ZERO; elem_count];
                 reader.read_u16_into::<LittleEndian>(data_t.reinterpret_cast_mut())?;
-                Tensor::from_vec(data_t, shape, &Device::Cpu)
+                Tensor::from_vec(data_t, shape, &CpuDevice {})
             }
             DType::F16 => {
                 let mut data_t = vec![f16::ZERO; elem_count];
                 reader.read_u16_into::<LittleEndian>(data_t.reinterpret_cast_mut())?;
-                Tensor::from_vec(data_t, shape, &Device::Cpu)
+                Tensor::from_vec(data_t, shape, &CpuDevice {})
             }
             DType::F32 => {
                 let mut data_t = vec![0f32; elem_count];
                 reader.read_f32_into::<LittleEndian>(&mut data_t)?;
-                Tensor::from_vec(data_t, shape, &Device::Cpu)
+                Tensor::from_vec(data_t, shape, &CpuDevice {})
             }
             DType::F64 => {
                 let mut data_t = vec![0f64; elem_count];
                 reader.read_f64_into::<LittleEndian>(&mut data_t)?;
-                Tensor::from_vec(data_t, shape, &Device::Cpu)
+                Tensor::from_vec(data_t, shape, &CpuDevice {})
             }
             DType::U8 => {
                 let mut data_t = vec![0u8; elem_count];
                 reader.read_exact(&mut data_t)?;
-                Tensor::from_vec(data_t, shape, &Device::Cpu)
+                Tensor::from_vec(data_t, shape, &CpuDevice {})
             }
             DType::U32 => {
                 let mut data_t = vec![0u32; elem_count];
                 reader.read_u32_into::<LittleEndian>(&mut data_t)?;
-                Tensor::from_vec(data_t, shape, &Device::Cpu)
+                Tensor::from_vec(data_t, shape, &CpuDevice {})
             }
             DType::I64 => {
                 let mut data_t = vec![0i64; elem_count];
                 reader.read_i64_into::<LittleEndian>(&mut data_t)?;
-                Tensor::from_vec(data_t, shape, &Device::Cpu)
+                Tensor::from_vec(data_t, shape, &CpuDevice {})
             }
             DType::F8E4M3 => {
                 let mut data_t = vec![F8E4M3::ZERO; elem_count];
                 let ptr = data_t.as_mut_ptr().cast::<i8>();
                 let len = data_t.len();
                 reader.read_i8_into(unsafe { slice::from_raw_parts_mut(ptr, len) })?;
-                Tensor::from_vec(data_t, shape, &Device::Cpu)
+                Tensor::from_vec(data_t, shape, &CpuDevice {})
             }
         }
     }
 
     /// Reads a npy file and return the stored multi-dimensional array as a tensor.
-    pub fn read_npy<T: AsRef<Path>>(path: T) -> Result<Self> {
+    pub fn read_npy<T: AsRef<Path>>(path: T) -> Result<Tensor<CpuStorage>> {
         let mut reader = File::open(path.as_ref())?;
         let header = read_header(&mut reader)?;
         let header = Header::parse(&header)?;
@@ -264,7 +265,7 @@ impl Tensor {
     }
 
     /// Reads a npz file and returns the stored multi-dimensional arrays together with their names.
-    pub fn read_npz<T: AsRef<Path>>(path: T) -> Result<Vec<(String, Self)>> {
+    pub fn read_npz<T: AsRef<Path>>(path: T) -> Result<Vec<(String, Tensor<CpuStorage>)>> {
         let zip_reader = BufReader::new(File::open(path.as_ref())?);
         let mut zip = zip::ZipArchive::new(zip_reader)?;
         let mut result = vec![];
@@ -286,7 +287,10 @@ impl Tensor {
     }
 
     /// Reads a npz file and returns the stored multi-dimensional arrays for some specified names.
-    pub fn read_npz_by_name<T: AsRef<Path>>(path: T, names: &[&str]) -> Result<Vec<Self>> {
+    pub fn read_npz_by_name<T: AsRef<Path>>(
+        path: T,
+        names: &[&str],
+    ) -> Result<Vec<Tensor<CpuStorage>>> {
         let zip_reader = BufReader::new(File::open(path.as_ref())?);
         let mut zip = zip::ZipArchive::new(zip_reader)?;
         let mut result = vec![];
@@ -335,7 +339,7 @@ impl Tensor {
     }
 
     /// Writes multiple multi-dimensional arrays using the npz format.
-    pub fn write_npz<S: AsRef<str>, T: AsRef<Tensor>, P: AsRef<Path>>(
+    pub fn write_npz<S: AsRef<str>, T: AsRef<Self>, P: AsRef<Path>>(
         ts: &[(S, T)],
         path: P,
     ) -> Result<()> {
@@ -398,7 +402,7 @@ impl NpzTensors {
         Ok((header.shape(), header.descr))
     }
 
-    pub fn get(&self, name: &str) -> Result<Option<Tensor>> {
+    pub fn get(&self, name: &str) -> Result<Option<Tensor<CpuStorage>>> {
         let index = match self.index_per_name.get(name) {
             None => return Ok(None),
             Some(index) => *index,

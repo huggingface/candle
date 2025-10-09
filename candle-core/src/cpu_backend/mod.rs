@@ -44,6 +44,12 @@ pub enum CpuStorageRef<'a> {
 #[derive(Debug, Clone)]
 pub struct CpuDevice;
 
+impl AsRef<CpuDevice> for CpuDevice {
+    fn as_ref(&self) -> &CpuDevice {
+        self
+    }
+}
+
 struct Cmp(CmpOp);
 impl Map2U8 for Cmp {
     const OP: &'static str = "cmp";
@@ -1610,6 +1616,23 @@ fn elu<T: num_traits::Float>(v: T, alpha: T) -> T {
 }
 
 impl CpuStorage {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::U8(s) => s.len(),
+            Self::U32(s) => s.len(),
+            Self::I64(s) => s.len(),
+            Self::BF16(s) => s.len(),
+            Self::F16(s) => s.len(),
+            Self::F32(s) => s.len(),
+            Self::F64(s) => s.len(),
+            Self::F8E4M3(s) => s.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn as_slice<D: WithDType>(&self) -> Result<&[D]> {
         D::cpu_storage_as_slice(self)
     }
@@ -1713,6 +1736,10 @@ impl CpuStorage {
 impl BackendStorage for CpuStorage {
     type Device = CpuDevice;
 
+    fn try_clone(&self, _: &Layout) -> Result<Self> {
+        Ok(self.clone())
+    }
+
     fn dtype(&self) -> DType {
         match self {
             Self::U8(_) => DType::U8,
@@ -1724,6 +1751,137 @@ impl BackendStorage for CpuStorage {
             Self::F64(_) => DType::F64,
             Self::F8E4M3(_) => DType::F8E4M3,
         }
+    }
+
+    fn device(&self) -> impl AsRef<Self::Device> {
+        &CpuDevice
+    }
+
+    fn to_cpu_storage(&self) -> Result<CpuStorage> {
+        Ok(self.clone())
+    }
+
+    fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<Self> {
+        Affine(mul, add).map(self, layout)
+    }
+
+    fn powf(&self, layout: &Layout, e: f64) -> Result<Self> {
+        use num_traits::Float;
+        // TODO: Have some generic map for functions that apply on num_traits::Float elements.
+        match self {
+            Self::BF16(storage) => {
+                let data = unary_map(storage, layout, |v| v.powf(bf16::from_f64(e)));
+                Ok(Self::BF16(data))
+            }
+            Self::F16(storage) => {
+                let data = unary_map(storage, layout, |v| v.powf(f16::from_f64(e)));
+                Ok(Self::F16(data))
+            }
+            Self::F32(storage) => {
+                let data = unary_map(storage, layout, |v| v.powf(e as f32));
+                Ok(Self::F32(data))
+            }
+            Self::F64(storage) => {
+                let data = unary_map(storage, layout, |v| v.powf(e));
+                Ok(Self::F64(data))
+            }
+            Self::F8E4M3(storage) => {
+                let data = unary_map(storage, layout, |v| v.powf(F8E4M3::from_f64(e)));
+                Ok(Self::F8E4M3(data))
+            }
+            Self::U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "elu").bt()),
+            Self::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "elu").bt()),
+            Self::I64(_) => Err(Error::UnsupportedDTypeForOp(DType::I64, "elu").bt()),
+        }
+    }
+
+    fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self> {
+        // TODO: Have some generic map for functions that apply on num_traits::Float elements.
+        match self {
+            Self::BF16(storage) => {
+                let data = unary_map(storage, layout, |v| elu(v, bf16::from_f64(alpha)));
+                Ok(Self::BF16(data))
+            }
+            Self::F16(storage) => {
+                let data = unary_map(storage, layout, |v| elu(v, f16::from_f64(alpha)));
+                Ok(Self::F16(data))
+            }
+            Self::F32(storage) => {
+                let data = unary_map(storage, layout, |v| elu(v, f32::from_f64(alpha)));
+                Ok(Self::F32(data))
+            }
+            Self::F64(storage) => {
+                let data = unary_map(storage, layout, |v| elu(v, alpha));
+                Ok(Self::F64(data))
+            }
+            Self::F8E4M3(storage) => {
+                let data = unary_map(storage, layout, |v| elu(v, F8E4M3::from_f64(alpha)));
+                Ok(Self::F8E4M3(data))
+            }
+            Self::U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "elu").bt()),
+            Self::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "elu").bt()),
+            Self::I64(_) => Err(Error::UnsupportedDTypeForOp(DType::I64, "elu").bt()),
+        }
+    }
+
+    fn reduce_op(&self, op: ReduceOp, layout: &Layout, reduce_dims: &[usize]) -> Result<Self> {
+        match op {
+            ReduceOp::Sum => {
+                let src_dims = layout.dims();
+                let mut dst_dims = src_dims.to_vec();
+                for &dim in reduce_dims.iter() {
+                    dst_dims[dim] = 1;
+                }
+                let dst_shape = Shape::from(dst_dims);
+                let mut reduce_dims = reduce_dims.to_vec();
+                // Sort the reduce_dims as they have to be processed from left to right when converting the
+                // indexes.
+                reduce_dims.sort();
+                let reduce_dims_and_stride: Vec<_> = reduce_dims
+                    .iter()
+                    .map(|&d| (src_dims[d], src_dims[d + 1..].iter().product::<usize>()))
+                    .collect();
+                ReduceSum {
+                    dst_shape: &dst_shape,
+                    reduce_dims: &reduce_dims,
+                    reduce_dims_and_stride,
+                }
+                .map(self, layout)
+            }
+            ReduceOp::Min | ReduceOp::ArgMin | ReduceOp::Max | ReduceOp::ArgMax => {
+                let reduce_dim_index = match reduce_dims {
+                    [reduce_dim_index] => *reduce_dim_index,
+                    _ => {
+                        let op = match op {
+                            ReduceOp::Min => "min",
+                            ReduceOp::ArgMin => "argmin",
+                            ReduceOp::Max => "max",
+                            ReduceOp::ArgMax => "argmax",
+                            _ => unreachable!(),
+                        };
+                        let dims = reduce_dims.to_vec();
+                        Err(Error::OnlySingleDimension { op, dims })?
+                    }
+                };
+                let (use_min, return_index) = match op {
+                    ReduceOp::Min => (true, false),
+                    ReduceOp::ArgMin => (true, true),
+                    ReduceOp::Max => (false, false),
+                    ReduceOp::ArgMax => (false, true),
+                    _ => unreachable!(),
+                };
+                ReduceIndex {
+                    reduce_dim_index,
+                    use_min,
+                    return_index,
+                }
+                .map(self, layout)
+            }
+        }
+    }
+
+    fn cmp(&self, op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
+        Cmp(op).map(self, lhs_l, rhs, rhs_l)
     }
 
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
@@ -1988,155 +2146,6 @@ impl BackendStorage for CpuStorage {
         }
     }
 
-    fn reduce_op(&self, op: ReduceOp, layout: &Layout, reduce_dims: &[usize]) -> Result<Self> {
-        match op {
-            ReduceOp::Sum => {
-                let src_dims = layout.dims();
-                let mut dst_dims = src_dims.to_vec();
-                for &dim in reduce_dims.iter() {
-                    dst_dims[dim] = 1;
-                }
-                let dst_shape = Shape::from(dst_dims);
-                let mut reduce_dims = reduce_dims.to_vec();
-                // Sort the reduce_dims as they have to be processed from left to right when converting the
-                // indexes.
-                reduce_dims.sort();
-                let reduce_dims_and_stride: Vec<_> = reduce_dims
-                    .iter()
-                    .map(|&d| (src_dims[d], src_dims[d + 1..].iter().product::<usize>()))
-                    .collect();
-                ReduceSum {
-                    dst_shape: &dst_shape,
-                    reduce_dims: &reduce_dims,
-                    reduce_dims_and_stride,
-                }
-                .map(self, layout)
-            }
-            ReduceOp::Min | ReduceOp::ArgMin | ReduceOp::Max | ReduceOp::ArgMax => {
-                let reduce_dim_index = match reduce_dims {
-                    [reduce_dim_index] => *reduce_dim_index,
-                    _ => {
-                        let op = match op {
-                            ReduceOp::Min => "min",
-                            ReduceOp::ArgMin => "argmin",
-                            ReduceOp::Max => "max",
-                            ReduceOp::ArgMax => "argmax",
-                            _ => unreachable!(),
-                        };
-                        let dims = reduce_dims.to_vec();
-                        Err(Error::OnlySingleDimension { op, dims })?
-                    }
-                };
-                let (use_min, return_index) = match op {
-                    ReduceOp::Min => (true, false),
-                    ReduceOp::ArgMin => (true, true),
-                    ReduceOp::Max => (false, false),
-                    ReduceOp::ArgMax => (false, true),
-                    _ => unreachable!(),
-                };
-                ReduceIndex {
-                    reduce_dim_index,
-                    use_min,
-                    return_index,
-                }
-                .map(self, layout)
-            }
-        }
-    }
-
-    fn cmp(&self, op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
-        Cmp(op).map(self, lhs_l, rhs, rhs_l)
-    }
-
-    fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<Self> {
-        Affine(mul, add).map(self, layout)
-    }
-
-    fn avg_pool2d(
-        &self,
-        layout: &Layout,
-        kernel_size: (usize, usize),
-        stride: (usize, usize),
-    ) -> Result<Self> {
-        AvgPool2D(kernel_size, stride).map(self, layout)
-    }
-
-    fn max_pool2d(
-        &self,
-        layout: &Layout,
-        kernel_size: (usize, usize),
-        stride: (usize, usize),
-    ) -> Result<Self> {
-        MaxPool2D(kernel_size, stride).map(self, layout)
-    }
-
-    fn upsample_nearest1d(&self, layout: &Layout, sz: usize) -> Result<Self> {
-        UpsampleNearest1D(sz).map(self, layout)
-    }
-
-    fn upsample_nearest2d(&self, layout: &Layout, h: usize, w: usize) -> Result<Self> {
-        UpsampleNearest2D(h, w).map(self, layout)
-    }
-
-    fn powf(&self, layout: &Layout, e: f64) -> Result<Self> {
-        use num_traits::Float;
-        // TODO: Have some generic map for functions that apply on num_traits::Float elements.
-        match self {
-            Self::BF16(storage) => {
-                let data = unary_map(storage, layout, |v| v.powf(bf16::from_f64(e)));
-                Ok(Self::BF16(data))
-            }
-            Self::F16(storage) => {
-                let data = unary_map(storage, layout, |v| v.powf(f16::from_f64(e)));
-                Ok(Self::F16(data))
-            }
-            Self::F32(storage) => {
-                let data = unary_map(storage, layout, |v| v.powf(e as f32));
-                Ok(Self::F32(data))
-            }
-            Self::F64(storage) => {
-                let data = unary_map(storage, layout, |v| v.powf(e));
-                Ok(Self::F64(data))
-            }
-            Self::F8E4M3(storage) => {
-                let data = unary_map(storage, layout, |v| v.powf(F8E4M3::from_f64(e)));
-                Ok(Self::F8E4M3(data))
-            }
-            Self::U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "elu").bt()),
-            Self::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "elu").bt()),
-            Self::I64(_) => Err(Error::UnsupportedDTypeForOp(DType::I64, "elu").bt()),
-        }
-    }
-
-    fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self> {
-        // TODO: Have some generic map for functions that apply on num_traits::Float elements.
-        match self {
-            Self::BF16(storage) => {
-                let data = unary_map(storage, layout, |v| elu(v, bf16::from_f64(alpha)));
-                Ok(Self::BF16(data))
-            }
-            Self::F16(storage) => {
-                let data = unary_map(storage, layout, |v| elu(v, f16::from_f64(alpha)));
-                Ok(Self::F16(data))
-            }
-            Self::F32(storage) => {
-                let data = unary_map(storage, layout, |v| elu(v, f32::from_f64(alpha)));
-                Ok(Self::F32(data))
-            }
-            Self::F64(storage) => {
-                let data = unary_map(storage, layout, |v| elu(v, alpha));
-                Ok(Self::F64(data))
-            }
-            Self::F8E4M3(storage) => {
-                let data = unary_map(storage, layout, |v| elu(v, F8E4M3::from_f64(alpha)));
-                Ok(Self::F8E4M3(data))
-            }
-            Self::U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "elu").bt()),
-            Self::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "elu").bt()),
-            Self::I64(_) => Err(Error::UnsupportedDTypeForOp(DType::I64, "elu").bt()),
-        }
-    }
-
     fn unary_impl<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
         match self {
             Self::BF16(storage) => {
@@ -2274,70 +2283,6 @@ impl BackendStorage for CpuStorage {
         }
     }
 
-    fn copy2d(
-        &self,
-        dst: &mut Self,
-        d1: usize,
-        d2: usize,
-        src_s: usize,
-        dst_s: usize,
-        src_o: usize,
-        dst_o: usize,
-    ) -> Result<()> {
-        match (self, dst) {
-            (Self::U8(src), Self::U8(dst)) => copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o),
-            (Self::U32(src), Self::U32(dst)) => {
-                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
-            }
-            (Self::I64(src), Self::I64(dst)) => {
-                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
-            }
-            (Self::BF16(src), Self::BF16(dst)) => {
-                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
-            }
-            (Self::F16(src), Self::F16(dst)) => {
-                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
-            }
-            (Self::F32(src), Self::F32(dst)) => {
-                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
-            }
-            (Self::F64(src), Self::F64(dst)) => {
-                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
-            }
-            (_, dst) => {
-                return Err(Error::DTypeMismatchBinaryOp {
-                    lhs: self.dtype(),
-                    rhs: dst.dtype(),
-                    op: "copy2d",
-                }
-                .bt());
-            }
-        }
-        Ok(())
-    }
-
-    fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
-        match (self, dst) {
-            (Self::U8(src), Self::U8(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
-            (Self::U32(src), Self::U32(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
-            (Self::I64(src), Self::I64(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
-            (Self::BF16(src), Self::BF16(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
-            (Self::F16(src), Self::F16(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
-            (Self::F32(src), Self::F32(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
-            (Self::F64(src), Self::F64(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
-            (_, dst) => {
-                // This should be covered by the dtype check above.
-                return Err(Error::DTypeMismatchBinaryOp {
-                    lhs: self.dtype(),
-                    rhs: dst.dtype(),
-                    op: "copy_strided",
-                }
-                .bt());
-            }
-        }
-        Ok(())
-    }
-
     fn where_cond(
         &self,
         layout: &Layout,
@@ -2386,6 +2331,7 @@ impl BackendStorage for CpuStorage {
             // Make the kernel contiguous if not already the case.
             let mut kernel_c = unsafe {
                 self.device()
+                    .as_ref()
                     .alloc_uninit(kernel_l.shape(), kernel.dtype())?
             };
             kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
@@ -2395,7 +2341,11 @@ impl BackendStorage for CpuStorage {
             col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, l_out, params.c_out)).transpose(1, 2)?;
-        let mut res_t = unsafe { self.device().alloc_uninit(res_l.shape(), res.dtype())? };
+        let mut res_t = unsafe {
+            self.device()
+                .as_ref()
+                .alloc_uninit(res_l.shape(), res.dtype())?
+        };
         res.copy_strided_src(&mut res_t, 0, &res_l)?;
         Ok(res_t)
     }
@@ -2488,6 +2438,7 @@ impl BackendStorage for CpuStorage {
             // Make the kernel contiguous if not already the case.
             let mut kernel_c = unsafe {
                 self.device()
+                    .as_ref()
                     .alloc_uninit(kernel_l.shape(), kernel.dtype())?
             };
             kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
@@ -2499,7 +2450,11 @@ impl BackendStorage for CpuStorage {
         let res_l = Layout::contiguous((b, h_out, w_out, params.c_out))
             .transpose(1, 2)?
             .transpose(1, 3)?;
-        let mut res_t = unsafe { self.device().alloc_uninit(res_l.shape(), res.dtype())? };
+        let mut res_t = unsafe {
+            self.device()
+                .as_ref()
+                .alloc_uninit(res_l.shape(), res.dtype())?
+        };
         res.copy_strided_src(&mut res_t, 0, &res_l)?;
         Ok(res_t)
     }
@@ -2514,13 +2469,30 @@ impl BackendStorage for CpuStorage {
         ConvTranspose2D(params).map(self, l, kernel, kernel_l)
     }
 
-    fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
-        match ids {
-            Self::U8(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
-            Self::U32(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
-            Self::I64(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
-            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "index-select").bt()),
-        }
+    fn avg_pool2d(
+        &self,
+        layout: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+    ) -> Result<Self> {
+        AvgPool2D(kernel_size, stride).map(self, layout)
+    }
+
+    fn max_pool2d(
+        &self,
+        layout: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+    ) -> Result<Self> {
+        MaxPool2D(kernel_size, stride).map(self, layout)
+    }
+
+    fn upsample_nearest1d(&self, layout: &Layout, sz: usize) -> Result<Self> {
+        UpsampleNearest1D(sz).map(self, layout)
+    }
+
+    fn upsample_nearest2d(&self, layout: &Layout, h: usize, w: usize) -> Result<Self> {
+        UpsampleNearest2D(h, w).map(self, layout)
     }
 
     fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
@@ -2563,6 +2535,15 @@ impl BackendStorage for CpuStorage {
             Self::U32(ids) => Scatter::<_, Add>::new(ids, ids_l, dim).map(self, l, src, src_l),
             Self::I64(ids) => Scatter::<_, Add>::new(ids, ids_l, dim).map(self, l, src, src_l),
             _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "scatter-add").bt()),
+        }
+    }
+
+    fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
+        match ids {
+            Self::U8(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
+            Self::U32(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
+            Self::I64(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "index-select").bt()),
         }
     }
 
@@ -2611,16 +2592,68 @@ impl BackendStorage for CpuStorage {
         MatMul(bmnk).map(self, lhs_l, rhs, rhs_l)
     }
 
-    fn device(&self) -> &Self::Device {
-        &CpuDevice
+    fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
+        match (self, dst) {
+            (Self::U8(src), Self::U8(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
+            (Self::U32(src), Self::U32(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
+            (Self::I64(src), Self::I64(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
+            (Self::BF16(src), Self::BF16(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
+            (Self::F16(src), Self::F16(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
+            (Self::F32(src), Self::F32(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
+            (Self::F64(src), Self::F64(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
+            (_, dst) => {
+                // This should be covered by the dtype check above.
+                return Err(Error::DTypeMismatchBinaryOp {
+                    lhs: self.dtype(),
+                    rhs: dst.dtype(),
+                    op: "copy_strided",
+                }
+                .bt());
+            }
+        }
+        Ok(())
     }
 
-    fn try_clone(&self, _: &Layout) -> Result<Self> {
-        Ok(self.clone())
-    }
-
-    fn to_cpu_storage(&self) -> Result<CpuStorage> {
-        Ok(self.clone())
+    fn copy2d(
+        &self,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_s: usize,
+        dst_s: usize,
+        src_o: usize,
+        dst_o: usize,
+    ) -> Result<()> {
+        match (self, dst) {
+            (Self::U8(src), Self::U8(dst)) => copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o),
+            (Self::U32(src), Self::U32(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::I64(src), Self::I64(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::BF16(src), Self::BF16(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::F16(src), Self::F16(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::F32(src), Self::F32(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::F64(src), Self::F64(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (_, dst) => {
+                return Err(Error::DTypeMismatchBinaryOp {
+                    lhs: self.dtype(),
+                    rhs: dst.dtype(),
+                    op: "copy2d",
+                }
+                .bt());
+            }
+        }
+        Ok(())
     }
 
     fn const_set(&mut self, s: crate::scalar::Scalar, l: &Layout) -> Result<()> {
@@ -2665,29 +2698,90 @@ impl BackendStorage for CpuStorage {
         }
         Ok(())
     }
+    fn inplace_op1(&mut self, l: &Layout, c: &dyn crate::InplaceOp1) -> Result<()> {
+        c.cpu_fwd(self, l)
+    }
+
+    fn inplace_op2(
+        &mut self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn crate::InplaceOp2,
+    ) -> Result<()> {
+        c.cpu_fwd(self, l1, t2, l2)
+    }
+
+    fn inplace_op3(
+        &mut self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn crate::InplaceOp3,
+    ) -> Result<()> {
+        c.cpu_fwd(self, l1, t2, l2, t3, l3)
+    }
+
+    fn apply_op1(&self, l: &Layout, c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)> {
+        c.cpu_fwd(self, l)
+    }
+
+    fn apply_op2(
+        &self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn crate::CustomOp2<Self>,
+    ) -> Result<(Self, Shape)> {
+        c.cpu_fwd(self, l1, t2, l2)
+    }
+
+    fn apply_op3(
+        &self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn crate::CustomOp3<Self>,
+    ) -> Result<(Self, Shape)> {
+        c.cpu_fwd(self, l1, t2, l2, t3, l3)
+    }
 }
 
-impl BackendDevice for CpuDevice {
-    type Storage = CpuStorage;
-
+impl BackendDevice<CpuStorage> for CpuDevice {
     fn location(&self) -> crate::DeviceLocation {
         crate::DeviceLocation::Cpu
     }
 
-    fn same_device(&self, _: &Self) -> bool {
+    fn same_device(&self, _: &CpuDevice) -> bool {
         true
     }
 
-    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {
+    fn is_cpu(&self) -> bool {
+        true
+    }
+
+    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<CpuStorage> {
         Ok(T::to_cpu_storage(s))
     }
 
-    fn storage_from_cpu_storage(&self, s: &CpuStorage) -> Result<Self::Storage> {
+    fn storage_from_cpu_storage(&self, s: &CpuStorage) -> Result<CpuStorage> {
         Ok(s.clone())
     }
 
-    fn storage_from_cpu_storage_owned(&self, s: CpuStorage) -> Result<Self::Storage> {
+    fn storage_from_cpu_storage_owned(&self, s: CpuStorage) -> Result<CpuStorage> {
         Ok(s)
+    }
+
+    fn storage<A: crate::NdArray>(&self, array: A) -> Result<CpuStorage> {
+        Ok(array.to_cpu_storage())
+    }
+
+    fn storage_owned<S: WithDType>(&self, data: Vec<S>) -> Result<CpuStorage> {
+        Ok(S::to_cpu_storage_owned(data))
     }
 
     fn new(_: usize) -> Result<Self> {
@@ -2698,7 +2792,13 @@ impl BackendDevice for CpuDevice {
         crate::bail!("cannot seed the CPU rng with set_seed")
     }
 
-    fn rand_uniform(&self, shape: &Shape, dtype: DType, min: f64, max: f64) -> Result<CpuStorage> {
+    fn rand_uniform<T: crate::FloatDType>(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        min: T,
+        max: T,
+    ) -> Result<CpuStorage> {
         use rand::prelude::*;
 
         let elem_count = shape.elem_count();
@@ -2709,8 +2809,11 @@ impl BackendDevice for CpuDevice {
             }
             DType::BF16 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let uniform = rand::distr::Uniform::new(bf16::from_f64(min), bf16::from_f64(max))
-                    .map_err(Error::wrap)?;
+                let uniform = rand::distr::Uniform::new(
+                    bf16::from_f64(min.to_f64()),
+                    bf16::from_f64(max.to_f64()),
+                )
+                .map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(rng.sample::<bf16, _>(uniform))
                 }
@@ -2718,8 +2821,11 @@ impl BackendDevice for CpuDevice {
             }
             DType::F16 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let uniform = rand::distr::Uniform::new(f16::from_f64(min), f16::from_f64(max))
-                    .map_err(Error::wrap)?;
+                let uniform = rand::distr::Uniform::new(
+                    f16::from_f64(min.to_f64()),
+                    f16::from_f64(max.to_f64()),
+                )
+                .map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(rng.sample::<f16, _>(uniform))
                 }
@@ -2727,9 +2833,11 @@ impl BackendDevice for CpuDevice {
             }
             DType::F8E4M3 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let uniform =
-                    rand::distr::Uniform::new(F8E4M3::from_f64(min), F8E4M3::from_f64(max))
-                        .map_err(Error::wrap)?;
+                let uniform = rand::distr::Uniform::new(
+                    F8E4M3::from_f64(min.to_f64()),
+                    F8E4M3::from_f64(max.to_f64()),
+                )
+                .map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(rng.sample::<F8E4M3, _>(uniform))
                 }
@@ -2737,8 +2845,8 @@ impl BackendDevice for CpuDevice {
             }
             DType::F32 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let uniform =
-                    rand::distr::Uniform::new(min as f32, max as f32).map_err(Error::wrap)?;
+                let uniform = rand::distr::Uniform::new(min.to_f64() as f32, max.to_f64() as f32)
+                    .map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(rng.sample::<f32, _>(uniform))
                 }
@@ -2746,7 +2854,8 @@ impl BackendDevice for CpuDevice {
             }
             DType::F64 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let uniform = rand::distr::Uniform::new(min, max).map_err(Error::wrap)?;
+                let uniform =
+                    rand::distr::Uniform::new(min.to_f64(), max.to_f64()).map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(rng.sample::<f64, _>(uniform))
                 }
@@ -2755,7 +2864,13 @@ impl BackendDevice for CpuDevice {
         }
     }
 
-    fn rand_normal(&self, shape: &Shape, dtype: DType, mean: f64, std: f64) -> Result<CpuStorage> {
+    fn rand_normal<T: crate::FloatDType>(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        mean: T,
+        std: T,
+    ) -> Result<CpuStorage> {
         use rand::prelude::*;
 
         let elem_count = shape.elem_count();
@@ -2766,8 +2881,11 @@ impl BackendDevice for CpuDevice {
             }
             DType::BF16 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let normal = rand_distr::Normal::new(bf16::from_f64(mean), bf16::from_f64(std))
-                    .map_err(Error::wrap)?;
+                let normal = rand_distr::Normal::new(
+                    bf16::from_f64(mean.to_f64()),
+                    bf16::from_f64(std.to_f64()),
+                )
+                .map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(normal.sample(&mut rng))
                 }
@@ -2775,8 +2893,11 @@ impl BackendDevice for CpuDevice {
             }
             DType::F16 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let normal = rand_distr::Normal::new(f16::from_f64(mean), f16::from_f64(std))
-                    .map_err(Error::wrap)?;
+                let normal = rand_distr::Normal::new(
+                    f16::from_f64(mean.to_f64()),
+                    f16::from_f64(std.to_f64()),
+                )
+                .map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(normal.sample(&mut rng))
                 }
@@ -2784,8 +2905,11 @@ impl BackendDevice for CpuDevice {
             }
             DType::F8E4M3 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let normal = rand_distr::Normal::new(F8E4M3::from_f64(mean), F8E4M3::from_f64(std))
-                    .map_err(Error::wrap)?;
+                let normal = rand_distr::Normal::new(
+                    F8E4M3::from_f64(mean.to_f64()),
+                    F8E4M3::from_f64(std.to_f64()),
+                )
+                .map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(normal.sample(&mut rng))
                 }
@@ -2793,8 +2917,8 @@ impl BackendDevice for CpuDevice {
             }
             DType::F32 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let normal =
-                    rand_distr::Normal::new(mean as f32, std as f32).map_err(Error::wrap)?;
+                let normal = rand_distr::Normal::new(mean.to_f64() as f32, std.to_f64() as f32)
+                    .map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(normal.sample(&mut rng))
                 }
@@ -2802,7 +2926,8 @@ impl BackendDevice for CpuDevice {
             }
             DType::F64 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let normal = rand_distr::Normal::new(mean, std).map_err(Error::wrap)?;
+                let normal =
+                    rand_distr::Normal::new(mean.to_f64(), std.to_f64()).map_err(Error::wrap)?;
                 for _i in 0..elem_count {
                     data.push(normal.sample(&mut rng))
                 }
@@ -2863,7 +2988,7 @@ impl BackendDevice for CpuDevice {
         Ok(storage)
     }
 
-    fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<CpuStorage> {
+    fn zeros(&self, shape: &Shape, dtype: DType) -> Result<CpuStorage> {
         let elem_count = shape.elem_count();
         let storage = match dtype {
             DType::U8 => CpuStorage::U8(vec![0u8; elem_count]),

@@ -6,7 +6,7 @@ use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::models::llama::Cache;
 
 use anyhow::{bail, Error as E, Result};
-use candle::{DType, Device, IndexOp, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::llava::config::{
     HFGenerationConfig, HFLLaVAConfig, HFPreProcessorConfig,
@@ -51,14 +51,15 @@ struct Args {
 }
 
 //from https://github.com/huggingface/candle/blob/main/candle-examples/examples/clip/main.rs
-fn load_image<T: AsRef<std::path::Path>>(
-    path: T,
+fn load_image<P: AsRef<std::path::Path>, B: BackendStorage>(
+    path: P,
     processor: &ImageProcessor,
     llava_config: &LLaVAConfig,
     dtype: DType,
-) -> Result<((u32, u32), Tensor)> {
+    device: &B::Device,
+) -> Result<((u32, u32), Tensor<B>)> {
     let img = image::ImageReader::open(path)?.decode()?;
-    let img_tensor = process_image(&img, processor, llava_config)?;
+    let img_tensor = process_image(&img, processor, llava_config, device)?;
     Ok(((img.width(), img.height()), img_tensor.to_dtype(dtype)?))
 }
 
@@ -105,12 +106,13 @@ where
     res
 }
 
-fn tokenizer_image_token(
+fn tokenizer_image_token<B: BackendStorage>(
     prompt: &str,
     tokenizer: &Tokenizer,
     image_token_index: i64,
     llava_config: &LLaVAConfig,
-) -> Result<Tensor> {
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let prompt_chunks = prompt
         .split("<image>")
         .map(|s| {
@@ -143,12 +145,35 @@ fn tokenizer_image_token(
         input_ids.extend(x[1..].to_vec())
     }
     let input_len = input_ids.len();
-    Tensor::from_vec(input_ids, (1, input_len), &Device::Cpu).map_err(E::msg)
+    Tensor::from_vec(input_ids, (1, input_len), device).map_err(E::msg)
 }
 
-fn main() -> Result<()> {
-    let mut args = Args::parse();
-    let device = candle_examples::device(args.cpu)?;
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage + 'static>(mut args: Args) -> Result<()> {
     println!("Start loading model");
     let api = Api::new()?;
     let api = api.model(args.model_path.clone());
@@ -186,6 +211,7 @@ fn main() -> Result<()> {
         )
     };
 
+    let device = B::Device::new(0)?;
     let llama_config = llava_config.to_llama_config();
     let dtype: DType = match llava_config.torch_dtype.as_str() {
         "float16" => DType::F16,
@@ -203,7 +229,7 @@ fn main() -> Result<()> {
     let weight_filenames =
         candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?;
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&weight_filenames, dtype, &device)? };
-    let llava: LLaVA = LLaVA::load(vb, &llava_config, clip_vision_config)?;
+    let llava: LLaVA<B> = LLaVA::load(vb, &llava_config, clip_vision_config)?;
 
     println!("generating conv template");
     let image_token_se =
@@ -256,10 +282,14 @@ fn main() -> Result<()> {
     conv.append_assistant_message(None);
     let prompt = conv.get_prompt();
     println!("loading image");
-    let (image_size, image_tensor) =
-        load_image(&args.image_file, &image_processor, &llava_config, dtype)
-            .map_err(|e| E::msg(format!("Error loading {}: {}", &args.image_file, e)))?;
-    let image_tensor = image_tensor.to_device(&device)?;
+    let (image_size, image_tensor) = load_image(
+        &args.image_file,
+        &image_processor,
+        &llava_config,
+        dtype,
+        &device,
+    )
+    .map_err(|e| E::msg(format!("Error loading {}: {}", &args.image_file, e)))?;
 
     let mut logits_processor = {
         let temperature = f64::from(args.temperature);
@@ -277,6 +307,7 @@ fn main() -> Result<()> {
         &tokenizer,
         llava_config.image_token_index as i64,
         &llava_config,
+        &device,
     )?;
     let mut input_embeds =
         llava.prepare_inputs_labels_for_multimodal(&tokens, &[image_tensor], &[image_size])?;

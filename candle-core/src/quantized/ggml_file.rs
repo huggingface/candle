@@ -1,7 +1,7 @@
 //! Support for the GGML file format.
 
-use super::{k_quants, GgmlDType, QStorage};
-use crate::{Device, Result};
+use super::{k_quants, GgmlDType, QuantizedBackend};
+use crate::{quantized::QuantizedDevice, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
 
@@ -117,30 +117,28 @@ impl Vocab {
     }
 }
 
-fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
+fn from_raw_data<
+    QB: QuantizedBackend,
+    T: super::GgmlType + Send + Sync + std::fmt::Debug + 'static,
+>(
     raw_data: &[u8],
     size_in_bytes: usize,
     dims: Vec<usize>,
-    device: &Device,
-) -> Result<super::QTensor> {
+    device: &QB::Device,
+) -> Result<super::QTensor<QB>> {
     let raw_data_ptr = raw_data.as_ptr();
     let n_blocks = size_in_bytes / std::mem::size_of::<T>();
     let data = unsafe { std::slice::from_raw_parts(raw_data_ptr as *const T, n_blocks) };
-    let data: QStorage = match device {
-        Device::Cpu => QStorage::Cpu(Box::new(data.to_vec())),
-        Device::Metal(metal) => super::metal::load_quantized(metal, data)?,
-        Device::Cuda(cuda) => super::cuda::load_quantized(cuda, data)?,
-    };
-    super::QTensor::new(data, dims)
+    super::QTensor::new(device.load_quantized(data)?, dims)
 }
 
 /// Creates a Tensor from a raw GGML tensor.
-pub fn qtensor_from_ggml(
+pub fn qtensor_from_ggml<QB: QuantizedBackend>(
     ggml_dtype: GgmlDType,
     raw_data: &[u8],
     dims: Vec<usize>,
-    device: &Device,
-) -> Result<super::QTensor> {
+    device: &QB::Device,
+) -> Result<super::QTensor<QB>> {
     let tensor_elems = dims.iter().product::<usize>();
     let block_size = ggml_dtype.block_size();
     if tensor_elems % block_size != 0 {
@@ -151,48 +149,48 @@ pub fn qtensor_from_ggml(
     let size_in_bytes = tensor_elems / block_size * ggml_dtype.type_size();
 
     match ggml_dtype {
-        GgmlDType::F32 => from_raw_data::<f32>(raw_data, size_in_bytes, dims, device),
-        GgmlDType::F16 => from_raw_data::<half::f16>(raw_data, size_in_bytes, dims, device),
-        GgmlDType::BF16 => from_raw_data::<half::bf16>(raw_data, size_in_bytes, dims, device),
+        GgmlDType::F32 => from_raw_data::<QB, f32>(raw_data, size_in_bytes, dims, device),
+        GgmlDType::F16 => from_raw_data::<QB, half::f16>(raw_data, size_in_bytes, dims, device),
+        GgmlDType::BF16 => from_raw_data::<QB, half::bf16>(raw_data, size_in_bytes, dims, device),
         GgmlDType::Q4_0 => {
-            from_raw_data::<k_quants::BlockQ4_0>(raw_data, size_in_bytes, dims, device)
+            from_raw_data::<QB, k_quants::BlockQ4_0>(raw_data, size_in_bytes, dims, device)
         }
         GgmlDType::Q4_1 => {
-            from_raw_data::<k_quants::BlockQ4_1>(raw_data, size_in_bytes, dims, device)
+            from_raw_data::<QB, k_quants::BlockQ4_1>(raw_data, size_in_bytes, dims, device)
         }
         GgmlDType::Q5_0 => {
-            from_raw_data::<k_quants::BlockQ5_0>(raw_data, size_in_bytes, dims, device)
+            from_raw_data::<QB, k_quants::BlockQ5_0>(raw_data, size_in_bytes, dims, device)
         }
         GgmlDType::Q5_1 => {
-            from_raw_data::<k_quants::BlockQ5_1>(raw_data, size_in_bytes, dims, device)
+            from_raw_data::<QB, k_quants::BlockQ5_1>(raw_data, size_in_bytes, dims, device)
         }
         GgmlDType::Q8_0 => {
-            from_raw_data::<k_quants::BlockQ8_0>(raw_data, size_in_bytes, dims, device)
+            from_raw_data::<QB, k_quants::BlockQ8_0>(raw_data, size_in_bytes, dims, device)
         }
         GgmlDType::Q2K => {
-            from_raw_data::<k_quants::BlockQ2K>(raw_data, size_in_bytes, dims, device)
+            from_raw_data::<QB, k_quants::BlockQ2K>(raw_data, size_in_bytes, dims, device)
         }
         GgmlDType::Q3K => {
-            from_raw_data::<k_quants::BlockQ3K>(raw_data, size_in_bytes, dims, device)
+            from_raw_data::<QB, k_quants::BlockQ3K>(raw_data, size_in_bytes, dims, device)
         }
         GgmlDType::Q4K => {
-            from_raw_data::<k_quants::BlockQ4K>(raw_data, size_in_bytes, dims, device)
+            from_raw_data::<QB, k_quants::BlockQ4K>(raw_data, size_in_bytes, dims, device)
         }
         GgmlDType::Q5K => {
-            from_raw_data::<k_quants::BlockQ5K>(raw_data, size_in_bytes, dims, device)
+            from_raw_data::<QB, k_quants::BlockQ5K>(raw_data, size_in_bytes, dims, device)
         }
         GgmlDType::Q6K => {
-            from_raw_data::<k_quants::BlockQ6K>(raw_data, size_in_bytes, dims, device)
+            from_raw_data::<QB, k_quants::BlockQ6K>(raw_data, size_in_bytes, dims, device)
         }
         _ => crate::bail!("quantized type {ggml_dtype:?} is not supported yet"),
     }
 }
 
-fn read_one_tensor<R: std::io::Seek + std::io::Read>(
+fn read_one_tensor<QB: QuantizedBackend, R: std::io::Seek + std::io::Read>(
     reader: &mut R,
     magic: VersionedMagic,
-    device: &Device,
-) -> Result<(String, super::QTensor)> {
+    device: &QB::Device,
+) -> Result<(String, super::QTensor<QB>)> {
     let n_dims = reader.read_u32::<LittleEndian>()?;
     let name_len = reader.read_u32::<LittleEndian>()?;
     let ggml_dtype = reader.read_u32::<LittleEndian>()?;
@@ -222,19 +220,19 @@ fn read_one_tensor<R: std::io::Seek + std::io::Read>(
     }
 }
 
-pub struct Content {
+pub struct Content<QB: QuantizedBackend> {
     pub magic: VersionedMagic,
     pub hparams: HParams,
     pub vocab: Vocab,
-    pub tensors: HashMap<String, super::QTensor>,
-    pub device: Device,
+    pub tensors: HashMap<String, super::QTensor<QB>>,
+    pub device: QB::Device,
 }
 
-impl Content {
+impl<QB: QuantizedBackend> Content<QB> {
     pub fn read<R: std::io::Seek + std::io::Read>(
         reader: &mut R,
-        device: &Device,
-    ) -> Result<Content> {
+        device: &QB::Device,
+    ) -> Result<Content<QB>> {
         // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.cpp#L505
         let last_position = reader.seek(std::io::SeekFrom::End(0))?;
         reader.seek(std::io::SeekFrom::Start(0))?;
@@ -257,7 +255,7 @@ impl Content {
         })
     }
 
-    pub fn remove(&mut self, name: &str) -> Result<super::QTensor> {
+    pub fn remove(&mut self, name: &str) -> Result<super::QTensor<QB>> {
         match self.tensors.remove(name) {
             None => crate::bail!("cannot find tensor with name '{name}'"),
             Some(tensor) => Ok(tensor),

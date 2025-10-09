@@ -32,7 +32,7 @@
 //! ```
 
 use super::with_tracing::{layer_norm, linear_no_bias as linear, LayerNorm, Linear};
-use candle::{DType, Device, IndexOp, Result, Tensor};
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use std::collections::{HashMap, HashSet};
 
@@ -55,19 +55,19 @@ pub struct Config {
     pub rescale_every: usize,
 }
 
-pub struct StatePerLayer {
-    pub extract_key_value: Tensor,
-    pub linear_attention: Tensor,
-    pub feed_forward: Tensor,
+pub struct StatePerLayer<B: BackendStorage> {
+    pub extract_key_value: Tensor<B>,
+    pub linear_attention: Tensor<B>,
+    pub feed_forward: Tensor<B>,
 }
 
-pub struct State {
-    pub per_layer: Vec<StatePerLayer>,
+pub struct State<B: BackendStorage> {
+    pub per_layer: Vec<StatePerLayer<B>>,
     pub pos: usize,
 }
 
-impl State {
-    pub fn new(batch_size: usize, cfg: &Config, dev: &Device) -> Result<Self> {
+impl<B: BackendStorage> State<B> {
+    pub fn new(batch_size: usize, cfg: &Config, dev: &B::Device) -> Result<Self> {
         let mut per_layer = Vec::with_capacity(cfg.num_hidden_layers);
         // Certainly a weird convention but taken from modeling_rwkv5.py
         let num_attention_heads = cfg.hidden_size / cfg.num_attention_heads;
@@ -95,25 +95,25 @@ impl State {
 }
 
 #[derive(Debug, Clone)]
-struct SelfAttention {
-    key: Linear,
-    receptance: Linear,
-    value: Linear,
-    gate: Linear,
-    output: Linear,
-    ln_x: candle_nn::GroupNorm,
-    time_mix_key: Tensor,
-    time_mix_value: Tensor,
-    time_mix_receptance: Tensor,
-    time_decay: Tensor,
-    time_faaaa: Tensor,
-    time_mix_gate: Tensor,
+struct SelfAttention<B: BackendStorage> {
+    key: Linear<B>,
+    receptance: Linear<B>,
+    value: Linear<B>,
+    gate: Linear<B>,
+    output: Linear<B>,
+    ln_x: candle_nn::GroupNorm<B>,
+    time_mix_key: Tensor<B>,
+    time_mix_value: Tensor<B>,
+    time_mix_receptance: Tensor<B>,
+    time_decay: Tensor<B>,
+    time_faaaa: Tensor<B>,
+    time_mix_gate: Tensor<B>,
     layer_id: usize,
     n_attn_heads: usize,
 }
 
-impl SelfAttention {
-    pub fn new(layer_id: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SelfAttention<B> {
+    pub fn new(layer_id: usize, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let attn_hidden_size = cfg.attention_hidden_size;
         let key = linear(hidden_size, attn_hidden_size, vb.pp("key"))?;
@@ -152,7 +152,7 @@ impl SelfAttention {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, state: &mut State<B>) -> Result<Tensor<B>> {
         let h = self.time_decay.dim(0)?;
         let (b, t, s) = xs.dims3()?;
         let s = s / h;
@@ -195,7 +195,7 @@ impl SelfAttention {
                 .reshape(((), 1, 1))?
                 .reshape((self.n_attn_heads, (), 1))?;
 
-        let mut out: Vec<Tensor> = Vec::with_capacity(t);
+        let mut out: Vec<Tensor<B>> = Vec::with_capacity(t);
         for t_ in 0..t {
             let rt = receptance.i((.., .., t_..t_ + 1))?.contiguous()?;
             let kt = key.i((.., .., .., t_..t_ + 1))?.contiguous()?;
@@ -215,17 +215,17 @@ impl SelfAttention {
 }
 
 #[derive(Debug, Clone)]
-struct FeedForward {
-    time_mix_key: Tensor,
-    time_mix_receptance: Tensor,
-    key: Linear,
-    receptance: Linear,
-    value: Linear,
+struct FeedForward<B: BackendStorage> {
+    time_mix_key: Tensor<B>,
+    time_mix_receptance: Tensor<B>,
+    key: Linear<B>,
+    receptance: Linear<B>,
+    value: Linear<B>,
     layer_id: usize,
 }
 
-impl FeedForward {
-    pub fn new(layer_id: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> FeedForward<B> {
+    pub fn new(layer_id: usize, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let int_size = cfg
             .intermediate_size
             .unwrap_or(((cfg.hidden_size as f64 * 3.5) as usize) / 32 * 32);
@@ -244,7 +244,7 @@ impl FeedForward {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, state: &mut State<B>) -> Result<Tensor<B>> {
         let shifted = &state.per_layer[self.layer_id].feed_forward;
         let key = (xs.broadcast_mul(&self.time_mix_key)?
             + shifted.broadcast_mul(&(1.0 - &self.time_mix_key)?)?)?;
@@ -260,16 +260,16 @@ impl FeedForward {
 }
 
 #[derive(Debug, Clone)]
-struct Block {
-    pre_ln: Option<LayerNorm>,
-    ln1: LayerNorm,
-    ln2: LayerNorm,
-    attention: SelfAttention,
-    feed_forward: FeedForward,
+struct Block<B: BackendStorage> {
+    pre_ln: Option<LayerNorm<B>>,
+    ln1: LayerNorm<B>,
+    ln2: LayerNorm<B>,
+    attention: SelfAttention<B>,
+    feed_forward: FeedForward<B>,
 }
 
-impl Block {
-    pub fn new(layer_id: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Block<B> {
+    pub fn new(layer_id: usize, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let ln1 = layer_norm(cfg.hidden_size, cfg.layer_norm_epsilon, vb.pp("ln1"))?;
         let ln2 = layer_norm(cfg.hidden_size, cfg.layer_norm_epsilon, vb.pp("ln2"))?;
         let pre_ln = if layer_id == 0 {
@@ -289,7 +289,7 @@ impl Block {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, state: &mut State<B>) -> Result<Tensor<B>> {
         let xs = match self.pre_ln.as_ref() {
             None => xs.clone(),
             Some(pre_ln) => xs.apply(pre_ln)?,
@@ -303,17 +303,17 @@ impl Block {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    embeddings: Embedding,
-    blocks: Vec<Block>,
-    ln_out: LayerNorm,
-    head: Linear,
+pub struct Model<B: BackendStorage> {
+    embeddings: Embedding<B>,
+    blocks: Vec<Block<B>>,
+    ln_out: LayerNorm<B>,
+    head: Linear<B>,
     rescale_every: usize,
     layers_are_rescaled: bool,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb_m = vb.pp("rwkv");
         let embeddings = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embeddings"))?;
         let mut blocks = Vec::with_capacity(cfg.num_hidden_layers);
@@ -334,7 +334,7 @@ impl Model {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, state: &mut State<B>) -> Result<Tensor<B>> {
         let (_b_size, _seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.embeddings)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {

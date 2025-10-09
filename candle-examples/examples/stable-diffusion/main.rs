@@ -8,7 +8,7 @@ use candle_transformers::models::stable_diffusion;
 use std::ops::Div;
 
 use anyhow::{Error as E, Result};
-use candle::{DType, Device, IndexOp, Module, Tensor, D};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Module, Tensor, D};
 use clap::Parser;
 use rand::Rng;
 use stable_diffusion::vae::AutoEncoderKL;
@@ -315,9 +315,9 @@ fn output_filename(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn save_image(
-    vae: &AutoEncoderKL,
-    latents: &Tensor,
+fn save_image<B: BackendStorage>(
+    vae: &AutoEncoderKL<B>,
+    latents: &Tensor<B>,
     vae_scale: f64,
     bsize: usize,
     idx: usize,
@@ -326,7 +326,7 @@ fn save_image(
     timestep_ids: Option<usize>,
 ) -> Result<()> {
     let images = vae.decode(&(latents / vae_scale)?)?;
-    let images = ((images / 2.)? + 0.5)?.to_device(&Device::Cpu)?;
+    let images = ((images / 2.)? + 0.5)?;
     let images = (images.clamp(0f32, 1.)? * 255.)?.to_dtype(DType::U8)?;
     for batch in 0..bsize {
         let image = images.i(batch)?;
@@ -342,20 +342,20 @@ fn save_image(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn text_embeddings(
+fn text_embeddings<B: BackendStorage>(
     prompt: &str,
     uncond_prompt: &str,
     tokenizer: Option<String>,
     clip_weights: Option<String>,
     clip2_weights: Option<String>,
     sd_version: StableDiffusionVersion,
-    sd_config: &stable_diffusion::StableDiffusionConfig,
+    sd_config: &stable_diffusion::StableDiffusionConfig<B>,
     use_f16: bool,
-    device: &Device,
+    device: &B::Device,
     dtype: DType,
     use_guide_scale: bool,
     first: bool,
-) -> Result<Tensor> {
+) -> Result<Tensor<B>> {
     let tokenizer_file = if first {
         ModelFile::Tokenizer
     } else {
@@ -432,7 +432,10 @@ fn text_embeddings(
     Ok(text_embeddings)
 }
 
-fn image_preprocess<T: AsRef<std::path::Path>>(path: T) -> anyhow::Result<Tensor> {
+fn image_preprocess<P: AsRef<std::path::Path>, B: BackendStorage>(
+    path: P,
+    device: &B::Device,
+) -> anyhow::Result<Tensor<B>> {
     let img = image::ImageReader::open(path)?.decode()?;
     let (height, width) = (img.height() as usize, img.width() as usize);
     let height = height - height % 32;
@@ -444,7 +447,7 @@ fn image_preprocess<T: AsRef<std::path::Path>>(path: T) -> anyhow::Result<Tensor
     );
     let img = img.to_rgb8();
     let img = img.into_raw();
-    let img = Tensor::from_vec(img, (height, width, 3), &Device::Cpu)?
+    let img = Tensor::from_vec(img, (height, width, 3), device)?
         .permute((2, 0, 1))?
         .to_dtype(DType::F32)?
         .affine(2. / 255., -1.)?
@@ -453,7 +456,10 @@ fn image_preprocess<T: AsRef<std::path::Path>>(path: T) -> anyhow::Result<Tensor
 }
 
 /// Convert the mask image to a single channel tensor. Also ensure the image is a multiple of 32 in both dimensions.
-fn mask_preprocess<T: AsRef<std::path::Path>>(path: T) -> anyhow::Result<Tensor> {
+fn mask_preprocess<P: AsRef<std::path::Path>, B: BackendStorage>(
+    path: P,
+    device: &B::Device,
+) -> anyhow::Result<Tensor<B>> {
     let img = image::open(path)?.to_luma8();
     let (new_width, new_height) = {
         let (width, height) = img.dimensions();
@@ -466,7 +472,7 @@ fn mask_preprocess<T: AsRef<std::path::Path>>(path: T) -> anyhow::Result<Tensor>
         image::imageops::FilterType::CatmullRom,
     )
     .into_raw();
-    let mask = Tensor::from_vec(img, (new_height as usize, new_width as usize), &Device::Cpu)?
+    let mask = Tensor::from_vec(img, (new_height as usize, new_width as usize), device)?
         .unsqueeze(0)?
         .to_dtype(DType::F32)?
         .div(255.0)?
@@ -476,17 +482,17 @@ fn mask_preprocess<T: AsRef<std::path::Path>>(path: T) -> anyhow::Result<Tensor>
 
 /// Generates the mask latents, scaled mask and mask_4 for inpainting. Returns a tuple of None if inpainting is not
 /// being used.
-#[allow(clippy::too_many_arguments)]
-fn inpainting_tensors(
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn inpainting_tensors<B: BackendStorage>(
     sd_version: StableDiffusionVersion,
     mask_path: Option<String>,
     dtype: DType,
-    device: &Device,
+    device: &B::Device,
     use_guide_scale: bool,
-    vae: &AutoEncoderKL,
-    image: Option<Tensor>,
+    vae: &AutoEncoderKL<B>,
+    image: Option<Tensor<B>>,
     vae_scale: f64,
-) -> Result<(Option<Tensor>, Option<Tensor>, Option<Tensor>)> {
+) -> Result<(Option<Tensor<B>>, Option<Tensor<B>>, Option<Tensor<B>>)> {
     match sd_version {
         StableDiffusionVersion::XlInpaint
         | StableDiffusionVersion::V2Inpaint
@@ -495,9 +501,7 @@ fn inpainting_tensors(
                 anyhow::anyhow!("An inpainting model was requested but mask-path is not provided.")
             })?;
             // Get the mask image with shape [1, 1, 128, 128]
-            let mask = mask_preprocess(inpaint_mask)?
-                .to_device(device)?
-                .to_dtype(dtype)?;
+            let mask = mask_preprocess(inpaint_mask, device)?.to_dtype(dtype)?;
             // Generate the masked image from the image and the mask with shape [1, 3, 1024, 1024]
             let xmask = mask.le(0.5)?.repeat(&[1, 3, 1, 1])?.to_dtype(dtype)?;
             let image = &image
@@ -511,7 +515,7 @@ fn inpainting_tensors(
             let mask = mask.interpolate2d(w, h)?;
             // shape: [1, 4, 128, 128]
             let mask_latents = vae.encode(&masked_img)?;
-            let mask_latents = (mask_latents.sample()? * vae_scale)?.to_device(device)?;
+            let mask_latents = (mask_latents.sample()? * vae_scale)?;
 
             let mask_4 = mask.as_ref().repeat(&[1, 4, 1, 1])?;
             let (mask_latents, mask) = if use_guide_scale {
@@ -528,14 +532,13 @@ fn inpainting_tensors(
     }
 }
 
-fn run(args: Args) -> Result<()> {
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
     let Args {
         prompt,
         uncond_prompt,
-        cpu,
         height,
         width,
         n_steps,
@@ -597,7 +600,7 @@ fn run(args: Args) -> Result<()> {
         },
     };
     let dtype = if use_f16 { DType::F16 } else { DType::F32 };
-    let sd_config = match sd_version {
+    let sd_config: stable_diffusion::StableDiffusionConfig<B> = match sd_version {
         StableDiffusionVersion::V1_5 | StableDiffusionVersion::V1_5Inpaint => {
             stable_diffusion::StableDiffusionConfig::v1_5(sliced_attention_size, height, width)
         }
@@ -615,7 +618,7 @@ fn run(args: Args) -> Result<()> {
     };
 
     let mut scheduler = sd_config.build_scheduler(n_steps)?;
-    let device = candle_examples::device(cpu)?;
+    let device = B::Device::new(0)?;
     // If a seed is not given, generate a random seed and print it
     let seed = seed.unwrap_or(rand::rng().random_range(0u64..u64::MAX));
 
@@ -660,9 +663,7 @@ fn run(args: Args) -> Result<()> {
     let (image, init_latent_dist) = match &img2img {
         None => (None, None),
         Some(image) => {
-            let image = image_preprocess(image)?
-                .to_device(&device)?
-                .to_dtype(dtype)?;
+            let image = image_preprocess(image, &device)?.to_dtype(dtype)?;
             (Some(image.clone()), Some(vae.encode(&image)?))
         }
     };
@@ -708,7 +709,7 @@ fn run(args: Args) -> Result<()> {
         let timesteps = scheduler.timesteps().to_vec();
         let latents = match &init_latent_dist {
             Some(init_latent_dist) => {
-                let latents = (init_latent_dist.sample()? * vae_scale)?.to_device(&device)?;
+                let latents = (init_latent_dist.sample()? * vae_scale)?;
                 if t_start < timesteps.len() {
                     let noise = latents.randn_like(0f64, 1f64)?;
                     scheduler.add_noise(&latents, noise, timesteps[t_start])?
@@ -755,8 +756,7 @@ fn run(args: Args) -> Result<()> {
                     1,
                 )?,
                 _ => latent_model_input,
-            }
-            .to_device(&device)?;
+            };
 
             let noise_pred =
                 unet.forward(&latent_model_input, timestep as f64, &text_embeddings)?;
@@ -819,7 +819,17 @@ fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     let args = Args::parse();
-    run(args)
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args)?;
+    }
+    Ok(())
 }

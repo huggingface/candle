@@ -14,7 +14,9 @@
 //!
 
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};
-use candle::{DType, Device, Module, Result, Tensor, D};
+#[cfg(feature = "flash-attn")]
+use candle::CudaStorage;
+use candle::{BackendStorage, DType, Module, Result, Tensor, D};
 use candle_nn::{Activation, LayerNorm, VarBuilder};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -78,18 +80,18 @@ impl Config {
 }
 
 #[derive(Debug)]
-pub(crate) struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+pub(crate) struct RotaryEmbedding<B: BackendStorage> {
+    sin: Tensor<B>,
+    cos: Tensor<B>,
 }
 
-fn rotate_half(xs: &Tensor) -> Result<Tensor> {
+fn rotate_half<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
     let xs = xs.chunk(2, D::Minus1)?;
     Tensor::cat(&[&xs[1].neg()?, &xs[0]], D::Minus1)
 }
 
-impl RotaryEmbedding {
-    pub(crate) fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
+impl<B: BackendStorage> RotaryEmbedding<B> {
+    pub(crate) fn new(dtype: DType, cfg: &Config, dev: &B::Device) -> Result<Self> {
         let dim = cfg.rotary_ndims();
         let max_seq_len = cfg.max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
@@ -111,10 +113,10 @@ impl RotaryEmbedding {
 
     pub(crate) fn apply_rotary_emb_qkv(
         &self,
-        q: &Tensor,
-        k: &Tensor,
+        q: &Tensor<B>,
+        k: &Tensor<B>,
         seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
@@ -128,16 +130,16 @@ impl RotaryEmbedding {
 
 #[derive(Debug)]
 #[allow(clippy::upper_case_acronyms)]
-struct MLP {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+struct MLP<B: BackendStorage> {
+    gate_proj: Linear<B>,
+    up_proj: Linear<B>,
+    down_proj: Linear<B>,
     act_fn: Activation,
     span: tracing::Span,
 }
 
-impl MLP {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MLP<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
         let gate_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("gate_proj"))?;
@@ -153,8 +155,8 @@ impl MLP {
     }
 }
 
-impl Module for MLP {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for MLP<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let lhs = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
         let rhs = xs.apply(&self.up_proj)?;
@@ -164,41 +166,47 @@ impl Module for MLP {
 
 #[cfg(feature = "flash-attn")]
 fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
+    q: &Tensor<CudaStorage>,
+    k: &Tensor<CudaStorage>,
+    v: &Tensor<CudaStorage>,
     softmax_scale: f32,
     causal: bool,
-) -> Result<Tensor> {
+) -> Result<Tensor<CudaStorage>> {
     candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
 }
 
 #[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+fn flash_attn<B: BackendStorage>(
+    _: &Tensor<B>,
+    _: &Tensor<B>,
+    _: &Tensor<B>,
+    _: f32,
+    _: bool,
+) -> Result<Tensor<B>> {
     unimplemented!("compile with '--features flash-attn'")
 }
 
 #[derive(Debug)]
-struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+struct Attention<B: BackendStorage> {
+    q_proj: Linear<B>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    o_proj: Linear<B>,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
     hidden_size: usize,
-    rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: Option<(Tensor, Tensor)>,
+    rotary_emb: Arc<RotaryEmbedding<B>>,
+    kv_cache: Option<(Tensor<B>, Tensor<B>)>,
     use_cache: bool,
     rotary_ndims: usize,
     use_flash_attn: bool,
     span: tracing::Span,
 }
 
-impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Attention<B> {
+    fn new(rotary_emb: Arc<RotaryEmbedding<B>>, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let head_dim = cfg.head_dim();
         let num_heads = cfg.num_attention_heads;
@@ -234,10 +242,10 @@ impl Attention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<B>,
+        attention_mask: Option<&Tensor<B>>,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -308,16 +316,16 @@ impl Attention {
 }
 
 #[derive(Debug)]
-struct DecoderLayer {
-    self_attn: Attention,
-    mlp: MLP,
-    input_layernorm: LayerNorm,
-    post_attention_layernorm: LayerNorm,
+struct DecoderLayer<B: BackendStorage> {
+    self_attn: Attention<B>,
+    mlp: MLP<B>,
+    input_layernorm: LayerNorm<B>,
+    post_attention_layernorm: LayerNorm<B>,
     span: tracing::Span,
 }
 
-impl DecoderLayer {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> DecoderLayer<B> {
+    fn new(rotary_emb: Arc<RotaryEmbedding<B>>, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         let input_layernorm = candle_nn::layer_norm(
@@ -341,10 +349,10 @@ impl DecoderLayer {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<B>,
+        attention_mask: Option<&Tensor<B>>,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -357,18 +365,18 @@ impl DecoderLayer {
 }
 
 #[derive(Debug)]
-pub struct Model {
-    embed_tokens: candle_nn::Embedding,
-    layers: Vec<DecoderLayer>,
-    norm: LayerNorm,
-    lm_head: Linear,
-    device: Device,
+pub struct Model<B: BackendStorage> {
+    embed_tokens: candle_nn::Embedding<B>,
+    layers: Vec<DecoderLayer<B>>,
+    norm: LayerNorm<B>,
+    lm_head: Linear<B>,
+    device: B::Device,
     dtype: DType,
     span: tracing::Span,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -397,7 +405,7 @@ impl Model {
         b_size: usize,
         tgt_len: usize,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         // Sliding window mask?
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
@@ -413,7 +421,7 @@ impl Model {
             .to_dtype(self.dtype)
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor<B>, seqlen_offset: usize) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (b_size, seq_len) = input_ids.dims2()?;
         let attention_mask = if seq_len <= 1 {

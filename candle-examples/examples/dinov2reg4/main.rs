@@ -11,7 +11,7 @@ extern crate accelerate_src;
 
 use clap::Parser;
 
-use candle::{DType, IndexOp, D};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Tensor, D};
 use candle_nn::{Module, VarBuilder};
 use candle_transformers::models::dinov2reg4;
 
@@ -31,9 +31,31 @@ struct Args {
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let device = candle_examples::device(args.cpu)?;
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
 
-    let image = candle_examples::imagenet::load_image518(args.image)?.to_device(&device)?;
+fn run<B: BackendStorage>(args: Args) -> anyhow::Result<()> {
+    let device = B::Device::new(0)?;
+    let image: Tensor<B> = candle_examples::imagenet::load_image518(args.image, &device)?;
     println!("loaded image {image:?}");
 
     let f_species_id_mapping = "candle-examples/examples/dinov2reg4/species_id_mapping.txt";

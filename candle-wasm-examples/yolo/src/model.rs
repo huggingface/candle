@@ -1,7 +1,6 @@
-use candle::{DType, IndexOp, Result, Tensor, D};
-use candle_nn::{
-    batch_norm, conv2d, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder,
-};
+use crate::{BatchNorm, Conv2d, Tensor, VarBuilder};
+use candle::{CpuStorage, DType, IndexOp, Result, D};
+use candle_nn::{batch_norm, conv2d, conv2d_no_bias, Conv2dConfig, Module};
 use image::DynamicImage;
 
 // Model architecture from https://github.com/ultralytics/ultralytics/issues/189
@@ -70,7 +69,7 @@ impl Upsample {
     }
 }
 
-impl Module for Upsample {
+impl Module<CpuStorage> for Upsample {
     fn forward(&self, xs: &Tensor) -> candle::Result<Tensor> {
         let (_b_size, _channels, h, w) = xs.dims4()?;
         xs.upsample_nearest2d(self.scale_factor * h, self.scale_factor * w)
@@ -106,7 +105,7 @@ impl ConvBlock {
     }
 }
 
-impl Module for ConvBlock {
+impl Module<CpuStorage> for ConvBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs = self.conv.forward(xs)?.apply_t(&self.bn, false)?;
         candle_nn::ops::silu(&xs)
@@ -131,7 +130,7 @@ impl Bottleneck {
     }
 }
 
-impl Module for Bottleneck {
+impl Module<CpuStorage> for Bottleneck {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let ys = self.cv2.forward(&self.cv1.forward(xs)?)?;
         if self.residual {
@@ -167,7 +166,7 @@ impl C2f {
     }
 }
 
-impl Module for C2f {
+impl Module<CpuStorage> for C2f {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let ys = self.cv1.forward(xs)?;
         let mut ys = ys.chunk(2, 1)?;
@@ -195,7 +194,7 @@ impl Sppf {
     }
 }
 
-impl Module for Sppf {
+impl Module<CpuStorage> for Sppf {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (_, _, _, _) = xs.dims4()?;
         let xs = self.cv1.forward(xs)?;
@@ -228,7 +227,7 @@ impl Dfl {
     }
 }
 
-impl Module for Dfl {
+impl Module<CpuStorage> for Dfl {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_sz, _channels, anchors) = xs.dims3()?;
         let xs = xs
@@ -666,7 +665,7 @@ impl YoloV8 {
     }
 }
 
-impl Module for YoloV8 {
+impl Module<CpuStorage> for YoloV8 {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (xs1, xs2, xs3) = self.net.forward(xs)?;
         let (xs1, xs2, xs3) = self.fpn.forward(&xs1, &xs2, &xs3)?;
@@ -695,7 +694,7 @@ impl YoloV8Pose {
     }
 }
 
-impl Module for YoloV8Pose {
+impl Module<CpuStorage> for YoloV8Pose {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (xs1, xs2, xs3) = self.net.forward(xs)?;
         let (xs1, xs2, xs3) = self.fpn.forward(&xs1, &xs2, &xs3)?;

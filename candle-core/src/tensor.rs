@@ -1,10 +1,11 @@
 //! Tensors are N-dimensional matrixes of elements using a single data type.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::{BackendDevice, BackendStorage};
+use crate::convert::TryConvertStorage;
 use crate::op::{BackpropOp, BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::scalar::TensorOrScalar;
 use crate::shape::{Dim, Dims, ShapeWithOneHole};
-use crate::{bail, storage::Storage, DType, Device, Error, Layout, Result, Shape};
+use crate::{bail, DType, Error, Layout, Result, Shape};
 use std::sync::{Arc, RwLock};
 
 /// Unique identifier for tensors.
@@ -20,7 +21,8 @@ impl TensorId {
     }
 }
 
-pub struct Tensor_ {
+#[derive(Clone)]
+pub struct Tensor_<B: BackendStorage> {
     id: TensorId,
     // As we provide inner mutability on the tensor content, the alternatives are:
     // - Using a mutex, this would have the highest cost when retrieving the storage but would
@@ -34,41 +36,49 @@ pub struct Tensor_ {
     // Ideally, we would use Arc<Storage> for tensors on which we don't plan on modifying the data
     // and Arc<Mutex<Storage>> for tensors where the data could be modified, e.g. variables but
     // that's tricky to encode in the current setup.
-    storage: Arc<RwLock<Storage>>,
+    storage: Arc<RwLock<B>>,
     layout: Layout,
-    op: BackpropOp,
+    op: BackpropOp<B>,
     is_variable: bool,
     dtype: DType,
-    device: Device,
+    device: B::Device,
 }
 
-impl AsRef<Tensor> for Tensor {
-    fn as_ref(&self) -> &Tensor {
+impl<B: BackendStorage> AsRef<Tensor<B>> for Tensor<B> {
+    fn as_ref(&self) -> &Tensor<B> {
         self
     }
 }
+#[cfg(not(any(feature = "cuda", feature = "metal")))]
+pub type DefaultStorage = crate::CpuStorage;
+#[cfg(feature = "cuda")]
+pub type DefaultStorage = crate::CudaStorage;
+#[cfg(feature = "metal")]
+pub type DefaultStorage = crate::MetalStorage;
 
 // Tensors are refcounted so that cloning is cheap when building the op graph.
 // Storages are also refcounted independently so that its possible to avoid
 // copying the storage for operations that only modify the shape or stride.
-#[derive(Clone)]
 /// The core struct for manipulating tensors.
 ///
 /// ```rust
-/// use candle_core::{Tensor, DType, Device};
-///
-/// let a = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((2, 3))?;
-/// let b = Tensor::arange(0f32, 12f32, &Device::Cpu)?.reshape((3, 4))?;
+/// use candle_core::{CpuStorage, cpu_backend::CpuDevice, DType, Device};
+/// type Tensor = candle_core::Tensor<CpuStorage>;
+/// let a = Tensor::arange(0f32, 6f32, &CpuDevice)?.reshape((2, 3))?;
+/// let b = Tensor::arange(0f32, 12f32, &CpuDevice)?.reshape((3, 4))?;
 ///
 /// let c = a.matmul(&b)?;
 /// # Ok::<(), candle_core::Error>(())
 /// ```
 ///
 /// Tensors are reference counted with [`Arc`] so cloning them is cheap.
-pub struct Tensor(Arc<Tensor_>);
+#[derive(Clone)]
+pub struct Tensor<B>(Arc<Tensor_<B>>)
+where
+    B: BackendStorage;
 
-impl std::ops::Deref for Tensor {
-    type Target = Tensor_;
+impl<B: BackendStorage> std::ops::Deref for Tensor<B> {
+    type Target = Tensor_<B>;
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
@@ -111,13 +121,12 @@ macro_rules! binary_op {
 
 macro_rules! binary_op_scalar {
     ($fn_name:ident, $op_name:ident) => {
-        pub fn $fn_name<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
+        pub fn $fn_name<T: TensorOrScalar<B>>(&self, rhs: T) -> Result<Self> {
             let rhs = match rhs.to_tensor_scalar()? {
                 crate::scalar::TensorScalar::Tensor(rhs) => rhs,
-                crate::scalar::TensorScalar::Scalar(rhs) => rhs
-                    .to_dtype(self.dtype())?
-                    .to_device(self.device())?
-                    .broadcast_as(self.shape())?,
+                crate::scalar::TensorScalar::Scalar(rhs) => {
+                    rhs.to_dtype(self.dtype())?.broadcast_as(self.shape())?
+                }
             };
             let shape = self.same_shape_binary_op(&rhs, stringify!($fn_name))?;
             if self.elem_count() == 0 {
@@ -156,14 +165,14 @@ macro_rules! broadcast_binary_op {
 }
 
 /// Creates a fresh tensor structure based on a storage and a shape, this uses contiguous strides.
-pub(crate) fn from_storage<S: Into<Shape>>(
-    storage: Storage,
+pub(crate) fn from_storage<B: BackendStorage, S: Into<Shape>>(
+    storage: B,
     shape: S,
-    op: BackpropOp,
+    op: BackpropOp<B>,
     is_variable: bool,
-) -> Tensor {
+) -> Tensor<B> {
     let dtype = storage.dtype();
-    let device = storage.device();
+    let device = storage.device().as_ref().clone();
     let tensor_ = Tensor_ {
         id: TensorId::new(),
         storage: Arc::new(RwLock::new(storage)),
@@ -176,11 +185,31 @@ pub(crate) fn from_storage<S: Into<Shape>>(
     Tensor(Arc::new(tensor_))
 }
 
-impl Tensor {
+impl<B: BackendStorage> Tensor<B> {
+    pub fn from_storage<S: Into<Shape>>(
+        storage: B,
+        shape: S,
+        op: BackpropOp<B>,
+        is_variable: bool,
+    ) -> Self {
+        let dtype = storage.dtype();
+        let device = storage.device().as_ref().clone();
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: Arc::new(RwLock::new(storage)),
+            layout: Layout::contiguous(shape),
+            op,
+            is_variable,
+            dtype,
+            device,
+        };
+        Tensor(Arc::new(tensor_))
+    }
+
     pub(crate) fn ones_impl<S: Into<Shape>>(
         shape: S,
         dtype: DType,
-        device: &Device,
+        device: &B::Device,
         is_variable: bool,
     ) -> Result<Self> {
         let none = BackpropOp::none();
@@ -194,13 +223,15 @@ impl Tensor {
     /// Creates a new tensor filled with ones.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, DType, Device};
-    /// let a = Tensor::ones((2, 3), DType::F32, &Device::Cpu)?;
-    /// let b = Tensor::from_slice(&[1.0f32, 1.0, 1.0, 1.0, 1.0, 1.0], (2, 3), &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, DType};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::ones((2, 3), DType::F32, &CpuDevice)?;
+    /// let b = Tensor::from_slice(&[1.0f32, 1.0, 1.0, 1.0, 1.0, 1.0], (2, 3), &CpuDevice)?;
     /// // a == b
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn ones<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
+    pub fn ones<S: Into<Shape>>(shape: S, dtype: DType, device: &B::Device) -> Result<Self> {
         Self::ones_impl(shape, dtype, device, false)
     }
 
@@ -219,8 +250,10 @@ impl Tensor {
     /// Creates a new tensor filled with ones with same shape, dtype, and device as the other tensor.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, DType, Device};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, DType};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
     /// let b = a.ones_like()?;
     /// // b == a + 1
     /// # Ok::<(), candle_core::Error>(())
@@ -234,7 +267,7 @@ impl Tensor {
     pub(crate) fn zeros_impl<S: Into<Shape>>(
         shape: S,
         dtype: DType,
-        device: &Device,
+        device: &B::Device,
         is_variable: bool,
     ) -> Result<Self> {
         let none = BackpropOp::none();
@@ -246,13 +279,16 @@ impl Tensor {
     /// Creates a new tensor filled with zeros.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, DType, Device};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
-    /// let b = Tensor::from_slice(&[0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0], (2, 3), &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, DType};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
+    /// let b = Tensor::from_slice(&[0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0], (2, 3), &CpuDevice)?;
     /// // a == b
+    ///
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn zeros<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
+    pub fn zeros<S: Into<Shape>>(shape: S, dtype: DType, device: &B::Device) -> Result<Self> {
         Self::zeros_impl(shape, dtype, device, false)
     }
 
@@ -260,8 +296,10 @@ impl Tensor {
     /// tensor.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, DType, Device};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, DType};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
     /// let b = a.zeros_like()?;
     /// // b is on CPU f32.
     /// # Ok::<(), candle_core::Error>(())
@@ -274,11 +312,11 @@ impl Tensor {
         lo: T,
         up: T,
         s: S,
-        device: &Device,
+        device: &B::Device,
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_uniform(lo, up, &s)?;
+        let storage = device.rand_uniform(&s, T::DTYPE, lo, up)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }
@@ -288,11 +326,13 @@ impl Tensor {
         up: f64,
         s: S,
         dtype: DType,
-        device: &Device,
+        device: &B::Device,
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_uniform_f64(lo, up, &s, dtype)?;
+        let storage = device
+            .rand_uniform(&s, DType::F64, lo, up)?
+            .to_dtype(&Layout::contiguous(s.clone()), dtype)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }
@@ -302,24 +342,24 @@ impl Tensor {
         lo: T,
         up: T,
         s: S,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         Self::rand_impl(lo, up, s, device, false)
     }
 
-    pub fn rand_like(&self, lo: f64, up: f64) -> Result<Self> {
-        Tensor::rand_f64_impl(lo, up, self.shape(), self.dtype(), self.device(), false)
+    pub fn rand_like<T: crate::FloatDType>(&self, lo: T, up: T) -> Result<Self> {
+        Tensor::rand(lo, up, self.shape(), self.device())
     }
 
     pub(crate) fn randn_impl<S: Into<Shape>, T: crate::FloatDType>(
         mean: T,
         std: T,
         s: S,
-        device: &Device,
+        device: &B::Device,
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_normal(mean, std, &s)?;
+        let storage = device.rand_normal(&s, T::DTYPE, mean, std)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }
@@ -329,24 +369,19 @@ impl Tensor {
         std: f64,
         s: S,
         dtype: DType,
-        device: &Device,
+        device: &B::Device,
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_normal_f64(mean, std, &s, dtype)?;
+        let storage = device
+            .rand_normal(&s, DType::F64, mean, std)?
+            .to_dtype(&Layout::contiguous(s.clone()), dtype)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }
 
-    pub fn randn_like(&self, mean: f64, stdev: f64) -> Result<Self> {
-        Tensor::randn_f64_impl(
-            mean,
-            stdev,
-            self.shape(),
-            self.dtype(),
-            self.device(),
-            false,
-        )
+    pub fn randn_like<T: crate::FloatDType>(&self, mean: T, stdev: T) -> Result<Self> {
+        Tensor::randn(mean, stdev, self.shape(), self.device())
     }
 
     /// Creates a new tensor initialized with values sampled from a normal distribution with the
@@ -355,7 +390,7 @@ impl Tensor {
         mean: T,
         std: T,
         s: S,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         Self::randn_impl(mean, std, s, device, false)
     }
@@ -363,7 +398,7 @@ impl Tensor {
     pub(crate) fn new_impl<A: crate::device::NdArray>(
         array: A,
         shape: Shape,
-        device: &Device,
+        device: &B::Device,
         is_variable: bool,
     ) -> Result<Self> {
         let n: usize = shape.elem_count();
@@ -371,21 +406,23 @@ impl Tensor {
         if buffer_size != n {
             return Err(Error::ShapeMismatch { buffer_size, shape }.bt());
         }
-        let storage = device.storage(array)?;
+        let storage = device.storage_from_cpu_storage(&array.to_cpu_storage())?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, is_variable))
     }
 
     /// Creates a new tensor on the specified device using the content and shape of the input.
-    pub fn new<A: crate::device::NdArray>(array: A, device: &Device) -> Result<Self> {
+    pub fn new<A: crate::device::NdArray>(array: A, device: &B::Device) -> Result<Self> {
         let shape = array.shape()?;
         Self::new_impl(array, shape, device, false)
     }
 
     /// Returns a new tensor with all the elements having the same specified value.
     ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::full(3.5, (2, 4), &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::full(3.5, (2, 4), &CpuDevice)?;
     ///
     /// assert_eq!(a.to_vec2::<f64>()?, &[
     ///     [3.5, 3.5, 3.5, 3.5],
@@ -395,7 +432,7 @@ impl Tensor {
     pub fn full<D: crate::WithDType, S: Into<Shape>>(
         value: D,
         shape: S,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         let none = BackpropOp::none();
         let shape = shape.into();
@@ -407,15 +444,17 @@ impl Tensor {
 
     /// Creates a new 1D tensor from an iterator.
     ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::from_iter( [1.0, 2.0, 3.0, 4.0].into_iter(), &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::from_iter( [1.0, 2.0, 3.0, 4.0].into_iter(), &CpuDevice)?;
     ///
     /// assert_eq!(a.to_vec1::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn from_iter<D: crate::WithDType>(
         iter: impl IntoIterator<Item = D>,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         let data = iter.into_iter().collect::<Vec<_>>();
         let len = data.len();
@@ -425,21 +464,25 @@ impl Tensor {
     /// Creates a new 1D tensor with values from the interval `[start, end)` taken with a common
     /// difference `1` from `start`.
     ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::arange(2., 5., &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::arange(2., 5., &CpuDevice)?;
     ///
     /// assert_eq!(a.to_vec1::<f64>()?, &[2., 3., 4.]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn arange<D: crate::WithDType>(start: D, end: D, device: &Device) -> Result<Self> {
+    pub fn arange<D: crate::WithDType>(start: D, end: D, device: &B::Device) -> Result<Self> {
         Self::arange_step(start, end, D::one(), device)
     }
 
     /// Creates a new 1D tensor with values from the interval `[start, end)` taken with a common
     /// difference `step` from `start`.
     ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::arange_step(2.0, 4.0, 0.5, &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::arange_step(2.0, 4.0, 0.5, &CpuDevice)?;
     ///
     /// assert_eq!(a.to_vec1::<f64>()?, &[2.0, 2.5, 3.0, 3.5]);
     /// # Ok::<(), candle_core::Error>(())
@@ -448,7 +491,7 @@ impl Tensor {
         start: D,
         end: D,
         step: D,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         if D::is_zero(&step) {
             bail!("step cannot be zero")
@@ -473,7 +516,7 @@ impl Tensor {
     pub(crate) fn from_vec_impl<S: ShapeWithOneHole, D: crate::WithDType>(
         data: Vec<D>,
         shape: S,
-        device: &Device,
+        device: &B::Device,
         is_variable: bool,
     ) -> Result<Self> {
         let shape = shape.into_shape(data.len())?;
@@ -486,8 +529,10 @@ impl Tensor {
     /// in this vector must be the same as the number of elements defined by the shape.
     /// If the device is cpu, no data copy is made.
     ///```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::from_vec(vec!{1., 2., 3., 4., 5., 6.}, (2, 3), &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::from_vec(vec!{1., 2., 3., 4., 5., 6.}, (2, 3), &CpuDevice)?;
     ///
     /// assert_eq!(a.to_vec2::<f64>()?, &[
     ///     [1., 2., 3.],
@@ -498,7 +543,7 @@ impl Tensor {
     pub fn from_vec<S: ShapeWithOneHole, D: crate::WithDType>(
         data: Vec<D>,
         shape: S,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         Self::from_vec_impl(data, shape, device, false)
     }
@@ -506,9 +551,11 @@ impl Tensor {
     /// Creates a new tensor initialized with values from the input slice. The number of elements
     /// in this vector must be the same as the number of elements defined by the shape.
     ///```rust
-    /// use candle_core::{Tensor, Device};
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
     /// let values = vec![1., 2., 3., 4., 5., 6., 7., 8.];
-    /// let a = Tensor::from_slice(&values[1..7], (2, 3), &Device::Cpu)?;
+    /// let a = Tensor::from_slice(&values[1..7], (2, 3), &CpuDevice)?;
     ///
     /// assert_eq!(a.to_vec2::<f64>()?, &[
     ///     [2., 3., 4.],
@@ -519,7 +566,7 @@ impl Tensor {
     pub fn from_slice<S: ShapeWithOneHole, D: crate::WithDType>(
         array: &[D],
         shape: S,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         let shape = shape.into_shape(array.len())?;
         let storage = device.storage_from_slice(array)?;
@@ -613,11 +660,7 @@ impl Tensor {
             let data = S::cpu_storage_as_slice(cpu_storage)?;
             Ok::<_, Error>(data[self.layout().start_offset()])
         };
-        match &*self.storage() {
-            Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
-            Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-        }
+        from_cpu_storage(&self.storage().to_cpu_storage()?)
     }
 
     /// An alias for `to_scalar`.
@@ -626,7 +669,7 @@ impl Tensor {
     }
 
     /// Repeat this tensor along the specified dimensions.
-    pub fn repeat<S: Into<Shape>>(&self, shape: S) -> Result<Tensor> {
+    pub fn repeat<S: Into<Shape>>(&self, shape: S) -> Result<Self> {
         // Similar to PyTorch, we extend the number of dimensions of self if needed.
         let repeats = shape.into();
         let repeats = repeats.dims();
@@ -657,9 +700,11 @@ impl Tensor {
     /// # Examples
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device, Shape};
-    /// let x = Tensor::new(&[1f32, 2., 3.], &Device::Cpu)?;
-    /// let y = Tensor::new(&[4f32, 5., 6.], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, Shape};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let x = Tensor::new(&[1f32, 2., 3.], &CpuDevice)?;
+    /// let y = Tensor::new(&[4f32, 5., 6.], &CpuDevice)?;
     ///
     /// let grids_xy = Tensor::meshgrid(&[&x, &y], true)?;
     ///
@@ -680,7 +725,7 @@ impl Tensor {
     ///
     /// * Will return `Err` if `args` contains less than 2 tensors.
     ///
-    pub fn meshgrid<A: AsRef<Tensor>>(args: &[A], xy_indexing: bool) -> Result<Vec<Self>> {
+    pub fn meshgrid<A: AsRef<Self>>(args: &[A], xy_indexing: bool) -> Result<Vec<Self>> {
         if args.len() <= 1 {
             Err(Error::OpRequiresAtLeastTwoTensors { op: "meshgrid" }.bt())?
         }
@@ -716,8 +761,10 @@ impl Tensor {
     /// be performed.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &CpuDevice)?;
     /// let a = a.affine(4., -2.)?;
     /// assert_eq!(a.to_vec2::<f32>()?, &[[-2.0, 2.0], [6.0, 10.0]]);
     /// # Ok::<(), candle_core::Error>(())
@@ -793,12 +840,14 @@ impl Tensor {
     /// Returns a new tensor that is a narrowed version of the input, the dimension `dim`
     /// ranges from `start` to `start + len`.
     /// ```
-    /// use candle_core::{Tensor, Device};
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
     /// let a = Tensor::new(&[
     ///     [0f32, 1., 2.],
     ///     [3.  , 4., 5.],
     ///     [6.  , 7., 8.]
-    /// ], &Device::Cpu)?;
+    /// ], &CpuDevice)?;
     ///
     /// let b = a.narrow(0, 1, 2)?;
     /// assert_eq!(b.shape().dims(), &[2, 3]);
@@ -918,11 +967,13 @@ impl Tensor {
     /// Elements that are shifted beyond the last position are re-introduced at the first position.
     ///
     /// ```rust
-    /// # use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let tensor = tensor.roll(1, 0)?;
     /// assert_eq!(tensor.to_vec2::<f32>()?, &[[4., 5.], [0., 1.], [2., 3.]]);
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let tensor = tensor.roll(-1, 0)?;
     /// assert_eq!(tensor.to_vec2::<f32>()?, &[[2., 3.], [4., 5.], [0., 1.]]);
     /// # Ok::<(), candle_core::Error>(())
@@ -950,8 +1001,10 @@ impl Tensor {
     /// that the number of elements for each dimension index in `sum_dims` is 1.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &CpuDevice)?;
     /// let s = a.sum_keepdim(0)?;
     /// assert_eq!(s.to_vec2::<f32>()?, &[[2., 4.]]);
     /// let s = a.sum_keepdim(1)?;
@@ -978,8 +1031,10 @@ impl Tensor {
     /// that the number of elements for each dimension index in `mean_dims` is 1.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &CpuDevice)?;
     /// let s = a.mean_keepdim(0)?;
     /// assert_eq!(s.to_vec2::<f32>()?, &[[1., 2.]]);
     /// let s = a.mean_keepdim(1)?;
@@ -1063,13 +1118,12 @@ impl Tensor {
     /// comparison operation is specified by the `op` argument.
     ///
     /// The returned tensor has the same shape as the original tensors and uses `u8` elements.
-    pub fn cmp<T: TensorOrScalar>(&self, rhs: T, op: CmpOp) -> Result<Self> {
+    pub fn cmp<T: TensorOrScalar<B>>(&self, rhs: T, op: CmpOp) -> Result<Self> {
         let rhs = match rhs.to_tensor_scalar()? {
             crate::scalar::TensorScalar::Tensor(rhs) => rhs,
-            crate::scalar::TensorScalar::Scalar(rhs) => rhs
-                .to_dtype(self.dtype())?
-                .to_device(self.device())?
-                .broadcast_as(self.shape())?,
+            crate::scalar::TensorScalar::Scalar(rhs) => {
+                rhs.to_dtype(self.dtype())?.broadcast_as(self.shape())?
+            }
         };
         let shape = self.same_shape_binary_op(&rhs, "cmp")?;
         let storage = self
@@ -1080,41 +1134,45 @@ impl Tensor {
     }
 
     /// Element-wise equality.
-    pub fn eq<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
+    pub fn eq<T: TensorOrScalar<B>>(&self, rhs: T) -> Result<Self> {
         self.cmp(rhs, CmpOp::Eq)
     }
 
     /// Element-wise non-equality.
-    pub fn ne<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
+    pub fn ne<T: TensorOrScalar<B>>(&self, rhs: T) -> Result<Self> {
         self.cmp(rhs, CmpOp::Ne)
     }
 
     /// Element-wise comparison with lower-than, the returned tensor uses value 1 where `self <
     /// rhs` and 0 otherwise.
-    pub fn lt<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
+    pub fn lt<T: TensorOrScalar<B>>(&self, rhs: T) -> Result<Self> {
         self.cmp(rhs, CmpOp::Lt)
     }
 
     /// Element-wise comparison with greater-than, the returned tensor uses value 1 where `self >
     /// rhs` and 0 otherwise.
-    pub fn gt<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
+    pub fn gt<T: TensorOrScalar<B>>(&self, rhs: T) -> Result<Self> {
         self.cmp(rhs, CmpOp::Gt)
     }
 
     /// Element-wise comparison with greater-equal, the returned tensor uses value 1 where `self >=
     /// rhs` and 0 otherwise.
-    pub fn ge<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
+    pub fn ge<T: TensorOrScalar<B>>(&self, rhs: T) -> Result<Self> {
         self.cmp(rhs, CmpOp::Ge)
     }
 
     /// Element-wise comparison with lower-equal, the returned tensor uses value 1 where `self <=
     /// rhs` and 0 otherwise.
-    pub fn le<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
+    pub fn le<T: TensorOrScalar<B>>(&self, rhs: T) -> Result<Self> {
         self.cmp(rhs, CmpOp::Le)
     }
 
     /// Clamp the tensor values to be between `min` and `max`.
-    pub fn clamp<T1: TensorOrScalar, T2: TensorOrScalar>(&self, min: T1, max: T2) -> Result<Self> {
+    pub fn clamp<T1: TensorOrScalar<B>, T2: TensorOrScalar<B>>(
+        &self,
+        min: T1,
+        max: T2,
+    ) -> Result<Self> {
         self.maximum(min)?.minimum(max)
     }
 
@@ -1243,9 +1301,11 @@ impl Tensor {
     ///
     /// # Example (vectors)
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let t1 = Tensor::new(&[1.0, 2.0, 3.0], &Device::Cpu)?;
-    /// let t2 = Tensor::new(&[4.0, 5.0, 6.0], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let t1 = Tensor::new(&[1.0, 2.0, 3.0], &CpuDevice)?;
+    /// let t2 = Tensor::new(&[4.0, 5.0, 6.0], &CpuDevice)?;
     /// let res = t1.dot(&t2)?;
     /// assert_eq!(res.to_scalar::<f64>()?, 32.);
     /// # Ok::<(), candle_core::Error>(())
@@ -1268,8 +1328,10 @@ impl Tensor {
     ///
     /// # Example
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let t = Tensor::new(&[[3., 4.], [0., 0.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let t = Tensor::new(&[[3., 4.], [0., 0.]], &CpuDevice)?;
     /// let norm = t.norm()?;
     /// assert_eq!(norm.to_scalar::<f64>()?, 5.);
     /// # Ok::<(), candle_core::Error>(())
@@ -1289,9 +1351,11 @@ impl Tensor {
     ///
     /// # Example
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let mat = Tensor::new(&[[1., 2., 3.], [4., 5., 6.]], &Device::Cpu)?;
-    /// let vec = Tensor::new(&[1., 1., 1.], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let mat = Tensor::new(&[[1., 2., 3.], [4., 5., 6.]], &CpuDevice)?;
+    /// let vec = Tensor::new(&[1., 1., 1.], &CpuDevice)?;
     /// let res = mat.mv(&vec)?;
     /// assert_eq!(res.to_vec1::<f64>()?, [6., 15.]);
     /// # Ok::<(), candle_core::Error>(())
@@ -1416,9 +1480,11 @@ impl Tensor {
     /// vocabulary size, and `h` the hidden size.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let values = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
-    /// let ids = Tensor::new(&[2u32, 1u32, 2u32], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let values = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
+    /// let ids = Tensor::new(&[2u32, 1u32, 2u32], &CpuDevice)?;
     /// let emb = values.embedding(&ids)?;
     /// assert_eq!(emb.to_vec2::<f32>()?, &[[4., 5.], [2., 3.], [4., 5.]]);
     /// # Ok::<(), candle_core::Error>(())
@@ -1516,7 +1582,7 @@ impl Tensor {
         self.storage()
             .copy_strided_src(&mut storage, 0, self.layout())?;
         let layout = Layout::contiguous(shape);
-        storage.scatter_add(
+        storage.scatter_add_set(
             &layout,
             &indexes.storage(),
             indexes.layout(),
@@ -1536,7 +1602,7 @@ impl Tensor {
         }
         let dim = dim.to_index(self.shape(), "scatter-add-set")?;
         self.scatter_checks(indexes, source, dim)?;
-        self.storage_mut().scatter_add(
+        self.storage_mut().scatter_add_set(
             self.layout(),
             &indexes.storage(),
             indexes.layout(),
@@ -1772,11 +1838,7 @@ impl Tensor {
             };
             Ok::<Vec<_>, Error>(data)
         };
-        match &*self.storage() {
-            Storage::Cpu(storage) => from_cpu_storage(storage),
-            Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-        }
+        from_cpu_storage(&self.storage().to_cpu_storage()?)
     }
 
     /// Returns the data contained in a 2D tensor as a vector of vector of scalar values.
@@ -1803,11 +1865,7 @@ impl Tensor {
             }
             Ok(rows)
         };
-        match &*self.storage() {
-            Storage::Cpu(storage) => from_cpu_storage(storage),
-            Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-        }
+        from_cpu_storage(&self.storage().to_cpu_storage()?)
     }
 
     /// Returns the data contained in a 3D tensor.
@@ -1844,11 +1902,7 @@ impl Tensor {
             }
             Ok(top_rows)
         };
-        match &*self.storage() {
-            Storage::Cpu(storage) => from_cpu_storage(storage),
-            Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
-        }
+        from_cpu_storage(&self.storage().to_cpu_storage()?)
     }
 
     /// The dtype for the elements stored in the input tensor.
@@ -1857,7 +1911,7 @@ impl Tensor {
     }
 
     /// The device on which the input tensor is located.
-    pub fn device(&self) -> &Device {
+    pub fn device(&self) -> &B::Device {
         &self.device
     }
 
@@ -1908,7 +1962,7 @@ impl Tensor {
         self.is_variable
     }
 
-    pub(crate) fn op(&self) -> &Option<Op> {
+    pub(crate) fn op(&self) -> &Option<Op<B>> {
         &self.op
     }
 
@@ -1916,13 +1970,15 @@ impl Tensor {
     /// scalar with zero dimensions.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let tensor = tensor.max_all()?;
     /// assert_eq!(tensor.to_scalar::<f32>()?, 5.);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn max_all(&self) -> Result<Tensor> {
+    pub fn max_all(&self) -> Result<Self> {
         if self.rank() == 0 {
             Ok(self.clone())
         } else {
@@ -1934,13 +1990,15 @@ impl Tensor {
     /// scalar with zero dimensions.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let tensor = tensor.min_all()?;
     /// assert_eq!(tensor.to_scalar::<f32>()?, 0.);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn min_all(&self) -> Result<Tensor> {
+    pub fn min_all(&self) -> Result<Self> {
         if self.rank() == 0 {
             Ok(self.clone())
         } else {
@@ -1952,18 +2010,20 @@ impl Tensor {
     /// scalar with zero dimensions.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let tensor = tensor.sum_all()?;
     /// assert_eq!(tensor.to_scalar::<f32>()?, 15.);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn sum_all(&self) -> Result<Tensor> {
+    pub fn sum_all(&self) -> Result<Self> {
         let dims: Vec<_> = (0..self.rank()).collect();
         self.sum(dims)
     }
 
-    pub fn mean_all(&self) -> Result<Tensor> {
+    pub fn mean_all(&self) -> Result<Self> {
         self.sum_all()? / self.elem_count() as f64
     }
 
@@ -1971,7 +2031,7 @@ impl Tensor {
         &self,
         start_dim: Option<D1>,
         end_dim: Option<D2>,
-    ) -> Result<Tensor> {
+    ) -> Result<Self> {
         if self.rank() == 0 {
             self.reshape(1)
         } else {
@@ -1999,46 +2059,50 @@ impl Tensor {
 
     /// Flattens the input tensor on the dimension indexes from `start_dim` to `end_dim` (both
     /// inclusive).
-    pub fn flatten<D1: Dim, D2: Dim>(&self, start_dim: D1, end_dim: D2) -> Result<Tensor> {
+    pub fn flatten<D1: Dim, D2: Dim>(&self, start_dim: D1, end_dim: D2) -> Result<Self> {
         self.flatten_(Some(start_dim), Some(end_dim))
     }
 
     /// Flattens the input tensor on the dimension indexes from `0` to `end_dim` (inclusive).
-    pub fn flatten_to<D: Dim>(&self, end_dim: D) -> Result<Tensor> {
+    pub fn flatten_to<D: Dim>(&self, end_dim: D) -> Result<Self> {
         self.flatten_(None::<usize>, Some(end_dim))
     }
 
     /// Flattens the input tensor on the dimension indexes from `start_dim` (inclusive) to the last
     /// dimension.
-    pub fn flatten_from<D: Dim>(&self, start_dim: D) -> Result<Tensor> {
+    pub fn flatten_from<D: Dim>(&self, start_dim: D) -> Result<Self> {
         self.flatten_(Some(start_dim), None::<usize>)
     }
 
     /// Flattens the input tensor by reshaping it into a one dimension tensor.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let tensor = tensor.flatten_all()?;
     /// assert_eq!(tensor.to_vec1::<f32>()?, &[0., 1., 2., 3., 4., 5.]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn flatten_all(&self) -> Result<Tensor> {
+    pub fn flatten_all(&self) -> Result<Self> {
         self.flatten_(None::<usize>, None::<usize>)
     }
 
     /// Returns the sub-tensor fixing the index at `i` on the first dimension.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let t = tensor.get(0)?;
     /// assert_eq!(t.to_vec1::<f32>()?, &[0., 1.]);
     /// let t = tensor.get(1)?;
     /// assert_eq!(t.to_vec1::<f32>()?, &[2., 3.]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn get(&self, i: usize) -> Result<Tensor> {
+    pub fn get(&self, i: usize) -> Result<Self> {
         let dims = self.dims();
         if dims.is_empty() {
             Ok(self.clone())
@@ -2050,8 +2114,10 @@ impl Tensor {
     /// Returns the sub-tensor fixing the index at `index` on the dimension `dim`.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let t = tensor.get_on_dim(1, 0)?;
     /// assert_eq!(t.to_vec1::<f32>()?, &[0., 2., 4.]);
     /// let t = tensor.get_on_dim(1, 1)?;
@@ -2060,7 +2126,7 @@ impl Tensor {
     /// assert_eq!(t.to_vec1::<f32>()?, &[2., 3.]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn get_on_dim<D: Dim>(&self, dim: D, index: usize) -> Result<Tensor> {
+    pub fn get_on_dim<D: Dim>(&self, dim: D, index: usize) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "get_on_dim")?;
         self.narrow(dim, index, 1)?.squeeze(dim)
     }
@@ -2069,13 +2135,15 @@ impl Tensor {
     /// input are swapped.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &CpuDevice)?;
     /// let tensor = tensor.t()?;
     /// assert_eq!(tensor.to_vec2::<f32>()?, &[[0.0, 2.0, 4.0], [1.0, 3.0, 5.0]]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn t(&self) -> Result<Tensor> {
+    pub fn t(&self) -> Result<Self> {
         let rank = self.rank();
         if rank < 2 {
             Err(Error::UnexpectedNumberOfDims {
@@ -2090,7 +2158,7 @@ impl Tensor {
 
     /// Returns a tensor that is a transposed version of the input, the given dimensions are
     /// swapped.
-    pub fn transpose<D1: Dim, D2: Dim>(&self, dim1: D1, dim2: D2) -> Result<Tensor> {
+    pub fn transpose<D1: Dim, D2: Dim>(&self, dim1: D1, dim2: D2) -> Result<Self> {
         let dim1 = dim1.to_index(self.shape(), "transpose")?;
         let dim2 = dim2.to_index(self.shape(), "transpose")?;
         if dim1 == dim2 {
@@ -2113,14 +2181,16 @@ impl Tensor {
     /// dims must be a permutation, i.e. include each dimension index exactly once.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::arange(0u32, 120u32, &Device::Cpu)?.reshape((2, 3, 4, 5))?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::arange(0u32, 120u32, &CpuDevice)?.reshape((2, 3, 4, 5))?;
     /// assert_eq!(tensor.dims(), &[2, 3, 4, 5]);
     /// let tensor = tensor.permute((2, 3, 1, 0))?;
     /// assert_eq!(tensor.dims(), &[4, 5, 3, 2]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn permute<D: Dims>(&self, dims: D) -> Result<Tensor> {
+    pub fn permute<D: Dims>(&self, dims: D) -> Result<Self> {
         let dims = dims.to_indexes(self.shape(), "permute")?;
         // O(n^2) permutation check but these arrays are small.
         let is_permutation =
@@ -2157,7 +2227,7 @@ impl Tensor {
 
     /// Compared to clone, this copies the actual storage but may fail because of running out of
     /// memory.
-    pub fn copy(&self) -> Result<Tensor> {
+    pub fn copy(&self) -> Result<Self> {
         let op = BackpropOp::new1(self, Op::Copy);
         let tensor_ = Tensor_ {
             id: TensorId::new(),
@@ -2175,7 +2245,7 @@ impl Tensor {
     /// this new node. The storage of this tensor is shared with the initial tensor.
     ///
     /// If the tensor is already detached from the computation graph, the same tensor is returned.
-    pub fn detach(&self) -> Tensor {
+    pub fn detach(&self) -> Self {
         if self.op.is_none() && !self.is_variable {
             self.clone()
         } else {
@@ -2193,46 +2263,55 @@ impl Tensor {
     }
 
     /// If the target device is the same as the tensor device, only a shallow copy is performed.
-    pub fn to_device(&self, device: &Device) -> Result<Tensor> {
-        if self.device().same_device(device) {
-            Ok(self.clone())
-        } else {
-            let storage = match (&*self.storage(), device) {
-                (Storage::Cpu(storage), Device::Cuda(cuda)) => {
-                    Storage::Cuda(cuda.storage_from_cpu_storage(storage)?)
-                }
-                (Storage::Cpu(storage), Device::Metal(metal)) => {
-                    Storage::Metal(metal.storage_from_cpu_storage(storage)?)
-                }
-                (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
-                (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
-                (Storage::Cuda(storage), Device::Cuda(cuda)) => {
-                    // TODO: Avoid passing through the cpu storage here, especially if the gpu ids
-                    // are the same.
-                    let cpu_storage = storage.to_cpu_storage()?;
-                    Storage::Cuda(cuda.storage_from_cpu_storage(&cpu_storage)?)
-                }
-                (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
-                _ => {
-                    bail!(
-                        "not implemented yet, self.device: {:?}, device: {:?}",
-                        self.device(),
-                        device
-                    )
-                }
-            };
-            let op = BackpropOp::new1(self, Op::ToDevice);
-            let tensor_ = Tensor_ {
-                id: TensorId::new(),
-                storage: Arc::new(RwLock::new(storage)),
-                layout: self.layout.clone(),
-                op,
-                is_variable: false,
-                dtype: self.dtype,
-                device: device.clone(),
-            };
-            Ok(Tensor(Arc::new(tensor_)))
-        }
+    pub fn to_device<U>(&self, device: &U::Device) -> Result<Tensor<U>>
+    where
+        U: BackendStorage + TryConvertStorage<B>,
+    {
+        let storage = self.storage().clone();
+        let storage = U::convert(storage, device)?;
+        let op = BackpropOp::none();
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: Arc::new(RwLock::new(storage)),
+            layout: self.layout.clone(),
+            op,
+            is_variable: false,
+            dtype: self.dtype,
+            device: device.clone(),
+        };
+        Ok(Tensor(Arc::new(tensor_)))
+    }
+
+    /// If the tensor is cpu only a shallow copy is performed.
+    pub fn to_cpu(&self) -> Result<Tensor<crate::CpuStorage>> {
+        let storage = self.storage().clone().to_cpu_storage()?;
+        let op = BackpropOp::none();
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: Arc::new(RwLock::new(storage)),
+            layout: self.layout.clone(),
+            op,
+            is_variable: false,
+            dtype: self.dtype,
+            device: crate::CpuDevice,
+        };
+        Ok(Tensor(Arc::new(tensor_)))
+    }
+
+    /// If the tensor is cpu only a shallow copy is performed.
+    pub fn from_cpu(tensor: Tensor<crate::CpuStorage>, device: &B::Device) -> Result<Self> {
+        let storage = device.storage_from_cpu_storage(&tensor.storage())?;
+        let op = BackpropOp::none();
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: Arc::new(RwLock::new(storage)),
+            layout: tensor.layout.clone(),
+            op,
+            is_variable: false,
+            dtype: tensor.dtype,
+            device: device.clone(),
+        };
+        Ok(Tensor(Arc::new(tensor_)))
     }
 
     /// Returns a new tensor duplicating data from the original tensor. New dimensions are inserted
@@ -2272,8 +2351,10 @@ impl Tensor {
     /// Casts the input tensor to the target `dtype`.
     ///
     /// ```rust
-    /// use candle_core::{Tensor, Device};
-    /// let tensor = Tensor::new(3.14159265358979f64, &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let tensor = Tensor::new(3.14159265358979f64, &CpuDevice)?;
     /// assert_eq!(tensor.to_scalar::<f64>()?, 3.14159265358979);
     /// let tensor = tensor.to_dtype(candle_core::DType::F32)?;
     /// assert_eq!(tensor.to_scalar::<f32>()?, 3.1415927);
@@ -2292,7 +2373,7 @@ impl Tensor {
 
     /// Returns a tensor that is in row major order. This is the same as the original tensor if it
     /// was already contiguous, otherwise a copy is triggered.
-    pub fn contiguous(&self) -> Result<Tensor> {
+    pub fn contiguous(&self) -> Result<Self> {
         if self.is_contiguous() {
             Ok(self.clone())
         } else {
@@ -2306,7 +2387,7 @@ impl Tensor {
     }
 
     /// Returns a tensor that is in row major order. This always makes a copy.
-    pub fn force_contiguous(&self) -> Result<Tensor> {
+    pub fn force_contiguous(&self) -> Result<Self> {
         let shape = self.shape();
         let mut storage = unsafe { self.device().alloc_uninit(shape, self.dtype())? };
         self.storage()
@@ -2317,7 +2398,7 @@ impl Tensor {
 
     /// Create a variable based on the values currently stored in a tensor. The storage is always
     /// copied.
-    pub(crate) fn make_var(&self) -> Result<Tensor> {
+    pub(crate) fn make_var(&self) -> Result<Self> {
         let shape = self.shape().clone();
         let mut storage = unsafe { self.device().alloc_uninit(&shape, self.dtype())? };
         self.storage()
@@ -2335,8 +2416,10 @@ impl Tensor {
     /// as to match the number of elements in the tensor.
     ///
     /// ```rust
-    /// # use candle_core::{Tensor, DType, Device, D};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, DType, D};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
     ///
     /// let c = a.reshape((1, 6))?;
     /// assert_eq!(c.shape().dims(), &[1, 6]);
@@ -2349,7 +2432,7 @@ impl Tensor {
     ///
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn reshape<S: ShapeWithOneHole>(&self, s: S) -> Result<Tensor> {
+    pub fn reshape<S: ShapeWithOneHole>(&self, s: S) -> Result<Self> {
         let shape = s.into_shape(self.elem_count())?;
         if shape.elem_count() != self.elem_count() {
             return Err(Error::ShapeMismatchBinaryOp {
@@ -2382,8 +2465,10 @@ impl Tensor {
     /// Creates a new tensor with the specified dimension removed if its size was one.
     ///
     /// ```rust
-    /// # use candle_core::{Tensor, DType, Device, D};
-    /// let a = Tensor::zeros((2, 3, 1), DType::F32, &Device::Cpu)?;
+    /// use candle_core::{CpuStorage, CpuDevice, DType, D};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3, 1), DType::F32, &CpuDevice)?;
     ///
     /// let c = a.squeeze(2)?;
     /// assert_eq!(c.shape().dims(), &[2, 3]);
@@ -2420,8 +2505,10 @@ impl Tensor {
     /// Creates a new tensor with a dimension of size one inserted at the specified position.
     ///
     /// ```rust
-    /// # use candle_core::{Tensor, DType, Device, D};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// # use candle_core::{CpuStorage, CpuDevice, DType, D};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
     ///
     /// let c = a.unsqueeze(0)?;
     /// assert_eq!(c.shape().dims(), &[1, 2, 3]);
@@ -2457,9 +2544,11 @@ impl Tensor {
     /// All tensors must have the same rank, and the output has one additional rank
     ///
     /// ```rust
-    /// # use candle_core::{Tensor, DType, Device};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
-    /// let b = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// # use candle_core::{CpuStorage, CpuDevice, DType};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let a = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
+    /// let b = Tensor::zeros((2, 3), DType::F32, &CpuDevice)?;
     ///
     /// let c = Tensor::stack(&[&a, &b], 0)?;
     /// assert_eq!(c.shape().dims(), &[2, 2, 3]);
@@ -2468,7 +2557,7 @@ impl Tensor {
     /// assert_eq!(c.shape().dims(), &[2, 3, 2]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn stack<A: AsRef<Tensor>, D: Dim>(args: &[A], dim: D) -> Result<Self> {
+    pub fn stack<A: AsRef<Self>, D: Dim>(args: &[A], dim: D) -> Result<Self> {
         if args.is_empty() {
             Err(Error::OpRequiresAtLeastOneTensor { op: "stack" }.bt())?
         }
@@ -2549,41 +2638,39 @@ impl Tensor {
     }
 
     /// Run the `forward` method of `m` on `self`.
-    pub fn apply<M: crate::Module>(&self, m: &M) -> Result<Self> {
+    pub fn apply<M: crate::Module<B>>(&self, m: &M) -> Result<Self> {
         m.forward(self)
     }
 
     /// Run the `forward` method of `m` on `self`.
-    pub fn apply_t<M: crate::ModuleT>(&self, m: &M, train: bool) -> Result<Self> {
+    pub fn apply_t<M: crate::ModuleT<B>>(&self, m: &M, train: bool) -> Result<Self> {
         m.forward_t(self, train)
     }
 
-    pub(crate) fn storage(&self) -> std::sync::RwLockReadGuard<'_, Storage> {
+    pub(crate) fn storage(&self) -> std::sync::RwLockReadGuard<'_, B> {
         self.storage.read().unwrap()
     }
 
-    pub(crate) fn storage_mut(&self) -> std::sync::RwLockWriteGuard<'_, Storage> {
+    pub(crate) fn storage_mut(&self) -> std::sync::RwLockWriteGuard<'_, B> {
         self.storage.write().unwrap()
     }
 
     // If we extend the visibility of this function to be usable outside of this crate, we should
     // make it unsafe.
-    pub(crate) fn storage_mut_and_layout(
-        &self,
-    ) -> (std::sync::RwLockWriteGuard<'_, Storage>, &Layout) {
+    pub(crate) fn storage_mut_and_layout(&self) -> (std::sync::RwLockWriteGuard<'_, B>, &Layout) {
         let storage = self.storage.write().unwrap();
         (storage, &self.layout)
     }
 
     /// The storage used by this tensor, together with the layout to use to access it safely.
-    pub fn storage_and_layout(&self) -> (std::sync::RwLockReadGuard<'_, Storage>, &Layout) {
+    pub fn storage_and_layout(&self) -> (std::sync::RwLockReadGuard<'_, B>, &Layout) {
         let storage = self.storage.read().unwrap();
         (storage, &self.layout)
     }
 
     pub(crate) fn same_storage(&self, rhs: &Self) -> bool {
-        let lhs: &RwLock<Storage> = self.storage.as_ref();
-        let rhs: &RwLock<Storage> = rhs.storage.as_ref();
+        let lhs: &RwLock<B> = self.storage.as_ref();
+        let rhs: &RwLock<B> = rhs.storage.as_ref();
         std::ptr::eq(lhs, rhs)
     }
 
@@ -2605,7 +2692,7 @@ impl Tensor {
     }
 
     /// Returns a lower triangular matrix of ones of size n by n.
-    pub fn tril2(n: usize, dtype: DType, device: &Device) -> Result<Self> {
+    pub fn tril2(n: usize, dtype: DType, device: &B::Device) -> Result<Self> {
         let t = Tensor::arange(0u32, n as u32, device)?;
         let t1 = t.reshape((1, n))?.broadcast_as((n, n))?;
         let t2 = t.reshape((n, 1))?.broadcast_as((n, n))?;
@@ -2613,7 +2700,7 @@ impl Tensor {
     }
 
     /// Returns an upper triangular matrix of ones of size n by n.
-    pub fn triu2(n: usize, dtype: DType, device: &Device) -> Result<Self> {
+    pub fn triu2(n: usize, dtype: DType, device: &B::Device) -> Result<Self> {
         let t = Tensor::arange(0u32, n as u32, device)?;
         let t1 = t.reshape((1, n))?.broadcast_as((n, n))?;
         let t2 = t.reshape((n, 1))?.broadcast_as((n, n))?;
@@ -2621,7 +2708,7 @@ impl Tensor {
     }
 
     /// Returns a matrix with a diagonal of ones of size n by n.
-    pub fn eye(n: usize, dtype: DType, device: &Device) -> Result<Self> {
+    pub fn eye(n: usize, dtype: DType, device: &B::Device) -> Result<Self> {
         let t = Tensor::arange(0u32, n as u32, device)?;
         let t1 = t.reshape((1, n))?.broadcast_as((n, n))?;
         let t2 = t.reshape((n, 1))?.broadcast_as((n, n))?;
@@ -2655,7 +2742,7 @@ impl Tensor {
     pub fn slice_assign<D: std::ops::RangeBounds<usize>>(
         &self,
         ranges: &[D],
-        src: &Tensor,
+        src: &Self,
     ) -> Result<Self> {
         let src_dims = src.dims();
         let self_dims = self.dims();
@@ -2724,12 +2811,12 @@ impl Tensor {
     }
 
     /// Pointwise pow operation.
-    pub fn pow(&self, rhs: &Tensor) -> Result<Self> {
+    pub fn pow(&self, rhs: &Self) -> Result<Self> {
         rhs.mul(&self.log()?)?.exp()
     }
 
     /// Broadcasting version of `pow`.
-    pub fn broadcast_pow(&self, rhs: &Tensor) -> Result<Self> {
+    pub fn broadcast_pow(&self, rhs: &Self) -> Result<Self> {
         rhs.broadcast_mul(&self.log()?)?.exp()
     }
 
@@ -2737,15 +2824,17 @@ impl Tensor {
     /// This function makes a copy of the tensor’s data.
     ///
     /// ```rust
-    /// # use candle_core::{Tensor, Device};
-    /// let t = Tensor::arange(0., 6., &Device::Cpu)?.reshape((2, 3))?;
+    /// use candle_core::{CpuStorage, CpuDevice};
+    /// type Tensor = candle_core::Tensor<CpuStorage>;
+    ///
+    /// let t = Tensor::arange(0., 6., &CpuDevice)?.reshape((2, 3))?;
     /// assert_eq!(t.to_vec2::<f64>()?, &[[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]);
     /// let t_flipped = t.flip(&[0])?;
     /// assert_eq!(t_flipped.to_vec2::<f64>()?, &[[3.0, 4.0, 5.0], [0.0, 1.0, 2.0]]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn flip(&self, dims: &[usize]) -> Result<Tensor> {
-        let mut result = self.clone();
+    pub fn flip(&self, dims: &[usize]) -> Result<Self> {
+        let mut result: Self = self.clone();
         for &dim in dims.iter() {
             let size = result.dim(dim)?;
             let indices: Vec<i64> = (0..size).rev().map(|x| x as i64).collect();
@@ -2758,64 +2847,76 @@ impl Tensor {
 
 macro_rules! bin_trait {
     ($trait:ident, $fn1:ident, $mul:expr, $add:expr) => {
-        impl<B: std::borrow::Borrow<Tensor>> std::ops::$trait<B> for Tensor {
-            type Output = Result<Tensor>;
+        impl<S: BackendStorage, B: std::borrow::Borrow<Tensor<S>>> std::ops::$trait<B>
+            for Tensor<S>
+        {
+            type Output = Result<Self>;
 
             fn $fn1(self, rhs: B) -> Self::Output {
                 Tensor::$fn1(&self, rhs.borrow())
             }
         }
 
-        impl<B: std::borrow::Borrow<Tensor>> std::ops::$trait<B> for &Tensor {
-            type Output = Result<Tensor>;
+        impl<S: BackendStorage, B: std::borrow::Borrow<Tensor<S>>> std::ops::$trait<B>
+            for &Tensor<S>
+        {
+            type Output = Result<Tensor<S>>;
 
             fn $fn1(self, rhs: B) -> Self::Output {
                 Tensor::$fn1(&self, rhs.borrow())
             }
         }
 
-        impl<B: std::borrow::Borrow<Tensor>> std::ops::$trait<Tensor> for Result<B> {
-            type Output = Result<Tensor>;
+        impl<S: BackendStorage, B: std::borrow::Borrow<Tensor<S>>> std::ops::$trait<Tensor<S>>
+            for Result<B>
+        {
+            type Output = Result<Tensor<S>>;
 
-            fn $fn1(self, rhs: Tensor) -> Self::Output {
+            fn $fn1(self, rhs: Tensor<S>) -> Self::Output {
                 Tensor::$fn1(self?.borrow(), &rhs)
             }
         }
 
-        impl<B: std::borrow::Borrow<Tensor>> std::ops::$trait<&Tensor> for Result<B> {
-            type Output = Result<Tensor>;
+        impl<S: BackendStorage, B: std::borrow::Borrow<Tensor<S>>> std::ops::$trait<&Tensor<S>>
+            for Result<B>
+        {
+            type Output = Result<Tensor<S>>;
 
-            fn $fn1(self, rhs: &Tensor) -> Self::Output {
+            fn $fn1(self, rhs: &Tensor<S>) -> Self::Output {
                 Tensor::$fn1(self?.borrow(), rhs)
             }
         }
 
-        impl<B: std::borrow::Borrow<Tensor>> std::ops::$trait<Result<B>> for Tensor {
-            type Output = Result<Tensor>;
+        impl<S: BackendStorage, B: std::borrow::Borrow<Tensor<S>>> std::ops::$trait<Result<B>>
+            for Tensor<S>
+        {
+            type Output = Result<Self>;
 
             fn $fn1(self, rhs: Result<B>) -> Self::Output {
                 Tensor::$fn1(&self, rhs?.borrow())
             }
         }
 
-        impl<B: std::borrow::Borrow<Tensor>> std::ops::$trait<Result<B>> for &Tensor {
-            type Output = Result<Tensor>;
+        impl<S: BackendStorage, B: std::borrow::Borrow<Tensor<S>>> std::ops::$trait<Result<B>>
+            for &Tensor<S>
+        {
+            type Output = Result<Tensor<S>>;
 
             fn $fn1(self, rhs: Result<B>) -> Self::Output {
                 Tensor::$fn1(&self, rhs?.borrow())
             }
         }
 
-        impl std::ops::$trait<f64> for Tensor {
-            type Output = Result<Tensor>;
+        impl<S: BackendStorage> std::ops::$trait<f64> for Tensor<S> {
+            type Output = Result<Self>;
 
             fn $fn1(self, rhs: f64) -> Self::Output {
                 self.affine($mul(rhs), $add(rhs))
             }
         }
 
-        impl std::ops::$trait<f64> for &Tensor {
-            type Output = Result<Tensor>;
+        impl<S: BackendStorage> std::ops::$trait<f64> for &Tensor<S> {
+            type Output = Result<Tensor<S>>;
 
             fn $fn1(self, rhs: f64) -> Self::Output {
                 self.affine($mul(rhs), $add(rhs))
@@ -2829,68 +2930,68 @@ bin_trait!(Sub, sub, |_| 1., |v: f64| -v);
 bin_trait!(Mul, mul, |v| v, |_| 0.);
 bin_trait!(Div, div, |v| 1. / v, |_| 0.);
 
-impl std::ops::Add<Tensor> for f64 {
-    type Output = Result<Tensor>;
+impl<B: BackendStorage> std::ops::Add<Tensor<B>> for f64 {
+    type Output = Result<Tensor<B>>;
 
-    fn add(self, rhs: Tensor) -> Self::Output {
+    fn add(self, rhs: Tensor<B>) -> Self::Output {
         rhs + self
     }
 }
 
-impl std::ops::Add<&Tensor> for f64 {
-    type Output = Result<Tensor>;
+impl<B: BackendStorage> std::ops::Add<&Tensor<B>> for f64 {
+    type Output = Result<Tensor<B>>;
 
-    fn add(self, rhs: &Tensor) -> Self::Output {
+    fn add(self, rhs: &Tensor<B>) -> Self::Output {
         rhs + self
     }
 }
 
-impl std::ops::Mul<Tensor> for f64 {
-    type Output = Result<Tensor>;
+impl<B: BackendStorage> std::ops::Mul<Tensor<B>> for f64 {
+    type Output = Result<Tensor<B>>;
 
-    fn mul(self, rhs: Tensor) -> Self::Output {
+    fn mul(self, rhs: Tensor<B>) -> Self::Output {
         rhs * self
     }
 }
 
-impl std::ops::Mul<&Tensor> for f64 {
-    type Output = Result<Tensor>;
+impl<B: BackendStorage> std::ops::Mul<&Tensor<B>> for f64 {
+    type Output = Result<Tensor<B>>;
 
-    fn mul(self, rhs: &Tensor) -> Self::Output {
+    fn mul(self, rhs: &Tensor<B>) -> Self::Output {
         rhs * self
     }
 }
 
-impl std::ops::Sub<Tensor> for f64 {
-    type Output = Result<Tensor>;
+impl<B: BackendStorage> std::ops::Sub<Tensor<B>> for f64 {
+    type Output = Result<Tensor<B>>;
 
-    fn sub(self, rhs: Tensor) -> Self::Output {
+    fn sub(self, rhs: Tensor<B>) -> Self::Output {
         rhs.affine(-1., self)
     }
 }
 
-impl std::ops::Sub<&Tensor> for f64 {
-    type Output = Result<Tensor>;
+impl<B: BackendStorage> std::ops::Sub<&Tensor<B>> for f64 {
+    type Output = Result<Tensor<B>>;
 
-    fn sub(self, rhs: &Tensor) -> Self::Output {
+    fn sub(self, rhs: &Tensor<B>) -> Self::Output {
         rhs.affine(-1., self)
     }
 }
 
-impl std::ops::Div<Tensor> for f64 {
-    type Output = Result<Tensor>;
+impl<B: BackendStorage> std::ops::Div<Tensor<B>> for f64 {
+    type Output = Result<Tensor<B>>;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
-    fn div(self, rhs: Tensor) -> Self::Output {
+    fn div(self, rhs: Tensor<B>) -> Self::Output {
         rhs.recip()? * self
     }
 }
 
-impl std::ops::Div<&Tensor> for f64 {
-    type Output = Result<Tensor>;
+impl<B: BackendStorage> std::ops::Div<&Tensor<B>> for f64 {
+    type Output = Result<Tensor<B>>;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
-    fn div(self, rhs: &Tensor) -> Self::Output {
+    fn div(self, rhs: &Tensor<B>) -> Self::Output {
         rhs.recip()? * self
     }
 }

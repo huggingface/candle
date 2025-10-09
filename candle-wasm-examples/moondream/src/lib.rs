@@ -1,4 +1,10 @@
+use candle::{CpuStorage, QCpuStorage};
 use wasm_bindgen::prelude::*;
+
+pub type Tensor = candle::Tensor<CpuStorage>;
+pub type MoonDream = candle_transformers::models::moondream::Model<CpuStorage>;
+pub type QMoonDream = candle_transformers::models::quantized_moondream::Model<QCpuStorage>;
+pub type QVarBuilder = candle_transformers::quantized_var_builder::VarBuilder<QCpuStorage>;
 
 #[wasm_bindgen]
 extern "C" {

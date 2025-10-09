@@ -1,4 +1,4 @@
-use candle::{Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 
 pub struct Batcher<I> {
     inner: I,
@@ -26,48 +26,50 @@ impl<I> Batcher<I> {
     }
 }
 
-pub struct Iter1<I: Iterator<Item = Tensor>> {
+pub struct Iter1<B: BackendStorage, I: Iterator<Item = Tensor<B>>> {
     inner: I,
 }
 
-pub struct Iter2<I: Iterator<Item = (Tensor, Tensor)>> {
+pub struct Iter2<B: BackendStorage, I: Iterator<Item = (Tensor<B>, Tensor<B>)>> {
     inner: I,
 }
 
-impl<I: Iterator<Item = Tensor>> Batcher<Iter1<I>> {
+impl<B: BackendStorage, I: Iterator<Item = Tensor<B>>> Batcher<Iter1<B, I>> {
     pub fn new1(inner: I) -> Self {
         Self::new(Iter1 { inner })
     }
 }
 
-impl<I: Iterator<Item = (Tensor, Tensor)>> Batcher<Iter2<I>> {
+impl<B: BackendStorage, I: Iterator<Item = (Tensor<B>, Tensor<B>)>> Batcher<Iter2<B, I>> {
     pub fn new2(inner: I) -> Self {
         Self::new(Iter2 { inner })
     }
 }
 
-pub struct IterResult1<I: Iterator<Item = Result<Tensor>>> {
+pub struct IterResult1<B: BackendStorage, I: Iterator<Item = Result<Tensor<B>>>> {
     inner: I,
 }
 
-pub struct IterResult2<I: Iterator<Item = Result<(Tensor, Tensor)>>> {
+pub struct IterResult2<B: BackendStorage, I: Iterator<Item = Result<(Tensor<B>, Tensor<B>)>>> {
     inner: I,
 }
 
-impl<I: Iterator<Item = Result<Tensor>>> Batcher<IterResult1<I>> {
+impl<B: BackendStorage, I: Iterator<Item = Result<Tensor<B>>>> Batcher<IterResult1<B, I>> {
     pub fn new_r1(inner: I) -> Self {
         Self::new(IterResult1 { inner })
     }
 }
 
-impl<I: Iterator<Item = Result<(Tensor, Tensor)>>> Batcher<IterResult2<I>> {
+impl<B: BackendStorage, I: Iterator<Item = Result<(Tensor<B>, Tensor<B>)>>>
+    Batcher<IterResult2<B, I>>
+{
     pub fn new_r2(inner: I) -> Self {
         Self::new(IterResult2 { inner })
     }
 }
 
-impl<I: Iterator<Item = Tensor>> Iterator for Batcher<Iter1<I>> {
-    type Item = Result<Tensor>;
+impl<B: BackendStorage, I: Iterator<Item = Tensor<B>>> Iterator for Batcher<Iter1<B, I>> {
+    type Item = Result<Tensor<B>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut items = Vec::with_capacity(self.batch_size);
@@ -89,8 +91,10 @@ impl<I: Iterator<Item = Tensor>> Iterator for Batcher<Iter1<I>> {
     }
 }
 
-impl<I: Iterator<Item = (Tensor, Tensor)>> Iterator for Batcher<Iter2<I>> {
-    type Item = Result<(Tensor, Tensor)>;
+impl<B: BackendStorage, I: Iterator<Item = (Tensor<B>, Tensor<B>)>> Iterator
+    for Batcher<Iter2<B, I>>
+{
+    type Item = Result<(Tensor<B>, Tensor<B>)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut xs = Vec::with_capacity(self.batch_size);
@@ -115,8 +119,10 @@ impl<I: Iterator<Item = (Tensor, Tensor)>> Iterator for Batcher<Iter2<I>> {
     }
 }
 
-impl<I: Iterator<Item = Result<Tensor>>> Iterator for Batcher<IterResult1<I>> {
-    type Item = Result<Tensor>;
+impl<B: BackendStorage, I: Iterator<Item = Result<Tensor<B>>>> Iterator
+    for Batcher<IterResult1<B, I>>
+{
+    type Item = Result<Tensor<B>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut items = Vec::with_capacity(self.batch_size);
@@ -134,13 +140,15 @@ impl<I: Iterator<Item = Result<Tensor>>> Iterator for Batcher<IterResult1<I>> {
                 }
             }
         }
-        let items = items.into_iter().collect::<Result<Vec<Tensor>>>();
+        let items = items.into_iter().collect::<Result<Vec<Tensor<B>>>>();
         Some(items.and_then(|items| Tensor::stack(&items, 0)))
     }
 }
 
-impl<I: Iterator<Item = Result<(Tensor, Tensor)>>> Iterator for Batcher<IterResult2<I>> {
-    type Item = Result<(Tensor, Tensor)>;
+impl<B: BackendStorage, I: Iterator<Item = Result<(Tensor<B>, Tensor<B>)>>> Iterator
+    for Batcher<IterResult2<B, I>>
+{
+    type Item = Result<(Tensor<B>, Tensor<B>)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut xs = Vec::with_capacity(self.batch_size);

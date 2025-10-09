@@ -1,12 +1,16 @@
-use crate::{DType, Result};
+use crate::{
+    BackendDevice, BackendStorage, CpuStorage, CpuStorageRef, DType, MetalStorage, Result, Shape,
+};
 use candle_metal_kernels::{
     metal::{
         Buffer, BufferMap, CommandBuffer, Commands, ComputePipeline, Device, MTLResourceOptions,
     },
     Kernels,
 };
-use objc2_foundation::NSURL;
+use objc2_foundation::{NSRange, NSURL};
 use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
+use std::collections::HashMap;
+use std::ffi::c_void;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -75,6 +79,12 @@ impl std::ops::Deref for MetalDevice {
 
     fn deref(&self) -> &Self::Target {
         &self.device
+    }
+}
+
+impl AsRef<MetalDevice> for MetalDevice {
+    fn as_ref(&self) -> &MetalDevice {
+        self
     }
 }
 
@@ -225,6 +235,207 @@ impl MetalDevice {
             .startCaptureWithDescriptor_error(&descriptor)
             .map_err(|e| MetalError::from(e.to_string()))?;
         Ok(())
+    }
+}
+
+impl BackendDevice<MetalStorage> for MetalDevice {
+    const SUPPORTS_BF16: bool = true;
+
+    fn new(ordinal: usize) -> Result<Self> {
+        let device = Device::all().swap_remove(ordinal);
+        let command_queue = device.new_command_queue().map_err(MetalError::from)?;
+        let kernels = Arc::new(Kernels::new());
+        let seed = Arc::new(Mutex::new(
+            device
+                .new_buffer_with_data(
+                    [299792458u64].as_ptr() as *const c_void,
+                    4,
+                    MTLResourceOptions::StorageModeManaged,
+                )
+                .map_err(MetalError::from)?,
+        ));
+        let commands = Commands::new(command_queue).map_err(MetalError::from)?;
+        Ok(Self {
+            id: DeviceId::new(),
+            device,
+            commands: Arc::new(RwLock::new(commands)),
+            buffers: Arc::new(RwLock::new(HashMap::new())),
+            kernels,
+            seed,
+        })
+    }
+
+    fn location(&self) -> crate::DeviceLocation {
+        crate::DeviceLocation::Metal {
+            gpu_id: self.registry_id() as usize,
+        }
+    }
+
+    fn same_device(&self, rhs: &Self) -> bool {
+        self.id == rhs.id
+    }
+
+    fn is_cpu(&self) -> bool {
+        false
+    }
+
+    unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "alloc-uninit")?;
+        Ok(MetalStorage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
+    }
+
+    fn zeros(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
+        let size = shape.elem_count() * dtype.size_in_bytes();
+        let buffer = self.allocate_zeros(size)?;
+        Ok(MetalStorage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
+    }
+
+    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<MetalStorage> {
+        let (count, buffer) = match T::cpu_storage_ref(s) {
+            CpuStorageRef::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::BF16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::F8E4M3(_) => crate::bail!("Metal device does not yet support F8E4M3."),
+        };
+        Ok(MetalStorage::new(buffer?, self.clone(), count, T::DTYPE))
+    }
+
+    fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<MetalStorage> {
+        let (count, buffer) = match storage {
+            CpuStorage::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::BF16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F8E4M3(_) => crate::bail!("Metal device does not yet support F8E4M3."),
+        };
+        Ok(MetalStorage::new(
+            buffer?,
+            self.clone(),
+            count,
+            storage.dtype(),
+        ))
+    }
+
+    fn storage_from_cpu_storage_owned(&self, storage: CpuStorage) -> Result<MetalStorage> {
+        self.storage_from_cpu_storage(&storage)
+    }
+
+    fn storage<A: crate::NdArray>(&self, array: A) -> Result<MetalStorage> {
+        let storage = array.to_cpu_storage();
+        let storage = self.storage_from_cpu_storage_owned(storage)?;
+        Ok(storage)
+    }
+
+    fn storage_owned<S: crate::WithDType>(&self, data: Vec<S>) -> Result<MetalStorage> {
+        let storage = S::to_cpu_storage_owned(data);
+        let storage = self.storage_from_cpu_storage_owned(storage)?;
+        Ok(storage)
+    }
+
+    fn rand_uniform<T: crate::FloatDType>(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        min: T,
+        max: T,
+    ) -> Result<MetalStorage> {
+        let name = match dtype {
+            DType::F64 => "rand_uniform_f64",
+            DType::F32 => "rand_uniform_f32",
+            DType::F16 => "rand_uniform_f16",
+            DType::BF16 => "rand_uniform_bf16",
+            dtype => crate::bail!("rand_uniform not implemented for {dtype:?}"),
+        };
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_uniform")?;
+        let command_buffer = self.command_buffer()?;
+        candle_metal_kernels::call_random_uniform(
+            &self.device,
+            &command_buffer,
+            &self.kernels,
+            name,
+            min.to_f64() as f32,
+            max.to_f64() as f32,
+            shape.elem_count(),
+            &self.seed.lock().unwrap(),
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+
+        Ok(MetalStorage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
+    }
+
+    fn rand_normal<T: crate::FloatDType>(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        mean: T,
+        stddev: T,
+    ) -> Result<MetalStorage> {
+        let name = match dtype {
+            DType::F64 => "rand_uniform_f64",
+            DType::F32 => "rand_normal_f32",
+            DType::F16 => "rand_normal_f16",
+            DType::BF16 => "rand_normal_bf16",
+            dtype => crate::bail!("rand_uniform not implemented for {dtype:?}"),
+        };
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_normal")?;
+        let command_buffer = self.command_buffer()?;
+        candle_metal_kernels::call_random_normal(
+            &self.device,
+            &command_buffer,
+            &self.kernels,
+            name,
+            mean.to_f64() as f32,
+            stddev.to_f64() as f32,
+            shape.elem_count(),
+            &self.seed.lock().unwrap(),
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+
+        Ok(MetalStorage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
+    }
+
+    fn set_seed(&self, seed: u64) -> Result<()> {
+        let seed_buffer = self.seed.try_lock().map_err(MetalError::from)?;
+        let contents = seed_buffer.data();
+        unsafe {
+            std::ptr::copy([seed].as_ptr(), contents as *mut u64, 1);
+        }
+        seed_buffer.did_modify_range(NSRange::new(0, 8));
+
+        Ok(())
+    }
+
+    fn synchronize(&self) -> Result<()> {
+        self.wait_until_completed()
     }
 }
 

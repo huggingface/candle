@@ -6,7 +6,7 @@
 //! - [Paper](https://arxiv.org/abs/1512.03385)
 //!
 use crate::models::with_tracing::{conv2d, Conv2d};
-use candle::{Result, Tensor, D};
+use candle::{BackendStorage, Result, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
 
@@ -45,20 +45,20 @@ impl Default for ResnetBlock2DConfig {
 }
 
 #[derive(Debug)]
-pub struct ResnetBlock2D {
-    norm1: nn::GroupNorm,
-    conv1: Conv2d,
-    norm2: nn::GroupNorm,
-    conv2: Conv2d,
-    time_emb_proj: Option<nn::Linear>,
-    conv_shortcut: Option<Conv2d>,
+pub struct ResnetBlock2D<B: BackendStorage> {
+    norm1: nn::GroupNorm<B>,
+    conv1: Conv2d<B>,
+    norm2: nn::GroupNorm<B>,
+    conv2: Conv2d<B>,
+    time_emb_proj: Option<nn::Linear<B>>,
+    conv_shortcut: Option<Conv2d<B>>,
     span: tracing::Span,
     config: ResnetBlock2DConfig,
 }
 
-impl ResnetBlock2D {
+impl<B: BackendStorage> ResnetBlock2D<B> {
     pub fn new(
-        vs: nn::VarBuilder,
+        vs: nn::VarBuilder<B>,
         in_channels: usize,
         config: ResnetBlock2DConfig,
     ) -> Result<Self> {
@@ -117,7 +117,7 @@ impl ResnetBlock2D {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, temb: Option<&Tensor>) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor<B>, temb: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let shortcut_xs = match &self.conv_shortcut {
             Some(conv_shortcut) => conv_shortcut.forward(xs)?,

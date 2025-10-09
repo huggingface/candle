@@ -5,6 +5,8 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::Result;
+use candle::quantized::QuantizedBackend;
+use candle_transformers::quantized_nn::Linear;
 use clap::{Parser, ValueEnum};
 
 use candle_transformers::models::quantized_rwkv_v5::Model as Q5;
@@ -12,22 +14,29 @@ use candle_transformers::models::quantized_rwkv_v6::Model as Q6;
 use candle_transformers::models::rwkv_v5::{Config, Model as M5, State, Tokenizer};
 use candle_transformers::models::rwkv_v6::Model as M6;
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, DType, Module, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 
 const EOS_TOKEN_ID: u32 = 261;
 
-enum Model {
-    M5(M5),
-    Q5(Q5),
-    M6(M6),
-    Q6(Q6),
+enum Model<QB: QuantizedBackend> {
+    M5(M5<QB::Storage>),
+    Q5(Q5<QB>),
+    M6(M6<QB::Storage>),
+    Q6(Q6<QB>),
 }
 
-impl Model {
-    fn forward(&self, xs: &Tensor, state: &mut State) -> candle::Result<Tensor> {
+impl<QB: QuantizedBackend> Model<QB> {
+    fn forward(
+        &self,
+        xs: &Tensor<QB::Storage>,
+        state: &mut State<QB::Storage>,
+    ) -> candle::Result<Tensor<QB::Storage>>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         match self {
             Self::M5(m) => m.forward(xs, state),
             Self::Q5(m) => m.forward(xs, state),
@@ -37,20 +46,20 @@ impl Model {
     }
 }
 
-struct TextGeneration {
-    model: Model,
+struct TextGeneration<QB: QuantizedBackend> {
+    model: Model<QB>,
     config: Config,
-    device: Device,
+    device: QB::Device,
     tokenizer: Tokenizer,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
 }
 
-impl TextGeneration {
+impl<QB: QuantizedBackend> TextGeneration<QB> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
+        model: Model<QB>,
         config: Config,
         tokenizer: Tokenizer,
         seed: u64,
@@ -58,7 +67,7 @@ impl TextGeneration {
         top_p: Option<f64>,
         repeat_penalty: f32,
         repeat_last_n: usize,
-        device: &Device,
+        device: &QB::Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
@@ -72,7 +81,10 @@ impl TextGeneration {
         }
     }
 
-    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()> {
+    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         use std::io::Write;
         let mut tokens = self.tokenizer.encode(prompt)?;
         let mut generated_tokens = 0usize;
@@ -217,11 +229,30 @@ struct Args {
     repeat_last_n: usize,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::QCpuStorage>(args)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::QCudaStorage>(args)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::QMetalStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<QB: QuantizedBackend>(args: Args) -> anyhow::Result<()>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
+    let device = QB::Device::new(0)?;
+
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -296,8 +327,8 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let config: Config = serde_json::from_slice(&std::fs::read(config_filename)?)?;
-    let device = candle_examples::device(args.cpu)?;
-    let model = if args.quantized {
+
+    let model: Model<QB> = if args.quantized {
         let filename = &filenames[0];
         let vb =
             candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, &device)?;

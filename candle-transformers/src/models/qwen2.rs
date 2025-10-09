@@ -15,7 +15,7 @@
 //!
 
 use crate::models::with_tracing::{linear, linear_no_bias, Linear, RmsNorm};
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
@@ -38,13 +38,13 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+struct RotaryEmbedding<B: BackendStorage> {
+    sin: Tensor<B>,
+    cos: Tensor<B>,
 }
 
-impl RotaryEmbedding {
-    fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
+impl<B: BackendStorage> RotaryEmbedding<B> {
+    fn new(dtype: DType, cfg: &Config, dev: &B::Device) -> Result<Self> {
         let dim = cfg.hidden_size / cfg.num_attention_heads;
         let max_seq_len = cfg.max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
@@ -65,10 +65,10 @@ impl RotaryEmbedding {
 
     fn apply_rotary_emb_qkv(
         &self,
-        q: &Tensor,
-        k: &Tensor,
+        q: &Tensor<B>,
+        k: &Tensor<B>,
         seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
@@ -80,15 +80,15 @@ impl RotaryEmbedding {
 
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
-struct MLP {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+struct MLP<B: BackendStorage> {
+    gate_proj: Linear<B>,
+    up_proj: Linear<B>,
+    down_proj: Linear<B>,
     act_fn: Activation,
 }
 
-impl MLP {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MLP<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
         let gate_proj = linear_no_bias(hidden_sz, intermediate_sz, vb.pp("gate_proj"))?;
@@ -103,8 +103,8 @@ impl MLP {
     }
 }
 
-impl Module for MLP {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for MLP<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let lhs = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
         let rhs = xs.apply(&self.up_proj)?;
         (lhs * rhs)?.apply(&self.down_proj)
@@ -112,22 +112,22 @@ impl Module for MLP {
 }
 
 #[derive(Debug, Clone)]
-struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+struct Attention<B: BackendStorage> {
+    q_proj: Linear<B>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    o_proj: Linear<B>,
     num_heads: usize,
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
     hidden_size: usize,
-    rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: Option<(Tensor, Tensor)>,
+    rotary_emb: Arc<RotaryEmbedding<B>>,
+    kv_cache: Option<(Tensor<B>, Tensor<B>)>,
 }
 
-impl Attention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Attention<B> {
+    fn new(rotary_emb: Arc<RotaryEmbedding<B>>, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -154,10 +154,10 @@ impl Attention {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<B>,
+        attention_mask: Option<&Tensor<B>>,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let query_states = self.q_proj.forward(xs)?;
@@ -215,15 +215,15 @@ impl Attention {
 }
 
 #[derive(Debug, Clone)]
-struct DecoderLayer {
-    self_attn: Attention,
-    mlp: MLP,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+struct DecoderLayer<B: BackendStorage> {
+    self_attn: Attention<B>,
+    mlp: MLP<B>,
+    input_layernorm: RmsNorm<B>,
+    post_attention_layernorm: RmsNorm<B>,
 }
 
-impl DecoderLayer {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> DecoderLayer<B> {
+    fn new(rotary_emb: Arc<RotaryEmbedding<B>>, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         let input_layernorm =
@@ -243,10 +243,10 @@ impl DecoderLayer {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<B>,
+        attention_mask: Option<&Tensor<B>>,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
         let xs = self.self_attn.forward(&xs, attention_mask, seqlen_offset)?;
@@ -262,17 +262,17 @@ impl DecoderLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    embed_tokens: candle_nn::Embedding,
-    layers: Vec<DecoderLayer>,
-    norm: RmsNorm,
+pub struct Model<B: BackendStorage> {
+    embed_tokens: candle_nn::Embedding<B>,
+    layers: Vec<DecoderLayer<B>>,
+    norm: RmsNorm<B>,
     sliding_window: usize,
-    device: Device,
+    device: B::Device,
     dtype: DType,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
@@ -299,7 +299,7 @@ impl Model {
         b_size: usize,
         tgt_len: usize,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         // Sliding window mask?
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| {
@@ -323,9 +323,9 @@ impl Model {
             .to_dtype(self.dtype)
     }
 
-    fn prepare_attention_mask(&self, attn_mask: &Tensor) -> Result<Tensor> {
+    fn prepare_attention_mask(&self, attn_mask: &Tensor<B>) -> Result<Tensor<B>> {
         let (b_sz, sql_len) = attn_mask.dims2()?;
-        let mut mask: Vec<Tensor> = vec![];
+        let mut mask: Vec<Tensor<B>> = vec![];
         for b in 0..b_sz {
             mask.push(attn_mask.i((b, ..))?.expand((1, 1, sql_len, sql_len))?);
         }
@@ -339,12 +339,12 @@ impl Model {
 
     pub fn forward(
         &mut self,
-        input_ids: &Tensor,
+        input_ids: &Tensor<B>,
         seqlen_offset: usize,
-        attn_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        attn_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let (b_size, seq_len) = input_ids.dims2()?;
-        let attention_mask: Option<Tensor> = match attn_mask {
+        let attention_mask: Option<Tensor<B>> = match attn_mask {
             Some(mask) => Some(self.prepare_attention_mask(mask)?),
             None => {
                 if seq_len <= 1 {
@@ -369,13 +369,13 @@ impl Model {
 }
 
 #[derive(Debug, Clone)]
-pub struct ModelForCausalLM {
-    base_model: Model,
-    lm_head: Linear,
+pub struct ModelForCausalLM<B: BackendStorage> {
+    base_model: Model<B>,
+    lm_head: Linear<B>,
 }
 
-impl ModelForCausalLM {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> ModelForCausalLM<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let base_model = Model::new(cfg, vb.clone())?;
         let lm_head = if vb.contains_tensor("lm_head.weight") {
             linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
@@ -388,7 +388,7 @@ impl ModelForCausalLM {
         })
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor<B>, seqlen_offset: usize) -> Result<Tensor<B>> {
         let (_b_size, seq_len) = input_ids.dims2()?;
         self.base_model
             .forward(input_ids, seqlen_offset, None)?

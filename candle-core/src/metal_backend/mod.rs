@@ -1,17 +1,11 @@
 //! Implementation of Backend traits for Metal
 //!
-use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
-use candle_metal_kernels::{
-    metal::{Buffer, Commands, Device},
-    BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
-};
-use objc2_foundation::NSRange;
-use std::collections::HashMap;
-use std::ffi::c_void;
-use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
+use crate::{BackendDevice, BackendStorage, TryConvertStorage};
+use crate::{CpuStorage, DType, Layout, Result, Shape};
+use candle_metal_kernels::{metal::Buffer, BufferOffset, CallConvTranspose2dCfg};
+use std::sync::{Arc, PoisonError, TryLockError};
 
 mod device;
 pub use device::{DeviceId, MetalDevice};
@@ -93,7 +87,7 @@ impl BackendStorage for MetalStorage {
         self.dtype
     }
 
-    fn device(&self) -> &Self::Device {
+    fn device(&self) -> impl AsRef<MetalDevice> {
         &self.device
     }
 
@@ -111,7 +105,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device().as_ref().clone();
 
         let shape = layout.shape();
         let el = shape.elem_count();
@@ -170,7 +164,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn powf(&self, layout: &Layout, pow: f64) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device().as_ref().clone();
 
         let shape = layout.shape();
         let el = shape.elem_count();
@@ -221,7 +215,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device().as_ref().clone();
 
         let shape = layout.shape();
         let el = shape.elem_count();
@@ -428,7 +422,7 @@ impl BackendStorage for MetalStorage {
             s: S,
             l: &Layout,
         ) -> Result<()> {
-            let device = self_.device();
+            let device = self_.device().as_ref().clone();
             let dtype = self_.dtype;
             let shape = l.shape();
             let el_count = shape.elem_count();
@@ -445,7 +439,7 @@ impl BackendStorage for MetalStorage {
                         _ => crate::bail!("internal bug in const_set"),
                     };
                     candle_metal_kernels::call_const_set_contiguous_tiled(
-                        &device.device,
+                        &device.as_ref().device,
                         &command_buffer,
                         &device.kernels,
                         kernel_name,
@@ -518,7 +512,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
-        let device = self.device();
+        let device = self.device().as_ref().clone();
         let shape = layout.shape();
         let el_count = shape.elem_count();
         let buffer = device.new_buffer(el_count, dtype, "todtype")?;
@@ -635,7 +629,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn unary_impl<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
-        let device = self.device();
+        let device = self.device.clone();
         let dtype = self.dtype;
         let shape = layout.shape();
         let el_count = shape.elem_count();
@@ -950,7 +944,7 @@ impl BackendStorage for MetalStorage {
         kernel_l: &Layout,
         params: &ParamsConv1D,
     ) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device.clone();
         let shape = layout.shape();
         let dims = shape.dims();
         let strides = layout.stride();
@@ -1005,7 +999,10 @@ impl BackendStorage for MetalStorage {
             col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
-            let mut kernel_c = self.device().zeros_impl(kernel_l.shape(), kernel.dtype())?;
+            let mut kernel_c = self
+                .device()
+                .as_ref()
+                .zeros(kernel_l.shape(), kernel.dtype())?;
             kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
@@ -1013,7 +1010,7 @@ impl BackendStorage for MetalStorage {
             col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, l_out, n)).transpose(1, 2)?;
-        let mut res_t = self.device().zeros_impl(res_l.shape(), res.dtype())?;
+        let mut res_t = self.device.zeros(res_l.shape(), res.dtype())?;
         res.copy_strided_src(&mut res_t, 0, &res_l)?;
         Ok(res_t)
     }
@@ -1138,7 +1135,7 @@ impl BackendStorage for MetalStorage {
         kernel_l: &Layout,
         params: &ParamsConv2D,
     ) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device().as_ref().clone();
         let shape = layout.shape();
         let dims = shape.dims();
 
@@ -1198,7 +1195,10 @@ impl BackendStorage for MetalStorage {
             col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
-            let mut kernel_c = self.device().zeros_impl(kernel_l.shape(), kernel.dtype())?;
+            let mut kernel_c = self
+                .device()
+                .as_ref()
+                .zeros(kernel_l.shape(), kernel.dtype())?;
             kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
@@ -1208,7 +1208,7 @@ impl BackendStorage for MetalStorage {
         let res_l = Layout::contiguous((b, h_out, w_out, n))
             .transpose(1, 2)?
             .transpose(1, 3)?;
-        let mut res_t = self.device().zeros_impl(res_l.shape(), res.dtype())?;
+        let mut res_t = self.device.zeros(res_l.shape(), res.dtype())?;
         res.copy_strided_src(&mut res_t, 0, &res_l)?;
         Ok(res_t)
     }
@@ -1411,8 +1411,7 @@ impl BackendStorage for MetalStorage {
         let ids_el = ids_l.dims()[dim];
         let dst_el = ids_l.shape().elem_count();
         let dtype = self.dtype;
-        let device = self.device();
-        let buffer = device.new_buffer(dst_el, dtype, "gather")?;
+        let buffer = self.device.new_buffer(dst_el, dtype, "gather")?;
         let name = match (ids.dtype, self.dtype) {
             (DType::U8, DType::U8) => "gather_u8_u8",
             (DType::U8, DType::F32) => "gather_u8_f32",
@@ -1436,7 +1435,7 @@ impl BackendStorage for MetalStorage {
         let src = buffer_o(&self.buffer, src_l, dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_gather(
-            &device.device,
+            &self.device,
             &command_buffer,
             &self.device.kernels,
             name,
@@ -1448,7 +1447,7 @@ impl BackendStorage for MetalStorage {
             &buffer,
         )
         .map_err(MetalError::from)?;
-        Ok(Self::new(buffer, device.clone(), dst_el, dtype))
+        Ok(Self::new(buffer, self.device.clone(), dst_el, dtype))
     }
 
     fn scatter_set(
@@ -1558,7 +1557,7 @@ impl BackendStorage for MetalStorage {
         let ids_el = ids_l.shape().elem_count();
         let dst_el = ids_el * left_size * right_size;
         let dtype = self.dtype;
-        let device = self.device();
+        let device = self.device.clone();
         let buffer = device.new_buffer(dst_el, dtype, "index_select")?;
         let name = match (ids.dtype, self.dtype) {
             (DType::U8, DType::U8) => "is_u8_u8",
@@ -1605,7 +1604,7 @@ impl BackendStorage for MetalStorage {
             &buffer,
         )
         .map_err(MetalError::from)?;
-        Ok(Self::new(buffer, device.clone(), dst_el, dtype))
+        Ok(Self::new(buffer, device, dst_el, dtype))
     }
 
     fn index_add(
@@ -1617,7 +1616,7 @@ impl BackendStorage for MetalStorage {
         src_l: &Layout,
         dim: usize,
     ) -> Result<Self> {
-        let mut acc = self.device.zeros_impl(l.shape(), self.dtype())?;
+        let mut acc = self.device.zeros(l.shape(), self.dtype())?;
         self.copy_strided_src(&mut acc, 0, l)?;
         if !ids_l.is_contiguous() || !src_l.is_contiguous() {
             return Err(crate::Error::RequiresContiguous { op: "index-add" }.bt());
@@ -1821,6 +1820,58 @@ impl BackendStorage for MetalStorage {
         }
         Ok(())
     }
+
+    fn apply_op1(&self, l: &Layout, c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)> {
+        c.metal_fwd(self, l)
+    }
+
+    fn apply_op2(
+        &self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn crate::CustomOp2<Self>,
+    ) -> Result<(Self, Shape)> {
+        c.metal_fwd(self, l1, t2, l2)
+    }
+
+    fn apply_op3(
+        &self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn crate::CustomOp3<Self>,
+    ) -> Result<(Self, Shape)> {
+        c.metal_fwd(self, l1, t2, l2, t3, l3)
+    }
+
+    fn inplace_op1(&mut self, l: &Layout, c: &dyn crate::InplaceOp1) -> Result<()> {
+        c.metal_fwd(self, l)
+    }
+
+    fn inplace_op2(
+        &mut self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn crate::InplaceOp2,
+    ) -> Result<()> {
+        c.metal_fwd(self, l1, t2, l2)
+    }
+
+    fn inplace_op3(
+        &mut self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn crate::InplaceOp3,
+    ) -> Result<()> {
+        c.metal_fwd(self, l1, t2, l2, t3, l3)
+    }
 }
 
 impl MetalStorage {
@@ -1844,7 +1895,7 @@ impl MetalStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        let device = self.device();
+        let device = self.device.clone();
         let shape = lhs_l.shape();
         let el_count = shape.elem_count();
         let command_buffer = device.command_buffer()?;
@@ -2059,186 +2110,16 @@ impl MetalStorage {
     }
 }
 
-impl BackendDevice for MetalDevice {
-    type Storage = MetalStorage;
-
-    fn new(ordinal: usize) -> Result<Self> {
-        let device = Device::all().swap_remove(ordinal);
-        let command_queue = device.new_command_queue().map_err(MetalError::from)?;
-        let kernels = Arc::new(Kernels::new());
-        let seed = Arc::new(Mutex::new(
-            device
-                .new_buffer_with_data(
-                    [299792458u64].as_ptr() as *const c_void,
-                    4,
-                    RESOURCE_OPTIONS,
-                )
-                .map_err(MetalError::from)?,
-        ));
-        let commands = Commands::new(command_queue).map_err(MetalError::from)?;
-        Ok(Self {
-            id: DeviceId::new(),
-            device,
-            commands: Arc::new(RwLock::new(commands)),
-            buffers: Arc::new(RwLock::new(HashMap::new())),
-            kernels,
-            seed,
-        })
+impl TryConvertStorage<CpuStorage> for MetalStorage {
+    fn convert(storage: CpuStorage, device: &Self::Device) -> Result<Self> {
+        device.storage_from_cpu_storage_owned(storage)
     }
+}
 
-    fn location(&self) -> crate::DeviceLocation {
-        crate::DeviceLocation::Metal {
-            gpu_id: self.registry_id() as usize,
-        }
-    }
-
-    fn same_device(&self, rhs: &Self) -> bool {
-        self.id == rhs.id
-    }
-
-    unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
-        let buffer = self.new_buffer(shape.elem_count(), dtype, "alloc-uninit")?;
-        Ok(MetalStorage::new(
-            buffer,
-            self.clone(),
-            shape.elem_count(),
-            dtype,
-        ))
-    }
-
-    fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
-        let size = shape.elem_count() * dtype.size_in_bytes();
-        let buffer = self.allocate_zeros(size)?;
-        Ok(MetalStorage::new(
-            buffer,
-            self.clone(),
-            shape.elem_count(),
-            dtype,
-        ))
-    }
-
-    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {
-        let (count, buffer) = match T::cpu_storage_ref(s) {
-            CpuStorageRef::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::BF16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorageRef::F8E4M3(_) => crate::bail!("Metal device does not yet support F8E4M3."),
-        };
-        Ok(Self::Storage::new(buffer?, self.clone(), count, T::DTYPE))
-    }
-
-    fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
-        let (count, buffer) = match storage {
-            CpuStorage::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::BF16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
-            CpuStorage::F8E4M3(_) => crate::bail!("Metal device does not yet support F8E4M3."),
-        };
-        Ok(Self::Storage::new(
-            buffer?,
-            self.clone(),
-            count,
-            storage.dtype(),
-        ))
-    }
-
-    fn storage_from_cpu_storage_owned(&self, storage: CpuStorage) -> Result<Self::Storage> {
-        self.storage_from_cpu_storage(&storage)
-    }
-
-    fn rand_uniform(
-        &self,
-        shape: &Shape,
-        dtype: DType,
-        min: f64,
-        max: f64,
-    ) -> Result<Self::Storage> {
-        let name = match dtype {
-            DType::F32 => "rand_uniform_f32",
-            DType::F16 => "rand_uniform_f16",
-            DType::BF16 => "rand_uniform_bf16",
-            dtype => crate::bail!("rand_uniform not implemented for {dtype:?}"),
-        };
-        let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_uniform")?;
-        let command_buffer = self.command_buffer()?;
-        candle_metal_kernels::call_random_uniform(
-            &self.device,
-            &command_buffer,
-            &self.kernels,
-            name,
-            min as f32,
-            max as f32,
-            shape.elem_count(),
-            &self.seed.lock().unwrap(),
-            &buffer,
-        )
-        .map_err(MetalError::from)?;
-
-        Ok(Self::Storage::new(
-            buffer,
-            self.clone(),
-            shape.elem_count(),
-            dtype,
-        ))
-    }
-
-    fn rand_normal(
-        &self,
-        shape: &Shape,
-        dtype: DType,
-        mean: f64,
-        stddev: f64,
-    ) -> Result<Self::Storage> {
-        let name = match dtype {
-            DType::F32 => "rand_normal_f32",
-            DType::F16 => "rand_normal_f16",
-            DType::BF16 => "rand_normal_bf16",
-            dtype => crate::bail!("rand_uniform not implemented for {dtype:?}"),
-        };
-        let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_normal")?;
-        let command_buffer = self.command_buffer()?;
-        candle_metal_kernels::call_random_normal(
-            &self.device,
-            &command_buffer,
-            &self.kernels,
-            name,
-            mean as f32,
-            stddev as f32,
-            shape.elem_count(),
-            &self.seed.lock().unwrap(),
-            &buffer,
-        )
-        .map_err(MetalError::from)?;
-
-        Ok(Self::Storage::new(
-            buffer,
-            self.clone(),
-            shape.elem_count(),
-            dtype,
-        ))
-    }
-
-    fn set_seed(&self, seed: u64) -> Result<()> {
-        let seed_buffer = self.seed.try_lock().map_err(MetalError::from)?;
-        let contents = seed_buffer.data();
-        unsafe {
-            std::ptr::copy_nonoverlapping([seed].as_ptr(), contents as *mut u64, 1);
-        }
-        seed_buffer.did_modify_range(NSRange::new(0, 8));
-
-        Ok(())
-    }
-
-    fn synchronize(&self) -> Result<()> {
-        self.wait_until_completed()
+impl TryConvertStorage<MetalStorage> for MetalStorage {
+    fn convert(storage: MetalStorage, _: &Self::Device) -> Result<Self> {
+        // TODO: if multi gpu hits metal support transferring between metal devices
+        Ok(storage)
     }
 }
 

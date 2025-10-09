@@ -2,7 +2,7 @@
 // This source code is licensed under the license found in the
 // LICENSE file in the root directory of this source tree.
 
-use candle::{Module, Result, StreamTensor, StreamingModule, Tensor, D};
+use candle::{BackendStorage, Module, Result, StreamTensor, StreamingModule, Tensor, D};
 use candle_nn::{Conv1d, VarBuilder};
 
 #[allow(clippy::enum_variant_names)]
@@ -23,14 +23,14 @@ pub enum PadMode {
 // Applies weight norm for inference by recomputing the weight tensor. This
 // does not apply to training.
 // https://pytorch.org/docs/stable/generated/torch.nn.utils.weight_norm.html
-fn conv1d_weight_norm(
+fn conv1d_weight_norm<B: BackendStorage>(
     in_c: usize,
     out_c: usize,
     kernel_size: usize,
     bias: bool,
     config: candle_nn::Conv1dConfig,
-    vb: VarBuilder,
-) -> Result<Conv1d> {
+    vb: VarBuilder<B>,
+) -> Result<Conv1d<B>> {
     let weight = if vb.contains_tensor("weight") {
         vb.get((out_c, in_c, kernel_size), "weight")?
     } else {
@@ -48,13 +48,13 @@ fn conv1d_weight_norm(
 }
 
 #[derive(Debug, Clone)]
-pub struct NormConv1d {
-    conv: Conv1d,
-    norm: Option<candle_nn::GroupNorm>,
+pub struct NormConv1d<B: BackendStorage> {
+    conv: Conv1d<B>,
+    norm: Option<candle_nn::GroupNorm<B>>,
     span: tracing::Span,
 }
 
-impl NormConv1d {
+impl<B: BackendStorage> NormConv1d<B> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         in_c: usize,
@@ -64,7 +64,7 @@ impl NormConv1d {
         norm: Option<Norm>,
         bias: bool,
         cfg: candle_nn::Conv1dConfig,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let conv = match norm {
             None | Some(Norm::TimeGroupNorm) => {
@@ -97,8 +97,8 @@ impl NormConv1d {
     }
 }
 
-impl Module for NormConv1d {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for NormConv1d<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let xs = xs.apply(&self.conv)?;
         match self.norm.as_ref() {
@@ -109,17 +109,17 @@ impl Module for NormConv1d {
 }
 
 #[derive(Debug, Clone)]
-pub struct NormConvTranspose1d {
-    ws: Tensor,
-    bs: Option<Tensor>,
+pub struct NormConvTranspose1d<B: BackendStorage> {
+    ws: Tensor<B>,
+    bs: Option<Tensor<B>>,
     k_size: usize,
     stride: usize,
     groups: usize,
-    norm: Option<candle_nn::GroupNorm>,
+    norm: Option<candle_nn::GroupNorm<B>>,
     span: tracing::Span,
 }
 
-impl NormConvTranspose1d {
+impl<B: BackendStorage> NormConvTranspose1d<B> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         in_c: usize,
@@ -130,7 +130,7 @@ impl NormConvTranspose1d {
         bias: bool,
         stride: usize,
         groups: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let vb = vb.pp("conv");
         let bs = if bias {
@@ -183,8 +183,8 @@ impl NormConvTranspose1d {
     }
 }
 
-impl Module for NormConvTranspose1d {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for NormConvTranspose1d<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         // conv-transpose1d seems to be broken on metal after enough iterations. Causing
         // the following error:
@@ -207,8 +207,8 @@ impl Module for NormConvTranspose1d {
     }
 }
 
-fn get_extra_padding_for_conv1d(
-    xs: &Tensor,
+fn get_extra_padding_for_conv1d<B: BackendStorage>(
+    xs: &Tensor<B>,
     k_size: usize,
     stride: usize,
     padding_total: usize,
@@ -220,7 +220,12 @@ fn get_extra_padding_for_conv1d(
     Ok(ideal_len.saturating_sub(len))
 }
 
-fn pad1d(xs: &Tensor, pad_l: usize, pad_r: usize, mode: PadMode) -> Result<Tensor> {
+fn pad1d<B: BackendStorage>(
+    xs: &Tensor<B>,
+    pad_l: usize,
+    pad_r: usize,
+    mode: PadMode,
+) -> Result<Tensor<B>> {
     match mode {
         PadMode::Constant => xs.pad_with_zeros(D::Minus1, pad_l, pad_r),
         PadMode::Reflect => candle::bail!("pad-mode 'reflect' is not supported"),
@@ -228,7 +233,7 @@ fn pad1d(xs: &Tensor, pad_l: usize, pad_r: usize, mode: PadMode) -> Result<Tenso
     }
 }
 
-fn unpad1d(xs: &Tensor, unpad_l: usize, unpad_r: usize) -> Result<Tensor> {
+fn unpad1d<B: BackendStorage>(xs: &Tensor<B>, unpad_l: usize, unpad_r: usize) -> Result<Tensor<B>> {
     let len = xs.dim(D::Minus1)?;
     if len < unpad_l + unpad_r {
         candle::bail!("unpad1d: tensor len {len} is too low, {unpad_l} + {unpad_r}")
@@ -237,17 +242,17 @@ fn unpad1d(xs: &Tensor, unpad_l: usize, unpad_r: usize) -> Result<Tensor> {
 }
 
 #[derive(Debug, Clone)]
-pub struct StreamableConv1d {
-    conv: NormConv1d,
+pub struct StreamableConv1d<B: BackendStorage> {
+    conv: NormConv1d<B>,
     causal: bool,
     pad_mode: PadMode,
-    state_prev_xs: StreamTensor,
+    state_prev_xs: StreamTensor<B>,
     left_pad_applied: bool,
     kernel_size: usize,
     span: tracing::Span,
 }
 
-impl StreamableConv1d {
+impl<B: BackendStorage> StreamableConv1d<B> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         in_c: usize,
@@ -260,7 +265,7 @@ impl StreamableConv1d {
         causal: bool,
         norm: Option<Norm>,
         pad_mode: PadMode,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let cfg = candle_nn::Conv1dConfig {
             padding: 0,
@@ -285,8 +290,8 @@ impl StreamableConv1d {
     }
 }
 
-impl Module for StreamableConv1d {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for StreamableConv1d<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (_b, _t, _c) = xs.dims3()?;
         let k_size = self.conv.conv.weight().dim(D::Minus1)?;
@@ -312,13 +317,13 @@ impl Module for StreamableConv1d {
     }
 }
 
-impl StreamingModule for StreamableConv1d {
+impl<B: BackendStorage> StreamingModule<B> for StreamableConv1d<B> {
     fn reset_state(&mut self) {
         self.state_prev_xs.reset();
         self.left_pad_applied = false;
     }
 
-    fn step(&mut self, xs: &StreamTensor) -> Result<StreamTensor> {
+    fn step(&mut self, xs: &StreamTensor<B>) -> Result<StreamTensor<B>> {
         let _enter = self.span.enter();
         let xs = match xs.as_option() {
             None => return Ok(().into()),
@@ -357,15 +362,15 @@ impl StreamingModule for StreamableConv1d {
 }
 
 #[derive(Debug, Clone)]
-pub struct StreamableConvTranspose1d {
-    convtr: NormConvTranspose1d,
+pub struct StreamableConvTranspose1d<B: BackendStorage> {
+    convtr: NormConvTranspose1d<B>,
     causal: bool,
-    state_prev_ys: StreamTensor,
+    state_prev_ys: StreamTensor<B>,
     kernel_size: usize,
     span: tracing::Span,
 }
 
-impl StreamableConvTranspose1d {
+impl<B: BackendStorage> StreamableConvTranspose1d<B> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         in_c: usize,
@@ -376,7 +381,7 @@ impl StreamableConvTranspose1d {
         bias: bool,
         causal: bool,
         norm: Option<Norm>,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let convtr =
             NormConvTranspose1d::new(in_c, out_c, k_size, causal, norm, bias, stride, groups, vb)?;
@@ -390,8 +395,8 @@ impl StreamableConvTranspose1d {
     }
 }
 
-impl Module for StreamableConvTranspose1d {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for StreamableConvTranspose1d<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let k_size = self.convtr.k_size;
         let stride = self.convtr.stride;
@@ -408,12 +413,12 @@ impl Module for StreamableConvTranspose1d {
     }
 }
 
-impl StreamingModule for StreamableConvTranspose1d {
+impl<B: BackendStorage> StreamingModule<B> for StreamableConvTranspose1d<B> {
     fn reset_state(&mut self) {
         self.state_prev_ys.reset()
     }
 
-    fn step(&mut self, xs: &StreamTensor) -> Result<StreamTensor> {
+    fn step(&mut self, xs: &StreamTensor<B>) -> Result<StreamTensor<B>> {
         let _enter = self.span.enter();
         let xs = match xs.as_option() {
             Some(xs) => xs,
@@ -449,17 +454,17 @@ impl StreamingModule for StreamableConvTranspose1d {
 }
 
 #[derive(Debug, Clone)]
-pub struct ConvDownsample1d {
-    conv: StreamableConv1d,
+pub struct ConvDownsample1d<B: BackendStorage> {
+    conv: StreamableConv1d<B>,
 }
 
-impl ConvDownsample1d {
+impl<B: BackendStorage> ConvDownsample1d<B> {
     pub fn new(
         stride: usize,
         dim: usize,
         causal: bool,
         learnt: bool,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         if !learnt {
             candle::bail!("only learnt=true is supported")
@@ -481,34 +486,34 @@ impl ConvDownsample1d {
     }
 }
 
-impl Module for ConvDownsample1d {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ConvDownsample1d<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.conv)
     }
 }
 
-impl StreamingModule for ConvDownsample1d {
+impl<B: BackendStorage> StreamingModule<B> for ConvDownsample1d<B> {
     fn reset_state(&mut self) {
         self.conv.reset_state()
     }
 
-    fn step(&mut self, xs: &StreamTensor) -> Result<StreamTensor> {
+    fn step(&mut self, xs: &StreamTensor<B>) -> Result<StreamTensor<B>> {
         self.conv.step(xs)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ConvTrUpsample1d {
-    convtr: StreamableConvTranspose1d,
+pub struct ConvTrUpsample1d<B: BackendStorage> {
+    convtr: StreamableConvTranspose1d<B>,
 }
 
-impl ConvTrUpsample1d {
+impl<B: BackendStorage> ConvTrUpsample1d<B> {
     pub fn new(
         stride: usize,
         dim: usize,
         causal: bool,
         learnt: bool,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         if !learnt {
             candle::bail!("only learnt=true is supported")
@@ -528,18 +533,18 @@ impl ConvTrUpsample1d {
     }
 }
 
-impl Module for ConvTrUpsample1d {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ConvTrUpsample1d<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.convtr)
     }
 }
 
-impl StreamingModule for ConvTrUpsample1d {
+impl<B: BackendStorage> StreamingModule<B> for ConvTrUpsample1d<B> {
     fn reset_state(&mut self) {
         self.convtr.reset_state()
     }
 
-    fn step(&mut self, xs: &StreamTensor) -> Result<StreamTensor> {
+    fn step(&mut self, xs: &StreamTensor<B>) -> Result<StreamTensor<B>> {
         self.convtr.step(xs)
     }
 }
@@ -547,7 +552,7 @@ impl StreamingModule for ConvTrUpsample1d {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle::IndexOp;
+    use candle::{CpuStorage, IndexOp};
 
     fn run_conv1d(
         k_size: usize,
@@ -558,8 +563,8 @@ mod tests {
         bias: bool,
     ) -> Result<()> {
         // TODO: We should ensure for the seed to be constant when running these tests.
-        let dev = &candle::Device::Cpu;
-        let vm = candle_nn::VarMap::new();
+        let dev = &candle::CpuDevice;
+        let vm: candle_nn::VarMap<CpuStorage> = candle_nn::VarMap::new();
         let vb = VarBuilder::from_varmap(&vm, candle::DType::F32, dev);
         let conv1d = StreamableConv1d::new(
             /* in_c */ 2,
@@ -608,8 +613,8 @@ mod tests {
         bias: bool,
     ) -> Result<()> {
         // TODO: We should ensure for the seed to be constant when running these tests.
-        let dev = &candle::Device::Cpu;
-        let vm = candle_nn::VarMap::new();
+        let dev = &candle::CpuDevice;
+        let vm: candle_nn::VarMap<candle::CpuStorage> = candle_nn::VarMap::new();
         let vb = VarBuilder::from_varmap(&vm, candle::DType::F32, dev);
         let conv1d = StreamableConvTranspose1d::new(
             /* in_c */ 2, /* out_c */ 3, /* k_size */ k_size,

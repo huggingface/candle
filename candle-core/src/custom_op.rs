@@ -1,10 +1,17 @@
+#[cfg(not(target_arch = "wasm32"))]
+use crate::backend::UgDevice;
 use crate::op::{BackpropOp, Op};
 use crate::tensor::from_storage;
-use crate::{CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Tensor};
+use crate::{BackendStorage, CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Tensor};
 use std::sync::Arc;
 
+/// The results of calling backward on custom ops
+type Op1BwdResult<B> = Option<Tensor<B>>;
+type Op2BwdResult<B> = (Option<Tensor<B>>, Option<Tensor<B>>);
+type Op3BwdResult<B> = (Option<Tensor<B>>, Option<Tensor<B>>, Option<Tensor<B>>);
+
 /// Unary ops that can be defined in user-land.
-pub trait CustomOp1 {
+pub trait CustomOp1<B: BackendStorage> {
     // Box<dyn> does not support const yet, so use a function to get the name.
     fn name(&self) -> &'static str;
 
@@ -35,12 +42,17 @@ pub trait CustomOp1 {
     /// This function takes as argument the argument `arg` used in the forward pass, the result
     /// produced by the forward operation `res` and the gradient of the result `grad_res`.
     /// The function should return the gradient of the argument.
-    fn bwd(&self, _arg: &Tensor, _res: &Tensor, _grad_res: &Tensor) -> Result<Option<Tensor>> {
+    fn bwd(
+        &self,
+        _arg: &Tensor<B>,
+        _res: &Tensor<B>,
+        _grad_res: &Tensor<B>,
+    ) -> Result<Op1BwdResult<B>> {
         Err(crate::Error::BackwardNotSupported { op: self.name() })
     }
 }
 
-pub trait CustomOp2 {
+pub trait CustomOp2<B: BackendStorage> {
     fn name(&self) -> &'static str;
 
     /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
@@ -83,16 +95,16 @@ pub trait CustomOp2 {
 
     fn bwd(
         &self,
-        _arg1: &Tensor,
-        _arg2: &Tensor,
-        _res: &Tensor,
-        _grad_res: &Tensor,
-    ) -> Result<(Option<Tensor>, Option<Tensor>)> {
+        _arg1: &Tensor<B>,
+        _arg2: &Tensor<B>,
+        _res: &Tensor<B>,
+        _grad_res: &Tensor<B>,
+    ) -> Result<Op2BwdResult<B>> {
         Err(crate::Error::BackwardNotSupported { op: self.name() })
     }
 }
 
-pub trait CustomOp3 {
+pub trait CustomOp3<B: BackendStorage> {
     fn name(&self) -> &'static str;
 
     /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
@@ -141,25 +153,25 @@ pub trait CustomOp3 {
 
     fn bwd(
         &self,
-        _arg1: &Tensor,
-        _arg2: &Tensor,
-        _arg3: &Tensor,
-        _res: &Tensor,
-        _grad_res: &Tensor,
-    ) -> Result<(Option<Tensor>, Option<Tensor>, Option<Tensor>)> {
+        _arg1: &Tensor<B>,
+        _arg2: &Tensor<B>,
+        _arg3: &Tensor<B>,
+        _res: &Tensor<B>,
+        _grad_res: &Tensor<B>,
+    ) -> Result<Op3BwdResult<B>> {
         Err(crate::Error::BackwardNotSupported { op: self.name() })
     }
 }
 
-impl Tensor {
+impl<B: BackendStorage> Tensor<B> {
     /// Applies a unary custom op without backward support
-    pub fn apply_op1_no_bwd<C: CustomOp1>(&self, c: &C) -> Result<Self> {
+    pub fn apply_op1_no_bwd<C: CustomOp1<B>>(&self, c: &C) -> Result<Self> {
         let (storage, shape) = self.storage().apply_op1(self.layout(), c)?;
         Ok(from_storage(storage, shape, BackpropOp::none(), false))
     }
 
     /// Applies a binary custom op without backward support
-    pub fn apply_op2_no_bwd<C: CustomOp2>(&self, rhs: &Self, c: &C) -> Result<Self> {
+    pub fn apply_op2_no_bwd<C: CustomOp2<B>>(&self, rhs: &Self, c: &C) -> Result<Self> {
         let (storage, shape) =
             self.storage()
                 .apply_op2(self.layout(), &rhs.storage(), rhs.layout(), c)?;
@@ -167,7 +179,7 @@ impl Tensor {
     }
 
     /// Applies a ternary custom op without backward support
-    pub fn apply_op3_no_bwd<C: CustomOp3>(&self, t2: &Self, t3: &Self, c: &C) -> Result<Self> {
+    pub fn apply_op3_no_bwd<C: CustomOp3<B>>(&self, t2: &Self, t3: &Self, c: &C) -> Result<Self> {
         let (storage, shape) = self.storage().apply_op3(
             self.layout(),
             &t2.storage(),
@@ -180,7 +192,7 @@ impl Tensor {
     }
 
     /// Applies a unary custom op.
-    pub fn apply_op1_arc(&self, c: Arc<Box<dyn CustomOp1 + Send + Sync>>) -> Result<Self> {
+    pub fn apply_op1_arc(&self, c: Arc<Box<dyn CustomOp1<B> + Send + Sync>>) -> Result<Self> {
         let (storage, shape) = self
             .storage()
             .apply_op1(self.layout(), c.as_ref().as_ref())?;
@@ -188,7 +200,7 @@ impl Tensor {
         Ok(from_storage(storage, shape, op, false))
     }
 
-    pub fn apply_op1<C: 'static + CustomOp1 + Send + Sync>(&self, c: C) -> Result<Self> {
+    pub fn apply_op1<C: 'static + CustomOp1<B> + Send + Sync>(&self, c: C) -> Result<Self> {
         self.apply_op1_arc(Arc::new(Box::new(c)))
     }
 
@@ -196,7 +208,7 @@ impl Tensor {
     pub fn apply_op2_arc(
         &self,
         rhs: &Self,
-        c: Arc<Box<dyn CustomOp2 + Send + Sync>>,
+        c: Arc<Box<dyn CustomOp2<B> + Send + Sync>>,
     ) -> Result<Self> {
         let (storage, shape) = self.storage().apply_op2(
             self.layout(),
@@ -208,7 +220,11 @@ impl Tensor {
         Ok(from_storage(storage, shape, op, false))
     }
 
-    pub fn apply_op2<C: 'static + CustomOp2 + Send + Sync>(&self, r: &Self, c: C) -> Result<Self> {
+    pub fn apply_op2<C: 'static + CustomOp2<B> + Send + Sync>(
+        &self,
+        r: &Self,
+        c: C,
+    ) -> Result<Self> {
         self.apply_op2_arc(r, Arc::new(Box::new(c)))
     }
 
@@ -217,7 +233,7 @@ impl Tensor {
         &self,
         t2: &Self,
         t3: &Self,
-        c: Arc<Box<dyn CustomOp3 + Send + Sync>>,
+        c: Arc<Box<dyn CustomOp3<B> + Send + Sync>>,
     ) -> Result<Self> {
         let (storage, shape) = self.storage().apply_op3(
             self.layout(),
@@ -233,7 +249,7 @@ impl Tensor {
         Ok(from_storage(storage, shape, op, false))
     }
 
-    pub fn apply_op3<C: 'static + CustomOp3 + Send + Sync>(
+    pub fn apply_op3<C: 'static + CustomOp3<B> + Send + Sync>(
         &self,
         t2: &Self,
         t3: &Self,
@@ -351,7 +367,7 @@ pub trait InplaceOp3 {
     }
 }
 
-impl Tensor {
+impl<B: BackendStorage> Tensor<B> {
     /// Applies a unary custom op in place.
     pub fn inplace_op1<C: InplaceOp1>(&self, c: &C) -> Result<()> {
         self.storage_mut().inplace_op1(self.layout(), c)
@@ -376,25 +392,28 @@ impl Tensor {
     }
 }
 
-pub struct UgIOp1 {
+#[allow(unused)]
+pub struct UgIOp1<B: BackendStorage>
+where
+    B::Device: UgDevice,
+{
     name: &'static str,
-    #[cfg(feature = "cuda")]
-    func: cudarc::driver::CudaFunction,
-    #[cfg(feature = "metal")]
-    func: candle_metal_kernels::metal::ComputePipeline,
+    func: <B::Device as UgDevice>::UgFunction,
 }
 
-impl UgIOp1 {
+impl<B: BackendStorage> UgIOp1<B>
+where
+    B::Device: UgDevice,
+{
     #[allow(unused)]
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     pub fn new(
         name: &'static str,
         kernel: ug::lang::ssa::Kernel,
-        device: &crate::Device,
+        device: &B::Device,
     ) -> Result<Self> {
         #[cfg(feature = "cuda")]
         {
-            let device = device.as_cuda_device()?;
             let func = device.compile(name, kernel)?;
             Ok(Self {
                 name,
@@ -403,27 +422,26 @@ impl UgIOp1 {
         }
         #[cfg(feature = "metal")]
         {
-            let device = device.as_metal_device()?;
             let func = device.compile(name, kernel)?;
             Ok(Self { name, func })
         }
         #[cfg(not(any(feature = "cuda", feature = "metal")))]
         {
-            Ok(Self { name })
+            crate::bail!("ug ops are only supported on metal/cuda at the moment")
         }
     }
 }
 
-impl InplaceOp1 for UgIOp1 {
+#[cfg(all(feature = "metal", not(target_arch = "wasm32")))]
+impl InplaceOp1 for UgIOp1<MetalStorage> {
     fn name(&self) -> &'static str {
         self.name
     }
 
     fn cpu_fwd(&self, _: &mut CpuStorage, _: &Layout) -> Result<()> {
-        crate::bail!("ug ops are only supported on metal/cuda at the moment")
+        unreachable!()
     }
 
-    #[cfg(feature = "metal")]
     fn metal_fwd(&self, sto: &mut MetalStorage, layout: &Layout) -> Result<()> {
         use crate::backend::BackendStorage;
         use candle_metal_kernels::utils::EncoderProvider;
@@ -434,7 +452,7 @@ impl InplaceOp1 for UgIOp1 {
             // TODO: support more dtypes.
             crate::bail!("input is not a f32 tensor")
         }
-        let device = sto.device();
+        let device = sto.device().as_ref().clone();
         println!("here");
         let command_buffer = device.command_buffer()?;
         let command_buffer = &command_buffer;
@@ -460,7 +478,25 @@ impl InplaceOp1 for UgIOp1 {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
+    fn cuda_fwd(&self, _: &mut CudaStorage, _: &Layout) -> Result<()> {
+        unreachable!()
+    }
+}
+
+#[cfg(all(feature = "cuda", not(target_arch = "wasm32")))]
+impl InplaceOp1 for UgIOp1<CudaStorage> {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn cpu_fwd(&self, _: &mut CpuStorage, _: &Layout) -> Result<()> {
+        unreachable!()
+    }
+
+    fn metal_fwd(&self, _: &mut MetalStorage, _: &Layout) -> Result<()> {
+        unreachable!()
+    }
+
     fn cuda_fwd(&self, sto: &mut CudaStorage, layout: &Layout) -> Result<()> {
         use crate::cuda_backend::WrapErr;
         use cudarc::driver::PushKernelArg;

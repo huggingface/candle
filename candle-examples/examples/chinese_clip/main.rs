@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn as nn;
 use candle_transformers::models::chinese_clip::{ChineseClipConfig, ChineseClipModel};
 use clap::Parser;
@@ -28,13 +28,36 @@ struct Args {
     sequences: Option<Vec<String>>,
 }
 
-fn main() -> anyhow::Result<()> {
+pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
-    let device = candle_examples::device(args.cpu)?;
-    let var = load_weights(args.model, &device)?;
+    let device = B::Device::new(0)?;
+    let var: nn::VarBuilder<B> = load_weights(args.model, &device)?;
     let clip_model = ChineseClipModel::new(var, &ChineseClipConfig::clip_vit_base_patch16())?;
     tracing::info!("Transformer loaded. ");
 
@@ -77,7 +100,10 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn load_weights(model: Option<String>, device: &Device) -> anyhow::Result<nn::VarBuilder<'_>> {
+pub fn load_weights<'a, B: BackendStorage + 'a>(
+    model: Option<String>,
+    device: &B::Device,
+) -> anyhow::Result<nn::VarBuilder<'a, B>> {
     let model_file = match model {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
@@ -110,11 +136,12 @@ pub fn load_tokenizer() -> anyhow::Result<Tokenizer> {
     Tokenizer::from_file(tokenizer_file).map_err(anyhow::Error::msg)
 }
 
-pub fn tokenize_sequences(
+#[allow(clippy::type_complexity)]
+pub fn tokenize_sequences<B: BackendStorage>(
     sequences: Option<Vec<String>>,
     tokenizer: &Tokenizer,
-    device: &Device,
-) -> anyhow::Result<(Tensor, Tensor, Tensor, Vec<String>)> {
+    device: &B::Device,
+) -> anyhow::Result<(Tensor<B>, Tensor<B>, Tensor<B>, Vec<String>)> {
     let vec_seq = match sequences {
         Some(seq) => seq,
         None => vec![
@@ -175,10 +202,10 @@ pub fn tokenize_sequences(
     Ok((input_ids, type_ids, attention_mask, vec_seq))
 }
 
-pub fn load_images(
+pub fn load_images<B: BackendStorage>(
     images: Option<Vec<String>>,
-    device: &Device,
-) -> anyhow::Result<(Tensor, Vec<String>)> {
+    device: &B::Device,
+) -> anyhow::Result<(Tensor<B>, Vec<String>)> {
     let vec_imgs = match images {
         Some(imgs) => imgs,
         None => vec![
@@ -194,15 +221,15 @@ pub fn load_images(
         images.push(tensor);
     }
 
-    let images = Tensor::stack(&images, 0)?.to_device(device)?;
+    let images = Tensor::stack(&images, 0)?;
     Ok((images, vec_imgs))
 }
 
-fn load_image<T: AsRef<std::path::Path>>(
-    path: T,
+fn load_image<P: AsRef<std::path::Path>, B: BackendStorage>(
+    path: P,
     image_size: usize,
-    device: &Device,
-) -> anyhow::Result<Tensor> {
+    device: &B::Device,
+) -> anyhow::Result<Tensor<B>> {
     let img = image::ImageReader::open(path)?.decode()?;
     let (height, width) = (image_size, image_size);
     let img = img.resize_to_fill(

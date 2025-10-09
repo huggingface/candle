@@ -11,7 +11,7 @@
 //! - [Official Implementation](https://github.com/DingXiaoH/RepVGG)
 //!
 
-use candle::{Result, Tensor, D};
+use candle::{BackendStorage, Result, Tensor, D};
 use candle_nn::{
     batch_norm, conv2d_no_bias, linear, BatchNorm, Conv2d, Conv2dConfig, Func, VarBuilder,
 };
@@ -121,7 +121,10 @@ impl Config {
 // fuses a convolutional kernel and a batchnorm layer into a convolutional layer
 // based on the _fuse_bn_tensor method in timm
 // see https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/byobnet.py#L602
-fn fuse_conv_bn(weights: &Tensor, bn: BatchNorm) -> Result<(Tensor, Tensor)> {
+fn fuse_conv_bn<B: BackendStorage>(
+    weights: &Tensor<B>,
+    bn: BatchNorm<B>,
+) -> Result<(Tensor<B>, Tensor<B>)> {
     let (gamma, beta) = bn.weight_and_bias().unwrap();
     let mu = bn.running_mean();
     let sigma = (bn.running_var() + bn.eps())?.sqrt();
@@ -136,15 +139,15 @@ fn fuse_conv_bn(weights: &Tensor, bn: BatchNorm) -> Result<(Tensor, Tensor)> {
 // The latter is a simple and efficient equivalent transformation of the former
 // realized by a structural reparameterization technique, where 3x3 and 1x1 convolutions
 // along with identity branches and batchnorm layers are fused into a single 3x3 convolution.
-fn repvgg_layer(
+fn repvgg_layer<B: BackendStorage + 'static>(
     has_identity: bool,
     dim: usize,
     stride: usize,
     in_channels: usize,
     out_channels: usize,
     groups: usize,
-    vb: VarBuilder,
-) -> Result<Func<'static>> {
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let conv2d_cfg = Conv2dConfig {
         stride,
         groups,
@@ -230,7 +233,11 @@ fn output_channels_per_stage(a: f32, b: f32, stage: usize) -> usize {
 // The G4 variants have a groupwise convolution instead of a dense one on odd layers
 // counted across stage boundaries, so we keep track of which layer we are in the
 // full model.
-fn repvgg_stage(cfg: &Config, idx: usize, vb: VarBuilder) -> Result<Func<'static>> {
+fn repvgg_stage<B: BackendStorage + 'static>(
+    cfg: &Config,
+    idx: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let nlayers = cfg.stages[idx - 1];
     let mut layers = Vec::with_capacity(nlayers);
     let prev_layers: usize = cfg.stages[..idx - 1].iter().sum();
@@ -271,7 +278,11 @@ fn repvgg_stage(cfg: &Config, idx: usize, vb: VarBuilder) -> Result<Func<'static
 }
 
 // Build a RepVGG model for a given configuration.
-fn repvgg_model(config: &Config, nclasses: Option<usize>, vb: VarBuilder) -> Result<Func<'static>> {
+fn repvgg_model<B: BackendStorage + 'static>(
+    config: &Config,
+    nclasses: Option<usize>,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     let cls = match nclasses {
         None => None,
         Some(nclasses) => {
@@ -305,10 +316,17 @@ fn repvgg_model(config: &Config, nclasses: Option<usize>, vb: VarBuilder) -> Res
     }))
 }
 
-pub fn repvgg(cfg: &Config, nclasses: usize, vb: VarBuilder) -> Result<Func<'static>> {
+pub fn repvgg<B: BackendStorage + 'static>(
+    cfg: &Config,
+    nclasses: usize,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     repvgg_model(cfg, Some(nclasses), vb)
 }
 
-pub fn repvgg_no_final_layer(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
+pub fn repvgg_no_final_layer<B: BackendStorage + 'static>(
+    cfg: &Config,
+    vb: VarBuilder<B>,
+) -> Result<Func<'static, B>> {
     repvgg_model(cfg, None, vb)
 }

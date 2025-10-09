@@ -17,21 +17,28 @@ use std::collections::HashMap;
 
 use candle::quantized::gguf_file;
 use candle::quantized::QTensor;
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::quantized::QuantizedBackend;
+#[cfg(not(feature = "flash-attn"))]
+use candle::BackendStorage;
+#[cfg(feature = "flash-attn")]
+use candle::CudaStorage;
+#[cfg(feature = "flash-attn")]
+use candle::CudaStorage;
+use candle::{DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{kv_cache::KvCache, Embedding, RmsNorm};
 
 #[derive(Debug, Clone)]
-struct QLinear {
-    inner: candle::quantized::QMatMul,
+pub struct QLinear<QB: QuantizedBackend> {
+    inner: candle::quantized::QMatMul<QB>,
     span: tracing::Span,
 }
 
-impl QLinear {
+impl<QB: QuantizedBackend> QLinear<QB> {
     fn new<R: std::io::Read + std::io::Seek>(
         ct: &gguf_file::Content,
         r: &mut R,
         name: &str,
-        device: &Device,
+        device: &QB::Device,
     ) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
         let w = ct.tensor(r, &format!("{name}.weight"), device)?;
@@ -40,22 +47,28 @@ impl QLinear {
     }
 }
 
-impl Module for QLinear {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for QLinear<QB>
+where
+    candle::quantized::QMatMul<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let _enter = self.span.enter();
         self.inner.forward(xs)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    ffn_up: QLinear,
-    ffn_down: QLinear,
+struct Mlp<QB: QuantizedBackend> {
+    ffn_up: QLinear<QB>,
+    ffn_down: QLinear<QB>,
     i_size: usize,
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<QB: QuantizedBackend> Module<QB::Storage> for Mlp<QB>
+where
+    QLinear<QB>: Module<QB::Storage>,
+{
+    fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         let up_states = xs.apply(&self.ffn_up)?;
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
@@ -64,39 +77,47 @@ impl Module for Mlp {
     }
 }
 
-fn rms_norm(w: QTensor, eps: f64) -> Result<RmsNorm> {
-    let w = w.dequantize(&w.device())?;
+fn rms_norm<QB: QuantizedBackend>(w: QTensor<QB>, eps: f64) -> Result<RmsNorm<QB::Storage>> {
+    let w = w.dequantize()?;
     let rms = RmsNorm::new(w, eps);
     Ok(rms)
 }
 
 #[derive(Debug, Clone)]
-struct LayerWeights {
-    attn_qkv: QLinear,
-    attn_output: QLinear,
-    attn_norm: RmsNorm,
-    ffn_norm: RmsNorm,
-    mlp: Mlp,
+struct LayerWeights<QB: QuantizedBackend> {
+    attn_qkv: QLinear<QB>,
+    attn_output: QLinear<QB>,
+    attn_norm: RmsNorm<QB::Storage>,
+    ffn_norm: RmsNorm<QB::Storage>,
+    mlp: Mlp<QB>,
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
-    cos: Tensor,
-    sin: Tensor,
-    neg_inf: Tensor,
-    kv_cache: KvCache,
+    cos: Tensor<QB::Storage>,
+    sin: Tensor<QB::Storage>,
+    neg_inf: Tensor<QB::Storage>,
+    kv_cache: KvCache<QB::Storage>,
     use_flash_attn: bool,
     span_attn: tracing::Span,
     span_rot: tracing::Span,
 }
 
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
+fn masked_fill<QB: QuantizedBackend>(
+    on_false: &Tensor<QB::Storage>,
+    mask: &Tensor<QB::Storage>,
+    on_true: &Tensor<QB::Storage>,
+) -> Result<Tensor<QB::Storage>> {
     let shape = mask.shape();
     let m = mask.where_cond(&on_true.broadcast_as(shape.dims())?, on_false)?;
     Ok(m)
 }
 
-impl LayerWeights {
-    fn apply_rotary_emb(&self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
+impl<QB: QuantizedBackend> LayerWeights<QB> {
+    fn apply_rotary_emb(
+        &self,
+        xs: &Tensor<QB::Storage>,
+        index_pos: usize,
+    ) -> Result<Tensor<QB::Storage>> {
         let _enter = self.span_rot.enter();
         let (_b_sz, _h, seq_len, _n_embd) = xs.dims4()?;
         let cos = self.cos.narrow(0, index_pos, seq_len)?;
@@ -106,10 +127,13 @@ impl LayerWeights {
 
     fn forward_attn(
         &mut self,
-        x: &Tensor,
-        mask: Option<&Tensor>,
+        x: &Tensor<QB::Storage>,
+        mask: Option<&Tensor<QB::Storage>>,
         index_pos: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        QLinear<QB>: Module<QB::Storage>,
+    {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
         let qkv = self.attn_qkv.forward(x)?;
@@ -159,7 +183,7 @@ impl LayerWeights {
                 None => att,
                 Some(mask) => {
                     let mask = mask.broadcast_as(att.shape())?;
-                    masked_fill(&att, &mask, &self.neg_inf)?
+                    masked_fill::<QB>(&att, &mask, &self.neg_inf)?
                 }
             };
             let att = candle_nn::ops::softmax_last_dim(&att)?;
@@ -174,37 +198,47 @@ impl LayerWeights {
 
 #[cfg(feature = "flash-attn")]
 fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
+    q: &Tensor<CudaStorage>,
+    k: &Tensor<CudaStorage>,
+    v: &Tensor<CudaStorage>,
     softmax_scale: f32,
     causal: bool,
-) -> Result<Tensor> {
+) -> Result<Tensor<CudaStorage>> {
     candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
 }
 
 #[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+fn flash_attn<B: BackendStorage>(
+    _: &Tensor<B>,
+    _: &Tensor<B>,
+    _: &Tensor<B>,
+    _: f32,
+    _: bool,
+) -> Result<Tensor<B>> {
     unimplemented!("compile with '--features flash-attn'")
 }
 
 #[derive(Debug, Clone)]
-pub struct ModelWeights {
-    tok_embeddings: Embedding,
-    layers: Vec<LayerWeights>,
-    output_norm: RmsNorm,
-    output: QLinear,
-    masks: HashMap<usize, Tensor>,
+pub struct ModelWeights<QB: QuantizedBackend> {
+    tok_embeddings: Embedding<QB::Storage>,
+    layers: Vec<LayerWeights<QB>>,
+    output_norm: RmsNorm<QB::Storage>,
+    output: QLinear<QB>,
+    masks: HashMap<usize, Tensor<QB::Storage>>,
     span: tracing::Span,
     span_output: tracing::Span,
 }
 
-fn precomput_freqs_cis(
+type CosSin<QB> = (
+    Tensor<<QB as QuantizedBackend>::Storage>,
+    Tensor<<QB as QuantizedBackend>::Storage>,
+);
+fn precomput_freqs_cis<QB: QuantizedBackend>(
     head_dim: usize,
     max_seq_len: usize,
     freq_base: f32,
-    device: &Device,
-) -> Result<(Tensor, Tensor)> {
+    device: &QB::Device,
+) -> Result<CosSin<QB>> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
@@ -219,12 +253,12 @@ fn precomput_freqs_cis(
     Ok((cos, sin))
 }
 
-impl ModelWeights {
+impl<QB: QuantizedBackend> ModelWeights<QB> {
     pub fn from_gguf<R: std::io::Seek + std::io::Read>(
         use_flash_attn: bool,
         ct: gguf_file::Content,
         reader: &mut R,
-        device: &Device,
+        device: &QB::Device,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle::bail!("cannot find {s} in metadata"),
@@ -241,12 +275,13 @@ impl ModelWeights {
         let i_size = md_get("phi3.feed_forward_length")?.to_u32()? as usize;
         let rope_dim = md_get("phi3.rope.dimension_count")?.to_u32()? as usize;
         let rms_eps = md_get("phi3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
-        let (cos, sin) = precomput_freqs_cis(rope_dim, max_seq_len, 10_000., device)?;
+        let (cos, sin) = precomput_freqs_cis::<QB>(rope_dim, max_seq_len, 10_000., device)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
-        let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
-        let tok_embeddings = tok_embeddings.dequantize(device)?;
-        let output_norm = rms_norm(ct.tensor(reader, "output_norm.weight", device)?, rms_eps)?;
+        let tok_embeddings: QTensor<QB> = ct.tensor(reader, "token_embd.weight", device)?;
+        let tok_embeddings = tok_embeddings.dequantize()?;
+        let output_norm =
+            rms_norm::<QB>(ct.tensor(reader, "output_norm.weight", device)?, rms_eps)?;
         let output = QLinear::new(&ct, reader, "output", device)?;
 
         let mut layers = Vec::with_capacity(block_count);
@@ -259,11 +294,11 @@ impl ModelWeights {
                 ffn_down,
                 i_size,
             };
-            let attn_norm = rms_norm(
+            let attn_norm = rms_norm::<QB>(
                 ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
                 rms_eps,
             )?;
-            let ffn_norm = rms_norm(
+            let ffn_norm = rms_norm::<QB>(
                 ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?,
                 rms_eps,
             )?;
@@ -301,7 +336,7 @@ impl ModelWeights {
         })
     }
 
-    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
+    fn mask(&mut self, t: usize, device: &QB::Device) -> Result<Tensor<QB::Storage>> {
         if let Some(mask) = self.masks.get(&t) {
             Ok(mask.clone())
         } else {
@@ -314,7 +349,14 @@ impl ModelWeights {
         }
     }
 
-    pub fn forward(&mut self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        xs: &Tensor<QB::Storage>,
+        index_pos: usize,
+    ) -> Result<Tensor<QB::Storage>>
+    where
+        QLinear<QB>: Module<QB::Storage>,
+    {
         let (_b_sz, seq_len) = xs.dims2()?;
         let mask = if seq_len == 1 {
             None

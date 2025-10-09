@@ -9,35 +9,35 @@ use clap::Parser;
 
 use candle_transformers::models::pixtral::{vision_model, Config, Model};
 
-use candle::{DType, Device, Module, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Module, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-struct TextGeneration {
-    model: Model,
-    image: Tensor,
-    device: Device,
+struct TextGeneration<B: BackendStorage> {
+    model: Model<B>,
+    image: Tensor<B>,
+    device: B::Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
 }
 
-impl TextGeneration {
+impl<B: BackendStorage> TextGeneration<B> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
-        image: Tensor,
+        model: Model<B>,
+        image: Tensor<B>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
         top_p: Option<f64>,
         repeat_penalty: f32,
         repeat_last_n: usize,
-        device: &Device,
+        device: &B::Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
@@ -218,11 +218,25 @@ struct Args {
     vision_only: bool,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -268,8 +282,7 @@ fn main() -> Result<()> {
     };
     println!("retrieved the files in {:?}", start.elapsed());
 
-    let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.supports_bf16() && !args.vision_only {
+    let dtype = if B::Device::SUPPORTS_BF16 && !args.vision_only {
         DType::BF16
     } else {
         DType::F32
@@ -281,8 +294,8 @@ fn main() -> Result<()> {
             serde_json::from_slice(&std::fs::read(config_file)?)?
         }
     };
-    let image = if args.image.ends_with(".safetensors") {
-        match candle::safetensors::load(&args.image, &device)?.remove("img") {
+    let image: Tensor<B> = if args.image.ends_with(".safetensors") {
+        match candle::safetensors::load(&args.image, device)?.remove("img") {
             None => anyhow::bail!("no img tensor in {}", args.image),
             Some(v) => v,
         }
@@ -292,11 +305,12 @@ fn main() -> Result<()> {
             1024,
             &[0.48145466, 0.4578275, 0.40821073],
             &[0.26862954, 0.261_302_6, 0.275_777_1],
+            device,
         )?
     };
-    let image = image.to_device(&device)?.unsqueeze(0)?;
+    let image = image.unsqueeze(0)?;
     println!("loaded image with shape {image:?}");
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
 
     if args.vision_only {
         let start = std::time::Instant::now();
@@ -318,7 +332,7 @@ fn main() -> Result<()> {
             args.top_p,
             args.repeat_penalty,
             args.repeat_last_n,
-            &device,
+            device,
         );
         pipeline.run(&args.prompt, args.sample_len)?;
     }

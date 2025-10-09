@@ -1,4 +1,4 @@
-use candle::{DType, IndexOp, Result, Tensor};
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 
 use super::image_encoder::ImageEncoderViT;
@@ -16,13 +16,13 @@ const MODEL_MASK_THRESHOLD: f32 = 0.0;
 const CROP_NMS_THRESH: f32 = 0.7;
 
 #[derive(Debug)]
-enum ImageEncoder {
-    Original(Box<ImageEncoderViT>),
-    TinyViT(Box<TinyViT>),
+enum ImageEncoder<B: BackendStorage> {
+    Original(Box<ImageEncoderViT<B>>),
+    TinyViT(Box<TinyViT<B>>),
 }
 
-impl Module for ImageEncoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ImageEncoder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         match self {
             Self::Original(vit) => vit.forward(xs),
             Self::TinyViT(vit) => vit.forward(xs),
@@ -31,21 +31,21 @@ impl Module for ImageEncoder {
 }
 
 #[derive(Debug)]
-pub struct Sam {
-    image_encoder: ImageEncoder,
-    prompt_encoder: PromptEncoder,
-    mask_decoder: MaskDecoder,
-    pixel_mean: Tensor,
-    pixel_std: Tensor,
+pub struct Sam<B: BackendStorage> {
+    image_encoder: ImageEncoder<B>,
+    prompt_encoder: PromptEncoder<B>,
+    mask_decoder: MaskDecoder<B>,
+    pixel_mean: Tensor<B>,
+    pixel_std: Tensor<B>,
 }
 
-impl Sam {
+impl<B: BackendStorage> Sam<B> {
     pub fn new(
         encoder_embed_dim: usize,
         encoder_depth: usize,
         encoder_num_heads: usize,
         encoder_global_attn_indexes: &[usize],
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let image_embedding_size = IMAGE_SIZE / VIT_PATCH_SIZE;
 
@@ -91,7 +91,7 @@ impl Sam {
         })
     }
 
-    pub fn new_tiny(vb: VarBuilder) -> Result<Self> {
+    pub fn new_tiny(vb: VarBuilder<B>) -> Result<Self> {
         let image_embedding_size = IMAGE_SIZE / VIT_PATCH_SIZE;
 
         let image_encoder = tiny_vit_5m(vb.pp("image_encoder"))?;
@@ -122,17 +122,17 @@ impl Sam {
         })
     }
 
-    pub fn embeddings(&self, img: &Tensor) -> Result<Tensor> {
+    pub fn embeddings(&self, img: &Tensor<B>) -> Result<Tensor<B>> {
         let img = self.preprocess(img)?.unsqueeze(0)?;
         self.image_encoder.forward(&img)
     }
 
     pub fn forward(
         &self,
-        img: &Tensor,
+        img: &Tensor<B>,
         points: &[(f64, f64, bool)],
         multimask_output: bool,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let (_c, original_h, original_w) = img.dims3()?;
         let img = self.preprocess(img)?.unsqueeze(0)?;
         let img_embeddings = self.image_encoder.forward(&img)?;
@@ -157,12 +157,12 @@ impl Sam {
     /// and `false` for points that should be part of the background and so excluded from the mask.
     pub fn forward_for_embeddings(
         &self,
-        img_embeddings: &Tensor,
+        img_embeddings: &Tensor<B>,
         original_h: usize,
         original_w: usize,
         points: &[(f64, f64, bool)],
         multimask_output: bool,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let image_pe = self.prompt_encoder.get_dense_pe()?;
         let points = if points.is_empty() {
             None
@@ -196,7 +196,7 @@ impl Sam {
         )
     }
 
-    pub fn unpreprocess(&self, img: &Tensor) -> Result<Tensor> {
+    pub fn unpreprocess(&self, img: &Tensor<B>) -> Result<Tensor<B>> {
         let img = img
             .broadcast_mul(&self.pixel_std)?
             .broadcast_add(&self.pixel_mean)?;
@@ -204,7 +204,7 @@ impl Sam {
             .minimum(&(img.ones_like()? * 255.)?)
     }
 
-    pub fn preprocess(&self, img: &Tensor) -> Result<Tensor> {
+    pub fn preprocess(&self, img: &Tensor<B>) -> Result<Tensor<B>> {
         let (_c, h, w) = img.dims3()?;
         let img = img
             .to_dtype(DType::F32)?
@@ -219,10 +219,10 @@ impl Sam {
 
     fn process_crop(
         &self,
-        img: &Tensor,
+        img: &Tensor<B>,
         cb: CropBox,
         point_grids: &[(f64, f64)],
-    ) -> Result<Vec<crate::object_detection::Bbox<Tensor>>> {
+    ) -> Result<Vec<crate::object_detection::Bbox<Tensor<B>>>> {
         // Crop the image and calculate embeddings.
         let img = img.i((.., cb.y0..cb.y1, cb.x0..cb.x1))?;
         let img = self.preprocess(&img)?.unsqueeze(0)?;
@@ -321,12 +321,12 @@ impl Sam {
 
     pub fn generate_masks(
         &self,
-        img: &Tensor,
+        img: &Tensor<B>,
         points_per_side: usize,
         crop_n_layer: usize,
         crop_overlap_ratio: f64,
         crop_n_points_downscale_factor: usize,
-    ) -> Result<Vec<crate::object_detection::Bbox<Tensor>>> {
+    ) -> Result<Vec<crate::object_detection::Bbox<Tensor<B>>>> {
         let (_c, h, w) = img.dims3()?;
         let point_grids = build_all_layer_point_grids(
             points_per_side,

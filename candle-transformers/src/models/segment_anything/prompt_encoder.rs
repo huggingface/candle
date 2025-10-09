@@ -1,13 +1,13 @@
-use candle::{DType, IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 #[derive(Debug)]
-struct PositionEmbeddingRandom {
-    positional_encoding_gaussian_matrix: Tensor,
+struct PositionEmbeddingRandom<B: BackendStorage> {
+    positional_encoding_gaussian_matrix: Tensor<B>,
 }
 
-impl PositionEmbeddingRandom {
-    fn new(num_pos_feats: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> PositionEmbeddingRandom<B> {
+    fn new(num_pos_feats: usize, vb: VarBuilder<B>) -> Result<Self> {
         let positional_encoding_gaussian_matrix =
             vb.get((2, num_pos_feats), "positional_encoding_gaussian_matrix")?;
         Ok(Self {
@@ -15,14 +15,14 @@ impl PositionEmbeddingRandom {
         })
     }
 
-    fn pe_encoding(&self, coords: &Tensor) -> Result<Tensor> {
+    fn pe_encoding(&self, coords: &Tensor<B>) -> Result<Tensor<B>> {
         let coords = coords.affine(2., -1.)?;
         let coords = coords.broadcast_matmul(&self.positional_encoding_gaussian_matrix)?;
         let coords = (coords * (2. * std::f64::consts::PI))?;
         Tensor::cat(&[coords.sin()?, coords.cos()?], D::Minus1)
     }
 
-    fn forward(&self, h: usize, w: usize) -> Result<Tensor> {
+    fn forward(&self, h: usize, w: usize) -> Result<Tensor<B>> {
         let device = self.positional_encoding_gaussian_matrix.device();
         let x_embed = (Tensor::arange(0u32, w as u32, device)?.to_dtype(DType::F32)? + 0.5)?;
         let y_embed = (Tensor::arange(0u32, h as u32, device)?.to_dtype(DType::F32)? + 0.5)?;
@@ -38,9 +38,9 @@ impl PositionEmbeddingRandom {
 
     fn forward_with_coords(
         &self,
-        coords_input: &Tensor,
+        coords_input: &Tensor<B>,
         image_size: (usize, usize),
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let coords0 = (coords_input.narrow(D::Minus1, 0, 1)? / image_size.1 as f64)?;
         let coords1 = (coords_input.narrow(D::Minus1, 1, 1)? / image_size.0 as f64)?;
         let c = coords_input.dim(D::Minus1)?;
@@ -51,29 +51,29 @@ impl PositionEmbeddingRandom {
 }
 
 #[derive(Debug)]
-pub struct PromptEncoder {
-    pe_layer: PositionEmbeddingRandom,
-    point_embeddings: Vec<candle_nn::Embedding>,
-    not_a_point_embed: candle_nn::Embedding,
-    mask_downscaling_conv1: candle_nn::Conv2d,
-    mask_downscaling_ln1: super::LayerNorm2d,
-    mask_downscaling_conv2: candle_nn::Conv2d,
-    mask_downscaling_ln2: super::LayerNorm2d,
-    mask_downscaling_conv3: candle_nn::Conv2d,
-    no_mask_embed: candle_nn::Embedding,
+pub struct PromptEncoder<B: BackendStorage> {
+    pe_layer: PositionEmbeddingRandom<B>,
+    point_embeddings: Vec<candle_nn::Embedding<B>>,
+    not_a_point_embed: candle_nn::Embedding<B>,
+    mask_downscaling_conv1: candle_nn::Conv2d<B>,
+    mask_downscaling_ln1: super::LayerNorm2d<B>,
+    mask_downscaling_conv2: candle_nn::Conv2d<B>,
+    mask_downscaling_ln2: super::LayerNorm2d<B>,
+    mask_downscaling_conv3: candle_nn::Conv2d<B>,
+    no_mask_embed: candle_nn::Embedding<B>,
     image_embedding_size: (usize, usize),
     input_image_size: (usize, usize),
     embed_dim: usize,
     span: tracing::Span,
 }
 
-impl PromptEncoder {
+impl<B: BackendStorage> PromptEncoder<B> {
     pub fn new(
         embed_dim: usize,
         image_embedding_size: (usize, usize),
         input_image_size: (usize, usize),
         mask_in_chans: usize,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let num_points_embeddings = 4;
         let pe_layer = PositionEmbeddingRandom::new(embed_dim / 2, vb.pp("pe_layer"))?;
@@ -127,13 +127,13 @@ impl PromptEncoder {
         })
     }
 
-    pub fn get_dense_pe(&self) -> Result<Tensor> {
+    pub fn get_dense_pe(&self) -> Result<Tensor<B>> {
         self.pe_layer
             .forward(self.image_embedding_size.0, self.image_embedding_size.1)?
             .unsqueeze(0)
     }
 
-    fn embed_masks(&self, masks: &Tensor) -> Result<Tensor> {
+    fn embed_masks(&self, masks: &Tensor<B>) -> Result<Tensor<B>> {
         masks
             .apply(&self.mask_downscaling_conv1)?
             .apply(&self.mask_downscaling_ln1)?
@@ -144,7 +144,7 @@ impl PromptEncoder {
             .apply(&self.mask_downscaling_conv3)
     }
 
-    fn embed_points(&self, points: &Tensor, labels: &Tensor, pad: bool) -> Result<Tensor> {
+    fn embed_points(&self, points: &Tensor<B>, labels: &Tensor<B>, pad: bool) -> Result<Tensor<B>> {
         let points = (points + 0.5)?;
         let dev = points.device();
         let (points, labels) = if pad {
@@ -185,7 +185,7 @@ impl PromptEncoder {
         Ok(point_embedding)
     }
 
-    fn embed_boxes(&self, boxes: &Tensor) -> Result<Tensor> {
+    fn embed_boxes(&self, boxes: &Tensor<B>) -> Result<Tensor<B>> {
         let boxes = (boxes + 0.5)?;
         let coords = boxes.reshape(((), 2, 2))?;
         let corner_embedding = self
@@ -200,10 +200,10 @@ impl PromptEncoder {
 
     pub fn forward(
         &self,
-        points: Option<(&Tensor, &Tensor)>,
-        boxes: Option<&Tensor>,
-        masks: Option<&Tensor>,
-    ) -> Result<(Tensor, Tensor)> {
+        points: Option<(&Tensor<B>, &Tensor<B>)>,
+        boxes: Option<&Tensor<B>>,
+        masks: Option<&Tensor<B>>,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let _enter = self.span.enter();
         let se_points = match points {
             Some((coords, labels)) => Some(self.embed_points(coords, labels, boxes.is_none())?),

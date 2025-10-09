@@ -1,89 +1,90 @@
 //! Implement conversion traits for tensors
-use crate::{DType, Device, Error, Tensor, WithDType};
+use crate::{BackendStorage, CudaStorage, DType, Error, MetalStorage, Tensor, WithDType};
+use crate::{CpuDevice, CpuStorage};
 use float8::F8E4M3;
 use half::{bf16, f16, slice::HalfFloatSliceExt};
 use std::convert::TryFrom;
 
-impl<T: WithDType> TryFrom<&Tensor> for Vec<T> {
+impl<B: BackendStorage, T: WithDType> TryFrom<&Tensor<B>> for Vec<T> {
     type Error = Error;
-    fn try_from(tensor: &Tensor) -> Result<Self, Self::Error> {
+    fn try_from(tensor: &Tensor<B>) -> Result<Self, Self::Error> {
         tensor.to_vec1::<T>()
     }
 }
 
-impl<T: WithDType> TryFrom<&Tensor> for Vec<Vec<T>> {
+impl<B: BackendStorage, T: WithDType> TryFrom<&Tensor<B>> for Vec<Vec<T>> {
     type Error = Error;
-    fn try_from(tensor: &Tensor) -> Result<Self, Self::Error> {
+    fn try_from(tensor: &Tensor<B>) -> Result<Self, Self::Error> {
         tensor.to_vec2::<T>()
     }
 }
 
-impl<T: WithDType> TryFrom<&Tensor> for Vec<Vec<Vec<T>>> {
+impl<B: BackendStorage, T: WithDType> TryFrom<&Tensor<B>> for Vec<Vec<Vec<T>>> {
     type Error = Error;
-    fn try_from(tensor: &Tensor) -> Result<Self, Self::Error> {
+    fn try_from(tensor: &Tensor<B>) -> Result<Self, Self::Error> {
         tensor.to_vec3::<T>()
     }
 }
 
-impl<T: WithDType> TryFrom<Tensor> for Vec<T> {
+impl<B: BackendStorage, T: WithDType> TryFrom<Tensor<B>> for Vec<T> {
     type Error = Error;
-    fn try_from(tensor: Tensor) -> Result<Self, Self::Error> {
+    fn try_from(tensor: Tensor<B>) -> Result<Self, Self::Error> {
         Vec::<T>::try_from(&tensor)
     }
 }
 
-impl<T: WithDType> TryFrom<Tensor> for Vec<Vec<T>> {
+impl<B: BackendStorage, T: WithDType> TryFrom<Tensor<B>> for Vec<Vec<T>> {
     type Error = Error;
-    fn try_from(tensor: Tensor) -> Result<Self, Self::Error> {
+    fn try_from(tensor: Tensor<B>) -> Result<Self, Self::Error> {
         Vec::<Vec<T>>::try_from(&tensor)
     }
 }
 
-impl<T: WithDType> TryFrom<Tensor> for Vec<Vec<Vec<T>>> {
+impl<B: BackendStorage, T: WithDType> TryFrom<Tensor<B>> for Vec<Vec<Vec<T>>> {
     type Error = Error;
-    fn try_from(tensor: Tensor) -> Result<Self, Self::Error> {
+    fn try_from(tensor: Tensor<B>) -> Result<Self, Self::Error> {
         Vec::<Vec<Vec<T>>>::try_from(&tensor)
     }
 }
 
-impl<T: WithDType> TryFrom<&[T]> for Tensor {
+impl<T: WithDType> TryFrom<&[T]> for Tensor<CpuStorage> {
     type Error = Error;
     fn try_from(v: &[T]) -> Result<Self, Self::Error> {
-        Tensor::from_slice(v, v.len(), &Device::Cpu)
+        Tensor::from_slice(v, v.len(), &CpuDevice {})
     }
 }
 
-impl<T: WithDType> TryFrom<Vec<T>> for Tensor {
+impl<T: WithDType> TryFrom<Vec<T>> for Tensor<CpuStorage> {
     type Error = Error;
     fn try_from(v: Vec<T>) -> Result<Self, Self::Error> {
         let len = v.len();
-        Tensor::from_vec(v, len, &Device::Cpu)
+        Tensor::from_vec(v, len, &CpuDevice {})
     }
 }
 
 macro_rules! from_tensor {
     ($typ:ident) => {
-        impl TryFrom<&Tensor> for $typ {
+        impl<B: BackendStorage> TryFrom<&Tensor<B>> for $typ {
             type Error = Error;
 
-            fn try_from(tensor: &Tensor) -> Result<Self, Self::Error> {
+            fn try_from(tensor: &Tensor<B>) -> Result<Self, Self::Error> {
                 tensor.to_scalar::<$typ>()
             }
         }
 
-        impl TryFrom<Tensor> for $typ {
+        impl<B: BackendStorage> TryFrom<Tensor<B>> for $typ {
             type Error = Error;
 
-            fn try_from(tensor: Tensor) -> Result<Self, Self::Error> {
+            fn try_from(tensor: Tensor<B>) -> Result<Self, Self::Error> {
                 $typ::try_from(&tensor)
             }
         }
 
-        impl TryFrom<$typ> for Tensor {
+        impl TryFrom<$typ> for Tensor<CpuStorage> {
             type Error = Error;
 
             fn try_from(v: $typ) -> Result<Self, Self::Error> {
-                Tensor::new(v, &Device::Cpu)
+                Tensor::new(v, &CpuDevice {})
             }
         }
     };
@@ -97,7 +98,7 @@ from_tensor!(i64);
 from_tensor!(u32);
 from_tensor!(u8);
 
-impl Tensor {
+impl<B: BackendStorage> Tensor<B> {
     pub fn write_bytes<W: std::io::Write>(&self, f: &mut W) -> crate::Result<()> {
         use byteorder::{LittleEndian, WriteBytesExt};
 
@@ -147,5 +148,35 @@ impl Tensor {
             }
         }
         Ok(())
+    }
+}
+
+pub trait TryConvertStorage<T: BackendStorage>: BackendStorage {
+    /// Performs the conversion.
+    fn convert(storage: T, device: &Self::Device) -> Result<Self, Error>;
+}
+
+/*
+impl<B: BackendStorage> TryConvertStorage<B, B> for B::Device {
+    fn convert(&self, storage: B) -> Result<B, Error> {
+        Ok(storage)
+    }
+}
+ */
+impl TryConvertStorage<CpuStorage> for CpuStorage {
+    fn convert(storage: CpuStorage, _: &Self::Device) -> Result<Self, Error> {
+        Ok(storage)
+    }
+}
+
+impl TryConvertStorage<CudaStorage> for CpuStorage {
+    fn convert(storage: CudaStorage, _: &Self::Device) -> Result<Self, Error> {
+        storage.to_cpu_storage()
+    }
+}
+
+impl TryConvertStorage<MetalStorage> for CpuStorage {
+    fn convert(storage: MetalStorage, _: &Self::Device) -> Result<Self, Error> {
+        storage.to_cpu_storage()
     }
 }

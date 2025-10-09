@@ -4,7 +4,7 @@
 // https://github.com/comfyanonymous/ComfyUI/blob/78e133d0415784924cd2674e2ee48f3eeca8a2aa/comfy/ldm/modules/diffusionmodules/mmdit.py#L1
 // with MMDiT-X support following the Stability-AI/sd3.5 repository.
 // https://github.com/Stability-AI/sd3.5/blob/4e484e05308d83fb77ae6f680028e6c313f9da54/mmditx.py#L1
-use candle::{Module, Result, Tensor, D};
+use candle::{BackendStorage, Module, Result, Tensor, D};
 use candle_nn as nn;
 
 use super::blocks::{
@@ -71,18 +71,18 @@ impl Config {
     }
 }
 
-pub struct MMDiT {
-    core: MMDiTCore,
-    patch_embedder: PatchEmbedder,
-    pos_embedder: PositionEmbedder,
-    timestep_embedder: TimestepEmbedder,
-    vector_embedder: VectorEmbedder,
-    context_embedder: nn::Linear,
+pub struct MMDiT<B: BackendStorage> {
+    core: MMDiTCore<B>,
+    patch_embedder: PatchEmbedder<B>,
+    pos_embedder: PositionEmbedder<B>,
+    timestep_embedder: TimestepEmbedder<B>,
+    vector_embedder: VectorEmbedder<B>,
+    context_embedder: nn::Linear<B>,
     unpatchifier: Unpatchifier,
 }
 
-impl MMDiT {
-    pub fn new(cfg: &Config, use_flash_attn: bool, vb: nn::VarBuilder) -> Result<Self> {
+impl<B: BackendStorage + 'static> MMDiT<B> {
+    pub fn new(cfg: &Config, use_flash_attn: bool, vb: nn::VarBuilder<B>) -> Result<Self> {
         let hidden_size = cfg.head_size * cfg.depth;
         let core = MMDiTCore::new(
             cfg.depth,
@@ -132,12 +132,12 @@ impl MMDiT {
 
     pub fn forward(
         &self,
-        x: &Tensor,
-        t: &Tensor,
-        y: &Tensor,
-        context: &Tensor,
+        x: &Tensor<B>,
+        t: &Tensor<B>,
+        y: &Tensor<B>,
+        context: &Tensor<B>,
         skip_layers: Option<&[usize]>,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         // Following the convention of the ComfyUI implementation.
         // https://github.com/comfyanonymous/ComfyUI/blob/78e133d0415784924cd2674e2ee48f3eeca8a2aa/comfy/ldm/modules/diffusionmodules/mmdit.py#L919
         //
@@ -163,13 +163,13 @@ impl MMDiT {
     }
 }
 
-pub struct MMDiTCore {
-    joint_blocks: Vec<Box<dyn JointBlock>>,
-    context_qkv_only_joint_block: ContextQkvOnlyJointBlock,
-    final_layer: FinalLayer,
+pub struct MMDiTCore<B: BackendStorage> {
+    joint_blocks: Vec<Box<dyn JointBlock<B>>>,
+    context_qkv_only_joint_block: ContextQkvOnlyJointBlock<B>,
+    final_layer: FinalLayer<B>,
 }
 
-impl MMDiTCore {
+impl<B: BackendStorage + 'static> MMDiTCore<B> {
     pub fn new(
         depth: usize,
         hidden_size: usize,
@@ -177,12 +177,12 @@ impl MMDiTCore {
         patch_size: usize,
         out_channels: usize,
         use_flash_attn: bool,
-        vb: nn::VarBuilder,
+        vb: nn::VarBuilder<B>,
     ) -> Result<Self> {
         let mut joint_blocks = Vec::with_capacity(depth - 1);
         for i in 0..depth - 1 {
             let joint_block_vb_pp = format!("joint_blocks.{i}");
-            let joint_block: Box<dyn JointBlock> =
+            let joint_block: Box<dyn JointBlock<B>> =
                 if vb.contains_tensor(&format!("{joint_block_vb_pp}.x_block.attn2.qkv.weight")) {
                     Box::new(MMDiTXJointBlock::new(
                         hidden_size,
@@ -220,11 +220,11 @@ impl MMDiTCore {
 
     pub fn forward(
         &self,
-        context: &Tensor,
-        x: &Tensor,
-        c: &Tensor,
+        context: &Tensor<B>,
+        x: &Tensor<B>,
+        c: &Tensor<B>,
         skip_layers: Option<&[usize]>,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let (mut context, mut x) = (context.clone(), x.clone());
         for (i, joint_block) in self.joint_blocks.iter().enumerate() {
             if let Some(skip_layers) = &skip_layers {

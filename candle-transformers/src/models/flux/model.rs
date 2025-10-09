@@ -1,4 +1,4 @@
-use candle::{DType, IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::{LayerNorm, Linear, RmsNorm, VarBuilder};
 
 // https://github.com/black-forest-labs/flux/blob/727e3a71faf37390f318cf9434f0939653302b60/src/flux/model.py#L12
@@ -56,12 +56,16 @@ impl Config {
     }
 }
 
-fn layer_norm(dim: usize, vb: VarBuilder) -> Result<LayerNorm> {
+fn layer_norm<B: BackendStorage>(dim: usize, vb: VarBuilder<B>) -> Result<LayerNorm<B>> {
     let ws = Tensor::ones(dim, vb.dtype(), vb.device())?;
     Ok(LayerNorm::new_no_bias(ws, 1e-6))
 }
 
-fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+fn scaled_dot_product_attention<B: BackendStorage>(
+    q: &Tensor<B>,
+    k: &Tensor<B>,
+    v: &Tensor<B>,
+) -> Result<Tensor<B>> {
     let dim = q.dim(D::Minus1)?;
     let scale_factor = 1.0 / (dim as f64).sqrt();
     let mut batch_dims = q.dims().to_vec();
@@ -77,7 +81,7 @@ fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Te
     attn_scores.reshape(batch_dims)
 }
 
-fn rope(pos: &Tensor, dim: usize, theta: usize) -> Result<Tensor> {
+fn rope<B: BackendStorage>(pos: &Tensor<B>, dim: usize, theta: usize) -> Result<Tensor<B>> {
     if dim % 2 == 1 {
         candle::bail!("dim {dim} is odd")
     }
@@ -98,7 +102,7 @@ fn rope(pos: &Tensor, dim: usize, theta: usize) -> Result<Tensor> {
     out.reshape((b, n, d, 2, 2))
 }
 
-fn apply_rope(x: &Tensor, freq_cis: &Tensor) -> Result<Tensor> {
+fn apply_rope<B: BackendStorage>(x: &Tensor<B>, freq_cis: &Tensor<B>) -> Result<Tensor<B>> {
     let dims = x.dims();
     let (b_sz, n_head, seq_len, n_embd) = x.dims4()?;
     let x = x.reshape((b_sz, n_head, seq_len, n_embd / 2, 2))?;
@@ -109,14 +113,23 @@ fn apply_rope(x: &Tensor, freq_cis: &Tensor) -> Result<Tensor> {
     (fr0.broadcast_mul(&x0)? + fr1.broadcast_mul(&x1)?)?.reshape(dims.to_vec())
 }
 
-pub(crate) fn attention(q: &Tensor, k: &Tensor, v: &Tensor, pe: &Tensor) -> Result<Tensor> {
+pub(crate) fn attention<B: BackendStorage>(
+    q: &Tensor<B>,
+    k: &Tensor<B>,
+    v: &Tensor<B>,
+    pe: &Tensor<B>,
+) -> Result<Tensor<B>> {
     let q = apply_rope(q, pe)?.contiguous()?;
     let k = apply_rope(k, pe)?.contiguous()?;
     let x = scaled_dot_product_attention(&q, &k, v)?;
     x.transpose(1, 2)?.flatten_from(2)
 }
 
-pub(crate) fn timestep_embedding(t: &Tensor, dim: usize, dtype: DType) -> Result<Tensor> {
+pub(crate) fn timestep_embedding<B: BackendStorage>(
+    t: &Tensor<B>,
+    dim: usize,
+    dtype: DType,
+) -> Result<Tensor<B>> {
     const TIME_FACTOR: f64 = 1000.;
     const MAX_PERIOD: f64 = 10000.;
     if dim % 2 == 1 {
@@ -153,8 +166,8 @@ impl EmbedNd {
     }
 }
 
-impl candle::Module for EmbedNd {
-    fn forward(&self, ids: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for EmbedNd {
+    fn forward(&self, ids: &Tensor<B>) -> Result<Tensor<B>> {
         let n_axes = ids.dim(D::Minus1)?;
         let mut emb = Vec::with_capacity(n_axes);
         for idx in 0..n_axes {
@@ -171,13 +184,13 @@ impl candle::Module for EmbedNd {
 }
 
 #[derive(Debug, Clone)]
-pub struct MlpEmbedder {
-    in_layer: Linear,
-    out_layer: Linear,
+pub struct MlpEmbedder<B: BackendStorage> {
+    in_layer: Linear<B>,
+    out_layer: Linear<B>,
 }
 
-impl MlpEmbedder {
-    fn new(in_sz: usize, h_sz: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MlpEmbedder<B> {
+    fn new(in_sz: usize, h_sz: usize, vb: VarBuilder<B>) -> Result<Self> {
         let in_layer = candle_nn::linear(in_sz, h_sz, vb.pp("in_layer"))?;
         let out_layer = candle_nn::linear(h_sz, h_sz, vb.pp("out_layer"))?;
         Ok(Self {
@@ -187,20 +200,20 @@ impl MlpEmbedder {
     }
 }
 
-impl candle::Module for MlpEmbedder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for MlpEmbedder<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.in_layer)?.silu()?.apply(&self.out_layer)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct QkNorm {
-    query_norm: RmsNorm,
-    key_norm: RmsNorm,
+pub struct QkNorm<B: BackendStorage> {
+    query_norm: RmsNorm<B>,
+    key_norm: RmsNorm<B>,
 }
 
-impl QkNorm {
-    fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> QkNorm<B> {
+    fn new(dim: usize, vb: VarBuilder<B>) -> Result<Self> {
         let query_norm = vb.get(dim, "query_norm.scale")?;
         let query_norm = RmsNorm::new(query_norm, 1e-6);
         let key_norm = vb.get(dim, "key_norm.scale")?;
@@ -212,35 +225,35 @@ impl QkNorm {
     }
 }
 
-struct ModulationOut {
-    shift: Tensor,
-    scale: Tensor,
-    gate: Tensor,
+struct ModulationOut<B: BackendStorage> {
+    shift: Tensor<B>,
+    scale: Tensor<B>,
+    gate: Tensor<B>,
 }
 
-impl ModulationOut {
-    fn scale_shift(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> ModulationOut<B> {
+    fn scale_shift(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.broadcast_mul(&(&self.scale + 1.)?)?
             .broadcast_add(&self.shift)
     }
 
-    fn gate(&self, xs: &Tensor) -> Result<Tensor> {
+    fn gate(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         self.gate.broadcast_mul(xs)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Modulation1 {
-    lin: Linear,
+struct Modulation1<B: BackendStorage> {
+    lin: Linear<B>,
 }
 
-impl Modulation1 {
-    fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Modulation1<B> {
+    fn new(dim: usize, vb: VarBuilder<B>) -> Result<Self> {
         let lin = candle_nn::linear(dim, 3 * dim, vb.pp("lin"))?;
         Ok(Self { lin })
     }
 
-    fn forward(&self, vec_: &Tensor) -> Result<ModulationOut> {
+    fn forward(&self, vec_: &Tensor<B>) -> Result<ModulationOut<B>> {
         let ys = vec_
             .silu()?
             .apply(&self.lin)?
@@ -258,17 +271,17 @@ impl Modulation1 {
 }
 
 #[derive(Debug, Clone)]
-struct Modulation2 {
-    lin: Linear,
+struct Modulation2<B: BackendStorage> {
+    lin: Linear<B>,
 }
 
-impl Modulation2 {
-    fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Modulation2<B> {
+    fn new(dim: usize, vb: VarBuilder<B>) -> Result<Self> {
         let lin = candle_nn::linear(dim, 6 * dim, vb.pp("lin"))?;
         Ok(Self { lin })
     }
 
-    fn forward(&self, vec_: &Tensor) -> Result<(ModulationOut, ModulationOut)> {
+    fn forward(&self, vec_: &Tensor<B>) -> Result<(ModulationOut<B>, ModulationOut<B>)> {
         let ys = vec_
             .silu()?
             .apply(&self.lin)?
@@ -292,15 +305,15 @@ impl Modulation2 {
 }
 
 #[derive(Debug, Clone)]
-pub struct SelfAttention {
-    qkv: Linear,
-    norm: QkNorm,
-    proj: Linear,
+pub struct SelfAttention<B: BackendStorage> {
+    qkv: Linear<B>,
+    norm: QkNorm<B>,
+    proj: Linear<B>,
     num_heads: usize,
 }
 
-impl SelfAttention {
-    fn new(dim: usize, num_heads: usize, qkv_bias: bool, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SelfAttention<B> {
+    fn new(dim: usize, num_heads: usize, qkv_bias: bool, vb: VarBuilder<B>) -> Result<Self> {
         let head_dim = dim / num_heads;
         let qkv = candle_nn::linear_b(dim, dim * 3, qkv_bias, vb.pp("qkv"))?;
         let norm = QkNorm::new(head_dim, vb.pp("norm"))?;
@@ -313,7 +326,7 @@ impl SelfAttention {
         })
     }
 
-    fn qkv(&self, xs: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
+    fn qkv(&self, xs: &Tensor<B>) -> Result<(Tensor<B>, Tensor<B>, Tensor<B>)> {
         let qkv = xs.apply(&self.qkv)?;
         let (b, l, _khd) = qkv.dims3()?;
         let qkv = qkv.reshape((b, l, 3, self.num_heads, ()))?;
@@ -326,48 +339,48 @@ impl SelfAttention {
     }
 
     #[allow(unused)]
-    fn forward(&self, xs: &Tensor, pe: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, pe: &Tensor<B>) -> Result<Tensor<B>> {
         let (q, k, v) = self.qkv(xs)?;
         attention(&q, &k, &v, pe)?.apply(&self.proj)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    lin1: Linear,
-    lin2: Linear,
+struct Mlp<B: BackendStorage> {
+    lin1: Linear<B>,
+    lin2: Linear<B>,
 }
 
-impl Mlp {
-    fn new(in_sz: usize, mlp_sz: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Mlp<B> {
+    fn new(in_sz: usize, mlp_sz: usize, vb: VarBuilder<B>) -> Result<Self> {
         let lin1 = candle_nn::linear(in_sz, mlp_sz, vb.pp("0"))?;
         let lin2 = candle_nn::linear(mlp_sz, in_sz, vb.pp("2"))?;
         Ok(Self { lin1, lin2 })
     }
 }
 
-impl candle::Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> candle::Module<B> for Mlp<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.lin1)?.gelu()?.apply(&self.lin2)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct DoubleStreamBlock {
-    img_mod: Modulation2,
-    img_norm1: LayerNorm,
-    img_attn: SelfAttention,
-    img_norm2: LayerNorm,
-    img_mlp: Mlp,
-    txt_mod: Modulation2,
-    txt_norm1: LayerNorm,
-    txt_attn: SelfAttention,
-    txt_norm2: LayerNorm,
-    txt_mlp: Mlp,
+pub struct DoubleStreamBlock<B: BackendStorage> {
+    img_mod: Modulation2<B>,
+    img_norm1: LayerNorm<B>,
+    img_attn: SelfAttention<B>,
+    img_norm2: LayerNorm<B>,
+    img_mlp: Mlp<B>,
+    txt_mod: Modulation2<B>,
+    txt_norm1: LayerNorm<B>,
+    txt_attn: SelfAttention<B>,
+    txt_norm2: LayerNorm<B>,
+    txt_mlp: Mlp<B>,
 }
 
-impl DoubleStreamBlock {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> DoubleStreamBlock<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let h_sz = cfg.hidden_size;
         let mlp_sz = (h_sz as f64 * cfg.mlp_ratio) as usize;
         let img_mod = Modulation2::new(h_sz, vb.pp("img_mod"))?;
@@ -396,11 +409,11 @@ impl DoubleStreamBlock {
 
     fn forward(
         &self,
-        img: &Tensor,
-        txt: &Tensor,
-        vec_: &Tensor,
-        pe: &Tensor,
-    ) -> Result<(Tensor, Tensor)> {
+        img: &Tensor<B>,
+        txt: &Tensor<B>,
+        vec_: &Tensor<B>,
+        pe: &Tensor<B>,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let (img_mod1, img_mod2) = self.img_mod.forward(vec_)?; // shift, scale, gate
         let (txt_mod1, txt_mod2) = self.txt_mod.forward(vec_)?; // shift, scale, gate
         let img_modulated = img.apply(&self.img_norm1)?;
@@ -440,19 +453,19 @@ impl DoubleStreamBlock {
 }
 
 #[derive(Debug, Clone)]
-pub struct SingleStreamBlock {
-    linear1: Linear,
-    linear2: Linear,
-    norm: QkNorm,
-    pre_norm: LayerNorm,
-    modulation: Modulation1,
+pub struct SingleStreamBlock<B: BackendStorage> {
+    linear1: Linear<B>,
+    linear2: Linear<B>,
+    norm: QkNorm<B>,
+    pre_norm: LayerNorm<B>,
+    modulation: Modulation1<B>,
     h_sz: usize,
     mlp_sz: usize,
     num_heads: usize,
 }
 
-impl SingleStreamBlock {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SingleStreamBlock<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let h_sz = cfg.hidden_size;
         let mlp_sz = (h_sz as f64 * cfg.mlp_ratio) as usize;
         let head_dim = h_sz / cfg.num_heads;
@@ -473,7 +486,7 @@ impl SingleStreamBlock {
         })
     }
 
-    fn forward(&self, xs: &Tensor, vec_: &Tensor, pe: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, vec_: &Tensor<B>, pe: &Tensor<B>) -> Result<Tensor<B>> {
         let mod_ = self.modulation.forward(vec_)?;
         let x_mod = mod_.scale_shift(&xs.apply(&self.pre_norm)?)?;
         let x_mod = x_mod.apply(&self.linear1)?;
@@ -493,14 +506,14 @@ impl SingleStreamBlock {
 }
 
 #[derive(Debug, Clone)]
-pub struct LastLayer {
-    norm_final: LayerNorm,
-    linear: Linear,
-    ada_ln_modulation: Linear,
+pub struct LastLayer<B: BackendStorage> {
+    norm_final: LayerNorm<B>,
+    linear: Linear<B>,
+    ada_ln_modulation: Linear<B>,
 }
 
-impl LastLayer {
-    fn new(h_sz: usize, p_sz: usize, out_c: usize, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> LastLayer<B> {
+    fn new(h_sz: usize, p_sz: usize, out_c: usize, vb: VarBuilder<B>) -> Result<Self> {
         let norm_final = layer_norm(h_sz, vb.pp("norm_final"))?;
         let linear = candle_nn::linear(h_sz, p_sz * p_sz * out_c, vb.pp("linear"))?;
         let ada_ln_modulation = candle_nn::linear(h_sz, 2 * h_sz, vb.pp("adaLN_modulation.1"))?;
@@ -511,7 +524,7 @@ impl LastLayer {
         })
     }
 
-    fn forward(&self, xs: &Tensor, vec: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor<B>, vec: &Tensor<B>) -> Result<Tensor<B>> {
         let chunks = vec.silu()?.apply(&self.ada_ln_modulation)?.chunk(2, 1)?;
         let (shift, scale) = (&chunks[0], &chunks[1]);
         let xs = xs
@@ -523,20 +536,20 @@ impl LastLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Flux {
-    img_in: Linear,
-    txt_in: Linear,
-    time_in: MlpEmbedder,
-    vector_in: MlpEmbedder,
-    guidance_in: Option<MlpEmbedder>,
+pub struct Flux<B: BackendStorage> {
+    img_in: Linear<B>,
+    txt_in: Linear<B>,
+    time_in: MlpEmbedder<B>,
+    vector_in: MlpEmbedder<B>,
+    guidance_in: Option<MlpEmbedder<B>>,
     pe_embedder: EmbedNd,
-    double_blocks: Vec<DoubleStreamBlock>,
-    single_blocks: Vec<SingleStreamBlock>,
-    final_layer: LastLayer,
+    double_blocks: Vec<DoubleStreamBlock<B>>,
+    single_blocks: Vec<SingleStreamBlock<B>>,
+    final_layer: LastLayer<B>,
 }
 
-impl Flux {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Flux<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let img_in = candle_nn::linear(cfg.in_channels, cfg.hidden_size, vb.pp("img_in"))?;
         let txt_in = candle_nn::linear(cfg.context_in_dim, cfg.hidden_size, vb.pp("txt_in"))?;
         let mut double_blocks = Vec::with_capacity(cfg.depth);
@@ -577,18 +590,18 @@ impl Flux {
     }
 }
 
-impl super::WithForward for Flux {
+impl<B: BackendStorage> super::WithForward<B> for Flux<B> {
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
-        img: &Tensor,
-        img_ids: &Tensor,
-        txt: &Tensor,
-        txt_ids: &Tensor,
-        timesteps: &Tensor,
-        y: &Tensor,
-        guidance: Option<&Tensor>,
-    ) -> Result<Tensor> {
+        img: &Tensor<B>,
+        img_ids: &Tensor<B>,
+        txt: &Tensor<B>,
+        txt_ids: &Tensor<B>,
+        timesteps: &Tensor<B>,
+        y: &Tensor<B>,
+        guidance: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         if txt.rank() != 3 {
             candle::bail!("unexpected shape for txt {:?}", txt.shape())
         }

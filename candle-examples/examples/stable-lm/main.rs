@@ -5,43 +5,45 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
+use candle::quantized::QuantizedBackend;
+use candle_transformers::quantized_nn::Linear;
 use clap::{Parser, ValueEnum};
 
 use candle_transformers::models::quantized_stable_lm::Model as QStableLM;
 use candle_transformers::models::stable_lm::{Config, Model as StableLM};
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, DType, Module, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-enum Model {
-    StableLM(StableLM),
-    Quantized(QStableLM),
+enum Model<QB: QuantizedBackend> {
+    StableLM(StableLM<QB::Storage>),
+    Quantized(QStableLM<QB>),
 }
 
-struct TextGeneration {
-    model: Model,
-    device: Device,
+struct TextGeneration<QB: QuantizedBackend> {
+    model: Model<QB>,
+    device: QB::Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
 }
 
-impl TextGeneration {
+impl<QB: QuantizedBackend> TextGeneration<QB> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
+        model: Model<QB>,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
         top_p: Option<f64>,
         repeat_penalty: f32,
         repeat_last_n: usize,
-        device: &Device,
+        device: &QB::Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
@@ -54,7 +56,10 @@ impl TextGeneration {
         }
     }
 
-    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()> {
+    fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
         use std::io::Write;
         self.tokenizer.clear();
         let mut tokens = self
@@ -192,11 +197,39 @@ struct Args {
     repeat_last_n: usize,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::QCpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        #[cfg(feature = "cuda")]
+        run::<candle::QCudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::QMetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::QCpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<QB: QuantizedBackend>(args: Args) -> Result<()>
+where
+    Linear<QB>: Module<QB::Storage>,
+{
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -287,15 +320,15 @@ fn main() -> Result<()> {
         }
     };
 
-    let device = candle_examples::device(args.cpu)?;
-    let model = if args.quantized {
+    let device = QB::Device::new(0)?;
+    let model: Model<QB> = if args.quantized {
         let filename = &filenames[0];
         let vb =
             candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, &device)?;
         let model = QStableLM::new(&config, vb)?;
         Model::Quantized(model)
     } else {
-        let dtype = if device.is_cuda() {
+        let dtype = if QB::Device::SUPPORTS_BF16 {
             DType::BF16
         } else {
             DType::F32

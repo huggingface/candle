@@ -7,7 +7,7 @@ extern crate accelerate_src;
 use candle_transformers::models::jina_bert::{BertModel, Config, PositionEmbeddingType};
 
 use anyhow::Error as E;
-use candle::{DType, Module, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Module, Tensor};
 use candle_nn::VarBuilder;
 use clap::Parser;
 
@@ -45,7 +45,10 @@ struct Args {
 }
 
 impl Args {
-    fn build_model_and_tokenizer(&self) -> anyhow::Result<(BertModel, tokenizers::Tokenizer)> {
+    fn build_model_and_tokenizer<B: BackendStorage>(
+        &self,
+        device: &B::Device,
+    ) -> anyhow::Result<(BertModel<B>, tokenizers::Tokenizer)> {
         use hf_hub::{api::sync::Api, Repo, RepoType};
         let model_name = match self.model.as_ref() {
             Some(model) => model.to_string(),
@@ -64,7 +67,6 @@ impl Args {
                 .repo(Repo::new(model_name.to_string(), RepoType::Model))
                 .get("tokenizer.json")?,
         };
-        let device = candle_examples::device(self.cpu)?;
         let tokenizer = tokenizers::Tokenizer::from_file(tokenizer).map_err(E::msg)?;
         let config = Config::new(
             tokenizer.get_vocab_size(true),
@@ -80,17 +82,41 @@ impl Args {
             0,
             PositionEmbeddingType::Alibi,
         );
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
-        let model = BertModel::new(vb, &config)?;
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, device)? };
+        let model: BertModel<B> = BertModel::new(vb, &config)?;
         Ok((model, tokenizer))
     }
 }
 
-fn main() -> anyhow::Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> anyhow::Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         println!("tracing...");
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -101,7 +127,8 @@ fn main() -> anyhow::Result<()> {
     };
     let start = std::time::Instant::now();
 
-    let (model, mut tokenizer) = args.build_model_and_tokenizer()?;
+    let device = B::Device::new(0)?;
+    let (model, mut tokenizer) = args.build_model_and_tokenizer::<B>(&device)?;
     let device = &model.device;
 
     if let Some(prompt) = args.prompt {
@@ -196,6 +223,6 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn normalize_l2(v: &Tensor) -> candle::Result<Tensor> {
+pub fn normalize_l2<B: BackendStorage>(v: &Tensor<B>) -> candle::Result<Tensor<B>> {
     v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?)
 }

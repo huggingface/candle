@@ -4,11 +4,13 @@
 //! <https://www.cs.toronto.edu/~kriz/cifar.html>
 //! The binary version of the dataset is used.
 use crate::vision::Dataset;
-use candle::{DType, Device, Error, Result, Tensor};
+use candle::{CpuDevice, CpuStorage, DType, Error, Result, Tensor};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::fs::File;
 use std::io::{BufReader, Read};
+
+type CpuTensor = Tensor<CpuStorage>;
 
 const W: usize = 32;
 const H: usize = 32;
@@ -16,7 +18,7 @@ const C: usize = 3;
 const BYTES_PER_IMAGE: usize = W * H * C + 1;
 const SAMPLES_PER_FILE: usize = 10000;
 
-fn read_file(filename: &std::path::Path) -> Result<(Tensor, Tensor)> {
+fn read_file(filename: &std::path::Path) -> Result<(CpuTensor, CpuTensor)> {
     let mut buf_reader = BufReader::new(File::open(filename)?);
     let mut data = vec![0u8; SAMPLES_PER_FILE * BYTES_PER_IMAGE];
     buf_reader.read_exact(&mut data)?;
@@ -33,8 +35,8 @@ fn read_file(filename: &std::path::Path) -> Result<(Tensor, Tensor)> {
         .flatten()
         .copied()
         .collect::<Vec<_>>();
-    let labels = Tensor::from_vec(labels, SAMPLES_PER_FILE, &Device::Cpu)?;
-    let images = Tensor::from_vec(images, (SAMPLES_PER_FILE, C, H, W), &Device::Cpu)?;
+    let labels = Tensor::from_vec(labels, SAMPLES_PER_FILE, &CpuDevice)?;
+    let images = Tensor::from_vec(images, (SAMPLES_PER_FILE, C, H, W), &CpuDevice)?;
     let images = (images.to_dtype(DType::F32)? / 255.)?;
     Ok((images, labels))
 }
@@ -63,7 +65,7 @@ pub fn load_dir<T: AsRef<std::path::Path>>(dir: T) -> Result<Dataset> {
     })
 }
 
-fn load_parquet(parquet: SerializedFileReader<std::fs::File>) -> Result<(Tensor, Tensor)> {
+fn load_parquet(parquet: SerializedFileReader<std::fs::File>) -> Result<(CpuTensor, CpuTensor)> {
     let samples = parquet.metadata().file_metadata().num_rows() as usize;
     let mut buffer_images: Vec<u8> = Vec::with_capacity(samples * 1_024);
     let mut buffer_labels: Vec<u8> = Vec::with_capacity(samples);
@@ -84,11 +86,11 @@ fn load_parquet(parquet: SerializedFileReader<std::fs::File>) -> Result<(Tensor,
         }
     }
     // Reorder image-rs convention (width, height, channels) to candle/pytorch convolution convention (channels, height, width)
-    let images = (Tensor::from_vec(buffer_images, (samples, 32, 32, 3), &Device::Cpu)?
+    let images = (Tensor::from_vec(buffer_images, (samples, 32, 32, 3), &CpuDevice)?
         .to_dtype(DType::F32)?
         .permute((0, 3, 2, 1))?
         / 255.)?;
-    let labels = Tensor::from_vec(buffer_labels, (samples,), &Device::Cpu)?;
+    let labels = Tensor::from_vec(buffer_labels, (samples,), &CpuDevice)?;
     Ok((images, labels))
 }
 

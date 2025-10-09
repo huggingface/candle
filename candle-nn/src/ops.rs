@@ -1,15 +1,17 @@
 //! Tensor ops.
 //!
 
-use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
+use candle::{BackendStorage, CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
 /// a slice of fixed index on dimension `dim` are between 0 and 1 and sum to 1.
 ///
 /// ```rust
-/// use candle::{Tensor, Device, test_utils::to_vec2_round};
-/// let a = Tensor::new(&[[0f32, 1., 0., 1.], [-2., 2., 3., -3.]], &Device::Cpu)?;
+/// use candle::{CpuStorage, CpuDevice, test_utils::to_vec2_round};
+/// type Tensor = candle::Tensor<CpuStorage>;
+///
+/// let a = Tensor::new(&[[0f32, 1., 0., 1.], [-2., 2., 3., -3.]], &CpuDevice)?;
 /// let a = candle_nn::ops::softmax(&a, 1)?;
 /// assert_eq!(
 ///     to_vec2_round(&a, 4)?,
@@ -19,7 +21,10 @@ use rayon::prelude::*;
 ///     ]);
 /// # Ok::<(), candle::Error>(())
 /// ```
-pub fn softmax<D: candle::shape::Dim>(xs: &Tensor, dim: D) -> Result<Tensor> {
+pub fn softmax<B: BackendStorage, D: candle::shape::Dim>(
+    xs: &Tensor<B>,
+    dim: D,
+) -> Result<Tensor<B>> {
     let dim = dim.to_index(xs.shape(), "softmax")?;
     let max = xs.max_keepdim(dim)?;
     let diff = xs.broadcast_sub(&max)?;
@@ -28,7 +33,10 @@ pub fn softmax<D: candle::shape::Dim>(xs: &Tensor, dim: D) -> Result<Tensor> {
     num.broadcast_div(&den)
 }
 
-pub fn log_softmax<D: candle::shape::Dim>(xs: &Tensor, d: D) -> Result<Tensor> {
+pub fn log_softmax<B: BackendStorage, D: candle::shape::Dim>(
+    xs: &Tensor<B>,
+    d: D,
+) -> Result<Tensor<B>> {
     let d = d.to_index(xs.shape(), "log-softmax")?;
     let max = xs.max_keepdim(d)?;
     let diff = xs.broadcast_sub(&max)?;
@@ -37,18 +45,18 @@ pub fn log_softmax<D: candle::shape::Dim>(xs: &Tensor, d: D) -> Result<Tensor> {
     Ok(log_sm)
 }
 
-pub fn silu(xs: &Tensor) -> Result<Tensor> {
+pub fn silu<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
     xs.silu()
 }
 
-pub fn swiglu(xs: &Tensor) -> Result<Tensor> {
+pub fn swiglu<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
     let xs = xs.chunk(2, D::Minus1)?;
     &xs[0].silu()? * &xs[1]
 }
 
 struct Sigmoid;
 
-impl candle::CustomOp1 for Sigmoid {
+impl<B: BackendStorage> candle::CustomOp1<B> for Sigmoid {
     fn name(&self) -> &'static str {
         "sigmoid"
     }
@@ -76,7 +84,7 @@ impl candle::CustomOp1 for Sigmoid {
             }
             _ => Err(candle::Error::UnsupportedDTypeForOp(
                 storage.dtype(),
-                self.name(),
+                <Sigmoid as candle::CustomOp1<B>>::name(self),
             ))?,
         };
         Ok((storage, layout.shape().clone()))
@@ -142,7 +150,7 @@ impl candle::CustomOp1 for Sigmoid {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         use candle::MetalError;
-        let device = storage.device();
+        let device = storage.device().as_ref().clone();
         let dtype = storage.dtype();
         let shape = layout.shape();
         let el_count = shape.elem_count();
@@ -228,32 +236,37 @@ impl candle::CustomOp1 for Sigmoid {
         Ok((new_storage, layout.shape().clone()))
     }
 
-    fn bwd(&self, _arg: &Tensor, res: &Tensor, grad_res: &Tensor) -> Result<Option<Tensor>> {
+    fn bwd(
+        &self,
+        _arg: &Tensor<B>,
+        res: &Tensor<B>,
+        grad_res: &Tensor<B>,
+    ) -> Result<Option<Tensor<B>>> {
         // d/dx sigmoid(x) = (1 - sigmoid(x)) * sigmoid(x)
         let d_dx_sigmoid = res.ones_like()?.sub(res)?.mul(res)?;
         Ok(Some(grad_res.mul(&d_dx_sigmoid)?))
     }
 }
 
-pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
+pub fn sigmoid<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
     xs.apply_op1(Sigmoid)
 }
 
-pub fn hard_sigmoid(xs: &Tensor) -> Result<Tensor> {
+pub fn hard_sigmoid<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
     // TODO: Should we have a specialized op for this?
     ((xs + 3.0)? / 6.0)?.clamp(0f32, 1f32)
 }
 
-pub fn mish(xs: &Tensor) -> Result<Tensor> {
+pub fn mish<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
     xs * (1.0 + xs.exp()?)?.log()?.tanh()
 }
 
-pub fn leaky_relu(xs: &Tensor, negative_slope: f64) -> Result<Tensor> {
+pub fn leaky_relu<B: BackendStorage>(xs: &Tensor<B>, negative_slope: f64) -> Result<Tensor<B>> {
     let zeros = xs.zeros_like()?;
     xs.maximum(&zeros)? + xs.minimum(&zeros)? * negative_slope
 }
 
-pub fn selu(xs: &Tensor, alpha: f32, gamma: f32) -> Result<Tensor> {
+pub fn selu<B: BackendStorage>(xs: &Tensor<B>, alpha: f32, gamma: f32) -> Result<Tensor<B>> {
     let is_pos = xs.gt(0f32)?;
     let alpha_t = Tensor::full(alpha, xs.dims(), xs.device())?;
     let neg = xs.exp()?.mul(&alpha_t)?.sub(&alpha_t)?;
@@ -262,7 +275,7 @@ pub fn selu(xs: &Tensor, alpha: f32, gamma: f32) -> Result<Tensor> {
     selu.broadcast_mul(&gamma_t)
 }
 
-pub fn dropout(xs: &Tensor, drop_p: f32) -> Result<Tensor> {
+pub fn dropout<B: BackendStorage>(xs: &Tensor<B>, drop_p: f32) -> Result<Tensor<B>> {
     // This implementation is inefficient as it stores the full mask for the backward pass.
     // Instead we could just store the seed and have a specialized kernel that would both
     // generate the random mask and apply it.
@@ -288,7 +301,7 @@ impl Dropout {
         Self { drop_p }
     }
 
-    pub fn forward(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
+    pub fn forward<B: BackendStorage>(&self, xs: &Tensor<B>, train: bool) -> Result<Tensor<B>> {
         if train {
             dropout(xs, self.drop_p)
         } else {
@@ -297,15 +310,15 @@ impl Dropout {
     }
 }
 
-impl candle::ModuleT for Dropout {
-    fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
+impl<B: BackendStorage> candle::ModuleT<B> for Dropout {
+    fn forward_t(&self, xs: &Tensor<B>, train: bool) -> Result<Tensor<B>> {
         self.forward(xs, train)
     }
 }
 
 struct SoftmaxLastDim;
 
-impl candle::CustomOp1 for SoftmaxLastDim {
+impl<B: BackendStorage> candle::CustomOp1<B> for SoftmaxLastDim {
     fn name(&self) -> &'static str {
         "softmax-last-dim"
     }
@@ -414,7 +427,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         layout: &Layout,
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
-        let device = storage.device();
+        let device = storage.device().as_ref().clone();
         let command_buffer = device.command_buffer()?;
         let kernels = device.kernels();
         let name = match storage.dtype() {
@@ -450,7 +463,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
     }
 }
 
-pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
+pub fn softmax_last_dim<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
     xs.apply_op1_no_bwd(&SoftmaxLastDim)
 }
 
@@ -459,7 +472,7 @@ struct RmsNorm {
     eps: f32,
 }
 
-impl candle::CustomOp2 for RmsNorm {
+impl<B: BackendStorage> candle::CustomOp2<B> for RmsNorm {
     fn name(&self) -> &'static str {
         "rms-norm"
     }
@@ -605,7 +618,7 @@ impl candle::CustomOp2 for RmsNorm {
         l2: &Layout,
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
-        let device = s1.device();
+        let device = s1.device().as_ref().clone();
         let command_buffer = device.command_buffer()?;
         let kernels = device.kernels();
         let name = match (s1.dtype(), s2.dtype()) {
@@ -642,7 +655,11 @@ impl candle::CustomOp2 for RmsNorm {
     }
 }
 
-pub fn rms_norm_slow(x: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
+pub fn rms_norm_slow<B: BackendStorage>(
+    x: &Tensor<B>,
+    alpha: &Tensor<B>,
+    eps: f32,
+) -> Result<Tensor<B>> {
     let x_dtype = x.dtype();
     let internal_dtype = match x_dtype {
         DType::F16 | DType::BF16 => DType::F32,
@@ -655,7 +672,11 @@ pub fn rms_norm_slow(x: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
     x_normed.to_dtype(x_dtype)?.broadcast_mul(alpha)
 }
 
-pub fn rms_norm(xs: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
+pub fn rms_norm<B: BackendStorage>(
+    xs: &Tensor<B>,
+    alpha: &Tensor<B>,
+    eps: f32,
+) -> Result<Tensor<B>> {
     let hidden_size_xs = xs.dim(D::Minus1)?;
     let hidden_size_alpha = alpha.dims1()?;
     if hidden_size_xs != hidden_size_alpha {
@@ -673,7 +694,7 @@ struct LayerNorm {
     eps: f32,
 }
 
-impl candle::CustomOp3 for LayerNorm {
+impl<B: BackendStorage> candle::CustomOp3<B> for LayerNorm {
     fn name(&self) -> &'static str {
         "layer-norm"
     }
@@ -847,7 +868,7 @@ impl candle::CustomOp3 for LayerNorm {
         l3: &Layout,
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
-        let device = s1.device();
+        let device = s1.device().as_ref().clone();
         let command_buffer = device.command_buffer()?;
         let kernels = device.kernels();
         let name = match (s1.dtype(), s2.dtype(), s3.dtype()) {
@@ -888,7 +909,12 @@ impl candle::CustomOp3 for LayerNorm {
     }
 }
 
-pub fn layer_norm_slow(x: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Result<Tensor> {
+pub fn layer_norm_slow<B: BackendStorage>(
+    x: &Tensor<B>,
+    alpha: &Tensor<B>,
+    beta: &Tensor<B>,
+    eps: f32,
+) -> Result<Tensor<B>> {
     let x_dtype = x.dtype();
     let internal_dtype = match x_dtype {
         DType::F16 | DType::BF16 => DType::F32,
@@ -908,7 +934,12 @@ pub fn layer_norm_slow(x: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> R
         .broadcast_add(beta)
 }
 
-pub fn layer_norm(xs: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Result<Tensor> {
+pub fn layer_norm<B: BackendStorage>(
+    xs: &Tensor<B>,
+    alpha: &Tensor<B>,
+    beta: &Tensor<B>,
+    eps: f32,
+) -> Result<Tensor<B>> {
     let hidden_size_xs = xs.dim(D::Minus1)?;
     let hidden_size_alpha = alpha.dims1()?;
     let hidden_size_beta = beta.dims1()?;
@@ -924,7 +955,10 @@ pub fn layer_norm(xs: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Resul
 }
 
 // https://pytorch.org/docs/stable/generated/torch.nn.PixelShuffle.html
-pub fn pixel_shuffle(xs: &Tensor, upscale_factor: usize) -> Result<Tensor> {
+pub fn pixel_shuffle<B: BackendStorage>(
+    xs: &Tensor<B>,
+    upscale_factor: usize,
+) -> Result<Tensor<B>> {
     let (b_size, c, h, w) = xs.dims4()?;
     let out_c = c / upscale_factor / upscale_factor;
     xs.reshape((b_size, out_c, upscale_factor, upscale_factor, h, w))?
@@ -932,7 +966,10 @@ pub fn pixel_shuffle(xs: &Tensor, upscale_factor: usize) -> Result<Tensor> {
         .reshape((b_size, out_c, h * upscale_factor, w * upscale_factor))
 }
 
-pub fn pixel_unshuffle(xs: &Tensor, downscale_factor: usize) -> Result<Tensor> {
+pub fn pixel_unshuffle<B: BackendStorage>(
+    xs: &Tensor<B>,
+    downscale_factor: usize,
+) -> Result<Tensor<B>> {
     let (b_size, c, h, w) = xs.dims4()?;
     let out_c = c * downscale_factor * downscale_factor;
     xs.reshape((
@@ -948,7 +985,7 @@ pub fn pixel_unshuffle(xs: &Tensor, downscale_factor: usize) -> Result<Tensor> {
 }
 
 // https://pytorch.org/docs/stable/generated/torch.nn.ReplicationPad2d.html
-pub fn replication_pad2d(xs: &Tensor, pad: usize) -> Result<Tensor> {
+pub fn replication_pad2d<B: BackendStorage>(xs: &Tensor<B>, pad: usize) -> Result<Tensor<B>> {
     match pad {
         0 => Ok(xs.clone()),
         1 => {
@@ -977,8 +1014,8 @@ impl Default for Identity {
     }
 }
 
-impl Module for Identity {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Identity {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         Ok(xs.clone())
     }
 }
@@ -989,7 +1026,7 @@ struct Sdpa {
     softcapping: f32,
 }
 
-impl candle::CustomOp3 for Sdpa {
+impl<B: BackendStorage> candle::CustomOp3<B> for Sdpa {
     fn name(&self) -> &'static str {
         "metal-sdpa"
     }
@@ -1019,7 +1056,7 @@ impl candle::CustomOp3 for Sdpa {
         use candle::backend::BackendStorage;
         use candle_metal_kernels::SdpaDType;
 
-        let device = q.device();
+        let device = q.device().as_ref().clone();
 
         let out_dims = vec![q_l.dim(0)?, q_l.dim(1)?, q_l.dim(2)?, v_l.dim(3)?];
         let elem_count: usize = out_dims.iter().product();
@@ -1087,7 +1124,7 @@ impl candle::CustomOp3 for Sdpa {
             other => candle::bail!("unsupported sdpa type {other:?}"),
         };
 
-        let command_buffer = q.device().command_buffer()?;
+        let command_buffer = q.device().as_ref().command_buffer()?;
         if supports_sdpa_vector {
             // Route to the 2 pass fused attention if the k seqlen is large.
             // https://github.com/ml-explore/mlx/pull/1597
@@ -1118,9 +1155,9 @@ impl candle::CustomOp3 for Sdpa {
 
                 command_buffer.set_label("vector_attention");
                 candle_metal_kernels::call_sdpa_vector_2pass(
-                    q.device().device(),
+                    q.device().as_ref().device(),
                     &command_buffer,
-                    q.device().kernels(),
+                    q.device().as_ref().kernels(),
                     q_l.start_offset(),
                     q_l.dims(),
                     q.buffer(),
@@ -1143,9 +1180,9 @@ impl candle::CustomOp3 for Sdpa {
             } else {
                 command_buffer.set_label("vector_attention");
                 candle_metal_kernels::call_sdpa_vector(
-                    q.device().device(),
+                    q.device().as_ref().device(),
                     &command_buffer,
-                    q.device().kernels(),
+                    q.device().as_ref().kernels(),
                     q_l.start_offset(),
                     q_l.dims(),
                     q.buffer(),
@@ -1172,9 +1209,9 @@ impl candle::CustomOp3 for Sdpa {
 
             command_buffer.set_label("full_attention");
             candle_metal_kernels::call_sdpa_full(
-                q.device().device(),
+                q.device().as_ref().device(),
                 &command_buffer,
-                q.device().kernels(),
+                q.device().as_ref().kernels(),
                 q_l.start_offset(),
                 q_l.dims(),
                 q.buffer(),
@@ -1222,6 +1259,12 @@ impl candle::CustomOp3 for Sdpa {
 ///     - Use an alternate kernel
 ///     - Requires `seq` == `kv_seq`
 ///     - GQA is not supported (requires `qhead` == `kv_head`)
-pub fn sdpa(q: &Tensor, k: &Tensor, v: &Tensor, scale: f32, softcapping: f32) -> Result<Tensor> {
+pub fn sdpa<B: BackendStorage>(
+    q: &Tensor<B>,
+    k: &Tensor<B>,
+    v: &Tensor<B>,
+    scale: f32,
+    softcapping: f32,
+) -> Result<Tensor<B>> {
     q.apply_op3_no_bwd(k, v, &Sdpa { scale, softcapping })
 }

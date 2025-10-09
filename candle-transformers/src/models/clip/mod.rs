@@ -12,18 +12,18 @@ use self::{
     text_model::{Activation, ClipTextTransformer},
     vision_model::ClipVisionTransformer,
 };
-use candle::{Result, Tensor, D};
+use candle::{BackendStorage, Result, Tensor, D};
 
 pub mod text_model;
 pub mod vision_model;
 
 #[derive(Clone, Debug)]
-pub struct ClipModel {
-    text_model: ClipTextTransformer,
-    vision_model: ClipVisionTransformer,
-    visual_projection: candle_nn::Linear,
-    text_projection: candle_nn::Linear,
-    logit_scale: Tensor,
+pub struct ClipModel<B: BackendStorage> {
+    text_model: ClipTextTransformer<B>,
+    vision_model: ClipVisionTransformer<B>,
+    visual_projection: candle_nn::Linear<B>,
+    text_projection: candle_nn::Linear<B>,
+    logit_scale: Tensor<B>,
 }
 
 #[derive(Clone, Debug)]
@@ -92,8 +92,8 @@ impl ClipConfig {
     }
 }
 
-impl ClipModel {
-    pub fn new(vs: candle_nn::VarBuilder, c: &ClipConfig) -> Result<Self> {
+impl<B: BackendStorage> ClipModel<B> {
+    pub fn new(vs: candle_nn::VarBuilder<B>, c: &ClipConfig) -> Result<Self> {
         let text_model = ClipTextTransformer::new(vs.pp("text_model"), &c.text_config)?;
         let vision_model = ClipVisionTransformer::new(vs.pp("vision_model"), &c.vision_config)?;
         let visual_projection = candle_nn::linear_no_bias(
@@ -121,19 +121,23 @@ impl ClipModel {
         })
     }
 
-    pub fn get_text_features(&self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn get_text_features(&self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         input_ids
             .apply(&self.text_model)?
             .apply(&self.text_projection)
     }
 
-    pub fn get_image_features(&self, pixel_values: &Tensor) -> Result<Tensor> {
+    pub fn get_image_features(&self, pixel_values: &Tensor<B>) -> Result<Tensor<B>> {
         pixel_values
             .apply(&self.vision_model)?
             .apply(&self.visual_projection)
     }
 
-    pub fn forward(&self, pixel_values: &Tensor, input_ids: &Tensor) -> Result<(Tensor, Tensor)> {
+    pub fn forward(
+        &self,
+        pixel_values: &Tensor<B>,
+        input_ids: &Tensor<B>,
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let image_features = self.get_image_features(pixel_values)?;
         let text_features = self.get_text_features(input_ids)?;
         let image_features_normalized = div_l2_norm(&image_features)?;
@@ -146,7 +150,7 @@ impl ClipModel {
     }
 }
 
-pub fn div_l2_norm(v: &Tensor) -> Result<Tensor> {
+pub fn div_l2_norm<B: BackendStorage>(v: &Tensor<B>) -> Result<Tensor<B>> {
     let l2_norm = v.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?;
     v.broadcast_div(&l2_norm)
 }

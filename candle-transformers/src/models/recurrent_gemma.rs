@@ -17,7 +17,7 @@
 //! This implementation is based on the python version from huggingface/transformers.
 //! https://github.com/huggingface/transformers/blob/b109257f4fb8b1166e7c53cc5418632014ed53a5/src/transformers/models/recurrent_gemma/modeling_recurrent_gemma.py#L2
 //!
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{linear_b as linear, Linear, VarBuilder};
 use std::sync::Arc;
 
@@ -57,24 +57,24 @@ fn default_max_seq_len() -> usize {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RmsNorm {
-    weight: Tensor,
+pub(crate) struct RmsNorm<B: BackendStorage> {
+    weight: Tensor<B>,
     eps: f64,
 }
 
-impl RmsNorm {
-    pub(crate) fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> RmsNorm<B> {
+    pub(crate) fn new(dim: usize, eps: f64, vb: VarBuilder<B>) -> Result<Self> {
         let weight = vb.get(dim, "weight")?;
         Ok(Self { weight, eps })
     }
 
-    pub(crate) fn from_weight(weight: Tensor, eps: f64) -> Self {
+    pub(crate) fn from_weight(weight: Tensor<B>, eps: f64) -> Self {
         Self { weight, eps }
     }
 }
 
-impl Module for RmsNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for RmsNorm<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
             DType::F16 | DType::BF16 => DType::F32,
@@ -91,20 +91,20 @@ impl Module for RmsNorm {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+pub(crate) struct RotaryEmbedding<B: BackendStorage> {
+    sin: Tensor<B>,
+    cos: Tensor<B>,
 }
 
-fn rotate_half(xs: &Tensor) -> Result<Tensor> {
+fn rotate_half<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
     let last_dim = xs.dim(D::Minus1)?;
     let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
     let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
     Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
 }
 
-impl RotaryEmbedding {
-    pub(crate) fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
+impl<B: BackendStorage> RotaryEmbedding<B> {
+    pub(crate) fn new(dtype: DType, cfg: &Config, dev: &B::Device) -> Result<Self> {
         if cfg.partial_rotary_factor != 0.5 {
             candle::bail!("partial-rotary-factor {} <> 0.5", cfg.partial_rotary_factor)
         }
@@ -129,10 +129,10 @@ impl RotaryEmbedding {
 
     pub(crate) fn apply_rotary_emb_qkv(
         &self,
-        q: &Tensor,
-        k: &Tensor,
+        q: &Tensor<B>,
+        k: &Tensor<B>,
         seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor<B>, Tensor<B>)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
@@ -145,15 +145,15 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-struct Mlp {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+struct Mlp<B: BackendStorage> {
+    gate_proj: Linear<B>,
+    up_proj: Linear<B>,
+    down_proj: Linear<B>,
     act_fn: candle_nn::Activation,
 }
 
-impl Mlp {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Mlp<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let h = cfg.hidden_size;
         let intermediate_size = cfg.intermediate_size / 2;
         let gate_proj = linear(h, intermediate_size, true, vb.pp("gate_proj"))?;
@@ -168,8 +168,8 @@ impl Mlp {
     }
 }
 
-impl Module for Mlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Mlp<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let gate = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
         (gate * xs.apply(&self.up_proj))?.apply(&self.down_proj)
     }
@@ -177,27 +177,27 @@ impl Module for Mlp {
 
 // Real-Gated Linear Recurrent Unit
 #[derive(Debug, Clone)]
-pub(crate) struct Rglru {
-    pub(crate) recurrent_param: Tensor,
-    pub(crate) input_gate_weight: Tensor,
-    pub(crate) input_gate_bias: Tensor,
-    pub(crate) recurrent_gate_weight: Tensor,
-    pub(crate) recurrent_gate_bias: Tensor,
+pub(crate) struct Rglru<B: BackendStorage> {
+    pub(crate) recurrent_param: Tensor<B>,
+    pub(crate) input_gate_weight: Tensor<B>,
+    pub(crate) input_gate_bias: Tensor<B>,
+    pub(crate) recurrent_gate_weight: Tensor<B>,
+    pub(crate) recurrent_gate_bias: Tensor<B>,
     pub(crate) block_width: usize,
     pub(crate) n_heads: usize,
-    pub(crate) recurrent_states: Option<Tensor>,
+    pub(crate) recurrent_states: Option<Tensor<B>>,
 }
 
-fn baddbmm(a: &Tensor, b: &Tensor, c: &Tensor) -> Result<Tensor> {
+fn baddbmm<B: BackendStorage>(a: &Tensor<B>, b: &Tensor<B>, c: &Tensor<B>) -> Result<Tensor<B>> {
     a.broadcast_add(&b.matmul(c)?)
 }
 
-fn softplus(xs: &Tensor) -> Result<Tensor> {
+fn softplus<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
     (xs.exp()? + 1.0)?.log()
 }
 
-impl Rglru {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Rglru<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let h = cfg.hidden_size;
         let lru_width = cfg.lru_width.unwrap_or(h);
         let n_heads = cfg.num_attention_heads;
@@ -221,7 +221,7 @@ impl Rglru {
     }
 
     // https://github.com/huggingface/transformers/blob/0bd58f1ce0573c0e3269de4215a17d318add49b9/src/transformers/models/recurrent_gemma/modeling_recurrent_gemma.py#L303
-    pub(crate) fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    pub(crate) fn forward(&mut self, xs: &Tensor<B>, pos: usize) -> Result<Tensor<B>> {
         let (b_sz, seq_len, lru_width) = xs.dims3()?;
         let pos = Tensor::arange(pos as u32, (pos + seq_len) as u32, xs.device())?;
         let reset = pos.eq(0u32)?.unsqueeze(1)?.unsqueeze(0)?;
@@ -269,12 +269,12 @@ impl Rglru {
     }
 }
 
-fn rnn_scan(
-    hidden_states: &Tensor,
-    recurrent_gate: &Tensor,
-    reset: &Tensor,
-    recurrent_states: Option<&Tensor>,
-) -> Result<(Tensor, Tensor)> {
+fn rnn_scan<B: BackendStorage>(
+    hidden_states: &Tensor<B>,
+    recurrent_gate: &Tensor<B>,
+    reset: &Tensor<B>,
+    recurrent_states: Option<&Tensor<B>>,
+) -> Result<(Tensor<B>, Tensor<B>)> {
     let acc_dtype = DType::F32;
     let dev = hidden_states.device();
     let in_dtype = hidden_states.dtype();
@@ -317,19 +317,19 @@ fn rnn_scan(
 }
 
 #[derive(Debug, Clone)]
-struct RecurrentBlock {
-    linear_y: Linear,
-    linear_x: Linear,
-    linear_out: Linear,
-    conv_1d: candle_nn::Conv1d,
-    conv1d_state: Option<Tensor>,
+struct RecurrentBlock<B: BackendStorage> {
+    linear_y: Linear<B>,
+    linear_x: Linear<B>,
+    linear_out: Linear<B>,
+    conv_1d: candle_nn::Conv1d<B>,
+    conv1d_state: Option<Tensor<B>>,
     conv1d_width: usize,
-    rg_lru: Rglru,
+    rg_lru: Rglru<B>,
     act_fn: candle_nn::Activation,
 }
 
-impl RecurrentBlock {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> RecurrentBlock<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let h = cfg.hidden_size;
         let lru_width = cfg.lru_width.unwrap_or(h);
         let linear_y = linear(h, lru_width, true, vb.pp("linear_y"))?;
@@ -359,7 +359,7 @@ impl RecurrentBlock {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor<B>, pos: usize) -> Result<Tensor<B>> {
         let (_b_sz, seq_len, _) = xs.dims3()?;
 
         let y_branch = xs.apply(&self.linear_y)?.apply(&self.act_fn)?;
@@ -403,21 +403,21 @@ impl RecurrentBlock {
 }
 
 #[derive(Debug, Clone)]
-struct SdpaAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+struct SdpaAttention<B: BackendStorage> {
+    q_proj: Linear<B>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    o_proj: Linear<B>,
     n_heads: usize,
     n_kv_heads: usize,
     head_dim: usize,
     hidden_size: usize,
-    kv_cache: Option<(Tensor, Tensor)>,
-    rotary_emb: Arc<RotaryEmbedding>,
+    kv_cache: Option<(Tensor<B>, Tensor<B>)>,
+    rotary_emb: Arc<RotaryEmbedding<B>>,
 }
 
-impl SdpaAttention {
-    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> SdpaAttention<B> {
+    fn new(rotary_emb: Arc<RotaryEmbedding<B>>, cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let h = cfg.hidden_size;
         let n_heads = cfg.num_attention_heads;
         let n_kv_heads = cfg.num_key_value_heads;
@@ -440,17 +440,17 @@ impl SdpaAttention {
         })
     }
 
-    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
+    fn repeat_kv(&self, x: Tensor<B>) -> Result<Tensor<B>> {
         let n_rep = self.n_heads / self.n_kv_heads;
         crate::utils::repeat_kv(x, n_rep)
     }
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<B>,
+        attention_mask: Option<&Tensor<B>>,
         pos: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let (bsz, q_len, _) = xs.dims3()?;
 
         let query_states = xs.apply(&self.q_proj)?;
@@ -508,18 +508,18 @@ impl SdpaAttention {
 }
 
 #[derive(Debug, Clone)]
-enum TemporalBlock {
-    Recurrent(RecurrentBlock),
-    Attention(SdpaAttention),
+enum TemporalBlock<B: BackendStorage> {
+    Recurrent(RecurrentBlock<B>),
+    Attention(SdpaAttention<B>),
 }
 
-impl TemporalBlock {
+impl<B: BackendStorage> TemporalBlock<B> {
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<B>,
+        attention_mask: Option<&Tensor<B>>,
         pos: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         match self {
             Self::Recurrent(b) => b.forward(xs, pos),
             Self::Attention(b) => b.forward(xs, attention_mask, pos),
@@ -528,19 +528,19 @@ impl TemporalBlock {
 }
 
 #[derive(Debug, Clone)]
-struct DecoderLayer {
-    temporal_pre_norm: RmsNorm,
-    channel_pre_norm: RmsNorm,
-    temporal_block: TemporalBlock,
-    mlp_block: Mlp,
+struct DecoderLayer<B: BackendStorage> {
+    temporal_pre_norm: RmsNorm<B>,
+    channel_pre_norm: RmsNorm<B>,
+    temporal_block: TemporalBlock<B>,
+    mlp_block: Mlp<B>,
 }
 
-impl DecoderLayer {
+impl<B: BackendStorage> DecoderLayer<B> {
     fn new(
         block_idx: usize,
-        rotary_emb: Arc<RotaryEmbedding>,
+        rotary_emb: Arc<RotaryEmbedding<B>>,
         cfg: &Config,
-        vb: VarBuilder,
+        vb: VarBuilder<B>,
     ) -> Result<Self> {
         let h = cfg.hidden_size;
         let temporal_pre_norm = RmsNorm::new(h, cfg.rms_norm_eps, vb.pp("temporal_pre_norm"))?;
@@ -566,10 +566,10 @@ impl DecoderLayer {
 
     fn forward(
         &mut self,
-        xs: &Tensor,
-        attention_mask: Option<&Tensor>,
+        xs: &Tensor<B>,
+        attention_mask: Option<&Tensor<B>>,
         pos: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = xs.apply(&self.temporal_pre_norm)?;
         let xs = self.temporal_block.forward(&xs, attention_mask, pos)?;
@@ -581,19 +581,19 @@ impl DecoderLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    embed_tokens: candle_nn::Embedding,
-    layers: Vec<DecoderLayer>,
-    final_norm: RmsNorm,
-    lm_head: Linear,
+pub struct Model<B: BackendStorage> {
+    embed_tokens: candle_nn::Embedding<B>,
+    layers: Vec<DecoderLayer<B>>,
+    final_norm: RmsNorm<B>,
+    lm_head: Linear<B>,
     hidden_size: usize,
     logits_soft_cap: f64,
     dtype: DType,
-    device: Device,
+    device: B::Device,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?;
         let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?);
@@ -622,7 +622,7 @@ impl Model {
         b_size: usize,
         tgt_len: usize,
         seqlen_offset: usize,
-    ) -> Result<Tensor> {
+    ) -> Result<Tensor<B>> {
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
             .collect();
@@ -637,7 +637,7 @@ impl Model {
             .to_dtype(self.dtype)
     }
 
-    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor<B>, pos: usize) -> Result<Tensor<B>> {
         let (b_size, seq_len) = xs.dims2()?;
         let attention_mask = if seq_len <= 1 {
             None

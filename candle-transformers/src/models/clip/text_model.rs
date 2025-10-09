@@ -6,7 +6,7 @@
 //! - [GH](https://github.com/openai/CLIP)
 //! - [Code](https://github.com/huggingface/transformers/tree/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip)
 
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
 
@@ -17,8 +17,8 @@ pub enum Activation {
     QuickGelu,
 }
 
-impl Module for Activation {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Activation {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         match self {
             Activation::QuickGelu => xs * nn::ops::sigmoid(&(xs * 1.702f64)?)?,
         }
@@ -60,17 +60,17 @@ impl ClipTextConfig {
 // ClipTextEmbeddings mostly based on the existing implementation in the stable diffision model.
 // TODO rewrite to be more similar to https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L142
 #[derive(Clone, Debug)]
-struct ClipTextEmbeddings {
-    token_embedding: candle_nn::Embedding,
-    position_embedding: candle_nn::Embedding,
-    position_ids: Tensor,
+struct ClipTextEmbeddings<B: BackendStorage> {
+    token_embedding: candle_nn::Embedding<B>,
+    position_embedding: candle_nn::Embedding<B>,
+    position_ids: Tensor<B>,
 }
 
-impl ClipTextEmbeddings {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
+impl<B: BackendStorage> ClipTextEmbeddings<B> {
+    fn new(vs: candle_nn::VarBuilder<B>, c: &ClipTextConfig) -> Result<Self> {
         let token_embedding =
             candle_nn::embedding(c.vocab_size, c.embed_dim, vs.pp("token_embedding"))?;
-        let position_embedding: nn::Embedding = candle_nn::embedding(
+        let position_embedding: nn::Embedding<B> = candle_nn::embedding(
             c.max_position_embeddings,
             c.embed_dim,
             vs.pp("position_embedding"),
@@ -85,8 +85,8 @@ impl ClipTextEmbeddings {
     }
 }
 
-impl Module for ClipTextEmbeddings {
-    fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ClipTextEmbeddings<B> {
+    fn forward(&self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let seq_length = input_ids.dim(D::Minus1)?;
         let inputs_embeds = self.token_embedding.forward(input_ids)?;
         let position_ids = self.position_ids.narrow(1, 0, seq_length)?;
@@ -96,18 +96,18 @@ impl Module for ClipTextEmbeddings {
 }
 
 #[derive(Clone, Debug)]
-struct ClipAttention {
-    k_proj: candle_nn::Linear,
-    v_proj: candle_nn::Linear,
-    q_proj: candle_nn::Linear,
-    out_proj: candle_nn::Linear,
+struct ClipAttention<B: BackendStorage> {
+    k_proj: candle_nn::Linear<B>,
+    v_proj: candle_nn::Linear<B>,
+    q_proj: candle_nn::Linear<B>,
+    out_proj: candle_nn::Linear<B>,
     head_dim: usize,
     scale: f64,
     num_attention_heads: usize,
 }
 
-impl ClipAttention {
-    fn new(vs: candle_nn::VarBuilder, c: &EncoderConfig) -> Result<Self> {
+impl<B: BackendStorage> ClipAttention<B> {
+    fn new(vs: candle_nn::VarBuilder<B>, c: &EncoderConfig) -> Result<Self> {
         let embed_dim = c.embed_dim();
         let num_attention_heads = c.num_attention_heads();
         let k_proj = candle_nn::linear(embed_dim, embed_dim, vs.pp("k_proj"))?;
@@ -128,13 +128,17 @@ impl ClipAttention {
         })
     }
 
-    fn shape(&self, xs: &Tensor, seq_len: usize, bsz: usize) -> Result<Tensor> {
+    fn shape(&self, xs: &Tensor<B>, seq_len: usize, bsz: usize) -> Result<Tensor<B>> {
         xs.reshape((bsz, seq_len, self.num_attention_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()
     }
 
-    fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor<B>,
+        causal_attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let in_dtype = xs.dtype();
         let (bsz, seq_len, embed_dim) = xs.dims3()?;
 
@@ -177,14 +181,14 @@ impl ClipAttention {
 }
 
 #[derive(Clone, Debug)]
-struct ClipMlp {
-    fc1: candle_nn::Linear,
-    fc2: candle_nn::Linear,
+struct ClipMlp<B: BackendStorage> {
+    fc1: candle_nn::Linear<B>,
+    fc2: candle_nn::Linear<B>,
     activation: Activation,
 }
 
-impl ClipMlp {
-    fn new(vs: candle_nn::VarBuilder, c: &EncoderConfig) -> Result<Self> {
+impl<B: BackendStorage> ClipMlp<B> {
+    fn new(vs: candle_nn::VarBuilder<B>, c: &EncoderConfig) -> Result<Self> {
         let fc1 = candle_nn::linear(c.embed_dim(), c.intermediate_size(), vs.pp("fc1"))?;
         let fc2 = candle_nn::linear(c.intermediate_size(), c.embed_dim(), vs.pp("fc2"))?;
 
@@ -196,23 +200,23 @@ impl ClipMlp {
     }
 }
 
-impl ClipMlp {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> ClipMlp<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let xs = self.fc1.forward(xs)?;
         self.fc2.forward(&self.activation.forward(&xs)?)
     }
 }
 
 #[derive(Clone, Debug)]
-struct ClipEncoderLayer {
-    self_attn: ClipAttention,
-    layer_norm1: candle_nn::LayerNorm,
-    mlp: ClipMlp,
-    layer_norm2: candle_nn::LayerNorm,
+struct ClipEncoderLayer<B: BackendStorage> {
+    self_attn: ClipAttention<B>,
+    layer_norm1: candle_nn::LayerNorm<B>,
+    mlp: ClipMlp<B>,
+    layer_norm2: candle_nn::LayerNorm<B>,
 }
 
-impl ClipEncoderLayer {
-    fn new(vs: candle_nn::VarBuilder, c: &EncoderConfig) -> Result<Self> {
+impl<B: BackendStorage> ClipEncoderLayer<B> {
+    fn new(vs: candle_nn::VarBuilder<B>, c: &EncoderConfig) -> Result<Self> {
         let self_attn = ClipAttention::new(vs.pp("self_attn"), c)?;
         let layer_norm1 = candle_nn::layer_norm(c.embed_dim(), 1e-5, vs.pp("layer_norm1"))?;
         let mlp = ClipMlp::new(vs.pp("mlp"), c)?;
@@ -226,7 +230,11 @@ impl ClipEncoderLayer {
         })
     }
 
-    fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor<B>,
+        causal_attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = self.layer_norm1.forward(xs)?;
         let xs = self.self_attn.forward(&xs, causal_attention_mask)?;
@@ -240,14 +248,14 @@ impl ClipEncoderLayer {
 }
 
 #[derive(Clone, Debug)]
-pub struct ClipEncoder {
-    layers: Vec<ClipEncoderLayer>,
+pub struct ClipEncoder<B: BackendStorage> {
+    layers: Vec<ClipEncoderLayer<B>>,
 }
 
-impl ClipEncoder {
-    pub fn new(vs: candle_nn::VarBuilder, c: &EncoderConfig) -> Result<Self> {
+impl<B: BackendStorage> ClipEncoder<B> {
+    pub fn new(vs: candle_nn::VarBuilder<B>, c: &EncoderConfig) -> Result<Self> {
         let vs = vs.pp("layers");
-        let mut layers: Vec<ClipEncoderLayer> = Vec::new();
+        let mut layers: Vec<ClipEncoderLayer<B>> = Vec::new();
         for index in 0..c.num_hidden_layers() {
             let layer = ClipEncoderLayer::new(vs.pp(index.to_string()), c)?;
             layers.push(layer)
@@ -255,7 +263,11 @@ impl ClipEncoder {
         Ok(ClipEncoder { layers })
     }
 
-    pub fn forward(&self, xs: &Tensor, causal_attention_mask: Option<&Tensor>) -> Result<Tensor> {
+    pub fn forward(
+        &self,
+        xs: &Tensor<B>,
+        causal_attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Tensor<B>> {
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
             xs = layer.forward(&xs, causal_attention_mask)?;
@@ -265,9 +277,9 @@ impl ClipEncoder {
     // required by LLaVA
     pub fn output_hidden_states(
         &self,
-        xs: &Tensor,
-        causal_attention_mask: Option<&Tensor>,
-    ) -> Result<Vec<Tensor>> {
+        xs: &Tensor<B>,
+        causal_attention_mask: Option<&Tensor<B>>,
+    ) -> Result<Vec<Tensor<B>>> {
         let mut xs = xs.clone();
         let mut hidden_states = Vec::new();
         for layer in self.layers.iter() {
@@ -280,14 +292,14 @@ impl ClipEncoder {
 
 /// A CLIP transformer based model.
 #[derive(Clone, Debug)]
-pub struct ClipTextTransformer {
-    embeddings: ClipTextEmbeddings,
-    encoder: ClipEncoder,
-    final_layer_norm: candle_nn::LayerNorm,
+pub struct ClipTextTransformer<B: BackendStorage> {
+    embeddings: ClipTextEmbeddings<B>,
+    encoder: ClipEncoder<B>,
+    final_layer_norm: candle_nn::LayerNorm<B>,
 }
 
-impl ClipTextTransformer {
-    pub fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
+impl<B: BackendStorage> ClipTextTransformer<B> {
+    pub fn new(vs: candle_nn::VarBuilder<B>, c: &ClipTextConfig) -> Result<Self> {
         let embeddings = ClipTextEmbeddings::new(vs.pp("embeddings"), c)?;
         let encoder = ClipEncoder::new(vs.pp("encoder"), &EncoderConfig::Text(c.clone()))?;
         let final_layer_norm = candle_nn::layer_norm(c.embed_dim, 1e-5, vs.pp("final_layer_norm"))?;
@@ -303,8 +315,8 @@ impl ClipTextTransformer {
         bsz: usize,
         seq_len: usize,
         mask_after: usize,
-        device: &Device,
-    ) -> Result<Tensor> {
+        device: &B::Device,
+    ) -> Result<Tensor<B>> {
         let mask: Vec<_> = (0..seq_len)
             .flat_map(|i| {
                 (0..seq_len).map(move |j| {
@@ -320,7 +332,7 @@ impl ClipTextTransformer {
         mask.broadcast_as((bsz, 1, seq_len, seq_len))
     }
 
-    pub fn forward_with_mask(&self, input_ids: &Tensor, mask_after: usize) -> Result<Tensor> {
+    pub fn forward_with_mask(&self, input_ids: &Tensor<B>, mask_after: usize) -> Result<Tensor<B>> {
         let (bsz, seq_len) = input_ids.dims2()?;
         let input_ids = self.embeddings.forward(input_ids)?;
         let causal_attention_mask =
@@ -332,8 +344,8 @@ impl ClipTextTransformer {
     }
 }
 
-impl Module for ClipTextTransformer {
-    fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for ClipTextTransformer<B> {
+    fn forward(&self, input_ids: &Tensor<B>) -> Result<Tensor<B>> {
         let output = self.forward_with_mask(input_ids, usize::MAX)?;
         let sequence_max_indices = input_ids.argmax(D::Minus1)?.to_dtype(DType::I64)?;
 

@@ -8,27 +8,27 @@ use candle_transformers::models::distilbert::{
 };
 
 use anyhow::{Context, Error as E, Result};
-use candle::{Device, Tensor};
+use candle::{BackendDevice, BackendStorage, Tensor};
 use candle_nn::VarBuilder;
 use clap::{Parser, ValueEnum};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
 
-enum ModelType {
-    Masked(Box<DistilBertForMaskedLM>),
-    UnMasked(Box<DistilBertModel>),
+enum ModelType<B: BackendStorage> {
+    Masked(Box<DistilBertForMaskedLM<B>>),
+    UnMasked(Box<DistilBertModel<B>>),
 }
 
-impl ModelType {
-    fn device(&self) -> &Device {
+impl<B: BackendStorage> ModelType<B> {
+    fn device(&self) -> &B::Device {
         match self {
             ModelType::Masked(model) => &model.bert.device,
             ModelType::UnMasked(model) => &model.device,
         }
     }
 
-    fn forward(&self, input_ids: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, input_ids: &Tensor<B>, attention_mask: &Tensor<B>) -> Result<Tensor<B>> {
         match self {
             ModelType::Masked(model) => Ok(model.forward(input_ids, attention_mask)?),
             ModelType::UnMasked(model) => Ok(model.forward(input_ids, attention_mask)?),
@@ -85,9 +85,10 @@ struct Args {
 }
 
 impl Args {
-    fn build_model_and_tokenizer(&self) -> Result<(ModelType, Tokenizer)> {
-        let device = candle_examples::device(self.cpu)?;
-
+    fn build_model_and_tokenizer<B: BackendStorage>(
+        &self,
+        device: &B::Device,
+    ) -> Result<(ModelType<B>, Tokenizer)> {
         let (model_id, revision) = self.resolve_model_and_revision();
         let (config_path, tokenizer_path, weights_path) =
             self.download_model_files(&model_id, &revision)?;
@@ -96,7 +97,7 @@ impl Args {
         let config: Config = serde_json::from_str(&config)?;
         let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(E::msg)?;
 
-        let vb = self.load_variables(&weights_path, &device)?;
+        let vb = self.load_variables(&weights_path, device)?;
         let model = self.create_model(&config, vb)?;
 
         Ok((model, tokenizer))
@@ -134,7 +135,11 @@ impl Args {
         Ok((config, tokenizer, weights))
     }
 
-    fn load_variables(&self, weights_path: &PathBuf, device: &Device) -> Result<VarBuilder<'_>> {
+    fn load_variables<'a, B: BackendStorage + 'a>(
+        &self,
+        weights_path: &PathBuf,
+        device: &B::Device,
+    ) -> Result<VarBuilder<'a, B>> {
         if self.use_pth {
             Ok(VarBuilder::from_pth(weights_path, DTYPE, device)?)
         } else {
@@ -142,7 +147,11 @@ impl Args {
         }
     }
 
-    fn create_model(&self, config: &Config, vb: VarBuilder) -> Result<ModelType> {
+    fn create_model<B: BackendStorage>(
+        &self,
+        config: &Config,
+        vb: VarBuilder<B>,
+    ) -> Result<ModelType<B>> {
         match self.model {
             Which::DistilbertForMaskedLM => Ok(ModelType::Masked(
                 DistilBertForMaskedLM::load(vb, config)?.into(),
@@ -154,11 +163,36 @@ impl Args {
     }
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     let _guard = setup_tracing(&args);
 
-    let (model, tokenizer) = args.build_model_and_tokenizer()?;
+    let device = B::Device::new(0)?;
+    let (model, tokenizer) = args.build_model_and_tokenizer::<B>(&device)?;
     let device = model.device();
 
     let (token_ids, mask) = prepare_inputs(&args, &tokenizer, device)?;
@@ -183,7 +217,11 @@ fn setup_tracing(args: &Args) -> Option<impl Drop> {
     }
 }
 
-fn prepare_inputs(args: &Args, tokenizer: &Tokenizer, device: &Device) -> Result<(Tensor, Tensor)> {
+fn prepare_inputs<B: BackendStorage>(
+    args: &Args,
+    tokenizer: &Tokenizer,
+    device: &B::Device,
+) -> Result<(Tensor<B>, Tensor<B>)> {
     let mut binding = tokenizer.clone();
     let tokenizer_configured = binding
         .with_padding(None)
@@ -208,10 +246,10 @@ fn prepare_inputs(args: &Args, tokenizer: &Tokenizer, device: &Device) -> Result
     Ok((token_ids, mask))
 }
 
-fn process_output(
-    model: &ModelType,
-    output: &Tensor,
-    token_ids: &Tensor,
+fn process_output<B: BackendStorage>(
+    model: &ModelType<B>,
+    output: &Tensor<B>,
+    token_ids: &Tensor<B>,
     tokenizer: &Tokenizer,
     args: &Args,
 ) -> Result<()> {
@@ -228,9 +266,9 @@ fn process_output(
     Ok(())
 }
 
-fn process_masked_output(
-    output: &Tensor,
-    token_ids: &Tensor,
+fn process_masked_output<B: BackendStorage>(
+    output: &Tensor<B>,
+    token_ids: &Tensor<B>,
     tokenizer: &Tokenizer,
     args: &Args,
 ) -> Result<()> {
@@ -267,7 +305,7 @@ fn process_masked_output(
     Ok(())
 }
 
-fn get_top_k(tensor: &Tensor, k: usize) -> Result<(Tensor, Tensor)> {
+fn get_top_k<B: BackendStorage>(tensor: &Tensor<B>, k: usize) -> Result<(Tensor<B>, Tensor<B>)> {
     let n = tensor.dims().iter().product::<usize>();
     let k = std::cmp::min(k, n);
 
@@ -294,14 +332,18 @@ fn get_top_k(tensor: &Tensor, k: usize) -> Result<(Tensor, Tensor)> {
     Ok((top_values, top_indices))
 }
 
-fn attention_mask(size: usize, device: &Device) -> Result<Tensor> {
+fn attention_mask<B: BackendStorage>(size: usize, device: &B::Device) -> Result<Tensor<B>> {
     let mask: Vec<_> = (0..size)
         .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
         .collect();
     Ok(Tensor::from_slice(&mask, (size, size), device)?)
 }
 
-fn attention_mask_maskedlm(tokenizer: &Tokenizer, input: &str, device: &Device) -> Result<Tensor> {
+fn attention_mask_maskedlm<B: BackendStorage>(
+    tokenizer: &Tokenizer,
+    input: &str,
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let tokens = tokenizer.encode(input, true).map_err(E::msg)?;
     let seq_len = tokens.get_attention_mask().to_vec().len();
 

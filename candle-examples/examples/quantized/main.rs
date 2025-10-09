@@ -8,12 +8,12 @@ use clap::{Parser, ValueEnum};
 use std::io::Write;
 use tokenizers::Tokenizer;
 
-use candle::quantized::{ggml_file, gguf_file};
-use candle::Tensor;
+use candle::quantized::{ggml_file, gguf_file, QMatMul, QuantizedBackend};
+use candle::{BackendDevice, Module, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
-use candle_transformers::models::quantized_llama as model;
+use candle_transformers::models::quantized_llama::{self as model, MQATrait, MQA};
 use model::ModelWeights;
 
 const DEFAULT_PROMPT: &str = "My favorite theorem is ";
@@ -433,11 +433,39 @@ fn format_size(size_in_bytes: usize) -> String {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::QCpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        #[cfg(feature = "cuda")]
+        run::<candle::QCudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::QMetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::QCpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<QB: QuantizedBackend>(args: Args) -> anyhow::Result<()>
+where
+    MQA<QB>: MQATrait<QB>,
+    QMatMul<QB>: Module<QB::Storage>,
+{
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
-
-    let args = Args::parse();
 
     #[cfg(feature = "cuda")]
     candle::quantized::cuda::set_force_dmmv(args.force_dmmv);
@@ -465,10 +493,11 @@ fn main() -> anyhow::Result<()> {
         args.temperature, args.repeat_penalty, args.repeat_last_n
     );
 
+    let device = QB::Device::new(0)?;
+
     let model_path = args.model()?;
     let mut file = std::fs::File::open(&model_path)?;
     let start = std::time::Instant::now();
-    let device = candle_examples::device(args.cpu)?;
 
     let mut model = match model_path.extension().and_then(|v| v.to_str()) {
         Some("gguf") => {
@@ -488,7 +517,7 @@ fn main() -> anyhow::Result<()> {
             ModelWeights::from_gguf(model, &mut file, &device)?
         }
         Some("ggml" | "bin") | Some(_) | None => {
-            let model = ggml_file::Content::read(&mut file, &device)
+            let model: ggml_file::Content<QB> = ggml_file::Content::read(&mut file, &device)
                 .map_err(|e| e.with_path(model_path))?;
             let mut total_size_in_bytes = 0;
             for (_, tensor) in model.tensors.iter() {

@@ -9,7 +9,7 @@
 use crate::models::with_tracing::{linear_no_bias, Embedding, Linear};
 /// MPT model used by replit-code-v1_5-3b
 /// https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/modeling_mpt.py
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};
 
 // https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/configuration_mpt.py
@@ -49,27 +49,27 @@ impl Config {
 }
 
 #[derive(Debug, Clone)]
-struct GroupedQueryAttention {
-    wqkv: Linear,
-    out_proj: Linear,
-    kv_cache: Option<(Tensor, Tensor)>,
+struct GroupedQueryAttention<B: BackendStorage> {
+    wqkv: Linear<B>,
+    out_proj: Linear<B>,
+    kv_cache: Option<(Tensor<B>, Tensor<B>)>,
     softmax_scale: f64,
     head_dim: usize,
     d_model: usize,
     n_heads: usize,
     kv_n_heads: usize,
-    attn_bias: Tensor,
+    attn_bias: Tensor<B>,
     span: tracing::Span,
 }
 
-impl GroupedQueryAttention {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> GroupedQueryAttention<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let head_dim = cfg.d_model / cfg.n_heads;
         let wqkv_size = cfg.d_model + 2 * cfg.kv_n_heads * head_dim;
         let wqkv = linear_no_bias(cfg.d_model, wqkv_size, vb.pp("Wqkv"))?;
         let softmax_scale = 1f64 / (head_dim as f64).sqrt();
         let out_proj = linear_no_bias(cfg.d_model, cfg.d_model, vb.pp("out_proj"))?;
-        let attn_bias = build_alibi_bias(cfg)?.to_device(vb.device())?;
+        let attn_bias = build_alibi_bias(cfg, vb.device())?;
         Ok(Self {
             wqkv,
             out_proj,
@@ -84,7 +84,7 @@ impl GroupedQueryAttention {
         })
     }
 
-    fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&mut self, xs: &Tensor<B>, mask: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
         let qkv = self.wqkv.forward(xs)?;
@@ -143,13 +143,13 @@ impl GroupedQueryAttention {
 }
 
 #[derive(Debug, Clone)]
-struct Ffn {
-    up_proj: Linear,
-    down_proj: Linear,
+struct Ffn<B: BackendStorage> {
+    up_proj: Linear<B>,
+    down_proj: Linear<B>,
 }
 
-impl Ffn {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Ffn<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let hidden = cfg.d_model * cfg.expansion_ratio;
         let up_proj = linear_no_bias(cfg.d_model, hidden, vb.pp("up_proj"))?;
         let down_proj = linear_no_bias(hidden, cfg.d_model, vb.pp("down_proj"))?;
@@ -157,22 +157,22 @@ impl Ffn {
     }
 }
 
-impl Module for Ffn {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> Module<B> for Ffn<B> {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         xs.apply(&self.up_proj)?.gelu_erf()?.apply(&self.down_proj)
     }
 }
 
 #[derive(Debug, Clone)]
-struct MPTBlock {
-    norm1: LayerNorm, // Do we need the low-precision variant?
-    attn: GroupedQueryAttention,
-    norm2: LayerNorm,
-    ffn: Ffn,
+struct MPTBlock<B: BackendStorage> {
+    norm1: LayerNorm<B>, // Do we need the low-precision variant?
+    attn: GroupedQueryAttention<B>,
+    norm2: LayerNorm<B>,
+    ffn: Ffn<B>,
 }
 
-impl MPTBlock {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> MPTBlock<B> {
+    fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let ln_cfg = candle_nn::LayerNormConfig {
             affine: false,
             ..Default::default()
@@ -189,7 +189,7 @@ impl MPTBlock {
         })
     }
 
-    fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(&mut self, xs: &Tensor<B>, mask: Option<&Tensor<B>>) -> Result<Tensor<B>> {
         let residual = xs;
         let xs = xs.apply(&self.norm1)?;
         let xs = self.attn.forward(&xs, mask)?;
@@ -200,10 +200,13 @@ impl MPTBlock {
     }
 }
 
-pub(crate) fn build_alibi_bias(cfg: &Config) -> Result<Tensor> {
+pub(crate) fn build_alibi_bias<B: BackendStorage>(
+    cfg: &Config,
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let full = !cfg.is_causal();
     let seq_len = cfg.max_seq_len;
-    let alibi_bias = Tensor::arange(1 - seq_len as i64, 1, &Device::Cpu)?;
+    let alibi_bias = Tensor::arange(1 - seq_len as i64, 1, device)?;
     let alibi_bias = if full {
         let a1 = alibi_bias.reshape((1, 1, 1, seq_len))?;
         let a2 = alibi_bias.reshape((1, 1, seq_len, 1))?;
@@ -230,19 +233,19 @@ pub(crate) fn build_alibi_bias(cfg: &Config) -> Result<Tensor> {
             .cloned()
             .collect::<Vec<f32>>()
     };
-    let slopes = Tensor::new(slopes, &Device::Cpu)?.reshape((1, (), 1, 1))?;
+    let slopes = Tensor::new(slopes, device)?.reshape((1, (), 1, 1))?;
     alibi_bias.to_dtype(DType::F32)?.broadcast_mul(&slopes)
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
-    wte: Embedding,
-    blocks: Vec<MPTBlock>,
-    norm_f: LayerNorm,
+pub struct Model<B: BackendStorage> {
+    wte: Embedding<B>,
+    blocks: Vec<MPTBlock<B>>,
+    norm_f: LayerNorm<B>,
 }
 
-impl Model {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+impl<B: BackendStorage> Model<B> {
+    pub fn new(cfg: &Config, vb: VarBuilder<B>) -> Result<Self> {
         let wte = Embedding::new(cfg.vocab_size, cfg.d_model, vb.pp("wte"))?;
         let vb_b = vb.pp("blocks");
         let mut blocks = Vec::with_capacity(cfg.n_layers);
@@ -262,7 +265,7 @@ impl Model {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor<B>) -> Result<Tensor<B>> {
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.wte)?;
         let mask = if seq_len <= 1 {
@@ -283,14 +286,18 @@ impl Model {
     }
 }
 
-pub(crate) fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
+pub(crate) fn get_mask<B: BackendStorage>(size: usize, device: &B::Device) -> Result<Tensor<B>> {
     let mask: Vec<_> = (0..size)
         .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
         .collect();
     Tensor::from_slice(&mask, (size, size), device)
 }
 
-pub(crate) fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+pub(crate) fn masked_fill<B: BackendStorage>(
+    on_false: &Tensor<B>,
+    mask: &Tensor<B>,
+    on_true: f32,
+) -> Result<Tensor<B>> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true, on_false)?;

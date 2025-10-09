@@ -1,6 +1,6 @@
 //! Rotary Embeddings
 //!
-use candle::{CpuStorage, Layout, Result, Shape, Tensor, D};
+use candle::{BackendStorage, CpuStorage, Layout, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
 /// Interleaved variant of rotary embeddings.
@@ -11,7 +11,7 @@ use rayon::prelude::*;
 #[derive(Debug, Clone)]
 struct RotaryEmbI;
 
-impl candle::CustomOp3 for RotaryEmbI {
+impl<B: BackendStorage> candle::CustomOp3<B> for RotaryEmbI {
     fn name(&self) -> &'static str {
         "rotary-emb-int"
     }
@@ -177,7 +177,7 @@ impl candle::CustomOp3 for RotaryEmbI {
         l_sin: &Layout,
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
-        let device = src.device();
+        let device = src.device().as_ref().clone();
         let command_buffer = device.command_buffer()?;
         let kernels = device.kernels();
         if cos.dtype() != src.dtype() || sin.dtype() != src.dtype() {
@@ -219,12 +219,12 @@ impl candle::CustomOp3 for RotaryEmbI {
             &output,
         )
         .map_err(candle::Error::wrap)?;
-        let out = candle::MetalStorage::new(output, device.clone(), el, src.dtype());
+        let out = candle::MetalStorage::new(output, device, el, src.dtype());
         Ok((out, l_src.shape().clone()))
     }
 }
 
-fn rope_check_cs(cs: &Tensor, b_sz: usize) -> Result<(usize, usize)> {
+fn rope_check_cs<B: BackendStorage>(cs: &Tensor<B>, b_sz: usize) -> Result<(usize, usize)> {
     match *cs.dims() {
         [t, d] => Ok((t, d)),
         [b, t, d] => {
@@ -237,7 +237,11 @@ fn rope_check_cs(cs: &Tensor, b_sz: usize) -> Result<(usize, usize)> {
     }
 }
 
-pub fn rope_i(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+pub fn rope_i<B: BackendStorage>(
+    xs: &Tensor<B>,
+    cos: &Tensor<B>,
+    sin: &Tensor<B>,
+) -> Result<Tensor<B>> {
     let (b_sz, _n_head, seq_len, n_embd) = xs.dims4()?;
     let (cos_seq_len, cos_n_embd) = rope_check_cs(cos, b_sz)?;
     let (sin_seq_len, sin_n_embd) = rope_check_cs(sin, b_sz)?;
@@ -265,7 +269,11 @@ pub fn rope_i(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
     xs.apply_op3_no_bwd(cos, sin, &RotaryEmbI)
 }
 
-pub fn rope_i_slow(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+pub fn rope_i_slow<B: BackendStorage>(
+    x: &Tensor<B>,
+    cos: &Tensor<B>,
+    sin: &Tensor<B>,
+) -> Result<Tensor<B>> {
     let (b_sz, n_head, seq_len, n_embd) = x.dims4()?;
     let cos = cos
         .narrow(0, 0, seq_len)?
@@ -289,7 +297,7 @@ pub fn rope_i_slow(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
 #[derive(Debug, Clone)]
 struct RotaryEmb;
 
-impl candle::CustomOp3 for RotaryEmb {
+impl<B: BackendStorage> candle::CustomOp3<B> for RotaryEmb {
     fn name(&self) -> &'static str {
         "rotary-emb"
     }
@@ -459,7 +467,7 @@ impl candle::CustomOp3 for RotaryEmb {
         l_sin: &Layout,
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
-        let device = src.device();
+        let device = src.device().as_ref().clone();
         let command_buffer = device.command_buffer()?;
         let kernels = device.kernels();
         if cos.dtype() != src.dtype() || sin.dtype() != src.dtype() {
@@ -507,7 +515,11 @@ impl candle::CustomOp3 for RotaryEmb {
     }
 }
 
-pub fn rope(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+pub fn rope<B: BackendStorage>(
+    xs: &Tensor<B>,
+    cos: &Tensor<B>,
+    sin: &Tensor<B>,
+) -> Result<Tensor<B>> {
     let (b_sz, _n_head, seq_len, n_embd) = xs.dims4()?;
     let (cos_seq_len, cos_n_embd) = rope_check_cs(cos, b_sz)?;
     let (sin_seq_len, sin_n_embd) = rope_check_cs(sin, b_sz)?;
@@ -535,14 +547,18 @@ pub fn rope(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
     xs.apply_op3_no_bwd(cos, sin, &RotaryEmb)
 }
 
-fn rotate_half(xs: &Tensor) -> Result<Tensor> {
+fn rotate_half<B: BackendStorage>(xs: &Tensor<B>) -> Result<Tensor<B>> {
     let last_dim = xs.dim(D::Minus1)?;
     let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
     let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
     Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
 }
 
-pub fn rope_slow(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+pub fn rope_slow<B: BackendStorage>(
+    x: &Tensor<B>,
+    cos: &Tensor<B>,
+    sin: &Tensor<B>,
+) -> Result<Tensor<B>> {
     let (_b_sz, _h, seq_len, _n_embd) = x.dims4()?;
     let cos = Tensor::cat(&[cos, cos], D::Minus1)?;
     let sin = Tensor::cat(&[sin, sin], D::Minus1)?;
@@ -557,7 +573,7 @@ pub fn rope_slow(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
 #[derive(Debug, Clone)]
 struct RotaryEmbThd;
 
-impl candle::CustomOp3 for RotaryEmbThd {
+impl<B: BackendStorage> candle::CustomOp3<B> for RotaryEmbThd {
     fn name(&self) -> &'static str {
         "rotary-emb"
     }
@@ -728,7 +744,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
         l_sin: &Layout,
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
-        let device = src.device();
+        let device = src.device().as_ref().clone();
         let command_buffer = device.command_buffer()?;
         let kernels = device.kernels();
         if cos.dtype() != src.dtype() || sin.dtype() != src.dtype() {
@@ -754,7 +770,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
         let el = b * h * t * d;
         let output = device.new_buffer(el, src.dtype(), "rope-thd")?;
         candle_metal_kernels::call_rope_thd(
-            device.metal_device(),
+            &device,
             &command_buffer,
             kernels,
             name,
@@ -777,7 +793,11 @@ impl candle::CustomOp3 for RotaryEmbThd {
     }
 }
 
-pub fn rope_thd(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+pub fn rope_thd<B: BackendStorage>(
+    xs: &Tensor<B>,
+    cos: &Tensor<B>,
+    sin: &Tensor<B>,
+) -> Result<Tensor<B>> {
     let (b_sz, seq_len, _n_head, n_embd) = xs.dims4()?;
     let (cos_seq_len, cos_n_embd) = rope_check_cs(cos, b_sz)?;
     let (sin_seq_len, sin_n_embd) = rope_check_cs(sin, b_sz)?;

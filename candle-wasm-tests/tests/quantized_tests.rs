@@ -1,8 +1,8 @@
 #![allow(unused)]
 use candle::{
-    quantized::{self, k_quants, GgmlDType, GgmlType},
+    quantized::{self, k_quants, GgmlDType, GgmlType, QCpuStorage},
     test_utils::to_vec2_round,
-    Device, Module, Result, Tensor,
+    CpuDevice, Module, Result, Tensor,
 };
 
 use wasm_bindgen_test::*;
@@ -10,7 +10,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 
 #[wasm_bindgen_test]
 fn quantized_matmul_neg() -> Result<()> {
-    let cpu = &Device::Cpu;
+    let cpu = &CpuDevice;
     let (m, k, n) = (3, 64, 4);
     let lhs = (0..(m * k))
         .map(|v| v as f32 - (m * k) as f32 / 2.0)
@@ -41,7 +41,7 @@ fn quantized_matmul_neg() -> Result<()> {
         ]
     );
 
-    let qtensor = quantized::QTensor::new(quantized::QStorage::Cpu(Box::new(rhs_t)), (4, 64))?;
+    let qtensor = quantized::QTensor::new(QCpuStorage::new(Box::new(rhs_t)), (4, 64))?;
     let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
     let res = matmul.forward(&tensor_lhs)?;
     assert_eq!(

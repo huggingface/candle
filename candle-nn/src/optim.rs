@@ -1,13 +1,13 @@
 //! Various optimization algorithms.
-use candle::{Result, Tensor, Var};
+use candle::{BackendStorage, Result, Tensor, Var};
 
 /// The interface optimizers should implement.
-pub trait Optimizer: Sized {
+pub trait Optimizer<B: BackendStorage>: Sized {
     type Config: Sized;
 
-    fn new(vars: Vec<Var>, config: Self::Config) -> Result<Self>;
+    fn new(vars: Vec<Var<B>>, config: Self::Config) -> Result<Self>;
 
-    fn step(&mut self, grads: &candle::backprop::GradStore) -> Result<()>;
+    fn step(&mut self, grads: &candle::backprop::GradStore<B>) -> Result<()>;
 
     fn learning_rate(&self) -> f64;
 
@@ -17,12 +17,12 @@ pub trait Optimizer: Sized {
         Self::new(vec![], config)
     }
 
-    fn backward_step(&mut self, loss: &Tensor) -> Result<()> {
+    fn backward_step(&mut self, loss: &Tensor<B>) -> Result<()> {
         let grads = loss.backward()?;
         self.step(&grads)
     }
 
-    fn from_slice(vars: &[&Var], config: Self::Config) -> Result<Self> {
+    fn from_slice(vars: &[&Var<B>], config: Self::Config) -> Result<Self> {
         let vars: Vec<_> = vars.iter().map(|&v| v.clone()).collect();
         Self::new(vars, config)
     }
@@ -32,15 +32,15 @@ pub trait Optimizer: Sized {
 ///
 /// Contrary to the PyTorch implementation of SGD, this version does not support momentum.
 #[derive(Debug)]
-pub struct SGD {
-    vars: Vec<Var>,
+pub struct SGD<B: BackendStorage> {
+    vars: Vec<Var<B>>,
     learning_rate: f64,
 }
 
-impl Optimizer for SGD {
+impl<B: BackendStorage> Optimizer<B> for SGD<B> {
     type Config = f64;
 
-    fn new(vars: Vec<Var>, learning_rate: f64) -> Result<Self> {
+    fn new(vars: Vec<Var<B>>, learning_rate: f64) -> Result<Self> {
         let vars = vars
             .into_iter()
             .filter(|var| var.dtype().is_float())
@@ -55,7 +55,7 @@ impl Optimizer for SGD {
         self.learning_rate
     }
 
-    fn step(&mut self, grads: &candle::backprop::GradStore) -> Result<()> {
+    fn step(&mut self, grads: &candle::backprop::GradStore<B>) -> Result<()> {
         for var in self.vars.iter() {
             if let Some(grad) = grads.get(var) {
                 var.set(&var.sub(&(grad * self.learning_rate)?)?)?;
@@ -69,12 +69,12 @@ impl Optimizer for SGD {
     }
 }
 
-impl SGD {
-    pub fn into_inner(self) -> Vec<Var> {
+impl<B: BackendStorage> SGD<B> {
+    pub fn into_inner(self) -> Vec<Var<B>> {
         self.vars
     }
 
-    pub fn push(&mut self, var: &Var) {
+    pub fn push(&mut self, var: &Var<B>) {
         self.vars.push(var.clone())
     }
 }
@@ -101,23 +101,23 @@ impl Default for ParamsAdamW {
 }
 
 #[derive(Debug)]
-struct VarAdamW {
-    var: Var,
-    first_moment: Var,
-    second_moment: Var,
+struct VarAdamW<B: BackendStorage> {
+    var: Var<B>,
+    first_moment: Var<B>,
+    second_moment: Var<B>,
 }
 
 #[derive(Debug)]
-pub struct AdamW {
-    vars: Vec<VarAdamW>,
+pub struct AdamW<B: BackendStorage> {
+    vars: Vec<VarAdamW<B>>,
     step_t: usize,
     params: ParamsAdamW,
 }
 
-impl Optimizer for AdamW {
+impl<B: BackendStorage> Optimizer<B> for AdamW<B> {
     type Config = ParamsAdamW;
 
-    fn new(vars: Vec<Var>, params: ParamsAdamW) -> Result<Self> {
+    fn new(vars: Vec<Var<B>>, params: ParamsAdamW) -> Result<Self> {
         let vars = vars
             .into_iter()
             .filter(|var| var.dtype().is_float())
@@ -149,7 +149,7 @@ impl Optimizer for AdamW {
         self.params.lr = lr
     }
 
-    fn step(&mut self, grads: &candle::backprop::GradStore) -> Result<()> {
+    fn step(&mut self, grads: &candle::backprop::GradStore<B>) -> Result<()> {
         self.step_t += 1;
         let lr = self.params.lr;
         let lambda = self.params.weight_decay;
@@ -182,8 +182,8 @@ impl Optimizer for AdamW {
     }
 }
 
-impl AdamW {
-    pub fn new_lr(vars: Vec<Var>, learning_rate: f64) -> Result<Self> {
+impl<B: BackendStorage> AdamW<B> {
+    pub fn new_lr(vars: Vec<Var<B>>, learning_rate: f64) -> Result<Self> {
         let params = ParamsAdamW {
             lr: learning_rate,
             ..ParamsAdamW::default()

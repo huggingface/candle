@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle::{DType, IndexOp, D};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Tensor, D};
 use candle_nn::{ModuleT, VarBuilder};
 use candle_transformers::models::vgg::{Models, Vgg};
 use clap::{Parser, ValueEnum};
@@ -32,8 +32,22 @@ struct Args {
 
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let device = candle_examples::device(args.cpu)?;
-    let image = candle_examples::imagenet::load_image224(args.image)?.to_device(&device)?;
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> anyhow::Result<()> {
+    let device = B::Device::new(0)?;
+    let image: Tensor<B> = candle_examples::imagenet::load_image224(args.image, &device)?;
 
     println!("loaded image {image:?}");
 

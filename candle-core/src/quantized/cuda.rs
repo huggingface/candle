@@ -373,6 +373,46 @@ fn mul_mat_via_q8_1(
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 
+impl QuantizedDevice for CudaDevice {
+    type Storage = QCudaStorage;
+
+    fn qzeros(&self, elem_count: usize, dtype: GgmlDType) -> Result<Self::Storage> {
+        let size_in_bytes = ceil_div(elem_count, dtype.block_size()) * dtype.type_size();
+        let padded_size_in_bytes =
+            ceil_div(el_count + MATRIX_ROW_PADDING, dtype.block_size()) * dtype.type_size();
+        let inner = self.alloc_zeros::<u8>(padded_size_in_bytes)?;
+        Ok(QCudaStorage {
+            data: PaddedCudaSlice {
+                inner,
+                len: size_in_bytes,
+            },
+            device: self.clone(),
+            dtype,
+        })
+    }
+
+    fn load_quantized<T: GgmlType + Send + Sync + Debug + 'static>(
+        &self,
+        data: &[T],
+    ) -> Result<Self::Storage> {
+        let data = unsafe {
+            std::slice::from_raw_parts(data.as_ptr() as *const u8, core::mem::size_of_val(data))
+        };
+        let dtype = T::DTYPE;
+        let padded_len = data.len() + MATRIX_ROW_PADDING * dtype.type_size() / dtype.block_size();
+        let mut inner = unsafe { self.alloc::<u8>(padded_len)? };
+        self.memcpy_htod(data, &mut inner.slice_mut(..data.len()))?;
+        Ok(QCudaStorage {
+            data: PaddedCudaSlice {
+                inner,
+                len: data.len(),
+            },
+            device: self.clone(),
+            dtype,
+        })
+    }
+}
+
 impl QCudaStorage {
     pub fn zeros(device: &CudaDevice, el_count: usize, dtype: GgmlDType) -> Result<Self> {
         let size_in_bytes = ceil_div(el_count, dtype.block_size()) * dtype.type_size();

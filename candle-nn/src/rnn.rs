@@ -1,9 +1,9 @@
 //! Recurrent Neural Networks
-use candle::{DType, Device, IndexOp, Result, Tensor};
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor};
 
 /// Trait for Recurrent Neural Networks.
 #[allow(clippy::upper_case_acronyms)]
-pub trait RNN {
+pub trait RNN<B: BackendStorage> {
     type State: Clone;
 
     /// A zero state from which the recurrent network is usually initialized.
@@ -12,13 +12,13 @@ pub trait RNN {
     /// Applies a single step of the recurrent network.
     ///
     /// The input should have dimensions [batch_size, features].
-    fn step(&self, input: &Tensor, state: &Self::State) -> Result<Self::State>;
+    fn step(&self, input: &Tensor<B>, state: &Self::State) -> Result<Self::State>;
 
     /// Applies multiple steps of the recurrent network.
     ///
     /// The input should have dimensions [batch_size, seq_len, features].
     /// The initial state is the result of applying zero_state.
-    fn seq(&self, input: &Tensor) -> Result<Vec<Self::State>> {
+    fn seq(&self, input: &Tensor<B>) -> Result<Vec<Self::State>> {
         let batch_dim = input.dim(0)?;
         let state = self.zero_state(batch_dim)?;
         self.seq_init(input, &state)
@@ -27,7 +27,7 @@ pub trait RNN {
     /// Applies multiple steps of the recurrent network.
     ///
     /// The input should have dimensions [batch_size, seq_len, features].
-    fn seq_init(&self, input: &Tensor, init_state: &Self::State) -> Result<Vec<Self::State>> {
+    fn seq_init(&self, input: &Tensor<B>, init_state: &Self::State) -> Result<Vec<Self::State>> {
         let (_b_size, seq_len, _features) = input.dims3()?;
         let mut output = Vec::with_capacity(seq_len);
         for seq_index in 0..seq_len {
@@ -43,29 +43,29 @@ pub trait RNN {
     }
 
     /// Converts a sequence of state to a tensor.
-    fn states_to_tensor(&self, states: &[Self::State]) -> Result<Tensor>;
+    fn states_to_tensor(&self, states: &[Self::State]) -> Result<Tensor<B>>;
 }
 
 /// The state for a LSTM network, this contains two tensors.
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone)]
-pub struct LSTMState {
-    pub h: Tensor,
-    pub c: Tensor,
+pub struct LSTMState<B: BackendStorage> {
+    pub h: Tensor<B>,
+    pub c: Tensor<B>,
 }
 
-impl LSTMState {
-    pub fn new(h: Tensor, c: Tensor) -> Self {
+impl<B: BackendStorage> LSTMState<B> {
+    pub fn new(h: Tensor<B>, c: Tensor<B>) -> Self {
         LSTMState { h, c }
     }
 
     /// The hidden state vector, which is also the output of the LSTM.
-    pub fn h(&self) -> &Tensor {
+    pub fn h(&self) -> &Tensor<B> {
         &self.h
     }
 
     /// The cell state vector.
-    pub fn c(&self) -> &Tensor {
+    pub fn c(&self) -> &Tensor<B> {
         &self.c
     }
 }
@@ -118,24 +118,24 @@ impl LSTMConfig {
 /// <https://en.wikipedia.org/wiki/Long_short-term_memory>
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Debug)]
-pub struct LSTM {
-    w_ih: Tensor,
-    w_hh: Tensor,
-    b_ih: Option<Tensor>,
-    b_hh: Option<Tensor>,
+pub struct LSTM<B: BackendStorage> {
+    w_ih: Tensor<B>,
+    w_hh: Tensor<B>,
+    b_ih: Option<Tensor<B>>,
+    b_hh: Option<Tensor<B>>,
     hidden_dim: usize,
     config: LSTMConfig,
-    device: Device,
+    device: B::Device,
     dtype: DType,
 }
 
-impl LSTM {
+impl<B: BackendStorage> LSTM<B> {
     /// Creates a LSTM layer.
     pub fn new(
         in_dim: usize,
         hidden_dim: usize,
         config: LSTMConfig,
-        vb: crate::VarBuilder,
+        vb: crate::VarBuilder<B>,
     ) -> Result<Self> {
         let layer_idx = config.layer_idx;
         let direction_str = match config.direction {
@@ -186,17 +186,17 @@ impl LSTM {
 }
 
 /// Creates a LSTM layer.
-pub fn lstm(
+pub fn lstm<B: BackendStorage>(
     in_dim: usize,
     hidden_dim: usize,
     config: LSTMConfig,
-    vb: crate::VarBuilder,
-) -> Result<LSTM> {
+    vb: crate::VarBuilder<B>,
+) -> Result<LSTM<B>> {
     LSTM::new(in_dim, hidden_dim, config, vb)
 }
 
-impl RNN for LSTM {
-    type State = LSTMState;
+impl<B: BackendStorage> RNN<B> for LSTM<B> {
+    type State = LSTMState<B>;
 
     fn zero_state(&self, batch_dim: usize) -> Result<Self::State> {
         let zeros =
@@ -207,7 +207,7 @@ impl RNN for LSTM {
         })
     }
 
-    fn step(&self, input: &Tensor, in_state: &Self::State) -> Result<Self::State> {
+    fn step(&self, input: &Tensor<B>, in_state: &Self::State) -> Result<Self::State> {
         let w_ih = input.matmul(&self.w_ih.t()?)?;
         let w_hh = in_state.h.matmul(&self.w_hh.t()?)?;
         let w_ih = match &self.b_ih {
@@ -232,7 +232,7 @@ impl RNN for LSTM {
         })
     }
 
-    fn states_to_tensor(&self, states: &[Self::State]) -> Result<Tensor> {
+    fn states_to_tensor(&self, states: &[Self::State]) -> Result<Tensor<B>> {
         let states = states.iter().map(|s| s.h.clone()).collect::<Vec<_>>();
         Tensor::stack(&states, 1)
     }
@@ -241,13 +241,13 @@ impl RNN for LSTM {
 /// The state for a GRU network, this contains a single tensor.
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone)]
-pub struct GRUState {
-    pub h: Tensor,
+pub struct GRUState<B: BackendStorage> {
+    pub h: Tensor<B>,
 }
 
-impl GRUState {
+impl<B: BackendStorage> GRUState<B> {
     /// The hidden state vector, which is also the output of the LSTM.
-    pub fn h(&self) -> &Tensor {
+    pub fn h(&self) -> &Tensor<B> {
         &self.h
     }
 }
@@ -288,24 +288,24 @@ impl GRUConfig {
 /// <https://en.wikipedia.org/wiki/Gated_recurrent_unit>
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Debug)]
-pub struct GRU {
-    w_ih: Tensor,
-    w_hh: Tensor,
-    b_ih: Option<Tensor>,
-    b_hh: Option<Tensor>,
+pub struct GRU<B: BackendStorage> {
+    w_ih: Tensor<B>,
+    w_hh: Tensor<B>,
+    b_ih: Option<Tensor<B>>,
+    b_hh: Option<Tensor<B>>,
     hidden_dim: usize,
     config: GRUConfig,
-    device: Device,
+    device: B::Device,
     dtype: DType,
 }
 
-impl GRU {
+impl<B: BackendStorage> GRU<B> {
     /// Creates a GRU layer.
     pub fn new(
         in_dim: usize,
         hidden_dim: usize,
         config: GRUConfig,
-        vb: crate::VarBuilder,
+        vb: crate::VarBuilder<B>,
     ) -> Result<Self> {
         let w_ih = vb.get_with_hints(
             (3 * hidden_dim, in_dim),
@@ -342,17 +342,17 @@ impl GRU {
     }
 }
 
-pub fn gru(
+pub fn gru<B: BackendStorage>(
     in_dim: usize,
     hidden_dim: usize,
     config: GRUConfig,
-    vb: crate::VarBuilder,
-) -> Result<GRU> {
+    vb: crate::VarBuilder<B>,
+) -> Result<GRU<B>> {
     GRU::new(in_dim, hidden_dim, config, vb)
 }
 
-impl RNN for GRU {
-    type State = GRUState;
+impl<B: BackendStorage> RNN<B> for GRU<B> {
+    type State = GRUState<B>;
 
     fn zero_state(&self, batch_dim: usize) -> Result<Self::State> {
         let h =
@@ -360,7 +360,7 @@ impl RNN for GRU {
         Ok(Self::State { h })
     }
 
-    fn step(&self, input: &Tensor, in_state: &Self::State) -> Result<Self::State> {
+    fn step(&self, input: &Tensor<B>, in_state: &Self::State) -> Result<Self::State> {
         let w_ih = input.matmul(&self.w_ih.t()?)?;
         let w_hh = in_state.h.matmul(&self.w_hh.t()?)?;
         let w_ih = match &self.b_ih {
@@ -381,7 +381,7 @@ impl RNN for GRU {
         Ok(GRUState { h: next_h })
     }
 
-    fn states_to_tensor(&self, states: &[Self::State]) -> Result<Tensor> {
+    fn states_to_tensor(&self, states: &[Self::State]) -> Result<Tensor<B>> {
         let states = states.iter().map(|s| s.h.clone()).collect::<Vec<_>>();
         Tensor::cat(&states, 1)
     }

@@ -1,7 +1,12 @@
+use candle::CpuStorage;
 use candle_transformers::models::segment_anything::sam;
 use wasm_bindgen::prelude::*;
 
-pub use sam::{Sam, IMAGE_SIZE};
+pub use sam::IMAGE_SIZE;
+
+pub type Tensor = candle::Tensor<CpuStorage>;
+pub type VarBuilder<'a> = candle_nn::VarBuilder<'a, CpuStorage>;
+pub type Sam = sam::Sam<CpuStorage>;
 
 #[wasm_bindgen]
 extern "C" {

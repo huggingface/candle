@@ -1,4 +1,4 @@
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::glm4::{Config as ConfigOld, EosTokenId, Model as ModelOld};
@@ -8,13 +8,13 @@ use clap::Parser;
 use hf_hub::{Repo, RepoType};
 use tokenizers::Tokenizer;
 
-enum Model {
-    Old(ModelOld),
-    New(ModelNew),
+enum Model<B: BackendStorage> {
+    Old(ModelOld<B>),
+    New(ModelNew<B>),
 }
 
-impl Model {
-    fn forward(&mut self, input_ids: &Tensor, pos: usize) -> candle::Result<Tensor> {
+impl<B: BackendStorage> Model<B> {
+    fn forward(&mut self, input_ids: &Tensor<B>, pos: usize) -> candle::Result<Tensor<B>> {
         match self {
             Self::Old(m) => m.forward(input_ids),
             Self::New(m) => m.forward(input_ids, pos),
@@ -30,22 +30,22 @@ enum Which {
     GLM4New,
 }
 
-struct TextGeneration {
-    model: Model,
-    device: Device,
+struct TextGeneration<B: BackendStorage> {
+    model: Model<B>,
+    device: B::Device,
     tokenizer: Tokenizer,
     logits_processor: LogitsProcessor,
     args: Args,
     eos_tokens: Vec<u32>,
 }
 
-impl TextGeneration {
+impl<B: BackendStorage> TextGeneration<B> {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Model,
+        model: Model<B>,
         tokenizer: Tokenizer,
         args: Args,
-        device: &Device,
+        device: &B::Device,
         eos_tokens: Vec<u32>,
     ) -> Self {
         let logits_processor =
@@ -198,8 +198,22 @@ struct Args {
     which: Which,
 }
 
-fn main() -> anyhow::Result<()> {
+pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args, device: &B::Device) -> anyhow::Result<()> {
     println!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
         candle::utils::with_avx(),
@@ -256,23 +270,22 @@ fn main() -> anyhow::Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).expect("Tokenizer Error");
 
     let start = std::time::Instant::now();
-    let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
+    let dtype = if B::Device::SUPPORTS_BF16 {
         DType::BF16
     } else {
         DType::F32
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, device)? };
 
     let (model, eos_token_id) = match args.which {
         Which::GLM4Old => {
             let config: ConfigOld = serde_json::from_slice(&std::fs::read(config_filename)?)?;
-            let model = ModelOld::new(&config, vb)?;
+            let model: ModelOld<B> = ModelOld::new(&config, vb)?;
             (Model::Old(model), config.eos_token_id)
         }
         Which::GLM4New => {
             let config: ConfigNew = serde_json::from_slice(&std::fs::read(config_filename)?)?;
-            let model = ModelNew::new(&config, vb)?;
+            let model: ModelNew<B> = ModelNew::new(&config, vb)?;
             (Model::New(model), config.eos_token_id)
         }
     };
@@ -299,7 +312,7 @@ fn main() -> anyhow::Result<()> {
 
     println!("loaded the model in {:?}", start.elapsed());
 
-    let mut pipeline = TextGeneration::new(model, tokenizer, args, &device, eos_tokens);
+    let mut pipeline = TextGeneration::new(model, tokenizer, args, device, eos_tokens);
     pipeline.run()?;
     Ok(())
 }

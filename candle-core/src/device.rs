@@ -1,6 +1,7 @@
-use crate::backend::BackendDevice;
+use crate::backend::{BackendDevice, BackendStorage};
 use crate::cpu_backend::CpuDevice;
 use crate::{CpuStorage, DType, Result, Shape, Storage, WithDType};
+use std::convert::Into;
 
 /// A `DeviceLocation` represents a physical device whereas multiple `Device`
 /// can live on the same location (typically for cuda devices).
@@ -17,6 +18,12 @@ pub enum Device {
     Cpu,
     Cuda(crate::CudaDevice),
     Metal(crate::MetalDevice),
+}
+
+impl AsRef<Device> for Device {
+    fn as_ref(&self) -> &Device {
+        self
+    }
 }
 
 pub trait NdArray {
@@ -259,31 +266,6 @@ impl Device {
         Ok(Self::Metal(crate::MetalDevice::new(ordinal)?))
     }
 
-    pub fn set_seed(&self, seed: u64) -> Result<()> {
-        match self {
-            Self::Cpu => CpuDevice.set_seed(seed),
-            Self::Cuda(c) => c.set_seed(seed),
-            Self::Metal(m) => m.set_seed(seed),
-        }
-    }
-
-    pub fn same_device(&self, rhs: &Self) -> bool {
-        match (self, rhs) {
-            (Self::Cpu, Self::Cpu) => true,
-            (Self::Cuda(lhs), Self::Cuda(rhs)) => lhs.same_device(rhs),
-            (Self::Metal(lhs), Self::Metal(rhs)) => lhs.same_device(rhs),
-            _ => false,
-        }
-    }
-
-    pub fn location(&self) -> DeviceLocation {
-        match self {
-            Self::Cpu => DeviceLocation::Cpu,
-            Self::Cuda(device) => device.location(),
-            Device::Metal(device) => device.location(),
-        }
-    }
-
     pub fn is_cpu(&self) -> bool {
         matches!(self, Self::Cpu)
     }
@@ -327,13 +309,153 @@ impl Device {
             Ok(Self::Cpu)
         }
     }
+}
 
-    pub(crate) fn rand_uniform_f64(
+impl BackendDevice<Storage> for Device {
+    fn new(ordinal: usize) -> Result<Self> {
+        if cfg!(feature = "metal") {
+            Device::new_metal(ordinal)
+        } else if cfg!(feature = "cuda") {
+            Device::new_cuda(ordinal)
+        } else {
+            Ok(Device::Cpu)
+        }
+    }
+
+    fn location(&self) -> DeviceLocation {
+        match self {
+            Self::Cpu => DeviceLocation::Cpu,
+            Self::Cuda(device) => device.location(),
+            Device::Metal(device) => device.location(),
+        }
+    }
+
+    fn is_cpu(&self) -> bool {
+        match self {
+            Self::Cpu => true,
+            Self::Cuda(_) => false,
+            Self::Metal(_) => false,
+        }
+    }
+
+    fn zeros(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
+        match self {
+            Device::Cpu => {
+                let storage = CpuDevice.zeros(shape, dtype)?;
+                Ok(Storage::Cpu(storage))
+            }
+            Device::Cuda(device) => {
+                let storage = device.zeros(shape, dtype)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(device) => {
+                let storage = device.zeros(shape, dtype)?;
+                Ok(Storage::Metal(storage))
+            }
+        }
+    }
+
+    /// # Safety
+    /// This function is unsafe as it doesn't initialize the underlying data store.
+    /// The caller should ensure that the data is properly initialized as early as possible
+    /// after this call.
+    unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
+        match self {
+            Self::Cpu => {
+                let storage = CpuDevice.alloc_uninit(shape, dtype)?;
+                Ok(Storage::Cpu(storage))
+            }
+            Self::Cuda(device) => {
+                let storage = device.alloc_uninit(shape, dtype)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Self::Metal(device) => {
+                let storage = device.alloc_uninit(shape, dtype)?;
+                Ok(Storage::Metal(storage))
+            }
+        }
+    }
+
+    fn storage_from_slice<T: crate::WithDType>(&self, data: &[T]) -> Result<Storage> {
+        match self {
+            Device::Cpu => Ok(Storage::Cpu(data.to_cpu_storage())),
+            Device::Cuda(device) => {
+                let storage = device.storage_from_slice(data)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(device) => {
+                let storage = device.storage_from_slice(data)?;
+                Ok(Storage::Metal(storage))
+            }
+        }
+    }
+
+    fn storage_from_cpu_storage(&self, cpu: &CpuStorage) -> Result<Storage> {
+        match self {
+            Device::Cpu => Ok(Storage::Cpu(cpu.clone())),
+            Device::Cuda(device) => {
+                let storage = device.storage_from_cpu_storage(cpu)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(device) => {
+                let storage = device.storage_from_cpu_storage(cpu)?;
+                Ok(Storage::Metal(storage))
+            }
+        }
+    }
+
+    fn storage_from_cpu_storage_owned(&self, cpu: CpuStorage) -> Result<Storage> {
+        match self {
+            Device::Cpu => Ok(Storage::Cpu(cpu)),
+            Device::Cuda(device) => {
+                let storage = device.storage_from_cpu_storage_owned(cpu)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(device) => {
+                let storage = device.storage_from_cpu_storage_owned(cpu)?;
+                Ok(Storage::Metal(storage))
+            }
+        }
+    }
+
+    fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
+        match self {
+            Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
+            Device::Cuda(device) => {
+                let storage = array.to_cpu_storage();
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(device) => {
+                let storage = array.to_cpu_storage();
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                Ok(Storage::Metal(storage))
+            }
+        }
+    }
+
+    fn storage_owned<S: WithDType>(&self, data: Vec<S>) -> Result<Storage> {
+        match self {
+            Device::Cpu => Ok(Storage::Cpu(S::to_cpu_storage_owned(data))),
+            Device::Cuda(device) => {
+                let storage = S::to_cpu_storage_owned(data);
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(device) => {
+                let storage = S::to_cpu_storage_owned(data);
+                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                Ok(Storage::Metal(storage))
+            }
+        }
+    }
+
+    fn rand_uniform<T: crate::FloatDType>(
         &self,
-        lo: f64,
-        up: f64,
         shape: &Shape,
         dtype: DType,
+        lo: T,
+        up: T,
     ) -> Result<Storage> {
         match self {
             Device::Cpu => {
@@ -351,27 +473,23 @@ impl Device {
                 }
             }
             Device::Metal(device) => {
-                let storage = device.rand_uniform(shape, dtype, lo, up)?;
-                Ok(Storage::Metal(storage))
+                if dtype == DType::F64 {
+                    let storage = device.rand_uniform(shape, DType::F32, lo, up)?;
+                    Ok(Storage::Metal(storage))
+                } else {
+                    let storage = device.rand_uniform(shape, dtype, lo, up)?;
+                    Ok(Storage::Metal(storage))
+                }
             }
         }
     }
 
-    pub(crate) fn rand_uniform<T: crate::FloatDType>(
+    fn rand_normal<T: crate::FloatDType>(
         &self,
-        lo: T,
-        up: T,
-        shape: &Shape,
-    ) -> Result<Storage> {
-        self.rand_uniform_f64(lo.to_f64(), up.to_f64(), shape, T::DTYPE)
-    }
-
-    pub(crate) fn rand_normal_f64(
-        &self,
-        mean: f64,
-        std: f64,
         shape: &Shape,
         dtype: DType,
+        mean: T,
+        std: T,
     ) -> Result<Storage> {
         match self {
             Device::Cpu => {
@@ -395,96 +513,15 @@ impl Device {
         }
     }
 
-    pub(crate) fn rand_normal<T: crate::FloatDType>(
-        &self,
-        mean: T,
-        std: T,
-        shape: &Shape,
-    ) -> Result<Storage> {
-        self.rand_normal_f64(mean.to_f64(), std.to_f64(), shape, T::DTYPE)
-    }
-
-    pub(crate) fn zeros(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
+    fn set_seed(&self, seed: u64) -> Result<()> {
         match self {
-            Device::Cpu => {
-                let storage = CpuDevice.zeros_impl(shape, dtype)?;
-                Ok(Storage::Cpu(storage))
-            }
-            Device::Cuda(device) => {
-                let storage = device.zeros_impl(shape, dtype)?;
-                Ok(Storage::Cuda(storage))
-            }
-            Device::Metal(device) => {
-                let storage = device.zeros_impl(shape, dtype)?;
-                Ok(Storage::Metal(storage))
-            }
+            Self::Cpu => CpuDevice.set_seed(seed),
+            Self::Cuda(c) => c.set_seed(seed),
+            Self::Metal(m) => m.set_seed(seed),
         }
     }
 
-    pub(crate) unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
-        match self {
-            Device::Cpu => {
-                let storage = CpuDevice.alloc_uninit(shape, dtype)?;
-                Ok(Storage::Cpu(storage))
-            }
-            Device::Cuda(device) => {
-                let storage = device.alloc_uninit(shape, dtype)?;
-                Ok(Storage::Cuda(storage))
-            }
-            Device::Metal(device) => {
-                let storage = device.alloc_uninit(shape, dtype)?;
-                Ok(Storage::Metal(storage))
-            }
-        }
-    }
-
-    pub(crate) fn storage_from_slice<D: WithDType>(&self, data: &[D]) -> Result<Storage> {
-        match self {
-            Device::Cpu => Ok(Storage::Cpu(data.to_cpu_storage())),
-            Device::Cuda(device) => {
-                let storage = device.storage_from_slice(data)?;
-                Ok(Storage::Cuda(storage))
-            }
-            Device::Metal(device) => {
-                let storage = device.storage_from_slice(data)?;
-                Ok(Storage::Metal(storage))
-            }
-        }
-    }
-
-    pub(crate) fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
-        match self {
-            Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
-            Device::Cuda(device) => {
-                let storage = array.to_cpu_storage();
-                let storage = device.storage_from_cpu_storage_owned(storage)?;
-                Ok(Storage::Cuda(storage))
-            }
-            Device::Metal(device) => {
-                let storage = array.to_cpu_storage();
-                let storage = device.storage_from_cpu_storage_owned(storage)?;
-                Ok(Storage::Metal(storage))
-            }
-        }
-    }
-
-    pub(crate) fn storage_owned<S: WithDType>(&self, data: Vec<S>) -> Result<Storage> {
-        match self {
-            Device::Cpu => Ok(Storage::Cpu(S::to_cpu_storage_owned(data))),
-            Device::Cuda(device) => {
-                let storage = S::to_cpu_storage_owned(data);
-                let storage = device.storage_from_cpu_storage_owned(storage)?;
-                Ok(Storage::Cuda(storage))
-            }
-            Device::Metal(device) => {
-                let storage = S::to_cpu_storage_owned(data);
-                let storage = device.storage_from_cpu_storage_owned(storage)?;
-                Ok(Storage::Metal(storage))
-            }
-        }
-    }
-
-    pub fn synchronize(&self) -> Result<()> {
+    fn synchronize(&self) -> Result<()> {
         match self {
             Self::Cpu => Ok(()),
             Self::Cuda(d) => d.synchronize(),

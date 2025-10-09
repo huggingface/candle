@@ -21,20 +21,22 @@ use crate::models::metavoice::repeat_interleave;
 use candle::{Module, Result, Tensor, D};
 
 pub mod transformer {
+    use candle::quantized::QuantizedBackend;
+
     use super::*;
 
     type Config = crate::models::metavoice::transformer::Config;
 
     #[derive(Debug, Clone)]
-    struct FeedForward {
-        w1: Linear,
-        w2: Linear,
-        w3: Linear,
+    struct FeedForward<QB: QuantizedBackend> {
+        w1: Linear<QB>,
+        w2: Linear<QB>,
+        w3: Linear<QB>,
         span: tracing::Span,
     }
 
-    impl FeedForward {
-        fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    impl<QB: QuantizedBackend> FeedForward<QB> {
+        fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
             let i_size = cfg.intermediate_size();
             let w1 = linear_b(cfg.dim, i_size, false, vb.pp("swiglu.w1"))?;
             let w2 = linear_b(i_size, cfg.dim, false, vb.pp("w2"))?;
@@ -48,29 +50,36 @@ pub mod transformer {
         }
     }
 
-    impl Module for FeedForward {
-        fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    impl<QB: QuantizedBackend> Module<QB::Storage> for FeedForward<QB>
+    where
+        Linear<QB>: Module<QB::Storage>,
+    {
+        fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
             let _enter = self.span.enter();
             let swiglu = (candle_nn::ops::silu(&xs.apply(&self.w1)?)? * xs.apply(&self.w3))?;
             swiglu.apply(&self.w2)
         }
     }
 
+    type KVCache<QB> = (
+        Tensor<<QB as QuantizedBackend>::Storage>,
+        Tensor<<QB as QuantizedBackend>::Storage>,
+    );
     #[derive(Debug, Clone)]
-    struct Attention {
-        wqkv: Linear,
-        wo: Linear,
+    struct Attention<QB: QuantizedBackend> {
+        wqkv: Linear<QB>,
+        wo: Linear<QB>,
         dim: usize,
         kv_size: usize,
         n_local_heads: usize,
         head_dim: usize,
         n_head: usize,
-        kv_cache: Option<(Tensor, Tensor)>,
+        kv_cache: Option<KVCache<QB>>,
         span: tracing::Span,
     }
 
-    impl Attention {
-        fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    impl<QB: QuantizedBackend> Attention<QB> {
+        fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
             let n_local_heads = cfg.n_local_heads();
             let head_dim = cfg.head_dim();
             let total_head_dim = (cfg.n_head + 2 * n_local_heads) * head_dim;
@@ -89,7 +98,15 @@ pub mod transformer {
             })
         }
 
-        fn forward(&mut self, xs: &Tensor, _pos: usize, mask: &Tensor) -> Result<Tensor> {
+        fn forward(
+            &mut self,
+            xs: &Tensor<QB::Storage>,
+            _pos: usize,
+            mask: &Tensor<QB::Storage>,
+        ) -> Result<Tensor<QB::Storage>>
+        where
+            Linear<QB>: Module<QB::Storage>,
+        {
             let _enter = self.span.enter();
             let (b_sz, seqlen, _) = xs.dims3()?;
 
@@ -139,16 +156,16 @@ pub mod transformer {
     }
 
     #[derive(Debug, Clone)]
-    struct Block {
-        attention: Attention,
-        feed_forward: FeedForward,
-        ffn_norm: RmsNorm,
-        attention_norm: RmsNorm,
+    struct Block<QB: QuantizedBackend> {
+        attention: Attention<QB>,
+        feed_forward: FeedForward<QB>,
+        ffn_norm: RmsNorm<QB>,
+        attention_norm: RmsNorm<QB>,
         span: tracing::Span,
     }
 
-    impl Block {
-        fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    impl<QB: QuantizedBackend> Block<QB> {
+        fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
             let attention = Attention::new(cfg, vb.pp("attention"))?;
             let feed_forward = FeedForward::new(cfg, vb.pp("feed_forward"))?;
             let ffn_norm = RmsNorm::new(cfg.dim, cfg.norm_eps, vb.pp("ffn_norm"))?;
@@ -162,7 +179,15 @@ pub mod transformer {
             })
         }
 
-        fn forward(&mut self, xs: &Tensor, pos: usize, mask: &Tensor) -> Result<Tensor> {
+        fn forward(
+            &mut self,
+            xs: &Tensor<QB::Storage>,
+            pos: usize,
+            mask: &Tensor<QB::Storage>,
+        ) -> Result<Tensor<QB::Storage>>
+        where
+            Linear<QB>: Module<QB::Storage>,
+        {
             let _enter = self.span.enter();
             let hs = xs.apply(&self.attention_norm)?;
             let hs = (xs + self.attention.forward(&hs, pos, mask))?;
@@ -175,19 +200,19 @@ pub mod transformer {
     }
 
     #[derive(Debug, Clone)]
-    pub struct Model {
-        tok_embeddings: Embedding,
-        pos_embeddings: Embedding,
-        speaker_cond_pos: Linear,
-        layers: Vec<Block>,
-        norm: RmsNorm,
-        output: Linear,
-        spk_cond_mask: Tensor,
+    pub struct Model<QB: QuantizedBackend> {
+        tok_embeddings: Embedding<QB>,
+        pos_embeddings: Embedding<QB>,
+        speaker_cond_pos: Linear<QB>,
+        layers: Vec<Block<QB>>,
+        norm: RmsNorm<QB>,
+        output: Linear<QB>,
+        spk_cond_mask: Tensor<QB::Storage>,
         span: tracing::Span,
     }
 
-    impl Model {
-        pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    impl<QB: QuantizedBackend> Model<QB> {
+        pub fn new(cfg: &Config, vb: VarBuilder<QB>) -> Result<Self> {
             let tok_embeddings = Embedding::new(cfg.vocab_size, cfg.dim, vb.pp("tok_embeddings"))?;
             let pos_embeddings = Embedding::new(cfg.block_size, cfg.dim, vb.pp("pos_embeddings"))?;
             let speaker_cond_pos = linear_b(
@@ -229,7 +254,15 @@ pub mod transformer {
             }
         }
 
-        pub fn forward(&mut self, xs: &Tensor, spk_emb: &Tensor, pos: usize) -> Result<Tensor> {
+        pub fn forward(
+            &mut self,
+            xs: &Tensor<QB::Storage>,
+            spk_emb: &Tensor<QB::Storage>,
+            pos: usize,
+        ) -> Result<Tensor<QB::Storage>>
+        where
+            Linear<QB>: Module<QB::Storage>,
+        {
             let _enter = self.span.enter();
             let (_b_sz, seqlen) = xs.dims2()?;
             let mask: Vec<_> = (0..seqlen)

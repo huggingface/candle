@@ -1,8 +1,12 @@
+use candle::CpuStorage;
 use candle_transformers::models::bert;
 use wasm_bindgen::prelude::*;
 
-pub use bert::{BertModel, Config, DTYPE};
+pub use bert::{Config, DTYPE};
 pub use tokenizers::{PaddingParams, Tokenizer};
+
+pub type Tensor = candle::Tensor<CpuStorage>;
+pub type BertModel = bert::BertModel<CpuStorage>;
 
 #[wasm_bindgen]
 extern "C" {

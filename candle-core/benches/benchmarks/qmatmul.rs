@@ -1,16 +1,26 @@
-use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
+use crate::benchmarks::{bench_device, BenchDevice};
 use candle_core::{
-    quantized::{self, GgmlDType, QMatMul},
-    Device, Module, Tensor,
+    quantized::{self, GgmlDType, QMatMul, QTensor, QuantizedBackend, QuantizedDevice},
+    BackendStorage, CustomOp1, Module, Tensor,
 };
 use criterion::{black_box, criterion_group, Criterion, Throughput};
 use std::time::Instant;
 
-fn run(matmul: &QMatMul, x: &Tensor) {
+fn run<QB>(matmul: &QMatMul<QB>, x: &Tensor<QB::Storage>)
+where
+    QB: QuantizedBackend,
+    QTensor<QB>: CustomOp1<QB::Storage>,
+{
     matmul.forward(x).unwrap();
 }
 
-fn run_bench(c: &mut Criterion, device: &Device, dtype: GgmlDType) {
+fn run_bench<B, QB, D>(c: &mut Criterion, device: &D, dtype: GgmlDType)
+where
+    B: BackendStorage<Device = D>,
+    QB: QuantizedBackend<Storage = B, Device = D>,
+    D: QuantizedDevice<QB> + BenchDevice<B>,
+    QTensor<QB>: CustomOp1<QB::Storage>,
+{
     let b = 1;
     let m = 1;
     let n = 1024;
@@ -26,7 +36,7 @@ fn run_bench(c: &mut Criterion, device: &Device, dtype: GgmlDType) {
     let lhs = Tensor::from_slice(&lhs, (m, k), device).unwrap();
     let rhs = Tensor::from_slice(&rhs, (k, n), device).unwrap();
 
-    let qtensor = quantized::QTensor::quantize(&rhs.t().unwrap(), dtype).unwrap();
+    let qtensor: QTensor<QB> = quantized::QTensor::quantize(&rhs.t().unwrap(), dtype).unwrap();
     let matmul = quantized::QMatMul::from_qtensor(qtensor).unwrap();
 
     let flops = b * m * n * k;
@@ -40,7 +50,7 @@ fn run_bench(c: &mut Criterion, device: &Device, dtype: GgmlDType) {
             for _i in 0..iters {
                 run(black_box(&matmul), black_box(&lhs));
             }
-            device.sync().unwrap();
+            device.synchronize().unwrap();
             start.elapsed()
         })
     });
@@ -48,24 +58,22 @@ fn run_bench(c: &mut Criterion, device: &Device, dtype: GgmlDType) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let handler = BenchDeviceHandler::new().unwrap();
-    for device in handler.devices {
-        for dtype in [
-            GgmlDType::F32,
-            GgmlDType::F16,
-            GgmlDType::Q4_0,
-            GgmlDType::Q4_1,
-            GgmlDType::Q5_0,
-            GgmlDType::Q5_1,
-            GgmlDType::Q8_0,
-            GgmlDType::Q2K,
-            GgmlDType::Q3K,
-            GgmlDType::Q4K,
-            GgmlDType::Q5K,
-            GgmlDType::Q6K,
-        ] {
-            run_bench(c, &device, dtype);
-        }
+    let device = bench_device();
+    for dtype in [
+        GgmlDType::F32,
+        GgmlDType::F16,
+        GgmlDType::Q4_0,
+        GgmlDType::Q4_1,
+        GgmlDType::Q5_0,
+        GgmlDType::Q5_1,
+        GgmlDType::Q8_0,
+        GgmlDType::Q2K,
+        GgmlDType::Q3K,
+        GgmlDType::Q4K,
+        GgmlDType::Q5K,
+        GgmlDType::Q6K,
+    ] {
+        run_bench(c, &device, dtype);
     }
 }
 

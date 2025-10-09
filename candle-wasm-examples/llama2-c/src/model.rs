@@ -1,7 +1,6 @@
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{
-    embedding, linear_no_bias as linear, rms_norm, Embedding, Linear, Module, RmsNorm, VarBuilder,
-};
+use crate::{Embedding, Linear, RmsNorm, Tensor, VarBuilder};
+use candle::{CpuDevice, DType, IndexOp, Result, D};
+use candle_nn::{embedding, linear_no_bias as linear, rms_norm, Module};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -25,7 +24,7 @@ pub struct Cache {
     pub kvs: Arc<Mutex<Vec<Option<(Tensor, Tensor)>>>>,
     cos: Tensor,
     sin: Tensor,
-    device: Device,
+    device: CpuDevice,
 }
 
 impl Cache {

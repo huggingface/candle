@@ -103,6 +103,14 @@ impl CudaDevice {
     ) -> Result<cudarc::driver::CudaSlice<T>> {
         self.stream.memcpy_stod(src).w()
     }
+
+    pub fn context(&self) -> &cudarc::driver::CudaContext {
+        &self.context
+    }
+
+    pub fn stream(&self) -> &cudarc::driver::CudaStream {
+        &self.stream
+    }
 }
 
 pub struct CudaFunc {
@@ -177,11 +185,11 @@ impl CudaDevice {
             ..Default::default()
         };
         let ptx = cudarc::nvrtc::safe::compile_ptx_with_opts(cuda_code, opts).w()?;
-        let module = self.context.load_module(ptx).w()?;
+        let module = self.context().load_module(ptx).w()?;
         let func = module.load_function(func_name).w()?;
         Ok(CudaFunc {
             func,
-            stream: self.stream.clone(),
+            stream: self.stream().clone(),
         })
     }
 
@@ -256,12 +264,18 @@ impl CudaDevice {
     }
 }
 
-impl BackendDevice for CudaDevice {
-    type Storage = CudaStorage;
+impl AsRef<CudaDevice> for CudaDevice {
+    fn as_ref(&self) -> &CudaDevice {
+        self
+    }
+}
+
+impl BackendDevice<CudaStorage> for CudaDevice {
+    const SUPPORTS_BF16: bool = true;
 
     fn new(ordinal: usize) -> Result<Self> {
         let context = cudarc::driver::CudaContext::new(ordinal).w()?;
-        let stream = context.default_stream();
+        let stream = context.default_stream().w()?;
         let blas = cudarc::cublas::CudaBlas::new(stream.clone()).w()?;
         let curand = cudarc::curand::CudaRng::new(299792458, stream.clone()).w()?;
         let module_store = ModuleStore {
@@ -296,7 +310,11 @@ impl BackendDevice for CudaDevice {
         self.id == rhs.id
     }
 
-    fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
+    fn is_cpu(&self) -> bool {
+        false
+    }
+
+    fn zeros(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
         let elem_count = shape.elem_count();
         let slice = match dtype {
             DType::U8 => {
@@ -338,7 +356,13 @@ impl BackendDevice for CudaDevice {
         })
     }
 
-    fn rand_uniform(&self, shape: &Shape, dtype: DType, lo: f64, up: f64) -> Result<CudaStorage> {
+    fn rand_uniform<T: crate::FloatDType>(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        lo: T,
+        up: T,
+    ) -> Result<CudaStorage> {
         let elem_count = shape.elem_count();
         let curand = self.curand.lock().unwrap();
         let slice = match dtype {
@@ -415,7 +439,7 @@ impl BackendDevice for CudaDevice {
         })
     }
 
-    unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
+    unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
         let elem_count = shape.elem_count();
         let slice = match dtype {
             DType::U8 => {
@@ -457,7 +481,7 @@ impl BackendDevice for CudaDevice {
         })
     }
 
-    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {
+    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<CudaStorage> {
         let slice = match T::cpu_storage_ref(s) {
             CpuStorageRef::U8(storage) => {
                 let data = self.memcpy_stod(storage)?;
@@ -578,6 +602,18 @@ impl BackendDevice for CudaDevice {
             slice,
             device: self.clone(),
         })
+    }
+
+    fn storage<A: crate::NdArray>(&self, array: A) -> Result<Storage> {
+        let storage = array.to_cpu_storage();
+        let storage = self.storage_from_cpu_storage_owned(storage)?;
+        Ok(storage)
+    }
+
+    fn storage_owned<S: crate::WithDType>(&self, data: Vec<S>) -> Result<Storage> {
+        let storage = S::to_cpu_storage_owned(data);
+        let storage = self.storage_from_cpu_storage_owned(storage)?;
+        Ok(storage)
     }
 
     fn synchronize(&self) -> Result<()> {

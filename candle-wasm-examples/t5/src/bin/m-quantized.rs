@@ -1,4 +1,4 @@
-use candle::{Device, Tensor};
+use candle::{CpuDevice, QCpuStorage, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 pub use candle_transformers::models::quantized_t5::{
     Config, T5EncoderModel, T5ForConditionalGeneration, VarBuilder,
@@ -7,17 +7,17 @@ pub use candle_transformers::models::quantized_t5::{
 use candle_wasm_example_t5::console_log;
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
-const DEVICE: Device = Device::Cpu;
+const DEVICE: CpuDevice = CpuDevice;
 
 #[wasm_bindgen]
 pub struct ModelEncoder {
-    model: T5EncoderModel,
+    model: T5EncoderModel<QCpuStorage>,
     tokenizer: Tokenizer,
 }
 #[wasm_bindgen]
 
 pub struct ModelConditionalGeneration {
-    model: T5ForConditionalGeneration,
+    model: T5ForConditionalGeneration<QCpuStorage>,
     tokenizer: Tokenizer,
     config: Config,
 }

@@ -6,7 +6,7 @@ extern crate accelerate_src;
 use candle_transformers::models::bert::{BertModel, Config, HiddenAct, DTYPE};
 
 use anyhow::{Error as E, Result};
-use candle::Tensor;
+use candle::{BackendDevice, BackendStorage, Tensor};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use hf_hub::{api::sync::Api, Repo, RepoType};
@@ -52,8 +52,10 @@ struct Args {
 }
 
 impl Args {
-    fn build_model_and_tokenizer(&self) -> Result<(BertModel, Tokenizer)> {
-        let device = candle_examples::device(self.cpu)?;
+    fn build_model_and_tokenizer<B: BackendStorage>(
+        &self,
+        device: &B::Device,
+    ) -> Result<(BertModel<B>, Tokenizer)> {
         let default_model = "sentence-transformers/all-MiniLM-L6-v2".to_string();
         let default_revision = "refs/pr/21".to_string();
         let (model_id, revision) = match (self.model_id.to_owned(), self.revision.to_owned()) {
@@ -81,9 +83,9 @@ impl Args {
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
         let vb = if self.use_pth {
-            VarBuilder::from_pth(&weights_filename, DTYPE, &device)?
+            VarBuilder::from_pth(&weights_filename, DTYPE, device)?
         } else {
-            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, &device)? }
+            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, device)? }
         };
         if self.approximate_gelu {
             config.hidden_act = HiddenAct::GeluApproximate;
@@ -92,12 +94,34 @@ impl Args {
         Ok((model, tokenizer))
     }
 }
+pub fn main() -> Result<()> {
+    let args = Args::parse();
 
-fn main() -> Result<()> {
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         println!("tracing...");
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -108,8 +132,9 @@ fn main() -> Result<()> {
     };
     let start = std::time::Instant::now();
 
-    let (model, mut tokenizer) = args.build_model_and_tokenizer()?;
-    let device = &model.device;
+    let device = B::Device::new(0)?;
+    let (model, mut tokenizer): (BertModel<B>, Tokenizer) =
+        args.build_model_and_tokenizer(&device)?;
 
     if let Some(prompt) = args.prompt {
         let tokenizer = tokenizer
@@ -121,7 +146,7 @@ fn main() -> Result<()> {
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
-        let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
+        let token_ids = Tensor::new(&tokens[..], &device)?.unsqueeze(0)?;
         let token_type_ids = token_ids.zeros_like()?;
         println!("Loaded and encoded {:?}", start.elapsed());
         for idx in 0..args.n {
@@ -160,14 +185,14 @@ fn main() -> Result<()> {
             .iter()
             .map(|tokens| {
                 let tokens = tokens.get_ids().to_vec();
-                Ok(Tensor::new(tokens.as_slice(), device)?)
+                Ok(Tensor::new(tokens.as_slice(), &device)?)
             })
             .collect::<Result<Vec<_>>>()?;
         let attention_mask = tokens
             .iter()
             .map(|tokens| {
                 let tokens = tokens.get_attention_mask().to_vec();
-                Ok(Tensor::new(tokens.as_slice(), device)?)
+                Ok(Tensor::new(tokens.as_slice(), &device)?)
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -207,6 +232,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-pub fn normalize_l2(v: &Tensor) -> Result<Tensor> {
+pub fn normalize_l2<B: BackendStorage>(v: &Tensor<B>) -> Result<Tensor<B>> {
     Ok(v.broadcast_div(&v.sqr()?.sum_keepdim(1)?.sqrt()?)?)
 }

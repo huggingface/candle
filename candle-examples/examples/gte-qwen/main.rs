@@ -9,7 +9,7 @@ use clap::Parser;
 
 use candle_transformers::models::qwen2::{Config, Model};
 
-use candle::{DType, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{
@@ -93,11 +93,25 @@ fn load_from_local(local_path: &str) -> Result<ConfigFiles> {
     })
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args, &candle::CpuDevice)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args, &candle::CudaDevice::new(0)?)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args, &candle::MetalDevice::new(0)?)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args, device: &B::Device) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -130,15 +144,14 @@ fn main() -> Result<()> {
     tokenizer.with_padding(Some(padding));
 
     // Model initialization
-    let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
+    let dtype = if B::Device::SUPPORTS_BF16 {
         DType::BF16
     } else {
         DType::F32
     };
     let config: Config = serde_json::from_slice(&std::fs::read(config_files.config)?)?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&config_files.weights, dtype, &device)? };
-    let mut model = Model::new(&config, vb)?;
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&config_files.weights, dtype, device)? };
+    let mut model: Model<B> = Model::new(&config, vb)?;
     println!("Model loaded in {:?}", start.elapsed());
 
     // Encode the queries and the targets
@@ -151,9 +164,9 @@ fn main() -> Result<()> {
     ];
     let encoded = tokenizer.encode_batch(documents, true).map_err(E::msg)?;
     let tokens: Vec<&[u32]> = encoded.iter().map(|x| x.get_ids()).collect();
-    let tokens = Tensor::new(tokens, &device)?;
+    let tokens = Tensor::new(tokens, device)?;
     let mask: Vec<&[u32]> = encoded.iter().map(|x| x.get_attention_mask()).collect();
-    let mask = Tensor::new(mask, &device)?;
+    let mask = Tensor::new(mask, device)?;
 
     // Inference
     let start_gen = std::time::Instant::now();

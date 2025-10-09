@@ -9,7 +9,7 @@ use clap::Parser;
 
 use candle_transformers::models::csm::{Config, Model};
 
-use candle::{DType, IndexOp, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
@@ -98,11 +98,34 @@ struct Args {
     repeat_last_n: usize,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
-
-    let args = Args::parse();
 
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -161,6 +184,7 @@ fn main() -> Result<()> {
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
+    let device = B::Device::new(0)?;
     let start = std::time::Instant::now();
     let config: Config = match args.config {
         Some(config_file) => serde_json::from_slice(&std::fs::read(config_file)?)?,
@@ -169,10 +193,15 @@ fn main() -> Result<()> {
             serde_json::from_slice(&std::fs::read(config_file)?)?
         }
     };
-    let device = candle_examples::device(args.cpu)?;
+
     let (mut model, device) = {
-        let dtype = device.bf16_default_to_f32();
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+        let dtype = if B::Device::SUPPORTS_BF16 {
+            DType::BF16
+        } else {
+            DType::F32
+        };
+        let vb: VarBuilder<B> =
+            unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
         let model = Model::new(&config, vb)?;
         (model, device)
     };

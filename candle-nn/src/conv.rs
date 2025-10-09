@@ -1,6 +1,6 @@
 //! Convolution Layers.
 use crate::BatchNorm;
-use candle::{conv::CudnnFwdAlgo, Result, Tensor};
+use candle::{conv::CudnnFwdAlgo, BackendStorage, Result, Tensor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Conv1dConfig {
@@ -24,14 +24,14 @@ impl Default for Conv1dConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct Conv1d {
-    weight: Tensor,
-    bias: Option<Tensor>,
+pub struct Conv1d<B: BackendStorage> {
+    weight: Tensor<B>,
+    bias: Option<Tensor<B>>,
     config: Conv1dConfig,
 }
 
-impl Conv1d {
-    pub fn new(weight: Tensor, bias: Option<Tensor>, config: Conv1dConfig) -> Self {
+impl<B: BackendStorage> Conv1d<B> {
+    pub fn new(weight: Tensor<B>, bias: Option<Tensor<B>>, config: Conv1dConfig) -> Self {
         Self {
             weight,
             bias,
@@ -43,17 +43,17 @@ impl Conv1d {
         &self.config
     }
 
-    pub fn weight(&self) -> &Tensor {
+    pub fn weight(&self) -> &Tensor<B> {
         &self.weight
     }
 
-    pub fn bias(&self) -> Option<&Tensor> {
+    pub fn bias(&self) -> Option<&Tensor<B>> {
         self.bias.as_ref()
     }
 }
 
-impl crate::Module for Conv1d {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> crate::Module<B> for Conv1d<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let x = x.conv1d_with_algo(
             &self.weight,
             self.config.padding,
@@ -95,14 +95,14 @@ impl Default for ConvTranspose1dConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct ConvTranspose1d {
-    weight: Tensor,
-    bias: Option<Tensor>,
+pub struct ConvTranspose1d<B: BackendStorage> {
+    weight: Tensor<B>,
+    bias: Option<Tensor<B>>,
     config: ConvTranspose1dConfig,
 }
 
-impl ConvTranspose1d {
-    pub fn new(weight: Tensor, bias: Option<Tensor>, config: ConvTranspose1dConfig) -> Self {
+impl<B: BackendStorage> ConvTranspose1d<B> {
+    pub fn new(weight: Tensor<B>, bias: Option<Tensor<B>>, config: ConvTranspose1dConfig) -> Self {
         Self {
             weight,
             bias,
@@ -114,17 +114,17 @@ impl ConvTranspose1d {
         &self.config
     }
 
-    pub fn weight(&self) -> &Tensor {
+    pub fn weight(&self) -> &Tensor<B> {
         &self.weight
     }
 
-    pub fn bias(&self) -> Option<&Tensor> {
+    pub fn bias(&self) -> Option<&Tensor<B>> {
         self.bias.as_ref()
     }
 }
 
-impl crate::Module for ConvTranspose1d {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> crate::Module<B> for ConvTranspose1d<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let x = x.conv_transpose1d(
             &self.weight,
             self.config.padding,
@@ -166,14 +166,14 @@ impl Default for Conv2dConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct Conv2d {
-    weight: Tensor,
-    bias: Option<Tensor>,
+pub struct Conv2d<B: BackendStorage> {
+    weight: Tensor<B>,
+    bias: Option<Tensor<B>>,
     config: Conv2dConfig,
 }
 
-impl Conv2d {
-    pub fn new(weight: Tensor, bias: Option<Tensor>, config: Conv2dConfig) -> Self {
+impl<B: BackendStorage> Conv2d<B> {
+    pub fn new(weight: Tensor<B>, bias: Option<Tensor<B>>, config: Conv2dConfig) -> Self {
         Self {
             weight,
             bias,
@@ -185,15 +185,15 @@ impl Conv2d {
         &self.config
     }
 
-    pub fn weight(&self) -> &Tensor {
+    pub fn weight(&self) -> &Tensor<B> {
         &self.weight
     }
 
-    pub fn bias(&self) -> Option<&Tensor> {
+    pub fn bias(&self) -> Option<&Tensor<B>> {
         self.bias.as_ref()
     }
 
-    pub fn absorb_bn(&self, bn: &BatchNorm) -> Result<Self> {
+    pub fn absorb_bn(&self, bn: &BatchNorm<B>) -> Result<Self> {
         if let Some((w_bn, b_bn)) = bn.weight_and_bias() {
             let std_ = w_bn.div(&((bn.running_var() + bn.eps())?.sqrt()?))?;
             let weight = self
@@ -214,8 +214,8 @@ impl Conv2d {
     }
 }
 
-impl crate::Module for Conv2d {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> crate::Module<B> for Conv2d<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let x = x.conv2d_with_algo(
             &self.weight,
             self.config.padding,
@@ -256,14 +256,14 @@ impl Default for ConvTranspose2dConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct ConvTranspose2d {
-    weight: Tensor,
-    bias: Option<Tensor>,
+pub struct ConvTranspose2d<B: BackendStorage> {
+    weight: Tensor<B>,
+    bias: Option<Tensor<B>>,
     config: ConvTranspose2dConfig,
 }
 
-impl ConvTranspose2d {
-    pub fn new(weight: Tensor, bias: Option<Tensor>, config: ConvTranspose2dConfig) -> Self {
+impl<B: BackendStorage> ConvTranspose2d<B> {
+    pub fn new(weight: Tensor<B>, bias: Option<Tensor<B>>, config: ConvTranspose2dConfig) -> Self {
         Self {
             weight,
             bias,
@@ -275,17 +275,17 @@ impl ConvTranspose2d {
         &self.config
     }
 
-    pub fn weight(&self) -> &Tensor {
+    pub fn weight(&self) -> &Tensor<B> {
         &self.weight
     }
 
-    pub fn bias(&self) -> Option<&Tensor> {
+    pub fn bias(&self) -> Option<&Tensor<B>> {
         self.bias.as_ref()
     }
 }
 
-impl crate::Module for ConvTranspose2d {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> crate::Module<B> for ConvTranspose2d<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let x = x.conv_transpose2d(
             &self.weight,
             self.config.padding,
@@ -304,13 +304,13 @@ impl crate::Module for ConvTranspose2d {
     }
 }
 
-pub fn conv1d(
+pub fn conv1d<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: Conv1dConfig,
-    vb: crate::VarBuilder,
-) -> Result<Conv1d> {
+    vb: crate::VarBuilder<B>,
+) -> Result<Conv1d<B>> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints(
         (out_channels, in_channels / cfg.groups, kernel_size),
@@ -326,13 +326,13 @@ pub fn conv1d(
     Ok(Conv1d::new(ws, Some(bs), cfg))
 }
 
-pub fn conv1d_no_bias(
+pub fn conv1d_no_bias<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: Conv1dConfig,
-    vb: crate::VarBuilder,
-) -> Result<Conv1d> {
+    vb: crate::VarBuilder<B>,
+) -> Result<Conv1d<B>> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints(
         (out_channels, in_channels / cfg.groups, kernel_size),
@@ -342,13 +342,13 @@ pub fn conv1d_no_bias(
     Ok(Conv1d::new(ws, None, cfg))
 }
 
-pub fn conv_transpose1d(
+pub fn conv_transpose1d<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: ConvTranspose1dConfig,
-    vb: crate::VarBuilder,
-) -> Result<ConvTranspose1d> {
+    vb: crate::VarBuilder<B>,
+) -> Result<ConvTranspose1d<B>> {
     let bound = 1. / (out_channels as f64 * kernel_size as f64).sqrt();
     let init = crate::Init::Uniform {
         lo: -bound,
@@ -363,13 +363,13 @@ pub fn conv_transpose1d(
     Ok(ConvTranspose1d::new(ws, Some(bs), cfg))
 }
 
-pub fn conv_transpose1d_no_bias(
+pub fn conv_transpose1d_no_bias<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: ConvTranspose1dConfig,
-    vb: crate::VarBuilder,
-) -> Result<ConvTranspose1d> {
+    vb: crate::VarBuilder<B>,
+) -> Result<ConvTranspose1d<B>> {
     let bound = 1. / (out_channels as f64 * kernel_size as f64).sqrt();
     let init = crate::Init::Uniform {
         lo: -bound,
@@ -383,13 +383,13 @@ pub fn conv_transpose1d_no_bias(
     Ok(ConvTranspose1d::new(ws, None, cfg))
 }
 
-pub fn conv2d(
+pub fn conv2d<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: Conv2dConfig,
-    vb: crate::VarBuilder,
-) -> Result<Conv2d> {
+    vb: crate::VarBuilder<B>,
+) -> Result<Conv2d<B>> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints(
         (
@@ -410,13 +410,13 @@ pub fn conv2d(
     Ok(Conv2d::new(ws, Some(bs), cfg))
 }
 
-pub fn conv2d_no_bias(
+pub fn conv2d_no_bias<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: Conv2dConfig,
-    vb: crate::VarBuilder,
-) -> Result<Conv2d> {
+    vb: crate::VarBuilder<B>,
+) -> Result<Conv2d<B>> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vb.get_with_hints(
         (
@@ -431,13 +431,13 @@ pub fn conv2d_no_bias(
     Ok(Conv2d::new(ws, None, cfg))
 }
 
-pub fn conv_transpose2d(
+pub fn conv_transpose2d<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: ConvTranspose2dConfig,
-    vb: crate::VarBuilder,
-) -> Result<ConvTranspose2d> {
+    vb: crate::VarBuilder<B>,
+) -> Result<ConvTranspose2d<B>> {
     let bound = 1. / (out_channels as f64).sqrt() / kernel_size as f64;
     let init = crate::Init::Uniform {
         lo: -bound,
@@ -452,13 +452,13 @@ pub fn conv_transpose2d(
     Ok(ConvTranspose2d::new(ws, Some(bs), cfg))
 }
 
-pub fn conv_transpose2d_no_bias(
+pub fn conv_transpose2d_no_bias<B: BackendStorage>(
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
     cfg: ConvTranspose2dConfig,
-    vb: crate::VarBuilder,
-) -> Result<ConvTranspose2d> {
+    vb: crate::VarBuilder<B>,
+) -> Result<ConvTranspose2d<B>> {
     let bound = 1. / (out_channels as f64).sqrt() / kernel_size as f64;
     let init = crate::Init::Uniform {
         lo: -bound,

@@ -13,19 +13,19 @@ use candle_transformers::models::stella_en_v5::{
     Config, EmbedDim as StellaEmbedDim, EmbeddingModel,
 };
 
-use candle::{DType, Device, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn::VarBuilder;
 use hf_hub::{api::sync::Api, Repo};
 use tokenizers::{PaddingDirection, PaddingParams, PaddingStrategy, Tokenizer};
 
-struct Embedding {
-    model: EmbeddingModel,
-    device: Device,
+struct Embedding<B: BackendStorage> {
+    model: EmbeddingModel<B>,
+    device: B::Device,
     tokenizer: Tokenizer,
 }
 
-impl Embedding {
-    fn new(model: EmbeddingModel, tokenizer: Tokenizer, device: &Device) -> Self {
+impl<B: BackendStorage> Embedding<B> {
+    fn new(model: EmbeddingModel<B>, tokenizer: Tokenizer, device: &B::Device) -> Self {
         Self {
             model,
             tokenizer,
@@ -292,11 +292,35 @@ fn create_tokenizer(tokenizer_file: &Path, which: Which) -> Result<Tokenizer> {
     Ok(tokenizer)
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let args = Args::parse();
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -366,7 +390,7 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
 
-    let device = candle_examples::device(args.cpu)?;
+    let device = B::Device::new(0)?;
     let dtype = DType::F32;
 
     let base_vb =
@@ -375,7 +399,7 @@ fn main() -> Result<()> {
     let embed_vb =
         unsafe { VarBuilder::from_mmaped_safetensors(&embed_weight_files, DType::F32, &device)? };
 
-    let model = EmbeddingModel::new(&cfg, base_vb, embed_vb)?;
+    let model: EmbeddingModel<B> = EmbeddingModel::new(&cfg, base_vb, embed_vb)?;
 
     println!("loaded the model in {:?}", start.elapsed());
 

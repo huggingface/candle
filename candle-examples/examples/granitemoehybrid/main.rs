@@ -9,7 +9,7 @@ extern crate intel_mkl_src;
 use anyhow::{bail, Error as E, Result};
 use clap::Parser;
 
-use candle::{DType, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::models::granitemoehybrid as model;
@@ -102,21 +102,44 @@ struct Args {
     repeat_last_n: usize,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else if candle::utils::cuda_is_available() {
+        run::<candle::CudaStorage>(args)?;
+    } else if candle::utils::metal_is_available() {
+        run::<candle::MetalStorage>(args)?;
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            println!(
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        }
+        run::<candle::CpuStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage>(args: Args) -> Result<()> {
     use candle_examples::token_output_stream::TokenOutputStream;
     use tokenizers::Tokenizer;
-
-    let args = Args::parse();
     init_tracing(args.tracing);
 
-    let device = candle_examples::device(args.cpu)?;
+    let device = B::Device::new(0)?;
     let dtype = match args.dtype.as_deref() {
         Some("f16") => DType::F16,
         Some("bf16") => DType::BF16,
         Some("f32") => DType::F32,
         Some(dtype) => bail!("Unsupported dtype {dtype}"),
         None => {
-            if device.is_cuda() || device.is_metal() {
+            if B::Device::SUPPORTS_BF16 {
                 DType::BF16
             } else {
                 DType::F32
@@ -142,7 +165,8 @@ fn main() -> Result<()> {
                 model_path,
                 "model.safetensors.index.json",
             )?;
-            let cache = GraniteMoeHybridCache::new(!args.no_kv_cache, dtype, &config, &device)?;
+            let cache: GraniteMoeHybridCache<B> =
+                GraniteMoeHybridCache::new(!args.no_kv_cache, dtype, &config, &device)?;
             let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
             (
                 GraniteMoeHybrid::load(vb, &config)?,

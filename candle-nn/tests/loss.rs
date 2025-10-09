@@ -5,7 +5,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use candle::test_utils::to_vec0_round;
-use candle::{Device, Result, Tensor};
+use candle::{CpuDevice, CpuStorage, Result, Tensor};
 
 /* Equivalent python code:
 import torch
@@ -21,8 +21,8 @@ print(F.cross_entropy(input, target))
 */
 #[test]
 fn nll_and_cross_entropy() -> Result<()> {
-    let cpu = Device::Cpu;
-    let input = Tensor::new(
+    let cpu = CpuDevice;
+    let input: Tensor<CpuStorage> = Tensor::new(
         &[
             [1.1050f32, 0.3013, -1.5394, -2.1528, -0.8634],
             [1.0730, -0.9419, -0.1670, -0.6582, 0.5061],
@@ -60,7 +60,7 @@ print(F.binary_cross_entropy_with_logits(inp, target))
 */
 #[test]
 fn binary_cross_entropy_with_logit() -> Result<()> {
-    let cpu = Device::Cpu;
+    let cpu = CpuDevice;
 
     let inp = [
         [2.3611f32, -0.8813, -0.5006, -0.2178],
@@ -78,7 +78,7 @@ fn binary_cross_entropy_with_logit() -> Result<()> {
         [0., 0., 1., 0.],
     ];
 
-    let inp = Tensor::new(&inp, &cpu)?;
+    let inp: Tensor<CpuStorage> = Tensor::new(&inp, &cpu)?;
     let target = Tensor::new(&target, &cpu)?;
 
     let loss = candle_nn::loss::binary_cross_entropy_with_logit(&inp, &target)?;

@@ -2,12 +2,18 @@
 //!
 #![allow(dead_code)]
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
+use crate::{CpuStorage, DType, Error, Layout, Result, Shape, TryConvertStorage};
 
 #[derive(Debug, Clone)]
 pub struct CudaDevice;
 
-#[derive(Debug)]
+impl AsRef<CudaDevice> for CudaDevice {
+    fn as_ref(&self) -> &CudaDevice {
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct CudaStorage;
 
 macro_rules! fail {
@@ -18,6 +24,12 @@ macro_rules! fail {
 
 impl CudaDevice {
     pub fn new_with_stream(_: usize) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+}
+
+impl TryConvertStorage<CpuStorage> for CudaStorage {
+    fn convert(_storage: CpuStorage, _device: &CudaDevice) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 }
@@ -33,12 +45,10 @@ impl crate::backend::BackendStorage for CudaStorage {
         fail!()
     }
 
-    fn device(&self) -> &Self::Device {
-        fail!()
-    }
-
-    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
-        Err(Error::NotCompiledWithCudaSupport)
+    fn device(&self) -> impl AsRef<Self::Device> {
+        fail!();
+        #[allow(unreachable_code)]
+        CudaDevice
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
@@ -121,9 +131,21 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self> {
+    fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+
+    fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+    fn upsample_nearest1d(&self, _: &Layout, _: usize) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
@@ -149,6 +171,10 @@ impl crate::backend::BackendStorage for CudaStorage {
         _: &Layout,
         _: usize,
     ) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
@@ -191,30 +217,65 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
+    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
+    fn apply_op1(&self, _l: &Layout, _c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn upsample_nearest1d(&self, _: &Layout, _: usize) -> Result<Self> {
+    fn apply_op2(
+        &self,
+        _l1: &Layout,
+        _t2: &Self,
+        _l2: &Layout,
+        _c: &dyn crate::CustomOp2<Self>,
+    ) -> Result<(Self, Shape)> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
+    fn apply_op3(
+        &self,
+        _l1: &Layout,
+        _t2: &Self,
+        _l2: &Layout,
+        _t3: &Self,
+        _l3: &Layout,
+        _c: &dyn crate::CustomOp3<Self>,
+    ) -> Result<(Self, Shape)> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn inplace_op1(&mut self, _l: &Layout, _c: &dyn crate::InplaceOp1) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn inplace_op2(
+        &mut self,
+        _l1: &Layout,
+        _t2: &Self,
+        _l2: &Layout,
+        _c: &dyn crate::InplaceOp2,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn inplace_op3(
+        &mut self,
+        _l1: &Layout,
+        _t2: &Self,
+        _l2: &Layout,
+        _t3: &Self,
+        _l3: &Layout,
+        _c: &dyn crate::InplaceOp3,
+    ) -> Result<()> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 }
 
-impl crate::backend::BackendDevice for CudaDevice {
-    type Storage = CudaStorage;
+impl crate::backend::BackendDevice<CudaStorage> for CudaDevice {
     fn new(_: usize) -> Result<Self> {
-        Err(Error::NotCompiledWithCudaSupport)
-    }
-
-    fn set_seed(&self, _: u64) -> Result<()> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
@@ -222,35 +283,63 @@ impl crate::backend::BackendDevice for CudaDevice {
         fail!()
     }
 
-    fn same_device(&self, _: &Self) -> bool {
+    fn same_device(&self, _: &CudaDevice) -> bool {
         fail!()
     }
 
-    fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
+    fn is_cpu(&self) -> bool {
+        false
+    }
+
+    fn zeros(&self, _shape: &Shape, _dtype: DType) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
+    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<Self::Storage> {
+    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage> {
+    fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<Self::Storage> {
+    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
+    fn storage<A: crate::NdArray>(&self, _: A) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
+    fn storage_owned<S: crate::WithDType>(&self, _: Vec<S>) -> Result<CudaStorage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn rand_uniform<T: crate::FloatDType>(
+        &self,
+        _: &Shape,
+        _: DType,
+        _: T,
+        _: T,
+    ) -> Result<CudaStorage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn rand_normal<T: crate::FloatDType>(
+        &self,
+        _: &Shape,
+        _: DType,
+        _: T,
+        _: T,
+    ) -> Result<CudaStorage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn set_seed(&self, _: u64) -> Result<()> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 

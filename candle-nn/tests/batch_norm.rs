@@ -5,7 +5,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::Result;
-use candle::{test_utils, DType, Device, Tensor};
+use candle::{test_utils, CpuDevice, CpuStorage, DType, Tensor};
 use candle_nn::{batch_norm, BatchNorm, BatchNormConfig, VarBuilder, VarMap};
 
 /* The test below has been generated using the following PyTorch code:
@@ -21,8 +21,8 @@ print(m.running_var)
 */
 #[test]
 fn batch_norm_test() -> Result<()> {
-    let running_mean = Tensor::zeros(5, DType::F32, &Device::Cpu)?;
-    let running_var = Tensor::ones(5, DType::F32, &Device::Cpu)?;
+    let running_mean: Tensor<CpuStorage> = Tensor::zeros(5, DType::F32, &CpuDevice)?;
+    let running_var = Tensor::ones(5, DType::F32, &CpuDevice)?;
     let bn = BatchNorm::new_no_bias(5, running_mean.clone(), running_var.clone(), 1e-8)?;
     let input: [f32; 120] = [
         -0.7493, -1.0410, 1.6977, -0.6579, 1.7982, -0.0087, 0.2812, -0.1190, 0.2908, -0.5975,
@@ -38,7 +38,7 @@ fn batch_norm_test() -> Result<()> {
         0.4617, -0.6480, 0.1332, 0.0419, -0.9784, 0.4173, 1.2313, -1.9046, -0.1656, 0.1259, 0.0763,
         1.4252, -0.9115, -0.1093, -0.3100, -0.6734, -1.4357, 0.9205,
     ];
-    let input = Tensor::new(&input, &Device::Cpu)?.reshape((2, 5, 3, 4))?;
+    let input = Tensor::new(&input, &CpuDevice)?.reshape((2, 5, 3, 4))?;
     let output = bn.forward_train(&input)?;
     assert_eq!(output.dims(), &[2, 5, 3, 4]);
     let output = output.flatten_all()?;
@@ -63,8 +63,8 @@ fn batch_norm_test() -> Result<()> {
         5,
         running_mean,
         running_var,
-        Tensor::new(&[0.5f32], &Device::Cpu)?.broadcast_as(5)?,
-        Tensor::new(&[-1.5f32], &Device::Cpu)?.broadcast_as(5)?,
+        Tensor::new(&[0.5f32], &CpuDevice)?.broadcast_as(5)?,
+        Tensor::new(&[-1.5f32], &CpuDevice)?.broadcast_as(5)?,
         1e-8,
     )?;
     let output2 = bn2.forward_train(&input)?;
@@ -88,8 +88,8 @@ fn batch_norm_test() -> Result<()> {
 // This test makes sure that we can train a batch norm layer using a VarMap.
 #[test]
 fn train_batch_norm() -> Result<()> {
-    let vm = VarMap::new();
-    let vb = VarBuilder::from_varmap(&vm, DType::F32, &Device::Cpu);
+    let vm: VarMap<CpuStorage> = VarMap::new();
+    let vb = VarBuilder::from_varmap(&vm, DType::F32, &CpuDevice);
     let bn = batch_norm(1, BatchNormConfig::default(), vb)?;
     // Get a copy of the original mean to ensure it is being updated.
     let original_mean = bn.running_mean().detach().copy()?;

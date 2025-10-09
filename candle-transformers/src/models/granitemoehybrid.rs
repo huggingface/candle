@@ -4,7 +4,7 @@
 //! of very long context sequences
 
 use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{BackendStorage, DType, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use std::iter::repeat_n;
 use std::{collections::HashMap, f32::consts::PI};
@@ -138,13 +138,13 @@ pub struct GraniteMoeHybridInternalConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct GraniteMoeHybridCache {
-    masks: HashMap<usize, Tensor>,
+pub struct GraniteMoeHybridCache<B: BackendStorage> {
+    masks: HashMap<usize, Tensor<B>>,
     pub use_kv_cache: bool,
-    kvs: Vec<Option<(Tensor, Tensor)>>,
-    cos: Tensor,
-    sin: Tensor,
-    device: Device,
+    kvs: Vec<Option<(Tensor<B>, Tensor<B>)>>,
+    cos: Tensor<B>,
+    sin: Tensor<B>,
+    device: B::Device,
 }
 
 fn calculate_default_inv_freq(cfg: &GraniteMoeHybridInternalConfig) -> Vec<f32> {
@@ -155,12 +155,12 @@ fn calculate_default_inv_freq(cfg: &GraniteMoeHybridInternalConfig) -> Vec<f32> 
         .collect()
 }
 
-impl GraniteMoeHybridCache {
+impl<B: BackendStorage> GraniteMoeHybridCache<B> {
     pub fn new(
         use_kv_cache: bool,
         dtype: DType,
         config: &GraniteMoeHybridInternalConfig,
-        device: &Device,
+        device: &B::Device,
     ) -> Result<Self> {
         // precompute freqs_cis
         let theta = match &config.rope_scaling {
@@ -213,7 +213,7 @@ impl GraniteMoeHybridCache {
         })
     }
 
-    fn mask(&mut self, t: usize) -> Result<Tensor> {
+    fn mask(&mut self, t: usize) -> Result<Tensor<B>> {
         if let Some(mask) = self.masks.get(&t) {
             Ok(mask.clone())
         } else {
@@ -230,11 +230,11 @@ impl GraniteMoeHybridCache {
 }
 
 #[derive(Debug, Clone)]
-struct CausalSelfAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+struct CausalSelfAttention<B: BackendStorage> {
+    q_proj: Linear<B>,
+    k_proj: Linear<B>,
+    v_proj: Linear<B>,
+    o_proj: Linear<B>,
     num_attention_heads: usize,
     num_key_value_heads: usize,
     head_dim: usize,
@@ -257,17 +257,23 @@ fn flash_attn(
 }
 
 #[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+fn flash_attn<B: BackendStorage>(
+    _: &Tensor<B>,
+    _: &Tensor<B>,
+    _: &Tensor<B>,
+    _: f32,
+    _: bool,
+) -> Result<Tensor<B>> {
     unimplemented!("compile with '--features flash-attn'")
 }
 
-impl CausalSelfAttention {
+impl<B: BackendStorage> CausalSelfAttention<B> {
     fn apply_rotary_emb(
         &self,
-        x: &Tensor,
+        x: &Tensor<B>,
         index_pos: usize,
-        cache: &GraniteMoeHybridCache,
-    ) -> Result<Tensor> {
+        cache: &GraniteMoeHybridCache<B>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span_rot.enter();
         let (_b_sz, _, seq_len, _hidden_size) = x.dims4()?;
         let cos = cache.cos.narrow(0, index_pos, seq_len)?;
@@ -277,11 +283,11 @@ impl CausalSelfAttention {
 
     fn forward(
         &self,
-        x: &Tensor,
+        x: &Tensor<B>,
         index_pos: usize,
         block_idx: usize,
-        cache: &mut GraniteMoeHybridCache,
-    ) -> Result<Tensor> {
+        cache: &mut GraniteMoeHybridCache<B>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let (b_sz, seq_len, hidden_size) = x.dims3()?;
         let q = self.q_proj.forward(x)?;
@@ -363,11 +369,11 @@ impl CausalSelfAttention {
         Ok(y)
     }
 
-    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
+    fn repeat_kv(&self, x: Tensor<B>) -> Result<Tensor<B>> {
         crate::utils::repeat_kv(x, self.num_attention_heads / self.num_key_value_heads)
     }
 
-    fn load(vb: VarBuilder, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
+    fn load(vb: VarBuilder<B>, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "attn");
         let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
         let size_in = cfg.hidden_size;
@@ -395,7 +401,11 @@ impl CausalSelfAttention {
 }
 
 /// Utility function to fill elements of a tensor based on a boolean mask.
-fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+fn masked_fill<B: BackendStorage>(
+    on_false: &Tensor<B>,
+    mask: &Tensor<B>,
+    on_true: f32,
+) -> Result<Tensor<B>> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true, on_false)?;
@@ -406,14 +416,14 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 // (GeLU, SiLU, etc.). The goal is to add non-linearity and
 // increase the model's capacity to learn complex patterns.
 #[derive(Debug, Clone)]
-struct MultiLayerPercepton {
-    input_linear: Linear,
-    output_linear: Linear,
+struct MultiLayerPercepton<B: BackendStorage> {
+    input_linear: Linear<B>,
+    output_linear: Linear<B>,
     span: tracing::Span,
 }
 
-impl MultiLayerPercepton {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl<B: BackendStorage> MultiLayerPercepton<B> {
+    fn forward(&self, x: &Tensor<B>) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let projected = self.input_linear.forward(x)?;
         let chunks = projected.chunk(2, D::Minus1)?;
@@ -422,7 +432,7 @@ impl MultiLayerPercepton {
         self.output_linear.forward(&gated)
     }
 
-    fn load(vb: VarBuilder, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
+    fn load(vb: VarBuilder<B>, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "mlp");
         let h_size = cfg.hidden_size;
         let inter_size = cfg.shared_intermediate_size;
@@ -439,23 +449,23 @@ impl MultiLayerPercepton {
 // A Block is a actually a Transformer layer, consisting of
 // a self-attention mechanism followed by a feed-forward neural network (MLP).
 #[derive(Debug, Clone)]
-struct Block {
-    rms_1: RmsNorm,
-    attn: CausalSelfAttention,
-    rms_2: RmsNorm,
-    multi_layer_percepton: MultiLayerPercepton,
+struct Block<B: BackendStorage> {
+    rms_1: RmsNorm<B>,
+    attn: CausalSelfAttention<B>,
+    rms_2: RmsNorm<B>,
+    multi_layer_percepton: MultiLayerPercepton<B>,
     span: tracing::Span,
     residual_scale: f32,
 }
 
-impl Block {
+impl<B: BackendStorage> Block<B> {
     fn forward(
         &self,
-        x: &Tensor,
+        x: &Tensor<B>,
         index_pos: usize,
         block_idx: usize,
-        cache: &mut GraniteMoeHybridCache,
-    ) -> Result<Tensor> {
+        cache: &mut GraniteMoeHybridCache<B>,
+    ) -> Result<Tensor<B>> {
         let _enter = self.span.enter();
         let residual = x;
         let x = self.rms_1.forward(x)?;
@@ -472,7 +482,7 @@ impl Block {
         Ok(x)
     }
 
-    fn load(vb: VarBuilder, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
+    fn load(vb: VarBuilder<B>, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "block");
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg)?;
         let multi_layer_percepton = MultiLayerPercepton::load(vb.clone(), cfg)?;
@@ -494,21 +504,21 @@ impl Block {
 }
 
 #[derive(Debug, Clone)]
-pub struct GraniteMoeHybrid {
-    word_token_embedding: Embedding,
-    blocks: Vec<Block>,
-    ln_f: RmsNorm,
+pub struct GraniteMoeHybrid<B: BackendStorage> {
+    word_token_embedding: Embedding<B>,
+    blocks: Vec<Block<B>>,
+    ln_f: RmsNorm<B>,
     logits_scale: f32,
     embedding_scale: f32,
 }
 
-impl GraniteMoeHybrid {
+impl<B: BackendStorage> GraniteMoeHybrid<B> {
     pub fn forward(
         &self,
-        x: &Tensor,
+        x: &Tensor<B>,
         index_pos: usize,
-        cache: &mut GraniteMoeHybridCache,
-    ) -> Result<Tensor> {
+        cache: &mut GraniteMoeHybridCache<B>,
+    ) -> Result<Tensor<B>> {
         let (_b_sz, seq_len) = x.dims2()?;
         let x = self.word_token_embedding.forward(x)?;
         let x = scale_tensor(x, self.embedding_scale)?;
@@ -535,7 +545,7 @@ impl GraniteMoeHybrid {
         Ok(scaled_logits)
     }
 
-    pub fn load(vb: VarBuilder, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
+    pub fn load(vb: VarBuilder<B>, cfg: &GraniteMoeHybridInternalConfig) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         if cfg.layer_types.len() != cfg.num_hidden_layers {
@@ -577,7 +587,7 @@ impl GraniteMoeHybrid {
     }
 }
 
-fn scale_tensor(tensor: Tensor, scale: f32) -> Result<Tensor> {
+fn scale_tensor<B: BackendStorage>(tensor: Tensor<B>, scale: f32) -> Result<Tensor<B>> {
     if (scale - 1.0).abs() < f32::EPSILON {
         Ok(tensor)
     } else {

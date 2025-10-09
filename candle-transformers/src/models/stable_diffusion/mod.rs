@@ -53,23 +53,23 @@ pub mod vae;
 
 use std::sync::Arc;
 
-use candle::{DType, Device, Result};
+use candle::{BackendStorage, DType, Result};
 use candle_nn as nn;
 
 use self::schedulers::{Scheduler, SchedulerConfig};
 
 #[derive(Clone, Debug)]
-pub struct StableDiffusionConfig {
+pub struct StableDiffusionConfig<B: BackendStorage> {
     pub width: usize,
     pub height: usize,
     pub clip: clip::Config,
     pub clip2: Option<clip::Config>,
     autoencoder: vae::AutoEncoderKLConfig,
     unet: unet_2d::UNet2DConditionModelConfig,
-    scheduler: Arc<dyn SchedulerConfig>,
+    scheduler: Arc<dyn SchedulerConfig<B>>,
 }
 
-impl StableDiffusionConfig {
+impl<B: BackendStorage> StableDiffusionConfig<B> {
     pub fn v1_5(
         sliced_attention_size: Option<usize>,
         height: Option<usize>,
@@ -461,11 +461,11 @@ impl StableDiffusionConfig {
     pub fn build_vae<P: AsRef<std::path::Path>>(
         &self,
         vae_weights: P,
-        device: &Device,
+        device: &B::Device,
         dtype: DType,
-    ) -> Result<vae::AutoEncoderKL> {
+    ) -> Result<vae::AutoEncoderKL<B>> {
         let vs_ae =
-            unsafe { nn::VarBuilder::from_mmaped_safetensors(&[vae_weights], dtype, device)? };
+            unsafe { nn::VarBuilder::<B>::from_mmaped_safetensors(&[vae_weights], dtype, device)? };
         // https://huggingface.co/runwayml/stable-diffusion-v1-5/blob/main/vae/config.json
         let autoencoder = vae::AutoEncoderKL::new(vs_ae, 3, 3, self.autoencoder.clone())?;
         Ok(autoencoder)
@@ -474,14 +474,15 @@ impl StableDiffusionConfig {
     pub fn build_unet<P: AsRef<std::path::Path>>(
         &self,
         unet_weights: P,
-        device: &Device,
+        device: &B::Device,
         in_channels: usize,
         use_flash_attn: bool,
         dtype: DType,
-    ) -> Result<unet_2d::UNet2DConditionModel> {
-        let vs_unet =
-            unsafe { nn::VarBuilder::from_mmaped_safetensors(&[unet_weights], dtype, device)? };
-        let unet = unet_2d::UNet2DConditionModel::new(
+    ) -> Result<unet_2d::UNet2DConditionModel<B>> {
+        let vs_unet = unsafe {
+            nn::VarBuilder::<B>::from_mmaped_safetensors(&[unet_weights], dtype, device)?
+        };
+        let unet = unet_2d::UNet2DConditionModel::<B>::new(
             vs_unet,
             in_channels,
             4,
@@ -494,11 +495,11 @@ impl StableDiffusionConfig {
     pub fn build_unet_sharded<P: AsRef<std::path::Path>>(
         &self,
         unet_weight_files: &[P],
-        device: &Device,
+        device: &B::Device,
         in_channels: usize,
         use_flash_attn: bool,
         dtype: DType,
-    ) -> Result<unet_2d::UNet2DConditionModel> {
+    ) -> Result<unet_2d::UNet2DConditionModel<B>> {
         let vs_unet =
             unsafe { nn::VarBuilder::from_mmaped_safetensors(unet_weight_files, dtype, device)? };
         unet_2d::UNet2DConditionModel::new(
@@ -510,17 +511,17 @@ impl StableDiffusionConfig {
         )
     }
 
-    pub fn build_scheduler(&self, n_steps: usize) -> Result<Box<dyn Scheduler>> {
+    pub fn build_scheduler(&self, n_steps: usize) -> Result<Box<dyn Scheduler<B>>> {
         self.scheduler.build(n_steps)
     }
 }
 
-pub fn build_clip_transformer<P: AsRef<std::path::Path>>(
+pub fn build_clip_transformer<B: BackendStorage, P: AsRef<std::path::Path>>(
     clip: &clip::Config,
     clip_weights: P,
-    device: &Device,
+    device: &B::Device,
     dtype: DType,
-) -> Result<clip::ClipTextTransformer> {
+) -> Result<clip::ClipTextTransformer<B>> {
     let vs = unsafe { nn::VarBuilder::from_mmaped_safetensors(&[clip_weights], dtype, device)? };
     let text_model = clip::ClipTextTransformer::new(vs, clip)?;
     Ok(text_model)

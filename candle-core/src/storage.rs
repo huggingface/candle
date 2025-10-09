@@ -1,55 +1,101 @@
-use crate::backend::BackendStorage;
+use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{self, CmpOp, ReduceOp};
 use crate::scalar::Scalar;
-use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
+use crate::{
+    CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape,
+    TryConvertStorage,
+};
 use crate::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 
 // We do not want to implement Clone on Storage as cloning may fail because of
 // out of memory. Instead try_clone should be used.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Storage {
     Cpu(CpuStorage),
     Cuda(CudaStorage),
     Metal(MetalStorage),
 }
 
+impl From<CpuStorage> for Storage {
+    fn from(storage: CpuStorage) -> Self {
+        Storage::Cpu(storage)
+    }
+}
+
+impl From<CudaStorage> for Storage {
+    fn from(storage: CudaStorage) -> Self {
+        Storage::Cuda(storage)
+    }
+}
+
+impl From<MetalStorage> for Storage {
+    fn from(storage: MetalStorage) -> Self {
+        Storage::Metal(storage)
+    }
+}
+
+impl TryConvertStorage<Storage> for Storage {
+    fn convert(storage: Storage, device: &Device) -> Result<Self> {
+        match (storage, device) {
+            (Storage::Cpu(s), Device::Cpu) => Ok(s.into()),
+            (Storage::Cuda(s), Device::Cuda(_)) => Ok(s.into()),
+            (Storage::Metal(s), Device::Metal(_)) => Ok(s.into()),
+            (Storage::Cpu(s), Device::Cuda(d)) => {
+                d.storage_from_cpu_storage_owned(s).map(Into::into)
+            }
+            (Storage::Cpu(s), Device::Metal(d)) => {
+                d.storage_from_cpu_storage_owned(s).map(Into::into)
+            }
+            (Storage::Cuda(s), Device::Cpu) => s.to_cpu_storage().map(Into::into),
+            (Storage::Metal(s), Device::Cpu) => s.to_cpu_storage().map(Into::into),
+            // Unlikely, but easy to implement
+            (Storage::Metal(s), Device::Cuda(d)) => d
+                .storage_from_cpu_storage_owned(s.to_cpu_storage()?)
+                .map(Into::into),
+            (Storage::Cuda(s), Device::Metal(d)) => d
+                .storage_from_cpu_storage_owned(s.to_cpu_storage()?)
+                .map(Into::into),
+        }
+    }
+}
+
+impl TryConvertStorage<CpuStorage> for Storage {
+    fn convert(storage: CpuStorage, device: &Device) -> Result<Self> {
+        device.storage_from_cpu_storage(&storage)
+    }
+}
+
+impl TryConvertStorage<CudaStorage> for Storage {
+    fn convert(storage: CudaStorage, device: &Device) -> Result<Self> {
+        match device {
+            Device::Cpu => Ok(Storage::Cpu(storage.to_cpu_storage()?)),
+            Device::Cuda(_) => Ok(storage.into()),
+            _ => Err(crate::Error::Msg(
+                "Device does not support CUDA storage".into(),
+            )),
+        }
+    }
+}
+
+impl TryConvertStorage<MetalStorage> for Storage {
+    fn convert(storage: MetalStorage, device: &Device) -> Result<Self> {
+        match device {
+            Device::Cpu => Ok(Storage::Cpu(storage.to_cpu_storage()?)),
+            Device::Metal(_) => Ok(storage.into()),
+            _ => Err(crate::Error::Msg(
+                "Device does not support Metal storage".into(),
+            )),
+        }
+    }
+}
+
 impl Storage {
-    pub fn try_clone(&self, layout: &Layout) -> Result<Self> {
-        match self {
-            Self::Cpu(storage) => Ok(Self::Cpu(storage.clone())),
-            Self::Cuda(storage) => {
-                let storage = storage.try_clone(layout)?;
-                Ok(Self::Cuda(storage))
-            }
-            Self::Metal(storage) => {
-                let storage = storage.try_clone(layout)?;
-                Ok(Self::Metal(storage))
-            }
-        }
-    }
-
-    pub fn device(&self) -> Device {
-        match self {
-            Self::Cpu(_) => Device::Cpu,
-            Self::Cuda(storage) => Device::Cuda(storage.device().clone()),
-            Self::Metal(storage) => Device::Metal(storage.device().clone()),
-        }
-    }
-
-    pub fn dtype(&self) -> DType {
-        match self {
-            Self::Cpu(storage) => storage.dtype(),
-            Self::Cuda(storage) => storage.dtype(),
-            Self::Metal(storage) => storage.dtype(),
-        }
-    }
-
     pub(crate) fn same_device(&self, rhs: &Self, op: &'static str) -> Result<()> {
-        let lhs_device = self.device();
-        let rhs_device = rhs.device();
+        let lhs_device = self.device().as_ref().clone();
+        let rhs_device = rhs.device().as_ref().clone();
         let lhs = lhs_device.location();
         let rhs = rhs_device.location();
-        let same_device = if self.device().is_metal() {
+        let same_device = if lhs_device.is_metal() {
             // On metal, we require the device to be exactly the same rather than
             // having the same location. In cuda this is not necessary as all CudaDevice on the
             // same GPU will use the same cuda stream.
@@ -73,8 +119,51 @@ impl Storage {
             Ok(())
         }
     }
+}
 
-    pub(crate) fn const_set(&mut self, v: Scalar, l: &Layout) -> Result<()> {
+impl BackendStorage for Storage {
+    type Device = Device;
+
+    fn try_clone(&self, layout: &Layout) -> Result<Self> {
+        match self {
+            Self::Cpu(storage) => Ok(Self::Cpu(storage.clone())),
+            Self::Cuda(storage) => {
+                let storage = storage.try_clone(layout)?;
+                Ok(Self::Cuda(storage))
+            }
+            Self::Metal(storage) => {
+                let storage = storage.try_clone(layout)?;
+                Ok(Self::Metal(storage))
+            }
+        }
+    }
+
+    fn dtype(&self) -> DType {
+        match self {
+            Self::Cpu(storage) => storage.dtype(),
+            Self::Cuda(storage) => storage.dtype(),
+            Self::Metal(storage) => storage.dtype(),
+        }
+    }
+
+    // FIXME: Somehow return correct device with borrowed storage
+    fn device(&self) -> impl AsRef<Device> {
+        match self {
+            Self::Cpu(_) => Device::Cpu,
+            Self::Cuda(storage) => Device::Cuda(storage.device().as_ref().clone()),
+            Self::Metal(storage) => Device::Metal(storage.device().as_ref().clone()),
+        }
+    }
+
+    fn to_cpu_storage(&self) -> Result<CpuStorage> {
+        match self {
+            Self::Cpu(storage) => Ok(storage.clone()),
+            Self::Cuda(storage) => storage.to_cpu_storage(),
+            Self::Metal(storage) => storage.to_cpu_storage(),
+        }
+    }
+
+    fn const_set(&mut self, v: Scalar, l: &Layout) -> Result<()> {
         match self {
             Storage::Cpu(storage) => storage.const_set(v, l),
             Storage::Cuda(storage) => storage.const_set(v, l),
@@ -82,7 +171,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<Self> {
+    fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {
                 let storage = storage.affine(layout, mul, add)?;
@@ -99,7 +188,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn powf(&self, layout: &Layout, alpha: f64) -> Result<Self> {
+    fn powf(&self, layout: &Layout, alpha: f64) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {
                 let storage = storage.powf(layout, alpha)?;
@@ -116,7 +205,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self> {
+    fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {
                 let storage = storage.elu(layout, alpha)?;
@@ -133,13 +222,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn cmp(
-        &self,
-        op: CmpOp,
-        rhs: &Self,
-        lhs_layout: &Layout,
-        rhs_layout: &Layout,
-    ) -> Result<Self> {
+    fn cmp(&self, op: CmpOp, rhs: &Self, lhs_layout: &Layout, rhs_layout: &Layout) -> Result<Self> {
         self.same_device(rhs, "cmp")?;
         self.same_dtype(rhs, "cmp")?;
         match (self, rhs) {
@@ -159,8 +242,8 @@ impl Storage {
                 // Should not happen because of the same device check above but we're defensive
                 // anyway.
                 Err(Error::DeviceMismatchBinaryOp {
-                    lhs: lhs.device().location(),
-                    rhs: rhs.device().location(),
+                    lhs: lhs.device().as_ref().location(),
+                    rhs: rhs.device().as_ref().location(),
                     op: "cmp",
                 }
                 .bt())
@@ -168,7 +251,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn reduce_op(&self, op: ReduceOp, layout: &Layout, s: &[usize]) -> Result<Self> {
+    fn reduce_op(&self, op: ReduceOp, layout: &Layout, s: &[usize]) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {
                 let storage = storage.reduce_op(op, layout, s)?;
@@ -185,7 +268,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
+    fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {
                 let storage = storage.to_dtype(layout, dtype)?;
@@ -202,122 +285,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn apply_op1(&self, l: &Layout, c: &dyn CustomOp1) -> Result<(Self, Shape)> {
-        match self {
-            Self::Cpu(storage) => {
-                let (storage, shape) = c.cpu_fwd(storage, l)?;
-                Ok((Self::Cpu(storage), shape))
-            }
-            Self::Cuda(storage) => {
-                let (storage, shape) = c.cuda_fwd(storage, l)?;
-                Ok((Self::Cuda(storage), shape))
-            }
-            Self::Metal(storage) => {
-                let (storage, shape) = c.metal_fwd(storage, l)?;
-                Ok((Self::Metal(storage), shape))
-            }
-        }
-    }
-
-    pub(crate) fn apply_op2(
-        &self,
-        l1: &Layout,
-        t2: &Self,
-        l2: &Layout,
-        c: &dyn CustomOp2,
-    ) -> Result<(Self, Shape)> {
-        self.same_device(t2, c.name())?;
-        match (self, t2) {
-            (Self::Cpu(s1), Self::Cpu(s2)) => {
-                let (s, shape) = c.cpu_fwd(s1, l1, s2, l2)?;
-                Ok((Self::Cpu(s), shape))
-            }
-            (Self::Cuda(s1), Self::Cuda(s2)) => {
-                let (s, shape) = c.cuda_fwd(s1, l1, s2, l2)?;
-                Ok((Self::Cuda(s), shape))
-            }
-            (Self::Metal(s1), Self::Metal(s2)) => {
-                let (s, shape) = c.metal_fwd(s1, l1, s2, l2)?;
-                Ok((Self::Metal(s), shape))
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    pub(crate) fn apply_op3(
-        &self,
-        l1: &Layout,
-        t2: &Self,
-        l2: &Layout,
-        t3: &Self,
-        l3: &Layout,
-        c: &dyn CustomOp3,
-    ) -> Result<(Self, Shape)> {
-        self.same_device(t2, c.name())?;
-        self.same_device(t3, c.name())?;
-        match (self, t2, t3) {
-            (Self::Cpu(s1), Self::Cpu(s2), Self::Cpu(s3)) => {
-                let (s, shape) = c.cpu_fwd(s1, l1, s2, l2, s3, l3)?;
-                Ok((Self::Cpu(s), shape))
-            }
-            (Self::Cuda(s1), Self::Cuda(s2), Self::Cuda(s3)) => {
-                let (s, shape) = c.cuda_fwd(s1, l1, s2, l2, s3, l3)?;
-                Ok((Self::Cuda(s), shape))
-            }
-            (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
-                let (s, shape) = c.metal_fwd(s1, l1, s2, l2, s3, l3)?;
-                Ok((Self::Metal(s), shape))
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    pub(crate) fn inplace_op1(&mut self, l: &Layout, c: &dyn InplaceOp1) -> Result<()> {
-        match self {
-            Self::Cpu(storage) => c.cpu_fwd(storage, l),
-            Self::Cuda(storage) => c.cuda_fwd(storage, l),
-            Self::Metal(storage) => c.metal_fwd(storage, l),
-        }
-    }
-
-    pub(crate) fn inplace_op2(
-        &mut self,
-        l1: &Layout,
-        t2: &Self,
-        l2: &Layout,
-        c: &dyn InplaceOp2,
-    ) -> Result<()> {
-        self.same_device(t2, c.name())?;
-        match (self, t2) {
-            (Self::Cpu(s1), Self::Cpu(s2)) => c.cpu_fwd(s1, l1, s2, l2),
-            (Self::Cuda(s1), Self::Cuda(s2)) => c.cuda_fwd(s1, l1, s2, l2),
-            (Self::Metal(s1), Self::Metal(s2)) => c.metal_fwd(s1, l1, s2, l2),
-            _ => unreachable!(),
-        }
-    }
-
-    pub(crate) fn inplace_op3(
-        &mut self,
-        l1: &Layout,
-        t2: &Self,
-        l2: &Layout,
-        t3: &Self,
-        l3: &Layout,
-        c: &dyn InplaceOp3,
-    ) -> Result<()> {
-        self.same_device(t2, c.name())?;
-        self.same_device(t3, c.name())?;
-        match (self, t2, t3) {
-            (Self::Cpu(s1), Self::Cpu(s2), Self::Cpu(s3)) => c.cpu_fwd(s1, l1, s2, l2, s3, l3),
-            (Self::Cuda(s1), Self::Cuda(s2), Self::Cuda(s3)) => c.cuda_fwd(s1, l1, s2, l2, s3, l3),
-            (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
-                c.metal_fwd(s1, l1, s2, l2, s3, l3)
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    pub(crate) fn unary_impl<B: op::UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
+    fn unary_impl<B: op::UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {
                 let storage = storage.unary_impl::<B>(layout)?;
@@ -334,7 +302,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn binary_impl<B: op::BinaryOpT>(
+    fn binary_impl<B: op::BinaryOpT>(
         &self,
         rhs: &Self,
         lhs_layout: &Layout,
@@ -359,8 +327,8 @@ impl Storage {
                 // Should not happen because of the same device check above but we're defensive
                 // anyway.
                 Err(Error::DeviceMismatchBinaryOp {
-                    lhs: lhs.device().location(),
-                    rhs: rhs.device().location(),
+                    lhs: lhs.device().as_ref().location(),
+                    rhs: rhs.device().as_ref().location(),
                     op: B::NAME,
                 }
                 .bt())
@@ -368,7 +336,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn conv1d(
+    fn conv1d(
         &self,
         l: &Layout,
         kernel: &Self,
@@ -391,15 +359,15 @@ impl Storage {
                 Ok(Self::Metal(s))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
-                lhs: lhs.device().location(),
-                rhs: rhs.device().location(),
+                lhs: lhs.device().as_ref().location(),
+                rhs: rhs.device().as_ref().location(),
                 op: "conv1d",
             }
             .bt()),
         }
     }
 
-    pub(crate) fn conv_transpose1d(
+    fn conv_transpose1d(
         &self,
         l: &Layout,
         kernel: &Self,
@@ -422,15 +390,15 @@ impl Storage {
                 Ok(Self::Metal(s))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
-                lhs: lhs.device().location(),
-                rhs: rhs.device().location(),
+                lhs: lhs.device().as_ref().location(),
+                rhs: rhs.device().as_ref().location(),
                 op: "conv-transpose1d",
             }
             .bt()),
         }
     }
 
-    pub(crate) fn conv2d(
+    fn conv2d(
         &self,
         l: &Layout,
         kernel: &Self,
@@ -453,15 +421,15 @@ impl Storage {
                 Ok(Self::Metal(s))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
-                lhs: lhs.device().location(),
-                rhs: rhs.device().location(),
+                lhs: lhs.device().as_ref().location(),
+                rhs: rhs.device().as_ref().location(),
                 op: "conv2d",
             }
             .bt()),
         }
     }
 
-    pub(crate) fn conv_transpose2d(
+    fn conv_transpose2d(
         &self,
         l: &Layout,
         kernel: &Self,
@@ -484,15 +452,15 @@ impl Storage {
                 Ok(Self::Metal(s))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
-                lhs: lhs.device().location(),
-                rhs: rhs.device().location(),
+                lhs: lhs.device().as_ref().location(),
+                rhs: rhs.device().as_ref().location(),
                 op: "conv_transpose2d",
             }
             .bt()),
         }
     }
 
-    pub(crate) fn avg_pool2d(
+    fn avg_pool2d(
         &self,
         layout: &Layout,
         kernel_size: (usize, usize),
@@ -514,7 +482,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn max_pool2d(
+    fn max_pool2d(
         &self,
         layout: &Layout,
         kernel_size: (usize, usize),
@@ -536,7 +504,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn upsample_nearest1d(&self, layout: &Layout, sz: usize) -> Result<Self> {
+    fn upsample_nearest1d(&self, layout: &Layout, sz: usize) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {
                 let storage = storage.upsample_nearest1d(layout, sz)?;
@@ -553,7 +521,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn upsample_nearest2d(&self, layout: &Layout, h: usize, w: usize) -> Result<Self> {
+    fn upsample_nearest2d(&self, layout: &Layout, h: usize, w: usize) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {
                 let storage = storage.upsample_nearest2d(layout, h, w)?;
@@ -570,7 +538,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn where_cond(
+    fn where_cond(
         &self,
         layout: &Layout,
         t: &Self,
@@ -595,21 +563,15 @@ impl Storage {
                 Ok(Self::Metal(storage))
             }
             (_, lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
-                lhs: lhs.device().location(),
-                rhs: rhs.device().location(),
+                lhs: lhs.device().as_ref().location(),
+                rhs: rhs.device().as_ref().location(),
                 op: "where",
             }
             .bt()),
         }
     }
 
-    pub(crate) fn gather(
-        &self,
-        l: &Layout,
-        indexes: &Self,
-        indexes_l: &Layout,
-        d: usize,
-    ) -> Result<Self> {
+    fn gather(&self, l: &Layout, indexes: &Self, indexes_l: &Layout, d: usize) -> Result<Self> {
         self.same_device(indexes, "index-add")?;
         match (self, indexes) {
             (Self::Cpu(s), Self::Cpu(indexes)) => {
@@ -628,7 +590,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn scatter_set(
+    fn scatter_set(
         &mut self,
         l: &Layout,
         indexes: &Self,
@@ -654,7 +616,7 @@ impl Storage {
         Ok(())
     }
 
-    pub(crate) fn scatter_add(
+    fn scatter_add_set(
         &mut self,
         l: &Layout,
         indexes: &Self,
@@ -680,7 +642,7 @@ impl Storage {
         Ok(())
     }
 
-    pub(crate) fn index_add(
+    fn index_add(
         &self,
         l: &Layout,
         indexes: &Self,
@@ -708,13 +670,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn index_select(
-        &self,
-        rhs: &Self,
-        lhs_l: &Layout,
-        rhs_l: &Layout,
-        d: usize,
-    ) -> Result<Self> {
+    fn index_select(&self, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout, d: usize) -> Result<Self> {
         self.same_device(rhs, "index-select")?;
         match (self, rhs) {
             (Self::Cpu(lhs), Self::Cpu(rhs)) => {
@@ -730,15 +686,15 @@ impl Storage {
                 Ok(Self::Metal(storage))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
-                lhs: lhs.device().location(),
-                rhs: rhs.device().location(),
+                lhs: lhs.device().as_ref().location(),
+                rhs: rhs.device().as_ref().location(),
                 op: "index-select",
             }
             .bt()),
         }
     }
 
-    pub(crate) fn matmul(
+    fn matmul(
         &self,
         rhs: &Self,
         bmnk: (usize, usize, usize, usize),
@@ -761,8 +717,8 @@ impl Storage {
                 Ok(Self::Metal(storage))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
-                lhs: lhs.device().location(),
-                rhs: rhs.device().location(),
+                lhs: lhs.device().as_ref().location(),
+                rhs: rhs.device().as_ref().location(),
                 op: "matmul",
             }
             .bt()),
@@ -770,12 +726,7 @@ impl Storage {
     }
 
     // self, the source can be strided whereas dst is contiguous.
-    pub(crate) fn copy_strided_src(
-        &self,
-        dst: &mut Self,
-        dst_offset: usize,
-        src_l: &Layout,
-    ) -> Result<()> {
+    fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         match (self, dst) {
             (Self::Cpu(src), Self::Cpu(dst)) => src.copy_strided_src(dst, dst_offset, src_l),
             (Self::Cuda(src), Self::Cuda(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
@@ -783,8 +734,8 @@ impl Storage {
                 Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
-                lhs: lhs.device().location(),
-                rhs: rhs.device().location(),
+                lhs: lhs.device().as_ref().location(),
+                rhs: rhs.device().as_ref().location(),
                 op: "copy",
             }
             .bt()),
@@ -792,7 +743,7 @@ impl Storage {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn copy2d(
+    fn copy2d(
         &self,
         dst: &mut Self,
         d1: usize,
@@ -811,11 +762,126 @@ impl Storage {
                 Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
-                lhs: lhs.device().location(),
-                rhs: rhs.device().location(),
+                lhs: lhs.device().as_ref().location(),
+                rhs: rhs.device().as_ref().location(),
                 op: "copy2d",
             }
             .bt()),
+        }
+    }
+
+    fn apply_op1(&self, l: &Layout, c: &dyn CustomOp1<Self>) -> Result<(Self, Shape)> {
+        match self {
+            Self::Cpu(storage) => {
+                let (storage, shape) = c.cpu_fwd(storage, l)?;
+                Ok((Self::Cpu(storage), shape))
+            }
+            Self::Cuda(storage) => {
+                let (storage, shape) = c.cuda_fwd(storage, l)?;
+                Ok((Self::Cuda(storage), shape))
+            }
+            Self::Metal(storage) => {
+                let (storage, shape) = c.metal_fwd(storage, l)?;
+                Ok((Self::Metal(storage), shape))
+            }
+        }
+    }
+
+    fn apply_op2(
+        &self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn CustomOp2<Self>,
+    ) -> Result<(Self, Shape)> {
+        self.same_device(t2, c.name())?;
+        match (self, t2) {
+            (Self::Cpu(s1), Self::Cpu(s2)) => {
+                let (s, shape) = c.cpu_fwd(s1, l1, s2, l2)?;
+                Ok((Self::Cpu(s), shape))
+            }
+            (Self::Cuda(s1), Self::Cuda(s2)) => {
+                let (s, shape) = c.cuda_fwd(s1, l1, s2, l2)?;
+                Ok((Self::Cuda(s), shape))
+            }
+            (Self::Metal(s1), Self::Metal(s2)) => {
+                let (s, shape) = c.metal_fwd(s1, l1, s2, l2)?;
+                Ok((Self::Metal(s), shape))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn apply_op3(
+        &self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn CustomOp3<Self>,
+    ) -> Result<(Self, Shape)> {
+        self.same_device(t2, c.name())?;
+        self.same_device(t3, c.name())?;
+        match (self, t2, t3) {
+            (Self::Cpu(s1), Self::Cpu(s2), Self::Cpu(s3)) => {
+                let (s, shape) = c.cpu_fwd(s1, l1, s2, l2, s3, l3)?;
+                Ok((Self::Cpu(s), shape))
+            }
+            (Self::Cuda(s1), Self::Cuda(s2), Self::Cuda(s3)) => {
+                let (s, shape) = c.cuda_fwd(s1, l1, s2, l2, s3, l3)?;
+                Ok((Self::Cuda(s), shape))
+            }
+            (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
+                let (s, shape) = c.metal_fwd(s1, l1, s2, l2, s3, l3)?;
+                Ok((Self::Metal(s), shape))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn inplace_op1(&mut self, l: &Layout, c: &dyn InplaceOp1) -> Result<()> {
+        match self {
+            Self::Cpu(storage) => c.cpu_fwd(storage, l),
+            Self::Cuda(storage) => c.cuda_fwd(storage, l),
+            Self::Metal(storage) => c.metal_fwd(storage, l),
+        }
+    }
+
+    fn inplace_op2(
+        &mut self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn InplaceOp2,
+    ) -> Result<()> {
+        self.same_device(t2, c.name())?;
+        match (self, t2) {
+            (Self::Cpu(s1), Self::Cpu(s2)) => c.cpu_fwd(s1, l1, s2, l2),
+            (Self::Cuda(s1), Self::Cuda(s2)) => c.cuda_fwd(s1, l1, s2, l2),
+            (Self::Metal(s1), Self::Metal(s2)) => c.metal_fwd(s1, l1, s2, l2),
+            _ => unreachable!(),
+        }
+    }
+
+    fn inplace_op3(
+        &mut self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn InplaceOp3,
+    ) -> Result<()> {
+        self.same_device(t2, c.name())?;
+        self.same_device(t3, c.name())?;
+        match (self, t2, t3) {
+            (Self::Cpu(s1), Self::Cpu(s2), Self::Cpu(s3)) => c.cpu_fwd(s1, l1, s2, l2, s3, l3),
+            (Self::Cuda(s1), Self::Cuda(s2), Self::Cuda(s3)) => c.cuda_fwd(s1, l1, s2, l2, s3, l3),
+            (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
+                c.metal_fwd(s1, l1, s2, l2, s3, l3)
+            }
+            _ => unreachable!(),
         }
     }
 }

@@ -26,13 +26,13 @@ extern crate accelerate_src;
 
 use anyhow::Result;
 use candle::test_utils::to_vec3_round;
-use candle::{Device, Tensor};
+use candle::{CpuDevice, CpuStorage, Tensor};
 use candle_nn::{GroupNorm, Module};
 
 #[test]
 fn group_norm() -> Result<()> {
-    let device = &Device::Cpu;
-    let w = Tensor::from_vec(vec![1f32; 6], 6, device)?;
+    let device = &CpuDevice;
+    let w: Tensor<CpuStorage> = Tensor::from_vec(vec![1f32; 6], 6, device)?;
     let b = Tensor::from_vec(vec![0f32; 6], 6, device)?;
     let gn2 = GroupNorm::new(w.clone(), b.clone(), 6, 2, 1e-5)?;
     let gn3 = GroupNorm::new(w, b, 6, 3, 1e-5)?;

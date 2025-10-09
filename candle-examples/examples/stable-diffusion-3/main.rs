@@ -2,7 +2,7 @@ mod clip;
 mod sampling;
 mod vae;
 
-use candle::{DType, IndexOp, Tensor};
+use candle::{BackendDevice, BackendStorage, DType, IndexOp, Tensor};
 use candle_transformers::models::mmdit::model::{Config as MMDiTConfig, MMDiT};
 
 use crate::clip::StableDiffusion3TripleClipWithTokenizer;
@@ -93,14 +93,28 @@ struct Args {
     seed: Option<u64>,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if args.cpu {
+        run::<candle::CpuStorage>(args)?;
+    } else {
+        #[cfg(feature = "cuda")]
+        run::<candle::CudaStorage>(args)?;
+
+        #[cfg(feature = "metal")]
+        run::<candle::MetalStorage>(args)?;
+    }
+    Ok(())
+}
+
+fn run<B: BackendStorage + 'static>(args: Args) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
     let Args {
         prompt,
         uncond_prompt,
-        cpu,
         tracing,
         use_flash_attn,
         height,
@@ -111,7 +125,8 @@ fn main() -> Result<()> {
         seed,
         which,
         use_slg,
-    } = Args::parse();
+        ..
+    } = args;
 
     let _guard = if tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -121,7 +136,7 @@ fn main() -> Result<()> {
         None
     };
 
-    let device = candle_examples::device(cpu)?;
+    let device = B::Device::new(0)?;
     let default_inference_steps = match which {
         Which::V3_5Large => 28,
         Which::V3_5LargeTurbo => 4,
@@ -179,12 +194,13 @@ fn main() -> Result<()> {
             };
             sai_repo_for_mmdit.get(model_file)?
         };
-        let triple = StableDiffusion3TripleClipWithTokenizer::new_split(
-            &clip_g_file,
-            &clip_l_file,
-            &t5xxl_file,
-            &device,
-        )?;
+        let triple: StableDiffusion3TripleClipWithTokenizer<B> =
+            StableDiffusion3TripleClipWithTokenizer::new_split(
+                &clip_g_file,
+                &clip_l_file,
+                &t5xxl_file,
+                &device,
+            )?;
         let vb = unsafe {
             candle_nn::VarBuilder::from_mmaped_safetensors(&[model_file], DType::F16, &device)?
         };

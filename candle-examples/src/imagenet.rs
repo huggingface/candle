@@ -1,4 +1,4 @@
-use candle::{Device, Result, Tensor};
+use candle::{BackendStorage, Result, Tensor};
 
 pub const IMAGENET_MEAN: [f32; 3] = [0.485f32, 0.456, 0.406];
 pub const IMAGENET_STD: [f32; 3] = [0.229f32, 0.224, 0.225];
@@ -6,12 +6,13 @@ pub const IMAGENET_STD: [f32; 3] = [0.229f32, 0.224, 0.225];
 /// Loads an image from disk using the image crate at the requested resolution,
 /// using the given std and mean parameters.
 /// This returns a tensor with shape (3, res, res). imagenet normalization is applied.
-pub fn load_image_with_std_mean<P: AsRef<std::path::Path>>(
+pub fn load_image_with_std_mean<P: AsRef<std::path::Path>, B: BackendStorage>(
     p: P,
     res: usize,
     mean: &[f32; 3],
     std: &[f32; 3],
-) -> Result<Tensor> {
+    device: &B::Device,
+) -> Result<Tensor<B>> {
     let img = image::ImageReader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
@@ -22,9 +23,9 @@ pub fn load_image_with_std_mean<P: AsRef<std::path::Path>>(
         );
     let img = img.to_rgb8();
     let data = img.into_raw();
-    let data = Tensor::from_vec(data, (res, res, 3), &Device::Cpu)?.permute((2, 0, 1))?;
-    let mean = Tensor::new(mean, &Device::Cpu)?.reshape((3, 1, 1))?;
-    let std = Tensor::new(std, &Device::Cpu)?.reshape((3, 1, 1))?;
+    let data = Tensor::from_vec(data, (res, res, 3), device)?.permute((2, 0, 1))?;
+    let mean = Tensor::new(mean, device)?.reshape((3, 1, 1))?;
+    let std = Tensor::new(std, device)?.reshape((3, 1, 1))?;
     (data.to_dtype(candle::DType::F32)? / 255.)?
         .broadcast_sub(&mean)?
         .broadcast_div(&std)
@@ -32,21 +33,31 @@ pub fn load_image_with_std_mean<P: AsRef<std::path::Path>>(
 
 /// Loads an image from disk using the image crate at the requested resolution.
 /// This returns a tensor with shape (3, res, res). imagenet normalization is applied.
-pub fn load_image<P: AsRef<std::path::Path>>(p: P, res: usize) -> Result<Tensor> {
-    load_image_with_std_mean(p, res, &IMAGENET_MEAN, &IMAGENET_STD)
+pub fn load_image<P: AsRef<std::path::Path>, B: BackendStorage>(
+    p: P,
+    res: usize,
+    device: &B::Device,
+) -> Result<Tensor<B>> {
+    load_image_with_std_mean(p, res, &IMAGENET_MEAN, &IMAGENET_STD, device)
 }
 
 /// Loads an image from disk using the image crate, this returns a tensor with shape
 /// (3, 224, 224). imagenet normalization is applied.
-pub fn load_image224<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
-    load_image(p, 224)
+pub fn load_image224<P: AsRef<std::path::Path>, B: BackendStorage>(
+    p: P,
+    device: &B::Device,
+) -> Result<Tensor<B>> {
+    load_image(p, 224, device)
 }
 
 /// Loads an image from disk using the image crate, this returns a tensor with shape
 /// (3, 518, 518). imagenet normalization is applied.
 /// The model dinov2 reg4 analyzes images with dimensions 3x518x518 (resulting in 37x37 transformer tokens).
-pub fn load_image518<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
-    load_image(p, 518)
+pub fn load_image518<P: AsRef<std::path::Path>, B: BackendStorage>(
+    p: P,
+    device: &B::Device,
+) -> Result<Tensor<B>> {
+    load_image(p, 518, device)
 }
 
 pub const CLASS_COUNT: i64 = 1000;
