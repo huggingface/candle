@@ -10,9 +10,9 @@ jobs:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
     runs-on:
-      group: aws-g4dn-2xlarge
+      group: aws-g5-2xlarge
     container:
-      image: nvidia/cuda:12.3.1-devel-ubuntu22.04
+      image: nvidia/cuda:13.0.1-devel-ubuntu24.04
       options: --gpus 0 
     if: ${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     permissions:
