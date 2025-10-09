@@ -244,9 +244,22 @@ pub fn hard_sigmoid(xs: &Tensor) -> Result<Tensor> {
     ((xs + 3.0)? / 6.0)?.clamp(0f32, 1f32)
 }
 
+pub fn mish(xs: &Tensor) -> Result<Tensor> {
+    xs * (1.0 + xs.exp()?)?.log()?.tanh()
+}
+
 pub fn leaky_relu(xs: &Tensor, negative_slope: f64) -> Result<Tensor> {
     let zeros = xs.zeros_like()?;
     xs.maximum(&zeros)? + xs.minimum(&zeros)? * negative_slope
+}
+
+pub fn selu(xs: &Tensor, alpha: f32, gamma: f32) -> Result<Tensor> {
+    let is_pos = xs.gt(0f32)?;
+    let alpha_t = Tensor::full(alpha, xs.dims(), xs.device())?;
+    let neg = xs.exp()?.mul(&alpha_t)?.sub(&alpha_t)?;
+    let selu = is_pos.where_cond(xs, &neg)?;
+    let gamma_t = Tensor::full(gamma, xs.dims(), xs.device())?;
+    selu.broadcast_mul(&gamma_t)
 }
 
 pub fn dropout(xs: &Tensor, drop_p: f32) -> Result<Tensor> {

@@ -11,19 +11,29 @@ license = "MIT OR Apache-2.0"
 
 
 [dependencies]
-metal = { version = "0.27.0", features = ["mps"] }
-half = { version = "2.5.0", features = ["num-traits", "use-intrinsics", "rand_distr"] }
+half = { version = "2.5.0", features = [
+    "num-traits",
+    "use-intrinsics",
+    "rand_distr",
+] }
 once_cell = "1.18.0"
 thiserror = "1"
 tracing = "0.1.37"
+objc2-metal = "0.3.1"
+objc2 = "0.6.1"
+objc2-foundation = "0.3.1"
 
 [dev-dependencies]
 clap = { version = "4.2.4", features = ["derive"] }
 half = { version = "2.3.1", features = [
-  "num-traits",
-  "use-intrinsics",
-  "rand_distr",
+    "num-traits",
+    "use-intrinsics",
+    "rand_distr",
 ] }
 anyhow = "1"
 rand = "0.8.5"
 rand_distr = "0.4.3"
+
+[profile.profiling]
+inherits = "release"
+debug = 2

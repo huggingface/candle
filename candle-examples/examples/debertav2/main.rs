@@ -320,7 +320,7 @@ fn main() -> Result<()> {
                 results.push(current_row_result);
             }
 
-            println!("\n{:?}", results);
+            println!("\n{results:?}");
         }
 
         TaskType::TextClassification(classification_model) => {
@@ -344,7 +344,7 @@ fn main() -> Result<()> {
                 });
             }
 
-            println!("\n{:?}", results);
+            println!("\n{results:?}");
         }
     }
     Ok(())

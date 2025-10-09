@@ -15,7 +15,7 @@ template<int order, typename T>
 static __device__ void k_argsort(const T * x, uint32_t * dst, const int ncols, int ncols_pad) {
     // bitonic sort
     int col = threadIdx.x;
-    int row = blockIdx.y;
+    int row = blockIdx.x;
 
     if (col >= ncols_pad) {
         return;
@@ -75,6 +75,9 @@ extern "C" __global__ void asort_desc_##RUST_NAME(  \
  
 #if __CUDA_ARCH__ >= 800
 ASORT_OP(__nv_bfloat16, bf16)
+
+// NOTE: No sort ops for f8
+// ASORT_OP(__nv_fp8_e4m3, fp8_e4m3)
 #endif
 
 #if __CUDA_ARCH__ >= 530

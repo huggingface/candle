@@ -4,8 +4,11 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
-use candle_metal_kernels::{BufferOffset, CallConvTranspose2dCfg, Kernels};
-use metal::{Buffer, MTLResourceOptions, NSUInteger};
+use candle_metal_kernels::{
+    metal::{Buffer, Commands, Device},
+    BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
+};
+use objc2_foundation::NSRange;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
@@ -70,7 +73,7 @@ impl From<String> for MetalError {
 #[derive(Debug, Clone)]
 pub struct MetalStorage {
     /// The actual buffer containing the data.
-    buffer: Arc<metal::Buffer>,
+    buffer: Arc<Buffer>,
     /// a reference to the device owning this buffer
     device: MetalDevice,
     /// The count of allocated elements in the buffer
@@ -103,6 +106,7 @@ impl BackendStorage for MetalStorage {
             DType::BF16 => Ok(CpuStorage::BF16(self.to_cpu()?)),
             DType::F32 => Ok(CpuStorage::F32(self.to_cpu()?)),
             DType::F64 => Ok(CpuStorage::F64(self.to_cpu()?)),
+            DType::F8E4M3 => Ok(CpuStorage::F64(self.to_cpu()?)),
         }
     }
 
@@ -123,6 +127,7 @@ impl BackendStorage for MetalStorage {
                 DType::BF16 => "affine_bf16",
                 DType::U8 => "affine_u8",
                 DType::U32 => "affine_u32",
+                DType::I64 => "affine_i64",
                 dtype => crate::bail!("Metal contiguous affine {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_affine(
@@ -142,6 +147,9 @@ impl BackendStorage for MetalStorage {
                 DType::F32 => "affine_f32_strided",
                 DType::F16 => "affine_f16_strided",
                 DType::BF16 => "affine_bf16_strided",
+                DType::U8 => "affine_u8_strided",
+                DType::U32 => "affine_u32_strided",
+                DType::I64 => "affine_i64_strided",
                 dtype => crate::bail!("Metal strided affine {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_affine_strided(
@@ -456,6 +464,7 @@ impl BackendStorage for MetalStorage {
                         DType::I64 => contiguous::const_set::I64,
                         DType::U32 => contiguous::const_set::U32,
                         DType::U8 => contiguous::const_set::U8,
+                        DType::F8E4M3 => crate::bail!("unsupported const-set f8e4m3"),
                         DType::F64 => crate::bail!("unsupported const-set f64"),
                     };
                     candle_metal_kernels::call_const_set_contiguous(
@@ -478,6 +487,7 @@ impl BackendStorage for MetalStorage {
                         DType::I64 => strided::const_set::I64,
                         DType::U32 => strided::const_set::U32,
                         DType::U8 => strided::const_set::U8,
+                        DType::F8E4M3 => crate::bail!("unsupported const-set f8e4m3"),
                         DType::F64 => crate::bail!("unsupported const-set f64"),
                     };
                     candle_metal_kernels::call_const_set_strided(
@@ -912,7 +922,7 @@ impl BackendStorage for MetalStorage {
         let src = buffer_o(&self.buffer, layout, self.dtype);
         let t = buffer_o(&t.buffer, t_l, t.dtype);
         let f = buffer_o(&f.buffer, f_l, f.dtype);
-        candle_metal_kernels::call_where_cond_strided(
+        candle_metal_kernels::call_where_cond(
             &device.device,
             &command_buffer,
             &device.kernels,
@@ -920,10 +930,13 @@ impl BackendStorage for MetalStorage {
             dims,
             src,
             layout.stride(),
+            layout.is_contiguous(),
             t,
             t_l.stride(),
+            t_l.is_contiguous(),
             f,
             f_l.stride(),
+            f_l.is_contiguous(),
             &buffer,
         )
         .map_err(MetalError::from)?;
@@ -954,6 +967,10 @@ impl BackendStorage for MetalStorage {
         let command_buffer = self.device.command_buffer()?;
         let name = match self.dtype {
             DType::F32 => "im2col1d_f32",
+            DType::F16 => "im2col1d_f16",
+            DType::BF16 => "im2col1d_bf16",
+            DType::U8 => "im2col1d_u8",
+            DType::U32 => "im2col1d_u32",
             dtype => crate::bail!("Metal conv1d {dtype:?} not implemented"),
         };
         let src = buffer_o(&self.buffer, layout, self.dtype);
@@ -1033,6 +1050,8 @@ impl BackendStorage for MetalStorage {
 
             let name = match self.dtype {
                 DType::F32 => "col2im1d_f32",
+                DType::F16 => "col2im1d_f16",
+                DType::BF16 => "col2im1d_bf16",
                 DType::U32 => "col2im1d_u32",
                 DType::U8 => "col2im1d_u8",
                 dtype => crate::bail!("metal col2im1d {dtype:?} not implemented"),
@@ -1052,7 +1071,7 @@ impl BackendStorage for MetalStorage {
                 )?
             };
             // It is important for the command buffer to be obtained *after* the matmul
-            // kernel has run, otherwise we might use a command-buffer that has been commited
+            // kernel has run, otherwise we might use a command-buffer that has been committed
             // already resulting in the following error.
             // _status < MTLCommandBufferStatusCommitted >
             // -[IOGPUMetalCommandBuffer setCurrentCommandEncoder:]
@@ -1395,6 +1414,12 @@ impl BackendStorage for MetalStorage {
         let device = self.device();
         let buffer = device.new_buffer(dst_el, dtype, "gather")?;
         let name = match (ids.dtype, self.dtype) {
+            (DType::U8, DType::U8) => "gather_u8_u8",
+            (DType::U8, DType::F32) => "gather_u8_f32",
+            (DType::U8, DType::F16) => "gather_u8_f16",
+            (DType::U8, DType::BF16) => "gather_u8_bf16",
+            (DType::U8, DType::U32) => "gather_u8_u32",
+            (DType::U8, DType::I64) => "gather_u8_i64",
             (DType::U32, DType::F32) => "gather_u32_f32",
             (DType::U32, DType::F16) => "gather_u32_f16",
             (DType::U32, DType::BF16) => "gather_u32_bf16",
@@ -1709,11 +1734,11 @@ impl BackendStorage for MetalStorage {
         let command_buffer = self.device.command_buffer()?;
         if src_s == d2 && dst_s == d2 {
             command_buffer.set_label("copy2d_contiguous");
-            let blit = command_buffer.new_blit_command_encoder();
+            let blit = command_buffer.blit_command_encoder();
             blit.set_label("copy2d_contiguous");
-            let src_offset = (src_o * self.dtype.size_in_bytes()) as NSUInteger;
-            let length = (d1 * d2 * self.dtype.size_in_bytes()) as NSUInteger;
-            let dst_offset = (dst_o * dst.dtype().size_in_bytes()) as NSUInteger;
+            let src_offset = src_o * self.dtype.size_in_bytes();
+            let length = d1 * d2 * self.dtype.size_in_bytes();
+            let dst_offset = dst_o * dst.dtype().size_in_bytes();
             blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
             blit.end_encoding();
         } else {
@@ -1754,11 +1779,11 @@ impl BackendStorage for MetalStorage {
         let command_buffer = self.device.command_buffer()?;
         if src_l.is_contiguous() && self.dtype == dst.dtype() {
             command_buffer.set_label("copy_contiguous");
-            let blit = command_buffer.new_blit_command_encoder();
+            let blit = command_buffer.blit_command_encoder();
             blit.set_label("copy_contiguous");
-            let src_offset = (src_l.start_offset() * self.dtype.size_in_bytes()) as NSUInteger;
-            let length = (src_l.shape().elem_count() * self.dtype.size_in_bytes()) as NSUInteger;
-            let dst_offset = (dst_offset * dst.dtype().size_in_bytes()) as NSUInteger;
+            let src_offset = src_l.start_offset() * self.dtype.size_in_bytes();
+            let length = src_l.shape().elem_count() * self.dtype.size_in_bytes();
+            let dst_offset = dst_offset * dst.dtype().size_in_bytes();
             blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
             blit.end_encoding();
         } else {
@@ -1826,7 +1851,7 @@ impl MetalStorage {
         let lhs = buffer_o(&self.buffer, lhs_l, self.dtype);
         let rhs = buffer_o(&rhs.buffer, rhs_l, rhs.dtype);
         let (buffer, dtype) = if lhs_l.is_contiguous() && rhs_l.is_contiguous() && &op[..1] != "b" {
-            use candle_metal_kernels::binary::contiguous;
+            use candle_metal_kernels::kernels::binary::contiguous;
 
             let (kernel_name, dtype) = match (op, self.dtype) {
                 ("add", DType::F32) => (contiguous::add::FLOAT, self.dtype),
@@ -1913,7 +1938,7 @@ impl MetalStorage {
             .map_err(MetalError::from)?;
             (buffer, dtype)
         } else {
-            use candle_metal_kernels::binary::strided;
+            use candle_metal_kernels::kernels::binary::strided;
 
             let (kernel_name, dtype) = match (op, self.dtype) {
                 ("badd", DType::F32) => (strided::add::FLOAT, self.dtype),
@@ -2019,13 +2044,12 @@ impl MetalStorage {
     }
 
     pub(crate) fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
-        let size = (self.count * self.dtype.size_in_bytes()) as NSUInteger;
-
-        let buffer = self.device.new_buffer_managed(size)?;
+        let size = self.count * self.dtype.size_in_bytes();
+        let buffer = self.device.allocate_buffer(size)?;
         {
             let command_buffer = self.device.command_buffer()?;
             command_buffer.set_label("to_cpu");
-            let blit = command_buffer.new_blit_command_encoder();
+            let blit = command_buffer.blit_command_encoder();
             blit.set_label("blit_to_cpu");
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
             blit.end_encoding();
@@ -2039,15 +2063,19 @@ impl BackendDevice for MetalDevice {
     type Storage = MetalStorage;
 
     fn new(ordinal: usize) -> Result<Self> {
-        let device = metal::Device::all().swap_remove(ordinal);
-        let command_queue = device.new_command_queue();
+        let device = Device::all().swap_remove(ordinal);
+        let command_queue = device.new_command_queue().map_err(MetalError::from)?;
         let kernels = Arc::new(Kernels::new());
-        let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
-            [299792458].as_ptr() as *const c_void,
-            4,
-            MTLResourceOptions::StorageModeManaged,
-        )));
-        let commands = device::Commands::new(command_queue)?;
+        let seed = Arc::new(Mutex::new(
+            device
+                .new_buffer_with_data(
+                    [299792458u64].as_ptr() as *const c_void,
+                    4,
+                    RESOURCE_OPTIONS,
+                )
+                .map_err(MetalError::from)?,
+        ));
+        let commands = Commands::new(command_queue).map_err(MetalError::from)?;
         Ok(Self {
             id: DeviceId::new(),
             device,
@@ -2098,6 +2126,7 @@ impl BackendDevice for MetalDevice {
             CpuStorageRef::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorageRef::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorageRef::F8E4M3(_) => crate::bail!("Metal device does not yet support F8E4M3."),
         };
         Ok(Self::Storage::new(buffer?, self.clone(), count, T::DTYPE))
     }
@@ -2111,6 +2140,7 @@ impl BackendDevice for MetalDevice {
             CpuStorage::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F8E4M3(_) => crate::bail!("Metal device does not yet support F8E4M3."),
         };
         Ok(Self::Storage::new(
             buffer?,
@@ -2197,16 +2227,12 @@ impl BackendDevice for MetalDevice {
     }
 
     fn set_seed(&self, seed: u64) -> Result<()> {
-        let seed: u32 = seed.try_into().map_err(|_| {
-            MetalError::Message("Metal seed must be less than or equal to u32::MAX".to_string())
-        })?;
-
         let seed_buffer = self.seed.try_lock().map_err(MetalError::from)?;
-        let contents = seed_buffer.contents();
+        let contents = seed_buffer.data();
         unsafe {
-            std::ptr::copy([seed].as_ptr(), contents as *mut u32, 1);
+            std::ptr::copy_nonoverlapping([seed].as_ptr(), contents as *mut u64, 1);
         }
-        seed_buffer.did_modify_range(metal::NSRange::new(0, 4));
+        seed_buffer.did_modify_range(NSRange::new(0, 8));
 
         Ok(())
     }

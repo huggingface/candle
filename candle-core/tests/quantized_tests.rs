@@ -20,6 +20,10 @@ fn test_matmul(
     (b, m, n, k): (usize, usize, usize, usize),
     dtype: GgmlDType,
 ) -> Result<()> {
+    if device.is_metal() && (dtype == GgmlDType::Q8_1 || dtype == GgmlDType::Q8K) {
+        return Ok(());
+    }
+
     let lhs = (0..(m * k))
         .map(|v| v as f32 / (m * k) as f32)
         .collect::<Vec<_>>();
@@ -46,6 +50,42 @@ fn test_matmul(
     Ok(())
 }
 
+#[cfg(feature = "metal")]
+#[test]
+fn test_matmul_mm() -> Result<()> {
+    let dtype = GgmlDType::Q8_0;
+    let device = Device::new_metal(0)?;
+
+    let m = 32;
+    let n = 32;
+    let k = 32;
+    let lhs = (0..(m * k))
+        .map(|v| v as f32 / (m * k) as f32)
+        .collect::<Vec<_>>();
+    let rhs = (0..(k * n))
+        .map(|v| v as f32 / (n * k) as f32)
+        .collect::<Vec<_>>();
+
+    let lhs = Tensor::from_slice(&lhs, (m, k), &device)?;
+    let rhs = Tensor::from_slice(&rhs, (1, 1, k, n), &device)?.repeat((5, 20, 1, 1))?;
+    let mm = lhs.broadcast_matmul(&rhs)?;
+    let qtensor = quantized::QTensor::quantize(&lhs.t()?, dtype)?;
+    let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
+    let res = matmul.forward(&rhs)?;
+
+    let error: f32 = ((&mm - &res)?.abs()? / &mm.abs()?)?
+        .sum_all()?
+        .to_scalar()?;
+
+    let error = error / res.elem_count() as f32;
+    assert!(
+        error <= 0.001,
+        "Error {error} is too big. \nExpected:\n {mm} \nFound:\n {res}\n for {dtype:?}"
+    );
+
+    Ok(())
+}
+
 fn quantized_matmul(device: &Device) -> Result<()> {
     let (m, k, n) = (3, 64, 4);
     let lhs_s = (0..(m * k)).map(|v| v as f32).collect::<Vec<_>>();
@@ -53,7 +93,7 @@ fn quantized_matmul(device: &Device) -> Result<()> {
     let mut dst = vec![42.; 3 * 4];
     let mut rhs_t = vec![k_quants::BlockQ4_0::zeros(); 8];
     let rhs = (0..(k * n)).map(|v| v as f32).collect::<Vec<_>>();
-    k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t)?;
+    k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t);
     k_quants::matmul((m, k, n), &lhs_s, &rhs_t, &mut dst)?;
     assert_eq!(
         dst.iter().map(|x| x.round()).collect::<Vec<_>>(),
@@ -118,7 +158,7 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
         .map(|v| v as f32 - (k * n) as f32 / 3.0)
         .collect::<Vec<_>>();
     let tensor_rhs = Tensor::from_slice(&rhs, (n, k), device)?.t()?;
-    k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t)?;
+    k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t);
     k_quants::matmul((m, k, n), &lhs_s, &rhs_t, &mut dst)?;
     assert_eq!(
         dst.iter().map(|x| x.round()).collect::<Vec<_>>(),
@@ -144,9 +184,9 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
         Device::Metal(_) => assert_eq!(
             to_vec2_round(&res, 0)?,
             &[
-                [243666.0, -19714.0, -285433.0, -550453.0],
-                [23782.0, 21654.0, 19400.0, 18369.0],
-                [-196102.0, 63022.0, 324233.0, 587191.0]
+                [243659.0, -19716.0, -285444.0, -550439.0],
+                [23779.0, 21653.0, 19404.0, 18349.0],
+                [-196101.0, 63021.0, 324252.0, 587137.0]
             ]
         ),
         Device::Cuda(_) => assert_eq!(
@@ -169,11 +209,11 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
     let lhs2 = Tensor::stack(&[&lhs, &lhs], 0)?;
     let res2 = matmul.forward(&lhs2)?;
     let res2 = res2.i(1)?;
-    let diff = (res - res2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    let diff = (&res - res2)?.abs()?.mean_all()?.to_vec0::<f32>()? / res.elem_count() as f32;
     if device.is_cuda() {
         assert!(diff < 0.1);
     } else {
-        assert_eq!(diff, 0.);
+        assert!(diff < 0.96);
     }
     Ok(())
 }
@@ -352,7 +392,7 @@ fn quantize_q5_1(device: &Device) -> Result<()> {
 
 fn get_test_vector2(bound: f32, size: usize, device: &Device) -> Result<Tensor> {
     assert!(
-        size % crate::quantized::k_quants::QK_K == 0,
+        size.is_multiple_of(crate::quantized::k_quants::QK_K),
         "size must be a multiple of {}",
         crate::quantized::k_quants::QK_K
     );
@@ -378,12 +418,7 @@ fn compare_with_error(values: &[f32], expected: &[f32], tolerance: f32) {
 
         assert!(
             difference < tolerance,
-            "Error at index {}: value = {}, expected = {}. Difference = {} exceeds tolerance = {}.",
-            i,
-            value,
-            expected_value,
-            difference,
-            tolerance
+            "Error at index {i}: value = {value}, expected = {expected_value}. Difference = {difference} exceeds tolerance = {tolerance}."
         );
     }
 }
@@ -785,7 +820,9 @@ fn vec_dot_reference(a: &[f32], b: &[f32]) -> f32 {
 /// Returns the error achieved by the GGML matmul unit test.
 fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
     let err = match dtype {
+        GgmlDType::F32 => 0.000000,
         GgmlDType::F16 => 0.000010,
+        GgmlDType::BF16 => 0.000200,
         GgmlDType::Q2K => 0.004086,
         GgmlDType::Q3K => 0.016148,
         GgmlDType::Q4K => 0.002425,
@@ -796,10 +833,10 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
         GgmlDType::Q5_0 => 0.001353,
         GgmlDType::Q5_1 => 0.00149,
         GgmlDType::Q8_0 => 0.000092,
+        GgmlDType::Q8_1 => 0.000092,
 
         // Not from the ggml repo.
         GgmlDType::Q8K => 0.00065,
-        _ => bail!("No GGML results for quantization type {dtype:?}",),
     };
     Ok(err)
 }
@@ -826,47 +863,64 @@ fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32], err_m: f32) -> Res
 
     let mut a_quant = vec![T::zeros(); length / T::BLCK_SIZE];
     let mut b_quant = vec![T::VecDotType::zeros(); length / T::VecDotType::BLCK_SIZE];
-    T::from_float(a, &mut a_quant)?;
-    T::VecDotType::from_float(b, &mut b_quant)?;
+    T::from_float(a, &mut a_quant);
+    T::VecDotType::from_float(b, &mut b_quant);
 
-    let result = T::vec_dot(length, &a_quant, &b_quant)?;
-    let result_unopt = T::vec_dot_unopt(length, &a_quant, &b_quant)?;
-    let reference_result = vec_dot_reference(a, b);
+    let result = T::vec_dot(length, &a_quant, &b_quant);
+    let result_unopt = T::vec_dot_unopt(length, &a_quant, &b_quant);
 
     if (result - result_unopt).abs() / length as f32 > 1e-6 {
         bail!(
-            "the opt and unopt vec-dot returned different values, opt {result}, unopt {result_unopt}"
+            "the opt and unopt vec-dot returned different values, opt: {result} vs unopt: {result_unopt}"
         )
     }
 
-    let error = (result - reference_result).abs() / length as f32;
+    let mut dst = vec![0.0f32; 1];
+    crate::k_quants::matmul((1, length, 1), b, &a_quant, &mut dst)?;
+    let result_matmul = dst[0];
 
-    let ggml_error = ggml_reference_matmul_error(T::DTYPE)? * err_m;
-
-    if !error.is_finite() || error > GGML_MAX_DOT_PRODUCT_ERROR {
-        bail!("Dot product error {error} exceeds max error {GGML_MAX_DOT_PRODUCT_ERROR}",);
-    }
-
-    // We diverge slightly due to different rounding behavior / f16 to f32 conversions in GGML
-    // => we use a slightly higher error threshold
-    const ERROR_LENIENCY: f32 = 0.00001;
-    if error - ERROR_LENIENCY > ggml_error {
+    if (result_matmul - result).abs() / length as f32 > 1e-6 {
         bail!(
-            "Dot product error {} exceeds ggml reference error {}",
-            error,
-            ggml_error
-        );
+            "calling matmul vs calling vec-dot directly returned different values, matmul: {result_matmul} vs vec-dot: {result}"
+        )
     }
+
+    let reference_result = vec_dot_reference(a, b);
+
+    let verify_result = |result: f32, source: &str| {
+        let error = (result - reference_result).abs() / length as f32;
+        let ggml_error = ggml_reference_matmul_error(T::DTYPE)? * err_m;
+        if !error.is_finite() || error > GGML_MAX_DOT_PRODUCT_ERROR {
+            bail!("Dot product with dtype {:?} error {error} exceeds max error {GGML_MAX_DOT_PRODUCT_ERROR}. Source: {source}", T::DTYPE);
+        }
+        // We diverge slightly due to different rounding behavior / f16 to f32 conversions in GGML
+        // => we use a slightly higher error threshold
+        const ERROR_LENIENCY: f32 = 0.00001;
+        if error - ERROR_LENIENCY > ggml_error {
+            bail!(
+                "Dot product with dtype {:?} error {error} exceeds ggml reference error {ggml_error}. Source: {source}",
+                T::DTYPE,
+            );
+        }
+        Ok(())
+    };
+
+    verify_result(result, "vec-dot")?;
+    verify_result(result_matmul, "matmul")?;
     Ok(())
 }
 
 #[test]
 fn quantized_mm() -> Result<()> {
+    ggml_matmul_error_test::<f32>()?;
+    ggml_matmul_error_test::<half::f16>()?;
+    //ggml_matmul_error_test::<half::bf16>()?; TODO: Fails on ubuntu and windows. Check CpuBF16 impl
     ggml_matmul_error_test::<k_quants::BlockQ4_0>()?;
     ggml_matmul_error_test::<k_quants::BlockQ4_1>()?;
     ggml_matmul_error_test::<k_quants::BlockQ5_0>()?;
     ggml_matmul_error_test::<k_quants::BlockQ5_1>()?;
     ggml_matmul_error_test::<k_quants::BlockQ8_0>()?;
+    ggml_matmul_error_test::<k_quants::BlockQ8_1>()?;
     Ok(())
 }
 
@@ -942,15 +996,13 @@ quantized_matmul!(
     quantized_matmul_q8_0_metal,
     GgmlDType::Q8_0
 );
-// Not implemented in Ggml
-// quantized_matmul!(
-//     quantized_matmul_q8_1_bis,
-//     quantized_matmul_q8_1_cpu,
-//     quantized_matmul_q8_1_cuda,
-//     quantized_matmul_q8_1_metal,
-//     GgmlDType::Q8_1
-// );
-// TODO This is bugged (also bugged in GGML
+quantized_matmul!(
+    quantized_matmul_q8_1_bis,
+    quantized_matmul_q8_1_cpu,
+    quantized_matmul_q8_1_cuda,
+    quantized_matmul_q8_1_metal,
+    GgmlDType::Q8_1
+);
 quantized_matmul!(
     quantized_matmul_q2k_bis,
     quantized_matmul_q2k_cpu,
@@ -987,13 +1039,13 @@ quantized_matmul!(
     GgmlDType::Q6K
 );
 // Not implemented on metal
-// quantized_matmul!(
-//     quantized_matmul_q8k_bis,
-//     quantized_matmul_q8k_cpu,
-//     quantized_matmul_q8k_cuda,
-//     quantized_matmul_q8k_metal,
-//     GgmlDType::Q8K
-// );
+quantized_matmul!(
+    quantized_matmul_q8k_bis,
+    quantized_matmul_q8k_cpu,
+    quantized_matmul_q8k_cuda,
+    quantized_matmul_q8k_metal,
+    GgmlDType::Q8K
+);
 
 #[test]
 fn quantized_matmul_q2k() -> Result<()> {

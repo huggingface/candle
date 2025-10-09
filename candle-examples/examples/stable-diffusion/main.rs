@@ -618,6 +618,7 @@ fn run(args: Args) -> Result<()> {
     let device = candle_examples::device(cpu)?;
     // If a seed is not given, generate a random seed and print it
     let seed = seed.unwrap_or(rand::rng().random_range(0u64..u64::MAX));
+
     println!("Using seed {seed}");
     device.set_seed(seed)?;
     let use_guide_scale = guidance_scale > 1.0;

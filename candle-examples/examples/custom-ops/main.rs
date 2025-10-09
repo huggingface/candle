@@ -8,7 +8,9 @@ extern crate intel_mkl_src;
 
 #[rustfmt::skip]
 #[cfg(feature = "cuda")]
-mod cuda_kernels;
+mod cuda_kernels {
+    include!(concat!(env!("OUT_DIR"), "/cuda_kernels.rs"));
+}
 
 use clap::Parser;
 

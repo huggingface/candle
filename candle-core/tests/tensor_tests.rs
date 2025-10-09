@@ -2,6 +2,7 @@ use candle_core::{test_device, test_utils, DType, Device, IndexOp, Result, Tenso
 fn glu_activation(device: &Device) -> Result<()> {
     let input = Tensor::new(&[[1.0f32, 2.0, 3.0, 4.0]], device)?;
     let output = input.glu()?;
+use float8::F8E4M3;
 
     // Verify output shape (most important)
     assert_eq!(output.dims(), &[1, 2]);
@@ -112,6 +113,24 @@ fn ones(device: &Device) -> Result<()> {
             ]
         ],
     );
+
+    if !device.is_metal() {
+        assert_eq!(
+            Tensor::ones((2, 3), DType::F8E4M3, device)?.to_vec2::<F8E4M3>()?,
+            [
+                [
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.)
+                ],
+                [
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.),
+                    F8E4M3::from_f32(1.)
+                ]
+            ],
+        );
+    }
     Ok(())
 }
 
@@ -160,6 +179,24 @@ fn arange(device: &Device) -> Result<()> {
         Tensor::arange_step(5i64, 0i64, -1, device)?.to_vec1::<i64>()?,
         [5, 4, 3, 2, 1],
     );
+
+    if !device.is_metal() {
+        assert_eq!(
+            Tensor::arange_step(
+                F8E4M3::from_f32(0.),
+                F8E4M3::from_f32(5.),
+                F8E4M3::from_f32(2.),
+                device
+            )?
+            .to_vec1::<F8E4M3>()?,
+            [
+                F8E4M3::from_f32(0.),
+                F8E4M3::from_f32(2.),
+                F8E4M3::from_f32(4.),
+            ],
+        );
+    }
+
     Ok(())
 }
 
@@ -1732,6 +1769,27 @@ test_device!(
     glu_odd_dimension_error_metal
 );
 
+fn tensor_send_sync(device: &Device) -> Result<()> {
+    let tensor = Tensor::new(vec![1.0f32, 2.0, 3.0], device)?;
+
+    for _ in 0..10 {
+        let tensor = tensor.clone();
+        std::thread::spawn(move || {
+            let new = tensor.add(&tensor).unwrap();
+            let result: Vec<f32> = new.to_vec1().unwrap();
+            assert_eq!(result, vec![2.0f32, 4.0, 6.0]);
+        });
+    }
+
+    Ok(())
+}
+test_device!(
+    tensor_send_sync,
+    tensor_send_sync_cpu,
+    tensor_send_sync_gpu,
+    tensor_send_sync_metal
+);
+
 // There was originally a bug on the CPU implementation for randn
 // https://github.com/huggingface/candle/issues/381
 #[test]
@@ -1953,5 +2011,13 @@ fn tensor_new() -> Result<()> {
             [[3.0, 1.0, 4.0], [1.0, 5.0, 9.0]]
         ]
     );
+    Ok(())
+}
+
+#[test]
+fn tensor_norm() -> Result<()> {
+    let t = Tensor::new(&[[3., 4.], [0., 0.]], &Device::Cpu)?;
+    let norm = t.norm()?;
+    assert_eq!(norm.to_scalar::<f64>()?, 5.);
     Ok(())
 }
