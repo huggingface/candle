@@ -2,19 +2,18 @@
 
 This is an adapted version of the Candle Bert example to inline (embed) the model files into the binary to create a single file binary.
 
-**Note: the bert-single-file-binary-builder feature is required `--features="bert-single-file-binary-builder"`.**
+**Note: the single-file-binary-builder feature is required `--features="single-file-binary-builder"`.**
 
 ### Limitations
 
-1. Because the model files must be available at compile time, a special build step is needed. See the [bert-single-file-binary-builder crate](../../bert_single_file_binary_builder/)
-2. The model id and revision is hardcoded
-3. Since the [`include_bytes!`](https://doc.rust-lang.org/std/macro.include_bytes.html) marco is project relative and requires the argument must be a string literal, it is easier to download the files into the examples dir than navigate the hub cache dir snapshots.
+1. Because the model files must be available at compile time, a special build step is needed. See the [single-file-binary-builder crate](../../single_file_binary_builder/)
+2. Since the [`include_bytes!`](https://doc.rust-lang.org/std/macro.include_bytes.html) marco is project relative and requires the argument must be a string literal, it is easier to download the files into the examples dir than navigate the hub cache dir snapshots.
 
 ## Running the example
 
 ```bash
 cd path/to/candle/candle-examples
-cargo build --example bert_single_file_binary --release --features="bert-single-file-binary-builder"
+CANDLE_SINGLE_FILE_BINARY_BUILDER_URL="https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/c9745ed1d9f207416be6d2e6f8de32d1f16199bf" cargo build --example bert_single_file_binary --release --features="single-file-binary-builder"
 ../target/release/examples/bert_single_file_binary --prompt "Here is a test sentence"
 ```
 

@@ -1,5 +1,5 @@
 [package]
-name = "bert-single-file-binary-builder"
+name = "single-file-binary-builder"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
