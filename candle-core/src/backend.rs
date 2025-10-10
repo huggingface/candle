@@ -16,7 +16,7 @@ pub trait BackendStorage: Sized + Clone + Send + Sync + Debug {
 
     fn dtype(&self) -> DType;
 
-    fn device(&self) -> impl AsRef<Self::Device>;
+    fn device(&self) -> Self::Device;
 
     // Maybe this should return a Cow instead so that no copy is done on the cpu case.
     fn to_cpu_storage(&self) -> Result<CpuStorage>;

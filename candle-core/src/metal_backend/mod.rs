@@ -87,8 +87,8 @@ impl BackendStorage for MetalStorage {
         self.dtype
     }
 
-    fn device(&self) -> impl AsRef<MetalDevice> {
-        &self.device
+    fn device(&self) -> MetalDevice {
+        self.device.clone()
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
@@ -105,7 +105,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<Self> {
-        let device = self.device().as_ref().clone();
+        let device = self.device();
 
         let shape = layout.shape();
         let el = shape.elem_count();
@@ -164,7 +164,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn powf(&self, layout: &Layout, pow: f64) -> Result<Self> {
-        let device = self.device().as_ref().clone();
+        let device = self.device();
 
         let shape = layout.shape();
         let el = shape.elem_count();
@@ -215,7 +215,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self> {
-        let device = self.device().as_ref().clone();
+        let device = self.device();
 
         let shape = layout.shape();
         let el = shape.elem_count();
@@ -266,7 +266,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
-        let device = self.device.clone();
+        let device = self.device();
 
         let src_stride = layout.stride();
         let src_dims = layout.shape().dims();
@@ -512,7 +512,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
-        let device = self.device().as_ref().clone();
+        let device = self.device();
         let shape = layout.shape();
         let el_count = shape.elem_count();
         let buffer = device.new_buffer(el_count, dtype, "todtype")?;
@@ -1135,7 +1135,7 @@ impl BackendStorage for MetalStorage {
         kernel_l: &Layout,
         params: &ParamsConv2D,
     ) -> Result<Self> {
-        let device = self.device().as_ref().clone();
+        let device = self.device();
         let shape = layout.shape();
         let dims = shape.dims();
 
