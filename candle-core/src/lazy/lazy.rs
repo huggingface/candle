@@ -377,7 +377,7 @@ impl<B: BackendStorage> BackendStorage for Lazy<B> {
     }
 
     fn apply_op1(&self, l: &Layout, c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)> {
-        todo!("{}", c.name());
+        todo!("apply_op1: {}", c.name());
     }
 
     fn apply_op2(
@@ -387,7 +387,7 @@ impl<B: BackendStorage> BackendStorage for Lazy<B> {
         l2: &Layout,
         c: &dyn crate::CustomOp2<Self>,
     ) -> Result<(Self, Shape)> {
-        todo!("{}", c.name());
+        todo!("apply_op2: {}", c.name());
     }
 
     fn apply_op3(
@@ -397,9 +397,9 @@ impl<B: BackendStorage> BackendStorage for Lazy<B> {
         _l2: &Layout,
         _t3: &Self,
         _l3: &Layout,
-        _c: &dyn crate::CustomOp3<Self>,
+        c: &dyn crate::CustomOp3<Self>,
     ) -> Result<(Self, Shape)> {
-        todo!("{}", c.name());
+        todo!("apply_op3: {}", c.name());
     }
 
     fn inplace_op1(&mut self, l: &Layout, c: &dyn crate::InplaceOp1) -> Result<()> {
