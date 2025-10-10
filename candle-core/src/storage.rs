@@ -147,7 +147,7 @@ impl BackendStorage for Storage {
     }
 
     // FIXME: Somehow return correct device with borrowed storage
-    fn device(&self) -> impl AsRef<Device> {
+    fn device(&self) -> Device {
         match self {
             Self::Cpu(_) => Device::Cpu,
             Self::Cuda(storage) => Device::Cuda(storage.device().as_ref().clone()),

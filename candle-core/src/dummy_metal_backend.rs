@@ -51,7 +51,7 @@ mod dummy {
             fail!()
         }
 
-        fn device(&self) -> impl AsRef<Self::Device> {
+        fn device(&self) -> Self::Device {
             fail!();
             #[allow(unreachable_code)]
             MetalDevice

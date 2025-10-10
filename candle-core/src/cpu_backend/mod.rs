@@ -1753,8 +1753,8 @@ impl BackendStorage for CpuStorage {
         }
     }
 
-    fn device(&self) -> impl AsRef<Self::Device> {
-        &CpuDevice
+    fn device(&self) -> Self::Device {
+        CpuDevice
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {

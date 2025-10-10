@@ -1307,7 +1307,7 @@ impl BackendStorage for CudaStorage {
 
     fn try_clone(&self, layout: &Layout) -> Result<Self> {
         let slice = Clone.map(&self.slice, self.device(), layout)?;
-        let device = self.device.clone();
+        let device = self.device();
         Ok(Self { slice, device })
     }
 
@@ -1324,8 +1324,8 @@ impl BackendStorage for CudaStorage {
         }
     }
 
-    fn device(&self) -> &CudaDevice {
-        &self.device
+    fn device(&self) -> CudaDevice {
+        self.device.clone()
     }
 
     fn const_set(&mut self, s: crate::scalar::Scalar, layout: &Layout) -> Result<()> {
@@ -1483,37 +1483,37 @@ impl BackendStorage for CudaStorage {
     }
 
     fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let slice = Affine(mul, add).map(&self.slice, &device, layout)?;
         Ok(Self { slice, device })
     }
 
     fn powf(&self, layout: &Layout, e: f64) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let slice = Powf(e).map(&self.slice, &device, layout)?;
         Ok(Self { slice, device })
     }
 
     fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let slice = Elu(alpha).map(&self.slice, &device, layout)?;
         Ok(Self { slice, device })
     }
 
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let slice = FastReduce(sum_dims, op).map(&self.slice, &device, layout)?;
         Ok(Self { slice, device })
     }
 
     fn cmp(&self, op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let slice = Cmp(op).map(&self.slice, lhs_l, &rhs.slice, rhs_l, &device)?;
         Ok(Self { slice, device })
     }
 
     fn unary_impl<U: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let slice = U::V.map(&self.slice, &device, layout)?;
         Ok(Self { slice, device })
     }
@@ -1524,7 +1524,7 @@ impl BackendStorage for CudaStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let slice = B::V.map(&self.slice, lhs_l, &rhs.slice, rhs_l, &device)?;
         Ok(Self { slice, device })
     }
@@ -1574,7 +1574,7 @@ impl BackendStorage for CudaStorage {
         f: &Self,
         f_l: &Layout,
     ) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let slice = WhereCond(self, layout).map(&t.slice, t_l, &f.slice, f_l, &device)?;
         Ok(Self { slice, device })
     }
@@ -1589,7 +1589,7 @@ impl BackendStorage for CudaStorage {
     ) -> Result<Self> {
         const USE_IM2COL_CONV1D: bool = true;
 
-        let device = self.device().clone();
+        let device = self.device();
         if !USE_IM2COL_CONV1D {
             let slice = Conv1D(params).map(&self.slice, l, &kernel.slice, kernel_l, &device)?;
             return Ok(Self { slice, device });
@@ -1638,7 +1638,7 @@ impl BackendStorage for CudaStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConv1D,
     ) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         if !kernel_l.is_contiguous() {
             let slice = Conv1D(params).map(&self.slice, inp_l, &kernel.slice, kernel_l, &device)?;
             return Ok(Self { slice, device });
@@ -1705,7 +1705,7 @@ impl BackendStorage for CudaStorage {
     ) -> Result<Self> {
         const USE_COL2IM_CONV1D_TR: bool = true;
 
-        let device = self.device().clone();
+        let device = self.device();
         let can_use_col2im = kernel_l.is_contiguous()
             && params.dilation == 1
             && params.padding == 0
@@ -1765,7 +1765,7 @@ impl BackendStorage for CudaStorage {
     ) -> Result<Self> {
         const USE_IM2COL_CONV2D: bool = true;
 
-        let device = self.device().clone();
+        let device = self.device();
         if !USE_IM2COL_CONV2D {
             let slice = Conv2D(params).map(&self.slice, l, &kernel.slice, kernel_l, &device)?;
             return Ok(Self { slice, device });
@@ -1818,7 +1818,7 @@ impl BackendStorage for CudaStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         if !kernel_l.is_contiguous() {
             let slice = Conv2D(params).map(&self.slice, inp_l, &kernel.slice, kernel_l, &device)?;
             return Ok(Self { slice, device });
@@ -1883,14 +1883,14 @@ impl BackendStorage for CudaStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConvTranspose2D,
     ) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let slice =
             ConvTranspose2D(params).map(&self.slice, l, &kernel.slice, kernel_l, &device)?;
         Ok(Self { slice, device })
     }
 
     fn avg_pool2d(&self, l: &Layout, k: (usize, usize), stride: (usize, usize)) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let slice = Pool2D {
             w_k: k.0,
             h_k: k.1,
@@ -1903,7 +1903,7 @@ impl BackendStorage for CudaStorage {
     }
 
     fn max_pool2d(&self, l: &Layout, k: (usize, usize), stride: (usize, usize)) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let slice = Pool2D {
             w_k: k.0,
             h_k: k.1,
@@ -1920,18 +1920,18 @@ impl BackendStorage for CudaStorage {
     }
 
     fn upsample_nearest2d(&self, l: &Layout, out_w: usize, out_h: usize) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let slice = UpsampleNearest2D(out_w, out_h).map(&self.slice, &device, l)?;
         Ok(Self { slice, device })
     }
 
     fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let slice = IndexSelect(ids, ids_l, dim).map(&self.slice, &device, l)?;
         Ok(Self { slice, device })
     }
     fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let slice = Gather(ids, ids_l, dim).map(&self.slice, &device, l)?;
         Ok(Self { slice, device })
     }
@@ -1944,7 +1944,7 @@ impl BackendStorage for CudaStorage {
         src_l: &Layout,
         dim: usize,
     ) -> Result<()> {
-        let device = self.device().clone();
+        let device = self.device();
         Scatter(ids, ids_l, dim).map(&mut self.slice, l, &src.slice, src_l, &device)
     }
     fn scatter_add_set(
@@ -1956,7 +1956,7 @@ impl BackendStorage for CudaStorage {
         src_l: &Layout,
         dim: usize,
     ) -> Result<()> {
-        let device = self.device().clone();
+        let device = self.device();
         ScatterAdd(ids, ids_l, dim).map(&mut self.slice, l, &src.slice, src_l, &device)
     }
     fn index_add(
@@ -1968,7 +1968,7 @@ impl BackendStorage for CudaStorage {
         src_l: &Layout,
         dim: usize,
     ) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
         let mut acc = unsafe { device.alloc_uninit(l.shape(), self.dtype())? };
         self.copy_strided_src(&mut acc, 0, l)?;
         IndexAdd(ids, ids_l, dim).map(&mut acc.slice, l, &src.slice, src_l, &device)?;
