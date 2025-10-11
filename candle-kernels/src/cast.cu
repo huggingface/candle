@@ -141,7 +141,6 @@ extern "C" __global__ void FN_NAME( \
     cast_through<SRC_TYPENAME, DST_TYPENAME, INT_TYPENAME>(numel, num_dims, info, inp, out); \
 } \
 
-
 #if __CUDA_ARCH__ >= 800 || (__CUDA_ARCH__ >= 530 && __CUDA_ARCH__ < 800)
 CAST_OP(__nv_bfloat16, __nv_bfloat16, cast_bf16_bf16)
 CAST_OP(__nv_fp8_e4m3, __nv_fp8_e4m3, cast_f8_e4m3_f8_e4m3)
@@ -172,7 +171,7 @@ CAST_OP_FP8_INTO(__nv_bfloat16, __nv_fp8_e4m3, cast_bf16_f8_e4m3)
 #endif
 
 #if __CUDA_ARCH__ >= 530
-CAST_OP(__half,   __half, cast_f16_f16)
+CAST_OP(__half, __half, cast_f16_f16)
 
 CAST_THROUGH_OP(__half, uint8_t,  float, cast_f16_u8)
 CAST_OP(__half, uint32_t, cast_f16_u32)
