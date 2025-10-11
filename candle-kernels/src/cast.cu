@@ -85,6 +85,7 @@ CAST_THROUGH_OP(__nv_bfloat16, uint8_t, float, cast_bf16_u8)
 CAST_THROUGH_OP(__nv_bfloat16, __half,   float, cast_bf16_f16)
 CAST_THROUGH_OP(__half,   __nv_bfloat16, float, cast_f16_bf16)
 #endif
+
 #if __CUDA_ARCH__ >= 530
 CAST_OP(__half,   __half, cast_f16_f16)
 

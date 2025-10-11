@@ -589,6 +589,16 @@ SUM_OP(__nv_bfloat16, sum_bf16)
 // SUM_OP(__nv_bfloat16, sum_bf16)
 #endif
 
+#if __CUDA_ARCH__ >= 750 
+SUM_OP(__nv_bfloat16, sum_bf16)
+#elif __CUDA_ARCH__ >= 530 &&  __CUDA_ARCH__ < 750
+// The automatic fallback mechanism for these architectures:
+// 1. Converts bfloat16 to float using __bfloat162float
+// 2. Performs atomicAdd with floats
+// 3. Converts back to bfloat16
+// SUM_OP(__nv_bfloat16, sum_bf16)
+#endif
+
 #if __CUDA_ARCH__ >= 530
 SOFTMAX_OP(__half, float, softmax_f16)
 RMSNORM_OP(__half, rmsnorm_f16)
