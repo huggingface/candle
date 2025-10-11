@@ -35,7 +35,7 @@ __device__ double atomicAdd(double* address, double val) {
 }
 #endif
 
-#if __CUDA_ARCH__ >= 530 && >__CUDA_ARCH__ < 700
+#if __CUDA_ARCH__ >= 530 && __CUDA_ARCH__ < 700
 // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#atomicadd
 // The 16-bit __half floating-point version of atomicAdd() is only supported by devices of compute capability 7.x and higher.
 // Solution adapted from https://github.com/torch/cutorch/blob/master/lib/THC/THCAtomics.cuh#L96-L119
