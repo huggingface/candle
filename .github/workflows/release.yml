@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.9.2)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Check version matches input
+        run: |
+          CURRENT_VERSION=$(grep -A1 "^\[workspace\.package\]" Cargo.toml | grep "version" | sed 's/.*= "\(.*\)"/\1/')
+          if [ "$CURRENT_VERSION" != "${{ github.event.inputs.version }}" ]; then
+            echo "Version mismatch: Cargo.toml has $CURRENT_VERSION but input is ${{ github.event.inputs.version }}"
+            exit 1
+          fi
+          echo "Version $CURRENT_VERSION matches input"
+
+  run-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      
+      - name: Run tests
+        run: cargo test --workspace
+      
+      - name: Check examples compile
+        run: cargo check --examples
+
+  create-release:
+    needs: [verify-version, run-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          release_name: Release v${{ github.event.inputs.version }}
+          body: Release v${{ github.event.inputs.version }}
+          draft: false
+          prerelease: false
+
+  publish-crates:
+    needs: [create-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      
+      - name: Publish all crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo workspaces publish --from-git --yes --token $CARGO_REGISTRY_TOKEN
