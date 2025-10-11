@@ -52,6 +52,63 @@ impl ArgSort {
     }
 }
 
+#[cfg(feature = "cuda")]
+mod cuda {
+    use super::*;
+    use crate::cuda_backend::cudarc::driver::{
+        CudaSlice, DeviceRepr, LaunchConfig, ValidAsZeroBits,
+    };
+    use crate::cuda_backend::{kernel_name, kernels, CudaStorageSlice as S, WrapErr};
+    use crate::{CudaDevice, WithDType};
+
+    fn next_power_of_2(x: usize) -> usize {
+        let mut n = 1;
+        while n < x {
+            n *= 2
+        }
+        n
+    }
+
+    impl crate::cuda_backend::Map1Any for ArgSort {
+        fn f<T: DeviceRepr + WithDType + ValidAsZeroBits, W: Fn(CudaSlice<T>) -> S>(
+            &self,
+            src: &CudaSlice<T>,
+            dev: &CudaDevice,
+            layout: &crate::Layout,
+            _wrap: W,
+        ) -> Result<S> {
+            use cudarc::driver::PushKernelArg;
+
+            let slice = match layout.contiguous_offsets() {
+                None => crate::bail!("input has to be contiguous"),
+                Some((o1, o2)) => src.slice(o1..o2),
+            };
+            let elem_count = layout.shape().elem_count();
+            let dst = unsafe { dev.alloc::<u32>(elem_count)? };
+            let func = if self.asc {
+                dev.get_or_load_func(&kernel_name::<T>("asort_asc"), &kernels::SORT)?
+            } else {
+                dev.get_or_load_func(&kernel_name::<T>("asort_desc"), &kernels::SORT)?
+            };
+            let ncols = self.last_dim;
+            let nrows = elem_count / ncols;
+            let ncols_pad = next_power_of_2(ncols);
+            let cfg = LaunchConfig {
+                grid_dim: (nrows as u32, 1, 1),
+                block_dim: (ncols_pad as u32, 1, 1),
+                shared_mem_bytes: (ncols_pad * std::mem::size_of::<u32>()) as u32,
+            };
+            let stream = dev.cuda_stream();
+            let mut builder = stream.launch_builder(&func);
+            let ncols = ncols as i32;
+            let ncols_pad = ncols_pad as i32;
+            builder.arg(&slice).arg(&dst).arg(&ncols).arg(&ncols_pad);
+            unsafe { builder.launch(cfg) }.w()?;
+            Ok(S::U32(dst))
+        }
+    }
+}
+
 impl crate::CustomOp1 for ArgSort {
     fn name(&self) -> &'static str {
         "argsort"
@@ -70,6 +127,7 @@ impl crate::CustomOp1 for ArgSort {
             crate::CpuStorage::F16(vs) => self.asort(vs, layout),
             crate::CpuStorage::F32(vs) => self.asort(vs, layout),
             crate::CpuStorage::F64(vs) => self.asort(vs, layout),
+            crate::CpuStorage::F8E4M3(vs) => self.asort(vs, layout),
         };
         let sort_indexes = crate::CpuStorage::U32(sort_indexes);
         Ok((sort_indexes, layout.shape().into()))
@@ -81,46 +139,8 @@ impl crate::CustomOp1 for ArgSort {
         storage: &crate::CudaStorage,
         layout: &crate::Layout,
     ) -> Result<(crate::CudaStorage, crate::Shape)> {
-        use crate::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig, ValidAsZeroBits,
-        };
-        use crate::cuda_backend::{kernel_name, kernels, CudaStorageSlice as S, Map1Any, WrapErr};
-        use crate::{CudaDevice, WithDType};
-
-        impl Map1Any for ArgSort {
-            fn f<T: DeviceRepr + WithDType + ValidAsZeroBits, W: Fn(CudaSlice<T>) -> S>(
-                &self,
-                src: &CudaSlice<T>,
-                dev: &CudaDevice,
-                layout: &crate::Layout,
-                _wrap: W,
-            ) -> Result<S> {
-                let slice = match layout.contiguous_offsets() {
-                    None => crate::bail!("input has to be contiguous"),
-                    Some((o1, o2)) => src.slice(o1..o2),
-                };
-                let elem_count = layout.shape().elem_count();
-                let dst = unsafe { dev.alloc::<u32>(elem_count) }.w()?;
-                let func = if self.asc {
-                    dev.get_or_load_func(&kernel_name::<T>("asort_asc"), kernels::SORT)?
-                } else {
-                    dev.get_or_load_func(&kernel_name::<T>("asort_desc"), kernels::SORT)?
-                };
-                let ncols = self.last_dim;
-                let nrows = elem_count / ncols;
-                let ncols_pad = next_power_of_2(ncols);
-                let params = (&slice, &dst, ncols as i32, ncols_pad as i32);
-                let cfg = LaunchConfig {
-                    grid_dim: (1, nrows as u32, 1),
-                    block_dim: (ncols_pad as u32, 1, 1),
-                    shared_mem_bytes: (ncols_pad * std::mem::size_of::<u32>()) as u32,
-                };
-                unsafe { func.launch(cfg, params) }.w()?;
-                Ok(S::U32(dst))
-            }
-        }
-
         use crate::backend::BackendStorage;
+        use crate::cuda_backend::Map1Any;
         let dev = storage.device();
         let slice = self.map(&storage.slice, dev, layout)?;
         let dst = crate::cuda_backend::CudaStorage {
@@ -149,6 +169,7 @@ impl crate::CustomOp1 for ArgSort {
                     DType::U8 => "asort_asc_u8",
                     DType::U32 => "asort_asc_u32",
                     DType::I64 => "asort_asc_i64",
+                    DType::F8E4M3 => crate::bail!("Metal device does not yet support F8E4M3."),
                 }
             } else {
                 match storage.dtype() {
@@ -159,6 +180,7 @@ impl crate::CustomOp1 for ArgSort {
                     DType::U8 => "asort_desc_u8",
                     DType::U32 => "asort_desc_u32",
                     DType::I64 => "asort_desc_i64",
+                    DType::F8E4M3 => crate::bail!("Metal device does not yet support F8E4M3."),
                 }
             }
         };
@@ -189,15 +211,6 @@ impl crate::CustomOp1 for ArgSort {
         let dst = crate::MetalStorage::new(dst, device.clone(), el, DType::U32);
         Ok((dst, layout.shape().clone()))
     }
-}
-
-#[allow(unused)]
-fn next_power_of_2(x: usize) -> usize {
-    let mut n = 1;
-    while n < x {
-        n *= 2
-    }
-    n
 }
 
 impl Tensor {

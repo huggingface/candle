@@ -14,8 +14,8 @@ based on [MobileSAM](https://github.com/ChaoningZhang/MobileSAM).
 
 ```bash
 cargo run --example segment-anything --release -- \
-    --image candle-examples/examples/yolo-v8/assets/bike.jpg
-    --use-tiny
+    --image candle-examples/examples/yolo-v8/assets/bike.jpg \
+    --use-tiny \
     --point 0.6,0.6 --point 0.6,0.55
 ```
 

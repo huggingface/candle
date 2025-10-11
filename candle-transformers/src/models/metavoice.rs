@@ -1,7 +1,7 @@
 //! MetaVoice Studio ML Models
 //!
 //! See MetaVoice's TTS and voice cloning models:
-//! - [Github](https://github.com/metavoiceio/metavoice-src)
+//! - [GitHub](https://github.com/metavoiceio/metavoice-src)
 //! - [Website](https://studio.metavoice.ai/)
 
 use candle::{DType, Device, Error as E, IndexOp, Module, Result, Tensor, D};
@@ -716,7 +716,7 @@ pub mod transformer {
                 None => {
                     let hidden_dim = self.dim * 4;
                     let n_hidden = ((2 * hidden_dim) as f64 / 3.) as usize;
-                    (n_hidden + 255) / 256 * 256
+                    n_hidden.div_ceil(256) * 256
                 }
             }
         }

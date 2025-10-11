@@ -189,7 +189,7 @@ pub fn log_mel_spectrogram_<T: Float>(
 
     // pad audio with at least one extra chunk of zeros
     let pad = 100 * super::CHUNK_LENGTH / 2;
-    let n_len = if n_len % pad != 0 {
+    let n_len = if !n_len.is_multiple_of(pad) {
         (n_len / pad + 1) * pad
     } else {
         n_len
@@ -198,7 +198,7 @@ pub fn log_mel_spectrogram_<T: Float>(
     let samples = {
         let mut samples_padded = samples.to_vec();
         let to_add = n_len * fft_step - samples.len();
-        samples_padded.extend(std::iter::repeat(zero).take(to_add));
+        samples_padded.extend(std::iter::repeat_n(zero, to_add));
         samples_padded
     };
 

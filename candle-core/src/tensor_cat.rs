@@ -241,12 +241,15 @@ impl Tensor {
     /// `self` and `src` must have the same shape except on dimension `dim` where the `self` size
     /// has to be greater than or equal to `offset` plus the `src` size.
     ///
-    /// Note that this modifies `self` in place and as such is not compatibel with
+    /// Note that this modifies `self` in place and as such is not compatible with
     /// back-propagation.  
     pub fn slice_set<D: Dim>(&self, src: &Self, dim: D, offset: usize) -> Result<()> {
         let dim = dim.to_index(self.shape(), "slice-set")?;
         if !self.is_contiguous() || !src.is_contiguous() {
             Err(Error::RequiresContiguous { op: "slice-set" }.bt())?
+        }
+        if self.same_storage(src) {
+            crate::bail!("cannot use slice_set when self and src share their storage")
         }
         if self.dtype() != src.dtype() {
             Err(Error::DTypeMismatchBinaryOp {

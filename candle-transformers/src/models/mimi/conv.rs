@@ -267,6 +267,7 @@ impl StreamableConv1d {
             stride,
             dilation,
             groups,
+            cudnn_fwd_algo: None,
         };
         let conv = NormConv1d::new(in_c, out_c, k_size, causal, norm, bias, cfg, vb)?;
         if k_size < stride {

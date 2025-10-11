@@ -181,9 +181,9 @@ impl MMDiTCore {
     ) -> Result<Self> {
         let mut joint_blocks = Vec::with_capacity(depth - 1);
         for i in 0..depth - 1 {
-            let joint_block_vb_pp = format!("joint_blocks.{}", i);
+            let joint_block_vb_pp = format!("joint_blocks.{i}");
             let joint_block: Box<dyn JointBlock> =
-                if vb.contains_tensor(&format!("{}.x_block.attn2.qkv.weight", joint_block_vb_pp)) {
+                if vb.contains_tensor(&format!("{joint_block_vb_pp}.x_block.attn2.qkv.weight")) {
                     Box::new(MMDiTXJointBlock::new(
                         hidden_size,
                         num_heads,

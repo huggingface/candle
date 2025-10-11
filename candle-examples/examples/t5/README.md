@@ -1,5 +1,7 @@
 # candle-t5
 
+Candle implementations of the T5 family of translation models.
+
 ## Encoder-decoder example:
 
 ```bash

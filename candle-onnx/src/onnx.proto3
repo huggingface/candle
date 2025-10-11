@@ -204,7 +204,7 @@ message NodeProto {
   repeated string output = 2;   // namespace Value
 
   // An optional identifier for this node in a graph.
-  // This field MAY be absent in ths version of the IR.
+  // This field MAY be absent in the version of the IR.
   string name = 3;     // namespace Node
 
   // The symbolic identifier of the Operator to execute.
@@ -403,7 +403,7 @@ message ModelProto {
   //
   // Name of the function "FunctionProto.name" should be unique within the domain "FunctionProto.domain".
   // In case of any conflicts the behavior (whether the model local functions are given higher priority,
-  // or standard operator sets are given higher priotity or this is treated as error) is defined by
+  // or standard operator sets are given higher priority or this is treated as error) is defined by
   // the runtimes.
   //
   // The operator sets imported by FunctionProto should be compatible with the ones

@@ -77,7 +77,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn load_weights(model: Option<String>, device: &Device) -> anyhow::Result<nn::VarBuilder> {
+pub fn load_weights(model: Option<String>, device: &Device) -> anyhow::Result<nn::VarBuilder<'_>> {
     let model_file = match model {
         None => {
             let api = hf_hub::api::sync::Api::new()?;

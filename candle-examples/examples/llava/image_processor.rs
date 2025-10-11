@@ -9,7 +9,7 @@ use hf_hub::api::sync::Api;
 use image::{imageops::overlay, DynamicImage, GenericImageView, Rgb, RgbImage};
 use serde::{Deserialize, Serialize};
 
-//This struct is mainly for LLaVA aplications, hence it's not completely compatible with python transformer CLIPImageProcessor  few several preprocess that LLaVA used, including "openai/clip-vit-large-patch14-336" and "openai/clip-vit-large-patch14".
+//This struct is mainly for LLaVA applications, hence it's not completely compatible with python transformer CLIPImageProcessor  few several preprocess that LLaVA used, including "openai/clip-vit-large-patch14-336" and "openai/clip-vit-large-patch14".
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ImageProcessor {

@@ -15,6 +15,7 @@ pub trait Map1 {
             C::F16(vs) => Ok(C::F16(self.f(vs, layout)?)),
             C::F32(vs) => Ok(C::F32(self.f(vs, layout)?)),
             C::F64(vs) => Ok(C::F64(self.f(vs, layout)?)),
+            C::F8E4M3(vs) => Ok(C::F8E4M3(self.f(vs, layout)?)),
         }
     }
 }
@@ -31,6 +32,7 @@ pub trait Map1Any {
             C::F16(vs) => Ok(self.f(vs, layout, C::F16)?),
             C::F32(vs) => Ok(self.f(vs, layout, C::F32)?),
             C::F64(vs) => Ok(self.f(vs, layout, C::F64)?),
+            C::F8E4M3(vs) => Ok(self.f(vs, layout, C::F8E4M3)?),
         }
     }
 }
@@ -48,6 +50,7 @@ pub trait Map2 {
             (C::F16(v1), C::F16(v2)) => Ok(C::F16(self.f(v1, l1, v2, l2)?)),
             (C::F32(v1), C::F32(v2)) => Ok(C::F32(self.f(v1, l1, v2, l2)?)),
             (C::F64(v1), C::F64(v2)) => Ok(C::F64(self.f(v1, l1, v2, l2)?)),
+            (C::F8E4M3(v1), C::F8E4M3(v2)) => Ok(C::F8E4M3(self.f(v1, l1, v2, l2)?)),
             _ => Err(Error::DTypeMismatchBinaryOp {
                 lhs: v1.dtype(),
                 rhs: v2.dtype(),
@@ -55,6 +58,30 @@ pub trait Map2 {
             }
             .bt()),
         }
+    }
+}
+
+pub trait Map2InPlace {
+    const OP: &'static str;
+    fn f<T: WithDType>(&self, v1: &mut [T], l1: &Layout, v2: &[T], l2: &Layout) -> Result<()>;
+
+    fn map(&self, v1: &mut C, l1: &Layout, v2: &C, l2: &Layout) -> Result<()> {
+        match (v1, v2) {
+            (C::U8(v1), C::U8(v2)) => self.f(v1, l1, v2, l2)?,
+            (C::U32(v1), C::U32(v2)) => self.f(v1, l1, v2, l2)?,
+            (C::I64(v1), C::I64(v2)) => self.f(v1, l1, v2, l2)?,
+            (C::BF16(v1), C::BF16(v2)) => self.f(v1, l1, v2, l2)?,
+            (C::F16(v1), C::F16(v2)) => self.f(v1, l1, v2, l2)?,
+            (C::F32(v1), C::F32(v2)) => self.f(v1, l1, v2, l2)?,
+            (C::F64(v1), C::F64(v2)) => self.f(v1, l1, v2, l2)?,
+            (v1, v2) => Err(Error::DTypeMismatchBinaryOp {
+                lhs: v1.dtype(),
+                rhs: v2.dtype(),
+                op: Self::OP,
+            }
+            .bt())?,
+        };
+        Ok(())
     }
 }
 
@@ -71,6 +98,7 @@ pub trait Map2U8 {
             (C::F16(v1), C::F16(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
             (C::F32(v1), C::F32(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
             (C::F64(v1), C::F64(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
+            (C::F8E4M3(v1), C::F8E4M3(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
             _ => Err(Error::DTypeMismatchBinaryOp {
                 lhs: v1.dtype(),
                 rhs: v2.dtype(),

@@ -226,8 +226,8 @@ where
     /// assert_eq!(c.to_vec1::<f32>()?, &[1., 4.]);
     ///
     /// let d = a.i((2.., ..))?;
-    /// assert_eq!(c.shape().dims(), &[2]);
-    /// assert_eq!(c.to_vec1::<f32>()?, &[1., 4.]);
+    /// assert_eq!(d.shape().dims(), &[1, 3]);
+    /// assert_eq!(d.to_vec2::<f32>()?, &[[6., 7., 8.]]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
     fn i(&self, (a, b): (A, B)) -> Result<Tensor, Error> {

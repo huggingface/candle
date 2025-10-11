@@ -1,5 +1,6 @@
 pub(crate) mod conv;
 pub(crate) mod layer_norm;
+pub(crate) mod softmax;
 
 use candle::{Device, Result};
 
@@ -15,7 +16,10 @@ impl BenchDevice for Device {
             Device::Cpu => Ok(()),
             Device::Cuda(device) => {
                 #[cfg(feature = "cuda")]
-                return Ok(device.synchronize()?);
+                {
+                    use candle::backend::BackendDevice;
+                    return Ok(device.synchronize()?);
+                }
                 #[cfg(not(feature = "cuda"))]
                 panic!("Cuda device without cuda feature enabled: {:?}", device)
             }

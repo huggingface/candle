@@ -579,7 +579,7 @@ pub struct Embeddings {
     // For 1.5B: this is the `embed_tokens`
     // For 400M: this is the `word_embeddings`
     embeddings: candle_nn::Embedding,
-    // folloing are specifically for 400M
+    // following are specifically for 400M
     token_type_embeddings: Option<candle_nn::Embedding>,
     layer_norm: Option<LayerNorm>,
     position_ids: Option<Tensor>,

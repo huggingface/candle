@@ -81,14 +81,12 @@ impl Model {
         for &(x, y, _bool) in &transformed_points {
             if !(0.0..=1.0).contains(&x) {
                 return Err(JsError::new(&format!(
-                    "x has to be between 0 and 1, got {}",
-                    x
+                    "x has to be between 0 and 1, got {x}"
                 )));
             }
             if !(0.0..=1.0).contains(&y) {
                 return Err(JsError::new(&format!(
-                    "y has to be between 0 and 1, got {}",
-                    y
+                    "y has to be between 0 and 1, got {y}"
                 )));
             }
         }

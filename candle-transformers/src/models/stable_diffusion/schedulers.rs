@@ -19,7 +19,7 @@ pub trait Scheduler {
 
     fn scale_model_input(&self, sample: Tensor, _timestep: usize) -> Result<Tensor>;
 
-    fn step(&self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor>;
+    fn step(&mut self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor>;
 }
 
 /// This represents how beta ranges from its minimum value to the maximum

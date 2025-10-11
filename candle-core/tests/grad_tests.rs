@@ -1,6 +1,6 @@
 #![allow(clippy::approx_constant)]
 use anyhow::{Context, Result};
-use candle_core::{test_device, test_utils, Device, Shape, Tensor, Var};
+use candle_core::{test_device, test_utils, DType, Device, Shape, Tensor, Var};
 
 fn simple_grad(device: &Device) -> Result<()> {
     let x = Var::new(&[3f32, 1., 4.], device)?;
@@ -502,6 +502,36 @@ fn binary_grad(device: &Device) -> Result<()> {
     assert_eq!(ss.to_vec2::<f32>()?, [[9., 1., 16.], [4., 49., 1.]]);
     assert_eq!(grad_x.to_vec1::<f32>()?, [6.0, 2.0, -8.0, 0.0, 0.0, 0.0]);
     assert_eq!(grad_y.to_vec1::<f32>()?, [4.0, 14.0, 2.0]);
+    Ok(())
+}
+
+#[test]
+fn test_flip_backprop() -> Result<()> {
+    let device = &Device::Cpu;
+
+    // Create a tensor (leaf node) that requires gradients
+    let x = Var::ones((2, 2), DType::F64, device)?;
+    let weights = Tensor::arange(1.0, 5.0, device)?.reshape((2, 2))?;
+
+    let y = x.matmul(&weights)?;
+    let expected_y = Tensor::from_vec(vec![4.0, 6.0, 4.0, 6.0], (2, 2), device)?;
+    candle_core::test_utils::assert_tensor_eq(&y, &expected_y)?;
+
+    let z = y.flip(&[1])?;
+    let expected_z = Tensor::from_vec(vec![6.0, 4.0, 6.0, 4.0], (2, 2), device)?;
+    candle_core::test_utils::assert_tensor_eq(&z, &expected_z)?;
+
+    let loss = z.sum_all()?;
+
+    let grad_store = loss.backward()?;
+    let grad_x = grad_store.get_id(x.id()).unwrap();
+
+    let flipped_weights = weights.flip(&[1])?;
+    let dloss_dy = Tensor::ones((2, 2), DType::F64, device)?;
+    // dloss/dx = dloss/dy @ dy/dx = ones @ weight.flip.T
+    let expected_grad = dloss_dy.matmul(&flipped_weights.t()?)?;
+    candle_core::test_utils::assert_tensor_eq(grad_x, &expected_grad)?;
+
     Ok(())
 }
 

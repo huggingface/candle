@@ -17,8 +17,8 @@ const CROP_NMS_THRESH: f32 = 0.7;
 
 #[derive(Debug)]
 enum ImageEncoder {
-    Original(ImageEncoderViT),
-    TinyViT(TinyViT),
+    Original(Box<ImageEncoderViT>),
+    TinyViT(Box<TinyViT>),
 }
 
 impl Module for ImageEncoder {
@@ -83,7 +83,7 @@ impl Sam {
         let pixel_std =
             Tensor::new(&[58.395f32, 57.12, 57.375], vb.device())?.reshape((3, 1, 1))?;
         Ok(Self {
-            image_encoder: ImageEncoder::Original(image_encoder),
+            image_encoder: ImageEncoder::Original(image_encoder.into()),
             prompt_encoder,
             mask_decoder,
             pixel_std,
@@ -114,7 +114,7 @@ impl Sam {
         let pixel_std =
             Tensor::new(&[58.395f32, 57.12, 57.375], vb.device())?.reshape((3, 1, 1))?;
         Ok(Self {
-            image_encoder: ImageEncoder::TinyViT(image_encoder),
+            image_encoder: ImageEncoder::TinyViT(image_encoder.into()),
             prompt_encoder,
             mask_decoder,
             pixel_std,

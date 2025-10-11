@@ -127,7 +127,7 @@ impl LayerWeights {
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
             .transpose(1, 2)?;
         let k = k
-            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
             .transpose(1, 2)?;
         let v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
@@ -136,6 +136,9 @@ impl LayerWeights {
         let q = self.apply_rotary_emb(&q, index_pos)?.contiguous()?;
         let k = self.apply_rotary_emb(&k, index_pos)?;
 
+        if index_pos == 0 {
+            self.kv_cache.reset();
+        }
         let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
 
         let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;

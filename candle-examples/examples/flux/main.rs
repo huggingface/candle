@@ -250,7 +250,11 @@ fn run(args: Args) -> Result<()> {
     };
     println!("img\n{img}");
     let img = ((img.clamp(-1f32, 1f32)? + 1.0)? * 127.5)?.to_dtype(candle::DType::U8)?;
-    candle_examples::save_image(&img.i(0)?, "out.jpg")?;
+    let filename = match args.seed {
+        None => "out.jpg".to_string(),
+        Some(s) => format!("out-{s}.jpg"),
+    };
+    candle_examples::save_image(&img.i(0)?, filename)?;
     Ok(())
 }
 

@@ -4,7 +4,7 @@
 //! with support for temperature-based sampling, top-k filtering, nucleus sampling (top-p),
 //! and combinations thereof.
 use candle::{Context, DType, Error, Result, Tensor};
-use rand::{distributions::Distribution, SeedableRng};
+use rand::{distr::Distribution, SeedableRng};
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Sampling {
@@ -13,6 +13,8 @@ pub enum Sampling {
     TopK { k: usize, temperature: f64 },
     TopP { p: f64, temperature: f64 },
     TopKThenTopP { k: usize, p: f64, temperature: f64 },
+    // Note that the rng is not used for the Gumbel-Softmax sampling.
+    GumbelSoftmax { temperature: f64 },
 }
 
 pub struct LogitsProcessor {
@@ -49,8 +51,13 @@ impl LogitsProcessor {
         Ok(next_token)
     }
 
+    fn sample_gumbel_softmax(&mut self, logits: &Tensor, temperature: f64) -> Result<u32> {
+        let sampled = candle_nn::sampling::gumbel_softmax(logits, temperature, candle::D::Minus1)?;
+        sampled.to_vec0::<u32>()
+    }
+
     fn sample_multinomial(&mut self, prs: &Vec<f32>) -> Result<u32> {
-        let distr = rand::distributions::WeightedIndex::new(prs).map_err(Error::wrap)?;
+        let distr = rand::distr::weighted::WeightedIndex::new(prs).map_err(Error::wrap)?;
         let next_token = distr.sample(&mut self.rng) as u32;
         Ok(next_token)
     }
@@ -127,6 +134,9 @@ impl LogitsProcessor {
 
         let next_token = match &self.sampling {
             Sampling::ArgMax => self.sample_argmax(logits)?,
+            Sampling::GumbelSoftmax { temperature } => {
+                self.sample_gumbel_softmax(&logits, *temperature)?
+            }
             Sampling::All { temperature } => {
                 let prs = prs(*temperature)?;
                 self.sample_multinomial(&prs)?

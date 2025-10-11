@@ -83,7 +83,7 @@ fn rms_norml(device: &Device) -> Result<()> {
     let (b_size, seq_len, head_dim) = (24, 70, 64);
     let el_count = b_size * seq_len * head_dim;
     let mut rng = StdRng::seed_from_u64(299792458);
-    let src: Vec<f32> = (0..el_count).map(|_| rng.gen::<f32>()).collect();
+    let src: Vec<f32> = (0..el_count).map(|_| rng.random::<f32>()).collect();
     let tensor = Tensor::new(src, device)?.reshape((b_size, seq_len, head_dim))?;
     let alpha = Tensor::ones(head_dim, candle::DType::F32, device)?;
     let t = candle_nn::ops::rms_norm(&tensor, &alpha, 1e-5)?;
@@ -130,7 +130,7 @@ fn layer_norml(device: &Device) -> Result<()> {
     let (b_size, seq_len, head_dim) = (24, 70, 64);
     let el_count = b_size * seq_len * head_dim;
     let mut rng = StdRng::seed_from_u64(299792458);
-    let src: Vec<f32> = (0..el_count).map(|_| rng.gen::<f32>()).collect();
+    let src: Vec<f32> = (0..el_count).map(|_| rng.random::<f32>()).collect();
     let tensor = Tensor::new(src, device)?.reshape((b_size, seq_len, head_dim))?;
     let alpha = Tensor::ones(head_dim, candle::DType::F32, device)?;
     let beta = Tensor::zeros(head_dim, candle::DType::F32, device)?;
@@ -161,12 +161,12 @@ fn ropei(device: &Device) -> Result<()> {
     let (b_size, num_head, seq_len, head_dim) = (2, 5, 10, 16);
     let el_count = b_size * num_head * seq_len * head_dim;
     let mut rng = StdRng::seed_from_u64(299792458);
-    let src: Vec<f32> = (0..el_count).map(|_| rng.gen::<f32>()).collect();
+    let src: Vec<f32> = (0..el_count).map(|_| rng.random::<f32>()).collect();
     let cos: Vec<f32> = (0..seq_len * head_dim / 2)
-        .map(|_| rng.gen::<f32>())
+        .map(|_| rng.random::<f32>())
         .collect();
     let sin: Vec<f32> = (0..seq_len * head_dim / 2)
-        .map(|_| rng.gen::<f32>())
+        .map(|_| rng.random::<f32>())
         .collect();
     let src = Tensor::from_vec(src, (b_size, num_head, seq_len, head_dim), device)?;
     let cos = Tensor::from_vec(cos, (seq_len, head_dim / 2), device)?;
@@ -179,6 +179,28 @@ fn ropei(device: &Device) -> Result<()> {
     } else {
         assert!(sum_diff < 1e-4);
     }
+
+    // Test with a 3d cos/sin
+    let cos2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let sin2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let cos2 = Tensor::from_vec(cos2, (seq_len, head_dim / 2), device)?;
+    let sin2 = Tensor::from_vec(sin2, (seq_len, head_dim / 2), device)?;
+    let rope1 = candle_nn::rotary_emb::rope_i(&src.i(0..1)?, &cos, &sin)?;
+    let rope2 = candle_nn::rotary_emb::rope_i(&src.i(1..2)?, &cos2, &sin2)?;
+
+    let both_cos = Tensor::stack(&[cos, cos2], 0)?;
+    let both_sin = Tensor::stack(&[sin, sin2], 0)?;
+    let both_rope = candle_nn::rotary_emb::rope_i(&src, &both_cos, &both_sin)?;
+    let both_rope2 = Tensor::cat(&[rope1, rope2], 0)?;
+    let sum_diff = (both_rope - both_rope2)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(sum_diff, 0.);
     Ok(())
 }
 
@@ -188,12 +210,12 @@ fn rope(device: &Device) -> Result<()> {
     let (b_size, num_head, seq_len, head_dim) = (2, 5, 10, 16);
     let el_count = b_size * num_head * seq_len * head_dim;
     let mut rng = StdRng::seed_from_u64(299792458);
-    let src: Vec<f32> = (0..el_count).map(|_| rng.gen::<f32>()).collect();
+    let src: Vec<f32> = (0..el_count).map(|_| rng.random::<f32>()).collect();
     let cos: Vec<f32> = (0..seq_len * head_dim / 2)
-        .map(|_| rng.gen::<f32>())
+        .map(|_| rng.random::<f32>())
         .collect();
     let sin: Vec<f32> = (0..seq_len * head_dim / 2)
-        .map(|_| rng.gen::<f32>())
+        .map(|_| rng.random::<f32>())
         .collect();
     let src = Tensor::from_vec(src, (b_size, num_head, seq_len, head_dim), device)?;
     let cos = Tensor::from_vec(cos, (seq_len, head_dim / 2), device)?;
@@ -206,6 +228,28 @@ fn rope(device: &Device) -> Result<()> {
     } else {
         assert!(sum_diff < 1e-4);
     }
+
+    // Test with a 3d cos/sin
+    let cos2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let sin2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let cos2 = Tensor::from_vec(cos2, (seq_len, head_dim / 2), device)?;
+    let sin2 = Tensor::from_vec(sin2, (seq_len, head_dim / 2), device)?;
+    let rope1 = candle_nn::rotary_emb::rope(&src.i(0..1)?, &cos, &sin)?;
+    let rope2 = candle_nn::rotary_emb::rope(&src.i(1..2)?, &cos2, &sin2)?;
+
+    let both_cos = Tensor::stack(&[cos, cos2], 0)?;
+    let both_sin = Tensor::stack(&[sin, sin2], 0)?;
+    let both_rope = candle_nn::rotary_emb::rope(&src, &both_cos, &both_sin)?;
+    let both_rope2 = Tensor::cat(&[rope1, rope2], 0)?;
+    let sum_diff = (both_rope - both_rope2)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(sum_diff, 0.);
     Ok(())
 }
 
@@ -215,12 +259,12 @@ fn rope_thd(device: &Device) -> Result<()> {
     let (b_size, num_head, seq_len, head_dim) = (2, 5, 10, 16);
     let el_count = b_size * num_head * seq_len * head_dim;
     let mut rng = StdRng::seed_from_u64(299792458);
-    let src: Vec<f32> = (0..el_count).map(|_| rng.gen::<f32>()).collect();
+    let src: Vec<f32> = (0..el_count).map(|_| rng.random::<f32>()).collect();
     let cos: Vec<f32> = (0..seq_len * head_dim / 2)
-        .map(|_| rng.gen::<f32>())
+        .map(|_| rng.random::<f32>())
         .collect();
     let sin: Vec<f32> = (0..seq_len * head_dim / 2)
-        .map(|_| rng.gen::<f32>())
+        .map(|_| rng.random::<f32>())
         .collect();
     let src = Tensor::from_vec(src, (b_size, num_head, seq_len, head_dim), device)?;
     let cos = Tensor::from_vec(cos, (seq_len, head_dim / 2), device)?;
@@ -236,6 +280,37 @@ fn rope_thd(device: &Device) -> Result<()> {
     } else {
         assert!(sum_diff < 1e-4);
     }
+
+    // Test with a 3d cos/sin
+    let cos2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let sin2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let cos2 = Tensor::from_vec(cos2, (seq_len, head_dim / 2), device)?;
+    let sin2 = Tensor::from_vec(sin2, (seq_len, head_dim / 2), device)?;
+    let rope1 = {
+        let src = src.transpose(1, 2)?.contiguous()?;
+        candle_nn::rotary_emb::rope_thd(&src.i(0..1)?, &cos, &sin)?
+    };
+    let rope2 = {
+        let src = src.transpose(1, 2)?.contiguous()?;
+        candle_nn::rotary_emb::rope_thd(&src.i(1..2)?, &cos2, &sin2)?
+    };
+
+    let both_cos = Tensor::stack(&[cos, cos2], 0)?;
+    let both_sin = Tensor::stack(&[sin, sin2], 0)?;
+    let both_rope = {
+        let src = src.transpose(1, 2)?.contiguous()?;
+        candle_nn::rotary_emb::rope_thd(&src, &both_cos, &both_sin)?
+    };
+    let both_rope2 = Tensor::cat(&[rope1, rope2], 0)?;
+    let sum_diff = (both_rope - both_rope2)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(sum_diff, 0.);
     Ok(())
 }
 
