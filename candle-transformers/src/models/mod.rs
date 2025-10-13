@@ -126,3 +126,18 @@ pub mod with_tracing;
 pub mod wuerstchen;
 pub mod xlm_roberta;
 pub mod yi;
+
+// TODO: move this somewhere else?
+use candle::Result;
+use candle_nn::VarBuilder;
+use serde::de::DeserializeOwned;
+
+///  Generic trait for models that can be loaded
+pub trait LoadableModel<C> {
+    fn load(vb: VarBuilder, config: &C) -> Result<Self>
+    where
+        Self: Sized;
+}
+
+/// Generic trait for configs that can be deserialized
+pub trait ModelConfig: DeserializeOwned {}

@@ -1,12 +1,15 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use anyhow::{Error as E, Result};
-use candle::{Device, Tensor};
-use candle_nn::VarBuilder;
-use candle_transformers::models::modernbert;
+
+use candle_transformers::models::modernbert::{Config, ModernBertForMaskedLM};
+use candle_utils::{
+    get_device,
+    loader::load_tokenizer_config_model,
+    tokenization::{build_attention_mask, encode_tokens},
+};
 use clap::{Parser, ValueEnum};
-use hf_hub::{api::sync::Api, Repo, RepoType};
-use tokenizers::{PaddingParams, Tokenizer};
+use tokenizers::PaddingParams;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Model {
@@ -53,7 +56,8 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let api = Api::new()?;
+    let device = get_device(args.cpu, false)?;
+
     let model_id = match &args.model_id {
         Some(model_id) => model_id.to_string(),
         None => match args.model {
@@ -61,50 +65,22 @@ fn main() -> Result<()> {
             Model::ModernBertLarge => "answerdotai/ModernBERT-large".to_string(),
         },
     };
-    let repo = api.repo(Repo::with_revision(
-        model_id,
-        RepoType::Model,
-        args.revision,
-    ));
 
-    let tokenizer_filename = match args.tokenizer_file {
-        Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
-    };
+    let tokenizer_file = args.tokenizer_file.as_deref().map(Path::new);
+    let config_file = args.config_file.as_deref().map(Path::new);
+    let weights_files = args.weight_files.as_deref().map(Path::new);
 
-    let config_filename = match args.config_file {
-        Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("config.json")?,
-    };
+    let (mut tokenizer, config, model) =
+        load_tokenizer_config_model::<ModernBertForMaskedLM, Config>(
+            &device,
+            &model_id,
+            &args.revision,
+            candle::DType::F32,
+            tokenizer_file,
+            config_file,
+            weights_files,
+        )?;
 
-    let weights_filename = match args.weight_files {
-        Some(files) => PathBuf::from(files),
-        None => match repo.get("model.safetensors") {
-            Ok(safetensors) => safetensors,
-            Err(_) => match repo.get("pytorch_model.bin") {
-                Ok(pytorch_model) => pytorch_model,
-                Err(e) => {
-                    anyhow::bail!("Model weights not found. The weights should either be a `model.safetensors` or `pytorch_model.bin` file.  Error: {e}")
-                }
-            },
-        },
-    };
-
-    let config = std::fs::read_to_string(config_filename)?;
-    let config: modernbert::Config = serde_json::from_str(&config)?;
-    let mut tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
-
-    let device = candle_examples::device(args.cpu)?;
-
-    let vb = if weights_filename.ends_with("model.safetensors") {
-        unsafe {
-            VarBuilder::from_mmaped_safetensors(&[weights_filename], candle::DType::F32, &device)
-                .unwrap()
-        }
-    } else {
-        println!("Loading weights from pytorch_model.bin");
-        VarBuilder::from_pth(&weights_filename, candle::DType::F32, &device).unwrap()
-    };
     tokenizer
         .with_padding(Some(PaddingParams {
             strategy: tokenizers::PaddingStrategy::BatchLongest,
@@ -123,10 +99,9 @@ fn main() -> Result<()> {
             "The capital of France is [MASK].",
         ],
     };
-    let model = modernbert::ModernBertForMaskedLM::load(vb, &config)?;
 
-    let input_ids = tokenize_batch(&tokenizer, prompt.clone(), &device)?;
-    let attention_mask = get_attention_mask(&tokenizer, prompt.clone(), &device)?;
+    let (tokens, input_ids, _token_type_ids) = encode_tokens(&prompt, &tokenizer, &device)?;
+    let attention_mask = build_attention_mask(&tokens, &device)?;
 
     let output = model
         .forward(&input_ids, &attention_mask)?
@@ -142,39 +117,4 @@ fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-pub fn tokenize_batch(
-    tokenizer: &Tokenizer,
-    input: Vec<&str>,
-    device: &Device,
-) -> anyhow::Result<Tensor> {
-    let tokens = tokenizer.encode_batch(input, true).map_err(E::msg)?;
-
-    let token_ids = tokens
-        .iter()
-        .map(|tokens| {
-            let tokens = tokens.get_ids().to_vec();
-            Tensor::new(tokens.as_slice(), device)
-        })
-        .collect::<candle::Result<Vec<_>>>()?;
-
-    Ok(Tensor::stack(&token_ids, 0)?)
-}
-
-pub fn get_attention_mask(
-    tokenizer: &Tokenizer,
-    input: Vec<&str>,
-    device: &Device,
-) -> anyhow::Result<Tensor> {
-    let tokens = tokenizer.encode_batch(input, true).map_err(E::msg)?;
-
-    let attention_mask = tokens
-        .iter()
-        .map(|tokens| {
-            let tokens = tokens.get_attention_mask().to_vec();
-            Tensor::new(tokens.as_slice(), device)
-        })
-        .collect::<candle::Result<Vec<_>>>()?;
-    Ok(Tensor::stack(&attention_mask, 0)?)
 }
