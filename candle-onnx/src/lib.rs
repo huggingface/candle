@@ -1,4 +1,5 @@
 use candle::Result;
+pub use prost;
 use prost::Message;
 
 pub mod onnx {
