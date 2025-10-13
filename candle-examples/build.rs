@@ -17,7 +17,7 @@ const KERNEL_DIRS: [KernelDirectories; 1] = [KernelDirectories {
 }];
 
 fn main() -> Result<()> {
-    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo::rerun-if-changed=build.rs");
 
     #[cfg(feature = "cuda")]
     {
@@ -26,7 +26,7 @@ fn main() -> Result<()> {
 
         for kdir in KERNEL_DIRS.iter() {
             let builder = bindgen_cuda::Builder::default().kernel_paths_glob(kdir.kernel_glob);
-            println!("cargo:info={builder:?}");
+            println!("cargo::info={builder:?}");
             let bindings = builder.build_ptx().unwrap();
 
             // Changed: This now writes to a safe path inside $OUT_DIR.
