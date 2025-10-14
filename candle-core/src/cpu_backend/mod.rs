@@ -1735,6 +1735,7 @@ impl CpuStorage {
 
 impl BackendStorage for CpuStorage {
     type Device = CpuDevice;
+    type Storage = Self;
 
     fn try_clone(&self, _: &Layout) -> Result<Self> {
         Ok(self.clone())

@@ -123,6 +123,7 @@ impl Storage {
 
 impl BackendStorage for Storage {
     type Device = Device;
+    type Storage = Self;
 
     fn try_clone(&self, layout: &Layout) -> Result<Self> {
         match self {

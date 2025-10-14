@@ -1304,6 +1304,7 @@ fn gemm_config<T>(
 
 impl BackendStorage for CudaStorage {
     type Device = CudaDevice;
+    type Storage = Self;
 
     fn try_clone(&self, layout: &Layout) -> Result<Self> {
         let slice = Clone.map(&self.slice, self.device(), layout)?;

@@ -36,6 +36,7 @@ impl TryConvertStorage<CpuStorage> for CudaStorage {
 
 impl crate::backend::BackendStorage for CudaStorage {
     type Device = CudaDevice;
+    type Storage = Self;
 
     fn try_clone(&self, _: &Layout) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)

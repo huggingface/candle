@@ -1,16 +1,47 @@
 //! Traits to Define Backend Behavior
 //!
-use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, DType, Layout, Result, Shape};
+use crate::op::{BinaryOpT, CmpOp, Op, ReduceOp, UnaryOpT};
+use crate::{CpuStorage, DType, Layout, Result, Shape, Tensor};
 use std::fmt::Debug;
+use std::sync::{Arc, RwLock};
 
 #[cfg(feature = "cuda")]
 use crate::CudaDevice;
 #[cfg(feature = "metal")]
 use crate::{MetalDevice, MetalError};
-
+/*
+pub trait LockTrait<'a, T: Send + Sync + Debug>: Send + Sync + Debug {
+    type Guard;
+}
+impl<'a, T: 'a + Send + Sync + Debug> LockTrait<'a, T> for std::sync::Mutex<T> {
+    type Guard = std::sync::MutexGuard<'a, T>;
+}
+impl<'a, T: 'a + Send + Sync + Debug> LockTrait<'a, T> for std::sync::RwLock<T> {
+    type Guard = std::sync::RwLockReadGuard<'a, T>;
+}
+ */
 pub trait BackendStorage: Sized + Clone + Send + Sync + Debug {
     type Device: BackendDevice<Self>;
+    type Storage: BackendStorage;
+    //type LockedData: Send + Sync + Debug;
+    //type Locked: LockTrait<Self::LockedData>;
+
+    fn backprop_op(&self) -> Option<Op<Self>> {
+        None
+    }
+
+    fn is_variable(&self) -> bool {
+        false
+    }
+
+    fn to_tensor(
+        storage: Arc<RwLock<Self>>,
+        layout: Layout,
+        _op: crate::op::BackpropOp<Self>,
+        is_variable: bool,
+    ) -> Tensor<Self> {
+        Tensor::create(storage, layout, is_variable)
+    }
 
     fn try_clone(&self, _: &Layout) -> Result<Self>;
 
@@ -134,14 +165,18 @@ pub trait BackendStorage: Sized + Clone + Send + Sync + Debug {
 
     fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()>;
 
-    fn apply_op1(&self, _l: &Layout, _c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)>;
+    fn apply_op1(
+        &self,
+        _l: &Layout,
+        _c: &dyn crate::CustomOp1<Self::Storage>,
+    ) -> Result<(Self, Shape)>;
 
     fn apply_op2(
         &self,
         _l1: &Layout,
         _t2: &Self,
         _l2: &Layout,
-        _c: &dyn crate::CustomOp2<Self>,
+        _c: &dyn crate::CustomOp2<Self::Storage>,
     ) -> Result<(Self, Shape)>;
 
     fn apply_op3(
@@ -151,7 +186,7 @@ pub trait BackendStorage: Sized + Clone + Send + Sync + Debug {
         _l2: &Layout,
         _t3: &Self,
         _l3: &Layout,
-        _c: &dyn crate::CustomOp3<Self>,
+        _c: &dyn crate::CustomOp3<Self::Storage>,
     ) -> Result<(Self, Shape)>;
 
     fn inplace_op1(&mut self, _l: &Layout, _c: &dyn crate::InplaceOp1) -> Result<()>;
