@@ -1,7 +1,7 @@
 use crate::benchmarks::{bench_device, BenchDevice};
 use candle_core::{
     quantized::{self, GgmlDType, QMatMul, QTensor, QuantizedBackend, QuantizedDevice},
-    BackendStorage, CustomOp1, Module, Tensor,
+    BackendStorage, Module, Tensor,
 };
 use criterion::{black_box, criterion_group, Criterion, Throughput};
 use std::time::Instant;
@@ -9,7 +9,7 @@ use std::time::Instant;
 fn run<QB>(matmul: &QMatMul<QB>, x: &Tensor<QB::Storage>)
 where
     QB: QuantizedBackend,
-    QTensor<QB>: CustomOp1<QB::Storage>,
+    QMatMul<QB>: Module<QB::Storage>,
 {
     matmul.forward(x).unwrap();
 }
@@ -19,7 +19,7 @@ where
     B: BackendStorage<Device = D>,
     QB: QuantizedBackend<Storage = B, Device = D>,
     D: QuantizedDevice<QB> + BenchDevice<B>,
-    QTensor<QB>: CustomOp1<QB::Storage>,
+    QMatMul<QB>: Module<QB::Storage>,
 {
     let b = 1;
     let m = 1;
