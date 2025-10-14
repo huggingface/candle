@@ -1,6 +1,7 @@
 #![allow(clippy::approx_constant)]
 use anyhow::{Context, Result};
 use candle_core::{
+    backprop::{Bwd, BwdDevice},
     test_device,
     test_utils::{self, is_same_storage},
     BackendStorage, CpuDevice, CpuStorage, DType, Shape, Tensor, Var,
@@ -14,7 +15,9 @@ use candle_core::{CudaDevice, CudaStorage};
 use candle_core::{MetalDevice, MetalStorage};
 
 fn simple_grad<B: BackendStorage>(device: &B::Device) -> Result<()> {
-    let x: Var<B> = Var::new(&[3f32, 1., 4.], device)?;
+    let device = BwdDevice::from(device);
+
+    let x: Var<Bwd<B>> = Var::new(&[3f32, 1., 4.], &device)?;
     let x = x.as_tensor();
     let y = (((x * x)? + x * 5f64)? + 4f64)?;
     let grads = y.backward()?;
@@ -28,7 +31,9 @@ fn simple_grad<B: BackendStorage>(device: &B::Device) -> Result<()> {
 }
 
 fn sum_grad<B: BackendStorage>(device: &B::Device) -> Result<()> {
-    let x: Var<B> = Var::new(&[3f32, 1., 4.], device)?;
+    let device = BwdDevice::from(device);
+
+    let x: Var<Bwd<B>> = Var::new(&[3f32, 1., 4.], &device)?;
     let x = x.as_tensor();
     let y = (x.sqr()?.sum_keepdim(0)? * 2.)?;
     let grads = y.backward()?;
@@ -48,10 +53,12 @@ fn sum_grad<B: BackendStorage>(device: &B::Device) -> Result<()> {
 }
 
 fn matmul_grad<B: BackendStorage>(device: &B::Device) -> Result<()> {
+    let device = BwdDevice::from(device);
+
     let data: Vec<_> = (0..12).map(|i| i as f32).collect();
-    let x: Var<B> = Var::from_slice(&data, (2, 2, 3), device)?;
+    let x: Var<Bwd<B>> = Var::from_slice(&data, (2, 2, 3), &device)?;
     let data: Vec<_> = (0..12).map(|i| i as f32).collect();
-    let y: Var<B> = Var::from_slice(&data, (2, 3, 2), device)?;
+    let y: Var<Bwd<B>> = Var::from_slice(&data, (2, 3, 2), &device)?;
     let c = x.matmul(&y)?;
     let grads = c.backward()?;
     let grad_x = grads.get(&x).context("no grad for x")?;
@@ -77,7 +84,9 @@ fn matmul_grad<B: BackendStorage>(device: &B::Device) -> Result<()> {
 
 // The simplest gradient descent, using scalar variable.
 fn grad_descent<B: BackendStorage>(device: &B::Device) -> Result<()> {
-    let x: Var<B> = Var::new(0f32, device)?;
+    let device = BwdDevice::from(device);
+
+    let x: Var<Bwd<B>> = Var::new(0f32, &device)?;
     let learning_rate = 0.1;
     for _step in 0..100 {
         let xt = x.as_tensor();
@@ -91,7 +100,9 @@ fn grad_descent<B: BackendStorage>(device: &B::Device) -> Result<()> {
 }
 
 fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
-    let x: Var<B> = Var::new(&[3f32, 1., 4., 0.15], device)?;
+    let device = BwdDevice::from(device);
+
+    let x: Var<Bwd<B>> = Var::new(&[3f32, 1., 4., 0.15], &device)?;
     let x = x.as_tensor();
     let y = (x.log()? + 1.)?;
     let grads = y.backward()?;
@@ -169,7 +180,7 @@ fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
     let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(y.to_vec1::<f32>()?, [1.6, 1.2, 1.8, 1.03]);
     assert_eq!(grad_x.to_vec1::<f32>()?, [0.2, 0.2, 0.2, 0.2]);
-    let y = Tensor::new(1f32, device)?.broadcast_div(x)?;
+    let y = Tensor::new(1f32, &device)?.broadcast_div(x)?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(
@@ -180,13 +191,13 @@ fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
         grad_x.to_vec1::<f32>()?,
         [-0.11111111, -1.0, -0.0625, -44.444443],
     );
-    let y = x.broadcast_div(&Tensor::new(0.5f32, device)?)?;
+    let y = x.broadcast_div(&Tensor::new(0.5f32, &device)?)?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(y.to_vec1::<f32>()?, [6., 2., 8., 0.3]);
     assert_eq!(grad_x.to_vec1::<f32>()?, [2., 2., 2., 2.]);
 
-    let x: Var<B> = Var::new(&[3f32, 1., 4., 0.15], device)?;
+    let x: Var<Bwd<B>> = Var::new(&[3f32, 1., 4., 0.15], &device)?;
     let y = x.powf(2.5)?;
     let grads = y.backward()?;
     let grad_x = grads.get(&x).context("no grad for x")?;
@@ -269,7 +280,7 @@ fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
     // loss = y.sum()
     // loss.backward()
     // print(x.grad)
-    let elu_x: Var<B> = Var::new(&[-1.0f32, 0., -2., 3.], device)?;
+    let elu_x: Var<Bwd<B>> = Var::new(&[-1.0f32, 0., -2., 3.], &device)?;
     let y = elu_x.elu(2.)?;
     let grads = y.backward()?;
     let grad_x = grads.get(&elu_x).context("no grad for x")?;
@@ -296,7 +307,7 @@ fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
         [1.0881, 0.9277, 1.0527, 0.5747],
     );
     if is_same_storage::<B, CpuStorage>() {
-        let x: Var<B> = Var::new(&[[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]]], device)?;
+        let x: Var<Bwd<B>> = Var::new(&[[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]]], &device)?;
         let y = x.interpolate1d(12)?.reshape(36)?;
 
         let z = Tensor::new(
@@ -305,7 +316,7 @@ fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
                 17., 18., 19., 20., 21., 22., 23., 24., 25., 26., 27., 28., 29., 30., 31., 32.,
                 33., 34., 35., 36.,
             ],
-            device,
+            &device,
         )?;
 
         let loss = y.unsqueeze(1)?.transpose(0, 1)?.matmul(&z.unsqueeze(1)?)?;
@@ -319,7 +330,7 @@ fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
     }
 
     // manually checked: see comments
-    let x: Var<B> = Var::new(&[[[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]]]], device)?;
+    let x: Var<Bwd<B>> = Var::new(&[[[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]]]], &device)?;
     let y = x.interpolate2d(6, 6)?.reshape(36)?;
 
     let z = Tensor::new(
@@ -328,7 +339,7 @@ fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
             18., 19., 20., 21., 22., 23., 24., 25., 26., 27., 28., 29., 30., 31., 32., 33., 34.,
             35., 36.,
         ],
-        device,
+        &device,
     )?;
     // gradient should be
     // row 1
@@ -354,7 +365,7 @@ fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
     );
 
     // manually checked: see comments
-    let x: Var<B> = Var::new(&[[[[1f32, 2.], [4., 5.]]]], device)?;
+    let x: Var<Bwd<B>> = Var::new(&[[[[1f32, 2.], [4., 5.]]]], &device)?;
     let y = x.interpolate2d(6, 6)?.reshape(36)?;
 
     let z = Tensor::new(
@@ -363,7 +374,7 @@ fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
             18., 19., 20., 21., 22., 23., 24., 25., 26., 27., 28., 29., 30., 31., 32., 33., 34.,
             35., 36.,
         ],
-        device,
+        &device,
     )?;
     // gradient should be
     // row 1
@@ -383,7 +394,7 @@ fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
     );
 
     // manually checked: see comments
-    let x: Var<B> = Var::new(&[[[[1f32, 2.], [4., 5.]], [[6f32, 7.], [8., 9.]]]], device)?;
+    let x: Var<Bwd<B>> = Var::new(&[[[[1f32, 2.], [4., 5.]], [[6f32, 7.], [8., 9.]]]], &device)?;
 
     let y = x.interpolate2d(4, 4)?.reshape(32)?;
 
@@ -399,7 +410,7 @@ fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
             25.,   26., 27., 28.,
             29.,   30., 31., 32.
         ],
-        device,
+        &device,
     )?;
     // gradient should be
     // m1r1
@@ -426,27 +437,27 @@ fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
     );
 
     // manually checked: see comments
-    let x: Var<B> = Var::new(
+    let x: Var<Bwd<B>> = Var::new(
         &[[[[1f32, 2.], [4., 5.]]], [[[6f32, 7.], [8., 9.]]]],
-        device,
+        &device,
     )?;
 
     let y = x.interpolate2d(4, 4)?.reshape(32)?;
 
     #[rustfmt::skip]
-       let z = Tensor::new(
-           &[
-               1_f32, 02., 03., 04.,
-               05.,   06., 07., 08.,
-               09.,   10., 11., 12.,
-               13.,   14., 15., 16.,
-               17.,   18., 19., 20.,
-               21.,   22., 23., 24.,
-               25.,   26., 27., 28.,
-               29.,   30., 31., 32.
-           ],
-           device,
-       )?;
+    let z = Tensor::new(
+        &[
+            1_f32, 02., 03., 04.,
+            05.,   06., 07., 08.,
+            09.,   10., 11., 12.,
+            13.,   14., 15., 16.,
+            17.,   18., 19., 20.,
+            21.,   22., 23., 24.,
+            25.,   26., 27., 28.,
+            29.,   30., 31., 32.
+        ],
+        &device,
+    )?;
     // gradient should be
     // m1r1
     // 1+2+5+6=14
@@ -474,7 +485,9 @@ fn unary_grad<B: BackendStorage + 'static>(device: &B::Device) -> Result<()> {
 }
 
 fn binary_grad<B: BackendStorage>(device: &B::Device) -> Result<()> {
-    let x: Var<B> = Var::new(&[3f32, 1., -4., -1.], device)?;
+    let device = BwdDevice::from(device);
+
+    let x: Var<Bwd<B>> = Var::new(&[3f32, 1., -4., -1.], &device)?;
     let x = x.as_tensor();
     // leaky relu
     let y = x.maximum(&(x * 0.1)?)?;
@@ -497,9 +510,9 @@ fn binary_grad<B: BackendStorage>(device: &B::Device) -> Result<()> {
     assert_eq!(y.to_vec1::<f32>()?, [3., 1., -4., -1.]);
     assert_eq!(grad_x.to_vec1::<f32>()?, [1., 1., 1., 1.]);
 
-    let x_var: Var<B> = Var::new(&[3f32, 1., -4., -1., 5., 9.], device)?;
+    let x_var: Var<Bwd<B>> = Var::new(&[3f32, 1., -4., -1., 5., 9.], &device)?;
     let x = x_var.as_tensor();
-    let y_var: Var<B> = Var::new(&[2f32, 7., 1.], device)?;
+    let y_var: Var<Bwd<B>> = Var::new(&[2f32, 7., 1.], &device)?;
     let y = y_var.as_tensor();
 
     let ss = x
@@ -517,18 +530,18 @@ fn binary_grad<B: BackendStorage>(device: &B::Device) -> Result<()> {
 
 #[test]
 fn test_flip_backprop() -> Result<()> {
-    let device = &CpuDevice {};
+    let device = BwdDevice::from(&CpuDevice);
 
     // Create a tensor (leaf node) that requires gradients
-    let x: Var<CpuStorage> = Var::ones((2, 2), DType::F64, device)?;
-    let weights = Tensor::arange(1.0, 5.0, device)?.reshape((2, 2))?;
+    let x: Var<Bwd<CpuStorage>> = Var::ones((2, 2), DType::F64, &device)?;
+    let weights = Tensor::arange(1.0, 5.0, &device)?.reshape((2, 2))?;
 
     let y = x.matmul(&weights)?;
-    let expected_y = Tensor::from_vec(vec![4.0, 6.0, 4.0, 6.0], (2, 2), device)?;
+    let expected_y = Tensor::from_vec(vec![4.0, 6.0, 4.0, 6.0], (2, 2), &device)?;
     candle_core::test_utils::assert_tensor_eq(&y, &expected_y)?;
 
     let z = y.flip(&[1])?;
-    let expected_z = Tensor::from_vec(vec![6.0, 4.0, 6.0, 4.0], (2, 2), device)?;
+    let expected_z = Tensor::from_vec(vec![6.0, 4.0, 6.0, 4.0], (2, 2), &device)?;
     candle_core::test_utils::assert_tensor_eq(&z, &expected_z)?;
 
     let loss = z.sum_all()?;
@@ -537,7 +550,7 @@ fn test_flip_backprop() -> Result<()> {
     let grad_x = grad_store.get_id(x.id()).unwrap();
 
     let flipped_weights = weights.flip(&[1])?;
-    let dloss_dy = Tensor::ones((2, 2), DType::F64, device)?;
+    let dloss_dy = Tensor::ones((2, 2), DType::F64, &device)?;
     // dloss/dx = dloss/dy @ dy/dx = ones @ weight.flip.T
     let expected_grad = dloss_dy.matmul(&flipped_weights.t()?)?;
     candle_core::test_utils::assert_tensor_eq(grad_x, &expected_grad)?;

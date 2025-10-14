@@ -1,5 +1,6 @@
 use anyhow::Result;
 use candle_core::{
+    backprop::{Bwd, BwdDevice},
     test_device, test_utils, BackendStorage, CpuDevice, CpuStorage, IndexOp, Tensor,
 };
 
@@ -423,10 +424,13 @@ print(t.grad[0])
 print(w.grad.shape)
 print(w.grad[0])
 */
-fn conv2d_grad<B: BackendStorage>(dev: &B::Device) -> Result<()> {
+fn conv2d_grad<B: BackendStorage>(device: &B::Device) -> Result<()> {
     // conv-transposes are not implemented for metal
     use candle_core::Var;
-    let t: Var<B> = Var::from_slice(
+
+    let device = BwdDevice::from(device);
+
+    let t: Var<Bwd<B>> = Var::from_slice(
         &[
             0.4056f32, -0.8689, -0.0773, -1.5630, -2.8012, -1.5059, 0.3972, 1.0852, 0.4997, 3.0616,
             1.6541, 0.0964, -0.8338, -1.6523, -0.8323, -0.1699, 0.0823, 0.3526, 0.6843, 0.2395,
@@ -440,7 +444,7 @@ fn conv2d_grad<B: BackendStorage>(dev: &B::Device) -> Result<()> {
             -0.8, -0.4983, 1.5480, 0.8265, -0.1025, 0.5138, 0.5748, 0.3821, -0.4607, 0.0085,
         ],
         (1, 4, 5, 5),
-        dev,
+        &device,
     )?;
     let w = Var::from_slice(
         &[
@@ -454,7 +458,7 @@ fn conv2d_grad<B: BackendStorage>(dev: &B::Device) -> Result<()> {
             0.5583, 0.4623, 0.6026,
         ],
         (2, 4, 3, 3),
-        dev,
+        &device,
     )?;
     let res = t.conv2d(&w, 0, 1, 1, 1)?;
     let loss = res.sqr()?.sum_all()?;
@@ -658,7 +662,7 @@ fn conv2d_grad<B: BackendStorage>(dev: &B::Device) -> Result<()> {
     let dilation = 3;
     let stride = 3;
 
-    let t: Var<B> = Var::from_slice(
+    let t: Var<Bwd<B>> = Var::from_slice(
         &[
             0.4056_f32, -0.8689, -0.0773, -1.5630, -2.8012, -1.5059, 0.3972, 1.0852, 0.4997,
             3.0616, 1.6541, 0.0964, -0.8338, -1.6523, -0.8323, -0.1699, 0.0823, 0.3526, 0.6843,
@@ -677,11 +681,11 @@ fn conv2d_grad<B: BackendStorage>(dev: &B::Device) -> Result<()> {
             1.6475, 0.2219,
         ],
         (1, 4, 7, 5),
-        dev,
+        &device,
     )?;
 
     #[rustfmt::skip]
-    let w: Var<B> = Var::from_slice(
+    let w: Var<Bwd<B>> = Var::from_slice(
         &[
             -1.1744_f32, 0.3266, 2.5893, 1.0142, 0.1763, 0.7752, 0.6604, 0.2029, -0.2145, 0.7234,
             -0.3441, -1.5400, -0.6333, 0.6613, 0.2083, 0.6230, -1.7002, 0.3393, 0.4049, 1.0762,
@@ -697,7 +701,7 @@ fn conv2d_grad<B: BackendStorage>(dev: &B::Device) -> Result<()> {
             0.1372, 0.8141, -0.6163, 0.7304, -0.8285, 2.0636, -0.7176, 0.2495, -0.2581, -0.4478,
         ],
         (4, 2, 3, 5),
-        dev,
+        &device,
     )?;
     let res = t.conv_transpose2d(&w, padding, outpadding, stride, dilation)?;
     let loss = res.sqr()?.sum_all()?;

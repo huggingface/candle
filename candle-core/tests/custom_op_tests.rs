@@ -1,4 +1,5 @@
 use candle_core::backend::BackendStorage;
+use candle_core::backprop::Bwd;
 use candle_core::cpu_backend::{self, CpuDevice};
 use candle_core::test_utils::to_vec1_round;
 use candle_core::{CpuStorage, CustomOp1, DType, Error, Layout, Result, Shape, Tensor};
@@ -95,10 +96,10 @@ impl CustomOp1<CpuStorage> for EluWithBackward {
 
     fn bwd(
         &self,
-        arg: &CpuTensor,
-        _res: &CpuTensor,
-        grad_res: &CpuTensor,
-    ) -> Result<Option<CpuTensor>> {
+        arg: &Tensor<Bwd<CpuStorage>>,
+        _res: &Tensor<Bwd<CpuStorage>>,
+        grad_res: &Tensor<Bwd<CpuStorage>>,
+    ) -> Result<Option<Tensor<Bwd<CpuStorage>>>> {
         let alpha = self.0.alpha;
         let bwd = arg.apply_op1(EluBackward { alpha })?;
         Ok(Some(grad_res.mul(&bwd)?))
@@ -107,7 +108,8 @@ impl CustomOp1<CpuStorage> for EluWithBackward {
 
 #[test]
 fn custom_op1_with_backward() -> Result<()> {
-    let t = candle_core::Var::new(&[-2f32, 0f32, 2f32], &CpuDevice)?;
+    let device = candle_core::backprop::BwdDevice::from(&CpuDevice);
+    let t = candle_core::Var::new(&[-2f32, 0f32, 2f32], &device)?;
     let elu_t = t.apply_op1(EluWithBackward::new(2.))?;
     assert_eq!(to_vec1_round(&elu_t, 4)?, &[-1.7293, 0.0, 2.0]);
 
