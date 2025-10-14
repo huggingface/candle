@@ -156,10 +156,7 @@ impl<B: BackendStorage> BackendStorage for Bwd<B> {
         op: crate::op::BackpropOp<Self>,
         is_variable: bool,
     ) -> crate::Tensor<Self> {
-        let (backend, device) = {
-            let guard = storage.read().unwrap();
-            (guard.backend.clone(), guard.device())
-        };
+        let backend = storage.read().unwrap().backend.clone();
         let backprop = Bwd {
             backend,
             op,
