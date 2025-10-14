@@ -6,7 +6,7 @@ use float8::F8E4M3;
 use half::{bf16, f16};
 use num_traits::float::Float;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CmpOp {
     Eq,
     Ne,
@@ -72,7 +72,7 @@ pub enum UnaryOp {
     Sign,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Op<B: BackendStorage> {
     Binary(Tensor<B>, Tensor<B>, BinaryOp),
     Unary(Tensor<B>, UnaryOp),
@@ -168,18 +168,18 @@ pub enum Op<B: BackendStorage> {
     Powf(Tensor<B>, f64),
     CustomOp1(
         Tensor<B>,
-        std::sync::Arc<Box<dyn crate::CustomOp1<B> + Send + Sync>>,
+        std::sync::Arc<Box<dyn crate::CustomOp1<B::Storage> + Send + Sync>>,
     ),
     CustomOp2(
         Tensor<B>,
         Tensor<B>,
-        std::sync::Arc<Box<dyn crate::CustomOp2<B> + Send + Sync>>,
+        std::sync::Arc<Box<dyn crate::CustomOp2<B::Storage> + Send + Sync>>,
     ),
     CustomOp3(
         Tensor<B>,
         Tensor<B>,
         Tensor<B>,
-        std::sync::Arc<Box<dyn crate::CustomOp3<B> + Send + Sync>>,
+        std::sync::Arc<Box<dyn crate::CustomOp3<B::Storage> + Send + Sync>>,
     ),
 }
 
@@ -931,7 +931,7 @@ impl UnaryOpT for Relu {
 
 /// `BackpropOp` is a wrapper around `Option<Op>`. The main goal is to ensure that dependencies are
 /// properly checked when creating a new value
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BackpropOp<B: BackendStorage>(Option<Op<B>>);
 
 impl<B: BackendStorage> BackpropOp<B> {
