@@ -9,22 +9,10 @@ use std::sync::{Arc, RwLock};
 use crate::CudaDevice;
 #[cfg(feature = "metal")]
 use crate::{MetalDevice, MetalError};
-/*
-pub trait LockTrait<'a, T: Send + Sync + Debug>: Send + Sync + Debug {
-    type Guard;
-}
-impl<'a, T: 'a + Send + Sync + Debug> LockTrait<'a, T> for std::sync::Mutex<T> {
-    type Guard = std::sync::MutexGuard<'a, T>;
-}
-impl<'a, T: 'a + Send + Sync + Debug> LockTrait<'a, T> for std::sync::RwLock<T> {
-    type Guard = std::sync::RwLockReadGuard<'a, T>;
-}
- */
+
 pub trait BackendStorage: Sized + Clone + Send + Sync + Debug {
     type Device: BackendDevice<Self>;
     type Storage: BackendStorage;
-    //type LockedData: Send + Sync + Debug;
-    //type Locked: LockTrait<Self::LockedData>;
 
     fn backprop_op(&self) -> Option<Op<Self>> {
         None
