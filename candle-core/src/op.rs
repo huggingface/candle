@@ -987,10 +987,6 @@ impl<B: BackendStorage> BackpropOp<B> {
         };
         Self(op)
     }
-
-    pub(crate) fn is_none(&self) -> bool {
-        self.0.is_none()
-    }
 }
 
 impl<B: BackendStorage> std::ops::Deref for BackpropOp<B> {
