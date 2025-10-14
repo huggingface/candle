@@ -1,13 +1,16 @@
 //! Various optimization algorithms.
-use candle::{BackendStorage, Result, Tensor, Var};
+use candle::{
+    backprop::{Bwd, GradStore},
+    BackendStorage, Result, Tensor, Var,
+};
 
 /// The interface optimizers should implement.
 pub trait Optimizer<B: BackendStorage>: Sized {
     type Config: Sized;
 
-    fn new(vars: Vec<Var<B>>, config: Self::Config) -> Result<Self>;
+    fn new(vars: Vec<Var<Bwd<B>>>, config: Self::Config) -> Result<Self>;
 
-    fn step(&mut self, grads: &candle::backprop::GradStore<B>) -> Result<()>;
+    fn step(&mut self, grads: &GradStore<Bwd<B>>) -> Result<()>;
 
     fn learning_rate(&self) -> f64;
 
@@ -17,12 +20,12 @@ pub trait Optimizer<B: BackendStorage>: Sized {
         Self::new(vec![], config)
     }
 
-    fn backward_step(&mut self, loss: &Tensor<B>) -> Result<()> {
+    fn backward_step(&mut self, loss: &Tensor<Bwd<B>>) -> Result<()> {
         let grads = loss.backward()?;
         self.step(&grads)
     }
 
-    fn from_slice(vars: &[&Var<B>], config: Self::Config) -> Result<Self> {
+    fn from_slice(vars: &[&Var<Bwd<B>>], config: Self::Config) -> Result<Self> {
         let vars: Vec<_> = vars.iter().map(|&v| v.clone()).collect();
         Self::new(vars, config)
     }
@@ -33,14 +36,14 @@ pub trait Optimizer<B: BackendStorage>: Sized {
 /// Contrary to the PyTorch implementation of SGD, this version does not support momentum.
 #[derive(Debug)]
 pub struct SGD<B: BackendStorage> {
-    vars: Vec<Var<B>>,
+    vars: Vec<Var<Bwd<B>>>,
     learning_rate: f64,
 }
 
 impl<B: BackendStorage> Optimizer<B> for SGD<B> {
     type Config = f64;
 
-    fn new(vars: Vec<Var<B>>, learning_rate: f64) -> Result<Self> {
+    fn new(vars: Vec<Var<Bwd<B>>>, learning_rate: f64) -> Result<Self> {
         let vars = vars
             .into_iter()
             .filter(|var| var.dtype().is_float())
@@ -55,7 +58,7 @@ impl<B: BackendStorage> Optimizer<B> for SGD<B> {
         self.learning_rate
     }
 
-    fn step(&mut self, grads: &candle::backprop::GradStore<B>) -> Result<()> {
+    fn step(&mut self, grads: &GradStore<Bwd<B>>) -> Result<()> {
         for var in self.vars.iter() {
             if let Some(grad) = grads.get(var) {
                 var.set(&var.sub(&(grad * self.learning_rate)?)?)?;
@@ -70,11 +73,11 @@ impl<B: BackendStorage> Optimizer<B> for SGD<B> {
 }
 
 impl<B: BackendStorage> SGD<B> {
-    pub fn into_inner(self) -> Vec<Var<B>> {
+    pub fn into_inner(self) -> Vec<Var<Bwd<B>>> {
         self.vars
     }
 
-    pub fn push(&mut self, var: &Var<B>) {
+    pub fn push(&mut self, var: &Var<Bwd<B>>) {
         self.vars.push(var.clone())
     }
 }
@@ -109,7 +112,7 @@ struct VarAdamW<B: BackendStorage> {
 
 #[derive(Debug)]
 pub struct AdamW<B: BackendStorage> {
-    vars: Vec<VarAdamW<B>>,
+    vars: Vec<VarAdamW<Bwd<B>>>,
     step_t: usize,
     params: ParamsAdamW,
 }
@@ -117,7 +120,7 @@ pub struct AdamW<B: BackendStorage> {
 impl<B: BackendStorage> Optimizer<B> for AdamW<B> {
     type Config = ParamsAdamW;
 
-    fn new(vars: Vec<Var<B>>, params: ParamsAdamW) -> Result<Self> {
+    fn new(vars: Vec<Var<Bwd<B>>>, params: ParamsAdamW) -> Result<Self> {
         let vars = vars
             .into_iter()
             .filter(|var| var.dtype().is_float())
@@ -149,7 +152,7 @@ impl<B: BackendStorage> Optimizer<B> for AdamW<B> {
         self.params.lr = lr
     }
 
-    fn step(&mut self, grads: &candle::backprop::GradStore<B>) -> Result<()> {
+    fn step(&mut self, grads: &GradStore<Bwd<B>>) -> Result<()> {
         self.step_t += 1;
         let lr = self.params.lr;
         let lambda = self.params.weight_decay;
@@ -183,7 +186,7 @@ impl<B: BackendStorage> Optimizer<B> for AdamW<B> {
 }
 
 impl<B: BackendStorage> AdamW<B> {
-    pub fn new_lr(vars: Vec<Var<B>>, learning_rate: f64) -> Result<Self> {
+    pub fn new_lr(vars: Vec<Var<Bwd<B>>>, learning_rate: f64) -> Result<Self> {
         let params = ParamsAdamW {
             lr: learning_rate,
             ..ParamsAdamW::default()

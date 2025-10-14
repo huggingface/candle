@@ -1,7 +1,9 @@
 //! Tensor ops.
 //!
 
-use candle::{BackendStorage, CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
+use candle::{
+    backprop::Bwd, BackendStorage, CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D,
+};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -238,10 +240,10 @@ impl<B: BackendStorage> candle::CustomOp1<B> for Sigmoid {
 
     fn bwd(
         &self,
-        _arg: &Tensor<B>,
-        res: &Tensor<B>,
-        grad_res: &Tensor<B>,
-    ) -> Result<Option<Tensor<B>>> {
+        _arg: &Tensor<Bwd<B>>,
+        res: &Tensor<Bwd<B>>,
+        grad_res: &Tensor<Bwd<B>>,
+    ) -> Result<Option<Tensor<Bwd<B>>>> {
         // d/dx sigmoid(x) = (1 - sigmoid(x)) * sigmoid(x)
         let d_dx_sigmoid = res.ones_like()?.sub(res)?.mul(res)?;
         Ok(Some(grad_res.mul(&d_dx_sigmoid)?))

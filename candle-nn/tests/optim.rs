@@ -5,6 +5,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use candle::{
+    backprop::{Bwd, BwdDevice},
     test_utils::{to_vec0_round, to_vec2_round},
     CpuDevice, CpuStorage,
 };
@@ -15,7 +16,8 @@ use candle_nn::{AdamW, Linear, Module, Optimizer, ParamsAdamW, SGD};
 
 #[test]
 fn sgd_optim() -> Result<()> {
-    let x: Var<CpuStorage> = Var::new(0f32, &CpuDevice)?;
+    let device = BwdDevice::from(&CpuDevice);
+    let x: Var<Bwd<CpuStorage>> = Var::new(0f32, &device)?;
     let mut sgd = SGD::new(vec![x.clone()], 0.1)?;
     let xt = x.as_tensor();
     for _step in 0..100 {
@@ -52,16 +54,18 @@ fn sgd_optim() -> Result<()> {
 */
 #[test]
 fn sgd_linear_regression() -> Result<()> {
+    let device = BwdDevice::from(&CpuDevice);
+
     // Generate some linear data, y = 3.x1 + x2 - 2.
-    let w_gen: Tensor<CpuStorage> = Tensor::new(&[[3f32, 1.]], &CpuDevice)?;
-    let b_gen = Tensor::new(-2f32, &CpuDevice)?;
+    let w_gen: Tensor<Bwd<CpuStorage>> = Tensor::new(&[[3f32, 1.]], &device)?;
+    let b_gen = Tensor::new(-2f32, &device)?;
     let gen = Linear::new(w_gen, Some(b_gen));
-    let sample_xs = Tensor::new(&[[2f32, 1.], [7., 4.], [-4., 12.], [5., 8.]], &CpuDevice)?;
+    let sample_xs = Tensor::new(&[[2f32, 1.], [7., 4.], [-4., 12.], [5., 8.]], &device)?;
     let sample_ys = gen.forward(&sample_xs)?;
 
     // Now use backprop to run a linear regression between samples and get the coefficients back.
-    let w = Var::new(&[[0f32, 0.]], &CpuDevice)?;
-    let b = Var::new(0f32, &CpuDevice)?;
+    let w = Var::new(&[[0f32, 0.]], &device)?;
+    let b = Var::new(0f32, &device)?;
     let mut sgd = SGD::new(vec![w.clone(), b.clone()], 0.004)?;
     let lin = Linear::new(w.as_tensor().clone(), Some(b.as_tensor().clone()));
     for _step in 0..1000 {
@@ -100,15 +104,17 @@ print(m.bias)
 */
 #[test]
 fn adamw_linear_regression() -> Result<()> {
-    let w_gen: Tensor<CpuStorage> = Tensor::new(&[[3f32, 1.]], &CpuDevice)?;
-    let b_gen = Tensor::new(-2f32, &CpuDevice)?;
+    let device = BwdDevice::from(&CpuDevice);
+
+    let w_gen: Tensor<Bwd<CpuStorage>> = Tensor::new(&[[3f32, 1.]], &device)?;
+    let b_gen = Tensor::new(-2f32, &device)?;
     let gen = Linear::new(w_gen, Some(b_gen));
-    let sample_xs = Tensor::new(&[[2f32, 1.], [7., 4.], [-4., 12.], [5., 8.]], &CpuDevice)?;
+    let sample_xs = Tensor::new(&[[2f32, 1.], [7., 4.], [-4., 12.], [5., 8.]], &device)?;
     let sample_ys = gen.forward(&sample_xs)?;
 
     // Now use backprop to run a linear regression between samples and get the coefficients back.
-    let w = Var::new(&[[0f32, 0.]], &CpuDevice)?;
-    let b = Var::new(0f32, &CpuDevice)?;
+    let w = Var::new(&[[0f32, 0.]], &device)?;
+    let b = Var::new(0f32, &device)?;
     let params = ParamsAdamW {
         lr: 0.1,
         ..Default::default()
@@ -129,17 +135,19 @@ fn adamw_linear_regression() -> Result<()> {
 fn adamw_linear_regression_varmap() -> Result<()> {
     use candle_nn::Init::Const;
 
+    let device = BwdDevice::from(&CpuDevice);
+
     // Similar as the previous test but using a VarMap.
-    let w_gen: Tensor<CpuStorage> = Tensor::new(&[[3f32, 1.]], &CpuDevice)?;
-    let b_gen = Tensor::new(-2f32, &CpuDevice)?;
+    let w_gen: Tensor<Bwd<CpuStorage>> = Tensor::new(&[[3f32, 1.]], &device)?;
+    let b_gen = Tensor::new(-2f32, &device)?;
     let gen = Linear::new(w_gen, Some(b_gen));
-    let sample_xs = Tensor::new(&[[2f32, 1.], [7., 4.], [-4., 12.], [5., 8.]], &CpuDevice)?;
+    let sample_xs = Tensor::new(&[[2f32, 1.], [7., 4.], [-4., 12.], [5., 8.]], &device)?;
     let sample_ys = gen.forward(&sample_xs)?;
 
     let mut var_map = candle_nn::VarMap::new();
 
-    let w = var_map.get((1, 2), "w", Const(0.), DType::F32, &CpuDevice)?;
-    let b = var_map.get((), "b", Const(0.), DType::F32, &CpuDevice)?;
+    let w = var_map.get((1, 2), "w", Const(0.), DType::F32, &device)?;
+    let b = var_map.get((), "b", Const(0.), DType::F32, &device)?;
     let params = ParamsAdamW {
         lr: 0.1,
         ..Default::default()
@@ -154,8 +162,8 @@ fn adamw_linear_regression_varmap() -> Result<()> {
     assert_eq!(to_vec2_round(lin.weight(), 4)?, &[[2.7257, 0.7097]]);
     assert_eq!(to_vec0_round(lin.bias().unwrap(), 4)?, 0.7873);
 
-    var_map.set([("w", Tensor::zeros((1, 2), DType::F32, &CpuDevice)?)].into_iter())?;
-    var_map.set([("b", Tensor::ones((), DType::F32, &CpuDevice)?)].into_iter())?;
+    var_map.set([("w", Tensor::zeros((1, 2), DType::F32, &device)?)].into_iter())?;
+    var_map.set([("b", Tensor::ones((), DType::F32, &device)?)].into_iter())?;
 
     assert_eq!(to_vec2_round(lin.weight(), 4)?, &[[0., 0.]]);
     assert_eq!(to_vec0_round(lin.bias().unwrap(), 4)?, 1.);
