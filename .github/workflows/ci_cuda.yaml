@@ -30,5 +30,7 @@ jobs:
       - name: Install Rust Stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
+      - name: sleep
+        run: sleep 15m
       - name: Test (cuda)
         run: cargo test --features cuda
