@@ -1,14 +1,19 @@
 #[cfg(not(target_arch = "wasm32"))]
 use crate::backend::UgDevice;
+use crate::backprop::Bwd;
 use crate::op::{BackpropOp, Op};
 use crate::tensor::from_storage;
 use crate::{BackendStorage, CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Tensor};
 use std::sync::Arc;
 
 /// The results of calling backward on custom ops
-type Op1BwdResult<B> = Option<Tensor<B>>;
-type Op2BwdResult<B> = (Option<Tensor<B>>, Option<Tensor<B>>);
-type Op3BwdResult<B> = (Option<Tensor<B>>, Option<Tensor<B>>, Option<Tensor<B>>);
+type Op1BwdResult<B> = Option<Tensor<Bwd<B>>>;
+type Op2BwdResult<B> = (Option<Tensor<Bwd<B>>>, Option<Tensor<Bwd<B>>>);
+type Op3BwdResult<B> = (
+    Option<Tensor<Bwd<B>>>,
+    Option<Tensor<Bwd<B>>>,
+    Option<Tensor<Bwd<B>>>,
+);
 
 /// Unary ops that can be defined in user-land.
 pub trait CustomOp1<B: BackendStorage> {
@@ -44,9 +49,9 @@ pub trait CustomOp1<B: BackendStorage> {
     /// The function should return the gradient of the argument.
     fn bwd(
         &self,
-        _arg: &Tensor<B>,
-        _res: &Tensor<B>,
-        _grad_res: &Tensor<B>,
+        _arg: &Tensor<Bwd<B>>,
+        _res: &Tensor<Bwd<B>>,
+        _grad_res: &Tensor<Bwd<B>>,
     ) -> Result<Op1BwdResult<B>> {
         Err(crate::Error::BackwardNotSupported { op: self.name() })
     }
@@ -95,10 +100,10 @@ pub trait CustomOp2<B: BackendStorage> {
 
     fn bwd(
         &self,
-        _arg1: &Tensor<B>,
-        _arg2: &Tensor<B>,
-        _res: &Tensor<B>,
-        _grad_res: &Tensor<B>,
+        _arg1: &Tensor<Bwd<B>>,
+        _arg2: &Tensor<Bwd<B>>,
+        _res: &Tensor<Bwd<B>>,
+        _grad_res: &Tensor<Bwd<B>>,
     ) -> Result<Op2BwdResult<B>> {
         Err(crate::Error::BackwardNotSupported { op: self.name() })
     }
@@ -153,25 +158,49 @@ pub trait CustomOp3<B: BackendStorage> {
 
     fn bwd(
         &self,
-        _arg1: &Tensor<B>,
-        _arg2: &Tensor<B>,
-        _arg3: &Tensor<B>,
-        _res: &Tensor<B>,
-        _grad_res: &Tensor<B>,
+        _arg1: &Tensor<Bwd<B>>,
+        _arg2: &Tensor<Bwd<B>>,
+        _arg3: &Tensor<Bwd<B>>,
+        _res: &Tensor<Bwd<B>>,
+        _grad_res: &Tensor<Bwd<B>>,
     ) -> Result<Op3BwdResult<B>> {
         Err(crate::Error::BackwardNotSupported { op: self.name() })
     }
 }
 
+impl<B: BackendStorage> core::fmt::Debug for dyn CustomOp1<B> + Send + Sync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomOp1")
+            .field("name", &self.name())
+            .finish()
+    }
+}
+
+impl<B: BackendStorage> core::fmt::Debug for dyn CustomOp2<B> + Send + Sync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomOp2")
+            .field("name", &self.name())
+            .finish()
+    }
+}
+
+impl<B: BackendStorage> core::fmt::Debug for dyn CustomOp3<B> + Send + Sync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomOp3")
+            .field("name", &self.name())
+            .finish()
+    }
+}
+
 impl<B: BackendStorage> Tensor<B> {
     /// Applies a unary custom op without backward support
-    pub fn apply_op1_no_bwd<C: CustomOp1<B>>(&self, c: &C) -> Result<Self> {
+    pub fn apply_op1_no_bwd<C: CustomOp1<B::Storage>>(&self, c: &C) -> Result<Self> {
         let (storage, shape) = self.storage().apply_op1(self.layout(), c)?;
         Ok(from_storage(storage, shape, BackpropOp::none(), false))
     }
 
     /// Applies a binary custom op without backward support
-    pub fn apply_op2_no_bwd<C: CustomOp2<B>>(&self, rhs: &Self, c: &C) -> Result<Self> {
+    pub fn apply_op2_no_bwd<C: CustomOp2<B::Storage>>(&self, rhs: &Self, c: &C) -> Result<Self> {
         let (storage, shape) =
             self.storage()
                 .apply_op2(self.layout(), &rhs.storage(), rhs.layout(), c)?;
@@ -179,7 +208,12 @@ impl<B: BackendStorage> Tensor<B> {
     }
 
     /// Applies a ternary custom op without backward support
-    pub fn apply_op3_no_bwd<C: CustomOp3<B>>(&self, t2: &Self, t3: &Self, c: &C) -> Result<Self> {
+    pub fn apply_op3_no_bwd<C: CustomOp3<B::Storage>>(
+        &self,
+        t2: &Self,
+        t3: &Self,
+        c: &C,
+    ) -> Result<Self> {
         let (storage, shape) = self.storage().apply_op3(
             self.layout(),
             &t2.storage(),
@@ -192,7 +226,10 @@ impl<B: BackendStorage> Tensor<B> {
     }
 
     /// Applies a unary custom op.
-    pub fn apply_op1_arc(&self, c: Arc<Box<dyn CustomOp1<B> + Send + Sync>>) -> Result<Self> {
+    pub fn apply_op1_arc(
+        &self,
+        c: Arc<Box<dyn CustomOp1<B::Storage> + Send + Sync>>,
+    ) -> Result<Self> {
         let (storage, shape) = self
             .storage()
             .apply_op1(self.layout(), c.as_ref().as_ref())?;
@@ -200,7 +237,10 @@ impl<B: BackendStorage> Tensor<B> {
         Ok(from_storage(storage, shape, op, false))
     }
 
-    pub fn apply_op1<C: 'static + CustomOp1<B> + Send + Sync>(&self, c: C) -> Result<Self> {
+    pub fn apply_op1<C: 'static + CustomOp1<B::Storage> + Send + Sync>(
+        &self,
+        c: C,
+    ) -> Result<Self> {
         self.apply_op1_arc(Arc::new(Box::new(c)))
     }
 
@@ -208,7 +248,7 @@ impl<B: BackendStorage> Tensor<B> {
     pub fn apply_op2_arc(
         &self,
         rhs: &Self,
-        c: Arc<Box<dyn CustomOp2<B> + Send + Sync>>,
+        c: Arc<Box<dyn CustomOp2<B::Storage> + Send + Sync>>,
     ) -> Result<Self> {
         let (storage, shape) = self.storage().apply_op2(
             self.layout(),
@@ -220,7 +260,7 @@ impl<B: BackendStorage> Tensor<B> {
         Ok(from_storage(storage, shape, op, false))
     }
 
-    pub fn apply_op2<C: 'static + CustomOp2<B> + Send + Sync>(
+    pub fn apply_op2<C: 'static + CustomOp2<B::Storage> + Send + Sync>(
         &self,
         r: &Self,
         c: C,
@@ -233,7 +273,7 @@ impl<B: BackendStorage> Tensor<B> {
         &self,
         t2: &Self,
         t3: &Self,
-        c: Arc<Box<dyn CustomOp3<B> + Send + Sync>>,
+        c: Arc<Box<dyn CustomOp3<B::Storage> + Send + Sync>>,
     ) -> Result<Self> {
         let (storage, shape) = self.storage().apply_op3(
             self.layout(),
@@ -249,7 +289,7 @@ impl<B: BackendStorage> Tensor<B> {
         Ok(from_storage(storage, shape, op, false))
     }
 
-    pub fn apply_op3<C: 'static + CustomOp3<B> + Send + Sync>(
+    pub fn apply_op3<C: 'static + CustomOp3<B::Storage> + Send + Sync>(
         &self,
         t2: &Self,
         t3: &Self,
