@@ -601,7 +601,6 @@ impl<B: BackendStorage> Tensor<B> {
     /// Returns true if the computation graph should track this op, that is if it is
     /// a variable or if it has some variable as dependencies.
     pub fn track_op(&self) -> bool {
-        // TODO: op is always none. fixme
         self.is_variable || self.op().is_some()
     }
 
@@ -2236,7 +2235,6 @@ impl<B: BackendStorage> Tensor<B> {
     ///
     /// If the tensor is already detached from the computation graph, the same tensor is returned.
     pub fn detach(&self) -> Self {
-        // TODO: Fixme
         if self.op().is_none() && !self.is_variable {
             self.clone()
         } else {
