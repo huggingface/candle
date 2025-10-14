@@ -38,7 +38,6 @@ pub struct Tensor_<B: BackendStorage> {
     // that's tricky to encode in the current setup.
     storage: Arc<RwLock<B>>,
     layout: Layout,
-    op: BackpropOp<B>,
     is_variable: bool,
     dtype: DType,
     device: B::Device,
@@ -171,39 +170,43 @@ pub(crate) fn from_storage<B: BackendStorage, S: Into<Shape>>(
     op: BackpropOp<B>,
     is_variable: bool,
 ) -> Tensor<B> {
-    let dtype = storage.dtype();
-    let device = storage.device().clone();
-    let tensor_ = Tensor_ {
-        id: TensorId::new(),
-        storage: Arc::new(RwLock::new(storage)),
-        layout: Layout::contiguous(shape),
+    B::to_tensor(
+        Arc::new(RwLock::new(storage)),
+        Layout::contiguous(shape),
         op,
         is_variable,
-        dtype,
-        device,
-    };
-    Tensor(Arc::new(tensor_))
+    )
 }
 
 impl<B: BackendStorage> Tensor<B> {
+    pub(crate) fn create(storage: Arc<RwLock<B>>, layout: Layout, is_variable: bool) -> Self {
+        let (dtype, device) = {
+            let guard = storage.read().unwrap();
+            (guard.dtype(), guard.device())
+        };
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage,
+            layout,
+            is_variable,
+            dtype,
+            device,
+        };
+        Tensor(Arc::new(tensor_))
+    }
+
     pub fn from_storage<S: Into<Shape>>(
         storage: B,
         shape: S,
         op: BackpropOp<B>,
         is_variable: bool,
     ) -> Self {
-        let dtype = storage.dtype();
-        let device = storage.device().clone();
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: Arc::new(RwLock::new(storage)),
-            layout: Layout::contiguous(shape),
+        B::to_tensor(
+            Arc::new(RwLock::new(storage)),
+            Layout::contiguous(shape),
             op,
             is_variable,
-            dtype,
-            device,
-        };
-        Tensor(Arc::new(tensor_))
+        )
     }
 
     pub(crate) fn ones_impl<S: Into<Shape>>(
@@ -217,7 +220,13 @@ impl<B: BackendStorage> Tensor<B> {
         let mut storage = unsafe { device.alloc_uninit(&shape, dtype)? };
         let layout = Layout::contiguous(shape.clone());
         storage.const_set(crate::scalar::Scalar::one(dtype), &layout)?;
-        Ok(from_storage(storage, shape, none, is_variable))
+
+        Ok(B::to_tensor(
+            Arc::new(RwLock::new(storage)),
+            layout,
+            none,
+            is_variable,
+        ))
     }
 
     /// Creates a new tensor filled with ones.
@@ -406,7 +415,7 @@ impl<B: BackendStorage> Tensor<B> {
         if buffer_size != n {
             return Err(Error::ShapeMismatch { buffer_size, shape }.bt());
         }
-        let storage = device.storage_from_cpu_storage(&array.to_cpu_storage())?;
+        let storage = device.storage(array)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, is_variable))
     }
@@ -592,7 +601,8 @@ impl<B: BackendStorage> Tensor<B> {
     /// Returns true if the computation graph should track this op, that is if it is
     /// a variable or if it has some variable as dependencies.
     pub fn track_op(&self) -> bool {
-        self.is_variable || self.op.is_some()
+        // TODO: op is always none. fixme
+        self.is_variable || self.op().is_some()
     }
 
     // TODO: Also make an inplace version or a pre-allocated? This could be tricky
@@ -891,16 +901,7 @@ impl<B: BackendStorage> Tensor<B> {
         } else {
             let op = BackpropOp::new1(self, |t| Op::Narrow(t, dim, start, len));
             let layout = self.layout().narrow(dim, start, len)?;
-            let tensor_ = Tensor_ {
-                id: TensorId::new(),
-                storage: self.storage.clone(),
-                layout,
-                op,
-                is_variable: false,
-                dtype: self.dtype,
-                device: self.device.clone(),
-            };
-            Ok(Tensor(Arc::new(tensor_)))
+            Ok(B::to_tensor(self.storage.clone(), layout, op, false))
         }
     }
 
@@ -1962,8 +1963,8 @@ impl<B: BackendStorage> Tensor<B> {
         self.is_variable
     }
 
-    pub(crate) fn op(&self) -> &Option<Op<B>> {
-        &self.op
+    pub(crate) fn op(&self) -> Option<Op<B>> {
+        self.storage().backprop_op()
     }
 
     /// Computes the max of all the elements in this tensor and returns a tensor holding this
@@ -2165,16 +2166,12 @@ impl<B: BackendStorage> Tensor<B> {
             return Ok(self.clone());
         }
         let op = BackpropOp::new1(self, |t| Op::Transpose(t, dim1, dim2));
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: self.storage.clone(),
-            layout: self.layout.transpose(dim1, dim2)?,
+        Ok(B::to_tensor(
+            self.storage.clone(),
+            self.layout.transpose(dim1, dim2)?,
             op,
-            is_variable: false,
-            dtype: self.dtype,
-            device: self.device.clone(),
-        };
-        Ok(Tensor(Arc::new(tensor_)))
+            false,
+        ))
     }
 
     /// Returns a tensor with the same data as the input where the dimensions have been permuted.
@@ -2203,16 +2200,12 @@ impl<B: BackendStorage> Tensor<B> {
             )
         }
         let op = BackpropOp::new1(self, |t| Op::Permute(t, dims.clone()));
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: self.storage.clone(),
-            layout: self.layout.permute(&dims)?,
+        Ok(B::to_tensor(
+            self.storage.clone(),
+            self.layout.permute(&dims)?,
             op,
-            is_variable: false,
-            dtype: self.dtype,
-            device: self.device.clone(),
-        };
-        Ok(Tensor(Arc::new(tensor_)))
+            false,
+        ))
     }
 
     /// Returns true if the data is stored in a C contiguous (aka row major) way.
@@ -2229,16 +2222,13 @@ impl<B: BackendStorage> Tensor<B> {
     /// memory.
     pub fn copy(&self) -> Result<Self> {
         let op = BackpropOp::new1(self, Op::Copy);
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: Arc::new(RwLock::new(self.storage().try_clone(self.layout())?)),
-            layout: self.layout.clone(),
+        let copied = self.storage().try_clone(self.layout())?;
+        Ok(B::to_tensor(
+            Arc::new(RwLock::new(copied)),
+            self.layout.clone(),
             op,
-            is_variable: false,
-            dtype: self.dtype,
-            device: self.device.clone(),
-        };
-        Ok(Tensor(Arc::new(tensor_)))
+            false,
+        ))
     }
 
     /// Returns a new tensor detached from the current graph, gradient are not propagated through
@@ -2246,19 +2236,16 @@ impl<B: BackendStorage> Tensor<B> {
     ///
     /// If the tensor is already detached from the computation graph, the same tensor is returned.
     pub fn detach(&self) -> Self {
-        if self.op.is_none() && !self.is_variable {
+        // TODO: Fixme
+        if self.op().is_none() && !self.is_variable {
             self.clone()
         } else {
-            let tensor_ = Tensor_ {
-                id: TensorId::new(),
-                storage: self.storage.clone(),
-                layout: self.layout.clone(),
-                op: BackpropOp::none(),
-                is_variable: false,
-                dtype: self.dtype,
-                device: self.device.clone(),
-            };
-            Tensor(Arc::new(tensor_))
+            B::to_tensor(
+                self.storage.clone(),
+                self.layout.clone(),
+                BackpropOp::none(),
+                false,
+            )
         }
     }
 
@@ -2269,49 +2256,34 @@ impl<B: BackendStorage> Tensor<B> {
     {
         let storage = self.storage().clone();
         let storage = U::convert(storage, device)?;
-        let op = BackpropOp::none();
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: Arc::new(RwLock::new(storage)),
-            layout: self.layout.clone(),
-            op,
-            is_variable: false,
-            dtype: self.dtype,
-            device: device.clone(),
-        };
-        Ok(Tensor(Arc::new(tensor_)))
+        Ok(U::to_tensor(
+            Arc::new(RwLock::new(storage)),
+            self.layout.clone(),
+            BackpropOp::none(),
+            false,
+        ))
     }
 
     /// If the tensor is cpu only a shallow copy is performed.
     pub fn to_cpu(&self) -> Result<Tensor<crate::CpuStorage>> {
-        let storage = self.storage().clone().to_cpu_storage()?;
-        let op = BackpropOp::none();
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: Arc::new(RwLock::new(storage)),
-            layout: self.layout.clone(),
-            op,
-            is_variable: false,
-            dtype: self.dtype,
-            device: crate::CpuDevice,
-        };
-        Ok(Tensor(Arc::new(tensor_)))
+        let storage = self.storage().to_cpu_storage()?;
+        Ok(crate::CpuStorage::to_tensor(
+            Arc::new(RwLock::new(storage)),
+            self.layout.clone(),
+            BackpropOp::none(),
+            false,
+        ))
     }
 
     /// If the tensor is cpu only a shallow copy is performed.
     pub fn from_cpu(tensor: Tensor<crate::CpuStorage>, device: &B::Device) -> Result<Self> {
         let storage = device.storage_from_cpu_storage(&tensor.storage())?;
-        let op = BackpropOp::none();
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: Arc::new(RwLock::new(storage)),
-            layout: tensor.layout.clone(),
-            op,
-            is_variable: false,
-            dtype: tensor.dtype,
-            device: device.clone(),
-        };
-        Ok(Tensor(Arc::new(tensor_)))
+        Ok(B::to_tensor(
+            Arc::new(RwLock::new(storage)),
+            tensor.layout.clone(),
+            BackpropOp::none(),
+            false,
+        ))
     }
 
     /// Returns a new tensor duplicating data from the original tensor. New dimensions are inserted
@@ -2331,16 +2303,13 @@ impl<B: BackendStorage> Tensor<B> {
     /// any value, the dimension `t_a` must be equal to `i_a` if `i_a` is different from 1. If
     /// `i_a` is equal to 1, any value can be used.
     pub fn broadcast_as<S: Into<Shape>>(&self, shape: S) -> Result<Self> {
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: self.storage.clone(),
-            layout: self.layout.broadcast_as(shape)?,
-            op: BackpropOp::new1(self, Op::Broadcast),
-            is_variable: false,
-            dtype: self.dtype,
-            device: self.device.clone(),
-        };
-        Ok(Tensor(Arc::new(tensor_)))
+        let op = BackpropOp::new1(self, Op::Broadcast);
+        Ok(B::to_tensor(
+            self.storage.clone(),
+            self.layout.broadcast_as(shape)?,
+            op,
+            false,
+        ))
     }
 
     /// An alias for broadcast_as.
@@ -2444,16 +2413,12 @@ impl<B: BackendStorage> Tensor<B> {
         }
         let op = BackpropOp::new1(self, Op::Reshape);
         if self.is_contiguous() {
-            let tensor_ = Tensor_ {
-                id: TensorId::new(),
-                storage: self.storage.clone(),
-                layout: Layout::contiguous_with_offset(shape, self.layout.start_offset()),
+            Ok(B::to_tensor(
+                self.storage.clone(),
+                Layout::contiguous_with_offset(shape, self.layout.start_offset()),
                 op,
-                is_variable: false,
-                dtype: self.dtype,
-                device: self.device.clone(),
-            };
-            Ok(Tensor(Arc::new(tensor_)))
+                false,
+            ))
         } else {
             let mut storage = unsafe { self.device().alloc_uninit(&shape, self.dtype())? };
             self.storage()
@@ -2487,16 +2452,13 @@ impl<B: BackendStorage> Tensor<B> {
             let mut strides = self.stride().to_vec();
             dims.remove(dim);
             strides.remove(dim);
-            let tensor_ = Tensor_ {
-                id: TensorId::new(),
-                storage: self.storage.clone(),
-                layout: Layout::new(dims.into(), strides, self.layout.start_offset()),
-                op: BackpropOp::new1(self, Op::Reshape),
-                is_variable: false,
-                dtype: self.dtype,
-                device: self.device.clone(),
-            };
-            Ok(Tensor(Arc::new(tensor_)))
+            let op = BackpropOp::new1(self, Op::Reshape);
+            Ok(B::to_tensor(
+                self.storage.clone(),
+                Layout::new(dims.into(), strides, self.layout.start_offset()),
+                op,
+                false,
+            ))
         } else {
             Ok(self.clone())
         }
@@ -2527,16 +2489,13 @@ impl<B: BackendStorage> Tensor<B> {
         // C contiguous.
         let stride = if dim < strides.len() { strides[dim] } else { 1 };
         strides.insert(dim, stride);
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: self.storage.clone(),
-            layout: Layout::new(dims.into(), strides, self.layout.start_offset()),
-            op: BackpropOp::new1(self, Op::Reshape),
-            is_variable: false,
-            dtype: self.dtype,
-            device: self.device.clone(),
-        };
-        Ok(Tensor(Arc::new(tensor_)))
+        let op = BackpropOp::new1(self, Op::Reshape);
+        Ok(B::to_tensor(
+            self.storage.clone(),
+            Layout::new(dims.into(), strides, self.layout.start_offset()),
+            op,
+            false,
+        ))
     }
 
     /// Stacks two or more tensors along a particular dimension.
