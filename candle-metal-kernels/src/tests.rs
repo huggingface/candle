@@ -3,8 +3,7 @@ use crate::metal::create_command_buffer;
 use core::ffi::c_void;
 use half::{bf16, f16};
 use rand::prelude::SliceRandom;
-use rand::thread_rng;
-use rand::Rng;
+use rand::{rng, Rng};
 
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     let ptr = buffer.contents() as *const T;
@@ -999,7 +998,7 @@ fn reduce_sum_case<const N: usize, const D: usize>() {
     let mut v = create_array::<N>();
     if D == 1 {
         // Hardens 1-dimensional test cases
-        v.shuffle(&mut thread_rng());
+        v.shuffle(&mut rng());
     }
     let results = run_reduce(&v, N, D, "fast_sum_f32");
     assert_eq!(approx(results, 4), correct_sum::<N, D>());
@@ -1009,7 +1008,7 @@ fn reduce_max_case<const N: usize, const D: usize>() {
     let mut v = create_array::<N>();
     if D == 1 {
         // Hardens 1-dimensional test cases
-        v.shuffle(&mut thread_rng());
+        v.shuffle(&mut rng());
     }
     let results = run_reduce(&v, N, D, "fast_max_f32");
     assert_eq!(approx(results, 4), correct_max::<N, D>());
@@ -1019,7 +1018,7 @@ fn reduce_argmax_case<const N: usize, const D: usize>() {
     let mut v = create_array::<N>();
     if D == 1 {
         // Hardens 1-dimensional test cases
-        v.shuffle(&mut thread_rng());
+        v.shuffle(&mut rng());
     }
     let results: Vec<u32> = run_reduce(&v, N, D, "fast_argmax_f32");
     assert_eq!(results, correct_argmax::<N, D>(v));
@@ -1233,7 +1232,7 @@ fn run_where_cond<I: Clone, T: Clone>(
         buffer: &right,
         offset_in_bytes: cond_offset,
     };
-    call_where_cond_strided(
+    call_where_cond(
         &device,
         &command_buffer,
         &kernels,
@@ -2388,8 +2387,8 @@ fn const_fill() {
         name: &'static str,
         f: F,
     ) {
-        let len = rand::thread_rng().gen_range(2..16) * rand::thread_rng().gen_range(4..16);
-        let value = rand::thread_rng().gen_range(1. ..19.);
+        let len = rand::rng().random_range(2..16) * rand::rng().random_range(4..16);
+        let value = rand::rng().random_range(1. ..19.);
         let value = f(value);
         let v = constant_fill::<T>(name, len, value);
         assert_eq!(v, vec![value; len])

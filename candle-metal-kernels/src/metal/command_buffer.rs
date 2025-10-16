@@ -58,7 +58,7 @@ impl CommandBuffer {
     }
 
     pub fn wait_until_completed(&self) {
-        unsafe { self.raw.waitUntilCompleted() }
+        self.raw.waitUntilCompleted()
     }
 }
 
