@@ -22,6 +22,8 @@ jobs:
       # with sigstore/fulcio when running outside of PRs.
       id-token: write
       security-events: write
+    env:
+      CUDA_COMPUTE_CAP: 86
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -30,7 +32,5 @@ jobs:
       - name: Install Rust Stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
-      - name: sleep
-        run: sleep 15m
       - name: Test (cuda)
         run: cargo test --features cuda
