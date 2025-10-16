@@ -12,11 +12,11 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 candle = { path = "../candle-core", package = "candle-core", version = "0.9.1" }
 candle-nn = { path = "../candle-nn", version = "0.9.1" }
-prost = "0.12.1"
+prost = "0.14.1"
 
 [build-dependencies]
-prost-build = "0.12.1"
+prost-build = "0.14.1"
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
-clap = { version = "4.2.4", features = ["derive"] }
+clap = { version = "4.5.49", features = ["derive"] }

@@ -1,7 +1,8 @@
 use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
 use candle::{DType, Device, Module, Tensor};
 use candle_nn::{Conv2d, Conv2dConfig};
-use criterion::{black_box, criterion_group, Criterion};
+use criterion::{criterion_group, Criterion};
+use std::hint::black_box;
 use std::time::Instant;
 
 const B: usize = 1;
