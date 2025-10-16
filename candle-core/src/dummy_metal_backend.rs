@@ -42,7 +42,6 @@ mod dummy {
 
     impl crate::backend::BackendStorage for MetalStorage {
         type Device = MetalDevice;
-        type Storage = Self;
 
         fn try_clone(&self, _: &Layout) -> Result<Self> {
             Err(Error::NotCompiledWithMetalSupport)

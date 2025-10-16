@@ -61,7 +61,7 @@ struct EluBackward {
     alpha: f64,
 }
 
-impl CustomOp1<CpuStorage> for EluBackward {
+impl CustomOp1<Bwd<CpuStorage>> for EluBackward {
     fn name(&self) -> &'static str {
         "elu-bwd"
     }
@@ -85,7 +85,7 @@ impl EluWithBackward {
     }
 }
 
-impl CustomOp1<CpuStorage> for EluWithBackward {
+impl CustomOp1<Bwd<CpuStorage>> for EluWithBackward {
     fn name(&self) -> &'static str {
         "elu"
     }

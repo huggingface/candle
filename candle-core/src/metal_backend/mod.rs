@@ -78,7 +78,7 @@ pub struct MetalStorage {
 
 impl BackendStorage for MetalStorage {
     type Device = MetalDevice;
-    type Storage = Self;
+    type Storage = MetalStorage;
 
     fn try_clone(&self, _: &Layout) -> Result<Self> {
         Ok(self.clone())

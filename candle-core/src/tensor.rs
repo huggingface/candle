@@ -2604,6 +2604,14 @@ impl<B: BackendStorage> Tensor<B> {
         m.forward_t(self, train)
     }
 
+    pub fn storage_map<F>(&self, f: F) -> Result<(B, Shape)>
+    where
+        F: FnOnce(&B) -> Result<(B, Shape)>,
+    {
+        let storage = self.storage.write().unwrap();
+        f(&storage)
+    }
+
     pub(crate) fn storage(&self) -> std::sync::RwLockReadGuard<'_, B> {
         self.storage.read().unwrap()
     }

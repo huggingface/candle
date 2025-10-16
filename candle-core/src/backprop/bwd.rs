@@ -54,11 +54,13 @@ impl<B: BackendStorage> BwdDevice<B> {
     }
 }
 
+/*
 impl<B: BackendStorage> AsRef<B::Device> for BwdDevice<B> {
     fn as_ref(&self) -> &B::Device {
         &self.device
     }
 }
+*/
 
 impl<B: BackendStorage> BackendDevice<Bwd<B>> for BwdDevice<B> {
     fn new(ordinal: usize) -> Result<Self> {
@@ -415,34 +417,49 @@ impl<B: BackendStorage> BackendStorage for Bwd<B> {
         self.backend.const_set(s, l)
     }
 
-    fn apply_op1(
-        &self,
-        _l: &Layout,
-        c: &dyn crate::CustomOp1<Self::Storage>,
-    ) -> Result<(Self, Shape)> {
-        todo!("apply_op1: {}", c.name());
+    fn apply_op1(&self, l: &Layout, c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)> {
+        // TODO: fixme. Unsafe transmute is not good enough
+        let c = unsafe {
+            std::mem::transmute::<&dyn crate::CustomOp1<Self>, &dyn crate::CustomOp1<B>>(c)
+        };
+        self.backend.apply_op1(l, c).map(|(b, s)| (b.into(), s))
     }
 
     fn apply_op2(
         &self,
-        _l1: &Layout,
-        _t2: &Self,
-        _l2: &Layout,
-        c: &dyn crate::CustomOp2<Self::Storage>,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn crate::CustomOp2<Self>,
     ) -> Result<(Self, Shape)> {
-        todo!("apply_op2: {}", c.name());
+        // TODO: fixme. Unsafe transmute is not good enough
+        let c = unsafe {
+            std::mem::transmute::<&dyn crate::CustomOp2<Self>, &dyn crate::CustomOp2<B>>(c)
+        };
+        let t2 = &t2.backend;
+        self.backend
+            .apply_op2(l1, t2, l2, c)
+            .map(|(b, s)| (b.into(), s))
     }
 
     fn apply_op3(
         &self,
-        _l1: &Layout,
-        _t2: &Self,
-        _l2: &Layout,
-        _t3: &Self,
-        _l3: &Layout,
-        c: &dyn crate::CustomOp3<Self::Storage>,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn crate::CustomOp3<Self>,
     ) -> Result<(Self, Shape)> {
-        todo!("apply_op3: {}", c.name());
+        // TODO: fixme. Unsafe transmute is not good enough
+        let c = unsafe {
+            std::mem::transmute::<&dyn crate::CustomOp3<Self>, &dyn crate::CustomOp3<B>>(c)
+        };
+        let t2 = &t2.backend;
+        let t3 = &t3.backend;
+        self.backend
+            .apply_op3(l1, t2, l2, t3, l3, c)
+            .map(|(b, s)| (b.into(), s))
     }
 
     fn inplace_op1(&mut self, l: &Layout, c: &dyn crate::InplaceOp1) -> Result<()> {

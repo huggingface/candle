@@ -11,8 +11,8 @@ use crate::CudaDevice;
 use crate::{MetalDevice, MetalError};
 
 pub trait BackendStorage: Sized + Clone + Send + Sync + Debug {
-    type Device: BackendDevice<Self>;
-    type Storage: BackendStorage;
+    type Device: BackendDevice<Self>; // + From<<Self::Storage as BackendStorage>::Device>;
+    type Storage: BackendStorage + Into<Self>;
 
     fn backprop_op(&self) -> Option<Op<Self>> {
         None
@@ -153,18 +153,14 @@ pub trait BackendStorage: Sized + Clone + Send + Sync + Debug {
 
     fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()>;
 
-    fn apply_op1(
-        &self,
-        _l: &Layout,
-        _c: &dyn crate::CustomOp1<Self::Storage>,
-    ) -> Result<(Self, Shape)>;
+    fn apply_op1(&self, _l: &Layout, _c: &dyn crate::CustomOp1<Self>) -> Result<(Self, Shape)>;
 
     fn apply_op2(
         &self,
         _l1: &Layout,
         _t2: &Self,
         _l2: &Layout,
-        _c: &dyn crate::CustomOp2<Self::Storage>,
+        _c: &dyn crate::CustomOp2<Self>,
     ) -> Result<(Self, Shape)>;
 
     fn apply_op3(
@@ -174,7 +170,7 @@ pub trait BackendStorage: Sized + Clone + Send + Sync + Debug {
         _l2: &Layout,
         _t3: &Self,
         _l3: &Layout,
-        _c: &dyn crate::CustomOp3<Self::Storage>,
+        _c: &dyn crate::CustomOp3<Self>,
     ) -> Result<(Self, Shape)>;
 
     fn inplace_op1(&mut self, _l: &Layout, _c: &dyn crate::InplaceOp1) -> Result<()>;

@@ -808,6 +808,7 @@ impl crate::CustomOp1<Storage> for QTensor<QStorage> {
 impl<QB: QuantizedBackend> crate::Module<QB::Storage> for QMatMul<QB>
 where
     QTensor<QB>: CustomOp1<<QB::Storage as BackendStorage>::Storage>,
+    QTensor<QB>: CustomOp1<<QB as QuantizedBackend>::Storage>,
 {
     fn forward(&self, xs: &Tensor<QB::Storage>) -> Result<Tensor<QB::Storage>> {
         match self {

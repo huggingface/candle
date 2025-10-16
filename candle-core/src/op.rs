@@ -168,18 +168,18 @@ pub enum Op<B: BackendStorage> {
     Powf(Tensor<B>, f64),
     CustomOp1(
         Tensor<B>,
-        std::sync::Arc<Box<dyn crate::CustomOp1<B::Storage> + Send + Sync>>,
+        std::sync::Arc<Box<dyn crate::CustomOp1<B> + Send + Sync>>,
     ),
     CustomOp2(
         Tensor<B>,
         Tensor<B>,
-        std::sync::Arc<Box<dyn crate::CustomOp2<B::Storage> + Send + Sync>>,
+        std::sync::Arc<Box<dyn crate::CustomOp2<B> + Send + Sync>>,
     ),
     CustomOp3(
         Tensor<B>,
         Tensor<B>,
         Tensor<B>,
-        std::sync::Arc<Box<dyn crate::CustomOp3<B::Storage> + Send + Sync>>,
+        std::sync::Arc<Box<dyn crate::CustomOp3<B> + Send + Sync>>,
     ),
 }
 
