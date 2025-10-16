@@ -41,7 +41,7 @@ tokenizers = { workspace = true, features = ["onig"] }
 cpal = { version = "0.15.2", optional = true }
 pdf2image = { version = "0.1.2", optional = true }
 tekken-rs = { version = "0.1.1", optional = true }
-bert-single-file-binary-builder = { path = "bert_single_file_binary_builder", optional = true }
+single-file-binary-builder = { path = "single-file-binary-builder", optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -55,7 +55,7 @@ tracing = { workspace = true }
 tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }
 # Necessary to disambiguate with tokio in wasm examples which are 1.28.1
-tokio = "1.43.0"
+tokio = "1.48.0"
 
 [build-dependencies]
 anyhow = { workspace = true }
@@ -92,7 +92,7 @@ mimi = ["cpal", "symphonia", "rubato"]
 snac = ["cpal", "symphonia", "rubato"]
 depth_anything_v2 = ["palette", "enterpolation"]
 tekken = ["tekken-rs"]
-bert-single-file-binary-builder = ["dep:bert-single-file-binary-builder"]
+single-file-binary-builder = ["dep:single-file-binary-builder"]
 
 [[example]]
 name = "llama_multiprocess"
@@ -160,4 +160,4 @@ required-features = ["symphonia"]
 
 [[example]]
 name = "bert_single_file_binary"
-required-features = ["bert-single-file-binary-builder"]
+required-features = ["single-file-binary-builder"]
