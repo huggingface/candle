@@ -106,7 +106,7 @@ impl SegformerEfficientSelfAttention {
         sequence_reduction_ratio: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
-        if hidden_size % num_attention_heads != 0 {
+        if !hidden_size.is_multiple_of(num_attention_heads) {
             candle::bail!(
                 "The hidden size {} is not a multiple of the number of attention heads {}",
                 hidden_size,

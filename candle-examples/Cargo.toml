@@ -41,6 +41,7 @@ tokenizers = { workspace = true, features = ["onig"] }
 cpal = { version = "0.15.2", optional = true }
 pdf2image = { version = "0.1.2", optional = true }
 tekken-rs = { version = "0.1.1", optional = true }
+single-file-binary-builder = { path = "single-file-binary-builder", optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -91,6 +92,7 @@ mimi = ["cpal", "symphonia", "rubato"]
 snac = ["cpal", "symphonia", "rubato"]
 depth_anything_v2 = ["palette", "enterpolation"]
 tekken = ["tekken-rs"]
+single-file-binary-builder = ["dep:single-file-binary-builder"]
 
 [[example]]
 name = "llama_multiprocess"
@@ -155,3 +157,7 @@ required-features = ["pdf2image"]
 [[example]]
 name = "voxtral"
 required-features = ["symphonia"]
+
+[[example]]
+name = "bert_single_file_binary"
+required-features = ["single-file-binary-builder"]

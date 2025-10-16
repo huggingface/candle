@@ -56,7 +56,7 @@ cudarc = { version = "0.17.3", features = [
     "dynamic-linking",
 ], default-features = false }
 fancy-regex = "0.13.0"
-gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
+gemm = { version = "0.18.2", features = ["wasm-simd128-enable"] }
 hf-hub = "0.4.1"
 half = { version = "2.5.0", features = [
     "num-traits",
@@ -92,9 +92,9 @@ tokenizers = { version = "0.21.0", default-features = false }
 tracing = "0.1.37"
 tracing-chrome = "0.7.1"
 tracing-subscriber = "0.3.7"
-ug = "0.4.0"
-ug-cuda = "0.4.0"
-ug-metal = "0.4.0"
+ug = "0.5.0"
+ug-cuda = "0.5.0"
+ug-metal = "0.5.0"
 yoke = { version = "0.7.2", features = ["derive"] }
 zip = { version = "1.1.1", default-features = false }
 objc2-metal = { version = "0.3.1" }
