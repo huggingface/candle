@@ -186,9 +186,7 @@ fn main() -> Result<()> {
             // tokens, including padding. This was the original behavior of this
             // example, and we'd like to preserve it for posterity.
             let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
-            let embeddings = (embeddings.sum(1)? / (n_tokens as f64))?;
-
-            embeddings
+            (embeddings.sum(1)? / (n_tokens as f64))?
         } else {
             // Apply avg-pooling by taking the mean embedding value for all
             // tokens (after applying the attention mask from tokenization).
@@ -197,9 +195,7 @@ fn main() -> Result<()> {
             let attention_mask_for_pooling = attention_mask.to_dtype(DTYPE)?.unsqueeze(2)?;
             let sum_mask = attention_mask_for_pooling.sum(1)?;
             let embeddings = (embeddings.broadcast_mul(&attention_mask_for_pooling)?).sum(1)?;
-            let embeddings = embeddings.broadcast_div(&sum_mask)?;
-
-            embeddings
+            embeddings.broadcast_div(&sum_mask)?
         };
         let embeddings = if args.normalize_embeddings {
             normalize_l2(&embeddings)?
