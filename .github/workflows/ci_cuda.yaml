@@ -12,7 +12,7 @@ jobs:
     runs-on:
       group: aws-g5-4xlarge-cache
     container:
-      image: nvidia/cuda:13.0.1-devel-ubuntu24.04
+      image: nvidia/cuda:12.6.0-cudnn-devel-ubuntu22.04
       options: --gpus 0
     if: ${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     permissions:
