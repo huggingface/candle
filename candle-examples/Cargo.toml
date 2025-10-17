@@ -59,7 +59,7 @@ tokio = "1.48.0"
 
 [build-dependencies]
 anyhow = { workspace = true }
-bindgen_cuda = { version = "0.1.1", optional = true }
+bindgen_cuda = { version = "0.1.5", optional = true }
 
 [features]
 default = []
