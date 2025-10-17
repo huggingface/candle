@@ -1,0 +1,113 @@
+MLP Network Architecture Visualization Description
+
+This file describes the design for an MLP network architecture visualization to be created and saved as mlp_architecture.png.
+
+OVERALL LAYOUT:
+- A comprehensive visualization showing the Self-Attention Model architecture from Chapter 8
+- Clean, professional style with consistent colors and clear labels
+- Size approximately 800x600 pixels
+- Split into main sections: overall architecture, detailed components, and key formulas
+
+COMPONENTS:
+
+1. OVERALL ARCHITECTURE (Top section):
+   - Show the high-level structure of the Self-Attention Model
+   - Include the main components in a vertical flow:
+     * Input (token indices)
+     * Embedding layer
+     * Positional encoding
+     * Self-attention mechanism
+     * Feed-forward network
+     * Layer normalization
+     * Output projection (to vocabulary)
+   - Use boxes for components with clear labels
+   - Show data flow with arrows between components
+   - Color: Light blue background for this section (#D6EAF8 or similar)
+
+2. EMBEDDING AND POSITIONAL ENCODING (Middle-left section):
+   - Expanded view of the embedding and positional encoding components
+   - Show:
+     * Token embedding lookup
+     * Positional encoding generation (sinusoidal)
+     * Addition of embeddings and positional encodings
+   - Include dimensions (VOCAB_SIZE=26, HIDDEN_SIZE=256)
+   - Color: Light green background for this section (#D5F5E3 or similar)
+
+3. SELF-ATTENTION DETAIL (Middle-right section):
+   - Detailed view of the SelfAttention component
+   - Include:
+     * Query, Key, Value projections
+     * Attention score calculation
+     * Softmax operation
+     * Weighted aggregation
+     * Output projection
+   - Show the data flow with arrows
+   - Color: Light yellow background for this section (#FEF9E7 or similar)
+
+4. FEED-FORWARD NETWORK DETAIL (Bottom-left section):
+   - Expanded view of the FeedForward component
+   - Show:
+     * First linear layer (HIDDEN_SIZE → HIDDEN_SIZE*4)
+     * ReLU activation
+     * Second linear layer (HIDDEN_SIZE*4 → HIDDEN_SIZE)
+   - Include dimensions for each layer
+   - Color: Light orange background for this section (#FAE5D3 or similar)
+
+5. LAYER NORMALIZATION AND RESIDUAL CONNECTIONS (Bottom-right section):
+   - Detailed view of how layer normalization and residual connections are applied
+   - Show:
+     * Pre-normalization approach (LayerNorm before self-attention and feed-forward)
+     * Residual connections around self-attention and feed-forward blocks
+     * Final layer normalization
+   - Use dashed lines for residual connections
+   - Color: Light purple background for this section (#E8DAEF or similar)
+
+ARCHITECTURE SPECIFICATIONS (Based on Chapter 8):
+- Vocabulary size: 26 (letters A-Z)
+- Hidden size: 256
+- Sequence length: 10
+- Feed-forward size: 1024 (4x hidden size)
+- Layer normalization epsilon: 1e-5
+- Pre-normalization approach (LayerNorm before each sub-layer)
+- Residual connections around self-attention and feed-forward blocks
+
+ANNOTATIONS:
+- Add clear labels for all components
+- Include the key equations:
+  * Attention(Q, K, V) = softmax(QK^T)V
+  * Embedding + Positional Encoding
+  * LayerNorm(x) = γ * (x - μ) / (σ + ε) + β
+- Add a brief title at the top: "Self-Attention Model Architecture"
+- Include a small legend explaining the color coding and components
+- Add dimensions for each component (e.g., hidden_size=256, vocab_size=26)
+
+STYLE GUIDELINES:
+- Use a clean, minimalist design with adequate white space
+- Use a consistent, professional font (e.g., Arial or Helvetica)
+- Use a color scheme that's easy to distinguish but not too bright
+- Ensure all text is readable at the intended display size
+- Use thin lines for connections and borders
+- Use dashed lines for residual connections
+
+SPECIFIC DETAILS:
+- For the overall architecture, use a vertical flow diagram
+- For the self-attention component, show the key operations (projection, scoring, weighting)
+- For the feed-forward network, show both linear layers and the activation function
+- Use arrows to show the flow of information through the process
+- Include small explanatory notes where helpful
+- Show tensor shapes at key points in the network
+
+RECOMMENDED TOOLS:
+- Python with matplotlib for creating the visualization
+- Use matplotlib's gridspec for organizing the different components
+- Consider using patches for boxes and arrows
+
+EXPORT INSTRUCTIONS:
+- Export as PNG at 800x600 pixels resolution
+- Save as "mlp_architecture.png" in the src/images/ directory
+- Ensure the image has a transparent background or white background
+
+VERIFICATION:
+- After adding the image to the repository, verify it displays correctly in the documentation
+- Check that the image is properly referenced in src/08_building_your_first_neural_network.md
+- Ensure the image is clear and readable at different zoom levels

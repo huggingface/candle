@@ -1,0 +1,92 @@
+Backpropagation Gradient Descent Diagram Description
+
+This file describes the design for a backpropagation gradient descent visualization to be created and saved as backpropagation_gradient_descent.png.
+
+OVERALL LAYOUT:
+- A comprehensive visualization showing both the neural network structure and the gradient descent process
+- Clean, professional style with consistent colors and clear labels
+- Size approximately 800x500 pixels
+- Split into two main sections: network architecture (left) and gradient descent (right)
+
+COMPONENTS:
+
+1. NEURAL NETWORK ARCHITECTURE (Left side):
+   - A simple neural network with:
+     * Input layer (1 neuron for x)
+     * Hidden layer (2 neurons)
+     * Output layer (1 neuron for y_pred)
+   - Show the forward pass with:
+     * Input value x flowing through the network
+     * Weights (W1, W2) and biases (b1, b2) clearly labeled
+     * Activation functions (ReLU for hidden layer, linear for output)
+   - Color: Light blue background for the network section
+
+2. BACKPROPAGATION FLOW (Center):
+   - Arrows showing gradient flow in reverse direction:
+     * From loss to output layer
+     * From output layer to hidden layer
+     * From hidden layer to input layer
+   - Include key gradient calculations:
+     * dL/dy_pred = y_pred - y
+     * dL/dW2, dL/db2
+     * dL/dW1, dL/db1
+   - Use different colored arrows for forward pass (blue) and backward pass (red)
+
+3. GRADIENT DESCENT VISUALIZATION (Right side):
+   - A 3D-like surface representing the loss landscape
+   - A path showing the optimization trajectory:
+     * Starting from initial random weights (high loss)
+     * Moving downhill following the negative gradient
+     * Converging toward the minimum (optimal weights)
+   - Include multiple steps of the optimization process
+   - Show parameter updates with the formula: W = W - α·∇W
+   - Color: Light orange/yellow gradient for the loss surface
+
+4. LEARNING RATE ILLUSTRATION (Bottom right):
+   - Small inset showing the effect of different learning rates:
+     * Too small: slow convergence
+     * Too large: overshooting/divergence
+     * Just right: optimal convergence
+   - Use small arrows to indicate step sizes
+
+ANNOTATIONS:
+- Add clear labels for all components (neurons, weights, gradients)
+- Include the key equations:
+  * Forward pass: y_pred = f2(W2·f1(W1·x + b1) + b2)
+  * Loss function: L = (1/2)(y - y_pred)²
+  * Gradient descent update: θ = θ - α·∂L/∂θ
+- Add a brief title at the top: "Backpropagation and Gradient Descent"
+- Include a small legend explaining the color coding and arrow directions
+
+STYLE GUIDELINES:
+- Use a clean, minimalist design with adequate white space
+- Use a consistent, professional font (e.g., Arial or Helvetica)
+- Use a color scheme that's easy to distinguish but not too bright:
+  * Network structure: Blues (#D6EAF8 to #2E86C1)
+  * Forward pass: Blue arrows (#3498DB)
+  * Backward pass: Red arrows (#E74C3C)
+  * Loss landscape: Orange/yellow gradient (#F9E79F to #E67E22)
+- Ensure all text is readable at the intended display size
+- Use thin lines for connections and thicker lines for highlighted paths
+
+SPECIFIC DETAILS:
+- For the loss landscape, use a simple quadratic function to represent MSE loss
+- Show at least 3-4 steps of gradient descent on the loss surface
+- Use small circular markers to indicate the position at each iteration
+- For the neural network, use circles for neurons and lines for connections
+- Use mathematical notation consistent with the chapter text
+
+RECOMMENDED TOOLS:
+- Python with matplotlib and numpy for creating the visualization
+- Use matplotlib's 3D plotting capabilities for the loss landscape
+- Consider using networkx for the neural network structure
+
+EXPORT INSTRUCTIONS:
+- Export as PNG at 800x500 pixels resolution
+- Save as "backpropagation_gradient_descent.png" in the src/images/ directory
+- Ensure the image has a transparent background or white background
+
+VERIFICATION:
+- After adding the image to the repository, verify it displays correctly in the documentation
+- Check that the image is properly referenced in src/10_backpropagation_from_scratch.md
+- Ensure the image is clear and readable at different zoom levels
