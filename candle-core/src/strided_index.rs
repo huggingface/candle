@@ -5,7 +5,8 @@ use crate::Layout;
 #[derive(Debug)]
 pub struct StridedIndex {
     next_storage_index: Option<usize>,
-    multi_index: Vec<((usize, usize), usize)>,
+    // (current_index_in_dim, max_index_in_dim, stride_for_dim)
+    multi_index: Vec<(usize, usize, usize)>,
 }
 
 impl StridedIndex {
@@ -17,12 +18,13 @@ impl StridedIndex {
             // This applies to the scalar case.
             Some(start_offset)
         };
-        // This iterator is hot enough that precomputing the zipped structure is worth it.
-        let multi_index: Vec<_> = vec![0usize; dims.len()]
-            .into_iter()
-            .zip(dims.iter().copied())
-            .zip(stride.iter().copied())
+        // Precompute multi index iterator.
+        // For each dim, we have (current_index_in_dim, max_index_in_dim, stride_for_dim)
+        let multi_index: Vec<_> = dims
+            .iter()
+            .zip(stride.iter())
             .rev()
+            .map(|(dim, stride)| (0, *dim, *stride))
             .collect();
         StridedIndex {
             next_storage_index,
@@ -42,7 +44,7 @@ impl Iterator for StridedIndex {
         let storage_index = self.next_storage_index?;
         let mut updated = false;
         let mut next_storage_index = storage_index;
-        for ((multi_i, max_i), stride_i) in self.multi_index.iter_mut() {
+        for (multi_i, max_i, stride_i) in self.multi_index.iter_mut() {
             let next_i = *multi_i + 1;
             if next_i < *max_i {
                 *multi_i = next_i;
