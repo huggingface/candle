@@ -202,8 +202,6 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
             let mut col_tile = vec![T::zero(); k_size * tile_size];
 
             for (tile_idx, (out_y, out_x)) in out_coords.iter().enumerate() {
-                // let (out_y, out_x) = out_coords[tile_idx];
-
                 // Extract the im2col patch for this output position
                 for c_in in 0..p.c_in {
                     let mut patch_offset = c_in;
@@ -246,7 +244,6 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
 
             // Copy results to output: result is [c_out, tile_size]
             for (tile_idx, (out_y, out_x)) in out_coords.iter().enumerate() {
-                // let (out_y, out_x) = out_coords[tile_idx];
                 let dst_base = out_batch_offset + out_y * out_w + out_x;
 
                 for c_out_idx in 0..p.c_out {
