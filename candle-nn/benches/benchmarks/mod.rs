@@ -1,3 +1,4 @@
+pub(crate) mod activation_bench;
 pub(crate) mod conv;
 pub(crate) mod layer_norm;
 pub(crate) mod softmax;
