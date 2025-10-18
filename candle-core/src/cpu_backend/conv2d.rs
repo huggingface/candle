@@ -18,9 +18,7 @@ enum Conv2dImpl {
     Direct,
 }
 
-// const DEFAULT_CONV2D_IMPL: Conv2dImpl = Conv2dImpl::Direct;
 const DEFAULT_CONV2D_IMPL: Conv2dImpl = Conv2dImpl::TiledIm2Col;
-// const DEFAULT_CONV2D_IMPL: Conv2dImpl = Conv2dImpl::FullIm2Col;
 
 impl Map2 for Conv2D<'_> {
     const OP: &'static str = "conv2d";
@@ -98,22 +96,21 @@ fn conv2d_1x1<T: WithDType + num_traits::Num + Copy + 'static>(
 
         // Copy result to output
         let out_offset = b_idx * p.c_out * spatial_size;
-        for i in 0..result.len() {
+        for (i, r) in result.iter().enumerate() {
             unsafe {
                 let ptr = dst.as_ptr().add(out_offset + i) as *mut T;
-                *ptr = result[i];
+                *ptr = *r;
             }
         }
         Ok::<(), crate::Error>(())
     })?;
 
-    return Ok(dst);
+    Ok(dst)
 }
 
 /// General tiled convolution implementation using gemm.
 ///
-/// It's kinda like im2col + gemm, but processes output in tiles to avoid materializing the full im2col matrix and enable better parallelism.
-/// Overall, this impl for medium to large inputs and kernels tends to outperform both direct convolution and full im2col+gemm.
+/// Similar to full im2col, but instead of materializing the full matrix, we process input/output in tiles, in parallel.
 fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
     p: &ParamsConv2D,
     inp: &[T],
@@ -186,7 +183,8 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
         let inp_offset = b_idx * cont_s0;
         let out_batch_offset = b_idx * (p.c_out * out_h * out_w);
 
-        let num_tiles = (total_out_pixels + TILE_SIZE - 1) / TILE_SIZE;
+        // let num_tiles = (total_out_pixels + TILE_SIZE - 1) / TILE_SIZE;
+        let num_tiles = total_out_pixels.div_ceil(TILE_SIZE);
         (0..num_tiles).into_par_iter().try_for_each(|tile_idx| {
             // Determine actual tile size (may be smaller at the end) {
             let tile_start = tile_idx * TILE_SIZE;
@@ -203,8 +201,8 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
             // This represents the input patches needed for this tile of outputs
             let mut col_tile = vec![T::zero(); k_size * tile_size];
 
-            for tile_idx in 0..tile_size {
-                let (out_y, out_x) = out_coords[tile_idx];
+            for (tile_idx, (out_y, out_x)) in out_coords.iter().enumerate() {
+                // let (out_y, out_x) = out_coords[tile_idx];
 
                 // Extract the im2col patch for this output position
                 for c_in in 0..p.c_in {
@@ -247,8 +245,8 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
             let result = matmul.f(&k_flat, &k_layout, &col_tile, &col_layout)?;
 
             // Copy results to output: result is [c_out, tile_size]
-            for tile_idx in 0..tile_size {
-                let (out_y, out_x) = out_coords[tile_idx];
+            for (tile_idx, (out_y, out_x)) in out_coords.iter().enumerate() {
+                // let (out_y, out_x) = out_coords[tile_idx];
                 let dst_base = out_batch_offset + out_y * out_w + out_x;
 
                 for c_out_idx in 0..p.c_out {
@@ -372,12 +370,16 @@ fn conv2d_direct<T: WithDType + num_traits::Num + Copy + 'static>(
     Ok(dst)
 }
 
+#[allow(clippy::uninit_vec)]
 fn alloc_uninit_vec<T: WithDType + Copy + 'static>(size: usize) -> Vec<T> {
     let mut v = Vec::with_capacity(size);
     unsafe { v.set_len(size) };
     v
 }
 
+/// Full im2col + gemm convolution implementation.
+///
+/// For large inputs im2col and copy_strided_src for output gets expensive.
 fn conv2d_im2col_gemm<T: WithDType + num_traits::Num + Copy + 'static>(
     p: &ParamsConv2D,
     inp: &[T],
@@ -403,7 +405,7 @@ fn conv2d_im2col_gemm<T: WithDType + num_traits::Num + Copy + 'static>(
         let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
             .transpose(1, 2)?
             .broadcast_as((b, k, n))?;
-        MatMul((b, m, n, k)).f(&col, &col_l, &kernel, &kernel_l)?
+        MatMul((b, m, n, k)).f(&col, &col_l, kernel, &kernel_l)?
     } else {
         // Make the kernel contiguous if not already the case.
         let mut kernel_c = alloc_uninit_vec(kernel_l.shape().elem_count());
