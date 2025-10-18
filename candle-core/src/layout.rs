@@ -187,11 +187,11 @@ impl Layout {
         })
     }
 
-    pub(crate) fn strided_index(&self) -> crate::StridedIndex<'_> {
+    pub(crate) fn strided_index(&self) -> crate::StridedIndex {
         crate::StridedIndex::from_layout(self)
     }
 
-    pub(crate) fn strided_blocks(&self) -> crate::StridedBlocks<'_> {
+    pub(crate) fn strided_blocks(&self) -> crate::StridedBlocks {
         let mut block_len = 1;
         let mut contiguous_dims = 0; // These are counted from the right.
         for (&stride, &dim) in self.stride().iter().zip(self.dims().iter()).rev() {
