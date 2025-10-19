@@ -2,7 +2,7 @@
 use crate::{Error, Result, Shape};
 use arrayvec::ArrayVec;
 
-pub(crate) const MAX_DIMS: usize = 6;
+pub(crate) const MAX_DIMS: usize = 8;
 pub(crate) type Stride = ArrayVec<usize, MAX_DIMS>;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
