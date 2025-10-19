@@ -2647,11 +2647,11 @@ impl<B: BackendStorage> Tensor<B> {
         m.forward_t(self, train)
     }
 
-    pub(crate) fn storage(&self) -> std::sync::RwLockReadGuard<'_, B> {
+    pub fn storage(&self) -> std::sync::RwLockReadGuard<'_, B> {
         self.storage.read().unwrap()
     }
 
-    pub(crate) fn storage_mut(&self) -> std::sync::RwLockWriteGuard<'_, B> {
+    pub fn storage_mut(&self) -> std::sync::RwLockWriteGuard<'_, B> {
         self.storage.write().unwrap()
     }
 

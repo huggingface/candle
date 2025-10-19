@@ -3,8 +3,8 @@
 use std::{f32::consts::PI, sync::Arc};
 
 use candle::{
-    shape::Dim, BackendStorage, CpuStorage, CustomOp1, DType, Error, IndexOp, Layout, Result,
-    Shape, Tensor, WithDType, D,
+    shape::Dim, BackendStorage, CpuStorage, DType, Error, IndexOp, Layout, Result, Shape, Tensor,
+    WithDType, D,
 };
 use candle_nn::{embedding, rms_norm, Activation, Embedding, Linear, Module, RmsNorm, VarBuilder};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -56,6 +56,19 @@ impl NonZeroTrait for CpuStorage {
 
 struct NonZero {}
 
+impl<B: BackendStorage + NonZeroTrait> Module<B> for NonZero {
+    fn forward(&self, xs: &Tensor<B>) -> Result<Tensor<B>> {
+        let (storage, shape) = xs.storage().nonzero(xs.layout())?;
+        Ok(Tensor::from_storage(
+            storage,
+            shape,
+            candle::op::BackpropOp::none(),
+            false,
+        ))
+    }
+}
+
+/*
 impl CustomOp1<CpuStorage> for NonZero {
     fn name(&self) -> &'static str {
         "nonzero"
@@ -64,7 +77,6 @@ impl CustomOp1<CpuStorage> for NonZero {
     fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
         storage.nonzero(layout)
     }
-    /*
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
@@ -95,24 +107,8 @@ impl CustomOp1<CpuStorage> for NonZero {
             Ok((storage.clone(), layout.shape().clone()))
         }
     }
-     */
 }
-
-pub trait NonZeroOp<B: BackendStorage> {
-    fn nonzero(&self) -> Result<Tensor<B>>;
-}
-
-impl<B: BackendStorage> NonZeroOp<B> for Tensor<B> {
-    fn nonzero(&self) -> Result<Tensor<B>> {
-        if !self.is_contiguous() {
-            return Err(candle::Error::RequiresContiguous { op: "nonzero" });
-        }
-        let device = self.device();
-        let result = self.to_cpu()?.apply_op1_no_bwd(&NonZero {})?;
-        let tensor = Tensor::from_cpu(result, device)?;
-        Ok(tensor)
-    }
-}
+*/
 
 pub struct TopKOutput<B: BackendStorage> {
     pub values: Tensor<B>,
