@@ -251,7 +251,7 @@ impl ModernBertHead {
 
 impl Module for ModernBertHead {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = xs.apply(&self.dense)?.gelu_erf()?.apply(&self.norm)?;
+        let xs = xs.contiguous()?.apply(&self.dense)?.gelu_erf()?.apply(&self.norm)?;
         Ok(xs)
     }
 }
