@@ -122,6 +122,11 @@ impl Shape {
         self.0.to_vec()
     }
 
+    /// The inner shape vec
+    pub fn inner(&self) -> &ShapeVec {
+        &self.0
+    }
+
     /// The dimensions as a slice of `usize`.
     pub fn dims(&self) -> &[usize] {
         &self.0
@@ -183,7 +188,7 @@ impl Shape {
     /// Modifies the shape by adding a list of additional dimensions at the end of the existing
     /// dimensions.
     pub fn extend(mut self, additional_dims: &[usize]) -> Self {
-        self.0.extend(additional_dims.to_vec());
+        self.0.extend(additional_dims.iter().copied());
         self
     }
 
