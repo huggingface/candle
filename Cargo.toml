@@ -11,11 +11,11 @@ members = [
     "tensor-tools",
 ]
 exclude = [
-   "candle-book",
-   "candle-flash-attn",
-   "candle-kernels",
-   "candle-metal-kernels",
-   "candle-onnx",
+    "candle-book",
+    "candle-flash-attn",
+    "candle-kernels",
+    "candle-metal-kernels",
+    "candle-onnx",
 ]
 resolver = "2"
 
@@ -42,14 +42,36 @@ candle-nn = { path = "./candle-nn", version = "0.9.1" }
 candle-onnx = { path = "./candle-onnx", version = "0.9.1" }
 candle-transformers = { path = "./candle-transformers", version = "0.9.1" }
 clap = { version = "4.2.4", features = ["derive"] }
-criterion = { version = "0.5.1", default-features=false }
-cudarc = { version = "0.16.3", features = ["std", "cublas", "cublaslt", "curand", "driver", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-linking"], default-features=false }
+criterion = { version = "0.7.0", default-features = false }
+cudarc = { version = "0.17.3", features = [
+    "std",
+    "cublas",
+    "cublaslt",
+    "curand",
+    "driver",
+    "nvrtc",
+    "f16",
+    "f8",
+    "cuda-version-from-build-system",
+    "dynamic-linking",
+], default-features = false }
 fancy-regex = "0.13.0"
-gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
+gemm = { version = "0.18.2", features = ["wasm-simd128-enable"] }
 hf-hub = "0.4.1"
-half = { version = "2.5.0", features = ["num-traits", "use-intrinsics", "rand_distr"] }
+half = { version = "2.5.0", features = [
+    "num-traits",
+    "use-intrinsics",
+    "rand_distr",
+] }
+float8 = { version = "0.4.2", features = [
+    "num-traits",
+    "rand_distr",
+] }
 hound = "3.5.1"
-image = { version = "0.25.2", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25.2", default-features = false, features = [
+    "jpeg",
+    "png",
+] }
 imageproc = { version = "0.24.0", default-features = false }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
 libc = { version = "0.2.147" }
@@ -70,12 +92,13 @@ tokenizers = { version = "0.21.0", default-features = false }
 tracing = "0.1.37"
 tracing-chrome = "0.7.1"
 tracing-subscriber = "0.3.7"
-ug = "0.4.0"
-ug-cuda = "0.4.0"
-ug-metal = "0.4.0"
+ug = "0.5.0"
+ug-cuda = "0.5.0"
+ug-metal = "0.5.0"
 yoke = { version = "0.7.2", features = ["derive"] }
 zip = { version = "1.1.1", default-features = false }
-metal = { version = "0.27.0", features = ["mps"]}
+objc2-metal = { version = "0.3.1" }
+objc2-foundation = { version = "0.3.1" }
 
 [profile.release-with-debug]
 inherits = "release"

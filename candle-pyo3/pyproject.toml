@@ -9,6 +9,7 @@ dynamic = [
     'description',
     'license',
     'readme',
+    'version',
 ]
 
 [project.urls]

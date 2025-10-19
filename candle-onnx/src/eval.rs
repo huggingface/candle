@@ -443,7 +443,7 @@ fn simple_eval_(
                     None => input.t()?,
                     Some(perm) => {
                         let perm = perm.iter().map(|&v| v as usize).collect::<Vec<_>>();
-                        input.permute(perm)?
+                        input.permute(perm)?.contiguous()?
                     }
                 };
                 values.insert(node.output[0].clone(), output);
@@ -773,6 +773,7 @@ fn simple_eval_(
                     DType::F16 => arange_step!(f32),
                     DType::F32 => arange_step!(f32),
                     DType::F64 => arange_step!(f64),
+                    DType::F8E4M3 => arange_step!(f32),
                 };
 
                 values.insert(node.output[0].clone(), output);
@@ -1258,7 +1259,7 @@ fn simple_eval_(
                     // Satisfies version 18+
                     axes.to_vec1::<i64>().ok()
                 } else if let Ok(Some(axes)) = get_attr_opt::<[i64]>(node, "axes") {
-                    // Backward compatiblity with version 13 and below
+                    // Backward compatibility with version 13 and below
                     Some(axes.to_vec())
                 } else {
                     None
@@ -1367,7 +1368,7 @@ fn simple_eval_(
                     // Satisfies version 18+
                     axes.to_vec1::<i64>().ok()
                 } else if let Ok(Some(axes)) = get_attr_opt::<[i64]>(node, "axes") {
-                    // Backward compatiblity with version 13 and below
+                    // Backward compatibility with version 13 and below
                     Some(axes.to_vec())
                 } else {
                     None
@@ -1700,7 +1701,7 @@ fn simple_eval_(
                             dt.as_str()
                         )
                     }
-                    DType::BF16 | DType::F16 | DType::F32 | DType::F64 => {}
+                    DType::BF16 | DType::F16 | DType::F32 | DType::F64 | DType::F8E4M3 => {}
                 }
                 let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(0.01);
                 let output = candle_nn::ops::leaky_relu(input, alpha.into())?;
@@ -1950,6 +1951,137 @@ fn simple_eval_(
                     );
                 }
             }
+            "RNN" => {
+                // activation_alpha and activation_beta don't apply to (Tanh, Tanh) so ignoring them is okay
+                let activations_default = vec!["Tanh".to_string(), "Tanh".to_string()];
+                let activations = get_attr_opt_owned::<Vec<String>>(node, "activations")?
+                    .unwrap_or(activations_default.clone());
+                let clip = get_attr_opt::<f32>(node, "clip")?.copied();
+                if clip.is_some() {
+                    bail!("RNN does not currently support clip attribute");
+                }
+                let direction = get_attr_opt(node, "direction")?.unwrap_or("forward");
+                if direction != "forward" {
+                    bail!("RNN currently only supports direction == \"forward\"");
+                }
+                let num_directions = if direction == "bidirectional" { 2 } else { 1 };
+                let hidden_size: i64 = get_attr(node, "hidden_size").copied()?;
+
+                // The shape format of inputs X, initial_h and outputs Y, Y_h.
+                // If 0, the following shapes are expected:
+                //    X.shape = [seq_length, batch_size, input_size],
+                //    Y.shape = [seq_length, num_directions, batch_size, hidden_size],
+                //    initial_h.shape = Y_h.shape = [num_directions, batch_size, hidden_size].
+                // If 1, the following shapes are expected:
+                //    X.shape = [batch_size, seq_length, input_size],
+                //    Y.shape = [batch_size, seq_length, num_directions, hidden_size],
+                //    initial_h.shape = Y_h.shape = [batch_size, num_directions, hidden_size].
+                let layout = get_attr_opt(node, "layout")?.copied().unwrap_or(0);
+                if layout != 0 {
+                    bail!("RNN currently only supports layout == 0");
+                }
+
+                // The input sequences packed (and potentially padded) into one 3-D tensor
+                // with the shape of `[seq_length, batch_size, input_size]`.
+                let x = get(&node.input[0])?;
+                // XXX: depends on layout
+                let (seq_length, batch_size, _) = x.dims3()?;
+                // The weight tensor for the input gate.
+                // Concatenation of `Wi` and `WBi` (if bidirectional).
+                // The tensor has shape `[num_directions, hidden_size, input_size]`.
+                let w = get(&node.input[1])?;
+                // The recurrence weight tensor.
+                // Concatenation of `Ri` and `RBi` (if bidirectional).
+                // This tensor has shape `[num_directions, hidden_size, hidden_size]`.
+                let r = get(&node.input[2])?;
+
+                // The bias tensor for input gate.
+                // Concatenation of `[Wbi, Rbi]` and `[WBbi, RBbi]` (if bidirectional).
+                // This tensor has shape `[num_directions, 2*hidden_size]`.
+                // Optional: If not specified - assumed to be 0.
+                let b_default: Tensor;
+                let b = match get_opt(3) {
+                    Some(n) => n?,
+                    None => {
+                        b_default = Tensor::zeros(
+                            (num_directions, 2 * hidden_size as usize),
+                            DType::F32,
+                            x.device(),
+                        )?;
+                        &b_default
+                    }
+                };
+
+                // Optional tensor specifying lengths of the sequences in a batch.
+                // If not specified - assumed all sequences in the batch to have length `seq_length`.
+                // It has shape `[batch_size]`.
+                let seq_lens_default: Tensor;
+                let seq_lens = match get_opt(4) {
+                    Some(n) => n?,
+                    None => {
+                        seq_lens_default =
+                            Tensor::full(seq_length as i64, (batch_size,), x.device())?;
+                        &seq_lens_default
+                    }
+                };
+                let seq_lens_is_default =
+                    (seq_lens.to_vec1::<i64>()?.iter()).all(|e| *e as usize == seq_length);
+                if !seq_lens_is_default {
+                    bail!("RNN currently does not support variable-length sequences. All sequences must use the full sequence length of {}", seq_length);
+                }
+
+                // Optional initial value of the hidden. If not specified - assumed to be 0.
+                // It has shape `[num_directions, batch_size, hidden_size]`.
+                let initial_h_default: Tensor;
+                let initial_h = match get_opt(5) {
+                    Some(n) => n?,
+                    _ => {
+                        initial_h_default = Tensor::zeros(
+                            (num_directions, batch_size, hidden_size as usize),
+                            DType::F32,
+                            x.device(),
+                        )?;
+                        &initial_h_default
+                    }
+                };
+
+                fn choose_activation(activation: &str, x: &Tensor) -> Result<Tensor> {
+                    match activation {
+                        "Tanh" => x.tanh(),
+                        _ => bail!("unsupported activation {activation}"),
+                    }
+                }
+
+                // these all have [num_directions, ...] shapes
+                let w = w.get(0)?;
+                let r = r.get(0)?;
+                let b = b.get(0)?;
+                let idx_wb = Tensor::arange(0, hidden_size, x.device())?;
+                let idx_rb = Tensor::arange(hidden_size, 2 * hidden_size, x.device())?;
+                let wb = b.index_select(&idx_wb, 0)?;
+                let rb = b.index_select(&idx_rb, 0)?;
+                let mut h_t = initial_h.get(0)?;
+                let mut h_list: Vec<Tensor> = vec![];
+                for i in 0..seq_length {
+                    let xs = x.get(i)?;
+                    let h = xs
+                        .matmul(&w.t()?)?
+                        .add(&h_t.matmul(&r.t()?)?)?
+                        .add(&wb.unsqueeze(0)?)?
+                        .add(&rb.unsqueeze(0)?)?;
+                    let h = choose_activation(&activations[0], &h)?;
+                    h_list.push(h.to_owned());
+                    h_t = h;
+                }
+                let h = Tensor::stack(&h_list, 0)?;
+                let h =
+                    h.reshape((seq_length, num_directions, batch_size, hidden_size as usize))?;
+                values.insert(node.output[0].clone(), h);
+                values.insert(
+                    node.output[1].clone(),
+                    h_t.reshape((num_directions, batch_size, hidden_size as usize))?,
+                );
+            }
             // https://onnx.ai/onnx/operators/onnx__Xor.html
             "Xor" => {
                 // Since we don't have a `DType::Bool` yet, this ensures that we are working with `0`(False) & `1`(True)
@@ -1965,6 +2097,93 @@ fn simple_eval_(
                 let input = get(&node.input[0])?;
                 let output = input.sign()?;
                 values.insert(node.output[0].clone(), output);
+            }
+            // https://onnx.ai/onnx/operators/onnx__Selu.html
+            "Selu" => {
+                let input = get(&node.input[0])?;
+                let alpha = get_attr_opt::<f32>(node, "alpha")?
+                    .copied()
+                    .unwrap_or(1.6732632);
+                let gamma = get_attr_opt::<f32>(node, "gamma")?
+                    .copied()
+                    .unwrap_or(1.050701);
+                let out = candle_nn::ops::selu(input, alpha as f32, gamma as f32)?;
+                values.insert(node.output[0].clone(), out);
+            }
+
+            // https://onnx.ai/onnx/operators/onnx__OneHot.html
+            "OneHot" => {
+                let indices = get(&node.input[0])?;
+                let orig_shape = get(&node.input[0])?.dims().to_vec();
+                let depth_tensor = get(&node.input[1])?;
+                let values_tensor = get(&node.input[2])?;
+
+                let depth = depth_tensor.to_scalar::<i64>()? as usize;
+                let values_vec = values_tensor.to_vec1::<f32>()?;
+                if values_vec.len() != 2 {
+                    return Err(candle::Error::Msg(
+                        "OneHot: expected 2-element values tensor".to_string(),
+                    ));
+                }
+                let off_value = values_vec[0];
+                let on_value = values_vec[1];
+
+                let mut axis = node
+                    .attribute
+                    .iter()
+                    .find(|attr| attr.name == "axis")
+                    .map(|attr| attr.i)
+                    .unwrap_or(-1);
+
+                let rank = indices.rank();
+                if axis < -((rank as i64) + 1) || axis > (rank as i64) {
+                    return Err(candle::Error::Msg(format!(
+                        "OneHot: invalid axis {axis} for rank {rank}"
+                    )));
+                }
+                if axis < 0 {
+                    axis += rank as i64 + 1;
+                }
+
+                let indices = indices.flatten_all()?;
+                let indices_vec = indices.to_vec1::<i64>()?;
+                let mut out = vec![off_value; depth * indices.elem_count()];
+                for (i, &index) in indices_vec.iter().enumerate() {
+                    let idx = if index < 0 {
+                        (index + depth as i64) as usize
+                    } else {
+                        index as usize
+                    };
+                    if idx >= depth {
+                        continue;
+                    }
+                    out[i * depth + idx] = on_value;
+                }
+
+                let mut target_shape = orig_shape;
+                target_shape.push(depth);
+                let output = Tensor::from_vec(out, target_shape, indices.device())?;
+
+                let final_output = if axis as usize == output.rank() - 1 {
+                    output
+                } else {
+                    fn move_axis_to(rank: usize, from: usize, to: usize) -> Vec<usize> {
+                        let mut dims: Vec<usize> = (0..rank).collect();
+                        let axis = dims.remove(from);
+                        dims.insert(to, axis);
+                        dims
+                    }
+
+                    let perm = move_axis_to(output.rank(), output.rank() - 1, axis as usize);
+                    output.permute(&*perm)?
+                };
+                values.insert(node.output[0].clone(), final_output);
+            }
+            "HardSwish" => {
+                let input = get(&node.input[0])?;
+                let hard_sigmoid = candle_nn::ops::hard_sigmoid(&input)?;
+                let output = input * hard_sigmoid;
+                values.insert(node.output[0].clone(), output?);
             }
             "Resize" => {
                 let input = get(&node.input[0])?;
@@ -2101,7 +2320,7 @@ fn simple_eval_(
 
                 let indices_shape = indices.dims();
                 let data_shape = data.dims();
-                let updates_shape = updates.dims();
+                let _updates_shape = updates.dims();
 
                 // Last dimension of indices represents the depth of indexing
                 let k = indices_shape.last().unwrap().clone();
