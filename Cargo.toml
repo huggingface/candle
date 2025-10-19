@@ -42,7 +42,7 @@ candle-nn = { path = "./candle-nn", version = "0.9.1" }
 candle-onnx = { path = "./candle-onnx", version = "0.9.1" }
 candle-transformers = { path = "./candle-transformers", version = "0.9.1" }
 clap = { version = "4.2.4", features = ["derive"] }
-criterion = { version = "0.5.1", default-features = false }
+criterion = { version = "0.7.0", default-features = false }
 cudarc = { version = "0.17.3", features = [
     "std",
     "cublas",
@@ -56,7 +56,7 @@ cudarc = { version = "0.17.3", features = [
     "dynamic-linking",
 ], default-features = false }
 fancy-regex = "0.13.0"
-gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
+gemm = { version = "0.18.2", features = ["wasm-simd128-enable"] }
 hf-hub = "0.4.1"
 half = { version = "2.5.0", features = [
     "num-traits",

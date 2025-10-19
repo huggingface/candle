@@ -3,13 +3,12 @@ extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
-use candle_transformers::models::bert::{BertModel, Config, HiddenAct, DTYPE};
+use candle_transformers::models::bert::{BertModel, Config as BertConfig, DTYPE};
 
 use anyhow::{Error as E, Result};
-use candle::Tensor;
+use candle::{Device, Tensor};
 use candle_nn::VarBuilder;
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{PaddingParams, Tokenizer};
 
 #[derive(Parser, Debug)]
@@ -23,20 +22,9 @@ struct Args {
     #[arg(long)]
     tracing: bool,
 
-    /// The model to use, check out available models: https://huggingface.co/models?library=sentence-transformers&sort=trending
-    #[arg(long)]
-    model_id: Option<String>,
-
-    #[arg(long)]
-    revision: Option<String>,
-
     /// When set, compute embeddings for this prompt.
     #[arg(long)]
     prompt: Option<String>,
-
-    /// Use the pytorch weights rather than the safetensors ones
-    #[arg(long)]
-    use_pth: bool,
 
     /// The number of times to run the prompt.
     #[arg(long, default_value = "1")]
@@ -49,59 +37,18 @@ struct Args {
     /// Use tanh based approximation for Gelu instead of erf implementation.
     #[arg(long, default_value = "false")]
     approximate_gelu: bool,
-
-    /// Include padding token embeddings when performing mean pooling. By default, these are masked away.
-    #[arg(long, default_value = "false")]
-    include_padding_embeddings: bool,
 }
 
-impl Args {
-    fn build_model_and_tokenizer(&self) -> Result<(BertModel, Tokenizer)> {
-        let device = candle_examples::device(self.cpu)?;
-        let default_model = "sentence-transformers/all-MiniLM-L6-v2".to_string();
-        let default_revision = "refs/pr/21".to_string();
-        let (model_id, revision) = match (self.model_id.to_owned(), self.revision.to_owned()) {
-            (Some(model_id), Some(revision)) => (model_id, revision),
-            (Some(model_id), None) => (model_id, "main".to_string()),
-            (None, Some(revision)) => (default_model, revision),
-            (None, None) => (default_model, default_revision),
-        };
-
-        let repo = Repo::with_revision(model_id, RepoType::Model, revision);
-        let (config_filename, tokenizer_filename, weights_filename) = {
-            let api = Api::new()?;
-            let api = api.repo(repo);
-            let config = api.get("config.json")?;
-            let tokenizer = api.get("tokenizer.json")?;
-            let weights = if self.use_pth {
-                api.get("pytorch_model.bin")?
-            } else {
-                api.get("model.safetensors")?
-            };
-            (config, tokenizer, weights)
-        };
-        let config = std::fs::read_to_string(config_filename)?;
-        let mut config: Config = serde_json::from_str(&config)?;
-        let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
-
-        let vb = if self.use_pth {
-            VarBuilder::from_pth(&weights_filename, DTYPE, &device)?
-        } else {
-            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, &device)? }
-        };
-        if self.approximate_gelu {
-            config.hidden_act = HiddenAct::GeluApproximate;
-        }
-        let model = BertModel::load(vb, &config)?;
-        Ok((model, tokenizer))
-    }
-}
-
+// Remember to set env variable before running.
+// Use specific commit vs main to reduce chance of URL breaking later from directory layout changes, etc.
+// CANDLE_SINGLE_FILE_BINARY_BUILDER_URL="https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/c9745ed1d9f207416be6d2e6f8de32d1f16199bf"
+// cargo run --example bert_single_file_binary
 fn main() -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
     let args = Args::parse();
+
     let _guard = if args.tracing {
         println!("tracing...");
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -110,24 +57,29 @@ fn main() -> Result<()> {
     } else {
         None
     };
+
     let start = std::time::Instant::now();
 
-    let (model, mut tokenizer) = args.build_model_and_tokenizer()?;
-    let device = &model.device;
+    let device = candle_examples::device(args.cpu)?;
+    let (model, mut tokenizer) = build_model_and_tokenizer_from_bytes(&device)?;
 
     if let Some(prompt) = args.prompt {
         let tokenizer = tokenizer
             .with_padding(None)
             .with_truncation(None)
             .map_err(E::msg)?;
+
         let tokens = tokenizer
             .encode(prompt, true)
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
-        let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
+
+        let token_ids = Tensor::new(&tokens[..], &device)?.unsqueeze(0)?;
         let token_type_ids = token_ids.zeros_like()?;
+
         println!("Loaded and encoded {:?}", start.elapsed());
+
         for idx in 0..args.n {
             let start = std::time::Instant::now();
             let ys = model.forward(&token_ids, &token_type_ids, None)?;
@@ -147,7 +99,9 @@ fn main() -> Result<()> {
             "The new movie is so great",
             "Do you like pizza?",
         ];
+
         let n_sentences = sentences.len();
+
         if let Some(pp) = tokenizer.get_padding_mut() {
             pp.strategy = tokenizers::PaddingStrategy::BatchLongest
         } else {
@@ -157,51 +111,45 @@ fn main() -> Result<()> {
             };
             tokenizer.with_padding(Some(pp));
         }
+
         let tokens = tokenizer
             .encode_batch(sentences.to_vec(), true)
             .map_err(E::msg)?;
+
         let token_ids = tokens
             .iter()
             .map(|tokens| {
                 let tokens = tokens.get_ids().to_vec();
-                Ok(Tensor::new(tokens.as_slice(), device)?)
+                Ok(Tensor::new(tokens.as_slice(), &device)?)
             })
             .collect::<Result<Vec<_>>>()?;
+
         let attention_mask = tokens
             .iter()
             .map(|tokens| {
                 let tokens = tokens.get_attention_mask().to_vec();
-                Ok(Tensor::new(tokens.as_slice(), device)?)
+                Ok(Tensor::new(tokens.as_slice(), &device)?)
             })
             .collect::<Result<Vec<_>>>()?;
 
         let token_ids = Tensor::stack(&token_ids, 0)?;
         let attention_mask = Tensor::stack(&attention_mask, 0)?;
         let token_type_ids = token_ids.zeros_like()?;
+
         println!("running inference on batch {:?}", token_ids.shape());
+
         let embeddings = model.forward(&token_ids, &token_type_ids, Some(&attention_mask))?;
         println!("generated embeddings {:?}", embeddings.shape());
-        let embeddings = if args.include_padding_embeddings {
-            // Apply avg-pooling by taking the mean embedding value for all
-            // tokens, including padding. This was the original behavior of this
-            // example, and we'd like to preserve it for posterity.
-            let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
-            (embeddings.sum(1)? / (n_tokens as f64))?
-        } else {
-            // Apply avg-pooling by taking the mean embedding value for all
-            // tokens (after applying the attention mask from tokenization).
-            // This should produce the same numeric result as the
-            // `sentence_transformers` Python library.
-            let attention_mask_for_pooling = attention_mask.to_dtype(DTYPE)?.unsqueeze(2)?;
-            let sum_mask = attention_mask_for_pooling.sum(1)?;
-            let embeddings = (embeddings.broadcast_mul(&attention_mask_for_pooling)?).sum(1)?;
-            embeddings.broadcast_div(&sum_mask)?
-        };
+
+        // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
+        let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
+        let embeddings = (embeddings.sum(1)? / (n_tokens as f64))?;
         let embeddings = if args.normalize_embeddings {
             normalize_l2(&embeddings)?
         } else {
             embeddings
         };
+
         println!("pooled embeddings {:?}", embeddings.shape());
 
         let mut similarities = vec![];
@@ -216,12 +164,49 @@ fn main() -> Result<()> {
                 similarities.push((cosine_similarity, i, j))
             }
         }
+
         similarities.sort_by(|u, v| v.0.total_cmp(&u.0));
+
         for &(score, i, j) in similarities[..5].iter() {
             println!("score: {score:.2} '{}' '{}'", sentences[i], sentences[j])
         }
     }
     Ok(())
+}
+
+pub fn build_model_and_tokenizer_from_bytes(device: &Device) -> Result<(BertModel, Tokenizer)> {
+    let config_data = include_bytes!("../../single-file-binary-builder/files/config.json");
+
+    let tokenizer_data = include_bytes!("../../single-file-binary-builder/files/tokenizer.json");
+
+    let weights_data = include_bytes!("../../single-file-binary-builder/files/model.safetensors");
+
+    let config_string = std::str::from_utf8(config_data)?;
+    let config: BertConfig = serde_json::from_str(config_string)?;
+    let tokenizer = Tokenizer::from_bytes(tokenizer_data).map_err(anyhow::Error::msg)?;
+    let var_builder = VarBuilder::from_slice_safetensors(weights_data, DTYPE, device)?;
+
+    init_model_and_tokenizer(tokenizer, &config, var_builder)
+}
+
+pub fn init_model_and_tokenizer(
+    mut tokenizer: Tokenizer,
+    config: &BertConfig,
+    var_builder: VarBuilder,
+) -> Result<(BertModel, Tokenizer)> {
+    if let Some(pp) = tokenizer.get_padding_mut() {
+        pp.strategy = tokenizers::PaddingStrategy::BatchLongest
+    } else {
+        let pp = PaddingParams {
+            strategy: tokenizers::PaddingStrategy::BatchLongest,
+            ..Default::default()
+        };
+        tokenizer.with_padding(Some(pp));
+    }
+
+    let model = BertModel::load(var_builder, config)?;
+
+    Ok((model, tokenizer))
 }
 
 pub fn normalize_l2(v: &Tensor) -> Result<Tensor> {

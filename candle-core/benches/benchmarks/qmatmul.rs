@@ -3,7 +3,8 @@ use candle_core::{
     quantized::{self, GgmlDType, QMatMul},
     Device, Module, Tensor,
 };
-use criterion::{black_box, criterion_group, Criterion, Throughput};
+use criterion::{criterion_group, Criterion, Throughput};
+use std::hint::black_box;
 use std::time::Instant;
 
 fn run(matmul: &QMatMul, x: &Tensor) {

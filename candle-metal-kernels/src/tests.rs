@@ -3,8 +3,7 @@ use crate::metal::create_command_buffer;
 use core::ffi::c_void;
 use half::{bf16, f16};
 use rand::prelude::SliceRandom;
-use rand::thread_rng;
-use rand::Rng;
+use rand::{rng, Rng};
 
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     let ptr = buffer.contents() as *const T;
@@ -14,7 +13,7 @@ fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
 }
 
 fn new_buffer<T>(device: &Device, data: &[T]) -> Buffer {
-    let options = MTLResourceOptions::StorageModeManaged;
+    let options = RESOURCE_OPTIONS;
     let ptr = data.as_ptr() as *const c_void;
     let size = std::mem::size_of_val(data);
     device.new_buffer_with_data(ptr, size, options).unwrap()
@@ -70,7 +69,7 @@ fn run_binary<T: Clone>(x: &[T], y: &[T], name: kernels::binary::contiguous::Ker
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
     let command_buffer = create_command_buffer(&command_queue).unwrap();
-    let options = MTLResourceOptions::StorageModeManaged;
+    let options = RESOURCE_OPTIONS;
     let left = new_buffer(&device, x);
     let right = new_buffer(&device, y);
     let output = device
@@ -314,7 +313,7 @@ fn run_cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
     let command_queue = device.new_command_queue().unwrap();
     let command_buffer = create_command_buffer(&command_queue).unwrap();
     let input = new_buffer(&device, v);
-    let options = MTLResourceOptions::StorageModeManaged;
+    let options = RESOURCE_OPTIONS;
     let size = v.len() * std::mem::size_of::<U>();
     let output = device.new_buffer(size, options).unwrap();
 
@@ -877,7 +876,7 @@ fn run_reduce<T, U: Clone>(
     let command_buffer = create_command_buffer(&command_queue).unwrap();
     let input = new_buffer(&device, v);
 
-    let options = MTLResourceOptions::StorageModeManaged;
+    let options = RESOURCE_OPTIONS;
     let output = device
         .new_buffer(out_length * core::mem::size_of::<U>(), options)
         .unwrap();
@@ -999,7 +998,7 @@ fn reduce_sum_case<const N: usize, const D: usize>() {
     let mut v = create_array::<N>();
     if D == 1 {
         // Hardens 1-dimensional test cases
-        v.shuffle(&mut thread_rng());
+        v.shuffle(&mut rng());
     }
     let results = run_reduce(&v, N, D, "fast_sum_f32");
     assert_eq!(approx(results, 4), correct_sum::<N, D>());
@@ -1009,7 +1008,7 @@ fn reduce_max_case<const N: usize, const D: usize>() {
     let mut v = create_array::<N>();
     if D == 1 {
         // Hardens 1-dimensional test cases
-        v.shuffle(&mut thread_rng());
+        v.shuffle(&mut rng());
     }
     let results = run_reduce(&v, N, D, "fast_max_f32");
     assert_eq!(approx(results, 4), correct_max::<N, D>());
@@ -1019,7 +1018,7 @@ fn reduce_argmax_case<const N: usize, const D: usize>() {
     let mut v = create_array::<N>();
     if D == 1 {
         // Hardens 1-dimensional test cases
-        v.shuffle(&mut thread_rng());
+        v.shuffle(&mut rng());
     }
     let results: Vec<u32> = run_reduce(&v, N, D, "fast_argmax_f32");
     assert_eq!(results, correct_argmax::<N, D>(v));
@@ -1193,7 +1192,7 @@ fn run_where_cond<I: Clone, T: Clone>(
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
     let command_buffer = create_command_buffer(&command_queue).unwrap();
-    let options = MTLResourceOptions::StorageModeManaged;
+    let options = RESOURCE_OPTIONS;
 
     let length = cond.len();
     let cond = device
@@ -1233,7 +1232,7 @@ fn run_where_cond<I: Clone, T: Clone>(
         buffer: &right,
         offset_in_bytes: cond_offset,
     };
-    call_where_cond_strided(
+    call_where_cond(
         &device,
         &command_buffer,
         &kernels,
@@ -1241,10 +1240,13 @@ fn run_where_cond<I: Clone, T: Clone>(
         shape,
         cond,
         &cond_stride,
+        true,
         left,
         &left_stride,
+        true,
         right,
         &cond_stride,
+        true,
         &output,
     )
     .unwrap();
@@ -1312,7 +1314,7 @@ fn run_mlx_gemm<T: Clone>(
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
     let command_buffer = create_command_buffer(&command_queue).unwrap();
-    let options = MTLResourceOptions::StorageModeManaged;
+    let options = RESOURCE_OPTIONS;
 
     let lhs = device
         .new_buffer_with_data(
@@ -1463,7 +1465,7 @@ fn run_random<T: Clone>(name: &'static str, seed: u64, length: usize, a: f32, b:
     let command_queue = device.new_command_queue().unwrap();
     let command_buffer = create_command_buffer(&command_queue).unwrap();
 
-    let options = MTLResourceOptions::StorageModeManaged;
+    let options = RESOURCE_OPTIONS;
     let output = device
         .new_buffer(length * core::mem::size_of::<T>(), options)
         .unwrap();
@@ -1593,7 +1595,7 @@ fn run_scatter_add<T: Clone, I: Clone + std::fmt::Debug>(
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
     let command_buffer = create_command_buffer(&command_queue).unwrap();
-    let options = MTLResourceOptions::StorageModeManaged;
+    let options = RESOURCE_OPTIONS;
     let input_buffer = new_buffer(&device, input);
     let ids_buffer = new_buffer(&device, ids);
     let output = device
@@ -2374,10 +2376,7 @@ fn const_fill() {
         let command_queue = dev.new_command_queue().unwrap();
         let command_buffer = create_command_buffer(&command_queue).unwrap();
         let buffer = dev
-            .new_buffer(
-                len * std::mem::size_of::<T>(),
-                MTLResourceOptions::StorageModePrivate,
-            )
+            .new_buffer(len * std::mem::size_of::<T>(), RESOURCE_OPTIONS)
             .unwrap();
         call_const_fill(&dev, &command_buffer, &kernels, name, len, &buffer, value).unwrap();
         command_buffer.commit();
@@ -2388,8 +2387,8 @@ fn const_fill() {
         name: &'static str,
         f: F,
     ) {
-        let len = rand::thread_rng().gen_range(2..16) * rand::thread_rng().gen_range(4..16);
-        let value = rand::thread_rng().gen_range(1. ..19.);
+        let len = rand::rng().random_range(2..16) * rand::rng().random_range(4..16);
+        let value = rand::rng().random_range(1. ..19.);
         let value = f(value);
         let v = constant_fill::<T>(name, len, value);
         assert_eq!(v, vec![value; len])

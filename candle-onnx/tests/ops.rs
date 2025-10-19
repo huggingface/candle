@@ -6442,6 +6442,7 @@ fn test_selu_operator() -> Result<()> {
     Ok(())
 }
 
+#[test]
 fn test_hard_swish() -> candle::Result<()> {
     {
         let manual_graph = create_model_proto_with_graph(Some(GraphProto {

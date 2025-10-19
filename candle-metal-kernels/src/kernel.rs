@@ -115,7 +115,7 @@ impl Kernels {
                 let source_content = self.get_library_source(source);
                 let compile_options = MTLCompileOptions::new();
                 //unsafe { compile_options.setEnableLogging(true) };
-                unsafe { compile_options.setMathMode(MTLMathMode::Fast) };
+                compile_options.setMathMode(MTLMathMode::Fast);
                 device
                     .new_library_with_source(source_content, Some(&compile_options))
                     .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
@@ -134,8 +134,7 @@ impl Kernels {
     ) -> Result<Function, MetalKernelError> {
         let func = self
             .load_library(device, source)?
-            .get_function(name, constants)
-            .map_err(|e| MetalKernelError::LoadFunctionError(e.to_string()))?;
+            .get_function(name, constants)?;
         Ok(func)
     }
 
