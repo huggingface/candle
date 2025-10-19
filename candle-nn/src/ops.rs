@@ -319,8 +319,9 @@ impl candle::CustomOp1 for SoftmaxLastDim {
                 None => candle::bail!("input has to be contiguous"),
                 Some((o1, o2)) => &src[o1..o2],
             };
-            let el_count = layout.shape().elem_count();
-            let dims = layout.shape().dims();
+            let shape = layout.shape();
+            let el_count = shape.elem_count();
+            let dims = shape.inner();
             let dim_m1 = dims[dims.len() - 1];
             let mut dst = vec![T::zero(); el_count];
             src.par_chunks(dim_m1)
@@ -338,7 +339,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
                     }
                 });
             let storage = candle::WithDType::to_cpu_storage_owned(dst);
-            Ok((storage, Shape::from_dims(dims)))
+            Ok((storage, Shape::from(dims)))
         }
 
         match storage {
@@ -494,8 +495,9 @@ impl candle::CustomOp2 for RmsNorm {
                 None => candle::bail!("alpha has to be contiguous"),
                 Some((o1, o2)) => &alpha[o1..o2],
             };
-            let el_count = layout.shape().elem_count();
-            let dims = layout.shape().dims();
+            let shape = layout.shape();
+            let el_count = shape.elem_count();
+            let dims = shape.inner();
             let dim_m1 = dims[dims.len() - 1];
             let mut dst = vec![T::zero(); el_count];
             src.par_chunks(dim_m1)
@@ -515,7 +517,7 @@ impl candle::CustomOp2 for RmsNorm {
                     }
                 });
             let storage = candle::WithDType::to_cpu_storage_owned(dst);
-            Ok((storage, Shape::from_dims(dims)))
+            Ok((storage, Shape::from(dims)))
         }
 
         use CpuStorage as C;
@@ -716,8 +718,9 @@ impl candle::CustomOp3 for LayerNorm {
                 None => candle::bail!("beta has to be contiguous"),
                 Some((o1, o2)) => &beta[o1..o2],
             };
-            let el_count = layout.shape().elem_count();
-            let dims = layout.shape().dims();
+            let shape = layout.shape();
+            let el_count = shape.elem_count();
+            let dims = shape.inner();
             let dim_m1 = dims[dims.len() - 1];
             let mut dst = vec![T::zero(); el_count];
             src.par_chunks(dim_m1)
@@ -743,7 +746,7 @@ impl candle::CustomOp3 for LayerNorm {
                     }
                 });
             let storage = candle::WithDType::to_cpu_storage_owned(dst);
-            Ok((storage, Shape::from_dims(dims)))
+            Ok((storage, Shape::from(dims)))
         }
 
         use CpuStorage as C;

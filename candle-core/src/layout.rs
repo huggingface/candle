@@ -191,11 +191,11 @@ impl Layout {
         })
     }
 
-    pub(crate) fn strided_index(&self) -> crate::StridedIndex<'_> {
+    pub(crate) fn strided_index(&self) -> crate::StridedIndex {
         crate::StridedIndex::from_layout(self)
     }
 
-    pub(crate) fn strided_blocks(&self) -> crate::StridedBlocks<'_> {
+    pub(crate) fn strided_blocks(&self) -> crate::StridedBlocks {
         let mut block_len = 1;
         let mut contiguous_dims = 0; // These are counted from the right.
         for (&stride, &dim) in self.stride().iter().zip(self.dims().iter()).rev() {
@@ -213,8 +213,8 @@ impl Layout {
             }
         } else {
             let block_start_index = crate::StridedIndex::new(
-                &self.dims()[..index_dims],
-                &self.stride[..index_dims],
+                &self.dims()[..index_dims].try_into().unwrap(),
+                &self.stride[..index_dims].try_into().unwrap(),
                 self.start_offset,
             );
             crate::StridedBlocks::MultipleBlocks {

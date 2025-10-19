@@ -19,6 +19,18 @@ impl std::fmt::Debug for Shape {
     }
 }
 
+impl From<ShapeVec> for Shape {
+    fn from(dims: ShapeVec) -> Self {
+        Self(dims)
+    }
+}
+
+impl From<&ShapeVec> for Shape {
+    fn from(dims: &ShapeVec) -> Self {
+        Self(dims.clone())
+    }
+}
+
 impl<const C: usize> From<&[usize; C]> for Shape {
     fn from(dims: &[usize; C]) -> Self {
         Self(ShapeVec::try_from(dims.as_slice()).unwrap())
@@ -146,12 +158,16 @@ impl Shape {
     /// The strides given in number of elements for a contiguous n-dimensional
     /// arrays using this shape.
     pub(crate) fn stride_contiguous(&self) -> Stride {
-        let mut stride = Stride::try_from(vec![0; self.rank()].as_slice()).unwrap();
+        let mut stride = Stride::from_iter((0usize..self.rank()).into_iter());
         let mut acc = 1;
-        for (i, &dim) in self.dims().iter().enumerate().rev() {
-            stride[i] = acc;
-            acc *= dim;
-        }
+        self.inner()
+            .iter()
+            .zip(&mut stride)
+            .rev()
+            .for_each(|(dim, s)| {
+                *s = acc;
+                acc *= dim;
+            });
         stride
     }
 

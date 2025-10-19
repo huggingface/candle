@@ -1743,7 +1743,7 @@ impl Tensor {
 
     /// Returns an iterator over position of the elements in the storage when ranging over the
     /// index tuples in lexicographic order.
-    pub fn strided_index(&self) -> crate::StridedIndex<'_> {
+    pub fn strided_index(&self) -> crate::StridedIndex {
         self.layout.strided_index()
     }
 
@@ -1751,7 +1751,7 @@ impl Tensor {
     /// as well as the length of the contiguous blocks. For a contiguous tensor, the index iterator
     /// will only return the start offset and the size would be the number of elements in the
     /// tensor.
-    pub fn strided_blocks(&self) -> crate::StridedBlocks<'_> {
+    pub fn strided_blocks(&self) -> crate::StridedBlocks {
         self.layout.strided_blocks()
     }
 
@@ -2239,10 +2239,9 @@ impl Tensor {
     /// Returns a new tensor duplicating data from the original tensor. New dimensions are inserted
     /// on the left.
     pub fn broadcast_left<S: Into<Shape>>(&self, left_shape: S) -> Result<Self> {
-        let left_shape = left_shape.into();
-        let mut dims = left_shape.into_dims();
-        dims.extend(self.dims());
-        self.broadcast_as(dims)
+        let mut left_shape = left_shape.into().inner().clone();
+        left_shape.extend(self.shape().inner().iter().copied());
+        self.broadcast_as(left_shape.as_slice())
     }
 
     /// Broadcast the input tensor to the target shape. This returns an error if the input shape is

@@ -784,14 +784,13 @@ fn copy_strided_src_<T: Copy>(src: &[T], dst: &mut [T], dst_offset: usize, src_l
         } => {
             let mut dst_index = dst_offset;
             for src_index in block_start_index {
-                let next_dst_index = dst_index + block_len;
                 if dst_index >= dst.len() {
                     break;
                 }
                 let to_copy = usize::min(block_len, dst.len() - dst_index);
                 dst[dst_index..dst_index + to_copy]
                     .copy_from_slice(&src[src_index..src_index + to_copy]);
-                dst_index = next_dst_index
+                dst_index += block_len;
             }
         }
     }

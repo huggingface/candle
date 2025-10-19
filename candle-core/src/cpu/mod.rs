@@ -4,7 +4,7 @@ pub mod erf;
 pub mod kernels;
 
 #[allow(unused)]
-trait Cpu<const ARR: usize> {
+pub(crate) trait Cpu<const ARR: usize> {
     type Unit;
     type Array;
     const STEP: usize;
