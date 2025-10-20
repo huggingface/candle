@@ -26,13 +26,11 @@ jobs:
       CUDA_COMPUTE_CAP: 86
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
       - name: Install dependencies
-        run: apt-get update && apt install curl build-essential libssl-dev protobuf-compiler pkg-config -y
+        run: apt update && apt install curl build-essential libssl-dev protobuf-compiler pkg-config -y
       - name: Install Rust Stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
-      - name: sleep
-        run: sleep 15m
       - name: Test (cuda)
         run: cargo test --features cuda
