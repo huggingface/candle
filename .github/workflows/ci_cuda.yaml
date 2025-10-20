@@ -32,9 +32,7 @@ jobs:
       - name: Install Rust Stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
-      - name: LD_LIBRARY_PATH
-        run: echo $LD_LIBRARY_PATH
-      - name: locate lib
-        run: find /usr/ -name 'libcuda.so.*'
+      - name: Add libcuda.so to LD_LIBRARY_PATH
+        run: export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda-13.0/compat/libcuda.so.1
       - name: Test (cuda)
         run: cargo test --features cuda
