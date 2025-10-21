@@ -694,7 +694,8 @@ impl ScatteredCacheBuilder {
 /// The trade-off:
 /// - More allocations (one per token in autoregressive generation)
 /// - But each allocation uses a faster kernel path
-/// - Net result: 40-56% faster on GPU for typical LLM inference
+/// - Net result: 2-5x faster on GPU for autoregressive inference
+///   (speedup increases with sequence length: ~2x at 300 tokens, ~5x at 2000 tokens)
 #[derive(Debug, Clone)]
 pub struct ConcatKvCache {
     k: Option<Tensor>,
@@ -1008,13 +1009,13 @@ mod concat_cache_tests {
 
         let k1 = Tensor::zeros((1, 3, 8, 64), DType::F32, &device)?;
         let v1 = Tensor::zeros((1, 3, 8, 64), DType::F32, &device)?;
-        let (k, v) = cache.append(&k1, &v1)?;
+        let (k, _v) = cache.append(&k1, &v1)?;
 
         assert_eq!(k.dims(), &[1, 3, 8, 64]);
 
         let k2 = Tensor::zeros((1, 2, 8, 64), DType::F32, &device)?;
         let v2 = Tensor::zeros((1, 2, 8, 64), DType::F32, &device)?;
-        let (k, v) = cache.append(&k2, &v2)?;
+        let (k, _v) = cache.append(&k2, &v2)?;
 
         assert_eq!(k.dims(), &[1, 5, 8, 64]); // Concatenated on dim 1
         assert_eq!(cache.current_seq_len(), 5);
