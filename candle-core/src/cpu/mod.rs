@@ -78,7 +78,7 @@ pub use simd128::CurrentCpu;
 pub mod neon;
 #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
 #[cfg(target_feature = "neon")]
-pub use neon::CurrentCpu;
+pub use neon::{CurrentCpu, CurrentCpuBF16, CurrentCpuF16};
 
 #[cfg(any(
     target_feature = "neon",
@@ -163,7 +163,7 @@ pub(crate) unsafe fn vec_sum(row: *const f32, b: *mut f32, k: usize) {
     }
 }
 
-#[cfg(target_feature = "avx2")]
+#[cfg(any(target_feature = "neon", target_feature = "avx2"))]
 #[inline(always)]
 pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f32, k: usize) {
     let mut sumf = 0.0f32;
@@ -191,7 +191,7 @@ pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f
     *c = sumf;
 }
 
-#[cfg(target_feature = "avx2")]
+#[cfg(any(target_feature = "neon", target_feature = "avx2"))]
 #[inline(always)]
 pub(crate) unsafe fn vec_dot_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut f32, k: usize) {
     let mut sumf = 0.0f32;
@@ -219,7 +219,7 @@ pub(crate) unsafe fn vec_dot_bf16(a_row: *const bf16, b_row: *const bf16, c: *mu
     *c = sumf;
 }
 
-#[cfg(not(target_feature = "avx2"))]
+#[cfg(not(any(target_feature = "avx2", target_feature = "neon")))]
 #[inline(always)]
 pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f32, k: usize) {
     // leftovers
@@ -230,7 +230,7 @@ pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f
     *c = sum;
 }
 
-#[cfg(not(target_feature = "avx2"))]
+#[cfg(not(any(target_feature = "avx2", target_feature = "neon")))]
 #[inline(always)]
 pub(crate) unsafe fn vec_dot_bf16(a_row: *const bf16, b_row: *const bf16, c: *mut f32, k: usize) {
     // leftovers
