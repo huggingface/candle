@@ -61,8 +61,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       
+      # helper tool to publish all workspace crates in correct order
+      - name: Install cargo-workspaces
+        run: cargo install cargo-workspaces
+      
       - name: Publish all crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          cargo workspaces publish --from-git --yes --token $CARGO_REGISTRY_TOKEN
+        # flags:
+        # --from-git: uses git source to determine versions
+        # --no-verify: because `bert-single-file-binary-builder` modifies files during build.rs
+        # --yes: skip confirmation prompt
+        # --token: use the provided token for authentication
+        run: | 
+          cargo workspaces publish --from-git --no-verify --yes --token $CARGO_REGISTRY_TOKEN
