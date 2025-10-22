@@ -195,7 +195,7 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
+    fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize), _: usize) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 

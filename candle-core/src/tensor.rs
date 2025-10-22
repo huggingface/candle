@@ -1228,10 +1228,50 @@ impl Tensor {
             arg,
             kernel_size,
             stride,
+            padding: 0,
         });
         let storage = self
             .storage()
-            .max_pool2d(self.layout(), kernel_size, stride)?;
+            .max_pool2d(self.layout(), kernel_size, stride, 0)?;
+        Ok(from_storage(storage, (n, c, h_out, w_out), op, false))
+    }
+
+    /// Same as `max_pool2d_with_stride` but with padding support.
+    ///
+    /// The padding parameter adds padding around the input tensor before applying max pooling.
+    /// The padding is applied symmetrically (same amount on all sides).
+    pub fn max_pool2d_with_stride_padding<T: crate::ToUsize2>(
+        &self,
+        kernel_size: T,
+        stride: T,
+        padding: usize,
+    ) -> Result<Self> {
+        let kernel_size = kernel_size.to_usize2();
+        let stride = stride.to_usize2();
+        let (n, c, h, w) = self.dims4()?;
+        
+        // Calculate effective input size with padding
+        let h_padded = h + 2 * padding;
+        let w_padded = w + 2 * padding;
+        
+        if h_padded < kernel_size.0 || w_padded < kernel_size.1 {
+            bail!("kernel-size {kernel_size:?} is larger than the padded input size {h_padded},{w_padded}")
+        }
+        
+        // https://pytorch.org/docs/stable/generated/torch.nn.MaxPool2d.html#torch.nn.MaxPool2d
+        let h_out = (h_padded - kernel_size.0) / stride.0 + 1;
+        let w_out = (w_padded - kernel_size.1) / stride.1 + 1;
+        
+        let op = BackpropOp::new1(self, |arg| Op::MaxPool2D {
+            arg,
+            kernel_size,
+            stride,
+            padding,
+        });
+        
+        let storage = self
+            .storage()
+            .max_pool2d(self.layout(), kernel_size, stride, padding)?;
         Ok(from_storage(storage, (n, c, h_out, w_out), op, false))
     }
 
