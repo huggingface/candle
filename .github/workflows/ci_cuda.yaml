@@ -10,7 +10,7 @@ jobs:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
     runs-on:
-      group: aws-g5-4xlarge-cache
+      group: aws-g5-4xlarge-cache-k8s
     container:
       image: nvidia/cuda:13.0.1-cudnn-devel-ubuntu24.04
       options: --gpus 0
