@@ -1300,6 +1300,7 @@ impl BackendStorage for MetalStorage {
         let buffer = self.device.new_buffer(dst_el, self.dtype, "avg_pool2d")?;
         let command_buffers = self.device.command_buffer()?;
         candle_metal_kernels::call_pool2d(
+        candle_metal_kernels::call_pool2d_with_padding(
             &self.device.device,
             &command_buffers,
             &self.device.kernels,
@@ -1312,6 +1313,7 @@ impl BackendStorage for MetalStorage {
             h_k,
             w_stride,
             h_stride,
+            padding,
             &self.buffer,
             &buffer,
         )

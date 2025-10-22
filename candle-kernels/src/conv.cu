@@ -446,6 +446,7 @@ __device__ void max_pool2d(
     const size_t h_k,
     const size_t w_stride,
     const size_t h_stride,
+    const size_t padding,
     const size_t *info,
     const T *src,
     T *dst
@@ -459,8 +460,8 @@ __device__ void max_pool2d(
   const size_t w_in = src_dims[2];
   const size_t h_in = src_dims[3];
 
-  const size_t w_out = (w_in - w_k) / w_stride + 1;
-  const size_t h_out = (h_in - h_k) / h_stride + 1;
+  const size_t w_out = (w_in + 2 * padding - w_k) / w_stride + 1;
+  const size_t h_out = (h_in + 2 * padding - h_k) / h_stride + 1;
   if (dst_i >= src_dims[0] * c * w_out * h_out) {
     return;
   }
@@ -476,14 +477,16 @@ __device__ void max_pool2d(
   bool set = false;
   for (size_t w_offset = 0; w_offset < w_k; ++w_offset) {
     size_t src_w = w_stride * dst_w + w_offset;
-    if (src_w >= w_in) {
+    if (src_w < padding || src_w >= w_in + padding) {
       continue;
     }
+    src_w -= padding;
     for (size_t h_offset = 0; h_offset < h_k; ++h_offset) {
       size_t src_h = h_stride * dst_h + h_offset;
-      if (src_h >= h_in) {
+      if (src_h < padding || src_h >= h_in + padding) {
         continue;
       }
+      src_h -= padding;
       const size_t src_idx = src_idx0 + c_idx * src_s[1] + src_w * src_s[2] + src_h * src_s[3];
       if (set) {
         d = maxg(d, src[src_idx]);
@@ -671,11 +674,12 @@ extern "C" __global__ void FN_NAME(  \
     const size_t h_k, \
     const size_t w_stride, \
     const size_t h_stride, \
+    const size_t padding, \
     const size_t *info, \
     const TYPENAME *src, \
     TYPENAME *dst \
 ) {  \
-  max_pool2d<TYPENAME>(src_numel, w_k, h_k, w_stride, h_stride, info, src, dst); \
+  max_pool2d<TYPENAME>(src_numel, w_k, h_k, w_stride, h_stride, padding, info, src, dst); \
 } \
 
 #define UPSAMPLE_NEAREST2D_OP(TYPENAME, FN_NAME) \
