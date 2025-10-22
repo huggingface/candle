@@ -41,7 +41,7 @@ tokenizers = { workspace = true, features = ["onig"] }
 cpal = { version = "0.15.2", optional = true }
 pdf2image = { version = "0.1.2", optional = true }
 tekken-rs = { version = "0.1.1", optional = true }
-single-file-binary-builder = { path = "single-file-binary-builder", optional = true }
+single-file-binary-builder = { path = "single-file-binary-builder", version = "0.9.2", optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
