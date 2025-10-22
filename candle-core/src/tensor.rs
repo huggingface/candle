@@ -1238,8 +1238,19 @@ impl Tensor {
 
     /// Same as `max_pool2d_with_stride` but with padding support.
     ///
-    /// The padding parameter adds padding around the input tensor before applying max pooling.
-    /// The padding is applied symmetrically (same amount on all sides).
+    /// # Arguments
+    ///
+    /// * `kernel_size` - The size of the pooling window
+    /// * `stride` - The stride of the pooling operation, controlling how far the window
+    /// * `padding` - The amount of zero-padding to add to both sides of the height and width
+    /// # Examples
+    /// ```rust
+    /// use candle_core::{Tensor,Device,Shape};
+    /// let t = Tensor::rand(0.0f32, 1.0, (1, 1, 10, 10), &device)?;
+    /// let (kernel_size,stride,padding) = (2,2,2)
+    /// let t = t.max_pool2d_with_stride_padding(kernel_size,stride,padding)?;
+    /// assert_eq!(t.shape().dims(),[1,1,7,7]);
+    /// ```
     pub fn max_pool2d_with_stride_padding<T: crate::ToUsize2>(
         &self,
         kernel_size: T,
