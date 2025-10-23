@@ -85,8 +85,8 @@ impl Mlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let lhs = self.gate_proj.forward(&xs)?.apply(&self.act_fn)?;
-        let rhs = self.up_proj.forward(&xs)?;
+        let lhs = self.gate_proj.forward(xs)?.apply(&self.act_fn)?;
+        let rhs = self.up_proj.forward(xs)?;
         self.down_proj.forward(&(lhs * rhs)?)
     }
 }
@@ -135,8 +135,8 @@ impl Attention {
             o_proj,
             q_norm,
             k_norm,
-            num_heads: num_heads,
-            num_kv_heads: num_kv_heads,
+            num_heads,
+            num_kv_heads,
             head_dim: cfg.head_dim,
             rotary_emb,
             n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,

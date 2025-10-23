@@ -134,7 +134,7 @@ impl Qwen3VLModel {
                 }
             }
             image_mask_opt = Some(image_mask.to_dtype(DType::U8)?);
-            deepstack_image_opt = Some(deepstack_image_embeds.drain(..).collect());
+            deepstack_image_opt = Some(std::mem::take(&mut deepstack_image_embeds));
         }
 
         if let Some(pixel_values_videos) = &pixel_values_videos {
@@ -183,7 +183,7 @@ impl Qwen3VLModel {
                 }
             }
             video_mask_opt = Some(video_mask.to_dtype(DType::U8)?);
-            deepstack_video_opt = Some(deepstack_video_embeds.drain(..).collect());
+            deepstack_video_opt = Some(std::mem::take(&mut deepstack_video_embeds));
         }
 
         let (visual_pos_masks, deepstack_visual_embeds) = match (
@@ -263,9 +263,7 @@ impl Qwen3VLModel {
             attention_mask.as_ref(),
             seqlen_offsets,
             visual_pos_masks.as_ref(),
-            deepstack_visual_embeds
-                .as_ref()
-                .map(|embeds| embeds.as_slice()),
+            deepstack_visual_embeds.as_deref(),
         )?;
         Ok(out)
     }
