@@ -1,0 +1,108 @@
+Transformer Architecture Visualization Description
+
+This file describes the design for a transformer architecture visualization to be created and saved as transformer_architecture.png.
+
+OVERALL LAYOUT:
+- A comprehensive visualization showing the Shakespeare Transformer architecture
+- Clean, professional style with consistent colors and clear labels
+- Size approximately 800x600 pixels
+- Split into main sections: overall architecture, detailed components, and key formulas
+
+COMPONENTS:
+
+1. OVERALL ARCHITECTURE (Top section):
+   - Show the high-level structure of the Shakespeare Transformer model
+   - Include the main components in a vertical flow:
+     * Input (character tokens)
+     * TokenEmbedding (with positional encoding)
+     * TransformerDecoder (with multiple layers)
+     * Output projection (to vocabulary)
+   - Use boxes for components with clear labels
+   - Show data flow with arrows between components
+   - Color: Light blue background for this section (#D6EAF8 or similar)
+
+2. TRANSFORMER DECODER DETAIL (Middle-left section):
+   - Expanded view of the TransformerDecoder component
+   - Show multiple stacked TransformerDecoderLayers
+   - Include the final LayerNorm and output projection
+   - Highlight the residual connections between layers
+   - Color: Light green background for this section (#D5F5E3 or similar)
+
+3. DECODER LAYER DETAIL (Middle-right section):
+   - Detailed view of a single TransformerDecoderLayer
+   - Include:
+     * Self-attention block
+     * Layer normalization
+     * Feed-forward network
+     * Residual connections
+   - Show the pre-normalization approach (LayerNorm before sub-layers)
+   - Color: Light yellow background for this section (#FEF9E7 or similar)
+
+4. MULTI-HEAD ATTENTION DETAIL (Bottom-left section):
+   - Expanded view of the MultiHeadAttention component
+   - Show:
+     * Query, Key, Value projections
+     * Multiple attention heads in parallel
+     * Concatenation of head outputs
+     * Final projection to output dimension
+   - Include the scaled dot-product attention mechanism
+   - Color: Light orange background for this section (#FAE5D3 or similar)
+
+5. FEED-FORWARD NETWORK DETAIL (Bottom-right section):
+   - Detailed view of the FeedForward component
+   - Show the two linear layers with activation function
+   - Include dimensions for each layer
+   - Color: Light purple background for this section (#E8DAEF or similar)
+
+ARCHITECTURE SPECIFICATIONS (Based on Chapter 19):
+- Character-level tokenization (vocabulary size based on unique characters)
+- Token embedding dimension: 384
+- Number of transformer layers: 6
+- Number of attention heads: 6
+- Head dimension: 64
+- Feed-forward dimension: 1536 (4x embedding dimension)
+- Dropout rate: 0.1
+- Maximum sequence length: 256
+- Pre-normalization approach (LayerNorm before each sub-layer)
+- Causal masking for autoregressive generation
+
+ANNOTATIONS:
+- Add clear labels for all components
+- Include the key equations:
+  * Attention(Q, K, V) = softmax((QK^T)/√d_k)V
+  * MultiHead(Q, K, V) = Concat(head_1, ..., head_h)W^O
+  * head_i = Attention(QW_i^Q, KW_i^K, VW_i^V)
+- Add a brief title at the top: "Shakespeare Transformer Architecture"
+- Include a small legend explaining the color coding and components
+- Add dimensions for each component (e.g., embedding_dim=384, num_heads=6)
+
+STYLE GUIDELINES:
+- Use a clean, minimalist design with adequate white space
+- Use a consistent, professional font (e.g., Arial or Helvetica)
+- Use a color scheme that's easy to distinguish but not too bright
+- Ensure all text is readable at the intended display size
+- Use thin lines for connections and borders
+- Use dashed lines for residual connections
+
+SPECIFIC DETAILS:
+- For the overall architecture, use a vertical flow diagram
+- For the decoder layers, show at least 3 of the 6 layers to illustrate the stacking
+- For multi-head attention, show all 6 heads in parallel
+- Use arrows to show the flow of information through the process
+- Include small explanatory notes where helpful
+- Show the causal masking in the self-attention component
+
+RECOMMENDED TOOLS:
+- Python with matplotlib for creating the visualization
+- Use matplotlib's gridspec for organizing the different components
+- Consider using patches for boxes and arrows
+
+EXPORT INSTRUCTIONS:
+- Export as PNG at 800x600 pixels resolution
+- Save as "transformer_architecture.png" in the src/images/ directory
+- Ensure the image has a transparent background or white background
+
+VERIFICATION:
+- After adding the image to the repository, verify it displays correctly in the documentation
+- Check that the image is properly referenced in src/19_shakespeare_transformer.md
+- Ensure the image is clear and readable at different zoom levels
