@@ -43,11 +43,6 @@ pub struct VisionConfig {
     pub deepstack_visual_indexes: Vec<usize>,
 }
 
-// #[derive(Debug, Clone, serde::Deserialize)]
-// pub struct MRopeScaling {
-//     pub mrope_section: Vec<usize>,
-// }
-
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct TextConfig {
     pub head_dim: usize,
