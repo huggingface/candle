@@ -2,15 +2,16 @@
 
 This is an adapted version of the Candle Bert example to inline (embed) the model files into the binary to create a single file binary.
 
-**Note: This example requires you use the environment variable CANDLE_BUILDTIME_MODEL_REVISION.**
+**Note: This example requires you use the environment variable CANDLE_BUILDTIME_MODEL_REVISION and --features=buildtime-download**
 
 Because the model files must be available at compile time, a special build step is needed. The build step ([buildtime_downloader.rs](../../buildtime_downloader.rs)) downloads the model at compile time based on the `CANDLE_BUILDTIME_MODEL_REVISION` environment variable. Note the `:` between model_id and revision in the example below.
+In addition we have require you specify `--features=buildtime-download`. This feature flag doesn't actually do anything, but it protects against clippy attempting (and failing) to compile this example.
 
 ## Running the example
 
 ```bash
 cd path/to/candle/candle-examples
-CANDLE_BUILDTIME_MODEL_REVISION="sentence-transformers/all-MiniLM-L6-v2:c9745ed1d9f207416be6d2e6f8de32d1f16199bf" cargo build --example bert_single_file_binary --release
+CANDLE_BUILDTIME_MODEL_REVISION="sentence-transformers/all-MiniLM-L6-v2:c9745ed1d9f207416be6d2e6f8de32d1f16199bf" cargo build --example bert_single_file_binary --release --features=buildtime-download
 ../target/release/examples/bert_single_file_binary --prompt "Here is a test sentence"
 ```
 

@@ -92,6 +92,7 @@ mimi = ["cpal", "symphonia", "rubato"]
 snac = ["cpal", "symphonia", "rubato"]
 depth_anything_v2 = ["palette", "enterpolation"]
 tekken = ["tekken-rs"]
+buildtime-download = []
 
 [[example]]
 name = "llama_multiprocess"
@@ -159,3 +160,4 @@ required-features = ["symphonia"]
 
 [[example]]
 name = "bert_single_file_binary"
+required-features = ["buildtime-download"]
