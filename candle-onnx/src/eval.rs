@@ -443,7 +443,7 @@ fn simple_eval_(
                     None => input.t()?,
                     Some(perm) => {
                         let perm = perm.iter().map(|&v| v as usize).collect::<Vec<_>>();
-                        input.permute(perm)?
+                        input.permute(perm)?.contiguous()?
                     }
                 };
                 values.insert(node.output[0].clone(), output);
