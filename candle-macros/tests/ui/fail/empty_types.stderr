@@ -1,0 +1,51 @@
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `candle_core`
+ --> tests/ui/fail/empty_types.rs:7:1
+  |
+7 | register_quantized_types! {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `candle_core`
+  |
+  = help: if you wanted to use a crate named `candle_core`, use `cargo add candle_core` to add it to your `Cargo.toml`
+  = help: consider importing one of these items:
+          std::error::Error
+          std::fmt::Error
+          std::io::Error
+          core::error::Error
+          core::fmt::Error
+          syn::Error
+  = note: this error originates in the macro `register_quantized_types` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unexpected `cfg` condition value: `cuda`
+ --> tests/ui/fail/empty_types.rs:7:1
+  |
+7 | register_quantized_types! {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: no expected values for `feature`
+  = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+  = help: try referring to `register_quantized_types` crate for guidance on how handle this unexpected cfg
+  = help: the macro `register_quantized_types` may come from an old version of the `candle_macros` crate, try updating your dependency with `cargo update -p candle_macros`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: `#[warn(unexpected_cfgs)]` on by default
+  = note: this warning originates in the macro `register_quantized_types` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unexpected `cfg` condition value: `metal`
+ --> tests/ui/fail/empty_types.rs:7:1
+  |
+7 | register_quantized_types! {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: no expected values for `feature`
+  = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
+  = help: try referring to `register_quantized_types` crate for guidance on how handle this unexpected cfg
+  = help: the macro `register_quantized_types` may come from an old version of the `candle_macros` crate, try updating your dependency with `cargo update -p candle_macros`
+  = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+  = note: this warning originates in the macro `register_quantized_types` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `candle_core`
+ --> tests/ui/fail/empty_types.rs:7:1
+  |
+7 | register_quantized_types! {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `candle_core`
+  |
+  = help: if you wanted to use a crate named `candle_core`, use `cargo add candle_core` to add it to your `Cargo.toml`
+  = note: this error originates in the macro `register_quantized_types` (in Nightly builds, run with -Z macro-backtrace for more info)
