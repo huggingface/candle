@@ -66,6 +66,20 @@ pub trait Map2 {
             (C::F32(v1), C::F32(v2)) => Ok(C::F32(self.f(v1, l1, v2, l2)?)),
             (C::F64(v1), C::F64(v2)) => Ok(C::F64(self.f(v1, l1, v2, l2)?)),
             (C::F8E4M3(v1), C::F8E4M3(v2)) => Ok(C::F8E4M3(self.f(v1, l1, v2, l2)?)),
+            (C::Quantized(id1, data1), C::Quantized(id2, data2)) => {
+                // Auto-dequantize, perform operation, requantize
+                // This is the default behavior - operations with specialized quantized
+                // implementations should override this map() method
+                crate::quantized_helpers::map2_via_dequant(
+                    *id1,
+                    data1,
+                    l1,
+                    data2,
+                    l2,
+                    Self::OP,
+                    |lhs_f32, l1, rhs_f32, l2| self.f(lhs_f32, l1, rhs_f32, l2),
+                )
+            }
             _ => Err(Error::DTypeMismatchBinaryOp {
                 lhs: v1.dtype(),
                 rhs: v2.dtype(),

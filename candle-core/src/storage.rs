@@ -74,6 +74,18 @@ impl Storage {
         }
     }
 
+
+    /// Check that the dtypes are the same, or that we can fastpath the operation.
+    pub(crate) fn same_dtype_or_fastpath(&self, rhs: &Self, op: &'static str) -> Result<()> {
+        let lhs = self.dtype();
+        let rhs = rhs.dtype();
+        if lhs != rhs && !lhs.can_fastpath_with(&rhs) {
+            Err(Error::DTypeMismatchBinaryOp { lhs, rhs, op }.bt())
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn const_set(&mut self, v: Scalar, l: &Layout) -> Result<()> {
         match self {
             Storage::Cpu(storage) => storage.const_set(v, l),
@@ -746,7 +758,7 @@ impl Storage {
         rhs_layout: &Layout,
     ) -> Result<Self> {
         self.same_device(rhs, "matmul")?;
-        self.same_dtype(rhs, "matmul")?;
+        self.same_dtype_or_fastpath(rhs, "matmul")?;
         match (self, rhs) {
             (Self::Cpu(lhs), Self::Cpu(rhs)) => {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
