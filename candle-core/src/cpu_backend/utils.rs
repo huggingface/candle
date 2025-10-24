@@ -16,6 +16,16 @@ pub trait Map1 {
             C::F32(vs) => Ok(C::F32(self.f(vs, layout)?)),
             C::F64(vs) => Ok(C::F64(self.f(vs, layout)?)),
             C::F8E4M3(vs) => Ok(C::F8E4M3(self.f(vs, layout)?)),
+            C::Quantized(id, data) => {
+                // Auto-dequantize, perform operation, requantize
+                crate::quantized_helpers::map1_via_dequant(
+                    *id,
+                    data,
+                    layout,
+                    "map1",
+                    |data_f32, layout| self.f(data_f32, layout),
+                )
+            }
         }
     }
 }
@@ -33,6 +43,11 @@ pub trait Map1Any {
             C::F32(vs) => Ok(self.f(vs, layout, C::F32)?),
             C::F64(vs) => Ok(self.f(vs, layout, C::F64)?),
             C::F8E4M3(vs) => Ok(self.f(vs, layout, C::F8E4M3)?),
+            C::Quantized(id, data) => {
+                // Auto-dequantize, perform operation on f32, wrap result as F32 storage
+                let data_f32 = crate::quantized_helpers::dequantize_storage(*id, data, layout)?;
+                self.f(&data_f32, layout, C::F32)
+            }
         }
     }
 }

@@ -74,6 +74,7 @@ pub mod npy;
 pub mod op;
 pub mod pickle;
 pub mod quantized;
+mod quantized_helpers;
 pub mod safetensors;
 pub mod scalar;
 pub mod shape;

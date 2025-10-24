@@ -128,6 +128,13 @@ impl crate::CustomOp1 for ArgSort {
             crate::CpuStorage::F32(vs) => self.asort(vs, layout),
             crate::CpuStorage::F64(vs) => self.asort(vs, layout),
             crate::CpuStorage::F8E4M3(vs) => self.asort(vs, layout),
+            crate::CpuStorage::Quantized(qdtype, data) => {
+                // Dequantize to f32, then sort
+                let elem_count = layout.shape().elem_count();
+                let mut f32_data = vec![0f32; elem_count];
+                crate::dtype::quantized_dispatch::dequantize_cpu(*qdtype, data, &mut f32_data)?;
+                self.asort(&f32_data, layout)
+            }
         };
         let sort_indexes = crate::CpuStorage::U32(sort_indexes);
         Ok((sort_indexes, layout.shape().into()))

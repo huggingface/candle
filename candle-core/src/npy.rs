@@ -29,6 +29,7 @@ use crate::{DType, Device, Error, Result, Shape, Tensor};
 use byteorder::{LittleEndian, ReadBytesExt};
 use float8::F8E4M3;
 use half::{bf16, f16, slice::HalfFloatSliceExt};
+use ug::D;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
@@ -91,6 +92,11 @@ impl Header {
             DType::U32 => "u4",
             DType::U8 => "u1",
             DType::F8E4M3 => Err(Error::Npy("f8e4m3 is not supported".into()))?,
+            DType::Quantized(_) => {
+                return Err(Error::Npy(
+                    "quantized dtypes are not supported in npy format".into(),
+                ))
+            }
         };
         if !shape.is_empty() {
             shape.push(',')
@@ -248,6 +254,11 @@ impl Tensor {
                 let len = data_t.len();
                 reader.read_i8_into(unsafe { slice::from_raw_parts_mut(ptr, len) })?;
                 Tensor::from_vec(data_t, shape, &Device::Cpu)
+            }
+            DType::Quantized(_) => {
+                Err(Error::Npy(
+                    "quantized dtypes are not supported in npy format".into(),
+                ))
             }
         }
     }

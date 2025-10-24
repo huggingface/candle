@@ -35,6 +35,7 @@ accelerate-src = { version = "0.3.2" }
 anyhow = { version = "1", features = ["backtrace"] }
 byteorder = "1.4.3"
 candle = { path = "./candle-core", package = "candle-core", version = "0.9.1" }
+candle-macros = { path = "./candle-macros", version = "0.9.1" }
 candle-datasets = { path = "./candle-datasets", version = "0.9.1" }
 candle-flash-attn = { path = "./candle-flash-attn", version = "0.9.1" }
 candle-kernels = { path = "./candle-kernels", version = "0.9.1" }

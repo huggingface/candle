@@ -1,5 +1,6 @@
 //! Implementation of Backend Fns for CPU
 use crate::backend::{BackendDevice, BackendStorage};
+use crate::dtype::QuantizedDType;
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
 use float8::F8E4M3;
@@ -27,6 +28,7 @@ pub enum CpuStorage {
     F32(Vec<f32>),
     F64(Vec<f64>),
     F8E4M3(Vec<F8E4M3>),
+    Quantized(QuantizedDType, Vec<u8>),
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +41,7 @@ pub enum CpuStorageRef<'a> {
     F32(&'a [f32]),
     F64(&'a [f64]),
     F8E4M3(&'a [F8E4M3]),
+    Quantized(QuantizedDType, &'a [u8]),
 }
 
 #[derive(Debug, Clone)]
@@ -1705,6 +1708,17 @@ impl CpuStorage {
                     .concat();
                 Self::F8E4M3(storages)
             }
+            Self::Quantized(q, _) => {
+                let storages = storages
+                    .iter()
+                    .map(|s| match s {
+                        Self::Quantized(q2, s) if q == q2 => Ok(s.as_slice()),
+                        _ => crate::bail!("dtype mismatch"),
+                    })
+                    .collect::<Result<Vec<_>>>()?
+                    .concat();
+                Self::Quantized(*q, storages)
+            }
         };
         Ok(s)
     }
@@ -1723,6 +1737,7 @@ impl BackendStorage for CpuStorage {
             Self::F32(_) => DType::F32,
             Self::F64(_) => DType::F64,
             Self::F8E4M3(_) => DType::F8E4M3,
+            Self::Quantized(q, _) => DType::Quantized(*q),
         }
     }
 
@@ -1985,6 +2000,30 @@ impl BackendStorage for CpuStorage {
                 let data = unary_map(storage, layout, |v| v);
                 Ok(Self::F8E4M3(data))
             }
+            // Conversion TO quantized types
+            (Self::F32(storage), DType::Quantized(q)) => {
+                // Extract f32 data according to layout
+                let data = unary_map(storage, layout, |v| v);
+                // Quantize using helper function
+                let quantized = crate::quantized_helpers::quantize_storage(q, &data, layout)?;
+                Ok(Self::Quantized(q, quantized))
+            }
+            (_, DType::Quantized(q)) => {
+                // Convert to f32 first, then quantize
+                let f32_storage = self.to_dtype(layout, DType::F32)?;
+                f32_storage.to_dtype(layout, DType::Quantized(q))
+            }
+            // Conversion FROM quantized types
+            (Self::Quantized(q, data), DType::F32) => {
+                // Dequantize using helper function
+                let dequantized = crate::quantized_helpers::dequantize_storage(*q, data, layout)?;
+                Ok(Self::F32(dequantized))
+            }
+            (Self::Quantized(_q, _), target_dtype) => {
+                // Dequantize to f32 first, then convert to target dtype
+                let f32_storage = self.to_dtype(layout, DType::F32)?;
+                f32_storage.to_dtype(layout, target_dtype)
+            }
         }
     }
 
@@ -2102,9 +2141,11 @@ impl BackendStorage for CpuStorage {
                 let data = unary_map(storage, layout, |v| v.powf(F8E4M3::from_f64(e)));
                 Ok(Self::F8E4M3(data))
             }
-            Self::U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "elu").bt()),
-            Self::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "elu").bt()),
-            Self::I64(_) => Err(Error::UnsupportedDTypeForOp(DType::I64, "elu").bt()),
+            Self::U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "powf").bt()),
+            Self::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "powf").bt()),
+            Self::I64(_) => Err(Error::UnsupportedDTypeForOp(DType::I64, "powf").bt()),
+            // TODO: Handle Quantized
+            Self::Quantized(q, _) => Err(Error::UnsupportedDTypeForOp(DType::Quantized(*q), "powf").bt()),
         }
     }
 
@@ -2134,6 +2175,8 @@ impl BackendStorage for CpuStorage {
             Self::U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "elu").bt()),
             Self::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "elu").bt()),
             Self::I64(_) => Err(Error::UnsupportedDTypeForOp(DType::I64, "elu").bt()),
+             // TODO: Handle Quantized
+            Self::Quantized(q, _) => Err(Error::UnsupportedDTypeForOp(DType::Quantized(*q), "elu").bt()),
         }
     }
 
@@ -2195,6 +2238,10 @@ impl BackendStorage for CpuStorage {
             Self::I64(storage) => {
                 let data = unary_map(storage, layout, B::i64);
                 Ok(Self::I64(data))
+            }
+            //TODO: Handle Quantized
+            Self::Quantized(q, _) => {
+                Err(Error::UnsupportedDTypeForOp(DType::Quantized(*q), "unary op").bt())
             }
         }
     }
@@ -2752,6 +2799,18 @@ impl BackendDevice for CpuDevice {
                 }
                 Ok(CpuStorage::F64(data))
             }
+            DType::Quantized(qdtype) => {
+                // Generate F32 random data then quantize
+                let mut f32_data = Vec::with_capacity(elem_count);
+                let uniform =
+                    rand::distr::Uniform::new(min as f32, max as f32).map_err(Error::wrap)?;
+                for _i in 0..elem_count {
+                    f32_data.push(rng.sample::<f32, _>(uniform))
+                }
+                // Quantize the f32 data
+                let quantized_bytes = crate::dtype::quantized_dispatch::quantize_cpu(qdtype, &f32_data)?;
+                Ok(CpuStorage::Quantized(qdtype, quantized_bytes))
+            }
         }
     }
 
@@ -2808,6 +2867,18 @@ impl BackendDevice for CpuDevice {
                 }
                 Ok(CpuStorage::F64(data))
             }
+            DType::Quantized(qdtype) => {
+                // Generate F32 random data then quantize
+                let mut f32_data = Vec::with_capacity(elem_count);
+                let normal =
+                    rand_distr::Normal::new(mean as f32, std as f32).map_err(Error::wrap)?;
+                for _i in 0..elem_count {
+                    f32_data.push(normal.sample(&mut rng))
+                }
+                // Quantize the f32 data
+                let quantized_bytes = crate::dtype::quantized_dispatch::quantize_cpu(qdtype, &f32_data)?;
+                Ok(CpuStorage::Quantized(qdtype, quantized_bytes))
+            }
         }
     }
 
@@ -2859,6 +2930,12 @@ impl BackendDevice for CpuDevice {
                 v.set_len(elem_count);
                 CpuStorage::F8E4M3(v)
             }
+            DType::Quantized(qdtype) => {
+                let byte_size = crate::dtype::quantized_dispatch::storage_size_in_bytes(qdtype, elem_count);
+                let mut v = Vec::with_capacity(byte_size);
+                v.set_len(byte_size);
+                CpuStorage::Quantized(qdtype, v)
+            }
         };
         Ok(storage)
     }
@@ -2874,6 +2951,12 @@ impl BackendDevice for CpuDevice {
             DType::F8E4M3 => CpuStorage::F8E4M3(vec![F8E4M3::ZERO; elem_count]),
             DType::F32 => CpuStorage::F32(vec![0f32; elem_count]),
             DType::F64 => CpuStorage::F64(vec![0f64; elem_count]),
+            DType::Quantized(qdtype) => {
+                // Quantize zero-filled f32 array
+                let f32_zeros = vec![0f32; elem_count];
+                let quantized_bytes = crate::dtype::quantized_dispatch::quantize_cpu(qdtype, &f32_zeros)?;
+                CpuStorage::Quantized(qdtype, quantized_bytes)
+            }
         };
         Ok(storage)
     }

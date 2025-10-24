@@ -4,25 +4,42 @@ use syn::{parse_macro_input, DeriveInput, parse::Parser};
 
 /// Derive macro for QuantizedType trait implementation
 /// 
-/// Example: `#[derive(QuantizedType)] #[quantized(name = "q4_0")] pub struct Q4_0;`
+/// Attributes:
+/// - `name`: Type name identifier (default: lowercase struct name)
+/// - `size_in_bytes`: Static size per element in bytes (default: 1)
+/// 
+/// Example: `#[derive(QuantizedType)] #[quantized(name = "q4_0", size_in_bytes = 1)] pub struct Q4_0;`
 #[proc_macro_derive(QuantizedType, attributes(quantized))]
 pub fn derive_quantized_type(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     
     let name = &input.ident;
     
-    // Extract the name from attributes
-    let type_name = input.attrs.iter()
-        .find(|attr| attr.path().is_ident("quantized"))
-        .and_then(|attr| {
-            attr.parse_args::<syn::LitStr>().ok()
-        })
-        .map(|lit| lit.value())
-        .unwrap_or_else(|| name.to_string().to_lowercase());
+    // Extract attributes from #[quantized(name = "...", size_in_bytes = N)]
+    let mut type_name = name.to_string().to_lowercase();
+    let mut size_in_bytes = 1usize; // Default to 1 byte
+    
+    for attr in &input.attrs {
+        if attr.path().is_ident("quantized") {
+            let _ = attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("name") {
+                    let value = meta.value()?;
+                    let s: syn::LitStr = value.parse()?;
+                    type_name = s.value();
+                } else if meta.path.is_ident("size_in_bytes") {
+                    let value = meta.value()?;
+                    let n: syn::LitInt = value.parse()?;
+                    size_in_bytes = n.base10_parse()?;
+                }
+                Ok(())
+            });
+        }
+    }
     
     let expanded = quote! {
-        impl candle_core::dtype::QuantizedType for #name {
+        impl crate::dtype::QuantizedType for #name {
             const NAME: &'static str = #type_name;
+            const SIZE_IN_BYTES: usize = #size_in_bytes;
         }
     };
     
@@ -86,17 +103,6 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
         }
     });
     
-    // Generate const IDs
-    let const_ids = type_names.iter().map(|name| {
-        let const_name = syn::Ident::new(
-            &format!("{}_ID", name.to_string().to_uppercase()),
-            name.span()
-        );
-        quote! {
-            pub const #const_name: QuantizedDType = QuantizedDType::#name;
-        }
-    });
-    
     let expanded = quote! {
         /// Quantized data type enum
         /// 
@@ -125,15 +131,32 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 }
             }
             
+            /// Get size in bytes per element
+            #[inline]
+            pub fn size_in_bytes(self) -> usize {
+                match self {
+                    #(QuantizedDType::#type_names => #type_names::SIZE_IN_BYTES,)*
+                    QuantizedDType::External(name) => {
+                        let registry = EXTERNAL_TYPE_REGISTRY.get();
+                        if let Some(registry) = registry {
+                            let map = registry.read().unwrap();
+                            if let Some(ops) = map.get(name) {
+                                return ops.size_in_bytes;
+                            }
+                        }
+                        1
+                    }
+                }
+            }
+            
             /// Check if external type
             #[inline]
             pub const fn is_external(self) -> bool {
                 matches!(self, QuantizedDType::External(_))
             }
+
+
         }
-        
-        // Const IDs for convenience
-        #(#const_ids)*
         
         // ==================== External Type Support ====================
         
@@ -144,23 +167,26 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
         /// - CUDA ops (optional): dequantize, matmul
         /// - Metal ops (optional): dequantize, matmul
         pub struct ExternalQuantOps {
+            // Static size per element (bytes)
+            pub size_in_bytes: usize,
+            
             // CPU operations (required)
-            pub quantize_cpu: fn(&[f32]) -> candle_core::Result<Vec<u8>>,
-            pub dequantize_cpu: fn(&[u8], &mut [f32]) -> candle_core::Result<()>,
+            pub quantize_cpu: fn(&[f32]) -> crate::Result<Vec<u8>>,
+            pub dequantize_cpu: fn(&[u8], &mut [f32]) -> crate::Result<()>,
             pub storage_size_in_bytes: fn(usize) -> usize,
-            pub matmul_cpu: fn(&[f32], &[usize], &[u8], &[usize]) -> candle_core::Result<Vec<f32>>,
+            pub matmul_cpu: fn(&[f32], &[usize], &[u8], &[usize]) -> crate::Result<Vec<f32>>,
             
             // CUDA ops (optional)
             #[cfg(feature = "cuda")]
-            pub dequantize_cuda: Option<fn(&cudarc::driver::CudaSlice<u8>, &mut cudarc::driver::CudaSlice<f32>) -> candle_core::Result<()>>,
+            pub dequantize_cuda: Option<fn(&cudarc::driver::CudaSlice<u8>, &mut cudarc::driver::CudaSlice<f32>) -> crate::Result<()>>,
             #[cfg(feature = "cuda")]
-            pub matmul_cuda: Option<fn(&cudarc::driver::CudaSlice<u8>, &[usize], &cudarc::driver::CudaSlice<u8>, &[usize]) -> candle_core::Result<cudarc::driver::CudaSlice<u8>>>,
+            pub matmul_cuda: Option<fn(&cudarc::driver::CudaSlice<u8>, &[usize], &cudarc::driver::CudaSlice<u8>, &[usize]) -> crate::Result<cudarc::driver::CudaSlice<u8>>>,
             
             // Metal ops (optional)
             #[cfg(feature = "metal")]
-            pub dequantize_metal: Option<fn(&metal::Buffer, &mut metal::Buffer) -> candle_core::Result<()>>,
+            pub dequantize_metal: Option<fn(&metal::Buffer, &mut metal::Buffer) -> crate::Result<()>>,
             #[cfg(feature = "metal")]
-            pub matmul_metal: Option<fn(&metal::Buffer, &[usize], &metal::Buffer, &[usize]) -> candle_core::Result<metal::Buffer>>,
+            pub matmul_metal: Option<fn(&metal::Buffer, &[usize], &metal::Buffer, &[usize]) -> crate::Result<metal::Buffer>>,
         }
         
         /// Global registry for external types (thread-safe)
@@ -216,7 +242,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 id: QuantizedDType,
                 data: &[u8],
                 output: &mut [f32]
-            ) -> candle_core::Result<()> {
+            ) -> crate::Result<()> {
                 match id {
                     // Built-in: compile-time dispatch
                     #(#dequantize_arms,)*
@@ -224,10 +250,10 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                     // External: HashMap lookup
                     QuantizedDType::External(name) => {
                         let registry = EXTERNAL_TYPE_REGISTRY.get()
-                            .ok_or_else(|| candle_core::Error::Msg("External type registry not initialized".into()))?;
+                            .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
                         let map = registry.read().unwrap();
                         let ops = map.get(name)
-                            .ok_or_else(|| candle_core::Error::Msg(format!("External type '{}' not registered", name)))?;
+                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
                         
                         (ops.dequantize_cpu)(data, output)
                     }
@@ -238,16 +264,16 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
             pub fn quantize_cpu(
                 id: QuantizedDType,
                 input: &[f32]
-            ) -> candle_core::Result<Vec<u8>> {
+            ) -> crate::Result<Vec<u8>> {
                 match id {
                     #(#quantize_arms,)*
                     
                     QuantizedDType::External(name) => {
                         let registry = EXTERNAL_TYPE_REGISTRY.get()
-                            .ok_or_else(|| candle_core::Error::Msg("External type registry not initialized".into()))?;
+                            .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
                         let map = registry.read().unwrap();
                         let ops = map.get(name)
-                            .ok_or_else(|| candle_core::Error::Msg(format!("External type '{}' not registered", name)))?;
+                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
                         
                         (ops.quantize_cpu)(input)
                     }
@@ -285,16 +311,16 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 rhs_id: QuantizedDType,
                 rhs_data: &[u8],
                 rhs_shape: &[usize],
-            ) -> candle_core::Result<Vec<f32>> {
+            ) -> crate::Result<Vec<f32>> {
                 match rhs_id {
                     #(#matmul_arms,)*
                     
                     QuantizedDType::External(name) => {
                         let registry = EXTERNAL_TYPE_REGISTRY.get()
-                            .ok_or_else(|| candle_core::Error::Msg("External type registry not initialized".into()))?;
+                            .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
                         let map = registry.read().unwrap();
                         let ops = map.get(name)
-                            .ok_or_else(|| candle_core::Error::Msg(format!("External type '{}' not registered", name)))?;
+                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
                         
                         (ops.matmul_cpu)(lhs_f32, lhs_shape, rhs_data, rhs_shape)
                     }
@@ -309,7 +335,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 id: QuantizedDType,
                 data: &cudarc::driver::CudaSlice<u8>,
                 output: &mut cudarc::driver::CudaSlice<f32>
-            ) -> candle_core::Result<()> {
+            ) -> crate::Result<()> {
                 match id {
                     #(
                         QuantizedDType::#type_names => {
@@ -326,10 +352,10 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                     )*
                     QuantizedDType::External(name) => {
                         let registry = EXTERNAL_TYPE_REGISTRY.get()
-                            .ok_or_else(|| candle_core::Error::Msg("External type registry not initialized".into()))?;
+                            .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
                         let map = registry.read().unwrap();
                         let ops = map.get(name)
-                            .ok_or_else(|| candle_core::Error::Msg(format!("External type '{}' not registered", name)))?;
+                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
                         
                         // Try CUDA, fallback to CPU
                         if let Some(cuda_fn) = ops.dequantize_cuda {
@@ -353,7 +379,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 lhs_shape: &[usize],
                 rhs_data: &cudarc::driver::CudaSlice<u8>,
                 rhs_shape: &[usize],
-            ) -> candle_core::Result<cudarc::driver::CudaSlice<u8>> {
+            ) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
                 match id {
                     #(
                         QuantizedDType::#type_names => {
@@ -362,16 +388,16 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                     )*
                     QuantizedDType::External(name) => {
                         let registry = EXTERNAL_TYPE_REGISTRY.get()
-                            .ok_or_else(|| candle_core::Error::Msg("External type registry not initialized".into()))?;
+                            .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
                         let map = registry.read().unwrap();
                         let ops = map.get(name)
-                            .ok_or_else(|| candle_core::Error::Msg(format!("External type '{}' not registered", name)))?;
+                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
                         
                         // CUDA implementation or error
                         if let Some(cuda_fn) = ops.matmul_cuda {
                             cuda_fn(lhs_data, lhs_shape, rhs_data, rhs_shape)
                         } else {
-                            Err(candle_core::Error::Msg(format!("External type '{}' does not have CUDA matmul implementation", name)))
+                            Err(crate::Error::Msg(format!("External type '{}' does not have CUDA matmul implementation", name)))
                         }
                     }
                 }
@@ -385,7 +411,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 id: QuantizedDType,
                 data: &metal::Buffer,
                 output: &mut metal::Buffer
-            ) -> candle_core::Result<()> {
+            ) -> crate::Result<()> {
                 match id {
                     #(
                         QuantizedDType::#type_names => {
@@ -395,16 +421,16 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                     )*
                     QuantizedDType::External(name) => {
                         let registry = EXTERNAL_TYPE_REGISTRY.get()
-                            .ok_or_else(|| candle_core::Error::Msg("External type registry not initialized".into()))?;
+                            .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
                         let map = registry.read().unwrap();
                         let ops = map.get(name)
-                            .ok_or_else(|| candle_core::Error::Msg(format!("External type '{}' not registered", name)))?;
+                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
                         
                         // Try Metal or error
                         if let Some(metal_fn) = ops.dequantize_metal {
                             metal_fn(data, output)
                         } else {
-                            Err(candle_core::Error::Msg(format!("External type '{}' does not have Metal dequantize implementation", name)))
+                            Err(crate::Error::Msg(format!("External type '{}' does not have Metal dequantize implementation", name)))
                         }
                     }
                 }
@@ -418,7 +444,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 lhs_shape: &[usize],
                 rhs_data: &metal::Buffer,
                 rhs_shape: &[usize],
-            ) -> candle_core::Result<metal::Buffer> {
+            ) -> crate::Result<metal::Buffer> {
                 match id {
                     #(
                         QuantizedDType::#type_names => {
@@ -427,16 +453,16 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                     )*
                     QuantizedDType::External(name) => {
                         let registry = EXTERNAL_TYPE_REGISTRY.get()
-                            .ok_or_else(|| candle_core::Error::Msg("External type registry not initialized".into()))?;
+                            .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
                         let map = registry.read().unwrap();
                         let ops = map.get(name)
-                            .ok_or_else(|| candle_core::Error::Msg(format!("External type '{}' not registered", name)))?;
+                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
                         
                         // Metal implementation or error
                         if let Some(metal_fn) = ops.matmul_metal {
                             metal_fn(lhs_data, lhs_shape, rhs_data, rhs_shape)
                         } else {
-                            Err(candle_core::Error::Msg(format!("External type '{}' does not have Metal matmul implementation", name)))
+                            Err(crate::Error::Msg(format!("External type '{}' does not have Metal matmul implementation", name)))
                         }
                     }
                 }
@@ -463,15 +489,15 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
 /// Example:
 /// ```ignore
 /// #[derive(QuantizedType)]
-/// #[quantized(name = "my_q4")]
+/// #[quantized(name = "my_q4", size_in_bytes = 1)]
 /// pub struct MyQ4;
 /// 
 /// impl MyQ4 {
-///     pub fn dequantize(data: &[u8], output: &mut [f32]) -> candle_core::Result<()> { /* ... */ }
-///     pub fn quantize(input: &[f32]) -> candle_core::Result<Vec<u8>> { /* ... */ }
+///     pub fn dequantize(data: &[u8], output: &mut [f32]) -> Result<()> { /* ... */ }
+///     pub fn quantize(input: &[f32]) -> Result<Vec<u8>> { /* ... */ }
 ///     pub fn storage_size_in_bytes(n: usize) -> usize { /* ... */ }
 ///     pub fn matmul(lhs: &[f32], lhs_shape: &[usize], rhs: &[u8], rhs_shape: &[usize]) 
-///         -> candle_core::Result<Vec<f32>> { /* ... */ }
+///         -> Result<Vec<f32>> { /* ... */ }
 /// }
 /// 
 /// register_external_quantized_type!(MyQ4);
@@ -492,6 +518,7 @@ pub fn register_external_quantized_type(input: TokenStream) -> TokenStream {
             
             *DTYPE.get_or_init(|| {
                 let ops = ExternalQuantOps {
+                    size_in_bytes: <#type_name as candle_core::dtype::QuantizedType>::SIZE_IN_BYTES,
                     quantize_cpu: #type_name::quantize,
                     dequantize_cpu: #type_name::dequantize,
                     storage_size_in_bytes: #type_name::storage_size_in_bytes,
