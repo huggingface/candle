@@ -408,21 +408,19 @@ pub fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U
 ///
 /// This is used as a fallback for operations that don't have specialized
 /// quantized implementations.
+#[inline]
 pub fn dequantize_storage(
     id: crate::dtype::QuantizedDType,
     data: &[u8],
     layout: &Layout,
 ) -> Result<Vec<f32>> {
     let num_elements = layout.shape().elem_count();
-    let mut output = vec![0.0f32; num_elements];
-
-    // Use the generated dispatch to dequantize
-    crate::dtype::quantized_dispatch::dequantize_cpu(id, data, &mut output)?;
-
+    let output = id.dequantize(data, Some(num_elements))?;
     Ok(output)
 }
 
 /// Quantize f32 storage back to quantized format
+#[inline]
 pub fn quantize_storage(
     id: crate::dtype::QuantizedDType,
     data: &[f32],

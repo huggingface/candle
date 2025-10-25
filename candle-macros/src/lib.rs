@@ -103,6 +103,13 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
         }
     });
 
+    // Generate match arms for infer_element_count
+    let infer_count_arms = type_names.iter().map(|name| {
+        quote! {
+            QuantizedDType::#name => #name::infer_element_count(data_len)
+        }
+    });
+
     let expanded = quote! {
         /// Quantized data type enum
         ///
@@ -155,7 +162,21 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 matches!(self, QuantizedDType::External(_))
             }
 
-
+            /// Convenience dequantize function returning a newly allocated vector
+            /// If num_elements is None, infers number of elements from data size
+            #[inline]
+            pub fn dequantize(self, data: &[u8], num_elements: Option<usize>) -> crate::Result<Vec<f32>> {
+                let mut output = if let Some(n) = num_elements {
+                    vec![0.0f32; n]
+                }else{
+                    // Calculate number of elements from data size
+                    // For quantized types, we need to know the block structure
+                    let num_elements = quantized_dispatch::infer_element_count(self, data.len());
+                    vec![0.0f32; num_elements]
+                };
+                quantized_dispatch::dequantize_cpu(self, data, &mut output)?;
+                Ok(output)
+            }
         }
 
         // ==================== External Type Support ====================
@@ -163,7 +184,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
         /// External type operations
         ///
         /// All operations available to built-in types:
-        /// - CPU ops (required): quantize, dequantize, storage_size, matmul
+        /// - CPU ops (required): quantize, dequantize, storage_size, matmul, infer_element_count
         /// - CUDA ops (optional): dequantize, matmul
         /// - Metal ops (optional): dequantize, matmul
         pub struct ExternalQuantOps {
@@ -174,6 +195,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
             pub quantize_cpu: fn(&[f32]) -> crate::Result<Vec<u8>>,
             pub dequantize_cpu: fn(&[u8], &mut [f32]) -> crate::Result<()>,
             pub storage_size_in_bytes: fn(usize) -> usize,
+            pub infer_element_count: fn(usize) -> usize,
             pub matmul_cpu: fn(&[f32], &[usize], &[u8], &[usize]) -> crate::Result<Vec<f32>>,
 
             // CUDA ops (optional)
@@ -234,6 +256,29 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
         /// Dispatch functions: compile-time for built-in, HashMap lookup for external
         pub mod quantized_dispatch {
             use super::*;
+
+            /// Infer number of f32 elements from quantized data size
+            ///
+            /// Quantized data is stored in blocks. Each block represents multiple f32 elements.
+            /// This calls the type-specific infer_element_count method.
+            #[inline]
+            pub fn infer_element_count(id: QuantizedDType, data_len: usize) -> usize {
+                match id {
+                    #(#infer_count_arms,)*
+                    QuantizedDType::External(name) => {
+                        // Call external type's infer_element_count method
+                        let registry = EXTERNAL_TYPE_REGISTRY.get();
+                        if let Some(registry) = registry {
+                            let map = registry.read().unwrap();
+                            if let Some(ops) = map.get(name) {
+                                return (ops.infer_element_count)(data_len);
+                            }
+                        }
+                        // Fallback: assume 1:1 byte-to-element mapping
+                        data_len
+                    }
+                }
+            }
 
             // ==================== CPU Backend ====================
 
@@ -482,7 +527,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
 /// Register external quantized type with simplified API
 ///
 /// Type must implement QuantizedType trait and provide all required methods:
-/// - CPU ops (required): dequantize, quantize, storage_size_in_bytes, matmul
+/// - CPU ops (required): dequantize, quantize, storage_size_in_bytes, infer_element_count, matmul
 /// - CUDA ops (optional): dequantize_cuda, matmul_cuda
 /// - Metal ops (optional): dequantize_metal, matmul_metal
 ///
@@ -496,6 +541,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
 ///     pub fn dequantize(data: &[u8], output: &mut [f32]) -> Result<()> { /* ... */ }
 ///     pub fn quantize(input: &[f32]) -> Result<Vec<u8>> { /* ... */ }
 ///     pub fn storage_size_in_bytes(n: usize) -> usize { /* ... */ }
+///     pub fn infer_element_count(data_len: usize) -> usize { /* ... */ }
 ///     pub fn matmul(lhs: &[f32], lhs_shape: &[usize], rhs: &[u8], rhs_shape: &[usize])
 ///         -> Result<Vec<f32>> { /* ... */ }
 /// }
@@ -522,6 +568,7 @@ pub fn register_external_quantized_type(input: TokenStream) -> TokenStream {
                     quantize_cpu: #type_name::quantize,
                     dequantize_cpu: #type_name::dequantize,
                     storage_size_in_bytes: #type_name::storage_size_in_bytes,
+                    infer_element_count: #type_name::infer_element_count,
                     matmul_cpu: #type_name::matmul,
 
                     #[cfg(feature = "cuda")]

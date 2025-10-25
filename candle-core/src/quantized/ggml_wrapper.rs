@@ -23,9 +23,19 @@ mod shared_impl {
     /// This is a generic implementation that works for all GGML block types.
     /// Thanks to monomorphization and inlining, this has zero overhead compared to
     /// type-specific implementations.
+    ///
+    /// # Safety
+    /// Assumes `data` contains valid quantized blocks. The caller must ensure:
+    /// - `data.len()` is a multiple of `TYPE_SIZE`
+    /// - Data represents valid quantized blocks (validated by `to_float`)
     #[inline]
     pub fn dequantize<W: GgmlTypeWrapper>(data: &[u8], output: &mut [f32]) -> Result<()> {
         let block_count = data.len() / W::TYPE_SIZE;
+
+        // SAFETY:
+        // - Caller ensures data.len() is correct for the quantized format
+        // - W::Block is repr(C) with well-defined layout
+        // - to_float validates block contents and handles any invalid data
         let blocks =
             unsafe { std::slice::from_raw_parts(data.as_ptr() as *const W::Block, block_count) };
         W::Block::to_float(blocks, output);
@@ -50,13 +60,29 @@ mod shared_impl {
     /// Calculate storage size in bytes for given number of elements
     #[inline]
     pub fn storage_size_in_bytes<W: GgmlTypeWrapper>(num_elements: usize) -> usize {
-        let block_count = (num_elements + W::BLOCK_SIZE - 1) / W::BLOCK_SIZE;
+        let block_count = num_elements.div_ceil(W::BLOCK_SIZE);
         block_count * W::TYPE_SIZE
+    }
+
+    /// Infer number of f32 elements from byte length of quantized data
+    #[inline]
+    pub fn infer_element_count<W: GgmlTypeWrapper>(data_len: usize) -> usize {
+        debug_assert!(
+            data_len.is_multiple_of(W::TYPE_SIZE),
+            "data length must be multiple of TYPE_SIZE"
+        );
+        let num_blocks = data_len / W::TYPE_SIZE;
+        num_blocks * W::BLOCK_SIZE
     }
 
     /// Perform matrix multiplication with quantized right-hand side
     ///
     /// Generic implementation for f32 × quantized → f32 matmul.
+    ///
+    /// # Safety
+    /// Assumes `rhs_data` contains valid quantized blocks. The caller must ensure:
+    /// - `rhs_data.len()` is a multiple of `TYPE_SIZE`
+    /// - Data represents valid quantized blocks
     #[inline]
     pub fn matmul<W: GgmlTypeWrapper>(
         lhs_f32: &[f32],
@@ -77,6 +103,11 @@ mod shared_impl {
         }
 
         let block_count = rhs_data.len() / W::TYPE_SIZE;
+
+        // SAFETY:
+        // - Caller ensures rhs_data.len() is correct for the quantized format
+        // - W::Block is repr(C) with well-defined layout
+        // - k_quants::matmul validates block contents
         let rhs_blocks = unsafe {
             std::slice::from_raw_parts(rhs_data.as_ptr() as *const W::Block, block_count)
         };
@@ -102,6 +133,14 @@ macro_rules! define_ggml_wrapper {
             pub const NAME: &'static str = stringify!($name);
             /// Size in bytes per quantized element (averaged)
             pub const SIZE_IN_BYTES: usize = $type_size;
+            /// Number of f32 elements per block
+            pub const BLOCK_SIZE: usize = $block_size;
+
+            /// Infer number of f32 elements from byte length of quantized data
+            #[inline]
+            pub fn infer_element_count(data_len: usize) -> usize {
+                shared_impl::infer_element_count::<Self>(data_len)
+            }
 
             /// Dequantize data from compressed format to f32
             #[inline]

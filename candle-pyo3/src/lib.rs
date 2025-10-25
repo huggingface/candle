@@ -207,6 +207,10 @@ trait MapDType {
             DType::F32 => self.f::<f32>(t),
             DType::F64 => self.f::<f64>(t),
             DType::F8E4M3 => self.f::<F8E4M3>(t),
+            // TODO: Handle quantized dtypes properly.
+            DType::Quantized(_) => Err(PyTypeError::new_err(
+                "operation not supported for quantized dtypes",
+            )),
         }
     }
 }

@@ -34,7 +34,6 @@ use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
 use std::slice;
-use ug::D;
 
 const NPY_MAGIC_STRING: &[u8] = b"\x93NUMPY";
 const NPY_SUFFIX: &str = ".npy";
