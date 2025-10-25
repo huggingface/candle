@@ -5,7 +5,6 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use crate::{
     conv::ParamsConv2D,
     cpu_backend::{copy_strided_src_, Im2Col, Map1, Map2, MatMul},
-    shape::dims4,
     Layout, Result, WithDType,
 };
 
@@ -131,9 +130,12 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
     k_l: &Layout,
 ) -> Result<Vec<T>> {
     let inp = &inp[inp_l.start_offset()..];
-    let (inp_s0, inp_s1, inp_s2, inp_s3) = dims4(inp_l.stride())?;
+    let inp_stride = inp_l.stride();
+    let (inp_s0, inp_s1, inp_s2, inp_s3) =
+        (inp_stride[0], inp_stride[1], inp_stride[2], inp_stride[3]);
     let k = &k[k_l.start_offset()..];
-    let (k_s0, k_s1, k_s2, k_s3) = dims4(k_l.stride())?;
+    let k_stride = k_l.stride();
+    let (k_s0, k_s1, k_s2, k_s3) = (k_stride[0], k_stride[1], k_stride[2], k_stride[3]);
     let (out_h, out_w) = (p.out_h(), p.out_w());
 
     // Output shape: [b_size, c_out, out_h, out_w].
@@ -143,7 +145,8 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
     let cont_s0 = p.i_h * p.i_w * p.c_in;
     let cont_s1 = p.i_w * p.c_in;
     let cont_s2 = p.c_in;
-    let layout_is_valid = inp_l.stride() == [cont_s0, cont_s1, cont_s2, 1];
+    let layout_is_valid =
+        inp_s0 == cont_s0 && inp_s1 == cont_s1 && inp_s2 == cont_s2 && inp_s3 == 1;
     let inp_cont: Cow<[T]> = if layout_is_valid {
         Cow::Borrowed(inp)
     } else {
@@ -285,9 +288,12 @@ fn conv2d_direct<T: WithDType + num_traits::Num + Copy + 'static>(
     k_l: &Layout,
 ) -> Result<Vec<T>> {
     let inp = &inp[inp_l.start_offset()..];
-    let (inp_s0, inp_s1, inp_s2, inp_s3) = crate::shape::dims4(inp_l.stride())?;
+    let inp_stride = inp_l.stride();
+    let (inp_s0, inp_s1, inp_s2, inp_s3) =
+        (inp_stride[0], inp_stride[1], inp_stride[2], inp_stride[3]);
     let k = &k[k_l.start_offset()..];
-    let (k_s0, k_s1, k_s2, k_s3) = crate::shape::dims4(k_l.stride())?;
+    let k_stride = k_l.stride();
+    let (k_s0, k_s1, k_s2, k_s3) = (k_stride[0], k_stride[1], k_stride[2], k_stride[3]);
     let (out_h, out_w) = (p.out_h(), p.out_w());
 
     // Output shape: [b_size, c_out, out_h, out_w].
@@ -297,7 +303,8 @@ fn conv2d_direct<T: WithDType + num_traits::Num + Copy + 'static>(
     let cont_s0 = p.i_h * p.i_w * p.c_in;
     let cont_s1 = p.i_w * p.c_in;
     let cont_s2 = p.c_in;
-    let layout_is_valid = inp_l.stride() == [cont_s0, cont_s1, cont_s2, 1];
+    let layout_is_valid =
+        inp_s0 == cont_s0 && inp_s1 == cont_s1 && inp_s2 == cont_s2 && inp_s3 == 1;
     let inp_cont: Cow<[T]> = if layout_is_valid {
         Cow::Borrowed(inp)
     } else {
