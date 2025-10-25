@@ -74,12 +74,12 @@ impl Storage {
         }
     }
 
-
-    /// Check that the dtypes are the same, or that we can fastpath the operation.
-    pub(crate) fn same_dtype_or_fastpath(&self, rhs: &Self, op: &'static str) -> Result<()> {
+    /// Check that the dtypes are the same, or one of them is quantized.
+    pub(crate) fn same_dtype_or_quantized(&self, rhs: &Self, op: &'static str) -> Result<()> {
         let lhs = self.dtype();
         let rhs = rhs.dtype();
-        if lhs != rhs && !lhs.can_fastpath_with(&rhs) {
+
+        if lhs != rhs && !lhs.is_quantized() && !rhs.is_quantized() {
             Err(Error::DTypeMismatchBinaryOp { lhs, rhs, op }.bt())
         } else {
             Ok(())
@@ -353,7 +353,7 @@ impl Storage {
         rhs_layout: &Layout,
     ) -> Result<Self> {
         self.same_device(rhs, B::NAME)?;
-        self.same_dtype(rhs, B::NAME)?;
+        self.same_dtype_or_quantized(rhs, B::NAME)?;
         match (self, rhs) {
             (Storage::Cpu(lhs), Storage::Cpu(rhs)) => {
                 let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
@@ -758,7 +758,7 @@ impl Storage {
         rhs_layout: &Layout,
     ) -> Result<Self> {
         self.same_device(rhs, "matmul")?;
-        self.same_dtype_or_fastpath(rhs, "matmul")?;
+        self.same_dtype_or_quantized(rhs, "matmul")?;
         match (self, rhs) {
             (Self::Cpu(lhs), Self::Cpu(rhs)) => {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;

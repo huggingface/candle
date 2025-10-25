@@ -67,7 +67,11 @@ impl std::fmt::Debug for Tensor {
                 // Dequantize to f32 for display
                 match self.to_dtype(DType::F32) {
                     Ok(f32_tensor) => f32_tensor.fmt_dt::<f32>(f),
-                    Err(_) => write!(f, "Quantized Tensor[dtype={}; error converting to f32]", self.dtype().as_str()),
+                    Err(_) => write!(
+                        f,
+                        "Quantized Tensor[dtype={}; error converting to f32]",
+                        self.dtype().as_str()
+                    ),
                 }
             }
         }

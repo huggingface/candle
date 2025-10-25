@@ -29,12 +29,12 @@ use crate::{DType, Device, Error, Result, Shape, Tensor};
 use byteorder::{LittleEndian, ReadBytesExt};
 use float8::F8E4M3;
 use half::{bf16, f16, slice::HalfFloatSliceExt};
-use ug::D;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
 use std::slice;
+use ug::D;
 
 const NPY_MAGIC_STRING: &[u8] = b"\x93NUMPY";
 const NPY_SUFFIX: &str = ".npy";
@@ -255,11 +255,9 @@ impl Tensor {
                 reader.read_i8_into(unsafe { slice::from_raw_parts_mut(ptr, len) })?;
                 Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
-            DType::Quantized(_) => {
-                Err(Error::Npy(
-                    "quantized dtypes are not supported in npy format".into(),
-                ))
-            }
+            DType::Quantized(_) => Err(Error::Npy(
+                "quantized dtypes are not supported in npy format".into(),
+            )),
         }
     }
 

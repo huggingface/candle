@@ -74,7 +74,6 @@ pub mod npy;
 pub mod op;
 pub mod pickle;
 pub mod quantized;
-mod quantized_helpers;
 pub mod safetensors;
 pub mod scalar;
 pub mod shape;
@@ -94,7 +93,9 @@ pub use cuda_backend::cudnn;
 pub use cpu_backend::{CpuStorage, CpuStorageRef};
 pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3, UgIOp1};
 pub use device::{Device, DeviceLocation, NdArray};
-pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType, quantized_dispatch, QuantizedDType};
+pub use dtype::{
+    quantized_dispatch, DType, DTypeParseError, FloatDType, IntDType, QuantizedDType, WithDType,
+};
 pub use error::{Context, Error, Result};
 pub use indexer::{IndexOp, TensorIndexer};
 pub use layout::Layout;

@@ -4,14 +4,12 @@ use crate::backend::BackendStorage;
 use crate::cpu::kernels::VecOps;
 use crate::quantized::ggml_wrapper::*;
 use crate::{CpuStorage, CpuStorageRef, Error, Result};
-use candle_macros::{register_quantized_types};
+use candle_macros::register_quantized_types;
 
 register_quantized_types! {
     GgmlQ2K, GgmlQ3K, GgmlQ4K, GgmlQ5K, GgmlQ6K,GgmlQ8K,
     GgmlQ4_0, GgmlQ4_1, GgmlQ5_0, GgmlQ5_1, GgmlQ8_0, GgmlQ8_1
 }
-
-
 
 /// The different types of elements allowed in tensors.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -37,13 +35,9 @@ pub enum DType {
 }
 
 impl DType {
-    #[inline]
-    pub fn can_fastpath_with(&self, other: &DType) -> bool {
-        match (self, other) {
-            // Allow fastpath between f32 and quantized types
-            (Self::F32, DType::Quantized(_)) => true,
-            _ => false,
-        }
+    /// Returns true if the dtype is a quantized type.
+    pub fn is_quantized(&self) -> bool {
+        matches!(self, DType::Quantized(_))
     }
 }
 
@@ -109,14 +103,18 @@ impl DType {
     pub fn is_int(&self) -> bool {
         match self {
             Self::U8 | Self::U32 | Self::I64 => true,
-            Self::BF16 | Self::F16 | Self::F32 | Self::F64 | Self::F8E4M3 | Self::Quantized(_) => false,
+            Self::BF16 | Self::F16 | Self::F32 | Self::F64 | Self::F8E4M3 | Self::Quantized(_) => {
+                false
+            }
         }
     }
 
     pub fn is_float(&self) -> bool {
         match self {
             Self::U8 | Self::U32 | Self::I64 => false,
-            Self::BF16 | Self::F16 | Self::F32 | Self::F64 | Self::F8E4M3 | Self::Quantized(_) => true,
+            Self::BF16 | Self::F16 | Self::F32 | Self::F64 | Self::F8E4M3 | Self::Quantized(_) => {
+                true
+            }
         }
     }
 }

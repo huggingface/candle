@@ -17,14 +17,10 @@ pub trait Map1 {
             C::F64(vs) => Ok(C::F64(self.f(vs, layout)?)),
             C::F8E4M3(vs) => Ok(C::F8E4M3(self.f(vs, layout)?)),
             C::Quantized(id, data) => {
-                // Auto-dequantize, perform operation, requantize
-                crate::quantized_helpers::map1_via_dequant(
-                    *id,
-                    data,
-                    layout,
-                    "map1",
-                    |data_f32, layout| self.f(data_f32, layout),
-                )
+                // Auto-dequantize, perform operation, return as f32
+                let data_f32 = dequantize_storage(*id, data, layout)?;
+                let result_f32 = self.f(&data_f32, layout)?;
+                Ok(C::F32(result_f32))
             }
         }
     }
@@ -45,7 +41,7 @@ pub trait Map1Any {
             C::F8E4M3(vs) => Ok(self.f(vs, layout, C::F8E4M3)?),
             C::Quantized(id, data) => {
                 // Auto-dequantize, perform operation on f32, wrap result as F32 storage
-                let data_f32 = crate::quantized_helpers::dequantize_storage(*id, data, layout)?;
+                let data_f32 = dequantize_storage(*id, data, layout)?;
                 self.f(&data_f32, layout, C::F32)
             }
         }
@@ -66,20 +62,12 @@ pub trait Map2 {
             (C::F32(v1), C::F32(v2)) => Ok(C::F32(self.f(v1, l1, v2, l2)?)),
             (C::F64(v1), C::F64(v2)) => Ok(C::F64(self.f(v1, l1, v2, l2)?)),
             (C::F8E4M3(v1), C::F8E4M3(v2)) => Ok(C::F8E4M3(self.f(v1, l1, v2, l2)?)),
+            // Handle quantized types - dequantize and recurse
             (C::Quantized(id1, data1), C::Quantized(id2, data2)) => {
-                // Auto-dequantize, perform operation, requantize
-                // This is the default behavior - operations with specialized quantized
-                // implementations should override this map() method
-                crate::quantized_helpers::map2_via_dequant(
-                    *id1,
-                    data1,
-                    l1,
-                    data2,
-                    l2,
-                    Self::OP,
-                    |lhs_f32, l1, rhs_f32, l2| self.f(lhs_f32, l1, rhs_f32, l2),
-                )
+                map2_both_quantized(self, *id1, data1, l1, *id2, data2, l2)
             }
+            (C::Quantized(id1, data1), v2) => map2_left_quantized(self, *id1, data1, l1, v2, l2),
+            (v1, C::Quantized(id2, data2)) => map2_right_quantized(self, v1, l1, *id2, data2, l2),
             _ => Err(Error::DTypeMismatchBinaryOp {
                 lhs: v1.dtype(),
                 rhs: v2.dtype(),
@@ -414,4 +402,76 @@ pub fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U
             }
         }
     }
+}
+
+/// Dequantize quantized storage to f32
+///
+/// This is used as a fallback for operations that don't have specialized
+/// quantized implementations.
+pub fn dequantize_storage(
+    id: crate::dtype::QuantizedDType,
+    data: &[u8],
+    layout: &Layout,
+) -> Result<Vec<f32>> {
+    let num_elements = layout.shape().elem_count();
+    let mut output = vec![0.0f32; num_elements];
+
+    // Use the generated dispatch to dequantize
+    crate::dtype::quantized_dispatch::dequantize_cpu(id, data, &mut output)?;
+
+    Ok(output)
+}
+
+/// Quantize f32 storage back to quantized format
+pub fn quantize_storage(
+    id: crate::dtype::QuantizedDType,
+    data: &[f32],
+    _layout: &Layout,
+) -> Result<Vec<u8>> {
+    // Use the generated dispatch to quantize
+    crate::dtype::quantized_dispatch::quantize_cpu(id, data)
+}
+
+// Helper functions for Map2 quantized handling to avoid code duplication
+// These are cold path helpers - they're only called for quantized types
+
+#[inline]
+fn map2_both_quantized<M: Map2 + ?Sized>(
+    map: &M,
+    id1: crate::dtype::QuantizedDType,
+    data1: &[u8],
+    l1: &Layout,
+    id2: crate::dtype::QuantizedDType,
+    data2: &[u8],
+    l2: &Layout,
+) -> Result<C> {
+    let data1_f32 = dequantize_storage(id1, data1, l1)?;
+    let data2_f32 = dequantize_storage(id2, data2, l2)?;
+    map.map(&C::F32(data1_f32), l1, &C::F32(data2_f32), l2)
+}
+
+#[inline]
+fn map2_left_quantized<M: Map2 + ?Sized>(
+    map: &M,
+    id1: crate::dtype::QuantizedDType,
+    data1: &[u8],
+    l1: &Layout,
+    v2: &C,
+    l2: &Layout,
+) -> Result<C> {
+    let data1_f32 = dequantize_storage(id1, data1, l1)?;
+    map.map(&C::F32(data1_f32), l1, v2, l2)
+}
+
+#[inline]
+fn map2_right_quantized<M: Map2 + ?Sized>(
+    map: &M,
+    v1: &C,
+    l1: &Layout,
+    id2: crate::dtype::QuantizedDType,
+    data2: &[u8],
+    l2: &Layout,
+) -> Result<C> {
+    let data2_f32 = dequantize_storage(id2, data2, l2)?;
+    map.map(v1, l1, &C::F32(data2_f32), l2)
 }
