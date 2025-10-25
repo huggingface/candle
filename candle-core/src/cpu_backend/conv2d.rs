@@ -35,6 +35,10 @@ impl Map2 for Conv2D<'_> {
         // 1x1 convolutions with stride=1, padding=0, dilation=1
         if p.k_h == 1 && p.k_w == 1 && p.stride == 1 && p.padding == 0 && p.dilation == 1 {
             return conv2d_1x1(p, inp, inp_l, k, k_l);
+        } else if p.k_h == 1 && p.k_w == 1 {
+            // Other 1x1 convolutions for now are assumed faster with full im2col,
+            // although with large enough input size, tiled will start beating it.
+            return conv2d_im2col_gemm(p, inp, inp_l, k, k_l);
         }
         // TODO other cases
 
@@ -57,22 +61,30 @@ fn conv2d_1x1<T: WithDType + num_traits::Num + Copy + 'static>(
     k_l: &Layout,
 ) -> Result<Vec<T>> {
     let inp = &inp[inp_l.start_offset()..];
-    let (inp_s0, inp_s1, inp_s2, inp_s3) = dims4(inp_l.stride())?;
+    let inp_stride = inp_l.stride();
+    let (inp_s0, inp_s1, inp_s2, inp_s3) =
+        (inp_stride[0], inp_stride[1], inp_stride[2], inp_stride[3]);
     let k = &k[k_l.start_offset()..];
-    let (k_s0, k_s1, _k_s2, _k_s3) = dims4(k_l.stride())?;
+    let k_stride = k_l.stride();
+    let (k_s0, k_s1) = (k_stride[0], k_stride[1]);
     let (out_h, out_w) = (p.out_h(), p.out_w());
 
     let spatial_size = out_h * out_w;
     let dst = vec![T::zero(); p.b_size * p.c_out * spatial_size];
-
-    // Reshape kernel to [c_out, c_in]
-    let mut k_reshaped = Vec::with_capacity(p.c_out * p.c_in);
-    for c_out_idx in 0..p.c_out {
-        for c_in_idx in 0..p.c_in {
-            let k_idx = c_out_idx * k_s0 + c_in_idx * k_s1;
-            k_reshaped.push(k[k_idx]);
-        }
-    }
+    let k_reshaped: Cow<[T]> = if k_s0 == p.c_in && k_s1 == 1 {
+        // Already contiguous, use slice directly
+        Cow::Borrowed(&k[..p.c_out * p.c_in])
+    } else {
+        // Reshape kernel to [c_out, c_in]
+        let mut k_reshaped = Vec::with_capacity(p.c_out * p.c_in);
+        (0..p.c_out).for_each(|c_out_idx| {
+            (0..p.c_in).for_each(|c_in_idx| {
+                let k_idx = c_out_idx * k_s0 + c_in_idx * k_s1;
+                k_reshaped.push(k[k_idx]);
+            });
+        });
+        Cow::Owned(k_reshaped)
+    };
     let k_layout = Layout::contiguous((p.c_out, p.c_in));
 
     // Process each batch
@@ -183,7 +195,6 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
         let inp_offset = b_idx * cont_s0;
         let out_batch_offset = b_idx * (p.c_out * out_h * out_w);
 
-        // let num_tiles = (total_out_pixels + TILE_SIZE - 1) / TILE_SIZE;
         let num_tiles = total_out_pixels.div_ceil(TILE_SIZE);
         (0..num_tiles).into_par_iter().try_for_each(|tile_idx| {
             // Determine actual tile size (may be smaller at the end) {
@@ -265,7 +276,7 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
     Ok(dst)
 }
 
-/// General direct convolution impl. Decently fast for small inputs and kernels, but loses to tiled gemm mostly.
+/// General direct convolution impl. Decently fast for small inputs and kernels, but loses to full/tiled gemm.
 fn conv2d_direct<T: WithDType + num_traits::Num + Copy + 'static>(
     p: &ParamsConv2D,
     inp: &[T],
