@@ -111,6 +111,7 @@ kernel void FN_NAME##_strided( \
 
 AFFINE(affine_u8, uint8_t)
 AFFINE(affine_u32, uint32_t)
+AFFINE(affine_i64, int64_t)
 AFFINE(affine_f32, float)
 AFFINE(affine_f16, half)
 POWF(powf_f32, float)

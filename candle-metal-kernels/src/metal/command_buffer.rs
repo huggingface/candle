@@ -2,7 +2,7 @@ use crate::{BlitCommandEncoder, ComputeCommandEncoder};
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::NSString;
 use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus};
-use std::{collections::HashMap, thread};
+use std::{borrow::Cow, collections::HashMap, thread};
 
 #[derive(Clone, Debug)]
 pub struct CommandBuffer {
@@ -47,8 +47,18 @@ impl CommandBuffer {
         self.raw.status()
     }
 
+    pub fn error(&self) -> Option<Cow<'_, str>> {
+        unsafe {
+            self.raw.error().map(|error| {
+                let description = error.localizedDescription();
+                let c_str = core::ffi::CStr::from_ptr(description.UTF8String());
+                c_str.to_string_lossy()
+            })
+        }
+    }
+
     pub fn wait_until_completed(&self) {
-        unsafe { self.raw.waitUntilCompleted() }
+        self.raw.waitUntilCompleted()
     }
 }
 

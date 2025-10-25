@@ -127,6 +127,7 @@ impl BackendStorage for MetalStorage {
                 DType::BF16 => "affine_bf16",
                 DType::U8 => "affine_u8",
                 DType::U32 => "affine_u32",
+                DType::I64 => "affine_i64",
                 dtype => crate::bail!("Metal contiguous affine {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_affine(
@@ -146,6 +147,9 @@ impl BackendStorage for MetalStorage {
                 DType::F32 => "affine_f32_strided",
                 DType::F16 => "affine_f16_strided",
                 DType::BF16 => "affine_bf16_strided",
+                DType::U8 => "affine_u8_strided",
+                DType::U32 => "affine_u32_strided",
+                DType::I64 => "affine_i64_strided",
                 dtype => crate::bail!("Metal strided affine {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_affine_strided(
@@ -918,7 +922,7 @@ impl BackendStorage for MetalStorage {
         let src = buffer_o(&self.buffer, layout, self.dtype);
         let t = buffer_o(&t.buffer, t_l, t.dtype);
         let f = buffer_o(&f.buffer, f_l, f.dtype);
-        candle_metal_kernels::call_where_cond_strided(
+        candle_metal_kernels::call_where_cond(
             &device.device,
             &command_buffer,
             &device.kernels,
@@ -926,10 +930,13 @@ impl BackendStorage for MetalStorage {
             dims,
             src,
             layout.stride(),
+            layout.is_contiguous(),
             t,
             t_l.stride(),
+            t_l.is_contiguous(),
             f,
             f_l.stride(),
+            f_l.is_contiguous(),
             &buffer,
         )
         .map_err(MetalError::from)?;

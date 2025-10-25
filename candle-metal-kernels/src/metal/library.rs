@@ -32,7 +32,7 @@ impl Library {
             None => self
                 .raw
                 .newFunctionWithName(&NSString::from_str(name))
-                .ok_or(MetalKernelError::LoadFunctionError("".to_string()))?,
+                .ok_or(MetalKernelError::LoadFunctionError(name.to_string()))?,
         };
 
         Ok(Function { raw: function })

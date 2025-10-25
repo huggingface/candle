@@ -443,7 +443,7 @@ fn simple_eval_(
                     None => input.t()?,
                     Some(perm) => {
                         let perm = perm.iter().map(|&v| v as usize).collect::<Vec<_>>();
-                        input.permute(perm)?
+                        input.permute(perm)?.contiguous()?
                     }
                 };
                 values.insert(node.output[0].clone(), output);
@@ -2320,7 +2320,7 @@ fn simple_eval_(
 
                 let indices_shape = indices.dims();
                 let data_shape = data.dims();
-                let updates_shape = updates.dims();
+                let _updates_shape = updates.dims();
 
                 // Last dimension of indices represents the depth of indexing
                 let k = indices_shape.last().unwrap().clone();

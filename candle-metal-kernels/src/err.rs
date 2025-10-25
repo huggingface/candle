@@ -2,12 +2,16 @@ use crate::kernels::sdpa::SdpaDType;
 
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
-    #[error("Could not lock kernel map: {0}")]
+    #[error("Command buffer had following error: {0}")]
+    CommandBufferError(String),
+    #[error("Could not lock resource: {0}")]
     LockError(String),
     #[error("Error while loading library: {0}")]
     LoadLibraryError(String),
     #[error("Error while loading function: {0}")]
     LoadFunctionError(String),
+    #[error("Unsupported dtype {0} for operation {1}")]
+    UnsupportedDTypeForOp(&'static str, &'static str),
     #[error("Failed to create compute function")]
     FailedToCreateComputeFunction,
     #[error("Failed to create metal resource: {0}")]
