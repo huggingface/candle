@@ -4,6 +4,7 @@ pub mod cast;
 pub mod convolution;
 pub mod fill;
 pub mod indexing;
+pub mod layer_norm;
 mod macros;
 pub mod mlx_gemm;
 pub mod quantized;
@@ -28,3 +29,8 @@ pub use sdpa::{call_sdpa_full, call_sdpa_vector, call_sdpa_vector_2pass, SdpaDTy
 pub use sort::{call_arg_sort, call_mlx_arg_sort};
 pub use ternary::call_where_cond;
 pub use unary::*;
+// Override old reduce.rs layer_norm with new implementation
+pub use layer_norm::{
+    call_layer_norm_ops as call_layer_norm, call_layer_norm_optimized, call_layer_norm_strided,
+    call_rms_norm_ops as call_rms_norm,
+};

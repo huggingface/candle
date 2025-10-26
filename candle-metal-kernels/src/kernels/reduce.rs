@@ -163,7 +163,7 @@ pub fn call_last_softmax(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn call_rms_norm(
+pub fn call_rms_norm_reduce_deprecated(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
@@ -222,7 +222,7 @@ pub fn call_rms_norm(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn call_layer_norm(
+pub fn call_layer_norm_reduce_deprecated(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,

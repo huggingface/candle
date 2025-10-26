@@ -1,6 +1,6 @@
 use crate::source::{
-    AFFINE, BINARY, CAST, CONV, FILL, INDEXING, MLX_GEMM, MLX_SORT, QUANTIZED, RANDOM, REDUCE,
-    SDPA, SORT, TERNARY, UNARY,
+    AFFINE, BINARY, CAST, CONV, FILL, INDEXING, LAYER_NORM, MLX_GEMM, MLX_SORT, QUANTIZED, RANDOM,
+    REDUCE, SDPA, SORT, TERNARY, UNARY,
 };
 use crate::{
     ComputePipeline, ConstantValues, Device, Function, Library, MTLCompileOptions, MTLMathMode,
@@ -89,6 +89,7 @@ impl Kernels {
             Source::Fill => FILL,
             Source::Gemm => MLX_GEMM,
             Source::Indexing => INDEXING,
+            Source::LayerNorm => LAYER_NORM,
             Source::MlxSort => MLX_SORT,
             Source::Quantized => QUANTIZED,
             Source::Random => RANDOM,

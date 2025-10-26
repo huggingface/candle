@@ -46,3 +46,18 @@ out.wav
 bria.mp3
 bria.safetensors
 bria.wav
+
+# Claude Code and Serena working directories
+.claude/
+.serena/
+
+# Node/JavaScript temporary files
+node_modules/
+package.json
+bun.lock
+
+# Metal build artifacts
+*.air
+
+# Work archives
+metal_layernorm_work_archive_*.tar.gz
