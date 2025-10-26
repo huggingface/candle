@@ -1,64 +1,53 @@
-warning: unexpected `cfg` condition value: `cuda`
-  --> tests/ui/fail/missing_trait.rs:56:1
-   |
-56 | / register_quantized_types! {
-57 | |     Q4_0
-58 | | }
-   | |_^
-   |
-   = note: no expected values for `feature`
-   = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
-   = help: try referring to `register_quantized_types` crate for guidance on how handle this unexpected cfg
-   = help: the macro `register_quantized_types` may come from an old version of the `candle_macros` crate, try updating your dependency with `cargo update -p candle_macros`
-   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
-   = note: `#[warn(unexpected_cfgs)]` on by default
-   = note: this warning originates in the macro `register_quantized_types` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-warning: unexpected `cfg` condition value: `metal`
-  --> tests/ui/fail/missing_trait.rs:56:1
-   |
-56 | / register_quantized_types! {
-57 | |     Q4_0
-58 | | }
-   | |_^
-   |
-   = note: no expected values for `feature`
-   = note: using a cfg inside a macro will use the cfgs from the destination crate and not the ones from the defining crate
-   = help: try referring to `register_quantized_types` crate for guidance on how handle this unexpected cfg
-   = help: the macro `register_quantized_types` may come from an old version of the `candle_macros` crate, try updating your dependency with `cargo update -p candle_macros`
-   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
-   = note: this warning originates in the macro `register_quantized_types` (in Nightly builds, run with -Z macro-backtrace for more info)
-
 error[E0599]: no associated item named `NAME` found for struct `Q4_0` in the current scope
-  --> tests/ui/fail/missing_trait.rs:56:1
+  --> tests/ui/fail/missing_trait.rs:68:1
    |
-28 |   struct Q4_0;
+36 |   struct Q4_0;
    |   ----------- associated item `NAME` not found for this struct
 ...
-56 |   register_quantized_types! {
+68 |   register_quantized_types! {
    |  _^
-57 | |     Q4_0
-58 | | }
+69 | |     Q4_0
+70 | | }
    | |_^ associated item not found in `Q4_0`
    |
    = help: items from traits can only be used if the trait is implemented and in scope
 note: `QuantizedType` defines an item `NAME`, perhaps you need to implement it
-  --> tests/ui/fail/missing_trait.rs:6:9
+  --> tests/ui/fail/missing_trait.rs:23:9
    |
- 6 |         pub trait QuantizedType {
+23 |         pub trait QuantizedType {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the macro `register_quantized_types` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no associated item named `SIZE_IN_BYTES` found for struct `Q4_0` in the current scope
+  --> tests/ui/fail/missing_trait.rs:68:1
+   |
+36 |   struct Q4_0;
+   |   ----------- associated item `SIZE_IN_BYTES` not found for this struct
+...
+68 |   register_quantized_types! {
+   |  _^
+69 | |     Q4_0
+70 | | }
+   | |_^ associated item not found in `Q4_0`
+   |
+   = help: items from traits can only be used if the trait is implemented and in scope
+note: `QuantizedType` defines an item `SIZE_IN_BYTES`, perhaps you need to implement it
+  --> tests/ui/fail/missing_trait.rs:23:9
+   |
+23 |         pub trait QuantizedType {
    |         ^^^^^^^^^^^^^^^^^^^^^^^
    = note: this error originates in the macro `register_quantized_types` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0599]: no function or associated item named `matmul` found for struct `Q4_0` in the current scope
-  --> tests/ui/fail/missing_trait.rs:56:1
+  --> tests/ui/fail/missing_trait.rs:68:1
    |
-28 |   struct Q4_0;
+36 |   struct Q4_0;
    |   ----------- function or associated item `matmul` not found for this struct
 ...
-56 |   register_quantized_types! {
+68 |   register_quantized_types! {
    |  _^
-57 | |     Q4_0
-58 | | }
+69 | |     Q4_0
+70 | | }
    | |_^ function or associated item not found in `Q4_0`
    |
    = note: this error originates in the macro `register_quantized_types` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,25 +1,33 @@
 // Test: Type without required trait implementation
 // This should produce a compile error
+#![allow(unexpected_cfgs)]
+#![allow(unused_imports)]
+
+// Root-level types for macro (simulating candle-core crate root)
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub enum Error {
+    Msg(String),
+}
+
+impl From<String> for Error {
+    fn from(s: String) -> Self {
+        Error::Msg(s)
+    }
+}
 
 mod candle_core {
     pub mod dtype {
         pub trait QuantizedType {
             const NAME: &'static str;
+            const SIZE_IN_BYTES: usize;
         }
     }
     
-    pub type Result<T> = std::result::Result<T, Error>;
-    
-    #[derive(Debug)]
-    pub enum Error {
-        Msg(String),
-    }
-    
-    impl From<String> for Error {
-        fn from(s: String) -> Self {
-            Error::Msg(s)
-        }
-    }
+    pub type Result<T> = std::result::Result<T, super::Error>;
+    pub use super::Error;
 }
 
 use candle_macros::register_quantized_types;
@@ -39,6 +47,10 @@ impl Q4_0 {
     }
     
     fn storage_size_in_bytes(_n: usize) -> usize {
+        0
+    }
+
+    fn infer_element_count(_data_len: usize) -> usize {
         0
     }
     

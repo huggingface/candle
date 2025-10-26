@@ -7,10 +7,10 @@
 #[test]
 fn ui_tests() {
     let t = trybuild::TestCases::new();
-    
+
     // Test cases that should compile successfully
     t.pass("tests/ui/pass/*.rs");
-    
+
     // Test cases that should fail to compile with specific error messages
     t.compile_fail("tests/ui/fail/*.rs");
 }
