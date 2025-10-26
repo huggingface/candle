@@ -906,13 +906,13 @@ impl Map1 for Pool2D {
             crate::bail!("unexpected input shape for pool {dims:?}")
         };
         let el = shape.elem_count();
-        
+
         // Calculate output dimensions with padding
         let h_padded = dims[2] + 2 * self.padding;
         let w_padded = dims[3] + 2 * self.padding;
         let out_w = (h_padded - self.w_k) / self.w_stride + 1;
         let out_h = (w_padded - self.h_k) / self.h_stride + 1;
-        
+
         let dst_el = out_w * out_h * dims[0] * dims[1];
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let kname = match self.op {
@@ -1896,7 +1896,13 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
-    fn max_pool2d(&self, l: &Layout, k: (usize, usize), stride: (usize, usize), padding: usize) -> Result<Self> {
+    fn max_pool2d(
+        &self,
+        l: &Layout,
+        k: (usize, usize),
+        stride: (usize, usize),
+        padding: usize,
+    ) -> Result<Self> {
         let device = self.device().clone();
         let slice = Pool2D {
             w_k: k.0,

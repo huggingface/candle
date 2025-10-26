@@ -353,16 +353,16 @@ impl Map1 for MaxPool2D {
         let (b_sz, c, h, w) = layout.shape().dims4()?;
         let stride = layout.stride();
         let (stride_h, stride_w) = (stride[2], stride[3]);
-        
+
         // Calculate output dimensions with padding
         let h_padded = h + 2 * padding;
         let w_padded = w + 2 * padding;
         let h_out = (h_padded - k_h) / s_h + 1;
         let w_out = (w_padded - k_w) / s_w + 1;
-        
+
         let src_index = layout.start_offset();
         let mut dst = vec![T::zero(); b_sz * c * h_out * w_out];
-        
+
         for b_idx in 0..b_sz {
             let dst = &mut dst[b_idx * c * h_out * w_out..];
             let src_index = src_index + b_idx * stride[0];
@@ -373,18 +373,22 @@ impl Map1 for MaxPool2D {
                     for w_idx in 0..w_out {
                         let mut largest = T::zero();
                         let mut found_valid = false;
-                        
+
                         for m in 0..k_h {
                             for n in 0..k_w {
                                 let src_h = s_h * h_idx + m;
                                 let src_w = s_w * w_idx + n;
-                                
+
                                 // Check if we're within the original (unpadded) bounds
-                                if src_h >= padding && src_h < h + padding && 
-                                   src_w >= padding && src_w < w + padding {
+                                if src_h >= padding
+                                    && src_h < h + padding
+                                    && src_w >= padding
+                                    && src_w < w + padding
+                                {
                                     let actual_h = src_h - padding;
                                     let actual_w = src_w - padding;
-                                    let val = src[src_index + actual_h * stride_h + actual_w * stride_w];
+                                    let val =
+                                        src[src_index + actual_h * stride_h + actual_w * stride_w];
                                     if !found_valid || largest < val {
                                         largest = val;
                                         found_valid = true;
@@ -392,12 +396,12 @@ impl Map1 for MaxPool2D {
                                 }
                             }
                         }
-                        
+
                         // If no valid values were found (all padding), use zero
                         if !found_valid {
                             largest = T::zero();
                         }
-                        
+
                         dst[h_idx * w_out + w_idx] = largest;
                     }
                 }
