@@ -7,110 +7,69 @@ use std::thread;
 #[test]
 fn test_basic_operations_compatibility() -> Result<()> {
     let device = Device::Cpu;
-
-    // Original implementation
-    let original = {
-        #[derive(Clone)]
-        struct OriginalVarMap {
-            data: Arc<std::sync::Mutex<std::collections::HashMap<String, Var>>>,
-        }
-
-        impl OriginalVarMap {
-            fn new() -> Self {
-                Self {
-                    data: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-                }
-            }
-
-            fn get<S: Into<candle::Shape>>(
-                &self,
-                shape: S,
-                path: &str,
-                init: Init,
-                dtype: DType,
-                device: &Device,
-            ) -> Result<Tensor> {
-                let shape = shape.into();
-                let mut tensor_data = self.data.lock().unwrap();
-                if let Some(tensor) = tensor_data.get(path) {
-                    let tensor_shape = tensor.shape();
-                    if &shape != tensor_shape {
-                        candle::bail!("shape mismatch on {path}: {shape:?} <> {tensor_shape:?}")
-                    }
-                    return Ok(tensor.as_tensor().clone());
-                }
-                let var = init.var(shape, dtype, device)?;
-                let tensor = var.as_tensor().clone();
-                tensor_data.insert(path.to_string(), var);
-                Ok(tensor)
-            }
-
-            fn all_vars(&self) -> Vec<Var> {
-                let tensor_data = self.data.lock().unwrap();
-                tensor_data.values().cloned().collect()
-            }
-        }
-
-        OriginalVarMap::new()
-    };
-
-    // New implementation
-    let updated = VarMap::new();
-
-    // Test 1: Basic get operations
-    let t1_orig = original.get(
+    let varmap = VarMap::new();
+    // Test 1: Basic get operation with known initialization
+    let t1 = varmap.get(
         (2, 3),
         "test1",
-        Init::Randn {
-            mean: 0.,
-            stdev: 1.,
-        },
+        Init::Const(5.0),
         DType::F32,
         &device,
     )?;
-    let t1_updated = updated.get(
-        (2, 3),
-        "test1",
-        Init::Randn {
-            mean: 0.,
-            stdev: 1.,
-        },
-        DType::F32,
-        &device,
-    )?;
-
-    // Shapes should match
-    assert_eq!(t1_orig.shape(), t1_updated.shape());
-
-    // Test 2: Repeated get returns same variable
-    let t1_orig_2 = original.get((2, 3), "test1", Init::Const(0.), DType::F32, &device)?;
-    let t1_updated_2 = updated.get((2, 3), "test1", Init::Const(0.), DType::F32, &device)?;
-
-    // Should return existing variables
-    assert_eq!(t1_orig.shape(), t1_orig_2.shape());
-    assert_eq!(t1_updated.shape(), t1_updated_2.shape());
-
-    // Test 3: Multiple variables
+    // Verify shape
+    assert_eq!(t1.shape().dims(), &[2, 3]);
+    assert_eq!(t1.dtype(), DType::F32);
+    // Verify values
+    let data = t1.flatten_all()?.to_vec1::<f32>()?;
+    assert_eq!(data.len(), 6);
+    for &val in &data {
+        assert!((val - 5.0).abs() < 1e-6, "Expected const value 5.0, got {}", val);
+    }
+    // Test 2: Repeated get returns same variable (idempotency)
+    let t1_again = varmap.get((2, 3), "test1", Init::Const(0.), DType::F32, &device)?;
+    assert_eq!(t1.shape(), t1_again.shape());
+    // Values should still be 5.0 (original init), not 0.0 (new init)
+    let data_again = t1_again.flatten_all()?.to_vec1::<f32>()?;
+    for &val in &data_again {
+        assert!((val - 5.0).abs() < 1e-6, "Variable should retain original value");
+    }
+    // Test 3: Multiple variables with different shapes
     for i in 0..10 {
         let name = format!("var_{}", i);
-        original.get(
-            (i + 1, i + 2),
+        let expected_shape = (i + 1, i + 2);
+        let expected_value = i as f64;
+    
+        let var = varmap.get(
+            expected_shape,
             &name,
-            Init::Const(i as f64),
+            Init::Const(expected_value),
             DType::F32,
             &device,
         )?;
-        updated.get(
-            (i + 1, i + 2),
-            &name,
-            Init::Const(i as f64),
-            DType::F32,
-            &device,
-        )?;
+        // Verify shape
+        assert_eq!(var.shape().dims(), &[i + 1, i + 2]);
+        // Verify values
+        let data = var.flatten_all()?.to_vec1::<f32>()?;
+        let expected_len = (i + 1) * (i + 2);
+        assert_eq!(data.len(), expected_len);
+        
+        for &val in &data {
+            assert!(
+                (val - expected_value as f32).abs() < 1e-6,
+                "Variable {} expected value {}, got {}",
+                name,
+                expected_value,
+                val
+            );
+        }
     }
 
-    // Verify all variables match
-    assert_eq!(original.all_vars().len(), updated.all_vars().len());
+    // Test 4: Verify total variable count
+    let all_vars = varmap.all_vars();
+    assert_eq!(all_vars.len(), 11, "Expected 11 variables (test1 + var_0..var_9)");
+    // Test 5: Shape mismatch should fail
+    let result = varmap.get((3, 2), "test1", Init::Const(0.), DType::F32, &device);
+    assert!(result.is_err(), "Should fail on shape mismatch");
 
     Ok(())
 }
