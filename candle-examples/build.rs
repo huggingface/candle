@@ -28,7 +28,7 @@ fn main() -> Result<()> {
 
         for kdir in KERNEL_DIRS.iter() {
             let builder = bindgen_cuda::Builder::default().kernel_paths_glob(kdir.kernel_glob);
-            println!("cargo::info={builder:?}");
+            println!("cargo::warning={builder:?}");
             let bindings = builder.build_ptx().unwrap();
 
             // Changed: This now writes to a safe path inside $OUT_DIR.

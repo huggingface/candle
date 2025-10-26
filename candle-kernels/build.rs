@@ -10,7 +10,7 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let ptx_path = out_dir.join("ptx.rs");
     let builder = bindgen_cuda::Builder::default();
-    println!("cargo::info={builder:?}");
+    println!("cargo::warning={builder:?}");
     let bindings = builder.build_ptx().unwrap();
     bindings.write(ptx_path).unwrap();
 }
