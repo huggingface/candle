@@ -340,10 +340,11 @@ fn test_concurrent_varmap_specific_features() -> Result<()> {
     }
 
     // Test batch operations
-    let names: Vec<&str> = (0..10)
-        .map(|i| Box::leak(format!("weight_{}", i).into_boxed_str()) as &str)
+    let names: Vec<String> = (0..10)
+        .map(|i| format!("weight_{}", i))
         .collect();
-    let batch_vars = concurrent.get_vars_batch(&names);
+    let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+    let batch_vars = concurrent.get_vars_batch(&name_refs);
 
     assert_eq!(batch_vars.len(), 10);
     for (_name, var) in batch_vars {
