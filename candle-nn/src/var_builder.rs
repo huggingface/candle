@@ -487,12 +487,6 @@ impl<'a> VarBuilder<'a> {
     /// It is preferred to use one of the more specific constructors. This
     /// constructor is provided to allow downstream users to define their own
     /// backends.
-
-    /// Initializes a `VarBuilder` using a custom backend.
-    ///
-    /// It is preferred to use one of the more specific constructors. This
-    /// constructor is provided to allow downstream users to define their own
-    /// backends.
     pub fn from_backend(
         backend: Box<dyn SimpleBackend + 'a>,
         dtype: DType,
