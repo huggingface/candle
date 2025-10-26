@@ -151,17 +151,18 @@ fn test_save_load_compatibility() -> Result<()> {
         original.get(shape, &name, Init::Const(i as f64), DType::F32, &device)?;
         updated.get(shape, &name, Init::Const(i as f64), DType::F32, &device)?;
     }
+    // Use OS-agnostic temporary directory
+    let temp_dir = std::env::temp_dir();
+    let original_path = temp_dir.join("test_original_varmap.safetensors");
+    let updated_path = temp_dir.join("test_updated_varmap.safetensors");
 
     // Save both
-    let original_path = "/tmp/test_original_varmap.safetensors";
-    let updated_path = "/tmp/test_updated_varmap.safetensors";
-
-    original.save(original_path)?;
-    updated.save(updated_path)?;
+    original.save(&original_path)?;
+    updated.save(&updated_path)?;
 
     // Files should be identical
-    let original_bytes = std::fs::read(original_path)?;
-    let updated_bytes = std::fs::read(updated_path)?;
+    let original_bytes = std::fs::read(&original_path)?;
+    let updated_bytes = std::fs::read(&updated_path)?;
     assert_eq!(original_bytes, updated_bytes, "Saved files differ!");
 
     // Test loading
@@ -175,8 +176,8 @@ fn test_save_load_compatibility() -> Result<()> {
         updated_loaded.get((64, 64), &name, Init::Const(0.), DType::F32, &device)?;
     }
 
-    original_loaded.load(original_path)?;
-    updated_loaded.load(updated_path)?;
+    original_loaded.load(&original_path)?;
+    updated_loaded.load(&updated_path)?;
 
     // Verify loaded data matches - check a few specific variables
     for i in 0..20 {
@@ -200,8 +201,8 @@ fn test_save_load_compatibility() -> Result<()> {
     }
 
     // Cleanup
-    std::fs::remove_file(original_path).ok();
-    std::fs::remove_file(updated_path).ok();
+    std::fs::remove_file(&original_path).ok();
+    std::fs::remove_file(&updated_path).ok();
 
     Ok(())
 }
