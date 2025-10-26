@@ -1230,10 +1230,11 @@ impl Tensor {
     /// # Examples
     /// ```rust
     /// use candle_core::{Tensor,Device,Shape};
-    /// let t = Tensor::rand(0.0f32, 1.0, (1, 1, 10, 10), &device)?;
-    /// let (kernel_size,stride,padding) = (2,2,2)
+    /// let t = Tensor::rand(0.0f32, 1.0, (1, 1, 10, 10), &Device::Cpu)?;
+    /// let (kernel_size,stride,padding) = (2,2,2);
     /// let t = t.max_pool2d_with_stride_padding(kernel_size,stride,padding)?;
     /// assert_eq!(t.shape().dims(),[1,1,7,7]);
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn max_pool2d_with_stride_padding<T: crate::ToUsize2>(
         &self,
