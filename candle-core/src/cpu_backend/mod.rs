@@ -2746,6 +2746,7 @@ impl BackendStorage for CpuStorage {
             (Self::U32(storage), Scalar::U32(v)) => set(storage, l, v),
             (Self::I64(storage), Scalar::I64(v)) => set(storage, l, v),
             (Self::F8E4M3(storage), Scalar::F8E4M3(v)) => set(storage, l, v),
+            // TODO: Handle Quantized
             (st, s) => crate::bail!(
                 "const_set dtype mismatch, expected {:?} but got {:?}",
                 st.dtype(),

@@ -156,6 +156,18 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 }
             }
 
+            /// Calculate storage size in bytes for given number of elements
+            #[inline]
+            pub fn storage_size_in_bytes(self, num_elements: usize) -> usize {
+                quantized_dispatch::storage_size_in_bytes(self, num_elements)
+            }
+
+            /// Infer number of f32 elements from quantized data size
+            #[inline]
+            pub fn infer_element_count(self, data_len: usize) -> usize {
+                quantized_dispatch::infer_element_count(self, data_len)
+            }
+
             /// Check if external type
             #[inline]
             pub const fn is_external(self) -> bool {
@@ -176,6 +188,50 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 };
                 quantized_dispatch::dequantize_cpu(self, data, &mut output)?;
                 Ok(output)
+            }
+
+            /// Convenience quantize function
+            #[inline]
+            pub fn quantize(self, input: &[f32]) -> crate::Result<Vec<u8>> {
+                quantized_dispatch::quantize_cpu(self, input)
+            }
+
+            /// CUDA dequantize function returning a newly allocated CudaSlice
+            /// If num_elements is None, infers number of elements from data size
+            #[cfg(feature = "cuda")]
+            #[inline]
+            pub fn dequantize_cuda(
+                self,
+                data: &cudarc::driver::CudaSlice<u8>,
+                device: &crate::CudaDevice,
+                num_elements: Option<usize>
+            ) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
+                // Determine number of elements
+                let num_elements = if let Some(n) = num_elements {
+                    n
+                } else {
+                    // Infer from data size
+                    quantized_dispatch::infer_element_count(self, data.len())
+                };
+
+                // Allocate output buffer on GPU
+                let mut output = device.alloc_zeros::<f32>(num_elements)?;
+
+                // Perform dequantization
+                quantized_dispatch::dequantize_cuda(self, data, &mut output, device)?;
+
+                Ok(output)
+            }
+
+            /// CUDA quantize function
+            #[cfg(feature = "cuda")]
+            #[inline]
+            pub fn quantize_cuda(
+                self,
+                input: &cudarc::driver::CudaSlice<f32>,
+                device: &crate::CudaDevice
+            ) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
+                quantized_dispatch::quantize_cuda(self, input, device)
             }
         }
 
@@ -200,9 +256,11 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
 
             // CUDA ops (optional)
             #[cfg(feature = "cuda")]
-            pub dequantize_cuda: Option<fn(&cudarc::driver::CudaSlice<u8>, &mut cudarc::driver::CudaSlice<f32>) -> crate::Result<()>>,
+            pub quantize_cuda: Option<fn(&cudarc::driver::CudaSlice<f32>, &crate::CudaDevice) -> crate::Result<cudarc::driver::CudaSlice<u8>>>,
             #[cfg(feature = "cuda")]
-            pub matmul_cuda: Option<fn(&cudarc::driver::CudaSlice<u8>, &[usize], &cudarc::driver::CudaSlice<u8>, &[usize]) -> crate::Result<cudarc::driver::CudaSlice<u8>>>,
+            pub dequantize_cuda: Option<fn(&cudarc::driver::CudaSlice<u8>, &mut cudarc::driver::CudaSlice<f32>, &crate::CudaDevice) -> crate::Result<()>>,
+            #[cfg(feature = "cuda")]
+            pub matmul_cuda: Option<fn(&cudarc::driver::CudaSlice<f32>, &[usize], &cudarc::driver::CudaSlice<u8>, &[usize], &crate::CudaDevice) -> crate::Result<cudarc::driver::CudaSlice<f32>>>,
 
             // Metal ops (optional)
             #[cfg(feature = "metal")]
@@ -379,18 +437,20 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
             pub fn dequantize_cuda(
                 id: QuantizedDType,
                 data: &cudarc::driver::CudaSlice<u8>,
-                output: &mut cudarc::driver::CudaSlice<f32>
+                output: &mut cudarc::driver::CudaSlice<f32>,
+                device: &crate::CudaDevice
             ) -> crate::Result<()> {
                 match id {
                     #(
                         QuantizedDType::#type_names => {
                             // Try CUDA implementation, fallback to CPU
-                            #type_names::dequantize_cuda(data, output)
+                            #type_names::dequantize_cuda(data, output, device)
                                 .or_else(|_| {
-                                    let cpu_data = data.to_host()?;
+                                    // Fallback: CPU dequantize + copy back to GPU
+                                    let cpu_data = device.memcpy_dtov(data)?;
                                     let mut cpu_output = vec![0.0f32; output.len()];
-                                    #type_names::dequantize_cpu(&cpu_data, &mut cpu_output)?;
-                                    output.copy_from_host(&cpu_output)?;
+                                    dequantize_cpu(id, &cpu_data, &mut cpu_output)?;
+                                    device.memcpy_htod(&cpu_output, output)?;
                                     Ok(())
                                 })
                         }
@@ -404,31 +464,76 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
 
                         // Try CUDA, fallback to CPU
                         if let Some(cuda_fn) = ops.dequantize_cuda {
-                            cuda_fn(data, output)
+                            cuda_fn(data, output, device)
                         } else {
-                            let cpu_data = data.to_host()?;
+                            // Fallback: CPU dequantize + copy back to GPU
+                            let cpu_data = device.memcpy_dtov(data)?;
                             let mut cpu_output = vec![0.0f32; output.len()];
                             (ops.dequantize_cpu)(&cpu_data, &mut cpu_output)?;
-                            output.copy_from_host(&cpu_output)?;
+                            device.memcpy_htod(&cpu_output, output)?;
                             Ok(())
                         }
                     }
                 }
             }
 
+
             #[cfg(feature = "cuda")]
             #[inline]
-            pub fn matmul_cuda(
+            pub fn quantize_cuda(
                 id: QuantizedDType,
-                lhs_data: &cudarc::driver::CudaSlice<u8>,
-                lhs_shape: &[usize],
-                rhs_data: &cudarc::driver::CudaSlice<u8>,
-                rhs_shape: &[usize],
+                input: &cudarc::driver::CudaSlice<f32>,
+                device: &crate::CudaDevice
             ) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
                 match id {
                     #(
                         QuantizedDType::#type_names => {
-                            #type_names::matmul_cuda(lhs_data, lhs_shape, rhs_data, rhs_shape)
+                            // Try CUDA implementation, fallback to CPU
+                            #type_names::quantize_cuda(input, device)
+                                .or_else(|_| {
+                                    // Fallback: Copy to CPU, quantize, copy back to GPU
+                                    let cpu_input = device.memcpy_dtov(input)?;
+                                    let cpu_output = quantize_cpu(id, &cpu_input)?;
+                                    device.memcpy_stod(&cpu_output)
+                                })
+                        }
+                    )*
+                    QuantizedDType::External(name) => {
+                        let registry = EXTERNAL_TYPE_REGISTRY.get()
+                            .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
+                        let map = registry.read().unwrap();
+                        let ops = map.get(name)
+                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
+
+                        // Try CUDA, fallback to CPU
+                        if let Some(cuda_fn) = ops.quantize_cuda {
+                            cuda_fn(input, device)
+                        } else {
+                            // Fallback: Copy to CPU, quantize, copy back to GPU
+                            let cpu_input = device.memcpy_dtov(input)?;
+                            let cpu_output = (ops.quantize_cpu)(&cpu_input)?;
+                            device.memcpy_stod(&cpu_output)
+                        }
+                    }
+                }
+            }
+
+
+
+            #[cfg(feature = "cuda")]
+            #[inline]
+            pub fn matmul_cuda(
+                id: QuantizedDType,
+                lhs_data: &cudarc::driver::CudaSlice<f32>,
+                lhs_shape: &[usize],
+                rhs_data: &cudarc::driver::CudaSlice<u8>,
+                rhs_shape: &[usize],
+                device: &crate::CudaDevice
+            ) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
+                match id {
+                    #(
+                        QuantizedDType::#type_names => {
+                            #type_names::matmul_cuda(lhs_data, lhs_shape, rhs_data, rhs_shape, device)
                         }
                     )*
                     QuantizedDType::External(name) => {
@@ -440,7 +545,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
 
                         // CUDA implementation or error
                         if let Some(cuda_fn) = ops.matmul_cuda {
-                            cuda_fn(lhs_data, lhs_shape, rhs_data, rhs_shape)
+                            cuda_fn(lhs_data, lhs_shape, rhs_data, rhs_shape, device)
                         } else {
                             Err(crate::Error::Msg(format!("External type '{}' does not have CUDA matmul implementation", name)))
                         }
@@ -570,6 +675,14 @@ pub fn register_external_quantized_type(input: TokenStream) -> TokenStream {
                     storage_size_in_bytes: #type_name::storage_size_in_bytes,
                     infer_element_count: #type_name::infer_element_count,
                     matmul_cpu: #type_name::matmul,
+
+                    #[cfg(feature = "cuda")]
+                    quantize_cuda: {
+                        #[cfg(feature = "cuda")]
+                        { Some(#type_name::quantize_cuda) }
+                        #[cfg(not(feature = "cuda"))]
+                        { None }
+                    },
 
                     #[cfg(feature = "cuda")]
                     dequantize_cuda: {

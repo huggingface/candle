@@ -170,6 +170,37 @@ macro_rules! define_ggml_wrapper {
             ) -> Result<Vec<f32>> {
                 shared_impl::matmul::<Self>(lhs_f32, lhs_shape, rhs_data, rhs_shape)
             }
+
+            #[cfg(feature = "cuda")]
+            #[inline]
+            pub fn dequantize_cuda(
+                data: &cudarc::driver::CudaSlice<u8>,
+                output: &mut cudarc::driver::CudaSlice<f32>,
+                device: &crate::cuda_backend::CudaDevice,
+            ) -> Result<()> {
+                unimplemented!()
+            }
+
+            #[cfg(feature = "cuda")]
+            #[inline]
+            pub fn quantize_cuda(
+                input: &cudarc::driver::CudaSlice<f32>,
+                device: &crate::cuda_backend::CudaDevice,
+            ) -> Result<cudarc::driver::CudaSlice<u8>> {
+                unimplemented!()
+            }
+
+            #[cfg(feature = "cuda")]
+            #[inline]
+            pub fn matmul_cuda(
+                lhs_data: &cudarc::driver::CudaSlice<f32>,
+                lhs_shape: &[usize],
+                rhs_data: &cudarc::driver::CudaSlice<u8>,
+                rhs_shape: &[usize],
+                device: &crate::cuda_backend::CudaDevice,
+            ) -> Result<cudarc::driver::CudaSlice<f32>> {
+                unimplemented!()
+            }
         }
     };
 }

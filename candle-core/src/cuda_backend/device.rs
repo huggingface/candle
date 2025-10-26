@@ -1,5 +1,5 @@
 use crate::backend::BackendDevice;
-use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
+use crate::{quantized_dispatch, CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::driver::CudaFunction;
@@ -331,6 +331,13 @@ impl BackendDevice for CudaDevice {
                 let data = self.alloc_zeros::<F8E4M3>(elem_count)?;
                 CudaStorageSlice::F8E4M3(data)
             }
+            DType::Quantized(qdtype) => {
+                let unquantized = self.alloc_zeros::<f32>(elem_count)?;
+                CudaStorageSlice::Quantized(
+                    qdtype,
+                    quantized_dispatch::quantize_cuda(qdtype, &unquantized, &self)?,
+                )
+            }
         };
         Ok(CudaStorage {
             slice,
@@ -344,13 +351,17 @@ impl BackendDevice for CudaDevice {
         let slice = match dtype {
             // TODO: Add support for F16 and BF16 though this is likely to require some upstream
             // cudarc changes.
-            DType::U8 | DType::U32 | DType::I64 | DType::F16 | DType::BF16 | DType::F8E4M3 => {
-                Err(CudaError::UnsupportedDtype {
-                    dtype,
-                    op: "rand_uniform",
-                })
-                .w()?
-            }
+            DType::U8
+            | DType::U32
+            | DType::I64
+            | DType::F16
+            | DType::BF16
+            | DType::F8E4M3
+            | DType::Quantized(_) => Err(CudaError::UnsupportedDtype {
+                dtype,
+                op: "rand_uniform",
+            })
+            .w()?,
             DType::F32 => {
                 let mut data = unsafe { self.alloc::<f32>(elem_count)? };
                 curand.0.fill_with_uniform(&mut data).w()?;
@@ -388,13 +399,17 @@ impl BackendDevice for CudaDevice {
             elem_count
         };
         let slice = match dtype {
-            DType::U8 | DType::U32 | DType::I64 | DType::F16 | DType::BF16 | DType::F8E4M3 => {
-                Err(CudaError::UnsupportedDtype {
-                    dtype,
-                    op: "rand_normal",
-                })
-                .w()?
-            }
+            DType::U8
+            | DType::U32
+            | DType::I64
+            | DType::F16
+            | DType::BF16
+            | DType::F8E4M3
+            | DType::Quantized(_) => Err(CudaError::UnsupportedDtype {
+                dtype,
+                op: "rand_normal",
+            })
+            .w()?,
             DType::F32 => {
                 let mut data = unsafe { self.alloc::<f32>(elem_count_round)? };
                 curand
@@ -450,6 +465,10 @@ impl BackendDevice for CudaDevice {
                 let data = self.alloc::<F8E4M3>(elem_count)?;
                 CudaStorageSlice::F8E4M3(data)
             }
+            DType::Quantized(qdtype) => {
+                let unquantized = self.alloc::<u8>(qdtype.storage_size_in_bytes(elem_count))?;
+                CudaStorageSlice::Quantized(qdtype, unquantized)
+            }
         };
         Ok(CudaStorage {
             slice,
@@ -490,6 +509,10 @@ impl BackendDevice for CudaDevice {
             CpuStorageRef::F8E4M3(storage) => {
                 let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::F8E4M3(data)
+            }
+            CpuStorageRef::Quantized(id, storage) => {
+                let data = self.memcpy_stod(storage)?;
+                CudaStorageSlice::Quantized(id, data)
             }
         };
         Ok(CudaStorage {
@@ -532,6 +555,10 @@ impl BackendDevice for CudaDevice {
                 let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::F8E4M3(data)
             }
+            CpuStorage::Quantized(id, storage) => {
+                let data = self.memcpy_stod(storage)?;
+                CudaStorageSlice::Quantized(*id, data)
+            }
         };
         Ok(CudaStorage {
             slice,
@@ -572,6 +599,10 @@ impl BackendDevice for CudaDevice {
             CpuStorage::F8E4M3(storage) => {
                 let data = self.memcpy_stod(&storage)?;
                 CudaStorageSlice::F8E4M3(data)
+            }
+            CpuStorage::Quantized(id, storage) => {
+                let data = self.memcpy_stod(&storage)?;
+                CudaStorageSlice::Quantized(id, data)
             }
         };
         Ok(CudaStorage {
