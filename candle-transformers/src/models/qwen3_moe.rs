@@ -51,6 +51,7 @@ impl From<&Config> for Qwen3Config {
             rms_norm_eps: val.rms_norm_eps,
             use_sliding_window: val.use_sliding_window,
             hidden_act: val.hidden_act,
+            use_flash_attn: false,
         }
     }
 }

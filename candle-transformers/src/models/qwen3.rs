@@ -6,6 +6,12 @@ use candle::{DType, Device, Module, Result, Tensor};
 use candle_nn::{kv_cache::KvCache, Activation, VarBuilder};
 use std::sync::Arc;
 
+#[cfg(feature = "cuda")]
+use candle_flash_attn;
+
+#[cfg(not(feature = "cuda"))]
+use candle_nn::cpu_flash_attention;
+
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
     pub vocab_size: usize,
@@ -24,6 +30,8 @@ pub struct Config {
     pub rms_norm_eps: f64,
     pub use_sliding_window: bool,
     pub hidden_act: Activation,
+    #[serde(default)]
+    pub use_flash_attn: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +114,7 @@ pub(crate) struct Qwen3Attention {
     num_kv_groups: usize,
     head_dim: usize,
     hidden_size: usize,
+    use_flash_attn: bool,
     // utils
     rotary_emb: Arc<Qwen3RotaryEmbedding>,
     kv_cache: KvCache,
@@ -173,6 +182,7 @@ impl Qwen3Attention {
             num_kv_groups,
             head_dim,
             hidden_size,
+            use_flash_attn: cfg.use_flash_attn,
             rotary_emb,
             kv_cache,
         })
@@ -216,9 +226,98 @@ impl Qwen3Attention {
         // 5. Accumulate KV cache
         let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
 
+        if self.use_flash_attn && offset == 0 {
+            // Flash attention path - only used during prefill (offset == 0)
+            self.forward_flash_attn(&q, &k, &v, attn_mask, b, l)
+        } else {
+            // Standard attention path - used during decode or when flash attn is disabled
+            self.forward_standard_attn(&q, &k, &v, attn_mask, b, l)
+        }
+
+    }
+
+    #[cfg(feature = "cuda")]
+    fn forward_flash_attn(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        attn_mask: Option<&Tensor>,
+        b: usize,
+        l: usize,
+    ) -> Result<Tensor> {
+        // Flash attention expects (B, S, H, D) format
+        let q = q.transpose(1, 2)?.contiguous()?;
+        let k = k.transpose(1, 2)?.contiguous()?;
+        let v = v.transpose(1, 2)?.contiguous()?;
+
+        let scale = 1.0 / (self.head_dim as f32).sqrt();
+
+        let ctx = candle_flash_attn::flash_attn(&q, &k, &v, scale, false)?;
+
+        // Output: (B, S, H, D) -> (B, L, hidden_size)
+        ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    fn forward_flash_attn(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        attn_mask: Option<&Tensor>,
+        b: usize,
+        l: usize,
+    ) -> Result<Tensor> {
+        // CPU flash attention expects (B, S, H, D) format
+        let q = q.transpose(1, 2)?.contiguous()?;
+        let k = k.transpose(1, 2)?.contiguous()?;
+        let v = v.transpose(1, 2)?.contiguous()?;
+
+        let scale = 1.0 / (self.head_dim as f32).sqrt();
+
+        // Call CPU flash attention based on dtype
+        let ctx = match q.dtype() {
+            DType::F32 => cpu_flash_attention::run_flash_attn_cpu::<f32>(
+                &q, &k, &v, attn_mask, scale, None, None,
+            )?,
+            DType::F64 => cpu_flash_attention::run_flash_attn_cpu::<f64>(
+                &q, &k, &v, attn_mask, scale, None, None,
+            )?,
+            DType::BF16 => {
+                // Convert to F32 for computation
+                let q_f32 = q.to_dtype(DType::F32)?;
+                let k_f32 = k.to_dtype(DType::F32)?;
+                let v_f32 = v.to_dtype(DType::F32)?;
+                let ctx_f32 = cpu_flash_attention::run_flash_attn_cpu::<f32>(
+                    &q_f32, &k_f32, &v_f32, attn_mask, scale, None, None,
+                )?;
+                // Convert back to BF16
+                ctx_f32.to_dtype(DType::BF16)?
+            }
+            dtype => candle::bail!("Unsupported dtype for CPU flash attention: {:?}", dtype),
+        };
+
+        // Output from CPU flash attention is (B, H, S, D), transpose to (B, S, H, D)
+        let ctx = ctx.transpose(1, 2)?;
+
+        // Reshape and apply output projection
+        ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
+    }
+
+    fn forward_standard_attn(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        v: &Tensor,
+        attn_mask: Option<&Tensor>,
+        b: usize,
+        l: usize,
+    ) -> Result<Tensor> {
+
         // 6. GQA repeat_kv
-        let k = repeat_kv(k, self.num_kv_groups)?;
-        let v = repeat_kv(v, self.num_kv_groups)?;
+        let k = repeat_kv(k.clone(), self.num_kv_groups)?;
+        let v = repeat_kv(v.clone(), self.num_kv_groups)?;
 
         // 7. Attention score
         let scale = 1.0 / (self.head_dim as f64).sqrt();

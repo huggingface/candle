@@ -338,7 +338,8 @@ fn main() -> Result<()> {
             Model::Moe(ModelMoe::new(&config, vb)?)
         }
         WhichModel::W3_0_6b | WhichModel::W3_1_7b | WhichModel::W3_4b | WhichModel::W3_8b => {
-            let config: Config3 = serde_json::from_slice(&std::fs::read(config_file)?)?;
+            let mut config: Config3 = serde_json::from_slice(&std::fs::read(config_file)?)?;
+            config.use_flash_attn = args.use_flash_attn;
             Model::Base3(Model3::new(&config, vb)?)
         }
         WhichModel::W3MoeA3b => {
