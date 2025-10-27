@@ -6,10 +6,10 @@ use candle::{DType, Device, Module, Result, Tensor};
 use candle_nn::{kv_cache::KvCache, Activation, VarBuilder};
 use std::sync::Arc;
 
-#[cfg(feature = "cuda")]
+#[cfg(feature = "flash-attn")]
 use candle_flash_attn;
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(feature = "flash-attn"))]
 use candle_nn::cpu_flash_attention;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -236,7 +236,7 @@ impl Qwen3Attention {
 
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(feature = "flash-attn")]
     fn forward_flash_attn(
         &self,
         q: &Tensor,
@@ -259,7 +259,7 @@ impl Qwen3Attention {
         ctx.reshape((b, l, self.hidden_size))?.apply(&self.o_proj)
     }
 
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(not(feature = "flash-attn"))]
     fn forward_flash_attn(
         &self,
         q: &Tensor,
