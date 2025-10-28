@@ -1,7 +1,0 @@
-.idea
-target
-Cargo.lock
-.venv
-hkernel/build/*
-__pycache__
-*.egg-info

@@ -54,7 +54,7 @@ impl FlashAttn {
 
         if q_rank != 4 || k_rank != 4 || v_rank != 4 {
             candle::bail!(
-                "flash-attn expects input tensors of rank 4 (q: {q_rank}, k: {k_rank}, v: {v_rank}"
+                "flash-attn-v3 expects input tensors of rank 4 (q: {q_rank}, k: {k_rank}, v: {v_rank}"
             )
         }
         if q_stride[q_rank - 1] != 1 {
@@ -223,7 +223,7 @@ impl FlashAttn {
 
 impl candle::CustomOp3 for FlashAttn {
     fn name(&self) -> &'static str {
-        "flash-attn"
+        "flash-attn-v3"
     }
 
     fn cpu_fwd(
@@ -235,7 +235,7 @@ impl candle::CustomOp3 for FlashAttn {
         _: &CpuStorage,
         _: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        candle::bail!("no cpu support for flash-attn")
+        candle::bail!("no cpu support for flash-attn-v3")
     }
 
     fn cuda_fwd(
@@ -250,7 +250,7 @@ impl candle::CustomOp3 for FlashAttn {
         match q.dtype() {
             candle::DType::F16 => self.cuda_fwd_t::<f16>(q, q_l, k, k_l, v, v_l, false),
             candle::DType::BF16 => self.cuda_fwd_t::<bf16>(q, q_l, k, k_l, v, v_l, true),
-            dt => candle::bail!("flash-attn is only supported for f16/bf16 ({dt:?})"),
+            dt => candle::bail!("flash-attn-v3 is only supported for f16/bf16 ({dt:?})"),
         }
     }
 }
@@ -478,7 +478,7 @@ impl FlashAttnVarLen {
 
         if q_rank != 3 || k_rank != 3 || v_rank != 3 {
             candle::bail!(
-                "flash-attn-varlen expects input tensors of rank 3 (q: {q_rank}, k: {k_rank}, v: {v_rank}"
+                "flash-attn-v3-varlen expects input tensors of rank 3 (q: {q_rank}, k: {k_rank}, v: {v_rank}"
             )
         }
         if q_stride[q_rank - 1] != 1 {
@@ -665,7 +665,7 @@ impl FlashAttnVarLen {
 
 impl candle::CustomOp3 for FlashAttnVarLen {
     fn name(&self) -> &'static str {
-        "flash-attn-varlen"
+        "flash-attn-v3-varlen"
     }
 
     fn cpu_fwd(
@@ -677,7 +677,7 @@ impl candle::CustomOp3 for FlashAttnVarLen {
         _: &CpuStorage,
         _: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        candle::bail!("no cpu support for flash-attn")
+        candle::bail!("no cpu support for flash-attn-v3")
     }
 
     fn cuda_fwd(
@@ -692,7 +692,7 @@ impl candle::CustomOp3 for FlashAttnVarLen {
         match q.dtype() {
             candle::DType::F16 => self.cuda_fwd_t::<f16>(q, q_l, k, k_l, v, v_l, false),
             candle::DType::BF16 => self.cuda_fwd_t::<bf16>(q, q_l, k, k_l, v, v_l, true),
-            dt => candle::bail!("flash-attn is only supported for f16/bf16 ({dt:?})"),
+            dt => candle::bail!("flash-attn-v3 is only supported for f16/bf16 ({dt:?})"),
         }
     }
 }
