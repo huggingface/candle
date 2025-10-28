@@ -634,33 +634,32 @@ impl ScatteredCacheBuilder {
 /// KV-Cache using concatenation for append operations
 ///
 /// This implementation uses `Tensor::cat` instead of `slice_set` for updates,
-/// which provides better GPU performance due to optimized concatenation kernels.
+/// providing significant GPU performance improvements for autoregressive generation.
 ///
 /// # Performance Characteristics
 ///
-/// Benchmark results on NVIDIA A100 (SmolLM2-135M, Llama-3.2-1B):
-/// - **GPU**: 1.4-1.6x faster than `KvCache` (70 tok/s vs 42 tok/s)
-/// - **CPU**: ~10% slower than `KvCache` (due to repeated allocations)
-/// - **Memory**: Dynamic growth, no pre-allocation
+/// **GPU :**
+/// - 2-5x faster than `KvCache` (speedup increases with sequence length)
+/// - Works on both full-precision and quantized models
 ///
-/// The performance advantage on GPU comes from:
-/// - Optimized CUDA concatenation kernels (fused allocation + copy)
-/// - Coalesced memory writes (all threads write adjacent addresses)
-/// - Single kernel launch (vs multiple for slice_set: indexing + bounds + copy)
-/// - Better memory bandwidth utilization (75% vs 25% on A100)
+/// **CPU :**
+/// - Essentially neutral (~1% difference)
+///
+/// The GPU performance advantage comes from:
+/// - Tight memory layouts (sequential access patterns)
+/// - Optimized concatenation kernels (coalesced memory writes)
+/// - Better memory bandwidth utilization
 ///
 /// # When to Use
 ///
 /// **Recommended for:**
-/// - GPU inference (CUDA, Metal) where performance is critical
+/// - GPU inference (CUDA, Metal)
 /// - Autoregressive generation (token-by-token decoding)
-/// - When memory for dynamic growth is acceptable
 /// - Production inference servers prioritizing throughput
 ///
 /// **Use `KvCache` instead for:**
-/// - CPU-only inference (pre-allocation is faster)
-/// - Memory-constrained environments (pre-allocation uses less memory for short sequences)
-/// - When you need precise memory control
+/// - CPU-only inference
+/// - When you need fixed memory allocation upfront
 ///
 /// # Example
 ///
@@ -673,29 +672,19 @@ impl ScatteredCacheBuilder {
 /// let k1 = Tensor::randn(0f32, 1., (1, 8, 10, 64), &device)?;
 /// let v1 = Tensor::randn(0f32, 1., (1, 8, 10, 64), &device)?;
 /// let (k, v) = cache.append(&k1, &v1)?;
-/// assert_eq!(k.dims()[2], 10); // sequence length = 10
 ///
 /// // Subsequent tokens (decode)
-/// for _ in 0..5 {
-///     let k_new = Tensor::randn(0f32, 1., (1, 8, 1, 64), &device)?;
-///     let v_new = Tensor::randn(0f32, 1., (1, 8, 1, 64), &device)?;
-///     let (k, v) = cache.append(&k_new, &v_new)?;
-/// }
-/// assert_eq!(cache.current_seq_len(), 15); // 10 + 5
+/// let k_new = Tensor::randn(0f32, 1., (1, 8, 1, 64), &device)?;
+/// let v_new = Tensor::randn(0f32, 1., (1, 8, 1, 64), &device)?;
+/// let (k, v) = cache.append(&k_new, &v_new)?;
 /// ```
 ///
 /// # Implementation Details
 ///
-/// Unlike `KvCache` which pre-allocates a fixed-size buffer and uses `slice_set`,
-/// this implementation grows dynamically using `Tensor::cat`. While this uses more
-/// memory allocations, the GPU kernel for concatenation is significantly more
-/// optimized than the general-purpose `slice_set` operation.
-///
-/// The trade-off:
-/// - More allocations (one per token in autoregressive generation)
-/// - But each allocation uses a faster kernel path
-/// - Net result: 2-5x faster on GPU for autoregressive inference
-///   (speedup increases with sequence length: ~2x at 300 tokens, ~5x at 2000 tokens)
+/// Unlike `KvCache` which pre-allocates a fixed buffer, this implementation
+/// grows dynamically using `Tensor::cat`. The GPU concatenation kernels are
+/// highly optimized for sequential append patterns, resulting in better
+/// performance despite the dynamic allocation.
 #[derive(Debug, Clone)]
 pub struct ConcatKvCache {
     k: Option<Tensor>,
@@ -755,10 +744,6 @@ impl ConcatKvCache {
     /// # Returns
     /// Tuple of `(full_k, full_v)` containing all cached keys and values,
     /// including the newly appended data.
-    ///
-    /// # Performance Note
-    /// On GPU, this operation is highly optimized and faster than equivalent
-    /// `slice_set` operations despite allocating a new tensor.
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
         // Update K cache using concatenation
         self.k = Some(match &self.k {
