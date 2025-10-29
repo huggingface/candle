@@ -548,6 +548,55 @@ impl Tensor {
         self.is_variable || self.op.is_some()
     }
 
+    /// Creates a fresh tensor structure based on a storage and a shape.
+    /// This method is designed to be utilized for purely inference-only cases.
+    /// 
+    /// Important notes:
+    /// - This uses contiguous strides
+    /// - This has no backprop op and is not tracked as a variable.
+    pub unsafe fn new_from_storage<S: Into<Shape>>(
+        storage: Storage,
+        shape: S,
+    ) -> Tensor {
+        let dtype = storage.dtype();
+        let device = storage.device();
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: Arc::new(RwLock::new(storage)),
+            layout: Layout::contiguous(shape),
+            op: BackpropOp::none(),
+            is_variable: false,
+            dtype,
+            device,
+        };
+        Tensor(Arc::new(tensor_))
+    }
+
+    /// Creates a fresh tensor structure based on a storage and a shape.
+    /// 
+    /// Important notes:
+    /// - This uses contiguous strides
+    pub unsafe fn new_from_storage_op<S: Into<Shape>>(
+        storage: Storage,
+        shape: S,
+        op: BackpropOp,
+        is_variable: bool
+    ) -> Tensor {
+        let dtype = storage.dtype();
+        let device = storage.device();
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: Arc::new(RwLock::new(storage)),
+            layout: Layout::contiguous(shape),
+            op,
+            is_variable,
+            dtype,
+            device,
+        };
+        Tensor(Arc::new(tensor_))
+    }
+
+
     // TODO: Also make an inplace version or a pre-allocated? This could be tricky
     // if this can create cycles in the compute graph.
     binary_op!(add, Add);
