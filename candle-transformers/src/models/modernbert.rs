@@ -251,7 +251,7 @@ impl ModernBertHead {
 
 impl Module for ModernBertHead {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = xs.contiguous()?.apply(&self.dense)?.gelu_erf()?.apply(&self.norm)?;
+        let xs = xs.apply(&self.dense)?.gelu_erf()?.apply(&self.norm)?;
         Ok(xs)
     }
 }
@@ -488,7 +488,7 @@ impl ModernBertForSequenceClassification {
     pub fn forward(&self, xs: &Tensor, mask: &Tensor) -> Result<Tensor> {
         let output = self.model.forward(xs, mask)?;
         let last_hidden_state = match self.classifier_pooling {
-            ClassifierPooling::CLS => output.i((.., 0, ..))?,
+            ClassifierPooling::CLS => output.i((.., 0, ..))?.contiguous()?,
             ClassifierPooling::MEAN => {
                 let unsqueezed_mask = &mask.unsqueeze(D::Minus1)?.to_dtype(DType::F32)?;
                 let sum_output = output.broadcast_mul(unsqueezed_mask)?.sum(1)?;
