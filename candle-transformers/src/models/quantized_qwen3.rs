@@ -426,4 +426,10 @@ impl ModelWeights {
         let last_hidden = h.narrow(1, l - 1, 1)?;
         self.lm_head.forward(&last_hidden)?.squeeze(1)
     }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in &mut self.layers {
+            layer.self_attn.kv_cache.reset();
+        }
+    }
 }
