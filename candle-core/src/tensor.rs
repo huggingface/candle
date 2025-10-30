@@ -550,14 +550,12 @@ impl Tensor {
 
     /// Creates a fresh tensor structure based on a storage and a shape.
     /// This method is designed to be utilized for purely inference-only cases.
-    /// 
-    /// Important notes:
+    ///
+    /// # Safety
     /// - This uses contiguous strides
     /// - This has no backprop op and is not tracked as a variable.
-    pub unsafe fn new_from_storage<S: Into<Shape>>(
-        storage: Storage,
-        shape: S,
-    ) -> Tensor {
+    /// - Ensure the shape is compatible with the shape of the storage.
+    pub unsafe fn new_from_storage<S: Into<Shape>>(storage: Storage, shape: S) -> Tensor {
         let dtype = storage.dtype();
         let device = storage.device();
         let tensor_ = Tensor_ {
@@ -573,14 +571,15 @@ impl Tensor {
     }
 
     /// Creates a fresh tensor structure based on a storage and a shape.
-    /// 
-    /// Important notes:
+    ///
+    /// # Safety
     /// - This uses contiguous strides
+    /// - Ensure the shape is compatible with the shape of the storage.
     pub unsafe fn new_from_storage_op<S: Into<Shape>>(
         storage: Storage,
         shape: S,
         op: BackpropOp,
-        is_variable: bool
+        is_variable: bool,
     ) -> Tensor {
         let dtype = storage.dtype();
         let device = storage.device();
@@ -595,7 +594,6 @@ impl Tensor {
         };
         Tensor(Arc::new(tensor_))
     }
-
 
     // TODO: Also make an inplace version or a pre-allocated? This could be tricky
     // if this can create cycles in the compute graph.
