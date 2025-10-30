@@ -36,7 +36,7 @@ impl<B: Backend> Clone for VarBuilderArgs<'_, B> {
 pub type VarBuilder<'a> = VarBuilderArgs<'a, Box<dyn SimpleBackend + 'a>>;
 
 struct TensorData<B: Backend> {
-    backend: B,
+    backend: Arc<B>,
     pub device: Device,
     pub dtype: DType,
 }
@@ -108,7 +108,7 @@ impl Backend for Box<dyn SimpleBackend + '_> {
 impl<B: Backend> VarBuilderArgs<'_, B> {
     pub fn new_with_args(backend: B, dtype: DType, dev: &Device) -> Self {
         let data = TensorData {
-            backend,
+            backend: Arc::new(backend),
             device: dev.clone(),
             dtype,
         };
@@ -239,6 +239,31 @@ impl<B: Backend> VarBuilderArgs<'_, B> {
         self.data
             .backend
             .get(s.into(), &path, hints, dtype, &self.data.device)
+    }
+
+    /// Set the device of the VarBuilder.
+    pub fn set_device(self, device: Device) -> Self {
+        Self {
+            data: Arc::new(TensorData {
+                backend: self.data.backend.clone(),
+                dtype: self.data.dtype,
+                device,
+            }),
+            ..self
+        }
+    }
+
+    /// Set the dtype of the VarBuilder.
+    pub fn set_dtype(self, dtype: DType) -> Self {
+        Self {
+            data: Arc::new(TensorData {
+                backend: self.data.backend.clone(),
+                dtype,
+                device: self.data.device.clone(),
+            }),
+            dtype,
+            ..self
+        }
     }
 }
 
@@ -575,7 +600,7 @@ impl<'a> VarBuilder<'a> {
         device: Device,
     ) -> Self {
         let data = TensorData {
-            backend,
+            backend: Arc::new(backend),
             device,
             dtype,
         };
@@ -693,7 +718,7 @@ impl<'a> VarBuilder<'a> {
         let backend = Rename::new(self, renamer);
         let backend: Box<dyn SimpleBackend + 'a> = Box::new(backend);
         let data = TensorData {
-            backend,
+            backend: Arc::new(backend),
             device,
             dtype,
         };
