@@ -45,7 +45,7 @@ def download_with_progress(repo_id, filename, cache_dir):
             cache_dir=cache_dir,
             resume_download=True
         )
-        print(f"✓ Downloaded to: {path}")
+        print(f"Downloaded to: {path}")
         return Path(path)
     except Exception as e:
         print(f"Error downloading {filename}: {e}", file=sys.stderr)
@@ -73,7 +73,7 @@ def find_or_download_model(model_key, custom_path=None):
         if snapshots:
             model_path = snapshots[0] / filename
             if model_path.exists():
-                print(f"✓ Found model in cache: {model_path}")
+                print(f"Found model in cache: {model_path}")
                 return model_path
 
     # Download if not found
@@ -92,7 +92,7 @@ def find_or_download_tokenizer():
             tokenizer_path = snapshots[0] / 'tokenizer.json'
             config_path = snapshots[0] / 'config.json'
             if tokenizer_path.exists() and config_path.exists():
-                print(f"✓ Found tokenizer in cache: {snapshots[0]}")
+                print(f"Found tokenizer in cache: {snapshots[0]}")
                 return snapshots[0]
 
     print("Tokenizer not found in cache")
