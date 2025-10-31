@@ -73,7 +73,7 @@ COPY2D_OP(__half, copy2d_f16)
 CONST_SET_OP(__half, const_set_f16)
 #endif
 
-#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ >= 800 || (__CUDA_ARCH__ >= 530 && __CUDA_ARCH__ < 800)
 #include <cuda_bf16.h>
 #include <cuda_fp8.h>
 
