@@ -7,7 +7,7 @@ use wasm_bindgen::prelude::*;
 use std::io::Cursor;
 
 use crate::console_log;
-use crate::profiler::{profile_start, profile_end, ProfileGuard};
+use crate::profiler::{ProfileGuard};
 use candle_transformers::models::quantized_qwen3::{ModelWeights as QuantizedQwen3};
 
 #[wasm_bindgen]
@@ -32,13 +32,6 @@ impl Model {
         let _prof = ProfileGuard::new("total_load");
         console_error_panic_hook::set_once();
 
-        // Check if SIMD is enabled
-        #[cfg(feature = "simd-flash-attn")]
-        console_log!("Loading quantized Qwen3 model (Q8_0) with SIMD flash attention");
-
-        #[cfg(not(feature = "simd-flash-attn"))]
-        console_log!("Loading quantized Qwen3 model (Q8_0) - standard mode");
-
         let device = Device::Cpu;
 
         // Tokenizer loading
@@ -54,7 +47,7 @@ impl Model {
                 None => match tokenizer.get_vocab(true).get("<|im_end|>") {
                     Some(&token) => token,
                     None => {
-                        console_log!("⚠️ Warning: no EOS token found, using 0");
+                        console_log!("Warning: no EOS token found, using 0");
                         0
                     }
                 }
@@ -81,7 +74,7 @@ impl Model {
             };
 
             let load_time = (Date::now() - start) / 1000.0;
-            console_log!("✅ Quantized model loaded in {:.2}s", load_time);
+            console_log!("Quantized model loaded in {:.2}s", load_time);
 
             let logits_processor = LogitsProcessor::new(299792458, None, None);
 

@@ -15,12 +15,14 @@ A high-performance WebAssembly implementation of the Qwen3-0.6B language model r
 
 Running on a modern CPU with WASM SIMD support:
 
-| Quantization | Speed | Model Size | Quality |
-|--------------|-------|------------|---------|
-| **Q8_0** (default) | **9.5 tok/s** | ~645MB | Best |
-| Q4_K_M | 6.0 tok/s | ~380MB | Good |
+| Quantization | Speed         | Model Size | Quality |
+|--------------|---------------|------------|---------|
+| **Q8_0** (default) | **8.7 tok/s** | ~645MB | Best |
+| Q4_K_M | 5.8 tok/s     | ~380MB | Good |
 
 *Q8_0 provides superior quality with better throughput despite larger size, making it the recommended choice.*
+
+**Performance Note**: Having browser DevTools/console open can significantly reduce inference speed (up to 50% slower). For best performance, close the console during generation and only open it when you need to view profiling stats.
 
 ## Requirements
 ### Python Dependencies
@@ -118,6 +120,49 @@ Available models:
 │   └── config.toml      # WASM build config (SIMD flags)
 └── pkg/                 # Generated WASM (after build)
 ```
+
+
+## Using the Interface
+
+### Text Generation
+1. Enter your prompt in the text field
+2. Click **Generate** to start inference
+3. The model will generate up to set number of maximum tokens (default 100) or until it reaches an end-of-sequence token
+4. Click **Reset** to clear the output and KV cache for a fresh start
+
+### Performance Tools
+
+The interface includes several tools for monitoring and debugging performance:
+
+#### Show Stats
+Prints detailed performance profiling data to the browser console, including:
+- Time spent in each operation (model forward pass, tokenization, etc.)
+- Call counts, average/min/max times
+- Percentage of total time per operation
+
+**When to use**: After generation to analyze which operations are bottlenecks
+
+#### Clear Stats
+Resets all accumulated profiling data to start fresh measurements.
+
+**When to use**: Before running a benchmark or when you want to measure a specific generation without previous data
+
+#### Update Memory
+Refreshes the memory display showing:
+- **JS Heap**: JavaScript heap memory usage (used/total/limit)
+- **WASM Memory**: WebAssembly linear memory usage in MB and pages
+
+**When to use**: To check current memory consumption, especially useful for:
+- Monitoring memory growth during long generations
+- Debugging potential memory leaks
+- Understanding memory requirements for deployment
+
+**Example workflow**:
+1. Click **Clear Stats** to reset measurements
+2. Generate text
+3. Click **Show Stats** and open console to see timing breakdown
+4. Click **Update Memory** to see memory usage
+5. Repeat to compare different prompts or parameters
 
 ## Technical Details
 

@@ -90,6 +90,21 @@
             font-family: inherit;
             transition: border-color 0.3s;
         }
+        #maxTokens {
+            width: 120px;
+            padding: 12px;
+            font-size: 18px;
+            font-weight: 600;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+            text-align: center;
+        }
+        #maxTokens:focus {
+            outline: none;
+            border-color: #667eea;
+        }
         #prompt:focus {
             outline: none;
             border-color: #667eea;
@@ -209,12 +224,23 @@
                 />
             </div>
 
+            <div class="prompt-section">
+                <label for="maxTokens">Max tokens to generate:</label>
+                <input
+                    id="maxTokens"
+                    type="number"
+                    min="1"
+                    max="500"
+                    value="100"
+                />
+            </div>
+
             <div class="controls">
                 <button id="generateBtn" class="primary" onclick="generate()" disabled>
-                    🎯 Generate
+                    Generate
                 </button>
                 <button id="resetBtn" class="secondary" onclick="reset()" disabled>
-                    🔄 Reset
+                    Reset
                 </button>
             </div>
 
@@ -224,9 +250,9 @@
             <div class="profiler-controls">
                 <h3>Performance Tools</h3>
                 <div class="controls">
-                    <button class="secondary" onclick="showProfile()">📊 Show Stats</button>
-                    <button class="secondary" onclick="clearProfile()">🗑️ Clear Stats</button>
-                    <button class="secondary" onclick="updateMemory()">💾 Update Memory</button>
+                    <button class="secondary" onclick="showProfile()">Show Stats</button>
+                    <button class="secondary" onclick="clearProfile()">Clear Stats</button>
+                    <button class="secondary" onclick="updateMemory()">Update Memory</button>
                 </div>
                 <div id="memoryInfo">Loading memory info...</div>
             </div>
@@ -268,12 +294,12 @@
 
         window.showProfile = function() {
             profile_print_stats();
-            updateStatus('📊 Performance stats printed to console', 'ready');
+            updateStatus('Performance stats printed to console', 'ready');
         };
 
         window.clearProfile = function() {
             profile_clear();
-            updateStatus('🗑️ Stats cleared', 'ready');
+            updateStatus('Stats cleared', 'ready');
         };
 
         async function loadModel() {
@@ -327,10 +353,12 @@
             const resetBtn = document.getElementById('resetBtn');
             const promptInput = document.getElementById('prompt');
             const outputDiv = document.getElementById('output');
+            const maxTokensInput = document.getElementById('maxTokens');
 
             generateBtn.disabled = true;
             resetBtn.disabled = true;
             promptInput.disabled = true;
+            maxTokensInput.disabled = true;
 
             try {
                 const prompt = promptInput.value;
@@ -352,10 +380,10 @@
                 outputDiv.textContent += firstToken;
 
                 let tokenCount = 1;
-                const maxTokens = 150;
+                const maxTokens = parseInt(document.getElementById('maxTokens').value) || 100;
 
                 // Generate tokens
-                for (let i = 0; i < maxTokens; i++) {
+                for (let i = 0; i < maxTokens - 1; i++) {
                     if (model.is_eos()) {
                         updateStatus('Generation complete (EOS reached)', 'ready');
                         break;
@@ -391,6 +419,7 @@
                 generateBtn.disabled = false;
                 resetBtn.disabled = false;
                 promptInput.disabled = false;
+                maxTokensInput.disabled = false;
             }
         };
 
