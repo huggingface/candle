@@ -141,6 +141,12 @@
         button.secondary:hover:not(:disabled) {
             background: #5a6268;
         }
+        #stopBtn {
+            background: #dc3545;
+        }
+        #stopBtn:hover:not(:disabled) {
+            background: #c82333;
+        }
         button:disabled {
             background: #e0e0e0;
             color: #999;
@@ -239,6 +245,9 @@
                 <button id="generateBtn" class="primary" onclick="generate()" disabled>
                     Generate
                 </button>
+                <button id="stopBtn" class="secondary" onclick="stopGeneration()" disabled>
+                    Stop Generation
+                </button>
                 <button id="resetBtn" class="secondary" onclick="reset()" disabled>
                     Reset
                 </button>
@@ -275,6 +284,7 @@
         } from './pkg/candle_wasm_example_quant_qwen3.js';
 
         let model = null;
+        let shouldStopGeneration = false;
         const MODEL_FILE = window.location.pathname.endsWith('/') ?
             window.location.pathname.split('/').filter(Boolean).pop() + '.gguf' :
             'Qwen3-0.6B-Q8_0.gguf';
@@ -300,6 +310,11 @@
         window.clearProfile = function() {
             profile_clear();
             updateStatus('Stats cleared', 'ready');
+        };
+
+        window.stopGeneration = function() {
+            shouldStopGeneration = true;
+            updateStatus('Stopping generation...', 'loading');
         };
 
         async function loadModel() {
@@ -338,7 +353,6 @@
 
                 updateStatus('Model loaded and ready!', 'ready');
                 updateMemory();
-                profile_print_stats();
 
             } catch (e) {
                 updateStatus(`Error: ${e.message}`, 'error');
@@ -350,15 +364,19 @@
             if (!model) return;
 
             const generateBtn = document.getElementById('generateBtn');
+            const stopBtn = document.getElementById('stopBtn');
             const resetBtn = document.getElementById('resetBtn');
             const promptInput = document.getElementById('prompt');
             const outputDiv = document.getElementById('output');
             const maxTokensInput = document.getElementById('maxTokens');
 
             generateBtn.disabled = true;
+            stopBtn.disabled = false;
             resetBtn.disabled = true;
             promptInput.disabled = true;
             maxTokensInput.disabled = true;
+
+            shouldStopGeneration = false;
 
             try {
                 const prompt = promptInput.value;
@@ -384,6 +402,12 @@
 
                 // Generate tokens
                 for (let i = 0; i < maxTokens - 1; i++) {
+
+                    if (shouldStopGeneration) {
+                        updateStatus('Generation stopped by user', 'ready');
+                        break;
+                    }
+
                     if (model.is_eos()) {
                         updateStatus('Generation complete (EOS reached)', 'ready');
                         break;
@@ -410,13 +434,13 @@
                 );
 
                 updateMemory();
-                profile_print_stats();
 
             } catch (e) {
                 updateStatus(`Error: ${e.message}`, 'error');
                 console.error('Generation error:', e);
             } finally {
                 generateBtn.disabled = false;
+                stopBtn.disabled = true;
                 resetBtn.disabled = false;
                 promptInput.disabled = false;
                 maxTokensInput.disabled = false;

@@ -11,5 +11,5 @@ macro_rules! console_log {
     ($($t:tt)*) => ($crate::log(&format_args!($($t)*).to_string()))
 }
 
-pub mod profiler;
 pub mod m;
+pub mod profiler;

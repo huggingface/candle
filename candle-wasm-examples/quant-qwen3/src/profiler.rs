@@ -62,10 +62,13 @@ impl Profiler {
 
         if let Some((start_name, start_time)) = self.stack.pop() {
             if start_name != name {
-                web_sys::console::warn_1(&format!(
-                    "Profiler mismatch: expected '{}', got '{}'",
-                    start_name, name
-                ).into());
+                web_sys::console::warn_1(
+                    &format!(
+                        "Profiler mismatch: expected '{}', got '{}'",
+                        start_name, name
+                    )
+                    .into(),
+                );
                 return;
             }
 
@@ -197,24 +200,30 @@ pub fn profile_print_stats() {
 
     let total_time: f64 = entries.iter().map(|e| e.total_ms).sum();
 
-    web_sys::console::log_1(&format!(
-        "{:<30} {:>8} {:>10} {:>10} {:>10} {:>10}",
-        "Section", "Count", "Total(ms)", "Avg(ms)", "Min(ms)", "Max(ms)"
-    ).into());
+    web_sys::console::log_1(
+        &format!(
+            "{:<30} {:>8} {:>10} {:>10} {:>10} {:>10}",
+            "Section", "Count", "Total(ms)", "Avg(ms)", "Min(ms)", "Max(ms)"
+        )
+        .into(),
+    );
     web_sys::console::log_1(&"───────────────────────────────────────────────────────".into());
 
     for entry in &entries {
         let percent = (entry.total_ms / total_time) * 100.0;
-        web_sys::console::log_1(&format!(
-            "{:<30} {:>8} {:>10.2} {:>10.3} {:>10.3} {:>10.3}  ({:.1}%)",
-            entry.name,
-            entry.count,
-            entry.total_ms,
-            entry.avg_ms,
-            entry.min_ms,
-            entry.max_ms,
-            percent
-        ).into());
+        web_sys::console::log_1(
+            &format!(
+                "{:<30} {:>8} {:>10.2} {:>10.3} {:>10.3} {:>10.3}  ({:.1}%)",
+                entry.name,
+                entry.count,
+                entry.total_ms,
+                entry.avg_ms,
+                entry.min_ms,
+                entry.max_ms,
+                percent
+            )
+            .into(),
+        );
     }
 
     web_sys::console::log_1(&"───────────────────────────────────────────────────────".into());
@@ -235,7 +244,7 @@ pub fn profile_enable(enabled: bool) {
 #[wasm_bindgen]
 pub fn profile_clear() {
     profile_reset();
-    web_sys::console::log_1(&"🔄 Profiler CLEARED".into());
+    web_sys::console::log_1(&"Profiler CLEARED".into());
 }
 
 // Memory tracking
@@ -276,7 +285,7 @@ pub fn get_memory_info() -> String {
 #[wasm_bindgen]
 pub fn log_memory() {
     let info = get_memory_info();
-    web_sys::console::log_1(&format!("💾 Memory: {}", info).into());
+    web_sys::console::log_1(&format!("Memory: {}", info).into());
 }
 
 #[wasm_bindgen]
@@ -299,5 +308,5 @@ pub fn get_wasm_memory_info() -> String {
 #[wasm_bindgen]
 pub fn log_wasm_memory() {
     let info = get_wasm_memory_info();
-    web_sys::console::log_1(&format!("💾 {}", info).into());
+    web_sys::console::log_1(&format!("{}", info).into());
 }

@@ -1,14 +1,14 @@
-use candle::{DType, Device, Tensor};
 use candle::quantized::gguf_file;
+use candle::{DType, Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use js_sys::Date;
+use std::io::Cursor;
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
-use std::io::Cursor;
 
 use crate::console_log;
-use crate::profiler::{ProfileGuard};
-use candle_transformers::models::quantized_qwen3::{ModelWeights as QuantizedQwen3};
+use crate::profiler::ProfileGuard;
+use candle_transformers::models::quantized_qwen3::ModelWeights as QuantizedQwen3;
 
 #[wasm_bindgen]
 pub struct Model {
@@ -27,7 +27,7 @@ impl Model {
     pub fn load(
         weights: Vec<u8>,
         tokenizer: Vec<u8>,
-        _config: Vec<u8>,  // Not used for GGUF, but keep for compatibility
+        _config: Vec<u8>, // Not used for GGUF, but keep for compatibility
     ) -> Result<Model, JsError> {
         let _prof = ProfileGuard::new("total_load");
         console_error_panic_hook::set_once();
@@ -50,11 +50,12 @@ impl Model {
                         console_log!("Warning: no EOS token found, using 0");
                         0
                     }
-                }
+                },
             };
 
             let start = Date::now();
-            console_log!("Weights size: {} bytes ({:.2} MB)",
+            console_log!(
+                "Weights size: {} bytes ({:.2} MB)",
                 weights.len(),
                 weights.len() as f64 / 1_048_576.0
             );
@@ -245,6 +246,3 @@ impl Model {
         Ok(token)
     }
 }
-
-
-
