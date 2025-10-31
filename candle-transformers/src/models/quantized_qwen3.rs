@@ -10,9 +10,19 @@ use super::with_tracing::QMatMul;
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Tensor};
-use candle_nn::{kv_cache::KvCache, Activation, Embedding, Module};
+use candle_nn::{Activation, Embedding, Module};
 use std::io::{Read, Seek};
 use std::sync::Arc;
+
+// WASM optimizations:
+//#[cfg(target_arch = "wasm32")]
+//use candle_nn::kv_cache::WasmKvCache as KvCache;
+
+// Use standard KV cache on non-WASM
+//#[cfg(not(target_arch = "wasm32"))]
+//use candle_nn::kv_cache::KvCache;
+
+use candle_nn::kv_cache::ConcatKvCache as KvCache;
 
 struct Gguf<R: Read + Seek> {
     ct: gguf_file::Content,
@@ -162,7 +172,8 @@ impl AttentionWeights {
 
         // Initialize KV cache with 512 tokens capacity to reduce initial memory allocation.
         // The cache will grow in chunks of 512 tokens when needed.
-        let kv_cache = KvCache::new(2, 512);
+        //let kv_cache = KvCache::new(2, 512);
+        let kv_cache = KvCache::new(2);
 
         let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
 
