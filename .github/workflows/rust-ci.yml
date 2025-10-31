@@ -90,4 +90,4 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --workspace --tests --examples -- -D warnings
+          args: --workspace --tests --examples --benches -- -D warnings
