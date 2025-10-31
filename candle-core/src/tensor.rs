@@ -549,50 +549,17 @@ impl Tensor {
     }
 
     /// Creates a fresh tensor structure based on a storage and a shape.
-    /// This method is designed to be utilized for purely inference-only cases.
     ///
-    /// # Safety
-    /// - This uses contiguous strides
-    /// - This has no backprop op and is not tracked as a variable.
-    /// - Ensure the shape is compatible with the shape of the storage.
-    pub unsafe fn new_from_storage<S: Into<Shape>>(storage: Storage, shape: S) -> Tensor {
-        let dtype = storage.dtype();
-        let device = storage.device();
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: Arc::new(RwLock::new(storage)),
-            layout: Layout::contiguous(shape),
-            op: BackpropOp::none(),
-            is_variable: false,
-            dtype,
-            device,
-        };
-        Tensor(Arc::new(tensor_))
-    }
-
-    /// Creates a fresh tensor structure based on a storage and a shape.
-    ///
-    /// # Safety
+    /// # Note
     /// - This uses contiguous strides
     /// - Ensure the shape is compatible with the shape of the storage.
-    pub unsafe fn new_from_storage_op<S: Into<Shape>>(
+    pub fn from_storage<S: Into<Shape>>(
         storage: Storage,
         shape: S,
         op: BackpropOp,
         is_variable: bool,
     ) -> Tensor {
-        let dtype = storage.dtype();
-        let device = storage.device();
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: Arc::new(RwLock::new(storage)),
-            layout: Layout::contiguous(shape),
-            op,
-            is_variable,
-            dtype,
-            device,
-        };
-        Tensor(Arc::new(tensor_))
+        from_storage(storage, shape, op, is_variable)
     }
 
     // TODO: Also make an inplace version or a pre-allocated? This could be tricky
@@ -2939,5 +2906,11 @@ impl std::ops::Div<&Tensor> for f64 {
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: &Tensor) -> Self::Output {
         rhs.recip()? * self
+    }
+}
+
+impl From<(Storage, Shape)> for Tensor {
+    fn from((storage, shape): (Storage, Shape)) -> Self {
+        from_storage(storage, shape, BackpropOp::none(), false)
     }
 }
