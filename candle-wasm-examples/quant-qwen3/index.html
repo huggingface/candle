@@ -2,39 +2,63 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Qwen3 WASM with Profiler</title>
+    <title>Qwen3 WASM Text Generation</title>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 1200px;
-            margin: 50px auto;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
             padding: 20px;
         }
-        h1 {
-            color: #333;
-        }
         .container {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
+            max-width: 900px;
+            margin: 0 auto;
         }
-        .panel {
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            padding: 15px;
-            background: #f9f9f9;
+        .header {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
-        .panel h2 {
-            margin-top: 0;
-            font-size: 18px;
-            color: #555;
+        .header h1 {
+            color: #333;
+            font-size: 32px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .header p {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 10px;
+        }
+        .header a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .header a:hover {
+            text-decoration: underline;
+        }
+        .main-panel {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
         .status {
-            padding: 10px;
-            background: #f0f0f0;
-            border-radius: 5px;
-            margin: 10px 0;
-            font-weight: bold;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 500;
+            text-align: center;
         }
         .status.loading {
             background: #fff3cd;
@@ -48,278 +72,209 @@
             background: #f8d7da;
             color: #721c24;
         }
-        #output {
-            white-space: pre-wrap;
-            font-family: 'Courier New', monospace;
-            border: 1px solid #ddd;
-            padding: 15px;
-            min-height: 200px;
-            margin: 10px 0;
-            background: #fff;
-            border-radius: 5px;
-            overflow-y: auto;
-            max-height: 400px;
+        .prompt-section {
+            margin-bottom: 20px;
+        }
+        .prompt-section label {
+            display: block;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        #prompt {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+        #prompt:focus {
+            outline: none;
+            border-color: #667eea;
         }
         .controls {
-            margin: 20px 0;
-        }
-        input[type="text"] {
-            width: 60%;
-            padding: 8px;
-            font-size: 14px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
         }
         button {
-            padding: 8px 15px;
-            font-size: 14px;
-            margin: 5px;
-            background: #007bff;
-            color: white;
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: 500;
             border: none;
-            border-radius: 4px;
+            border-radius: 8px;
             cursor: pointer;
+            transition: all 0.3s;
+            flex: 1;
+            min-width: 120px;
         }
-        button:hover {
-            background: #0056b3;
+        button.primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
         }
-        button:disabled {
-            background: #ccc;
-            cursor: not-allowed;
+        button.primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
         }
         button.secondary {
             background: #6c757d;
+            color: white;
         }
-        button.secondary:hover {
-            background: #545b62;
+        button.secondary:hover:not(:disabled) {
+            background: #5a6268;
         }
-        button.danger {
-            background: #dc3545;
+        button:disabled {
+            background: #e0e0e0;
+            color: #999;
+            cursor: not-allowed;
+            transform: none !important;
         }
-        button.danger:hover {
-            background: #c82333;
-        }
-        .info {
-            font-size: 12px;
-            color: #666;
-            margin-top: 5px;
-        }
-        #profilerTable {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-            font-size: 12px;
-        }
-        #profilerTable th {
-            background: #e9ecef;
-            padding: 8px;
-            text-align: left;
-            font-weight: 600;
-        }
-        #profilerTable td {
-            padding: 6px 8px;
-            border-bottom: 1px solid #dee2e6;
-        }
-        #profilerTable tr:hover {
+        #output {
             background: #f8f9fa;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 300px;
+            max-height: 500px;
+            overflow-y: auto;
+            font-family: 'Courier New', Consolas, monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
-        .bar-container {
-            width: 100%;
-            height: 20px;
-            background: #e9ecef;
-            border-radius: 3px;
-            overflow: hidden;
-            position: relative;
+        .profiler-controls {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 2px solid #e0e0e0;
         }
-        .bar {
-            height: 100%;
-            background: linear-gradient(90deg, #007bff, #0056b3);
-            transition: width 0.3s ease;
+        .profiler-controls h3 {
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 10px;
         }
-        .bar-label {
-            position: absolute;
-            left: 5px;
-            top: 2px;
-            font-size: 11px;
-            font-weight: 600;
-            color: #fff;
-            text-shadow: 0 0 3px rgba(0,0,0,0.5);
+        .profiler-controls button {
+            min-width: auto;
+            padding: 8px 16px;
+            font-size: 14px;
         }
         #memoryInfo {
+            background: #e7f3ff;
+            border-left: 4px solid #667eea;
+            padding: 12px;
+            border-radius: 4px;
             font-family: 'Courier New', monospace;
             font-size: 13px;
-            padding: 10px;
-            background: #e7f3ff;
-            border-left: 3px solid #007bff;
-            margin: 10px 0;
+            margin-top: 10px;
         }
-        .metric {
-            display: flex;
-            justify-content: space-between;
-            margin: 5px 0;
-        }
-        .metric-label {
-            font-weight: 600;
-        }
-        .metric-value {
-            font-family: 'Courier New', monospace;
-            color: #007bff;
-        }
-        .benchmark-result {
-            background: #fff;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            padding: 10px;
-            margin: 10px 0;
-        }
-        .benchmark-result h3 {
-            margin: 0 0 10px 0;
+        .footer {
+            text-align: center;
+            color: white;
+            margin-top: 20px;
             font-size: 14px;
-            color: #495057;
-        }
-        .comparison {
-            display: flex;
-            justify-content: space-between;
-            margin: 5px 0;
-            padding: 5px;
-            background: #f8f9fa;
-            border-radius: 3px;
-        }
-        .improvement {
-            color: #28a745;
-            font-weight: 600;
-        }
-        .degradation {
-            color: #dc3545;
-            font-weight: 600;
         }
     </style>
 </head>
 <body>
-    <h1>🚀 Qwen3 WASM Performance Profiler</h1>
-
-    <div id="status" class="status loading">Initializing...</div>
-
     <div class="container">
-        <!-- Left Panel: Generation -->
-        <div class="panel">
-            <h2>🤖 Model Generation</h2>
-            <div class="controls">
+        <!-- Header -->
+        <div class="header">
+            <h1>
+                <span>🚀</span>
+                <span>Qwen3 Text Generation</span>
+            </h1>
+            <p>
+                Running the <strong>Qwen3-0.6B</strong> language model directly in your browser using WebAssembly.
+                Qwen3 is developed by the <a href="https://github.com/QwenLM/Qwen" target="_blank">Qwen team at Alibaba Cloud</a>.
+            </p>
+            <p>
+                Implementation by <a href="https://github.com/DrJesseGlass" target="_blank">Jesse Glass</a> using the Candle framework.
+            </p>
+        </div>
+
+        <!-- Main Generation Panel -->
+        <div class="main-panel">
+            <div id="status" class="status loading">Initializing...</div>
+
+            <div class="prompt-section">
+                <label for="prompt">Enter your prompt:</label>
                 <input
                     id="prompt"
                     type="text"
-                    placeholder="Enter your prompt..."
+                    placeholder="Once upon a time..."
                     value="Once upon a time"
                 />
-                <button id="generateBtn" onclick="generate()" disabled>Generate</button>
-                <button id="resetBtn" onclick="reset()" disabled>Reset</button>
-                <div class="info">
-                    Quantized Qwen3 with performance profiling
-                </div>
             </div>
-            <div id="output"></div>
-        </div>
 
-        <!-- Right Panel: Profiler -->
-        <div class="panel">
-            <h2>📊 Performance Profiler</h2>
             <div class="controls">
-                <button class="secondary" onclick="toggleProfiler()">
-                    <span id="profilerToggle">Disable</span> Profiler
+                <button id="generateBtn" class="primary" onclick="generate()" disabled>
+                    🎯 Generate
                 </button>
-                <button class="secondary" onclick="showProfile()">Show Stats</button>
-                <button class="danger" onclick="clearProfile()">Clear Stats</button>
-                <button onclick="updateMemory()">Update Memory</button>
+                <button id="resetBtn" class="secondary" onclick="reset()" disabled>
+                    🔄 Reset
+                </button>
             </div>
-            <div id="memoryInfo">Loading memory info...</div>
-            <div id="profilerStats"></div>
-        </div>
-    </div>
 
-    <!-- Benchmark Panel -->
-    <div class="panel" style="margin-top: 20px;">
-        <h2>⚡ Benchmark & Comparison</h2>
-        <div class="controls">
-            <button onclick="runBenchmark()">Run Benchmark (300 tokens)</button>
-            <button onclick="saveBenchmark()">Save as Baseline</button>
-            <button class="secondary" onclick="compareBenchmarks()">Compare with Baseline</button>
+            <div id="output"></div>
+
+            <!-- Profiler Controls -->
+            <div class="profiler-controls">
+                <h3>Performance Tools</h3>
+                <div class="controls">
+                    <button class="secondary" onclick="showProfile()">📊 Show Stats</button>
+                    <button class="secondary" onclick="clearProfile()">🗑️ Clear Stats</button>
+                    <button class="secondary" onclick="updateMemory()">💾 Update Memory</button>
+                </div>
+                <div id="memoryInfo">Loading memory info...</div>
+            </div>
         </div>
-        <div id="benchmarkResults"></div>
+
+        <div class="footer">
+            Built with WebAssembly and Rust • Quantized model for fast inference
+        </div>
     </div>
 
     <script type="module">
-        const MODEL_FILE = 'Qwen3-0.6B-Q8_0.gguf';
-        //const MODEL_FILE = 'Qwen3-0.6B-Q4_K_M.gguf';
-        // Change this to switch models
-
         import init, {
             Model,
             profile_print_stats,
             profile_clear,
             profile_enable,
             get_memory_info,
-            log_memory,
             get_wasm_memory_info,
-            log_wasm_memory
+            log_memory
         } from './pkg/candle_wasm_example_quant_qwen3.js';
 
         let model = null;
-        let profilerEnabled = true;
-        let baselineBenchmark = null;
-
-        console.log('SIMD supported:', WebAssembly.validate(new Uint8Array([
-            0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3,
-            2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11
-        ])));
+        const MODEL_FILE = window.location.pathname.endsWith('/') ?
+            window.location.pathname.split('/').filter(Boolean).pop() + '.gguf' :
+            'Qwen3-0.6B-Q8_0.gguf';
 
         function updateStatus(message, type = 'loading') {
-            const statusEl = document.getElementById('status');
-            statusEl.textContent = message;
-            statusEl.className = `status ${type}`;
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
         }
 
         window.updateMemory = function() {
-            const jsInfo = get_memory_info();
-            const wasmInfo = get_wasm_memory_info();
-
-            document.getElementById('memoryInfo').innerHTML = `
-                <div class="metric">
-                    <span class="metric-label">💾 JS Heap:</span>
-                    <span class="metric-value">${jsInfo}</span>
-                </div>
-                <div class="metric">
-                    <span class="metric-label">🔧 WASM Memory:</span>
-                    <span class="metric-value">${wasmInfo}</span>
-                </div>
-            `;
-        };
-
-        window.toggleProfiler = function() {
-            profilerEnabled = !profilerEnabled;
-            profile_enable(profilerEnabled);
-            document.getElementById('profilerToggle').textContent =
-                profilerEnabled ? 'Disable' : 'Enable';
+            const jsMemory = get_memory_info();
+            const wasmMemory = get_wasm_memory_info();
+            document.getElementById('memoryInfo').textContent =
+                `JS Heap: ${jsMemory}\nWASM: ${wasmMemory}`;
         };
 
         window.showProfile = function() {
             profile_print_stats();
-            displayProfileTable();
+            updateStatus('📊 Performance stats printed to console', 'ready');
         };
 
         window.clearProfile = function() {
             profile_clear();
-            document.getElementById('profilerStats').innerHTML = '';
+            updateStatus('🗑️ Stats cleared', 'ready');
         };
-
-        function displayProfileTable() {
-            // This will be populated by parsing console output
-            // For now, direct users to console
-            document.getElementById('profilerStats').innerHTML = `
-                <p style="font-size: 12px; color: #666;">
-                    Detailed stats printed to console. Open DevTools to see breakdown.
-                </p>
-            `;
-        }
 
         async function loadModel() {
             try {
@@ -330,7 +285,7 @@
 
                 const [weights, tokenizer, config] = await Promise.all([
                     fetch(MODEL_FILE).then(r => {
-                        if (!r.ok) throw new Error('Failed to load weights');
+                        if (!r.ok) throw new Error(`Failed to load ${MODEL_FILE}`);
                         return r.arrayBuffer();
                     }),
                     fetch('tokenizer.json').then(r => {
@@ -355,12 +310,12 @@
                 document.getElementById('generateBtn').disabled = false;
                 document.getElementById('resetBtn').disabled = false;
 
-                updateStatus('✅ Ready!', 'ready');
+                updateStatus('Model loaded and ready!', 'ready');
                 updateMemory();
                 profile_print_stats();
 
             } catch (e) {
-                updateStatus(`❌ Error: ${e.message}`, 'error');
+                updateStatus(`Error: ${e.message}`, 'error');
                 console.error('Load error:', e);
             }
         }
@@ -385,17 +340,24 @@
                 profile_clear();
                 const startTime = Date.now();
 
+                // Initialize with prompt
                 const firstToken = model.init_with_prompt(
-                    prompt, 0.0, 0.9, 1.1, 64, 42
+                    prompt,
+                    0.7,    // temperature
+                    0.9,    // top_p
+                    1.1,    // repeat_penalty
+                    64,     // repeat_last_n
+                    Date.now()  // seed
                 );
                 outputDiv.textContent += firstToken;
 
                 let tokenCount = 1;
-                const maxTokens = 100;
+                const maxTokens = 150;
 
+                // Generate tokens
                 for (let i = 0; i < maxTokens; i++) {
                     if (model.is_eos()) {
-                        updateStatus('✅ Generation complete (EOS)', 'ready');
+                        updateStatus('Generation complete (EOS reached)', 'ready');
                         break;
                     }
 
@@ -403,20 +365,19 @@
                     outputDiv.textContent += token;
                     tokenCount++;
 
-                    //await new Promise(r => setTimeout(r, 0));
-
+                    // Update status every 10 tokens
                     if (tokenCount % 10 === 0) {
                         const elapsed = (Date.now() - startTime) / 1000;
                         const tokensPerSec = (tokenCount / elapsed).toFixed(2);
                         updateStatus(`Generating... ${tokenCount} tokens (${tokensPerSec} tok/s)`, 'loading');
-                        updateMemory();
+                        await new Promise(r => setTimeout(r, 0)); // Allow UI update
                     }
                 }
 
                 const totalTime = (Date.now() - startTime) / 1000;
                 const tokensPerSec = (tokenCount / totalTime).toFixed(2);
                 updateStatus(
-                    `✅ Generated ${tokenCount} tokens in ${totalTime.toFixed(2)}s (${tokensPerSec} tok/s)`,
+                    `Generated ${tokenCount} tokens in ${totalTime.toFixed(2)}s (${tokensPerSec} tok/s)`,
                     'ready'
                 );
 
@@ -424,7 +385,7 @@
                 profile_print_stats();
 
             } catch (e) {
-                updateStatus(`❌ Error: ${e.message}`, 'error');
+                updateStatus(`Error: ${e.message}`, 'error');
                 console.error('Generation error:', e);
             } finally {
                 generateBtn.disabled = false;
@@ -437,117 +398,11 @@
             if (!model) return;
             model.reset();
             document.getElementById('output').textContent = '';
-            updateStatus('✅ Ready!', 'ready');
+            updateStatus('Model reset and ready!', 'ready');
             profile_clear();
         };
 
-        window.runBenchmark = async function() {
-            if (!model) return;
-
-            model.reset();
-            profile_clear();
-
-            model.init_with_prompt("The quick brown fox", 0.0, 0.9, 1.1, 64, 42);
-
-            const startWasmMem = get_wasm_memory_info();  // Capture the value
-            log_wasm_memory();  // Log to console
-
-            const startTime = performance.now();
-            const startMem = performance.memory ? performance.memory.usedJSHeapSize : 0;
-
-            // Single WASM call instead of 49 JS→WASM calls
-            model.generate_tokens(50);
-
-            const endTime = performance.now();
-            const endMem = performance.memory ? performance.memory.usedJSHeapSize : 0;
-
-            const endWasmMem = get_wasm_memory_info();  // Capture the value
-            log_wasm_memory();  // Log to console
-
-            const totalTime = endTime - startTime;
-            const tokPerSec = (50 / (totalTime / 1000)).toFixed(2);
-            const memUsed = ((endMem - startMem) / 1048576).toFixed(2);
-
-            const results = {
-                time: totalTime.toFixed(2),
-                tokPerSec: tokPerSec,
-                memoryDelta: memUsed,
-                timestamp: new Date().toISOString()
-            };
-
-            document.getElementById('benchmarkResults').innerHTML = `
-                <div class="benchmark-result">
-                    <h3>📊 Benchmark Results</h3>
-                    <div class="metric">
-                        <span class="metric-label">Total Time:</span>
-                        <span class="metric-value">${results.time}ms</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">Throughput:</span>
-                        <span class="metric-value">${results.tokPerSec} tok/s</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">Memory Used:</span>
-                        <span class="metric-value">${results.memoryDelta} MB</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">WASM Memory (Start):</span>
-                        <span class="metric-value">${startWasmMem}</span>
-                    </div>
-                    <div class="metric">
-                        <span class="metric-label">WASM Memory (End):</span>
-                        <span class="metric-value">${endWasmMem}</span>
-                    </div>
-                </div>
-            `;
-
-            window.lastBenchmark = results;
-            profile_print_stats();
-        };
-
-        window.saveBenchmark = function() {
-            if (window.lastBenchmark) {
-                baselineBenchmark = window.lastBenchmark;
-                alert('✅ Baseline saved!');
-            } else {
-                alert('❌ Run a benchmark first!');
-            }
-        };
-
-        window.compareBenchmarks = function() {
-            if (!baselineBenchmark || !window.lastBenchmark) {
-                alert('❌ Need both baseline and current benchmark!');
-                return;
-            }
-
-            const baseline = baselineBenchmark;
-            const current = window.lastBenchmark;
-
-            const timeChange = ((current.time - baseline.time) / baseline.time * 100).toFixed(1);
-            const throughputChange = ((current.tokPerSec - baseline.tokPerSec) / baseline.tokPerSec * 100).toFixed(1);
-
-            const timeClass = timeChange < 0 ? 'improvement' : 'degradation';
-            const throughputClass = throughputChange > 0 ? 'improvement' : 'degradation';
-
-            document.getElementById('benchmarkResults').innerHTML += `
-                <div class="benchmark-result">
-                    <h3>📈 Comparison vs Baseline</h3>
-                    <div class="comparison">
-                        <span>Time:</span>
-                        <span class="${timeClass}">${timeChange}% (${current.time}ms vs ${baseline.time}ms)</span>
-                    </div>
-                    <div class="comparison">
-                        <span>Throughput:</span>
-                        <span class="${throughputClass}">${throughputChange}% (${current.tokPerSec} vs ${baseline.tokPerSec} tok/s)</span>
-                    </div>
-                    <div class="comparison">
-                        <span>Memory:</span>
-                        <span>${current.memoryDelta}MB vs ${baseline.memoryDelta}MB</span>
-                    </div>
-                </div>
-            `;
-        };
-
+        // Start loading
         loadModel();
     </script>
 </body>
