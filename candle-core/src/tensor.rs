@@ -2909,8 +2909,8 @@ impl std::ops::Div<&Tensor> for f64 {
     }
 }
 
-impl From<(Storage, Shape)> for Tensor {
-    fn from((storage, shape): (Storage, Shape)) -> Self {
+impl<S: Into<Shape>> From<(Storage, S)> for Tensor {
+    fn from((storage, shape): (Storage, S)) -> Self {
         from_storage(storage, shape, BackpropOp::none(), false)
     }
 }
