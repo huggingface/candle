@@ -120,13 +120,58 @@ mod shared_impl {
 
 macro_rules! define_ggml_wrapper {
     ($name:ident, $block_type:ident, $block_size:expr, $type_size:expr) => {
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone, Copy, Default)]
         pub struct $name;
 
         impl GgmlTypeWrapper for $name {
             type Block = crate::quantized::k_quants::$block_type;
             const BLOCK_SIZE: usize = $block_size;
             const TYPE_SIZE: usize = $type_size;
+        }
+
+        // Implement QuantizedType trait from candle-macros-types
+        impl candle_macros_types::QuantizedType for $name {
+            const NAME: &'static str = stringify!($name);
+            const SIZE_IN_BYTES: usize = $type_size;
+
+            #[inline]
+            fn storage_size_in_bytes(&self, num_elements: usize) -> usize {
+                shared_impl::storage_size_in_bytes::<Self>(num_elements)
+            }
+
+            #[inline]
+            fn infer_element_count(&self, data_len: usize) -> usize {
+                shared_impl::infer_element_count::<Self>(data_len)
+            }
+        }
+
+        // Implement QuantizedCpuOps trait
+        impl candle_macros_types::QuantizedCpuOps for $name {
+            #[inline]
+            fn quantize(&self, input: &[f32]) -> std::result::Result<Vec<u8>, String> {
+                shared_impl::quantize::<Self>(input).map_err(|e| format!("{}", e))
+            }
+
+            #[inline]
+            fn dequantize(
+                &self,
+                data: &[u8],
+                output: &mut [f32],
+            ) -> std::result::Result<(), String> {
+                shared_impl::dequantize::<Self>(data, output).map_err(|e| format!("{}", e))
+            }
+
+            #[inline]
+            fn matmul(
+                &self,
+                lhs_f32: &[f32],
+                lhs_shape: &[usize],
+                rhs_data: &[u8],
+                rhs_shape: &[usize],
+            ) -> std::result::Result<Vec<f32>, String> {
+                shared_impl::matmul::<Self>(lhs_f32, lhs_shape, rhs_data, rhs_shape)
+                    .map_err(|e| format!("{}", e))
+            }
         }
 
         impl $name {

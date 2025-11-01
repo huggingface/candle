@@ -6,6 +6,9 @@ use crate::quantized::ggml_wrapper::*;
 use crate::{CpuStorage, CpuStorageRef, Error, Result};
 use candle_macros::register_quantized_types;
 
+// Re-export QuantizedType trait for use by macros
+pub use candle_macros_types::QuantizedType;
+
 register_quantized_types! {
     GgmlQ2K, GgmlQ3K, GgmlQ4K, GgmlQ5K, GgmlQ6K,GgmlQ8K,
     GgmlQ4_0, GgmlQ4_1, GgmlQ5_0, GgmlQ5_1, GgmlQ8_0, GgmlQ8_1
