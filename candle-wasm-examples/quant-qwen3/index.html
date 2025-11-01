@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Qwen3 WASM Text Generation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        .header {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .header h1 {
+            color: #333;
+            font-size: 32px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .header p {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 10px;
+        }
+        .header a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .header a:hover {
+            text-decoration: underline;
+        }
+        .main-panel {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .status {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 500;
+            text-align: center;
+        }
+        .status.loading {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .status.ready {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .prompt-section {
+            margin-bottom: 20px;
+        }
+        .prompt-section label {
+            display: block;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        #prompt {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+        #maxTokens {
+            width: 120px;
+            padding: 12px;
+            font-size: 18px;
+            font-weight: 600;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+            text-align: center;
+        }
+        #maxTokens:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        #prompt:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: 500;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            flex: 1;
+            min-width: 120px;
+        }
+        button.primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        button.primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        button.secondary {
+            background: #6c757d;
+            color: white;
+        }
+        button.secondary:hover:not(:disabled) {
+            background: #5a6268;
+        }
+        #stopBtn {
+            background: #dc3545;
+        }
+        #stopBtn:hover:not(:disabled) {
+            background: #c82333;
+        }
+        button:disabled {
+            background: #e0e0e0;
+            color: #999;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+        #output {
+            background: #f8f9fa;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 300px;
+            max-height: 500px;
+            overflow-y: auto;
+            font-family: 'Courier New', Consolas, monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .profiler-controls {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 2px solid #e0e0e0;
+        }
+        .profiler-controls h3 {
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        .profiler-controls button {
+            min-width: auto;
+            padding: 8px 16px;
+            font-size: 14px;
+        }
+        #memoryInfo {
+            background: #e7f3ff;
+            border-left: 4px solid #667eea;
+            padding: 12px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            margin-top: 10px;
+        }
+        .footer {
+            text-align: center;
+            color: white;
+            margin-top: 20px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>
+                <span>🚀</span>
+                <span>Qwen3 Text Generation</span>
+            </h1>
+            <p>
+                Running the <strong>Qwen3-0.6B</strong> language model directly in your browser using WebAssembly.
+                Qwen3 is developed by the <a href="https://github.com/QwenLM/Qwen" target="_blank">Qwen team at Alibaba Cloud</a>.
+            </p>
+            <p>
+                Quantized models from the <a href="https://huggingface.co/unsloth" target="_blank">Unsloth team</a>.
+            </p>
+            <p>
+                Implementation by <a href="https://github.com/DrJesseGlass" target="_blank">Jesse Glass</a> using the Candle framework.
+            </p>
+        </div>
+
+        <!-- Main Generation Panel -->
+        <div class="main-panel">
+            <div id="status" class="status loading">Initializing...</div>
+
+            <div class="prompt-section">
+                <label for="prompt">Enter your prompt:</label>
+                <input
+                    id="prompt"
+                    type="text"
+                    placeholder="Once upon a time..."
+                    value="Once upon a time"
+                />
+            </div>
+
+            <div class="prompt-section">
+                <label for="maxTokens">Max tokens to generate:</label>
+                <input
+                    id="maxTokens"
+                    type="number"
+                    min="1"
+                    max="500"
+                    value="100"
+                />
+            </div>
+
+            <div class="controls">
+                <button id="generateBtn" class="primary" onclick="generate()" disabled>
+                    Generate
+                </button>
+                <button id="stopBtn" class="secondary" onclick="stopGeneration()" disabled>
+                    Stop Generation
+                </button>
+                <button id="resetBtn" class="secondary" onclick="reset()" disabled>
+                    Reset
+                </button>
+            </div>
+
+            <div id="output"></div>
+
+            <!-- Profiler Controls -->
+            <div class="profiler-controls">
+                <h3>Performance Tools</h3>
+                <div class="controls">
+                    <button class="secondary" onclick="showProfile()">Show Stats</button>
+                    <button class="secondary" onclick="clearProfile()">Clear Stats</button>
+                    <button class="secondary" onclick="updateMemory()">Update Memory</button>
+                </div>
+                <div id="memoryInfo">Loading memory info...</div>
+            </div>
+        </div>
+
+        <div class="footer">
+            Built with WebAssembly and Rust • Quantized model for fast inference
+        </div>
+    </div>
+
+    <script type="module">
+        import init, {
+            Model,
+            profile_print_stats,
+            profile_clear,
+            profile_enable,
+            get_memory_info,
+            get_wasm_memory_info,
+            log_memory
+        } from './pkg/candle_wasm_example_quant_qwen3.js';
+
+        let model = null;
+        let shouldStopGeneration = false;
+        const MODEL_FILE = window.location.pathname.endsWith('/') ?
+            window.location.pathname.split('/').filter(Boolean).pop() + '.gguf' :
+            'Qwen3-0.6B-Q8_0.gguf';
+
+        function updateStatus(message, type = 'loading') {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = `status ${type}`;
+        }
+
+        window.updateMemory = function() {
+            const jsMemory = get_memory_info();
+            const wasmMemory = get_wasm_memory_info();
+            document.getElementById('memoryInfo').textContent =
+                `JS Heap: ${jsMemory}\nWASM: ${wasmMemory}`;
+        };
+
+        window.showProfile = function() {
+            profile_print_stats();
+            updateStatus('Performance stats printed to console', 'ready');
+        };
+
+        window.clearProfile = function() {
+            profile_clear();
+            updateStatus('Stats cleared', 'ready');
+        };
+
+        window.stopGeneration = function() {
+            shouldStopGeneration = true;
+            updateStatus('Stopping generation...', 'loading');
+        };
+
+        async function loadModel() {
+            try {
+                updateStatus('Initializing WASM...', 'loading');
+                await init();
+
+                updateStatus('Loading model files...', 'loading');
+
+                const [weights, tokenizer, config] = await Promise.all([
+                    fetch(MODEL_FILE).then(r => {
+                        if (!r.ok) throw new Error(`Failed to load ${MODEL_FILE}`);
+                        return r.arrayBuffer();
+                    }),
+                    fetch('tokenizer.json').then(r => {
+                        if (!r.ok) throw new Error('Failed to load tokenizer');
+                        return r.arrayBuffer();
+                    }),
+                    fetch('config.json').then(r => {
+                        if (!r.ok) throw new Error('Failed to load config');
+                        return r.arrayBuffer();
+                    }),
+                ]);
+
+                updateStatus('Creating model...', 'loading');
+                profile_clear();
+
+                model = new Model(
+                    new Uint8Array(weights),
+                    new Uint8Array(tokenizer),
+                    new Uint8Array(config)
+                );
+
+                document.getElementById('generateBtn').disabled = false;
+                document.getElementById('resetBtn').disabled = false;
+
+                updateStatus('Model loaded and ready!', 'ready');
+                updateMemory();
+
+            } catch (e) {
+                updateStatus(`Error: ${e.message}`, 'error');
+                console.error('Load error:', e);
+            }
+        }
+
+        window.generate = async function() {
+            if (!model) return;
+
+            const generateBtn = document.getElementById('generateBtn');
+            const stopBtn = document.getElementById('stopBtn');
+            const resetBtn = document.getElementById('resetBtn');
+            const promptInput = document.getElementById('prompt');
+            const outputDiv = document.getElementById('output');
+            const maxTokensInput = document.getElementById('maxTokens');
+
+            generateBtn.disabled = true;
+            stopBtn.disabled = false;
+            resetBtn.disabled = true;
+            promptInput.disabled = true;
+            maxTokensInput.disabled = true;
+
+            shouldStopGeneration = false;
+
+            try {
+                const prompt = promptInput.value;
+                outputDiv.textContent = prompt;
+
+                updateStatus('Generating...', 'loading');
+                profile_clear();
+                const startTime = Date.now();
+
+                // Initialize with prompt
+                const firstToken = model.init_with_prompt(
+                    prompt,
+                    0.7,    // temperature
+                    0.9,    // top_p
+                    1.1,    // repeat_penalty
+                    64,     // repeat_last_n
+                    Date.now()  // seed
+                );
+                outputDiv.textContent += firstToken;
+
+                let tokenCount = 1;
+                const maxTokens = parseInt(document.getElementById('maxTokens').value) || 100;
+
+                // Generate tokens
+                for (let i = 0; i < maxTokens - 1; i++) {
+
+                    if (shouldStopGeneration) {
+                        updateStatus('Generation stopped by user', 'ready');
+                        break;
+                    }
+
+                    if (model.is_eos()) {
+                        updateStatus('Generation complete (EOS reached)', 'ready');
+                        break;
+                    }
+
+                    const token = model.next_token();
+                    outputDiv.textContent += token;
+                    tokenCount++;
+
+                    // Update status every 10 tokens
+                    if (tokenCount % 10 === 0) {
+                        const elapsed = (Date.now() - startTime) / 1000;
+                        const tokensPerSec = (tokenCount / elapsed).toFixed(2);
+                        updateStatus(`Generating... ${tokenCount} tokens (${tokensPerSec} tok/s)`, 'loading');
+                        await new Promise(r => setTimeout(r, 0)); // Allow UI update
+                    }
+                }
+
+                const totalTime = (Date.now() - startTime) / 1000;
+                const tokensPerSec = (tokenCount / totalTime).toFixed(2);
+                updateStatus(
+                    `Generated ${tokenCount} tokens in ${totalTime.toFixed(2)}s (${tokensPerSec} tok/s)`,
+                    'ready'
+                );
+
+                updateMemory();
+
+            } catch (e) {
+                updateStatus(`Error: ${e.message}`, 'error');
+                console.error('Generation error:', e);
+            } finally {
+                generateBtn.disabled = false;
+                stopBtn.disabled = true;
+                resetBtn.disabled = false;
+                promptInput.disabled = false;
+                maxTokensInput.disabled = false;
+            }
+        };
+
+        window.reset = function() {
+            if (!model) return;
+            model.reset();
+            document.getElementById('output').textContent = '';
+            updateStatus('Model reset and ready!', 'ready');
+            profile_clear();
+        };
+
+        // Start loading
+        loadModel();
+    </script>
+</body>
+</html>
