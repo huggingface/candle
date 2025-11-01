@@ -10,10 +10,11 @@ mod utils;
 pub use utils::{
     binary_map, binary_map_vec, unary_map, unary_map_vec, Map1, Map1Any, Map2, Map2InPlace, Map2U8,
 };
+mod conv2d;
+use conv2d::Conv2D;
 
 const USE_IM2COL_CONV1D: bool = true;
 const USE_COL2IM_CONV1D_TR: bool = true;
-const USE_IM2COL_CONV2D: bool = true;
 
 // TODO: Maybe we should not implement [Clone] here and instead have an explicit allocator +
 // intercept the oom errors to avoid panicking and provide a proper error.
@@ -1112,94 +1113,6 @@ impl Map2 for ConvTranspose1D<'_> {
                 }
             })
         }
-        Ok(dst)
-    }
-}
-
-struct Conv2D<'a>(&'a crate::conv::ParamsConv2D);
-
-impl Map2 for Conv2D<'_> {
-    const OP: &'static str = "conv2d";
-    fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
-        let p = self.0;
-        let inp = &inp[inp_l.start_offset()..];
-        let (inp_s0, inp_s1, inp_s2, inp_s3) = crate::shape::dims4(inp_l.stride())?;
-        let k = &k[k_l.start_offset()..];
-        let (k_s0, k_s1, k_s2, k_s3) = crate::shape::dims4(k_l.stride())?;
-        let (out_h, out_w) = (p.out_h(), p.out_w());
-
-        // Output shape: [b_size, c_out, out_h, out_w].
-        let dst = vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
-
-        // TODO: Avoid making this copy if `inp` already has the appropriate layout.
-        let mut inp_cont = vec![T::zero(); p.b_size * p.c_in * p.i_h * p.i_w];
-        let cont_s0 = p.i_h * p.i_w * p.c_in;
-        let cont_s1 = p.i_w * p.c_in;
-        let cont_s2 = p.c_in;
-        for b_idx in 0..p.b_size {
-            for h_idx in 0..p.i_h {
-                for w_idx in 0..p.i_w {
-                    for c_idx in 0..p.c_in {
-                        let src_idx =
-                            b_idx * inp_s0 + c_idx * inp_s1 + h_idx * inp_s2 + w_idx * inp_s3;
-                        let dst_idx = b_idx * cont_s0 + h_idx * cont_s1 + w_idx * cont_s2 + c_idx;
-                        inp_cont[dst_idx] = inp[src_idx]
-                    }
-                }
-            }
-        }
-
-        for offset_h in 0..p.k_h {
-            for offset_w in 0..p.k_w {
-                (0..p.c_out).into_par_iter().for_each(|dst_c_idx| {
-                    let dst_idx = dst_c_idx * out_w * out_h;
-                    let k_cont = (0..p.c_in)
-                        .map(|c_in_idx| {
-                            k[dst_c_idx * k_s0
-                                + c_in_idx * k_s1
-                                + offset_h * k_s2
-                                + offset_w * k_s3]
-                        })
-                        .collect::<Vec<_>>();
-                    for b_idx in 0..p.b_size {
-                        let dst_idx = dst_idx + b_idx * p.c_out * out_h * out_w;
-                        for dst_h in 0..out_h {
-                            let dst_idx = dst_idx + dst_h * out_w;
-                            let src_h = p.stride * dst_h + offset_h * p.dilation;
-                            if src_h < p.padding || src_h >= p.i_h + p.padding {
-                                continue;
-                            }
-                            let src_h = src_h - p.padding;
-                            for dst_w in 0..out_w {
-                                let dst_idx = dst_idx + dst_w;
-                                let src_w = p.stride * dst_w + offset_w * p.dilation;
-                                if src_w < p.padding || src_w >= p.i_w + p.padding {
-                                    continue;
-                                }
-                                let src_w = src_w - p.padding;
-                                let inp_cont = &inp_cont
-                                    [b_idx * cont_s0 + src_h * cont_s1 + src_w * cont_s2..];
-                                assert!(inp_cont.len() >= p.c_in);
-                                assert!(k_cont.len() >= p.c_in);
-                                let mut d = T::zero();
-                                unsafe {
-                                    T::vec_dot(inp_cont.as_ptr(), k_cont.as_ptr(), &mut d, p.c_in)
-                                }
-                                let dst_p = dst.as_ptr();
-                                // Safety: dst_idx are uniques per dst_c_idx which is used to parallelise
-                                // the different tasks so no two threads can try to write at the same
-                                // location.
-                                unsafe {
-                                    let ptr = dst_p.add(dst_idx) as *mut T;
-                                    *ptr += d
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-        }
-
         Ok(dst)
     }
 }
@@ -2490,46 +2403,7 @@ impl BackendStorage for CpuStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
-        if !USE_IM2COL_CONV2D {
-            return Conv2D(params).map(self, l, kernel, kernel_l);
-        }
-        let op = Im2Col {
-            h_k: params.k_h,
-            w_k: params.k_w,
-            padding: params.padding,
-            stride: params.stride,
-            dilation: params.dilation,
-        };
-        let col = op.map(self, l)?;
-        let b = params.b_size;
-        let n = params.c_out;
-        let (h_out, w_out) = (params.out_h(), params.out_w());
-        let k = op.h_k * op.w_k * params.c_in;
-        let m = h_out * w_out;
-        let col_l = Layout::contiguous((b, m, k));
-        let res = if kernel_l.is_contiguous() {
-            let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
-                .transpose(1, 2)?
-                .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
-        } else {
-            // Make the kernel contiguous if not already the case.
-            let mut kernel_c = unsafe {
-                self.device()
-                    .alloc_uninit(kernel_l.shape(), kernel.dtype())?
-            };
-            kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
-            let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
-                .transpose(1, 2)?
-                .broadcast_as((b, k, n))?;
-            col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
-        };
-        let res_l = Layout::contiguous((b, h_out, w_out, params.c_out))
-            .transpose(1, 2)?
-            .transpose(1, 3)?;
-        let mut res_t = unsafe { self.device().alloc_uninit(res_l.shape(), res.dtype())? };
-        res.copy_strided_src(&mut res_t, 0, &res_l)?;
-        Ok(res_t)
+        Conv2D(params).map(self, l, kernel, kernel_l)
     }
 
     fn conv_transpose2d(
