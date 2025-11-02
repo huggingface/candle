@@ -25,30 +25,38 @@ fn gather(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let start_shape_offset2 = input_offset2 + select(CONST_IS_STARTOFFSET_ZERO2, 0u, 1u);
 
     var shapes_i = 1u;
-    var new_index1 = start_offset1;   
-    var new_index2 = start_offset2;   
-    var new_index_out = 0u; 
+    var new_index1 = start_offset1;
+    var new_index2 = start_offset2;
+    var new_index_out = 0u;
 
+    // unused kept for compatibility
     let unused = CONST_IS_CONTIGUOUS2;
-
-    for (var i2 : i32 = i32(dims1) - 1; i2 >= 0; i2--){
+    
+    for (var i2 : i32 = i32(dims2) - 1; i2 >= 0; i2--) {
         let i = u32(i2);
         let prev_shapes_i = shapes_i;
-        shapes_i *= op_meta[start_shape_offset2 + i]; 
+        shapes_i *= op_meta[start_shape_offset2 + i];
 
-        let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);  
-        new_index2 += si * op_meta[start_shape_offset2 + dims2 + i]; //s_i * stride_i
+        let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);
+        new_index2 += si * op_meta[start_shape_offset2 + dims2 + i]; // index-tensor stride
 
-        if(i != dim){
-            new_index1 += si * op_meta[start_shape_offset1 + dims1 + i]; //s_i * stride_i
+        // map index-tensor coordinates into input1 axes except for gather dim
+        if (i != dim) {
+            new_index1 += si * op_meta[start_shape_offset1 + dims1 + i]; // input1 stride
         }
-        
-        new_index_out += si * prev_shapes_i; //s_i * stride_i
+
+        new_index_out += si * prev_shapes_i;
     }
 
-    if index < shapes_i{ //in shapes_i is the length after the for loop
-        new_index1 += v_input2_u32[new_index2] * op_meta[start_shape_offset1 + dims1 + dim]; //s_i * stride_i
-        v_dest[new_index_out] = v_input1[new_index1];
+    if (index < shapes_i) { // shapes_i is total number of index elements
+        let gather_idx = v_input2_u32[new_index2];
+        // treat u32::MAX as sentinel -> write zero to output
+        if (gather_idx == 0xffffffffu) {
+            v_dest[new_index_out] = 0.0;
+        } else {
+            new_index1 += gather_idx * op_meta[start_shape_offset1 + dims1 + dim]; // s_dim * stride_dim
+            v_dest[new_index_out] = v_input1[new_index1];
+        }
     }
 }
 

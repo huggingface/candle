@@ -746,6 +746,9 @@ impl Storage {
             (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
                 s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
             }
+             (Self::Wgpu(s), Self::Wgpu(indexes), Self::Wgpu(source)) => {
+                s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
             _ => unreachable!(),
         }
         Ok(())

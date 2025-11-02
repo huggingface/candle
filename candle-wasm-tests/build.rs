@@ -1,9 +1,10 @@
 use quote::quote;
+use syn::visit_mut::VisitMut;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use syn::ItemFn;
+use syn::{Expr, ItemFn};
 
 fn write_file(file_path: &std::path::PathBuf, content: &str) -> io::Result<()> {
     if let Ok(old_content) = fs::read_to_string(file_path.clone()) {
@@ -95,6 +96,19 @@ fn make_fn_async_base<'h>(
     re.replace_all(content, &format!("{new_name}$1$2.await"))
 }
 
+fn make_fn_async_base_and_unwrap<'h>(
+    content: &'h str,
+    function_name: &str,
+    new_name: &str,
+) -> std::borrow::Cow<'h, str> {
+    let re = Regex::new(&format!(
+        "{function_name}(::<[^>]+>)?{BALANCED_PARENTHESES}(?!\\s*[-{{])"
+    ))
+    .unwrap();
+
+    re.replace_all(content, &format!("{new_name}$1$2.await.unwrap()"))
+}
+
 fn make_fn_async<'h>(content: &'h str, function_name: &str) -> std::borrow::Cow<'h, str> {
     make_fn_async_base(content, function_name, &format!("{function_name}_async"))
 }
@@ -177,6 +191,10 @@ use candle_wasm_tests::{to_vec0_round_async, to_vec1_round_async, to_vec2_round_
 
     transformed_content = transformed_content.replace("fn $fn_name", "async fn $fn_name");
 
+    //transformed_content = make_fn_async_base_and_unwrap(&transformed_content, "std::thread::spawn", "tokio::task::spawn_local").to_string();
+
+    transformed_content = transformed_content.replace(". await", ".await");
+
     match syn::parse_file(&transformed_content) {
         Ok(syntax_tree) => {
             let (mut new_output, converted_functions) =
@@ -200,6 +218,8 @@ use candle_wasm_tests::{to_vec0_round_async, to_vec1_round_async, to_vec2_round_
             ",
                 )
                 .to_string();
+            
+            new_output = new_output.replace("std::thread::spawn(async move || ", "(");
 
             new_output
         }
@@ -210,52 +230,99 @@ use candle_wasm_tests::{to_vec0_round_async, to_vec1_round_async, to_vec2_round_
     }
 }
 
+/// Marks closures and functions as async if appropriate.
 fn convert_to_async_if_await(mut file: syn::File, code: &str) -> (String, Vec<String>) {
     let mut converted_functions = vec![];
 
-    for mut item in file.items.iter_mut() {
-        // We're only interested in function items
-        if let syn::Item::Fn(func) = &mut item {
-            // Check if the function body contains `.await`
-            if contains_await(func, code) {
-                // If the function contains `.await`, modify it to be `async`
+    // Traverse file
+    for item in file.items.iter_mut() {
+        if let syn::Item::Fn(func) = item {
+            let mut visitor = AwaitMarker::new(code, func);
+
+            visitor.visit_item_fn_mut(func);
+
+            if visitor.should_make_fn_async() {
                 func.sig.asyncness = Some(syn::token::Async::default());
-                let name = &func.sig.ident;
-                converted_functions.push(quote!(#name).to_string())
+                converted_functions.push(func.sig.ident.to_string());
             }
         }
     }
 
     (prettyplease::unparse(&file), converted_functions)
 }
+struct AwaitMarker<'a> {
+    has_outer_await: bool,
+    inside_closure: usize,
+    code: &'a str,
+    func_name: String,
+    force_async: bool, // for test/device logic
+}
 
-/// Helper function to check if a function contains `.await`
-fn contains_await(func: &ItemFn, code: &str) -> bool {
-    if func.attrs.iter().any(|c| {
-        let name = c.path();
-        quote!(#name).to_string() == "test"
-    }) {
-        return true;
-    }
+impl<'a> AwaitMarker<'a> {
+    fn new(code: &'a str, func: &ItemFn) -> Self {
 
-    let name = &func.sig.ident;
-    let name = quote!(#name).to_string();
+        let mut force_async = false;
+        if func.attrs.iter().any(|c| {
+            let name = c.path();
+            quote!(#name).to_string() == "test"
+        }) {
+            force_async = true;
+        }
 
-    if Regex::new(&format!(
-        "test_device![\\n\\r\\s]*\\([\\n\\r\\s]*{name}[\\n\\r\\s]*,"
-    ))
-    .unwrap()
-    .is_match(code)
-    .unwrap()
-    {
-        return true;
-    }
+        let func_name = func.sig.ident.to_string();
 
-    // Traverse the function body and look for `.await`
-    for stmt in &func.block.stmts {
-        if quote!(#stmt).to_string().contains(". await") {
-            return true;
+        if !force_async{
+            force_async = fancy_regex::Regex::new(&format!(
+                "test_device![\\n\\r\\s]*\\([\\n\\r\\s]*{func_name}[\\n\\r\\s]*,"
+            ))
+            .unwrap()
+            .is_match(code)
+            .unwrap();
+        }
+
+        Self {
+            has_outer_await: false,
+            inside_closure: 0,
+            code,
+            func_name,
+            force_async,
         }
     }
-    false
+
+    fn should_make_fn_async(&self) -> bool {
+        self.force_async || self.has_outer_await
+    }
+}
+
+impl<'a> VisitMut for AwaitMarker<'a> {
+    fn visit_expr_mut(&mut self, expr: &mut Expr) {
+        match expr {
+            Expr::Await(_) => {
+                // Record `.await` only if not inside closure
+                if self.inside_closure == 0 {
+                    self.has_outer_await = true;
+                }
+            }
+            Expr::Closure(closure) => {
+                self.inside_closure += 1;
+
+                // Visit closure body
+                self.visit_expr_mut(&mut *closure.body);
+                self.inside_closure -= 1;
+
+                // Detect if closure body contains `.await`
+                let contains_await = quote::quote!(#closure.body)
+                    .to_string()
+                    .contains(". await");
+
+                if contains_await {
+                    closure.asyncness = Some(Default::default());
+                }
+
+                return; // do not descend further
+            }
+            _ => {}
+        }
+        syn::visit_mut::visit_expr_mut(self, expr);
+    }
 }

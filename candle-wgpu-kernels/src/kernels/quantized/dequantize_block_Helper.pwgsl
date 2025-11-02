@@ -267,11 +267,11 @@ let block_starting_byte = block_index * BLOCK_BYTE_SIZE;
         #definec FOR_SIZE (BLOCK_SIZE/2) //we are loading (BLOCK_SIZE/2) bytes, and then reading low and high values
     #elif BIT_SIZE == 5
         #definec FOR_SIZE (BLOCK_SIZE/2) //we are loading (BLOCK_SIZE/2) bytes, and then reading low and high values 
-    #if (QH_OFFSET % 4 == 0) && (BLOCK_BYTE_SIZE % 4 == 0)
-        let qh = data[(block_starting_byte + QH_OFFSET) / 4];
-    #else
-        let qh = load_data(data,block_starting_byte+QH_OFFSET,0xFFFF) | (load_data(data,block_starting_byte+QH_OFFSET+2,0xFFFF)) << 16 ;
-    #endif
+        #if (QH_OFFSET % 4 == 0) && (BLOCK_BYTE_SIZE % 4 == 0)
+            let qh = data[(block_starting_byte + QH_OFFSET) / 4];
+        #else
+            let qh = load_data(data,block_starting_byte+QH_OFFSET,0xFFFF) | (load_data(data,block_starting_byte+QH_OFFSET+2,0xFFFF)) << 16 ;
+        #endif
     #else
         #define FOR_SIZE BLOCK_SIZE
     #endif
@@ -304,7 +304,7 @@ let block_starting_byte = block_index * BLOCK_BYTE_SIZE;
             let x_u8 =  load_data(data,block_qs_byte + j,0xFF);
             let x_unsigned = i32(x_u8 << (32-BIT_SIZE)) >> (32-BIT_SIZE);
             #ifdef M_OFFSET 
-                CALLBACK(j           , f32(x_unsigned)*d+m)
+                CALLBACK(j           , f32(x_unsigned)*d)  //TODO: no + m needed? for some reason the quantized_matmul_q8_1_wgpu only works without +m here?
             #else
                 CALLBACK(j           , f32(x_unsigned)*d)
             #endif

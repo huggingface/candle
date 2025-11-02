@@ -80,20 +80,11 @@ pub fn queue_unary_inplace_op(
         queue.add(scalar1);
         queue.add(scalar2);
         queue.add(layout.shape().elem_count()); //length
-        if layout.start_offset() != 0
-            || op == UnaryOperation::RandNormal
-            || op == UnaryOperation::RandUniform
-        {
-            queue.add(layout.start_offset());
-        }
-        if op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
-            queue.add(dev.rand_state.lock().unwrap().next_u32());
-        }
 
         let mut is_contiguous4 = false;
         let pipeline = match op {
             UnaryOperation::SetZero | UnaryOperation::SetOne => {
-                if layout.shape().elem_count() % 4 == 0 && dtype.size_in_bytes() == 4 {
+                if layout.shape().elem_count().is_multiple_of(4) && dtype.size_in_bytes() == 4 {
                     is_contiguous4 = true;
                     Pipelines::Unary(dev.get_dtype(dtype)?, Functions::ConstInplaceContiguous4)
                 } else {
@@ -105,6 +96,22 @@ pub fn queue_unary_inplace_op(
             }
             _ => Pipelines::Unary(dev.get_dtype(dtype)?, Functions::UnaryInplaceContiguous),
         };
+
+        if layout.start_offset() != 0
+            || op == UnaryOperation::RandNormal
+            || op == UnaryOperation::RandUniform
+        {
+            if is_contiguous4{
+                queue.add(layout.start_offset() / 4);
+            }
+            else{
+                queue.add(layout.start_offset());
+            }
+        }
+        if op == UnaryOperation::RandNormal || op == UnaryOperation::RandUniform {
+            queue.add(dev.rand_state.lock().unwrap().next_u32());
+        }
+
 
         let length = if is_contiguous4 {
             (layout.shape().elem_count() / 4) as u32
@@ -135,7 +142,35 @@ pub fn queue_unary_inplace_op(
             Some(format!("OP: {:?}, layout: {:?}", op, layout)),
         );
     } else {
-        panic!("can only query unary inplace for contigueos memory!");
+        let const_vec = vec![op as u32];
+
+        let mut queue = dev.get_queue();
+        queue.add(scalar1);
+        queue.add(scalar2);
+        queue.add_layout1(layout);
+
+        let pipeline = match op {
+            UnaryOperation::SetZero | UnaryOperation::SetOne => {
+                Pipelines::Unary(dev.get_dtype(dtype)?, Functions::ConstInplaceNonContiguous)
+            }
+            _ => Pipelines::Unary(dev.get_dtype(dtype)?, Functions::UnaryInplaceNonContiguous),
+        };
+
+        let length = layout.shape().elem_count() as u32;
+   
+        let pipeline = queue.get_pipeline_const(pipeline, const_vec);
+
+        let bind_group = dev.create_bind_group_input0(
+            buffer, dtype.into(),
+        );
+
+        queue.enqueue_64_big_extra(
+            pipeline,
+            bind_group,
+            length,
+            #[cfg(feature = "wgpu_debug")]
+            Some(format!("OP: {:?}, layout: {:?}", op, layout)),
+        );
     }
     Ok(())
 }

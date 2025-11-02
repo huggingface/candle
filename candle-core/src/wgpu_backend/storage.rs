@@ -1009,37 +1009,37 @@ impl crate::backend::BackendStorage for WgpuStorage {
     
     fn const_set(&mut self, scalar: crate::scalar::Scalar, layout: &Layout) -> crate::Result<()> {
         if scalar.to_f64() == 0.0{
-            return wgpu_functions::queue_unary_inplace_op(
-                &*self.device(),
+            wgpu_functions::queue_unary_inplace_op(
+                self.device(),
                 *self.buffer(),
                 UnaryOperation::SetZero,
                 0.0,
                 0.0,
                 scalar.dtype(),
                 layout,
-            );
+            )
         }
         else if scalar.to_f64() == 1.0 {
-            return wgpu_functions::queue_unary_inplace_op(
-                &*self.device(),
+            wgpu_functions::queue_unary_inplace_op(
+                self.device(),
                 *self.buffer(),
                 UnaryOperation::SetOne,
                 0.0,
                 0.0,
                 scalar.dtype(),
                 layout,
-            );
+            )
         }
         else{
-            return wgpu_functions::queue_unary_inplace_op(
-                &*self.device(),
+            wgpu_functions::queue_unary_inplace_op(
+                self.device(),
                 *self.buffer(),
                 UnaryOperation::SetScalar,
                 scalar.to_f64() as f32,
                 0.0,
                 scalar.dtype(),
                 layout,
-            );
+            )
         }
     }
 }

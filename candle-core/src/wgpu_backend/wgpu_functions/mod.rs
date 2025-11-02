@@ -154,7 +154,7 @@ fn next_divisible_by_n<T: num_traits::Num + Clone>(value: T, n: T) -> T {
 
 impl WgpuDevice{
     ///Returns the Meta Array. 
-    pub fn get_queue(&self) -> QueueBuffer {
+    pub fn get_queue<'a>(&'a self) -> QueueBuffer<'a> {
         let mut command_queue = self
             .command_queue
             .lock()

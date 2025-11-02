@@ -167,10 +167,10 @@ fn create_buffers(device : &Device) -> Result<[WgpuStorage;4], Box<dyn std::erro
     let dtype = candle::DType::F32;
     match &device{
         Device::Wgpu(wgpu) => {
-            let buf1 = wgpu.ones_impl(&shape, dtype)?;
-            let buf2 = wgpu.ones_impl(&shape, dtype)?;
-            let buf3 = wgpu.ones_impl(&shape, dtype)?;
-            let buf4 = wgpu.ones_impl(&shape, dtype)?;
+            let buf1 = wgpu.zeros_impl(&shape, dtype)?;
+            let buf2 = wgpu.zeros_impl(&shape, dtype)?;
+            let buf3 = wgpu.zeros_impl(&shape, dtype)?;
+            let buf4 = wgpu.zeros_impl(&shape, dtype)?;
            Ok([buf1, buf2, buf3, buf4])
         },
         _ => todo!(),
