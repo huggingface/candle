@@ -24,7 +24,26 @@ fn main() -> Result<()> {
         ("Q8K", QuantizedDType::GgmlQ8K),
     ];
 
-    println!("Testing all GGML quantization types:");
+    // Display backend support matrix
+    println!("\n=== Backend Support Matrix ===\n");
+    println!("{:<6} | {:^6} | {:^6} | {:^6}", "Type", "CPU", "CUDA", "Metal");
+    println!("{:-<6}-+-{:-<6}-+-{:-<6}-+-{:-<6}", "", "", "", "");
+    
+    for (name, qtype) in &qtypes {
+        let has_cpu = qtype.has_cpu();
+        let has_cuda = qtype.has_cuda();
+        let has_metal = qtype.has_metal();
+        
+        println!(
+            "{:<6} | {:^6} | {:^6} | {:^6}",
+            name,
+            if has_cpu { "✓" } else { "✗" },
+            if has_cuda { "✓" } else { "✗" },
+            if has_metal { "✓" } else { "✗" }
+        );
+    }
+
+    println!("\n=== Quantization Quality Comparison ===\n");
     println!(
         "{:<6} | {:>12} | {:>12} | {:>12}",
         "Type", "Avg Error", "Max Error", "Rel Error %"

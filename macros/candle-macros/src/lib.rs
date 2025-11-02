@@ -12,39 +12,6 @@ use syn::{parse::Parser, parse_macro_input};
 /// - Zero-cost dispatch functions that are feature-gated
 /// - External type registration system via HashMap
 ///
-/// # Backend Detection via Autoderef-Based Specialization
-///
-/// **Important**: As of November 2025, Rust's `specialization` feature is still unstable.
-/// This macro uses **autoderef-based specialization** as a stable alternative to achieve
-/// compile-time backend detection without manual configuration.
-///
-/// The technique is based on:
-/// ["Generalized Autoref-Based Specialization" by Lukas Kalbertodt](https://lukaskalbertodt.github.io/2019/12/05/generalized-autoref-based-specialization.html)
-///
-/// ## How It Works
-///
-/// For each backend (CPU, CUDA, Metal), we generate:
-///
-/// 1. **Wrapper Type**: `struct CpuWrap<T>(PhantomData<T>)`
-///    - Avoids interference with other blanket implementations
-///
-/// 2. **Two-Level Trait Implementation**:
-///    - **Level 1 (Fallback)**: `impl<T: QuantizedType> MaybeCpuOps for CpuWrap<T>`
-///      - Returns errors for unsupported operations
-///      - Requires 2 auto-derefs to call methods
-///    - **Level 0 (Specialized)**: `impl MaybeCpuOps for &CpuWrap<Type> where Type: QuantizedCpuOps`
-///      - Calls actual trait methods
-///      - Requires only 1 auto-deref to call methods
-///
-/// 3. **Method Resolution**:
-///    ```rust
-///    (&&CpuWrap::<GgmlQ4_0>(PhantomData)).try_dequantize_cpu(data, output)
-///    ```
-///    - Rust's method resolution prefers methods requiring fewer auto-derefs
-///    - If `GgmlQ4_0: QuantizedCpuOps`, the specialized impl (1 deref) is chosen
-///    - Otherwise, the fallback impl (2 derefs) is chosen
-///    - Decision happens at **compile time** with **zero runtime cost**
-///
 /// ## Example
 ///
 /// ```ignore
@@ -166,29 +133,35 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
             /// Uses autoderef-based specialization for stable Rust compatibility.
             /// For external types, always returns true (they must provide CPU ops).
             #[inline]
-            pub const fn has_cpu(self) -> bool {
-                // Autoderef-based specialization: wrapper type to avoid blanket impl interference
-                struct Wrap<T>(std::marker::PhantomData<T>);
-
-                // Helper trait for detection
-                trait CpuCheck { const HAS: bool; }
-
-                // Level 1 (fallback): No CPU support
-                impl<T: candle_macros_types::QuantizedType> CpuCheck for Wrap<T> {
-                    const HAS: bool = false;
+            pub fn has_cpu(self) -> bool {
+                // Helper trait for compile-time detection using autoderef
+                trait CpuCheck {
+                    fn has_cpu(&self) -> bool;
                 }
 
-                // Level 0 (highest priority): Has CPU support if QuantizedCpuOps is implemented
-                #(
-                    impl CpuCheck for &Wrap<#type_names>
-                    where #type_names: candle_macros_types::QuantizedCpuOps
-                    {
-                        const HAS: bool = true;
+                // Level 1 (fallback): No CPU support - requires 2 auto-derefs
+                struct Wrap<T>(std::marker::PhantomData<T>);
+                impl<T: candle_macros_types::QuantizedType> CpuCheck for Wrap<T> {
+                    #[inline(always)]
+                    fn has_cpu(&self) -> bool {
+                        false
                     }
-                )*
+                }
 
+                // Level 0 (specialized): Has CPU support - requires 1 auto-deref
+                // Blanket impl for types with QuantizedCpuOps
+                impl<T: candle_macros_types::QuantizedCpuOps> CpuCheck for &Wrap<T> {
+                    #[inline(always)]
+                    fn has_cpu(&self) -> bool {
+                        true
+                    }
+                }
+
+                // Use autoderef directly on concrete types in match arms
+                // If Type: QuantizedCpuOps, (&&Wrap<Type>).has_cpu() derefs once to &Wrap<Type> (returns true)
+                // Otherwise, (&&Wrap<Type>).has_cpu() derefs twice to Wrap<Type> (returns false)
                 match self {
-                    #(QuantizedDType::#type_names => <&Wrap<#type_names> as CpuCheck>::HAS,)*
+                    #(QuantizedDType::#type_names => (&&Wrap::<#type_names>(std::marker::PhantomData)).has_cpu(),)*
                     QuantizedDType::External(_) => true,
                 }
             }
@@ -202,28 +175,32 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
             pub fn has_cuda(self) -> bool {
                 #[cfg(feature = "cuda")]
                 {
-                    // Autoderef-based specialization: wrapper type to avoid blanket impl interference
-                    struct Wrap<T>(std::marker::PhantomData<T>);
-
-                    // Helper trait for detection
-                    trait CudaCheck { const HAS: bool; }
-
-                    // Level 1 (fallback): No CUDA support
-                    impl<T: candle_macros_types::QuantizedType> CudaCheck for Wrap<T> {
-                        const HAS: bool = false;
+                    // Helper trait for compile-time detection using autoderef
+                    trait CudaCheck {
+                        fn has_cuda(&self) -> bool;
                     }
 
-                    // Level 0 (highest priority): Has CUDA support if QuantizedCudaOps is implemented
-                    #(
-                        impl CudaCheck for &Wrap<#type_names>
-                        where #type_names: candle_macros_types::QuantizedCudaOps
-                        {
-                            const HAS: bool = true;
+                    // Level 1 (fallback): No CUDA support - requires 2 auto-derefs
+                    struct Wrap<T>(std::marker::PhantomData<T>);
+                    impl<T: candle_macros_types::QuantizedType> CudaCheck for Wrap<T> {
+                        #[inline(always)]
+                        fn has_cuda(&self) -> bool {
+                            false
                         }
-                    )*
+                    }
 
+                    // Level 0 (specialized): Has CUDA support - requires 1 auto-deref
+                    // Blanket impl for types with QuantizedCudaOps
+                    impl<T: candle_macros_types::QuantizedCudaOps> CudaCheck for &Wrap<T> {
+                        #[inline(always)]
+                        fn has_cuda(&self) -> bool {
+                            true
+                        }
+                    }
+
+                    // Use autoderef directly on concrete types in match arms
                     match self {
-                        #(QuantizedDType::#type_names => <&Wrap<#type_names> as CudaCheck>::HAS,)*
+                        #(QuantizedDType::#type_names => (&&Wrap::<#type_names>(std::marker::PhantomData)).has_cuda(),)*
                         QuantizedDType::External(name) => {
                             EXTERNAL_TYPE_REGISTRY.get()
                                 .and_then(|r| r.read().ok())
@@ -249,28 +226,33 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
             pub fn has_metal(self) -> bool {
                 #[cfg(feature = "metal")]
                 {
-                    // Autoderef-based specialization: wrapper type to avoid blanket impl interference
-                    struct Wrap<T>(std::marker::PhantomData<T>);
-
-                    // Helper trait for detection
-                    trait MetalCheck { const HAS: bool; }
-
-                    // Level 1 (fallback): No Metal support
-                    impl<T: candle_macros_types::QuantizedType> MetalCheck for Wrap<T> {
-                        const HAS: bool = false;
+                    // Helper trait for compile-time detection using autoderef
+                    trait MetalCheck {
+                        fn has_metal(&self) -> bool;
                     }
 
-                    // Level 0 (highest priority): Has Metal support if QuantizedMetalOps is implemented
-                    #(
-                        impl MetalCheck for &Wrap<#type_names>
-                        where #type_names: candle_macros_types::QuantizedMetalOps
-                        {
-                            const HAS: bool = true;
+                    // Level 1 (fallback): No Metal support - requires 2 auto-derefs
+                    struct Wrap<T>(std::marker::PhantomData<T>);
+                    impl<T: candle_macros_types::QuantizedType> MetalCheck for Wrap<T> {
+                        #[inline(always)]
+                        fn has_metal(&self) -> bool {
+                            false
                         }
-                    )*
+                    }
 
+                    // Level 0 (specialized): Has Metal support - requires 1 auto-deref
+                    // Blanket impl for types with QuantizedMetalOps
+                    impl<T: candle_macros_types::QuantizedMetalOps> MetalCheck for &Wrap<T> {
+                        #[inline(always)]
+                        fn has_metal(&self) -> bool {
+                            true
+                        }
+                    }
+
+                    // Helper function that uses autoderef to pick the right impl
+                    // Use autoderef directly on concrete types in match arms
                     match self {
-                        #(QuantizedDType::#type_names => <&&Wrap<#type_names> as MetalCheck>::HAS,)*
+                        #(QuantizedDType::#type_names => (&&Wrap::<#type_names>(std::marker::PhantomData)).has_metal(),)*
                         QuantizedDType::External(name) => {
                             EXTERNAL_TYPE_REGISTRY.get()
                                 .and_then(|r| r.read().ok())
@@ -557,33 +539,33 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 }
             }
 
-            // Level 0 (specialized): For types WITH CPU support - requires only 1 auto-deref
-            // This impl is preferred over Level 1 when T implements QuantizedCpuOps
-            // because method resolution favors impls requiring fewer auto-derefs
-            #(
-                impl MaybeCpuOps for &CpuWrap<#type_names>
-                where
-                    #type_names: candle_macros_types::QuantizedCpuOps,
-                {
-                    #[inline(always)]
-                    fn try_dequantize_cpu(&self, data: &[u8], output: &mut [f32]) -> crate::Result<()> {
-                        use candle_macros_types::QuantizedCpuOps;
-                        <#type_names as Default>::default().dequantize(data, output).map_err(|e| crate::Error::Msg(e))
-                    }
-
-                    #[inline(always)]
-                    fn try_quantize_cpu(&self, input: &[f32]) -> crate::Result<Vec<u8>> {
-                        use candle_macros_types::QuantizedCpuOps;
-                        <#type_names as Default>::default().quantize(input).map_err(|e| crate::Error::Msg(e))
-                    }
-
-                    #[inline(always)]
-                    fn try_matmul_cpu(&self, lhs: &[f32], lhs_shape: &[usize], rhs: &[u8], rhs_shape: &[usize]) -> crate::Result<Vec<f32>> {
-                        use candle_macros_types::QuantizedCpuOps;
-                        <#type_names as Default>::default().matmul(lhs, lhs_shape, rhs, rhs_shape).map_err(|e| crate::Error::Msg(e))
-                    }
+            // Level 0 (specialized): Blanket impl for types WITH CPU support - requires only 1 auto-deref
+            // This impl is preferred over Level 1 because method resolution favors impls requiring fewer auto-derefs
+            //
+            // On stable Rust, we use a blanket impl with QuantizedCpuOps constraint.
+            // This works because:
+            // 1. The blanket impl exists for ALL types that implement QuantizedCpuOps + QuantizedType
+            // 2. For types that don't implement QuantizedCpuOps, this impl doesn't exist, so Level 1 is used
+            // 3. No explicit per-type impls needed - it's automatic!
+            impl<T> MaybeCpuOps for &CpuWrap<T>
+            where
+                T: candle_macros_types::QuantizedCpuOps + Default,
+            {
+                #[inline(always)]
+                fn try_dequantize_cpu(&self, data: &[u8], output: &mut [f32]) -> crate::Result<()> {
+                    T::default().dequantize(data, output).map_err(|e| crate::Error::Msg(e))
                 }
-            )*
+
+                #[inline(always)]
+                fn try_quantize_cpu(&self, input: &[f32]) -> crate::Result<Vec<u8>> {
+                    T::default().quantize(input).map_err(|e| crate::Error::Msg(e))
+                }
+
+                #[inline(always)]
+                fn try_matmul_cpu(&self, lhs: &[f32], lhs_shape: &[usize], rhs: &[u8], rhs_shape: &[usize]) -> crate::Result<Vec<f32>> {
+                    T::default().matmul(lhs, lhs_shape, rhs, rhs_shape).map_err(|e| crate::Error::Msg(e))
+                }
+            }
 
             // ============================================================================
             // CUDA Dispatch - Autoderef-Based Specialization (same pattern as CPU)
@@ -598,7 +580,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 fn try_matmul_cuda(&self, lhs: &cudarc::driver::CudaSlice<f32>, lhs_shape: &[usize], rhs: &cudarc::driver::CudaSlice<u8>, rhs_shape: &[usize]) -> crate::Result<cudarc::driver::CudaSlice<f32>>;
             }
 
-            // Level 1 (fallback): For types WITHOUT CUDA support
+            // Level 1 (fallback): For types WITHOUT CUDA support - requires 2 auto-derefs
             #[cfg(feature = "cuda")]
             impl<T> MaybeCudaOps for CudaWrap<T>
             where
@@ -620,32 +602,29 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 }
             }
 
-            // Level 0 (specialized): For types WITH CUDA support
-            #(
-                #[cfg(feature = "cuda")]
-                impl MaybeCudaOps for &CudaWrap<#type_names>
-                where
-                    #type_names: candle_macros_types::QuantizedCudaOps,
-                {
-                    #[inline(always)]
-                    fn try_dequantize_cuda(&self, data: &cudarc::driver::CudaSlice<u8>, output: &mut cudarc::driver::CudaSlice<f32>) -> crate::Result<()> {
-                        use candle_macros_types::QuantizedCudaOps;
-                        <#type_names as Default>::default().dequantize_cuda(data, output).map_err(|e| crate::Error::Msg(e))
-                    }
-
-                    #[inline(always)]
-                    fn try_quantize_cuda(&self, input: &cudarc::driver::CudaSlice<f32>) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
-                        use candle_macros_types::QuantizedCudaOps;
-                        <#type_names as Default>::default().quantize_cuda(input).map_err(|e| crate::Error::Msg(e))
-                    }
-
-                    #[inline(always)]
-                    fn try_matmul_cuda(&self, lhs: &cudarc::driver::CudaSlice<f32>, lhs_shape: &[usize], rhs: &cudarc::driver::CudaSlice<u8>, rhs_shape: &[usize]) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
-                        use candle_macros_types::QuantizedCudaOps;
-                        <#type_names as Default>::default().matmul_cuda(lhs, lhs_shape, rhs, rhs_shape).map_err(|e| crate::Error::Msg(e))
-                    }
+            // Level 0 (specialized): Blanket impl for types WITH CUDA support - requires only 1 auto-deref
+            // This impl is preferred over Level 1 because method resolution favors impls requiring fewer auto-derefs
+            // Blanket impl automatically applies to any type implementing QuantizedCudaOps
+            #[cfg(feature = "cuda")]
+            impl<T> MaybeCudaOps for &CudaWrap<T>
+            where
+                T: candle_macros_types::QuantizedCudaOps + Default,
+            {
+                #[inline(always)]
+                fn try_dequantize_cuda(&self, data: &cudarc::driver::CudaSlice<u8>, output: &mut cudarc::driver::CudaSlice<f32>) -> crate::Result<()> {
+                    T::default().dequantize_cuda(data, output).map_err(|e| crate::Error::Msg(e))
                 }
-            )*
+
+                #[inline(always)]
+                fn try_quantize_cuda(&self, input: &cudarc::driver::CudaSlice<f32>) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
+                    T::default().quantize_cuda(input).map_err(|e| crate::Error::Msg(e))
+                }
+
+                #[inline(always)]
+                fn try_matmul_cuda(&self, lhs: &cudarc::driver::CudaSlice<f32>, lhs_shape: &[usize], rhs: &cudarc::driver::CudaSlice<u8>, rhs_shape: &[usize]) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
+                    T::default().matmul_cuda(lhs, lhs_shape, rhs, rhs_shape).map_err(|e| crate::Error::Msg(e))
+                }
+            }
 
             #[cfg(feature = "cuda")]
             #[inline]
@@ -724,7 +703,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 fn try_matmul_metal(&self, lhs: &metal::Buffer, lhs_shape: &[usize], rhs: &metal::Buffer, rhs_shape: &[usize]) -> crate::Result<metal::Buffer>;
             }
 
-            // Level 1 (fallback): For types WITHOUT Metal support
+            // Level 1 (fallback): For types WITHOUT Metal support - requires 2 auto-derefs
             #[cfg(feature = "metal")]
             impl<T> MaybeMetalOps for MetalWrap<T>
             where
@@ -741,26 +720,24 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 }
             }
 
-            // Level 0 (specialized): For types WITH Metal support
-            #(
-                #[cfg(feature = "metal")]
-                impl MaybeMetalOps for &MetalWrap<#type_names>
-                where
-                    #type_names: candle_macros_types::QuantizedMetalOps,
-                {
-                    #[inline(always)]
-                    fn try_dequantize_metal(&self, data: &metal::Buffer, output: &mut metal::Buffer) -> crate::Result<()> {
-                        use candle_macros_types::QuantizedMetalOps;
-                        <#type_names as Default>::default().dequantize_metal(data, output).map_err(|e| crate::Error::Msg(e))
-                    }
-
-                    #[inline(always)]
-                    fn try_matmul_metal(&self, lhs: &metal::Buffer, lhs_shape: &[usize], rhs: &metal::Buffer, rhs_shape: &[usize]) -> crate::Result<metal::Buffer> {
-                        use candle_macros_types::QuantizedMetalOps;
-                        <#type_names as Default>::default().matmul_metal(lhs, lhs_shape, rhs, rhs_shape).map_err(|e| crate::Error::Msg(e))
-                    }
+            // Level 0 (specialized): Blanket impl for types WITH Metal support - requires only 1 auto-deref
+            // This impl is preferred over Level 1 because method resolution favors impls requiring fewer auto-derefs
+            // Blanket impl automatically applies to any type implementing QuantizedMetalOps
+            #[cfg(feature = "metal")]
+            impl<T> MaybeMetalOps for &MetalWrap<T>
+            where
+                T: candle_macros_types::QuantizedMetalOps + Default,
+            {
+                #[inline(always)]
+                fn try_dequantize_metal(&self, data: &metal::Buffer, output: &mut metal::Buffer) -> crate::Result<()> {
+                    T::default().dequantize_metal(data, output).map_err(|e| crate::Error::Msg(e))
                 }
-            )*
+
+                #[inline(always)]
+                fn try_matmul_metal(&self, lhs: &metal::Buffer, lhs_shape: &[usize], rhs: &metal::Buffer, rhs_shape: &[usize]) -> crate::Result<metal::Buffer> {
+                    T::default().matmul_metal(lhs, lhs_shape, rhs, rhs_shape).map_err(|e| crate::Error::Msg(e))
+                }
+            }
 
             #[cfg(feature = "metal")]
             #[inline]

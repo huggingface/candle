@@ -47,7 +47,7 @@ criterion = { workspace = true }
 
 [features]
 default = []
-cuda = ["cudarc", "dep:candle-kernels", "dep:ug-cuda", "float8/cuda"]
+cuda = ["cudarc", "dep:candle-kernels", "dep:ug-cuda", "float8/cuda", "candle-macros-types/cuda"]
 cudnn = ["cuda", "cudarc/cudnn"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
@@ -56,6 +56,7 @@ metal = [
     "dep:objc2-foundation",
     "dep:candle-metal-kernels",
     "dep:ug-metal",
+    "candle-macros-types/metal",
 ]
 
 [[bench]]

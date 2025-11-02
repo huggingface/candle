@@ -333,10 +333,7 @@ impl BackendDevice for CudaDevice {
             }
             DType::Quantized(qdtype) => {
                 let unquantized = self.alloc_zeros::<f32>(elem_count)?;
-                CudaStorageSlice::Quantized(
-                    qdtype,
-                    quantized_dispatch::quantize_cuda(qdtype, &unquantized, &self)?,
-                )
+                CudaStorageSlice::Quantized(qdtype, qdtype.quantize_cuda(&unquantized, &self)?)
             }
         };
         Ok(CudaStorage {
