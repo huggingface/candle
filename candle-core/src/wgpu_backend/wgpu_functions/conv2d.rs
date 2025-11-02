@@ -194,8 +194,8 @@ pub fn queue_conv2d(
     queue.enqueue_workgroups_extra(
         pipeline,
         bind_group,
-        (params.out_w() as u32 + 15) / 16,
-        (params.out_h() as u32 + 15) / 16,
+        (params.out_w() as u32).div_ceil(16),
+        (params.out_h() as u32).div_ceil(16),
         (params.c_out * params.b_size) as u32,
         params.out_w()
             * params.out_h()
@@ -287,7 +287,7 @@ pub fn queue_conv2d_matmul(
         let bind_group = dev.create_bind_group_input1(im2col_buffer, input.buffer(), dtype.into());
 
         let x = num_workgroups.min(65535);
-        let y = (num_workgroups + 65534) / 65535;
+        let y = num_workgroups.div_ceil(65535);
 
         queue.enqueue_workgroups_extra(
             pipeline,
@@ -378,8 +378,8 @@ pub fn queue_conv2d_transpose(
     queue.enqueue_workgroups(
         pipeline,
         bind_group,
-        ((params.out_w() - params.output_padding) as u32 + 15) / 16,
-        ((params.out_h() - params.output_padding) as u32 + 15) / 16,
+        ((params.out_w() - params.output_padding) as u32).div_ceil(16),
+        ((params.out_h() - params.output_padding) as u32).div_ceil(16),
         params.c_out as u32,
         params.out_w()
             * params.out_h()
@@ -435,7 +435,7 @@ pub fn queue_conv1d(
     queue.enqueue_workgroups(
         pipeline,
         bind_group,
-        (params.l_out() as u32 + 63) / 64,
+        (params.l_out() as u32).div_ceil(64),
         params.c_out as u32,
         1,
         params.l_out() * params.c_out * params.b_size * kernel.layout().shape().elem_count(),
@@ -486,7 +486,7 @@ pub fn queue_conv1d_transpose(
     queue.enqueue_workgroups(
         pipeline,
         bind_group,
-        ((params.l_out() - params.output_padding) as u32 + 63) / 64,
+        ((params.l_out() - params.output_padding) as u32).div_ceil(64),
         params.c_out as u32,
         1u32,
         params.l_out() * params.c_out * params.b_size * kernel.layout().shape().elem_count(),

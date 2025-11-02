@@ -312,7 +312,7 @@ impl View for &TensorView {
         &self.shape
     }
 
-    fn data(&self) -> Cow<[u8]> {
+    fn data(&self) -> Cow<'_, [u8]> {
         (&self.data).into()
     }
 
@@ -330,7 +330,7 @@ impl View for TensorView {
         &self.shape
     }
 
-    fn data(&self) -> Cow<[u8]> {
+    fn data(&self) -> Cow<'_, [u8]> {
         (&self.data).into()
     }
 

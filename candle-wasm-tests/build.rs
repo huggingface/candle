@@ -96,19 +96,6 @@ fn make_fn_async_base<'h>(
     re.replace_all(content, &format!("{new_name}$1$2.await"))
 }
 
-fn make_fn_async_base_and_unwrap<'h>(
-    content: &'h str,
-    function_name: &str,
-    new_name: &str,
-) -> std::borrow::Cow<'h, str> {
-    let re = Regex::new(&format!(
-        "{function_name}(::<[^>]+>)?{BALANCED_PARENTHESES}(?!\\s*[-{{])"
-    ))
-    .unwrap();
-
-    re.replace_all(content, &format!("{new_name}$1$2.await.unwrap()"))
-}
-
 fn make_fn_async<'h>(content: &'h str, function_name: &str) -> std::borrow::Cow<'h, str> {
     make_fn_async_base(content, function_name, &format!("{function_name}_async"))
 }
@@ -250,16 +237,14 @@ fn convert_to_async_if_await(mut file: syn::File, code: &str) -> (String, Vec<St
 
     (prettyplease::unparse(&file), converted_functions)
 }
-struct AwaitMarker<'a> {
+struct AwaitMarker {
     has_outer_await: bool,
     inside_closure: usize,
-    code: &'a str,
-    func_name: String,
     force_async: bool, // for test/device logic
 }
 
-impl<'a> AwaitMarker<'a> {
-    fn new(code: &'a str, func: &ItemFn) -> Self {
+impl AwaitMarker {
+    fn new(code: &str, func: &ItemFn) -> Self {
 
         let mut force_async = false;
         if func.attrs.iter().any(|c| {
@@ -283,8 +268,6 @@ impl<'a> AwaitMarker<'a> {
         Self {
             has_outer_await: false,
             inside_closure: 0,
-            code,
-            func_name,
             force_async,
         }
     }
@@ -294,7 +277,7 @@ impl<'a> AwaitMarker<'a> {
     }
 }
 
-impl<'a> VisitMut for AwaitMarker<'a> {
+impl VisitMut for AwaitMarker {
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
         match expr {
             Expr::Await(_) => {
@@ -307,7 +290,7 @@ impl<'a> VisitMut for AwaitMarker<'a> {
                 self.inside_closure += 1;
 
                 // Visit closure body
-                self.visit_expr_mut(&mut *closure.body);
+                self.visit_expr_mut(&mut closure.body);
                 self.inside_closure -= 1;
 
                 // Detect if closure body contains `.await`

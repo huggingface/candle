@@ -282,7 +282,7 @@ impl ModelCache {
         referenced_by_candle_storage: bool,
     ) -> BufferReferenceId {
         let data = bytemuck::cast_slice(data);
-        let length = ((data.len() + 3) / 4) * 4;
+        let length = data.len().div_ceil(4) * 4;
 
         if length as u64 > self.max_memory_size {
             panic!(

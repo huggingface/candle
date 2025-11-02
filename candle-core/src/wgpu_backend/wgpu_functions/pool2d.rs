@@ -45,8 +45,8 @@ pub fn queue_max_pool2d(
     queue.enqueue_workgroups(
         pipeline,
         bind_group,
-        (w_out as u32 + 7) / 8,
-        (h_out as u32 + 7) / 8,
+        (w_out as u32).div_ceil(8),
+        (h_out as u32).div_ceil(8),
         c as u32,
         h_out * w_out * b * c,
     );
@@ -95,8 +95,8 @@ pub fn queue_avg_pool2d(
     queue.enqueue_workgroups(
         pipeline,
         bind_group,
-        (w_out as u32 + 7) / 8,
-        (h_out as u32 + 7) / 8,
+        (w_out as u32).div_ceil(8),
+        (h_out as u32).div_ceil(8),
         c as u32,
         w_out * h_out * c * b,
     );

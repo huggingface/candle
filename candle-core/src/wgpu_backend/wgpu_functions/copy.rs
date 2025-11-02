@@ -89,9 +89,9 @@ pub fn queue_copy(
             input2_inplaceable: false,
         };
 
-        let use_vec4 = copy_size % 4 == 0
-            && source_offset % 4 == 0
-            && destination_offset % 4 == 0
+        let use_vec4 = copy_size.is_multiple_of(4)
+            && source_offset.is_multiple_of(4)
+            && destination_offset.is_multiple_of(4)
             && dtype.size_in_bytes() == 4;
 
         if use_vec4 {
@@ -171,8 +171,8 @@ pub fn queue_copy2d(
 
     let bind_group = dev.create_bind_group_input1(buffer_dest, buffer_input, dtype.into());
 
-    let x = (d1 + 15) / 16;
-    let y = (d2 + 15) / 16;
+    let x = d1.div_ceil(16);
+    let y = d2.div_ceil(16);
     
     if y > crate::wgpu_backend::queue_buffer::MAX_DISPATCH_SIZE {
         queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
@@ -186,7 +186,7 @@ pub fn queue_copy2d(
             bind_group,
             y.min(65535),
             x,
-            (y + 65534) / 65535,
+            y.div_ceil(65535),
             (d1 * d2) as usize,
         );
     } else {
@@ -202,7 +202,7 @@ pub fn queue_copy2d(
             bind_group,
             x.min(65535),
             y,
-            (x + 65534) / 65535,
+            x.div_ceil(65535),
             (d1 * d2) as usize,
         );
     }
@@ -261,8 +261,8 @@ pub fn queue_copy3d(
     queue.enqueue_workgroups(
         pipeline,
         bind_group,
-        (input_shape.2 + 15) / 16_u32,
-        (input_shape.1 + 15) / 16_u32,
+        input_shape.2.div_ceil(16_u32),
+        input_shape.1.div_ceil(16_u32),
         input_shape.0,
         input_layout.shape().elem_count(),
     );
@@ -327,8 +327,8 @@ pub fn queue_copy3d_padded(
     queue.enqueue_workgroups_extra(
         pipeline,
         bind_group,
-        ((dest_shape.2 + 15) / 16) as u32,
-        ((dest_shape.1 + 15) / 16) as u32,
+        dest_shape.2.div_ceil(16) as u32,
+        dest_shape.1.div_ceil(16) as u32,
         input_shape.0,
         input.layout().shape().elem_count(),
         #[cfg(feature = "wgpu_debug")]
@@ -364,8 +364,8 @@ pub fn queue_transpose3d(
     queue.enqueue_workgroups(
         pipeline,
         bind_group,
-        (width + 31) / 32,
-        (height + 31) / 32,
+        width.div_ceil(32),
+        height.div_ceil(32),
         batch,
         (width * height * batch) as usize,
     );
@@ -429,8 +429,8 @@ pub fn queue_copy4d_padded(
     queue.enqueue_workgroups(
         pipeline,
         bind_group,
-        ((dest_shape.3 + 15) / 16) as u32,
-        ((dest_shape.2 + 15) / 16) as u32,
+        dest_shape.3.div_ceil(16) as u32,
+        dest_shape.2.div_ceil(16) as u32,
         (input_shape.0 * input_shape.1) as u32,
         input_layout.shape().elem_count(),
     );

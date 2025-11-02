@@ -35,7 +35,7 @@ pub fn queue_cmp_buffer_from_buffer(
     queue.enqueue_64(
         pipeline,
         bind_group,
-        ((input1.layout().shape().elem_count() + 3) / 4) as u32,
+        input1.layout().shape().elem_count().div_ceil(4) as u32,
         input1.layout().shape().elem_count(),
     );
     Ok(())

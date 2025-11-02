@@ -59,8 +59,8 @@ pub fn queue_index_select(
     queue.enqueue_workgroups(
         pipeline,
         bind_group,
-        (length + 7) / 8,
-        ((index_length + 7) / 8) as u32,
+        length.div_ceil(8),
+        index_length.div_ceil(8) as u32,
         1,
         length as usize * index_length,
     );

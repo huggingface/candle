@@ -82,12 +82,12 @@ pub fn queue_reduce_from_buffer_op(
     let y;
     let z;
     if use_small_reduce {
-        let dest_size = (dest_size + 63) / 64;
+        let dest_size = dest_size.div_ceil(64);
         y = dest_size.min(65535);
-        z = (dest_size + 65534) / 65535;
+        z = dest_size.div_ceil(65535);
     } else {
         y = dest_size.min(65535);
-        z = (dest_size + 65534) / 65535;
+        z = dest_size.div_ceil(65535);
     }
 
     queue.enqueue_workgroups_extra(

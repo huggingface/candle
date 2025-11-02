@@ -22,7 +22,7 @@ pub fn queue_gather(
     queue.enqueue_workgroups(
         pipeline,
         bind_group,
-        (index.layout().shape().elem_count() as u32 + 63) / 64,
+        (index.layout().shape().elem_count() as u32).div_ceil(64),
         1,
         1,
         index.layout().shape().elem_count(),
@@ -58,7 +58,7 @@ pub fn queue_scatter_add_inplace(
     queue.enqueue_workgroups(
         pipeline,
         bind_group,
-        ((index.layout().shape().elem_count() / selected_index_length) as u32 + 63) / 64,
+        ((index.layout().shape().elem_count() / selected_index_length) as u32).div_ceil(64),
         1,
         1,
         index.layout().shape().elem_count(),
@@ -96,7 +96,7 @@ pub fn queue_scatter_set_inplace(
     queue.enqueue_workgroups(
         pipeline,
         bind_group,
-        ((index.layout().shape().elem_count() / selected_index_length) as u32 + 63) / 64,
+        ((index.layout().shape().elem_count() / selected_index_length) as u32).div_ceil(64),
         1,
         1,
         index.layout().shape().elem_count(),
@@ -132,7 +132,7 @@ pub fn queue_index_add_inplace(
     queue.enqueue_workgroups(
         pipeline,
         bind_group,
-        ((lay_input.shape().elem_count() / selected_index_length) as u32 + 63) / 64,
+        ((lay_input.shape().elem_count() / selected_index_length) as u32).div_ceil(64),
         1,
         1,
         lay_input.shape().elem_count(),

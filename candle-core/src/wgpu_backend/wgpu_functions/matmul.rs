@@ -191,8 +191,8 @@ mod sgemm {
         queue.enqueue_workgroups_extra(
             pipeline,
             bind_group,
-            (params.n + 15) / 16,
-            (params.m + 15) / 16,
+            params.n.div_ceil(16),
+            params.m.div_ceil(16),
             params.b,
             params.k as usize * params.m as usize * params.n as usize,
             #[cfg(feature = "wgpu_debug")]
@@ -327,10 +327,10 @@ mod sgemm {
         let input2_stride_n = *input2_stride.next().unwrap_or(&1);
         let input2_stride_k = *input2_stride.next().unwrap_or(&1);
 
-        assert!(k_tile % 4 == 0);
+        assert!(k_tile.is_multiple_of(4));
 
-        let no_padding_needed_input1_tile = ((params.m % m_tile == 0 && params.k % k_tile == 0) || NON_PADDED)
-            && input1.layout().start_offset() % 4 == 0 //input will be loaded 16 bytes aligned
+        let no_padding_needed_input1_tile = ((params.m.is_multiple_of(m_tile) && params.k.is_multiple_of(k_tile)) || NON_PADDED)
+            && input1.layout().start_offset().is_multiple_of(4) //input will be loaded 16 bytes aligned
             && !(input1_stride_m != 1 && input1_stride_k != 1);
 
         let no_padding_needed_input1_stride =
@@ -338,9 +338,9 @@ mod sgemm {
         let no_padding_needed_input1 =
             no_padding_needed_input1_tile && no_padding_needed_input1_stride;
 
-        let no_padding_needed_input2_tile = ((params.n % n_tile == 0 && params.k % k_tile == 0)
+        let no_padding_needed_input2_tile = ((params.n.is_multiple_of(n_tile) && params.k.is_multiple_of(k_tile))
             || NON_PADDED)
-            && input2.layout().start_offset() % 4 == 0
+            && input2.layout().start_offset().is_multiple_of(4)
             && !(input2_stride_n != 1 && input2_stride_k != 1);
 
         let no_padding_needed_input2_stride =
@@ -942,9 +942,9 @@ fn get_matmul_naive(
     input1: WgpuTensor,
     input2: WgpuTensor,
 ) -> crate::wgpu_backend::MatmulAlgorithm {
-    if k % 4 == 0
-        && input1.layout().start_offset() % 4 == 0
-        && input2.layout().start_offset() % 4 == 0
+    if k.is_multiple_of(4)
+        && input1.layout().start_offset().is_multiple_of(4)
+        && input2.layout().start_offset().is_multiple_of(4)
     {
         let mut input1_stride = input1.layout().stride().iter().rev();
         let mut input2_stride = input2.layout().stride().iter().rev();
@@ -985,13 +985,13 @@ pub fn queue_matmul_buffer_best(
     let alg;
     if m <= 2 || n <= 2 {
         if m <= 2 {
-            if k % 64 == 0 && n % 128 == 0 && input2_stride_k == 1 && input1_stride_k == 1 {
+            if k.is_multiple_of(64) && n.is_multiple_of(128) && input2_stride_k == 1 && input1_stride_k == 1 {
                 alg = MatmulAlgorithm::Matmul1_64B;
-            } else if k % 32 == 0 && n % 64 == 0 && input2_stride_k == 1 && input1_stride_k == 1 {
+            } else if k.is_multiple_of(32) && n.is_multiple_of(64) && input2_stride_k == 1 && input1_stride_k == 1 {
                 alg = MatmulAlgorithm::Matmul1_64_32B;
-            } else if k % 32 == 0 && n % 32 == 0 && input2_stride_k == 1 && input1_stride_k == 1 {
+            } else if k.is_multiple_of(32) && n.is_multiple_of(32) && input2_stride_k == 1 && input1_stride_k == 1 {
                 alg = MatmulAlgorithm::Matmul1_32_32B;
-            } else if k % 64 == 0 && n % 64 == 0 && input2_stride_n == 1 {
+            } else if k.is_multiple_of(64) && n.is_multiple_of(64) && input2_stride_n == 1 {
                 alg = MatmulAlgorithm::Matmul1_64;
             } else {
                 alg = get_matmul_naive(k, input1, input2);
@@ -1021,15 +1021,15 @@ pub fn queue_matmul_buffer_best(
             let s = get_matmul_setting(a);
 
             let no_padding_tiled = !s.needs_padding
-                || (m % s.m_tile as usize == 0
-                    && k % s.k_tile as usize == 0
-                    && n % s.n_tile as usize == 0);
+                || (m.is_multiple_of(s.m_tile as usize)
+                    && k.is_multiple_of(s.k_tile as usize)
+                    && n.is_multiple_of(s.n_tile as usize));
             let no_padding_stride = !s.needs_padding
                 || (!s.need_padding_input1(input1_stride_k, input1_stride_m)
                     && !s.need_padding_input2(input2_stride_n, input2_stride_k)
                     && (!s.alignment
-                        || (input1.layout().start_offset() % 4 == 0
-                            && input2.layout().start_offset() % 4 == 0)));
+                        || (input1.layout().start_offset().is_multiple_of(4)
+                            && input2.layout().start_offset().is_multiple_of(4))));
 
             let no_padding_needed = no_padding_tiled && no_padding_stride;
 

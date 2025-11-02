@@ -386,7 +386,7 @@ impl<'a> QueueBuffer<'a> {
     ) {
         let id = length.div_ceil(64);
         let x = id.min(65535);
-        let y = (id + 65534) / 65535;
+        let y = id.div_ceil(65535);
         self.enqueue_workgroups_extra(     
             pipeline,
             bind_group,

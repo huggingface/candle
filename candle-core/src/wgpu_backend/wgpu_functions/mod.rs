@@ -167,7 +167,7 @@ impl WgpuDevice{
         command_queue.current_meta = meta_offset as u32;
         command_queue
             .get_meta_mut()
-            .extend(std::iter::repeat(0).take((meta_offset - meta_array_length) as usize));
+            .extend(std::iter::repeat_n(0, (meta_offset - meta_array_length) as usize));
 
         QueueBuffer::new(command_queue)
     }

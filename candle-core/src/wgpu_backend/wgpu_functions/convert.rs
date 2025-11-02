@@ -40,7 +40,7 @@ pub fn queue_convert_u32_to_u8(
 
     let bind_group =
         dev.create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned4);
-    queue.enqueue_64(pipeline, bind_group, (size + 3) / 4, size as usize);
+    queue.enqueue_64(pipeline, bind_group, size.div_ceil(4), size as usize);
     Ok(())
 }
 
@@ -59,7 +59,7 @@ pub fn queue_convert_f32_to_u8(
 
     let bind_group =
         dev.create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned4);
-    queue.enqueue_64(pipeline, bind_group, (size + 3) / 4, size as usize);
+    queue.enqueue_64(pipeline, bind_group, size.div_ceil(4), size as usize);
     Ok(())
 }
 
@@ -78,7 +78,7 @@ pub fn queue_convert_f32_to_f16(
 
     let bind_group =
         dev.create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned4);
-    queue.enqueue_64(pipeline, bind_group, (size + 1) / 2, size as usize);
+    queue.enqueue_64(pipeline, bind_group, size.div_ceil(2), size as usize);
     Ok(())
 }
 
@@ -97,7 +97,7 @@ pub fn queue_convert_f16_to_f32(
 
     let bind_group =
         dev.create_bind_group_input1(buffer_dest, buffer_input, BindgroupAlignment::Aligned4);
-    queue.enqueue_64(pipeline, bind_group, (size + 1) / 2, size as usize);
+    queue.enqueue_64(pipeline, bind_group, size.div_ceil(2), size as usize);
     Ok(())
 }
 

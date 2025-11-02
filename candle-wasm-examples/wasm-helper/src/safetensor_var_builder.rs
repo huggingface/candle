@@ -116,7 +116,7 @@ pub async fn var_builder_from_opfs_safetensors<P: AsRef<Path>>(
     p: P,
     dtype: DType,
     dev: &Device,
-) -> GenericResult<VarBuilder> {
+) -> GenericResult<VarBuilder<'_>> {
     let tensors = MmapedSafetensors::new(p).await?;
 
     Ok(VarBuilder::from_backend(

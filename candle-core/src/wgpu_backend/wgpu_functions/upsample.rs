@@ -85,8 +85,8 @@ pub fn queue_upsample2d(
     queue.enqueue_workgroups(
         pipeline,
         bind_group,
-        (target_size.1 as u32 + 7) / 8,
-        (target_size.0 as u32 + 7) / 8,
+        (target_size.1 as u32).div_ceil(8),
+        (target_size.0 as u32).div_ceil(8),
         c as u32,
         b * c * target_size.0 * target_size.1,
     );

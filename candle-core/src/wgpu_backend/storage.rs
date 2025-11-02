@@ -402,7 +402,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
         lhs_l: &crate::Layout,
         rhs_l: &crate::Layout,
     ) -> crate::Result<Self> {
-        let buffer_size = ((lhs_l.shape().elem_count() + 3) / 4) * 4; //TODO: get next divisible by 4
+        let buffer_size = lhs_l.shape().elem_count().div_ceil(4) * 4; //TODO: get next divisible by 4
         let buffer_dest = self.device().alloc_uninit_size(crate::DType::U8, buffer_size);
 
         let op2 = match op {

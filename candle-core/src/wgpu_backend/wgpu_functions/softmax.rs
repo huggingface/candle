@@ -34,7 +34,7 @@ pub fn queue_softmax(
         bind_group,
         1,
         (id).min(65535),
-        (id + 65534) / 65535,
+        id.div_ceil(65535),
         (reduction_length * dest_size) as usize,
         #[cfg(feature = "wgpu_debug")]
         Some(format!("{reduction_length}x{dest_size}({input1_offset})")),
