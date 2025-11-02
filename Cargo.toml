@@ -106,13 +106,13 @@ objc2-metal = { version = "0.3.1" }
 objc2-foundation = { version = "0.3.1" }
 
 #wgpu dependencies:
-wgpu = {version="24.0.3", features=["fragile-send-sync-non-atomic-wasm"]}
-bytemuck = { version = "1.15", features = [ "derive" ] }
-pollster = "0.3.0"
-flume = "0.11.0"
-tracing-mutex = "0.3.0"
+wgpu = {version="27.0.1", features=["fragile-send-sync-non-atomic-wasm"]}
+bytemuck = { version = "1.24.0", features = [ "derive" ] }
+pollster = "0.4.0"
+flume = "0.11.1"
+tracing-mutex = "0.3.2"
 web-time = "=1.1.0"
-rustc-hash = "2.0.0"
+rustc-hash = "2.1.1"
 
 [profile.release-with-debug]
 inherits = "release"

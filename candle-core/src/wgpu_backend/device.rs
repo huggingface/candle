@@ -165,9 +165,11 @@ impl WgpuDevice {
             backend_options: wgpu::BackendOptions{
                 dx12: wgpu::Dx12BackendOptions {
                     shader_compiler: wgpu::Dx12Compiler::Fxc,
+                    ..Default::default()
                 },
                 ..Default::default()
-            }
+            },
+            ..Default::default()
         });
 
         // `request_adapter` instantiates the general connection to the GPU
@@ -222,8 +224,8 @@ impl WgpuDevice {
                     required_features: features,
                     required_limits: limits,
                     memory_hints: wgpu::MemoryHints::Performance,
-                },
-                None,
+                    ..Default::default()
+                }
             )
             .await
             .map_err(|err| crate::Error::Wgpu(err.to_string().into()))?;
@@ -377,7 +379,7 @@ impl WgpuDevice {
     }
 
     //allows to load const debug info(for simulating calls)
-    pub fn load_debug_info(&self, consts: Vec<std::collections::HashMap<String, f64>>) {
+    pub fn load_debug_info(&self, consts: Vec<Vec<(&'static str, f64)>>) {
         let mut queue = self.command_queue.lock().unwrap();
         queue.load_debug_info(consts);
     }

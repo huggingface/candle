@@ -44,7 +44,7 @@ impl ShaderCache {
         device: &wgpu::Device,
         pipeline: &PipelineReference,
         pipeline_layout: &wgpu::PipelineLayout,
-        consts: &std::collections::HashMap<String, f64>,
+        consts: &[(&str, f64)],
     ) -> crate::Result<Arc<wgpu::ComputePipeline>> {
         let shader = pipeline.0.get_shader();
         let shaders = &mut self.shaders;
@@ -87,7 +87,7 @@ fn load_pipeline(
     entry_point: &str,
     pipeline: &PipelineReference,
     pipeline_layout: &wgpu::PipelineLayout,
-    consts: &std::collections::HashMap<String, f64>,
+    consts: &[(&str, f64)],
 ) -> wgpu::ComputePipeline {
     let compilation_options = if consts.is_empty() {
         wgpu::PipelineCompilationOptions::default()

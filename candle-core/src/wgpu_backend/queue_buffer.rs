@@ -4,7 +4,6 @@
 /// - Specify pipeline constants for the next pipeline.
 /// - Create a reference to the pipeline.
 /// - Enqueue the defined pipeline.
-use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, MutexGuard};
 
@@ -95,7 +94,7 @@ pub struct QueueBufferInner {
     const_id_map: ObjectToIdMapper<ConstArray>,
 
     ///Id to ConstArray, maps a a unique Id to a set of Constants
-    pub(crate) id_to_const_array: Vec<HashMap<String, f64>>,
+    pub(crate) id_to_const_array: Vec<Vec<(&'static str, f64)>>,
 
     global_command_index: u32,
 
@@ -238,7 +237,7 @@ impl QueueBufferInner {
     ) -> PipelineReference {
         let (index, is_new) = self.const_id_map.get_or_insert(&self.const_array);
         if is_new {
-            self.id_to_const_array.push(self.const_array.to_hashmap())
+            self.id_to_const_array.push(self.const_array.to_vec())
         }
         self.init();
         PipelineReference(pipeline.into(), index, OpIsInplaceable::new())
@@ -257,7 +256,7 @@ impl QueueBufferInner {
 
         let (index, is_new) = self.const_id_map.get_or_insert(&self.const_array);
         if is_new {
-            self.id_to_const_array.push(self.const_array.to_hashmap());
+            self.id_to_const_array.push(self.const_array.to_vec());
         }
         self.init();
         PipelineReference(pipeline.into(), index, OpIsInplaceable::new())
@@ -277,7 +276,7 @@ impl QueueBufferInner {
 
         let (index, is_new) = self.const_id_map.get_or_insert(&self.const_array);
         if is_new {
-            self.id_to_const_array.push(self.const_array.to_hashmap())
+            self.id_to_const_array.push(self.const_array.to_vec())
         }
         self.init();
         PipelineReference(pipeline.into(), index, inplaceable)
@@ -301,7 +300,7 @@ impl QueueBufferInner {
     }
 
     //allows to load const debug info(for simulating calls)
-    pub fn load_debug_info(&mut self, consts: Vec<std::collections::HashMap<String, f64>>) {
+    pub fn load_debug_info(&mut self, consts: Vec<Vec<(&'static str, f64)>>) {
         self.id_to_const_array = consts;
         self.const_id_map.next_id = self.id_to_const_array.len();
     } 
