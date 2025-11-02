@@ -201,12 +201,9 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                     // Use autoderef directly on concrete types in match arms
                     match self {
                         #(QuantizedDType::#type_names => (&&Wrap::<#type_names>(std::marker::PhantomData)).has_cuda(),)*
-                        QuantizedDType::External(name) => {
-                            EXTERNAL_TYPE_REGISTRY.get()
-                                .and_then(|r| r.read().ok())
-                                .and_then(|m| m.get(name))
-                                .map(|ops| ops.quantize_cuda.is_some())
-                                .unwrap_or(false)
+                        QuantizedDType::External(_name) => {
+                            // External types don't support CUDA yet
+                            false
                         }
                     }
                 }
@@ -253,12 +250,9 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                     // Use autoderef directly on concrete types in match arms
                     match self {
                         #(QuantizedDType::#type_names => (&&Wrap::<#type_names>(std::marker::PhantomData)).has_metal(),)*
-                        QuantizedDType::External(name) => {
-                            EXTERNAL_TYPE_REGISTRY.get()
-                                .and_then(|r| r.read().ok())
-                                .and_then(|m| m.get(name))
-                                .map(|ops| ops.dequantize_metal.is_some())
-                                .unwrap_or(false)
+                        QuantizedDType::External(_name) => {
+                            // External types don't support Metal yet
+                            false
                         }
                     }
                 }
@@ -295,12 +289,15 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
             /// If num_elements is None, infers number of elements from data size
             #[cfg(feature = "cuda")]
             #[inline]
-            pub fn dequantize_cuda(
+            pub fn dequantize_cuda<D>(
                 self,
                 data: &cudarc::driver::CudaSlice<u8>,
-                device: &crate::CudaDevice,
+                device: &D,
                 num_elements: Option<usize>
-            ) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
+            ) -> crate::Result<cudarc::driver::CudaSlice<f32>>
+            where
+                D: candle_macros_types::CudaStorageDevice,
+            {
                 // Determine number of elements
                 let num_elements = if let Some(n) = num_elements {
                     n
@@ -310,7 +307,8 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 };
 
                 // Allocate output buffer on GPU
-                let mut output = device.alloc_zeros::<f32>(num_elements)?;
+                let mut output = device.alloc_zeros::<f32>(num_elements)
+                    .map_err(|e| crate::Error::Msg(e.to_string()))?;
 
                 // Perform dequantization
                 quantized_dispatch::dequantize_cuda(self, data, &mut output)?;
@@ -321,12 +319,14 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
             /// CUDA quantize function
             #[cfg(feature = "cuda")]
             #[inline]
-            pub fn quantize_cuda(
+            pub fn quantize_cuda<D>(
                 self,
                 input: &cudarc::driver::CudaSlice<f32>,
-                device: &crate::CudaDevice
-            ) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
-                let _ = device; // Keep for API compatibility but not needed for dispatch
+                device: &D
+            ) -> crate::Result<cudarc::driver::CudaSlice<u8>>
+            where
+                D: candle_macros_types::CudaStorageDevice,
+            {
                 quantized_dispatch::quantize_cuda(self, input)
             }
         }
@@ -636,13 +636,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 match id {
                     #(QuantizedDType::#type_names => (&&CudaWrap::<#type_names>(std::marker::PhantomData)).try_dequantize_cuda(data, output),)*
                     QuantizedDType::External(name) => {
-                        let registry = EXTERNAL_TYPE_REGISTRY.get()
-                            .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
-                        let ops = registry.read().unwrap().get(name).copied()
-                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
-                        ops.dequantize_cuda
-                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' does not support CUDA dequantize", name)))?
-                            (data, output)
+                        Err(crate::Error::Msg(format!("External type '{}' does not support CUDA operations yet", name)))
                     }
                 }
             }
@@ -656,13 +650,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 match id {
                     #(QuantizedDType::#type_names => (&&CudaWrap::<#type_names>(std::marker::PhantomData)).try_quantize_cuda(input),)*
                     QuantizedDType::External(name) => {
-                        let registry = EXTERNAL_TYPE_REGISTRY.get()
-                            .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
-                        let ops = registry.read().unwrap().get(name).copied()
-                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
-                        ops.quantize_cuda
-                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' does not support CUDA quantize", name)))?
-                            (input)
+                        Err(crate::Error::Msg(format!("External type '{}' does not support CUDA operations yet", name)))
                     }
                 }
             }
@@ -680,13 +668,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 match rhs_id {
                     #(QuantizedDType::#type_names => (&&CudaWrap::<#type_names>(std::marker::PhantomData)).try_matmul_cuda(lhs_data, lhs_shape, rhs_data, rhs_shape),)*
                     QuantizedDType::External(name) => {
-                        let registry = EXTERNAL_TYPE_REGISTRY.get()
-                            .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
-                        let ops = registry.read().unwrap().get(name).copied()
-                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
-                        ops.matmul_cuda
-                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' does not support CUDA matmul", name)))?
-                            (lhs_data, lhs_shape, rhs_data, rhs_shape)
+                        Err(crate::Error::Msg(format!("External type '{}' does not support CUDA operations yet", name)))
                     }
                 }
             }

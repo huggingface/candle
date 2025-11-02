@@ -1,11 +1,9 @@
-// Integration test for CPU-only operations (no backend dependencies)
-
+// Integration test for CPU-only operations using mocked candle-core types
 mod common;
 
 use candle_macros::register_quantized_types;
 use candle_macros_types::{QuantizedCpuOps, QuantizedType};
 
-// Re-export common mocks at crate root for macro
 pub use common::{Error, Result};
 
 #[cfg(feature = "cuda")]

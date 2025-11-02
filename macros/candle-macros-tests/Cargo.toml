@@ -8,11 +8,9 @@ publish = false
 [dependencies]
 candle-macros = { workspace = true }
 candle-macros-types = { workspace = true }
-
-# Optional dependencies for backend testing
 cudarc = { workspace = true, optional = true }
 
 [features]
 default = []
-cuda = ["candle-macros-types/cuda", "cudarc"]
+cuda = ["candle-macros-types/cuda", "dep:cudarc"]
 metal = ["candle-macros-types/metal"]

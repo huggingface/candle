@@ -22,11 +22,12 @@ impl From<String> for Error {
 pub struct CudaDevice;
 
 #[cfg(feature = "cuda")]
-impl CudaDevice {
-    pub fn alloc_zeros<T>(
+impl candle_macros_types::CudaStorageDevice for CudaDevice {
+    fn alloc_zeros<T: cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits>(
         &self,
         _len: usize,
-    ) -> std::result::Result<cudarc::driver::CudaSlice<T>, Error> {
-        Err(Error::Msg("Not implemented in test".to_string()))
+    ) -> std::result::Result<cudarc::driver::CudaSlice<T>, Box<dyn std::error::Error + Send + Sync>>
+    {
+        Err("Not implemented in test".into())
     }
 }

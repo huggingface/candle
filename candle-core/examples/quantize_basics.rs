@@ -26,14 +26,17 @@ fn main() -> Result<()> {
 
     // Display backend support matrix
     println!("\n=== Backend Support Matrix ===\n");
-    println!("{:<6} | {:^6} | {:^6} | {:^6}", "Type", "CPU", "CUDA", "Metal");
+    println!(
+        "{:<6} | {:^6} | {:^6} | {:^6}",
+        "Type", "CPU", "CUDA", "Metal"
+    );
     println!("{:-<6}-+-{:-<6}-+-{:-<6}-+-{:-<6}", "", "", "", "");
-    
+
     for (name, qtype) in &qtypes {
         let has_cpu = qtype.has_cpu();
         let has_cuda = qtype.has_cuda();
         let has_metal = qtype.has_metal();
-        
+
         println!(
             "{:<6} | {:^6} | {:^6} | {:^6}",
             name,

@@ -246,6 +246,32 @@ pub trait QuantizedCudaOps: QuantizedType {
     }
 }
 
+/// Trait for CUDA device types that can allocate GPU memory
+///
+/// This trait abstracts over the actual CudaDevice implementation,
+/// allowing the macro to work in different contexts (candle-core, tests, etc.)
+///
+/// # Feature Gate
+///
+/// Only available with `features = ["cuda"]`
+#[cfg(feature = "cuda")]
+pub trait CudaStorageDevice {
+    /// Allocate a zero-initialized buffer on the GPU
+    ///
+    /// # Arguments
+    /// * `len` - Number of elements to allocate
+    ///
+    /// # Returns
+    /// A `CudaSlice` containing `len` zero-initialized elements
+    ///
+    /// # Errors
+    /// Returns error if GPU allocation fails
+    fn alloc_zeros<T: cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits>(
+        &self,
+        len: usize,
+    ) -> Result<cudarc::driver::CudaSlice<T>, Box<dyn std::error::Error + Send + Sync>>;
+}
+
 /// Metal GPU operations for quantized types (optional)
 ///
 /// Implement this trait to enable Metal-accelerated quantization operations on Apple Silicon GPUs.

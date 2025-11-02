@@ -1,5 +1,5 @@
 use crate::backend::BackendDevice;
-use crate::{quantized_dispatch, CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
+use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::driver::CudaFunction;
@@ -611,5 +611,30 @@ impl BackendDevice for CudaDevice {
     fn synchronize(&self) -> Result<()> {
         self.stream.synchronize().map_err(crate::Error::wrap)?;
         Ok(())
+    }
+}
+
+// Implement CudaStorageDevice trait for quantized type macros
+impl candle_macros_types::CudaStorageDevice for CudaDevice {
+    fn alloc_zeros<T: cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits>(
+        &self,
+        len: usize,
+    ) -> std::result::Result<cudarc::driver::CudaSlice<T>, Box<dyn std::error::Error + Send + Sync>>
+    {
+        self.alloc_zeros(len)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+    }
+}
+
+// Also implement for &CudaDevice so it can be used with references
+impl candle_macros_types::CudaStorageDevice for &CudaDevice {
+    fn alloc_zeros<T: cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits>(
+        &self,
+        len: usize,
+    ) -> std::result::Result<cudarc::driver::CudaSlice<T>, Box<dyn std::error::Error + Send + Sync>>
+    {
+        (*self)
+            .alloc_zeros(len)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 }

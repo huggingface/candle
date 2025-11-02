@@ -1,4 +1,4 @@
-// Integration test for CUDA operations with real cudarc
+// Integration test for CUDA operations with real candle-core
 #![cfg(feature = "cuda")]
 
 mod common;
@@ -6,7 +6,6 @@ mod common;
 use candle_macros::register_quantized_types;
 use candle_macros_types::{QuantizedCudaOps, QuantizedType};
 
-// Re-export common mocks at crate root for macro
 pub use common::{CudaDevice, Error, Result};
 
 // Test quantized type with CUDA support
