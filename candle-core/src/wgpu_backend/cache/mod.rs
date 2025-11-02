@@ -102,6 +102,7 @@ impl From<crate::DType> for BindgroupAlignment {
     fn from(value: crate::DType) -> Self {
         match value {
             crate::DType::U8 => panic!("alignment not supported"),
+            crate::DType::F8E4M3 => panic!("alignment not supported"),
             crate::DType::U32 => BindgroupAlignment::Aligned4,
             crate::DType::I64 => BindgroupAlignment::Aligned8,
             crate::DType::BF16 => BindgroupAlignment::Aligned4,

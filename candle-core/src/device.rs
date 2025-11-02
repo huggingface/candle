@@ -353,9 +353,9 @@ impl Device {
             (Device::Cpu, _) => true,
             (Device::Cuda(_), _) => true,
             (Device::Metal(_), _) => true,
-            (Device::Wgpu(_dev), dtype) => {
+            (Device::Wgpu(_dev), _dtype) => {
                 #[cfg(feature="wgpu")]
-                return _dev.is_dtype_available(dtype);
+                return _dev.is_dtype_available(_dtype);
                 #[cfg(not(feature="wgpu"))]
                 return false;
             }, 
@@ -476,27 +476,6 @@ impl Device {
         shape: &Shape,
     ) -> Result<Storage> {
         self.rand_normal_f64(mean.to_f64(), std.to_f64(), shape, T::DTYPE)
-    }
-
-    pub(crate) fn ones(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
-        match self {
-            Device::Cpu => {
-                let storage = CpuDevice.ones_impl(shape, dtype)?;
-                Ok(Storage::Cpu(storage))
-            }
-            Device::Cuda(device) => {
-                let storage = device.ones_impl(shape, dtype)?;
-                Ok(Storage::Cuda(storage))
-            }
-            Device::Metal(device) => {
-                let storage = device.ones_impl(shape, dtype)?;
-                Ok(Storage::Metal(storage))
-            }
-            Device::Wgpu(device) => {
-                let storage = device.ones_impl(shape, dtype)?;
-                Ok(Storage::Wgpu(storage))
-            }
-        }
     }
 
     pub(crate) fn zeros(&self, shape: &Shape, dtype: DType) -> Result<Storage> {

@@ -1,7 +1,7 @@
 //! Tensor ops.
 //!
 
-use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D, WgpuStorage};
+use candle::{CpuStorage, D, DType, Layout, Module, Result, Shape, Tensor, WgpuStorage, wgpu::wgpu_functions::{self, WgpuTensor, unary::UnaryOperation}};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -234,47 +234,23 @@ impl candle::CustomOp1 for Sigmoid {
         Ok(Some(grad_res.mul(&d_dx_sigmoid)?))
     }
 
-    fn wgpu_fwd(&self, _storage: &WgpuStorage, _layout: &Layout) -> Result<(WgpuStorage, Shape)> {
-        use candle::backend::BackendStorage;
+    fn wgpu_fwd(&self, storage: &WgpuStorage, layout: &Layout) -> Result<(WgpuStorage, Shape)> {
+        let buffer_dest = storage.device().alloc_uninit_size(
+            storage.dtype(),
+            layout.shape().elem_count(),
+        );
 
-        let s = _storage.unary_impl::<Self>(_layout)?;
-        Ok((s, _layout.shape().clone()))
-    }
-}
-
-impl candle::op::UnaryOpT for Sigmoid {
-    const NAME: &'static str = "sigmoid";
-
-    const KERNEL: &'static str = "usigmoid";
-
-    const V: Self = Sigmoid;
-
-    fn bf16(_v1: half::prelude::bf16) -> half::prelude::bf16 {
-        todo!()
-    }
-
-    fn f16(_v1: half::prelude::f16) -> half::prelude::f16 {
-        todo!()
-    }
-
-    fn f32(_v1: f32) -> f32 {
-        todo!()
-    }
-
-    fn f64(_v1: f64) -> f64 {
-        todo!()
-    }
-
-    fn u8(_v1: u8) -> u8 {
-        todo!()
-    }
-
-    fn u32(_v1: u32) -> u32 {
-        todo!()
-    }
-
-    fn i64(_v1: i64) -> i64 {
-        todo!()
+        wgpu_functions::queue_unary_from_buffer_op(
+            storage.device(),
+            *buffer_dest.buffer(),
+            WgpuTensor::new(layout, *storage.buffer()),
+            UnaryOperation::Sigmoid,
+            0.0,
+            0.0,
+            storage.dtype(),
+        )?;
+        
+        Ok((buffer_dest, layout.shape().clone()))
     }
 }
 

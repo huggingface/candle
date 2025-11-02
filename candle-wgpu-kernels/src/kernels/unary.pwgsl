@@ -247,7 +247,9 @@ fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32)
              v_dest[id] = (erf(x / sqrt(2.0)) + 1.) * 0.5 * x;
         }
 #endif
-
+        case 100u{ //set
+            v_dest[id] = TODTYPE(scalar1);
+        }
         case 101u{ //add
             v_dest[id] = x + TODTYPE(scalar1);
         }

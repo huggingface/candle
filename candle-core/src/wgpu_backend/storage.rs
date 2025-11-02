@@ -853,35 +853,6 @@ impl crate::backend::BackendStorage for WgpuStorage {
         Ok(buffer_dest)
     }
 
-    fn scatter_add(
-        &self,
-        l: &Layout,
-        indexes: &Self,
-        indexes_l: &Layout,
-        source: &Self,
-        source_l: &Layout,
-        d: usize,
-    ) -> crate::Result<Self> {
-        let buffer_dest = self.device().alloc_uninit_size(
-            self.dtype,
-            l.shape().elem_count() 
-        );
-
-        self.copy_strided_src(&buffer_dest, 0, l)?;
-
-        wgpu_functions::queue_scatter_add_inplace(
-            self.device(),
-            buffer_dest.buffer,
-            WgpuTensor::new(indexes_l, indexes.buffer),
-            WgpuTensor::new(source_l, source.buffer),
-            self.dtype(),
-            &Layout::contiguous(l.shape().clone()),
-            d,
-        )?;
-
-        Ok(buffer_dest)
-    }
-
     fn index_select(
         &self,
         rhs: &Self,
@@ -990,6 +961,86 @@ impl crate::backend::BackendStorage for WgpuStorage {
             d2 as u32,
         )?;
         Ok(())
+    }
+    
+    fn scatter_set(
+        &mut self,
+        l: &Layout,
+        indexes: &Self,
+        indexes_l: &Layout,
+        source: &Self,
+        source_l: &Layout,
+        d: usize,
+    ) -> crate::Result<()> {
+        wgpu_functions::queue_scatter_set_inplace(
+            self.device(),
+            self.buffer,
+            WgpuTensor::new(indexes_l, indexes.buffer),
+            WgpuTensor::new(source_l, source.buffer),
+            self.dtype(),
+            &Layout::contiguous(l.shape().clone()),
+            d,
+        )?;
+
+        Ok(())
+    }
+    
+    fn scatter_add_set(
+        &mut self,
+        l: &Layout,
+        indexes: &Self,
+        indexes_l: &Layout,
+        source: &Self,
+        source_l: &Layout,
+        d: usize,
+    ) -> crate::Result<()> {
+        wgpu_functions::queue_scatter_add_inplace(
+            self.device(),
+            self.buffer,
+            WgpuTensor::new(indexes_l, indexes.buffer),
+            WgpuTensor::new(source_l, source.buffer),
+            self.dtype(),
+            &Layout::contiguous(l.shape().clone()),
+            d,
+        )?;
+
+        Ok(())
+    }
+    
+    fn const_set(&mut self, scalar: crate::scalar::Scalar, layout: &Layout) -> crate::Result<()> {
+        if scalar.to_f64() == 0.0{
+            return wgpu_functions::queue_unary_inplace_op(
+                &*self.device(),
+                *self.buffer(),
+                UnaryOperation::SetZero,
+                0.0,
+                0.0,
+                scalar.dtype(),
+                layout,
+            );
+        }
+        else if scalar.to_f64() == 1.0 {
+            return wgpu_functions::queue_unary_inplace_op(
+                &*self.device(),
+                *self.buffer(),
+                UnaryOperation::SetOne,
+                0.0,
+                0.0,
+                scalar.dtype(),
+                layout,
+            );
+        }
+        else{
+            return wgpu_functions::queue_unary_inplace_op(
+                &*self.device(),
+                *self.buffer(),
+                UnaryOperation::SetScalar,
+                scalar.to_f64() as f32,
+                0.0,
+                scalar.dtype(),
+                layout,
+            );
+        }
     }
 }
 

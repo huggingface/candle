@@ -9,7 +9,7 @@ use candle_wasm_tests::{
     to_vec0_round_async, to_vec1_round_async, to_vec2_round_async, to_vec3_round_async,
 };
 use anyhow::{Context, Result};
-use candle::{test_device, test_utils, Device, Shape, Tensor, Var};
+use candle::{test_device, test_utils, DType, Device, Shape, Tensor, Var};
 async fn simple_grad(device: &Device) -> Result<()> {
     let x = Var::new(&[3f32, 1., 4.], device)?;
     let x = x.as_tensor();
@@ -468,6 +468,26 @@ async fn binary_grad(device: &Device) -> Result<()> {
         grad_x.to_vec1_async::< f32 > (). await ?, [6.0, 2.0, - 8.0, 0.0, 0.0, 0.0]
     );
     assert_eq!(grad_y.to_vec1_async::< f32 > (). await ?, [4.0, 14.0, 2.0]);
+    Ok(())
+}
+#[test]
+async fn test_flip_backprop() -> Result<()> {
+    let device = &Device::Cpu;
+    let x = Var::ones((2, 2), DType::F64, device)?;
+    let weights = Tensor::arange(1.0, 5.0, device)?.reshape((2, 2))?;
+    let y = x.matmul(&weights)?;
+    let expected_y = Tensor::from_vec(vec![4.0, 6.0, 4.0, 6.0], (2, 2), device)?;
+    candle::test_utils::assert_tensor_eq(&y, &expected_y)?;
+    let z = y.flip(&[1])?;
+    let expected_z = Tensor::from_vec(vec![6.0, 4.0, 6.0, 4.0], (2, 2), device)?;
+    candle::test_utils::assert_tensor_eq(&z, &expected_z)?;
+    let loss = z.sum_all()?;
+    let grad_store = loss.backward()?;
+    let grad_x = grad_store.get_id(x.id()).unwrap();
+    let flipped_weights = weights.flip(&[1])?;
+    let dloss_dy = Tensor::ones((2, 2), DType::F64, device)?;
+    let expected_grad = dloss_dy.matmul(&flipped_weights.t()?)?;
+    candle::test_utils::assert_tensor_eq(grad_x, &expected_grad)?;
     Ok(())
 }
 candle_wasm_tests::test_device!(

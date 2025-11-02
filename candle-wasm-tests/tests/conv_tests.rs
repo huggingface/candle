@@ -78,6 +78,19 @@ async fn conv1d(dev: &Device) -> Result<()> {
         to_vec1_round_async(& res.flatten_all() ?, 4). await ?, [2.4509, 2.6357, -
         1.3336, 4.1393, 0.5657, 1.8091, - 1.1784, 3.5675, 0.5069, 3.3352]
     );
+    let res = {
+        let t = Tensor::cat(&[&t.zeros_like()?, &t, &t.zeros_like()?], 0)?;
+        t.conv1d(&w, 1, 1, 1, 1)?
+    };
+    assert_eq!(res.dims(), [3, 2, 5]);
+    assert_eq!(
+        to_vec1_round_async(& res.i(0) ?.flatten_all() ?, 4). await ?, [0., 0., 0., 0.,
+        0., 0., 0., 0., 0., 0.]
+    );
+    assert_eq!(
+        to_vec1_round_async(& res.i(1) ?.flatten_all() ?, 4). await ?, [2.4509, 2.6357, -
+        1.3336, 4.1393, 0.5657, 1.8091, - 1.1784, 3.5675, 0.5069, 3.3352]
+    );
     let w = w.transpose(0, 1)?;
     for w in [w.clone(), w.contiguous()?] {
         let res = t.conv_transpose1d(&w, 0, 0, 1, 1, 1)?;
@@ -304,6 +317,20 @@ async fn conv2d(dev: &Device) -> Result<()> {
     assert_eq!(res.dims(), [1, 2, 3, 3]);
     assert_eq!(
         to_vec1_round_async(& res.flatten_all() ?, 4). await ?, [- 4.2812, 2.0923,
+        5.2187, 7.5184, 0.752, - 14.9426, 10.0087, 4.391, 0.2918, 1.6715, 10.389, 3.6023,
+        - 4.2808, 0.2672, 5.3646, - 5.2023, - 2.1955, - 9.4075]
+    );
+    let res = {
+        let t = Tensor::cat(&[&t.zeros_like()?, &t, &t.zeros_like()?], 0)?;
+        t.conv2d(&w, 0, 1, 1, 1)?
+    };
+    assert_eq!(res.dims(), [3, 2, 3, 3]);
+    assert_eq!(
+        to_vec1_round_async(& res.i(0) ?.flatten_all() ?, 4). await ?, [0., 0., 0., 0.,
+        0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]
+    );
+    assert_eq!(
+        to_vec1_round_async(& res.i(1) ?.flatten_all() ?, 4). await ?, [- 4.2812, 2.0923,
         5.2187, 7.5184, 0.752, - 14.9426, 10.0087, 4.391, 0.2918, 1.6715, 10.389, 3.6023,
         - 4.2808, 0.2672, 5.3646, - 5.2023, - 2.1955, - 9.4075]
     );

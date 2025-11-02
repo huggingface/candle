@@ -101,6 +101,14 @@ impl SimpleBackend for MmapedSafetensors {
     fn contains_tensor(&self, name: &str) -> bool {
         self.get(name).is_ok()
     }
+    
+    fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> candle::Result<Tensor> {
+        let tensor = self
+            .load(name, dev)
+            .map_err(candle::Error::msg)?
+            .to_dtype(dtype)?;
+        Ok(tensor)
+    }
 }
 
 /// Initializes a `VarBuilder` from a binary builder in the safetensor format.

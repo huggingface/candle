@@ -15,6 +15,7 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 anyhow = { workspace = true }
 num-traits = { workspace = true }
 half = { workspace = true }
+float8 = { workspace = true }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.0"

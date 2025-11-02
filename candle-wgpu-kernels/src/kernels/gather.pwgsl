@@ -122,6 +122,72 @@ fn scatter_add_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 @compute
 @workgroup_size(64,1,1)
+fn scatter_set_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.x;
+
+    let input_offset1 = op_index_input_layout1;                                    //self
+    let input_offset2 = op_index_input_layout1 + get_size1(); //index
+    let input_offset3 = input_offset2 + get_size2(); //src
+    let dim = op_gather_dim;
+
+
+    let dims1 = CONST_DIMS1;
+    let start_offset1 = select(CONST_IS_STARTOFFSET_ZERO1, 0u, op_meta[input_offset1]);
+
+    let dims2 = CONST_DIMS2;
+    let start_offset2 = select(CONST_IS_STARTOFFSET_ZERO2, 0u, op_meta[input_offset2]);
+
+    let dims3 = CONST_DIMS3;
+    let start_offset3 = select(CONST_IS_STARTOFFSET_ZERO3, 0u, op_meta[input_offset3]);
+
+    let start_shape_offset1 = input_offset1 + select(CONST_IS_STARTOFFSET_ZERO1, 0u, 1u);
+    let start_shape_offset2 = input_offset2 + select(CONST_IS_STARTOFFSET_ZERO2, 0u, 1u);
+    let start_shape_offset3 = input_offset3 + select(CONST_IS_STARTOFFSET_ZERO3, 0u, 1u);
+
+    let unused = CONST_IS_CONTIGUOUS3;
+   
+    //var new_index_out = 0u; 
+
+    let selected_index_length = op_meta[start_shape_offset2 + dim];
+
+    for (var dim_index = 0u; dim_index < selected_index_length; dim_index++){
+        var shapes_i = 1u;
+        var new_index1 = start_offset1;   
+        var new_index2 = start_offset2;   
+        var new_index3 = start_offset3;   
+        for (var i2 : i32 = i32(dims1) - 1; i2 >= 0; i2--){
+            let i = u32(i2);
+           
+            if(i != dim){
+                let prev_shapes_i = shapes_i;
+                shapes_i *= op_meta[start_shape_offset2 + i]; 
+
+                let si = (index / prev_shapes_i) % (shapes_i / prev_shapes_i);  
+                new_index2 += si * op_meta[start_shape_offset2 + dims2 + i]; //index
+
+                new_index3 += si * op_meta[start_shape_offset3 + dims3 + i]; //src
+
+                new_index1 += si * op_meta[start_shape_offset1 + dims1 + i]; //self
+            }
+            else{
+                let si = dim_index;
+
+                new_index2 += si * op_meta[start_shape_offset2 + dims2 + i]; //index
+
+                new_index3 += si * op_meta[start_shape_offset3 + dims3 + i]; //src
+            }
+        }
+
+        if index < shapes_i{ //in shapes_i is the length after the for loop
+            new_index1 += v_input1_u32[new_index2] * op_meta[start_shape_offset1 + dims1 + dim]; //s_i * stride_i
+            v_dest[new_index1] = v_input2[new_index3];
+        }
+    }
+}
+
+
+@compute
+@workgroup_size(64,1,1)
 fn index_add_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
 

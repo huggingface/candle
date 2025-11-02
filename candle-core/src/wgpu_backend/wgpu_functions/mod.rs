@@ -47,7 +47,7 @@ pub use convert::{
     queue_convert_f32_to_f16, queue_convert_f16_to_f32
 };
 pub use copy::{queue_copy, queue_copy2d, queue_copy3d, queue_copy3d_padded, queue_copy_strided, queue_transpose3d};
-pub use gather::{queue_gather, queue_index_add_inplace, queue_scatter_add_inplace};
+pub use gather::{queue_gather, queue_index_add_inplace, queue_scatter_add_inplace, queue_scatter_set_inplace};
 pub use index_select::queue_index_select;
 pub use matmul::queue_matmul_buffer;
 pub use pool2d::{queue_avg_pool2d, queue_max_pool2d};
@@ -181,7 +181,7 @@ impl WgpuDevice{
             (crate::DType::I64, true) => Ok(DType::I64),
             (crate::DType::F64, true) => Ok(DType::F64),
             (crate::DType::F16, true) => Ok(DType::F16),
-            (crate::DType::BF16, _) | (crate::DType::U8, _) => Err(crate::Error::Wgpu(WgpuError::from(format!(
+            (crate::DType::BF16, _) | (crate::DType::U8, _) | (crate::DType::F8E4M3, _) => Err(crate::Error::Wgpu(WgpuError::from(format!(
                 "Dtype {:?} not supported on wgpu",
                 dtype
             )))),

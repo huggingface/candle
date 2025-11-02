@@ -76,6 +76,24 @@ async fn broadcast_matmul(device: &Device) -> Result<()> {
     }
     Ok(())
 }
+#[test]
+async fn tensor_dot() -> Result<()> {
+    let lhs = Tensor::new(&[1., 2., 3.], &Device::Cpu)?;
+    let rhs = Tensor::new(&[4., 5., 6.], &Device::Cpu)?;
+    let expected = Tensor::new(32., &Device::Cpu)?;
+    let dot_ret = lhs.dot(&rhs)?;
+    candle::test_utils::assert_tensor_eq(&dot_ret, &expected)?;
+    Ok(())
+}
+#[test]
+async fn tensor_mv() -> Result<()> {
+    let mat = Tensor::new(&[[1., 2., 3.], [4., 5., 6.]], &Device::Cpu)?;
+    let vec = Tensor::new(&[1., 1., 1.], &Device::Cpu)?;
+    let expected = Tensor::new(&[6., 15.], &Device::Cpu)?;
+    let mv_ret = mat.mv(&vec)?;
+    candle::test_utils::assert_tensor_eq(&mv_ret, &expected)?;
+    Ok(())
+}
 async fn squeeze_mm(device: &Device) -> Result<()> {
     let seq_len = 8_usize;
     let a = Tensor::zeros((1, seq_len, 16), DType::F32, device)?;

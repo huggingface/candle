@@ -254,18 +254,6 @@ impl crate::backend::BackendStorage for WgpuStorage {
         Err(Error::NotCompiledWithWgpuSupport)
     }
 
-    fn scatter_add(
-        &self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
-    ) -> Result<Self> {
-        Err(Error::NotCompiledWithWgpuSupport)
-    }
-
     fn index_add(
         &self,
         _: &Layout,
@@ -320,6 +308,34 @@ impl crate::backend::BackendStorage for WgpuStorage {
     fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
         Err(Error::NotCompiledWithWgpuSupport)
     }
+    
+    fn scatter_set(
+        &mut self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: usize,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithWgpuSupport)
+    }
+    
+    fn scatter_add_set(
+        &mut self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: usize,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithWgpuSupport)
+    }
+    
+    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
+        Err(Error::NotCompiledWithWgpuSupport)
+    }
 }
 
 impl WgpuDevice{
@@ -351,10 +367,6 @@ impl crate::backend::BackendDevice for WgpuDevice {
     }
 
     fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
-        Err(Error::NotCompiledWithWgpuSupport)
-    }
-
-    fn ones_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithWgpuSupport)
     }
 

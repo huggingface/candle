@@ -549,6 +549,7 @@ impl WgpuDevice {
             DType::F64 => self.device_features.contains(wgpu::Features::SHADER_F64),
             DType::F16 => self.device_features.contains(wgpu::Features::SHADER_F16),
             DType::BF16 => false,
+            DType::F8E4M3 => false,
         }
     }
 
@@ -735,23 +736,6 @@ impl crate::backend::BackendDevice for WgpuDevice {
             )?;
         }
 
-        Ok(buffer)
-    }
-
-    fn ones_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
-        let buffer = self.alloc_uninit_size(dtype, shape.elem_count());
-
-        if shape.elem_count() > 0 {
-            wgpu_functions::queue_unary_inplace_op(
-                self,
-                *buffer.buffer(),
-                UnaryOperation::SetOne,
-                0.0,
-                0.0,
-                dtype,
-                &Layout::contiguous(shape),
-            )?;
-        }
         Ok(buffer)
     }
 

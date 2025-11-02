@@ -154,6 +154,9 @@ impl LogitsProcessor {
 
         let next_token = match &self.sampling {
             Sampling::ArgMax => self.sample_argmax_async(logits).await?,
+            Sampling::GumbelSoftmax { temperature } => {
+                self.sample_gumbel_softmax(&logits, *temperature)?
+            }
             Sampling::All { temperature } => {
                 let prs : Vec<f32> = prs(*temperature,&logits,f).await?;
                 self.sample_multinomial(&prs)?

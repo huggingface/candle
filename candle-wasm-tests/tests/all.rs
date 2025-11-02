@@ -117,6 +117,19 @@ async fn conv1d(dev: &Device) -> Result<()> {
         to_vec1_round_async(& res.flatten_all() ?, 4). await ?, [2.4509, 2.6357, -
         1.3336, 4.1393, 0.5657, 1.8091, - 1.1784, 3.5675, 0.5069, 3.3352]
     );
+    let res = {
+        let t = Tensor::cat(&[&t.zeros_like()?, &t, &t.zeros_like()?], 0)?;
+        t.conv1d(&w, 1, 1, 1, 1)?
+    };
+    assert_eq!(res.dims(), [3, 2, 5]);
+    assert_eq!(
+        to_vec1_round_async(& res.i(0) ?.flatten_all() ?, 4). await ?, [0., 0., 0., 0.,
+        0., 0., 0., 0., 0., 0.]
+    );
+    assert_eq!(
+        to_vec1_round_async(& res.i(1) ?.flatten_all() ?, 4). await ?, [2.4509, 2.6357, -
+        1.3336, 4.1393, 0.5657, 1.8091, - 1.1784, 3.5675, 0.5069, 3.3352]
+    );
     let w = w.transpose(0, 1)?;
     for w in [w.clone(), w.contiguous()?] {
         let res = t.conv_transpose1d(&w, 0, 0, 1, 1, 1)?;
@@ -343,6 +356,20 @@ async fn conv2d(dev: &Device) -> Result<()> {
     assert_eq!(res.dims(), [1, 2, 3, 3]);
     assert_eq!(
         to_vec1_round_async(& res.flatten_all() ?, 4). await ?, [- 4.2812, 2.0923,
+        5.2187, 7.5184, 0.752, - 14.9426, 10.0087, 4.391, 0.2918, 1.6715, 10.389, 3.6023,
+        - 4.2808, 0.2672, 5.3646, - 5.2023, - 2.1955, - 9.4075]
+    );
+    let res = {
+        let t = Tensor::cat(&[&t.zeros_like()?, &t, &t.zeros_like()?], 0)?;
+        t.conv2d(&w, 0, 1, 1, 1)?
+    };
+    assert_eq!(res.dims(), [3, 2, 3, 3]);
+    assert_eq!(
+        to_vec1_round_async(& res.i(0) ?.flatten_all() ?, 4). await ?, [0., 0., 0., 0.,
+        0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]
+    );
+    assert_eq!(
+        to_vec1_round_async(& res.i(1) ?.flatten_all() ?, 4). await ?, [- 4.2812, 2.0923,
         5.2187, 7.5184, 0.752, - 14.9426, 10.0087, 4.391, 0.2918, 1.6715, 10.389, 3.6023,
         - 4.2808, 0.2672, 5.3646, - 5.2023, - 2.1955, - 9.4075]
     );
@@ -1195,7 +1222,7 @@ impl CustomOp1 for Elu {
     fn cpu_fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
         let storage = candle::map_dtype!(
             "elu", s, | s | cpu_backend::unary_map(s, l, | v | fwd(v, self.alpha)),
-            (BF16, F16, F32, F64)
+            (F8E4M3, BF16, F16, F32, F64)
         );
         Ok((storage, l.shape().clone()))
     }
@@ -1230,7 +1257,7 @@ impl CustomOp1 for EluBackward {
     fn cpu_fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
         let storage = candle::map_dtype!(
             "elu-bwd", s, | s | cpu_backend::unary_map(s, l, | v | bwd(v, self.alpha)),
-            (BF16, F16, F32, F64)
+            (F8E4M3, BF16, F16, F32, F64)
         );
         Ok((storage, l.shape().clone()))
     }
@@ -1277,6 +1304,7 @@ impl candle::InplaceOp1 for Elu {
     fn cpu_fwd(&self, s: &mut CpuStorage, _l: &Layout) -> Result<()> {
         let alpha = self.alpha;
         match s {
+            CpuStorage::F8E4M3(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
             CpuStorage::BF16(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
             CpuStorage::F16(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
             CpuStorage::F32(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
@@ -1424,7 +1452,7 @@ use candle_wasm_tests::{
     to_vec0_round_async, to_vec1_round_async, to_vec2_round_async, to_vec3_round_async,
 };
 use anyhow::{Context, Result};
-use candle::{test_device, test_utils, Device, Shape, Tensor, Var};
+use candle::{test_device, test_utils, DType, Device, Shape, Tensor, Var};
 async fn simple_grad(device: &Device) -> Result<()> {
     let x = Var::new(&[3f32, 1., 4.], device)?;
     let x = x.as_tensor();
@@ -1885,6 +1913,26 @@ async fn binary_grad(device: &Device) -> Result<()> {
     assert_eq!(grad_y.to_vec1_async::< f32 > (). await ?, [4.0, 14.0, 2.0]);
     Ok(())
 }
+#[test]
+async fn test_flip_backprop() -> Result<()> {
+    let device = &Device::Cpu;
+    let x = Var::ones((2, 2), DType::F64, device)?;
+    let weights = Tensor::arange(1.0, 5.0, device)?.reshape((2, 2))?;
+    let y = x.matmul(&weights)?;
+    let expected_y = Tensor::from_vec(vec![4.0, 6.0, 4.0, 6.0], (2, 2), device)?;
+    candle::test_utils::assert_tensor_eq(&y, &expected_y)?;
+    let z = y.flip(&[1])?;
+    let expected_z = Tensor::from_vec(vec![6.0, 4.0, 6.0, 4.0], (2, 2), device)?;
+    candle::test_utils::assert_tensor_eq(&z, &expected_z)?;
+    let loss = z.sum_all()?;
+    let grad_store = loss.backward()?;
+    let grad_x = grad_store.get_id(x.id()).unwrap();
+    let flipped_weights = weights.flip(&[1])?;
+    let dloss_dy = Tensor::ones((2, 2), DType::F64, device)?;
+    let expected_grad = dloss_dy.matmul(&flipped_weights.t()?)?;
+    candle::test_utils::assert_tensor_eq(grad_x, &expected_grad)?;
+    Ok(())
+}
 candle_wasm_tests::test_device!(
     simple_grad, simple_grad_cpu, simple_grad_gpu, simple_grad_metal, simple_grad_wgpu
 );
@@ -2238,6 +2286,24 @@ async fn broadcast_matmul(device: &Device) -> Result<()> {
     }
     Ok(())
 }
+#[test]
+async fn tensor_dot() -> Result<()> {
+    let lhs = Tensor::new(&[1., 2., 3.], &Device::Cpu)?;
+    let rhs = Tensor::new(&[4., 5., 6.], &Device::Cpu)?;
+    let expected = Tensor::new(32., &Device::Cpu)?;
+    let dot_ret = lhs.dot(&rhs)?;
+    candle::test_utils::assert_tensor_eq(&dot_ret, &expected)?;
+    Ok(())
+}
+#[test]
+async fn tensor_mv() -> Result<()> {
+    let mat = Tensor::new(&[[1., 2., 3.], [4., 5., 6.]], &Device::Cpu)?;
+    let vec = Tensor::new(&[1., 1., 1.], &Device::Cpu)?;
+    let expected = Tensor::new(&[6., 15.], &Device::Cpu)?;
+    let mv_ret = mat.mv(&vec)?;
+    candle::test_utils::assert_tensor_eq(&mv_ret, &expected)?;
+    Ok(())
+}
 async fn squeeze_mm(device: &Device) -> Result<()> {
     let seq_len = 8_usize;
     let a = Tensor::zeros((1, seq_len, 16), DType::F32, device)?;
@@ -2528,6 +2594,7 @@ use candle_wasm_tests::{
     to_vec0_round_async, to_vec1_round_async, to_vec2_round_async, to_vec3_round_async,
 };
 use candle::{test_device, test_utils, DType, Device, IndexOp, Result, Tensor, D};
+use float8::F8E4M3;
 async fn zeros(device: &Device) -> Result<()> {
     let tensor = Tensor::zeros((5, 2), DType::F32, device)?;
     let (dim1, dim2) = tensor.dims2()?;
@@ -2558,11 +2625,13 @@ async fn ones(device: &Device) -> Result<()> {
         Tensor::ones((2, 3), DType::F32, device) ?.to_vec2_async::< f32 > (). await ?,
         [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
     );
-    if device.is_dtype_available(DType::F64) {
-        assert_eq!(
-            Tensor::ones((2, 3), DType::F64, device) ?.to_vec2_async::< f64 > (). await
-            ?, [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
-        );
+    if !device.is_metal() {
+        if device.is_dtype_available(DType::F64) {
+            assert_eq!(
+                Tensor::ones((2, 3), DType::F64, device) ?.to_vec2_async::< f64 > ().
+                await ?, [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+            );
+        }
     }
     if device.is_dtype_available(DType::F16) {
         assert_eq!(
@@ -2577,10 +2646,37 @@ async fn ones(device: &Device) -> Result<()> {
             half::bf16::from_f32(1.0)], [half::bf16::from_f32(1.0),
             half::bf16::from_f32(1.0), half::bf16::from_f32(1.0)]],
         );
+        if !device.is_metal() {
+            assert_eq!(
+                Tensor::ones((2, 3), DType::F8E4M3, device) ?.to_vec2_async::< F8E4M3 >
+                (). await ?, [[F8E4M3::from_f32(1.), F8E4M3::from_f32(1.),
+                F8E4M3::from_f32(1.)], [F8E4M3::from_f32(1.), F8E4M3::from_f32(1.),
+                F8E4M3::from_f32(1.)]],
+            );
+        }
     }
     Ok(())
 }
 async fn full(device: &Device) -> Result<()> {
+    let tensor = Tensor::zeros((3, 4), DType::U32, device)?;
+    tensor.const_set(42u32.into())?;
+    assert_eq!(
+        tensor.to_vec2_async::< u32 > (). await ?, [[42, 42, 42, 42], [42, 42, 42, 42],
+        [42, 42, 42, 42]]
+    );
+    tensor.i((.., 2))?.const_set(1337u32.into())?;
+    assert_eq!(
+        tensor.to_vec2_async::< u32 > (). await ?, [[42, 42, 1337, 42], [42, 42, 1337,
+        42], [42, 42, 1337, 42]]
+    );
+    tensor.i((2, ..))?.const_set(1u32.into())?;
+    assert_eq!(
+        tensor.to_vec2_async::< u32 > (). await ?, [[42, 42, 1337, 42], [42, 42, 1337,
+        42], [1, 1, 1, 1]]
+    );
+    Ok(())
+}
+async fn const_set(device: &Device) -> Result<()> {
     assert_eq!(
         Tensor::full(42u32, (2, 3), device) ?.to_vec2_async::< u32 > (). await ?, [[42,
         42, 42], [42, 42, 42]],
@@ -2606,6 +2702,13 @@ async fn arange(device: &Device) -> Result<()> {
         assert_eq!(
             Tensor::arange_step(5i64, 0i64, - 1, device) ?.to_vec1_async::< i64 > ().
             await ?, [5, 4, 3, 2, 1],
+        );
+    }
+    if !device.is_metal() {
+        assert_eq!(
+            Tensor::arange_step(F8E4M3::from_f32(0.), F8E4M3::from_f32(5.),
+            F8E4M3::from_f32(2.), device) ? .to_vec1_async::< F8E4M3 > (). await ?,
+            [F8E4M3::from_f32(0.), F8E4M3::from_f32(2.), F8E4M3::from_f32(4.),],
         );
     }
     Ok(())
@@ -3213,12 +3316,23 @@ async fn embeddings(device: &Device) -> Result<()> {
     assert_eq!(
         hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]
     );
-    if device.is_dtype_available(DType::I64) {
-        let hs = t.index_select(&ids.to_dtype(DType::I64)?, 0)?;
-        assert_eq!(
-            hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]
-        );
-    }
+    let hs = t.index_select(&ids.to_dtype(DType::I64)?, 0)?;
+    assert_eq!(
+        hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]
+    );
+    let ids = Tensor::new(&[u32::MAX, 2u32, u32::MAX], device)?;
+    let hs = t.index_select(&ids, 0)?;
+    assert_eq!(
+        hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 0.0], [4.0, 5.0], [0.0, 0.0]]
+    );
+    Ok(())
+}
+#[test]
+async fn index_select_fail() -> Result<()> {
+    let ids = Tensor::new(&[4u32, 2u32, 1u32], &Device::Cpu)?;
+    let t = Tensor::new(&[[0f32, 1f32], [2f32, 3f32], [4f32, 5f32]], &Device::Cpu)?;
+    let hs = t.index_select(&ids, 0);
+    assert!(hs.is_err());
     Ok(())
 }
 async fn cmp(device: &Device) -> Result<()> {
@@ -3331,7 +3445,7 @@ async fn slice_scatter(device: &Device) -> Result<()> {
     );
     Ok(())
 }
-async fn scatter_add(device: &Device) -> Result<()> {
+async fn scatter(device: &Device) -> Result<()> {
     let t = Tensor::arange(0f32, 12f32, device)?.reshape((4, 3))?;
     assert_eq!(
         t.to_vec2_async::< f32 > (). await ?, & [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0], [6.0,
@@ -3344,11 +3458,37 @@ async fn scatter_add(device: &Device) -> Result<()> {
         hs.to_vec2_async::< f32 > (). await ?, & [[1.0, 2.0, 3.0, 1.0, 1.0], [6.0, 1.0,
         1.0, 4.0, 5.0], [1.0, 9.0, 1.0, 14.0, 1.0], [11.0, 1.0, 10.0, 1.0, 12.0]]
     );
+    let hs = init.scatter(&ids, &t, 1)?;
+    assert_eq!(
+        hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 1.0, 2.0, 1.0, 1.0], [5.0, 1.0,
+        1.0, 3.0, 4.0], [1.0, 8.0, 1.0, 7.0, 1.0], [10.0, 1.0, 9.0, 1.0, 11.0]]
+    );
     let init = Tensor::ones((6, 3), DType::F32, device)?;
     let hs = init.scatter_add(&ids, &t, 0)?;
     assert_eq!(
         hs.to_vec2_async::< f32 > (). await ?, & [[1.0, 11.0, 6.0], [1.0, 2.0, 9.0],
         [10.0, 1.0, 3.0], [10.0, 8.0, 1.0], [1.0, 5.0, 12.0], [1.0, 1.0, 1.0]]
+    );
+    let hs = init.scatter(&ids, &t, 0)?;
+    assert_eq!(
+        hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 10.0, 5.0], [1.0, 1.0, 8.0],
+        [9.0, 1.0, 2.0], [6.0, 7.0, 1.0], [1.0, 4.0, 11.0], [1.0, 1.0, 1.0]]
+    );
+    let hs = {
+        let ids = Tensor::new(
+            &[[0u32, u32::MAX, 2], [3, 4, u32::MAX], [3, 3, 1], [u32::MAX, u32::MAX, 4]],
+            device,
+        )?;
+        init.scatter(&ids, &t, 0)?
+    };
+    assert_eq!(
+        hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 1.0, 1.0], [1.0, 1.0, 8.0], [1.0,
+        1.0, 2.0], [6.0, 7.0, 1.0], [1.0, 4.0, 11.0], [1.0, 1.0, 1.0]]
+    );
+    init.scatter_set(&ids, &t, 0)?;
+    assert_eq!(
+        init.to_vec2_async::< f32 > (). await ?, & [[0.0, 10.0, 5.0], [1.0, 1.0, 8.0],
+        [9.0, 1.0, 2.0], [6.0, 7.0, 1.0], [1.0, 4.0, 11.0], [1.0, 1.0, 1.0]]
     );
     Ok(())
 }
@@ -3377,6 +3517,17 @@ async fn gather(device: &Device) -> Result<()> {
     let hs = t.gather(&ids, 0)?;
     assert_eq!(
         hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 7.0, 2.0], [0.0, 4.0, 5.0]]
+    );
+    let hs = {
+        let ids = Tensor::new(
+            &[[0u32, 0u32], [2u32, u32::MAX], [u32::MAX, 1u32], [0u32, 2u32]],
+            device,
+        )?;
+        t.gather(&ids, 1)?
+    };
+    assert_eq!(
+        hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 0.0], [5.0, 0.0], [0.0, 7.0],
+        [9.0, 11.0]]
     );
     let t = Tensor::new(
         &[
@@ -3761,6 +3912,7 @@ async fn zero_dim(device: &Device) -> Result<()> {
 candle_wasm_tests::test_device!(zeros, zeros_cpu, zeros_gpu, zeros_metal, zeros_wgpu);
 candle_wasm_tests::test_device!(ones, ones_cpu, ones_gpu, ones_metal, ones_wgpu);
 candle_wasm_tests::test_device!(full, full_cpu, full_gpu, full_metal, full_wgpu);
+candle_wasm_tests::test_device!(const_set, cs_cpu, cs_gpu, cs_metal, cs_wgpu);
 candle_wasm_tests::test_device!(
     arange, arange_cpu, arange_gpu, arange_metal, arange_wgpu
 );
@@ -3818,7 +3970,7 @@ candle_wasm_tests::test_device!(
     gather, gather_cpu, gather_gpu, gather_metal, gather_wgpu
 );
 candle_wasm_tests::test_device!(
-    scatter_add, scatter_add_cpu, scatter_add_gpu, scatter_add_metal, scatter_add_wgpu
+    scatter, scatter_cpu, scatter_gpu, scatter_metal, scatter_add_wgpu
 );
 candle_wasm_tests::test_device!(
     slice_scatter, slice_scatter_cpu, slice_scatter_gpu, slice_scatter_metal,
@@ -3830,6 +3982,22 @@ candle_wasm_tests::test_device!(asort, asort_cpu, asort_gpu, asort_metal);
 candle_wasm_tests::test_device!(var, var_cpu, var_gpu, var_metal, var_wgpu);
 candle_wasm_tests::test_device!(
     zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal, zero_dim_wgpu
+);
+async fn tensor_send_sync(device: &Device) -> Result<()> {
+    let tensor = Tensor::new(vec![1.0f32, 2.0, 3.0], device)?;
+    for _ in 0..10 {
+        let tensor = tensor.clone();
+        std::thread::spawn(async move || {
+            let new = tensor.add(&tensor).unwrap();
+            let result: Vec<f32> = new.to_vec1_async().await.unwrap();
+            assert_eq!(result, vec![2.0f32, 4.0, 6.0]);
+        });
+    }
+    Ok(())
+}
+candle_wasm_tests::test_device!(
+    tensor_send_sync, tensor_send_sync_cpu, tensor_send_sync_gpu, tensor_send_sync_metal,
+    tensor_send_sync_wgpu
 );
 #[test]
 async fn randn_hasneg() -> Result<()> {
@@ -3951,6 +4119,64 @@ async fn pow() -> Result<()> {
     assert_eq!(
         to_vec2_round_async(& res, 3). await ?, [[1.0, 1.0, 3.0], [16.0, 125.0, 1296.0]]
     );
+    Ok(())
+}
+#[test]
+async fn test_flip_1d() -> Result<()> {
+    let t = Tensor::arange(0.0, 5.0, &Device::Cpu)?.reshape((5,))?;
+    let flipped = t.flip(&[0])?;
+    let expected = Tensor::from_vec(vec![4.0, 3.0, 2.0, 1.0, 0.0], (5,), &Device::Cpu)?;
+    candle::test_utils::assert_tensor_eq(&flipped, &expected)?;
+    Ok(())
+}
+#[test]
+async fn test_flip_2d() -> Result<()> {
+    let t = Tensor::arange(0.0, 6.0, &Device::Cpu)?.reshape((2, 3))?;
+    let flipped = t.flip(&[0, 1])?;
+    let expected = Tensor::from_vec(
+        vec![5.0, 4.0, 3.0, 2.0, 1.0, 0.0],
+        (2, 3),
+        &Device::Cpu,
+    )?;
+    candle::test_utils::assert_tensor_eq(&flipped, &expected)?;
+    Ok(())
+}
+#[test]
+async fn test_flip_3d_channels() -> Result<()> {
+    let t = Tensor::arange(0.0, 12.0, &Device::Cpu)?.reshape((2, 2, 3))?;
+    let flipped = t.flip(&[2])?;
+    let expected = Tensor::from_vec(
+        vec![2.0, 1.0, 0.0, 5.0, 4.0, 3.0, 8.0, 7.0, 6.0, 11.0, 10.0, 9.0],
+        (2, 2, 3),
+        &Device::Cpu,
+    )?;
+    candle::test_utils::assert_tensor_eq(&flipped, &expected)?;
+    Ok(())
+}
+#[test]
+async fn tensor_new() -> Result<()> {
+    let t1 = Tensor::new(vec![1f32, 2.0, 3.0], &Device::Cpu)?;
+    assert_eq!(t1.to_vec1_async::< f32 > (). await ?, [1.0, 2.0, 3.0]);
+    let t2 = Tensor::new(vec![vec![1f32, 2., 3.], vec![4., 5., 6.]], &Device::Cpu)?;
+    assert_eq!(t2.to_vec2_async::< f32 > (). await ?, [[1., 2., 3.], [4., 5., 6.]]);
+    let t3 = Tensor::new(
+        vec![
+            vec![vec![1f32, 2., 3.], vec![4., 5., 6.]], vec![vec![3f32, 1., 4.], vec![1.,
+            5., 9.]],
+        ],
+        &Device::Cpu,
+    )?;
+    assert_eq!(
+        t3.to_vec3_async::< f32 > (). await ?, [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+        [[3.0, 1.0, 4.0], [1.0, 5.0, 9.0]]]
+    );
+    Ok(())
+}
+#[test]
+async fn tensor_norm() -> Result<()> {
+    let t = Tensor::new(&[[3., 4.], [0., 0.]], &Device::Cpu)?;
+    let norm = t.norm()?;
+    assert_eq!(norm.to_scalar_async::< f64 > (). await ?, 5.);
     Ok(())
 }
 }pub mod batch_norm {#![allow(unused_imports, unexpected_cfgs)]
@@ -4168,6 +4394,51 @@ async fn train_batch_norm() -> Result<()> {
     );
     Ok(())
 }
+}pub mod cpu_flash_attn {#![allow(unused_imports, unexpected_cfgs)]
+wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_test::wasm_bindgen_test as test;
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::test as test;
+use candle_wasm_tests::{
+    to_vec0_round_async, to_vec1_round_async, to_vec2_round_async, to_vec3_round_async,
+};
+use candle::{DType, Device, Result, Tensor};
+use candle_nn::cpu_flash_attention::run_flash_attn_cpu;
+#[test]
+async fn cpu_flash_attn() -> Result<()> {
+    let b = 1;
+    let s = 2;
+    let h = 1;
+    let d = 4;
+    let softmax_scale = 1.0f32 / (d as f32).sqrt();
+    let q = Tensor::randn(0f32, 1f32, (b, h, s, d), &Device::Cpu)?;
+    let k = Tensor::randn(0f32, 1f32, (b, h, s, d), &Device::Cpu)?;
+    let v = Tensor::randn(0f32, 1f32, (b, h, s, d), &Device::Cpu)?;
+    let ground_truth = {
+        let att = (q.clone() * softmax_scale as f64)?.matmul(&k.clone().t()?)?;
+        let att = candle_nn::ops::softmax_last_dim(&att.to_dtype(DType::F32)?)?
+            .to_dtype(q.dtype())?;
+        att.matmul(&v.clone())?
+    };
+    let out = run_flash_attn_cpu::<
+        f32,
+    >(
+        &q.transpose(1, 2)?,
+        &k.transpose(1, 2)?,
+        &v.transpose(1, 2)?,
+        None,
+        softmax_scale,
+        None,
+        None,
+    )?;
+    let out_arr: Vec<f32> = out.flatten_all()?.to_vec1_async().await?;
+    let ground_truth_arr: Vec<f32> = ground_truth.flatten_all()?.to_vec1_async().await?;
+    for (a, b) in out_arr.iter().zip(ground_truth_arr.iter()) {
+        assert!((a - b).abs() < 1e-5, "{a} {b}");
+    }
+    Ok(())
+}
 }pub mod group_norm {#![allow(unused_imports, unexpected_cfgs)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
@@ -4279,9 +4550,16 @@ async fn rotating_kv_cache() -> Result<()> {
         assert_eq!(cache.current_seq_len(), 0);
         let data = cache.current_data()?;
         assert!(data.is_none());
+        assert_eq!(cache.positions(1), & [0]);
+        assert_eq!(cache.positions(2), & [0, 1]);
         let t = Tensor::new(&[1., 2., 3.], &Device::Cpu)?;
         let data = cache.append(&t)?;
         assert_eq!(data.to_vec1_async::< f64 > (). await ?, [1., 2., 3.]);
+        assert_eq!(cache.positions(0), & [0, 1, 2]);
+        assert_eq!(cache.positions(1), & [0, 1, 2, 3]);
+        assert_eq!(cache.positions(2), & [0, 1, 2, 3, 4]);
+        assert_eq!(cache.positions(3), & [0, 1, 2, 3, 4, 5]);
+        assert_eq!(cache.positions(4), & [6, 1, 2, 3, 4, 5]);
         let t = Tensor::new(&[4.], &Device::Cpu)?;
         let data = cache.append(&t)?;
         assert_eq!(data.to_vec1_async::< f64 > (). await ?, [1., 2., 3., 4.]);
@@ -4315,6 +4593,10 @@ async fn rotating_kv_cache() -> Result<()> {
             mask.to_vec2_async::< u8 > (). await ?, & [[0, 0, 1, 1, 0, 0], [0, 0, 0, 1,
             0, 0], [0, 0, 0, 0, 0, 0]],
         );
+        assert_eq!(cache.positions(0), & [12, 7, 8, 9, 10, 11]);
+        assert_eq!(cache.positions(2), & [12, 13, 14, 9, 10, 11]);
+        assert_eq!(cache.positions(3), & [12, 13, 14, 15, 10, 11]);
+        assert_eq!(cache.positions(8), & [13, 14, 15, 16, 17, 18, 19, 20]);
         let t = Tensor::new(&[0., 1., 2., 3., 4., 5., 6., 7., 8.], &Device::Cpu)?;
         let data = cache.append(&t)?;
         assert_eq!(
@@ -4322,6 +4604,8 @@ async fn rotating_kv_cache() -> Result<()> {
         );
         assert_eq!(cache.current_seq_len(), 22);
         assert_eq!(cache.offset(), 0);
+        assert_eq!(cache.positions(0), & [16, 17, 18, 19, 20, 21]);
+        assert_eq!(cache.positions(1), & [22, 17, 18, 19, 20, 21]);
         let mask = cache.attn_mask(1, &Device::Cpu)?;
         assert!(mask.is_none());
         let mask = cache.attn_mask(2, &Device::Cpu)?.unwrap();
@@ -4552,7 +4836,7 @@ use tokio::test as test;
 use candle_wasm_tests::{
     to_vec0_round_async, to_vec1_round_async, to_vec2_round_async, to_vec3_round_async,
 };
-use candle::{test_device, test_utils::to_vec3_round, Device, Result, Tensor};
+use candle::{test_device, test_utils::to_vec3_round, Device, IndexOp, Result, Tensor};
 async fn softmax(device: &Device) -> Result<()> {
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
     let tensor = Tensor::new(data, device)?;
@@ -4687,6 +4971,26 @@ async fn ropei(device: &Device) -> Result<()> {
     } else {
         assert!(sum_diff < 1e-4);
     }
+    let cos2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let sin2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let cos2 = Tensor::from_vec(cos2, (seq_len, head_dim / 2), device)?;
+    let sin2 = Tensor::from_vec(sin2, (seq_len, head_dim / 2), device)?;
+    let rope1 = candle_nn::rotary_emb::rope_i(&src.i(0..1)?, &cos, &sin)?;
+    let rope2 = candle_nn::rotary_emb::rope_i(&src.i(1..2)?, &cos2, &sin2)?;
+    let both_cos = Tensor::stack(&[cos, cos2], 0)?;
+    let both_sin = Tensor::stack(&[sin, sin2], 0)?;
+    let both_rope = candle_nn::rotary_emb::rope_i(&src, &both_cos, &both_sin)?;
+    let both_rope2 = Tensor::cat(&[rope1, rope2], 0)?;
+    let sum_diff = (both_rope - both_rope2)?
+        .abs()?
+        .sum_all()?
+        .to_vec0_async::<f32>()
+        .await?;
+    assert_eq!(sum_diff, 0.);
     Ok(())
 }
 async fn rope(device: &Device) -> Result<()> {
@@ -4712,6 +5016,26 @@ async fn rope(device: &Device) -> Result<()> {
     } else {
         assert!(sum_diff < 1e-4);
     }
+    let cos2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let sin2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let cos2 = Tensor::from_vec(cos2, (seq_len, head_dim / 2), device)?;
+    let sin2 = Tensor::from_vec(sin2, (seq_len, head_dim / 2), device)?;
+    let rope1 = candle_nn::rotary_emb::rope(&src.i(0..1)?, &cos, &sin)?;
+    let rope2 = candle_nn::rotary_emb::rope(&src.i(1..2)?, &cos2, &sin2)?;
+    let both_cos = Tensor::stack(&[cos, cos2], 0)?;
+    let both_sin = Tensor::stack(&[sin, sin2], 0)?;
+    let both_rope = candle_nn::rotary_emb::rope(&src, &both_cos, &both_sin)?;
+    let both_rope2 = Tensor::cat(&[rope1, rope2], 0)?;
+    let sum_diff = (both_rope - both_rope2)?
+        .abs()?
+        .sum_all()?
+        .to_vec0_async::<f32>()
+        .await?;
+    assert_eq!(sum_diff, 0.);
     Ok(())
 }
 async fn rope_thd(device: &Device) -> Result<()> {
@@ -4740,6 +5064,35 @@ async fn rope_thd(device: &Device) -> Result<()> {
     } else {
         assert!(sum_diff < 1e-4);
     }
+    let cos2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let sin2: Vec<f32> = (0..seq_len * head_dim / 2)
+        .map(|_| rng.random::<f32>())
+        .collect();
+    let cos2 = Tensor::from_vec(cos2, (seq_len, head_dim / 2), device)?;
+    let sin2 = Tensor::from_vec(sin2, (seq_len, head_dim / 2), device)?;
+    let rope1 = {
+        let src = src.transpose(1, 2)?.contiguous()?;
+        candle_nn::rotary_emb::rope_thd(&src.i(0..1)?, &cos, &sin)?
+    };
+    let rope2 = {
+        let src = src.transpose(1, 2)?.contiguous()?;
+        candle_nn::rotary_emb::rope_thd(&src.i(1..2)?, &cos2, &sin2)?
+    };
+    let both_cos = Tensor::stack(&[cos, cos2], 0)?;
+    let both_sin = Tensor::stack(&[sin, sin2], 0)?;
+    let both_rope = {
+        let src = src.transpose(1, 2)?.contiguous()?;
+        candle_nn::rotary_emb::rope_thd(&src, &both_cos, &both_sin)?
+    };
+    let both_rope2 = Tensor::cat(&[rope1, rope2], 0)?;
+    let sum_diff = (both_rope - both_rope2)?
+        .abs()?
+        .sum_all()?
+        .to_vec0_async::<f32>()
+        .await?;
+    assert_eq!(sum_diff, 0.);
     Ok(())
 }
 async fn sigmoid(device: &Device) -> Result<()> {
@@ -5203,6 +5556,29 @@ async fn sample_with_top_k() -> Result<()> {
     assert_eq!(token, 3);
     let token = logits_process.sample_async(&logits).await?;
     assert_eq!(token, 2);
+    Ok(())
+}
+#[test]
+async fn sample_gumbel() -> Result<()> {
+    let mut logits_process = LogitsProcessor::from_sampling(
+        42,
+        candle_transformers::generation::Sampling::GumbelSoftmax {
+            temperature: 1.0,
+        },
+    );
+    let logits = Tensor::new(&[-1.0, 0.0, 0.2, 1.0], &Device::Cpu)?;
+    let sm = candle_nn::ops::softmax(&logits, 0)?.to_vec1_async::<f64>().await?;
+    let mut counts = vec![0f64; 4];
+    let samples = 100000;
+    for _ in 0..samples {
+        let token = logits_process.sample_async(&logits).await?;
+        counts[token as usize] += 1f64 / samples as f64;
+    }
+    for i in 0..4 {
+        if (counts[i] - sm[i]).abs() > 0.05 {
+            panic!("pr mismatch {counts:?} {sm:?}");
+        }
+    }
     Ok(())
 }
 }pub mod nms_tests {#![allow(unused_imports, unexpected_cfgs)]

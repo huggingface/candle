@@ -155,8 +155,8 @@ impl QWgpuStorage {
         queue.enqueue_workgroups(
             pipeline,
             bind_group,
-            (n as u32 + 15) / 16,
-            (m as u32+ 15) / 16,
+            (n as u32).div_ceil(16),
+            (m as u32).div_ceil(16),
             b as u32,
             k * m * n * b,
         );

@@ -54,6 +54,7 @@ pub enum UnaryOperation {
     Erf = 53,
     GeluErf = 54,
 
+    SetScalar = 100,
     AddScalar = 101,
     MultScalar = 102,
     MinusScalar = 103,

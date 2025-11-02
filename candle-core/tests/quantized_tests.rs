@@ -1036,7 +1036,7 @@ quantized_matmul!(
     quantized_matmul_q8_1_cpu,
     quantized_matmul_q8_1_cuda,
     quantized_matmul_q8_1_metal,
-//     quantized_matmul_q8_1_wgpu,
+    quantized_matmul_q8_1_wgpu,
     GgmlDType::Q8_1
 );
 quantized_matmul!(
@@ -1085,6 +1085,7 @@ quantized_matmul!(
     quantized_matmul_q8k_cpu,
     quantized_matmul_q8k_cuda,
     quantized_matmul_q8k_metal,
+    quantized_matmul_q8k_wgpu,
     GgmlDType::Q8K
 );
 
