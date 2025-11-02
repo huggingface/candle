@@ -4,7 +4,7 @@
 mod common;
 
 use candle_macros::register_quantized_types;
-use candle_macros_types::{QuantizedCudaOps, QuantizedType};
+use candle_macros_types::{CudaStorageDevice, QuantizedCudaOps, QuantizedType};
 
 pub use common::{CudaDevice, Error, Result};
 
@@ -26,28 +26,31 @@ impl QuantizedType for Q4_0 {
 }
 
 impl QuantizedCudaOps for Q4_0 {
-    fn quantize_cuda(
+    fn quantize_cuda<D: CudaStorageDevice>(
         &self,
         _input: &cudarc::driver::CudaSlice<f32>,
+        _device: &D,
     ) -> std::result::Result<cudarc::driver::CudaSlice<u8>, String> {
         // Not actually implemented - just verifying the macro generates correct CUDA code
         Err("Not implemented in test".to_string())
     }
 
-    fn dequantize_cuda(
+    fn dequantize_cuda<D: CudaStorageDevice>(
         &self,
         _data: &cudarc::driver::CudaSlice<u8>,
         _output: &mut cudarc::driver::CudaSlice<f32>,
+        _device: &D,
     ) -> std::result::Result<(), String> {
         Err("Not implemented in test".to_string())
     }
 
-    fn matmul_cuda(
+    fn matmul_cuda<D: CudaStorageDevice>(
         &self,
         _lhs: &cudarc::driver::CudaSlice<f32>,
         _lhs_shape: &[usize],
         _rhs: &cudarc::driver::CudaSlice<u8>,
         _rhs_shape: &[usize],
+        _device: &D,
     ) -> std::result::Result<cudarc::driver::CudaSlice<f32>, String> {
         Err("Not implemented in test".to_string())
     }

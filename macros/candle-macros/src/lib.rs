@@ -311,7 +311,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                     .map_err(|e| crate::Error::Msg(e.to_string()))?;
 
                 // Perform dequantization
-                quantized_dispatch::dequantize_cuda(self, data, &mut output)?;
+                quantized_dispatch::dequantize_cuda(self, data, &mut output, device)?;
 
                 Ok(output)
             }
@@ -327,7 +327,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
             where
                 D: candle_macros_types::CudaStorageDevice,
             {
-                quantized_dispatch::quantize_cuda(self, input)
+                quantized_dispatch::quantize_cuda(self, input, device)
             }
         }
 
@@ -575,9 +575,9 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
 
             #[cfg(feature = "cuda")]
             pub trait MaybeCudaOps {
-                fn try_dequantize_cuda(&self, data: &cudarc::driver::CudaSlice<u8>, output: &mut cudarc::driver::CudaSlice<f32>) -> crate::Result<()>;
-                fn try_quantize_cuda(&self, input: &cudarc::driver::CudaSlice<f32>) -> crate::Result<cudarc::driver::CudaSlice<u8>>;
-                fn try_matmul_cuda(&self, lhs: &cudarc::driver::CudaSlice<f32>, lhs_shape: &[usize], rhs: &cudarc::driver::CudaSlice<u8>, rhs_shape: &[usize]) -> crate::Result<cudarc::driver::CudaSlice<f32>>;
+                fn try_dequantize_cuda<D: candle_macros_types::CudaStorageDevice>(&self, data: &cudarc::driver::CudaSlice<u8>, output: &mut cudarc::driver::CudaSlice<f32>, device: &D) -> crate::Result<()>;
+                fn try_quantize_cuda<D: candle_macros_types::CudaStorageDevice>(&self, input: &cudarc::driver::CudaSlice<f32>, device: &D) -> crate::Result<cudarc::driver::CudaSlice<u8>>;
+                fn try_matmul_cuda<D: candle_macros_types::CudaStorageDevice>(&self, lhs: &cudarc::driver::CudaSlice<f32>, lhs_shape: &[usize], rhs: &cudarc::driver::CudaSlice<u8>, rhs_shape: &[usize], device: &D) -> crate::Result<cudarc::driver::CudaSlice<f32>>;
             }
 
             // Level 1 (fallback): For types WITHOUT CUDA support - requires 2 auto-derefs
@@ -587,17 +587,17 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 T: candle_macros_types::QuantizedType,
             {
                 #[inline(always)]
-                fn try_dequantize_cuda(&self, _data: &cudarc::driver::CudaSlice<u8>, _output: &mut cudarc::driver::CudaSlice<f32>) -> crate::Result<()> {
+                fn try_dequantize_cuda<D: candle_macros_types::CudaStorageDevice>(&self, _data: &cudarc::driver::CudaSlice<u8>, _output: &mut cudarc::driver::CudaSlice<f32>, _device: &D) -> crate::Result<()> {
                     Err(crate::Error::Msg(format!("Type '{}' does not implement CUDA dequantize", T::NAME)))
                 }
 
                 #[inline(always)]
-                fn try_quantize_cuda(&self, _input: &cudarc::driver::CudaSlice<f32>) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
+                fn try_quantize_cuda<D: candle_macros_types::CudaStorageDevice>(&self, _input: &cudarc::driver::CudaSlice<f32>, _device: &D) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
                     Err(crate::Error::Msg(format!("Type '{}' does not implement CUDA quantize", T::NAME)))
                 }
 
                 #[inline(always)]
-                fn try_matmul_cuda(&self, _lhs: &cudarc::driver::CudaSlice<f32>, _lhs_shape: &[usize], _rhs: &cudarc::driver::CudaSlice<u8>, _rhs_shape: &[usize]) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
+                fn try_matmul_cuda<D: candle_macros_types::CudaStorageDevice>(&self, _lhs: &cudarc::driver::CudaSlice<f32>, _lhs_shape: &[usize], _rhs: &cudarc::driver::CudaSlice<u8>, _rhs_shape: &[usize], _device: &D) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
                     Err(crate::Error::Msg(format!("Type '{}' does not implement CUDA matmul", T::NAME)))
                 }
             }
@@ -611,30 +611,31 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 T: candle_macros_types::QuantizedCudaOps + Default,
             {
                 #[inline(always)]
-                fn try_dequantize_cuda(&self, data: &cudarc::driver::CudaSlice<u8>, output: &mut cudarc::driver::CudaSlice<f32>) -> crate::Result<()> {
-                    T::default().dequantize_cuda(data, output).map_err(|e| crate::Error::Msg(e))
+                fn try_dequantize_cuda<D: candle_macros_types::CudaStorageDevice>(&self, data: &cudarc::driver::CudaSlice<u8>, output: &mut cudarc::driver::CudaSlice<f32>, device: &D) -> crate::Result<()> {
+                    T::default().dequantize_cuda(data, output, device).map_err(|e| crate::Error::Msg(e))
                 }
 
                 #[inline(always)]
-                fn try_quantize_cuda(&self, input: &cudarc::driver::CudaSlice<f32>) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
-                    T::default().quantize_cuda(input).map_err(|e| crate::Error::Msg(e))
+                fn try_quantize_cuda<D: candle_macros_types::CudaStorageDevice>(&self, input: &cudarc::driver::CudaSlice<f32>, device: &D) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
+                    T::default().quantize_cuda(input, device).map_err(|e| crate::Error::Msg(e))
                 }
 
                 #[inline(always)]
-                fn try_matmul_cuda(&self, lhs: &cudarc::driver::CudaSlice<f32>, lhs_shape: &[usize], rhs: &cudarc::driver::CudaSlice<u8>, rhs_shape: &[usize]) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
-                    T::default().matmul_cuda(lhs, lhs_shape, rhs, rhs_shape).map_err(|e| crate::Error::Msg(e))
+                fn try_matmul_cuda<D: candle_macros_types::CudaStorageDevice>(&self, lhs: &cudarc::driver::CudaSlice<f32>, lhs_shape: &[usize], rhs: &cudarc::driver::CudaSlice<u8>, rhs_shape: &[usize], device: &D) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
+                    T::default().matmul_cuda(lhs, lhs_shape, rhs, rhs_shape, device).map_err(|e| crate::Error::Msg(e))
                 }
             }
 
             #[cfg(feature = "cuda")]
             #[inline]
-            pub fn dequantize_cuda(
+            pub fn dequantize_cuda<D: candle_macros_types::CudaStorageDevice>(
                 id: QuantizedDType,
                 data: &cudarc::driver::CudaSlice<u8>,
                 output: &mut cudarc::driver::CudaSlice<f32>,
+                device: &D,
             ) -> crate::Result<()> {
                 match id {
-                    #(QuantizedDType::#type_names => (&&CudaWrap::<#type_names>(std::marker::PhantomData)).try_dequantize_cuda(data, output),)*
+                    #(QuantizedDType::#type_names => (&&CudaWrap::<#type_names>(std::marker::PhantomData)).try_dequantize_cuda(data, output, device),)*
                     QuantizedDType::External(name) => {
                         Err(crate::Error::Msg(format!("External type '{}' does not support CUDA operations yet", name)))
                     }
@@ -643,12 +644,13 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
 
             #[cfg(feature = "cuda")]
             #[inline]
-            pub fn quantize_cuda(
+            pub fn quantize_cuda<D: candle_macros_types::CudaStorageDevice>(
                 id: QuantizedDType,
                 input: &cudarc::driver::CudaSlice<f32>,
+                device: &D,
             ) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
                 match id {
-                    #(QuantizedDType::#type_names => (&&CudaWrap::<#type_names>(std::marker::PhantomData)).try_quantize_cuda(input),)*
+                    #(QuantizedDType::#type_names => (&&CudaWrap::<#type_names>(std::marker::PhantomData)).try_quantize_cuda(input, device),)*
                     QuantizedDType::External(name) => {
                         Err(crate::Error::Msg(format!("External type '{}' does not support CUDA operations yet", name)))
                     }
@@ -657,16 +659,17 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
 
             #[cfg(feature = "cuda")]
             #[inline]
-            pub fn matmul_cuda(
+            pub fn matmul_cuda<D: candle_macros_types::CudaStorageDevice>(
                 id: QuantizedDType,
                 lhs_data: &cudarc::driver::CudaSlice<f32>,
                 lhs_shape: &[usize],
                 rhs_id: QuantizedDType,
                 rhs_data: &cudarc::driver::CudaSlice<u8>,
                 rhs_shape: &[usize],
+                device: &D,
             ) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
                 match rhs_id {
-                    #(QuantizedDType::#type_names => (&&CudaWrap::<#type_names>(std::marker::PhantomData)).try_matmul_cuda(lhs_data, lhs_shape, rhs_data, rhs_shape),)*
+                    #(QuantizedDType::#type_names => (&&CudaWrap::<#type_names>(std::marker::PhantomData)).try_matmul_cuda(lhs_data, lhs_shape, rhs_data, rhs_shape, device),)*
                     QuantizedDType::External(name) => {
                         Err(crate::Error::Msg(format!("External type '{}' does not support CUDA operations yet", name)))
                     }

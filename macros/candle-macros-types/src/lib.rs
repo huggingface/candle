@@ -193,15 +193,17 @@ pub trait QuantizedCudaOps: QuantizedType {
     ///
     /// # Arguments
     /// * `input` - Input f32 slice on GPU device memory
+    /// * `device` - Reference to the CUDA device for kernel launches
     ///
     /// # Returns
     /// Quantized data as GPU device memory
     ///
     /// # Errors
     /// Returns error if CUDA operation fails
-    fn quantize_cuda(
+    fn quantize_cuda<D: CudaStorageDevice>(
         &self,
         _input: &cudarc::driver::CudaSlice<f32>,
+        _device: &D,
     ) -> Result<cudarc::driver::CudaSlice<u8>, String> {
         Err("CUDA quantize not implemented for this type".to_string())
     }
@@ -211,13 +213,15 @@ pub trait QuantizedCudaOps: QuantizedType {
     /// # Arguments
     /// * `data` - Quantized data on GPU device memory
     /// * `output` - Pre-allocated output buffer on GPU device memory
+    /// * `device` - Reference to the CUDA device for kernel launches
     ///
     /// # Errors
     /// Returns error if data is invalid, buffer size incorrect, or CUDA operation fails
-    fn dequantize_cuda(
+    fn dequantize_cuda<D: CudaStorageDevice>(
         &self,
         _data: &cudarc::driver::CudaSlice<u8>,
         _output: &mut cudarc::driver::CudaSlice<f32>,
+        _device: &D,
     ) -> Result<(), String> {
         Err("CUDA dequantize not implemented for this type".to_string())
     }
@@ -229,18 +233,20 @@ pub trait QuantizedCudaOps: QuantizedType {
     /// * `lhs_shape` - Shape `[M, K]` of left matrix
     /// * `rhs_data` - Right matrix on GPU in quantized format, shape `[K, N]`
     /// * `rhs_shape` - Shape `[K, N]` of right matrix
+    /// * `device` - Reference to the CUDA device for kernel launches
     ///
     /// # Returns
     /// Result matrix on GPU in f32 format with shape `[M, N]`
     ///
     /// # Errors
     /// Returns error if shapes are incompatible or CUDA operation fails
-    fn matmul_cuda(
+    fn matmul_cuda<D: CudaStorageDevice>(
         &self,
         _lhs_f32: &cudarc::driver::CudaSlice<f32>,
         _lhs_shape: &[usize],
         _rhs_data: &cudarc::driver::CudaSlice<u8>,
         _rhs_shape: &[usize],
+        _device: &D,
     ) -> Result<cudarc::driver::CudaSlice<f32>, String> {
         Err("CUDA matmul not implemented for this type".to_string())
     }
@@ -248,8 +254,7 @@ pub trait QuantizedCudaOps: QuantizedType {
 
 /// Trait for CUDA device types that can allocate GPU memory
 ///
-/// This trait abstracts over the actual CudaDevice implementation,
-/// allowing the macro to work in different contexts (candle-core, tests, etc.)
+/// Simplified CudeDevice interface for moving data to/from GPU in quantized operations.
 ///
 /// # Feature Gate
 ///

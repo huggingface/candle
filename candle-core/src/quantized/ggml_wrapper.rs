@@ -173,6 +173,48 @@ macro_rules! define_ggml_wrapper {
                     .map_err(|e| format!("{}", e))
             }
         }
+
+        // Implement QuantizedCudaOps trait  
+        #[cfg(feature = "cuda")]
+        impl candle_macros_types::QuantizedCudaOps for $name {
+            #[inline]
+            fn quantize_cuda<D: candle_macros_types::CudaStorageDevice>(
+                &self,
+                _input: &cudarc::driver::CudaSlice<f32>,
+                _device: &D,
+            ) -> std::result::Result<cudarc::driver::CudaSlice<u8>, String> {
+                // Quantization on GPU typically goes through CPU path
+                // as it's a one-time operation during model loading
+                Err("CUDA quantize not implemented - use CPU quantize then transfer to GPU".to_string())
+            }
+
+            #[inline]
+            fn dequantize_cuda<D: candle_macros_types::CudaStorageDevice>(
+                &self,
+                _data: &cudarc::driver::CudaSlice<u8>,
+                _output: &mut cudarc::driver::CudaSlice<f32>,
+                _device: &D,
+            ) -> std::result::Result<(), String> {
+                // Dequantization is handled through QCudaStorage which provides
+                // optimized CUDA kernels. The trait-based approach doesn't currently
+                // support the full context needed for optimal GPU operations.
+                Err("CUDA dequantize should use QCudaStorage::dequantize() instead".to_string())
+            }
+
+            #[inline]
+            fn matmul_cuda<D: candle_macros_types::CudaStorageDevice>(
+                &self,
+                _lhs_f32: &cudarc::driver::CudaSlice<f32>,
+                _lhs_shape: &[usize],
+                _rhs_data: &cudarc::driver::CudaSlice<u8>,
+                _rhs_shape: &[usize],
+                _device: &D,
+            ) -> std::result::Result<cudarc::driver::CudaSlice<f32>, String> {
+                // Matrix multiplication is handled through QCudaStorage in the higher-level API
+                // The low-level trait implementation is not currently used for matmul
+                Err("CUDA matmul should use QCudaStorage::fwd() instead".to_string())
+            }
+        }
     };
 }
 
