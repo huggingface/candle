@@ -3,7 +3,7 @@ use crate::{Context, CpuStorage, DType, Device, Result, Shape, Storage, Tensor};
 use k_quants::*;
 use std::borrow::Cow;
 
-#[cfg(target_feature = "avx")]
+#[cfg(target_feature = "avx2")]
 pub mod avx;
 mod dummy_cuda;
 mod dummy_metal;
@@ -36,7 +36,7 @@ pub mod neon;
 #[cfg(target_feature = "simd128")]
 pub mod simd128;
 pub mod utils;
-use half::f16;
+use half::{bf16, f16};
 
 pub use k_quants::GgmlType;
 
@@ -115,7 +115,7 @@ impl QStorage {
     fn quantize(&mut self, src: &Storage) -> Result<()> {
         match (self, src) {
             (QStorage::Cpu(storage), Storage::Cpu(src)) => {
-                storage.from_float(src.as_slice::<f32>()?)?;
+                storage.from_float(src.as_slice::<f32>()?);
             }
             (QStorage::Metal(storage), Storage::Metal(src)) => storage.quantize(src)?,
             (QStorage::Cuda(storage), Storage::Cuda(src)) => storage.quantize(src)?,
@@ -134,7 +134,7 @@ impl QStorage {
         }
     }
 
-    fn data(&self) -> Result<Cow<[u8]>> {
+    fn data(&self) -> Result<Cow<'_, [u8]>> {
         match self {
             QStorage::Cpu(storage) => {
                 let data_ptr = storage.as_ptr();
@@ -153,6 +153,7 @@ impl QStorage {
 pub enum GgmlDType {
     F32,
     F16,
+    BF16,
     Q4_0,
     Q4_1,
     Q5_0,
@@ -184,6 +185,8 @@ impl GgmlDType {
             13 => Self::Q5K,
             14 => Self::Q6K,
             15 => Self::Q8K,
+            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
+            30 => Self::BF16,
             _ => crate::bail!("unknown dtype for tensor {u}"),
         };
         Ok(dtype)
@@ -205,6 +208,8 @@ impl GgmlDType {
             Self::Q5K => 13,
             Self::Q6K => 14,
             Self::Q8K => 15,
+            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
+            Self::BF16 => 30,
         }
     }
 
@@ -225,6 +230,7 @@ impl GgmlDType {
             Self::Q5K => Box::new(vec![BlockQ5K::zeros(); elem_count / BlockQ5K::BLCK_SIZE]),
             Self::Q6K => Box::new(vec![BlockQ6K::zeros(); elem_count / BlockQ6K::BLCK_SIZE]),
             Self::Q8K => Box::new(vec![BlockQ8K::zeros(); elem_count / BlockQ8K::BLCK_SIZE]),
+            Self::BF16 => Box::new(vec![bf16::zeros(); elem_count]),
         }
     }
     /// The type size for blocks in bytes.
@@ -232,7 +238,7 @@ impl GgmlDType {
         use k_quants::*;
         match self {
             Self::F32 => 4,
-            Self::F16 => 2,
+            Self::F16 | Self::BF16 => 2,
             Self::Q4_0 => std::mem::size_of::<BlockQ4_0>(),
             Self::Q4_1 => std::mem::size_of::<BlockQ4_1>(),
             Self::Q5_0 => std::mem::size_of::<BlockQ5_0>(),
@@ -253,7 +259,7 @@ impl GgmlDType {
     pub fn block_size(&self) -> usize {
         match self {
             Self::F32 => 1,
-            Self::F16 => 1,
+            Self::F16 | Self::BF16 => 1,
             Self::Q4_0 => k_quants::QK4_0,
             Self::Q4_1 => k_quants::QK4_1,
             Self::Q5_0 => k_quants::QK5_0,
@@ -274,7 +280,7 @@ pub trait QuantizedType: Send + Sync {
     fn as_ptr(&self) -> *const u8;
     fn block_size(&self) -> usize;
     #[allow(clippy::wrong_self_convention)]
-    fn from_float(&mut self, xs: &[f32]) -> Result<()>;
+    fn from_float(&mut self, xs: &[f32]);
     fn size(&self) -> usize;
 }
 
@@ -287,7 +293,7 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
         self.len() * core::mem::size_of::<T>()
     }
 
-    fn from_float(&mut self, xs: &[f32]) -> Result<()> {
+    fn from_float(&mut self, xs: &[f32]) {
         T::from_float(xs, self)
     }
 
@@ -301,7 +307,7 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
 
     fn dequantize(&self, elem_count: usize) -> Result<CpuStorage> {
         let mut ys = vec![0.0f32; elem_count];
-        T::to_float(self.as_slice(), &mut ys)?;
+        T::to_float(self.as_slice(), &mut ys);
         Ok(CpuStorage::F32(ys))
     }
 
@@ -325,7 +331,7 @@ fn check_shape(shape: &Shape, block_size: usize) -> Result<()> {
     if dims.is_empty() {
         crate::bail!("scalar tensor cannot be quantized {shape:?}")
     }
-    if dims[dims.len() - 1] % block_size != 0 {
+    if !dims[dims.len() - 1].is_multiple_of(block_size) {
         crate::bail!(
             "quantized tensor must have their last dim divisible by block size {shape:?} {}",
             block_size
@@ -347,7 +353,7 @@ impl QTensor {
         check_shape(shape, block_size)?;
         let src = src.to_dtype(crate::DType::F32)?.flatten_all()?;
         let elem_count = shape.elem_count();
-        if elem_count % block_size != 0 {
+        if !elem_count.is_multiple_of(block_size) {
             crate::bail!(
                 "tensor size ({shape:?}) is not divisible by block size {}",
                 block_size
@@ -441,7 +447,7 @@ thread_local! {
 impl QMatMul {
     pub fn from_arc(qtensor: std::sync::Arc<QTensor>) -> Result<Self> {
         let dequantize = match qtensor.dtype() {
-            GgmlDType::F32 | GgmlDType::F16 => true,
+            GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16 => true,
             _ => DEQUANTIZE_ALL.with(|b| *b),
         };
         let t = if dequantize {

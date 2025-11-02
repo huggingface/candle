@@ -90,7 +90,7 @@ impl candle::CustomOp1 for Sigmoid {
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::backend::BackendStorage;
         use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig, ValidAsZeroBits,
+            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg, ValidAsZeroBits,
         };
         use candle::cuda_backend::SlicePtrOrNull;
         use candle::cuda_backend::{kernel_name, kernels, Map1, WrapErr};
@@ -110,13 +110,17 @@ impl candle::CustomOp1 for Sigmoid {
                 let cfg = LaunchConfig::for_num_elems(el_count as u32);
                 let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
                 let src = &src.slice(layout.start_offset()..);
-                let func = dev.get_or_load_func(&kernel_name::<T>("usigmoid"), kernels::UNARY)?;
+                let func = dev.get_or_load_func(&kernel_name::<T>("usigmoid"), &kernels::UNARY)?;
                 // SAFETY: Set later by running the kernel.
-                let out = unsafe { dev.alloc::<T>(el_count) }.w()?;
+                let out = unsafe { dev.alloc::<T>(el_count)? };
 
-                let params = (el_count, dims.len(), &ds, src, &out);
+                let mut builder = func.builder();
+                candle::builder_arg!(builder, el_count, dims.len());
+                ds.builder_arg(&mut builder);
+                builder.arg(src);
+                builder.arg(&out);
                 // SAFETY: ffi.
-                unsafe { func.launch(cfg, params) }.w()?;
+                unsafe { builder.launch(cfg) }.w()?;
                 Ok(out)
             }
         }
@@ -283,9 +287,22 @@ pub fn hard_sigmoid(xs: &Tensor) -> Result<Tensor> {
     ((xs + 3.0)? / 6.0)?.clamp(0f32, 1f32)
 }
 
+pub fn mish(xs: &Tensor) -> Result<Tensor> {
+    xs * (1.0 + xs.exp()?)?.log()?.tanh()
+}
+
 pub fn leaky_relu(xs: &Tensor, negative_slope: f64) -> Result<Tensor> {
     let zeros = xs.zeros_like()?;
     xs.maximum(&zeros)? + xs.minimum(&zeros)? * negative_slope
+}
+
+pub fn selu(xs: &Tensor, alpha: f32, gamma: f32) -> Result<Tensor> {
+    let is_pos = xs.gt(0f32)?;
+    let alpha_t = Tensor::full(alpha, xs.dims(), xs.device())?;
+    let neg = xs.exp()?.mul(&alpha_t)?.sub(&alpha_t)?;
+    let selu = is_pos.where_cond(xs, &neg)?;
+    let gamma_t = Tensor::full(gamma, xs.dims(), xs.device())?;
+    selu.broadcast_mul(&gamma_t)
 }
 
 pub fn dropout(xs: &Tensor, drop_p: f32) -> Result<Tensor> {
@@ -383,7 +400,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         layout: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg,
         };
         use candle::cuda_backend::{kernel_name, kernels, Map1, WrapErr};
         use candle::{CudaDevice, WithDType};
@@ -410,12 +427,15 @@ impl candle::CustomOp1 for SoftmaxLastDim {
                     block_dim: (1, 32, 1),
                     shared_mem_bytes: 0,
                 };
-                let func = dev.get_or_load_func(&kernel_name::<T>("softmax"), kernels::REDUCE)?;
+                let func = dev.get_or_load_func(&kernel_name::<T>("softmax"), &kernels::REDUCE)?;
                 // SAFETY: Set later by running the kernel.
-                let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-                let params = (&src, &dst, n_cols as i32);
+                let dst = unsafe { dev.alloc::<T>(el)? };
+                let mut builder = func.builder();
+                builder.arg(&src);
+                builder.arg(&dst);
+                candle::builder_arg!(builder, n_cols as i32);
                 // SAFETY: ffi.
-                unsafe { func.launch(cfg, params) }.w()?;
+                unsafe { builder.launch(cfg) }.w()?;
                 Ok(dst)
             }
         }
@@ -592,7 +612,7 @@ impl candle::CustomOp2 for RmsNorm {
         l2: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg,
         };
         use candle::cuda_backend::{kernel_name, kernels, Map2, WrapErr};
         use candle::{CudaDevice, WithDType};
@@ -628,19 +648,16 @@ impl candle::CustomOp2 for RmsNorm {
                     block_dim: (block_size, 1, 1),
                     shared_mem_bytes: 0,
                 };
-                let func = dev.get_or_load_func(&kernel_name::<T>("rmsnorm"), kernels::REDUCE)?;
+                let func = dev.get_or_load_func(&kernel_name::<T>("rmsnorm"), &kernels::REDUCE)?;
                 // SAFETY: Set later by running the kernel.
-                let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-                let params = (
-                    &src,
-                    &dst,
-                    &alpha,
-                    n_cols as i32,
-                    block_size as i32,
-                    self.eps,
-                );
+                let dst = unsafe { dev.alloc::<T>(el)? };
+                let mut builder = func.builder();
+                builder.arg(&src);
+                builder.arg(&dst);
+                builder.arg(&alpha);
+                candle::builder_arg!(builder, n_cols as i32, block_size as i32, self.eps);
                 // SAFETY: ffi.
-                unsafe { func.launch(cfg, params) }.w()?;
+                unsafe { builder.launch(cfg) }.w()?;
                 Ok(dst)
             }
         }
@@ -866,7 +883,7 @@ impl candle::CustomOp3 for LayerNorm {
         l3: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::cuda_backend::cudarc::driver::{
-            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+            CudaSlice, DeviceRepr, LaunchConfig, PushKernelArg,
         };
         use candle::cuda_backend::{kernel_name, kernels, Map3, WrapErr};
         use candle::{CudaDevice, WithDType};
@@ -908,20 +925,18 @@ impl candle::CustomOp3 for LayerNorm {
                     block_dim: (block_size, 1, 1),
                     shared_mem_bytes: 0,
                 };
-                let func = dev.get_or_load_func(&kernel_name::<T>("layernorm"), kernels::REDUCE)?;
+                let func =
+                    dev.get_or_load_func(&kernel_name::<T>("layernorm"), &kernels::REDUCE)?;
                 // SAFETY: Set later by running the kernel.
-                let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-                let params = (
-                    &src,
-                    &dst,
-                    &alpha,
-                    &beta,
-                    n_cols as i32,
-                    block_size as i32,
-                    self.eps,
-                );
+                let dst = unsafe { dev.alloc::<T>(el)? };
+                let mut builder = func.builder();
+                builder.arg(&src);
+                builder.arg(&dst);
+                builder.arg(&alpha);
+                builder.arg(&beta);
+                candle::builder_arg!(builder, n_cols as i32, block_size as i32, self.eps);
                 // SAFETY: ffi.
-                unsafe { func.launch(cfg, params) }.w()?;
+                unsafe { builder.launch(cfg) }.w()?;
                 Ok(dst)
             }
         }

@@ -106,7 +106,7 @@ impl TextGeneration {
                     }
                 };
                 load_t = start_gen.elapsed();
-                println!("load_t: {:?}", load_t);
+                println!("load_t: {load_t:?}");
                 logits
             };
             let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;

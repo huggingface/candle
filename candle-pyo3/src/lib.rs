@@ -1,5 +1,7 @@
 #![allow(clippy::redundant_closure_call)]
 #![allow(clippy::useless_conversion)]
+use float8::F8E4M3;
+use half::{bf16, f16};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::CompareOp;
@@ -8,8 +10,6 @@ use pyo3::ToPyObject;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-
-use half::{bf16, f16};
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
@@ -159,6 +159,7 @@ pydtype!(f16, f32::from);
 pydtype!(bf16, f32::from);
 pydtype!(f32, |v| v);
 pydtype!(f64, |v| v);
+pydtype!(F8E4M3, f32::from);
 
 fn actual_index(t: &Tensor, dim: usize, index: i64) -> ::candle::Result<usize> {
     let dim = t.dim(dim)?;
@@ -206,6 +207,7 @@ trait MapDType {
             DType::F16 => self.f::<f16>(t),
             DType::F32 => self.f::<f32>(t),
             DType::F64 => self.f::<f64>(t),
+            DType::F8E4M3 => self.f::<F8E4M3>(t),
         }
     }
 }
@@ -519,9 +521,7 @@ impl PyTensor {
             // Check that the index is in range
             if actual_index < 0 || actual_index >= dims[current_dim] as isize {
                 return Err(PyValueError::new_err(format!(
-                    "index out of range for dimension '{i}' with indexer '{value}'",
-                    i = current_dim,
-                    value = index
+                    "index out of range for dimension '{current_dim}' with indexer '{index}'"
                 )));
             }
             Ok(actual_index as usize)
@@ -581,8 +581,7 @@ impl PyTensor {
                 Ok((Indexer::Expand, current_dim))
             } else {
                 Err(PyTypeError::new_err(format!(
-                    "unsupported indexer {}",
-                    py_indexer
+                    "unsupported indexer {py_indexer}"
                 )))
             }
         }
@@ -749,7 +748,7 @@ impl PyTensor {
 
             compare(&self.0, &scalar_tensor)
         } else {
-            return Err(PyTypeError::new_err("unsupported rhs for __richcmp__"));
+            Err(PyTypeError::new_err("unsupported rhs for __richcmp__"))
         }
     }
 
@@ -1387,7 +1386,7 @@ fn load_gguf(
 #[pyo3(
     signature = (path, tensors, metadata)
 )]
-/// Save quanitzed tensors and metadata to a GGUF file.
+/// Save quantized tensors and metadata to a GGUF file.
 fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) -> PyResult<()> {
     use ::candle::quantized::gguf_file;
 
@@ -1424,8 +1423,7 @@ fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) 
             gguf_file::Value::Array(x)
         } else {
             return Err(PyErr::new::<PyValueError, _>(format!(
-                "unsupported type {:?}",
-                v
+                "unsupported type {v:?}"
             )));
         };
         Ok(v)

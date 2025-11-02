@@ -19,8 +19,9 @@ num-traits = { workspace = true }
 rayon = { workspace = true }
 safetensors = { workspace = true }
 serde = { workspace = true }
-metal = { workspace = true, optional = true }
+objc2-metal = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
+libc = { workspace = true }
 
 [dev-dependencies]
 pollster = { workspace = true }
@@ -33,8 +34,9 @@ criterion = { workspace = true }
 [features]
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
+cudnn = ["candle/cudnn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
-metal = ["candle/metal", "dep:candle-metal-kernels", "dep:metal"]
+metal = ["candle/metal", "dep:candle-metal-kernels", "dep:objc2-metal"]
 wgpu = ["candle/wgpu"]
 default=[]
 

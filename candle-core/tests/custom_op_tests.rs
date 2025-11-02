@@ -26,7 +26,7 @@ impl CustomOp1 for Elu {
             "elu",
             s,
             |s| cpu_backend::unary_map(s, l, |v| fwd(v, self.alpha)),
-            (BF16, F16, F32, F64)
+            (F8E4M3, BF16, F16, F32, F64)
         );
         Ok((storage, l.shape().clone()))
     }
@@ -69,7 +69,7 @@ impl CustomOp1 for EluBackward {
             "elu-bwd",
             s,
             |s| cpu_backend::unary_map(s, l, |v| bwd(v, self.alpha)),
-            (BF16, F16, F32, F64)
+            (F8E4M3, BF16, F16, F32, F64)
         );
         Ok((storage, l.shape().clone()))
     }
@@ -121,6 +121,7 @@ impl candle_core::InplaceOp1 for Elu {
     fn cpu_fwd(&self, s: &mut CpuStorage, _l: &Layout) -> Result<()> {
         let alpha = self.alpha;
         match s {
+            CpuStorage::F8E4M3(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
             CpuStorage::BF16(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
             CpuStorage::F16(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
             CpuStorage::F32(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),

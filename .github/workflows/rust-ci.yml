@@ -19,6 +19,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Remove cargo config (macOS ring crate fix)
+        if: runner.os == 'macOS'
+        run: rm -f .cargo/config.toml
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -44,6 +47,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Remove cargo config (macOS ring crate fix)
+        if: runner.os == 'macOS'
+        run: rm -f .cargo/config.toml
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
@@ -84,4 +90,4 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --workspace --tests --examples -- -D warnings
+          args: --workspace --tests --examples --benches -- -D warnings

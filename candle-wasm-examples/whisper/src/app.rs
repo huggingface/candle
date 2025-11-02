@@ -186,7 +186,7 @@ impl Component for App {
                     Ok(WorkerOutput::Decoded(segments)) => {
                         self.status = match dt {
                             None => "decoding succeeded!".to_string(),
-                            Some(dt) => format!("decoding succeeded in {:.2}s", dt),
+                            Some(dt) => format!("decoding succeeded in {dt:.2}s"),
                         };
                         self.segments = segments;
                     }

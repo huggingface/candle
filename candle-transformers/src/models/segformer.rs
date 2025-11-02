@@ -106,7 +106,7 @@ impl SegformerEfficientSelfAttention {
         sequence_reduction_ratio: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
-        if hidden_size % num_attention_heads != 0 {
+        if !hidden_size.is_multiple_of(num_attention_heads) {
             candle::bail!(
                 "The hidden size {} is not a multiple of the number of attention heads {}",
                 hidden_size,
@@ -420,7 +420,7 @@ impl SegformerEncoder {
                 stride,
                 num_channels,
                 hidden_size,
-                vb.pp(format!("patch_embeddings.{}", i)),
+                vb.pp(format!("patch_embeddings.{i}")),
             )?);
             let mut layers = Vec::with_capacity(config.depths[i]);
             for j in 0..config.depths[i] {
@@ -433,14 +433,14 @@ impl SegformerEncoder {
                     num_attention_heads,
                     sequence_reduction_ratio,
                     mlp_ratio,
-                    vb.pp(format!("block.{}.{}", i, j)),
+                    vb.pp(format!("block.{i}.{j}")),
                 )?);
             }
             blocks.push(layers);
             layer_norms.push(layer_norm(
                 hidden_size,
                 config.layer_norm_eps,
-                vb.pp(format!("layer_norm.{}", i)),
+                vb.pp(format!("layer_norm.{i}")),
             )?);
         }
         Ok(Self {
@@ -523,7 +523,7 @@ impl SegformerDecodeHead {
             linear_c.push(SegformerMLP::new(
                 config,
                 hidden_size,
-                vb.pp(format!("linear_c.{}", i)),
+                vb.pp(format!("linear_c.{i}")),
             )?);
         }
         let linear_fuse = conv2d_no_bias(

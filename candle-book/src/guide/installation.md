@@ -1,8 +1,23 @@
 # Installation
 
-**With Cuda support**:
+## 1. Create a new rust app or library
 
-1. First, make sure that Cuda is correctly installed.
+```bash
+cargo new myapp
+cd myapp
+```
+
+## 2. Add the correct candle version
+
+### Standard
+
+```bash
+cargo add --git https://github.com/huggingface/candle.git candle-core
+```
+
+### CUDA
+
+First, make sure that Cuda is correctly installed.
 - `nvcc --version` should print information about your Cuda compiler driver.
 - `nvidia-smi --query-gpu=compute_cap --format=csv` should print your GPUs compute capability, e.g. something
 like:
@@ -17,46 +32,39 @@ You can also compile the Cuda kernels for a specific compute cap using the
 
 If any of the above commands errors out, please make sure to update your Cuda version.
 
-2. Create a new app and add [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) with Cuda support.
-
-Start by creating a new cargo:
-
-```bash
-cargo new myapp
-cd myapp
-```
-
-Make sure to add the `candle-core` crate with the cuda feature:
+Add the `candle-core` crate with the cuda feature:
 
 ```bash
 cargo add --git https://github.com/huggingface/candle.git candle-core --features "cuda"
 ```
+
+### MKL
+
+You can also see the `mkl` feature which can get faster inference on CPU.
+
+Add the `candle-core` crate with the mkl feature:
+
+```bash
+cargo add --git https://github.com/huggingface/candle.git candle-core --features "mkl"
+```
+
+### Metal
+
+Metal is exclusive to MacOS.
+
+Add the `candle-core` crate with the metal feature:
+
+```bash
+cargo add --git https://github.com/huggingface/candle.git candle-core --features "metal"
+```
+
+## 3. Building
 
 Run `cargo build` to make sure everything can be correctly built.
 
 ```bash
 cargo build
 ```
-
-**Without Cuda support**:
-
-Create a new app and add [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) as follows:
-
-```bash
-cargo new myapp
-cd myapp
-cargo add --git https://github.com/huggingface/candle.git candle-core
-```
-
-Finally, run `cargo build` to make sure everything can be correctly built.
-
-```bash
-cargo build
-```
-
-**With mkl support**
-
-You can also see the `mkl` feature which could be interesting to get faster inference on CPU. [Using mkl](./advanced/mkl.md)
 
 
 **With wgpu support**

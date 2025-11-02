@@ -1,6 +1,7 @@
 use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
 use candle_core::{DType, Device, Tensor};
-use criterion::{black_box, criterion_group, Criterion, Throughput};
+use criterion::{criterion_group, Criterion, Throughput};
+use std::hint::black_box;
 use std::time::Instant;
 
 fn run(a: &Tensor) {
@@ -41,6 +42,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         if device.is_dtype_available(DType::BF16) {
             run_affine_benchmark(c, &device, DType::BF16, "affine_bf16");
         }
+        #[cfg(feature = "metal")]
+        continue;
+        run_affine_benchmark(c, &device, DType::F8E4M3, "affine_fp8");
     }
 }
 

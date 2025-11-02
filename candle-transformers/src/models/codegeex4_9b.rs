@@ -3,7 +3,7 @@
 //! A Pre-Trained Model For Code Generation with Multilingual Evaluations on HumanEval-X"
 //!
 //! - 📝 [Arxiv](https://arxiv.org/abs/2303.17568)
-//! - 💻 [Github](https://github.com/THUDM/CodeGeeX)
+//! - 💻 [GitHub](https://github.com/THUDM/CodeGeeX)
 //!
 
 use crate::models::with_tracing::{linear_b as linear, Linear};

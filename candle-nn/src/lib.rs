@@ -12,7 +12,7 @@
 //! - [candle-examples](https://docs.rs/candle-examples/). Examples of Candle in Use.
 //! - [candle-onnx](https://docs.rs/candle-onnx/). Loading and using ONNX models.
 //! - [candle-pyo3](https://docs.rs/candle-pyo3/). Access to Candle from Python.
-//! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implemntation of many published transformer models.
+//! - [candle-transformers](https://docs.rs/candle-transformers/). Candle implementation of many published transformer models.
 //!
 
 #![cfg_attr(all(target_arch = "wasm32", feature = "wgpu"), allow(deprecated))] //for wasm32 and wgpu, async functions may be used instead of sync functions. 
@@ -20,6 +20,7 @@
 pub mod activation;
 pub mod batch_norm;
 pub mod conv;
+pub mod cpu_flash_attention;
 pub mod embedding;
 pub mod encoding;
 pub mod func;
@@ -33,6 +34,7 @@ pub mod ops;
 pub mod optim;
 pub mod rnn;
 pub mod rotary_emb;
+pub mod sampling;
 pub mod sequential;
 pub mod var_builder;
 pub mod var_map;

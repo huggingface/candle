@@ -387,7 +387,7 @@ impl LLaVA {
         }
         cur_new_input_embeds.push(input_embed_no_ims[image_features.len()].clone());
         let new_input_embeds = Tensor::cat(&cur_new_input_embeds, 0)?;
-        //trancate
+        //truncate
         let new_input_embeds =
             if let Some(tokenizer_model_max_length) = self.config.tokenizer_model_max_length {
                 let (new_input_embeds_length, _) = new_input_embeds.shape().dims2()?;

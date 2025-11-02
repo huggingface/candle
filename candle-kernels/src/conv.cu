@@ -53,7 +53,7 @@ __device__ void conv1d(
 
 template <typename T>
 __device__ void im2col1d(
-    const size_t dst_numel,
+    const size_t numel,
     const size_t l_out,
     const size_t l_k,
     const size_t stride,
@@ -63,10 +63,10 @@ __device__ void im2col1d(
     const T *src,
     T *dst
 ) {
-  const size_t dst_i = blockIdx.x * blockDim.x + threadIdx.x;
+  const size_t thread_i = blockIdx.x * blockDim.x + threadIdx.x;
   // dst: (b_size, l_out, c_in, l_k)
   // src: (b_size, c_in, l_in)
-  if (dst_i >= dst_numel) {
+  if (thread_i >= numel) {
     return;
   }
   const size_t *src_dims = info;
@@ -74,26 +74,26 @@ __device__ void im2col1d(
   const size_t c_in = src_dims[1];
   const size_t l_in = src_dims[2];
 
-  const size_t dst_s2 = l_k;
-  const size_t dst_s1 = c_in * dst_s2;
+  const size_t dst_s1 = c_in;
   const size_t dst_s0 = l_out * dst_s1;
 
-  size_t tmp_dst_i = dst_i;
+  size_t tmp_dst_i = thread_i;
   const size_t b_idx = tmp_dst_i / dst_s0;
   tmp_dst_i -= b_idx * dst_s0;
   const size_t l_idx = tmp_dst_i / dst_s1;
   tmp_dst_i -= l_idx * dst_s1;
-  const size_t c_idx = tmp_dst_i / dst_s2;
-  tmp_dst_i -= c_idx * dst_s2;
-  const size_t l_k_idx = tmp_dst_i;
-  size_t src_l_idx = l_idx * stride + l_k_idx * dilation;
-  if (src_l_idx < padding || src_l_idx >= l_in + padding) {
-    dst[dst_i] = static_cast<T>(0);
-  }
-  else {
-    src_l_idx -= padding;
-    const size_t src_i = b_idx * src_s[0] + c_idx * src_s[1] + src_l_idx * src_s[2];
-    dst[dst_i] = src[src_i];
+  const size_t c_idx = tmp_dst_i;
+  for (size_t l_k_idx = 0; l_k_idx < l_k; ++l_k_idx) {
+    size_t src_l_idx = l_idx * stride + l_k_idx * dilation;
+    size_t dst_i = thread_i * l_k + l_k_idx;
+    if (src_l_idx < padding || src_l_idx >= l_in + padding) {
+      dst[dst_i] = static_cast<T>(0);
+    }
+    else {
+      src_l_idx -= padding;
+      const size_t src_i = b_idx * src_s[0] + c_idx * src_s[1] + src_l_idx * src_s[2];
+      dst[dst_i] = src[src_i];
+    }
   }
 }
 
@@ -702,6 +702,18 @@ UPSAMPLE_NEAREST2D_OP(__nv_bfloat16, upsample_nearest2d_bf16)
 IM2COL_OP(__nv_bfloat16, im2col_bf16)
 IM2COL1D_OP(__nv_bfloat16, im2col1d_bf16)
 COL2IM1D_OP(__nv_bfloat16, col2im1d_bf16)
+
+// NOTE: No conv ops for f8
+// CONV1D_OP(__nv_bfloat16, float, conv1d_f8_e5m)
+// CONV2D_OP(__nv_fp8_e4m3, float, conv2d_f8_e5m)
+// CONVT1D_OP(__nv_fp8_e4m3, float, conv_transpose1d_f8_e5m)
+// CONVT2D_OP(__nv_fp8_e4m3, float, conv_transpose2d_f8_e5m)
+// AVG_POOL2D_OP(__nv_fp8_e4m3, float, avg_pool2d_f8_e5m)
+// MAX_POOL2D_OP(__nv_fp8_e4m3, max_pool2d_f8_e5m)
+// UPSAMPLE_NEAREST2D_OP(__nv_fp8_e4m3, upsample_nearest2d_f8_e5m)
+// IM2COL_OP(__nv_fp8_e4m3, im2col_f8_e5m)
+// IM2COL1D_OP(__nv_fp8_e4m3, im2col1d_f8_e5m)
+// COL2IM1D_OP(__nv_fp8_e4m3, col2im1d_f8_e5m)
 #endif
 
 #if __CUDA_ARCH__ >= 530

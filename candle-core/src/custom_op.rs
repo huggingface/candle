@@ -467,12 +467,12 @@ pub struct UgIOp1 {
     #[cfg(feature = "cuda")]
     func: cudarc::driver::CudaFunction,
     #[cfg(feature = "metal")]
-    func: metal::ComputePipelineState,
+    func: candle_metal_kernels::metal::ComputePipeline,
 }
 
 impl UgIOp1 {
     #[allow(unused)]
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     pub fn new(
         name: &'static str,
         kernel: ug::lang::ssa::Kernel,
@@ -482,7 +482,10 @@ impl UgIOp1 {
         {
             let device = device.as_cuda_device()?;
             let func = device.compile(name, kernel)?;
-            Ok(Self { name, func })
+            Ok(Self {
+                name,
+                func: func.into_cuda_function(),
+            })
         }
         #[cfg(feature = "metal")]
         {
@@ -510,6 +513,7 @@ impl InplaceOp1 for UgIOp1 {
     fn metal_fwd(&self, sto: &mut MetalStorage, layout: &Layout) -> Result<()> {
         use crate::backend::BackendStorage;
         use candle_metal_kernels::utils::EncoderProvider;
+        use objc2_metal;
 
         let elem_count = layout.shape().elem_count();
         if sto.dtype() != crate::DType::F32 {
@@ -528,15 +532,15 @@ impl InplaceOp1 for UgIOp1 {
         } else {
             (elem_count, 1)
         };
-        let grid_dims = metal::MTLSize {
-            width: g as u64,
+        let grid_dims = objc2_metal::MTLSize {
+            width: g,
             height: 1,
             depth: 1,
         };
-        let group_dims = candle_metal_kernels::utils::get_block_dims(b as u64, 1, 1);
+        let group_dims = candle_metal_kernels::utils::get_block_dims(b, 1, 1);
         candle_metal_kernels::utils::set_param(encoder, 0, (sto.buffer(), 0usize));
 
-        encoder.use_resource(sto.buffer(), metal::MTLResourceUsage::Write);
+        encoder.use_resource(sto.buffer(), objc2_metal::MTLResourceUsage::Write);
         encoder.dispatch_threads(grid_dims, group_dims);
 
         Ok(())
@@ -545,16 +549,16 @@ impl InplaceOp1 for UgIOp1 {
     #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, sto: &mut CudaStorage, layout: &Layout) -> Result<()> {
         use crate::cuda_backend::WrapErr;
-        use cudarc::driver::LaunchAsync;
+        use cudarc::driver::PushKernelArg;
 
         let elem_count = layout.shape().elem_count();
+        let stream = sto.device.cuda_stream();
         // TODO: support more dtypes.
         let sto = sto.as_cuda_slice::<f32>()?;
         let sto = match layout.contiguous_offsets() {
             None => crate::bail!("input has to be contiguous"),
             Some((o1, o2)) => sto.slice(o1..o2),
         };
-        let params = (&sto,);
         let (g, b) = if elem_count % 32 == 0 {
             (elem_count / 32, 32)
         } else {
@@ -565,7 +569,9 @@ impl InplaceOp1 for UgIOp1 {
             block_dim: (b as u32, 1, 1),
             shared_mem_bytes: 0,
         };
-        unsafe { self.func.clone().launch(cfg, params) }.w()?;
+        let mut builder = stream.launch_builder(&self.func);
+        builder.arg(&sto);
+        unsafe { builder.launch(cfg) }.w()?;
         Ok(())
     }
 }

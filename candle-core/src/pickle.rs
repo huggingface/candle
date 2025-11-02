@@ -802,8 +802,8 @@ impl PthTensors {
             let tensor = tensor.reshape(shape_reversed)?;
 
             // Permute (transpose) the dimensions, e.g. Shape(4, 3, 2) -> Shape(2, 3, 4)
-            let dim_indeces_reversed: Vec<_> = (0..rank).rev().collect();
-            let tensor = tensor.permute(dim_indeces_reversed)?;
+            let dim_indices_reversed: Vec<_> = (0..rank).rev().collect();
+            let tensor = tensor.permute(dim_indices_reversed)?;
             Ok(Some(tensor))
         } else {
             Ok(Some(tensor))
@@ -816,7 +816,7 @@ impl PthTensors {
 /// # Arguments
 /// * `path` - Path to the pth file.
 /// * `key` - Optional key to retrieve `state_dict` from the pth file. Sometimes the pth file
-///           contains multiple objects and the state_dict is the one we are interested in.
+///   contains multiple objects and the state_dict is the one we are interested in.
 pub fn read_all_with_key<P: AsRef<std::path::Path>>(
     path: P,
     key: Option<&str>,

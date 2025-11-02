@@ -37,6 +37,10 @@ impl crate::backend::BackendStorage for CudaStorage {
         fail!()
     }
 
+    fn const_set(&mut self, _: crate::scalar::Scalar, _: &Layout) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
@@ -124,15 +128,27 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn scatter_add(
-        &self,
+    fn scatter_set(
+        &mut self,
         _: &Layout,
         _: &Self,
         _: &Layout,
         _: &Self,
         _: &Layout,
         _: usize,
-    ) -> Result<Self> {
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn scatter_add_set(
+        &mut self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: usize,
+    ) -> Result<()> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
@@ -211,10 +227,6 @@ impl crate::backend::BackendDevice for CudaDevice {
     }
 
     fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
-        Err(Error::NotCompiledWithCudaSupport)
-    }
-
-    fn ones_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 

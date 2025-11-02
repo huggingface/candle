@@ -1,6 +1,7 @@
 use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
 use candle_core::{DType, Device, Tensor};
-use criterion::{black_box, criterion_group, Criterion, Throughput};
+use criterion::{criterion_group, Criterion, Throughput};
+use std::hint::black_box;
 use std::time::Instant;
 
 fn run(a: &Tensor, b: &Tensor, c: &Tensor) {
@@ -32,8 +33,8 @@ const M: usize = 1024;
 const K: usize = 1024;
 const SIZE: usize = B * M * K;
 
-const DATA: [u8; SIZE] = create_cond_arr::<SIZE>();
-const DATA_U32: [u32; SIZE] = create_cond_arr_u32::<SIZE>();
+static DATA: [u8; SIZE] = create_cond_arr::<SIZE>();
+static DATA_U32: [u32; SIZE] = create_cond_arr_u32::<SIZE>();
 
 fn run_where_cond_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
     let tensor: Tensor = if device.is_wgpu() {

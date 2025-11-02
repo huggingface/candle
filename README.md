@@ -1,5 +1,5 @@
 # candle
-[![discord server](https://dcbadge.vercel.app/api/server/hugging-face-879548962464493619)](https://discord.gg/hugging-face-879548962464493619)
+[![discord server](https://dcbadge.limes.pink/api/server/hugging-face-879548962464493619)](https://discord.gg/hugging-face-879548962464493619)
 [![Latest version](https://img.shields.io/crates/v/candle-core.svg)](https://crates.io/crates/candle-core)
 [![Documentation](https://docs.rs/candle-core/badge.svg)](https://docs.rs/candle-core)
 [![License](https://img.shields.io/github/license/base-org/node?color=blue)](https://github.com/huggingface/candle/blob/main/LICENSE-MIT)
@@ -59,12 +59,12 @@ These online demos run entirely in your browser:
 - [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm): Image segmentation.
 - [BLIP](https://huggingface.co/spaces/radames/Candle-BLIP-Image-Captioning): image captioning.
 
-We also provide a some command line based examples using state of the art models:
+We also provide some command line based examples using state of the art models:
 
 - [LLaMA v1, v2, and v3](./candle-examples/examples/llama/): general LLM, includes
   the SOLAR-10.7B variant.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
-- [Codegeex4](./candle-examples/examples/codegeex4-9b/): Code completion,code interpreter,web search,fuction calling,repository-level
+- [Codegeex4](./candle-examples/examples/codegeex4-9b/): Code completion, code interpreter, web search, function calling, repository-level
 - [GLM4](./candle-examples/examples/glm4/): Open Multilingual Multimodal Chat LMs by THUDM
 - [Gemma v1 and v2](./candle-examples/examples/gemma/): 2b and 7b+/9b general LLMs from Google Deepmind.
 - [RecurrentGemma](./candle-examples/examples/recurrent-gemma/): 2b and 7b
@@ -292,6 +292,8 @@ Cheatsheet:
 
 ### Why should I use Candle?
 
+<!--- ANCHOR: goals --->
+
 Candle's core goal is to *make serverless inference possible*. Full machine learning frameworks like PyTorch
 are very large, which makes creating instances on a cluster slow. Candle allows deployment of lightweight
 binaries.
@@ -301,6 +303,7 @@ and the [GIL](https://www.backblaze.com/blog/the-python-gil-past-present-and-fut
 
 Finally, Rust is cool! A lot of the HF ecosystem already has Rust crates, like [safetensors](https://github.com/huggingface/safetensors) and [tokenizers](https://github.com/huggingface/tokenizers).
 
+<!--- ANCHOR_END: goals --->
 
 ### Other ML frameworks
 

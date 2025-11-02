@@ -14,10 +14,12 @@ accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
 candle-kernels = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
-metal = { workspace = true, optional = true }
+objc2-metal = { workspace = true, optional = true }
+objc2-foundation = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 gemm = { workspace = true }
 half = { workspace = true }
+float8 = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
 memmap2 = { workspace = true }
@@ -28,8 +30,6 @@ rand_distr = { workspace = true }
 rayon = { workspace = true }
 safetensors = { workspace = true }
 thiserror = { workspace = true }
-ug-cuda = { workspace = true, optional = true }
-ug-metal = { workspace = true, optional = true }
 yoke = { workspace = true }
 zip = { workspace = true }
 tracing = {workspace = true, optional = true, features = ["release_max_level_off"]}
@@ -47,8 +47,10 @@ rustc-hash = {workspace = true, optional = true}
 serde = { workspace = true, optional = true }
 
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 ug = { workspace = true }
+ug-cuda = { workspace = true, optional = true }
+ug-metal = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -56,11 +58,17 @@ clap = { workspace = true }
 criterion = { workspace = true }
 
 [features]
-cuda = ["cudarc", "dep:candle-kernels", "dep:ug-cuda"]
+cuda = ["cudarc", "dep:candle-kernels", "dep:ug-cuda", "float8/cuda"]
 cudnn = ["cuda", "cudarc/cudnn"]
+nccl = ["cuda", "cudarc/nccl"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
-metal = ["dep:metal", "dep:candle-metal-kernels", "dep:ug-metal"]
+metal = [
+    "dep:objc2-metal",
+    "dep:objc2-foundation",
+    "dep:candle-metal-kernels",
+    "dep:ug-metal",
+]
 wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume", "dep:candle-wgpu-kernels", "dep:log", "dep:tracing", "dep:rustc-hash"]
 wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize"]
 wgpu_debug_serialize = ["wgpu", "dep:serde", "dep:serde_json", "candle-wgpu-kernels/wgpu_debug_serialize"]
@@ -73,6 +81,10 @@ harness = false
 [[example]]
 name = "metal_basics"
 required-features = ["metal"]
+
+[[example]]
+name = "cuda_basics"
+required-features = ["cuda"]
 
 
 [[example]]

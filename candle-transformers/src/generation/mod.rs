@@ -13,6 +13,8 @@ pub enum Sampling {
     TopK { k: usize, temperature: f64 },
     TopP { p: f64, temperature: f64 },
     TopKThenTopP { k: usize, p: f64, temperature: f64 },
+    // Note that the rng is not used for the Gumbel-Softmax sampling.
+    GumbelSoftmax { temperature: f64 },
 }
 
 pub struct LogitsProcessor {
@@ -49,6 +51,11 @@ impl LogitsProcessor {
             .map(|(i, _)| i as u32)
             .context("empty logits")?;
         Ok(next_token)
+    }
+
+    fn sample_gumbel_softmax(&mut self, logits: &Tensor, temperature: f64) -> Result<u32> {
+        let sampled = candle_nn::sampling::gumbel_softmax(logits, temperature, candle::D::Minus1)?;
+        sampled.to_vec0::<u32>()
     }
 
     async fn sample_argmax_async(&mut self, logits: Tensor) -> Result<u32> {
@@ -188,6 +195,9 @@ impl LogitsProcessor {
         #[allow(deprecated)] //we are already ina deprecated function!
         let next_token = match &self.sampling {
             Sampling::ArgMax => self.sample_argmax(logits)?,
+            Sampling::GumbelSoftmax { temperature } => {
+                self.sample_gumbel_softmax(&logits, *temperature)?
+            }
             Sampling::All { temperature } => {
                 let prs = prs(*temperature)?;
                 self.sample_multinomial(&prs)?

@@ -33,7 +33,7 @@ pub fn wgpu_is_available() -> bool {
 }
 
 pub fn with_avx() -> bool {
-    cfg!(target_feature = "avx")
+    cfg!(target_feature = "avx2")
 }
 
 pub fn with_neon() -> bool {
