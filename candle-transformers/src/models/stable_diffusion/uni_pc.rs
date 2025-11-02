@@ -367,7 +367,7 @@ impl EdmDpmMultistepScheduler {
     }
 
     fn threshold_sample(&self, sample: Tensor) -> Result<Tensor> {
-        let shape = sample.shape().clone().into_dims();
+        let shape = sample.shape().inner();
         let v = sample
             .abs()?
             .reshape((shape[0], shape[1] * shape[2..].iter().product::<usize>()))?

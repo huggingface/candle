@@ -1,15 +1,15 @@
 //! The shape of a tensor is a tuple with the size of each of its dimensions.
 #![allow(clippy::redundant_closure_call)]
+use std::iter;
+
 use crate::{
-    layout::{Stride, MAX_DIMS},
+    layout::{IndexArray, IndexArrayExt, Stride},
     Error, Result,
 };
 use arrayvec::ArrayVec;
 
-pub(crate) type ShapeVec = ArrayVec<usize, MAX_DIMS>;
-
 #[derive(Clone, PartialEq, Eq)]
-pub struct Shape(ShapeVec);
+pub struct Shape(IndexArray);
 
 pub const SCALAR: Shape = Shape(ArrayVec::new_const());
 
@@ -19,27 +19,27 @@ impl std::fmt::Debug for Shape {
     }
 }
 
-impl From<ShapeVec> for Shape {
-    fn from(dims: ShapeVec) -> Self {
+impl From<IndexArray> for Shape {
+    fn from(dims: IndexArray) -> Self {
         Self(dims)
     }
 }
 
-impl From<&ShapeVec> for Shape {
-    fn from(dims: &ShapeVec) -> Self {
+impl From<&IndexArray> for Shape {
+    fn from(dims: &IndexArray) -> Self {
         Self(dims.clone())
     }
 }
 
 impl<const C: usize> From<&[usize; C]> for Shape {
     fn from(dims: &[usize; C]) -> Self {
-        Self(ShapeVec::try_from(dims.as_slice()).unwrap())
+        Self(IndexArray::from_slice(dims))
     }
 }
 
 impl From<&[usize]> for Shape {
     fn from(dims: &[usize]) -> Self {
-        Self(dims.try_into().unwrap())
+        Self(IndexArray::from_slice(dims))
     }
 }
 
@@ -57,7 +57,7 @@ impl From<()> for Shape {
 
 impl From<usize> for Shape {
     fn from(d1: usize) -> Self {
-        Self(ShapeVec::try_from([d1].as_slice()).unwrap())
+        Self(IndexArray::from_arr([d1]))
     }
 }
 
@@ -65,7 +65,7 @@ macro_rules! impl_from_tuple {
     ($tuple:ty, $($index:tt),+) => {
         impl From<$tuple> for Shape {
             fn from(d: $tuple) -> Self {
-                Self(ShapeVec::try_from([$(d.$index,)+].as_slice()).unwrap())
+                Self(IndexArray::from_arr([$(d.$index,)+]))
             }
         }
     }
@@ -80,7 +80,7 @@ impl_from_tuple!((usize, usize, usize, usize, usize, usize), 0, 1, 2, 3, 4, 5);
 
 impl From<Vec<usize>> for Shape {
     fn from(dims: Vec<usize>) -> Self {
-        Self(ShapeVec::try_from(dims.as_slice()).unwrap())
+        Self(IndexArray::from_slice(dims.as_slice()))
     }
 }
 
@@ -122,7 +122,7 @@ macro_rules! extract_dims {
 
 impl Shape {
     pub fn from_dims(dims: &[usize]) -> Self {
-        Self(ShapeVec::try_from(dims).unwrap())
+        Self(IndexArray::from_slice(dims))
     }
 
     /// The rank is the number of dimensions, 0 for a scalar value, 1 for a vector, etc.
@@ -130,12 +130,8 @@ impl Shape {
         self.0.len()
     }
 
-    pub fn into_dims(self) -> Vec<usize> {
-        self.0.to_vec()
-    }
-
     /// The inner shape vec
-    pub fn inner(&self) -> &ShapeVec {
+    pub fn inner(&self) -> &IndexArray {
         &self.0
     }
 
@@ -187,7 +183,7 @@ impl Shape {
     }
 
     /// Returns true if the strides are Fortran contiguous (aka column major).
-    pub fn is_fortran_contiguous(&self, stride: &[usize]) -> bool {
+    pub fn is_fortran_contiguous(&self, stride: &Stride) -> bool {
         if self.0.len() != stride.len() {
             return false;
         }
@@ -212,12 +208,12 @@ impl Shape {
     /// broadcasted shape. This is to be used for binary pointwise ops.
     pub fn broadcast_shape_binary_op(&self, rhs: &Self, op: &'static str) -> Result<Shape> {
         let lhs = self;
-        let lhs_dims = lhs.dims();
-        let rhs_dims = rhs.dims();
+        let lhs_dims = lhs.inner();
+        let rhs_dims = rhs.inner();
         let lhs_ndims = lhs_dims.len();
         let rhs_ndims = rhs_dims.len();
         let bcast_ndims = usize::max(lhs_ndims, rhs_ndims);
-        let mut bcast_dims = vec![0; bcast_ndims];
+        let mut bcast_dims = IndexArray::from_iter(iter::repeat_n(0, bcast_ndims));
         for (idx, bcast_value) in bcast_dims.iter_mut().enumerate() {
             let rev_idx = bcast_ndims - idx;
             let l_value = if lhs_ndims < rev_idx {
@@ -250,8 +246,8 @@ impl Shape {
 
     pub(crate) fn broadcast_shape_matmul(&self, rhs: &Self) -> Result<(Shape, Shape)> {
         let lhs = self;
-        let lhs_dims = lhs.dims();
-        let rhs_dims = rhs.dims();
+        let lhs_dims = lhs.inner();
+        let rhs_dims = rhs.inner();
         if lhs_dims.len() < 2 || rhs_dims.len() < 2 {
             crate::bail!("only 2d matrixes are supported {lhs:?} {rhs:?}")
         }
@@ -264,10 +260,15 @@ impl Shape {
         let lhs_b = Self::from(&lhs_dims[..lhs_dims.len() - 2]);
         let rhs_b = Self::from(&rhs_dims[..rhs_dims.len() - 2]);
         let bcast = lhs_b.broadcast_shape_binary_op(&rhs_b, "broadcast_matmul")?;
-        let bcast_dims = bcast.dims();
+        let mut bcast_lhs = bcast.inner().clone();
+        bcast_lhs.push(m);
+        bcast_lhs.push(lhs_k);
+        let mut bcast_rhs = bcast.inner().clone();
+        bcast_rhs.push(rhs_k);
+        bcast_rhs.push(n);
 
-        let bcast_lhs = [bcast_dims, &[m, lhs_k]].concat();
-        let bcast_rhs = [bcast_dims, &[rhs_k, n]].concat();
+        //let bcast_lhs = [bcast_dims, &[m, lhs_k]].concat();
+        //let bcast_rhs = [bcast_dims, &[rhs_k, n]].concat();
         Ok((Shape::from(bcast_lhs), Shape::from(bcast_rhs)))
     }
 }
@@ -624,6 +625,8 @@ impl ShapeWithOneHole for (usize, usize, usize, usize, ()) {
 
 #[cfg(test)]
 mod tests {
+    use crate::layout::IndexArrayExt;
+
     use super::*;
 
     #[test]
@@ -631,19 +634,13 @@ mod tests {
         let shape = Shape::from(());
         assert_eq!(shape.stride_contiguous(), Stride::new());
         let shape = Shape::from(42);
-        assert_eq!(
-            shape.stride_contiguous(),
-            Stride::try_from([1].as_slice()).unwrap()
-        );
+        assert_eq!(shape.stride_contiguous(), Stride::from_arr([1]));
         let shape = Shape::from((42, 1337));
-        assert_eq!(
-            shape.stride_contiguous(),
-            Stride::try_from([1337, 1].as_slice()).unwrap()
-        );
+        assert_eq!(shape.stride_contiguous(), Stride::from_arr([1337, 1]));
         let shape = Shape::from((299, 792, 458));
         assert_eq!(
             shape.stride_contiguous(),
-            Stride::try_from([458 * 792, 458, 1].as_slice()).unwrap()
+            Stride::from_arr([458 * 792, 458, 1])
         );
     }
 

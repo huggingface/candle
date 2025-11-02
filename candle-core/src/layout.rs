@@ -1,9 +1,45 @@
 //! Tensor Layouts including contiguous or sparse strides
 use crate::{Error, Result, Shape};
 use arrayvec::ArrayVec;
+use core::{iter, mem::ManuallyDrop};
 
 pub(crate) const MAX_DIMS: usize = 8;
-pub(crate) type Stride = ArrayVec<usize, MAX_DIMS>;
+pub(crate) type IndexArray = ArrayVec<usize, MAX_DIMS>;
+pub(crate) type Stride = IndexArray;
+
+pub(crate) trait IndexArrayExt {
+    fn from_slice(s: &[usize]) -> Self;
+
+    fn from_arr<const N: usize>(arr: [usize; N]) -> Self;
+}
+
+impl IndexArrayExt for IndexArray {
+    fn from_slice(s: &[usize]) -> Self {
+        debug_assert!(s.len() <= MAX_DIMS);
+
+        let mut index_type = IndexArray::new();
+        unsafe {
+            index_type
+                .as_mut_ptr()
+                .copy_from_nonoverlapping(s.as_ptr(), s.len());
+            index_type.set_len(s.len());
+        }
+        index_type
+    }
+
+    fn from_arr<const N: usize>(array: [usize; N]) -> Self {
+        debug_assert!(N <= MAX_DIMS);
+        let array = ManuallyDrop::new(array);
+        let mut index_type = IndexArray::new();
+        unsafe {
+            index_type
+                .as_mut_ptr()
+                .copy_from_nonoverlapping(array.as_ptr(), N);
+            index_type.set_len(N);
+        }
+        index_type
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Layout {
@@ -36,8 +72,8 @@ impl Layout {
         Self::contiguous_with_offset(shape, 0)
     }
 
-    pub fn dims(&self) -> &[usize] {
-        self.shape.dims()
+    pub fn dims(&self) -> &IndexArray {
+        &self.shape.inner()
     }
 
     /// The dimension size for a specified dimension index.
@@ -82,7 +118,7 @@ impl Layout {
     }
 
     pub fn narrow(&self, dim: usize, start: usize, len: usize) -> Result<Self> {
-        let dims = self.shape().dims();
+        let dims = self.shape().inner();
         if dim >= dims.len() {
             Err(Error::DimOutOfRange {
                 shape: self.shape().clone(),
@@ -101,7 +137,7 @@ impl Layout {
             }
             .bt())?
         }
-        let mut dims = dims.to_vec();
+        let mut dims = dims.clone();
         dims[dim] = len;
         Ok(Self {
             shape: Shape::from(dims),
@@ -121,7 +157,7 @@ impl Layout {
             .bt())?
         }
         let mut stride = self.stride().clone();
-        let mut dims = self.shape().dims().to_vec();
+        let mut dims = self.shape().inner().clone();
         dims.swap(dim1, dim2);
         stride.swap(dim1, dim2);
         Ok(Self {
@@ -142,9 +178,9 @@ impl Layout {
             )
         }
         let stride = self.stride();
-        let dims = self.shape().dims();
+        let dims = self.shape().inner();
         let mut perm_stride = stride.clone();
-        let mut perm_dims = dims.to_vec();
+        let mut perm_dims = dims.clone();
         for (i, &idx) in idxs.iter().enumerate() {
             perm_stride[i] = stride[idx];
             perm_dims[i] = dims[idx];
@@ -166,7 +202,7 @@ impl Layout {
             .bt());
         }
         let added_dims = shape.rank() - self.shape().rank();
-        let mut stride = Stride::try_from(vec![0; added_dims].as_slice())?;
+        let mut stride = Stride::from_iter(iter::repeat_n(0, added_dims));
         for (&dst_dim, (&src_dim, &src_stride)) in shape.dims()[added_dims..]
             .iter()
             .zip(self.dims().iter().zip(self.stride()))
@@ -191,11 +227,11 @@ impl Layout {
         })
     }
 
-    pub(crate) fn strided_index(&self) -> crate::StridedIndex {
-        crate::StridedIndex::from_layout(self)
+    pub(crate) fn strided_index(&self) -> crate::StridedIndex<'_> {
+        crate::StridedIndex::from(self)
     }
 
-    pub(crate) fn strided_blocks(&self) -> crate::StridedBlocks {
+    pub(crate) fn strided_blocks<'a>(&'a self) -> crate::StridedBlocks<'a> {
         let mut block_len = 1;
         let mut contiguous_dims = 0; // These are counted from the right.
         for (&stride, &dim) in self.stride().iter().zip(self.dims().iter()).rev() {
@@ -213,8 +249,8 @@ impl Layout {
             }
         } else {
             let block_start_index = crate::StridedIndex::new(
-                &self.dims()[..index_dims].try_into().unwrap(),
-                &self.stride[..index_dims].try_into().unwrap(),
+                &self.dims()[..index_dims],
+                &self.stride[..index_dims],
                 self.start_offset,
             );
             crate::StridedBlocks::MultipleBlocks {

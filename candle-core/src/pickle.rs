@@ -1,6 +1,7 @@
 //! Just enough pickle support to be able to read PyTorch checkpoints.
 // This hardcodes objects that are required for tensor reading, we may want to make this a bit more
 // composable/tensor agnostic at some point.
+use crate::layout::IndexArrayExt;
 use crate::{Context, DType, Error as E, Layout, Result, Tensor};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
@@ -646,7 +647,7 @@ fn rebuild_args(args: Object) -> Result<(Layout, DType, String, usize)> {
     };
     let layout = Layout::new(
         crate::Shape::from(size),
-        crate::layout::Stride::try_from(stride.as_slice())?,
+        crate::layout::Stride::from_slice(stride.as_slice()),
         offset * dtype.size_in_bytes(),
     );
     Ok((layout, dtype, path, storage_size))

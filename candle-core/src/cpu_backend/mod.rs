@@ -1,6 +1,6 @@
 //! Implementation of Backend Fns for CPU
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::layout::Stride;
+use crate::layout::{IndexArrayExt, Stride};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
 use float8::F8E4M3;
@@ -122,7 +122,7 @@ impl ReduceIndex {
         F: Fn(T, T) -> bool,
         G: Fn(T, usize) -> U,
     {
-        let reduce_dim_size = src_l.dims()[self.reduce_dim_index];
+        let reduce_dim_size = src_l.shape().inner()[self.reduce_dim_index];
         let reduce_dim_stride = src_l.stride()[self.reduce_dim_index];
         let dst_len = src_l.shape().elem_count() / reduce_dim_size;
         let mut dst: Vec<U> = Vec::with_capacity(dst_len);
@@ -524,17 +524,19 @@ impl<I: IntDType> Map1 for IndexSelect<'_, I> {
             None => Err(Error::RequiresContiguous { op: "index-select" }.bt())?,
         };
         let dim = self.dim;
-        let n_ids = match self.ids_l.dims() {
-            [n_ids] => *n_ids,
-            d => Err(Error::UnexpectedNumberOfDims {
+        let d = self.ids_l.dims();
+        let n_ids = if d.len() == 1 {
+            d[0]
+        } else {
+            Err(Error::UnexpectedNumberOfDims {
                 expected: 1,
                 got: d.len(),
                 shape: self.ids_l.shape().clone(),
             }
-            .bt())?,
+            .bt())?
         };
         let stride_ids = self.ids_l.stride()[0];
-        let mut dst_dims = layout.dims().to_vec();
+        let mut dst_dims = layout.dims().clone();
         let src_dim = dst_dims[dim];
         dst_dims[dim] = n_ids;
         let dst_len: usize = dst_dims.iter().product();
@@ -1905,7 +1907,7 @@ impl BackendStorage for CpuStorage {
         match op {
             ReduceOp::Sum => {
                 let src_dims = layout.dims();
-                let mut dst_dims = src_dims.to_vec();
+                let mut dst_dims = src_dims.clone();
                 for &dim in reduce_dims.iter() {
                     dst_dims[dim] = 1;
                 }
@@ -2343,7 +2345,7 @@ impl BackendStorage for CpuStorage {
                 // This merges the last two dimensions of the kernel together.
                 let kernel_l_mm = Layout::new(
                     (b_size, c_in, k_size * c_out).into(),
-                    Stride::try_from([0, k_size * c_out, 1].as_slice()).unwrap(),
+                    Stride::from_arr([0, k_size * c_out, 1]),
                     kernel_l.start_offset(),
                 );
                 self.matmul(
