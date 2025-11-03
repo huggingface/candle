@@ -2400,3 +2400,45 @@ fn const_fill() {
     test::<bf16, _>("fill_bf16", bf16::from_f32);
     test::<f32, _>("fill_f32", |v| v);
 }
+
+#[test]
+fn cross_thread_commit_and_wait() {
+    let device = Device::system_default().expect("no device found");
+    let kernels = Kernels::new();
+    let command_queue = device.new_command_queue().unwrap();
+    let command_buffer = create_command_buffer(&command_queue).unwrap();
+
+    let len = 256usize;
+    let value: f32 = 3.14159;
+    let buffer = device
+        .new_buffer(len * std::mem::size_of::<f32>(), RESOURCE_OPTIONS)
+        .unwrap();
+
+    call_const_fill(
+        &device,
+        &command_buffer,
+        &kernels,
+        "fill_f32",
+        len,
+        &buffer,
+        value,
+    )
+    .unwrap();
+
+    let cb2 = command_buffer.clone();
+
+    std::thread::spawn(move || {
+        cb2.commit();
+        cb2.wait_until_completed();
+    })
+    .join()
+    .unwrap();
+
+    let out: Vec<f32> = {
+        let ptr = buffer.contents() as *const f32;
+        assert!(!ptr.is_null());
+        unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
+    };
+
+    assert!(out.iter().all(|&v| (v - value).abs() < 1e-6));
+}

@@ -67,27 +67,3 @@ impl AsRef<ProtocolObject<dyn MTLCommandBuffer>> for CommandBuffer {
         &self.raw
     }
 }
-
-pub struct CommandBufferThreadMap {
-    inner: HashMap<thread::ThreadId, CommandBuffer>,
-}
-
-impl CommandBufferThreadMap {
-    pub fn new() -> Self {
-        Self {
-            inner: HashMap::new(),
-        }
-    }
-
-    pub fn get(&self) -> Option<&CommandBuffer> {
-        self.inner.get(&thread::current().id())
-    }
-
-    pub fn get_mut(&mut self) -> Option<&mut CommandBuffer> {
-        self.inner.get_mut(&thread::current().id())
-    }
-
-    pub fn insert(&mut self, command_buffer: CommandBuffer) -> Option<CommandBuffer> {
-        self.inner.insert(thread::current().id(), command_buffer)
-    }
-}

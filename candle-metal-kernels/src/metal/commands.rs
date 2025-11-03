@@ -1,4 +1,4 @@
-use crate::metal::{CommandBuffer, CommandBufferThreadMap};
+use crate::metal::CommandBuffer;
 use crate::MetalKernelError;
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_metal::{MTLCommandBufferStatus, MTLCommandQueue, MTLCounterSet};
@@ -21,7 +21,7 @@ pub struct Commands {
     /// Despite what the documentation says, command buffers are NOT ordered. They are ordered
     /// for their START time, but there's no guarantee that command buffer1 will finish before
     /// command buffer2 starts (or there are metal bugs there)
-    command_buffers: Arc<Mutex<CommandBufferThreadMap>>,
+    command_buffer: Arc<Mutex<CommandBuffer>>,
     /// Keeps track of the current amount of compute command encoders on the current
     /// command buffer
     /// Arc, RwLock because of the interior mutability.
@@ -46,9 +46,7 @@ impl Commands {
     pub fn new(command_queue: CommandQueue) -> Result<Self, MetalKernelError> {
         let command_buffer = create_command_buffer(&command_queue)?;
         command_buffer.enqueue();
-        let mut command_buffers = CommandBufferThreadMap::new();
-        command_buffers.insert(command_buffer);
-        let command_buffers = Arc::new(Mutex::new(command_buffers));
+        let command_buffer = Arc::new(Mutex::new(command_buffer));
 
         let compute_per_buffer = match std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER") {
             Ok(val) => val.parse().unwrap_or(50),
@@ -56,71 +54,51 @@ impl Commands {
         };
         Ok(Self {
             command_queue,
-            command_buffers,
+            command_buffer,
             command_buffer_index: 0,
             compute_per_buffer,
         })
     }
 
     pub fn command_buffer(&mut self) -> Result<(bool, CommandBuffer), MetalKernelError> {
-        let mut command_buffers = self.command_buffers.lock()?;
-        let command_buffer = match command_buffers.get_mut() {
-            Some(command_buffer) => command_buffer,
-            None => {
-                let command_buffer = create_command_buffer(&self.command_queue)?;
-                command_buffers.insert(command_buffer);
-                command_buffers.get_mut().unwrap()
-            }
-        };
+        let mut current = self.command_buffer.lock()?;
 
         let mut flushed = false;
         if self.command_buffer_index > self.compute_per_buffer {
-            command_buffer.commit();
-            *command_buffer = create_command_buffer(&self.command_queue)?;
+            current.commit();
+            *current = create_command_buffer(&self.command_queue)?;
             self.command_buffer_index = 0;
             flushed = true;
         }
         self.command_buffer_index += 1;
-        Ok((flushed, command_buffer.clone()))
+        Ok((flushed, current.clone()))
     }
 
     pub fn wait_until_completed(&mut self) -> Result<(), MetalKernelError> {
         let command_buffer = {
-            let mut command_buffers = self.command_buffers.lock()?;
-
-            if let Some(command_buffer) = command_buffers.get_mut() {
-                let current_command_buffer = command_buffer.clone();
-                *command_buffer = create_command_buffer(&self.command_queue)?;
-                Some(current_command_buffer)
-            } else {
-                None
-            }
+            let mut current = self.command_buffer.lock()?;
+            let current_clone = current.clone();
+            *current = create_command_buffer(&self.command_queue)?;
+            current_clone
         };
-        if let Some(command_buffer) = command_buffer {
-            // Only commit and wait if it needed
-            match command_buffer.status() {
-                MTLCommandBufferStatus::NotEnqueued | MTLCommandBufferStatus::Enqueued => {
-                    command_buffer.commit();
-                    command_buffer.wait_until_completed();
-                }
-                MTLCommandBufferStatus::Committed | MTLCommandBufferStatus::Scheduled => {
-                    command_buffer.wait_until_completed();
-                }
-                MTLCommandBufferStatus::Completed => {} // No action needed
-                MTLCommandBufferStatus::Error => {
-                    if let Some(error) = command_buffer.error() {
-                        return Err(MetalKernelError::CommandBufferError(error.to_string()));
-                    }
-                }
-                // All status variants covered.
-                // We need this final match arm because the statuses are implemented as integers, not an enum, in the objc2 framework.
-                _ => unreachable!(),
+
+        match command_buffer.status() {
+            MTLCommandBufferStatus::NotEnqueued | MTLCommandBufferStatus::Enqueued => {
+                command_buffer.commit();
+                command_buffer.wait_until_completed();
             }
-        } else {
-            // No command buffer to wait for, so we create one
-            let command_buffer = create_command_buffer(&self.command_queue)?;
-            let mut command_buffers = self.command_buffers.lock()?;
-            command_buffers.insert(command_buffer);
+            MTLCommandBufferStatus::Committed | MTLCommandBufferStatus::Scheduled => {
+                command_buffer.wait_until_completed();
+            }
+            MTLCommandBufferStatus::Completed => {} // No action needed
+            MTLCommandBufferStatus::Error => {
+                if let Some(error) = command_buffer.error() {
+                    return Err(MetalKernelError::CommandBufferError(error.to_string()));
+                }
+            }
+            // All status variants covered.
+            // We need this final match arm because the statuses are implemented as integers, not an enum, in the objc2 framework.
+            _ => unreachable!(),
         }
         Ok(())
     }
