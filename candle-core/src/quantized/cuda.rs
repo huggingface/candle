@@ -736,3 +736,165 @@ mod test {
         Ok(())
     }
 }
+
+// Public helper functions for GGML wrapper trait implementations
+// These expose the optimized CUDA kernels to the macro-generated code
+
+/// Helper to map GgmlDType enum variants to their corresponding wrappers
+#[inline]
+fn ggml_dtype_to_enum(name: &str) -> Option<GgmlDType> {
+    match name {
+        "GgmlQ4_0" => Some(GgmlDType::Q4_0),
+        "GgmlQ4_1" => Some(GgmlDType::Q4_1),
+        "GgmlQ5_0" => Some(GgmlDType::Q5_0),
+        "GgmlQ5_1" => Some(GgmlDType::Q5_1),
+        "GgmlQ8_0" => Some(GgmlDType::Q8_0),
+        "GgmlQ8_1" => Some(GgmlDType::Q8_1),
+        "GgmlQ2K" => Some(GgmlDType::Q2K),
+        "GgmlQ3K" => Some(GgmlDType::Q3K),
+        "GgmlQ4K" => Some(GgmlDType::Q4K),
+        "GgmlQ5K" => Some(GgmlDType::Q5K),
+        "GgmlQ6K" => Some(GgmlDType::Q6K),
+        "GgmlQ8K" => Some(GgmlDType::Q8K),
+        _ => None,
+    }
+}
+
+/// Quantize f32 GPU data to quantized format using CPU
+///
+/// This follows the same approach as QCudaStorage::quantize():
+/// 1. Copy f32 data from GPU to CPU
+/// 2. Quantize on CPU
+/// 3. Transfer quantized data back to GPU
+///
+/// # Arguments
+/// * `type_name` - Name of the quantized type (e.g., "GgmlQ4_0")
+/// * `input` - Input f32 data on GPU
+/// * `device` - CUDA device to use
+///
+/// # Returns
+/// Quantized data buffer on GPU
+pub fn quantize_cuda(
+    type_name: &str,
+    input: &cudarc::driver::CudaSlice<f32>,
+    device: &CudaDevice,
+) -> Result<cudarc::driver::CudaSlice<u8>> {
+    let dtype = ggml_dtype_to_enum(type_name)
+        .ok_or_else(|| crate::Error::Msg(format!("Unknown GGML type: {}", type_name)))?;
+
+    // Copy f32 data from GPU to CPU
+    let src = device.memcpy_dtov(input)?;
+    let src_len = src.len();
+
+    // Quantize on CPU
+    let src_storage = crate::Storage::Cpu(crate::CpuStorage::F32(src));
+    let mut qcpu_storage = crate::Device::Cpu.qzeros(src_len, dtype)?;
+    qcpu_storage.quantize(&src_storage)?;
+    let data = qcpu_storage.data()?;
+
+    // Transfer quantized data back to GPU with padding
+    let padded_len = data.len() + MATRIX_ROW_PADDING * dtype.type_size() / dtype.block_size();
+    let mut output = unsafe { device.alloc::<u8>(padded_len)? };
+    device.memcpy_htod(data.as_ref(), &mut output.slice_mut(..data.len()))?;
+
+    Ok(output)
+}
+
+/// Dequantize quantized GPU data to f32 using CUDA kernels
+///
+/// This is a public wrapper around the internal dequantize_f32 function
+/// that can be called from trait implementations.
+pub fn dequantize_cuda_f32(
+    type_name: &str,
+    data: &cudarc::driver::CudaSlice<u8>,
+    output: &mut cudarc::driver::CudaSlice<f32>,
+    device: &CudaDevice,
+) -> Result<()> {
+    let dtype = ggml_dtype_to_enum(type_name)
+        .ok_or_else(|| crate::Error::Msg(format!("Unknown GGML type: {}", type_name)))?;
+
+    let elem_count = output.len();
+
+    // Create a temporary PaddedCudaSlice for the existing implementation
+    let padded = PaddedCudaSlice {
+        inner: data.clone(),
+        len: data.len(),
+    };
+
+    // Use the existing optimized dequantization
+    let result = dequantize_f32(&padded, dtype, elem_count, device)?;
+    let result_slice = result.as_cuda_slice::<f32>()?;
+
+    // Copy result to output buffer
+    device.memcpy_dtod(&result_slice.slice(..), output)?;
+
+    Ok(())
+}
+
+/// Perform quantized matrix multiplication on CUDA
+///
+/// Computes: lhs_f32 @ rhs_quantized using optimized CUDA kernels
+///
+/// # Arguments
+/// * `type_name` - Name of the quantized type (e.g., "GgmlQ4_0")
+/// * `lhs_f32` - Left-hand side matrix in f32 format on GPU
+/// * `lhs_shape` - Shape of lhs matrix (must be at least 2D)
+/// * `rhs_data` - Right-hand side matrix in quantized format on GPU
+/// * `rhs_shape` - Shape of rhs matrix (must be at least 2D)
+/// * `device` - CUDA device to use
+///
+/// # Returns
+/// Result buffer containing the output matrix in f32 format
+pub fn matmul_cuda(
+    type_name: &str,
+    lhs_f32: &cudarc::driver::CudaSlice<f32>,
+    lhs_shape: &[usize],
+    rhs_data: &cudarc::driver::CudaSlice<u8>,
+    rhs_shape: &[usize],
+    device: &CudaDevice,
+) -> Result<cudarc::driver::CudaSlice<f32>> {
+    let dtype = ggml_dtype_to_enum(type_name)
+        .ok_or_else(|| crate::Error::Msg(format!("Unknown GGML type: {}", type_name)))?;
+
+    // Parse dimensions
+    if lhs_shape.len() < 2 || rhs_shape.len() < 2 {
+        crate::bail!("matmul requires at least 2D tensors");
+    }
+
+    let (b, m, k) = match lhs_shape {
+        [b, m, k] => (*b, *m, *k),
+        [m, k] => (1, *m, *k),
+        _ => crate::bail!("unsupported lhs shape: {:?}", lhs_shape),
+    };
+
+    let n = rhs_shape[rhs_shape.len() - 1];
+    let k2 = rhs_shape[rhs_shape.len() - 2];
+
+    if k != k2 {
+        crate::bail!("incompatible matmul dimensions: k={}, k2={}", k, k2);
+    }
+
+    // Create temporary PaddedCudaSlice for rhs
+    let rhs_padded = PaddedCudaSlice {
+        inner: rhs_data.clone(),
+        len: rhs_data.len(),
+    };
+
+    // Use the optimized mul_mat_via_q8_1 kernel
+    let result = mul_mat_via_q8_1(
+        &rhs_padded,
+        &lhs_f32.slice(..),
+        dtype,
+        /* x_rows */ n,
+        /* x_cols */ k,
+        /* y_rows */ k,
+        /* y_cols */ b * m,
+        device,
+    )?;
+
+    let result_slice = result.as_cuda_slice::<f32>()?;
+    // Clone the CudaSlice by copying the data to a new allocation
+    let mut output = unsafe { device.alloc::<f32>(result_slice.len())? };
+    device.memcpy_dtod(&result_slice.slice(..), &mut output)?;
+    Ok(output)
+}

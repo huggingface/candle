@@ -2,7 +2,10 @@
 //!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{builder_arg as barg, CpuStorage, DType, Layout, QuantizedDType, Result, WithDType};
+use crate::{
+    builder_arg as barg, quantized_dispatch, CpuStorage, DType, Layout, QuantizedDType, Result,
+    WithDType,
+};
 pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
@@ -1396,12 +1399,12 @@ impl BackendStorage for CudaStorage {
         };
         let inp = &inp;
 
-        let kernel_name = format!("cast_{}_{}", self.dtype().as_str(), dtype.as_str());
-        let func = dev.get_or_load_func(&kernel_name, &kernels::CAST)?;
-
         // Helper macro to reduce duplication in cast operations
         macro_rules! cast_kernel {
             ($dtype_variant:ident, $rust_type:ty) => {{
+                let kernel_name = format!("cast_{}_{}", self.dtype().as_str(), dtype.as_str());
+                let func = dev.get_or_load_func(&kernel_name, &kernels::CAST)?;
+
                 let out = unsafe { dev.alloc::<$rust_type>(el)? };
                 let mut builder = func.builder();
                 barg!(builder, el);
@@ -1960,6 +1963,14 @@ impl BackendStorage for CudaStorage {
         let elem_count = b * m * n;
         let dev = &self.device;
         let slice = match (&self.slice, &rhs.slice) {
+            (CudaStorageSlice::F32(lhs), CudaStorageSlice::Quantized(qdtype, rhs)) => {
+                let lhs_shape = lhs_l.shape().dims();
+                let rhs_shape = rhs_l.shape().dims();
+                let res = quantized_dispatch::matmul_cuda(
+                    *qdtype, lhs, lhs_shape, *qdtype, rhs, rhs_shape, dev,
+                )?;
+                CudaStorageSlice::F32(res)
+            }
             (CudaStorageSlice::BF16(lhs), CudaStorageSlice::BF16(rhs)) => {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);

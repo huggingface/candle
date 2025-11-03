@@ -624,6 +624,10 @@ impl candle_macros_types::CudaStorageDevice for CudaDevice {
         self.alloc_zeros(len)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 // Also implement for &CudaDevice so it can be used with references
@@ -636,5 +640,9 @@ impl candle_macros_types::CudaStorageDevice for &CudaDevice {
         (*self)
             .alloc_zeros(len)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        *self
     }
 }

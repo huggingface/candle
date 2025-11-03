@@ -174,45 +174,73 @@ macro_rules! define_ggml_wrapper {
             }
         }
 
-        // Implement QuantizedCudaOps trait  
+        // Implement QuantizedCudaOps trait
         #[cfg(feature = "cuda")]
         impl candle_macros_types::QuantizedCudaOps for $name {
-            #[inline]
             fn quantize_cuda<D: candle_macros_types::CudaStorageDevice>(
                 &self,
-                _input: &cudarc::driver::CudaSlice<f32>,
-                _device: &D,
+                input: &cudarc::driver::CudaSlice<f32>,
+                device: &D,
             ) -> std::result::Result<cudarc::driver::CudaSlice<u8>, String> {
-                // Quantization on GPU typically goes through CPU path
-                // as it's a one-time operation during model loading
-                Err("CUDA quantize not implemented - use CPU quantize then transfer to GPU".to_string())
+                println!(
+                    "⚠ Using CPU fallback for CUDA quantize of {}",
+                    stringify!($name)
+                );
+                // Downcast the device to CudaDevice
+                let cuda_device = device
+                    .as_any()
+                    .downcast_ref::<crate::CudaDevice>()
+                    .ok_or_else(|| "Device is not a CudaDevice".to_string())?;
+
+                // Quantize using CPU path (copy to CPU, quantize, copy back)
+                crate::quantized::cuda::quantize_cuda(stringify!($name), input, cuda_device)
+                    .map_err(|e| format!("CUDA quantize failed: {}", e))
             }
 
-            #[inline]
             fn dequantize_cuda<D: candle_macros_types::CudaStorageDevice>(
                 &self,
-                _data: &cudarc::driver::CudaSlice<u8>,
-                _output: &mut cudarc::driver::CudaSlice<f32>,
-                _device: &D,
+                data: &cudarc::driver::CudaSlice<u8>,
+                output: &mut cudarc::driver::CudaSlice<f32>,
+                device: &D,
             ) -> std::result::Result<(), String> {
-                // Dequantization is handled through QCudaStorage which provides
-                // optimized CUDA kernels. The trait-based approach doesn't currently
-                // support the full context needed for optimal GPU operations.
-                Err("CUDA dequantize should use QCudaStorage::dequantize() instead".to_string())
+                // Downcast the device to CudaDevice to call the dequantize function
+                let cuda_device = device
+                    .as_any()
+                    .downcast_ref::<crate::CudaDevice>()
+                    .ok_or_else(|| "Device is not a CudaDevice".to_string())?;
+
+                crate::quantized::cuda::dequantize_cuda_f32(
+                    stringify!($name),
+                    data,
+                    output,
+                    cuda_device,
+                )
+                .map_err(|e| format!("CUDA dequantize failed: {}", e))
             }
 
-            #[inline]
             fn matmul_cuda<D: candle_macros_types::CudaStorageDevice>(
                 &self,
-                _lhs_f32: &cudarc::driver::CudaSlice<f32>,
-                _lhs_shape: &[usize],
-                _rhs_data: &cudarc::driver::CudaSlice<u8>,
-                _rhs_shape: &[usize],
-                _device: &D,
+                lhs_f32: &cudarc::driver::CudaSlice<f32>,
+                lhs_shape: &[usize],
+                rhs_data: &cudarc::driver::CudaSlice<u8>,
+                rhs_shape: &[usize],
+                device: &D,
             ) -> std::result::Result<cudarc::driver::CudaSlice<f32>, String> {
-                // Matrix multiplication is handled through QCudaStorage in the higher-level API
-                // The low-level trait implementation is not currently used for matmul
-                Err("CUDA matmul should use QCudaStorage::fwd() instead".to_string())
+                // Downcast the device to CudaDevice
+                let cuda_device = device
+                    .as_any()
+                    .downcast_ref::<crate::CudaDevice>()
+                    .ok_or_else(|| "Device is not a CudaDevice".to_string())?;
+
+                crate::quantized::cuda::matmul_cuda(
+                    stringify!($name),
+                    lhs_f32,
+                    lhs_shape,
+                    rhs_data,
+                    rhs_shape,
+                    cuda_device,
+                )
+                .map_err(|e| format!("CUDA matmul failed: {}", e))
             }
         }
     };

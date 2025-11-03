@@ -30,4 +30,8 @@ impl candle_macros_types::CudaStorageDevice for CudaDevice {
     {
         Err("Not implemented in test".into())
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }

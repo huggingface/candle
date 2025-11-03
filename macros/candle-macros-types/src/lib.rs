@@ -275,6 +275,12 @@ pub trait CudaStorageDevice {
         &self,
         len: usize,
     ) -> Result<cudarc::driver::CudaSlice<T>, Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Downcast to Any for type-specific operations
+    ///
+    /// This allows implementations to be downcasted to their concrete types
+    /// when specific functionality is needed (e.g., CudaDevice for kernel launches)
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// Metal GPU operations for quantized types (optional)
