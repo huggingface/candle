@@ -86,3 +86,85 @@ fn binary_cross_entropy_with_logit() -> Result<()> {
     assert_eq!(to_vec0_round(&loss, 4)?, 0.8224);
     Ok(())
 }
+
+#[test]
+fn cross_entropy_with_ignore_matches_subset() -> Result<()> {
+    let cpu = Device::Cpu;
+    let input = Tensor::new(
+        &[
+            [1.1050f32, 0.3013, -1.5394],
+            [1.0730, -0.9419, -0.1670],
+            [0.8318, 1.1154, -0.3610],
+        ],
+        &cpu,
+    )?;
+    let target = Tensor::new(&[1u32, 0, 999], &cpu)?;
+
+    let loss_ignore = candle_nn::loss::cross_entropy_with_ignore(&input, &target, 999)?;
+
+    let input_first2 = input.narrow(0, 0, 2)?;
+    let target_first2 = target.narrow(0, 0, 2)?;
+    let loss_subset = candle_nn::loss::cross_entropy(&input_first2, &target_first2)?;
+
+    let a = to_vec0_round(&loss_ignore, 4)?;
+    let b = to_vec0_round(&loss_subset, 4)?;
+    assert_eq!(a, b);
+    Ok(())
+}
+
+#[test]
+fn cross_entropy_with_ignore_all_ignored_is_zero() -> Result<()> {
+    let cpu = Device::Cpu;
+    let input = Tensor::new(&[[0.0f32, 0.0, 0.0], [0.0, 0.0, 0.0]], &cpu)?;
+    let target = Tensor::new(&[999u32, 999u32], &cpu)?;
+
+    let loss = candle_nn::loss::cross_entropy_with_ignore(&input, &target, 999)?;
+    assert_eq!(to_vec0_round(&loss, 4)?, 0.0);
+    Ok(())
+}
+
+#[test]
+fn cross_entropy_with_ignore_none_ignored_equals_regular() -> Result<()> {
+    let cpu = Device::Cpu;
+    let input = Tensor::new(
+        &[
+            [0.5f32, -0.2, 0.1, 1.0],
+            [1.2, 0.3, -0.7, 0.0],
+            [-0.1, 0.4, 0.6, -0.3],
+        ],
+        &cpu,
+    )?;
+    let target = Tensor::new(&[1u32, 0, 2], &cpu)?;
+
+    let loss_regular = candle_nn::loss::cross_entropy(&input, &target)?;
+    let loss_ignore = candle_nn::loss::cross_entropy_with_ignore(&input, &target, 999)?;
+
+    let a = to_vec0_round(&loss_regular, 4)?;
+    let b = to_vec0_round(&loss_ignore, 4)?;
+    assert_eq!(a, b);
+    Ok(())
+}
+
+#[test]
+fn nll_with_ignore_matches_cross_entropy_with_ignore() -> Result<()> {
+    let cpu = Device::Cpu;
+    let input = Tensor::new(
+        &[
+            [1.1050f32, 0.3013, -1.5394, -2.1528],
+            [1.0730, -0.9419, -0.1670, -0.6582],
+            [0.8318, 1.1154, -0.3610, 0.5351],
+            [0.1, -0.2, 0.3, 0.4],
+        ],
+        &cpu,
+    )?;
+    let target = Tensor::new(&[1u32, 0, 999, 2], &cpu)?;
+
+    let log_softmax = candle_nn::ops::log_softmax(&input, 1)?;
+    let loss_nll = candle_nn::loss::nll_with_ignore(&log_softmax, &target, 999)?;
+    let loss_ce = candle_nn::loss::cross_entropy_with_ignore(&input, &target, 999)?;
+
+    let a = to_vec0_round(&loss_nll, 4)?;
+    let b = to_vec0_round(&loss_ce, 4)?;
+    assert_eq!(a, b);
+    Ok(())
+}
