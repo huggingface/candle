@@ -152,6 +152,7 @@
             color: #999;
             cursor: not-allowed;
             transform: none !important;
+            transition: none !important;
         }
         #output {
             background: #f8f9fa;
@@ -468,19 +469,23 @@ ${userMessage}<|im_end|>
             if (!model) return;
 
             const generateBtn = document.getElementById('generateBtn');
-            const stopBtn = document.getElementById('stopBtn');
-            const resetBtn = document.getElementById('resetBtn');
             const promptInput = document.getElementById('prompt');
+            const resetBtn = document.getElementById('resetBtn');
+            const maxTokensInput = document.getElementById('maxTokens');
+            const stopBtn = document.getElementById('stopBtn');
             const outputDiv = document.getElementById('output');
             const thinkingOutputDiv = document.getElementById('thinkingOutput');
             const thinkingSection = document.getElementById('thinkingSection');
-            const maxTokensInput = document.getElementById('maxTokens');
 
+            // Disable UI
             generateBtn.disabled = true;
-            stopBtn.disabled = false;
-            resetBtn.disabled = true;
             promptInput.disabled = true;
+            resetBtn.disabled = true;
             maxTokensInput.disabled = true;
+            stopBtn.disabled = false;
+
+            // Force browser to render the disabled state NOW
+            await new Promise(r => setTimeout(r, 0));
 
             shouldStopGeneration = false;
             fullResponse = '';
