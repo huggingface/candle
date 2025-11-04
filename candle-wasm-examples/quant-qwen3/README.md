@@ -217,7 +217,7 @@ This implementation is provided as-is. Please refer to the original Qwen3 licens
 - **Qwen Project**: https://github.com/QwenLM/Qwen
 - **Original Model**: https://huggingface.co/Qwen/Qwen3-0.6B
 - **Quantized Models**: https://huggingface.co/unsloth/Qwen3-0.6B-GGUF
-- **Your GitHub**: https://github.com/DrJesseGlass
+- **Example GitHub**: https://github.com/DrJesseGlass
 
 ---
 

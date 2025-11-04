@@ -197,6 +197,43 @@
             margin-top: 20px;
             font-size: 14px;
         }
+        .thinking-section {
+            margin: 20px 0;
+            border: 2px solid #667eea;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .thinking-toggle {
+            width: 100%;
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            font-size: 14px;
+            font-weight: 600;
+            text-align: left;
+            cursor: pointer;
+            transition: opacity 0.3s;
+        }
+
+        .thinking-toggle:hover {
+            opacity: 0.9;
+        }
+
+        .thinking-output {
+            padding: 20px;
+            background: #f0f4ff;
+            border-top: 1px solid #667eea;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            color: #333;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 400px;
+            overflow-y: auto;
+        }
     </style>
 </head>
 <body>
@@ -204,7 +241,6 @@
         <!-- Header -->
         <div class="header">
             <h1>
-                <span>🚀</span>
                 <span>Qwen3 Text Generation</span>
             </h1>
             <p>
@@ -256,6 +292,14 @@
                 </button>
             </div>
 
+            <div id="thinkingSection" class="thinking-section" style="display: none;">
+            <button class="thinking-toggle" onclick="toggleThinking()">
+                <span id="thinkingArrow">▶</span> Reasoning Process
+            </button>
+            <div id="thinkingOutput" class="thinking-output" style="display: none;"></div>
+        </div>
+
+            <label>Response:</label>
             <div id="output"></div>
 
             <!-- Profiler Controls -->
@@ -288,9 +332,66 @@
 
         let model = null;
         let shouldStopGeneration = false;
+        let fullResponse = '';
+        let showThinkingCollapsed = false;
+
         const MODEL_FILE = window.location.pathname.endsWith('/') ?
             window.location.pathname.split('/').filter(Boolean).pop() + '.gguf' :
             'Qwen3-0.6B-Q8_0.gguf';
+
+        function formatChatPrompt(userMessage) {
+            return `<|im_start|>system
+You are a helpful assistant.<|im_end|>
+<|im_start|>user
+${userMessage}<|im_end|>
+<|im_start|>assistant
+<think>
+`;
+        }
+
+        function parseResponse(fullText) {
+            if (fullText.includes('</think>')) {
+                const thinkEndPos = fullText.indexOf('</think>');
+                const thinkingRaw = fullText.substring(0, thinkEndPos);
+                const responseRaw = fullText.substring(thinkEndPos + 8);
+
+                return {
+                    thinking: cleanTokens(thinkingRaw.replace(/<think>/g, '')),
+                    response: cleanTokens(responseRaw)
+                };
+            } else {
+                // Still building thinking
+                const thinkingPartial = fullText.replace(/<think>/g, '');
+                return {
+                    thinking: cleanTokens(thinkingPartial),
+                    response: ''
+                };
+            }
+        }
+
+        function cleanTokens(text) {
+            return text
+                .replace(/<\|im_start\|>/g, '')
+                .replace(/<\|im_end\|>/g, '')
+                .replace(/<\|endoftext\|>/g, '')
+                .replace(/<think>/g, '')
+                .replace(/<\/think>/g, '')
+                .trim();
+        }
+
+        window.toggleThinking = function() {
+            const output = document.getElementById('thinkingOutput');
+            const arrow = document.getElementById('thinkingArrow');
+            showThinkingCollapsed = !showThinkingCollapsed;
+
+            if (showThinkingCollapsed) {
+                output.style.display = 'block';
+                arrow.textContent = '▼';
+            } else {
+                output.style.display = 'none';
+                arrow.textContent = '▶';
+            }
+        };
 
         function updateStatus(message, type = 'loading') {
             const status = document.getElementById('status');
@@ -371,6 +472,8 @@
             const resetBtn = document.getElementById('resetBtn');
             const promptInput = document.getElementById('prompt');
             const outputDiv = document.getElementById('output');
+            const thinkingOutputDiv = document.getElementById('thinkingOutput');
+            const thinkingSection = document.getElementById('thinkingSection');
             const maxTokensInput = document.getElementById('maxTokens');
 
             generateBtn.disabled = true;
@@ -380,32 +483,45 @@
             maxTokensInput.disabled = true;
 
             shouldStopGeneration = false;
+            fullResponse = '';
+            outputDiv.textContent = '';
+            thinkingOutputDiv.textContent = '';
+            thinkingSection.style.display = 'none';
 
             try {
-                const prompt = promptInput.value;
-                outputDiv.textContent = prompt;
+                const userPrompt = promptInput.value;
+                const formattedPrompt = formatChatPrompt(userPrompt);
 
                 updateStatus('Generating...', 'loading');
                 profile_clear();
                 const startTime = Date.now();
 
-                // Initialize with prompt
+                // Initialize with formatted prompt
                 const firstToken = model.init_with_prompt(
-                    prompt,
-                    0.7,    // temperature
-                    0.9,    // top_p
+                    formattedPrompt,
+                    0.0,    // temperature (0 for deterministic)
+                    0.0,    // top_p
                     1.1,    // repeat_penalty
                     64,     // repeat_last_n
-                    Date.now()  // seed
+                    42      // seed (fixed for reproducibility)
                 );
-                outputDiv.textContent += firstToken;
+
+                fullResponse += firstToken;
+                let parsed = parseResponse(fullResponse);
+
+                if (parsed.thinking) {
+                    thinkingSection.style.display = 'block';
+                    thinkingOutputDiv.textContent = parsed.thinking;
+                }
+                if (parsed.response) {
+                    outputDiv.textContent = parsed.response;
+                }
 
                 let tokenCount = 1;
-                const maxTokens = parseInt(document.getElementById('maxTokens').value) || 100;
+                const maxTokens = parseInt(maxTokensInput.value) || 100;
 
                 // Generate tokens
                 for (let i = 0; i < maxTokens - 1; i++) {
-
                     if (shouldStopGeneration) {
                         updateStatus('Generation stopped by user', 'ready');
                         break;
@@ -417,15 +533,26 @@
                     }
 
                     const token = model.next_token();
-                    outputDiv.textContent += token;
+                    fullResponse += token;
                     tokenCount++;
+
+                    // Parse and update displays
+                    parsed = parseResponse(fullResponse);
+
+                    if (parsed.thinking) {
+                        thinkingSection.style.display = 'block';
+                        thinkingOutputDiv.textContent = parsed.thinking;
+                    }
+                    if (parsed.response) {
+                        outputDiv.textContent = parsed.response;
+                    }
 
                     // Update status every 10 tokens
                     if (tokenCount % 10 === 0) {
                         const elapsed = (Date.now() - startTime) / 1000;
                         const tokensPerSec = (tokenCount / elapsed).toFixed(2);
                         updateStatus(`Generating... ${tokenCount} tokens (${tokensPerSec} tok/s)`, 'loading');
-                        await new Promise(r => setTimeout(r, 0)); // Allow UI update
+                        await new Promise(r => setTimeout(r, 0));
                     }
                 }
 
@@ -454,6 +581,9 @@
             if (!model) return;
             model.reset();
             document.getElementById('output').textContent = '';
+            document.getElementById('thinkingOutput').textContent = '';
+            document.getElementById('thinkingSection').style.display = 'none';
+            fullResponse = '';
             updateStatus('Model reset and ready!', 'ready');
             profile_clear();
         };
