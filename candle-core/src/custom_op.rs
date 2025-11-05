@@ -436,7 +436,7 @@ impl InplaceOp1 for UgIOp1 {
         let device = sto.device();
         let encoder = device.command_encoder()?;
         encoder.set_compute_pipeline_state(&self.func);
-        let (g, b) = if elem_count % 32 == 0 {
+        let (g, b) = if elem_count.is_multiple_of(32) {
             (elem_count / 32, 32)
         } else {
             (elem_count, 1)

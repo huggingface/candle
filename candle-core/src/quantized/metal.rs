@@ -128,7 +128,7 @@ impl QMetalStorage {
     }
 
     pub fn storage_size_in_bytes(&self) -> usize {
-        self.buffer.length() as usize
+        self.buffer.length()
     }
 
     fn fwd_mv(
@@ -289,7 +289,7 @@ impl QMetalStorage {
             blit.end_encoding();
         }
         self.device.wait_until_completed()?;
-        Ok(read_to_vec::<u8>(&buffer, self.buffer.length() as usize))
+        Ok(read_to_vec::<u8>(&buffer, self.storage_size_in_bytes()))
     }
 }
 
