@@ -2041,7 +2041,7 @@ impl Tensor {
         self.flatten_(None::<usize>, None::<usize>)
     }
 
-    /// Returns the sub-tensor fixing the index at `i` on the first dimension.
+    /// Returns the sub-tensor fixing the index at `index` on the first dimension.
     ///
     /// ```rust
     /// use candle_core::{Tensor, Device};
@@ -2052,12 +2052,12 @@ impl Tensor {
     /// assert_eq!(t.to_vec1::<f32>()?, &[2., 3.]);
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn get(&self, i: usize) -> Result<Tensor> {
+    pub fn get(&self, index: usize) -> Result<Tensor> {
         let dims = self.dims();
         if dims.is_empty() {
             Ok(self.clone())
         } else {
-            self.narrow(0, i, 1)?.reshape(&dims[1..])
+            self.narrow(0, index, 1)?.squeeze(0)
         }
     }
 
