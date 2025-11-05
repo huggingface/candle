@@ -36,9 +36,7 @@ impl QMetalStorage {
     pub fn dequantize(&self, elem_count: usize) -> Result<MetalStorage> {
         use crate::quantized::k_quants::GgmlType;
         let buffer = self.device.allocate_buffer(self.buffer.length())?;
-        let command_buffer = self.device.command_buffer()?;
-        command_buffer.set_label("to_cpu");
-        let blit = command_buffer.blit_command_encoder();
+        let blit = self.device.blit_command_encoder()?;
         blit.set_label("blit_to_cpu");
         blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
         blit.end_encoding();
@@ -168,13 +166,13 @@ impl QMetalStorage {
         let dst_shape = Shape::from(dst_shape);
         let device = storage.device().clone();
         let dst = device.new_buffer(dst_shape.elem_count(), DType::F32, "qmatmul")?;
-        let command_buffer = device.command_buffer()?;
+        let encoder = device.command_encoder()?;
         // In some cases it would be better to use the mm variant, though it has its drawbacks
         // around memory alignment.
         for batch_id in 0..m {
             candle_metal_kernels::call_quantized_matmul_mv_t(
                 device.device(),
-                &command_buffer,
+                &encoder,
                 device.kernels(),
                 self.dtype.into(),
                 (1, 1, n, k),
@@ -230,7 +228,7 @@ impl QMetalStorage {
         let dst_shape = Shape::from(dst_shape);
         let device = storage.device().clone();
         let dst = device.new_buffer(dst_shape.elem_count(), DType::F32, "qmatmul")?;
-        let command_buffer = device.command_buffer()?;
+        let encoder = device.command_encoder()?;
 
         assert_eq!(storage.dtype(), DType::F32);
 
@@ -258,7 +256,7 @@ impl QMetalStorage {
 
         candle_metal_kernels::call_quantized_matmul_mm_t(
             device.device(),
-            &command_buffer,
+            &encoder,
             device.kernels(),
             self.dtype.into(),
             src0_l.dims(),
@@ -285,9 +283,7 @@ impl QMetalStorage {
     pub fn data(&self) -> Result<Vec<u8>> {
         let buffer = self.device.allocate_buffer(self.buffer.length())?;
         {
-            let command_buffer = self.device.command_buffer()?;
-            command_buffer.set_label("to_cpu");
-            let blit = command_buffer.blit_command_encoder();
+            let blit = self.device.blit_command_encoder()?;
             blit.set_label("blit_to_cpu");
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
             blit.end_encoding();
