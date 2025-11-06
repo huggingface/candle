@@ -3,6 +3,8 @@ use anyhow::{Context, Result};
 use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+mod buildtime_downloader;
+use buildtime_downloader::download_model;
 
 struct KernelDirectories {
     kernel_glob: &'static str,
@@ -17,7 +19,7 @@ const KERNEL_DIRS: [KernelDirectories; 1] = [KernelDirectories {
 }];
 
 fn main() -> Result<()> {
-    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo::rerun-if-changed=build.rs");
 
     #[cfg(feature = "cuda")]
     {
@@ -26,7 +28,7 @@ fn main() -> Result<()> {
 
         for kdir in KERNEL_DIRS.iter() {
             let builder = bindgen_cuda::Builder::default().kernel_paths_glob(kdir.kernel_glob);
-            println!("cargo:info={builder:?}");
+            println!("cargo::warning={builder:?}");
             let bindings = builder.build_ptx().unwrap();
 
             // Changed: This now writes to a safe path inside $OUT_DIR.
@@ -37,6 +39,14 @@ fn main() -> Result<()> {
             );
             bindings.write(safe_target).unwrap()
         }
+    }
+
+    // Download config, tokenizer, and model files from hf at build time.
+    // option_env! automatically detects changes in the env var and trigger rebuilds correctly.
+    // Example value:
+    // CANDLE_BUILDTIME_MODEL_REVISION="sentence-transformers/all-MiniLM-L6-v2:c9745ed1d9f207416be6d2e6f8de32d1f16199bf"
+    if let Some(model_rev) = core::option_env!("CANDLE_BUILDTIME_MODEL_REVISION") {
+        buildtime_downloader::download_model(model_rev)?;
     }
     Ok(())
 }

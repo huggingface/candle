@@ -1,19 +1,14 @@
 use super::schedulers::{betas_for_alpha_bar, BetaSchedule, PredictionType};
 use candle::{Result, Tensor};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum DDPMVarianceType {
+    #[default]
     FixedSmall,
     FixedSmallLog,
     FixedLarge,
     FixedLargeLog,
     Learned,
-}
-
-impl Default for DDPMVarianceType {
-    fn default() -> Self {
-        Self::FixedSmall
-    }
 }
 
 #[derive(Debug, Clone)]
