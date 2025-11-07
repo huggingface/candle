@@ -5,6 +5,7 @@ use crate::Tensor;
 use float8::F8E4M3;
 use half::{bf16, f16};
 use num_traits::float::Float;
+use std::f64::consts::FRAC_1_SQRT_2;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CmpOp {
@@ -499,33 +500,33 @@ impl UnaryOpT for Gelu {
         bf16::from_f32_const(0.5)
             * v
             * (bf16::ONE
-                + bf16::tanh(
-                    bf16::from_f32_const(SQRT_TWO_OVER_PI_F32)
-                        * v
-                        * (bf16::ONE + bf16::from_f32_const(0.044715) * v * v),
-                ))
+            + bf16::tanh(
+            bf16::from_f32_const(SQRT_TWO_OVER_PI_F32)
+                * v
+                * (bf16::ONE + bf16::from_f32_const(0.044715) * v * v),
+        ))
     }
     #[inline(always)]
     fn f16(v: f16) -> f16 {
         f16::from_f32_const(0.5)
             * v
             * (f16::ONE
-                + f16::tanh(
-                    f16::from_f32_const(SQRT_TWO_OVER_PI_F32)
-                        * v
-                        * (f16::ONE + f16::from_f32_const(0.044715) * v * v),
-                ))
+            + f16::tanh(
+            f16::from_f32_const(SQRT_TWO_OVER_PI_F32)
+                * v
+                * (f16::ONE + f16::from_f32_const(0.044715) * v * v),
+        ))
     }
     #[inline(always)]
     fn f8e4m3(v: F8E4M3) -> F8E4M3 {
         F8E4M3::from_f32(0.5)
             * v
             * (F8E4M3::ONE
-                + F8E4M3::tanh(
-                    F8E4M3::from_f32(SQRT_TWO_OVER_PI_F32)
-                        * v
-                        * (F8E4M3::ONE + F8E4M3::from_f32(0.044715) * v * v),
-                ))
+            + F8E4M3::tanh(
+            F8E4M3::from_f32(SQRT_TWO_OVER_PI_F32)
+                * v
+                * (F8E4M3::ONE + F8E4M3::from_f32(0.044715) * v * v),
+        ))
     }
     #[inline(always)]
     fn f32(v: f32) -> f32 {
@@ -875,7 +876,7 @@ impl UnaryOpT for GeluErf {
     }
     #[inline(always)]
     fn f64(v: f64) -> f64 {
-        (crate::cpu::erf::erf(v / 2f64.sqrt()) + 1.) * 0.5 * v
+        (crate::cpu::erf::erf(v * FRAC_1_SQRT_2) + 1.) * 0.5 * v
     }
     #[inline(always)]
     fn u8(_: u8) -> u8 {
