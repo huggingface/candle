@@ -1,178 +1,80 @@
-use crate::metal::{
-    BlitCommandEncoder, CommandBuffer, CommandSemaphore, CommandStatus, ComputeCommandEncoder,
-};
-use crate::{utils::RwLockGuard, MetalKernelError};
+use crate::metal::{BlitCommandEncoder, CommandBufferPool, ComputeCommandEncoder};
+use crate::MetalKernelError;
 use objc2::{rc::Retained, runtime::ProtocolObject};
-use objc2_metal::{MTLCommandBufferStatus, MTLCommandQueue, MTLCounterSet};
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc, RwLock,
-};
+use objc2_metal::{MTLCommandQueue, MTLCounterSet};
+use std::sync::Arc;
 
 // Use Retained when appropriate. Gives us a more elegant way of handling memory (peaks) than autoreleasepool.
 // https://docs.rs/objc2/latest/objc2/rc/struct.Retained.html
 pub type CommandQueue = Retained<ProtocolObject<dyn MTLCommandQueue>>;
 pub type CounterSet = Retained<ProtocolObject<dyn MTLCounterSet>>;
 
+/// Commands manager backed by a command buffer pool for improved CPU-GPU parallelism.
+///
+/// This struct maintains a pool of command buffers instead of a single buffer, allowing
+/// the pool to balance load across multiple buffers and improve GPU utilization.
+/// The API remains the same as the original single-buffer implementation, but the
+/// implementation now uses the pool internally.
+///
+/// Thread-safe: Can be shared across threads safely.
 pub struct Commands {
-    /// Single command queue for the entire device.
-    command_queue: CommandQueue,
-    /// One command buffer at a time.
-    /// The scheduler works by allowing multiple
-    /// [ComputeCommandEncoder](https://developer.apple.com/documentation/metal/mtlcomputecommandencoder?language=objc)
-    /// on a single command buffer. Using a single command buffer would be fastest on the GPU but
-    /// prevents overlapping of CPU and GPU commands (because command buffer needs to be committed
-    /// to start to work).
-    /// Despite what the documentation says, command buffers are NOT ordered. They are ordered
-    /// for their START time, but there's no guarantee that command buffer1 will finish before
-    /// command buffer2 starts (or there are metal bugs there)
-    /// Arc, RwLock because of the interior mutability.
-    command_buffer: Arc<RwLock<CommandBuffer>>,
-    /// Keeps track of the current amount of compute command encoders on the current
-    /// command buffer
-    compute_count: AtomicUsize,
-    /// The maximum amount of [compute command encoder](https://developer.apple.com/documentation/metal/mtlcomputecommandencoder?language=objc) per [command buffer](https://developer.apple.com/documentation/metal/mtlcommandbuffer?language=objc)
-    compute_per_buffer: usize,
-    semaphore: Arc<CommandSemaphore>,
-    //capture: Option<Retained<MTLCaptureManager>>,
-    //timestamp_counter_set: Option<CounterSet>,
+    pool: Arc<CommandBufferPool>,
 }
+
 unsafe impl Send for Commands {}
 unsafe impl Sync for Commands {}
 
-fn create_command_buffer(
-    command_queue: &CommandQueue,
-    semaphore: Arc<CommandSemaphore>,
-) -> Result<CommandBuffer, MetalKernelError> {
-    command_queue
-        .commandBuffer()
-        .map(|raw| CommandBuffer::new(raw, semaphore))
-        .ok_or(MetalKernelError::FailedToCreateResource(
-            "CommandBuffer".to_string(),
-        ))
-}
-
 impl Commands {
+    /// Creates a new Commands manager with a command buffer pool.
+    ///
+    /// # Arguments
+    /// * `command_queue` - The Metal command queue to use
+    ///
+    /// # Environment Variables
+    /// * `CANDLE_METAL_COMPUTE_PER_BUFFER` - Max encoders per buffer (default: 50)
+    /// * `CANDLE_METAL_COMMAND_POOL_SIZE` - Number of buffers in pool (default: 4)
     pub fn new(command_queue: CommandQueue) -> Result<Self, MetalKernelError> {
-        let semaphore = Arc::new(CommandSemaphore::new());
-        let command_buffer = create_command_buffer(&command_queue, Arc::clone(&semaphore))?;
-        let command_buffer = Arc::new(RwLock::new(command_buffer));
-
         let compute_per_buffer = match std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER") {
             Ok(val) => val.parse().unwrap_or(50),
             _ => 50,
         };
+
+        let pool_size = match std::env::var("CANDLE_METAL_COMMAND_POOL_SIZE") {
+            Ok(val) => val.parse().unwrap_or(4),
+            _ => 4,
+        };
+
+        let pool = CommandBufferPool::new(command_queue, pool_size, compute_per_buffer)?;
+
         Ok(Self {
-            command_queue,
-            command_buffer,
-            compute_count: AtomicUsize::new(0),
-            compute_per_buffer,
-            semaphore,
+            pool: Arc::new(pool),
         })
     }
 
-    pub fn create_command_buffer(&self) -> Result<CommandBuffer, MetalKernelError> {
-        create_command_buffer(&self.command_queue, Arc::clone(&self.semaphore))
+    pub fn command_encoder(&self) -> Result<(bool, ComputeCommandEncoder), MetalKernelError> {
+        let encoder = self.pool.acquire_compute_encoder()?;
+        Ok((false, encoder))
     }
 
-    pub fn command_buffer(
-        &self,
-    ) -> Result<(bool, RwLockGuard<'_, CommandBuffer>), MetalKernelError> {
-        // If compute count > compute per buffer then commit current command buffer and
-        // replace it with a new one.
-        if self.compute_count.load(Ordering::Relaxed) > self.compute_per_buffer {
-            let mut command_buffer = self.command_buffer.write()?;
-            command_buffer.commit();
-            *command_buffer = self.create_command_buffer()?;
-            self.compute_count.store(1, Ordering::Relaxed);
-            Ok((true, command_buffer.into()))
-        } else {
-            self.compute_count.fetch_add(1, Ordering::Relaxed);
-            Ok((false, self.command_buffer.read()?.into()))
-        }
+    pub fn blit_command_encoder(&self) -> Result<(bool, BlitCommandEncoder), MetalKernelError> {
+        let encoder = self.pool.acquire_blit_encoder()?;
+        Ok((false, encoder))
     }
 
-    pub fn command_encoder(&mut self) -> Result<(bool, ComputeCommandEncoder), MetalKernelError> {
-        {
-            // Ensure command buffer available.
-            let mut guard = self
-                .semaphore
-                .wait_until(|s| matches!(s, CommandStatus::Available));
-            // Set status as encoding to block other threads from encoding to this commmand buffer
-            *guard = CommandStatus::Encoding;
-        }
-        // Notify after command status lock is released
-        self.semaphore.cond.notify_one();
-
-        let (flush, command_buffer) = self.command_buffer()?;
-        let command_encoder = command_buffer.compute_command_encoder();
-
-        Ok((flush, command_encoder))
+    /// Flushes all pending work in the pool and waits for completion.
+    ///
+    /// This ensures all buffered encoders are submitted to the GPU and waits
+    /// for them to complete execution. Useful as a synchronization point.
+    ///
+    /// This method is now immutable (`&self` instead of `&mut self`).
+    pub fn wait_until_completed(&self) -> Result<(), MetalKernelError> {
+        self.pool.flush_and_wait()
     }
 
-    pub fn blit_command_encoder(&mut self) -> Result<(bool, BlitCommandEncoder), MetalKernelError> {
-        {
-            // Ensure command buffer available.
-            let mut guard = self
-                .semaphore
-                .wait_until(|s| matches!(s, CommandStatus::Available));
-            // Set status as encoding to block other threads from encoding to this commmand buffer
-            *guard = CommandStatus::Encoding;
-        }
-        // Notify after command status lock is released
-        self.semaphore.cond.notify_one();
-
-        let (flush, command_buffer) = self.command_buffer()?;
-        let blit_command_encoder = command_buffer.blit_command_encoder();
-
-        Ok((flush, blit_command_encoder))
-    }
-
-    pub fn wait_until_completed(&mut self) -> Result<(), MetalKernelError> {
-        let current = {
-            // Ensure command buffer not encoding.
-            let mut guard = self
-                .semaphore
-                .wait_until(|s| matches!(s, CommandStatus::Available | CommandStatus::Done));
-
-            // Extract current command buffer, create new in its place
-            let current = {
-                // Scope drops write lock
-                let mut command_buffer = self.command_buffer.write()?;
-                let current = command_buffer.clone();
-                *command_buffer = self.create_command_buffer()?;
-                // Update compute count
-                self.compute_count.store(0, Ordering::Relaxed);
-                current
-            };
-            // After replacing the command buffer it is now safe to continue encoding new commands.
-            *guard = CommandStatus::Available;
-
-            current
-        };
-        // Notify after command status lock is released
-        self.semaphore.cond.notify_one();
-
-        // Only commit and wait if it needed
-        match current.status() {
-            MTLCommandBufferStatus::NotEnqueued | MTLCommandBufferStatus::Enqueued => {
-                current.commit();
-                current.wait_until_completed();
-            }
-            MTLCommandBufferStatus::Committed | MTLCommandBufferStatus::Scheduled => {
-                current.wait_until_completed();
-            }
-            MTLCommandBufferStatus::Completed => {} // No action needed
-            MTLCommandBufferStatus::Error => {
-                if let Some(error) = current.error() {
-                    return Err(MetalKernelError::CommandBufferError(error.to_string()));
-                }
-            }
-            // All status variants covered.
-            // We need this final match arm because the statuses are implemented as integers, not an enum, in the objc2 framework.
-            _ => unreachable!(),
-        }
-
-        Ok(())
+    /// Flushes all pending work without waiting (async from GPU perspective).
+    ///
+    /// Useful when you want to submit pending work but don't need to wait for results.
+    pub fn flush(&self) -> Result<(), MetalKernelError> {
+        self.pool.flush()
     }
 }
