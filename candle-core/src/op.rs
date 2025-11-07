@@ -500,33 +500,33 @@ impl UnaryOpT for Gelu {
         bf16::from_f32_const(0.5)
             * v
             * (bf16::ONE
-            + bf16::tanh(
-            bf16::from_f32_const(SQRT_TWO_OVER_PI_F32)
-                * v
-                * (bf16::ONE + bf16::from_f32_const(0.044715) * v * v),
-        ))
+                + bf16::tanh(
+                    bf16::from_f32_const(SQRT_TWO_OVER_PI_F32)
+                        * v
+                        * (bf16::ONE + bf16::from_f32_const(0.044715) * v * v),
+                ))
     }
     #[inline(always)]
     fn f16(v: f16) -> f16 {
         f16::from_f32_const(0.5)
             * v
             * (f16::ONE
-            + f16::tanh(
-            f16::from_f32_const(SQRT_TWO_OVER_PI_F32)
-                * v
-                * (f16::ONE + f16::from_f32_const(0.044715) * v * v),
-        ))
+                + f16::tanh(
+                    f16::from_f32_const(SQRT_TWO_OVER_PI_F32)
+                        * v
+                        * (f16::ONE + f16::from_f32_const(0.044715) * v * v),
+                ))
     }
     #[inline(always)]
     fn f8e4m3(v: F8E4M3) -> F8E4M3 {
         F8E4M3::from_f32(0.5)
             * v
             * (F8E4M3::ONE
-            + F8E4M3::tanh(
-            F8E4M3::from_f32(SQRT_TWO_OVER_PI_F32)
-                * v
-                * (F8E4M3::ONE + F8E4M3::from_f32(0.044715) * v * v),
-        ))
+                + F8E4M3::tanh(
+                    F8E4M3::from_f32(SQRT_TWO_OVER_PI_F32)
+                        * v
+                        * (F8E4M3::ONE + F8E4M3::from_f32(0.044715) * v * v),
+                ))
     }
     #[inline(always)]
     fn f32(v: f32) -> f32 {
