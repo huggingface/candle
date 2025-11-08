@@ -419,17 +419,6 @@ pub fn dequantize_storage(
     Ok(output)
 }
 
-/// Quantize f32 storage back to quantized format
-#[inline]
-pub fn quantize_storage(
-    id: crate::dtype::QuantizedDType,
-    data: &[f32],
-    _layout: &Layout,
-) -> Result<Vec<u8>> {
-    // Use the generated dispatch to quantize
-    crate::dtype::quantized_dispatch::quantize_cpu(id, data)
-}
-
 // Helper functions for Map2 quantized handling to avoid code duplication
 // These are cold path helpers - they're only called for quantized types
 

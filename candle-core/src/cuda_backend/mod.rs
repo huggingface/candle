@@ -2,10 +2,7 @@
 //!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{
-    builder_arg as barg, quantized_dispatch, CpuStorage, DType, Layout, QuantizedDType, Result,
-    WithDType,
-};
+use crate::{builder_arg as barg, CpuStorage, DType, Layout, QuantizedDType, Result, WithDType};
 pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
@@ -1966,8 +1963,7 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F32(lhs), CudaStorageSlice::Quantized(qdtype, rhs)) => {
                 let lhs_shape = lhs_l.shape().dims();
                 let rhs_shape = rhs_l.shape().dims();
-                let res =
-                    quantized_dispatch::matmul_cuda(*qdtype, lhs, lhs_shape, rhs, rhs_shape, dev)?;
+                let res = qdtype.matmul_cuda(lhs, lhs_shape, rhs, rhs_shape, dev)?;
                 CudaStorageSlice::F32(res)
             }
             (CudaStorageSlice::BF16(lhs), CudaStorageSlice::BF16(rhs)) => {

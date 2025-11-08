@@ -127,7 +127,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
             ///
             /// Detects at compile-time whether a type implements `QuantizedCpuOps`.
             /// Uses autoderef-based specialization for stable Rust compatibility.
-            /// For external types, always returns true (they must provide CPU ops).
+            /// For external types, checks if any CPU ops were registered.
             #[inline]
             pub fn has_cpu(self) -> bool {
                 // Helper trait for compile-time detection using autoderef
@@ -313,6 +313,20 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 quantized_dispatch::quantize_cpu(self, input)
             }
 
+            /// Convenience matmul function for CPU
+            ///
+            /// Performs matrix multiplication with f32 LHS and quantized RHS.
+            #[inline]
+            pub fn matmul(
+                self,
+                lhs: &[f32],
+                lhs_shape: &[usize],
+                rhs: &[u8],
+                rhs_shape: &[usize],
+            ) -> crate::Result<Vec<f32>> {
+                quantized_dispatch::matmul_cpu(lhs, lhs_shape, self, rhs, rhs_shape)
+            }
+
             /// CUDA dequantize function returning a newly allocated CudaSlice
             /// If num_elements is None, infers number of elements from data size
             #[cfg(feature = "cuda")]
@@ -356,6 +370,53 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 D: candle_macros_types::CudaStorageDevice,
             {
                 quantized_dispatch::quantize_cuda(self, input, device)
+            }
+
+            /// CUDA matmul function
+            ///
+            /// Performs matrix multiplication with f32 LHS and quantized RHS on CUDA.
+            #[cfg(feature = "cuda")]
+            #[inline]
+            pub fn matmul_cuda<D>(
+                self,
+                lhs: &cudarc::driver::CudaSlice<f32>,
+                lhs_shape: &[usize],
+                rhs: &cudarc::driver::CudaSlice<u8>,
+                rhs_shape: &[usize],
+                device: &D
+            ) -> crate::Result<cudarc::driver::CudaSlice<f32>>
+            where
+                D: candle_macros_types::CudaStorageDevice,
+            {
+                quantized_dispatch::matmul_cuda(self, lhs, lhs_shape, rhs, rhs_shape, device)
+            }
+
+            /// Metal dequantize function
+            ///
+            /// Dequantizes data on Metal (in-place into provided output buffer).
+            #[cfg(feature = "metal")]
+            #[inline]
+            pub fn dequantize_metal(
+                self,
+                data: &metal::Buffer,
+                output: &mut metal::Buffer
+            ) -> crate::Result<()> {
+                quantized_dispatch::dequantize_metal(self, data, output)
+            }
+
+            /// Metal matmul function
+            ///
+            /// Performs matrix multiplication with f32 LHS and quantized RHS on Metal.
+            #[cfg(feature = "metal")]
+            #[inline]
+            pub fn matmul_metal(
+                self,
+                lhs: &metal::Buffer,
+                lhs_shape: &[usize],
+                rhs: &metal::Buffer,
+                rhs_shape: &[usize],
+            ) -> crate::Result<metal::Buffer> {
+                quantized_dispatch::matmul_metal(self, lhs, lhs_shape, rhs, rhs_shape)
             }
         }
 
@@ -436,7 +497,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
 
 
         /// Dispatch functions: compile-time for built-in, HashMap lookup for external
-        pub mod quantized_dispatch {
+        mod quantized_dispatch {
             use super::*;
 
             #[inline]

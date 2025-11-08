@@ -1,6 +1,6 @@
 //! Implementation of Backend Fns for CPU
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::dtype::{self, QuantizedDType};
+use crate::dtype::QuantizedDType;
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
 use float8::F8E4M3;
@@ -2005,7 +2005,7 @@ impl BackendStorage for CpuStorage {
                 // Extract f32 data according to layout
                 let data = unary_map(storage, layout, |v| v);
                 // Quantize using helper function
-                let quantized = crate::cpu_backend::utils::quantize_storage(q, &data, layout)?;
+                let quantized = q.quantize(&data)?;
                 Ok(Self::Quantized(q, quantized))
             }
             (_, DType::Quantized(q)) => {
@@ -2684,13 +2684,7 @@ impl BackendStorage for CpuStorage {
         //Check if we can use a specialized matmul implementation for CPU backend.
         match (self, rhs) {
             (Self::F32(lhs), Self::Quantized(id, rhs)) => {
-                let result = dtype::quantized_dispatch::matmul_cpu(
-                    lhs,
-                    lhs_l.dims(),
-                    *id,
-                    rhs,
-                    rhs_l.dims(),
-                )?;
+                let result = id.matmul(lhs, lhs_l.dims(), rhs, rhs_l.dims())?;
                 Ok(Self::F32(result))
             }
             (_, _) => {
@@ -2851,8 +2845,7 @@ impl BackendDevice for CpuDevice {
                     f32_data.push(rng.sample::<f32, _>(uniform))
                 }
                 // Quantize the f32 data
-                let quantized_bytes =
-                    crate::dtype::quantized_dispatch::quantize_cpu(qdtype, &f32_data)?;
+                let quantized_bytes = qdtype.quantize(&f32_data)?;
                 Ok(CpuStorage::Quantized(qdtype, quantized_bytes))
             }
         }
@@ -2920,8 +2913,7 @@ impl BackendDevice for CpuDevice {
                     f32_data.push(normal.sample(&mut rng))
                 }
                 // Quantize the f32 data
-                let quantized_bytes =
-                    crate::dtype::quantized_dispatch::quantize_cpu(qdtype, &f32_data)?;
+                let quantized_bytes = qdtype.quantize(&f32_data)?;
                 Ok(CpuStorage::Quantized(qdtype, quantized_bytes))
             }
         }
@@ -2976,8 +2968,7 @@ impl BackendDevice for CpuDevice {
                 CpuStorage::F8E4M3(v)
             }
             DType::Quantized(qdtype) => {
-                let byte_size =
-                    crate::dtype::quantized_dispatch::storage_size_in_bytes(qdtype, elem_count);
+                let byte_size = qdtype.storage_size_in_bytes(elem_count);
                 let mut v = Vec::with_capacity(byte_size);
                 v.set_len(byte_size);
                 CpuStorage::Quantized(qdtype, v)
@@ -3000,8 +2991,7 @@ impl BackendDevice for CpuDevice {
             DType::Quantized(qdtype) => {
                 // Quantize zero-filled f32 array
                 let f32_zeros = vec![0f32; elem_count];
-                let quantized_bytes =
-                    crate::dtype::quantized_dispatch::quantize_cpu(qdtype, &f32_zeros)?;
+                let quantized_bytes = qdtype.quantize(&f32_zeros)?;
                 CpuStorage::Quantized(qdtype, quantized_bytes)
             }
         };
