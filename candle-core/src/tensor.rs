@@ -548,6 +548,20 @@ impl Tensor {
         self.is_variable || self.op.is_some()
     }
 
+    /// Creates a fresh tensor structure based on a storage and a shape.
+    ///
+    /// # Note
+    /// - This uses contiguous strides
+    /// - Ensure the shape is compatible with the shape of the storage.
+    pub fn from_storage<S: Into<Shape>>(
+        storage: Storage,
+        shape: S,
+        op: BackpropOp,
+        is_variable: bool,
+    ) -> Tensor {
+        from_storage(storage, shape, op, is_variable)
+    }
+
     // TODO: Also make an inplace version or a pre-allocated? This could be tricky
     // if this can create cycles in the compute graph.
     binary_op!(add, Add);
@@ -2892,5 +2906,11 @@ impl std::ops::Div<&Tensor> for f64 {
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: &Tensor) -> Self::Output {
         rhs.recip()? * self
+    }
+}
+
+impl<S: Into<Shape>> From<(Storage, S)> for Tensor {
+    fn from((storage, shape): (Storage, S)) -> Self {
+        from_storage(storage, shape, BackpropOp::none(), false)
     }
 }
