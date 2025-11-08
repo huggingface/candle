@@ -1966,9 +1966,8 @@ impl BackendStorage for CudaStorage {
             (CudaStorageSlice::F32(lhs), CudaStorageSlice::Quantized(qdtype, rhs)) => {
                 let lhs_shape = lhs_l.shape().dims();
                 let rhs_shape = rhs_l.shape().dims();
-                let res = quantized_dispatch::matmul_cuda(
-                    *qdtype, lhs, lhs_shape, *qdtype, rhs, rhs_shape, dev,
-                )?;
+                let res =
+                    quantized_dispatch::matmul_cuda(*qdtype, lhs, lhs_shape, rhs, rhs_shape, dev)?;
                 CudaStorageSlice::F32(res)
             }
             (CudaStorageSlice::BF16(lhs), CudaStorageSlice::BF16(rhs)) => {

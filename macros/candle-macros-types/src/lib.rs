@@ -183,12 +183,11 @@ pub trait QuantizedCpuOps: QuantizedType {
 /// # Feature Gate
 ///
 /// Only available with `features = ["cuda"]`
-///
-/// # Trait Object Safety
-///
-/// This trait is dyn-compatible (object-safe), allowing usage as `Box<dyn QuantizedCudaOps>`.
 #[cfg(feature = "cuda")]
-pub trait QuantizedCudaOps: QuantizedType {
+pub trait QuantizedCudaOps<D>: QuantizedType
+where
+    D: CudaStorageDevice,
+{
     /// Convert f32 values to quantized format on GPU
     ///
     /// # Arguments
@@ -200,7 +199,7 @@ pub trait QuantizedCudaOps: QuantizedType {
     ///
     /// # Errors
     /// Returns error if CUDA operation fails
-    fn quantize_cuda<D: CudaStorageDevice>(
+    fn quantize_cuda(
         &self,
         _input: &cudarc::driver::CudaSlice<f32>,
         _device: &D,
@@ -217,7 +216,7 @@ pub trait QuantizedCudaOps: QuantizedType {
     ///
     /// # Errors
     /// Returns error if data is invalid, buffer size incorrect, or CUDA operation fails
-    fn dequantize_cuda<D: CudaStorageDevice>(
+    fn dequantize_cuda(
         &self,
         _data: &cudarc::driver::CudaSlice<u8>,
         _output: &mut cudarc::driver::CudaSlice<f32>,
@@ -240,7 +239,7 @@ pub trait QuantizedCudaOps: QuantizedType {
     ///
     /// # Errors
     /// Returns error if shapes are incompatible or CUDA operation fails
-    fn matmul_cuda<D: CudaStorageDevice>(
+    fn matmul_cuda(
         &self,
         _lhs_f32: &cudarc::driver::CudaSlice<f32>,
         _lhs_shape: &[usize],

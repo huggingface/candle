@@ -176,16 +176,16 @@ macro_rules! define_ggml_wrapper {
 
         // Implement QuantizedCudaOps trait
         #[cfg(feature = "cuda")]
-        impl candle_macros_types::QuantizedCudaOps for $name {
-            fn quantize_cuda<D: candle_macros_types::CudaStorageDevice>(
+        impl<D> candle_macros_types::QuantizedCudaOps<D> for $name
+        where
+            D: candle_macros_types::CudaStorageDevice,
+        {
+            fn quantize_cuda(
                 &self,
                 input: &cudarc::driver::CudaSlice<f32>,
                 device: &D,
             ) -> std::result::Result<cudarc::driver::CudaSlice<u8>, String> {
-                println!(
-                    "⚠ Using CPU fallback for CUDA quantize of {}",
-                    stringify!($name)
-                );
+                // TODO: Find a better way to pass the device without downcasting
                 // Downcast the device to CudaDevice
                 let cuda_device = device
                     .as_any()
@@ -197,12 +197,13 @@ macro_rules! define_ggml_wrapper {
                     .map_err(|e| format!("CUDA quantize failed: {}", e))
             }
 
-            fn dequantize_cuda<D: candle_macros_types::CudaStorageDevice>(
+            fn dequantize_cuda(
                 &self,
                 data: &cudarc::driver::CudaSlice<u8>,
                 output: &mut cudarc::driver::CudaSlice<f32>,
                 device: &D,
             ) -> std::result::Result<(), String> {
+                // TODO: Find a better way to pass the device without downcasting
                 // Downcast the device to CudaDevice to call the dequantize function
                 let cuda_device = device
                     .as_any()
@@ -218,7 +219,7 @@ macro_rules! define_ggml_wrapper {
                 .map_err(|e| format!("CUDA dequantize failed: {}", e))
             }
 
-            fn matmul_cuda<D: candle_macros_types::CudaStorageDevice>(
+            fn matmul_cuda(
                 &self,
                 lhs_f32: &cudarc::driver::CudaSlice<f32>,
                 lhs_shape: &[usize],
@@ -226,6 +227,7 @@ macro_rules! define_ggml_wrapper {
                 rhs_shape: &[usize],
                 device: &D,
             ) -> std::result::Result<cudarc::driver::CudaSlice<f32>, String> {
+                // TODO: Find a better way to pass the device without downcasting
                 // Downcast the device to CudaDevice
                 let cuda_device = device
                     .as_any()

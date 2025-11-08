@@ -97,14 +97,10 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 match self {
                     #(QuantizedDType::#type_names => #type_names::SIZE_IN_BYTES,)*
                     QuantizedDType::External(name) => {
-                        let registry = EXTERNAL_TYPE_REGISTRY.get();
-                        if let Some(registry) = registry {
-                            let map = registry.read().unwrap();
-                            if let Some(ops) = map.get(name) {
-                                return ops.size_in_bytes;
-                            }
-                        }
-                        1
+                        EXTERNAL_TYPE_REGISTRY.get()
+                            .and_then(|r| r.read().ok())
+                            .and_then(|m| m.get(name).map(|impl_| impl_.size_in_bytes))
+                            .unwrap_or(1)
                     }
                 }
             }
@@ -162,7 +158,14 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 // Otherwise, (&&Wrap<Type>).has_cpu() derefs twice to Wrap<Type> (returns false)
                 match self {
                     #(QuantizedDType::#type_names => (&&Wrap::<#type_names>(std::marker::PhantomData)).has_cpu(),)*
-                    QuantizedDType::External(_) => true,
+                    QuantizedDType::External(name) => {
+                        EXTERNAL_TYPE_REGISTRY.get()
+                            .and_then(|r| r.read().ok())
+                            .and_then(|m| m.get(name).map(|impl_|
+                                impl_.cpu_quantize.is_some() || impl_.cpu_dequantize.is_some() || impl_.cpu_matmul.is_some()
+                            ))
+                            .unwrap_or(false)
+                    }
                 }
             }
 
@@ -175,34 +178,60 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
             pub fn has_cuda(self) -> bool {
                 #[cfg(feature = "cuda")]
                 {
-                    // Helper trait for compile-time detection using autoderef
-                    trait CudaCheck {
-                        fn has_cuda(&self) -> bool;
+                    // Helper macro to check if a type implements QuantizedCudaOps for any device
+                    macro_rules! check_cuda {
+                        ($ty:ty) => {{
+                            // Helper trait for compile-time detection using autoderef
+                            trait CudaCheck {
+                                fn check(&self) -> bool;
+                            }
+
+                            // Level 1 (fallback): No CUDA support - requires 2 auto-derefs
+                            struct Wrap<T>(std::marker::PhantomData<T>);
+                            impl<T> CudaCheck for Wrap<T>
+                            where
+                                T: candle_macros_types::QuantizedType,
+                            {
+                                #[inline(always)]
+                                fn check(&self) -> bool {
+                                    false
+                                }
+                            }
+
+                            // Level 0 (specialized): Has CUDA support - requires 1 auto-deref
+                            // This implementation is only valid if T: QuantizedCudaOps<D> for *some* D
+                            // We use a concrete dummy device to test this
+                            struct DummyDevice;
+                            impl candle_macros_types::CudaStorageDevice for DummyDevice {
+                                fn alloc_zeros<T: cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits>(
+                                    &self,
+                                    _len: usize,
+                                ) -> std::result::Result<cudarc::driver::CudaSlice<T>, Box<dyn std::error::Error + Send + Sync>> {
+                                    unreachable!()
+                                }
+                                fn as_any(&self) -> &dyn std::any::Any {
+                                    self
+                                }
+                            }
+
+                            impl<T> CudaCheck for &Wrap<T>
+                            where
+                                T: candle_macros_types::QuantizedCudaOps<DummyDevice>,
+                            {
+                                #[inline(always)]
+                                fn check(&self) -> bool {
+                                    true
+                                }
+                            }
+
+                            (&&Wrap::<$ty>(std::marker::PhantomData)).check()
+                        }};
                     }
 
-                    // Level 1 (fallback): No CUDA support - requires 2 auto-derefs
-                    struct Wrap<T>(std::marker::PhantomData<T>);
-                    impl<T: candle_macros_types::QuantizedType> CudaCheck for Wrap<T> {
-                        #[inline(always)]
-                        fn has_cuda(&self) -> bool {
-                            false
-                        }
-                    }
-
-                    // Level 0 (specialized): Has CUDA support - requires 1 auto-deref
-                    // Blanket impl for types with QuantizedCudaOps
-                    impl<T: candle_macros_types::QuantizedCudaOps> CudaCheck for &Wrap<T> {
-                        #[inline(always)]
-                        fn has_cuda(&self) -> bool {
-                            true
-                        }
-                    }
-
-                    // Use autoderef directly on concrete types in match arms
+                    // Use the macro in match arms
                     match self {
-                        #(QuantizedDType::#type_names => (&&Wrap::<#type_names>(std::marker::PhantomData)).has_cuda(),)*
+                        #(QuantizedDType::#type_names => check_cuda!(#type_names),)*
                         QuantizedDType::External(_name) => {
-                            // External types don't support CUDA yet
                             false
                         }
                     }
@@ -250,8 +279,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                     // Use autoderef directly on concrete types in match arms
                     match self {
                         #(QuantizedDType::#type_names => (&&Wrap::<#type_names>(std::marker::PhantomData)).has_metal(),)*
-                        QuantizedDType::External(_name) => {
-                            // External types don't support Metal yet
+                        QuantizedDType::External(name) => {
                             false
                         }
                     }
@@ -333,53 +361,44 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
 
         // ==================== External Type Support ====================
 
-        /// External type operations extracted from trait implementations
+        /// External type operations holder
         ///
-        /// All operations available to built-in types are function pointers
-        /// extracted from types implementing the quantized traits.
-        ///
-        /// Note: GPU operations don't require device parameters as CudaSlice/Buffer
-        /// already contain the device context.
-        #[derive(Copy, Clone)]
-        pub struct ExternalQuantOps {
-            // Metadata
-            pub size_in_bytes: usize,
+        /// Stores function pointers for external types, allowing them to work exactly
+        /// like built-in types through dynamic dispatch.
+        struct ExternalTypeImpl {
+            // Metadata (from QuantizedType associated consts)
+            size_in_bytes: usize,
 
-            // CPU operations (required) - extracted from QuantizedCpuOps trait
-            pub quantize_cpu: fn(&[f32]) -> crate::Result<Vec<u8>>,
-            pub dequantize_cpu: fn(&[u8], &mut [f32]) -> crate::Result<()>,
-            pub storage_size_in_bytes: fn(usize) -> usize,
-            pub infer_element_count: fn(usize) -> usize,
-            pub matmul_cpu: fn(&[f32], &[usize], &[u8], &[usize]) -> crate::Result<Vec<f32>>,
+            // Base operations (from QuantizedType trait methods)
+            storage_size_in_bytes: Box<dyn Fn(usize) -> usize + Send + Sync>,
+            infer_element_count: Box<dyn Fn(usize) -> usize + Send + Sync>,
 
-            // CUDA ops (optional) - extracted from QuantizedCudaOps trait
-            #[cfg(feature = "cuda")]
-            pub quantize_cuda: Option<fn(&cudarc::driver::CudaSlice<f32>) -> crate::Result<cudarc::driver::CudaSlice<u8>>>,
-            #[cfg(feature = "cuda")]
-            pub dequantize_cuda: Option<fn(&cudarc::driver::CudaSlice<u8>, &mut cudarc::driver::CudaSlice<f32>) -> crate::Result<()>>,
-            #[cfg(feature = "cuda")]
-            pub matmul_cuda: Option<fn(&cudarc::driver::CudaSlice<f32>, &[usize], &cudarc::driver::CudaSlice<u8>, &[usize]) -> crate::Result<cudarc::driver::CudaSlice<f32>>>,
-
-            // Metal ops (optional) - extracted from QuantizedMetalOps trait
-            #[cfg(feature = "metal")]
-            pub dequantize_metal: Option<fn(&metal::Buffer, &mut metal::Buffer) -> crate::Result<()>>,
-            #[cfg(feature = "metal")]
-            pub matmul_metal: Option<fn(&metal::Buffer, &[usize], &metal::Buffer, &[usize]) -> crate::Result<metal::Buffer>>,
+            // Optional CPU operations (function pointers extracted from trait methods)
+            cpu_quantize: Option<Box<dyn Fn(&[f32]) -> std::result::Result<Vec<u8>, String> + Send + Sync>>,
+            cpu_dequantize: Option<Box<dyn Fn(&[u8], &mut [f32]) -> std::result::Result<(), String> + Send + Sync>>,
+            cpu_matmul: Option<Box<dyn Fn(&[f32], &[usize], &[u8], &[usize]) -> std::result::Result<Vec<f32>, String> + Send + Sync>>,
         }
 
         /// Global registry for external types (thread-safe)
-        static EXTERNAL_TYPE_REGISTRY: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<&'static str, ExternalQuantOps>>>
+        static EXTERNAL_TYPE_REGISTRY: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<&'static str, ExternalTypeImpl>>>
             = std::sync::OnceLock::new();
 
         /// Register external quantized type by name
         ///
-        /// External types provide same operations as built-in types.
+        /// External types work exactly like built-in types but use dynamic dispatch via closures.
+        /// Must provide metadata and base operations, CPU/CUDA/Metal ops are optional.
         ///
         /// # Panics
         /// If type name already registered
+        #[allow(clippy::too_many_arguments)]
         pub fn register_external_quant_type(
             name: &'static str,
-            ops: ExternalQuantOps,
+            size_in_bytes: usize,
+            storage_size_in_bytes: Box<dyn Fn(usize) -> usize + Send + Sync>,
+            infer_element_count: Box<dyn Fn(usize) -> usize + Send + Sync>,
+            cpu_quantize: Option<Box<dyn Fn(&[f32]) -> std::result::Result<Vec<u8>, String> + Send + Sync>>,
+            cpu_dequantize: Option<Box<dyn Fn(&[u8], &mut [f32]) -> std::result::Result<(), String> + Send + Sync>>,
+            cpu_matmul: Option<Box<dyn Fn(&[f32], &[usize], &[u8], &[usize]) -> std::result::Result<Vec<f32>, String> + Send + Sync>>,
         ) -> QuantizedDType {
             let registry = EXTERNAL_TYPE_REGISTRY.get_or_init(|| {
                 std::sync::RwLock::new(std::collections::HashMap::new())
@@ -391,7 +410,14 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 panic!("External quantized type '{}' is already registered", name);
             }
 
-            map.insert(name, ops);
+            map.insert(name, ExternalTypeImpl {
+                size_in_bytes,
+                storage_size_in_bytes,
+                infer_element_count,
+                cpu_quantize,
+                cpu_dequantize,
+                cpu_matmul,
+            });
 
             QuantizedDType::External(name)
         }
@@ -420,7 +446,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                     QuantizedDType::External(name) => {
                         EXTERNAL_TYPE_REGISTRY.get()
                             .and_then(|r| r.read().ok())
-                            .and_then(|m| m.get(name).map(|ops| (ops.infer_element_count)(data_len)))
+                            .and_then(|m| m.get(name).map(|impl_| (impl_.infer_element_count)(data_len)))
                             .unwrap_or(data_len)
                     }
                 }
@@ -433,7 +459,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                     QuantizedDType::External(name) => {
                         EXTERNAL_TYPE_REGISTRY.get()
                             .and_then(|r| r.read().ok())
-                            .and_then(|m| m.get(name).map(|ops| (ops.storage_size_in_bytes)(num_elements)))
+                            .and_then(|m| m.get(name).map(|impl_| (impl_.storage_size_in_bytes)(num_elements)))
                             .unwrap_or(0)
                     }
                 }
@@ -448,9 +474,15 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                     QuantizedDType::External(name) => {
                         let registry = EXTERNAL_TYPE_REGISTRY.get()
                             .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
-                        let ops = registry.read().unwrap().get(name).copied()
+                        let map = registry.read().unwrap();
+                        let impl_ = map.get(name)
                             .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
-                        (ops.dequantize_cpu)(data, output)
+
+                        if let Some(ref func) = impl_.cpu_dequantize {
+                            func(data, output).map_err(|e| crate::Error::Msg(e))
+                        } else {
+                            Err(crate::Error::Msg(format!("External type '{}' does not implement CPU dequantize", name)))
+                        }
                     }
                 }
             }
@@ -462,9 +494,15 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                     QuantizedDType::External(name) => {
                         let registry = EXTERNAL_TYPE_REGISTRY.get()
                             .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
-                        let ops = registry.read().unwrap().get(name).copied()
+                        let map = registry.read().unwrap();
+                        let impl_ = map.get(name)
                             .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
-                        (ops.quantize_cpu)(input)
+
+                        if let Some(ref func) = impl_.cpu_quantize {
+                            func(input).map_err(|e| crate::Error::Msg(e))
+                        } else {
+                            Err(crate::Error::Msg(format!("External type '{}' does not implement CPU quantize", name)))
+                        }
                     }
                 }
             }
@@ -482,9 +520,15 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                     QuantizedDType::External(name) => {
                         let registry = EXTERNAL_TYPE_REGISTRY.get()
                             .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
-                        let ops = registry.read().unwrap().get(name).copied()
+                        let map = registry.read().unwrap();
+                        let impl_ = map.get(name)
                             .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
-                        (ops.matmul_cpu)(lhs_f32, lhs_shape, rhs_data, rhs_shape)
+
+                        if let Some(ref func) = impl_.cpu_matmul {
+                            func(lhs_f32, lhs_shape, rhs_data, rhs_shape).map_err(|e| crate::Error::Msg(e))
+                        } else {
+                            Err(crate::Error::Msg(format!("External type '{}' does not implement CPU matmul", name)))
+                        }
                     }
                 }
             }
@@ -574,30 +618,34 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
             struct CudaWrap<T>(std::marker::PhantomData<T>);
 
             #[cfg(feature = "cuda")]
-            pub trait MaybeCudaOps {
-                fn try_dequantize_cuda<D: candle_macros_types::CudaStorageDevice>(&self, data: &cudarc::driver::CudaSlice<u8>, output: &mut cudarc::driver::CudaSlice<f32>, device: &D) -> crate::Result<()>;
-                fn try_quantize_cuda<D: candle_macros_types::CudaStorageDevice>(&self, input: &cudarc::driver::CudaSlice<f32>, device: &D) -> crate::Result<cudarc::driver::CudaSlice<u8>>;
-                fn try_matmul_cuda<D: candle_macros_types::CudaStorageDevice>(&self, lhs: &cudarc::driver::CudaSlice<f32>, lhs_shape: &[usize], rhs: &cudarc::driver::CudaSlice<u8>, rhs_shape: &[usize], device: &D) -> crate::Result<cudarc::driver::CudaSlice<f32>>;
+            pub trait MaybeCudaOps<D>
+            where
+                D: candle_macros_types::CudaStorageDevice
+            {
+                fn try_dequantize_cuda(&self, data: &cudarc::driver::CudaSlice<u8>, output: &mut cudarc::driver::CudaSlice<f32>, device: &D) -> crate::Result<()>;
+                fn try_quantize_cuda(&self, input: &cudarc::driver::CudaSlice<f32>, device: &D) -> crate::Result<cudarc::driver::CudaSlice<u8>>;
+                fn try_matmul_cuda(&self, lhs: &cudarc::driver::CudaSlice<f32>, lhs_shape: &[usize], rhs: &cudarc::driver::CudaSlice<u8>, rhs_shape: &[usize], device: &D) -> crate::Result<cudarc::driver::CudaSlice<f32>>;
             }
 
             // Level 1 (fallback): For types WITHOUT CUDA support - requires 2 auto-derefs
             #[cfg(feature = "cuda")]
-            impl<T> MaybeCudaOps for CudaWrap<T>
+            impl<T, D> MaybeCudaOps<D> for CudaWrap<T>
             where
                 T: candle_macros_types::QuantizedType,
+                D: candle_macros_types::CudaStorageDevice,
             {
                 #[inline(always)]
-                fn try_dequantize_cuda<D: candle_macros_types::CudaStorageDevice>(&self, _data: &cudarc::driver::CudaSlice<u8>, _output: &mut cudarc::driver::CudaSlice<f32>, _device: &D) -> crate::Result<()> {
+                fn try_dequantize_cuda(&self, _data: &cudarc::driver::CudaSlice<u8>, _output: &mut cudarc::driver::CudaSlice<f32>, _device: &D) -> crate::Result<()> {
                     Err(crate::Error::Msg(format!("Type '{}' does not implement CUDA dequantize", T::NAME)))
                 }
 
                 #[inline(always)]
-                fn try_quantize_cuda<D: candle_macros_types::CudaStorageDevice>(&self, _input: &cudarc::driver::CudaSlice<f32>, _device: &D) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
+                fn try_quantize_cuda(&self, _input: &cudarc::driver::CudaSlice<f32>, _device: &D) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
                     Err(crate::Error::Msg(format!("Type '{}' does not implement CUDA quantize", T::NAME)))
                 }
 
                 #[inline(always)]
-                fn try_matmul_cuda<D: candle_macros_types::CudaStorageDevice>(&self, _lhs: &cudarc::driver::CudaSlice<f32>, _lhs_shape: &[usize], _rhs: &cudarc::driver::CudaSlice<u8>, _rhs_shape: &[usize], _device: &D) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
+                fn try_matmul_cuda(&self, _lhs: &cudarc::driver::CudaSlice<f32>, _lhs_shape: &[usize], _rhs: &cudarc::driver::CudaSlice<u8>, _rhs_shape: &[usize], _device: &D) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
                     Err(crate::Error::Msg(format!("Type '{}' does not implement CUDA matmul", T::NAME)))
                 }
             }
@@ -606,22 +654,23 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
             // This impl is preferred over Level 1 because method resolution favors impls requiring fewer auto-derefs
             // Blanket impl automatically applies to any type implementing QuantizedCudaOps
             #[cfg(feature = "cuda")]
-            impl<T> MaybeCudaOps for &CudaWrap<T>
+            impl<T, D> MaybeCudaOps<D> for &CudaWrap<T>
             where
-                T: candle_macros_types::QuantizedCudaOps + Default,
+                T: candle_macros_types::QuantizedCudaOps<D> + Default,
+                D: candle_macros_types::CudaStorageDevice,
             {
                 #[inline(always)]
-                fn try_dequantize_cuda<D: candle_macros_types::CudaStorageDevice>(&self, data: &cudarc::driver::CudaSlice<u8>, output: &mut cudarc::driver::CudaSlice<f32>, device: &D) -> crate::Result<()> {
+                fn try_dequantize_cuda(&self, data: &cudarc::driver::CudaSlice<u8>, output: &mut cudarc::driver::CudaSlice<f32>, device: &D) -> crate::Result<()> {
                     T::default().dequantize_cuda(data, output, device).map_err(|e| crate::Error::Msg(e))
                 }
 
                 #[inline(always)]
-                fn try_quantize_cuda<D: candle_macros_types::CudaStorageDevice>(&self, input: &cudarc::driver::CudaSlice<f32>, device: &D) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
+                fn try_quantize_cuda(&self, input: &cudarc::driver::CudaSlice<f32>, device: &D) -> crate::Result<cudarc::driver::CudaSlice<u8>> {
                     T::default().quantize_cuda(input, device).map_err(|e| crate::Error::Msg(e))
                 }
 
                 #[inline(always)]
-                fn try_matmul_cuda<D: candle_macros_types::CudaStorageDevice>(&self, lhs: &cudarc::driver::CudaSlice<f32>, lhs_shape: &[usize], rhs: &cudarc::driver::CudaSlice<u8>, rhs_shape: &[usize], device: &D) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
+                fn try_matmul_cuda(&self, lhs: &cudarc::driver::CudaSlice<f32>, lhs_shape: &[usize], rhs: &cudarc::driver::CudaSlice<u8>, rhs_shape: &[usize], device: &D) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
                     T::default().matmul_cuda(lhs, lhs_shape, rhs, rhs_shape, device).map_err(|e| crate::Error::Msg(e))
                 }
             }
@@ -637,7 +686,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 match id {
                     #(QuantizedDType::#type_names => (&&CudaWrap::<#type_names>(std::marker::PhantomData)).try_dequantize_cuda(data, output, device),)*
                     QuantizedDType::External(name) => {
-                        Err(crate::Error::Msg(format!("External type '{}' does not support CUDA operations yet", name)))
+                         Err(crate::Error::Msg("Cuda currently not supported for external types".to_string()))
                     }
                 }
             }
@@ -652,7 +701,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 match id {
                     #(QuantizedDType::#type_names => (&&CudaWrap::<#type_names>(std::marker::PhantomData)).try_quantize_cuda(input, device),)*
                     QuantizedDType::External(name) => {
-                        Err(crate::Error::Msg(format!("External type '{}' does not support CUDA operations yet", name)))
+                         Err(crate::Error::Msg("Cuda currently not supported for external types".to_string()))
                     }
                 }
             }
@@ -663,15 +712,14 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 id: QuantizedDType,
                 lhs_data: &cudarc::driver::CudaSlice<f32>,
                 lhs_shape: &[usize],
-                rhs_id: QuantizedDType,
                 rhs_data: &cudarc::driver::CudaSlice<u8>,
                 rhs_shape: &[usize],
                 device: &D,
             ) -> crate::Result<cudarc::driver::CudaSlice<f32>> {
-                match rhs_id {
+                match id {
                     #(QuantizedDType::#type_names => (&&CudaWrap::<#type_names>(std::marker::PhantomData)).try_matmul_cuda(lhs_data, lhs_shape, rhs_data, rhs_shape, device),)*
                     QuantizedDType::External(name) => {
-                        Err(crate::Error::Msg(format!("External type '{}' does not support CUDA operations yet", name)))
+                        Err(crate::Error::Msg("Cuda currently not supported for external types".to_string()))
                     }
                 }
             }
@@ -734,13 +782,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 match id {
                     #(QuantizedDType::#type_names => (&&MetalWrap::<#type_names>(std::marker::PhantomData)).try_dequantize_metal(data, output),)*
                     QuantizedDType::External(name) => {
-                        let registry = EXTERNAL_TYPE_REGISTRY.get()
-                            .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
-                        let ops = registry.read().unwrap().get(name).copied()
-                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
-                        ops.dequantize_metal
-                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' does not support Metal dequantize", name)))?
-                            (data, output)
+                        Err(crate::Error::Msg("Metal currently not supported for external types".to_string()))
                     }
                 }
             }
@@ -757,13 +799,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
                 match id {
                     #(QuantizedDType::#type_names => (&&MetalWrap::<#type_names>(std::marker::PhantomData)).try_matmul_metal(lhs_data, lhs_shape, rhs_data, rhs_shape),)*
                     QuantizedDType::External(name) => {
-                        let registry = EXTERNAL_TYPE_REGISTRY.get()
-                            .ok_or_else(|| crate::Error::Msg("External type registry not initialized".into()))?;
-                        let ops = registry.read().unwrap().get(name).copied()
-                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' not registered", name)))?;
-                        ops.matmul_metal
-                            .ok_or_else(|| crate::Error::Msg(format!("External type '{}' does not support Metal matmul", name)))?
-                            (lhs_data, lhs_shape, rhs_data, rhs_shape)
+                        Err(crate::Error::Msg("Metal currently not supported for external types".to_string()))
                     }
                 }
             }
@@ -781,8 +817,9 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
 
 /// Register external quantized type with simplified API
 ///
-/// Type must implement QuantizedType and at least one of: QuantizedCpuOps, QuantizedCudaOps, or QuantizedMetalOps.
-/// Other ops traits are optional - unimplemented operations will return errors when called.
+/// Type must implement QuantizedType. CPU, CUDA, and Metal ops are all optional.
+/// Implement QuantizedCpuOps, QuantizedCudaOps, and/or QuantizedMetalOps as needed.
+/// Unimplemented operations will return errors when called.
 ///
 /// Example:
 /// ```ignore
@@ -799,6 +836,7 @@ pub fn register_quantized_types(input: TokenStream) -> TokenStream {
 ///     fn infer_element_count(&self, data_len: usize) -> usize { /* ... */ }
 /// }
 ///
+/// // CPU ops are optional
 /// impl QuantizedCpuOps for MyQ4 {
 ///     fn dequantize(&self, data: &[u8], output: &mut [f32]) -> Result<(), String> { /* ... */ }
 ///     fn quantize(&self, input: &[f32]) -> Result<Vec<u8>, String> { /* ... */ }
@@ -819,120 +857,81 @@ pub fn register_external_quantized_type(input: TokenStream) -> TokenStream {
         pub fn get_quantized_dtype() -> candle_core::quantized::QuantizedDType {
             use std::sync::OnceLock;
             use candle_core::quantized::*;
-            use candle_macros_types::QuantizedCpuOps;
+            use candle_macros_types::QuantizedType;
 
             static DTYPE: OnceLock<QuantizedDType> = OnceLock::new();
 
             *DTYPE.get_or_init(|| {
-                // Create a zero-sized instance for extracting trait methods
-                let instance = #type_name::default();
-
-                // Wrapper functions that convert from trait methods to function pointers
-                fn quantize_wrapper(input: &[f32]) -> candle_core::Result<Vec<u8>> {
-                    let instance = #type_name::default();
-                    instance.quantize(input).map_err(|e| candle_core::Error::Msg(e))
+                // Helper trait for compile-time detection of CPU ops using autoderef
+                trait CheckCpuOps<T> {
+                    fn check_cpu_quantize(&self) -> Option<Box<dyn Fn(&[f32]) -> std::result::Result<Vec<u8>, String> + Send + Sync>>;
+                    fn check_cpu_dequantize(&self) -> Option<Box<dyn Fn(&[u8], &mut [f32]) -> std::result::Result<(), String> + Send + Sync>>;
+                    fn check_cpu_matmul(&self) -> Option<Box<dyn Fn(&[f32], &[usize], &[u8], &[usize]) -> std::result::Result<Vec<f32>, String> + Send + Sync>>;
                 }
 
-                fn dequantize_wrapper(data: &[u8], output: &mut [f32]) -> candle_core::Result<()> {
-                    let instance = #type_name::default();
-                    instance.dequantize(data, output).map_err(|e| candle_core::Error::Msg(e))
+                // Level 1 (fallback): No CPU ops - requires 2 auto-derefs
+                struct Wrap<T>(std::marker::PhantomData<T>);
+                impl<T: QuantizedType + Default> CheckCpuOps<T> for Wrap<T> {
+                    #[inline(always)]
+                    fn check_cpu_quantize(&self) -> Option<Box<dyn Fn(&[f32]) -> Result<Vec<u8>, String> + Send + Sync>> {
+                        None
+                    }
+                    #[inline(always)]
+                    fn check_cpu_dequantize(&self) -> Option<Box<dyn Fn(&[u8], &mut [f32]) -> Result<(), String> + Send + Sync>> {
+                        None
+                    }
+                    #[inline(always)]
+                    fn check_cpu_matmul(&self) -> Option<Box<dyn Fn(&[f32], &[usize], &[u8], &[usize]) -> Result<Vec<f32>, String> + Send + Sync>> {
+                        None
+                    }
                 }
 
-                fn storage_size_wrapper(num_elements: usize) -> usize {
-                    let instance = #type_name::default();
-                    instance.storage_size_in_bytes(num_elements)
+                // Level 0 (specialized): Has CPU ops - requires 1 auto-deref
+                impl<T: candle_macros_types::QuantizedCpuOps + Default + 'static> CheckCpuOps<T> for &Wrap<T> {
+                    #[inline(always)]
+                    fn check_cpu_quantize(&self) -> Option<Box<dyn Fn(&[f32]) -> std::result::Result<Vec<u8>, String> + Send + Sync>> {
+                        Some(Box::new(|input: &[f32]| -> std::result::Result<Vec<u8>, String> {
+                            T::default().quantize(input)
+                        }))
+                    }
+                    #[inline(always)]
+                    fn check_cpu_dequantize(&self) -> Option<Box<dyn Fn(&[u8], &mut [f32]) -> std::result::Result<(), String> + Send + Sync>> {
+                        Some(Box::new(|data: &[u8], output: &mut [f32]| -> std::result::Result<(), String> {
+                            T::default().dequantize(data, output)
+                        }))
+                    }
+                    #[inline(always)]
+                    fn check_cpu_matmul(&self) -> Option<Box<dyn Fn(&[f32], &[usize], &[u8], &[usize]) -> std::result::Result<Vec<f32>, String> + Send + Sync>> {
+                        Some(Box::new(|lhs: &[f32], lhs_shape: &[usize], rhs: &[u8], rhs_shape: &[usize]| -> std::result::Result<Vec<f32>, String> {
+                            T::default().matmul(lhs, lhs_shape, rhs, rhs_shape)
+                        }))
+                    }
                 }
 
-                fn infer_count_wrapper(data_len: usize) -> usize {
-                    let instance = #type_name::default();
-                    instance.infer_element_count(data_len)
-                }
+                let cpu_quantize = (&&Wrap::<#type_name>(std::marker::PhantomData)).check_cpu_quantize();
+                let cpu_dequantize = (&&Wrap::<#type_name>(std::marker::PhantomData)).check_cpu_dequantize();
+                let cpu_matmul = (&&Wrap::<#type_name>(std::marker::PhantomData)).check_cpu_matmul();
 
-                fn matmul_wrapper(
-                    lhs: &[f32],
-                    lhs_shape: &[usize],
-                    rhs: &[u8],
-                    rhs_shape: &[usize]
-                ) -> candle_core::Result<Vec<f32>> {
-                    let instance = #type_name::default();
-                    instance.matmul(lhs, lhs_shape, rhs, rhs_shape)
-                        .map_err(|e| candle_core::Error::Msg(e))
-                }
 
-                let ops = ExternalQuantOps {
-                    size_in_bytes: <#type_name as candle_core::dtype::QuantizedType>::SIZE_IN_BYTES,
-                    quantize_cpu: quantize_wrapper,
-                    dequantize_cpu: dequantize_wrapper,
-                    storage_size_in_bytes: storage_size_wrapper,
-                    infer_element_count: infer_count_wrapper,
-                    matmul_cpu: matmul_wrapper,
 
-                    #[cfg(feature = "cuda")]
-                    quantize_cuda: {
-                        use candle_macros_types::QuantizedCudaOps;
-                        fn wrapper(input: &cudarc::driver::CudaSlice<f32>) -> candle_core::Result<cudarc::driver::CudaSlice<u8>> {
-                            let instance = #type_name::default();
-                            instance.quantize_cuda(input).map_err(|e| candle_core::Error::Msg(e))
-                        }
-                        Some(wrapper)
-                    },
+                // Create closures for base operations (QuantizedType trait methods)
+                // These capture the type via its Default implementation
+                let storage_size_fn: Box<dyn Fn(usize) -> usize + Send + Sync> = Box::new(|num_elements| {
+                    #type_name::default().storage_size_in_bytes(num_elements)
+                });
 
-                    #[cfg(feature = "cuda")]
-                    dequantize_cuda: {
-                        use candle_macros_types::QuantizedCudaOps;
-                        fn wrapper(data: &cudarc::driver::CudaSlice<u8>, output: &mut cudarc::driver::CudaSlice<f32>) -> candle_core::Result<()> {
-                            let instance = #type_name::default();
-                            instance.dequantize_cuda(data, output).map_err(|e| candle_core::Error::Msg(e))
-                        }
-                        Some(wrapper)
-                    },
-
-                    #[cfg(feature = "cuda")]
-                    matmul_cuda: {
-                        use candle_macros_types::QuantizedCudaOps;
-                        fn wrapper(
-                            lhs: &cudarc::driver::CudaSlice<f32>,
-                            lhs_shape: &[usize],
-                            rhs: &cudarc::driver::CudaSlice<u8>,
-                            rhs_shape: &[usize]
-                        ) -> candle_core::Result<cudarc::driver::CudaSlice<f32>> {
-                            let instance = #type_name::default();
-                            instance.matmul_cuda(lhs, lhs_shape, rhs, rhs_shape)
-                                .map_err(|e| candle_core::Error::Msg(e))
-                        }
-                        Some(wrapper)
-                    },
-
-                    #[cfg(feature = "metal")]
-                    dequantize_metal: {
-                        use candle_macros_types::QuantizedMetalOps;
-                        fn wrapper(data: &metal::Buffer, output: &mut metal::Buffer) -> candle_core::Result<()> {
-                            let instance = #type_name::default();
-                            instance.dequantize_metal(data, output).map_err(|e| candle_core::Error::Msg(e))
-                        }
-                        Some(wrapper)
-                    },
-
-                    #[cfg(feature = "metal")]
-                    matmul_metal: {
-                        use candle_macros_types::QuantizedMetalOps;
-                        fn wrapper(
-                            lhs: &metal::Buffer,
-                            lhs_shape: &[usize],
-                            rhs: &metal::Buffer,
-                            rhs_shape: &[usize]
-                        ) -> candle_core::Result<metal::Buffer> {
-                            let instance = #type_name::default();
-                            instance.matmul_metal(lhs, lhs_shape, rhs, rhs_shape)
-                                .map_err(|e| candle_core::Error::Msg(e))
-                        }
-                        Some(wrapper)
-                    },
-                };
+                let infer_count_fn: Box<dyn Fn(usize) -> usize + Send + Sync> = Box::new(|data_len| {
+                    #type_name::default().infer_element_count(data_len)
+                });
 
                 register_external_quant_type(
-                    <#type_name as candle_core::dtype::QuantizedType>::NAME,
-                    ops
+                    <#type_name as candle_macros_types::QuantizedType>::NAME,
+                    <#type_name as candle_macros_types::QuantizedType>::SIZE_IN_BYTES,
+                    storage_size_fn,
+                    infer_count_fn,
+                    cpu_quantize,
+                    cpu_dequantize,
+                    cpu_matmul,
                 )
             })
         }

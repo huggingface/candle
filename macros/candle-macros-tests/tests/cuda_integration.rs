@@ -4,7 +4,7 @@
 mod common;
 
 use candle_macros::register_quantized_types;
-use candle_macros_types::{CudaStorageDevice, QuantizedCudaOps, QuantizedType};
+use candle_macros_types::{QuantizedCudaOps, QuantizedType};
 
 pub use common::{CudaDevice, Error, Result};
 
@@ -25,8 +25,11 @@ impl QuantizedType for Q4_0 {
     }
 }
 
-impl QuantizedCudaOps for Q4_0 {
-    fn quantize_cuda<D: CudaStorageDevice>(
+impl<D> QuantizedCudaOps<D> for Q4_0
+where
+    D: candle_macros_types::CudaStorageDevice,
+{
+    fn quantize_cuda(
         &self,
         _input: &cudarc::driver::CudaSlice<f32>,
         _device: &D,
@@ -35,7 +38,7 @@ impl QuantizedCudaOps for Q4_0 {
         Err("Not implemented in test".to_string())
     }
 
-    fn dequantize_cuda<D: CudaStorageDevice>(
+    fn dequantize_cuda(
         &self,
         _data: &cudarc::driver::CudaSlice<u8>,
         _output: &mut cudarc::driver::CudaSlice<f32>,
@@ -44,7 +47,7 @@ impl QuantizedCudaOps for Q4_0 {
         Err("Not implemented in test".to_string())
     }
 
-    fn matmul_cuda<D: CudaStorageDevice>(
+    fn matmul_cuda(
         &self,
         _lhs: &cudarc::driver::CudaSlice<f32>,
         _lhs_shape: &[usize],
