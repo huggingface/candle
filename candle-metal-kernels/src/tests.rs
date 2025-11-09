@@ -1,5 +1,5 @@
 use super::*;
-use crate::metal::{create_command_buffer, CommandSemaphore};
+use crate::metal::{create_command_buffer, CommandBufferPool, CommandSemaphore};
 use core::ffi::c_void;
 use half::{bf16, f16};
 use rand::prelude::SliceRandom;
@@ -2419,4 +2419,33 @@ fn const_fill() {
     test::<f16, _>("fill_f16", f16::from_f32);
     test::<bf16, _>("fill_bf16", bf16::from_f32);
     test::<f32, _>("fill_f32", |v| v);
+}
+
+#[test]
+fn test_pool_creation() {
+    let device = Device::system_default().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let pool = CommandBufferPool::new(queue, 5, 50).unwrap();
+    let encoder = pool.acquire_compute_encoder();
+    assert!(encoder.is_ok());
+}
+
+#[test]
+fn test_pool_zero_size_fails() {
+    let device = Device::system_default().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let result = CommandBufferPool::new(queue, 0, 50);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_encoder_acquisition() {
+    let device = Device::system_default().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let pool = Arc::new(CommandBufferPool::new(queue, 3, 50).unwrap());
+
+    for _ in 0..10 {
+        let encoder = pool.acquire_compute_encoder().unwrap();
+        drop(encoder);
+    }
 }
