@@ -1,4 +1,4 @@
-use objc2_metal::MTLCommandQueue;
+use objc2_metal::{MTLCommandBufferStatus, MTLCommandQueue};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -71,6 +71,7 @@ impl CommandBufferPool {
     ) -> Result<Arc<CommandBufferEntry>, MetalKernelError> {
         let semaphore = Arc::new(CommandSemaphore::new());
         let cb = create_command_buffer(command_queue, Arc::clone(&semaphore))?;
+
         Ok(Arc::new(CommandBufferEntry {
             state: Mutex::new(EntryState {
                 current: cb,
@@ -123,6 +124,7 @@ impl CommandBufferPool {
                 .wait_until(|s| matches!(s, CommandStatus::Available));
             *guard = CommandStatus::Encoding;
         }
+
         Ok(entry)
     }
 
@@ -187,7 +189,7 @@ impl CommandBufferPool {
             };
 
             for cb in to_wait {
-                cb.wait_until_completed();
+                Self::ensure_completed(&cb)?;
             }
         }
 
@@ -200,6 +202,7 @@ impl CommandBufferPool {
         for entry in &self.pool {
             self.flush_entry(entry)?;
         }
+
         Ok(())
     }
 
@@ -217,6 +220,29 @@ impl CommandBufferPool {
             let old_cb = std::mem::replace(&mut state.current, new_cb);
             state.in_flight.push(old_cb);
             entry.compute_count.store(0, Ordering::Release);
+        }
+
+        Ok(())
+    }
+
+    fn ensure_completed(cb: &CommandBuffer) -> Result<(), MetalKernelError> {
+        match cb.status() {
+            MTLCommandBufferStatus::NotEnqueued | MTLCommandBufferStatus::Enqueued => {
+                cb.commit();
+                cb.wait_until_completed();
+            }
+            MTLCommandBufferStatus::Committed | MTLCommandBufferStatus::Scheduled => {
+                cb.wait_until_completed();
+            }
+            MTLCommandBufferStatus::Completed => {}
+            MTLCommandBufferStatus::Error => {
+                let msg = cb
+                    .error()
+                    .map(|e| e.into_owned())
+                    .unwrap_or_else(|| "unknown error".to_string());
+                return Err(MetalKernelError::CommandBufferError(msg));
+            }
+            _ => unreachable!(),
         }
 
         Ok(())

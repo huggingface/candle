@@ -2449,3 +2449,17 @@ fn test_encoder_acquisition() {
         drop(encoder);
     }
 }
+
+#[test]
+fn commands_wait_flushes_pool() {
+    let device = Device::system_default().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let cmds = crate::metal::Commands::new(queue).unwrap();
+
+    for _ in 0..10 {
+        let (_dirty, enc) = cmds.command_encoder().unwrap();
+        drop(enc);
+    }
+
+    cmds.wait_until_completed().unwrap();
+}
