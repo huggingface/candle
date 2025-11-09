@@ -107,7 +107,7 @@ impl CommandBufferPool {
         let entry = self
             .pool
             .iter()
-            .min_by_key(|e| e.compute_count.load(Ordering::Relaxed))
+            .min_by_key(|e| e.compute_count.load(Ordering::Acquire))
             .ok_or(MetalKernelError::FailedToCreateResource(
                 "Command buffer pool is empty".to_string(),
             ))?;
@@ -139,17 +139,17 @@ impl CommandBufferPool {
                 )
             })?;
 
-            let count = entry.compute_count.load(Ordering::Relaxed);
+            let count = entry.compute_count.load(Ordering::Acquire);
             // Recycle: commit and create fresh buffer if limit reached
             if count >= self.compute_per_buffer {
                 cb.commit();
                 let new_cb =
                     create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
                 *cb = new_cb;
-                entry.compute_count.store(0, Ordering::Relaxed);
+                entry.compute_count.store(0, Ordering::Release);
             }
 
-            entry.compute_count.fetch_add(1, Ordering::Relaxed);
+            entry.compute_count.fetch_add(1, Ordering::Release);
             create_encoder(&mut cb)
         };
 
@@ -159,7 +159,7 @@ impl CommandBufferPool {
     /// Flushes all buffers and waits for their completion.
     pub fn flush_and_wait(&self) -> Result<(), MetalKernelError> {
         for entry in &self.pool {
-            let pending_count = entry.compute_count.load(Ordering::Relaxed);
+            let pending_count = entry.compute_count.load(Ordering::Acquire);
 
             if pending_count > 0 {
                 let _guard = entry
@@ -178,7 +178,7 @@ impl CommandBufferPool {
                 let new_cb =
                     create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
                 *cb = new_cb;
-                entry.compute_count.store(0, Ordering::Relaxed);
+                entry.compute_count.store(0, Ordering::Release);
             }
         }
 
@@ -194,7 +194,7 @@ impl CommandBufferPool {
     }
 
     fn flush_entry(&self, entry: &Arc<CommandBufferEntry>) -> Result<(), MetalKernelError> {
-        let pending_count = entry.compute_count.load(Ordering::Relaxed);
+        let pending_count = entry.compute_count.load(Ordering::Acquire);
 
         if pending_count > 0 {
             let _guard = entry
@@ -210,7 +210,7 @@ impl CommandBufferPool {
             cb.commit();
             let new_cb = create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
             *cb = new_cb;
-            entry.compute_count.store(0, Ordering::Relaxed);
+            entry.compute_count.store(0, Ordering::Release);
         }
 
         Ok(())
