@@ -82,16 +82,18 @@ impl CommandBufferPool {
         }))
     }
 
-    pub fn acquire_compute_encoder(&self) -> Result<ComputeCommandEncoder, MetalKernelError> {
+    pub fn acquire_compute_encoder(
+        &self,
+    ) -> Result<(bool, ComputeCommandEncoder), MetalKernelError> {
         let entry = self.select_entry()?;
-        let encoder = self.finalize_entry(entry, |cb| cb.compute_command_encoder())?;
-        Ok(encoder)
+        let (recycled, encoder) = self.finalize_entry(entry, |cb| cb.compute_command_encoder())?;
+        Ok((recycled, encoder))
     }
 
-    pub fn acquire_blit_encoder(&self) -> Result<BlitCommandEncoder, MetalKernelError> {
+    pub fn acquire_blit_encoder(&self) -> Result<(bool, BlitCommandEncoder), MetalKernelError> {
         let entry = self.select_entry()?;
-        let encoder = self.finalize_entry(entry, |cb| cb.blit_command_encoder())?;
-        Ok(encoder)
+        let (recycled, encoder) = self.finalize_entry(entry, |cb| cb.blit_command_encoder())?;
+        Ok((recycled, encoder))
     }
 
     /// Selects an entry from the pool using a two-phase strategy:
@@ -134,29 +136,28 @@ impl CommandBufferPool {
         &self,
         entry: Arc<CommandBufferEntry>,
         create_encoder: F,
-    ) -> Result<E, MetalKernelError>
+    ) -> Result<(bool, E), MetalKernelError>
     where
         F: FnOnce(&mut CommandBuffer) -> E,
     {
-        let encoder = {
-            let mut state = entry.state.lock()?;
+        let mut state = entry.state.lock().map_err(|_| {
+            MetalKernelError::FailedToCreateResource("Command buffer mutex poisoned".to_string())
+        })?;
 
-            let count = entry.compute_count.load(Ordering::Acquire);
-            if count >= self.compute_per_buffer {
-                // Commit current, replace with a new buffer, push old into in-flight
-                state.current.commit();
-                let new_cb =
-                    create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
-                let old_cb = std::mem::replace(&mut state.current, new_cb);
-                state.in_flight.push(old_cb);
-                entry.compute_count.store(0, Ordering::Release);
-            }
+        // Atomic increment and check
+        let old_count = entry.compute_count.fetch_add(1, Ordering::AcqRel);
+        let recycled = old_count >= self.compute_per_buffer;
 
-            entry.compute_count.fetch_add(1, Ordering::Release);
-            create_encoder(&mut state.current)
-        };
+        if recycled {
+            state.current.commit();
+            let new_cb = create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
+            let old_cb = std::mem::replace(&mut state.current, new_cb);
+            state.in_flight.push(old_cb);
+            entry.compute_count.store(1, Ordering::Release);
+        }
 
-        Ok(encoder)
+        let encoder = create_encoder(&mut state.current);
+        Ok((recycled, encoder))
     }
 
     /// Flushes all buffers and waits for their completion.
