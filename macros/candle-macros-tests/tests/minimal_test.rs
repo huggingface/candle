@@ -12,7 +12,7 @@ impl QuantizedType for Q8_0 {
     const SIZE_IN_BYTES: usize = 34;
 
     fn storage_size_in_bytes(&self, num_elements: usize) -> usize {
-        ((num_elements + 31) / 32) * 34
+        num_elements.div_ceil(32) * 34
     }
 
     fn infer_element_count(&self, data_len: usize) -> usize {

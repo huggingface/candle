@@ -131,7 +131,7 @@ fn cuda_examples(device: &Device) -> Result<()> {
         (1, 128),
         device,
     )?;
-    let weights_q4k = weights.to_dtype(DType::Quantized(QuantizedDType::GgmlQ4K))?;
+    let weights_q4k = weights.to_dtype(DType::Quantized(QuantizedDType::GgmlQ8_0))?;
     let result = activations.matmul(&weights_q4k)?;
 
     let result_cpu = result.to_device(&Device::Cpu)?;
@@ -142,8 +142,9 @@ fn cuda_examples(device: &Device) -> Result<()> {
         result_cpu.shape()
     );
     println!(
-        "First 3 values: [{:.4}, {:.4}, {:.4}]",
-        result_vec[0][0], result_vec[0][1], result_vec[0][2]
+        "  Result sample: [{:.4}, ..., {:.4}]",
+        result_vec[0][0],
+        result_vec[0][result_vec[0].len() - 1]
     );
 
     Ok(())

@@ -25,7 +25,7 @@ impl QuantizedType for ExternalQ4 {
     const SIZE_IN_BYTES: usize = 18;
 
     fn storage_size_in_bytes(&self, num_elements: usize) -> usize {
-        ((num_elements + 31) / 32) * 18
+        num_elements.div_ceil(32) * 18
     }
 
     fn infer_element_count(&self, data_len: usize) -> usize {
@@ -64,7 +64,7 @@ impl QuantizedCpuOps for ExternalQ4 {
         // Simple mock matmul: just return zeros with correct size
         let m = lhs_shape[0];
         let n = rhs_shape[1];
-        Ok(vec![lhs_f32.get(0).copied().unwrap_or(0.0); m * n])
+        Ok(vec![lhs_f32.first().copied().unwrap_or(0.0); m * n])
     }
 }
 
@@ -77,7 +77,7 @@ impl QuantizedType for ExternalNoCpu {
     const SIZE_IN_BYTES: usize = 20;
 
     fn storage_size_in_bytes(&self, num_elements: usize) -> usize {
-        ((num_elements + 15) / 16) * 20
+        num_elements.div_ceil(16) * 20
     }
 
     fn infer_element_count(&self, data_len: usize) -> usize {
@@ -122,7 +122,7 @@ impl QuantizedType for BuiltInQ8 {
     const SIZE_IN_BYTES: usize = 34;
 
     fn storage_size_in_bytes(&self, num_elements: usize) -> usize {
-        ((num_elements + 31) / 32) * 34
+        num_elements.div_ceil(32) * 34
     }
 
     fn infer_element_count(&self, data_len: usize) -> usize {
@@ -169,8 +169,8 @@ fn test_external_type_concepts() {
     );
 
     // Show that types can be instantiated
-    let q4 = ExternalQ4::default();
-    let no_cpu = ExternalNoCpu::default();
+    let q4 = ExternalQ4;
+    let no_cpu = ExternalNoCpu;
 
     // Test their trait implementations
     assert_eq!(ExternalQ4::NAME, "external_q4");
@@ -188,7 +188,7 @@ fn test_external_type_concepts() {
 #[test]
 fn test_external_type_cpu_operations() {
     // Test the CPU operations directly on the type
-    let q4 = ExternalQ4::default();
+    let q4 = ExternalQ4;
 
     // Test quantize
     let input = vec![1.0, 2.0, 3.0, 4.0];
@@ -231,8 +231,8 @@ fn test_external_type_cpu_operations() {
 #[test]
 fn test_builtin_vs_external_traits() {
     // Compare built-in and external types at the trait level
-    let builtin = BuiltInQ8::default();
-    let external = ExternalQ4::default();
+    let builtin = BuiltInQ8;
+    let external = ExternalQ4;
 
     // Both implement QuantizedType
     assert_eq!(BuiltInQ8::NAME, "builtin_q8");
@@ -249,7 +249,7 @@ fn test_builtin_vs_external_traits() {
 #[test]
 fn test_optional_cpu_ops() {
     // ExternalNoCpu does NOT implement QuantizedCpuOps
-    let no_cpu = ExternalNoCpu::default();
+    let no_cpu = ExternalNoCpu;
 
     // But it still implements QuantizedType
     assert_eq!(ExternalNoCpu::NAME, "external_no_cpu");
@@ -280,35 +280,4 @@ fn test_builtin_type_dispatch() {
     assert!(result.is_ok());
 
     println!("Built-in type dispatch test passed!");
-}
-
-#[test]
-fn test_registration_workflow() {
-    // This test documents the workflow for external type registration
-
-    // Step 1: Define a type implementing QuantizedType (required)
-    let _q4 = ExternalQ4::default();
-
-    // Step 2: Optionally implement QuantizedCpuOps (CPU operations)
-    // ExternalQ4 has this
-
-    // Step 3: Optionally implement QuantizedCudaOps (CUDA operations)
-    // Not implemented in this test
-
-    // Step 4: Optionally implement QuantizedMetalOps (Metal operations)
-    // Not implemented in this test
-
-    // Step 5: Use register_external_quantized_type! macro
-    // In actual code: register_external_quantized_type!(ExternalQ4);
-    // This would:
-    // - Extract function pointers for all implemented operations
-    // - Register them in the global registry
-    // - Return a QuantizedDType::External variant
-
-    // Step 6: Use the registered type just like built-in types
-    // let dtype = get_quantized_dtype();
-    // dtype.quantize(...);
-    // dtype.dequantize(...);
-
-    println!("Registration workflow documentation test passed!");
 }
