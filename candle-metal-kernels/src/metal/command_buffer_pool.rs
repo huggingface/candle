@@ -21,20 +21,22 @@ pub fn create_command_buffer(
         ))
 }
 
+struct EntryState {
+    current: CommandBuffer,
+    in_flight: Vec<CommandBuffer>,
+}
+
 /// A pool entry containing a command buffer, its usage count, and synchronization primitives.
-/// The mutex guards the command buffer while the atomic count and semaphore can be accessed
-/// without locking for efficient load balancing.
+/// The `state` mutex guards the current buffer and the in-flight list for coherent updates.
+/// `compute_count` and `semaphore` remain accessible without locking for selection/coordination.
 pub struct CommandBufferEntry {
-    command_buffer: Mutex<CommandBuffer>,
+    state: Mutex<EntryState>,
     compute_count: AtomicUsize,
     semaphore: Arc<CommandSemaphore>,
 }
 
 /// A pool of command buffers that distributes work across multiple buffers to improve
 /// parallelism between CPU encoding and GPU execution.
-///
-/// The pool automatically recycles buffers when they reach their compute limit and
-/// balances load across available entries.
 pub struct CommandBufferPool {
     pool: Vec<Arc<CommandBufferEntry>>,
     command_queue: CommandQueue,
@@ -70,7 +72,10 @@ impl CommandBufferPool {
         let semaphore = Arc::new(CommandSemaphore::new());
         let cb = create_command_buffer(command_queue, Arc::clone(&semaphore))?;
         Ok(Arc::new(CommandBufferEntry {
-            command_buffer: Mutex::new(cb),
+            state: Mutex::new(EntryState {
+                current: cb,
+                in_flight: Vec::new(),
+            }),
             compute_count: AtomicUsize::new(0),
             semaphore,
         }))
@@ -97,7 +102,6 @@ impl CommandBufferPool {
             if let Ok(mut status) = entry.semaphore.status.try_lock() {
                 if matches!(*status, CommandStatus::Available) {
                     *status = CommandStatus::Encoding;
-                    entry.semaphore.cond.notify_one();
                     return Ok(Arc::clone(entry));
                 }
             }
@@ -119,11 +123,11 @@ impl CommandBufferPool {
                 .wait_until(|s| matches!(s, CommandStatus::Available));
             *guard = CommandStatus::Encoding;
         }
-        entry.semaphore.cond.notify_one();
         Ok(entry)
     }
 
     /// Creates an encoder from the selected entry, recycling the buffer if needed.
+    /// When recycling, the old committed buffer is moved to `in_flight` so we can later wait on it.
     fn finalize_entry<F, E>(
         &self,
         entry: Arc<CommandBufferEntry>,
@@ -133,52 +137,57 @@ impl CommandBufferPool {
         F: FnOnce(&mut CommandBuffer) -> E,
     {
         let encoder = {
-            let mut cb = entry.command_buffer.lock().map_err(|_| {
-                MetalKernelError::FailedToCreateResource(
-                    "Command buffer mutex poisoned".to_string(),
-                )
-            })?;
+            let mut state = entry.state.lock()?;
 
             let count = entry.compute_count.load(Ordering::Acquire);
-            // Recycle: commit and create fresh buffer if limit reached
             if count >= self.compute_per_buffer {
-                cb.commit();
+                // Commit current, replace with a new buffer, push old into in-flight
+                state.current.commit();
                 let new_cb =
                     create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
-                *cb = new_cb;
+                let old_cb = std::mem::replace(&mut state.current, new_cb);
+                state.in_flight.push(old_cb);
                 entry.compute_count.store(0, Ordering::Release);
             }
 
             entry.compute_count.fetch_add(1, Ordering::Release);
-            create_encoder(&mut cb)
+            create_encoder(&mut state.current)
         };
 
         Ok(encoder)
     }
 
     /// Flushes all buffers and waits for their completion.
+    /// Commits any pending work on the current buffers, moves them to in-flight,
+    /// then waits on all in-flight buffers including those from prior recycles.
     pub fn flush_and_wait(&self) -> Result<(), MetalKernelError> {
         for entry in &self.pool {
-            let pending_count = entry.compute_count.load(Ordering::Acquire);
-
-            if pending_count > 0 {
+            // Ensure no active encoder is still encoding on this entry.
+            {
                 let _guard = entry
                     .semaphore
                     .wait_until(|s| matches!(s, CommandStatus::Available));
+            }
 
-                let mut cb = entry.command_buffer.lock().map_err(|_| {
-                    MetalKernelError::FailedToCreateResource(
-                        "Command buffer mutex poisoned".to_string(),
-                    )
-                })?;
+            // Under state lock, commit current if it has pending work and swap to a fresh one.
+            let to_wait: Vec<CommandBuffer> = {
+                let mut state = entry.state.lock()?;
 
-                cb.commit();
+                if entry.compute_count.load(Ordering::Acquire) > 0 {
+                    state.current.commit();
+                    let new_cb =
+                        create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
+                    let old_cb = std::mem::replace(&mut state.current, new_cb);
+                    state.in_flight.push(old_cb);
+                    entry.compute_count.store(0, Ordering::Release);
+                }
+
+                // Drain in_flight into a local vec to wait without holding the lock.
+                std::mem::take(&mut state.in_flight)
+            };
+
+            for cb in to_wait {
                 cb.wait_until_completed();
-
-                let new_cb =
-                    create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
-                *cb = new_cb;
-                entry.compute_count.store(0, Ordering::Release);
             }
         }
 
@@ -186,6 +195,7 @@ impl CommandBufferPool {
     }
 
     /// Flushes all buffers without waiting for completion.
+    /// Commits any pending work and moves current buffers to in-flight.
     pub fn flush(&self) -> Result<(), MetalKernelError> {
         for entry in &self.pool {
             self.flush_entry(entry)?;
@@ -194,22 +204,18 @@ impl CommandBufferPool {
     }
 
     fn flush_entry(&self, entry: &Arc<CommandBufferEntry>) -> Result<(), MetalKernelError> {
-        let pending_count = entry.compute_count.load(Ordering::Acquire);
+        // Ensure no active encoder is still encoding on this entry.
+        let _guard = entry
+            .semaphore
+            .wait_until(|s| matches!(s, CommandStatus::Available));
 
-        if pending_count > 0 {
-            let _guard = entry
-                .semaphore
-                .wait_until(|s| matches!(s, CommandStatus::Available));
+        let mut state = entry.state.lock()?;
 
-            let mut cb = entry.command_buffer.lock().map_err(|_| {
-                MetalKernelError::FailedToCreateResource(
-                    "Command buffer mutex poisoned".to_string(),
-                )
-            })?;
-
-            cb.commit();
+        if entry.compute_count.load(Ordering::Acquire) > 0 {
+            state.current.commit();
             let new_cb = create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
-            *cb = new_cb;
+            let old_cb = std::mem::replace(&mut state.current, new_cb);
+            state.in_flight.push(old_cb);
             entry.compute_count.store(0, Ordering::Release);
         }
 
