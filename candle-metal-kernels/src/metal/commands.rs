@@ -47,13 +47,13 @@ impl Commands {
     }
 
     pub fn command_encoder(&self) -> Result<(bool, ComputeCommandEncoder), MetalKernelError> {
-        let (recycled, encoder) = self.pool.acquire_compute_encoder()?;
-        Ok((recycled, encoder))
+        let (flushed, encoder) = self.pool.acquire_compute_encoder()?;
+        Ok((flushed, encoder))
     }
 
     pub fn blit_command_encoder(&self) -> Result<(bool, BlitCommandEncoder), MetalKernelError> {
-        let (recycled, encoder) = self.pool.acquire_blit_encoder()?;
-        Ok((recycled, encoder))
+        let (flushed, encoder) = self.pool.acquire_blit_encoder()?;
+        Ok((flushed, encoder))
     }
 
     pub fn wait_until_completed(&self) -> Result<(), MetalKernelError> {

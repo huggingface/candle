@@ -86,14 +86,14 @@ impl CommandBufferPool {
         &self,
     ) -> Result<(bool, ComputeCommandEncoder), MetalKernelError> {
         let entry = self.select_entry()?;
-        let (recycled, encoder) = self.finalize_entry(entry, |cb| cb.compute_command_encoder())?;
-        Ok((recycled, encoder))
+        let (flushed, encoder) = self.finalize_entry(entry, |cb| cb.compute_command_encoder())?;
+        Ok((flushed, encoder))
     }
 
     pub fn acquire_blit_encoder(&self) -> Result<(bool, BlitCommandEncoder), MetalKernelError> {
         let entry = self.select_entry()?;
-        let (recycled, encoder) = self.finalize_entry(entry, |cb| cb.blit_command_encoder())?;
-        Ok((recycled, encoder))
+        let (flushed, encoder) = self.finalize_entry(entry, |cb| cb.blit_command_encoder())?;
+        Ok((flushed, encoder))
     }
 
     /// Selects an entry from the pool using a two-phase strategy:
@@ -140,15 +140,12 @@ impl CommandBufferPool {
     where
         F: FnOnce(&mut CommandBuffer) -> E,
     {
-        let mut state = entry.state.lock().map_err(|_| {
-            MetalKernelError::FailedToCreateResource("Command buffer mutex poisoned".to_string())
-        })?;
+        let mut state = entry.state.lock()?;
 
-        // Atomic increment and check
-        let old_count = entry.compute_count.fetch_add(1, Ordering::AcqRel);
-        let recycled = old_count >= self.compute_per_buffer;
+        let count = entry.compute_count.fetch_add(1, Ordering::Relaxed);
+        let flushed = count >= self.compute_per_buffer;
 
-        if recycled {
+        if flushed {
             state.current.commit();
             let new_cb = create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
             let old_cb = std::mem::replace(&mut state.current, new_cb);
@@ -157,7 +154,8 @@ impl CommandBufferPool {
         }
 
         let encoder = create_encoder(&mut state.current);
-        Ok((recycled, encoder))
+
+        Ok((flushed, encoder))
     }
 
     /// Flushes all buffers and waits for their completion.
