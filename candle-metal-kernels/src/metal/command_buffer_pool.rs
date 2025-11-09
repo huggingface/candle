@@ -8,7 +8,7 @@ use crate::metal::{
 };
 use crate::MetalKernelError;
 
-/// Creates a new command buffer for the given queue with synchronization via semaphore.
+/// Creates a new command buffer from the queue with an attached semaphore for tracking its state.
 pub fn create_command_buffer(
     command_queue: &CommandQueue,
     semaphore: Arc<CommandSemaphore>,
@@ -21,17 +21,20 @@ pub fn create_command_buffer(
         ))
 }
 
+/// A pool entry containing a command buffer, its usage count, and synchronization primitives.
+/// The mutex guards the command buffer while the atomic count and semaphore can be accessed
+/// without locking for efficient load balancing.
 pub struct CommandBufferEntry {
     command_buffer: Mutex<CommandBuffer>,
     compute_count: AtomicUsize,
     semaphore: Arc<CommandSemaphore>,
 }
 
-/// Pool of command buffers for efficient reuse and scheduling.
+/// A pool of command buffers that distributes work across multiple buffers to improve
+/// parallelism between CPU encoding and GPU execution.
 ///
-/// Uses a two-tier strategy for entry selection:
-/// 1. Fast path: Scans for an immediately available entry
-/// 2. Fallback: Waits for the least-loaded entry
+/// The pool automatically recycles buffers when they reach their compute limit and
+/// balances load across available entries.
 pub struct CommandBufferPool {
     pool: Vec<Arc<CommandBufferEntry>>,
     command_queue: CommandQueue,
@@ -49,17 +52,6 @@ impl CommandBufferPool {
                 "Pool size must be greater than 0".to_string(),
             ));
         }
-
-        // let mut pool = Vec::with_capacity(pool_size);
-        // for id in 0..pool_size {
-        //     let semaphore = Arc::new(CommandSemaphore::new());
-        //     let cb = create_command_buffer(&command_queue, Arc::clone(&semaphore))?;
-        //     pool.push(Arc::new(CommandBufferEntry {
-        //         command_buffer: Mutex::new(cb),
-        //         compute_count: AtomicUsize::new(0),
-        //         semaphore,
-        //     }))
-        // }
 
         let pool = (0..pool_size)
             .map(|_| Self::create_pool_entry(&command_queue))
@@ -86,21 +78,21 @@ impl CommandBufferPool {
 
     pub fn acquire_compute_encoder(&self) -> Result<ComputeCommandEncoder, MetalKernelError> {
         let entry = self.select_entry()?;
-        let encoder = self.finalize_compute_entry(&entry)?;
-        Ok(encoder) // Just return the encoder directly!
+        let encoder = self.finalize_entry(entry, |cb| cb.compute_command_encoder())?;
+        Ok(encoder)
     }
 
     pub fn acquire_blit_encoder(&self) -> Result<BlitCommandEncoder, MetalKernelError> {
         let entry = self.select_entry()?;
-        let encoder = self.finalize_blit_entry(&entry)?;
-        Ok(encoder) // Just return the encoder directly!
+        let encoder = self.finalize_entry(entry, |cb| cb.blit_command_encoder())?;
+        Ok(encoder)
     }
 
-    /// Selects a command buffer entry using a two-tier strategy:
-    /// 1. Fast path: Try to find an available entry without blocking
-    /// 2. Fallback: Wait for the least-loaded entry to become available
+    /// Selects an entry from the pool using a two-phase strategy:
+    /// 1. Try non-blocking: find any available buffer without waiting
+    /// 2. Fallback: select the least-loaded buffer and wait for availability
     fn select_entry(&self) -> Result<Arc<CommandBufferEntry>, MetalKernelError> {
-        // Try fast path: scan for immediately available entry
+        // Phase 1: Try to find an available buffer without blocking
         for entry in &self.pool {
             if let Ok(mut status) = entry.semaphore.status.try_lock() {
                 if matches!(*status, CommandStatus::Available) {
@@ -111,7 +103,7 @@ impl CommandBufferPool {
             }
         }
 
-        // Fallback: wait for the least-loaded entry to become available
+        // Phase 2: Select the buffer with the least work and wait for it
         let entry = self
             .pool
             .iter()
@@ -131,12 +123,15 @@ impl CommandBufferPool {
         Ok(entry)
     }
 
-    /// Finalizes the entry by creating or reusing a compute encoder.
-    /// Commits and replaces the command buffer if it has reached the compute limit.
-    fn finalize_compute_entry(
+    /// Creates an encoder from the selected entry, recycling the buffer if needed.
+    fn finalize_entry<F, E>(
         &self,
-        entry: &Arc<CommandBufferEntry>,
-    ) -> Result<ComputeCommandEncoder, MetalKernelError> {
+        entry: Arc<CommandBufferEntry>,
+        create_encoder: F,
+    ) -> Result<E, MetalKernelError>
+    where
+        F: FnOnce(&mut CommandBuffer) -> E,
+    {
         let encoder = {
             let mut cb = entry.command_buffer.lock().map_err(|_| {
                 MetalKernelError::FailedToCreateResource(
@@ -145,34 +140,7 @@ impl CommandBufferPool {
             })?;
 
             let count = entry.compute_count.load(Ordering::Relaxed);
-            if count >= self.compute_per_buffer {
-                // Commit current buffer and create new one
-                cb.commit();
-                let new_cb =
-                    create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
-                *cb = new_cb;
-                entry.compute_count.store(0, Ordering::Relaxed);
-            }
-
-            entry.compute_count.fetch_add(1, Ordering::Relaxed);
-            cb.compute_command_encoder()
-        };
-
-        Ok(encoder)
-    }
-
-    fn finalize_blit_entry(
-        &self,
-        entry: &Arc<CommandBufferEntry>,
-    ) -> Result<BlitCommandEncoder, MetalKernelError> {
-        let encoder = {
-            let mut cb = entry.command_buffer.lock().map_err(|_| {
-                MetalKernelError::FailedToCreateResource(
-                    "Command buffer mutex poisoned".to_string(),
-                )
-            })?;
-
-            let count = entry.compute_count.load(Ordering::Relaxed);
+            // Recycle: commit and create fresh buffer if limit reached
             if count >= self.compute_per_buffer {
                 cb.commit();
                 let new_cb =
@@ -182,12 +150,42 @@ impl CommandBufferPool {
             }
 
             entry.compute_count.fetch_add(1, Ordering::Relaxed);
-            cb.blit_command_encoder()
+            create_encoder(&mut cb)
         };
 
         Ok(encoder)
     }
 
+    /// Flushes all buffers and waits for their completion.
+    pub fn flush_and_wait(&self) -> Result<(), MetalKernelError> {
+        for entry in &self.pool {
+            let pending_count = entry.compute_count.load(Ordering::Relaxed);
+
+            if pending_count > 0 {
+                let _guard = entry
+                    .semaphore
+                    .wait_until(|s| matches!(s, CommandStatus::Available));
+
+                let mut cb = entry.command_buffer.lock().map_err(|_| {
+                    MetalKernelError::FailedToCreateResource(
+                        "Command buffer mutex poisoned".to_string(),
+                    )
+                })?;
+
+                cb.commit();
+                cb.wait_until_completed();
+
+                let new_cb =
+                    create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
+                *cb = new_cb;
+                entry.compute_count.store(0, Ordering::Relaxed);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Flushes all buffers without waiting for completion.
     pub fn flush(&self) -> Result<(), MetalKernelError> {
         for entry in &self.pool {
             self.flush_entry(entry)?;
@@ -195,40 +193,14 @@ impl CommandBufferPool {
         Ok(())
     }
 
-    pub fn flush_and_wait(&self) -> Result<(), MetalKernelError> {
-        for entry in &self.pool {
-            let pending_count = entry.compute_count.load(Ordering::Relaxed);
-
-            if pending_count > 0 {
-                let mut cb = entry.command_buffer.lock().map_err(|_| {
-                    MetalKernelError::FailedToCreateResource(
-                        "Command buffer mutex poisoned".to_string(),
-                    )
-                })?;
-
-                // Commit and wait for completion
-                cb.commit();
-                cb.wait_until_completed();
-
-                // Create fresh buffer and reset state
-                let new_cb =
-                    create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
-                *cb = new_cb;
-                entry.compute_count.store(0, Ordering::Relaxed);
-                drop(cb);
-
-                // Reset status to available
-                entry.semaphore.set_status(CommandStatus::Available);
-            }
-        }
-
-        Ok(())
-    }
-
     fn flush_entry(&self, entry: &Arc<CommandBufferEntry>) -> Result<(), MetalKernelError> {
         let pending_count = entry.compute_count.load(Ordering::Relaxed);
 
         if pending_count > 0 {
+            let _guard = entry
+                .semaphore
+                .wait_until(|s| matches!(s, CommandStatus::Available));
+
             let mut cb = entry.command_buffer.lock().map_err(|_| {
                 MetalKernelError::FailedToCreateResource(
                     "Command buffer mutex poisoned".to_string(),
@@ -236,7 +208,6 @@ impl CommandBufferPool {
             })?;
 
             cb.commit();
-            // Create a new command buffer to replace the committed one
             let new_cb = create_command_buffer(&self.command_queue, Arc::clone(&entry.semaphore))?;
             *cb = new_cb;
             entry.compute_count.store(0, Ordering::Relaxed);
