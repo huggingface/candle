@@ -57,6 +57,8 @@ pub mod cpu;
 pub mod cpu_backend;
 #[cfg(feature = "cuda")]
 pub mod cuda_backend;
+#[cfg(feature = "cuda")]
+pub use cudarc::driver::PinnedHostSlice;
 mod custom_op;
 mod device;
 pub mod display;

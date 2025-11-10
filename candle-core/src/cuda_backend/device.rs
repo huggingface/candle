@@ -2,13 +2,13 @@ use crate::backend::BackendDevice;
 use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 pub use candle_kernels as kernels;
 pub use cudarc;
-use cudarc::driver::CudaFunction;
+use cudarc::driver::{CudaFunction, PinnedHostSlice};
 use float8::F8E4M3;
 use half::{bf16, f16};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use super::{CudaError, CudaStorage, CudaStorageSlice, WrapErr};
+use super::{CudaDType, CudaError, CudaStorage, CudaStorageSlice, WrapErr};
 
 /// Unique identifier for cuda devices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -102,6 +102,34 @@ impl CudaDevice {
         src: &Src,
     ) -> Result<cudarc::driver::CudaSlice<T>> {
         self.stream.memcpy_stod(src).w()
+    }
+
+    pub fn storage_from_pinned_slice<T: CudaDType + cudarc::driver::DeviceRepr>(
+        &self,
+        src: &PinnedHostSlice<T>,
+    ) -> Result<CudaStorage> {
+        let data = self.memcpy_stod(src)?;
+        Ok(CudaStorage::wrap_cuda_slice(data, self.clone()))
+    }
+
+    pub fn memcpy_dtoh<
+        T: cudarc::driver::DeviceRepr,
+        Src: cudarc::driver::DevicePtr<T>,
+        Dst: cudarc::driver::HostSlice<T> + ?Sized,
+    >(
+        &self,
+        src: &Src,
+        dst: &mut Dst,
+    ) -> Result<()> {
+        self.stream.memcpy_dtoh(src, dst).w()
+    }
+
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe fn alloc_pinned<T: cudarc::driver::DeviceRepr>(
+        &self,
+        len: usize,
+    ) -> Result<PinnedHostSlice<T>> {
+        self.context.alloc_pinned::<T>(len).w()
     }
 }
 

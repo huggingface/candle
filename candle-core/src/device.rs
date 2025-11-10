@@ -1,5 +1,7 @@
 use crate::backend::BackendDevice;
 use crate::cpu_backend::CpuDevice;
+#[cfg(feature = "cuda")]
+use crate::PinnedHostSlice;
 use crate::{CpuStorage, DType, Result, Shape, Storage, WithDType};
 
 /// A `DeviceLocation` represents a physical device whereas multiple `Device`
@@ -257,6 +259,37 @@ impl Device {
 
     pub fn new_metal(ordinal: usize) -> Result<Self> {
         Ok(Self::Metal(crate::MetalDevice::new(ordinal)?))
+    }
+
+    #[cfg(feature = "cuda")]
+    pub unsafe fn cuda_alloc_pinned<
+        T: crate::cuda_backend::CudaDType + cudarc::driver::DeviceRepr,
+    >(
+        &self,
+        len: usize,
+    ) -> Result<PinnedHostSlice<T>> {
+        match self {
+            Device::Cuda(device) => device.alloc_pinned(len),
+            _ => crate::bail!("pinned host allocations require a cuda device"),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    pub fn storage_from_pinned_host<
+        T: crate::cuda_backend::CudaDType + cudarc::driver::DeviceRepr,
+    >(
+        &self,
+        pinned: &PinnedHostSlice<T>,
+    ) -> Result<Storage> {
+        match self {
+            Device::Cuda(device) => {
+                let storage = device.storage_from_pinned_slice(pinned)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Device::Cpu | Device::Metal(_) => {
+                crate::bail!("pinned host storage is only available with cuda devices")
+            }
+        }
     }
 
     pub fn set_seed(&self, seed: u64) -> Result<()> {

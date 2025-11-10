@@ -4,6 +4,8 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BackpropOp, BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::scalar::TensorOrScalar;
 use crate::shape::{Dim, Dims, ShapeWithOneHole};
+#[cfg(feature = "cuda")]
+use crate::PinnedHostSlice;
 use crate::{bail, storage::Storage, DType, Device, Error, Layout, Result, Shape};
 use std::sync::{Arc, RwLock};
 
@@ -527,6 +529,21 @@ impl Tensor {
         Ok(from_storage(storage, shape, none, false))
     }
 
+    #[cfg(feature = "cuda")]
+    pub fn from_pinned_host<
+        S: ShapeWithOneHole,
+        T: crate::WithDType + crate::cuda_backend::CudaDType + cudarc::driver::DeviceRepr,
+    >(
+        pinned: &PinnedHostSlice<T>,
+        shape: S,
+        device: &Device,
+    ) -> Result<Self> {
+        let shape = shape.into_shape(pinned.len())?;
+        let storage = device.storage_from_pinned_host(pinned)?;
+        let none = BackpropOp::none();
+        Ok(from_storage(storage, shape, none, false))
+    }
+
     pub(crate) fn same_shape_binary_op(&self, rhs: &Self, op: &'static str) -> Result<&Shape> {
         let lhs = self.shape();
         let rhs = rhs.shape();
@@ -546,6 +563,41 @@ impl Tensor {
     /// a variable or if it has some variable as dependencies.
     pub fn track_op(&self) -> bool {
         self.is_variable || self.op.is_some()
+    }
+
+    #[cfg(feature = "cuda")]
+    pub fn copy_to_pinned_host<
+        T: crate::WithDType + crate::cuda_backend::CudaDType + cudarc::driver::DeviceRepr,
+    >(
+        &self,
+        dst: &mut PinnedHostSlice<T>,
+    ) -> Result<()> {
+        if !self.device().is_cuda() {
+            bail!("copy_to_pinned_host requires a cuda tensor");
+        }
+        if self.dtype() != T::DTYPE {
+            bail!(
+                "copy_to_pinned_host dtype mismatch: tensor {:?} vs destination {:?}",
+                self.dtype(),
+                T::DTYPE
+            );
+        }
+        if self.elem_count() != dst.len() {
+            bail!(
+                "copy_to_pinned_host length mismatch: tensor {} vs destination {}",
+                self.elem_count(),
+                dst.len()
+            );
+        }
+        let storage = self.storage.read().unwrap();
+        match &*storage {
+            Storage::Cuda(storage) => {
+                let slice = T::as_cuda_slice(storage)?;
+                storage.device().memcpy_dtoh(slice, dst)?;
+                Ok(())
+            }
+            _ => bail!("copy_to_pinned_host requires a cuda tensor"),
+        }
     }
 
     /// Creates a fresh tensor structure based on a storage and a shape.
