@@ -1,10 +1,11 @@
 use super::*;
-use crate::metal::{create_command_buffer, CommandBufferPool, CommandSemaphore};
+use crate::metal::{create_command_buffer, CommandSemaphore, Commands};
 use core::ffi::c_void;
 use half::{bf16, f16};
 use rand::prelude::SliceRandom;
 use rand::{rng, Rng};
 use std::sync::Arc;
+use std::thread;
 
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     let ptr = buffer.contents() as *const T;
@@ -2422,44 +2423,71 @@ fn const_fill() {
 }
 
 #[test]
-fn test_pool_creation() {
+fn commands_creation_and_encoder() {
     let device = Device::system_default().unwrap();
     let queue = device.new_command_queue().unwrap();
-    let pool = CommandBufferPool::new(queue, 5, 50).unwrap();
-    let encoder = pool.acquire_compute_encoder();
-    assert!(encoder.is_ok());
+    let commands = Commands::new(queue).unwrap();
+
+    let (_flush, encoder) = commands.command_encoder().unwrap();
+    drop(encoder);
 }
 
 #[test]
-fn test_pool_zero_size_fails() {
+fn commands_rotation_threshold() {
+    std::env::set_var("CANDLE_METAL_COMPUTE_PER_BUFFER", "2");
+
     let device = Device::system_default().unwrap();
     let queue = device.new_command_queue().unwrap();
-    let result = CommandBufferPool::new(queue, 0, 50);
-    assert!(result.is_err());
-}
+    let commands = Commands::new(queue).unwrap();
 
-#[test]
-fn test_encoder_acquisition() {
-    let device = Device::system_default().unwrap();
-    let queue = device.new_command_queue().unwrap();
-    let pool = Arc::new(CommandBufferPool::new(queue, 3, 50).unwrap());
-
-    for _ in 0..10 {
-        let encoder = pool.acquire_compute_encoder().unwrap();
+    let mut flush_count = 0;
+    for _ in 0..6 {
+        let (flush, encoder) = commands.command_encoder().unwrap();
+        flush_count += flush as usize;
         drop(encoder);
     }
+
+    assert!(flush_count >= 2);
 }
 
 #[test]
-fn commands_wait_flushes_pool() {
+fn commands_wait_flushes_all() {
+    std::env::set_var("CANDLE_METAL_COMPUTE_PER_BUFFER", "2");
+
     let device = Device::system_default().unwrap();
     let queue = device.new_command_queue().unwrap();
-    let cmds = crate::metal::Commands::new(queue).unwrap();
+    let commands = Commands::new(queue).unwrap();
 
     for _ in 0..10 {
-        let (_dirty, enc) = cmds.command_encoder().unwrap();
-        drop(enc);
+        let (_flush, encoder) = commands.command_encoder().unwrap();
+        drop(encoder);
     }
 
-    cmds.wait_until_completed().unwrap();
+    commands.wait_until_completed().unwrap();
+}
+
+#[test]
+fn commands_concurrent_acquisition() {
+    std::env::set_var("CANDLE_METAL_COMPUTE_PER_BUFFER", "2");
+    std::env::set_var("CANDLE_METAL_COMMAND_POOL_SIZE", "4");
+
+    let device = Device::system_default().unwrap();
+    let queue = device.new_command_queue().unwrap();
+    let commands = Arc::new(Commands::new(queue).unwrap());
+
+    let mut handles = vec![];
+
+    for _ in 0..16 {
+        let c = Arc::clone(&commands);
+        handles.push(thread::spawn(move || {
+            let (_flush, encoder) = c.command_encoder().unwrap();
+            drop(encoder);
+        }));
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    commands.wait_until_completed().unwrap();
 }
