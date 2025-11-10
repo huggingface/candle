@@ -276,7 +276,7 @@ impl Device {
 
     #[cfg(feature = "cuda")]
     pub fn storage_from_pinned_host<
-        T: crate::cuda_backend::CudaDType + cudarc::driver::DeviceRepr,
+        T: crate::WithDType + crate::cuda_backend::CudaDType + cudarc::driver::DeviceRepr,
     >(
         &self,
         pinned: &PinnedHostSlice<T>,
@@ -286,8 +286,12 @@ impl Device {
                 let storage = device.storage_from_pinned_slice(pinned)?;
                 Ok(Storage::Cuda(storage))
             }
-            Device::Cpu | Device::Metal(_) => {
-                crate::bail!("pinned host storage is only available with cuda devices")
+            Device::Cpu => {
+                let cpu_storage = T::to_cpu_storage(&*pinned);
+                Ok(Storage::Cpu(cpu_storage))
+            }
+            Device::Metal(_) => {
+                crate::bail!("pinned host storage is only available with cuda or cpu devices")
             }
         }
     }

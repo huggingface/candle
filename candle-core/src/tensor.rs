@@ -530,6 +530,23 @@ impl Tensor {
     }
 
     #[cfg(feature = "cuda")]
+    /// Creates a 1-D tensor from a pinned host slice.
+    ///
+    /// This is equivalent to calling [`Tensor::from_pinned_host`] with a shape that matches the
+    /// slice length.
+    pub fn new_pinned<
+        T: crate::WithDType + crate::cuda_backend::CudaDType + cudarc::driver::DeviceRepr,
+    >(
+        pinned: &PinnedHostSlice<T>,
+        device: &Device,
+    ) -> Result<Self> {
+        let shape = Shape::from(pinned.len());
+        let storage = device.storage_from_pinned_host(pinned)?;
+        let none = BackpropOp::none();
+        Ok(from_storage(storage, shape, none, false))
+    }
+
+    #[cfg(feature = "cuda")]
     pub fn from_pinned_host<
         S: ShapeWithOneHole,
         T: crate::WithDType + crate::cuda_backend::CudaDType + cudarc::driver::DeviceRepr,

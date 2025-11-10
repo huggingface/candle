@@ -35,4 +35,3 @@ fn cuda_pinned_tensor_roundtrip() -> Result<()> {
 
     Ok(())
 }
-
