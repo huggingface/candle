@@ -249,7 +249,7 @@ impl Commands {
             MTLCommandBufferStatus::Error => {
                 let msg = cb
                     .error()
-                    .map(|e| e.into_owned())
+                    .map(|e| e.to_string())
                     .unwrap_or_else(|| "unknown error".to_string());
                 return Err(MetalKernelError::CommandBufferError(msg));
             }
