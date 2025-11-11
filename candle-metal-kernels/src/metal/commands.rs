@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 pub type CommandQueue = Retained<ProtocolObject<dyn MTLCommandQueue>>;
 
 const DEFAULT_CANDLE_METAL_COMPUTE_PER_BUFFER: usize = 50;
-const DEFAULT_CANDLE_METAL_COMMAND_POOL_SIZE: usize = 50;
+const DEFAULT_CANDLE_METAL_COMMAND_POOL_SIZE: usize = 5;
 
 /// Creates a new command buffer from the queue with an attached semaphore for tracking its state.
 pub fn create_command_buffer(

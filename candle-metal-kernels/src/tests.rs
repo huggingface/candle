@@ -2448,21 +2448,9 @@ fn commands_rotation_threshold() {
     }
 
     assert!(flush_count >= 2);
-}
 
-#[test]
-fn commands_wait_flushes_all() {
-    std::env::set_var("CANDLE_METAL_COMPUTE_PER_BUFFER", "2");
-
-    let device = Device::system_default().unwrap();
-    let queue = device.new_command_queue().unwrap();
-    let commands = Commands::new(queue).unwrap();
-
-    for _ in 0..10 {
-        let (_flush, encoder) = commands.command_encoder().unwrap();
-        drop(encoder);
-    }
-
+    // Flushes pending work and blocks until all in‑flight command buffers complete.
+    // Ensures completion and surfaces any GPU errors before the test ends.
     commands.wait_until_completed().unwrap();
 }
 
