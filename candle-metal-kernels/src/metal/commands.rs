@@ -126,11 +126,11 @@ impl Commands {
             }
         }
 
-        // Phase 2: Select the buffer with the least work and wait for it
+        // Phase 2: Select the buffer with the most work and wait for it
         let entry = self
             .pool
             .iter()
-            .min_by_key(|e| e.compute_count.load(Ordering::Acquire))
+            .max_by_key(|e| e.compute_count.load(Ordering::Acquire))
             .ok_or(MetalKernelError::FailedToCreateResource(
                 "Command buffer pool is empty".to_string(),
             ))?;
