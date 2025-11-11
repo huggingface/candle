@@ -147,8 +147,8 @@ impl candle::CustomOp1 for Sigmoid {
         let shape = layout.shape();
         let el_count = shape.elem_count();
         let buffer = device.new_buffer(el_count, dtype, "sigmoid")?;
-        let command_buffer = device.command_buffer()?;
-        command_buffer.set_label("sigmoid");
+        let encoder = device.command_encoder()?;
+        encoder.set_label("sigmoid");
         let src = candle_metal_kernels::BufferOffset {
             buffer: storage.buffer(),
             offset_in_bytes: layout.start_offset() * storage.dtype().size_in_bytes(),
@@ -169,7 +169,7 @@ impl candle::CustomOp1 for Sigmoid {
                 };
                 candle_metal_kernels::call_unary_contiguous_tiled(
                     device.metal_device(),
-                    &command_buffer,
+                    &encoder,
                     device.kernels(),
                     kernel_name,
                     el_count,
@@ -190,7 +190,7 @@ impl candle::CustomOp1 for Sigmoid {
                 };
                 candle_metal_kernels::call_unary_contiguous(
                     device.metal_device(),
-                    &command_buffer,
+                    &encoder,
                     device.kernels(),
                     kernel_name,
                     el_count,
@@ -212,7 +212,7 @@ impl candle::CustomOp1 for Sigmoid {
                 let dst = candle_metal_kernels::BufferOffset::zero_offset(&buffer);
                 candle_metal_kernels::call_unary_strided(
                     device.metal_device(),
-                    &command_buffer,
+                    &encoder,
                     device.kernels(),
                     kernel_name,
                     layout.dims(),
@@ -415,7 +415,8 @@ impl candle::CustomOp1 for SoftmaxLastDim {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = storage.device();
-        let command_buffer = device.command_buffer()?;
+        let encoder = device.command_encoder()?;
+        encoder.set_label("softmax");
         let kernels = device.kernels();
         let name = match storage.dtype() {
             DType::F32 => "softmax_f32",
@@ -434,7 +435,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         let output = device.new_buffer(elem_count, storage.dtype(), "softmax")?;
         candle_metal_kernels::call_last_softmax(
             device.metal_device(),
-            &command_buffer,
+            &encoder,
             kernels,
             name,
             elem_count,
@@ -606,7 +607,8 @@ impl candle::CustomOp2 for RmsNorm {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = s1.device();
-        let command_buffer = device.command_buffer()?;
+        let encoder = device.command_encoder()?;
+        encoder.set_label("rmsnorm");
         let kernels = device.kernels();
         let name = match (s1.dtype(), s2.dtype()) {
             (DType::F32, DType::F32) => "rmsnorm_f32",
@@ -624,7 +626,7 @@ impl candle::CustomOp2 for RmsNorm {
         let output = device.new_buffer(elem_count, s1.dtype(), "rmsnorm")?;
         candle_metal_kernels::call_rms_norm(
             device.metal_device(),
-            &command_buffer,
+            &encoder,
             kernels,
             name,
             elem_count,
@@ -848,7 +850,8 @@ impl candle::CustomOp3 for LayerNorm {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = s1.device();
-        let command_buffer = device.command_buffer()?;
+        let encoder = device.command_encoder()?;
+        encoder.set_label("layernorm");
         let kernels = device.kernels();
         let name = match (s1.dtype(), s2.dtype(), s3.dtype()) {
             (DType::F32, DType::F32, DType::F32) => "layernorm_f32",
@@ -868,7 +871,7 @@ impl candle::CustomOp3 for LayerNorm {
         let output = device.new_buffer(elem_count, s1.dtype(), "layernorm")?;
         candle_metal_kernels::call_layer_norm(
             device.metal_device(),
-            &command_buffer,
+            &encoder,
             kernels,
             name,
             elem_count,
@@ -1087,7 +1090,7 @@ impl candle::CustomOp3 for Sdpa {
             other => candle::bail!("unsupported sdpa type {other:?}"),
         };
 
-        let command_buffer = q.device().command_buffer()?;
+        let encoder = q.device().command_encoder()?;
         if supports_sdpa_vector {
             // Route to the 2 pass fused attention if the k seqlen is large.
             // https://github.com/ml-explore/mlx/pull/1597
@@ -1116,10 +1119,10 @@ impl candle::CustomOp3 for Sdpa {
                     "sdpa_2pass_maxs",
                 )?;
 
-                command_buffer.set_label("vector_attention");
+                encoder.set_label("vector_attention");
                 candle_metal_kernels::call_sdpa_vector_2pass(
                     q.device().device(),
-                    &command_buffer,
+                    &encoder,
                     q.device().kernels(),
                     q_l.start_offset(),
                     q_l.dims(),
@@ -1141,10 +1144,10 @@ impl candle::CustomOp3 for Sdpa {
                 )
                 .map_err(candle::Error::wrap)?;
             } else {
-                command_buffer.set_label("vector_attention");
+                encoder.set_label("vector_attention");
                 candle_metal_kernels::call_sdpa_vector(
                     q.device().device(),
-                    &command_buffer,
+                    &encoder,
                     q.device().kernels(),
                     q_l.start_offset(),
                     q_l.dims(),
@@ -1170,10 +1173,10 @@ impl candle::CustomOp3 for Sdpa {
                 )
             }
 
-            command_buffer.set_label("full_attention");
+            encoder.set_label("full_attention");
             candle_metal_kernels::call_sdpa_full(
                 q.device().device(),
-                &command_buffer,
+                &encoder,
                 q.device().kernels(),
                 q_l.start_offset(),
                 q_l.dims(),

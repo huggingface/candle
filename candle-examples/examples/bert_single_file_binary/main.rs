@@ -175,11 +175,9 @@ fn main() -> Result<()> {
 }
 
 pub fn build_model_and_tokenizer_from_bytes(device: &Device) -> Result<(BertModel, Tokenizer)> {
-    let config_data = include_bytes!("../../single-file-binary-builder/files/config.json");
-
-    let tokenizer_data = include_bytes!("../../single-file-binary-builder/files/tokenizer.json");
-
-    let weights_data = include_bytes!("../../single-file-binary-builder/files/model.safetensors");
+    let config_data = include_bytes!(env!("CANDLE_BUILDTIME_MODEL_CONFIG"));
+    let tokenizer_data = include_bytes!(env!("CANDLE_BUILDTIME_MODEL_TOKENIZER"));
+    let weights_data = include_bytes!(env!("CANDLE_BUILDTIME_MODEL_WEIGHTS"));
 
     let config_string = std::str::from_utf8(config_data)?;
     let config: BertConfig = serde_json::from_str(config_string)?;
