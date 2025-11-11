@@ -270,7 +270,7 @@ impl DinoVisionTransformer {
         let n = self.pos_embed.dim(1)? - 1;
         let sqrt_n = (n as f64).sqrt();
         if npatch == n && w == h {
-            return Ok(xs.clone());
+            return Ok(self.pos_embed.clone());
         }
         let class_pos_embed = self.pos_embed.i((.., ..1))?;
         let patch_pos_embed = self.pos_embed.i((.., 1..))?;
