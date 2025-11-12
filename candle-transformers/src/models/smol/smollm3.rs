@@ -463,7 +463,7 @@ impl ModelForCausalLM {
             .narrow(1, l - 1, 1)?
             .apply(&self.lm_head)
     }
-
+    
     pub fn clear_kv_cache(&mut self) {
         self.base.clear_kv_cache();
     }
