@@ -19,6 +19,7 @@ candle-flash-attn = { workspace = true, optional = true }
 candle-onnx = { workspace = true, optional = true }
 
 csv = "1.3.0"
+crono = "0.4.0"
 cudarc = { workspace = true, optional = true }
 half = { workspace = true, optional = true }
 hf-hub = { workspace = true, features = ["tokio"] }
