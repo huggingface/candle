@@ -63,5 +63,5 @@
 //! - [SmolLM3 Model Card](https://huggingface.co/HuggingFaceTB/SmolLM3-3B)
 //! - [NoPE Paper](https://arxiv.org/abs/2410.01926)
 
-pub mod smollm3;
 pub mod quantized_smollm3;
+pub mod smollm3;

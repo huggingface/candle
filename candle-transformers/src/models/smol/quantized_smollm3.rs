@@ -1,11 +1,11 @@
-use candle::{DType, Device, Module, Result, Tensor};
-use candle_nn::Activation;
-use candle::quantized::gguf_file;
-use crate::quantized_var_builder::VarBuilder;
-use std::sync::Arc;
-use std::io::Write;
 use crate::models::with_tracing::QMatMul;
+use crate::quantized_var_builder::VarBuilder;
+use candle::quantized::gguf_file;
+use candle::{DType, Device, Module, Result, Tensor};
 use candle_nn::kv_cache::KvCache;
+use candle_nn::Activation;
+use std::io::Write;
+use std::sync::Arc;
 
 const MAX_SEQ_LEN: usize = 4096;
 use candle::IndexOp;
@@ -82,17 +82,23 @@ impl QuantizedConfig {
 
         // Helper to get required metadata
         let get_u32 = |key: &str| -> Result<usize> {
-            metadata.get(key)
+            metadata
+                .get(key)
                 .and_then(|v| v.to_u32().ok())
                 .map(|v| v as usize)
-                .ok_or_else(|| candle::Error::Msg(format!("Missing or invalid metadata key: {}", key)))
+                .ok_or_else(|| {
+                    candle::Error::Msg(format!("Missing or invalid metadata key: {}", key))
+                })
         };
 
         let get_f32 = |key: &str| -> Result<f64> {
-            metadata.get(key)
+            metadata
+                .get(key)
                 .and_then(|v| v.to_f32().ok())
                 .map(|v| v as f64)
-                .ok_or_else(|| candle::Error::Msg(format!("Missing or invalid metadata key: {}", key)))
+                .ok_or_else(|| {
+                    candle::Error::Msg(format!("Missing or invalid metadata key: {}", key))
+                })
         };
 
         Ok(Self {
@@ -174,7 +180,12 @@ impl RotaryEmbedding {
         })
     }
 
-    pub fn apply_rotary_emb(&self, q: &Tensor, k: &Tensor, offset: usize) -> Result<(Tensor, Tensor)> {
+    pub fn apply_rotary_emb(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        offset: usize,
+    ) -> Result<(Tensor, Tensor)> {
         let (_, _, seq_len, _) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?;
         let sin = self.sin.narrow(0, offset, seq_len)?;
@@ -265,7 +276,7 @@ impl QuantizedAttention {
         let q_weight = q_weight.to_device(device)?; // Move to GPU
 
         // Re-quantize (now on GPU)
-        use candle::quantized::{QTensor, GgmlDType};
+        use candle::quantized::{GgmlDType, QTensor};
         let q_weight_qtensor = QTensor::quantize(&q_weight, GgmlDType::Q8_0)?;
         drop(q_weight_raw); // Explicitly free CPU memory
         drop(q_weight);
@@ -298,21 +309,22 @@ impl QuantizedAttention {
         })
     }
 
-    fn forward(
-        &mut self,
-        x: &Tensor,
-        mask: Option<&Tensor>,
-        offset: usize,
-    ) -> Result<Tensor> {
+    fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         let (b, seq_len, _) = x.dims3()?;
 
-        let q = self.q_proj.forward(x)?
+        let q = self
+            .q_proj
+            .forward(x)?
             .reshape((b, seq_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let k = self.k_proj.forward(x)?
+        let k = self
+            .k_proj
+            .forward(x)?
             .reshape((b, seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let v = self.v_proj.forward(x)?
+        let v = self
+            .v_proj
+            .forward(x)?
             .reshape((b, seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
@@ -375,22 +387,21 @@ impl QuantizedDecoderLayer {
             self_attn: QuantizedAttention::new(attn_vb.clone(), cfg, layer_idx, rotary_emb)?,
             mlp: QuantizedMLP::new(attn_vb.clone(), layer_idx)?,
             input_layernorm: RmsNorm::new(
-                attn_vb.get_no_shape("attn_norm.weight")?.dequantize(vb.device())?,
+                attn_vb
+                    .get_no_shape("attn_norm.weight")?
+                    .dequantize(vb.device())?,
                 cfg.rms_norm_eps,
             ),
             post_attention_layernorm: RmsNorm::new(
-                attn_vb.get_no_shape("ffn_norm.weight")?.dequantize(vb.device())?,
+                attn_vb
+                    .get_no_shape("ffn_norm.weight")?
+                    .dequantize(vb.device())?,
                 cfg.rms_norm_eps,
             ),
         })
     }
 
-    fn forward(
-        &mut self,
-        x: &Tensor,
-        mask: Option<&Tensor>,
-        offset: usize,
-    ) -> Result<Tensor> {
+    fn forward(&mut self, x: &Tensor, mask: Option<&Tensor>, offset: usize) -> Result<Tensor> {
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
         let x = self.self_attn.forward(&x, mask, offset)?;
@@ -419,7 +430,7 @@ pub struct QuantizedModelForCausalLM {
 
 impl QuantizedModelForCausalLM {
     pub fn from_gguf<P: AsRef<std::path::Path>>(path: P, device: &Device) -> Result<Self> {
-        use candle::quantized::{QTensor, GgmlDType};
+        use candle::quantized::{GgmlDType, QTensor};
 
         // Open file once to read metadata
         let mut file = std::fs::File::open(path.as_ref())?;
@@ -437,14 +448,9 @@ impl QuantizedModelForCausalLM {
         let embed_tokens = candle_nn::Embedding::new(embed_tensor_gpu, config.hidden_size);
 
         // Create rotary embedding if needed
-        let needs_rope = (0..config.num_hidden_layers)
-            .any(|i| !config.should_skip_rope(i));
+        let needs_rope = (0..config.num_hidden_layers).any(|i| !config.should_skip_rope(i));
         let rotary_emb = if needs_rope {
-            Some(Arc::new(RotaryEmbedding::new(
-                DType::F32,
-                &config,
-                device,
-            )?))
+            Some(Arc::new(RotaryEmbedding::new(DType::F32, &config, device)?))
         } else {
             None
         };
@@ -454,7 +460,11 @@ impl QuantizedModelForCausalLM {
         println!("Loading {} decoder layers...", config.num_hidden_layers);
         for layer_idx in 0..config.num_hidden_layers {
             if layer_idx % 4 == 0 || layer_idx == config.num_hidden_layers - 1 {
-                print!("  Layer {}/{}...\r", layer_idx + 1, config.num_hidden_layers);
+                print!(
+                    "  Layer {}/{}...\r",
+                    layer_idx + 1,
+                    config.num_hidden_layers
+                );
                 std::io::stdout().flush().ok();
             }
             layers.push(QuantizedDecoderLayer::new(
@@ -464,7 +474,10 @@ impl QuantizedModelForCausalLM {
                 rotary_emb.clone(),
             )?);
         }
-        println!("  Layer {}/{} - Done!    ", config.num_hidden_layers, config.num_hidden_layers);
+        println!(
+            "  Layer {}/{} - Done!    ",
+            config.num_hidden_layers, config.num_hidden_layers
+        );
 
         // Load output norm
         let norm = RmsNorm::new(

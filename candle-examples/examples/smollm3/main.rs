@@ -47,7 +47,7 @@ impl SmolLM3Model {
                     num_attention_heads: cfg.num_attention_heads,
                     num_key_value_heads: cfg.num_key_value_heads,
                     rope_theta: cfg.rope_theta as f32, // Convert f64 to f32
-                    eos_token_id: Some(128012), // Default SmolLM3 EOS
+                    eos_token_id: Some(128012),        // Default SmolLM3 EOS
                     no_rope_layers: None,
                     no_rope_layer_interval: None,
                 }
@@ -61,7 +61,10 @@ impl SmolLM3Model {
                     num_key_value_heads: cfg.num_key_value_heads,
                     rope_theta: cfg.rope_theta as f32, // Convert f64 to f32
                     eos_token_id: cfg.eos_token_id,
-                    no_rope_layers: cfg.no_rope_layers.as_ref().map(|v| v.iter().map(|&x| x as u32).collect()), // Convert Vec<usize> to Vec<u32>
+                    no_rope_layers: cfg
+                        .no_rope_layers
+                        .as_ref()
+                        .map(|v| v.iter().map(|&x| x as u32).collect()), // Convert Vec<usize> to Vec<u32>
                     no_rope_layer_interval: cfg.no_rope_layer_interval,
                 }
             }
@@ -313,13 +316,17 @@ fn format_prompt(prompt: &str, use_chat_template: bool, enable_thinking: bool) -
         let today_date = now.format("%d %B %Y").to_string();
 
         // Set reasoning mode based on thinking flag
-        let reasoning_mode = if enable_thinking { "/think" } else { "/no_think" };
+        let reasoning_mode = if enable_thinking {
+            "/think"
+        } else {
+            "/no_think"
+        };
 
         // Build the assistant start with or without thinking tags
         let assistant_start = if enable_thinking {
-            "<|im_start|>assistant\n<think>\n"  // Open for reasoning
+            "<|im_start|>assistant\n<think>\n" // Open for reasoning
         } else {
-            "<|im_start|>assistant\n<think>\n\n</think>\n"  // Empty = skip reasoning
+            "<|im_start|>assistant\n<think>\n\n</think>\n" // Empty = skip reasoning
         };
 
         format!(
@@ -337,10 +344,7 @@ You are a helpful AI assistant named SmolLM, trained by Hugging Face.\n\
 <|im_start|>user\n\
 {}<|im_end|>\n\
 {}",
-            today_date,
-            reasoning_mode,
-            prompt,
-            assistant_start
+            today_date, reasoning_mode, prompt, assistant_start
         )
     } else {
         prompt.to_string()
@@ -381,8 +385,22 @@ fn run_generation(
 
     println!("\n=== Generation Settings ===");
     println!("Model type: {:?}", args.model_type);
-    println!("Chat template: {}", if use_chat_template { "enabled" } else { "disabled" });
-    println!("Thinking mode: {}", if args.thinking { "enabled (/think)" } else { "disabled (/no_think)" });
+    println!(
+        "Chat template: {}",
+        if use_chat_template {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    println!(
+        "Thinking mode: {}",
+        if args.thinking {
+            "enabled (/think)"
+        } else {
+            "disabled (/no_think)"
+        }
+    );
     println!("Raw prompt: {}", prompt_str);
 
     // Encode prompt

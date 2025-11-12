@@ -36,7 +36,6 @@ pub struct Config {
 }
 
 impl Config {
-
     pub fn should_skip_rope(&self, layer_idx: usize) -> bool {
         // Method 1: Explicit array (some model variants may provide this)
         if let Some(ref no_rope_layers) = self.no_rope_layers {
@@ -112,9 +111,24 @@ impl SmolLM3MLP {
     pub(crate) fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let mlp_bias = cfg.mlp_bias.unwrap_or(false);
         Ok(Self {
-            gate_proj: linear_b(cfg.hidden_size, cfg.intermediate_size, mlp_bias, vb.pp("gate_proj"))?,
-            up_proj: linear_b(cfg.hidden_size, cfg.intermediate_size, mlp_bias, vb.pp("up_proj"))?,
-            down_proj: linear_b(cfg.intermediate_size, cfg.hidden_size, mlp_bias, vb.pp("down_proj"))?,
+            gate_proj: linear_b(
+                cfg.hidden_size,
+                cfg.intermediate_size,
+                mlp_bias,
+                vb.pp("gate_proj"),
+            )?,
+            up_proj: linear_b(
+                cfg.hidden_size,
+                cfg.intermediate_size,
+                mlp_bias,
+                vb.pp("up_proj"),
+            )?,
+            down_proj: linear_b(
+                cfg.intermediate_size,
+                cfg.hidden_size,
+                mlp_bias,
+                vb.pp("down_proj"),
+            )?,
             act_fn: cfg.hidden_act,
         })
     }
@@ -350,7 +364,11 @@ impl Model {
         // Only create rotary embedding if at least one layer uses RoPE
         let needs_rope = (0..cfg.num_hidden_layers).any(|i| !cfg.should_skip_rope(i));
         let rotary = if needs_rope {
-            Some(Arc::new(SmolLM3RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?))
+            Some(Arc::new(SmolLM3RotaryEmbedding::new(
+                vb.dtype(),
+                cfg,
+                vb.device(),
+            )?))
         } else {
             None
         };
@@ -444,7 +462,6 @@ impl ModelForCausalLM {
             .forward(input, offset)?
             .narrow(1, l - 1, 1)?
             .apply(&self.lm_head)
-
     }
 
     pub fn clear_kv_cache(&mut self) {
