@@ -11,7 +11,7 @@ const MAX_SEQ_LEN: usize = 4096;
 use candle::IndexOp;
 
 // ===== RECONSTRUCTION FUNCTION =====
-fn reconstruct_qk_weights(gguf_weight: &Tensor, num_heads: usize) -> Result<Tensor> {
+fn reconstruct_qk_weights(gguf_weight: &Tensor, _num_heads: usize) -> Result<Tensor> {
     let total_rows = gguf_weight.dim(0)?;
     let half_rows = total_rows / 2;
     let chunk_size = 128;

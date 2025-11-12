@@ -289,7 +289,7 @@ impl SmolLM3Attention {
 }
 
 #[derive(Debug, Clone)]
-struct DecoderLayer {
+pub(crate) struct DecoderLayer {
     self_attn: SmolLM3Attention,
     mlp: SmolLM3MLP,
     ln1: RmsNorm,
