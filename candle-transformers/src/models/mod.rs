@@ -112,6 +112,7 @@ pub mod rwkv_v6;
 pub mod segformer;
 pub mod segment_anything;
 pub mod siglip;
+pub mod smol;
 pub mod snac;
 pub mod stable_diffusion;
 pub mod stable_lm;
