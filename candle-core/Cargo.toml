@@ -34,6 +34,9 @@ thiserror = { workspace = true }
 yoke = { workspace = true }
 zip = { workspace = true }
 
+# TEAM-488: Phase 1 - ROCm support
+rocm-rs = { path = "../../rocm-rs", optional = true }
+
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
 ug = { workspace = true }
 ug-cuda = { workspace = true, optional = true }
@@ -57,6 +60,8 @@ metal = [
     "dep:candle-metal-kernels",
     "dep:ug-metal",
 ]
+# TEAM-488: Phase 1 - ROCm feature
+rocm = ["dep:rocm-rs"]
 
 [[bench]]
 name = "bench_main"

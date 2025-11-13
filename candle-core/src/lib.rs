@@ -70,6 +70,8 @@ pub mod layout;
 pub mod metal_backend;
 #[cfg(feature = "mkl")]
 mod mkl;
+#[cfg(feature = "rocm")]
+pub mod rocm_backend;
 pub mod npy;
 pub mod op;
 pub mod pickle;
@@ -117,6 +119,9 @@ pub use metal_backend::{MetalDevice, MetalError, MetalStorage};
 
 #[cfg(not(feature = "metal"))]
 pub use dummy_metal_backend::{MetalDevice, MetalError, MetalStorage};
+
+#[cfg(feature = "rocm")]
+pub use rocm_backend::{RocmDevice, RocmError, RocmStorage};
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;

@@ -9,14 +9,17 @@ pub enum DeviceLocation {
     Cpu,
     Cuda { gpu_id: usize },
     Metal { gpu_id: usize },
+    Rocm { gpu_id: usize }, // TEAM-488: Phase 1 - Added ROCm support
 }
 
-/// Cpu, Cuda, or Metal
+/// Cpu, Cuda, Metal, or ROCm
 #[derive(Debug, Clone)]
 pub enum Device {
     Cpu,
     Cuda(crate::CudaDevice),
     Metal(crate::MetalDevice),
+    #[cfg(feature = "rocm")]
+    Rocm(crate::RocmDevice), // TEAM-488: Phase 1 - Added ROCm support
 }
 
 pub trait NdArray {
@@ -240,6 +243,8 @@ impl Device {
             Self::Cuda(d) => Ok(d),
             Self::Cpu => crate::bail!("expected a cuda device, got cpu"),
             Self::Metal(_) => crate::bail!("expected a cuda device, got Metal"),
+            #[cfg(feature = "rocm")]
+            Self::Rocm(_) => crate::bail!("expected a cuda device, got ROCm"),
         }
     }
 
@@ -248,6 +253,19 @@ impl Device {
             Self::Cuda(_) => crate::bail!("expected a metal device, got cuda"),
             Self::Cpu => crate::bail!("expected a metal device, got cpu"),
             Self::Metal(d) => Ok(d),
+            #[cfg(feature = "rocm")]
+            Self::Rocm(_) => crate::bail!("expected a metal device, got ROCm"),
+        }
+    }
+
+    // TEAM-488: Phase 1 - ROCm device accessor
+    #[cfg(feature = "rocm")]
+    pub fn as_rocm_device(&self) -> Result<&crate::RocmDevice> {
+        match self {
+            Self::Rocm(d) => Ok(d),
+            Self::Cpu => crate::bail!("expected a rocm device, got cpu"),
+            Self::Cuda(_) => crate::bail!("expected a rocm device, got CUDA"),
+            Self::Metal(_) => crate::bail!("expected a rocm device, got Metal"),
         }
     }
 
@@ -259,11 +277,19 @@ impl Device {
         Ok(Self::Metal(crate::MetalDevice::new(ordinal)?))
     }
 
+    // TEAM-488: Phase 1 - ROCm device creation
+    #[cfg(feature = "rocm")]
+    pub fn new_rocm(ordinal: usize) -> Result<Self> {
+        Ok(Self::Rocm(crate::RocmDevice::new(ordinal)?))
+    }
+
     pub fn set_seed(&self, seed: u64) -> Result<()> {
         match self {
             Self::Cpu => CpuDevice.set_seed(seed),
             Self::Cuda(c) => c.set_seed(seed),
             Self::Metal(m) => m.set_seed(seed),
+            #[cfg(feature = "rocm")]
+            Self::Rocm(_) => Ok(()), // TEAM-488: ROCm seed support TODO
         }
     }
 
@@ -272,6 +298,8 @@ impl Device {
             (Self::Cpu, Self::Cpu) => true,
             (Self::Cuda(lhs), Self::Cuda(rhs)) => lhs.same_device(rhs),
             (Self::Metal(lhs), Self::Metal(rhs)) => lhs.same_device(rhs),
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(lhs), Self::Rocm(rhs)) => lhs == rhs, // TEAM-488: ROCm support
             _ => false,
         }
     }
@@ -281,6 +309,8 @@ impl Device {
             Self::Cpu => DeviceLocation::Cpu,
             Self::Cuda(device) => device.location(),
             Device::Metal(device) => device.location(),
+            #[cfg(feature = "rocm")]
+            Device::Rocm(device) => DeviceLocation::Rocm { gpu_id: device.id() }, // TEAM-488: ROCm support
         }
     }
 
@@ -296,9 +326,17 @@ impl Device {
         matches!(self, Self::Metal(_))
     }
 
+    // TEAM-488: Phase 1 - ROCm device check
+    #[cfg(feature = "rocm")]
+    pub fn is_rocm(&self) -> bool {
+        matches!(self, Self::Rocm(_))
+    }
+
     pub fn supports_bf16(&self) -> bool {
         match self {
             Self::Cuda(_) | Self::Metal(_) => true,
+            #[cfg(feature = "rocm")]
+            Self::Rocm(_) => true, // TEAM-488: ROCm supports BF16
             Self::Cpu => false,
         }
     }
@@ -323,6 +361,16 @@ impl Device {
     pub fn metal_if_available(ordinal: usize) -> Result<Self> {
         if crate::utils::metal_is_available() {
             Self::new_metal(ordinal)
+        } else {
+            Ok(Self::Cpu)
+        }
+    }
+
+    // TEAM-488: Phase 1 - ROCm availability helper
+    #[cfg(feature = "rocm")]
+    pub fn rocm_if_available(ordinal: usize) -> Result<Self> {
+        if crate::rocm_backend::is_available() {
+            Self::new_rocm(ordinal)
         } else {
             Ok(Self::Cpu)
         }
