@@ -1,6 +1,10 @@
-// candle-core/src/rocm_backend/utils.rs
-// TEAM-493: ROCm utility traits - EXACT parity with CUDA backend
-// Matches candle-core/src/cuda_backend/utils.rs
+//! ROCm utility traits
+//!
+//! Created by: TEAM-493 (Initial utility traits implementation)
+//! CUDA parity verified by: TEAM-498
+//!
+//! These traits provide type-safe dispatch for operations on storage slices.
+//! Matches cuda_backend/utils.rs pattern (EXACT parity).
 
 use crate::{Layout, Result, WithDType};
 use rocm_rs::hip::DeviceMemory;
@@ -9,8 +13,8 @@ use super::{RocmDevice, RocmError};
 
 pub type S = super::RocmStorageSlice;
 
+// TEAM-493 | CUDA parity: cuda_backend/utils.rs:10-31 (Map1 trait)
 /// Map1 trait - unary operations on storage slices
-/// MATCHES: cuda_backend/utils.rs Map1
 pub trait Map1 {
     fn f<T: WithDType>(
         &self,
@@ -34,8 +38,8 @@ pub trait Map1 {
     }
 }
 
+// TEAM-493 | CUDA parity: cuda_backend/utils.rs:33-57 (Map2 trait)
 /// Map2 trait - binary operations on storage slices
-/// MATCHES: cuda_backend/utils.rs Map2
 pub trait Map2 {
     fn f<T: WithDType>(
         &self,
@@ -62,8 +66,8 @@ pub trait Map2 {
     }
 }
 
+// TEAM-493 | CUDA parity: cuda_backend/utils.rs:59-98 (Map3 trait)
 /// Map3 trait - ternary operations on storage slices
-/// MATCHES: cuda_backend/utils.rs Map3
 pub trait Map3 {
     #[allow(clippy::too_many_arguments)]
     fn f<T: WithDType>(
@@ -105,8 +109,8 @@ pub trait Map3 {
     }
 }
 
+// TEAM-493 | CUDA parity: cuda_backend/utils.rs:100-130 (Map2InPlace trait)
 /// Map2InPlace trait - in-place binary operations
-/// MATCHES: cuda_backend/utils.rs Map2InPlace
 pub trait Map2InPlace {
     fn f<T: WithDType>(
         &self,
@@ -139,8 +143,8 @@ pub trait Map2InPlace {
     }
 }
 
+// TEAM-493 | CUDA parity: cuda_backend/utils.rs:132-154 (Map1Any trait)
 /// Map1Any trait - unary operations that can change dtype
-/// MATCHES: cuda_backend/utils.rs Map1Any
 pub trait Map1Any {
     fn f<T: WithDType, W: Fn(DeviceMemory<T>) -> S>(
         &self,
@@ -165,8 +169,8 @@ pub trait Map1Any {
     }
 }
 
+// TEAM-493 | CUDA parity: cuda_backend/utils.rs:156-180 (Map2Any trait)
 /// Map2Any trait - binary operations that can change dtype
-/// MATCHES: cuda_backend/utils.rs Map2Any
 pub trait Map2Any {
     fn f<T: WithDType>(
         &self,

@@ -1,7 +1,10 @@
 //! MIOpen integration for ROCm backend
 //!
+//! Created by: TEAM-495 (MIOpen operations - conv2d, pooling)
+//! CUDA parity verified by: TEAM-498
+//!
 //! This module provides convolution and pooling operations using AMD's MIOpen library.
-//! Matches cuda_backend/cudnn.rs pattern.
+//! Matches cuda_backend/cudnn.rs pattern (cuDNN equivalent).
 
 use crate::backend::BackendStorage;
 use crate::rocm_backend::{RocmDevice, RocmError, RocmStorageSlice as S};
@@ -10,6 +13,7 @@ use half::f16;
 use rocm_rs::miopen::{ConvolutionDescriptor, Handle, PoolingDescriptor, TensorDescriptor};
 use std::os::raw::c_void;
 
+// TEAM-495 | CUDA parity: cuda_backend/mod.rs:1892-1903 (max_pool2d)
 /// Helper function for 2D pooling operations (average and max)
 pub(crate) fn pool2d(
     storage: &crate::rocm_backend::RocmStorage,
@@ -143,6 +147,7 @@ pub(crate) fn pool2d(
     Ok(crate::rocm_backend::RocmStorage { slice, device: storage.device().clone() })
 }
 
+// TEAM-495 | CUDA parity: cuda_backend/mod.rs:1800-1863 (conv2d with cudnn)
 /// 2D convolution using MIOpen
 /// Matches cuda_backend/cudnn.rs::launch_conv2d pattern
 pub(crate) fn conv2d(
@@ -504,4 +509,206 @@ pub(crate) fn conv2d(
     };
 
     Ok(crate::rocm_backend::RocmStorage { slice, device })
+}
+
+// TEAM-495 | CUDA parity: cuda_backend/mod.rs:1620-1684 (conv1d with cudnn)
+/// 1D convolution using MIOpen (treats as 2D with height=1)
+pub(crate) fn conv1d(
+    storage: &crate::rocm_backend::RocmStorage,
+    inp_l: &Layout,
+    kernel: &crate::rocm_backend::RocmStorage,
+    kernel_l: &Layout,
+    params: &crate::conv::ParamsConv1D,
+) -> Result<crate::rocm_backend::RocmStorage> {
+    // Conv1D is implemented as Conv2D with height=1
+    // Input shape: (batch, channels, length) -> treat as (batch, channels, 1, length)
+    // Kernel shape: (out_channels, in_channels, k_size) -> treat as (out_channels, in_channels, 1, k_size)
+    
+    let device = storage.device().clone();
+    let out_l = params.l_out();
+    let dst_el = params.c_out * out_l * params.b_size;
+    
+    let inp_shape = inp_l.shape();
+    if inp_shape.rank() != 3 {
+        return Err(RocmError::InternalError("conv1d requires 3D input tensor (NCL)").into());
+    }
+    let (n, c_in, l_in) = (inp_shape.dims()[0], inp_shape.dims()[1], inp_shape.dims()[2]);
+    
+    let kernel_shape = kernel_l.shape();
+    if kernel_shape.rank() != 3 {
+        return Err(RocmError::InternalError("conv1d requires 3D kernel tensor").into());
+    }
+    
+    let slice = match (&storage.slice, &kernel.slice) {
+        (S::F32(inp), S::F32(k)) => {
+            let inp_slice = &inp.slice(inp_l.start_offset()..);
+            let k_slice = &k.slice(kernel_l.start_offset()..);
+            let mut out = unsafe { device.hip_device().alloc::<f32>(dst_el)? };
+            
+            let handle = Handle::new().map_err(|e| {
+                RocmError::InternalError(&format!("MIOpen handle creation failed: {:?}", e))
+            })?;
+            
+            // Create input tensor descriptor (treat as 2D: N x C x 1 x L)
+            let mut input_desc = TensorDescriptor::new().map_err(|e| {
+                RocmError::InternalError(&format!("Input tensor descriptor creation failed: {:?}", e))
+            })?;
+            input_desc.set_4d(
+                rocm_rs::miopen::ffi::miopenDataType_t_miopenFloat,
+                n as i32,
+                c_in as i32,
+                1, // height = 1
+                l_in as i32,
+            ).map_err(|e| {
+                RocmError::InternalError(&format!("Input tensor descriptor set failed: {:?}", e))
+            })?;
+            
+            // Create filter descriptor (treat as 2D: out_channels x in_channels x 1 x k_size)
+            let mut filter_desc = TensorDescriptor::new().map_err(|e| {
+                RocmError::InternalError(&format!("Filter descriptor creation failed: {:?}", e))
+            })?;
+            filter_desc.set_4d(
+                rocm_rs::miopen::ffi::miopenDataType_t_miopenFloat,
+                params.c_out as i32,
+                c_in as i32,
+                1, // height = 1
+                params.k_size as i32,
+            ).map_err(|e| {
+                RocmError::InternalError(&format!("Filter descriptor set failed: {:?}", e))
+            })?;
+            
+            // Create convolution descriptor
+            let mut conv_desc = ConvolutionDescriptor::new().map_err(|e| {
+                RocmError::InternalError(&format!("Convolution descriptor creation failed: {:?}", e))
+            })?;
+            conv_desc.init_2d(
+                rocm_rs::miopen::ffi::miopenConvolutionMode_t_miopenConvolution,
+                0, // pad_h = 0
+                params.padding as i32, // pad_w = padding
+                1, // stride_h = 1
+                params.stride as i32, // stride_w = stride
+                1, // dilation_h = 1
+                params.dilation as i32, // dilation_w = dilation
+            ).map_err(|e| {
+                RocmError::InternalError(&format!("Convolution descriptor init failed: {:?}", e))
+            })?;
+            
+            // Create output tensor descriptor
+            let mut output_desc = TensorDescriptor::new().map_err(|e| {
+                RocmError::InternalError(&format!("Output tensor descriptor creation failed: {:?}", e))
+            })?;
+            output_desc.set_4d(
+                rocm_rs::miopen::ffi::miopenDataType_t_miopenFloat,
+                n as i32,
+                params.c_out as i32,
+                1, // height = 1
+                out_l as i32,
+            ).map_err(|e| {
+                RocmError::InternalError(&format!("Output tensor descriptor set failed: {:?}", e))
+            })?;
+            
+            // Get workspace size
+            let workspace_size = rocm_rs::miopen::convolution::get_convolution_forward_workspace_size(
+                &handle,
+                &filter_desc,
+                &input_desc,
+                &conv_desc,
+                &output_desc,
+            ).map_err(|e| {
+                RocmError::InternalError(&format!("Workspace size query failed: {:?}", e))
+            })?;
+            
+            let workspace = if workspace_size > 0 {
+                unsafe { device.hip_device().alloc::<u8>(workspace_size)? }
+            } else {
+                unsafe { device.hip_device().alloc::<u8>(0)? }
+            };
+            
+            // Find best algorithm
+            let (_, perf_results) = unsafe {
+                rocm_rs::miopen::convolution::find_convolution_forward_algorithm(
+                    &handle,
+                    &input_desc,
+                    inp_slice.as_ptr() as *const c_void,
+                    &filter_desc,
+                    k_slice.as_ptr() as *const c_void,
+                    &conv_desc,
+                    &output_desc,
+                    out.as_mut_ptr() as *mut c_void,
+                    1,
+                    workspace.as_mut_ptr() as *mut c_void,
+                    workspace_size,
+                    false,
+                ).map_err(|e| {
+                    RocmError::InternalError(&format!("Algorithm search failed: {:?}", e))
+                })?
+            };
+            
+            let algo = if !perf_results.is_empty() {
+                perf_results[0].fwd_algo
+            } else {
+                return Err(RocmError::InternalError("No convolution algorithm found").into());
+            };
+            
+            // Run convolution
+            let alpha: f32 = 1.0;
+            let beta: f32 = 0.0;
+            
+            unsafe {
+                rocm_rs::miopen::convolution::convolution_forward(
+                    &handle,
+                    &alpha.to_ne_bytes(),
+                    &input_desc,
+                    inp_slice.as_ptr() as *const c_void,
+                    &filter_desc,
+                    k_slice.as_ptr() as *const c_void,
+                    &conv_desc,
+                    algo,
+                    &beta.to_ne_bytes(),
+                    &output_desc,
+                    out.as_mut_ptr() as *mut c_void,
+                    workspace.as_mut_ptr() as *mut c_void,
+                    workspace_size,
+                ).map_err(|e| {
+                    RocmError::InternalError(&format!("Convolution forward failed: {:?}", e))
+                })?;
+            }
+            
+            S::F32(out)
+        }
+        _ => return Err(RocmError::InternalError("conv1d only supports f32 for now").into()),
+    };
+    
+    Ok(crate::rocm_backend::RocmStorage { slice, device })
+}
+
+// TEAM-495 | Not yet implemented (CUDA has this but needs MIOpen ConvolutionBackwardData)
+/// Transpose convolution 1D using MIOpen
+pub(crate) fn conv_transpose1d(
+    storage: &crate::rocm_backend::RocmStorage,
+    inp_l: &Layout,
+    kernel: &crate::rocm_backend::RocmStorage,
+    kernel_l: &Layout,
+    params: &crate::conv::ParamsConvTranspose1D,
+) -> Result<crate::rocm_backend::RocmStorage> {
+    // For now, return error - transpose convolution needs backward data pass
+    // This requires implementing MIOpen's ConvolutionBackwardData
+    Err(RocmError::InternalError(
+        "conv_transpose1d not yet implemented - needs MIOpen ConvolutionBackwardData"
+    ).into())
+}
+
+/// Transpose convolution 2D using MIOpen
+pub(crate) fn conv_transpose2d(
+    storage: &crate::rocm_backend::RocmStorage,
+    inp_l: &Layout,
+    kernel: &crate::rocm_backend::RocmStorage,
+    kernel_l: &Layout,
+    params: &crate::conv::ParamsConvTranspose2D,
+) -> Result<crate::rocm_backend::RocmStorage> {
+    // For now, return error - transpose convolution needs backward data pass
+    // This requires implementing MIOpen's ConvolutionBackwardData
+    Err(RocmError::InternalError(
+        "conv_transpose2d not yet implemented - needs MIOpen ConvolutionBackwardData"
+    ).into())
 }

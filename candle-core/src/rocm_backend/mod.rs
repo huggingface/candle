@@ -19,13 +19,14 @@ pub mod rocblas;
 pub mod storage;
 pub mod utils;
 
-// Re-exports
+// Re-exports (matches CUDA backend pattern)
 pub use device::{device_count, is_available, runtime_version, RocmDevice};
-pub use error::RocmError;
+pub use error::{RocmError, WrapErr};
 pub use storage::{RocmStorage, RocmStorageSlice};
 
-// Re-export rocm-rs types we use directly
-pub use rocm_rs::hip::{Dim3, DeviceMemory, Function, Module, Stream};
+// Re-export rocm-rs crate (matches CUDA's `pub use cudarc;`)
+// TEAM-498: Added for CUDA parity - allows users to access rocm-rs directly
+pub use rocm_rs;
 
 // Type alias for convenience (matches CUDA backend pattern)
 pub type S = RocmStorageSlice;

@@ -1,6 +1,7 @@
-// candle-core/src/rocm_backend/kernels.rs
-// TEAM-492: Direct kernel loading from rocm-rs with Candle CUDA parity
-// Matches Candle's CUDA kernel calling convention EXACTLY
+//! ROCm kernel launch infrastructure
+//! Created by: TEAM-492 (Kernel loading infrastructure with CUDA parity)
+//! Updated by: TEAM-494 (Binary and reduce operations)
+//! CUDA parity verified by: TEAM-498
 
 use crate::rocm_backend::{Result, RocmError};
 use crate::{DType, Layout};
@@ -31,6 +32,7 @@ pub fn get_kernel(name: &str) -> Result<Function> {
         .map_err(|e| RocmError::KernelError(format!("Failed to get kernel '{}': {:?}", name, e)))
 }
 
+// TEAM-492 | CUDA parity: cuda_backend/mod.rs:24-27
 /// SlicePtrOrNull - matches Candle CUDA pattern
 /// Either a pointer to dims/strides info, or null for contiguous tensors
 pub enum SlicePtrOrNull {
@@ -39,6 +41,7 @@ pub enum SlicePtrOrNull {
 }
 
 impl SlicePtrOrNull {
+    // TEAM-492 | CUDA parity: cuda_backend/mod.rs:54-62 (params_from_layout)
     /// Create from layout - matches Candle's params_from_layout
     pub fn from_layout(device: &rocm_rs::hip::Device, layout: &Layout) -> Result<Self> {
         if layout.is_contiguous() {
@@ -65,6 +68,7 @@ impl SlicePtrOrNull {
     }
 }
 
+// TEAM-492 | CUDA parity: cuda_backend/device.rs (LaunchConfig pattern)
 /// Launch config - matches Candle's LaunchConfig::for_num_elems
 #[inline]
 pub fn launch_config_for_num_elems(num_elems: u32) -> (Dim3, Dim3) {
@@ -73,6 +77,7 @@ pub fn launch_config_for_num_elems(num_elems: u32) -> (Dim3, Dim3) {
     (Dim3::new(grid_size, 1, 1), Dim3::new(block_size, 1, 1))
 }
 
+// TEAM-492 | CUDA parity: cuda_backend/mod.rs:368-394 (UnaryOpT impl)
 /// Launch unary operation kernel - MATCHES Candle CUDA signature
 /// Signature: (numel, num_dims, info, inp, out)
 pub fn launch_unary<T>(
@@ -111,6 +116,7 @@ pub fn launch_unary<T>(
     Ok(out)
 }
 
+// TEAM-492 | CUDA parity: cuda_backend/mod.rs:94-123 (Affine struct)
 /// Launch affine operation kernel - MATCHES Candle CUDA signature
 /// Signature: (numel, num_dims, info, inp, out, mul, add)
 pub fn launch_affine<T>(
@@ -155,6 +161,8 @@ where
     Ok(out)
 }
 
+// TEAM-492 | CUDA parity: cuda_backend/mod.rs:975-1027 (WhereCond struct)
+// Critical: Uses 3 separate strides [dims, cond_stride, true_stride, false_stride]
 /// Launch ternary (where) operation kernel - MATCHES Candle CUDA signature
 /// Signature: (numel, num_dims, info, ids, t, f, out)
 pub fn launch_ternary<C, T>(
@@ -211,6 +219,7 @@ pub fn launch_ternary<C, T>(
     Ok(out)
 }
 
+// TEAM-493 | CUDA parity: cuda_backend/mod.rs:1321-1360 (cast pattern)
 /// Launch cast operation kernel - MATCHES Candle CUDA signature
 /// Signature: (numel, num_dims, info, inp, out)
 /// NOTE: Input and output types are DIFFERENT!
@@ -250,9 +259,10 @@ pub fn launch_cast<I, O>(
     Ok(out)
 }
 
+// TEAM-494 | CUDA parity: cuda_backend/mod.rs:1042-1088 (binary pattern)
+// Uses 2 separate strides [dims, lhs_stride, rhs_stride]
 /// Launch binary operation kernel - MATCHES Candle CUDA signature
 /// Signature: (numel, num_dims, info, lhs, rhs, out)
-/// TEAM-494: Added for binary operations (add, sub, mul, div)
 pub fn launch_binary<T>(
     kernel_name: &str,
     device: &rocm_rs::hip::Device,
@@ -302,9 +312,9 @@ pub fn launch_binary<T>(
     Ok(out)
 }
 
+// TEAM-494 | CUDA parity: cuda_backend/mod.rs:286-366 (FastReduce struct)
 /// Launch reduce operation kernel - MATCHES Candle CUDA signature
 /// Signature: (numel, num_dims, info, inp, out)
-/// TEAM-494: Added for reduce operations (sum, min, max)
 pub fn launch_reduce<T>(
     kernel_name: &str,
     device: &rocm_rs::hip::Device,

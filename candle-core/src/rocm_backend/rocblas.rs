@@ -1,15 +1,19 @@
 //! rocBLAS integration for ROCm backend
 //!
+//! Created by: TEAM-496 (Module refactoring - extracted from mod.rs)
+//! CUDA parity verified by: TEAM-498
+//!
 //! This module provides matrix multiplication operations using AMD's rocBLAS library.
-//! Matches cuda_backend BLAS operations pattern.
+//! Matches cuda_backend BLAS operations pattern (cuBLAS equivalent).
 
 use crate::rocm_backend::{RocmDevice, RocmError, RocmStorageSlice as S};
 use crate::{Layout, Result};
 use half::{bf16, f16};
 use rocm_rs::rocblas::{Handle, Operation};
 
+// TEAM-496 | CUDA parity: cuda_backend/mod.rs:1965-2019 (matmul method)
 /// Matrix multiplication using rocBLAS GEMM
-/// Matches cuda_backend/mod.rs::matmul pattern (line 1965)
+/// Matches cuda_backend/mod.rs::matmul pattern
 pub(crate) fn matmul(
     storage: &crate::rocm_backend::RocmStorage,
     rhs: &crate::rocm_backend::RocmStorage,

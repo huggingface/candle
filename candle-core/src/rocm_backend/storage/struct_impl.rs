@@ -1,4 +1,7 @@
 //! RocmStorage struct definition and basic methods
+//! Created by: TEAM-488 (Phase 1 - Device integration)
+//! Modified by: TEAM-491-496 (Kernel work and backend implementation)
+//! CUDA parity verified by: TEAM-497
 
 use crate::rocm_backend::{miopen, RocmDevice, RocmError};
 use crate::Result;
@@ -6,6 +9,8 @@ use super::RocmStorageSlice;
 
 type S = RocmStorageSlice;
 
+// Created by: TEAM-488 | CUDA parity verified by: TEAM-497
+// CUDA: cuda_backend/mod.rs:1132-1135
 /// ROCm storage - wraps storage slice + device
 #[derive(Debug)]
 pub struct RocmStorage {
@@ -13,15 +18,18 @@ pub struct RocmStorage {
     pub(crate) device: RocmDevice,
 }
 
+// Created by: TEAM-488 | CUDA parity verified by: TEAM-497
 impl RocmStorage {
     pub fn new(slice: RocmStorageSlice, device: RocmDevice) -> Self {
         Self { slice, device }
     }
 
+    // TEAM-497: Device accessor (CUDA: cuda_backend/mod.rs:1314-1316)
     pub fn device(&self) -> &RocmDevice {
         &self.device
     }
 
+    // TEAM-497: DType accessor (CUDA: cuda_backend/mod.rs:1301-1312)
     pub fn dtype(&self) -> crate::DType {
         match &self.slice {
             S::U8(_) => crate::DType::U8,
@@ -35,6 +43,9 @@ impl RocmStorage {
         }
     }
 
+    // TEAM-497: ROCm-specific helper for pooling (CUDA uses separate avg_pool2d/max_pool2d)
+    // CUDA avg_pool2d: cuda_backend/mod.rs:1879-1890
+    // CUDA max_pool2d: cuda_backend/mod.rs:1892-1903
     /// Helper method for pooling operations
     pub(super) fn pool2d(
         &self,
