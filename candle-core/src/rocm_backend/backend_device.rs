@@ -115,10 +115,9 @@ impl BackendDevice for RocmDevice {
     }
 
     // TEAM-509: Implement rand_uniform (CUDA parity)
-    // Matches cuda_backend/device.rs:341-374
+    // Matches cuda_backend/device.rs:341-376
+    // Fixed by: TEAM-509 (range scaling with Affine operation)
     fn rand_uniform(&self, shape: &Shape, dtype: DType, lo: f64, up: f64) -> Result<Self::Storage> {
-        use rocm_rs::rocrand::{rng_type, PseudoRng};
-        
         let elem_count = shape.elem_count();
         let mut rng = self.rocrand().lock().unwrap();
         
@@ -127,23 +126,12 @@ impl BackendDevice for RocmDevice {
                 let mut data = unsafe { self.alloc::<f32>(elem_count)? };
                 rng.0.generate_uniform(&mut data)
                     .map_err(|e| RocmError::InternalError(&format!("rocRAND uniform failed: {:?}", e)))?;
-                
-                // Scale from [0, 1) to [lo, up)
-                if lo != 0.0 || up != 1.0 {
-                    // TODO: Add kernel to scale values
-                    // For now, just use the [0, 1) range
-                }
                 S::F32(data)
             }
             DType::F64 => {
                 let mut data = unsafe { self.alloc::<f64>(elem_count)? };
                 rng.0.generate_uniform_double(&mut data)
                     .map_err(|e| RocmError::InternalError(&format!("rocRAND uniform failed: {:?}", e)))?;
-                
-                // Scale from [0, 1) to [lo, up)
-                if lo != 0.0 || up != 1.0 {
-                    // TODO: Add kernel to scale values
-                }
                 S::F64(data)
             }
             DType::U8 | DType::U32 | DType::I64 | DType::F16 | DType::BF16 | DType::F8E4M3 => {
@@ -155,24 +143,45 @@ impl BackendDevice for RocmDevice {
             }
         };
         
+        // Scale from [0, 1) to [lo, up) using Affine operation
+        // Matches cuda_backend/device.rs:365-371
+        let slice = if lo == 0.0 && up == 1.0 {
+            slice
+        } else {
+            use super::ops::Affine;
+            use super::utils::Map1;
+            let layout = Layout::contiguous(shape);
+            Affine(up - lo, lo).map(&slice, self, &layout)?
+        };
+        
         Ok(RocmStorage::new(slice, self.clone()))
     }
 
     // TEAM-509: Implement rand_normal (CUDA parity)
-    // Matches cuda_backend/device.rs:378-407
+    // Matches cuda_backend/device.rs:378-416
+    // Fixed by: TEAM-509 (odd element count handling)
     fn rand_normal(&self, shape: &Shape, dtype: DType, mean: f64, std: f64) -> Result<Self::Storage> {
         let elem_count = shape.elem_count();
         let mut rng = self.rocrand().lock().unwrap();
         
+        // rocRAND (like cuRAND) can only generate an even number of values for normal distribution
+        // See: https://github.com/huggingface/candle/issues/734
+        // Round up to even count, then we'll only use elem_count elements
+        let elem_count_round = if elem_count % 2 == 1 {
+            elem_count + 1
+        } else {
+            elem_count
+        };
+        
         let slice = match dtype {
             DType::F32 => {
-                let mut data = unsafe { self.alloc::<f32>(elem_count)? };
+                let mut data = unsafe { self.alloc::<f32>(elem_count_round)? };
                 rng.0.generate_normal(&mut data, mean as f32, std as f32)
                     .map_err(|e| RocmError::InternalError(&format!("rocRAND normal failed: {:?}", e)))?;
                 S::F32(data)
             }
             DType::F64 => {
-                let mut data = unsafe { self.alloc::<f64>(elem_count)? };
+                let mut data = unsafe { self.alloc::<f64>(elem_count_round)? };
                 rng.0.generate_normal_double(&mut data, mean, std)
                     .map_err(|e| RocmError::InternalError(&format!("rocRAND normal failed: {:?}", e)))?;
                 S::F64(data)

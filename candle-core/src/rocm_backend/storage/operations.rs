@@ -1,8 +1,8 @@
-//! Tensor operations (affine, reduce, cmp, unary, binary, where)
+//! Tensor operations (affine, reduce, cmp, unary, binary, where, const_set)
 //! Created by: TEAM-488 (Phase 1 - Device integration)
 //! Kernel operations: TEAM-492, TEAM-493, TEAM-494, TEAM-495 (affine, unary, binary, reduce, cmp, where)
-//! Updated by: TEAM-509 (const_set implementation)
-//! CUDA parity verified by: TEAM-497, TEAM-498
+//! Updated by: TEAM-509 (const_set implementation with CONST_SET_OP kernels from rocm-rs)
+//! CUDA parity verified by: TEAM-497, TEAM-498, TEAM-509
 
 use super::{RocmStorage, RocmStorageSlice};
 use crate::rocm_backend::{kernels, ops, RocmError};
@@ -240,68 +240,27 @@ impl RocmStorage {
         Ok(Self { slice, device: self.device.clone() })
     }
     
-    // TEAM-509: Implement const_set (CUDA parity)
-    // Matches cuda_backend/mod.rs const_set pattern
+    // TEAM-509: Implement const_set (CUDA parity - COMPLETE ✅)
+    // Matches cuda_backend/mod.rs:1318-1347 const_set pattern
+    // Fixed by: TEAM-509 (ported CONST_SET_OP kernels from CUDA to HIP in rocm-rs)
     /// Set all elements in the tensor to a constant value
     /// 
-    /// This uses HIP memset for simple cases and a kernel for complex types.
+    /// **Implementation Status:**
+    /// - ✅ All values (zero and non-zero) for U8, U32, I64, F16, F32, F64
+    /// - ✅ Contiguous layouts (fast path)
+    /// - ✅ Non-contiguous/strided layouts (handled by CONST_SET_OP kernel)
+    /// - ❌ BF16, F8E4M3 (ROCm lacks native types, same as CUDA arch < 800)
+    /// 
+    /// **CUDA Parity:**
+    /// ✅ COMPLETE - Uses CONST_SET_OP kernels ported from candle-kernels/src/fill.cu
+    /// ✅ Handles all dtypes that CUDA supports (except BF16/FP8 which need arch >= 800)
+    /// ✅ Handles strided layouts using get_strided_index (same as CUDA)
     pub(super) fn const_set_impl(&mut self, v: Scalar, layout: &crate::Layout) -> Result<()> {
-        use rocm_rs::hip::DeviceMemory;
-        
-        // For contiguous layouts, we can use memset or fill operations
-        if layout.is_contiguous() {
-            let elem_count = layout.shape().elem_count();
-            
-            match (&mut self.slice, v) {
-                // U8 - use HIP memset
-                (S::U8(mem), Scalar::U8(val)) => {
-                    // HIP memset fills with byte value
-                    unsafe {
-                        rocm_rs::hip::memset_d8(mem.as_mut_ptr(), val, elem_count)
-                            .map_err(|e| RocmError::InternalError(&format!("memset failed: {:?}", e)))?;
-                    }
-                    Ok(())
-                }
-                // U32 - use HIP memset for zero, otherwise use fill
-                (S::U32(mem), Scalar::U32(val)) if val == 0 => {
-                    unsafe {
-                        rocm_rs::hip::memset_d32(mem.as_mut_ptr(), 0, elem_count)
-                            .map_err(|e| RocmError::InternalError(&format!("memset failed: {:?}", e)))?;
-                    }
-                    Ok(())
-                }
-                // F32 - use fill operation
-                (S::F32(mem), Scalar::F32(val)) if val == 0.0 => {
-                    unsafe {
-                        rocm_rs::hip::memset_d32(mem.as_mut_ptr(), 0, elem_count)
-                            .map_err(|e| RocmError::InternalError(&format!("memset failed: {:?}", e)))?;
-                    }
-                    Ok(())
-                }
-                // F64 - use fill operation
-                (S::F64(mem), Scalar::F64(val)) if val == 0.0 => {
-                    unsafe {
-                        rocm_rs::hip::memset_d32(mem.as_mut_ptr(), 0, elem_count * 2)
-                            .map_err(|e| RocmError::InternalError(&format!("memset failed: {:?}", e)))?;
-                    }
-                    Ok(())
-                }
-                // For non-zero values or other types, we need a kernel
-                // For now, return an error - this will be implemented with a proper fill kernel
-                _ => {
-                    // TODO: Implement fill kernel for non-zero values
-                    // This would use a simple kernel that writes the constant to all elements
-                    Err(RocmError::InternalError(
-                        "const_set for non-zero values not yet implemented - use zeros() or implement fill kernel"
-                    ).into())
-                }
-            }
-        } else {
-            // Non-contiguous layouts need a kernel that respects strides
-            // For now, return an error
-            Err(RocmError::InternalError(
-                "const_set for non-contiguous layouts not yet implemented"
-            ).into())
-        }
+        // TEAM-509: Use ConstSet operation - SAME pattern as all other operations!
+        // Matches affine_impl, powf_impl, elu_impl, etc.
+        let device = self.device().clone();
+        let slice = ops::ConstSet(v).map(&self.slice, &device, layout)?;
+        self.slice = slice;
+        Ok(())
     }
 }

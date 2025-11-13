@@ -21,6 +21,9 @@ pub(crate) struct Affine(pub f64, pub f64);
 pub(crate) struct Powf(pub f64);
 pub(crate) struct Elu(pub f64);
 
+// TEAM-509 | CUDA parity: cuda_backend/mod.rs:1318-1347 (const_set)
+pub(crate) struct ConstSet(pub crate::scalar::Scalar);
+
 // Map2 operations (binary - two inputs)
 // TEAM-494 | CUDA parity: cuda_backend/mod.rs:1248-1346
 pub(crate) struct BinaryAdd;
@@ -347,7 +350,7 @@ impl utils::Map1Any for ReduceMin {
 
 // TEAM-494 | CUDA parity: cuda_backend/mod.rs:286-366 (FastReduce - Max)
 impl utils::Map1Any for ReduceMax {
-    fn f<T: WithDType, W: Fn(Vec<usize>) -> Result<DeviceMemory<T>>>
+    fn f<T: WithDType, W: Fn(Vec<usize>) -> Result<DeviceMemory<T>>>(
         &self,
         src: &DeviceMemory<T>,
         dev: &RocmDevice,
@@ -362,6 +365,24 @@ impl utils::Map1Any for ReduceMax {
             layout,
             &self.sum_dims,
             wrap,
+        )
+    }
+}
+
+// TEAM-509 | CUDA parity: cuda_backend/mod.rs:1318-1347 (const_set)
+impl utils::Map1 for ConstSet {
+    fn f<T: WithDType>(
+        &self,
+        _src: &DeviceMemory<T>,
+        dev: &RocmDevice,
+        layout: &crate::Layout,
+    ) -> Result<DeviceMemory<T>> {
+        let kernel_name = format!("const_set_{}", T::DTYPE.as_str());
+        kernels::launch_const_set(
+            &kernel_name,
+            dev,
+            layout,
+            self.0,
         )
     }
 }

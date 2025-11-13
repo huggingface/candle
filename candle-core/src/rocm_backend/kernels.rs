@@ -353,3 +353,48 @@ where
 
     Ok(out)
 }
+
+// TEAM-509 | CUDA parity: cuda_backend/mod.rs:1318-1347 (const_set)
+/// Launch const_set operation kernel - MATCHES Candle CUDA signature
+/// Signature: (numel, num_dims, info, value, out)
+pub fn launch_const_set<T>(
+    kernel_name: &str,
+    dev: &RocmDevice,
+    layout: &Layout,
+    value: crate::scalar::Scalar,
+) -> Result<DeviceMemory<T>>
+where
+    T: WithDType,
+{
+    let shape = layout.shape();
+    let el = shape.elem_count();
+    let (grid, block) = launch_config_for_num_elems(el as u32);
+    
+    // Get layout info (dims + strides)
+    let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
+    
+    // Allocate output
+    let mut out = unsafe { dev.hip_device().alloc::<T>(el)? };
+    
+    // Load kernel from FILL module
+    let func = dev.get_or_load_func(kernel_name, &kernels_module::FILL)?;
+    
+    // Convert scalar value to T
+    let val = T::from_scalar(value);
+    
+    // Build args: (numel, num_dims, info, value, out)
+    let mut args = [
+        &(el as usize) as *const usize as *mut c_void,
+        &shape.rank() as *const usize as *mut c_void,
+        ds.as_ptr() as *mut c_void,
+        &val as *const T as *mut c_void,
+        out.as_ptr() as *mut c_void,
+    ];
+    
+    unsafe {
+        func.launch(grid, block, 0, None, &mut args)
+            .map_err(|e| RocmError::KernelError(format!("ConstSet kernel launch failed: {:?}", e)))?;
+    }
+    
+    Ok(out)
+}
