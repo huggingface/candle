@@ -1,11 +1,14 @@
-use crate::metal::{Buffer, ComputePipeline, MetalResource};
+use crate::metal::{Buffer, CommandSemaphore, CommandStatus, ComputePipeline, MetalResource};
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSRange, NSString};
-use objc2_metal::{MTLBlitCommandEncoder, MTLComputeCommandEncoder, MTLResourceUsage, MTLSize};
-use std::{ffi::c_void, ptr};
+use objc2_metal::{
+    MTLBlitCommandEncoder, MTLCommandEncoder, MTLComputeCommandEncoder, MTLResourceUsage, MTLSize,
+};
+use std::{ffi::c_void, ptr, sync::Arc};
 
 pub struct ComputeCommandEncoder {
     raw: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>,
+    semaphore: Arc<CommandSemaphore>,
 }
 
 impl AsRef<ComputeCommandEncoder> for ComputeCommandEncoder {
@@ -16,8 +19,13 @@ impl AsRef<ComputeCommandEncoder> for ComputeCommandEncoder {
 impl ComputeCommandEncoder {
     pub fn new(
         raw: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>,
+        semaphore: Arc<CommandSemaphore>,
     ) -> ComputeCommandEncoder {
-        ComputeCommandEncoder { raw }
+        ComputeCommandEncoder { raw, semaphore }
+    }
+
+    pub(crate) fn signal_encoding_ended(&self) {
+        self.semaphore.set_status(CommandStatus::Available);
     }
 
     pub fn set_threadgroup_memory_length(&self, index: usize, length: usize) {
@@ -72,12 +80,17 @@ impl ComputeCommandEncoder {
 
     pub fn end_encoding(&self) {
         use objc2_metal::MTLCommandEncoder as _;
-        self.raw.endEncoding()
+        self.raw.endEncoding();
+        self.signal_encoding_ended();
     }
 
     pub fn encode_pipeline(&mut self, pipeline: &ComputePipeline) {
         use MTLComputeCommandEncoder as _;
         self.raw.setComputePipelineState(pipeline.as_ref());
+    }
+
+    pub fn set_label(&self, label: &str) {
+        self.raw.setLabel(Some(&NSString::from_str(label)))
     }
 }
 
@@ -89,6 +102,7 @@ impl Drop for ComputeCommandEncoder {
 
 pub struct BlitCommandEncoder {
     raw: Retained<ProtocolObject<dyn MTLBlitCommandEncoder>>,
+    semaphore: Arc<CommandSemaphore>,
 }
 
 impl AsRef<BlitCommandEncoder> for BlitCommandEncoder {
@@ -98,13 +112,21 @@ impl AsRef<BlitCommandEncoder> for BlitCommandEncoder {
 }
 
 impl BlitCommandEncoder {
-    pub fn new(raw: Retained<ProtocolObject<dyn MTLBlitCommandEncoder>>) -> BlitCommandEncoder {
-        BlitCommandEncoder { raw }
+    pub fn new(
+        raw: Retained<ProtocolObject<dyn MTLBlitCommandEncoder>>,
+        semaphore: Arc<CommandSemaphore>,
+    ) -> BlitCommandEncoder {
+        BlitCommandEncoder { raw, semaphore }
+    }
+
+    pub(crate) fn signal_encoding_ended(&self) {
+        self.semaphore.set_status(CommandStatus::Available);
     }
 
     pub fn end_encoding(&self) {
         use objc2_metal::MTLCommandEncoder as _;
-        self.raw.endEncoding()
+        self.raw.endEncoding();
+        self.signal_encoding_ended();
     }
 
     pub fn set_label(&self, label: &str) {
