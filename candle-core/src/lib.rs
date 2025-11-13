@@ -121,7 +121,7 @@ pub use metal_backend::{MetalDevice, MetalError, MetalStorage};
 pub use dummy_metal_backend::{MetalDevice, MetalError, MetalStorage};
 
 #[cfg(feature = "rocm")]
-pub use rocm_backend::{RocmDevice, RocmError, RocmStorage, RocmStorageSlice};
+pub use rocm_backend::{RocmDevice, RocmError, RocmStorageSlice};
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
