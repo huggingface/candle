@@ -10,6 +10,10 @@
 //! - `storage`: Storage types (RocmStorage, RocmStorageSlice)
 //! - `utils`: Utility traits
 
+// TEAM-507: Import candle-kernels for CUDA parity
+// This gives access to pre-compiled HSACO modules (AFFINE, BINARY, CAST, etc.)
+pub use candle_kernels as kernels_module;
+
 pub mod device;
 pub mod error;
 pub mod kernels;

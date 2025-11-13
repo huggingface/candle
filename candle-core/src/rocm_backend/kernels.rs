@@ -1,35 +1,18 @@
 //! ROCm kernel launch infrastructure
 //! Created by: TEAM-492 (Kernel loading infrastructure with CUDA parity)
 //! Updated by: TEAM-494 (Binary and reduce operations)
+//! Updated by: TEAM-507 (Migrated to candle_kernels for CUDA parity)
 //! CUDA parity verified by: TEAM-498
 
-use crate::rocm_backend::{Result, RocmError};
-use crate::{DType, Layout};
-use rocm_rs::hip::{DeviceMemory, Dim3, Function, Module};
+use crate::rocm_backend::{kernels_module, Result, RocmDevice, RocmError};
+use crate::{DType, Layout, WithDType};
+use rocm_rs::hip::{DeviceMemory, Dim3};
 use std::ffi::c_void;
-use std::sync::Once;
 
-static INIT: Once = Once::new();
-static mut ROCM_RS_MODULE: Option<Module> = None;
-
-/// Initialize rocm-rs kernel module
-pub fn init_kernels() -> Result<()> {
-    INIT.call_once(|| {
-        match rocm_rs::rocarray::kernels::init() {
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Failed to initialize rocm-rs kernels: {:?}", e);
-            }
-        }
-    });
-    Ok(())
-}
-
-/// Get a kernel function from rocm-rs module
-pub fn get_kernel(name: &str) -> Result<Function> {
-    init_kernels()?;
-    rocm_rs::rocarray::kernels::get_function(name)
-        .map_err(|e| RocmError::KernelError(format!("Failed to get kernel '{}': {:?}", name, e)))
+// TEAM-507: Helper to generate kernel names (matches CUDA pattern)
+pub fn kernel_name<T: WithDType>(root: &str) -> String {
+    let dtype = T::DTYPE.as_str();
+    format!("{root}_{dtype}")
 }
 
 // TEAM-492 | CUDA parity: cuda_backend/mod.rs:24-27
@@ -78,24 +61,26 @@ pub fn launch_config_for_num_elems(num_elems: u32) -> (Dim3, Dim3) {
 }
 
 // TEAM-492 | CUDA parity: cuda_backend/mod.rs:368-394 (UnaryOpT impl)
+// TEAM-507 | Updated to use candle_kernels
 /// Launch unary operation kernel - MATCHES Candle CUDA signature
 /// Signature: (numel, num_dims, info, inp, out)
 pub fn launch_unary<T>(
     kernel_name: &str,
-    device: &rocm_rs::hip::Device,
+    dev: &RocmDevice,
     src: &DeviceMemory<T>,
     layout: &Layout,
 ) -> Result<DeviceMemory<T>> {
-    let func = get_kernel(kernel_name)?;
+    // TEAM-507: Use candle_kernels module
+    let func = dev.get_or_load_func(kernel_name, &kernels_module::UNARY)?;
     let shape = layout.shape();
     let el = shape.elem_count();
     let (grid, block) = launch_config_for_num_elems(el as u32);
     
-    let ds = SlicePtrOrNull::from_layout(device, layout)?;
+    let ds = SlicePtrOrNull::from_layout(dev.hip_device(), layout)?;
     let src_offset = &src.slice(layout.start_offset()..);
     
     // Allocate output
-    let out = device
+    let out = dev.hip_device()
         .alloc::<T>(el)
         .map_err(|e| RocmError::OutOfMemory { requested: el * std::mem::size_of::<T>() })?;
     

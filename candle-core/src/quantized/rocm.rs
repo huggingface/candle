@@ -60,7 +60,8 @@ fn quantize_q8_1(
     let kx = elem_count;
     let kx_padded = pad(kx, MATRIX_ROW_PADDING);
     let num_blocks = ceil_div(kx_padded, HIP_QUANTIZE_BLOCK_SIZE);
-    let func = dev.get_or_load_func("quantize_q8_1", quantized_stub::QUANTIZED)?;
+    // TEAM-507: Use get_or_load_func_raw for runtime-compiled kernels
+    let func = dev.get_or_load_func_raw("quantize_q8_1", quantized_stub::QUANTIZED.as_bytes())?;
     let grid_dim = Dim3 { x: num_blocks as u32, y: ky as u32, z: 1 };
     let block_dim = Dim3 { x: HIP_QUANTIZE_BLOCK_SIZE as u32, y: 1, z: 1 };
     let kx_i32 = kx as i32;
@@ -106,7 +107,8 @@ fn dequantize_f32(
         GgmlDType::Q8K => ("dequantize_block_q8_K_f32", true, 32, nb),
         _ => crate::bail!("unsupported dtype for dequantize {dtype:?}"),
     };
-    let func = dev.get_or_load_func(kernel_name, quantized_stub::QUANTIZED)?;
+    // TEAM-507: Use get_or_load_func_raw for runtime-compiled kernels
+    let func = dev.get_or_load_func_raw(kernel_name, quantized_stub::QUANTIZED.as_bytes())?;
     let dst = unsafe { dev.alloc::<f32>(elem_count)? };
     // See e.g.
     // https://github.com/ggerganov/llama.cpp/blob/cbbd1efa06f8c09f9dff58ff9d9af509cc4c152b/ggml-cuda.cu#L7270
@@ -164,7 +166,8 @@ fn dequantize_f16(
         GgmlDType::Q8K => ("dequantize_block_q8_K_f16", true, 32, nb),
         _ => crate::bail!("unsupported dtype for dequantize {dtype:?}"),
     };
-    let func = dev.get_or_load_func(kernel_name, quantized_stub::QUANTIZED)?;
+    // TEAM-507: Use get_or_load_func_raw for runtime-compiled kernels
+    let func = dev.get_or_load_func_raw(kernel_name, quantized_stub::QUANTIZED.as_bytes())?;
     let dst = unsafe { dev.alloc::<f16>(elem_count)? };
     // See e.g.
     // https://github.com/ggerganov/llama.cpp/blob/cbbd1efa06f8c09f9dff58ff9d9af509cc4c152b/ggml-cuda.cu#L7270
@@ -219,7 +222,8 @@ fn dequantize_mul_mat_vec(
         GgmlDType::Q6K => "dequantize_mul_mat_vec_q6_k",
         _ => crate::bail!("unsupported dtype for quantized matmul {dtype:?}"),
     };
-    let func = dev.get_or_load_func(kernel_name, quantized_stub::QUANTIZED)?;
+    // TEAM-507: Use get_or_load_func_raw for runtime-compiled kernels
+    let func = dev.get_or_load_func_raw(kernel_name, quantized_stub::QUANTIZED.as_bytes())?;
     let dst = unsafe { dev.alloc::<f32>(nrows)? };
     let block_num_y = ceil_div(nrows, GGML_HIP_MMV_Y);
     let grid_dim = Dim3 { x: block_num_y as u32, y: 1, z: 1 };
@@ -278,7 +282,8 @@ fn mul_mat_vec_via_q8_1(
         _ => crate::bail!("unsupported dtype for quantized matmul {dtype:?}"),
     };
     let kernel_name = format!("{kernel_name}{b_size}");
-    let func = dev.get_or_load_func(&kernel_name, quantized_stub::QUANTIZED)?;
+    // TEAM-507: Use get_or_load_func_raw for runtime-compiled kernels
+    let func = dev.get_or_load_func_raw(&kernel_name, quantized_stub::QUANTIZED.as_bytes())?;
     let dst = unsafe { dev.alloc::<f32>(nrows * b_size)? };
     // https://github.com/ggerganov/llama.cpp/blob/facb8b56f8fd3bb10a693bf0943ae9d69d0828ef/ggml-cuda/mmvq.cu#L98
     let (nblocks, nwarps) = match b_size {
@@ -348,7 +353,8 @@ fn mul_mat_via_q8_1(
         GgmlDType::Q6K => ("mul_mat_q6_K", 64, 64),
         _ => crate::bail!("unsupported dtype for quantized matmul {dtype:?}"),
     };
-    let func = dev.get_or_load_func(kernel_name, quantized_stub::QUANTIZED)?;
+    // TEAM-507: Use get_or_load_func_raw for runtime-compiled kernels
+    let func = dev.get_or_load_func_raw(kernel_name, quantized_stub::QUANTIZED.as_bytes())?;
     let dst = unsafe { dev.alloc::<f32>(x_rows * y_cols)? };
     let grid_dim =
         Dim3 { x: ceil_div(x_rows, mmq_y) as u32, y: ceil_div(y_cols, mmq_x) as u32, z: 1 };

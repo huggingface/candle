@@ -1,30 +1,61 @@
 //! ROCm device wrapper
 //! Created by: TEAM-488 (Phase 1 - Device integration)
 //! CUDA parity verified by: TEAM-497, TEAM-498
+//! Updated by: TEAM-507 (Module caching for CUDA parity)
 //! 
 //! Note: Like CUDA's CudaDevice, this is a thin wrapper around the underlying library.
 //! CUDA exposes `cudarc` directly, we expose `rocm_rs` directly (see mod.rs).
 //! Users can access rocm-rs APIs directly when needed via `hip_device()` or `rocm_rs::*`.
 
 use super::error::{Result, RocmError};
-use rocm_rs::hip::{Device as HipDevice, DeviceProperties as HipProps};
+use super::kernels_module;
+use rocm_rs::hip::{Device as HipDevice, DeviceProperties as HipProps, Module as HipModule};
+use std::sync::{Arc, RwLock};
+
+// TEAM-507: Module cache for CUDA parity
+// Matches cuda_backend/device.rs:244-246
+struct ModuleStore {
+    mdls: [Option<HipModule>; kernels_module::ALL_IDS.len()],
+}
 
 /// Candle wrapper for ROCm device
 /// 
 /// This is a thin wrapper around rocm_rs::hip::Device.
 /// We don't reimplement - we just wrap the existing API.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RocmDevice {
     inner: HipDevice,
+    // TEAM-507: Module cache for CUDA parity
+    modules: Arc<RwLock<ModuleStore>>,
+}
+
+// TEAM-507: Manual Debug impl (HipModule doesn't implement Debug)
+impl std::fmt::Debug for RocmDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RocmDevice")
+            .field("inner", &self.inner)
+            .field("modules", &"<cached modules>")
+            .finish()
+    }
 }
 
 impl RocmDevice {
     // Created by: TEAM-488 | CUDA parity: cuda_backend/device.rs:262-279 (BackendDevice::new)
+    // Updated by: TEAM-507 | Added module cache initialization
     /// Create a new ROCm device
     pub fn new(id: usize) -> Result<Self> {
         let inner = HipDevice::new(id as i32)?;
         inner.set_current()?;
-        Ok(Self { inner })
+        
+        // TEAM-507: Initialize module cache (CUDA parity)
+        let module_store = ModuleStore {
+            mdls: [const { None }; kernels_module::ALL_IDS.len()],
+        };
+        
+        Ok(Self { 
+            inner,
+            modules: Arc::new(RwLock::new(module_store)),
+        })
     }
 
     // Created by: TEAM-488 | CUDA parity: cuda_backend/device.rs:188-190
@@ -112,8 +143,36 @@ impl RocmDevice {
     }
 
     // Created by: TEAM-502 | CUDA parity: cuda_backend/device.rs (kernel loading)
-    /// Get or load a kernel function from HSACO binary
-    pub fn get_or_load_func(&self, name: &str, hsaco: &[u8]) -> Result<rocm_rs::hip::Function> {
+    // Updated by: TEAM-507 | Now takes kernels_module::Module and caches modules
+    /// Get or load a kernel function from candle-kernels Module
+    /// 
+    /// This matches CUDA's pattern exactly:
+    /// - Takes &kernels_module::Module (not raw bytes)
+    /// - Caches loaded modules for reuse
+    /// - Only loads each module once
+    pub fn get_or_load_func(&self, name: &str, mdl: &kernels_module::Module) -> Result<rocm_rs::hip::Function> {
+        // Try to get from cache first
+        let ms = self.modules.read().unwrap();
+        if let Some(module) = ms.mdls[mdl.index()].as_ref() {
+            let func = module.get_function(name).map_err(RocmError::from)?;
+            return Ok(func);
+        }
+        drop(ms);
+        
+        // Not cached, load it
+        let mut ms = self.modules.write().unwrap();
+        let hip_module = self.inner.load_module(mdl.hsaco()).map_err(RocmError::from)?;
+        ms.mdls[mdl.index()] = Some(hip_module.clone());
+        let func = hip_module.get_function(name).map_err(RocmError::from)?;
+        Ok(func)
+    }
+    
+    // TEAM-507: Keep old signature for quantized_stub (runtime compilation)
+    /// Get or load a kernel function from raw HSACO binary (for runtime compilation)
+    /// 
+    /// This is used by quantized_stub which uses runtime compilation.
+    /// For pre-compiled kernels, use get_or_load_func() instead.
+    pub fn get_or_load_func_raw(&self, name: &str, hsaco: &[u8]) -> Result<rocm_rs::hip::Function> {
         let module = self.inner.load_module(hsaco).map_err(RocmError::from)?;
         module.get_function(name).map_err(RocmError::from)
     }

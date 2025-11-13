@@ -3,7 +3,7 @@ name = "candle-kernels"
 version = "0.9.2-alpha.1"
 edition = "2021"
 
-description = "CUDA kernels for Candle"
+description = "CUDA and ROCm kernels for Candle"
 repository = "https://github.com/huggingface/candle"
 keywords = ["blas", "tensor", "machine-learning"]
 categories = ["science"]
@@ -12,4 +12,9 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 
 [build-dependencies]
-bindgen_cuda = "0.1.1"
+bindgen_cuda = { version = "0.1.1", optional = true }
+
+[features]
+default = []
+cuda = ["bindgen_cuda"]
+rocm = []
