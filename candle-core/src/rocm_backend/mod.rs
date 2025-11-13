@@ -5,10 +5,15 @@
 pub mod device;
 pub mod error;
 pub mod storage;
+pub mod storage_slice;
 
 pub use device::{device_count, is_available, runtime_version, RocmDevice};
 pub use error::{Result, RocmError};
 pub use storage::RocmStorage;
+pub use storage_slice::RocmStorageSlice;
 
 // Re-export rocm-rs types we use directly
 pub use rocm_rs::hip::{Dim3, DeviceMemory, Function, Module, Stream};
+
+// Type alias for convenience (matches CUDA backend pattern)
+pub type S = RocmStorageSlice;
