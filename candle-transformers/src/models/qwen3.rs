@@ -214,7 +214,7 @@ impl Qwen3Attention {
         let (q, k) = self.rotary_emb.apply(&q, &k, offset)?;
 
         // 5. Accumulate KV cache
-        let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
+        let (k, v) = self.kv_cache.append(&k, &v)?;
 
         // 6. GQA repeat_kv
         let k = repeat_kv(k, self.num_kv_groups)?;
