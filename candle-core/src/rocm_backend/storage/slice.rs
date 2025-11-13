@@ -1,15 +1,12 @@
-// candle-core/src/rocm_backend/storage_slice.rs
-// Created by: TEAM-488 (Phase 1)
-// ROCm storage slice enum - matches CUDA backend pattern
+//! ROCm storage slice enum
+//!
+//! Holds device memory for different tensor dtypes.
 
 use float8::F8E4M3;
 use half::{bf16, f16};
 use rocm_rs::hip::DeviceMemory;
 
 /// ROCm storage slice for different data types
-///
-/// This enum holds device memory for different tensor dtypes.
-/// Matches the pattern used in CUDA backend.
 #[derive(Debug)]
 pub enum RocmStorageSlice {
     U8(DeviceMemory<u8>),

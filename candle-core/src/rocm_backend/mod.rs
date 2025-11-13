@@ -7,11 +7,8 @@
 //! - `miopen`: MIOpen operations (conv2d, pooling)
 //! - `ops`: Operation structs (Binary, Cmp, Reduce, Unary)
 //! - `rocblas`: rocBLAS operations (matmul)
-//! - `storage`: RocmStorage struct and BackendStorage impl
-//! - `storage_slice`: Storage slice enum
+//! - `storage`: Storage types (RocmStorage, RocmStorageSlice)
 //! - `utils`: Utility traits
-//!
-//! Created by: TEAM-496
 
 pub mod device;
 pub mod error;
@@ -20,14 +17,12 @@ pub mod miopen;
 pub mod ops;
 pub mod rocblas;
 pub mod storage;
-pub mod storage_slice;
 pub mod utils;
 
 // Re-exports
 pub use device::{device_count, is_available, runtime_version, RocmDevice};
 pub use error::RocmError;
-pub use storage::RocmStorage;
-pub use storage_slice::RocmStorageSlice;
+pub use storage::{RocmStorage, RocmStorageSlice};
 
 // Re-export rocm-rs types we use directly
 pub use rocm_rs::hip::{Dim3, DeviceMemory, Function, Module, Stream};
