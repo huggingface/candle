@@ -2,13 +2,14 @@
 //! Created by: TEAM-488 (Phase 1 - Device integration)
 //! Modified by: TEAM-491-496 (Kernel work and backend implementation)
 //! CUDA parity verified by: TEAM-497
+//! Arc-based memory: TEAM-500
 //!
 //! Holds device memory for different tensor dtypes.
 //!
 //! ## Architectural Note:
-//! CUDA uses Arc-based sharing (CudaSlice with internal Arc), making clone() cheap.
-//! ROCm currently uses explicit device-to-device copies, making clone() expensive.
-//! TODO: Refactor rocm-rs DeviceMemory to use Arc internally for parity with CUDA.
+//! TEAM-500: Arc-based memory sharing implemented!
+//! ROCm now uses Arc internally (like CUDA), making clone() cheap.
+//! Backwards compatibility maintained via Arc::make_mut() for mutable operations.
 
 use float8::F8E4M3;
 use half::{bf16, f16};
@@ -64,54 +65,22 @@ impl RocmStorageSlice {
     }
 }
 
-// Created by: TEAM-488 | Modified by: TEAM-491-496
-// PARITY: CPU (cpu_backend/mod.rs:21) and Metal (metal_backend/mod.rs:73) both derive Clone
-// ARCHITECTURAL DIFFERENCE: CUDA uses Arc-based sharing (cheap clone via ref counting)
-//                           ROCm uses explicit GPU memory copy (expensive clone operation)
-// TODO: Refactor rocm-rs DeviceMemory to use Arc internally to match CUDA architecture
+// TEAM-500: Removed explicit Clone implementation
+// DeviceMemory now uses Arc internally, so clone is cheap (just ref count increment)
+// The old implementation did expensive device-to-device copies
+// Now we get CUDA parity: cheap clones via Arc::clone()
+// Backwards compatibility maintained: Arc::make_mut() creates independent copies when needed
 impl Clone for RocmStorageSlice {
     fn clone(&self) -> Self {
         match self {
-            Self::U8(s) => {
-                let mut new = DeviceMemory::new(s.count()).expect("allocation failed");
-                new.copy_from_device(s).expect("copy failed");
-                Self::U8(new)
-            }
-            Self::U32(s) => {
-                let mut new = DeviceMemory::new(s.count()).expect("allocation failed");
-                new.copy_from_device(s).expect("copy failed");
-                Self::U32(new)
-            }
-            Self::I64(s) => {
-                let mut new = DeviceMemory::new(s.count()).expect("allocation failed");
-                new.copy_from_device(s).expect("copy failed");
-                Self::I64(new)
-            }
-            Self::BF16(s) => {
-                let mut new = DeviceMemory::new(s.count()).expect("allocation failed");
-                new.copy_from_device(s).expect("copy failed");
-                Self::BF16(new)
-            }
-            Self::F16(s) => {
-                let mut new = DeviceMemory::new(s.count()).expect("allocation failed");
-                new.copy_from_device(s).expect("copy failed");
-                Self::F16(new)
-            }
-            Self::F32(s) => {
-                let mut new = DeviceMemory::new(s.count()).expect("allocation failed");
-                new.copy_from_device(s).expect("copy failed");
-                Self::F32(new)
-            }
-            Self::F64(s) => {
-                let mut new = DeviceMemory::new(s.count()).expect("allocation failed");
-                new.copy_from_device(s).expect("copy failed");
-                Self::F64(new)
-            }
-            Self::F8E4M3(s) => {
-                let mut new = DeviceMemory::new(s.count()).expect("allocation failed");
-                new.copy_from_device(s).expect("copy failed");
-                Self::F8E4M3(new)
-            }
+            Self::U8(s) => Self::U8(s.clone()),
+            Self::U32(s) => Self::U32(s.clone()),
+            Self::I64(s) => Self::I64(s.clone()),
+            Self::BF16(s) => Self::BF16(s.clone()),
+            Self::F16(s) => Self::F16(s.clone()),
+            Self::F32(s) => Self::F32(s.clone()),
+            Self::F64(s) => Self::F64(s.clone()),
+            Self::F8E4M3(s) => Self::F8E4M3(s.clone()),
         }
     }
 }

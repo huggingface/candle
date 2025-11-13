@@ -9,6 +9,7 @@ use crate::Result;
 
 impl RocmStorage {
     // Created by: TEAM-497 | CUDA parity verified by: TEAM-497 (cuda_backend/mod.rs:1909-1913)
+    // TEAM-499: Implemented upsample_nearest2d with CUDA parity
     pub(super) fn upsample_nearest2d_impl(
         &self,
         layout: &crate::Layout,
@@ -24,30 +25,55 @@ impl RocmStorage {
             );
         }
 
-        let (batch, channels, in_h, in_w) = (dims[0], dims[1], dims[2], dims[3]);
-        let dst_el = batch * channels * out_h * out_w;
-
-        let scale_h = in_h / out_h;
-        let scale_w = in_w / out_w;
-
         let device = self.device().clone();
+        let stream = device.hip_device().default_stream()?;
+
+        // TEAM-499: Create info array (dims + strides) like CUDA (cuda_backend/mod.rs:947-949)
+        let info_vec = [dims, layout.stride()].concat();
+        let info = device.hip_device().htod_copy(info_vec)?;
+
+        // TEAM-499: Calculate scales as f64 like CUDA (cuda_backend/mod.rs:959-960)
+        let scale_w = dims[2] as f64 / out_w as f64;
+        let scale_h = dims[3] as f64 / out_h as f64;
+
+        let dst_el = out_w * out_h * dims[0] * dims[1];
 
         let slice = match &self.slice {
             S::F32(input) => {
                 let input_slice = &input.slice(layout.start_offset()..);
                 let mut output = unsafe { device.hip_device().alloc::<f32>(dst_el)? };
 
-                // Call rocm-rs kernel wrapper
-                // TODO: This needs the actual rocm-rs integration
-                // For now, return error indicating kernel needs to be wired up
-                return Err(RocmError::InternalError(
-                    "upsample_nearest2d_f32 kernel wrapper not yet integrated - needs rocm-rs module loading"
-                ).into());
+                // TEAM-499: Call rocm-rs kernel with CUDA-compatible signature
+                rocm_rs::rocarray::kernels::upsample_nearest2d_f32(
+                    out_w,
+                    out_h,
+                    scale_w,
+                    scale_h,
+                    &info,
+                    input_slice,
+                    &mut output,
+                    &stream,
+                )?;
+
+                S::F32(output)
             }
-            S::F16(_) => {
-                return Err(
-                    RocmError::InternalError("upsample_nearest2d f16 not yet implemented").into()
-                );
+            S::F16(input) => {
+                let input_slice = &input.slice(layout.start_offset()..);
+                let mut output = unsafe { device.hip_device().alloc::<half::f16>(dst_el)? };
+
+                // TEAM-499: Call rocm-rs kernel for f16
+                rocm_rs::rocarray::kernels::upsample_nearest2d_f16(
+                    out_w,
+                    out_h,
+                    scale_w,
+                    scale_h,
+                    &info,
+                    input_slice,
+                    &mut output,
+                    &stream,
+                )?;
+
+                S::F16(output)
             }
             _ => {
                 return Err(RocmError::InternalError(
