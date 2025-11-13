@@ -19,6 +19,7 @@ pub struct Model {
     repeat_penalty: f32,
     repeat_last_n: usize,
     eos_token: u32,
+    enable_thinking: bool,
 }
 
 #[wasm_bindgen]
@@ -87,6 +88,7 @@ impl Model {
                 repeat_penalty: 1.,
                 repeat_last_n: 64,
                 eos_token,
+                enable_thinking: true,
             })
         }
     }
@@ -100,8 +102,11 @@ impl Model {
         repeat_penalty: f32,
         repeat_last_n: usize,
         seed: f64,
+        enable_thinking: bool,
     ) -> Result<String, JsError> {
         let _prof = ProfileGuard::new("init_with_prompt");
+
+        self.enable_thinking = enable_thinking;
 
         // Clear KV cache
         {
@@ -122,10 +127,12 @@ impl Model {
         self.repeat_last_n = repeat_last_n;
         self.tokens.clear();
 
+        let formatted_prompt = format_prompt(&prompt, enable_thinking);
+
         let tokens = {
             let _prof = ProfileGuard::new("tokenize_prompt");
             self.tokenizer
-                .encode(prompt, true)
+                .encode(formatted_prompt, true)
                 .map_err(|m| JsError::new(&m.to_string()))?
                 .get_ids()
                 .to_vec()
@@ -188,6 +195,22 @@ impl Model {
 
         Ok(result)
     }
+}
+
+fn format_prompt(prompt: &str, enable_thinking: bool) -> String {
+    // Set reasoning mode based on thinking flag
+    let reasoning_mode = if enable_thinking {
+        "/think"
+    } else {
+        "/no_think"
+    };
+
+    format!(
+        "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n{}",
+        reasoning_mode,
+        prompt,
+        if !enable_thinking { "\n</think>\n" } else { "" }
+    )
 }
 
 impl Model {

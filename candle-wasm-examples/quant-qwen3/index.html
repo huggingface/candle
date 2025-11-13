@@ -280,6 +280,11 @@
                     value="100"
                 />
             </div>
+            <div class="prompt-section">
+                <label>
+                    <input type="checkbox" id="enableThinking" checked> Enable Reasoning Mode
+                </label>
+            </div>
 
             <div class="controls">
                 <button id="generateBtn" class="primary" onclick="generate()" disabled>
@@ -340,32 +345,41 @@
             window.location.pathname.split('/').filter(Boolean).pop() + '.gguf' :
             'Qwen3-0.6B-Q8_0.gguf';
 
-        function formatChatPrompt(userMessage) {
-            return `<|im_start|>system
-You are a helpful assistant.<|im_end|>
-<|im_start|>user
-${userMessage}<|im_end|>
-<|im_start|>assistant
-<think>
-`;
-        }
+        let currentThinkingMode = true;
+        
+        function parseResponse(fullText, enableThinking) {
+            if (enableThinking) {
+                const lastThinkStart = fullText.lastIndexOf('<think>');
+                const lastThinkEnd = fullText.lastIndexOf('</think>');
 
-        function parseResponse(fullText) {
-            if (fullText.includes('</think>')) {
-                const thinkEndPos = fullText.indexOf('</think>');
-                const thinkingRaw = fullText.substring(0, thinkEndPos);
-                const responseRaw = fullText.substring(thinkEndPos + 8);
+                // If last <think> comes after last </think>, we're still in thinking mode
+                if (lastThinkStart > lastThinkEnd) {
+                    // Currently inside a <think> block - everything is thinking
+                    return {
+                        thinking: cleanTokens(fullText),
+                        response: ''
+                    };
+                } else if (lastThinkEnd !== -1) {
+                    // We have a closed </think> and no <think> after it - split here
+                    const thinkingRaw = fullText.substring(0, lastThinkEnd);
+                    const responseRaw = fullText.substring(lastThinkEnd + 8); // Skip '</think>'
 
-                return {
-                    thinking: cleanTokens(thinkingRaw.replace(/<think>/g, '')),
-                    response: cleanTokens(responseRaw)
-                };
+                    return {
+                        thinking: cleanTokens(thinkingRaw),
+                        response: cleanTokens(responseRaw)
+                    };
+                } else {
+                    // No tags yet - still building initial thinking
+                    return {
+                        thinking: cleanTokens(fullText),
+                        response: ''
+                    };
+                }
             } else {
-                // Still building thinking
-                const thinkingPartial = fullText.replace(/<think>/g, '');
+                // Non-thinking mode: everything is response
                 return {
-                    thinking: cleanTokens(thinkingPartial),
-                    response: ''
+                    thinking: '',
+                    response: cleanTokens(fullText)
                 };
             }
         }
@@ -375,8 +389,8 @@ ${userMessage}<|im_end|>
                 .replace(/<\|im_start\|>/g, '')
                 .replace(/<\|im_end\|>/g, '')
                 .replace(/<\|endoftext\|>/g, '')
-                .replace(/<think>/g, '')
-                .replace(/<\/think>/g, '')
+                .replace(/<think>/g, '')      // Remove all <think> tags
+                .replace(/<\/think>/g, '')    // Remove all </think> tags
                 .trim();
         }
 
@@ -476,6 +490,7 @@ ${userMessage}<|im_end|>
             const outputDiv = document.getElementById('output');
             const thinkingOutputDiv = document.getElementById('thinkingOutput');
             const thinkingSection = document.getElementById('thinkingSection');
+            const enableThinking = document.getElementById('enableThinking').checked;
 
             // Disable UI
             generateBtn.disabled = true;
@@ -495,7 +510,6 @@ ${userMessage}<|im_end|>
 
             try {
                 const userPrompt = promptInput.value;
-                const formattedPrompt = formatChatPrompt(userPrompt);
 
                 updateStatus('Generating...', 'loading');
                 profile_clear();
@@ -503,16 +517,17 @@ ${userMessage}<|im_end|>
 
                 // Initialize with formatted prompt
                 const firstToken = model.init_with_prompt(
-                    formattedPrompt,
+                    userPrompt,
                     0.0,    // temperature (0 for deterministic)
                     0.0,    // top_p
                     1.1,    // repeat_penalty
                     64,     // repeat_last_n
-                    42      // seed (fixed for reproducibility)
+                    42,     // seed (fixed for reproducibility)
+                    enableThinking    // enable thinking
                 );
 
                 fullResponse += firstToken;
-                let parsed = parseResponse(fullResponse);
+                let parsed = parseResponse(fullResponse, enableThinking);
 
                 if (parsed.thinking) {
                     thinkingSection.style.display = 'block';
@@ -542,7 +557,7 @@ ${userMessage}<|im_end|>
                     tokenCount++;
 
                     // Parse and update displays
-                    parsed = parseResponse(fullResponse);
+                    parsed = parseResponse(fullResponse, enableThinking);
 
                     if (parsed.thinking) {
                         thinkingSection.style.display = 'block';
