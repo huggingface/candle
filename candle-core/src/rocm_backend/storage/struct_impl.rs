@@ -3,9 +3,9 @@
 //! Modified by: TEAM-491-496 (Kernel work and backend implementation)
 //! CUDA parity verified by: TEAM-497
 
+use super::RocmStorageSlice;
 use crate::rocm_backend::{miopen, RocmDevice, RocmError};
 use crate::Result;
-use super::RocmStorageSlice;
 
 type S = RocmStorageSlice;
 
@@ -55,5 +55,89 @@ impl RocmStorage {
         mode: rocm_rs::miopen::ffi::miopenPoolingMode_t,
     ) -> Result<Self> {
         miopen::pool2d(self, layout, k, stride, mode)
+    }
+
+    // Created by: TEAM-502 | CUDA parity: cuda_backend/mod.rs:1137-1191 (wrap_cuda_slice pattern)
+    /// Wrap a DeviceMemory<f32> into RocmStorage
+    pub fn wrap_rocm_slice(mem: rocm_rs::hip::DeviceMemory<f32>, device: RocmDevice) -> Self {
+        Self { slice: RocmStorageSlice::F32(mem), device }
+    }
+
+    // Created by: TEAM-502 | CUDA parity: cuda_backend/mod.rs:1137-1191 (wrap_cuda_slice pattern)
+    /// Wrap a DeviceMemory<f16> into RocmStorage
+    pub fn wrap_rocm_slice_f16(
+        mem: rocm_rs::hip::DeviceMemory<half::f16>,
+        device: RocmDevice,
+    ) -> Self {
+        Self { slice: RocmStorageSlice::F16(mem), device }
+    }
+
+    // Created by: TEAM-502 | CUDA parity: cuda_backend/mod.rs (as_cuda_slice pattern)
+    /// Get a reference to the underlying DeviceMemory<f32>
+    pub fn as_hip_slice<T>(&self) -> Result<&rocm_rs::hip::DeviceMemory<T>>
+    where
+        T: 'static,
+    {
+        use std::any::TypeId;
+
+        match &self.slice {
+            S::F32(mem) if TypeId::of::<T>() == TypeId::of::<f32>() => {
+                // SAFETY: We've checked the type matches
+                Ok(unsafe {
+                    &*(mem as *const rocm_rs::hip::DeviceMemory<f32>
+                        as *const rocm_rs::hip::DeviceMemory<T>)
+                })
+            }
+            S::F16(mem) if TypeId::of::<T>() == TypeId::of::<half::f16>() => {
+                // SAFETY: We've checked the type matches
+                Ok(unsafe {
+                    &*(mem as *const rocm_rs::hip::DeviceMemory<half::f16>
+                        as *const rocm_rs::hip::DeviceMemory<T>)
+                })
+            }
+            S::F64(mem) if TypeId::of::<T>() == TypeId::of::<f64>() => {
+                // SAFETY: We've checked the type matches
+                Ok(unsafe {
+                    &*(mem as *const rocm_rs::hip::DeviceMemory<f64>
+                        as *const rocm_rs::hip::DeviceMemory<T>)
+                })
+            }
+            S::U8(mem) if TypeId::of::<T>() == TypeId::of::<u8>() => {
+                // SAFETY: We've checked the type matches
+                Ok(unsafe {
+                    &*(mem as *const rocm_rs::hip::DeviceMemory<u8>
+                        as *const rocm_rs::hip::DeviceMemory<T>)
+                })
+            }
+            S::U32(mem) if TypeId::of::<T>() == TypeId::of::<u32>() => {
+                // SAFETY: We've checked the type matches
+                Ok(unsafe {
+                    &*(mem as *const rocm_rs::hip::DeviceMemory<u32>
+                        as *const rocm_rs::hip::DeviceMemory<T>)
+                })
+            }
+            S::I64(mem) if TypeId::of::<T>() == TypeId::of::<i64>() => {
+                // SAFETY: We've checked the type matches
+                Ok(unsafe {
+                    &*(mem as *const rocm_rs::hip::DeviceMemory<i64>
+                        as *const rocm_rs::hip::DeviceMemory<T>)
+                })
+            }
+            S::BF16(mem) if TypeId::of::<T>() == TypeId::of::<half::bf16>() => {
+                // SAFETY: We've checked the type matches
+                Ok(unsafe {
+                    &*(mem as *const rocm_rs::hip::DeviceMemory<half::bf16>
+                        as *const rocm_rs::hip::DeviceMemory<T>)
+                })
+            }
+            _ => Err(crate::Error::UnexpectedDType {
+                msg: format!(
+                    "Type mismatch in as_hip_slice: expected {:?}, got {:?}",
+                    std::any::type_name::<T>(),
+                    self.dtype()
+                ),
+            }
+            .bt()),
+        }
     }
 }

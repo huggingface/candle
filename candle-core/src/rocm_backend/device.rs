@@ -75,6 +75,48 @@ impl RocmDevice {
     pub fn hip_device(&self) -> &HipDevice {
         &self.inner
     }
+
+    // Created by: TEAM-502 | CUDA parity: cuda_backend/device.rs:56-58
+    /// Allocate device memory
+    pub unsafe fn alloc<T>(&self, len: usize) -> Result<rocm_rs::hip::DeviceMemory<T>> {
+        self.inner.alloc::<T>(len).map_err(RocmError::from)
+    }
+
+    // Created by: TEAM-502 | CUDA parity: cuda_backend/device.rs:59-65
+    /// Allocate zero-initialized device memory
+    pub fn alloc_zeros<T>(&self, len: usize) -> Result<rocm_rs::hip::DeviceMemory<T>>
+    where
+        T: Default + Clone,
+    {
+        self.inner.alloc_zeros::<T>(len).map_err(RocmError::from)
+    }
+
+    // Created by: TEAM-502 | CUDA parity: cuda_backend/device.rs (memcpy operations)
+    /// Copy data from host (stack) to device
+    pub fn memcpy_stod<T: Clone>(&self, src: &[T]) -> Result<rocm_rs::hip::DeviceMemory<T>> {
+        let mut dst = unsafe { self.alloc::<T>(src.len())? };
+        self.inner.memcpy_htod(src, &mut dst).map_err(RocmError::from)?;
+        Ok(dst)
+    }
+
+    // Created by: TEAM-502 | CUDA parity: cuda_backend/device.rs (memcpy operations)
+    /// Copy data from host to device
+    pub fn memcpy_htod<T>(&self, src: &[T], dst: &mut rocm_rs::hip::DeviceMemory<T>) -> Result<()> {
+        self.inner.memcpy_htod(src, dst).map_err(RocmError::from)
+    }
+
+    // Created by: TEAM-502 | CUDA parity: cuda_backend/device.rs (memcpy operations)
+    /// Copy data from device to host (vector)
+    pub fn memcpy_dtov<T: Clone>(&self, src: &rocm_rs::hip::DeviceMemory<T>) -> Result<Vec<T>> {
+        self.inner.memcpy_dtoh(src).map_err(RocmError::from)
+    }
+
+    // Created by: TEAM-502 | CUDA parity: cuda_backend/device.rs (kernel loading)
+    /// Get or load a kernel function from HSACO binary
+    pub fn get_or_load_func(&self, name: &str, hsaco: &[u8]) -> Result<rocm_rs::hip::Function> {
+        let module = self.inner.load_module(hsaco).map_err(RocmError::from)?;
+        module.get_function(name).map_err(RocmError::from)
+    }
 }
 
 impl PartialEq for RocmDevice {
