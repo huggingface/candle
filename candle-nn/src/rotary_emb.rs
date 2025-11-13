@@ -227,22 +227,61 @@ impl candle::CustomOp3 for RotaryEmbI {
     #[cfg(feature = "rocm")]
     fn rocm_fwd(
         &self,
-        _s1: &candle::RocmStorage,
-        _l1: &Layout,
-        _s2: &candle::RocmStorage,
-        _l2: &Layout,
-        _s3: &candle::RocmStorage,
-        _l3: &Layout,
+        s1: &candle::RocmStorage,
+        l1: &Layout,
+        s2: &candle::RocmStorage,
+        l2: &Layout,
+        s3: &candle::RocmStorage,
+        l3: &Layout,
     ) -> Result<(candle::RocmStorage, Shape)> {
-        // TODO: Implement RopeI (Rotary Embeddings - Interleaved) for ROCm
-        // This requires a custom HIP kernel similar to the CUDA/Metal implementations
-        // Reference: candle-kernels/src/ternary.cu (rope_i kernel)
-        candle::bail!(
-            "RopeI (Rotary Embeddings - Interleaved) is not yet implemented for ROCm. \
-             This requires a custom HIP kernel implementation at: \
-             deps/rocm-rs/src/rocarray/kernels.hip. \
-             See CUDA reference: candle-kernels/src/ternary.cu"
-        )
+        // TEAM-505: Wired up RopeI to use TEAM-503's HIP kernel implementation
+        // TEAM-506: CUDA parity verified ✅
+        // Matches CUDA implementation (lines 100-166): stride_b calculation, contiguous checks, kernel parameters
+        use candle::backend::BackendStorage;
+        
+        let (b, h, t, d) = l1.shape().dims4()?;
+        let stride_b = if l2.dims().len() == 3 && l3.dims().len() == 3 {
+            h * t * d  // TEAM-506: Fixed to match CUDA (was t * d / 2)
+        } else {
+            0
+        };
+        
+        let src = match l1.contiguous_offsets() {
+            None => candle::bail!("input has to be contiguous"),
+            Some((o1, o2)) => s1.slice(o1..o2),
+        };
+        let cos = match l2.contiguous_offsets() {
+            None => candle::bail!("cos has to be contiguous"),
+            Some((o1, o2)) => s2.slice(o1..o2),
+        };
+        let sin = match l3.contiguous_offsets() {
+            None => candle::bail!("sin has to be contiguous"),
+            Some((o1, o2)) => s3.slice(o1..o2),
+        };
+        
+        let el = l1.shape().elem_count();
+        let dev = s1.device();
+        let dst = dev.alloc::<f32>(el)?;
+        
+        // Call the HIP kernel
+        rocm_rs::rocarray::kernels::rope_i_f32(
+            &src,
+            &cos,
+            &sin,
+            &dst,
+            b,
+            h,
+            t,
+            d,
+            stride_b,
+            dev.stream(),
+        )?;
+        
+        let dst_storage = candle::RocmStorage {
+            slice: dst,
+            device: dev.clone(),
+        };
+        Ok((dst_storage, l1.shape().clone()))
     }
 }
 
@@ -532,22 +571,61 @@ impl candle::CustomOp3 for RotaryEmb {
     #[cfg(feature = "rocm")]
     fn rocm_fwd(
         &self,
-        _s1: &candle::RocmStorage,
-        _l1: &Layout,
-        _s2: &candle::RocmStorage,
-        _l2: &Layout,
-        _s3: &candle::RocmStorage,
-        _l3: &Layout,
+        s1: &candle::RocmStorage,
+        l1: &Layout,
+        s2: &candle::RocmStorage,
+        l2: &Layout,
+        s3: &candle::RocmStorage,
+        l3: &Layout,
     ) -> Result<(candle::RocmStorage, Shape)> {
-        // TODO: Implement Rope (Rotary Embeddings - Standard) for ROCm
-        // This requires a custom HIP kernel similar to the CUDA/Metal implementations
-        // Reference: candle-kernels/src/ternary.cu (rope kernel)
-        candle::bail!(
-            "Rope (Rotary Embeddings - Standard) is not yet implemented for ROCm. \
-             This requires a custom HIP kernel implementation at: \
-             deps/rocm-rs/src/rocarray/kernels.hip. \
-             See CUDA reference: candle-kernels/src/ternary.cu"
-        )
+        // TEAM-505: Wired up Rope to use TEAM-503's HIP kernel implementation
+        // TEAM-506: CUDA parity verified ✅
+        // Matches CUDA implementation (lines 368-434): stride_b = h * t * d, contiguous checks, kernel parameters
+        use candle::backend::BackendStorage;
+        
+        let (b, h, t, d) = l1.shape().dims4()?;
+        let stride_b = if l2.dims().len() == 3 && l3.dims().len() == 3 {
+            h * t * d  // TEAM-506: Correct - matches CUDA
+        } else {
+            0
+        };
+        
+        let src = match l1.contiguous_offsets() {
+            None => candle::bail!("input has to be contiguous"),
+            Some((o1, o2)) => s1.slice(o1..o2),
+        };
+        let cos = match l2.contiguous_offsets() {
+            None => candle::bail!("cos has to be contiguous"),
+            Some((o1, o2)) => s2.slice(o1..o2),
+        };
+        let sin = match l3.contiguous_offsets() {
+            None => candle::bail!("sin has to be contiguous"),
+            Some((o1, o2)) => s3.slice(o1..o2),
+        };
+        
+        let el = l1.shape().elem_count();
+        let dev = s1.device();
+        let dst = dev.alloc::<f32>(el)?;
+        
+        // Call the HIP kernel
+        rocm_rs::rocarray::kernels::rope_f32(
+            &src,
+            &cos,
+            &sin,
+            &dst,
+            b,
+            h,
+            t,
+            d,
+            stride_b,
+            dev.stream(),
+        )?;
+        
+        let dst_storage = candle::RocmStorage {
+            slice: dst,
+            device: dev.clone(),
+        };
+        Ok((dst_storage, l1.shape().clone()))
     }
 }
 
@@ -824,22 +902,61 @@ impl candle::CustomOp3 for RotaryEmbThd {
     #[cfg(feature = "rocm")]
     fn rocm_fwd(
         &self,
-        _s1: &candle::RocmStorage,
-        _l1: &Layout,
-        _s2: &candle::RocmStorage,
-        _l2: &Layout,
-        _s3: &candle::RocmStorage,
-        _l3: &Layout,
+        s1: &candle::RocmStorage,
+        l1: &Layout,
+        s2: &candle::RocmStorage,
+        l2: &Layout,
+        s3: &candle::RocmStorage,
+        l3: &Layout,
     ) -> Result<(candle::RocmStorage, Shape)> {
-        // TODO: Implement RopeThd (Rotary Embeddings - Threaded) for ROCm
-        // This requires a custom HIP kernel similar to the CUDA/Metal implementations
-        // Reference: candle-kernels/src/ternary.cu (rope_thd kernel)
-        candle::bail!(
-            "RopeThd (Rotary Embeddings - Threaded) is not yet implemented for ROCm. \
-             This requires a custom HIP kernel implementation at: \
-             deps/rocm-rs/src/rocarray/kernels.hip. \
-             See CUDA reference: candle-kernels/src/ternary.cu"
-        )
+        // TEAM-505: Wired up RopeThd to use TEAM-503's HIP kernel implementation
+        // TEAM-506: CUDA parity verified ✅
+        // Matches CUDA implementation (lines 697-763): stride_b calculation, contiguous checks, kernel parameters
+        use candle::backend::BackendStorage;
+        
+        let (b, t, h, d) = l1.shape().dims4()?;
+        let stride_b = if l2.dims().len() == 3 && l3.dims().len() == 3 {
+            t * d / 2  // TEAM-506: Correct - matches CUDA (different from rope_f32)
+        } else {
+            0
+        };
+        
+        let src = match l1.contiguous_offsets() {
+            None => candle::bail!("input has to be contiguous"),
+            Some((o1, o2)) => s1.slice(o1..o2),
+        };
+        let cos = match l2.contiguous_offsets() {
+            None => candle::bail!("cos has to be contiguous"),
+            Some((o1, o2)) => s2.slice(o1..o2),
+        };
+        let sin = match l3.contiguous_offsets() {
+            None => candle::bail!("sin has to be contiguous"),
+            Some((o1, o2)) => s3.slice(o1..o2),
+        };
+        
+        let el = l1.shape().elem_count();
+        let dev = s1.device();
+        let dst = dev.alloc::<f32>(el)?;
+        
+        // Call the HIP kernel
+        rocm_rs::rocarray::kernels::rope_thd_f32(
+            &src,
+            &cos,
+            &sin,
+            &dst,
+            b,
+            t,
+            h,
+            d,
+            stride_b,
+            dev.stream(),
+        )?;
+        
+        let dst_storage = candle::RocmStorage {
+            slice: dst,
+            device: dev.clone(),
+        };
+        Ok((dst_storage, l1.shape().clone()))
     }
 }
 

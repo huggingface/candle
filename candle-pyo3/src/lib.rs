@@ -72,6 +72,8 @@ impl PyDType {
 
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 static METAL_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+#[cfg(feature = "rocm")]
+static ROCM_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PyDevice {
@@ -116,7 +118,12 @@ impl PyDevice {
             }
             #[cfg(feature = "rocm")]
             Self::Rocm => {
+                let mut device = ROCM_DEVICE.lock().unwrap();
+                if let Some(device) = device.as_ref() {
+                    return Ok(device.clone());
+                };
                 let d = Device::new_rocm(0).map_err(wrap_err)?;
+                *device = Some(d.clone());
                 Ok(d)
             }
         }
