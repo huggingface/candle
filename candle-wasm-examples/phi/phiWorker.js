@@ -1,4 +1,4 @@
-import init, { Model } from "./build/m.js";
+import init, { Model, initThreadPool } from "./build/m.js";
 
 async function fetchArrayBuffer(url) {
   const cacheName = "phi-mixformer-candle-cache";
@@ -13,13 +13,18 @@ async function fetchArrayBuffer(url) {
   return new Uint8Array(await res.arrayBuffer());
 }
 async function concatenateArrayBuffers(urls) {
-  const arrayBuffers = await Promise.all(urls.map(url => fetchArrayBuffer(url)));
+  const arrayBuffers = await Promise.all(
+    urls.map((url) => fetchArrayBuffer(url))
+  );
 
-  let totalLength = arrayBuffers.reduce((acc, arrayBuffer) => acc + arrayBuffer.byteLength, 0);
+  let totalLength = arrayBuffers.reduce(
+    (acc, arrayBuffer) => acc + arrayBuffer.byteLength,
+    0
+  );
   let concatenatedBuffer = new Uint8Array(totalLength);
 
   let offset = 0;
-  arrayBuffers.forEach(buffer => {
+  arrayBuffers.forEach((buffer) => {
     concatenatedBuffer.set(new Uint8Array(buffer), offset);
     offset += buffer.byteLength;
   });
@@ -39,11 +44,14 @@ class Phi {
     // load individual modelID only once
     if (!this.instance[modelID]) {
       await init();
+      await initThreadPool(navigator.hardwareConcurrency || 4);
 
       self.postMessage({ status: "loading", message: "Loading Model" });
       const [weightsArrayU8, tokenizerArrayU8, configArrayU8] =
         await Promise.all([
-          weightsURL instanceof Array ? concatenateArrayBuffers(weightsURL) : fetchArrayBuffer(weightsURL),
+          weightsURL instanceof Array
+            ? concatenateArrayBuffers(weightsURL)
+            : fetchArrayBuffer(weightsURL),
           fetchArrayBuffer(tokenizerURL),
           fetchArrayBuffer(configURL),
         ]);
