@@ -641,7 +641,6 @@ impl ScatteredCacheBuilder {
 /// **Recommended for:**
 /// - GPU inference (CUDA, Metal)
 /// - Autoregressive generation (token-by-token decoding)
-/// - Production inference servers prioritizing throughput
 ///
 /// **Use `KvCache` instead for:**
 /// - CPU-only inference
