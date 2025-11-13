@@ -249,3 +249,106 @@ pub fn launch_cast<I, O>(
     
     Ok(out)
 }
+
+/// Launch binary operation kernel - MATCHES Candle CUDA signature
+/// Signature: (numel, num_dims, info, lhs, rhs, out)
+/// TEAM-494: Added for binary operations (add, sub, mul, div)
+pub fn launch_binary<T>(
+    kernel_name: &str,
+    device: &rocm_rs::hip::Device,
+    lhs: &DeviceMemory<T>,
+    lhs_layout: &Layout,
+    rhs: &DeviceMemory<T>,
+    rhs_layout: &Layout,
+) -> Result<DeviceMemory<T>> {
+    let func = get_kernel(kernel_name)?;
+    let shape = lhs_layout.shape();
+    let el = shape.elem_count();
+    let (grid, block) = launch_config_for_num_elems(el as u32);
+    
+    // Binary ops use SEPARATE strides for lhs and rhs
+    // info layout: [dims, lhs_strides, rhs_strides]
+    let mut info = Vec::with_capacity(shape.rank() * 3);
+    info.extend_from_slice(lhs_layout.dims());
+    info.extend_from_slice(lhs_layout.stride());
+    info.extend_from_slice(rhs_layout.stride());
+    
+    let device_info = device
+        .htod_copy(info)
+        .map_err(|e| RocmError::KernelError(format!("Failed to copy binary layout info: {:?}", e)))?;
+    
+    let lhs_offset = &lhs.slice(lhs_layout.start_offset()..);
+    let rhs_offset = &rhs.slice(rhs_layout.start_offset()..);
+    
+    let out = device
+        .alloc::<T>(el)
+        .map_err(|e| RocmError::OutOfMemory { requested: el * std::mem::size_of::<T>() })?;
+    
+    // Build args: (numel, num_dims, info, lhs, rhs, out)
+    let mut args = [
+        &(el as usize) as *const usize as *mut c_void,
+        &shape.rank() as *const usize as *mut c_void,
+        device_info.as_ptr() as *mut c_void,
+        lhs_offset.as_ptr() as *mut c_void,
+        rhs_offset.as_ptr() as *mut c_void,
+        out.as_ptr() as *mut c_void,
+    ];
+    
+    unsafe {
+        func.launch(grid, block, 0, None, &mut args)
+            .map_err(|e| RocmError::KernelError(format!("Binary kernel launch failed: {:?}", e)))?;
+    }
+    
+    Ok(out)
+}
+
+/// Launch reduce operation kernel - MATCHES Candle CUDA signature
+/// Signature: (numel, num_dims, info, inp, out)
+/// TEAM-494: Added for reduce operations (sum, min, max)
+pub fn launch_reduce<T>(
+    kernel_name: &str,
+    device: &rocm_rs::hip::Device,
+    src: &DeviceMemory<T>,
+    layout: &Layout,
+    sum_dims: &[usize],
+) -> Result<DeviceMemory<T>>
+where
+    T: Copy + Default,
+{
+    let func = get_kernel(kernel_name)?;
+    let shape = layout.shape();
+    
+    // Calculate output shape (reduced dimensions)
+    let mut out_dims = shape.dims().to_vec();
+    for &dim in sum_dims.iter().rev() {
+        out_dims.remove(dim);
+    }
+    let out_el = if out_dims.is_empty() { 1 } else { out_dims.iter().product() };
+    
+    let el = shape.elem_count();
+    let (grid, block) = launch_config_for_num_elems(el as u32);
+    
+    let ds = SlicePtrOrNull::from_layout(device, layout)?;
+    let src_offset = &src.slice(layout.start_offset()..);
+    
+    // Allocate output with reduced size
+    let out = device
+        .alloc::<T>(out_el)
+        .map_err(|e| RocmError::OutOfMemory { requested: out_el * std::mem::size_of::<T>() })?;
+    
+    // Build args: (numel, num_dims, info, inp, out)
+    let mut args = [
+        &(el as usize) as *const usize as *mut c_void,
+        &shape.rank() as *const usize as *mut c_void,
+        ds.as_ptr() as *mut c_void,
+        src_offset.as_ptr() as *mut c_void,
+        out.as_ptr() as *mut c_void,
+    ];
+    
+    unsafe {
+        func.launch(grid, block, 0, None, &mut args)
+            .map_err(|e| RocmError::KernelError(format!("Reduce kernel launch failed: {:?}", e)))?;
+    }
+    
+    Ok(out)
+}

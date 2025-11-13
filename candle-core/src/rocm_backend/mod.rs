@@ -67,6 +67,48 @@ struct Powf(f64);
 struct Elu(f64);
 
 // ============================================================================
+// TEAM-494: Binary Operation Structs (Map2 pattern)
+// ============================================================================
+
+struct BinaryAdd;
+struct BinarySub;
+struct BinaryMul;
+struct BinaryDiv;
+
+// ============================================================================
+// TEAM-495: Comparison Operation Structs (Map2 pattern)
+// ============================================================================
+
+struct CmpEq;
+struct CmpNe;
+struct CmpLt;
+struct CmpLe;
+struct CmpGt;
+struct CmpGe;
+
+// ============================================================================
+// TEAM-494: Reduce Operation Structs (Map1Any pattern)
+// ============================================================================
+
+struct ReduceSum { sum_dims: Vec<usize> };
+struct ReduceMin { sum_dims: Vec<usize> };
+struct ReduceMax { sum_dims: Vec<usize> };
+
+// ============================================================================
+// TEAM-494: Unary Operation Dispatcher
+// ============================================================================
+
+struct UnaryOp<T: crate::op::UnaryOpT> {
+    _phantom: std::marker::PhantomData<T>,
+}
+
+impl<T: crate::op::UnaryOpT> UnaryOp<T> {
+    fn new() -> Self {
+        Self { _phantom: std::marker::PhantomData }
+    }
+}
+
+// ============================================================================
 // Map1 Implementations
 // ============================================================================
 
@@ -123,6 +165,217 @@ impl utils::Map1 for Elu {
         layout: &crate::Layout,
     ) -> Result<DeviceMemory<T>> {
         let kernel_name = format!("uelu_{}", T::DTYPE.as_str());
+        kernels::launch_unary(&kernel_name, dev.hip_device(), src, layout)
+    }
+}
+
+// ============================================================================
+// TEAM-494: Map2 Implementations for Binary Operations
+// ============================================================================
+
+impl utils::Map2 for BinaryAdd {
+    fn f<T: crate::WithDType>(
+        &self,
+        src1: &DeviceMemory<T>,
+        layout1: &crate::Layout,
+        src2: &DeviceMemory<T>,
+        layout2: &crate::Layout,
+        dev: &RocmDevice,
+    ) -> Result<DeviceMemory<T>> {
+        let kernel_name = format!("badd_{}", T::DTYPE.as_str());
+        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+    }
+}
+
+impl utils::Map2 for BinarySub {
+    fn f<T: crate::WithDType>(
+        &self,
+        src1: &DeviceMemory<T>,
+        layout1: &crate::Layout,
+        src2: &DeviceMemory<T>,
+        layout2: &crate::Layout,
+        dev: &RocmDevice,
+    ) -> Result<DeviceMemory<T>> {
+        let kernel_name = format!("bsub_{}", T::DTYPE.as_str());
+        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+    }
+}
+
+impl utils::Map2 for BinaryMul {
+    fn f<T: crate::WithDType>(
+        &self,
+        src1: &DeviceMemory<T>,
+        layout1: &crate::Layout,
+        src2: &DeviceMemory<T>,
+        layout2: &crate::Layout,
+        dev: &RocmDevice,
+    ) -> Result<DeviceMemory<T>> {
+        let kernel_name = format!("bmul_{}", T::DTYPE.as_str());
+        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+    }
+}
+
+impl utils::Map2 for BinaryDiv {
+    fn f<T: crate::WithDType>(
+        &self,
+        src1: &DeviceMemory<T>,
+        layout1: &crate::Layout,
+        src2: &DeviceMemory<T>,
+        layout2: &crate::Layout,
+        dev: &RocmDevice,
+    ) -> Result<DeviceMemory<T>> {
+        let kernel_name = format!("bdiv_{}", T::DTYPE.as_str());
+        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+    }
+}
+
+// ============================================================================
+// TEAM-495: Map2 Implementations for Comparison Operations
+// ============================================================================
+
+impl utils::Map2 for CmpEq {
+    fn f<T: crate::WithDType>(
+        &self,
+        src1: &DeviceMemory<T>,
+        layout1: &crate::Layout,
+        src2: &DeviceMemory<T>,
+        layout2: &crate::Layout,
+        dev: &RocmDevice,
+    ) -> Result<DeviceMemory<T>> {
+        let kernel_name = format!("eq_{}", T::DTYPE.as_str());
+        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+    }
+}
+
+impl utils::Map2 for CmpNe {
+    fn f<T: crate::WithDType>(
+        &self,
+        src1: &DeviceMemory<T>,
+        layout1: &crate::Layout,
+        src2: &DeviceMemory<T>,
+        layout2: &crate::Layout,
+        dev: &RocmDevice,
+    ) -> Result<DeviceMemory<T>> {
+        let kernel_name = format!("ne_{}", T::DTYPE.as_str());
+        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+    }
+}
+
+impl utils::Map2 for CmpLt {
+    fn f<T: crate::WithDType>(
+        &self,
+        src1: &DeviceMemory<T>,
+        layout1: &crate::Layout,
+        src2: &DeviceMemory<T>,
+        layout2: &crate::Layout,
+        dev: &RocmDevice,
+    ) -> Result<DeviceMemory<T>> {
+        let kernel_name = format!("lt_{}", T::DTYPE.as_str());
+        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+    }
+}
+
+impl utils::Map2 for CmpLe {
+    fn f<T: crate::WithDType>(
+        &self,
+        src1: &DeviceMemory<T>,
+        layout1: &crate::Layout,
+        src2: &DeviceMemory<T>,
+        layout2: &crate::Layout,
+        dev: &RocmDevice,
+    ) -> Result<DeviceMemory<T>> {
+        let kernel_name = format!("le_{}", T::DTYPE.as_str());
+        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+    }
+}
+
+impl utils::Map2 for CmpGt {
+    fn f<T: crate::WithDType>(
+        &self,
+        src1: &DeviceMemory<T>,
+        layout1: &crate::Layout,
+        src2: &DeviceMemory<T>,
+        layout2: &crate::Layout,
+        dev: &RocmDevice,
+    ) -> Result<DeviceMemory<T>> {
+        let kernel_name = format!("gt_{}", T::DTYPE.as_str());
+        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+    }
+}
+
+impl utils::Map2 for CmpGe {
+    fn f<T: crate::WithDType>(
+        &self,
+        src1: &DeviceMemory<T>,
+        layout1: &crate::Layout,
+        src2: &DeviceMemory<T>,
+        layout2: &crate::Layout,
+        dev: &RocmDevice,
+    ) -> Result<DeviceMemory<T>> {
+        let kernel_name = format!("ge_{}", T::DTYPE.as_str());
+        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+    }
+}
+
+// ============================================================================
+// TEAM-494: Map1Any Implementations for Reduce Operations
+// ============================================================================
+
+impl utils::Map1Any for ReduceSum {
+    fn f<T: crate::WithDType, W: Fn(DeviceMemory<T>) -> S>(
+        &self,
+        src: &DeviceMemory<T>,
+        dev: &RocmDevice,
+        layout: &crate::Layout,
+        wrap: W,
+    ) -> Result<S> {
+        let kernel_name = format!("reduce_sum_{}", T::DTYPE.as_str());
+        let result = kernels::launch_reduce(&kernel_name, dev.hip_device(), src, layout, &self.sum_dims)?;
+        Ok(wrap(result))
+    }
+}
+
+impl utils::Map1Any for ReduceMin {
+    fn f<T: crate::WithDType, W: Fn(DeviceMemory<T>) -> S>(
+        &self,
+        src: &DeviceMemory<T>,
+        dev: &RocmDevice,
+        layout: &crate::Layout,
+        wrap: W,
+    ) -> Result<S> {
+        let kernel_name = format!("reduce_min_{}", T::DTYPE.as_str());
+        let result = kernels::launch_reduce(&kernel_name, dev.hip_device(), src, layout, &self.sum_dims)?;
+        Ok(wrap(result))
+    }
+}
+
+impl utils::Map1Any for ReduceMax {
+    fn f<T: crate::WithDType, W: Fn(DeviceMemory<T>) -> S>(
+        &self,
+        src: &DeviceMemory<T>,
+        dev: &RocmDevice,
+        layout: &crate::Layout,
+        wrap: W,
+    ) -> Result<S> {
+        let kernel_name = format!("reduce_max_{}", T::DTYPE.as_str());
+        let result = kernels::launch_reduce(&kernel_name, dev.hip_device(), src, layout, &self.sum_dims)?;
+        Ok(wrap(result))
+    }
+}
+
+// ============================================================================
+// TEAM-494: Map1 Implementation for Generic Unary Operations
+// ============================================================================
+
+impl<T: crate::op::UnaryOpT> utils::Map1 for UnaryOp<T> {
+    fn f<U: crate::WithDType>(
+        &self,
+        src: &DeviceMemory<U>,
+        dev: &RocmDevice,
+        layout: &crate::Layout,
+    ) -> Result<DeviceMemory<U>> {
+        // Use the KERNEL constant from UnaryOpT trait
+        let kernel_name = format!("{}_{}", T::KERNEL, U::DTYPE.as_str());
         kernels::launch_unary(&kernel_name, dev.hip_device(), src, layout)
     }
 }
@@ -294,47 +547,95 @@ impl crate::backend::BackendStorage for RocmStorage {
     }
 
     // ==========================================================================
-    // TODO: TEAM-494 - Wire Existing rocm-rs Operations
+    // TEAM-494: ✅ COMPLETE - Wired reduce_op, binary_impl, unary_impl
+    // TEAM-495: ✅ COMPLETE - Added all missing kernels and wired cmp()
     // ==========================================================================
-    // These operations EXIST in rocm-rs but aren't wired to Candle yet!
+    // Status:
+    // ✅ reduce_op - Implemented (Sum, Min, Max)
+    // ✅ binary_impl - Implemented (Add, Sub, Mul, Div)
+    // ✅ unary_impl - Implemented (generic dispatch via UnaryOpT)
+    // ✅ cmp - Implemented (Eq, Ne, Lt, Le, Gt, Ge) - TEAM-495
     //
-    // 1. reduce_op - rocm-rs has reduce_sum/min/max in rocarray/kernels.rs
-    //    - Create ReduceSum/ReduceMin/ReduceMax structs
-    //    - Implement Map1Any trait for them
-    //    - Call rocm_rs::rocarray::kernels::reduce_*()
-    //
-    // 2. binary_impl - rocm-rs has elementwise_add/sub/mul/div
-    //    - Create Add/Sub/Mul/Div structs
-    //    - Implement Map2 trait for them
-    //    - Call rocm_rs::rocarray::kernels::elementwise_*()
-    //
-    // 3. unary_impl - rocm-rs has many unary kernels (exp, log, sin, etc.)
-    //    - Create generic dispatch based on UnaryOpT trait
-    //    - Call appropriate kernels::launch_unary() with kernel name
-    //
-    // 4. cmp - MISSING from rocm-rs (see TODO in rocm-rs/src/rocarray/kernels.hip)
-    //    - TEAM-495 needs to add comparison kernels first
-    //    - Then create Cmp struct and wire it here
+    // Kernels added by TEAM-495 to rocm-rs/src/rocarray/kernels.hip:
+    // ✅ Binary ops: badd_f32, bsub_f32, bmul_f32, bdiv_f32 (×5 types = 20 kernels)
+    // ✅ Comparison ops: eq_f32, ne_f32, lt_f32, le_f32, gt_f32, ge_f32 (×5 types = 30 kernels)
+    // ✅ Additional unary ops: uneg_f32, urecip_f32, uabs_f32, usqr_f32, etc. (×2 types = 24 kernels)
+    // Total: 74 kernels added
     // ==========================================================================
 
-    fn reduce_op(&self, _op: crate::op::ReduceOp, _layout: &crate::Layout, _sum_dims: &[usize]) -> Result<Self> {
-        // TODO: TEAM-494 - Wire rocm-rs reduce_sum/min/max
-        unimplemented!("reduce_op - rocm-rs HAS reduce_sum/min/max, need to wire them")
+    fn reduce_op(&self, op: crate::op::ReduceOp, layout: &crate::Layout, sum_dims: &[usize]) -> Result<Self> {
+        // TEAM-494: ✅ Implemented - calls ReduceSum/Min/Max via Map1Any
+        use crate::op::ReduceOp;
+        
+        let device = self.device().clone();
+        let sum_dims = sum_dims.to_vec();
+        
+        let slice = match op {
+            ReduceOp::Sum => ReduceSum { sum_dims }.map(&self.slice, &device, layout)?,
+            ReduceOp::Min => ReduceMin { sum_dims }.map(&self.slice, &device, layout)?,
+            ReduceOp::Max => ReduceMax { sum_dims }.map(&self.slice, &device, layout)?,
+            ReduceOp::ArgMin | ReduceOp::ArgMax => {
+                // ArgMin/ArgMax need special handling - return indices (U32)
+                return Err(RocmError::InternalError(
+                    "ArgMin/ArgMax not yet implemented for ROCm - need index-returning kernels"
+                ).into());
+            }
+        };
+        
+        Ok(Self { slice, device })
     }
 
-    fn cmp(&self, _op: crate::op::CmpOp, _rhs: &Self, _lhs_l: &crate::Layout, _rhs_l: &crate::Layout) -> Result<Self> {
-        // TODO: TEAM-495 - Add comparison kernels to rocm-rs first, then wire here
-        unimplemented!("cmp - need to add comparison kernels to rocm-rs/src/rocarray/kernels.hip")
+    fn cmp(&self, op: crate::op::CmpOp, rhs: &Self, lhs_l: &crate::Layout, rhs_l: &crate::Layout) -> Result<Self> {
+        // TEAM-495: ✅ Implemented - calls comparison kernels (eq, ne, lt, le, gt, ge)
+        use crate::op::CmpOp;
+        
+        let device = self.device().clone();
+        
+        let slice = match op {
+            CmpOp::Eq => CmpEq.map(&self.slice, lhs_l, &rhs.slice, rhs_l, &device)?,
+            CmpOp::Ne => CmpNe.map(&self.slice, lhs_l, &rhs.slice, rhs_l, &device)?,
+            CmpOp::Lt => CmpLt.map(&self.slice, lhs_l, &rhs.slice, rhs_l, &device)?,
+            CmpOp::Le => CmpLe.map(&self.slice, lhs_l, &rhs.slice, rhs_l, &device)?,
+            CmpOp::Gt => CmpGt.map(&self.slice, lhs_l, &rhs.slice, rhs_l, &device)?,
+            CmpOp::Ge => CmpGe.map(&self.slice, lhs_l, &rhs.slice, rhs_l, &device)?,
+        };
+        
+        Ok(Self { slice, device })
     }
 
-    fn unary_impl<B: crate::op::UnaryOpT>(&self, _layout: &crate::Layout) -> Result<Self> {
-        // TODO: TEAM-494 - Create generic dispatch to existing unary kernels
-        unimplemented!("unary_impl - rocm-rs HAS unary kernels (exp, log, sin, etc.), need generic dispatch")
+    fn unary_impl<B: crate::op::UnaryOpT>(&self, layout: &crate::Layout) -> Result<Self> {
+        // TEAM-494: ✅ Implemented - generic dispatch via UnaryOp<B>
+        let device = self.device().clone();
+        let slice = UnaryOp::<B>::new().map(&self.slice, &device, layout)?;
+        Ok(Self { slice, device })
     }
 
-    fn binary_impl<B: crate::op::BinaryOpT>(&self, _rhs: &Self, _lhs_l: &crate::Layout, _rhs_l: &crate::Layout) -> Result<Self> {
-        // TODO: TEAM-494 - Wire rocm-rs elementwise_add/sub/mul/div
-        unimplemented!("binary_impl - rocm-rs HAS elementwise_add/sub/mul/div, need to wire them")
+    fn binary_impl<B: crate::op::BinaryOpT>(&self, rhs: &Self, lhs_l: &crate::Layout, rhs_l: &crate::Layout) -> Result<Self> {
+        // TEAM-494: ✅ Implemented - calls BinaryAdd/Sub/Mul/Div via Map2
+        use crate::op::{Add, Sub, Mul, Div};
+        
+        let device = self.device().clone();
+        
+        // Dispatch based on BinaryOpT type using type_name as a workaround
+        // This is safe because we're matching on the concrete types
+        let type_name = std::any::type_name::<B>();
+        
+        let slice = if type_name.contains("::Add") {
+            BinaryAdd.map(&self.slice, lhs_l, &rhs.slice, rhs_l, &device)?
+        } else if type_name.contains("::Sub") {
+            BinarySub.map(&self.slice, lhs_l, &rhs.slice, rhs_l, &device)?
+        } else if type_name.contains("::Mul") {
+            BinaryMul.map(&self.slice, lhs_l, &rhs.slice, rhs_l, &device)?
+        } else if type_name.contains("::Div") {
+            BinaryDiv.map(&self.slice, lhs_l, &rhs.slice, rhs_l, &device)?
+        } else {
+            // For Maximum/Minimum, we need to implement them separately
+            return Err(RocmError::InternalError(
+                &format!("Binary operation {} not yet implemented for ROCm", type_name)
+            ).into());
+        };
+        
+        Ok(Self { slice, device })
     }
 
     fn where_cond(&self, layout: &crate::Layout, t: &Self, layout_t: &crate::Layout, f: &Self, layout_f: &crate::Layout) -> Result<Self> {
