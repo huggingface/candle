@@ -464,12 +464,15 @@ impl Tensor {
     }
 }
 
+// TEAM-510: Added ROCm support for user-defined kernels
 pub struct UgIOp1 {
     name: &'static str,
     #[cfg(feature = "cuda")]
     func: cudarc::driver::CudaFunction,
     #[cfg(feature = "metal")]
     func: candle_metal_kernels::metal::ComputePipeline,
+    #[cfg(feature = "rocm")]
+    func: rocm_rs::hip::Function,
 }
 
 impl UgIOp1 {
@@ -495,7 +498,17 @@ impl UgIOp1 {
             let func = device.compile(name, kernel)?;
             Ok(Self { name, func })
         }
-        #[cfg(not(any(feature = "cuda", feature = "metal")))]
+        // TEAM-510: ROCm support for user-defined kernels
+        #[cfg(feature = "rocm")]
+        {
+            let device = device.as_rocm_device()?;
+            let func = device.compile(name, kernel)?;
+            Ok(Self {
+                name,
+                func: func.into_hip_function(),
+            })
+        }
+        #[cfg(not(any(feature = "cuda", feature = "metal", feature = "rocm")))]
         {
             Ok(Self { name })
         }
@@ -569,6 +582,40 @@ impl InplaceOp1 for UgIOp1 {
         let mut builder = stream.launch_builder(&self.func);
         builder.arg(&sto);
         unsafe { builder.launch(cfg) }.w()?;
+        Ok(())
+    }
+
+    // TEAM-510: ROCm implementation for user-defined kernels
+    // Matches cuda_fwd pattern (lines 559-586)
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(&self, sto: &mut RocmStorage, layout: &Layout) -> Result<()> {
+        use crate::rocm_backend::WrapErr;
+
+        let elem_count = layout.shape().elem_count();
+        // TODO: support more dtypes.
+        let sto_slice = sto.as_rocm_slice::<f32>()?;
+        let sto_slice = match layout.contiguous_offsets() {
+            None => crate::bail!("input has to be contiguous"),
+            Some((o1, o2)) => &sto_slice[o1..o2],
+        };
+        let (g, b) = if elem_count % 32 == 0 {
+            (elem_count / 32, 32)
+        } else {
+            (elem_count, 1)
+        };
+        
+        // Launch HIP kernel
+        let grid_dim = rocm_rs::hip::utils::Dim3 { x: g as u32, y: 1, z: 1 };
+        let block_dim = rocm_rs::hip::utils::Dim3 { x: b as u32, y: 1, z: 1 };
+        
+        let mut kernel_params = vec![sto_slice.as_ptr() as *mut std::ffi::c_void];
+        self.func.launch(
+            grid_dim,
+            block_dim,
+            0, // shared_mem_bytes
+            Some(&sto.device.stream),
+            &mut kernel_params,
+        ).w()?;
         Ok(())
     }
 }

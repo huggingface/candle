@@ -25,6 +25,28 @@ struct ModuleStore {
 struct RocmRng(PseudoRng);
 unsafe impl Send for RocmRng {}
 
+// TEAM-510: ROCm function wrapper for ug-rocm (CUDA parity)
+// Matches cuda_backend/device.rs:108-125
+/// Wrapper for compiled ROCm kernel function
+pub struct RocmFunc {
+    func: rocm_rs::hip::Function,
+    stream: Arc<rocm_rs::hip::Stream>,
+}
+
+impl std::ops::Deref for RocmFunc {
+    type Target = rocm_rs::hip::Function;
+
+    fn deref(&self) -> &Self::Target {
+        &self.func
+    }
+}
+
+impl RocmFunc {
+    pub fn into_hip_function(self) -> rocm_rs::hip::Function {
+        self.func
+    }
+}
+
 /// Candle wrapper for ROCm device
 /// 
 /// This is a thin wrapper around rocm_rs::hip::Device.
@@ -40,10 +62,14 @@ pub struct RocmDevice {
     // TEAM-509: Random number generator (CUDA parity)
     // Matches cuda_backend/device.rs:41
     rocrand: Arc<Mutex<RocmRng>>,
+    // TEAM-510: HIP stream for kernel execution (CUDA parity)
+    // Matches cuda_backend/device.rs stream field
+    pub(crate) stream: Arc<rocm_rs::hip::Stream>,
 }
 
 // TEAM-507: Manual Debug impl (HipModule doesn't implement Debug)
 // Updated by: TEAM-509 (added custom_modules, rocrand)
+// Updated by: TEAM-510 (added stream)
 impl std::fmt::Debug for RocmDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RocmDevice")
@@ -51,6 +77,7 @@ impl std::fmt::Debug for RocmDevice {
             .field("modules", &"<cached modules>")
             .field("custom_modules", &"<custom module cache>")
             .field("rocrand", &"<random generator>")
+            .field("stream", &"<hip stream>")
             .finish()
     }
 }
@@ -59,6 +86,7 @@ impl RocmDevice {
     // Created by: TEAM-488 | CUDA parity: cuda_backend/device.rs:262-279 (BackendDevice::new)
     // Updated by: TEAM-507 | Added module cache initialization
     // Updated by: TEAM-509 | Added custom module cache and rocRAND generator
+    // Updated by: TEAM-510 | Added stream initialization
     /// Create a new ROCm device
     pub fn new(id: usize) -> Result<Self> {
         let inner = HipDevice::new(id as i32)?;
@@ -74,11 +102,15 @@ impl RocmDevice {
         let rng = PseudoRng::new(rocm_rs::rocrand::rng_type::XORWOW)
             .map_err(|e| RocmError::InternalError(&format!("Failed to create rocRAND generator: {:?}", e)))?;
         
+        // TEAM-510: Initialize HIP stream (CUDA parity)
+        let stream = Arc::new(rocm_rs::hip::Stream::new()?);
+        
         Ok(Self { 
             inner,
             modules: Arc::new(RwLock::new(module_store)),
             custom_modules: Arc::new(RwLock::new(HashMap::new())),
             rocrand: Arc::new(Mutex::new(RocmRng(rng))),
+            stream,
         })
     }
 
@@ -233,6 +265,35 @@ impl RocmDevice {
         ms.insert(module_name.to_string(), module.clone());
         let func = module.get_function(fn_name).map_err(RocmError::from)?;
         Ok(func)
+    }
+    
+    // TEAM-510: Compile ug kernel to HIP code (CUDA parity)
+    // Matches cuda_backend/device.rs:167-186
+    /// Compile a ug kernel to HIP and load it
+    /// 
+    /// This generates HIP C++ code from a ug kernel, compiles it using hipcc,
+    /// and loads the resulting HSACO module.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn compile(
+        &self,
+        func_name: &'static str,
+        kernel: ug::lang::ssa::Kernel,
+    ) -> Result<RocmFunc> {
+        let mut buf = vec![];
+        ug_rocm::code_gen::gen(&mut buf, func_name, &kernel)?;
+        let hip_code = String::from_utf8(buf)?;
+        
+        // Compile HIP code to HSACO using hipcc
+        // TODO: This requires hipcc to be installed and in PATH
+        // For now, we'll use rocm-rs's compile_and_load if available
+        let module = rocm_rs::hip::module::compile_and_load(&hip_code, &[])
+            .map_err(RocmError::from)?;
+        let func = module.get_function(func_name).map_err(RocmError::from)?;
+        
+        Ok(RocmFunc {
+            func,
+            stream: self.stream.clone(),
+        })
     }
     
     // TEAM-509: Set random seed (CUDA parity)
