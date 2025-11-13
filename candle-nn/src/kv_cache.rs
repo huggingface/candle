@@ -882,11 +882,6 @@ mod tests {
 
         Ok(())
     }
-}
-
-#[cfg(test)]
-mod concat_cache_tests {
-    use super::*;
 
     #[test]
     fn test_concat_cache_basic() -> Result<()> {
