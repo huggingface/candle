@@ -1,5 +1,6 @@
 // candle-core/src/rocm_backend/error.rs
 // Created by: TEAM-488 (Phase 1)
+// Updated by: TEAM-492 (Phase 2 Step 3) - Added KernelError
 // ROCm error handling - wraps rocm-rs errors
 
 use thiserror::Error;
@@ -11,6 +12,9 @@ pub enum RocmError {
 
     #[error("ROCm BLAS error: {0}")]
     Blas(#[from] rocm_rs::rocblas::Error),
+
+    #[error("Kernel error: {0}")]
+    KernelError(String),
 
     #[error("Device {0} not found")]
     DeviceNotFound(usize),
