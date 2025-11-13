@@ -272,4 +272,9 @@ impl crate::backend::BackendStorage for RocmStorage {
     ) -> Result<()> {
         self.copy_strided_src_impl(dst, dst_offset, src_l)
     }
+    
+    // Created by: TEAM-509 | CUDA parity verified by: TEAM-509 (cuda_backend/mod.rs const_set pattern)
+    fn const_set(&mut self, v: crate::scalar::Scalar, layout: &crate::Layout) -> Result<()> {
+        self.const_set_impl(v, layout)
+    }
 }

@@ -14,6 +14,7 @@
 // This gives access to pre-compiled HSACO modules (AFFINE, BINARY, CAST, etc.)
 pub use candle_kernels as kernels_module;
 
+mod backend_device;
 pub mod device;
 pub mod error;
 pub mod kernels;

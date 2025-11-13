@@ -289,7 +289,7 @@ impl Device {
             Self::Cuda(c) => c.set_seed(seed),
             Self::Metal(m) => m.set_seed(seed),
             #[cfg(feature = "rocm")]
-            Self::Rocm(_) => Ok(()), // TEAM-488: ROCm seed support TODO
+            Self::Rocm(r) => r.set_seed(seed), // TEAM-509: ROCm seed support implemented
         }
     }
 

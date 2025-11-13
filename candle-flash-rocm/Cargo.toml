@@ -1,0 +1,16 @@
+[package]
+name = "candle-flash-rocm"
+version = "0.1.0"
+edition = "2021"
+description = "Flash Attention for ROCm backend - AMD GPU support"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+candle = { path = "../candle-core" }
+half = "2.4"
+
+[build-dependencies]
+cc = { version = "1.0", features = ["parallel"] }
+
+[features]
+default = []

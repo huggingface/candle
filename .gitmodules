@@ -4,3 +4,6 @@
 [submodule "candle-flash-attn-v3/cutlass"]
 	path = candle-flash-attn-v3/cutlass
 	url = https://github.com/NVIDIA/cutlass
+[submodule "candle-flash-attn-rocm/ck"]
+    path = candle-flash-attn-rocm/ck
+    url = https://github.com/ROCm/composable_kernel

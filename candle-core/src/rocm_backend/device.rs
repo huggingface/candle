@@ -10,13 +10,20 @@
 use super::error::{Result, RocmError};
 use super::kernels_module;
 use rocm_rs::hip::{Device as HipDevice, DeviceProperties as HipProps, Module as HipModule};
-use std::sync::{Arc, RwLock};
+use rocm_rs::rocrand::PseudoRng;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
 
 // TEAM-507: Module cache for CUDA parity
 // Matches cuda_backend/device.rs:244-246
 struct ModuleStore {
     mdls: [Option<HipModule>; kernels_module::ALL_IDS.len()],
 }
+
+// TEAM-509: Random number generator wrapper (CUDA parity)
+// Matches cuda_backend/device.rs:26-27
+struct RocmRng(PseudoRng);
+unsafe impl Send for RocmRng {}
 
 /// Candle wrapper for ROCm device
 /// 
@@ -27,14 +34,23 @@ pub struct RocmDevice {
     inner: HipDevice,
     // TEAM-507: Module cache for CUDA parity
     modules: Arc<RwLock<ModuleStore>>,
+    // TEAM-509: Custom module cache for runtime-compiled kernels (CUDA parity)
+    // Matches cuda_backend/device.rs:38
+    custom_modules: Arc<RwLock<HashMap<String, HipModule>>>,
+    // TEAM-509: Random number generator (CUDA parity)
+    // Matches cuda_backend/device.rs:41
+    rocrand: Arc<Mutex<RocmRng>>,
 }
 
 // TEAM-507: Manual Debug impl (HipModule doesn't implement Debug)
+// Updated by: TEAM-509 (added custom_modules, rocrand)
 impl std::fmt::Debug for RocmDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RocmDevice")
             .field("inner", &self.inner)
             .field("modules", &"<cached modules>")
+            .field("custom_modules", &"<custom module cache>")
+            .field("rocrand", &"<random generator>")
             .finish()
     }
 }
@@ -42,6 +58,7 @@ impl std::fmt::Debug for RocmDevice {
 impl RocmDevice {
     // Created by: TEAM-488 | CUDA parity: cuda_backend/device.rs:262-279 (BackendDevice::new)
     // Updated by: TEAM-507 | Added module cache initialization
+    // Updated by: TEAM-509 | Added custom module cache and rocRAND generator
     /// Create a new ROCm device
     pub fn new(id: usize) -> Result<Self> {
         let inner = HipDevice::new(id as i32)?;
@@ -52,9 +69,16 @@ impl RocmDevice {
             mdls: [const { None }; kernels_module::ALL_IDS.len()],
         };
         
+        // TEAM-509: Initialize rocRAND generator (CUDA parity)
+        // Use XORWOW as default (matches CUDA's curand default)
+        let rng = PseudoRng::new(rocm_rs::rocrand::rng_type::XORWOW)
+            .map_err(|e| RocmError::InternalError(&format!("Failed to create rocRAND generator: {:?}", e)))?;
+        
         Ok(Self { 
             inner,
             modules: Arc::new(RwLock::new(module_store)),
+            custom_modules: Arc::new(RwLock::new(HashMap::new())),
+            rocrand: Arc::new(Mutex::new(RocmRng(rng))),
         })
     }
 
@@ -175,6 +199,58 @@ impl RocmDevice {
     pub fn get_or_load_func_raw(&self, name: &str, hsaco: &[u8]) -> Result<rocm_rs::hip::Function> {
         let module = self.inner.load_module(hsaco).map_err(RocmError::from)?;
         module.get_function(name).map_err(RocmError::from)
+    }
+    
+    // TEAM-509: Custom module cache for runtime-compiled kernels (CUDA parity)
+    // Matches cuda_backend/device.rs:192-220
+    /// Get or load a custom kernel function (with caching)
+    /// 
+    /// This caches runtime-compiled modules by name to avoid reloading.
+    /// Used for custom operations and quantized kernels.
+    pub fn get_or_load_custom_func(
+        &self,
+        fn_name: &str,
+        module_name: &str,
+        hsaco: &[u8],
+    ) -> Result<rocm_rs::hip::Function> {
+        // Try to get from cache first
+        let ms = self.custom_modules.read().unwrap();
+        if let Some(mdl) = ms.get(module_name) {
+            let func = mdl.get_function(fn_name).map_err(RocmError::from)?;
+            return Ok(func);
+        }
+        drop(ms);
+        
+        // Not cached, load it
+        let mut ms = self.custom_modules.write().unwrap();
+        // Double-check after acquiring write lock
+        if let Some(mdl) = ms.get(module_name) {
+            let func = mdl.get_function(fn_name).map_err(RocmError::from)?;
+            return Ok(func);
+        }
+        
+        let module = self.inner.load_module(hsaco).map_err(RocmError::from)?;
+        ms.insert(module_name.to_string(), module.clone());
+        let func = module.get_function(fn_name).map_err(RocmError::from)?;
+        Ok(func)
+    }
+    
+    // TEAM-509: Set random seed (CUDA parity)
+    // Matches cuda_backend/device.rs set_seed behavior
+    /// Set the random number generator seed
+    /// 
+    /// This allows reproducible random number generation.
+    pub fn set_seed(&self, seed: u64) -> Result<()> {
+        let mut rng = self.rocrand.lock().unwrap();
+        rng.0.set_seed(seed)
+            .map_err(|e| RocmError::InternalError(&format!("Failed to set rocRAND seed: {:?}", e)))?;
+        Ok(())
+    }
+    
+    // TEAM-509: Access to rocRAND generator (internal use)
+    /// Get reference to rocRAND generator (for internal use)
+    pub(crate) fn rocrand(&self) -> &Arc<Mutex<RocmRng>> {
+        &self.rocrand
     }
 }
 
