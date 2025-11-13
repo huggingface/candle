@@ -7,6 +7,7 @@ use std::borrow::Cow;
 pub mod avx;
 mod dummy_cuda;
 mod dummy_metal;
+mod dummy_rocm;
 pub mod ggml_file;
 pub mod gguf_file;
 pub mod k_quants;
@@ -21,6 +22,12 @@ pub mod cuda;
 #[cfg(not(feature = "cuda"))]
 mod cuda {
     pub use super::dummy_cuda::*;
+}
+#[cfg(feature = "rocm")]
+pub mod rocm;
+#[cfg(not(feature = "rocm"))]
+mod rocm {
+    pub use super::dummy_rocm::*;
 }
 
 #[cfg(target_feature = "neon")]
@@ -37,6 +44,7 @@ pub struct QTensor {
     shape: Shape,
 }
 
+// TEAM-502: Added ROCm quantization support
 impl Device {
     fn qzeros(&self, elem_count: usize, dtype: GgmlDType) -> Result<QStorage> {
         match self {
@@ -52,14 +60,22 @@ impl Device {
                 let storage = cuda::QCudaStorage::zeros(cuda, elem_count, dtype)?;
                 Ok(QStorage::Cuda(storage))
             }
+            #[cfg(feature = "rocm")]
+            Device::Rocm(rocm) => {
+                let storage = rocm::QRocmStorage::zeros(rocm, elem_count, dtype)?;
+                Ok(QStorage::Rocm(storage))
+            }
         }
     }
 }
 
+// TEAM-502: Added ROCm variant for quantized storage
 pub enum QStorage {
     Cpu(Box<dyn QuantizedType>),
     Metal(metal::QMetalStorage),
     Cuda(cuda::QCudaStorage),
+    #[cfg(feature = "rocm")]
+    Rocm(rocm::QRocmStorage),
 }
 
 impl QStorage {
@@ -68,6 +84,8 @@ impl QStorage {
             QStorage::Cpu(storage) => storage.block_size(),
             QStorage::Metal(storage) => storage.dtype().block_size(),
             QStorage::Cuda(storage) => storage.dtype().block_size(),
+            #[cfg(feature = "rocm")]
+            QStorage::Rocm(storage) => storage.dtype().block_size(), // TEAM-502
         }
     }
 
@@ -76,6 +94,8 @@ impl QStorage {
             QStorage::Cpu(storage) => storage.dtype(),
             QStorage::Metal(storage) => storage.dtype(),
             QStorage::Cuda(storage) => storage.dtype(),
+            #[cfg(feature = "rocm")]
+            QStorage::Rocm(storage) => storage.dtype(), // TEAM-502
         }
     }
 
@@ -84,6 +104,8 @@ impl QStorage {
             QStorage::Cpu(_storage) => Device::Cpu,
             QStorage::Metal(storage) => Device::Metal(storage.device().clone()),
             QStorage::Cuda(storage) => Device::Cuda(storage.device().clone()),
+            #[cfg(feature = "rocm")]
+            QStorage::Rocm(storage) => Device::Rocm(storage.device().clone()), // TEAM-502
         }
     }
 
@@ -92,6 +114,8 @@ impl QStorage {
             QStorage::Cpu(storage) => storage.storage_size_in_bytes(),
             QStorage::Metal(storage) => storage.storage_size_in_bytes(),
             QStorage::Cuda(storage) => storage.storage_size_in_bytes(),
+            #[cfg(feature = "rocm")]
+            QStorage::Rocm(storage) => storage.storage_size_in_bytes(), // TEAM-502
         }
     }
 
@@ -102,6 +126,8 @@ impl QStorage {
             }
             (QStorage::Metal(storage), Storage::Metal(src)) => storage.quantize(src)?,
             (QStorage::Cuda(storage), Storage::Cuda(src)) => storage.quantize(src)?,
+            #[cfg(feature = "rocm")]
+            (QStorage::Rocm(storage), Storage::Rocm(src)) => storage.quantize(src)?, // TEAM-502
             _ => crate::bail!("Invalid dequantize storage locations do not match"),
         }
         Ok(())
@@ -112,6 +138,8 @@ impl QStorage {
             QStorage::Cpu(storage) => Ok(Storage::Cpu(storage.dequantize(elem_count)?)),
             QStorage::Metal(storage) => Ok(Storage::Metal(storage.dequantize(elem_count)?)),
             QStorage::Cuda(storage) => Ok(Storage::Cuda(storage.dequantize(elem_count)?)),
+            #[cfg(feature = "rocm")]
+            QStorage::Rocm(storage) => Ok(Storage::Rocm(storage.dequantize(elem_count)?)), // TEAM-502
         }
     }
 
@@ -124,6 +152,10 @@ impl QStorage {
                 Ok(Cow::from(data))
             }
             QStorage::Metal(_) | QStorage::Cuda(_) => {
+                crate::bail!("not implemented");
+            }
+            #[cfg(feature = "rocm")]
+            QStorage::Rocm(_) => { // TEAM-502
                 crate::bail!("not implemented");
             }
         }
@@ -497,6 +529,8 @@ impl crate::CustomOp1 for QTensor {
         let self_storage = match &self.storage {
             QStorage::Cpu(storage) => storage,
             QStorage::Metal(_) | QStorage::Cuda(_) => crate::bail!("Invalid storage"),
+            #[cfg(feature = "rocm")]
+            QStorage::Rocm(_) => crate::bail!("Invalid storage"), // TEAM-502
         };
         let slice = storage.as_slice::<f32>()?;
         let slice = &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
@@ -525,6 +559,20 @@ impl crate::CustomOp1 for QTensor {
         let self_storage = match &self.storage {
             QStorage::Cuda(cuda) => cuda,
             _ => unreachable!("Cannot call cuda matmul on non cuda QTensor"),
+        };
+        self_storage.fwd(&self.shape, storage, layout)
+    }
+
+    // TEAM-502: Added ROCm quantized matmul support
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        storage: &crate::RocmStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::RocmStorage, Shape)> {
+        let self_storage = match &self.storage {
+            QStorage::Rocm(rocm) => rocm,
+            _ => unreachable!("Cannot call rocm matmul on non rocm QTensor"),
         };
         self_storage.fwd(&self.shape, storage, layout)
     }

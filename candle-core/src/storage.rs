@@ -2,6 +2,8 @@ use crate::backend::BackendStorage;
 use crate::op::{self, CmpOp, ReduceOp};
 use crate::scalar::Scalar;
 use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
+#[cfg(feature = "rocm")]
+use crate::RocmStorage;
 use crate::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 
 // We do not want to implement Clone on Storage as cloning may fail because of
@@ -11,6 +13,8 @@ pub enum Storage {
     Cpu(CpuStorage),
     Cuda(CudaStorage),
     Metal(MetalStorage),
+    #[cfg(feature = "rocm")]
+    Rocm(RocmStorage), // TEAM-501: Phase 1 - Added ROCm storage variant
 }
 
 impl Storage {
@@ -25,6 +29,11 @@ impl Storage {
                 let storage = storage.try_clone(layout)?;
                 Ok(Self::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => {
+                let storage = storage.try_clone(layout)?;
+                Ok(Self::Rocm(storage))
+            }
         }
     }
 
@@ -33,6 +42,8 @@ impl Storage {
             Self::Cpu(_) => Device::Cpu,
             Self::Cuda(storage) => Device::Cuda(storage.device().clone()),
             Self::Metal(storage) => Device::Metal(storage.device().clone()),
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => Device::Rocm(storage.device().clone()),
         }
     }
 
@@ -41,6 +52,8 @@ impl Storage {
             Self::Cpu(storage) => storage.dtype(),
             Self::Cuda(storage) => storage.dtype(),
             Self::Metal(storage) => storage.dtype(),
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => storage.dtype(),
         }
     }
 
@@ -79,6 +92,8 @@ impl Storage {
             Storage::Cpu(storage) => storage.const_set(v, l),
             Storage::Cuda(storage) => storage.const_set(v, l),
             Storage::Metal(storage) => storage.const_set(v, l),
+            #[cfg(feature = "rocm")]
+            Storage::Rocm(storage) => storage.const_set(v, l),
         }
     }
 
@@ -95,6 +110,11 @@ impl Storage {
             Self::Metal(storage) => {
                 let storage = storage.affine(layout, mul, add)?;
                 Ok(Self::Metal(storage))
+            }
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => {
+                let storage = storage.affine(layout, mul, add)?;
+                Ok(Self::Rocm(storage))
             }
         }
     }
@@ -113,6 +133,11 @@ impl Storage {
                 let storage = storage.powf(layout, alpha)?;
                 Ok(Self::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => {
+                let storage = storage.powf(layout, alpha)?;
+                Ok(Self::Rocm(storage))
+            }
         }
     }
 
@@ -129,6 +154,11 @@ impl Storage {
             Self::Metal(storage) => {
                 let storage = storage.elu(layout, alpha)?;
                 Ok(Self::Metal(storage))
+            }
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => {
+                let storage = storage.elu(layout, alpha)?;
+                Ok(Self::Rocm(storage))
             }
         }
     }
@@ -154,6 +184,11 @@ impl Storage {
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
+            }
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(lhs), Self::Rocm(rhs)) => {
+                let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
+                Ok(Self::Rocm(storage))
             }
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive
@@ -182,6 +217,11 @@ impl Storage {
                 let storage = storage.reduce_op(op, layout, s)?;
                 Ok(Self::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => {
+                let storage = storage.reduce_op(op, layout, s)?;
+                Ok(Self::Rocm(storage))
+            }
         }
     }
 
@@ -199,6 +239,11 @@ impl Storage {
                 let storage = storage.to_dtype(layout, dtype)?;
                 Ok(Self::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => {
+                let storage = storage.to_dtype(layout, dtype)?;
+                Ok(Self::Rocm(storage))
+            }
         }
     }
 
@@ -215,6 +260,11 @@ impl Storage {
             Self::Metal(storage) => {
                 let (storage, shape) = c.metal_fwd(storage, l)?;
                 Ok((Self::Metal(storage), shape))
+            }
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => {
+                let (storage, shape) = c.rocm_fwd(storage, l)?;
+                Ok((Self::Rocm(storage), shape))
             }
         }
     }
@@ -239,6 +289,11 @@ impl Storage {
             (Self::Metal(s1), Self::Metal(s2)) => {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2)?;
                 Ok((Self::Metal(s), shape))
+            }
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(s1), Self::Rocm(s2)) => {
+                let (s, shape) = c.rocm_fwd(s1, l1, s2, l2)?;
+                Ok((Self::Rocm(s), shape))
             }
             _ => unreachable!(),
         }
@@ -268,6 +323,11 @@ impl Storage {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2, s3, l3)?;
                 Ok((Self::Metal(s), shape))
             }
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(s1), Self::Rocm(s2), Self::Rocm(s3)) => {
+                let (s, shape) = c.rocm_fwd(s1, l1, s2, l2, s3, l3)?;
+                Ok((Self::Rocm(s), shape))
+            }
             _ => unreachable!(),
         }
     }
@@ -277,6 +337,8 @@ impl Storage {
             Self::Cpu(storage) => c.cpu_fwd(storage, l),
             Self::Cuda(storage) => c.cuda_fwd(storage, l),
             Self::Metal(storage) => c.metal_fwd(storage, l),
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => c.rocm_fwd(storage, l),
         }
     }
 
@@ -292,6 +354,8 @@ impl Storage {
             (Self::Cpu(s1), Self::Cpu(s2)) => c.cpu_fwd(s1, l1, s2, l2),
             (Self::Cuda(s1), Self::Cuda(s2)) => c.cuda_fwd(s1, l1, s2, l2),
             (Self::Metal(s1), Self::Metal(s2)) => c.metal_fwd(s1, l1, s2, l2),
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(s1), Self::Rocm(s2)) => c.rocm_fwd(s1, l1, s2, l2),
             _ => unreachable!(),
         }
     }
@@ -313,6 +377,10 @@ impl Storage {
             (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
                 c.metal_fwd(s1, l1, s2, l2, s3, l3)
             }
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(s1), Self::Rocm(s2), Self::Rocm(s3)) => {
+                c.rocm_fwd(s1, l1, s2, l2, s3, l3)
+            }
             _ => unreachable!(),
         }
     }
@@ -330,6 +398,11 @@ impl Storage {
             Self::Metal(storage) => {
                 let storage = storage.unary_impl::<B>(layout)?;
                 Ok(Self::Metal(storage))
+            }
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => {
+                let storage = storage.unary_impl::<B>(layout)?;
+                Ok(Self::Rocm(storage))
             }
         }
     }
@@ -354,6 +427,11 @@ impl Storage {
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
+            }
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(lhs), Self::Rocm(rhs)) => {
+                let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
+                Ok(Self::Rocm(storage))
             }
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive
@@ -390,6 +468,11 @@ impl Storage {
                 let s = inp.conv1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
+            #[cfg(feature = "rocm")]
+            (Storage::Rocm(inp), Storage::Rocm(kernel)) => {
+                let s = inp.conv1d(l, kernel, kernel_l, params)?;
+                Ok(Self::Rocm(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -421,6 +504,11 @@ impl Storage {
                 let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
+            #[cfg(feature = "rocm")]
+            (Storage::Rocm(inp), Storage::Rocm(kernel)) => {
+                let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
+                Ok(Self::Rocm(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -446,11 +534,16 @@ impl Storage {
             }
             (Storage::Cuda(inp), Storage::Cuda(kernel)) => {
                 let s = inp.conv2d(l, kernel, kernel_l, params)?;
-                Ok(Self::Cuda(s))
+                Ok(Self::Cuda(s))  
             }
             (Storage::Metal(inp), Storage::Metal(kernel)) => {
                 let s = inp.conv2d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
+            }
+            #[cfg(feature = "rocm")]
+            (Storage::Rocm(inp), Storage::Rocm(kernel)) => {
+                let s = inp.conv2d(l, kernel, kernel_l, params)?;
+                Ok(Self::Rocm(s))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),

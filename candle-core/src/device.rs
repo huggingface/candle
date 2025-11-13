@@ -9,6 +9,7 @@ pub enum DeviceLocation {
     Cpu,
     Cuda { gpu_id: usize },
     Metal { gpu_id: usize },
+    #[cfg(feature = "rocm")] // TEAM-502: Gate behind rocm feature
     Rocm { gpu_id: usize }, // TEAM-488: Phase 1 - Added ROCm support
 }
 
