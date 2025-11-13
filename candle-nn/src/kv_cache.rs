@@ -636,20 +636,6 @@ impl ScatteredCacheBuilder {
 /// This implementation uses `Tensor::cat` instead of `slice_set` for updates,
 /// providing significant GPU performance improvements for autoregressive generation.
 ///
-/// # Performance Characteristics
-///
-/// **GPU :**
-/// - 2-5x faster than `KvCache` (speedup increases with sequence length)
-/// - Works on both full-precision and quantized models
-///
-/// **CPU :**
-/// - Essentially neutral (~1% difference)
-///
-/// The GPU performance advantage comes from:
-/// - Tight memory layouts (sequential access patterns)
-/// - Optimized concatenation kernels (coalesced memory writes)
-/// - Better memory bandwidth utilization
-///
 /// # When to Use
 ///
 /// **Recommended for:**
