@@ -209,7 +209,7 @@ impl AttentionWeights {
 
         let (q, k) = self.rotary_emb.apply(&q, &k, offset)?;
 
-        let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
+        let (k, v) = self.kv_cache.append(&k, &v)?;
 
         let k = repeat_kv(k, self.num_kv_groups)?;
         let v = repeat_kv(v, self.num_kv_groups)?;
