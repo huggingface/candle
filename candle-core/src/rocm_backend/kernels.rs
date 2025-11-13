@@ -210,3 +210,42 @@ pub fn launch_ternary<C, T>(
     
     Ok(out)
 }
+
+/// Launch cast operation kernel - MATCHES Candle CUDA signature
+/// Signature: (numel, num_dims, info, inp, out)
+/// NOTE: Input and output types are DIFFERENT!
+pub fn launch_cast<I, O>(
+    kernel_name: &str,
+    device: &rocm_rs::hip::Device,
+    src: &DeviceMemory<I>,
+    layout: &Layout,
+) -> Result<DeviceMemory<O>> {
+    let func = get_kernel(kernel_name)?;
+    let shape = layout.shape();
+    let el = shape.elem_count();
+    let (grid, block) = launch_config_for_num_elems(el as u32);
+    
+    let ds = SlicePtrOrNull::from_layout(device, layout)?;
+    let src_offset = &src.slice(layout.start_offset()..);
+    
+    // Allocate output with OUTPUT type
+    let out = device
+        .alloc::<O>(el)
+        .map_err(|e| RocmError::OutOfMemory { requested: el * std::mem::size_of::<O>() })?;
+    
+    // Build args: (numel, num_dims, info, inp, out)
+    let mut args = [
+        &(el as usize) as *const usize as *mut c_void,
+        &shape.rank() as *const usize as *mut c_void,
+        ds.as_ptr() as *mut c_void,
+        src_offset.as_ptr() as *mut c_void,
+        out.as_ptr() as *mut c_void,
+    ];
+    
+    unsafe {
+        func.launch(grid, block, 0, None, &mut args)
+            .map_err(|e| RocmError::KernelError(format!("Cast kernel launch failed: {:?}", e)))?;
+    }
+    
+    Ok(out)
+}
