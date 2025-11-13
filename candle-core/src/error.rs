@@ -172,6 +172,10 @@ pub enum Error {
     #[error("Metal error {0}")]
     Metal(#[from] MetalError),
 
+    #[cfg(feature = "rocm")]
+    #[error(transparent)]
+    Rocm(Box<dyn std::error::Error + Send + Sync>),
+
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))]
     #[error(transparent)]
     Ug(#[from] ug::Error),

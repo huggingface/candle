@@ -576,6 +576,11 @@ impl Storage {
                 let s = inp.conv_transpose2d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
+            #[cfg(feature = "rocm")]
+            (Storage::Rocm(inp), Storage::Rocm(kernel)) => {
+                let s = inp.conv_transpose2d(l, kernel, kernel_l, params)?;
+                Ok(Self::Rocm(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -604,6 +609,11 @@ impl Storage {
                 let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => {
+                let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
+                Ok(Self::Rocm(storage))
+            }
         }
     }
 
@@ -626,6 +636,11 @@ impl Storage {
                 let storage = storage.max_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => {
+                let storage = storage.max_pool2d(layout, kernel_size, stride)?;
+                Ok(Self::Rocm(storage))
+            }
         }
     }
 
@@ -643,6 +658,11 @@ impl Storage {
                 let storage = storage.upsample_nearest1d(layout, sz)?;
                 Ok(Self::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => {
+                let storage = storage.upsample_nearest1d(layout, sz)?;
+                Ok(Self::Rocm(storage))
+            }
         }
     }
 
@@ -659,6 +679,11 @@ impl Storage {
             Self::Metal(storage) => {
                 let storage = storage.upsample_nearest2d(layout, h, w)?;
                 Ok(Self::Metal(storage))
+            }
+            #[cfg(feature = "rocm")]
+            Self::Rocm(storage) => {
+                let storage = storage.upsample_nearest2d(layout, h, w)?;
+                Ok(Self::Rocm(storage))
             }
         }
     }
@@ -686,6 +711,11 @@ impl Storage {
             (Self::Metal(cond), Self::Metal(t), Self::Metal(f)) => {
                 let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
                 Ok(Self::Metal(storage))
+            }
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(cond), Self::Rocm(t), Self::Rocm(f)) => {
+                let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
+                Ok(Self::Rocm(storage))
             }
             (_, lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -717,6 +747,11 @@ impl Storage {
                 let storage = s.gather(l, indexes, indexes_l, d)?;
                 Ok(Self::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(s), Self::Rocm(indexes)) => {
+                let storage = s.gather(l, indexes, indexes_l, d)?;
+                Ok(Self::Rocm(storage))
+            }
             _ => unreachable!(),
         }
     }
@@ -740,6 +775,10 @@ impl Storage {
                 s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
+                s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(s), Self::Rocm(indexes), Self::Rocm(source)) => {
                 s.scatter_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             _ => unreachable!(),
@@ -766,6 +805,10 @@ impl Storage {
                 s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
+                s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
+            }
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(s), Self::Rocm(indexes), Self::Rocm(source)) => {
                 s.scatter_add_set(l, indexes, indexes_l, source, source_l, d)?;
             }
             _ => unreachable!(),
@@ -797,6 +840,11 @@ impl Storage {
                 let storage = s.index_add(l, indexes, indexes_l, source, source_l, d)?;
                 Ok(Self::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(s), Self::Rocm(indexes), Self::Rocm(source)) => {
+                let storage = s.index_add(l, indexes, indexes_l, source, source_l, d)?;
+                Ok(Self::Rocm(storage))
+            }
             _ => unreachable!(),
         }
     }
@@ -821,6 +869,11 @@ impl Storage {
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
                 Ok(Self::Metal(storage))
+            }
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(lhs), Self::Rocm(rhs)) => {
+                let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
+                Ok(Self::Rocm(storage))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -853,6 +906,11 @@ impl Storage {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
             }
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(lhs), Self::Rocm(rhs)) => {
+                let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
+                Ok(Self::Rocm(storage))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -873,6 +931,10 @@ impl Storage {
             (Self::Cpu(src), Self::Cpu(dst)) => src.copy_strided_src(dst, dst_offset, src_l),
             (Self::Cuda(src), Self::Cuda(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
             (Self::Metal(src), Self::Metal(dst)) => {
+                Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
+            }
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(src), Self::Rocm(dst)) => {
                 Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
@@ -901,6 +963,10 @@ impl Storage {
                 Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
             }
             (Self::Metal(src), Self::Metal(dst)) => {
+                Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
+            }
+            #[cfg(feature = "rocm")]
+            (Self::Rocm(src), Self::Rocm(dst)) => {
                 Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {

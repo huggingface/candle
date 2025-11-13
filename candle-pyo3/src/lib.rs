@@ -78,6 +78,8 @@ enum PyDevice {
     Cpu,
     Cuda,
     Metal,
+    #[cfg(feature = "rocm")]
+    Rocm,
 }
 
 impl PyDevice {
@@ -86,6 +88,8 @@ impl PyDevice {
             Device::Cpu => Self::Cpu,
             Device::Cuda(_) => Self::Cuda,
             Device::Metal(_) => Self::Metal,
+            #[cfg(feature = "rocm")]
+            Device::Rocm(_) => Self::Rocm,
         }
     }
 
@@ -110,6 +114,11 @@ impl PyDevice {
                 *device = Some(d.clone());
                 Ok(d)
             }
+            #[cfg(feature = "rocm")]
+            Self::Rocm => {
+                let d = Device::new_rocm(0).map_err(wrap_err)?;
+                Ok(d)
+            }
         }
     }
 }
@@ -120,6 +129,9 @@ impl<'source> FromPyObject<'source> for PyDevice {
         let device = match device.as_str() {
             "cpu" => PyDevice::Cpu,
             "cuda" => PyDevice::Cuda,
+            "metal" => PyDevice::Metal,
+            #[cfg(feature = "rocm")]
+            "rocm" => PyDevice::Rocm,
             _ => Err(PyTypeError::new_err(format!("invalid device '{device}'")))?,
         };
         Ok(device)
@@ -132,6 +144,8 @@ impl ToPyObject for PyDevice {
             PyDevice::Cpu => "cpu",
             PyDevice::Cuda => "cuda",
             PyDevice::Metal => "metal",
+            #[cfg(feature = "rocm")]
+            PyDevice::Rocm => "rocm",
         };
         str.to_object(py)
     }

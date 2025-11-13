@@ -449,6 +449,84 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             candle::MetalStorage::new(output, device.clone(), elem_count, storage.dtype());
         Ok((newstorage, layout.shape().clone()))
     }
+
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        storage: &candle::RocmStorage,
+        layout: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        use candle::backend::BackendStorage;
+        
+        // Check layout constraints
+        let n = layout.stride().len();
+        if !(layout.is_contiguous() && layout.stride()[n - 1] == 1) {
+            candle::bail!("Non contiguous softmax-last-dim is not implemented for ROCm");
+        }
+
+        // Get dimensions
+        let dims = layout.shape().dims();
+        let last_dim = dims[dims.len() - 1];
+        let elem_count = layout.shape().elem_count();
+        let batch_size = elem_count / last_dim;
+
+        // Create MIOpen handle and tensor descriptors
+        let device = storage.device();
+        let handle = device.miopen_handle()?;
+        
+        // Create input/output tensor descriptors
+        // For softmax, we treat it as [batch_size, 1, 1, last_dim] for MIOPEN_SOFTMAX_MODE_INSTANCE
+        let tensor_desc = rocm_rs::miopen::TensorDescriptor::new()?;
+        let data_type = match storage.dtype() {
+            DType::F32 => rocm_rs::miopen::DataType::Float,
+            DType::F16 => rocm_rs::miopen::DataType::Half,
+            DType::BF16 => rocm_rs::miopen::DataType::BFloat16,
+            dtype => candle::bail!("softmax-last-dim is not implemented for {dtype:?} on ROCm"),
+        };
+        
+        // Set tensor descriptor: [batch_size, 1, 1, last_dim]
+        tensor_desc.set_4d(
+            data_type,
+            batch_size,
+            1,
+            1,
+            last_dim,
+        )?;
+
+        // Allocate output storage
+        let dst = device.alloc_zeros(layout.shape(), storage.dtype())?;
+
+        // Prepare alpha/beta as byte arrays (1.0 and 0.0)
+        let alpha = match storage.dtype() {
+            DType::F32 => 1.0f32.to_ne_bytes().to_vec(),
+            DType::F16 => half::f16::from_f32(1.0).to_ne_bytes().to_vec(),
+            DType::BF16 => half::bf16::from_f32(1.0).to_ne_bytes().to_vec(),
+            _ => unreachable!(),
+        };
+        let beta = match storage.dtype() {
+            DType::F32 => 0.0f32.to_ne_bytes().to_vec(),
+            DType::F16 => half::f16::from_f32(0.0).to_ne_bytes().to_vec(),
+            DType::BF16 => half::bf16::from_f32(0.0).to_ne_bytes().to_vec(),
+            _ => unreachable!(),
+        };
+
+        // Call MIOpen softmax forward
+        unsafe {
+            rocm_rs::miopen::softmax_forward_v2(
+                &handle,
+                &alpha,
+                &tensor_desc,
+                *storage.as_rocm_slice().device_ptr() as *const std::ffi::c_void,
+                &beta,
+                &tensor_desc,
+                *dst.as_rocm_slice().device_ptr() as *mut std::ffi::c_void,
+                rocm_rs::miopen::ffi::miopenSoftmaxAlgorithm_t_MIOPEN_SOFTMAX_ACCURATE,
+                rocm_rs::miopen::ffi::miopenSoftmaxMode_t_MIOPEN_SOFTMAX_MODE_INSTANCE,
+            )?;
+        }
+
+        Ok((dst, layout.shape().clone()))
+    }
 }
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
@@ -641,6 +719,25 @@ impl candle::CustomOp2 for RmsNorm {
         .map_err(candle::Error::wrap)?;
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
+    }
+
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        _s1: &candle::RocmStorage,
+        _l1: &Layout,
+        _s2: &candle::RocmStorage,
+        _l2: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        // TODO: Implement RmsNorm for ROCm
+        // This requires a custom HIP kernel similar to the CUDA implementation
+        // For now, return an error directing users to use rms_norm_slow() fallback
+        candle::bail!(
+            "RmsNorm is not yet implemented for ROCm. \
+             Use candle_nn::ops::rms_norm_slow() as a fallback, \
+             or help implement the HIP kernel at: \
+             deps/rocm-rs/src/rocarray/kernels.hip"
+        )
     }
 }
 
