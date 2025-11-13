@@ -723,6 +723,9 @@ impl ConcatKvCache {
     /// Tuple of `(full_k, full_v)` containing all cached keys and values,
     /// including the newly appended data.
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        // Ensure inputs are contiguous for optimal concatenation performance
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
         // Update K cache using concatenation
         self.k = Some(match &self.k {
             None => k.clone(),
