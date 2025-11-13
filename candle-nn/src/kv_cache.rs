@@ -678,13 +678,6 @@ impl ScatteredCacheBuilder {
 /// let v_new = Tensor::randn(0f32, 1., (1, 8, 1, 64), &device)?;
 /// let (k, v) = cache.append(&k_new, &v_new)?;
 /// ```
-///
-/// # Implementation Details
-///
-/// Unlike `KvCache` which pre-allocates a fixed buffer, this implementation
-/// grows dynamically using `Tensor::cat`. The GPU concatenation kernels are
-/// highly optimized for sequential append patterns, resulting in better
-/// performance despite the dynamic allocation.
 #[derive(Debug, Clone)]
 pub struct ConcatKvCache {
     k: Option<Tensor>,
