@@ -742,7 +742,7 @@ impl ConcatKvCache {
         // Update V cache using concatenation
         self.v = Some(match &self.v {
             None => v.clone(),
-            Some(v_cache) => Tensor::cat(&[v_cache, v], self.dim)?,
+            Some(v_cache) => Tensor::cat(&[v_cache, &v], self.dim)?,
         });
 
         Ok((
