@@ -223,6 +223,27 @@ impl candle::CustomOp3 for RotaryEmbI {
         let out = candle::MetalStorage::new(output, device.clone(), el, src.dtype());
         Ok((out, l_src.shape().clone()))
     }
+
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        _s1: &candle::RocmStorage,
+        _l1: &Layout,
+        _s2: &candle::RocmStorage,
+        _l2: &Layout,
+        _s3: &candle::RocmStorage,
+        _l3: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        // TODO: Implement RopeI (Rotary Embeddings - Interleaved) for ROCm
+        // This requires a custom HIP kernel similar to the CUDA/Metal implementations
+        // Reference: candle-kernels/src/ternary.cu (rope_i kernel)
+        candle::bail!(
+            "RopeI (Rotary Embeddings - Interleaved) is not yet implemented for ROCm. \
+             This requires a custom HIP kernel implementation at: \
+             deps/rocm-rs/src/rocarray/kernels.hip. \
+             See CUDA reference: candle-kernels/src/ternary.cu"
+        )
+    }
 }
 
 fn rope_check_cs(cs: &Tensor, b_sz: usize) -> Result<(usize, usize)> {
@@ -507,6 +528,27 @@ impl candle::CustomOp3 for RotaryEmb {
         let out = candle::MetalStorage::new(output, device.clone(), el, src.dtype());
         Ok((out, l_src.shape().clone()))
     }
+
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        _s1: &candle::RocmStorage,
+        _l1: &Layout,
+        _s2: &candle::RocmStorage,
+        _l2: &Layout,
+        _s3: &candle::RocmStorage,
+        _l3: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        // TODO: Implement Rope (Rotary Embeddings - Standard) for ROCm
+        // This requires a custom HIP kernel similar to the CUDA/Metal implementations
+        // Reference: candle-kernels/src/ternary.cu (rope kernel)
+        candle::bail!(
+            "Rope (Rotary Embeddings - Standard) is not yet implemented for ROCm. \
+             This requires a custom HIP kernel implementation at: \
+             deps/rocm-rs/src/rocarray/kernels.hip. \
+             See CUDA reference: candle-kernels/src/ternary.cu"
+        )
+    }
 }
 
 pub fn rope(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
@@ -777,6 +819,27 @@ impl candle::CustomOp3 for RotaryEmbThd {
         .map_err(candle::Error::wrap)?;
         let out = candle::MetalStorage::new(output, device.clone(), el, src.dtype());
         Ok((out, l_src.shape().clone()))
+    }
+
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        _s1: &candle::RocmStorage,
+        _l1: &Layout,
+        _s2: &candle::RocmStorage,
+        _l2: &Layout,
+        _s3: &candle::RocmStorage,
+        _l3: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        // TODO: Implement RopeThd (Rotary Embeddings - Threaded) for ROCm
+        // This requires a custom HIP kernel similar to the CUDA/Metal implementations
+        // Reference: candle-kernels/src/ternary.cu (rope_thd kernel)
+        candle::bail!(
+            "RopeThd (Rotary Embeddings - Threaded) is not yet implemented for ROCm. \
+             This requires a custom HIP kernel implementation at: \
+             deps/rocm-rs/src/rocarray/kernels.hip. \
+             See CUDA reference: candle-kernels/src/ternary.cu"
+        )
     }
 }
 

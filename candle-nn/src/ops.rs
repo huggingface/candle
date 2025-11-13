@@ -228,6 +228,77 @@ impl candle::CustomOp1 for Sigmoid {
         Ok((new_storage, layout.shape().clone()))
     }
 
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        storage: &candle::RocmStorage,
+        layout: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        use candle::backend::BackendStorage;
+        
+        // Check layout constraints
+        if !layout.is_contiguous() {
+            candle::bail!("Non-contiguous sigmoid is not yet implemented for ROCm");
+        }
+
+        let device = storage.device();
+        let dtype = storage.dtype();
+        let shape = layout.shape();
+        let el_count = shape.elem_count();
+
+        // Create MIOpen handle and activation descriptor
+        let handle = device.miopen_handle()?;
+        let mut act_desc = rocm_rs::miopen::ActivationDescriptor::new()?;
+        
+        // Set activation mode to LOGISTIC (sigmoid)
+        let activation_mode = rocm_rs::miopen::ffi::miopenActivationMode_t_miopenActivationLOGISTIC;
+        act_desc.set(activation_mode, 0.0, 0.0, 0.0)?;
+
+        // Create tensor descriptor
+        let data_type = match dtype {
+            DType::F32 => rocm_rs::miopen::DataType::Float,
+            DType::F16 => rocm_rs::miopen::DataType::Half,
+            DType::BF16 => rocm_rs::miopen::DataType::BFloat16,
+            dtype => candle::bail!("sigmoid is not implemented for {dtype:?} on ROCm"),
+        };
+
+        let tensor_desc = rocm_rs::miopen::TensorDescriptor::new()?;
+        // Treat as [1, 1, 1, el_count] for simplicity
+        tensor_desc.set_4d(data_type, 1, 1, 1, el_count)?;
+
+        // Allocate output storage
+        let dst = device.alloc_zeros(shape, dtype)?;
+
+        // Prepare alpha/beta as byte arrays (1.0 and 0.0)
+        let alpha = match dtype {
+            DType::F32 => 1.0f32.to_ne_bytes().to_vec(),
+            DType::F16 => half::f16::from_f32(1.0).to_ne_bytes().to_vec(),
+            DType::BF16 => half::bf16::from_f32(1.0).to_ne_bytes().to_vec(),
+            _ => unreachable!(),
+        };
+        let beta = match dtype {
+            DType::F32 => 0.0f32.to_ne_bytes().to_vec(),
+            DType::F16 => half::f16::from_f32(0.0).to_ne_bytes().to_vec(),
+            DType::BF16 => half::bf16::from_f32(0.0).to_ne_bytes().to_vec(),
+            _ => unreachable!(),
+        };
+
+        // Call MIOpen activation forward
+        unsafe {
+            act_desc.forward(
+                &handle,
+                &alpha,
+                &tensor_desc,
+                *storage.as_rocm_slice().device_ptr() as *const std::ffi::c_void,
+                &beta,
+                &tensor_desc,
+                *dst.as_rocm_slice().device_ptr() as *mut std::ffi::c_void,
+            )?;
+        }
+
+        Ok((dst, shape.clone()))
+    }
+
     fn bwd(&self, _arg: &Tensor, res: &Tensor, grad_res: &Tensor) -> Result<Option<Tensor>> {
         // d/dx sigmoid(x) = (1 - sigmoid(x)) * sigmoid(x)
         let d_dx_sigmoid = res.ones_like()?.sub(res)?.mul(res)?;
@@ -986,6 +1057,29 @@ impl candle::CustomOp3 for LayerNorm {
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
     }
+
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        _s1: &candle::RocmStorage,
+        _l1: &Layout,
+        _s2: &candle::RocmStorage,
+        _l2: &Layout,
+        _s3: &candle::RocmStorage,
+        _l3: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        // TODO: Implement LayerNorm for ROCm
+        // Options:
+        // 1. Use MIOpen BatchNorm (requires reshaping and careful setup)
+        // 2. Implement custom HIP kernel (similar to CUDA layernorm kernel)
+        // For now, return an error directing users to use layer_norm_slow() fallback
+        candle::bail!(
+            "LayerNorm is not yet implemented for ROCm. \
+             Use candle_nn::ops::layer_norm_slow() as a fallback, \
+             or help implement using MIOpen BatchNorm or custom HIP kernel at: \
+             deps/rocm-rs/src/rocarray/kernels.hip"
+        )
+    }
 }
 
 pub fn layer_norm_slow(x: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Result<Tensor> {
@@ -1294,6 +1388,35 @@ impl candle::CustomOp3 for Sdpa {
 
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, q.dtype());
         Ok((newstorage, Shape::from_dims(&out_dims)))
+    }
+
+    #[cfg(feature = "rocm")]
+    fn rocm_fwd(
+        &self,
+        _q: &candle::RocmStorage,
+        _q_l: &Layout,
+        _k: &candle::RocmStorage,
+        _k_l: &Layout,
+        _v: &candle::RocmStorage,
+        _v_l: &Layout,
+    ) -> Result<(candle::RocmStorage, Shape)> {
+        // TODO: Implement SDPA (Scaled Dot-Product Attention) for ROCm
+        // MIOpen provides MhaDescriptor for multi-head attention!
+        // Reference: /deps/rocm-rs/src/miopen/mha.rs
+        // 
+        // Implementation steps:
+        // 1. Create MhaDescriptor with scale parameter
+        // 2. Set up tensor descriptors for Q, K, V
+        // 3. Handle causal masking if needed (MhaMask::CAUSAL)
+        // 4. Call MIOpen MHA forward
+        //
+        // For now, return an error with guidance
+        candle::bail!(
+            "SDPA (Scaled Dot-Product Attention) is not yet implemented for ROCm. \
+             MIOpen provides MhaDescriptor for this - see: \
+             /deps/rocm-rs/src/miopen/mha.rs. \
+             Implementation needed in candle-nn/src/ops.rs"
+        )
     }
 }
 
