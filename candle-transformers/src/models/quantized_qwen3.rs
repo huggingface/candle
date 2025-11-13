@@ -211,8 +211,8 @@ impl AttentionWeights {
 
         let (k, v) = self.kv_cache.append(&k, &v)?;
 
-        let k = repeat_kv(k, self.num_kv_groups)?;
-        let v = repeat_kv(v, self.num_kv_groups)?;
+        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
         let scale = 1.0 / (self.head_dim as f64).sqrt();
         let mut scores = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
