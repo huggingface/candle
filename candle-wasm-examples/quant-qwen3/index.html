@@ -313,7 +313,6 @@
                 <h3>Performance Tools</h3>
                 <div class="controls">
                     <button class="secondary" onclick="showProfile()">Show Stats</button>
-                    <button class="secondary" onclick="clearProfile()">Clear Stats</button>
                     <button class="secondary" onclick="updateMemory()">Update Memory</button>
                 </div>
                 <div id="memoryInfo">Loading memory info...</div>
@@ -346,7 +345,7 @@
             'Qwen3-0.6B-Q8_0.gguf';
 
         let currentThinkingMode = true;
-        
+
         function parseResponse(fullText, enableThinking) {
             if (enableThinking) {
                 const lastThinkStart = fullText.lastIndexOf('<think>');
@@ -389,8 +388,8 @@
                 .replace(/<\|im_start\|>/g, '')
                 .replace(/<\|im_end\|>/g, '')
                 .replace(/<\|endoftext\|>/g, '')
-                .replace(/<think>/g, '')      // Remove all <think> tags
-                .replace(/<\/think>/g, '')    // Remove all </think> tags
+                .replace(/<think>/g, '')
+                .replace(/<\/think>/g, '')
                 .trim();
         }
 
@@ -424,11 +423,6 @@
         window.showProfile = function() {
             profile_print_stats();
             updateStatus('Performance stats printed to console', 'ready');
-        };
-
-        window.clearProfile = function() {
-            profile_clear();
-            updateStatus('Stats cleared', 'ready');
         };
 
         window.stopGeneration = function() {
