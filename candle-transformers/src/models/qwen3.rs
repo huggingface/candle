@@ -217,8 +217,8 @@ impl Qwen3Attention {
         let (k, v) = self.kv_cache.append(&k, &v)?;
 
         // 6. GQA repeat_kv
-        let k = repeat_kv(k, self.num_kv_groups)?;
-        let v = repeat_kv(v, self.num_kv_groups)?;
+        let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
+        let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
         // 7. Attention score
         let scale = 1.0 / (self.head_dim as f64).sqrt();
