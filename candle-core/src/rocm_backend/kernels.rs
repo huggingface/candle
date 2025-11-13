@@ -34,10 +34,10 @@ impl SlicePtrOrNull {
             let mut info = Vec::with_capacity(layout.shape().rank() * 2);
             info.extend_from_slice(layout.dims());
             info.extend_from_slice(layout.stride());
-            
-            let device_info = device
-                .htod_copy(info)
-                .map_err(|e| RocmError::KernelError(format!("Failed to copy layout info: {:?}", e)))?;
+
+            let device_info = device.htod_copy(info).map_err(|e| {
+                RocmError::KernelError(format!("Failed to copy layout info: {:?}", e))
+            })?;
             Ok(SlicePtrOrNull::Ptr(device_info))
         }
     }
@@ -75,15 +75,16 @@ pub fn launch_unary<T>(
     let shape = layout.shape();
     let el = shape.elem_count();
     let (grid, block) = launch_config_for_num_elems(el as u32);
-    
+
     let ds = SlicePtrOrNull::from_layout(dev.hip_device(), layout)?;
     let src_offset = &src.slice(layout.start_offset()..);
-    
+
     // Allocate output
-    let out = dev.hip_device()
+    let out = dev
+        .hip_device()
         .alloc::<T>(el)
         .map_err(|e| RocmError::OutOfMemory { requested: el * std::mem::size_of::<T>() })?;
-    
+
     // Build args: (numel, num_dims, info, inp, out)
     let mut args = [
         &(el as usize) as *const usize as *mut c_void,
@@ -92,12 +93,12 @@ pub fn launch_unary<T>(
         src_offset.as_ptr() as *mut c_void,
         out.as_ptr() as *mut c_void,
     ];
-    
+
     unsafe {
         func.launch(grid, block, 0, None, &mut args)
             .map_err(|e| RocmError::KernelError(format!("Unary kernel launch failed: {:?}", e)))?;
     }
-    
+
     Ok(out)
 }
 
@@ -106,7 +107,7 @@ pub fn launch_unary<T>(
 /// Signature: (numel, num_dims, info, inp, out, mul, add)
 pub fn launch_affine<T>(
     kernel_name: &str,
-    device: &rocm_rs::hip::Device,
+    dev: &RocmDevice,
     src: &DeviceMemory<T>,
     layout: &Layout,
     mul: T,
@@ -115,18 +116,19 @@ pub fn launch_affine<T>(
 where
     T: Copy,
 {
-    let func = get_kernel(kernel_name)?;
+    let func = dev.get_or_load_func(kernel_name, &kernels_module::AFFINE)?;
     let shape = layout.shape();
     let el = shape.elem_count();
     let (grid, block) = launch_config_for_num_elems(el as u32);
-    
-    let ds = SlicePtrOrNull::from_layout(device, layout)?;
+
+    let ds = SlicePtrOrNull::from_layout(dev.hip_device(), layout)?;
     let src_offset = &src.slice(layout.start_offset()..);
-    
-    let out = device
+
+    let out = dev
+        .hip_device()
         .alloc::<T>(el)
         .map_err(|e| RocmError::OutOfMemory { requested: el * std::mem::size_of::<T>() })?;
-    
+
     // Build args: (numel, num_dims, info, inp, out, mul, add)
     let mut args = [
         &(el as usize) as *const usize as *mut c_void,
@@ -137,12 +139,12 @@ where
         &mul as *const T as *mut c_void,
         &add as *const T as *mut c_void,
     ];
-    
+
     unsafe {
         func.launch(grid, block, 0, None, &mut args)
             .map_err(|e| RocmError::KernelError(format!("Affine kernel launch failed: {:?}", e)))?;
     }
-    
+
     Ok(out)
 }
 
@@ -152,7 +154,7 @@ where
 /// Signature: (numel, num_dims, info, ids, t, f, out)
 pub fn launch_ternary<C, T>(
     kernel_name: &str,
-    device: &rocm_rs::hip::Device,
+    dev: &RocmDevice,
     cond: &DeviceMemory<C>,
     cond_layout: &Layout,
     true_vals: &DeviceMemory<T>,
@@ -160,11 +162,11 @@ pub fn launch_ternary<C, T>(
     false_vals: &DeviceMemory<T>,
     false_layout: &Layout,
 ) -> Result<DeviceMemory<T>> {
-    let func = get_kernel(kernel_name)?;
+    let func = dev.get_or_load_func(kernel_name, &kernels_module::TERNARY)?;
     let shape = cond_layout.shape();
     let el = shape.elem_count();
     let (grid, block) = launch_config_for_num_elems(el as u32);
-    
+
     // Candle's ternary uses SEPARATE strides for cond, true_vals, false_vals!
     // info layout: [dims, cond_strides, true_strides, false_strides]
     let mut info = Vec::with_capacity(shape.rank() * 4);
@@ -172,19 +174,20 @@ pub fn launch_ternary<C, T>(
     info.extend_from_slice(cond_layout.stride());
     info.extend_from_slice(true_layout.stride());
     info.extend_from_slice(false_layout.stride());
-    
-    let device_info = device
-        .htod_copy(info)
-        .map_err(|e| RocmError::KernelError(format!("Failed to copy ternary layout info: {:?}", e)))?;
-    
+
+    let device_info = dev.hip_device().htod_copy(info).map_err(|e| {
+        RocmError::KernelError(format!("Failed to copy ternary layout info: {:?}", e))
+    })?;
+
     let cond_offset = &cond.slice(cond_layout.start_offset()..);
     let true_offset = &true_vals.slice(true_layout.start_offset()..);
     let false_offset = &false_vals.slice(false_layout.start_offset()..);
-    
-    let out = device
+
+    let out = dev
+        .hip_device()
         .alloc::<T>(el)
         .map_err(|e| RocmError::OutOfMemory { requested: el * std::mem::size_of::<T>() })?;
-    
+
     // Build args: (numel, num_dims, info, ids, t, f, out)
     let mut args = [
         &(el as usize) as *const usize as *mut c_void,
@@ -195,12 +198,13 @@ pub fn launch_ternary<C, T>(
         false_offset.as_ptr() as *mut c_void,
         out.as_ptr() as *mut c_void,
     ];
-    
+
     unsafe {
-        func.launch(grid, block, 0, None, &mut args)
-            .map_err(|e| RocmError::KernelError(format!("Ternary kernel launch failed: {:?}", e)))?;
+        func.launch(grid, block, 0, None, &mut args).map_err(|e| {
+            RocmError::KernelError(format!("Ternary kernel launch failed: {:?}", e))
+        })?;
     }
-    
+
     Ok(out)
 }
 
@@ -210,23 +214,24 @@ pub fn launch_ternary<C, T>(
 /// NOTE: Input and output types are DIFFERENT!
 pub fn launch_cast<I, O>(
     kernel_name: &str,
-    device: &rocm_rs::hip::Device,
+    dev: &RocmDevice,
     src: &DeviceMemory<I>,
     layout: &Layout,
 ) -> Result<DeviceMemory<O>> {
-    let func = get_kernel(kernel_name)?;
+    let func = dev.get_or_load_func(kernel_name, &kernels_module::CAST)?;
     let shape = layout.shape();
     let el = shape.elem_count();
     let (grid, block) = launch_config_for_num_elems(el as u32);
-    
-    let ds = SlicePtrOrNull::from_layout(device, layout)?;
+
+    let ds = SlicePtrOrNull::from_layout(dev.hip_device(), layout)?;
     let src_offset = &src.slice(layout.start_offset()..);
-    
+
     // Allocate output with OUTPUT type
-    let out = device
+    let out = dev
+        .hip_device()
         .alloc::<O>(el)
         .map_err(|e| RocmError::OutOfMemory { requested: el * std::mem::size_of::<O>() })?;
-    
+
     // Build args: (numel, num_dims, info, inp, out)
     let mut args = [
         &(el as usize) as *const usize as *mut c_void,
@@ -235,12 +240,12 @@ pub fn launch_cast<I, O>(
         src_offset.as_ptr() as *mut c_void,
         out.as_ptr() as *mut c_void,
     ];
-    
+
     unsafe {
         func.launch(grid, block, 0, None, &mut args)
             .map_err(|e| RocmError::KernelError(format!("Cast kernel launch failed: {:?}", e)))?;
     }
-    
+
     Ok(out)
 }
 
@@ -250,35 +255,36 @@ pub fn launch_cast<I, O>(
 /// Signature: (numel, num_dims, info, lhs, rhs, out)
 pub fn launch_binary<T>(
     kernel_name: &str,
-    device: &rocm_rs::hip::Device,
+    dev: &RocmDevice,
     lhs: &DeviceMemory<T>,
     lhs_layout: &Layout,
     rhs: &DeviceMemory<T>,
     rhs_layout: &Layout,
 ) -> Result<DeviceMemory<T>> {
-    let func = get_kernel(kernel_name)?;
+    let func = dev.get_or_load_func(kernel_name, &kernels_module::BINARY)?;
     let shape = lhs_layout.shape();
     let el = shape.elem_count();
     let (grid, block) = launch_config_for_num_elems(el as u32);
-    
+
     // Binary ops use SEPARATE strides for lhs and rhs
     // info layout: [dims, lhs_strides, rhs_strides]
     let mut info = Vec::with_capacity(shape.rank() * 3);
     info.extend_from_slice(lhs_layout.dims());
     info.extend_from_slice(lhs_layout.stride());
     info.extend_from_slice(rhs_layout.stride());
-    
-    let device_info = device
-        .htod_copy(info)
-        .map_err(|e| RocmError::KernelError(format!("Failed to copy binary layout info: {:?}", e)))?;
-    
+
+    let device_info = dev.hip_device().htod_copy(info).map_err(|e| {
+        RocmError::KernelError(format!("Failed to copy binary layout info: {:?}", e))
+    })?;
+
     let lhs_offset = &lhs.slice(lhs_layout.start_offset()..);
     let rhs_offset = &rhs.slice(rhs_layout.start_offset()..);
-    
-    let out = device
+
+    let out = dev
+        .hip_device()
         .alloc::<T>(el)
         .map_err(|e| RocmError::OutOfMemory { requested: el * std::mem::size_of::<T>() })?;
-    
+
     // Build args: (numel, num_dims, info, lhs, rhs, out)
     let mut args = [
         &(el as usize) as *const usize as *mut c_void,
@@ -288,12 +294,12 @@ pub fn launch_binary<T>(
         rhs_offset.as_ptr() as *mut c_void,
         out.as_ptr() as *mut c_void,
     ];
-    
+
     unsafe {
         func.launch(grid, block, 0, None, &mut args)
             .map_err(|e| RocmError::KernelError(format!("Binary kernel launch failed: {:?}", e)))?;
     }
-    
+
     Ok(out)
 }
 
@@ -312,25 +318,25 @@ where
 {
     let func = get_kernel(kernel_name)?;
     let shape = layout.shape();
-    
+
     // Calculate output shape (reduced dimensions)
     let mut out_dims = shape.dims().to_vec();
     for &dim in sum_dims.iter().rev() {
         out_dims.remove(dim);
     }
     let out_el = if out_dims.is_empty() { 1 } else { out_dims.iter().product() };
-    
+
     let el = shape.elem_count();
     let (grid, block) = launch_config_for_num_elems(el as u32);
-    
+
     let ds = SlicePtrOrNull::from_layout(device, layout)?;
     let src_offset = &src.slice(layout.start_offset()..);
-    
+
     // Allocate output with reduced size
     let out = device
         .alloc::<T>(out_el)
         .map_err(|e| RocmError::OutOfMemory { requested: out_el * std::mem::size_of::<T>() })?;
-    
+
     // Build args: (numel, num_dims, info, inp, out)
     let mut args = [
         &(el as usize) as *const usize as *mut c_void,
@@ -339,11 +345,11 @@ where
         src_offset.as_ptr() as *mut c_void,
         out.as_ptr() as *mut c_void,
     ];
-    
+
     unsafe {
         func.launch(grid, block, 0, None, &mut args)
             .map_err(|e| RocmError::KernelError(format!("Reduce kernel launch failed: {:?}", e)))?;
     }
-    
+
     Ok(out)
 }

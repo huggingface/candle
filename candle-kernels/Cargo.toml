@@ -13,8 +13,9 @@ license = "MIT OR Apache-2.0"
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.1", optional = true }
+rocm-rs = { path = "../../rocm-rs", optional = true }
 
 [features]
 default = []
 cuda = ["bindgen_cuda"]
-rocm = []
+rocm = ["rocm-rs"]

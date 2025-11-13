@@ -93,7 +93,7 @@ impl utils::Map1 for Affine {
         let kernel_name = format!("affine_{}", T::DTYPE.as_str());
         kernels::launch_affine(
             &kernel_name,
-            dev.hip_device(),
+            dev,
             src,
             layout,
             T::from_f64(self.0),
@@ -111,7 +111,7 @@ impl utils::Map1 for Powf {
         layout: &crate::Layout,
     ) -> Result<DeviceMemory<T>> {
         let kernel_name = format!("upowf_{}", T::DTYPE.as_str());
-        kernels::launch_unary(&kernel_name, dev.hip_device(), src, layout)
+        kernels::launch_unary(&kernel_name, dev, src, layout)
     }
 }
 
@@ -124,7 +124,7 @@ impl utils::Map1 for Elu {
         layout: &crate::Layout,
     ) -> Result<DeviceMemory<T>> {
         let kernel_name = format!("uelu_{}", T::DTYPE.as_str());
-        kernels::launch_unary(&kernel_name, dev.hip_device(), src, layout)
+        kernels::launch_unary(&kernel_name, dev, src, layout)
     }
 }
 
@@ -137,7 +137,7 @@ impl<T: crate::op::UnaryOpT> utils::Map1 for UnaryOp<T> {
         layout: &crate::Layout,
     ) -> Result<DeviceMemory<U>> {
         let kernel_name = format!("u{}_{}", T::KERNEL_NAME, U::DTYPE.as_str());
-        kernels::launch_unary(&kernel_name, dev.hip_device(), src, layout)
+        kernels::launch_unary(&kernel_name, dev, src, layout)
     }
 }
 
@@ -156,7 +156,7 @@ impl utils::Map2 for BinaryAdd {
         dev: &RocmDevice,
     ) -> Result<DeviceMemory<T>> {
         let kernel_name = format!("badd_{}", T::DTYPE.as_str());
-        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+        kernels::launch_binary(&kernel_name, dev, src1, layout1, src2, layout2)
     }
 }
 
@@ -171,7 +171,7 @@ impl utils::Map2 for BinarySub {
         dev: &RocmDevice,
     ) -> Result<DeviceMemory<T>> {
         let kernel_name = format!("bsub_{}", T::DTYPE.as_str());
-        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+        kernels::launch_binary(&kernel_name, dev, src1, layout1, src2, layout2)
     }
 }
 
@@ -186,7 +186,7 @@ impl utils::Map2 for BinaryMul {
         dev: &RocmDevice,
     ) -> Result<DeviceMemory<T>> {
         let kernel_name = format!("bmul_{}", T::DTYPE.as_str());
-        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+        kernels::launch_binary(&kernel_name, dev, src1, layout1, src2, layout2)
     }
 }
 
@@ -201,7 +201,7 @@ impl utils::Map2 for BinaryDiv {
         dev: &RocmDevice,
     ) -> Result<DeviceMemory<T>> {
         let kernel_name = format!("bdiv_{}", T::DTYPE.as_str());
-        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+        kernels::launch_binary(&kernel_name, dev, src1, layout1, src2, layout2)
     }
 }
 
@@ -220,7 +220,7 @@ impl utils::Map2 for CmpEq {
         dev: &RocmDevice,
     ) -> Result<DeviceMemory<T>> {
         let kernel_name = format!("ceq_{}", T::DTYPE.as_str());
-        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+        kernels::launch_binary(&kernel_name, dev, src1, layout1, src2, layout2)
     }
 }
 
@@ -235,7 +235,7 @@ impl utils::Map2 for CmpNe {
         dev: &RocmDevice,
     ) -> Result<DeviceMemory<T>> {
         let kernel_name = format!("cne_{}", T::DTYPE.as_str());
-        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+        kernels::launch_binary(&kernel_name, dev, src1, layout1, src2, layout2)
     }
 }
 
@@ -250,7 +250,7 @@ impl utils::Map2 for CmpLt {
         dev: &RocmDevice,
     ) -> Result<DeviceMemory<T>> {
         let kernel_name = format!("clt_{}", T::DTYPE.as_str());
-        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+        kernels::launch_binary(&kernel_name, dev, src1, layout1, src2, layout2)
     }
 }
 
@@ -265,7 +265,7 @@ impl utils::Map2 for CmpLe {
         dev: &RocmDevice,
     ) -> Result<DeviceMemory<T>> {
         let kernel_name = format!("cle_{}", T::DTYPE.as_str());
-        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+        kernels::launch_binary(&kernel_name, dev, src1, layout1, src2, layout2)
     }
 }
 
@@ -280,7 +280,7 @@ impl utils::Map2 for CmpGt {
         dev: &RocmDevice,
     ) -> Result<DeviceMemory<T>> {
         let kernel_name = format!("cgt_{}", T::DTYPE.as_str());
-        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+        kernels::launch_binary(&kernel_name, dev, src1, layout1, src2, layout2)
     }
 }
 
@@ -295,7 +295,7 @@ impl utils::Map2 for CmpGe {
         dev: &RocmDevice,
     ) -> Result<DeviceMemory<T>> {
         let kernel_name = format!("cge_{}", T::DTYPE.as_str());
-        kernels::launch_binary(&kernel_name, dev.hip_device(), src1, layout1, src2, layout2)
+        kernels::launch_binary(&kernel_name, dev, src1, layout1, src2, layout2)
     }
 }
 
