@@ -735,7 +735,7 @@ impl ConcatKvCache {
                 // - Fused allocation + copy
                 // - Coalesced memory access
                 // - Single kernel launch
-                Tensor::cat(&[k_cache, k], self.dim)?
+                Tensor::cat(&[k_cache, &k], self.dim)?
             }
         });
 
