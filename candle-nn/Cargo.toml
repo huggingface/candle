@@ -37,6 +37,8 @@ cuda = ["candle/cuda"]
 cudnn = ["candle/cudnn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
 metal = ["candle/metal", "dep:candle-metal-kernels", "dep:objc2-metal"]
+# TEAM-507: ROCm support (AMD GPU)
+rocm = ["candle/rocm"]
 
 [[bench]]
 name = "bench_main"
