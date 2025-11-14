@@ -3,11 +3,11 @@
 https://huggingface.co/naver/provence-reranker-debertav3-v1
 
 ```bash
-cargo run  --example provence --release --features=metal -- --task=text-classification --model-id=naver/provence-reranker-debertav3-v1 --sentence="Tell me how to make a good cake."
+cargo run  --example provence --release --features=metal -- --model-id=naver/provence-reranker-debertav3-v1 --sentence="Tell me how to make a good cake."
 ```
 
 ```bash
-cargo run  --example provence --release --features=metal -- --task=text-classification --model-id=naver/trecdl22-crossencoder-debertav3 --sentence="Tell me how to make a good cake."
+cargo run  --example provence --release --features=metal -- --model-id=naver/trecdl22-crossencoder-debertav3 --sentence="Tell me how to make a good cake."
 ```
 
 ---

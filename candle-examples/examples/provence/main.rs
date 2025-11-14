@@ -22,6 +22,7 @@ use tokenizers::{Encoding, PaddingParams, Tokenizer};
 enum TaskType {
     Ner(Box<DebertaV2NERModel>),
     TextClassification(Box<DebertaV2SeqClassificationModel>),
+    Reranker(Box<DebertaV2SeqClassificationModel>),
 }
 
 #[derive(Parser, Debug, Clone, ValueEnum)]
@@ -31,6 +32,9 @@ enum ArgsTask {
 
     /// Text Classification
     TextClassification,
+
+    /// Reranker
+    Reranker,
 }
 
 impl Display for ArgsTask {
@@ -38,6 +42,7 @@ impl Display for ArgsTask {
         match self {
             ArgsTask::Ner => write!(f, "ner"),
             ArgsTask::TextClassification => write!(f, "text-classification"),
+            ArgsTask::Reranker => write!(f, "reranker"),
         }
     }
 }
@@ -77,7 +82,7 @@ struct Args {
     benchmark_iters: Option<usize>,
 
     /// Which task to run
-    #[arg(long, default_value_t = ArgsTask::Ner)]
+    #[arg(long, default_value_t = ArgsTask::Reranker)]
     task: ArgsTask,
 
     /// Use model from a specific directory instead of HuggingFace local cache.
@@ -174,8 +179,17 @@ impl Args {
                 tokenizer,
                 id2label,
             )),
-            ArgsTask::TextClassification => Ok((
+            (ArgsTask::TextClassification) => Ok((
                 TaskType::TextClassification(
+                    DebertaV2SeqClassificationModel::load(vb, &config, Some(id2label.clone()))?
+                        .into(),
+                ),
+                config,
+                tokenizer,
+                id2label,
+            )),
+            (ArgsTask::Reranker) => Ok((
+                TaskType::Reranker(
                     DebertaV2SeqClassificationModel::load(vb, &config, Some(id2label.clone()))?
                         .into(),
                 ),
@@ -191,6 +205,7 @@ fn get_device(model_type: &TaskType) -> &Device {
     match model_type {
         TaskType::Ner(ner_model) => &ner_model.device,
         TaskType::TextClassification(classification_model) => &classification_model.device,
+        TaskType::Reranker(classification_model) => &classification_model.device,
     }
 }
 
@@ -256,6 +271,75 @@ fn main() -> Result<()> {
     );
 
     match task_type {
+        TaskType::Reranker(classification_model) => {
+            let query = "what is panda?".to_string();
+
+            let documents = ["South Korea is a country in East Asia.".to_string(),
+                "There are forests in the mountains.".to_string(),
+                "Pandas look like bears.".to_string(),
+                "There are some animals with black and white fur.".to_string(),
+                "The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China.".to_string()];
+
+            // create pairs of query and documents
+            let pairs = documents
+                .iter()
+                .map(|doc| (query.clone(), doc.clone()))
+                .collect::<Vec<_>>();
+
+            let input_ids = tokenize_batch(
+                &tokenizer,
+                TokenizeInput::Pairs(&pairs),
+                &classification_model.device,
+            )?;
+            let attention_mask = get_attention_mask(
+                &tokenizer,
+                TokenizeInput::Pairs(&pairs),
+                &classification_model.device,
+            )?;
+
+            let token_type_ids = Tensor::zeros(
+                input_ids.dims(),
+                input_ids.dtype(),
+                &classification_model.device,
+            )?;
+
+            // let model = XLMRobertaForSequenceClassification::new(1, &config, vb)?;
+
+            // let output =
+            //     model.forward(&input_ids, &attention_mask, &token_type_ids)?;
+
+            let output = classification_model.forward(
+                &input_ids,
+                Some(token_type_ids),
+                Some(attention_mask),
+            )?;
+
+            let output = candle_nn::ops::sigmoid(&output)?.t().unwrap();
+            let ranks = output
+                .arg_sort_last_dim(false)?
+                .to_vec2::<u32>()?
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+
+            println!("\nRanking Results:");
+            println!("{:-<80}", "");
+
+            documents.iter().enumerate().for_each(|(idx, doc)| {
+                let rank = ranks.iter().position(|&r| r == idx as u32).unwrap();
+                let score = output
+                    .get_on_dim(1, idx)
+                    .unwrap()
+                    .to_dtype(candle::DType::F32)
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap();
+                println!("Rank #{:<2} | Score: {:.4} | {}", rank + 1, score[0], doc);
+            });
+
+            println!("{:-<80}", "");
+        }
+
         TaskType::Ner(ner_model) => {
             if let Some(num_iters) = args.benchmark_iters {
                 create_benchmark(num_iters, model_input)(
@@ -378,4 +462,61 @@ where
         println!("Max time: {:.3} ms", max_time as f64 / 1_000_000.0);
         Ok(())
     }
+}
+
+// From xml-roberta
+
+#[derive(Debug)]
+pub enum TokenizeInput<'a> {
+    Single(&'a [String]),
+    Pairs(&'a [(String, String)]),
+}
+
+pub fn tokenize_batch(
+    tokenizer: &Tokenizer,
+    input: TokenizeInput,
+    device: &Device,
+) -> anyhow::Result<Tensor> {
+    let tokens = match input {
+        TokenizeInput::Single(text_batch) => tokenizer
+            .encode_batch(text_batch.to_vec(), true)
+            .map_err(E::msg)?,
+        TokenizeInput::Pairs(pairs) => tokenizer
+            .encode_batch(pairs.to_vec(), true)
+            .map_err(E::msg)?,
+    };
+
+    let token_ids = tokens
+        .iter()
+        .map(|tokens| {
+            let tokens = tokens.get_ids().to_vec();
+            Tensor::new(tokens.as_slice(), device)
+        })
+        .collect::<candle::Result<Vec<_>>>()?;
+
+    Ok(Tensor::stack(&token_ids, 0)?)
+}
+
+pub fn get_attention_mask(
+    tokenizer: &Tokenizer,
+    input: TokenizeInput,
+    device: &Device,
+) -> anyhow::Result<Tensor> {
+    let tokens = match input {
+        TokenizeInput::Single(text_batch) => tokenizer
+            .encode_batch(text_batch.to_vec(), true)
+            .map_err(E::msg)?,
+        TokenizeInput::Pairs(pairs) => tokenizer
+            .encode_batch(pairs.to_vec(), true)
+            .map_err(E::msg)?,
+    };
+
+    let attention_mask = tokens
+        .iter()
+        .map(|tokens| {
+            let tokens = tokens.get_attention_mask().to_vec();
+            Tensor::new(tokens.as_slice(), device)
+        })
+        .collect::<candle::Result<Vec<_>>>()?;
+    Ok(Tensor::stack(&attention_mask, 0)?)
 }
