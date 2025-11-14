@@ -10,7 +10,7 @@ use super::with_tracing::QMatMul;
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Tensor};
-use candle_nn::{kv_cache::KvCache, Activation, Embedding, Module};
+use candle_nn::{kv_cache::ConcatKvCache, Activation, Embedding, Module};
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
@@ -136,7 +136,7 @@ struct AttentionWeights {
     num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: KvCache,
+    kv_cache: ConcatKvCache,
     span_attn: tracing::Span,
 }
 
@@ -160,9 +160,7 @@ impl AttentionWeights {
         let q_norm = gg.rms_norm(&format!("{prefix}.attn_q_norm.weight"), rms_norm_eps)?;
         let k_norm = gg.rms_norm(&format!("{prefix}.attn_k_norm.weight"), rms_norm_eps)?;
 
-        // Initialize KV cache with 512 tokens capacity to reduce initial memory allocation.
-        // The cache will grow in chunks of 512 tokens when needed.
-        let kv_cache = KvCache::new(2, 512);
+        let kv_cache = ConcatKvCache::new(2);
 
         let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
 
@@ -211,15 +209,7 @@ impl AttentionWeights {
 
         let (q, k) = self.rotary_emb.apply(&q, &k, offset)?;
 
-        // Reset KV cache if we're at the first position
-        if offset == 0 {
-            self.kv_cache.reset();
-        }
-        let (k, v) = self.kv_cache.append(&k.contiguous()?, &v.contiguous()?)?;
-
-        // Make tensor contiguous to avoid some strided copies
-        let k = k.contiguous()?;
-        let v = v.contiguous()?;
+        let (k, v) = self.kv_cache.append(&k, &v)?;
 
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
