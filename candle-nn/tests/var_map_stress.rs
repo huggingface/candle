@@ -1,6 +1,7 @@
 //! A `VarMap` is a store that holds named variables.
 //!
 use candle::{DType, Device, Result, Shape, Tensor, Var};
+use candle_nn::Init;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 

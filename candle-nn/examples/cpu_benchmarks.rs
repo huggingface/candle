@@ -7,8 +7,8 @@ extern crate accelerate_src;
 
 use candle::quantized::GgmlType;
 use candle::{CpuStorage, Device, Layout, Module, Result, Shape, Tensor, D};
+use candle_nn::Activation;
 use clap::{Parser, Subcommand};
-
 const CHECK_CONV2D: bool = false;
 
 trait Benchmark {
@@ -19,6 +19,54 @@ trait Benchmark {
     fn run_one(_: &Self::PreProcessData) -> Result<Self::RunResult>;
 
     const ITERS: usize;
+}
+
+struct GluActivation;
+impl Benchmark for GluActivation {
+    type PreProcessData = Tensor;
+    type RunResult = Tensor;
+
+    fn preprocess() -> Result<Self::PreProcessData> {
+        Tensor::randn(0f32, 1., (1024, 2048), &Device::Cpu)
+    }
+
+    fn run_one(data: &Self::PreProcessData) -> Result<Self::RunResult> {
+        Activation::Glu.forward(data)
+    }
+
+    const ITERS: usize = 100;
+}
+
+struct GeGluActivation;
+impl Benchmark for GeGluActivation {
+    type PreProcessData = Tensor;
+    type RunResult = Tensor;
+
+    fn preprocess() -> Result<Self::PreProcessData> {
+        Tensor::randn(0f32, 1., (1024, 2048), &Device::Cpu)
+    }
+
+    fn run_one(data: &Self::PreProcessData) -> Result<Self::RunResult> {
+        Activation::GeGlu.forward(data)
+    }
+
+    const ITERS: usize = 100;
+}
+
+struct ReGluActivation;
+impl Benchmark for ReGluActivation {
+    type PreProcessData = Tensor;
+    type RunResult = Tensor;
+
+    fn preprocess() -> Result<Self::PreProcessData> {
+        Tensor::randn(0f32, 1., (1024, 2048), &Device::Cpu)
+    }
+
+    fn run_one(data: &Self::PreProcessData) -> Result<Self::RunResult> {
+        Activation::ReGlu.forward(data)
+    }
+
+    const ITERS: usize = 100;
 }
 
 struct Im2Col {
@@ -313,6 +361,9 @@ enum Task {
     Softmax,
     SoftmaxLastDim,
     Cat,
+    GluActivation,
+    GeGluActivation,
+    ReGluActivation,
 }
 
 #[derive(Parser, Debug)]
@@ -338,6 +389,9 @@ fn main() -> Result<()> {
         Task::SoftmaxLastDim => run::<SoftmaxLastDim>(args.iters)?,
         Task::Qmatmul => run::<QMatMul>(args.iters)?,
         Task::Cat => run::<Cat>(args.iters)?,
+        Task::GluActivation => run::<GluActivation>(args.iters)?,
+        Task::GeGluActivation => run::<GeGluActivation>(args.iters)?,
+        Task::ReGluActivation => run::<ReGluActivation>(args.iters)?,
     }
     Ok(())
 }
