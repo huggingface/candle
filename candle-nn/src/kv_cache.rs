@@ -2,6 +2,12 @@
 //!
 use candle::{DType, Device, Result, Tensor};
 
+pub trait KvCacheTrait {
+    fn new(dim: usize, max_seq_len: usize) -> Self;
+    fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)>;
+    fn reset(&mut self);
+}
+
 #[derive(Debug, Clone)]
 pub struct Cache {
     // all_data is an option on a Tensor, this makes it possible to only create the actual tensor
@@ -670,6 +676,19 @@ pub struct ConcatKvCache {
     dim: usize,
 }
 
+impl KvCacheTrait for ConcatKvCache {
+    fn new(dim: usize, _: usize) -> Self {
+        ConcatKvCache::new(dim)
+    }
+
+    fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        self.append(k, v)
+    }
+
+    fn reset(&mut self) {
+        self.reset()
+    }
+}
 impl ConcatKvCache {
     /// Create a new empty concatenation-based KV-cache
     ///

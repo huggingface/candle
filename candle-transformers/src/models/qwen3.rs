@@ -3,7 +3,10 @@ use crate::{
     utils::repeat_kv,
 };
 use candle::{DType, Device, Module, Result, Tensor};
-use candle_nn::{kv_cache::ConcatKvCache, Activation, VarBuilder};
+use candle_nn::{
+    kv_cache::{ConcatKvCache, KvCacheTrait},
+    Activation, VarBuilder,
+};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -91,7 +94,7 @@ impl Module for Qwen3MLP {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Qwen3Attention {
+pub(crate) struct Qwen3Attention<Cache: KvCacheTrait = ConcatKvCache> {
     // projections
     q_proj: Linear,
     k_proj: Linear,
@@ -108,10 +111,10 @@ pub(crate) struct Qwen3Attention {
     hidden_size: usize,
     // utils
     rotary_emb: Arc<Qwen3RotaryEmbedding>,
-    kv_cache: ConcatKvCache,
+    kv_cache: Cache,
 }
 
-impl Qwen3Attention {
+impl<Cache: KvCacheTrait> Qwen3Attention<Cache> {
     pub(crate) fn new(
         cfg: &Config,
         rotary_emb: Arc<Qwen3RotaryEmbedding>,
@@ -159,7 +162,9 @@ impl Qwen3Attention {
 
         // dim=2 because we concatenate along the sequence dimension
         // For tensors of shape [batch, heads, seq, head_dim]
-        let kv_cache = ConcatKvCache::new(2);
+        // The KV cache is initialized with 512 tokens capacity. If the KvCache implementation uses capacity this
+        // leads to reduced initial memory allocation, and the cache will grow in chunks of 512 tokens when needed.
+        let kv_cache = Cache::new(2, 512);
 
         Ok(Self {
             q_proj,
