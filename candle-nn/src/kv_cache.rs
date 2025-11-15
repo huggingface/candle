@@ -3,8 +3,17 @@
 use candle::{DType, Device, Result, Tensor};
 
 pub trait KvCacheTrait {
+    type Mask;
     fn new(dim: usize, max_seq_len: usize) -> Self;
     fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)>;
+    fn append_with_mask(
+        &mut self,
+        k: &Tensor,
+        v: &Tensor,
+        mask: Option<&Self::Mask>,
+    ) -> Result<(Tensor, Tensor)> {
+        self.append(k, v)
+    }
     fn reset(&mut self);
 }
 
@@ -91,6 +100,21 @@ pub struct KvCache {
     v: Cache,
 }
 
+impl KvCacheTrait for KvCache {
+    type Mask = ();
+    fn new(dim: usize, max_seq_len: usize) -> Self {
+        KvCache::new(dim, max_seq_len)
+    }
+
+    fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        self.append(k, v)
+    }
+
+    fn reset(&mut self) {
+        self.reset()
+    }
+}
+
 impl KvCache {
     pub fn new(dim: usize, max_seq_len: usize) -> Self {
         let k = Cache::new(dim, max_seq_len);
@@ -123,8 +147,8 @@ impl KvCache {
     }
 
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
-        self.k.append(k)?;
-        self.v.append(v)?;
+        self.k.append(&k.contiguous()?)?;
+        self.v.append(&v.contiguous()?)?;
         let out_k = self.k.current_data()?;
         let out_v = self.v.current_data()?;
         let k = match out_k {
@@ -505,7 +529,6 @@ impl ScatteredCacheBuilder {
         self.indices[batch_index] = 0;
     }
 
-    #[allow(clippy::needless_range_loop)]
     pub fn indices_and_mask(
         &mut self,
         seq_len: usize,
@@ -531,18 +554,26 @@ impl ScatteredCacheBuilder {
                 let mut indices = Vec::with_capacity(seq_len);
                 let mut all_pos = vec![usize::MAX; context];
                 if start_pos < context {
-                    for i in 0..start_pos {
-                        all_pos[i] = i;
-                    }
+                    all_pos
+                        .iter_mut()
+                        .enumerate()
+                        .take(start_pos)
+                        .for_each(|(i, p)| {
+                            *p = i;
+                        });
                 } else {
                     let offset = start_pos - start_index;
-                    for i in 0..context {
-                        all_pos[i] = if i < start_index {
-                            i + offset
-                        } else {
-                            i + offset - context
-                        };
-                    }
+                    all_pos
+                        .iter_mut()
+                        .enumerate()
+                        .take(context)
+                        .for_each(|(i, p)| {
+                            *p = if i < start_index {
+                                i + offset
+                            } else {
+                                i + offset - context
+                            };
+                        });
                 }
                 for seq_i in 0..seq_len {
                     let index = self.indices[batch_i];
@@ -590,7 +621,6 @@ impl ScatteredCacheBuilder {
         &self.device
     }
 
-    #[allow(clippy::needless_range_loop)]
     fn indices_and_mask_abs(
         &mut self,
         seq_len: usize,
@@ -677,6 +707,8 @@ pub struct ConcatKvCache {
 }
 
 impl KvCacheTrait for ConcatKvCache {
+    type Mask = ();
+
     fn new(dim: usize, _: usize) -> Self {
         ConcatKvCache::new(dim)
     }
@@ -689,6 +721,7 @@ impl KvCacheTrait for ConcatKvCache {
         self.reset()
     }
 }
+
 impl ConcatKvCache {
     /// Create a new empty concatenation-based KV-cache
     ///

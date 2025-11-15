@@ -10,7 +10,10 @@ use super::with_tracing::QMatMul;
 use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Tensor};
-use candle_nn::{kv_cache::ConcatKvCache, Activation, Embedding, Module};
+use candle_nn::{
+    kv_cache::{ConcatKvCache, KvCache, KvCacheTrait},
+    Activation, Embedding, Module,
+};
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
@@ -124,7 +127,7 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-struct AttentionWeights {
+struct AttentionWeights<Cache: KvCacheTrait = KvCache> {
     q_proj: QMatMul,
     k_proj: QMatMul,
     v_proj: QMatMul,
@@ -136,11 +139,11 @@ struct AttentionWeights {
     num_kv_groups: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    kv_cache: ConcatKvCache,
+    kv_cache: Cache,
     span_attn: tracing::Span,
 }
 
-impl AttentionWeights {
+impl<Cache: KvCacheTrait> AttentionWeights<Cache> {
     fn new<R: Read + Seek>(
         gg: &mut Gguf<R>,
         num_heads: usize,
@@ -160,7 +163,7 @@ impl AttentionWeights {
         let q_norm = gg.rms_norm(&format!("{prefix}.attn_q_norm.weight"), rms_norm_eps)?;
         let k_norm = gg.rms_norm(&format!("{prefix}.attn_k_norm.weight"), rms_norm_eps)?;
 
-        let kv_cache = ConcatKvCache::new(2);
+        let kv_cache = Cache::new(2, 512);
 
         let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
 
