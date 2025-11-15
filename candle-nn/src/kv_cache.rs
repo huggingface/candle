@@ -26,7 +26,7 @@ pub struct Cache {
     all_data: Option<Tensor>,
     dim: usize,
     current_seq_len: usize,
-    grow_by: usize,
+    increment: usize,
     max_seq_len: usize,
 }
 
@@ -36,7 +36,7 @@ impl Cache {
             all_data: None,
             dim,
             current_seq_len: 0,
-            grow_by: max_seq_len,
+            increment: max_seq_len,
             max_seq_len,
         }
     }
@@ -83,10 +83,10 @@ impl Cache {
         let ad = self.all_data.as_mut().unwrap();
         while self.current_seq_len + seq_len > self.max_seq_len {
             let mut shape = src.dims().to_vec();
-            shape[self.dim] = self.grow_by;
+            shape[self.dim] = self.increment;
             let next_ad = Tensor::zeros(shape, src.dtype(), src.device())?;
             *ad = Tensor::cat(&[&*ad, &next_ad], self.dim)?;
-            self.max_seq_len += self.grow_by;
+            self.max_seq_len += self.increment;
         }
         ad.slice_set(src, self.dim, self.current_seq_len)?;
         self.current_seq_len += seq_len;
@@ -95,15 +95,15 @@ impl Cache {
 }
 
 #[derive(Debug, Clone)]
-pub struct KvCache {
+pub struct IncrementalKvCache {
     k: Cache,
     v: Cache,
 }
 
-impl KvCacheTrait for KvCache {
+impl KvCacheTrait for IncrementalKvCache {
     type Mask = ();
     fn new(dim: usize, max_seq_len: usize) -> Self {
-        KvCache::new(dim, max_seq_len)
+        IncrementalKvCache::new(dim, max_seq_len)
     }
 
     fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
@@ -115,7 +115,7 @@ impl KvCacheTrait for KvCache {
     }
 }
 
-impl KvCache {
+impl IncrementalKvCache {
     pub fn new(dim: usize, max_seq_len: usize) -> Self {
         let k = Cache::new(dim, max_seq_len);
         let v = Cache::new(dim, max_seq_len);
@@ -678,7 +678,7 @@ impl ScatteredCacheBuilder {
 /// - GPU inference (CUDA, Metal)
 /// - Autoregressive generation (token-by-token decoding)
 ///
-/// **Use `KvCache` instead for:**
+/// **Use `IncrementalKvCache` instead for:**
 /// - CPU-only inference
 /// - When you need fixed memory allocation upfront
 ///
