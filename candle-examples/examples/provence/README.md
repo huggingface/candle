@@ -3,7 +3,7 @@
 https://huggingface.co/naver/provence-reranker-debertav3-v1
 
 ```bash
-cargo run  --example provence --release --features=metal -- --model-id=naver/provence-reranker-debertav3-v1 --sentence="Tell me how to make a good cake."
+cargo run  --example provence --release --features=metal
 ```
 
 ```bash
