@@ -11,7 +11,7 @@ use anyhow::bail;
 use anyhow::{Error as E, Result};
 use candle::{Device, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::models::debertav2::{
+use candle_transformers::models::provence::{
     Config as DebertaV2Config, DebertaV2SeqClassificationModel,
 };
 use clap::{Parser, ValueEnum};
