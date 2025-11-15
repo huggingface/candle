@@ -193,7 +193,6 @@ pub struct RotatingCache {
     max_seq_len: usize,
 }
 
-impl KvCache
 impl RotatingCache {
     pub fn new(dim: usize, max_seq_len: usize) -> Self {
         Self {
@@ -367,6 +366,21 @@ impl RotatingCache {
 pub struct RotatingKvCache {
     k: RotatingCache,
     v: RotatingCache,
+}
+
+impl KvCache for RotatingKvCache {
+    type Mask = ();
+    fn new(dim: usize, max_seq_len: usize) -> Self {
+        RotatingKvCache::new(dim, max_seq_len)
+    }
+
+    fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        self.append(k, v)
+    }
+
+    fn reset(&mut self) {
+        self.reset()
+    }
 }
 
 impl RotatingKvCache {
