@@ -234,7 +234,7 @@ impl AttentionWeights {
         self.o_proj.forward(&reshaped_ctx)
     }
 
-    pub fn clear_kv_cache(&mut self) {
+    fn clear_kv_cache(&mut self) {
         self.kv_cache.reset();
     }
 }
@@ -288,7 +288,7 @@ impl LayerWeights {
         x + h2
     }
 
-    pub fn clear_kv_cache(&mut self) {
+    fn clear_kv_cache(&mut self) {
         self.self_attn.clear_kv_cache();
     }
 }
