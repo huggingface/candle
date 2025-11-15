@@ -2,7 +2,7 @@
 //!
 use candle::{DType, Device, Result, Tensor};
 
-pub trait KvCacheTrait {
+pub trait KvCache {
     type Mask;
     fn new(dim: usize, max_seq_len: usize) -> Self;
     fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)>;
@@ -100,7 +100,7 @@ pub struct IncrementalKvCache {
     v: Cache,
 }
 
-impl KvCacheTrait for IncrementalKvCache {
+impl KvCache for IncrementalKvCache {
     type Mask = ();
     fn new(dim: usize, max_seq_len: usize) -> Self {
         IncrementalKvCache::new(dim, max_seq_len)
@@ -193,6 +193,7 @@ pub struct RotatingCache {
     max_seq_len: usize,
 }
 
+impl KvCache
 impl RotatingCache {
     pub fn new(dim: usize, max_seq_len: usize) -> Self {
         Self {
@@ -706,7 +707,7 @@ pub struct ConcatKvCache {
     dim: usize,
 }
 
-impl KvCacheTrait for ConcatKvCache {
+impl KvCache for ConcatKvCache {
     type Mask = ();
 
     fn new(dim: usize, _: usize) -> Self {

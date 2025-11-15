@@ -11,7 +11,7 @@ use crate::{quantized_nn::RmsNorm, utils::repeat_kv};
 use candle::quantized::{gguf_file, QTensor};
 use candle::{DType, Device, Result, Tensor};
 use candle_nn::{
-    kv_cache::{ConcatKvCache, IncrementalKvCache, KvCacheTrait},
+    kv_cache::{ConcatKvCache, IncrementalKvCache, KvCache},
     Activation, Embedding, Module,
 };
 use std::io::{Read, Seek};
@@ -127,7 +127,7 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-struct AttentionWeights<Cache: KvCacheTrait = IncrementalKvCache> {
+struct AttentionWeights<Cache: KvCache = IncrementalKvCache> {
     q_proj: QMatMul,
     k_proj: QMatMul,
     v_proj: QMatMul,
@@ -143,7 +143,7 @@ struct AttentionWeights<Cache: KvCacheTrait = IncrementalKvCache> {
     span_attn: tracing::Span,
 }
 
-impl<Cache: KvCacheTrait> AttentionWeights<Cache> {
+impl<Cache: KvCache> AttentionWeights<Cache> {
     fn new<R: Read + Seek>(
         gg: &mut Gguf<R>,
         num_heads: usize,

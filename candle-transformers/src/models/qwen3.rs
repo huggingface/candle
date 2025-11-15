@@ -4,7 +4,7 @@ use crate::{
 };
 use candle::{DType, Device, Module, Result, Tensor};
 use candle_nn::{
-    kv_cache::{ConcatKvCache, IncrementalKvCache, KvCacheTrait},
+    kv_cache::{ConcatKvCache, IncrementalKvCache, KvCache},
     Activation, VarBuilder,
 };
 use std::sync::Arc;
@@ -94,7 +94,7 @@ impl Module for Qwen3MLP {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Qwen3Attention<Cache: KvCacheTrait = IncrementalKvCache> {
+pub(crate) struct Qwen3Attention<Cache: KvCache = IncrementalKvCache> {
     // projections
     q_proj: Linear,
     k_proj: Linear,
@@ -114,7 +114,7 @@ pub(crate) struct Qwen3Attention<Cache: KvCacheTrait = IncrementalKvCache> {
     kv_cache: Cache,
 }
 
-impl<Cache: KvCacheTrait> Qwen3Attention<Cache> {
+impl<Cache: KvCache> Qwen3Attention<Cache> {
     pub(crate) fn new(
         cfg: &Config,
         rotary_emb: Arc<Qwen3RotaryEmbedding>,
