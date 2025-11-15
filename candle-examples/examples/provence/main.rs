@@ -9,17 +9,15 @@ use std::path::PathBuf;
 
 use anyhow::bail;
 use anyhow::{Error as E, Result};
-use candle::{Device, Tensor};
+use candle::{Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::models::provence::{
-    Config as DebertaV2Config, DebertaV2SeqClassificationModel,
-};
+use candle_transformers::models::{debertav2::Config as DebertaV2Config, provence::ProvenceModel};
 use clap::{Parser, ValueEnum};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{Encoding, PaddingParams, Tokenizer};
 
 enum TaskType {
-    Reranker(Box<DebertaV2SeqClassificationModel>),
+    Reranker(Box<ProvenceModel>),
 }
 
 #[derive(Parser, Debug, Clone, ValueEnum)]
@@ -94,12 +92,6 @@ impl Args {
         let config = std::fs::read_to_string(config_filename)?;
         let config: DebertaV2Config = serde_json::from_str(&config)?;
 
-        let id2label = if let Some(id2label) = &config.id2label {
-            id2label.clone()
-        } else {
-            bail!("Id2Label not found in the model configuration nor specified as a parameter")
-        };
-
         let mut tokenizer = Tokenizer::from_file(tokenizer_filename)
             .map_err(|e| candle::Error::Msg(format!("Tokenizer error: {e}")))?;
 
@@ -117,10 +109,7 @@ impl Args {
 
         match self.task {
             ArgsTask::Reranker => Ok((
-                TaskType::Reranker(
-                    DebertaV2SeqClassificationModel::load(vb, &config, Some(id2label.clone()))?
-                        .into(),
-                ),
+                TaskType::Reranker(ProvenceModel::load(vb, &config)?.into()),
                 config,
                 tokenizer,
             )),
@@ -147,67 +136,113 @@ fn main() -> Result<()> {
     );
 
     match task_type {
-        TaskType::Reranker(classification_model) => {
-            // create pairs of query and documents
-            let pairs = args
-                .documents
+        TaskType::Reranker(model) => {
+            // 6. Prepare input text
+            let question = "What goes on the bottom of Shepherd's pie?";
+            let context = "Shepherd's pie. History. In early cookery books, the dish was a means of using leftover roasted meat of any kind, and the pie dish was lined on the sides and bottom with mashed potato, as well as having a mashed potato crust on top.";
+
+            // Concatenate query and context (following DeBERTa format)
+            let input_text = format!("{} [SEP] {}", question, context);
+
+            // 7. Tokenize
+            let encoding = tokenizer
+                .encode(input_text, true)
+                .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
+
+            // 8. Convert to tensors
+            let input_ids = Tensor::new(encoding.get_ids(), &model.device)?.unsqueeze(0)?; // [1, seq_len]
+
+            let attention_mask =
+                Tensor::new(encoding.get_attention_mask(), &model.device)?.unsqueeze(0)?; // [1, seq_len]
+
+            // 9. Run forward pass
+            // Note: forward expects Option<Tensor> (owned), so pass Some(attention_mask.clone())
+            let output = model.forward(&input_ids, Some(attention_mask.clone()))?;
+
+            // 10. Process outputs
+            println!("=== Provence Model Output ===\n");
+
+            // Ranking score (shape: [batch])
+            let ranking_scores = output.ranking_scores.to_vec1::<f32>()?;
+            println!("Ranking Score: {:.4}", ranking_scores[0]);
+            println!("  (Higher = more relevant context for this query)\n");
+
+            // Compression logits (shape: [batch, seq_len, 1])
+            let compression_logits = output.compression_logits;
+            let dims = compression_logits.dims();
+            println!("Compression Logits Shape: {:?}", dims);
+            println!("  [batch_size, sequence_length, 1]\n");
+
+            // Convert token logits -> probabilities using sigmoid (single logit per token)
+            let compression_logits = compression_logits.squeeze(2)?; // -> [batch, seq_len]
+            let compression_probs = candle_nn::ops::sigmoid(&compression_logits)?; // [batch, seq_len]
+
+            // Get keep probability (batch 0)
+            let keep_probs_vec = compression_probs.to_vec2::<f32>()?[0].clone();
+
+            // Apply threshold to decide which tokens to keep
+            let threshold = 0.1;
+            let token_decisions: Vec<bool> = keep_probs_vec
                 .iter()
-                .map(|doc| (args.query.clone(), doc.clone()))
-                .collect::<Vec<_>>();
+                .map(|&prob| prob > threshold)
+                .collect();
 
-            dbg!(&args.documents);
+            // 11. Decode selected tokens
+            let tokens = encoding.get_ids();
+            let selected_token_ids: Vec<u32> = tokens
+                .iter()
+                .zip(token_decisions.iter())
+                .filter_map(|(token, &keep)| if keep { Some(*token) } else { None })
+                .collect();
 
-            let input_ids = tokenize_batch(
-                &tokenizer,
-                TokenizeInput::Pairs(&pairs),
-                &classification_model.device,
-            )?;
+            let pruned_text = tokenizer
+                .decode(&selected_token_ids, true)
+                .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
 
-            let attention_mask = get_attention_mask(
-                &tokenizer,
-                TokenizeInput::Pairs(&pairs),
-                &classification_model.device,
-            )?;
+            // Collect removed tokens
+            let removed_token_ids: Vec<u32> = tokens
+                .iter()
+                .zip(token_decisions.iter())
+                .filter_map(|(token, &keep)| if !keep { Some(*token) } else { None })
+                .collect();
 
-            let token_type_ids = Tensor::zeros(
-                input_ids.dims(),
-                input_ids.dtype(),
-                &classification_model.device,
-            )?;
+            let removed_text = tokenizer
+                .decode(&removed_token_ids, true)
+                .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
 
-            let output = classification_model.forward(
-                &input_ids,
-                Some(token_type_ids),
-                Some(attention_mask),
-            )?;
+            println!("Original Context Length: {} chars", context.len());
+            println!("Pruned Context Length: {} chars", pruned_text.len());
+            println!(
+                "Compression Rate: {:.1}%",
+                (1.0 - pruned_text.len() as f32 / context.len() as f32) * 100.0
+            );
+            println!("\nPruned Context:\n{}\n", pruned_text);
 
-            let output = candle_nn::ops::sigmoid(&output)?.t().unwrap();
+            println!(
+                "Removed Tokens (first 100 chars):\n{}\n",
+                &removed_text[..removed_text.len().min(100)]
+            );
 
-            let ranks = output
-                .arg_sort_last_dim(false)?
-                .to_vec2::<u32>()?
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>();
-
-            println!("\nRanking Results:");
-            println!("{:-<80}", "");
-
-            args.documents.iter().enumerate().for_each(|(idx, doc)| {
-                let rank = ranks.iter().position(|&r| r == idx as u32).unwrap();
-
-                let score = output
-                    .get_on_dim(1, idx)
-                    .unwrap()
-                    .to_dtype(candle::DType::F32)
-                    .unwrap()
-                    .to_vec1::<f32>()
-                    .unwrap();
-
-                println!("Rank #{:<2} | Score: {:.4} | {}", rank + 1, score[0], doc);
-            });
-
-            println!("{:-<80}", "");
+            // Optional token-level analysis
+            println!("=== Token-level Analysis (first 20 tokens) ===");
+            for (i, (token_id, keep, prob)) in tokens
+                .iter()
+                .zip(token_decisions.iter())
+                .zip(keep_probs_vec.iter())
+                .map(|((t, k), p)| (t, k, p))
+                .take(20)
+                .enumerate()
+            {
+                let token_str = tokenizer.decode(&[*token_id], false).unwrap_or_default();
+                let status = if *keep { "KEEP" } else { "DROP" };
+                println!(
+                    "{:3}: {:20} prob={:.3} -> {}",
+                    i,
+                    format!("'{}'", token_str),
+                    prob,
+                    status
+                );
+            }
         }
     }
     Ok(())
