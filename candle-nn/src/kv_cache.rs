@@ -18,7 +18,7 @@ pub trait KvCache {
 }
 
 #[derive(Debug, Clone)]
-pub struct Cache {
+pub struct InnerCache {
     // all_data is an option on a Tensor, this makes it possible to only create the actual tensor
     // on the first call where the batch size is easily known.
     // Also this makes it safe to clone a KvCache that has been reset (as in it will not share
@@ -30,7 +30,7 @@ pub struct Cache {
     max_seq_len: usize,
 }
 
-impl Cache {
+impl InnerCache {
     pub fn new(dim: usize, max_seq_len: usize) -> Self {
         Self {
             all_data: None,
@@ -96,8 +96,8 @@ impl Cache {
 
 #[derive(Debug, Clone)]
 pub struct IncrementalKvCache {
-    k: Cache,
-    v: Cache,
+    k: InnerCache,
+    v: InnerCache,
 }
 
 impl KvCache for IncrementalKvCache {
@@ -117,24 +117,24 @@ impl KvCache for IncrementalKvCache {
 
 impl IncrementalKvCache {
     pub fn new(dim: usize, max_seq_len: usize) -> Self {
-        let k = Cache::new(dim, max_seq_len);
-        let v = Cache::new(dim, max_seq_len);
+        let k = InnerCache::new(dim, max_seq_len);
+        let v = InnerCache::new(dim, max_seq_len);
         Self { k, v }
     }
 
-    pub fn k_cache(&self) -> &Cache {
+    pub fn k_cache(&self) -> &InnerCache {
         &self.k
     }
 
-    pub fn v_cache(&self) -> &Cache {
+    pub fn v_cache(&self) -> &InnerCache {
         &self.v
     }
 
-    pub fn k_cache_mut(&mut self) -> &mut Cache {
+    pub fn k_cache_mut(&mut self) -> &mut InnerCache {
         &mut self.k
     }
 
-    pub fn v_cache_mut(&mut self) -> &mut Cache {
+    pub fn v_cache_mut(&mut self) -> &mut InnerCache {
         &mut self.v
     }
 
