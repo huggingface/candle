@@ -63,7 +63,12 @@ impl<S: WithDType, const N: usize, const M: usize> NdArray for &[[S; N]; M] {
     }
 
     fn to_cpu_storage(&self) -> CpuStorage {
-        S::to_cpu_storage_owned(self.concat())
+        let vec_std = self.concat();
+        #[cfg(not(feature = "pinned-memory"))]
+        let vec = vec_std;
+        #[cfg(feature = "pinned-memory")]
+        let vec: crate::cpu_backend::StorageVec<S> = vec_std.into_iter().collect();
+        S::to_cpu_storage_owned(vec)
     }
 }
 
@@ -75,12 +80,16 @@ impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize> NdArray
     }
 
     fn to_cpu_storage(&self) -> CpuStorage {
-        let mut vec = Vec::with_capacity(N1 * N2 * N3);
+        let mut vec_std = Vec::with_capacity(N1 * N2 * N3);
         for i1 in 0..N1 {
             for i2 in 0..N2 {
-                vec.extend(self[i1][i2])
+                vec_std.extend(self[i1][i2])
             }
         }
+        #[cfg(not(feature = "pinned-memory"))]
+        let vec = vec_std;
+        #[cfg(feature = "pinned-memory")]
+        let vec: crate::cpu_backend::StorageVec<S> = vec_std.into_iter().collect();
         S::to_cpu_storage_owned(vec)
     }
 }
@@ -93,14 +102,18 @@ impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize, const N4: 
     }
 
     fn to_cpu_storage(&self) -> CpuStorage {
-        let mut vec = Vec::with_capacity(N1 * N2 * N3 * N4);
+        let mut vec_std = Vec::with_capacity(N1 * N2 * N3 * N4);
         for i1 in 0..N1 {
             for i2 in 0..N2 {
                 for i3 in 0..N3 {
-                    vec.extend(self[i1][i2][i3])
+                    vec_std.extend(self[i1][i2][i3])
                 }
             }
         }
+        #[cfg(not(feature = "pinned-memory"))]
+        let vec = vec_std;
+        #[cfg(feature = "pinned-memory")]
+        let vec: crate::cpu_backend::StorageVec<S> = vec_std.into_iter().collect();
         S::to_cpu_storage_owned(vec)
     }
 }
@@ -131,7 +144,11 @@ impl<S: WithDType> NdArray for Vec<&[S]> {
     }
 
     fn to_cpu_storage(&self) -> CpuStorage {
-        let data = self.iter().copied().flatten().copied().collect::<Vec<_>>();
+        let data_std = self.iter().copied().flatten().copied().collect::<std::vec::Vec<_>>();
+        #[cfg(not(feature = "pinned-memory"))]
+        let data = data_std;
+        #[cfg(feature = "pinned-memory")]
+        let data: crate::cpu_backend::StorageVec<S> = data_std.into_iter().collect();
         S::to_cpu_storage_owned(data)
     }
 }
@@ -153,10 +170,14 @@ impl<S: WithDType> NdArray for Vec<Vec<S>> {
 
     fn to_cpu_storage(&self) -> CpuStorage {
         let len: usize = self.iter().map(|v| v.len()).sum();
-        let mut dst = Vec::with_capacity(len);
+        let mut dst_std = Vec::with_capacity(len);
         for v in self.iter() {
-            dst.extend(v.iter().copied());
+            dst_std.extend(v.iter().copied());
         }
+        #[cfg(not(feature = "pinned-memory"))]
+        let dst = dst_std;
+        #[cfg(feature = "pinned-memory")]
+        let dst: crate::cpu_backend::StorageVec<S> = dst_std.into_iter().collect();
         S::to_cpu_storage_owned(dst)
     }
 }
@@ -179,18 +200,27 @@ impl<S: WithDType> NdArray for Vec<Vec<Vec<S>>> {
 
     fn to_cpu_storage(&self) -> CpuStorage {
         if self.is_empty() {
-            return S::to_cpu_storage_owned(vec![]);
+            let vec_std = Vec::new();
+            #[cfg(not(feature = "pinned-memory"))]
+            let vec = vec_std;
+            #[cfg(feature = "pinned-memory")]
+            let vec: crate::cpu_backend::StorageVec<S> = vec_std.into_iter().collect();
+            return S::to_cpu_storage_owned(vec);
         }
         let len: usize = self
             .iter()
             .map(|v| v.iter().map(|v| v.len()).sum::<usize>())
             .sum();
-        let mut dst = Vec::with_capacity(len);
+        let mut dst_std = Vec::with_capacity(len);
         for v1 in self.iter() {
             for v2 in v1.iter() {
-                dst.extend(v2.iter().copied());
+                dst_std.extend(v2.iter().copied());
             }
         }
+        #[cfg(not(feature = "pinned-memory"))]
+        let dst = dst_std;
+        #[cfg(feature = "pinned-memory")]
+        let dst: crate::cpu_backend::StorageVec<S> = dst_std.into_iter().collect();
         S::to_cpu_storage_owned(dst)
     }
 }
@@ -220,14 +250,18 @@ impl<S: WithDType> NdArray for Vec<Vec<Vec<Vec<S>>>> {
                     .sum::<usize>()
             })
             .sum();
-        let mut dst = Vec::with_capacity(len);
+        let mut dst_std = Vec::with_capacity(len);
         for v1 in self.iter() {
             for v2 in v1.iter() {
                 for v3 in v2.iter() {
-                    dst.extend(v3.iter().copied());
+                    dst_std.extend(v3.iter().copied());
                 }
             }
         }
+        #[cfg(not(feature = "pinned-memory"))]
+        let dst = dst_std;
+        #[cfg(feature = "pinned-memory")]
+        let dst: crate::cpu_backend::StorageVec<S> = dst_std.into_iter().collect();
         S::to_cpu_storage_owned(dst)
     }
 }
@@ -276,7 +310,7 @@ impl Device {
 
     #[cfg(feature = "cuda")]
     pub fn storage_from_pinned_host<
-        T: crate::WithDType + crate::cuda_backend::CudaDType + cudarc::driver::DeviceRepr,
+        T: crate::WithDType + crate::cuda_backend::CudaDType + cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits,
     >(
         &self,
         pinned: &PinnedHostSlice<T>,
@@ -287,7 +321,8 @@ impl Device {
                 Ok(Storage::Cuda(storage))
             }
             Device::Cpu => {
-                let cpu_storage = T::to_cpu_storage(&*pinned);
+                let slice = pinned.as_slice().expect("pinned slice");
+                let cpu_storage = T::to_cpu_storage(slice);
                 Ok(Storage::Cpu(cpu_storage))
             }
             Device::Metal(_) => {
@@ -506,15 +541,19 @@ impl Device {
     }
 
     pub(crate) fn storage_owned<S: WithDType>(&self, data: Vec<S>) -> Result<Storage> {
+        #[cfg(not(feature = "pinned-memory"))]
+        let data_storage = data;
+        #[cfg(feature = "pinned-memory")]
+        let data_storage: crate::cpu_backend::StorageVec<S> = data.into_iter().collect();
         match self {
-            Device::Cpu => Ok(Storage::Cpu(S::to_cpu_storage_owned(data))),
+            Device::Cpu => Ok(Storage::Cpu(S::to_cpu_storage_owned(data_storage))),
             Device::Cuda(device) => {
-                let storage = S::to_cpu_storage_owned(data);
+                let storage = S::to_cpu_storage_owned(data_storage);
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Cuda(storage))
             }
             Device::Metal(device) => {
-                let storage = S::to_cpu_storage_owned(data);
+                let storage = S::to_cpu_storage_owned(data_storage);
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Metal(storage))
             }

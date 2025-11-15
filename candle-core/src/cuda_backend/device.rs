@@ -529,35 +529,35 @@ impl BackendDevice for CudaDevice {
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<CudaStorage> {
         let slice = match storage {
             CpuStorage::U8(storage) => {
-                let data = self.memcpy_stod(storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::U8(data)
             }
             CpuStorage::U32(storage) => {
-                let data = self.memcpy_stod(storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::U32(data)
             }
             CpuStorage::I64(storage) => {
-                let data = self.memcpy_stod(storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::I64(data)
             }
             CpuStorage::BF16(storage) => {
-                let data = self.memcpy_stod(storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::BF16(data)
             }
             CpuStorage::F16(storage) => {
-                let data = self.memcpy_stod(storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::F16(data)
             }
             CpuStorage::F32(storage) => {
-                let data = self.memcpy_stod(storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::F32(data)
             }
             CpuStorage::F64(storage) => {
-                let data = self.memcpy_stod(storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::F64(data)
             }
             CpuStorage::F8E4M3(storage) => {
-                let data = self.memcpy_stod(storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::F8E4M3(data)
             }
         };
@@ -570,35 +570,35 @@ impl BackendDevice for CudaDevice {
     fn storage_from_cpu_storage_owned(&self, storage: CpuStorage) -> Result<CudaStorage> {
         let slice = match storage {
             CpuStorage::U8(storage) => {
-                let data = self.memcpy_stod(&storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::U8(data)
             }
             CpuStorage::U32(storage) => {
-                let data = self.memcpy_stod(&storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::U32(data)
             }
             CpuStorage::I64(storage) => {
-                let data = self.memcpy_stod(&storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::I64(data)
             }
             CpuStorage::BF16(storage) => {
-                let data = self.memcpy_stod(&storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::BF16(data)
             }
             CpuStorage::F16(storage) => {
-                let data = self.memcpy_stod(&storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::F16(data)
             }
             CpuStorage::F32(storage) => {
-                let data = self.memcpy_stod(&storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::F32(data)
             }
             CpuStorage::F64(storage) => {
-                let data = self.memcpy_stod(&storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::F64(data)
             }
             CpuStorage::F8E4M3(storage) => {
-                let data = self.memcpy_stod(&storage)?;
+                let data = self.memcpy_stod(storage.as_slice())?;
                 CudaStorageSlice::F8E4M3(data)
             }
         };

@@ -20,7 +20,9 @@ fn cuda_pinned_tensor_roundtrip() -> Result<()> {
         .expect("pinned slice")
         .copy_from_slice(&expected);
 
-    let tensor = Tensor::from_pinned_host(&pinned_in, len, &device)?;
+    let tensor = Tensor::from_pinned_host(&pinned_in, len)?;
+    // Move to CUDA for the roundtrip test (copy_to_pinned_host requires CUDA tensor)
+    let tensor = tensor.to_device(&device)?;
     drop(pinned_in);
 
     // Run a simple tensor op to ensure usability within the tensor API.

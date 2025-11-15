@@ -337,7 +337,8 @@ impl candle::CustomOp1 for SoftmaxLastDim {
                         *d /= sum_exp
                     }
                 });
-            let storage = candle::WithDType::to_cpu_storage_owned(dst);
+            let dst_storage = candle::cpu_backend::to_storage_vec(dst);
+            let storage = candle::WithDType::to_cpu_storage_owned(dst_storage);
             Ok((storage, Shape::from_dims(dims)))
         }
 
@@ -514,7 +515,8 @@ impl candle::CustomOp2 for RmsNorm {
                         *d = *s / m * *alpha
                     }
                 });
-            let storage = candle::WithDType::to_cpu_storage_owned(dst);
+            let dst_storage = candle::cpu_backend::to_storage_vec(dst);
+            let storage = candle::WithDType::to_cpu_storage_owned(dst_storage);
             Ok((storage, Shape::from_dims(dims)))
         }
 
@@ -742,7 +744,8 @@ impl candle::CustomOp3 for LayerNorm {
                         *d = T::from_f32(d_).unwrap_or_else(T::nan);
                     }
                 });
-            let storage = candle::WithDType::to_cpu_storage_owned(dst);
+            let dst_storage = candle::cpu_backend::to_storage_vec(dst);
+            let storage = candle::WithDType::to_cpu_storage_owned(dst_storage);
             Ok((storage, Shape::from_dims(dims)))
         }
 

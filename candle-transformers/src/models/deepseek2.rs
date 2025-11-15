@@ -54,7 +54,8 @@ impl CustomOp1 for NonZero {
         };
         let index_len = layout.dims().len();
         let result_len = result.len() / index_len;
-        let result = CpuStorage::U32(result);
+        let result_storage = candle::cpu_backend::to_storage_vec(result);
+        let result = CpuStorage::U32(result_storage);
         let shape = Shape::from_dims(&[result_len, index_len]);
         Ok((result, shape))
     }

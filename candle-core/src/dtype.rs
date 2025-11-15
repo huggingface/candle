@@ -115,10 +115,15 @@ pub trait WithDType:
     fn to_f64(self) -> f64;
     fn to_scalar(self) -> crate::scalar::Scalar;
     fn cpu_storage_ref(data: &[Self]) -> CpuStorageRef<'_>;
-    fn to_cpu_storage_owned(data: Vec<Self>) -> CpuStorage;
+    fn to_cpu_storage_owned(data: crate::cpu_backend::StorageVec<Self>) -> CpuStorage;
 
     fn to_cpu_storage(data: &[Self]) -> CpuStorage {
-        Self::to_cpu_storage_owned(data.to_vec())
+        let vec_std = data.to_vec();
+        #[cfg(not(feature = "pinned-memory"))]
+        let vec = vec_std;
+        #[cfg(feature = "pinned-memory")]
+        let vec: crate::cpu_backend::StorageVec<Self> = vec_std.into_iter().collect();
+        Self::to_cpu_storage_owned(vec)
     }
 
     fn cpu_storage_as_slice(s: &CpuStorage) -> Result<&[Self]>;
@@ -146,13 +151,19 @@ macro_rules! with_dtype {
                 CpuStorageRef::$dtype(data)
             }
 
-            fn to_cpu_storage_owned(data: Vec<Self>) -> CpuStorage {
+            fn to_cpu_storage_owned(data: crate::cpu_backend::StorageVec<Self>) -> CpuStorage {
                 CpuStorage::$dtype(data)
             }
 
             fn cpu_storage_data(s: CpuStorage) -> Result<Vec<Self>> {
                 match s {
-                    CpuStorage::$dtype(data) => Ok(data),
+                    CpuStorage::$dtype(data) => {
+                        #[cfg(not(feature = "pinned-memory"))]
+                        let vec = data;
+                        #[cfg(feature = "pinned-memory")]
+                        let vec: std::vec::Vec<Self> = data.into_iter().collect();
+                        Ok(vec)
+                    }
                     _ => Err(Error::UnexpectedDType {
                         expected: DType::$dtype,
                         got: s.dtype(),

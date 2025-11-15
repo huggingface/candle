@@ -534,29 +534,32 @@ impl Tensor {
     ///
     /// This is equivalent to calling [`Tensor::from_pinned_host`] with a shape that matches the
     /// slice length.
+    ///
+    /// The tensor is always created on CPU since pinned memory is host memory by definition.
     pub fn new_pinned<
-        T: crate::WithDType + crate::cuda_backend::CudaDType + cudarc::driver::DeviceRepr,
+        T: crate::WithDType + crate::cuda_backend::CudaDType + cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits,
     >(
         pinned: &PinnedHostSlice<T>,
-        device: &Device,
     ) -> Result<Self> {
         let shape = Shape::from(pinned.len());
-        let storage = device.storage_from_pinned_host(pinned)?;
+        let storage = Device::Cpu.storage_from_pinned_host(pinned)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, false))
     }
 
     #[cfg(feature = "cuda")]
+    /// Creates a tensor from a pinned host slice with the specified shape.
+    ///
+    /// The tensor is always created on CPU since pinned memory is host memory by definition.
     pub fn from_pinned_host<
         S: ShapeWithOneHole,
-        T: crate::WithDType + crate::cuda_backend::CudaDType + cudarc::driver::DeviceRepr,
+        T: crate::WithDType + crate::cuda_backend::CudaDType + cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits,
     >(
         pinned: &PinnedHostSlice<T>,
         shape: S,
-        device: &Device,
     ) -> Result<Self> {
         let shape = shape.into_shape(pinned.len())?;
-        let storage = device.storage_from_pinned_host(pinned)?;
+        let storage = Device::Cpu.storage_from_pinned_host(pinned)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, false))
     }

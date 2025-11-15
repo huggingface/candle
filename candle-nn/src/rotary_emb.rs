@@ -65,7 +65,8 @@ impl candle::CustomOp3 for RotaryEmbI {
                         dst[i + 1] = src[i] * sin[rope_i] + src[i + 1] * cos[rope_i];
                     }
                 });
-            let storage = candle::WithDType::to_cpu_storage_owned(dst);
+            let dst_storage = candle::cpu_backend::to_storage_vec(dst);
+            let storage = candle::WithDType::to_cpu_storage_owned(dst_storage);
             Ok((storage, (b, h, t, d).into()))
         }
 
@@ -347,7 +348,8 @@ impl candle::CustomOp3 for RotaryEmb {
                         }
                     }
                 });
-            let storage = candle::WithDType::to_cpu_storage_owned(dst);
+            let dst_storage = candle::cpu_backend::to_storage_vec(dst);
+            let storage = candle::WithDType::to_cpu_storage_owned(dst_storage);
             Ok((storage, (b, h, t, d).into()))
         }
 
@@ -616,7 +618,8 @@ impl candle::CustomOp3 for RotaryEmbThd {
                         }
                     }
                 });
-            let storage = candle::WithDType::to_cpu_storage_owned(dst);
+            let dst_storage = candle::cpu_backend::to_storage_vec(dst);
+            let storage = candle::WithDType::to_cpu_storage_owned(dst_storage);
             Ok((storage, (b, t, h, d).into()))
         }
 
