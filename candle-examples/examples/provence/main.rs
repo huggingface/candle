@@ -4,11 +4,10 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use std::fmt::Display;
+use std::fmt;
 use std::path::PathBuf;
 
-use anyhow::bail;
-use anyhow::{Error as E, Result};
+use anyhow::{bail, Context, Error as E, Result};
 use candle::{Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::{debertav2::Config as DebertaV2Config, provence::ProvenceModel};
@@ -17,18 +16,18 @@ use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::{Encoding, PaddingParams, Tokenizer};
 
 enum TaskType {
-    Reranker(Box<ProvenceModel>),
+    Single(Box<ProvenceModel>),
 }
 
 #[derive(Parser, Debug, Clone, ValueEnum)]
 enum ArgsTask {
-    Reranker,
+    Single,
 }
 
-impl Display for ArgsTask {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl fmt::Display for ArgsTask {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ArgsTask::Reranker => write!(f, "reranker"),
+            ArgsTask::Single => write!(f, "single"),
         }
     }
 }
@@ -76,8 +75,12 @@ struct Args {
     )]
     context: Vec<String>,
 
+    /// Threshold
+    #[arg(short, long, default_value = "0.5")]
+    threshold: f32,
+
     /// Which task to run
-    #[arg(long, default_value_t = ArgsTask::Reranker)]
+    #[arg(long, default_value_t = ArgsTask::Single)]
     task: ArgsTask,
 }
 
@@ -108,8 +111,8 @@ impl Args {
         let vb = vb.set_prefix("deberta");
 
         match self.task {
-            ArgsTask::Reranker => Ok((
-                TaskType::Reranker(ProvenceModel::load(vb, &config)?.into()),
+            ArgsTask::Single => Ok((
+                TaskType::Single(ProvenceModel::load(vb, &config)?.into()),
                 config,
                 tokenizer,
             )),
@@ -136,11 +139,14 @@ fn main() -> Result<()> {
     );
 
     match task_type {
-        TaskType::Reranker(model) => {
+        TaskType::Single(model) => {
             let question = &args.question;
-            let context = &args.context[0];
+            let context = args.context.first().context("context can't be empty")?;
 
-            let input_text = format!("{} [SEP] {}", question, context);
+            // Forward only
+            println!("Running forward pass only");
+
+            let input_text = model.format_input(question, context);
 
             let encoding = tokenizer
                 .encode(input_text, true)
@@ -152,113 +158,52 @@ fn main() -> Result<()> {
 
             let output = model.forward(&input_ids, Some(attention_mask.clone()))?;
 
-            println!("=== Provence Model Output ===\n");
+            println!("Forward pass output");
+            dbg!(&output);
 
-            let ranking_scores = output.ranking_scores.to_vec1::<f32>()?;
-            println!("Ranking Score: {:.4}", ranking_scores[0]);
+            // Simple usage
+            println!("Running process helper function");
+            let result =
+                model.process_single(&tokenizer, question, context, args.threshold, true, true)?;
+
+            println!("Simple output");
+            println!("Pruned: {}", result.pruned_context);
+            println!("Score: {:.2}", result.reranking_score);
+            println!("Compression: {:.1}%", result.compression_rate);
+
+            // Detailed usage
+            println!("Detailed output");
+            let max_tokens = 80;
+
+            let token_details = result.token_details.context("token details is none")?;
+
+            println!("Ranking Score: {:.4}", result.reranking_score);
             println!("  (Higher = more relevant context for this query)\n");
 
-            let compression_logits = output.compression_logits;
-            let compression_logits = compression_logits.squeeze(2)?;
-            let compression_probs = candle_nn::ops::sigmoid(&compression_logits)?;
-            let keep_probs_vec = compression_probs.to_vec2::<f32>()?[0].clone();
-
-            let threshold = 0.5;
-
-            let tokens = encoding.get_ids();
-
-            let sep_index = tokens
-                .iter()
-                .position(|id| tokenizer.decode(&[*id], false).unwrap_or_default() == "[SEP]")
-                .unwrap_or(0);
-
-            let mut kept_token_ids: Vec<u32> = Vec::with_capacity(tokens.len());
-            let mut kept_context_ids: Vec<u32> = Vec::new();
-            let mut removed_context_ids: Vec<u32> = Vec::new();
-
-            for (i, token_id) in tokens.iter().enumerate() {
-                if i <= sep_index {
-                    kept_token_ids.push(*token_id);
-                } else if keep_probs_vec[i] > threshold {
-                    kept_token_ids.push(*token_id);
-                    kept_context_ids.push(*token_id);
-                } else {
-                    removed_context_ids.push(*token_id);
-                }
-            }
-
-            // let pruned_text = tokenizer
-            //     .decode(&kept_token_ids, true)
-            //     .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
-
-            let pruned_context_text = tokenizer
-                .decode(&kept_context_ids, true)
-                .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
-
-            let removed_text = tokenizer
-                .decode(&removed_context_ids, true)
-                .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
-
             println!("Original Context Length (chars): {}", context.len());
-
             println!(
                 "Pruned Context Length (chars): {}",
-                pruned_context_text.len()
+                result.pruned_context.len()
             );
-
-            let compression_rate = if !context.is_empty() {
-                (1.0 - pruned_context_text.len() as f32 / context.len() as f32) * 100.0
-            } else {
-                0.0
-            };
-
-            println!("Compression Rate (context-only): {:.1}%", compression_rate);
-
             println!(
-                "Kept context tokens: {} | Removed context tokens: {}",
-                kept_context_ids.len(),
-                removed_context_ids.len()
+                "Compression Rate (context-only): {:.1}%",
+                result.compression_rate
             );
 
             println!("\nQuestion:\n{}", question);
-            println!("\nPruned (pruned context):\n{}\n", pruned_context_text);
+            println!("\nPruned Context:\n{}\n", result.pruned_context);
 
-            let print_removed_max = 200;
-
-            if !removed_text.is_empty() {
-                println!(
-                    "Removed Context (first {} chars):\n{}\n",
-                    print_removed_max,
-                    &removed_text[..removed_text.len().min(print_removed_max)]
-                );
-            } else {
-                println!(
-                    "Removed Context (first {} chars): <none>\n",
-                    print_removed_max
-                );
-            }
-
-            println!("=== Token-level Analysis (first 80 tokens) ===");
-            for (i, token_id) in tokens.iter().enumerate().take(80) {
-                let token_str = tokenizer.decode(&[*token_id], false).unwrap_or_default();
-                let prob = keep_probs_vec[i];
-
-                let status = if i <= sep_index {
-                    "KEEP (Q/SPECIAL)"
-                } else if prob > threshold {
-                    "KEEP"
-                } else {
-                    "DROP"
-                };
-
+            println!("=== Token-level Analysis (first {} tokens) ===", max_tokens);
+            for detail in token_details.iter().take(max_tokens) {
                 println!(
                     "{:3}: {:20} prob={:.3} -> {}",
-                    i,
-                    format!("'{}'", token_str),
-                    prob,
-                    status
+                    detail.index,
+                    format!("'{}'", detail.token),
+                    detail.probability,
+                    detail.status
                 );
             }
+            println!("\nNOTE: With sentence rounding, entire sentences are kept/dropped together");
         }
     }
 
@@ -305,7 +250,6 @@ fn get_model_files(
 }
 
 // From xml-roberta
-
 #[derive(Debug)]
 pub enum TokenizeInput<'a> {
     Single(&'a [String]),

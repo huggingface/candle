@@ -93,6 +93,7 @@ snac = ["cpal", "symphonia", "rubato"]
 depth_anything_v2 = ["palette", "enterpolation"]
 tekken = ["tekken-rs"]
 buildtime-download = []
+candle-transformers-provence-process = ["candle-transformers/provence-process"]
 
 [[example]]
 name = "llama_multiprocess"
@@ -161,3 +162,7 @@ required-features = ["symphonia"]
 [[example]]
 name = "bert_single_file_binary"
 required-features = ["buildtime-download"]
+
+[[example]]
+name = "provence"
+required-features = ["candle-transformers-provence-process"]
