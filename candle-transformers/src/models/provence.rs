@@ -1,4 +1,4 @@
-use candle::{Device, IndexOp, Module, Result, Tensor};
+use candle::{Device, Module, Result, Tensor};
 use candle_nn::{Dropout, VarBuilder};
 
 use crate::models::debertav2::{Config, DebertaV2ContextPooler, DebertaV2Model, StableDropout};
@@ -7,6 +7,8 @@ use crate::models::debertav2::{Config, DebertaV2ContextPooler, DebertaV2Model, S
 pub struct ProvenceOutput {
     pub compression_logits: Tensor,
     pub ranking_scores: Tensor,
+    pub hidden_states: Option<Vec<Tensor>>,
+    pub attentions: Option<Vec<Tensor>>,
 }
 
 pub struct ProvenceModel {
@@ -22,7 +24,8 @@ pub struct ProvenceModel {
 impl ProvenceModel {
     pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         // TODO: okay to hardcode?
-        let id2label_len = 1;
+        // For ranking (single score)
+        let num_labels = 1;
 
         let deberta = DebertaV2Model::load(vb.clone(), config)?;
         let pooler = DebertaV2ContextPooler::load(vb.clone(), config)?;
@@ -30,14 +33,14 @@ impl ProvenceModel {
 
         let base_dropout = config.cls_dropout.unwrap_or(config.hidden_dropout_prob);
 
-        // RANKING LAYER
+        // RANKING LAYER (on pooled output)
         let dropout = StableDropout::new(base_dropout);
-        let classifier = candle_nn::linear(output_dim, id2label_len, vb.root().pp("classifier"))?;
+        let classifier = candle_nn::linear(output_dim, num_labels, vb.root().pp("classifier"))?;
 
-        // hard coded number of labels
-        let token_classifier =
-            candle_nn::linear(output_dim, id2label_len, vb.root().pp("classifier"))?;
+        // COMPRESSION LAYER (on token embeddings)
         let token_dropout = Dropout::new(base_dropout as f32);
+        let token_classifier =
+            candle_nn::linear(config.hidden_size, 1, vb.root().pp("classifier"))?;
 
         Ok(Self {
             device: vb.device().clone(),
@@ -57,22 +60,22 @@ impl ProvenceModel {
     ) -> Result<ProvenceOutput> {
         let encoder_layer = self.deberta.forward(input_ids, None, attention_mask)?;
 
-        // Ranking path
+        // Ranking
         let pooled_output = self.pooler.forward(&encoder_layer)?;
         let pooled_output = self.dropout.forward(&pooled_output)?;
         let ranking_logits = self.classifier.forward(&pooled_output)?;
+        let ranking_scores = ranking_logits.squeeze(1)?;
 
-        // NEW: Since output is [batch, 1], just squeeze it
-        let ranking_scores = ranking_logits.squeeze(1)?; // Remove the second dim
-                                                         // OR if batch size is 1, just squeeze all: ranking_logits.squeeze(D::Minus1)?
-
-        // Compression path (unchanged)
+        // Compression
         let token_output = self.token_dropout.forward(&encoder_layer, false)?;
         let compression_logits = self.token_classifier.forward(&token_output)?;
 
         Ok(ProvenceOutput {
             compression_logits,
             ranking_scores,
+            // TODO: implement
+            hidden_states: None,
+            attentions: None,
         })
     }
 }

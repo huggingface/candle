@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use anyhow::bail;
 use anyhow::{Error as E, Result};
-use candle::{Device, IndexOp, Tensor};
+use candle::{Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::{debertav2::Config as DebertaV2Config, provence::ProvenceModel};
 use clap::{Parser, ValueEnum};
@@ -57,24 +57,24 @@ struct Args {
     #[arg(long, default_value = "main")]
     revision: String,
 
-    /// Query string
-    #[arg(short, long, default_value = "what is panda?")]
-    query: String,
+    /// Question
+    #[arg(
+        short,
+        long,
+        default_value = "What goes on the bottom of Shepherd's pie?"
+    )]
+    question: String,
 
-    /// Documents (either repeat the flag or provide a comma-separated list)
+    /// Context (either repeat the flag or provide a comma-separated list)
     #[arg(
         short,
         long,
         num_args = 1..,
         default_values = &[
-            "South Korea is a country in East Asia.",
-            "There are forests in the mountains.",
-            "Pandas look like bears.",
-            "There are some animals with black and white fur.",
-            "The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China."
+            "Shepherd’s pie. History. In early cookery books, the dish was a means of using leftover roasted meat of any kind, and the pie dish was lined on the sides and bottom with mashed potato, as well as having a mashed potato crust on top. Variations and similar dishes. Other potato-topped pies include: The modern ”Cumberland pie” is a version with either beef or lamb and a layer of bread- crumbs and cheese on top. In medieval times, and modern-day Cumbria, the pastry crust had a filling of meat with fruits and spices.. In Quebec, a varia- tion on the cottage pie is called ”Paˆte ́ chinois”. It is made with ground beef on the bottom layer, canned corn in the middle, and mashed potato on top.. The ”shepherdess pie” is a vegetarian version made without meat, or a vegan version made without meat and dairy.. In the Netherlands, a very similar dish called ”philosopher’s stew” () often adds ingredients like beans, apples, prunes, or apple sauce.. In Brazil, a dish called in refers to the fact that a manioc puree hides a layer of sun-dried meat.",
         ]
     )]
-    documents: Vec<String>,
+    context: Vec<String>,
 
     /// Which task to run
     #[arg(long, default_value_t = ArgsTask::Reranker)]
@@ -137,104 +137,120 @@ fn main() -> Result<()> {
 
     match task_type {
         TaskType::Reranker(model) => {
-            // 6. Prepare input text
-            let question = "What goes on the bottom of Shepherd's pie?";
-            let context = "Shepherd's pie. History. In early cookery books, the dish was a means of using leftover roasted meat of any kind, and the pie dish was lined on the sides and bottom with mashed potato, as well as having a mashed potato crust on top.";
+            let question = &args.question;
+            let context = &args.context[0];
 
-            // Concatenate query and context (following DeBERTa format)
             let input_text = format!("{} [SEP] {}", question, context);
 
-            // 7. Tokenize
             let encoding = tokenizer
                 .encode(input_text, true)
                 .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
-            // 8. Convert to tensors
-            let input_ids = Tensor::new(encoding.get_ids(), &model.device)?.unsqueeze(0)?; // [1, seq_len]
-
+            let input_ids = Tensor::new(encoding.get_ids(), &model.device)?.unsqueeze(0)?;
             let attention_mask =
-                Tensor::new(encoding.get_attention_mask(), &model.device)?.unsqueeze(0)?; // [1, seq_len]
+                Tensor::new(encoding.get_attention_mask(), &model.device)?.unsqueeze(0)?;
 
-            // 9. Run forward pass
-            // Note: forward expects Option<Tensor> (owned), so pass Some(attention_mask.clone())
             let output = model.forward(&input_ids, Some(attention_mask.clone()))?;
 
-            // 10. Process outputs
             println!("=== Provence Model Output ===\n");
 
-            // Ranking score (shape: [batch])
             let ranking_scores = output.ranking_scores.to_vec1::<f32>()?;
             println!("Ranking Score: {:.4}", ranking_scores[0]);
             println!("  (Higher = more relevant context for this query)\n");
 
-            // Compression logits (shape: [batch, seq_len, 1])
             let compression_logits = output.compression_logits;
-            let dims = compression_logits.dims();
-            println!("Compression Logits Shape: {:?}", dims);
-            println!("  [batch_size, sequence_length, 1]\n");
-
-            // Convert token logits -> probabilities using sigmoid (single logit per token)
-            let compression_logits = compression_logits.squeeze(2)?; // -> [batch, seq_len]
-            let compression_probs = candle_nn::ops::sigmoid(&compression_logits)?; // [batch, seq_len]
-
-            // Get keep probability (batch 0)
+            let compression_logits = compression_logits.squeeze(2)?;
+            let compression_probs = candle_nn::ops::sigmoid(&compression_logits)?;
             let keep_probs_vec = compression_probs.to_vec2::<f32>()?[0].clone();
 
-            // Apply threshold to decide which tokens to keep
-            let threshold = 0.1;
-            let token_decisions: Vec<bool> = keep_probs_vec
-                .iter()
-                .map(|&prob| prob > threshold)
-                .collect();
+            let threshold = 0.5;
 
-            // 11. Decode selected tokens
             let tokens = encoding.get_ids();
-            let selected_token_ids: Vec<u32> = tokens
-                .iter()
-                .zip(token_decisions.iter())
-                .filter_map(|(token, &keep)| if keep { Some(*token) } else { None })
-                .collect();
 
-            let pruned_text = tokenizer
-                .decode(&selected_token_ids, true)
+            let sep_index = tokens
+                .iter()
+                .position(|id| tokenizer.decode(&[*id], false).unwrap_or_default() == "[SEP]")
+                .unwrap_or(0);
+
+            let mut kept_token_ids: Vec<u32> = Vec::with_capacity(tokens.len());
+            let mut kept_context_ids: Vec<u32> = Vec::new();
+            let mut removed_context_ids: Vec<u32> = Vec::new();
+
+            for (i, token_id) in tokens.iter().enumerate() {
+                if i <= sep_index {
+                    kept_token_ids.push(*token_id);
+                } else if keep_probs_vec[i] > threshold {
+                    kept_token_ids.push(*token_id);
+                    kept_context_ids.push(*token_id);
+                } else {
+                    removed_context_ids.push(*token_id);
+                }
+            }
+
+            // let pruned_text = tokenizer
+            //     .decode(&kept_token_ids, true)
+            //     .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
+
+            let pruned_context_text = tokenizer
+                .decode(&kept_context_ids, true)
                 .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
-
-            // Collect removed tokens
-            let removed_token_ids: Vec<u32> = tokens
-                .iter()
-                .zip(token_decisions.iter())
-                .filter_map(|(token, &keep)| if !keep { Some(*token) } else { None })
-                .collect();
 
             let removed_text = tokenizer
-                .decode(&removed_token_ids, true)
+                .decode(&removed_context_ids, true)
                 .map_err(|e| anyhow::anyhow!("Decoding failed: {}", e))?;
 
-            println!("Original Context Length: {} chars", context.len());
-            println!("Pruned Context Length: {} chars", pruned_text.len());
-            println!(
-                "Compression Rate: {:.1}%",
-                (1.0 - pruned_text.len() as f32 / context.len() as f32) * 100.0
-            );
-            println!("\nPruned Context:\n{}\n", pruned_text);
+            println!("Original Context Length (chars): {}", context.len());
 
             println!(
-                "Removed Tokens (first 100 chars):\n{}\n",
-                &removed_text[..removed_text.len().min(100)]
+                "Pruned Context Length (chars): {}",
+                pruned_context_text.len()
             );
 
-            // Optional token-level analysis
-            println!("=== Token-level Analysis (first 20 tokens) ===");
-            for (i, (token_id, keep, prob)) in tokens
-                .iter()
-                .zip(token_decisions.iter())
-                .zip(keep_probs_vec.iter())
-                .map(|((t, k), p)| (t, k, p))
-                .take(20)
-                .enumerate()
-            {
+            let compression_rate = if !context.is_empty() {
+                (1.0 - pruned_context_text.len() as f32 / context.len() as f32) * 100.0
+            } else {
+                0.0
+            };
+
+            println!("Compression Rate (context-only): {:.1}%", compression_rate);
+
+            println!(
+                "Kept context tokens: {} | Removed context tokens: {}",
+                kept_context_ids.len(),
+                removed_context_ids.len()
+            );
+
+            println!("\nQuestion:\n{}", question);
+            println!("\nPruned (pruned context):\n{}\n", pruned_context_text);
+
+            let print_removed_max = 200;
+
+            if !removed_text.is_empty() {
+                println!(
+                    "Removed Context (first {} chars):\n{}\n",
+                    print_removed_max,
+                    &removed_text[..removed_text.len().min(print_removed_max)]
+                );
+            } else {
+                println!(
+                    "Removed Context (first {} chars): <none>\n",
+                    print_removed_max
+                );
+            }
+
+            println!("=== Token-level Analysis (first 80 tokens) ===");
+            for (i, token_id) in tokens.iter().enumerate().take(80) {
                 let token_str = tokenizer.decode(&[*token_id], false).unwrap_or_default();
-                let status = if *keep { "KEEP" } else { "DROP" };
+                let prob = keep_probs_vec[i];
+
+                let status = if i <= sep_index {
+                    "KEEP (Q/SPECIAL)"
+                } else if prob > threshold {
+                    "KEEP"
+                } else {
+                    "DROP"
+                };
+
                 println!(
                     "{:3}: {:20} prob={:.3} -> {}",
                     i,
@@ -245,6 +261,7 @@ fn main() -> Result<()> {
             }
         }
     }
+
     Ok(())
 }
 
