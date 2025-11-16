@@ -10,7 +10,7 @@ pub trait KvCache {
         &mut self,
         k: &Tensor,
         v: &Tensor,
-        mask: Option<&Self::Mask>,
+        _mask: Option<&Self::Mask>,
     ) -> Result<(Tensor, Tensor)> {
         self.append(k, v)
     }
@@ -459,34 +459,90 @@ impl IndicesAndMask {
 
 #[derive(Debug, Clone)]
 pub struct ScatteredKvCache {
-    k: Tensor,
-    v: Tensor,
+    k: Option<Tensor>,
+    v: Option<Tensor>,
+    dim: usize,
     context: usize,
+}
+impl KvCache for ScatteredKvCache {
+    type Mask = IndicesAndMask;
+
+    fn new(dim: usize, max_seq_len: usize) -> Self {
+        ScatteredKvCache::new(dim, max_seq_len)
+    }
+
+    fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        self.append_with_mask(k, v, None)
+    }
+
+    fn append_with_mask(
+        &mut self,
+        k: &Tensor,
+        v: &Tensor,
+        mask: Option<&Self::Mask>,
+    ) -> Result<(Tensor, Tensor)> {
+        if let Some(mask) = mask {
+            return self.scattered_append(k, v, mask);
+        } else {
+            candle::bail!("ScatteredKvCache requires InidicesAndMask")
+        }
+    }
+
+    fn reset(&mut self) {
+        self.reset()
+    }
 }
 
 impl ScatteredKvCache {
-    pub fn append(
+    pub fn new(dim: usize, context: usize) -> Self {
+        Self {
+            k: None,
+            v: None,
+            dim,
+            context,
+        }
+    }
+
+    pub fn scattered_append(
         &mut self,
         k: &Tensor,
         v: &Tensor,
         iam: &IndicesAndMask,
     ) -> Result<(Tensor, Tensor)> {
-        if self.context <= k.dim(2)? {
+        if self.context <= k.dim(self.dim)? {
             return Ok((k.clone(), v.clone()));
         }
-        let indices = iam.indices.unsqueeze(2)?.unsqueeze(1)?;
+        if self.k.is_none() {
+            let mut k_shape = k.dims().to_vec();
+            k_shape[self.dim] = self.context;
+            self.k = Some(Tensor::zeros(k_shape.clone(), k.dtype(), k.device())?);
+        }
+        if self.v.is_none() {
+            let mut v_shape = v.dims().to_vec();
+            v_shape[self.dim] = self.context;
+            self.v = Some(Tensor::zeros(v_shape.clone(), v.dtype(), v.device())?);
+        }
+
+        let indices = iam.indices.unsqueeze(self.dim)?.unsqueeze(1)?;
         let indices = indices.broadcast_as(k.shape())?.contiguous()?;
-        self.k.scatter_set(&indices, k, 2)?;
-        self.v.scatter_set(&indices, v, 2)?;
-        Ok((self.k.clone(), self.v.clone()))
+        let new_k = self.k.as_mut().unwrap();
+        let new_v = self.v.as_mut().unwrap();
+        new_k.scatter_set(&indices, k, self.dim)?;
+        new_v.scatter_set(&indices, v, self.dim)?;
+        Ok((new_k.clone(), new_v.clone()))
     }
 
-    pub fn k(&self) -> &Tensor {
-        &self.k
+    pub fn k(&self) -> Option<&Tensor> {
+        self.k.as_ref()
     }
 
-    pub fn v(&self) -> &Tensor {
-        &self.v
+    pub fn v(&self) -> Option<&Tensor> {
+        self.v.as_ref()
+    }
+
+    pub fn reset(&mut self) {
+        self.k = None;
+        self.v = None;
     }
 }
 
@@ -514,16 +570,8 @@ impl ScatteredCacheBuilder {
         })
     }
 
-    pub fn make_cache(&self, num_heads: usize, head_dim: usize) -> Result<ScatteredKvCache> {
-        let batch_size = self.batch_size();
-        let shape = (batch_size, num_heads, self.context, head_dim);
-        let k = Tensor::zeros(shape, self.dtype, self.device())?;
-        let v = Tensor::zeros(shape, self.dtype, self.device())?;
-        Ok(ScatteredKvCache {
-            k,
-            v,
-            context: self.context,
-        })
+    pub fn make_cache(&self, head_dim: usize) -> ScatteredKvCache {
+        ScatteredKvCache::new(head_dim, self.context)
     }
 
     pub fn positions(&self) -> &[usize] {
