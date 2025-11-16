@@ -379,9 +379,9 @@ impl WgpuDevice {
     }
 
     //allows to load const debug info(for simulating calls)
-    pub fn load_debug_info(&self, consts: Vec<Vec<(&'static str, f64)>>) {
+    pub fn load_simulation_consts(&self, consts: Vec<Vec<(&'static str, f64)>>) {
         let mut queue = self.command_queue.lock().unwrap();
-        queue.load_debug_info(consts);
+        queue.load_simulation_consts(consts);
     }
 
     pub fn simulate_command(
@@ -529,7 +529,9 @@ impl WgpuDevice {
                         .iter()
                         .map(|(pk, _)| debug_info::PipelineInfo {
                             name: format!("{:?}", pk.0).to_owned(),
-                            consts: queue.id_to_const_array[pk.1].clone(),
+                            consts: queue.id_to_const_array[pk.1].iter()
+                                .map(|(s, x)| (s.to_string(), *x))
+                                .collect(),
                         })
                         .collect(),
                 };

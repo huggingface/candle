@@ -1,10 +1,15 @@
 ## Test project
 This is a test project to test performance with wasm and to run candle core tests in the browser.
 
+### Native
+```bash
+cargo run --bin candle-test --release
+```
+
 ### Xtask
 one can compile this example for wasm and start a web server with the following command:
 ```bash
-cargo xtask run-wasm -- --release
+cargo xtask run-wasm -- --release --bin candle-test
 ```
 Then open `http://localhost:80` in your browser.
 

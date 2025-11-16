@@ -117,7 +117,7 @@ impl Default for WgpuDeviceConfig {
             use_cache : true,
             flush_gpu_before_buffer_init : true,
             buffer_mapping_size : 3,
-            backend: WgpuBackends::metal() | WgpuBackends::vulkan(), //directx shader compilation is much slower than vulkan. (like 300secs vs 5s there is a faster copmiler, but this would need additional .dlls, and with this compilations needs 30s as well)
+            backend: WgpuBackends::metal() | WgpuBackends::vulkan() | WgpuBackends::browser_webgpu(), //directx shader compilation is much slower than vulkan. (like 300secs vs 5s there is a faster copmiler, but this would need additional .dlls, and with this compilations needs 30s as well)
         }
     }
 }

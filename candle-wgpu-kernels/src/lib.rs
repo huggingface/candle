@@ -196,6 +196,13 @@ pub trait ShaderLoader: std::fmt::Debug {
     /// }
     ///  ```
     fn get_entry_point(&self, index: PipelineIndex) -> &str;
+
+    /// Returns an optional debug name for the given shader.
+    /// This name may be used for debugging purposes, such as labeling shader outputs in wgpu or logging.
+    /// Returns `None` if no debug name is available for the given shader index.
+    fn get_debug_name(&self, _index: ShaderIndex) -> Option<String> {
+        None
+    }
 }
 
 //Struct for storing a custom Shader
@@ -243,6 +250,16 @@ impl ShaderLoaderCache {
             .load(shader)
     }
 
+    pub fn get_shader_name(&self, shader: impl Into<ShaderIndex>) -> String {
+        let shader: ShaderIndex = shader.into();
+        let loader: LoaderIndex = shader.into();
+        self.loader[loader.0 as usize]
+            .as_ref()
+            .expect("expected loader to be added")
+            .shader_loader
+            .get_debug_name(shader).unwrap_or_else(|| format!("{:?}", shader))
+    }
+
     pub fn get_entry_point(&self, shader: impl Into<PipelineIndex>) -> &str {
         let shader: PipelineIndex = shader.into();
         let loader: LoaderIndex = shader.into();
@@ -271,5 +288,10 @@ impl ShaderLoader for DefaultWgpuShader {
     fn get_entry_point(&self, index: PipelineIndex) -> &str {
         let pipeline: Pipelines = index.into();
         pipeline.get_entry_point()
+    }
+
+    fn get_debug_name(&self, index: ShaderIndex) -> Option<String> {
+        let shader: Shaders = index.into();
+        Some(format!("{:?}", shader))
     }
 }

@@ -153,7 +153,7 @@ pub struct Measurement {
 #[derive(Serialize, Deserialize)]
 pub struct PipelineInfo {
     pub name: String,
-    pub consts: HashMap<String, f64>,
+    pub consts: Vec<(String, f64)>,
 }
 
 #[derive(Serialize, Deserialize)]

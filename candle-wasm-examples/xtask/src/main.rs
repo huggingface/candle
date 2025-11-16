@@ -12,7 +12,7 @@ Usage: xtask <COMMAND>
 Commands:
   run-wasm
     --release   Build in release mode
-    --name Mame of Executable
+    --bin Name of Executable
     --no-serve  Just build the generated files, don't serve them
   test
     --llvm-cov  Run tests with LLVM code coverage using the llvm-cov tool

@@ -5,10 +5,10 @@ mod utils;
 use utils::{bench_function_max_time_async, MeasurementInfo};
 use web_time::Duration;
 
-const DEBUG_D : &str = include_str!("D:\\dev_github\\projekt-informatik\\candle_webgpu\\wgpu_llama2c_test_42.0_d.json");
-const DEBUG_E : &str = include_str!("D:\\dev_github\\projekt-informatik\\candle_webgpu\\wgpu_llama2c_test_42.0_e.json");
-//const DEBUG_D : &str = "";
-//const DEBUG_E : &str = "";
+//const DEBUG_USED_CONSTS : &str = include_str!("..._used_consts.json");
+//const DEBUG_USED_PIPELINES : &str = include_str!("...used_pipelines.json");
+const DEBUG_USED_CONSTS : &str = "";
+const DEBUG_USED_PIPELINES : &str = "";
 const PERFORMANCE_OUTPUT_FILE : &str = "performance_llama2c_5.json";
 
 const TEST_MATMUL : bool = false;
@@ -48,7 +48,7 @@ async fn test() -> Result<(), Box<dyn std::error::Error>>{
 }
 
 fn load_recording_consts(device : &Device) -> Result<(), Box<dyn std::error::Error>>{
-    let debug_recordings_consts :  Vec<Vec<(&'static str, f64)>> = serde_json::from_str(DEBUG_E)?;
+    let debug_recordings_consts :  Vec<Vec<(&'static str, f64)>> = serde_json::from_str(DEBUG_USED_CONSTS)?;
     match &device{
         Device::Wgpu(wgpu) => {
             wgpu.load_simulation_consts(debug_recordings_consts);
@@ -100,17 +100,9 @@ async fn test_matmul() -> Result<(), Box<dyn std::error::Error>>{
         // MatmulAlgorithm::Matmul7,
         //MatmulAlgorithm::MatmulX,
         
-        
-        
-        
-        
-        
-        
-        
         //MatmulAlgorithm::Matmul64_64_8_8,
         //MatmulAlgorithm::Matmul64_64_4_8,
        
-     
         //MatmulAlgorithm::
         // MatmulAlgorithm::Matmul7,
         // MatmulAlgorithm::Matmul16_16,
@@ -177,14 +169,18 @@ fn create_buffers(device : &Device) -> Result<[WgpuStorage;4], Box<dyn std::erro
 
 pub async fn performance_test() -> Result<(), Box<dyn std::error::Error>>{
     log::warn!("start performance test");
-    let device = candle::Device::new_wgpu_async(0).await?;
+    
+    if DEBUG_USED_CONSTS.is_empty() || DEBUG_USED_PIPELINES.is_empty() {
+        log::error!("No debug recordings found, please set DEBUG_USED_PIPELINES and DEBUG_USED_CONSTS constants.");
+        return Ok(());
+    }
 
+    let device = candle::Device::new_wgpu_async(0).await?;
     load_recording_consts(&device)?;
     let buffers = create_buffers(&device)?;
 
-    let debug_recordings : Vec<candle::wgpu_backend::DebugPipelineRecording> = serde_json::from_str(DEBUG_D)?;
+    let debug_recordings : Vec<candle::wgpu_backend::DebugPipelineRecording> = serde_json::from_str(DEBUG_USED_PIPELINES)?;
     //let debug_recordings : Vec<_> = debug_recordings.iter().filter(|v| matches!(&v.pipeline.0.into(), Pipelines::Matmul64x648x8(_,_))).collect();
-
 
     let mut measurements : Vec<MeasurementInfo> = vec![];
 
@@ -234,8 +230,8 @@ async fn test_func<F>(device : &Device, count: u32, func : F, name : &str, measu
 where   F: Fn() -> Result<(), candle::Error>,
 {
         let device_name = match device{
-            Device::Cpu => "CPU:",
-            Device::Wgpu(_) => "GPU:",
+            Device::Cpu => "CPU",
+            Device::Wgpu(_) => "GPU",
             _ => todo!(),
         };
 

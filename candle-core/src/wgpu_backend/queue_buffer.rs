@@ -13,9 +13,6 @@ use candle_wgpu_kernels::Constants;
 
 use crate::Layout;
 
-#[cfg(feature = "wgpu_debug")]
-use super::debug_info::{DebugInfo, MInfo, Measurements, ShaderInfo};
-
 use super::cache::{BindgroupAlignment, BindgroupAlignmentLayout,BufferReferenceId, CachedBindgroupId, CachedBufferId,BindgroupInputBase};
 use super::util::{ObjectToIdMapper, ToU32};
 use super::wgpu_functions::{MetaArray, ConstArray, ToKernelParameterMeta};
@@ -300,7 +297,7 @@ impl QueueBufferInner {
     }
 
     //allows to load const debug info(for simulating calls)
-    pub fn load_debug_info(&mut self, consts: Vec<Vec<(&'static str, f64)>>) {
+    pub fn load_simulation_consts(&mut self, consts: Vec<Vec<(&'static str, f64)>>) {
         self.id_to_const_array = consts;
         self.const_id_map.next_id = self.id_to_const_array.len();
     } 

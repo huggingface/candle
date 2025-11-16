@@ -42,12 +42,11 @@ fn compile(shell: &Shell, mut args: Arguments, name : &str, is_bench : bool) -> 
     let release = args.contains("--release");
     let release_flag: &[_] = if release { &["--release"] } else { &[] };
     let output_dir = if release { "release" } else { "debug" };
-
-    
-
     log::info!("building, outdir:{output_dir}");
 
     let cargo_args = args.finish();
+
+    
 
     xshell::cmd!(
         shell,
@@ -70,7 +69,7 @@ fn compile(shell: &Shell, mut args: Arguments, name : &str, is_bench : bool) -> 
 
     xshell::cmd!(
         shell,
-        "wasm-bindgen ../../target/wasm32-unknown-unknown/{output_dir}/m.wasm  --target web --no-typescript --out-dir build --out-name m"
+        "wasm-bindgen ../../target/wasm32-unknown-unknown/{output_dir}/{name}.wasm  --target web --no-typescript --out-dir build --out-name {name}"
     )
     .quiet()
     .run().inspect_err(|f| println!("{:?}",f))
@@ -82,7 +81,7 @@ fn compile(shell: &Shell, mut args: Arguments, name : &str, is_bench : bool) -> 
 pub(crate) fn run_wasm(shell: Shell, mut args: Arguments) -> Result<(), anyhow::Error> {
     let no_serve = args.contains("--no-serve");
    
-    let name1   = args.value_from_str::<&str, String>("--bin");//.unwrap_or(args.value_from_str("--bench").unwrap_or("test_1".to_owned()));
+    let name1   = args.value_from_str::<&str, String>("--bin");
     let name2 = args.value_from_str::<&str, String>("--bench");
 
     let name : String;
@@ -95,10 +94,10 @@ pub(crate) fn run_wasm(shell: Shell, mut args: Arguments) -> Result<(), anyhow::
         name = b;
     }   
     else {
-        name = "test_1".to_owned();
+        name = "m".to_owned();
     }
 
-    //let name : String = args.value_from_str("--bin").unwrap_or("test_1".to_owned());
+    //let name : String = args.value_from_str("--bin").unwrap_or("m".to_owned());
 
     let programs_needed: &[_] = if no_serve {
         &[Program {
