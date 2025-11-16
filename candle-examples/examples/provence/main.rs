@@ -95,6 +95,12 @@ impl Args {
         let config = std::fs::read_to_string(config_filename)?;
         let config: DebertaV2Config = serde_json::from_str(&config)?;
 
+        let id2label = if let Some(id2label) = &config.id2label {
+            id2label.clone()
+        } else {
+            bail!("Id2Label not found in the model configuration nor specified as a parameter")
+        };
+
         let mut tokenizer = Tokenizer::from_file(tokenizer_filename)
             .map_err(|e| candle::Error::Msg(format!("Tokenizer error: {e}")))?;
 
@@ -112,7 +118,7 @@ impl Args {
 
         match self.task {
             ArgsTask::Single => Ok((
-                TaskType::Single(ProvenceModel::load(vb, &config)?.into()),
+                TaskType::Single(ProvenceModel::load(vb, &config, Some(id2label.clone()))?.into()),
                 config,
                 tokenizer,
             )),
@@ -193,7 +199,7 @@ fn main() -> Result<()> {
             println!("\nQuestion:\n{}", question);
             println!("\nPruned Context:\n{}\n", result.pruned_context);
 
-            println!("=== Token-level Analysis (first {} tokens) ===", max_tokens);
+            println!("Token-level Analysis (first {} tokens)", max_tokens);
             for detail in token_details.iter().take(max_tokens) {
                 println!(
                     "{:3}: {:20} prob={:.3} -> {}",

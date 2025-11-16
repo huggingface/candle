@@ -13,7 +13,7 @@ Also, the `candle-transformers-provence-process` feature flag is required to ena
 ### Single Questing and Context
 
 ```bash
-cargo run  --example provence --release --features=metal,candle-transformers-provence-process -- -q "What is used to thicken a classic béchamel sauce?" -c "Béchamel sauce. Basics. Béchamel is one of the five mother sauces of French cuisine. It is a simple white sauce made from a roux of butter and flour, to which milk is gradually added while whisking to avoid lumps. The roux acts as the thickening agent, giving the sauce a smooth, creamy texture. Variations. Some chefs add a pinch of nutmeg for flavor. In Italian cuisine, a similar sauce called besciamella is often used in lasagna. Modern adaptations may substitute butter with olive oil or milk with plant-based alternatives, but the thickening principle with flour remains the same." -t="0.45"
+cargo run  --example provence --release --features=metal,candle-transformers-provence-process -- -q "What is used to thicken a classic béchamel sauce?" -c "Béchamel sauce. Basics. Béchamel is one of the five mother sauces of French cuisine. It is a simple white sauce made from a roux of butter and flour, to which milk is gradually added while whisking to avoid lumps. The roux acts as the thickening agent, giving the sauce a smooth, creamy texture. Variations. Some chefs add a pinch of nutmeg for flavor. In Italian cuisine, a similar sauce called besciamella is often used in lasagna. Modern adaptations may substitute butter with olive oil or milk with plant-based alternatives, but the thickening principle with flour remains the same." -t="0.35"
 ```
 
 ### Running on CPU

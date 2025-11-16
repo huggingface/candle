@@ -1,7 +1,9 @@
-use candle::{Device, Module, Result, Tensor};
+use candle::{Device, IndexOp, Module, Result, Tensor};
 use candle_nn::{Dropout, VarBuilder};
 
-use crate::models::debertav2::{Config, DebertaV2ContextPooler, DebertaV2Model, StableDropout};
+use crate::models::debertav2::{
+    id2label_len, Config, DebertaV2ContextPooler, DebertaV2Model, Id2Label, StableDropout,
+};
 
 // https://huggingface.co/naver/provence-reranker-debertav3-v1/blob/421f9139ad3f5ed919d9b04dd4ff02c10301dac9/modeling_provence.py
 #[derive(Debug, Clone)]
@@ -27,10 +29,8 @@ pub mod config {
 }
 
 impl ProvenceModel {
-    pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
-        // TODO: okay to hardcode?
-        // For ranking (single score)
-        let num_labels = 1;
+    pub fn load(vb: VarBuilder, config: &Config, id2label: Option<Id2Label>) -> Result<Self> {
+        let id2label_len = id2label_len(config, id2label)?;
 
         let deberta = DebertaV2Model::load(vb.clone(), config)?;
         let pooler = DebertaV2ContextPooler::load(vb.clone(), config)?;
@@ -40,12 +40,12 @@ impl ProvenceModel {
 
         // RANKING LAYER (on pooled output)
         let dropout = StableDropout::new(base_dropout);
-        let classifier = candle_nn::linear(output_dim, num_labels, vb.root().pp("classifier"))?;
+        let classifier = candle_nn::linear(output_dim, id2label_len, vb.root().pp("classifier"))?;
 
         // COMPRESSION LAYER (on token embeddings)
         let token_dropout = Dropout::new(base_dropout as f32);
         let token_classifier =
-            candle_nn::linear(config.hidden_size, 1, vb.root().pp("classifier"))?;
+            candle_nn::linear(config.hidden_size, 2, vb.root().pp("token_classifier"))?;
 
         Ok(Self {
             device: vb.device().clone(),
@@ -69,7 +69,7 @@ impl ProvenceModel {
         let pooled_output = self.pooler.forward(&encoder_layer)?;
         let pooled_output = self.dropout.forward(&pooled_output)?;
         let ranking_logits = self.classifier.forward(&pooled_output)?;
-        let ranking_scores = ranking_logits.squeeze(1)?;
+        let ranking_scores = ranking_logits.i((.., 0))?;
 
         // Compression
         let token_output = self.token_dropout.forward(&encoder_layer, false)?;
@@ -93,8 +93,7 @@ impl ProvenceModel {
 pub mod process {
     use std::fmt;
 
-    use candle::{Context, Error, Result, Tensor};
-    use candle_nn::ops::sigmoid;
+    use candle::{Context, Error, IndexOp, Result, Tensor};
     use tokenizers::{Encoding, Tokenizer};
 
     use super::{
@@ -243,9 +242,11 @@ pub mod process {
         }
 
         pub fn get_compression_probabilities(&self, output: &ProvenceOutput) -> Result<Vec<f32>> {
-            let compression_logits = output.compression_logits.squeeze(2)?;
-            let compression_probs = sigmoid(&compression_logits)?;
-            let keep_probs_vec = compression_probs.to_vec2::<f32>()?[0].clone();
+            let compression_logits = output.compression_logits.squeeze(0)?;
+            let compression_probs = candle_nn::ops::softmax(&compression_logits, 1)?;
+
+            let keep_probs = compression_probs.i((.., 1))?;
+            let keep_probs_vec = keep_probs.to_vec1::<f32>()?;
 
             Ok(keep_probs_vec)
         }
@@ -390,8 +391,6 @@ pub mod sentence_rounding {
 
     /// Split context into sentences (simple splitter) but return token index coords
     /// relative to the full encoding token indices by using encoding offsets.
-    ///
-    /// Kept the same signature, but split into helpers for clarity and performance.
     pub fn split_sentences_and_track_from_encoding(
         context: &str,
         encoding: &Encoding,
@@ -453,7 +452,6 @@ pub mod sentence_rounding {
     /// Trim a byte range `[start, end)` within `context` (both byte indices relative to `context`) and
     /// return trim_start_rel, trim_end_rel, trimmed_string or None if trimmed string is empty.
     fn trim_range(context: &str, start: usize, end: usize) -> TrimRangeResult {
-        // Validate bounds and char boundaries to avoid panics from slicing
         if start > end || end > context.len() {
             bail!(
                 "trim_range: invalid range [{}, {}) for context len {}",
