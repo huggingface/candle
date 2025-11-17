@@ -1,4 +1,5 @@
 {
+    "rust-analyzer.cargo.features": ["metal"],
     "[python]": {
         "editor.defaultFormatter": "ms-python.black-formatter"
     },
