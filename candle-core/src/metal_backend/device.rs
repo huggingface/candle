@@ -169,6 +169,23 @@ impl MetalDevice {
         self.allocate_buffer(size)
     }
 
+    /// Creates a new private buffer (not necessarily zeroed).
+    /// 
+    /// This is intentionally not in the Metal buffer pool to allow the efficient implementation of persistent buffers.
+    pub fn new_private_buffer(
+        &self,
+        element_count: usize,
+        dtype: DType,
+        _name: &str,
+    ) -> Result<Arc<Buffer>> {
+        let size = element_count * dtype.size_in_bytes();
+        let buffer = self
+            .device
+            .new_buffer(size, RESOURCE_OPTIONS)
+            .map_err(MetalError::from)?;
+        Ok(Arc::new(buffer))
+    }
+
     /// Creates a new buffer from data.
     ///
     /// Does not require synchronization, as [newBufferWithBytes](https://developer.apple.com/documentation/metal/mtldevice/1433429-newbufferwithbytes)
