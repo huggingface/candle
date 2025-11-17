@@ -145,6 +145,10 @@ impl CudaDevice {
         self.stream.clone()
     }
 
+    pub fn cublas_handle(&self) -> Arc<cudarc::cublas::CudaBlas> {
+        self.blas.clone()
+    }
+
     /// When turned on, all cuda tensors **created after calling this function** will
     /// not track uses via cuda events.
     ///
