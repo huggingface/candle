@@ -476,6 +476,14 @@ impl BackendStorage for MetalStorage {
                         DType::U8 => contiguous::const_set::U8,
                         DType::F8E4M3 => crate::bail!("unsupported const-set f8e4m3"),
                         DType::F64 => crate::bail!("unsupported const-set f64"),
+                        DType::F4
+                        | DType::F6E2M3
+                        | DType::F6E3M2
+                        | DType::F8E8M0
+                        | DType::I16
+                        | DType::I32 => {
+                            crate::bail!("unsupported const-set i32/i16/f6e2m3/f6e3m2/f4/f8e8m0")
+                        }
                     };
                     candle_metal_kernels::call_const_set_contiguous(
                         &device.device,
@@ -499,6 +507,14 @@ impl BackendStorage for MetalStorage {
                         DType::U8 => strided::const_set::U8,
                         DType::F8E4M3 => crate::bail!("unsupported const-set f8e4m3"),
                         DType::F64 => crate::bail!("unsupported const-set f64"),
+                        DType::F4
+                        | DType::F6E2M3
+                        | DType::F6E3M2
+                        | DType::F8E8M0
+                        | DType::I16
+                        | DType::I32 => {
+                            crate::bail!("unsupported const-set i32/i16/f6e2m3/f6e3m2/f4/f8e8m0")
+                        }
                     };
                     candle_metal_kernels::call_const_set_strided(
                         &device.device,

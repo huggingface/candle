@@ -1,5 +1,7 @@
 #![allow(clippy::redundant_closure_call)]
 #![allow(clippy::useless_conversion)]
+use float8::F8E4M3;
+use half::{bf16, f16};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::CompareOp;
@@ -8,8 +10,6 @@ use pyo3::ToPyObject;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use half::{bf16, f16};
-use float8::F8E4M3;
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
