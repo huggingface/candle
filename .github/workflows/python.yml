@@ -20,17 +20,15 @@ jobs:
         os: [ubuntu-latest] # For now, only test on Linux
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
-          python-version: 3.11
+          python-version: 3.13
           architecture: "x64"
 
       - name: Cache Cargo Registry
@@ -42,8 +40,8 @@ jobs:
       - name: Install Protoc
         uses: arduino/setup-protoc@v2
         with:
-            version: "25.0"
-            repo-token: ${{ secrets.GITHUB_TOKEN }}
+          version: "25.0"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install
         working-directory: ./candle-pyo3
