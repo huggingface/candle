@@ -21,6 +21,8 @@ jobs:
       # with sigstore/fulcio when running outside of PRs.
       id-token: write
       security-events: write
+    env:
+      CUDA_COMPUTE_CAP: 86
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
