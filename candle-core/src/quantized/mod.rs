@@ -173,7 +173,7 @@ impl QStorage {
     ) -> Result<()> {
         match (self, src) {
             (QStorage::Cpu(storage), Storage::Cpu(src)) => {
-                storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row)?;
+                storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row);
             }
             (QStorage::Metal(storage), Storage::Metal(src)) => {
                 storage.quantize_imatrix(src, imatrix_weights, n_per_row)?
@@ -206,7 +206,7 @@ impl QStorage {
     ) -> Result<()> {
         match (self, src) {
             (QStorage::Cpu(storage), Storage::Cpu(src)) => {
-                storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row)?;
+                storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row);
             }
             (QStorage::Metal(storage), Storage::Cpu(src)) => {
                 storage.quantize_imatrix_onto(src, imatrix_weights, n_per_row)?
@@ -396,12 +396,7 @@ pub trait QuantizedType: Send + Sync {
     #[allow(clippy::wrong_self_convention)]
     fn from_float(&mut self, xs: &[f32]);
     #[allow(clippy::wrong_self_convention)]
-    fn from_float_imatrix(
-        &mut self,
-        xs: &[f32],
-        imatrix_weights: &[f32],
-        n_per_row: usize,
-    ) -> Result<()>;
+    fn from_float_imatrix(&mut self, xs: &[f32], imatrix_weights: &[f32], n_per_row: usize);
     fn size(&self) -> usize;
 }
 
@@ -421,12 +416,7 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
         T::from_float(xs, self)
     }
 
-    fn from_float_imatrix(
-        &mut self,
-        xs: &[f32],
-        imatrix_weights: &[f32],
-        n_per_row: usize,
-    ) -> Result<()> {
+    fn from_float_imatrix(&mut self, xs: &[f32], imatrix_weights: &[f32], n_per_row: usize) {
         T::from_float_imatrix(xs, self, imatrix_weights, n_per_row)
     }
 

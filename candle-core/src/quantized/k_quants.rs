@@ -37,8 +37,8 @@ pub trait GgmlType: Sized + Clone + Send + Sync {
         _ys: &mut [Self],
         _imatrix_weights: &[f32],
         _n_per_row: usize,
-    ) -> Result<()> {
-        crate::bail!(
+    ) {
+        panic!(
             "`from_float_imatrix` is unimplemented for {:?}",
             Self::DTYPE
         );
@@ -881,12 +881,7 @@ impl GgmlType for BlockQ2K {
         }
     }
 
-    fn from_float_imatrix(
-        xs: &[f32],
-        ys: &mut [Self],
-        imatrix_weights: &[f32],
-        n_per_row: usize,
-    ) -> Result<()> {
+    fn from_float_imatrix(xs: &[f32], ys: &mut [Self], imatrix_weights: &[f32], n_per_row: usize) {
         for (sblk_idx, (block, x)) in group_for_quantization(xs, ys).into_iter().enumerate() {
             let mut mins: [f32; QK_K / 16] = [0.0; QK_K / 16];
             let mut scales: [f32; QK_K / 16] = [0.0; QK_K / 16];
@@ -942,7 +937,6 @@ impl GgmlType for BlockQ2K {
                 }
             }
         }
-        Ok(())
     }
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L354
     fn to_float(xs: &[Self], ys: &mut [f32]) {
@@ -1203,12 +1197,7 @@ impl GgmlType for BlockQ3K {
         }
     }
 
-    fn from_float_imatrix(
-        xs: &[f32],
-        ys: &mut [Self],
-        imatrix_weights: &[f32],
-        n_per_row: usize,
-    ) -> Result<()> {
+    fn from_float_imatrix(xs: &[f32], ys: &mut [Self], imatrix_weights: &[f32], n_per_row: usize) {
         for (sblk_idx, (block, x)) in group_for_quantization(xs, ys).into_iter().enumerate() {
             let mut scales: [f32; QK_K / 16] = [0.0; QK_K / 16];
             let mut weights: [f32; 16] = [0.0; 16];
@@ -1303,7 +1292,6 @@ impl GgmlType for BlockQ3K {
                 }
             }
         }
-        Ok(())
     }
 
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L533
@@ -1523,12 +1511,7 @@ impl GgmlType for BlockQ4K {
         }
     }
 
-    fn from_float_imatrix(
-        xs: &[f32],
-        ys: &mut [Self],
-        imatrix_weights: &[f32],
-        n_per_row: usize,
-    ) -> Result<()> {
+    fn from_float_imatrix(xs: &[f32], ys: &mut [Self], imatrix_weights: &[f32], n_per_row: usize) {
         for (sblk_idx, (block, x)) in group_for_quantization(xs, ys).into_iter().enumerate() {
             let mut mins: [f32; QK_K / 32] = [0.0; QK_K / 32];
             let mut scales: [f32; QK_K / 32] = [0.0; QK_K / 32];
@@ -1591,7 +1574,6 @@ impl GgmlType for BlockQ4K {
                 }
             }
         }
-        Ok(())
     }
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L735
     fn to_float(xs: &[Self], ys: &mut [f32]) {
@@ -1806,12 +1788,7 @@ impl GgmlType for BlockQ5K {
         }
     }
 
-    fn from_float_imatrix(
-        xs: &[f32],
-        ys: &mut [Self],
-        imatrix_weights: &[f32],
-        n_per_row: usize,
-    ) -> Result<()> {
+    fn from_float_imatrix(xs: &[f32], ys: &mut [Self], imatrix_weights: &[f32], n_per_row: usize) {
         for (sblk_idx, (block, x)) in group_for_quantization(xs, ys).into_iter().enumerate() {
             let mut mins: [f32; QK_K / 32] = [0.0; QK_K / 32];
             let mut scales: [f32; QK_K / 32] = [0.0; QK_K / 32];
@@ -1891,7 +1868,6 @@ impl GgmlType for BlockQ5K {
                 m2 <<= 2;
             }
         }
-        Ok(())
     }
 
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L928
@@ -2082,16 +2058,11 @@ impl GgmlType for BlockQ6K {
         }
     }
 
-    fn from_float_imatrix(
-        xs: &[f32],
-        ys: &mut [Self],
-        imatrix_weights: &[f32],
-        n_per_row: usize,
-    ) -> Result<()> {
+    fn from_float_imatrix(xs: &[f32], ys: &mut [Self], imatrix_weights: &[f32], n_per_row: usize) {
         debug_assert_eq!(
             xs.len(),
             ys.len() * Self::BLCK_SIZE,
-            "quantize_row_q6k: size mismatch {} {} {}",
+            "quantize_row_q6k imatrix: size mismatch {} {} {}",
             xs.len(),
             ys.len(),
             Self::BLCK_SIZE
@@ -2165,7 +2136,6 @@ impl GgmlType for BlockQ6K {
                 x = x.add(QK_K)
             }
         }
-        Ok(())
     }
 
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L1067

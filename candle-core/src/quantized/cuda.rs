@@ -549,7 +549,7 @@ impl QCudaStorage {
         let mut qcpu_storage = crate::Device::Cpu.qzeros(src_len, self.dtype)?;
 
         if let QStorage::Cpu(storage) = &mut qcpu_storage {
-            storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row)?;
+            storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row);
         } else {
             unreachable!()
         }
