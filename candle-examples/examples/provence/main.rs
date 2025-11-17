@@ -152,7 +152,7 @@ fn main() -> Result<()> {
             // Forward only
             println!("Running forward pass only");
 
-            let input_text = model.format_input(question, context);
+            let input_text = ProvenceModel::format_input(question, context);
 
             let encoding = tokenizer
                 .encode(input_text, true)
@@ -170,7 +170,7 @@ fn main() -> Result<()> {
             // Simple usage
             println!("Running process helper function");
             let result =
-                model.process_single(&tokenizer, question, context, args.threshold, true, true)?;
+                model.process_single(&tokenizer, question, context, args.threshold, false, true)?;
 
             println!("Simple output");
             println!("Pruned: {}", result.pruned_context);
