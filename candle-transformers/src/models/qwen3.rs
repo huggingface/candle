@@ -4,7 +4,7 @@ use crate::{
 };
 use candle::{DType, Device, Module, Result, Tensor};
 use candle_nn::{
-    kv_cache::{ConcatKvCache, IncrementalKvCache, KvCache},
+    kv_cache::{DefaultKvCache, KvCache},
     Activation, VarBuilder,
 };
 use std::sync::Arc;
@@ -94,7 +94,7 @@ impl Module for Qwen3MLP {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Qwen3Attention<Cache: KvCache = IncrementalKvCache> {
+pub(crate) struct Qwen3Attention<C: KvCache> {
     // projections
     q_proj: Linear,
     k_proj: Linear,
@@ -111,10 +111,10 @@ pub(crate) struct Qwen3Attention<Cache: KvCache = IncrementalKvCache> {
     hidden_size: usize,
     // utils
     rotary_emb: Arc<Qwen3RotaryEmbedding>,
-    kv_cache: Cache,
+    kv_cache: C,
 }
 
-impl<Cache: KvCache> Qwen3Attention<Cache> {
+impl<C: KvCache> Qwen3Attention<C> {
     pub(crate) fn new(
         cfg: &Config,
         rotary_emb: Arc<Qwen3RotaryEmbedding>,
@@ -164,7 +164,7 @@ impl<Cache: KvCache> Qwen3Attention<Cache> {
         // For tensors of shape [batch, heads, seq, head_dim]
         // The KV cache is initialized with 512 tokens capacity. If the KvCache implementation uses capacity this
         // leads to reduced initial memory allocation, and the cache will grow in chunks of 512 tokens when needed.
-        let kv_cache = Cache::new(2, 512);
+        let kv_cache = C::new(2, 512);
 
         Ok(Self {
             q_proj,
@@ -246,14 +246,14 @@ impl<Cache: KvCache> Qwen3Attention<Cache> {
 }
 
 #[derive(Debug, Clone)]
-struct DecoderLayer {
-    self_attn: Qwen3Attention,
+struct DecoderLayer<C: KvCache> {
+    self_attn: Qwen3Attention<C>,
     mlp: Qwen3MLP,
     ln1: RmsNorm,
     ln2: RmsNorm,
 }
 
-impl DecoderLayer {
+impl<C: KvCache> DecoderLayer<C> {
     fn new(cfg: &Config, rotary: Arc<Qwen3RotaryEmbedding>, vb: VarBuilder) -> Result<Self> {
         let self_attn = Qwen3Attention::new(cfg, rotary, vb.pp("self_attn"))?;
         let mlp = Qwen3MLP::new(cfg, vb.pp("mlp"))?;
@@ -286,9 +286,9 @@ impl DecoderLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
+pub struct Model<C: KvCache = DefaultKvCache> {
     embed_tokens: candle_nn::Embedding,
-    layers: Vec<DecoderLayer>,
+    layers: Vec<DecoderLayer<C>>,
     norm: RmsNorm,
     device: Device,
     dtype: DType,

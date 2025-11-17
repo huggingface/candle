@@ -3,7 +3,10 @@ use crate::models::{
     with_tracing::{linear_no_bias, Linear, RmsNorm},
 };
 use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Activation, VarBuilder};
+use candle_nn::{
+    kv_cache::{DefaultKvCache, KvCache},
+    Activation, VarBuilder,
+};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -189,14 +192,14 @@ impl Module for Qwen3FeedForward {
 }
 
 #[derive(Debug, Clone)]
-struct DecoderLayer {
-    self_attn: Qwen3Attention,
+struct DecoderLayer<C: KvCache> {
+    self_attn: Qwen3Attention<C>,
     feed_forward: Qwen3FeedForward,
     ln1: RmsNorm,
     ln2: RmsNorm,
 }
 
-impl DecoderLayer {
+impl<C: KvCache> DecoderLayer<C> {
     fn new(
         layer_idx: usize,
         cfg: &Config,
@@ -243,15 +246,15 @@ impl DecoderLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct Model {
+pub struct Model<C: KvCache = DefaultKvCache> {
     embed_tokens: candle_nn::Embedding,
-    layers: Vec<DecoderLayer>,
+    layers: Vec<DecoderLayer<C>>,
     norm: RmsNorm,
     device: Device,
     dtype: DType,
 }
 
-impl Model {
+impl<C: KvCache> Model<C> {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
@@ -325,12 +328,12 @@ impl Model {
 }
 
 #[derive(Debug, Clone)]
-pub struct ModelForCausalLM {
-    base: Model,
+pub struct ModelForCausalLM<C: KvCache = DefaultKvCache> {
+    base: Model<C>,
     lm_head: Linear,
 }
 
-impl ModelForCausalLM {
+impl<C: KvCache> ModelForCausalLM<C> {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let base = Model::new(cfg, vb.clone())?;
         let lm_head = if cfg.tie_word_embeddings {

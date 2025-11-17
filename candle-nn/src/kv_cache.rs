@@ -2,6 +2,8 @@
 //!
 use candle::{DType, Device, Result, Tensor};
 
+pub type DefaultKvCache = ConcatKvCache;
+
 pub trait KvCache {
     type Mask;
     fn new(dim: usize, max_seq_len: usize) -> Self;
@@ -482,7 +484,7 @@ impl KvCache for ScatteredKvCache {
         mask: Option<&Self::Mask>,
     ) -> Result<(Tensor, Tensor)> {
         if let Some(mask) = mask {
-            return self.scattered_append(k, v, mask);
+            self.scattered_append(k, v, mask)
         } else {
             candle::bail!("ScatteredKvCache requires InidicesAndMask")
         }
