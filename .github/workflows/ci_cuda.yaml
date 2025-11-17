@@ -13,7 +13,6 @@ jobs:
       group: aws-g4dn-2xlarge
     container:
       image: nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
-      options: --gpus 0
     if: ${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     permissions:
       contents: write
