@@ -94,7 +94,7 @@ impl st::View for &Tensor {
 impl Tensor {
     pub fn save_safetensors<P: AsRef<Path>>(&self, name: &str, filename: P) -> Result<()> {
         let data = [(name, self.clone())];
-        Ok(st::serialize_to_file(data, &None, filename.as_ref())?)
+        Ok(st::serialize_to_file(data, None, filename.as_ref())?)
     }
 }
 
@@ -268,7 +268,7 @@ pub fn save<K: AsRef<str> + Ord + std::fmt::Display, P: AsRef<Path>>(
     tensors: &HashMap<K, Tensor>,
     filename: P,
 ) -> Result<()> {
-    Ok(st::serialize_to_file(tensors, &None, filename.as_ref())?)
+    Ok(st::serialize_to_file(tensors, None, filename.as_ref())?)
 }
 
 #[derive(yoke::Yokeable)]
