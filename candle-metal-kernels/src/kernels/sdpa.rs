@@ -121,7 +121,7 @@ pub fn call_sdpa_full(
 
     let pipeline = kernels.load_pipeline_with_constants(device, Source::Sdpa, name, constants)?;
     let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
     let nq = (ql + BQ - 1) / BQ;
@@ -168,21 +168,19 @@ pub fn call_sdpa_full(
     };
 
     impl EncoderParam for AttnParams {
-        fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
+        fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
             encoder.set_bytes(
                 position,
-                core::mem::size_of::<AttnParams>() as u64,
-                &data as *const AttnParams as *const c_void,
+                &data
             );
         }
     }
 
     impl EncoderParam for AttnMaskParams {
-        fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
+        fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
             encoder.set_bytes(
                 position,
-                core::mem::size_of::<AttnMaskParams>() as u64,
-                &data as *const AttnMaskParams as *const c_void,
+                &data
             );
         }
     }
@@ -196,7 +194,7 @@ pub fn call_sdpa_full(
                 mask_strides[2] as i64,
             ],
         };
-        encoder.use_resource(mask, metal::MTLResourceUsage::Read);
+        encoder.use_resource(mask, MTLResourceUsage::Read);
 
         set_params!(
             encoder,
