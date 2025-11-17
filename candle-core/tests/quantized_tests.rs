@@ -20,9 +20,7 @@ fn test_matmul(
     (b, m, n, k): (usize, usize, usize, usize),
     dtype: GgmlDType,
 ) -> Result<()> {
-    if (device.is_cuda() || device.is_metal())
-        && (dtype == GgmlDType::Q8_1 || dtype == GgmlDType::Q8K)
-    {
+    if device.is_metal() && (dtype == GgmlDType::Q8_1 || dtype == GgmlDType::Q8K) {
         return Ok(());
     }
 
@@ -95,7 +93,7 @@ fn quantized_matmul(device: &Device) -> Result<()> {
     let mut dst = vec![42.; 3 * 4];
     let mut rhs_t = vec![k_quants::BlockQ4_0::zeros(); 8];
     let rhs = (0..(k * n)).map(|v| v as f32).collect::<Vec<_>>();
-    k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t)?;
+    k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t);
     k_quants::matmul((m, k, n), &lhs_s, &rhs_t, &mut dst)?;
     assert_eq!(
         dst.iter().map(|x| x.round()).collect::<Vec<_>>(),
@@ -160,7 +158,7 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
         .map(|v| v as f32 - (k * n) as f32 / 3.0)
         .collect::<Vec<_>>();
     let tensor_rhs = Tensor::from_slice(&rhs, (n, k), device)?.t()?;
-    k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t)?;
+    k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t);
     k_quants::matmul((m, k, n), &lhs_s, &rhs_t, &mut dst)?;
     assert_eq!(
         dst.iter().map(|x| x.round()).collect::<Vec<_>>(),
@@ -865,11 +863,11 @@ fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32], err_m: f32) -> Res
 
     let mut a_quant = vec![T::zeros(); length / T::BLCK_SIZE];
     let mut b_quant = vec![T::VecDotType::zeros(); length / T::VecDotType::BLCK_SIZE];
-    T::from_float(a, &mut a_quant)?;
-    T::VecDotType::from_float(b, &mut b_quant)?;
+    T::from_float(a, &mut a_quant);
+    T::VecDotType::from_float(b, &mut b_quant);
 
-    let result = T::vec_dot(length, &a_quant, &b_quant)?;
-    let result_unopt = T::vec_dot_unopt(length, &a_quant, &b_quant)?;
+    let result = T::vec_dot(length, &a_quant, &b_quant);
+    let result_unopt = T::vec_dot_unopt(length, &a_quant, &b_quant);
 
     if (result - result_unopt).abs() / length as f32 > 1e-6 {
         bail!(
