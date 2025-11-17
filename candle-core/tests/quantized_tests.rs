@@ -1,5 +1,9 @@
 use candle_core::{
-    DType, Device, IndexOp, Module, Result, Tensor, Var, bail, quantized::{self, GgmlDType}, test_device, test_utils::to_vec2_round
+    bail,
+    quantized::{self, GgmlDType},
+    test_device,
+    test_utils::to_vec2_round,
+    DType, Device, IndexOp, Module, Result, Tensor, Var,
 };
 use quantized::{k_quants, GgmlType};
 use rand::prelude::*;
