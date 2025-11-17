@@ -40,6 +40,17 @@ impl QMetalStorage {
     ) -> Result<(MetalStorage, crate::Shape)> {
         Err(Error::NotCompiledWithMetalSupport)
     }
+
+    pub fn indexed_moe_forward(
+        &self,
+        _: &crate::Shape,
+        _: &MetalStorage,
+        _: &crate::Layout,
+        _: &MetalStorage,
+        _: &crate::Layout,
+    ) -> Result<(MetalStorage, crate::Shape)> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
 }
 
 pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(

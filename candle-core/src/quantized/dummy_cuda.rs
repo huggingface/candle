@@ -44,6 +44,17 @@ impl QCudaStorage {
     ) -> Result<(CudaStorage, crate::Shape)> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+
+    pub fn indexed_moe_forward(
+        &self,
+        _: &crate::Shape,
+        _: &CudaStorage,
+        _: &crate::Layout,
+        _: &CudaStorage,
+        _: &crate::Layout,
+    ) -> Result<(CudaStorage, crate::Shape)> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
 }
 
 pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
