@@ -169,19 +169,13 @@ pub fn call_sdpa_full(
 
     impl EncoderParam for AttnParams {
         fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-            encoder.set_bytes(
-                position,
-                &data
-            );
+            encoder.set_bytes(position, &data);
         }
     }
 
     impl EncoderParam for AttnMaskParams {
         fn set_param(encoder: &ComputeCommandEncoder, position: usize, data: Self) {
-            encoder.set_bytes(
-                position,
-                &data
-            );
+            encoder.set_bytes(position, &data);
         }
     }
 
