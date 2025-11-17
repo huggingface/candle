@@ -38,6 +38,7 @@ impl QMetalStorage {
 
         let buffer = self.device.allocate_buffer(self.buffer.length())?;
         let blit = self.device.blit_command_encoder()?;
+        blie.set_label("blit_to_cpu")?;
         blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
         blit.end_encoding();
         self.device.wait_until_completed()?;
