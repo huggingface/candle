@@ -4,7 +4,7 @@ use crate::{backend::BackendDevice, cuda_backend::WrapErr};
 use crate::{builder_arg as barg, CudaDevice, CudaStorage, Result};
 use half::f16;
 
-use cudarc::driver::{CudaSlice, PushKernelArg};
+use cudarc::driver::{CudaSlice, CudaView, PushKernelArg};
 
 #[derive(Clone, Debug)]
 struct PaddedCudaSlice {
@@ -44,7 +44,7 @@ fn pad(p: usize, q: usize) -> usize {
 }
 
 fn quantize_q8_1(
-    src: &CudaSlice<f32>,
+    src: &CudaView<f32>,
     dst: &mut CudaSlice<u8>,
     k: usize,
     ky: usize,
@@ -222,7 +222,7 @@ fn dequantize_f16(
 
 fn dequantize_mul_mat_vec(
     data: &PaddedCudaSlice,
-    y: &CudaSlice<f32>,
+    y: &CudaView<f32>,
     dtype: GgmlDType,
     ncols: usize,
     nrows: usize,
@@ -268,7 +268,7 @@ fn dequantize_mul_mat_vec(
 
 fn mul_mat_vec_via_q8_1(
     data: &PaddedCudaSlice,
-    y: &CudaSlice<f32>,
+    y: &CudaView<f32>,
     dtype: GgmlDType,
     ncols: usize,
     nrows: usize,
@@ -339,7 +339,7 @@ fn mul_mat_vec_via_q8_1(
 #[allow(clippy::too_many_arguments)]
 fn mul_mat_via_q8_1(
     data: &PaddedCudaSlice,
-    y: &CudaSlice<f32>,
+    y: &CudaView<f32>,
     dtype: GgmlDType,
     x_rows: usize,
     x_cols: usize,
@@ -635,11 +635,8 @@ impl QCudaStorage {
     ) -> Result<(CudaStorage, crate::Shape)> {
         let (nrows, ncols) = self_shape.dims2()?;
         let rhs = rhs.as_cuda_slice::<f32>()?;
-        match rhs_l.contiguous_offsets() {
-            Some((o1, _)) => assert!(
-                o1 == 0,
-                "sliced input is not supported in quantized matmul!"
-            ),
+        let rhs = match rhs_l.contiguous_offsets() {
+            Some((o1, o2)) => rhs.slice(o1..o2),
             None => Err(crate::Error::RequiresContiguous { op: "dmmv" }.bt())?,
         };
         let (b_size, k) = match rhs_l.shape().dims() {
@@ -693,11 +690,8 @@ impl QCudaStorage {
             storage.matmul(&data_f32, (b, m, n, k), layout, &rhs_l)?
         } else {
             let storage = storage.as_cuda_slice::<f32>()?;
-            match layout.contiguous_offsets() {
-                Some((o1, _)) => assert!(
-                    o1 == 0,
-                    "sliced input is not supported in quantized matmul!"
-                ),
+            let storage = match layout.contiguous_offsets() {
+                Some((o1, o2)) => storage.slice(o1..o2),
                 None => Err(crate::Error::RequiresContiguous {
                     op: "quantized-matmul",
                 }
@@ -756,7 +750,7 @@ mod test {
         let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
         let vs: Vec<f32> = (0..el).map(|v| v as f32).collect();
         let y = dev.memcpy_stod(&vs)?;
-        quantize_q8_1(&y, &mut y_q8_1, el, 1, &dev)?;
+        quantize_q8_1(&y.as_view(), &mut y_q8_1, el, 1, &dev)?;
         Ok(())
     }
 
@@ -770,7 +764,7 @@ mod test {
         xs.quantize(&CudaStorage::wrap_cuda_slice(y.clone(), dev.clone()))?;
         let cuda_storage = mul_mat_vec_via_q8_1(
             &xs.data,
-            &y,
+            &y.as_view(),
             /* dtype */ GgmlDType::Q4_0,
             /* ncols */ ncols,
             /* nrows */ 1,
@@ -778,7 +772,7 @@ mod test {
             &dev,
         )?;
         let vs = cuda_storage.as_cuda_slice::<f32>()?;
-        let vs = dev.memcpy_dtov(&vs.slice(..))?;
+        let vs = dev.memcpy_dtov(&vs.as_view())?;
         assert_eq!(vs.len(), 1);
         // for n = 255, n.(n+1).(2n+1) / 6 = 5559680
         // Q8 means 1/256 precision.
@@ -786,14 +780,14 @@ mod test {
 
         let cuda_storage = dequantize_mul_mat_vec(
             &xs.data,
-            &y,
+            &y.as_view(),
             /* dtype */ GgmlDType::Q4_0,
             /* ncols */ ncols,
             /* nrows */ 1,
             &dev,
         )?;
         let vs = cuda_storage.as_cuda_slice::<f32>()?;
-        let vs = dev.memcpy_dtov(&vs.slice(..))?;
+        let vs = dev.memcpy_dtov(&vs.as_view())?;
         assert_eq!(vs.len(), 1);
         assert_eq!(vs[0], 5561851.0);
         Ok(())
@@ -809,7 +803,7 @@ mod test {
         xs.quantize(&CudaStorage::wrap_cuda_slice(y.clone(), dev.clone()))?;
         let cuda_storage = mul_mat_via_q8_1(
             &xs.data,
-            &y,
+            &y.as_view(),
             /* dtype */ GgmlDType::Q4_0,
             /* x_rows */ 4,
             /* x_cols */ ncols,
@@ -818,7 +812,7 @@ mod test {
             &dev,
         )?;
         let vs = cuda_storage.as_cuda_slice::<f32>()?;
-        let vs = dev.memcpy_dtov(&vs.slice(..))?;
+        let vs = dev.memcpy_dtov(&vs.as_view())?;
 
         /*
            x = torch.tensor([float(v) for v in range(1024)]).reshape(4, 256)
@@ -850,7 +844,7 @@ mod test {
         xs.quantize(&CudaStorage::wrap_cuda_slice(y.clone(), dev.clone()))?;
         let cuda_storage = mul_mat_via_q8_1(
             &xs.data,
-            &y,
+            &y.as_view(),
             /* dtype */ GgmlDType::Q4_0,
             /* x_rows */ x_rows,
             /* x_cols */ ncols,
@@ -859,7 +853,7 @@ mod test {
             &dev,
         )?;
         let vs = cuda_storage.as_cuda_slice::<f32>()?;
-        let _vs = dev.memcpy_dtov(&vs.slice(..))?;
+        let _vs = dev.memcpy_dtov(&vs.as_view())?;
         Ok(())
     }
 }
