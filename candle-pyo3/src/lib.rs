@@ -1,7 +1,5 @@
 #![allow(clippy::redundant_closure_call)]
 #![allow(clippy::useless_conversion)]
-use float8::F8E4M3;
-use half::{bf16, f16};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::CompareOp;
@@ -10,6 +8,8 @@ use pyo3::ToPyObject;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use half::{bf16, f16};
+use float8::F8E4M3;
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
@@ -206,7 +206,21 @@ trait MapDType {
             DType::F16 => self.f::<f16>(t),
             DType::F32 => self.f::<f32>(t),
             DType::F64 => self.f::<f64>(t),
-            DType::F8E4M3 => self.f::<F8E4M3>(t),
+            DType::I16 => Err(PyErr::new::<PyTypeError, _>(
+                "i16 dtype is not supported in Python interface",
+            )),
+            DType::I32 => Err(PyErr::new::<PyTypeError, _>(
+                "i32 dtype is not supported in Python interface",
+            )),
+            DType::F8E4M3 => Err(PyErr::new::<PyTypeError, _>(
+                "f8e4m3 dtype is not supported in Python interface",
+            )),
+            DType::F6E2M3 | DType::F6E3M2 | DType::F4 | DType::F8E8M0 => {
+                Err(PyErr::new::<PyTypeError, _>(format!(
+                    "Dummy dtype {:?} is not supported",
+                    t.dtype()
+                )))
+            }
         }
     }
 }
