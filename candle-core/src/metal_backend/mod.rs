@@ -2,6 +2,7 @@
 //!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
+use crate::metal_backend::device::AllocationPolicy;
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 use candle_metal_kernels::{
@@ -11,8 +12,7 @@ use candle_metal_kernels::{
 use objc2_foundation::NSRange;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
-
+use std::sync::{atomic::AtomicUsize, Arc, Mutex, PoisonError, RwLock, TryLockError};
 mod device;
 pub use device::{DeviceId, MetalDevice};
 
@@ -2099,6 +2099,8 @@ impl BackendDevice for MetalDevice {
             buffers: Arc::new(RwLock::new(HashMap::new())),
             kernels,
             seed,
+            pending_allocation_bytes: Arc::new(AtomicUsize::new(0)),
+            allocation_policy: AllocationPolicy::default(),
         })
     }
 

@@ -9,7 +9,10 @@ use candle_metal_kernels::{
 use objc2_foundation::NSURL;
 use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex, RwLock,
+};
 
 use super::MetalError;
 
@@ -23,6 +26,61 @@ impl DeviceId {
         use std::sync::atomic;
         static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
         Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed))
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct AllocationPolicy {
+    /// Total bytes we can allocate before forcing a sync to reclaim temporaries.
+    pending_limit_bytes: usize,
+    /// Maximum bytes to keep cached for reuse.
+    cache_limit_bytes: usize,
+}
+
+impl Default for AllocationPolicy {
+    fn default() -> Self {
+        const DEFAULT_PENDING: usize = 4 * 1024 * 1024 * 1024; // 4 GiB
+        const MIN_PENDING: usize = 512 * 1024 * 1024; // 512 MiB
+        const MAX_PENDING: usize = 12 * 1024 * 1024 * 1024; // 12 GiB
+
+        fn parse_env_mebibytes(var: &str) -> Option<usize> {
+            std::env::var(var)
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .map(|mb| mb * 1024 * 1024)
+        }
+
+        fn system_memory_bytes() -> Option<usize> {
+            use libc::c_void;
+            let mut value: u64 = 0;
+            let mut len = core::mem::size_of::<u64>();
+            let ret = unsafe {
+                libc::sysctlbyname(
+                    b"hw.memsize\0".as_ptr() as *const libc::c_char,
+                    &mut value as *mut u64 as *mut c_void,
+                    &mut len as *mut usize,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            };
+            if ret == 0 {
+                Some(value as usize)
+            } else {
+                None
+            }
+        }
+
+        let pending_limit = parse_env_mebibytes("CANDLE_METAL_PENDING_LIMIT_MB")
+            .or_else(|| system_memory_bytes().map(|mem| (mem / 3).clamp(MIN_PENDING, MAX_PENDING)))
+            .unwrap_or(DEFAULT_PENDING);
+
+        let cache_limit = parse_env_mebibytes("CANDLE_METAL_CACHE_LIMIT_MB")
+            .unwrap_or_else(|| std::cmp::max(pending_limit / 2, 64 * 1024 * 1024));
+
+        crate::metal_backend::device::AllocationPolicy {
+            pending_limit_bytes: pending_limit,
+            cache_limit_bytes: cache_limit,
+        }
     }
 }
 
@@ -57,6 +115,10 @@ pub struct MetalDevice {
     pub(crate) kernels: Arc<Kernels>,
     /// Seed for random number generation.
     pub(crate) seed: Arc<Mutex<Buffer>>,
+    /// Bytes allocated since the last synchronization point.
+    pub(crate) pending_allocation_bytes: Arc<AtomicUsize>,
+    /// Allocation thresholds and cache budget.
+    pub(crate) allocation_policy: AllocationPolicy,
 }
 
 // Resource options used for creating buffers. Shared storage mode allows both CPU and GPU to access the buffer.
@@ -112,14 +174,46 @@ impl MetalDevice {
     }
 
     fn drop_unused_buffers(&self) -> Result<()> {
+        self.trim_buffer_cache_to(self.allocation_policy.cache_limit_bytes)
+    }
+
+    fn trim_buffer_cache_to(&self, limit: usize) -> Result<()> {
         let mut buffers = self.buffers.write().map_err(MetalError::from)?;
-        for subbuffers in buffers.values_mut() {
-            let newbuffers = subbuffers
-                .iter()
-                .filter(|s| Arc::strong_count(*s) > 1)
-                .map(Arc::clone)
-                .collect();
-            *subbuffers = newbuffers;
+        let mut cached_bytes = 0usize;
+        for (size, subbuffers) in buffers.iter() {
+            for buffer in subbuffers.iter() {
+                if Arc::strong_count(buffer) == 1 {
+                    cached_bytes += *size;
+                }
+            }
+        }
+        if cached_bytes <= limit {
+            return Ok(());
+        }
+
+        let mut bytes_to_drop = cached_bytes - limit;
+        let mut empty_keys = Vec::new();
+        for (size, subbuffers) in buffers.iter_mut() {
+            if bytes_to_drop == 0 {
+                break;
+            }
+            subbuffers.retain(|buffer| {
+                if bytes_to_drop == 0 {
+                    return true;
+                }
+                if Arc::strong_count(buffer) == 1 {
+                    bytes_to_drop = bytes_to_drop.saturating_sub(*size);
+                    false
+                } else {
+                    true
+                }
+            });
+            if subbuffers.is_empty() {
+                empty_keys.push(*size);
+            }
+        }
+        for key in empty_keys {
+            buffers.remove(&key);
         }
         Ok(())
     }
@@ -211,6 +305,8 @@ impl MetalDevice {
             .map_err(MetalError::from)?;
         let new_buffer = Arc::new(new_buffer);
         subbuffers.push(new_buffer.clone());
+        drop(buffers);
+        self.on_new_allocation(size)?;
         Ok(new_buffer)
     }
 
@@ -233,6 +329,22 @@ impl MetalDevice {
         capture
             .startCaptureWithDescriptor_error(&descriptor)
             .map_err(|e| MetalError::from(e.to_string()))?;
+        Ok(())
+    }
+
+    fn on_new_allocation(&self, size: usize) -> Result<()> {
+        let pending = self
+            .pending_allocation_bytes
+            .fetch_add(size, Ordering::AcqRel)
+            .saturating_add(size);
+        if pending >= self.allocation_policy.pending_limit_bytes {
+            // Ensure the GPU processed the backlog so buffers can be reused.
+            self.wait_until_completed()?;
+            self.pending_allocation_bytes.store(0, Ordering::Release);
+            // Drop part of the cache to keep the resident set under control.
+            let target = self.allocation_policy.cache_limit_bytes / 2;
+            self.trim_buffer_cache_to(target)?;
+        }
         Ok(())
     }
 }
