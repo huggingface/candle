@@ -100,11 +100,11 @@ fn ggml_matmul_error_test<T: GgmlType>() -> Result<()> {
 
     let mut a_quant = vec![T::zeros(); length / T::BLCK_SIZE];
     let mut b_quant = vec![T::VecDotType::zeros(); length / T::VecDotType::BLCK_SIZE];
-    T::from_float(&a, &mut a_quant);
-    T::VecDotType::from_float(&b, &mut b_quant);
+    T::from_float(&a, &mut a_quant)?;
+    T::VecDotType::from_float(&b, &mut b_quant)?;
 
-    let result = T::vec_dot(length, &a_quant, &b_quant);
-    let result_unopt = T::vec_dot_unopt(length, &a_quant, &b_quant);
+    let result = T::vec_dot(length, &a_quant, &b_quant)?;
+    let result_unopt = T::vec_dot_unopt(length, &a_quant, &b_quant)?;
     let reference_result = vec_dot_reference(&a, &b);
 
     if (result - result_unopt).abs() / length as f32 > 1e-6 {
