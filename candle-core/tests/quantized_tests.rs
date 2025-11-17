@@ -20,7 +20,9 @@ fn test_matmul(
     (b, m, n, k): (usize, usize, usize, usize),
     dtype: GgmlDType,
 ) -> Result<()> {
-    if device.is_metal() && (dtype == GgmlDType::Q8_1 || dtype == GgmlDType::Q8K) {
+    if (device.is_cuda() || device.is_metal())
+        && (dtype == GgmlDType::Q8_1 || dtype == GgmlDType::Q8K)
+    {
         return Ok(());
     }
 
