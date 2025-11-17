@@ -1,4 +1,6 @@
-use crate::{backend::BackendStorage, CpuStorage, DType, Device, Result, Shape, Storage, Tensor, D};
+use crate::{
+    backend::BackendStorage, CpuStorage, DType, Device, Result, Shape, Storage, Tensor, D,
+};
 use k_quants::*;
 use std::borrow::Cow;
 

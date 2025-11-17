@@ -1220,8 +1220,7 @@ impl GgmlType for BlockQ3K {
             let sigma2 = 2. * sum_x2 / QK_K as f32;
 
             for (j, x_scale_slice) in x.chunks_exact(16).enumerate() {
-                for (l_idx, (w_elem, x_elem)) in weights.iter_mut().zip(x_scale_slice).enumerate()
-                {
+                for (l_idx, (w_elem, x_elem)) in weights.iter_mut().zip(x_scale_slice).enumerate() {
                     let imatrix_row = sblk_idx % (n_per_row / QK_K);
                     let imatrix_w = imatrix_weights[imatrix_row * QK_K + 16 * j + l_idx];
                     *w_elem = imatrix_w * (sigma2 + x_elem * x_elem).sqrt();
