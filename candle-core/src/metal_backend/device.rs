@@ -81,7 +81,7 @@ impl Default for AllocationPolicy {
             const SYSTEM_RESERVE_MIN: usize = 2 * 1024 * 1024 * 1024; // 2 GiB floor.
 
             let hw_total = sysctl_u64(HW_MEMSIZE_KEY).and_then(|bytes| {
-                if bytes == 0 || bytes > usize::MAX as u64 {
+                if bytes == 0 {
                     None
                 } else {
                     Some(bytes as usize)
@@ -95,7 +95,7 @@ impl Default for AllocationPolicy {
             }
 
             let wired_limit_bytes = sysctl_u64(IOGPU_WIRED_LIMIT_MB_KEY).and_then(|limit_mb| {
-                if limit_mb == 0 || limit_mb > usize::MAX as u64 {
+                if limit_mb == 0 {
                     return None;
                 }
                 (limit_mb as usize).checked_mul(MEBIBYTE)
