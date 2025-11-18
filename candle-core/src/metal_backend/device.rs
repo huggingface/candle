@@ -101,12 +101,11 @@ impl Default for AllocationPolicy {
                 (limit_mb as usize).checked_mul(MEBIBYTE)
             });
 
-            let wired_clamped = wired_limit_bytes.map(|limit| std::cmp::min(limit, hw_total));
-
-            Some(match wired_clamped {
-                Some(wired) => std::cmp::min(wired, hw_budget),
-                None => hw_budget,
-            })
+            if let Some(wired) = wired_limit_bytes {
+                Some(std::cmp::min(wired, hw_budget))
+            } else {
+                Some(hw_budget)
+            }
         }
 
         let pending_limit = parse_env_mebibytes("CANDLE_METAL_PENDING_LIMIT_MB")
