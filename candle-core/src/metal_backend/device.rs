@@ -8,6 +8,7 @@ use candle_metal_kernels::{
 };
 use objc2_foundation::NSURL;
 use objc2_metal::{MTLCaptureDescriptor, MTLCaptureDestination, MTLCaptureManager};
+use std::ffi::CStr;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -42,6 +43,8 @@ impl Default for AllocationPolicy {
         const DEFAULT_PENDING: usize = 4 * 1024 * 1024 * 1024; // 4 GiB
         const MIN_PENDING: usize = 512 * 1024 * 1024; // 512 MiB
         const MAX_PENDING: usize = 12 * 1024 * 1024 * 1024; // 12 GiB
+        const HW_MEMSIZE_KEY: &CStr = c"hw.memsize";
+        const IOGPU_WIRED_LIMIT_MB_KEY: &CStr = c"iogpu.wired_limit_mb";
 
         fn parse_env_mebibytes(var: &str) -> Option<usize> {
             std::env::var(var)
@@ -49,12 +52,12 @@ impl Default for AllocationPolicy {
                 .and_then(|value| value.trim().parse::<usize>().ok())
                 .map(|mb| mb * 1024 * 1024)
         }
-        fn sysctl_u64(name: &[u8]) -> Option<u64> {
+        fn sysctl_u64(name: &CStr) -> Option<u64> {
             use libc::c_void;
             unsafe {
                 let mut len: usize = 0;
                 if libc::sysctlbyname(
-                    name.as_ptr() as *const libc::c_char,
+                    name.as_ptr(),
                     std::ptr::null_mut(),
                     &mut len as *mut usize,
                     std::ptr::null_mut(),
@@ -68,7 +71,7 @@ impl Default for AllocationPolicy {
                 }
                 let mut value: u64 = 0;
                 if libc::sysctlbyname(
-                    name.as_ptr() as *const libc::c_char,
+                    name.as_ptr(),
                     &mut value as *mut u64 as *mut c_void,
                     &mut len as *mut usize,
                     std::ptr::null_mut(),
@@ -86,7 +89,7 @@ impl Default for AllocationPolicy {
             const SYSTEM_RESERVE_FRACTION: usize = 4; // Keep at least 25% for the OS.
             const SYSTEM_RESERVE_MIN: usize = 2 * 1024 * 1024 * 1024; // 2 GiB floor.
 
-            let hw_total = sysctl_u64(b"hw.memsize\0").and_then(|bytes| {
+            let hw_total = sysctl_u64(HW_MEMSIZE_KEY).and_then(|bytes| {
                 if bytes == 0 || bytes > usize::MAX as u64 {
                     None
                 } else {
@@ -100,7 +103,7 @@ impl Default for AllocationPolicy {
                 return None;
             }
 
-            let wired_limit_bytes = sysctl_u64(b"iogpu.wired_limit_mb\0").and_then(|limit_mb| {
+            let wired_limit_bytes = sysctl_u64(IOGPU_WIRED_LIMIT_MB_KEY).and_then(|limit_mb| {
                 if limit_mb == 0 || limit_mb > usize::MAX as u64 {
                     return None;
                 }
