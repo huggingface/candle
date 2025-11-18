@@ -86,6 +86,20 @@ impl Default for AllocationPolicy {
             const SYSTEM_RESERVE_FRACTION: usize = 4; // Keep at least 25% for the OS.
             const SYSTEM_RESERVE_MIN: usize = 2 * 1024 * 1024 * 1024; // 2 GiB floor.
 
+            let hw_total = sysctl_u64(b"hw.memsize\0").and_then(|bytes| {
+                if bytes == 0 || bytes > usize::MAX as u64 {
+                    None
+                } else {
+                    Some(bytes as usize)
+                }
+            })?;
+
+            let reserve = std::cmp::max(hw_total / SYSTEM_RESERVE_FRACTION, SYSTEM_RESERVE_MIN);
+            let hw_budget = hw_total.saturating_sub(reserve);
+            if hw_budget == 0 {
+                return None;
+            }
+
             let wired_limit_bytes = sysctl_u64(b"iogpu.wired_limit_mb\0").and_then(|limit_mb| {
                 if limit_mb == 0 || limit_mb > usize::MAX as u64 {
                     return None;
@@ -93,27 +107,12 @@ impl Default for AllocationPolicy {
                 (limit_mb as usize).checked_mul(MEBIBYTE)
             });
 
-            let hw_budget = sysctl_u64(b"hw.memsize\0").and_then(|bytes| {
-                if bytes > usize::MAX as u64 {
-                    return None;
-                }
-                let hw = bytes as usize;
-                // Reserve some memory for the OS / CPU workloads.
-                let reserve = std::cmp::max(hw / SYSTEM_RESERVE_FRACTION, SYSTEM_RESERVE_MIN);
-                let available = hw.saturating_sub(reserve);
-                if available > 0 {
-                    Some(available)
-                } else {
-                    None
-                }
-            });
+            let wired_clamped = wired_limit_bytes.map(|limit| std::cmp::min(limit, hw_total));
 
-            match (hw_budget, wired_limit_bytes) {
-                (Some(hw), Some(wired)) => Some(std::cmp::min(hw, wired)),
-                (Some(hw), None) => Some(hw),
-                (None, Some(wired)) => Some(wired),
-                (None, None) => None,
-            }
+            Some(match wired_clamped {
+                Some(wired) => std::cmp::min(wired, hw_budget),
+                None => hw_budget,
+            })
         }
 
         let pending_limit = parse_env_mebibytes("CANDLE_METAL_PENDING_LIMIT_MB")
