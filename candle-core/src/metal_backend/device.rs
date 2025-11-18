@@ -32,8 +32,9 @@ impl DeviceId {
 
 #[derive(Clone)]
 pub(crate) struct AllocationPolicy {
-    /// Total bytes we can allocate before forcing a sync to reclaim temporaries.
-    pending_limit_bytes: usize,
+    /// Maximum number of bytes we allow to be newly allocated since the last
+    /// synchronization point before forcing a sync to reclaim temporaries.
+    pending_allocation_bytes_limit: usize,
     /// Maximum bytes to keep cached for reuse.
     cache_limit_bytes: usize,
 }
@@ -116,7 +117,7 @@ impl Default for AllocationPolicy {
             .unwrap_or_else(|| std::cmp::max(pending_limit / 2, 64 * 1024 * 1024));
 
         crate::metal_backend::device::AllocationPolicy {
-            pending_limit_bytes: pending_limit,
+            pending_allocation_bytes_limit: pending_limit,
             cache_limit_bytes: cache_limit,
         }
     }
@@ -153,7 +154,9 @@ pub struct MetalDevice {
     pub(crate) kernels: Arc<Kernels>,
     /// Seed for random number generation.
     pub(crate) seed: Arc<Mutex<Buffer>>,
-    /// Bytes allocated since the last synchronization point.
+    /// Bytes newly allocated since the last GPU synchronization point. This is
+    /// compared against `allocation_policy.pending_allocation_bytes_limit` to
+    /// decide when to force a sync and reclaim temporaries.
     pub(crate) pending_allocation_bytes: Arc<AtomicUsize>,
     /// Allocation thresholds and cache budget.
     pub(crate) allocation_policy: AllocationPolicy,
@@ -375,7 +378,7 @@ impl MetalDevice {
             .pending_allocation_bytes
             .fetch_add(size, Ordering::AcqRel)
             .saturating_add(size);
-        if pending >= self.allocation_policy.pending_limit_bytes {
+        if pending >= self.allocation_policy.pending_allocation_bytes_limit {
             // Ensure the GPU processed the backlog so buffers can be reused.
             self.wait_until_completed()?;
             self.pending_allocation_bytes.store(0, Ordering::Release);
