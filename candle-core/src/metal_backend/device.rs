@@ -49,25 +49,56 @@ impl Default for AllocationPolicy {
                 .and_then(|value| value.trim().parse::<usize>().ok())
                 .map(|mb| mb * 1024 * 1024)
         }
-
-        fn system_memory_bytes() -> Option<usize> {
+        fn sysctl_u64(name: &[u8]) -> Option<u64> {
             use libc::c_void;
-            let mut value: u64 = 0;
-            let mut len = core::mem::size_of::<u64>();
-            let ret = unsafe {
-                libc::sysctlbyname(
-                    b"hw.memsize\0".as_ptr() as *const libc::c_char,
+            unsafe {
+                let mut len: usize = 0;
+                if libc::sysctlbyname(
+                    name.as_ptr() as *const libc::c_char,
+                    std::ptr::null_mut(),
+                    &mut len as *mut usize,
+                    std::ptr::null_mut(),
+                    0,
+                ) != 0
+                {
+                    return None;
+                }
+                if len == 0 || len > core::mem::size_of::<u64>() {
+                    return None;
+                }
+                let mut value: u64 = 0;
+                if libc::sysctlbyname(
+                    name.as_ptr() as *const libc::c_char,
                     &mut value as *mut u64 as *mut c_void,
                     &mut len as *mut usize,
                     std::ptr::null_mut(),
                     0,
-                )
-            };
-            if ret == 0 {
-                Some(value as usize)
-            } else {
-                None
+                ) != 0
+                {
+                    return None;
+                }
+                Some(value)
             }
+        }
+
+        fn system_memory_bytes() -> Option<usize> {
+            const MEBIBYTE: usize = 1024 * 1024;
+            if let Some(limit_mb) = sysctl_u64(b"iogpu.wired_limit_mb\0") {
+                if limit_mb <= usize::MAX as u64 {
+                    let limit_mb = limit_mb as usize;
+                    if let Some(limit_bytes) = limit_mb.checked_mul(MEBIBYTE) {
+                        return Some(limit_bytes);
+                    }
+                }
+            }
+
+            sysctl_u64(b"hw.memsize\0").and_then(|bytes| {
+                if bytes <= usize::MAX as u64 {
+                    Some(bytes as usize)
+                } else {
+                    None
+                }
+            })
         }
 
         let pending_limit = parse_env_mebibytes("CANDLE_METAL_PENDING_LIMIT_MB")
