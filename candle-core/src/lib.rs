@@ -90,6 +90,9 @@ mod variable;
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;
 
+#[cfg(feature = "metal")]
+pub mod metal_ext;
+
 pub use cpu_backend::{CpuStorage, CpuStorageRef};
 pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3, UgIOp1};
 pub use device::{Device, DeviceLocation, NdArray};
