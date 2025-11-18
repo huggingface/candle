@@ -1,9 +1,62 @@
 #include "cuda_utils.cuh"
 #include <cmath>
 #include <stdint.h>
+#include <limits>
 
 #define WARP_SIZE 32
 const int BLOCK_SIZE = 1024;
+
+// Helpers to initialize reduction identities for both floating-point and
+// integer types. For floats we keep using +/-INFINITY, while for integers
+// we use well-defined numeric_limits values instead of relying on casting
+// +/-INFINITY to an integer type (which is undefined behaviour and has been
+// observed to break on newer GPU architectures such as Blackwell).
+template <typename T>
+__device__ __forceinline__ T reduce_init_lowest() {
+  // Default implementation is used for floating-point types (__half,
+  // __nv_bfloat16, float, double). The conversion from -INFINITY (double)
+  // to these types is well-defined and produces -inf.
+  return -INFINITY;
+}
+
+template <typename T>
+__device__ __forceinline__ T reduce_init_highest() {
+  // Default implementation is used for floating-point types (__half,
+  // __nv_bfloat16, float, double). The conversion from INFINITY (double)
+  // to these types is well-defined and produces +inf.
+  return INFINITY;
+}
+
+// Integer specializations – use numeric_limits instead of +/-INFINITY.
+template <>
+__device__ __forceinline__ int64_t reduce_init_lowest<int64_t>() {
+  return INT64_MIN;
+}
+
+template <>
+__device__ __forceinline__ uint32_t reduce_init_lowest<uint32_t>() {
+  return 0u;
+}
+
+template <>
+__device__ __forceinline__ uint8_t reduce_init_lowest<uint8_t>() {
+  return 0u;
+}
+
+template <>
+__device__ __forceinline__ int64_t reduce_init_highest<int64_t>() {
+  return INT64_MAX;
+}
+
+template <>
+__device__ __forceinline__ uint32_t reduce_init_highest<uint32_t>() {
+  return UINT32_MAX;
+}
+
+template <>
+__device__ __forceinline__ uint8_t reduce_init_highest<uint8_t>() {
+  return UINT8_MAX;
+}
 
 // TODO: Maybe add some fast_sum_f16_f32 variant that not only accumulate in f32
 // but also expect a f32 output so that this can be used for normalization e.g.
@@ -102,21 +155,21 @@ __device__ void layernorm(const T * x, T * dst, const T * alpha, const T * beta,
 
     if (alpha == nullptr && beta == nullptr) {
       for (int col = tid; col < ncols; col += block_size) {
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std; 
+          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
           dst[row*ncols + col] = static_cast<T>(lhs);
       }
     }
     else if (alpha == nullptr && beta != nullptr) {
       for (int col = tid; col < ncols; col += block_size) {
           float b = static_cast<float>(beta[col]);
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std; 
+          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
           dst[row*ncols + col] = static_cast<T>(lhs + b);
       }
     }
     else if (alpha != nullptr && beta == nullptr) {
       for (int col = tid; col < ncols; col += block_size) {
           float a = static_cast<float>(alpha[col]);
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std; 
+          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
           dst[row*ncols + col] = static_cast<T>(lhs * a);
       }
     }
@@ -124,7 +177,7 @@ __device__ void layernorm(const T * x, T * dst, const T * alpha, const T * beta,
       for (int col = tid; col < ncols; col += block_size) {
           float a = static_cast<float>(alpha[col]);
           float b = static_cast<float>(beta[col]);
-          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std; 
+          float lhs = (static_cast<float>(x[row*ncols + col]) - mean) * inv_std;
           dst[row*ncols + col] = static_cast<T>(lhs * a + b);
       }
     }
@@ -301,7 +354,9 @@ fast_max(const size_t src_numel, const size_t el_to_sum_per_block,
   size_t tid = threadIdx.x;
   size_t dst_id = blockIdx.x;
 
-  shr[tid] = -INFINITY;
+  // Initialize with the lowest representable value for T so that the first
+  // comparison in the reduction always picks a real element.
+  shr[tid] = reduce_init_lowest<T>();
   // Elements summed in this block range from dst_id * el_to_sum_per_block
   // to (dst_id + 1) * el_to_sum_per_block.
   size_t start_idx = dst_id * el_to_sum_per_block;
@@ -339,7 +394,9 @@ fast_min(const size_t src_numel, const size_t el_to_sum_per_block,
   size_t tid = threadIdx.x;
   size_t dst_id = blockIdx.x;
 
-  shr[tid] = INFINITY;
+  // Initialize with the highest representable value for T so that the first
+  // comparison in the reduction always picks a real element.
+  shr[tid] = reduce_init_highest<T>();
   // Elements summed in this block range from dst_id * el_to_sum_per_block
   // to (dst_id + 1) * el_to_sum_per_block.
   size_t start_idx = dst_id * el_to_sum_per_block;
@@ -378,8 +435,9 @@ fast_argmin(const size_t src_numel, const size_t el_to_sum_per_block,
   size_t tid = threadIdx.x;
   size_t dst_id = blockIdx.x;
 
-  // Not sure how that works on uint32_t and uint8_t but it seems to do ok.
-  shr[tid] = INFINITY;
+  // For floating types this uses +inf; for integer types we use the largest
+  // representable value instead of casting INFINITY to an integer.
+  shr[tid] = reduce_init_highest<T>();
   shr_index[tid] = 0xFFFFFFFF;
   bool not_set = true;
   // Elements summed in this block range from dst_id * el_to_sum_per_block
@@ -427,7 +485,9 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
   size_t tid = threadIdx.x;
   size_t dst_id = blockIdx.x;
 
-  shr[tid] = -INFINITY;
+  // For floating types this uses -inf; for integer types we use the lowest
+  // representable value instead of casting -INFINITY to an integer.
+  shr[tid] = reduce_init_lowest<T>();
   shr_index[tid] = 0xFFFFFFFF;
   bool not_set = true;
   // Elements summed in this block range from dst_id * el_to_sum_per_block
