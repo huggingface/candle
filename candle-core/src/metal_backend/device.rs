@@ -234,7 +234,6 @@ impl MetalDevice {
         }
 
         let mut bytes_to_drop = cached_bytes - limit;
-        let mut empty_keys = Vec::new();
         for (size, subbuffers) in buffers.iter_mut() {
             if bytes_to_drop == 0 {
                 break;
@@ -250,12 +249,6 @@ impl MetalDevice {
                     true
                 }
             });
-            if subbuffers.is_empty() {
-                empty_keys.push(*size);
-            }
-        }
-        for key in empty_keys {
-            buffers.remove(&key);
         }
         Ok(())
     }
