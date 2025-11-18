@@ -32,6 +32,28 @@ impl QCudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    pub fn quantize_imatrix(
+        &mut self,
+        _src: &CudaStorage,
+        _imatrix_weights: &[f32],
+        _n_per_row: usize,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    pub fn quantize_imatrix_onto(
+        &mut self,
+        _src: &crate::CpuStorage,
+        _imatrix_weights: &[f32],
+        _n_per_row: usize,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    pub fn quantize_onto(&mut self, _src: &crate::CpuStorage) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     pub fn storage_size_in_bytes(&self) -> usize {
         0
     }
@@ -53,6 +75,10 @@ impl QCudaStorage {
         _: &CudaStorage,
         _: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    pub fn data(&self) -> Result<Vec<u8>> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 }

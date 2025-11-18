@@ -94,6 +94,18 @@ impl CudaDevice {
         self.stream.memcpy_dtod(src, dst).w()
     }
 
+    pub fn memcpy_dtoh<
+        T: cudarc::driver::DeviceRepr,
+        Src: cudarc::driver::DevicePtr<T>,
+        Dst: cudarc::driver::HostSlice<T>,
+    >(
+        &self,
+        src: &Src,
+        dst: &mut Dst,
+    ) -> Result<()> {
+        self.stream.memcpy_dtoh(src, dst).w()
+    }
+
     pub fn memcpy_stod<
         T: cudarc::driver::DeviceRepr,
         Src: cudarc::driver::HostSlice<T> + ?Sized,
