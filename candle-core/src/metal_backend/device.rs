@@ -50,7 +50,7 @@ impl Default for AllocationPolicy {
             std::env::var(var)
                 .ok()
                 .and_then(|value| value.trim().parse::<usize>().ok())
-                .map(|mb| mb * 1024 * 1024)
+                .and_then(|mb| mb.checked_mul(1024 * 1024))
         }
         fn sysctl_u64(name: &CStr) -> Option<u64> {
             use libc::c_void;
