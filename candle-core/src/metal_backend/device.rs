@@ -83,22 +83,37 @@ impl Default for AllocationPolicy {
 
         fn system_memory_bytes() -> Option<usize> {
             const MEBIBYTE: usize = 1024 * 1024;
-            if let Some(limit_mb) = sysctl_u64(b"iogpu.wired_limit_mb\0") {
-                if limit_mb <= usize::MAX as u64 {
-                    let limit_mb = limit_mb as usize;
-                    if let Some(limit_bytes) = limit_mb.checked_mul(MEBIBYTE) {
-                        return Some(limit_bytes);
-                    }
-                }
-            }
+            const SYSTEM_RESERVE_FRACTION: usize = 4; // Keep at least 25% for the OS.
+            const SYSTEM_RESERVE_MIN: usize = 2 * 1024 * 1024 * 1024; // 2 GiB floor.
 
-            sysctl_u64(b"hw.memsize\0").and_then(|bytes| {
-                if bytes <= usize::MAX as u64 {
-                    Some(bytes as usize)
+            let wired_limit_bytes = sysctl_u64(b"iogpu.wired_limit_mb\0").and_then(|limit_mb| {
+                if limit_mb == 0 || limit_mb > usize::MAX as u64 {
+                    return None;
+                }
+                (limit_mb as usize).checked_mul(MEBIBYTE)
+            });
+
+            let hw_budget = sysctl_u64(b"hw.memsize\0").and_then(|bytes| {
+                if bytes > usize::MAX as u64 {
+                    return None;
+                }
+                let hw = bytes as usize;
+                // Reserve some memory for the OS / CPU workloads.
+                let reserve = std::cmp::max(hw / SYSTEM_RESERVE_FRACTION, SYSTEM_RESERVE_MIN);
+                let available = hw.saturating_sub(reserve);
+                if available > 0 {
+                    Some(available)
                 } else {
                     None
                 }
-            })
+            });
+
+            match (hw_budget, wired_limit_bytes) {
+                (Some(hw), Some(wired)) => Some(std::cmp::min(hw, wired)),
+                (Some(hw), None) => Some(hw),
+                (None, Some(wired)) => Some(wired),
+                (None, None) => None,
+            }
         }
 
         let pending_limit = parse_env_mebibytes("CANDLE_METAL_PENDING_LIMIT_MB")
