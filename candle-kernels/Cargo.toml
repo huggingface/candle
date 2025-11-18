@@ -12,4 +12,4 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 
 [build-dependencies]
-bindgen_cuda = "0.1.1"
+bindgen_cuda = "0.1.5"
