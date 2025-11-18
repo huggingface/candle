@@ -44,6 +44,7 @@ impl Default for AllocationPolicy {
         const DEFAULT_PENDING: usize = 4 * 1024 * 1024 * 1024; // 4 GiB
         const MIN_PENDING: usize = 512 * 1024 * 1024; // 512 MiB
         const MAX_PENDING: usize = 12 * 1024 * 1024 * 1024; // 12 GiB
+        const MIN_CACHE_LIMIT: usize = 64 * 1024 * 1024; // 64 MiB
         const HW_MEMSIZE_KEY: &CStr = c"hw.memsize";
         const IOGPU_WIRED_LIMIT_MB_KEY: &CStr = c"iogpu.wired_limit_mb";
 
@@ -114,7 +115,7 @@ impl Default for AllocationPolicy {
             .unwrap_or(DEFAULT_PENDING);
 
         let cache_limit = parse_env_mebibytes("CANDLE_METAL_CACHE_LIMIT_MB")
-            .unwrap_or_else(|| std::cmp::max(pending_limit / 2, 64 * 1024 * 1024));
+            .unwrap_or_else(|| std::cmp::max(pending_limit / 2, MIN_CACHE_LIMIT));
 
         crate::metal_backend::device::AllocationPolicy {
             pending_allocation_bytes_limit: pending_limit,
