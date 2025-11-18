@@ -55,21 +55,8 @@ impl Default for AllocationPolicy {
         fn sysctl_u64(name: &CStr) -> Option<u64> {
             use libc::c_void;
             unsafe {
-                let mut len: usize = 0;
-                if libc::sysctlbyname(
-                    name.as_ptr(),
-                    std::ptr::null_mut(),
-                    &mut len as *mut usize,
-                    std::ptr::null_mut(),
-                    0,
-                ) != 0
-                {
-                    return None;
-                }
-                if len == 0 || len > core::mem::size_of::<u64>() {
-                    return None;
-                }
                 let mut value: u64 = 0;
+                let mut len = core::mem::size_of::<u64>();
                 if libc::sysctlbyname(
                     name.as_ptr(),
                     &mut value as *mut u64 as *mut c_void,
@@ -80,7 +67,11 @@ impl Default for AllocationPolicy {
                 {
                     return None;
                 }
-                Some(value)
+                if len == 0 {
+                    None
+                } else {
+                    Some(value)
+                }
             }
         }
 
