@@ -1,7 +1,7 @@
 #include "cuda_utils.cuh"
 #include <cmath>
 #include <stdint.h>
-#include <limits>
+#include <cuda/std/limits>
 
 #define WARP_SIZE 32
 const int BLOCK_SIZE = 1024;
@@ -30,32 +30,32 @@ __device__ __forceinline__ T reduce_init_highest() {
 // Integer specializations – use numeric_limits instead of +/-INFINITY.
 template <>
 __device__ __forceinline__ int64_t reduce_init_lowest<int64_t>() {
-  return INT64_MIN;
+  return ::cuda::std::numeric_limits<int64_t>::lowest();
 }
 
 template <>
 __device__ __forceinline__ uint32_t reduce_init_lowest<uint32_t>() {
-  return 0u;
+  return ::cuda::std::numeric_limits<uint32_t>::lowest();
 }
 
 template <>
 __device__ __forceinline__ uint8_t reduce_init_lowest<uint8_t>() {
-  return 0u;
+  return ::cuda::std::numeric_limits<uint8_t>::lowest();
 }
 
 template <>
 __device__ __forceinline__ int64_t reduce_init_highest<int64_t>() {
-  return INT64_MAX;
+  return ::cuda::std::numeric_limits<int64_t>::max();
 }
 
 template <>
 __device__ __forceinline__ uint32_t reduce_init_highest<uint32_t>() {
-  return UINT32_MAX;
+  return ::cuda::std::numeric_limits<uint32_t>::max();
 }
 
 template <>
 __device__ __forceinline__ uint8_t reduce_init_highest<uint8_t>() {
-  return UINT8_MAX;
+  return ::cuda::std::numeric_limits<uint8_t>::max();
 }
 
 // TODO: Maybe add some fast_sum_f16_f32 variant that not only accumulate in f32
