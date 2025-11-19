@@ -125,7 +125,7 @@ impl MetalDevice {
     }
 
     pub fn command_encoder(&self) -> Result<ComputeCommandEncoder> {
-        let mut commands = self.commands.write().map_err(MetalError::from)?;
+        let commands = self.commands.write().map_err(MetalError::from)?;
         let (flush, command_encoder) = commands.command_encoder().map_err(MetalError::from)?;
         if flush {
             self.drop_unused_buffers()?
@@ -134,7 +134,7 @@ impl MetalDevice {
     }
 
     pub fn blit_command_encoder(&self) -> Result<BlitCommandEncoder> {
-        let mut commands = self.commands.write().map_err(MetalError::from)?;
+        let commands = self.commands.write().map_err(MetalError::from)?;
         let (flush, command_encoder) = commands.blit_command_encoder().map_err(MetalError::from)?;
         if flush {
             self.drop_unused_buffers()?
@@ -143,7 +143,7 @@ impl MetalDevice {
     }
 
     pub fn wait_until_completed(&self) -> Result<()> {
-        let mut commands = self.commands.write().map_err(MetalError::from)?;
+        let commands = self.commands.write().map_err(MetalError::from)?;
         commands.wait_until_completed().map_err(MetalError::from)?;
         Ok(())
     }
