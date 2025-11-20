@@ -3,7 +3,7 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
+use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape, Error};
 use candle_metal_kernels::{
     metal::{Buffer, Commands, Device},
     BufferOffset, CallConvTranspose2dCfg, Kernels, RESOURCE_OPTIONS,
@@ -2079,7 +2079,17 @@ impl BackendDevice for MetalDevice {
     type Storage = MetalStorage;
 
     fn new(ordinal: usize) -> Result<Self> {
-        let device = Device::all().swap_remove(ordinal);
+        let mut devices = Device::all();
+        if devices.is_empty() {
+            return Err(Error::Msg("no Metal devices available".to_string()));
+        }
+        if ordinal >= devices.len() {
+            return Err(Error::Msg(format!(
+                "requested Metal device {ordinal} but only {} available",
+                devices.len()
+            )));
+        }
+        let device = devices.swap_remove(ordinal);
         let command_queue = device.new_command_queue().map_err(MetalError::from)?;
         let kernels = Arc::new(Kernels::new());
         let seed = Arc::new(Mutex::new(

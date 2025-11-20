@@ -3,7 +3,7 @@ use crate::metal::{
 };
 use crate::MetalKernelError;
 use objc2::{rc::Retained, runtime::ProtocolObject};
-use objc2_metal::{MTLCommandBufferStatus, MTLCommandQueue};
+use objc2_metal::{MTLCommandBufferStatus, MTLCommandQueue, MTLCommandBuffer};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -110,6 +110,30 @@ impl Commands {
 
     pub fn wait_until_completed(&self) -> Result<(), MetalKernelError> {
         self.flush_and_wait()
+    }
+
+    /// Run a closure with the current command buffer for the selected pool entry.
+    /// This participates in the same compute_per_buffer accounting and recycling as
+    /// encoder-based paths, so external encodes share the same commit cadence.
+    pub fn with_command_buffer<F, R>(&self, f: F) -> Result<R, MetalKernelError>
+    where
+        F: FnOnce(&ProtocolObject<dyn MTLCommandBuffer>) -> R,
+    {
+        let entry = self.select_entry()?;
+        let mut state = entry.state.lock()?;
+
+        let count = entry.compute_count.fetch_add(1, Ordering::Relaxed);
+        let flush = count >= self.compute_per_buffer;
+        if flush {
+            self.commit_swap_locked(&entry, &mut state, 1)?;
+        }
+
+        let cb = state.current.clone();
+        drop(state);
+
+        let out = f(cb.as_ref());
+        entry.semaphore.set_status(CommandStatus::Available);
+        Ok(out)
     }
 
     // Selects an entry from the pool using a two-phase strategy:

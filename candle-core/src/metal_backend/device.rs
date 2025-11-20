@@ -142,6 +142,16 @@ impl MetalDevice {
         Ok(command_encoder)
     }
 
+    /// Expose Candle's current command buffer to allow external encodes (e.g., MPSGraph)
+    /// to share the same scheduling/commit cadence as Candle's own kernels.
+    pub fn with_command_buffer<F, R>(&self, f: F) -> Result<R>
+    where
+        F: FnOnce(&objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>) -> R,
+    {
+        let commands = self.commands.write().map_err(MetalError::from)?;
+        Ok(commands.with_command_buffer(f).map_err(MetalError::from)?)
+    }
+
     pub fn wait_until_completed(&self) -> Result<()> {
         let commands = self.commands.write().map_err(MetalError::from)?;
         commands.wait_until_completed().map_err(MetalError::from)?;

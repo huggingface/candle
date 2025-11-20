@@ -16,6 +16,7 @@ candle-kernels = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
 objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
+objc2 = { version = "0.6.3", optional = true }
 cudarc = { workspace = true, optional = true }
 gemm = { workspace = true }
 half = { workspace = true }
@@ -52,6 +53,7 @@ nccl = ["cuda", "cudarc/nccl"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
 metal = [
+    "dep:objc2",
     "dep:objc2-metal",
     "dep:objc2-foundation",
     "dep:candle-metal-kernels",
