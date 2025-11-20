@@ -1,6 +1,5 @@
 use crate::metal::{Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipeline};
-use objc2_foundation::{NSOperatingSystemVersion, NSProcessInfo};
-use objc2_metal::MTLSize;
+use crate::MTLSize;
 use std::ffi::OsStr;
 use std::ops::Deref;
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
@@ -237,81 +236,6 @@ impl<'a, T> From<RwLockWriteGuard<'a, T>> for RwLockGuard<'a, T> {
     fn from(g: RwLockWriteGuard<'a, T>) -> Self {
         RwLockGuard::Write(g)
     }
-}
-
-pub(crate) struct OSVersion {
-    pub major: isize,
-    pub minor: isize,
-    pub patch: isize,
-}
-
-impl From<isize> for OSVersion {
-    fn from(major: isize) -> OSVersion {
-        OSVersion {
-            major,
-            minor: 0,
-            patch: 0,
-        }
-    }
-}
-
-impl From<(isize, isize)> for OSVersion {
-    fn from((major, minor): (isize, isize)) -> OSVersion {
-        OSVersion {
-            major,
-            minor,
-            patch: 0,
-        }
-    }
-}
-
-impl From<(isize, isize, isize)> for OSVersion {
-    fn from((major, minor, patch): (isize, isize, isize)) -> OSVersion {
-        OSVersion {
-            major,
-            minor,
-            patch,
-        }
-    }
-}
-
-impl From<OSVersion> for NSOperatingSystemVersion {
-    fn from(v: OSVersion) -> NSOperatingSystemVersion {
-        NSOperatingSystemVersion {
-            majorVersion: v.major,
-            minorVersion: v.minor,
-            patchVersion: v.patch,
-        }
-    }
-}
-
-// Checks if OS version is at least the provided (major, minor, patch) version
-pub(crate) fn os_version_at_least<V: Into<OSVersion>>(v: V) -> bool {
-    let v: OSVersion = v.into();
-    let info = NSProcessInfo::new();
-    info.isOperatingSystemAtLeastVersion(v.into())
-}
-
-// Poor man's Swift @available attribute
-#[macro_export]
-macro_rules! available {
-    (ios=$t:expr) => {
-        if cfg!(target_os = "ios") {
-            os_version_at_least($t)
-        } else {
-            true
-        }
-    };
-    (macos=$t:expr) => {
-        if cfg!(target_os = "macos") {
-            os_version_at_least($t)
-        } else {
-            true
-        }
-    };
-    ($i:ident=$e:expr, $($is:ident=$es:expr)*) => {{
-        (available!($i=$e)) && (available!($($is=$es),+))
-    }};
 }
 
 fn is_truthy(s: String) -> bool {

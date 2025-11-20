@@ -2,11 +2,12 @@ use crate::source::{
     AFFINE, BINARY, CAST, CONV, FILL, INDEXING, MLX_GEMM, MLX_SORT, QUANTIZED, RANDOM, REDUCE,
     SDPA, SORT, TERNARY, UNARY,
 };
-use crate::utils::{get_env_bool, os_version_at_least};
+use crate::utils::get_env_bool;
 use crate::{
-    available, ComputePipeline, ConstantValues, Device, Function, Library, MTLCompileOptions,
+    ComputePipeline, ConstantValues, Device, Function, Library, MTLCompileOptions,
     MTLMathFloatingPointFunctions, MTLMathMode, MetalKernelError, Source,
 };
+use objc2::available;
 use objc2::rc::Retained;
 use std::collections::HashMap;
 use std::sync::RwLock;
