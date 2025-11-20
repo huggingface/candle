@@ -6,7 +6,11 @@ use crate::{
     ComputePipeline, ConstantValues, Device, Function, Library, MTLCompileOptions, MTLMathMode,
     MetalKernelError, Source,
 };
+use objc2::rc::Retained;
+use objc2_foundation::{NSOperatingSystemVersion, NSProcessInfo};
 use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::str::FromStr;
 use std::sync::RwLock;
 
 #[derive(Debug, Clone)]
@@ -113,9 +117,7 @@ impl Kernels {
         } else {
             let lib = {
                 let source_content = self.get_library_source(source);
-                let compile_options = MTLCompileOptions::new();
-                //unsafe { compile_options.setEnableLogging(true) };
-                compile_options.setMathMode(MTLMathMode::Fast);
+                let compile_options = get_compile_options();
                 device
                     .new_library_with_source(source_content, Some(&compile_options))
                     .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
@@ -175,4 +177,37 @@ impl Kernels {
     ) -> Result<ComputePipeline, MetalKernelError> {
         self.load_pipeline_with_constants(device, source, name, None)
     }
+}
+
+// Checks if OS version is at least the provided (major, minor, patch) version
+fn os_version_at_least(major: isize, minor: isize, patch: isize) -> bool {
+    let v = NSOperatingSystemVersion {
+        majorVersion: major,
+        minorVersion: minor,
+        patchVersion: patch,
+    };
+    let info = NSProcessInfo::new();
+    info.isOperatingSystemAtLeastVersion(v)
+}
+
+fn get_env<K: AsRef<OsStr>, R: FromStr>(key: K) -> Option<R> {
+    std::env::var(key).map(|s| R::from_str(&s).ok()).ok()?
+}
+
+#[allow(deprecated)]
+fn get_compile_options() -> Retained<MTLCompileOptions> {
+    let compile_options = MTLCompileOptions::new();
+    //unsafe { compile_options.setEnableLogging(true) };
+
+    let fast_math_enabled: bool = get_env("CANDLE_METAL_ENABLE_FAST_MATH").unwrap_or(false);
+    if fast_math_enabled {
+        // TODO: ios
+        if os_version_at_least(15, 0, 0) {
+            compile_options.setMathMode(MTLMathMode::Fast);
+        } else {
+            // For older OS versions we use the old api
+            compile_options.setFastMathEnabled(true);
+        }
+    }
+    compile_options
 }
