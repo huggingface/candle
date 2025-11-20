@@ -347,7 +347,8 @@ where
             Err(error) => Err(Error::WrappedContext {
                 wrapped: Box::new(error),
                 context: context.to_string(),
-            }),
+            }
+            .bt()),
         }
     }
 
@@ -361,7 +362,8 @@ where
             Err(error) => Err(Error::WrappedContext {
                 wrapped: Box::new(error),
                 context: context().to_string(),
-            }),
+            }
+            .bt()),
         }
     }
 }
@@ -375,7 +377,7 @@ impl<T> Context<T, Infallible> for Option<T> {
         // backtrace.
         match self {
             Some(ok) => Ok(ok),
-            None => Err(Error::msg(context)),
+            None => Err(Error::msg(context).bt()),
         }
     }
 
@@ -385,8 +387,8 @@ impl<T> Context<T, Infallible> for Option<T> {
         F: FnOnce() -> C,
     {
         match self {
-            Some(ok) => Ok(ok),
-            None => Err(Error::msg(context())),
+            Some(v) => Ok(v),
+            None => Err(Error::UnwrapNone.context(context()).bt()),
         }
     }
 }

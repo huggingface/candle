@@ -65,6 +65,14 @@ pub const RESOURCE_OPTIONS: MTLResourceOptions =
 //| MTLResourceOptions::HazardTrackingModeUntracked.bits(),
 //);
 
+// Resource options used for `new_private_buffer`. This uses `private` where supported.
+#[cfg(target_os = "ios")]
+pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions =
+    objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModeShared.bits());
+#[cfg(not(target_os = "ios"))]
+pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions =
+    objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModePrivate.bits());
+
 impl std::fmt::Debug for MetalDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "MetalDevice({:?})", self.id)
@@ -179,7 +187,7 @@ impl MetalDevice {
         let size = element_count * dtype.size_in_bytes();
         let buffer = self
             .device
-            .new_buffer(size, RESOURCE_OPTIONS)
+            .new_buffer(size, PRIVATE_RESOURCE_OPTIONS)
             .map_err(MetalError::from)?;
         Ok(Arc::new(buffer))
     }
