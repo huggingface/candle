@@ -2,10 +2,13 @@ use crate::source::{
     AFFINE, BINARY, CAST, CONV, FILL, INDEXING, MLX_GEMM, MLX_SORT, QUANTIZED, RANDOM, REDUCE,
     SDPA, SORT, TERNARY, UNARY,
 };
+use crate::utils::get_env_bool;
 use crate::{
-    ComputePipeline, ConstantValues, Device, Function, Library, MTLCompileOptions, MTLMathMode,
-    MetalKernelError, Source,
+    ComputePipeline, ConstantValues, Device, Function, Library, MTLCompileOptions,
+    MTLMathFloatingPointFunctions, MTLMathMode, MetalKernelError, Source,
 };
+use objc2::available;
+use objc2::rc::Retained;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
@@ -113,9 +116,7 @@ impl Kernels {
         } else {
             let lib = {
                 let source_content = self.get_library_source(source);
-                let compile_options = MTLCompileOptions::new();
-                //unsafe { compile_options.setEnableLogging(true) };
-                compile_options.setMathMode(MTLMathMode::Fast);
+                let compile_options = get_compile_options();
                 device
                     .new_library_with_source(source_content, Some(&compile_options))
                     .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
@@ -175,4 +176,27 @@ impl Kernels {
     ) -> Result<ComputePipeline, MetalKernelError> {
         self.load_pipeline_with_constants(device, source, name, None)
     }
+}
+
+fn get_compile_options() -> Retained<MTLCompileOptions> {
+    let compile_options = MTLCompileOptions::new();
+    //unsafe { compile_options.setEnableLogging(true) };
+
+    let fast_math_enabled = get_env_bool("CANDLE_METAL_ENABLE_FAST_MATH", true);
+    // Ref availability:
+    // https://developer.apple.com/documentation/metal/mtlcompileoptions/mathmode
+    if available!(macos = 15, ios = 18) {
+        if fast_math_enabled {
+            compile_options.setMathMode(MTLMathMode::Fast);
+            compile_options.setMathFloatingPointFunctions(MTLMathFloatingPointFunctions::Fast);
+        } else {
+            compile_options.setMathMode(MTLMathMode::Relaxed);
+            compile_options.setMathFloatingPointFunctions(MTLMathFloatingPointFunctions::Precise);
+        }
+    } else {
+        // For older OS versions we use the old api
+        #[allow(deprecated)]
+        compile_options.setFastMathEnabled(fast_math_enabled);
+    }
+    compile_options
 }
