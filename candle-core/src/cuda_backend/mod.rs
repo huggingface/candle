@@ -1349,7 +1349,7 @@ impl BackendStorage for CudaStorage {
             S::F16(s) => (slice_ptr(s, src_o), "const_set_f16"),
             S::F32(s) => (slice_ptr(s, src_o), "const_set_f32"),
             S::F64(s) => (slice_ptr(s, src_o), "const_set_f64"),
-            S::F8E4M3(s) => (slice_ptr(s, src_o), "const_set_f8e4m3"),
+            S::F8E4M3(s) => (slice_ptr(s, src_o), "const_set_f8_e4m3"),
             S::F4(_) | S::F6E2M3(_) | S::F6E3M2(_) | S::F8E8M0(_) => {
                 return Err(CudaError::UnsupportedDtype {
                     dtype: self.dtype(),
