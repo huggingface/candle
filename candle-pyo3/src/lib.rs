@@ -1612,7 +1612,7 @@ fn candle(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_submodule(&nn)?;
     #[cfg(feature = "onnx")]
     {
-        let onnx = PyModule::new_bound(py, "onnx")?;
+        let onnx = PyModule::new(py, "onnx")?;
         candle_onnx_m(py, &onnx)?;
         m.add_submodule(&onnx)?;
     }
