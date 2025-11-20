@@ -628,4 +628,17 @@ mod tests {
         assert_eq!(bytes, b"x\0\0\0\0\0\0\0{\"t\":{\"dtype\":\"F32\",\"shape\":[2,2],\"data_offsets\":[0,16]},\"u\":{\"dtype\":\"F32\",\"shape\":[1,2],\"data_offsets\":[16,24]}}      \0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
         std::fs::remove_file("multi.safetensors").unwrap();
     }
+
+    #[test]
+    fn load_i8() {
+        let bytes = b"8\0\0\0\0\0\0\0{\"x\":{\"dtype\":\"I8\",\"shape\":[2],\"data_offsets\":[0,2]}}   \x01\x03";
+        std::fs::write("test_i8.safetensors", bytes).unwrap();
+        let weights = load("test_i8.safetensors", &Device::Cpu).unwrap();
+        let tensor = weights.get("x").unwrap();
+        assert_eq!(tensor.dims(), &[2]);
+        assert_eq!(tensor.dtype(), DType::I64);
+        let data: Vec<i64> = tensor.to_vec1().unwrap();
+        assert_eq!(data, vec![1, 3]);
+        std::fs::remove_file("test_i8.safetensors").unwrap();
+    }
 }

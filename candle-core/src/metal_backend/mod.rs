@@ -452,7 +452,7 @@ impl BackendStorage for MetalStorage {
                     let kernel_name = match dtype {
                         DType::F16 => contiguous_tiled::const_set::HALF,
                         DType::BF16 => contiguous_tiled::const_set::BFLOAT,
-                        _ => crate::bail!("internal bug in const_set"),
+                        _ => unreachable!(),
                     };
                     candle_metal_kernels::call_const_set_contiguous_tiled(
                         &device.device,
@@ -482,7 +482,7 @@ impl BackendStorage for MetalStorage {
                         | DType::F8E8M0
                         | DType::I16
                         | DType::I32 => {
-                            crate::bail!("unsupported const-set i32/i16/f6e2m3/f6e3m2/f4/f8e8m0")
+                            return Err(Error::UnsupportedDTypeForOp(dtype, "const-set").bt())
                         }
                     };
                     candle_metal_kernels::call_const_set_contiguous(
@@ -513,7 +513,7 @@ impl BackendStorage for MetalStorage {
                         | DType::F8E8M0
                         | DType::I16
                         | DType::I32 => {
-                            crate::bail!("unsupported const-set i32/i16/f6e2m3/f6e3m2/f4/f8e8m0")
+                            return Err(Error::UnsupportedDTypeForOp(dtype, "const-set").bt())
                         }
                     };
                     candle_metal_kernels::call_const_set_strided(

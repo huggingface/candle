@@ -1,4 +1,4 @@
-//! Tensor Opertion Enums and Traits
+//! Tensor Operation Enums and Traits
 //!
 #![allow(clippy::redundant_closure_call)]
 use crate::Tensor;
@@ -634,7 +634,7 @@ impl UnaryOpT for Erf {
     }
     #[inline(always)]
     fn f32(v: f32) -> f32 {
-        Self::f64(v as f64) as f32
+        crate::cpu::erf::erf_f32(v)
     }
     #[inline(always)]
     fn f64(v: f64) -> f64 {
