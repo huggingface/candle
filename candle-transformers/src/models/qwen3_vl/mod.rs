@@ -5,7 +5,7 @@ use candle_nn::VarBuilder;
 use text::Qwen3VLTextModel;
 use vision::Qwen3VLVisionModel;
 
-mod config;
+pub mod config;
 mod conv3d_temporal_2;
 mod text;
 mod vision;
