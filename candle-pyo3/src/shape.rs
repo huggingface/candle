@@ -5,21 +5,23 @@ use pyo3::prelude::*;
 /// Represents an absolute shape e.g. (1, 2, 3)
 pub struct PyShape(Vec<usize>);
 
-impl<'source> pyo3::FromPyObject<'source> for PyShape {
-    fn extract_bound(ob: &Bound<'source, PyAny>) -> PyResult<Self> {
-        if ob.is_none() {
+impl pyo3::FromPyObject<'_, '_> for PyShape {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
+        if obj.is_none() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "Shape cannot be None",
             ));
         }
 
-        let tuple = ob.downcast::<pyo3::types::PyTuple>()?;
+        let tuple = obj.cast::<pyo3::types::PyTuple>()?;
         if tuple.len() == 1 {
             let first_element = tuple.get_item(0)?;
-            let dims: Vec<usize> = pyo3::FromPyObject::extract_bound(&first_element)?;
+            let dims: Vec<usize> = first_element.extract()?;
             Ok(PyShape(dims))
         } else {
-            let dims: Vec<usize> = pyo3::FromPyObject::extract_bound(tuple)?;
+            let dims: Vec<usize> = tuple.extract()?;
             Ok(PyShape(dims))
         }
     }
@@ -35,20 +37,22 @@ impl From<PyShape> for ::candle::Shape {
 /// Represents a shape with a hole in it e.g. (1, -1, 3)
 pub struct PyShapeWithHole(Vec<isize>);
 
-impl<'source> pyo3::FromPyObject<'source> for PyShapeWithHole {
-    fn extract_bound(ob: &Bound<'source, PyAny>) -> PyResult<Self> {
-        if ob.is_none() {
+impl pyo3::FromPyObject<'_, '_> for PyShapeWithHole {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
+        if obj.is_none() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                 "Shape cannot be None",
             ));
         }
 
-        let tuple = ob.downcast::<pyo3::types::PyTuple>()?;
+        let tuple = obj.cast::<pyo3::types::PyTuple>()?;
         let dims: Vec<isize> = if tuple.len() == 1 {
             let first_element = tuple.get_item(0)?;
-            pyo3::FromPyObject::extract_bound(&first_element)?
+            first_element.extract()?
         } else {
-            pyo3::FromPyObject::extract_bound(tuple)?
+            tuple.extract()?
         };
 
         // Ensure we have only positive numbers and at most one "hole" (-1)

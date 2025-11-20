@@ -1,6 +1,5 @@
 # This example shows how the candle Python api can be used to replicate llama.cpp.
 import sys
-from typing import Dict, Tuple, Any
 import candle
 from candle.models.llama import QuantizedLlama
 from candle import utils
