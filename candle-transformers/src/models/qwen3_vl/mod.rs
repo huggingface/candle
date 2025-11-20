@@ -10,7 +10,7 @@ mod conv3d_temporal_2;
 mod text;
 mod vision;
 
-pub(crate) use config::Config;
+pub use config::Config;
 
 use crate::models::deepseek2::NonZeroOp;
 
