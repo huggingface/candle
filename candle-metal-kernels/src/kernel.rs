@@ -177,7 +177,6 @@ impl Kernels {
     }
 }
 
-#[allow(deprecated)]
 fn get_compile_options() -> Retained<MTLCompileOptions> {
     let compile_options = MTLCompileOptions::new();
     //unsafe { compile_options.setEnableLogging(true) };
@@ -195,6 +194,7 @@ fn get_compile_options() -> Retained<MTLCompileOptions> {
         }
     } else {
         // For older OS versions we use the old api
+        #[allow(deprecated)]
         compile_options.setFastMathEnabled(fast_math_enabled);
     }
     compile_options
