@@ -292,6 +292,7 @@ pub(crate) fn os_version_at_least<V: Into<OSVersion>>(v: V) -> bool {
     info.isOperatingSystemAtLeastVersion(v.into())
 }
 
+// Poor man's Swift @available attribute
 #[macro_export]
 macro_rules! available {
     (ios=$t:expr) => {
