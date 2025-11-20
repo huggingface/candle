@@ -19,7 +19,10 @@ use candle::quantized::gguf_file;
 use candle::quantized::QTensor;
 use candle::D;
 use candle::{DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{Embedding, Module};
+use candle_nn::{
+    kv_cache::{DefaultKvCache, KvCache},
+    Embedding, Module,
+};
 
 pub const MAX_SEQ_LEN: usize = 131072; // Gemma 3 supports 128K context window
 pub const DEFAULT_SLIDING_WINDOW_TYPE: usize = 6;
@@ -101,7 +104,7 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-struct LayerWeights {
+struct LayerWeights<C: KvCache> {
     // Attention components
     attention_wq: QMatMul,
     attention_wk: QMatMul,
@@ -133,14 +136,14 @@ struct LayerWeights {
     neg_inf: Tensor,
 
     // Cache
-    kv_cache: Option<(Tensor, Tensor)>,
+    kv_cache: C,
 
     // Tracing
     span_attn: tracing::Span,
     span_mlp: tracing::Span,
 }
 
-impl LayerWeights {
+impl<C: KvCache> LayerWeights<C> {
     fn mask(
         &self,
         b_sz: usize,
@@ -207,19 +210,7 @@ impl LayerWeights {
             .rotary_embedding
             .apply_rotary_emb_qkv(&q, &k, index_pos)?;
 
-        let (k, v) = match &self.kv_cache {
-            None => (k, v),
-            Some((k_cache, v_cache)) => {
-                if index_pos == 0 {
-                    (k, v)
-                } else {
-                    let k = Tensor::cat(&[k_cache, &k], 2)?; // concat on seq dim
-                    let v = Tensor::cat(&[v_cache, &v], 2)?;
-                    (k, v)
-                }
-            }
-        };
-        self.kv_cache = Some((k.clone(), v.clone())); // update cache
+        let (k, v) = self.kv_cache.append(&k, &v)?;
 
         // Repeat KV for GQA
         let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
@@ -247,17 +238,17 @@ impl LayerWeights {
 }
 
 #[derive(Debug, Clone)]
-pub struct ModelWeights {
+pub struct ModelWeights<C: KvCache = DefaultKvCache> {
     tok_embeddings: Embedding,
     embedding_length: usize,
-    layers: Vec<LayerWeights>,
+    layers: Vec<LayerWeights<C>>,
     norm: RmsNorm,
     output: QMatMul,
     span: tracing::Span,
     span_output: tracing::Span,
 }
 
-impl ModelWeights {
+impl<C: KvCache> ModelWeights<C> {
     pub fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
@@ -402,7 +393,7 @@ impl ModelWeights {
                 sliding_window_size,
                 rotary_embedding,
                 neg_inf: neg_inf.clone(),
-                kv_cache: None,
+                kv_cache: C::new(2, 512),
                 span_attn,
                 span_mlp,
             })
