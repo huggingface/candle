@@ -947,7 +947,7 @@ impl UnaryOpT for GeluErf {
     }
     #[inline(always)]
     fn f32(v: f32) -> f32 {
-        Self::f64(v as f64) as f32
+        (crate::cpu::erf::erf_f32(v * std::f32::consts::FRAC_1_SQRT_2) + 1.) * 0.5 * v
     }
     #[inline(always)]
     fn f64(v: f64) -> f64 {
@@ -975,7 +975,7 @@ impl UnaryOpT for GeluErf {
     }
     #[inline(always)]
     fn f8e4m3(v: f8e4m3) -> f8e4m3 {
-        f8e4m3::from_f64(Self::f64(v.to_f64()))
+        f8e4m3::from_f32(Self::f32(v.to_f32()))
     }
 }
 
