@@ -56,10 +56,20 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macOS-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - run: cargo clippy --workspace --tests --examples --benches -- -D warnings
+
+      - name: clippy metal
+        if: runner.os == 'macOS'
+        run: cargo clippy --features=metal --workspace --tests --examples --benches -- -D warnings
+
+      - name: clippy
+        if: runner.os != 'macOS'
+        run: cargo clippy --workspace --tests --examples --benches -- -D warnings
