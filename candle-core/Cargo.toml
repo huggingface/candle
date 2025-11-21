@@ -14,6 +14,8 @@ accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
 candle-kernels = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
+candle-macros = { workspace = true }
+candle-macros-types = { workspace = true }
 objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
@@ -46,7 +48,7 @@ criterion = { workspace = true }
 
 [features]
 default = []
-cuda = ["cudarc", "dep:candle-kernels", "dep:ug-cuda", "float8/cuda"]
+cuda = ["cudarc", "dep:candle-kernels", "dep:ug-cuda", "float8/cuda", "candle-macros-types/cuda"]
 cudnn = ["cuda", "cudarc/cudnn"]
 nccl = ["cuda", "cudarc/nccl"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
@@ -56,6 +58,7 @@ metal = [
     "dep:objc2-foundation",
     "dep:candle-metal-kernels",
     "dep:ug-metal",
+    "candle-macros-types/metal",
 ]
 
 [[bench]]

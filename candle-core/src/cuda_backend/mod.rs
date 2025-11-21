@@ -2,7 +2,7 @@
 //!
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{builder_arg as barg, CpuStorage, DType, Layout, Result, WithDType};
+use crate::{builder_arg as barg, CpuStorage, DType, Layout, QuantizedDType, Result, WithDType};
 pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
@@ -72,6 +72,7 @@ pub enum CudaStorageSlice {
     F32(CudaSlice<f32>),
     F64(CudaSlice<f64>),
     F8E4M3(CudaSlice<F8E4M3>),
+    Quantized(QuantizedDType, CudaSlice<u8>),
 }
 
 struct Clone;
@@ -1308,6 +1309,7 @@ impl BackendStorage for CudaStorage {
             CudaStorageSlice::F32(_) => DType::F32,
             CudaStorageSlice::F64(_) => DType::F64,
             CudaStorageSlice::F8E4M3(_) => DType::F8E4M3,
+            CudaStorageSlice::Quantized(id, _) => DType::Quantized(id),
         }
     }
 
@@ -1332,6 +1334,10 @@ impl BackendStorage for CudaStorage {
             S::F32(s) => (slice_ptr(s, src_o), "const_set_f32"),
             S::F64(s) => (slice_ptr(s, src_o), "const_set_f64"),
             S::F8E4M3(s) => (slice_ptr(s, src_o), "const_set_f8_e4m3"),
+            // TODO: handle quantized const_set
+            S::Quantized(id, _) => {
+                crate::bail!("const_set not implemented for quantized dtype id {:?}", id)
+            }
         };
 
         let func = dev.get_or_load_func(kernel_name, &kernels::FILL)?;
@@ -1347,6 +1353,26 @@ impl BackendStorage for CudaStorage {
     }
 
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
+        // Handle dequantization: if source is quantized and target is not, dequantize first
+        if let CudaStorageSlice::Quantized(q_dtype, data) = &self.slice {
+            if !matches!(dtype, DType::Quantized(_)) {
+                // Dequantize to F32, then cast to target dtype if needed
+                let el = layout.shape().elem_count();
+                let f32_slice = q_dtype.dequantize_cuda(data, self.device(), Some(el))?;
+                let f32_storage = Self {
+                    slice: CudaStorageSlice::F32(f32_slice),
+                    device: self.device().clone(),
+                };
+
+                // If target is F32, we're done. Otherwise, cast to target dtype.
+                if dtype == DType::F32 {
+                    return Ok(f32_storage);
+                } else {
+                    return f32_storage.to_dtype(layout, dtype);
+                }
+            }
+        }
+
         let shape = layout.shape();
         let dims = shape.dims();
         let el = shape.elem_count();
@@ -1366,101 +1392,59 @@ impl BackendStorage for CudaStorage {
             CudaStorageSlice::F32(inp) => slice_ptr(inp, start_o),
             CudaStorageSlice::F64(inp) => slice_ptr(inp, start_o),
             CudaStorageSlice::F8E4M3(inp) => slice_ptr(inp, start_o),
+            CudaStorageSlice::Quantized(_, inp) => slice_ptr(inp, start_o),
         };
         let inp = &inp;
 
-        let kernel_name = format!("cast_{}_{}", self.dtype().as_str(), dtype.as_str());
-        let func = dev.get_or_load_func(&kernel_name, &kernels::CAST)?;
+        // Helper macro to reduce duplication in cast operations
+        macro_rules! cast_kernel {
+            ($dtype_variant:ident, $rust_type:ty) => {{
+                let kernel_name = format!("cast_{}_{}", self.dtype().as_str(), dtype.as_str());
+                let func = dev.get_or_load_func(&kernel_name, &kernels::CAST)?;
+
+                let out = unsafe { dev.alloc::<$rust_type>(el)? };
+                let mut builder = func.builder();
+                barg!(builder, el);
+                barg!(builder, dims.len());
+                ds.builder_arg(&mut builder);
+                barg!(builder, *inp);
+                builder.arg(&out);
+                unsafe { builder.launch(cfg) }.w()?;
+                CudaStorageSlice::$dtype_variant(out)
+            }};
+        }
+
         let slice = match dtype {
-            DType::U8 => {
-                let out = unsafe { dev.alloc::<u8>(el)? };
-                let mut builder = func.builder();
-                barg!(builder, el);
-                barg!(builder, dims.len());
-                ds.builder_arg(&mut builder);
-                barg!(builder, *inp);
-                builder.arg(&out);
-                unsafe { builder.launch(cfg) }.w()?;
-                CudaStorageSlice::U8(out)
-            }
-            DType::U32 => {
-                let out = unsafe { dev.alloc::<u32>(el)? };
-                let mut builder = func.builder();
-                barg!(builder, el);
-                barg!(builder, dims.len());
-                ds.builder_arg(&mut builder);
-                barg!(builder, *inp);
-                builder.arg(&out);
-                unsafe { builder.launch(cfg) }.w()?;
-                CudaStorageSlice::U32(out)
-            }
-            DType::I64 => {
-                let out = unsafe { dev.alloc::<i64>(el)? };
-                let mut builder = func.builder();
-                barg!(builder, el);
-                barg!(builder, dims.len());
-                ds.builder_arg(&mut builder);
-                barg!(builder, *inp);
-                builder.arg(&out);
-                unsafe { builder.launch(cfg) }.w()?;
-                CudaStorageSlice::I64(out)
-            }
-            DType::BF16 => {
-                let out = unsafe { dev.alloc::<bf16>(el)? };
-                let mut builder = func.builder();
-                barg!(builder, el);
-                barg!(builder, dims.len());
-                ds.builder_arg(&mut builder);
-                barg!(builder, *inp);
-                builder.arg(&out);
-                unsafe { builder.launch(cfg) }.w()?;
-                CudaStorageSlice::BF16(out)
-            }
-            DType::F16 => {
-                let out = unsafe { dev.alloc::<f16>(el)? };
-                let mut builder = func.builder();
-                barg!(builder, el);
-                barg!(builder, dims.len());
-                ds.builder_arg(&mut builder);
-                barg!(builder, *inp);
-                builder.arg(&out);
-                unsafe { builder.launch(cfg) }.w()?;
-                CudaStorageSlice::F16(out)
-            }
-            DType::F32 => {
-                let out = unsafe { dev.alloc::<f32>(el)? };
-                let mut builder = func.builder();
-                barg!(builder, el);
-                barg!(builder, dims.len());
-                ds.builder_arg(&mut builder);
-                barg!(builder, *inp);
-                builder.arg(&out);
-                unsafe { builder.launch(cfg) }.w()?;
-                CudaStorageSlice::F32(out)
-            }
-            DType::F64 => {
-                let out = unsafe { dev.alloc::<f64>(el)? };
-                let mut builder = func.builder();
-                barg!(builder, el);
-                barg!(builder, dims.len());
-                ds.builder_arg(&mut builder);
-                barg!(builder, *inp);
-                builder.arg(&out);
-                unsafe { builder.launch(cfg) }.w()?;
-                CudaStorageSlice::F64(out)
-            }
-            DType::F8E4M3 => {
-                let out: CudaSlice<F8E4M3> = unsafe { dev.alloc::<F8E4M3>(el) }?;
+            DType::U8 => cast_kernel!(U8, u8),
+            DType::U32 => cast_kernel!(U32, u32),
+            DType::I64 => cast_kernel!(I64, i64),
+            DType::BF16 => cast_kernel!(BF16, bf16),
+            DType::F16 => cast_kernel!(F16, f16),
+            DType::F32 => cast_kernel!(F32, f32),
+            DType::F64 => cast_kernel!(F64, f64),
+            DType::F8E4M3 => cast_kernel!(F8E4M3, F8E4M3),
+            DType::Quantized(q_dtype) => {
+                // To quantize, we need F32 input
+                // First cast to F32 if not already, then call quantize_cuda
+                let f32_slice = if self.dtype() == DType::F32 {
+                    // Already F32, can use directly
+                    match &self.slice {
+                        CudaStorageSlice::F32(data) => data.clone(),
+                        _ => unreachable!("dtype is F32 but slice is not"),
+                    }
+                } else {
+                    // Need to cast to F32 first
+                    let f32_storage = self.to_dtype(layout, DType::F32)?;
+                    match f32_storage.slice {
+                        CudaStorageSlice::F32(data) => data,
+                        _ => unreachable!("cast to F32 should return F32 slice"),
+                    }
+                };
 
-                let mut builder = func.builder();
-                barg!(builder, el);
-                barg!(builder, dims.len());
-                ds.builder_arg(&mut builder);
-                barg!(builder, *inp);
-                builder.arg(&out);
-                unsafe { builder.launch(cfg) }.w()?;
+                // Now quantize the F32 data using the QuantizedDType method
+                let quantized_data = q_dtype.quantize_cuda(&f32_slice, dev)?;
 
-                CudaStorageSlice::F8E4M3(out)
+                CudaStorageSlice::Quantized(q_dtype, quantized_data)
             }
         };
         Ok(Self {
@@ -1549,6 +1533,10 @@ impl BackendStorage for CudaStorage {
             CudaStorageSlice::F8E4M3(slice) => {
                 let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
                 Ok(CpuStorage::F8E4M3(cpu_storage))
+            }
+            CudaStorageSlice::Quantized(id, slice) => {
+                let cpu_storage = slice.stream().memcpy_dtov(slice).w()?;
+                Ok(CpuStorage::Quantized(*id, cpu_storage))
             }
         }
     }
@@ -1972,6 +1960,12 @@ impl BackendStorage for CudaStorage {
         let elem_count = b * m * n;
         let dev = &self.device;
         let slice = match (&self.slice, &rhs.slice) {
+            (CudaStorageSlice::F32(lhs), CudaStorageSlice::Quantized(qdtype, rhs)) => {
+                let lhs_shape = lhs_l.shape().dims();
+                let rhs_shape = rhs_l.shape().dims();
+                let res = qdtype.matmul_cuda(lhs, lhs_shape, rhs, rhs_shape, dev)?;
+                CudaStorageSlice::F32(res)
+            }
             (CudaStorageSlice::BF16(lhs), CudaStorageSlice::BF16(rhs)) => {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
                 let rhs = &rhs.slice(rhs_l.start_offset()..);

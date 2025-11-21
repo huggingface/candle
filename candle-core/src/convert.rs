@@ -145,6 +145,10 @@ impl Tensor {
                     f.write_u8(v.to_bits())?
                 }
             }
+            DType::Quantized(_) => {
+                // TODO: Implement write_bytes for quantized types
+                crate::bail!("write_bytes not supported for quantized types")
+            }
         }
         Ok(())
     }

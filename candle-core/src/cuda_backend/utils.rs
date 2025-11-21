@@ -25,6 +25,11 @@ pub trait Map1 {
             S::F32(s) => S::F32(self.f(s, d, l)?),
             S::F64(s) => S::F64(self.f(s, d, l)?),
             S::F8E4M3(s) => S::F8E4M3(self.f(s, d, l)?),
+            S::Quantized(id, s) => {
+                let m_elements = l.shape().elem_count();
+                let dequantized = id.dequantize_cuda(s, d, Some(m_elements))?;
+                S::F32(self.f(&dequantized, d, l)?)
+            }
         };
         Ok(out)
     }
@@ -148,6 +153,11 @@ pub trait Map1Any {
             S::F32(s) => self.f(s, d, l, S::F32)?,
             S::F64(s) => self.f(s, d, l, S::F64)?,
             S::F8E4M3(s) => self.f(s, d, l, S::F8E4M3)?,
+            S::Quantized(id, s) => {
+                let m_elements = l.shape().elem_count();
+                let dequantized = id.dequantize_cuda(s, d, Some(m_elements))?;
+                self.f(&dequantized, d, l, S::F32)?
+            }
         };
         Ok(out)
     }

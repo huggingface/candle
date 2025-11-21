@@ -347,6 +347,10 @@ impl BackendDevice for CudaDevice {
                 let data = self.alloc_zeros::<F8E4M3>(elem_count)?;
                 CudaStorageSlice::F8E4M3(data)
             }
+            DType::Quantized(qdtype) => {
+                let unquantized = self.alloc_zeros::<f32>(elem_count)?;
+                CudaStorageSlice::Quantized(qdtype, qdtype.quantize_cuda(&unquantized, &self)?)
+            }
         };
         Ok(CudaStorage {
             slice,
@@ -360,13 +364,17 @@ impl BackendDevice for CudaDevice {
         let slice = match dtype {
             // TODO: Add support for F16 and BF16 though this is likely to require some upstream
             // cudarc changes.
-            DType::U8 | DType::U32 | DType::I64 | DType::F16 | DType::BF16 | DType::F8E4M3 => {
-                Err(CudaError::UnsupportedDtype {
-                    dtype,
-                    op: "rand_uniform",
-                })
-                .w()?
-            }
+            DType::U8
+            | DType::U32
+            | DType::I64
+            | DType::F16
+            | DType::BF16
+            | DType::F8E4M3
+            | DType::Quantized(_) => Err(CudaError::UnsupportedDtype {
+                dtype,
+                op: "rand_uniform",
+            })
+            .w()?,
             DType::F32 => {
                 let mut data = unsafe { self.alloc::<f32>(elem_count)? };
                 curand.0.fill_with_uniform(&mut data).w()?;
@@ -404,13 +412,17 @@ impl BackendDevice for CudaDevice {
             elem_count
         };
         let slice = match dtype {
-            DType::U8 | DType::U32 | DType::I64 | DType::F16 | DType::BF16 | DType::F8E4M3 => {
-                Err(CudaError::UnsupportedDtype {
-                    dtype,
-                    op: "rand_normal",
-                })
-                .w()?
-            }
+            DType::U8
+            | DType::U32
+            | DType::I64
+            | DType::F16
+            | DType::BF16
+            | DType::F8E4M3
+            | DType::Quantized(_) => Err(CudaError::UnsupportedDtype {
+                dtype,
+                op: "rand_normal",
+            })
+            .w()?,
             DType::F32 => {
                 let mut data = unsafe { self.alloc::<f32>(elem_count_round)? };
                 curand
@@ -466,6 +478,10 @@ impl BackendDevice for CudaDevice {
                 let data = self.alloc::<F8E4M3>(elem_count)?;
                 CudaStorageSlice::F8E4M3(data)
             }
+            DType::Quantized(qdtype) => {
+                let unquantized = self.alloc::<u8>(qdtype.storage_size_in_bytes(elem_count))?;
+                CudaStorageSlice::Quantized(qdtype, unquantized)
+            }
         };
         Ok(CudaStorage {
             slice,
@@ -506,6 +522,10 @@ impl BackendDevice for CudaDevice {
             CpuStorageRef::F8E4M3(storage) => {
                 let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::F8E4M3(data)
+            }
+            CpuStorageRef::Quantized(id, storage) => {
+                let data = self.memcpy_stod(storage)?;
+                CudaStorageSlice::Quantized(id, data)
             }
         };
         Ok(CudaStorage {
@@ -548,6 +568,10 @@ impl BackendDevice for CudaDevice {
                 let data = self.memcpy_stod(storage)?;
                 CudaStorageSlice::F8E4M3(data)
             }
+            CpuStorage::Quantized(id, storage) => {
+                let data = self.memcpy_stod(storage)?;
+                CudaStorageSlice::Quantized(*id, data)
+            }
         };
         Ok(CudaStorage {
             slice,
@@ -589,6 +613,10 @@ impl BackendDevice for CudaDevice {
                 let data = self.memcpy_stod(&storage)?;
                 CudaStorageSlice::F8E4M3(data)
             }
+            CpuStorage::Quantized(id, storage) => {
+                let data = self.memcpy_stod(&storage)?;
+                CudaStorageSlice::Quantized(id, data)
+            }
         };
         Ok(CudaStorage {
             slice,
@@ -599,5 +627,38 @@ impl BackendDevice for CudaDevice {
     fn synchronize(&self) -> Result<()> {
         self.stream.synchronize().map_err(crate::Error::wrap)?;
         Ok(())
+    }
+}
+
+// Implement CudaStorageDevice trait for quantized type macros
+impl candle_macros_types::CudaStorageDevice for CudaDevice {
+    fn alloc_zeros<T: cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits>(
+        &self,
+        len: usize,
+    ) -> std::result::Result<cudarc::driver::CudaSlice<T>, Box<dyn std::error::Error + Send + Sync>>
+    {
+        self.alloc_zeros(len)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+// Also implement for &CudaDevice so it can be used with references
+impl candle_macros_types::CudaStorageDevice for &CudaDevice {
+    fn alloc_zeros<T: cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits>(
+        &self,
+        len: usize,
+    ) -> std::result::Result<cudarc::driver::CudaSlice<T>, Box<dyn std::error::Error + Send + Sync>>
+    {
+        (*self)
+            .alloc_zeros(len)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        *self
     }
 }

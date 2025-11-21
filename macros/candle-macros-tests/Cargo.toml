@@ -1,0 +1,16 @@
+[package]
+name = "candle-macros-tests"
+version.workspace = true
+edition.workspace = true
+description = "Integration tests for candle-macros with optional backend dependencies"
+publish = false
+
+[dependencies]
+candle-macros = { workspace = true }
+candle-macros-types = { workspace = true }
+cudarc = { workspace = true, optional = true }
+
+[features]
+default = []
+cuda = ["candle-macros-types/cuda", "dep:cudarc"]
+metal = ["candle-macros-types/metal"]

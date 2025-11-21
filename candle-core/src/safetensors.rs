@@ -28,6 +28,8 @@ impl From<DType> for st::Dtype {
             DType::F32 => st::Dtype::F32,
             DType::F64 => st::Dtype::F64,
             DType::F8E4M3 => st::Dtype::F8_E4M3,
+            // TODO: For now we just dump quantized types as u8.
+            DType::Quantized(_) => st::Dtype::U8,
         }
     }
 }
@@ -207,6 +209,10 @@ impl Tensor {
             DType::F32 => convert_slice::<f32>(data, shape, device),
             DType::F64 => convert_slice::<f64>(data, shape, device),
             DType::F8E4M3 => convert_slice::<F8E4M3>(data, shape, device),
+            DType::Quantized(_) => {
+                // TODO: Support quantized types
+                crate::bail!("safetensors does not support quantized types")
+            }
         }
     }
 }
@@ -248,6 +254,10 @@ fn convert_back(tensor: &Tensor) -> Result<Vec<u8>> {
         DType::F32 => Ok(convert_back_::<f32>(tensor.to_vec1()?)),
         DType::F64 => Ok(convert_back_::<f64>(tensor.to_vec1()?)),
         DType::F8E4M3 => Ok(convert_back_::<F8E4M3>(tensor.to_vec1()?)),
+        DType::Quantized(_) => {
+            // TODO: Support quantized types
+            crate::bail!("safetensors does not support quantized types")
+        }
     }
 }
 

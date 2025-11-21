@@ -9,6 +9,7 @@ pub mod avx;
 mod dummy_cuda;
 mod dummy_metal;
 pub mod ggml_file;
+pub mod ggml_wrapper;
 pub mod gguf_file;
 pub mod imatrix_file;
 pub mod k_quants;

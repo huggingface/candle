@@ -63,6 +63,17 @@ impl std::fmt::Debug for Tensor {
             DType::F32 => self.fmt_dt::<f32>(f),
             DType::F64 => self.fmt_dt::<f64>(f),
             DType::F8E4M3 => self.fmt_dt::<F8E4M3>(f),
+            DType::Quantized(_) => {
+                // Dequantize to f32 for display
+                match self.to_dtype(DType::F32) {
+                    Ok(f32_tensor) => f32_tensor.fmt_dt::<f32>(f),
+                    Err(_) => write!(
+                        f,
+                        "Quantized Tensor[dtype={}; error converting to f32]",
+                        self.dtype().as_str()
+                    ),
+                }
+            }
         }
     }
 }
@@ -505,6 +516,29 @@ impl std::fmt::Display for Tensor {
                     let max_w = tf.max_width(&to_display);
                     tf.fmt_tensor(self, 1, max_w, summarize, &po, f)?;
                     writeln!(f)?;
+                }
+            }
+            DType::Quantized(_) => {
+                // Dequantize and display as f32
+                match self.to_dtype(DType::F32) {
+                    Ok(f32_tensor) => {
+                        let to_display_f32 = if summarize {
+                            match get_summarized_data(&f32_tensor, po.edge_items) {
+                                Ok(v) => v,
+                                Err(err) => return write!(f, "{err:?}"),
+                            }
+                        } else {
+                            f32_tensor.clone()
+                        };
+                        if let Ok(tf) = FloatFormatter::<f32>::new(&to_display_f32, &po) {
+                            let max_w = tf.max_width(&to_display_f32);
+                            tf.fmt_tensor(&f32_tensor, 1, max_w, summarize, &po, f)?;
+                            writeln!(f)?;
+                        }
+                    }
+                    Err(err) => {
+                        return write!(f, "Quantized Tensor[error: {err:?}]");
+                    }
                 }
             }
         };
