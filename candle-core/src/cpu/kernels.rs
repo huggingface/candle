@@ -151,6 +151,28 @@ impl VecOps for u32 {
         <Self as Ord>::max(self, other)
     }
 }
+impl VecOps for i16 {
+    #[inline(always)]
+    fn min(self, other: Self) -> Self {
+        <Self as Ord>::min(self, other)
+    }
+
+    #[inline(always)]
+    fn max(self, other: Self) -> Self {
+        <Self as Ord>::max(self, other)
+    }
+}
+impl VecOps for i32 {
+    #[inline(always)]
+    fn min(self, other: Self) -> Self {
+        <Self as Ord>::min(self, other)
+    }
+
+    #[inline(always)]
+    fn max(self, other: Self) -> Self {
+        <Self as Ord>::max(self, other)
+    }
+}
 impl VecOps for i64 {
     #[inline(always)]
     fn min(self, other: Self) -> Self {
@@ -160,6 +182,18 @@ impl VecOps for i64 {
     #[inline(always)]
     fn max(self, other: Self) -> Self {
         <Self as Ord>::max(self, other)
+    }
+}
+
+impl VecOps for float8::F8E4M3 {
+    #[inline(always)]
+    fn min(self, other: Self) -> Self {
+        Self::min(self, other)
+    }
+
+    #[inline(always)]
+    fn max(self, other: Self) -> Self {
+        Self::max(self, other)
     }
 }
 
