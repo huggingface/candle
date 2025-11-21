@@ -21,11 +21,11 @@ override CONSTV_4 : bool = true;
 #define op_matmul_input2_stride_b   op_meta[6]
 #define op_matmul_input2_offset     op_meta[7]
 
-#define op_matmul_input1_stride_k   select(CONSTV_0, 1u, op_meta[8])
-#define op_matmul_input1_stride_m   select(CONSTV_1, 1u, op_meta[9]) 
+#define op_matmul_input1_stride_k   select(op_meta[8], 1u,CONSTV_0)
+#define op_matmul_input1_stride_m   select(op_meta[9], 1u,CONSTV_1) 
 
-#define op_matmul_input2_stride_n   select(CONSTV_2, 1u, op_meta[10])
-#define op_matmul_input2_stride_k   select(CONSTV_3, 1u, op_meta[11])
+#define op_matmul_input2_stride_n   select(op_meta[10], 1u,CONSTV_2)
+#define op_matmul_input2_stride_k   select(op_meta[11], 1u,CONSTV_3)
 
 #define op_matmul_gx_offset     op_meta[12]
 #define op_matmul_gy_offset     op_meta[13]
@@ -44,13 +44,13 @@ fn matmul1(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let output_size_of_one_batch = select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u); 
+    let output_size_of_one_batch = select(0u, op_matmul_m * op_matmul_n,op_matmul_use_batch); 
 
     let input1_offset = op_matmul_input1_offset;
     let input2_offset = op_matmul_input2_offset;
 
-    let input1_stride_b = select(op_matmul_use_batch, op_matmul_input1_stride_b, 0u); 
-    let input2_stride_b = select(op_matmul_use_batch, op_matmul_input2_stride_b, 0u); 
+    let input1_stride_b = select(0u, op_matmul_input1_stride_b,op_matmul_use_batch); 
+    let input2_stride_b = select(0u, op_matmul_input2_stride_b,op_matmul_use_batch); 
     
     let m_input1_offset = input1_offset + op_matmul_input1_stride_m * y + b * input1_stride_b;
     let m_input2_offset = input2_offset + op_matmul_input2_stride_n * x + b * input2_stride_b;
@@ -87,13 +87,13 @@ fn matmul1_16(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let output_size_of_one_batch = select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u); 
+    let output_size_of_one_batch = select(0u, op_matmul_m * op_matmul_n,op_matmul_use_batch); 
 
     let input1_offset = op_matmul_input1_offset;
     let input2_offset = op_matmul_input2_offset;
 
-    let input1_stride_b = select(op_matmul_use_batch, op_matmul_input1_stride_b, 0u); 
-    let input2_stride_b = select(op_matmul_use_batch, op_matmul_input2_stride_b, 0u); 
+    let input1_stride_b = select(0u, op_matmul_input1_stride_b,op_matmul_use_batch); 
+    let input2_stride_b = select(0u, op_matmul_input2_stride_b,op_matmul_use_batch); 
     
     let m_input1_offset = (input1_offset + op_matmul_input1_stride_m * y + b * input1_stride_b)/4;
     let m_input2_offset = (input2_offset + op_matmul_input2_stride_n * x + b * input2_stride_b)/4;
@@ -125,13 +125,13 @@ fn matmul7(@builtin(workgroup_id) group_id: vec3<u32>, @builtin(local_invocation
 
     let batch = group_id.z;
 
-    let output_size_of_one_batch = select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u); 
+    let output_size_of_one_batch = select(0u, op_matmul_m * op_matmul_n,op_matmul_use_batch); 
 
     let input1_offset = op_matmul_input1_offset;
     let input2_offset = op_matmul_input2_offset;
     
-    let input1_stride_b = select(op_matmul_use_batch, op_matmul_input1_stride_b, 0u); 
-    let input2_stride_b = select(op_matmul_use_batch, op_matmul_input2_stride_b, 0u); 
+    let input1_stride_b = select(0u, op_matmul_input1_stride_b,op_matmul_use_batch); 
+    let input2_stride_b = select(0u, op_matmul_input2_stride_b,op_matmul_use_batch); 
 
     let m_input1_offset = input1_offset + op_matmul_input1_stride_m * gy + batch * input1_stride_b;
     let m_input2_offset = input2_offset + op_matmul_input2_stride_n * gx + batch * input2_stride_b;

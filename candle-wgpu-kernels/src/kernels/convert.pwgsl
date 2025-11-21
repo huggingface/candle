@@ -62,10 +62,10 @@ fn convert_u32_to_u8(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    // let x1 = select(0, v_input1[convert_start_offset + id_source + 0], id_source + 0 < convert_size);
-    // let x2 = select(0, v_input1[convert_start_offset + id_source + 1], id_source + 1 < convert_size);
-    // let x3 = select(0, v_input1[convert_start_offset + id_source + 2], id_source + 2 < convert_size);
-    // let x4 = select(0, v_input1[convert_start_offset + id_source + 3], id_source + 3 < convert_size);
+    // let x1 = select(id_source + 0 < convert_size, v_input1[convert_start_offset + id_source + 0],0);
+    // let x2 = select(id_source + 1 < convert_size, v_input1[convert_start_offset + id_source + 1],0);
+    // let x3 = select(id_source + 2 < convert_size, v_input1[convert_start_offset + id_source + 2],0);
+    // let x4 = select(id_source + 3 < convert_size, v_input1[convert_start_offset + id_source + 3],0);
 
     var x1 : u32 = 0;
     var x2 : u32 = 0;

@@ -21,8 +21,8 @@ fn transpose_batched(
     @builtin(workgroup_id) workgroup_id: vec3<u32>,
 ) {
     // Get the batch index from the z-dimension of the global ID
-    let batch = select(op_transpose_use_batch, global_id.z, 0u);
-    let input_offset = select(op_transpose_input_offset_is_zero, 0u, op_transpose_input_offset);
+    let batch = select(0u, global_id.z,op_transpose_use_batch);
+    let input_offset = select(op_transpose_input_offset, 0u,op_transpose_input_offset_is_zero);
 
     // Compute global indices for the input matrix within the batch
     let x = workgroup_id.x * TILE_DIM + local_id.x;

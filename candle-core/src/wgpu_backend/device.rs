@@ -344,23 +344,23 @@ impl WgpuDevice {
         let map2 = crate::wgpu::debug_info::calulate_measurment(&info);
         crate::wgpu::debug_info::save_list(
             &map2,
-            &format!("{folder}wgpu_{name}_test_{version}_b.json"),
+            &format!("{folder}wgpu_{name}_test_{version}_measurements.json"),
         )
         .unwrap();
 
         let info: Vec<crate::wgpu::debug_info::ShaderInfo> = self.get_pipeline_info().unwrap();
         crate::wgpu::debug_info::save_list(
             &info,
-            &format!("{folder}wgpu_{name}_test_{version}_c.json"),
+            &format!("{folder}wgpu_{name}_test_{version}_shaders.json"),
         )
         .unwrap();
 
         let (pipelines, consts) = self.get_used_pipelines();
         std::fs::write(
-            format!("{folder}wgpu_{name}_test_{version}_d.json"),
+            format!("{folder}wgpu_{name}_test_{version}_used_pipelines.json"),
             pipelines,
         )?;
-        std::fs::write(format!("{folder}wgpu_{name}_test_{version}_e.json"), consts)?;
+        std::fs::write(format!("{folder}wgpu_{name}_test_{version}_used_consts.json"), consts)?;
         Ok(())
     }
 
@@ -524,11 +524,11 @@ impl WgpuDevice {
             .map(|(k, v)| {
                 let pipelines = &v.pipelines;
                 let s = debug_info::ShaderInfo {
-                    name: format!("{:?}", k).to_owned(),
+                    name: shaders.loader_cache.get_shader_name(*k),
                     pipelines: pipelines
                         .iter()
                         .map(|(pk, _)| debug_info::PipelineInfo {
-                            name: format!("{:?}", pk.0).to_owned(),
+                            name: shaders.loader_cache.get_entry_point(pk.0).to_owned(),
                             consts: queue.id_to_const_array[pk.1].iter()
                                 .map(|(s, x)| (s.to_string(), *x))
                                 .collect(),

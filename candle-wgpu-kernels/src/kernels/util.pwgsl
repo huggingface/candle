@@ -165,25 +165,6 @@ fn float_to_half(x: f32) -> u32 {
     return u32(sign | normalized | denormalized | saturated);
 }
 
-
-fn select(d : bool, value : u32, other : u32) -> u32{
-    if d{
-        return value;
-    }
-    else{
-        return other;
-    }
-}
-
-fn selectf32(d : bool, value : f32, other : f32) -> f32{
-    if d{
-        return value;
-    }
-    else{
-        return other;
-    }
-}
-
 override CONST_DIMS1 : u32 = 1u;
 override CONST_IS_CONTIGUOUS1 : bool = true;
 override CONST_IS_STARTOFFSET_ZERO1 : bool = true;
@@ -197,8 +178,8 @@ override CONST_IS_CONTIGUOUS3 : bool = true;
 override CONST_IS_STARTOFFSET_ZERO3 : bool = true;
 
 fn get_index(input_offset : u32, index : u32, dims : u32, is_contiguous : bool, is_const_start_offset_zero : bool) -> MatrixIndex{
-    let start_offset = select(is_const_start_offset_zero, 0u, op_meta[input_offset]);
-    let start_shape_offset = input_offset + select(is_const_start_offset_zero, 0u, 1u);
+    let start_offset = select(op_meta[input_offset], 0u,is_const_start_offset_zero);
+    let start_shape_offset = input_offset + select(1u, 0u,is_const_start_offset_zero);
 
     if is_contiguous {
         let length = op_meta[start_shape_offset];
@@ -241,7 +222,7 @@ fn get_index3(input_offset : u32, index : u32) -> MatrixIndex{
 }
 
 fn get_size(dims : u32, is_contiguous : bool, is_const_start_offset_zero : bool) -> u32{
-    let start_shape_size = select(is_const_start_offset_zero, 0u, 1u);
+    let start_shape_size = select(1u, 0u,is_const_start_offset_zero);
     if is_contiguous{ 
         return start_shape_size + 1u;
     }

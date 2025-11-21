@@ -27,11 +27,11 @@ override CONSTV_5 : u32 = 0u;
 #define op_matmul_is_input2_stride_n_one CONSTV_2
 #define op_matmul_is_input2_stride_k_one CONSTV_3
 
-#define op_matmul_input1_stride_k   select(op_matmul_is_input1_stride_k_one, 1u, op_meta[8])
-#define op_matmul_input1_stride_m   select(op_matmul_is_input1_stride_m_one, 1u, op_meta[9]) 
+#define op_matmul_input1_stride_k   select(op_meta[8], 1u,op_matmul_is_input1_stride_k_one)
+#define op_matmul_input1_stride_m   select(op_meta[9], 1u,op_matmul_is_input1_stride_m_one) 
 
-#define op_matmul_input2_stride_n   select(op_matmul_is_input2_stride_n_one, 1u, op_meta[10])
-#define op_matmul_input2_stride_k   select(op_matmul_is_input2_stride_k_one, 1u, op_meta[11])
+#define op_matmul_input2_stride_n   select(op_meta[10], 1u,op_matmul_is_input2_stride_n_one)
+#define op_matmul_input2_stride_k   select(op_meta[11], 1u,op_matmul_is_input2_stride_k_one)
 
 
 #ifndef RTSM
@@ -206,8 +206,8 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
     let gx = TSN*group_id.x + lx;
     let gy = TSM*group_id.y + ly;
 
-    let input1_stride_b = select(op_matmul_use_batch, op_matmul_input1_stride_b, 0u); 
-    let input2_stride_b = select(op_matmul_use_batch, op_matmul_input2_stride_b, 0u); 
+    let input1_stride_b = select(0u, op_matmul_input1_stride_b,op_matmul_use_batch); 
+    let input2_stride_b = select(0u, op_matmul_input2_stride_b,op_matmul_use_batch); 
 
     let m_input1_offset = (op_matmul_input1_offset + op_matmul_input1_stride_m * TSM * group_id.y + group_id.z * input1_stride_b);
     let m_input2_offset = (op_matmul_input2_offset + op_matmul_input2_stride_n * TSN * group_id.x + group_id.z * input2_stride_b);
@@ -345,14 +345,14 @@ fn generic_sgemm(group_id: vec3<u32>, local_id: vec3<u32>) {
         workgroupBarrier();
     }
    
-    let dest_index = group_id.z * select(op_matmul_use_batch, op_matmul_m * op_matmul_n, 0u) + gy * op_matmul_n + gx;
+    let dest_index = group_id.z * select(0u, op_matmul_m * op_matmul_n,op_matmul_use_batch) + gy * op_matmul_n + gx;
     if IsOutputPadded{
         // let is_in_gy = gy < op_matmul_m;
         // let is_in_gx = gx < op_matmul_n;
         // let is_output_pixel = is_in_gy && is_in_gx;
 
-        // let wcount_x = select(is_in_gx, min(op_matmul_n - gx, WPTN), 0u);
-        // let wcount_y = select(is_in_gy, min(op_matmul_m - gy, WPTM), 0u);
+        // let wcount_x = select(WPTN, min(op_matmul_n - gx,is_in_gx), 0u);
+        // let wcount_y = select(WPTM, min(op_matmul_m - gy,is_in_gy), 0u);
         // if(is_output_pixel){
         //     if (wcount_y == WPTM && wcount_x == WPTN){
         //         for (var wm=0u; wm<WPTM; wm++) {

@@ -20,7 +20,7 @@ override USE_Z : bool = false;
 @workgroup_size(64,1,1)
 fn softmax(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let tid = global_id.x;
-    let output_index = global_id.y + select(USE_Z, global_id.z * 65535, 0u);
+    let output_index = global_id.y + select(0u, global_id.z * 65535,USE_Z);
     
     //Start Index of the Elements to Reduce
     let start_index = output_index * op_softmax_length;

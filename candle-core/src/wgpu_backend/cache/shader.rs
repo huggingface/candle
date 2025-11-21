@@ -12,7 +12,7 @@ pub struct ShaderModuleComputePipelines {
 
 #[derive(Debug)]
 pub(crate) struct ShaderCache {
-    loader_cache: candle_wgpu_kernels::ShaderLoaderCache,
+    pub(crate) loader_cache: candle_wgpu_kernels::ShaderLoaderCache,
     pub(crate) shaders: HashMap<candle_wgpu_kernels::ShaderIndex, ShaderModuleComputePipelines>,
 }
 

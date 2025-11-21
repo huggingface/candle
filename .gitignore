@@ -49,5 +49,8 @@ bria.wav
 
 #generated wgpu shader files
 **/generated/*.pwgsl_generated_*.wgsl
-wgpu_*_test_*_[a,b,c,d,e].json
+wgpu_*_test_*_measurements.json
+wgpu_*_test_*_shaders.json
+wgpu_*_test_*_used_consts.json
+wgpu_*_test_*_used_pipelines.json
 wgpu_loader_indices.toml

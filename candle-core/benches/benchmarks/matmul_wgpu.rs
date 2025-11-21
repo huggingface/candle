@@ -6,7 +6,8 @@ use candle_core::{DType, Device, Tensor, D};
 #[cfg(feature = "wgpu")]
 use candle_core::wgpu::MatmulAlgorithm;
 
-use criterion::{black_box, criterion_group, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, BenchmarkId, Criterion, Throughput};
+use std::hint::black_box;
 
 fn run(a: &Tensor, b: &Tensor) {
     a.matmul(b).unwrap();

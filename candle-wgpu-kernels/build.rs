@@ -3,6 +3,7 @@ use std::{env, fs};
 use std::path::{Path, PathBuf};
 
 const SHORTEN_NORMAL_VARIABLES : bool = false;
+const SHORTEN_NORMAL_FUNCTIONS : bool = false;
 const SHORTEN_GLOBAL_FUNCTIONS : bool = false;
 const SHORTEN_OVERRIDES : bool = false;
 const REMOVE_UNUSED : bool = true;
@@ -109,11 +110,11 @@ fn main() {
         
 
         let global_functions = shader_info.global_functions;
-        shader_info.global_functions = HashMap::new();
+        shader_info.global_functions = Vec::new();
         shader_info.global_function_counter = 1;
 
         if !global_functions.is_empty(){//no compute functions
-            let functions : Vec<String> = global_functions.keys().map(|key| to_upper_camel_case(key)).collect();
+            let functions : Vec<String> = global_functions.iter().map(|(key, _)| to_upper_camel_case(key)).collect();
 
             let functions_match : Vec<String> = global_functions.iter().map(|(key, value)| format!("Functions::{} => \"{}\"", to_upper_camel_case(key), value)).collect();
             
@@ -1057,17 +1058,28 @@ mod shader_loader{
     pub mod shader_shortener{
         use std::collections::{HashMap, HashSet};
 
-        use super::{shader_tokeniser::{match_function_block, match_until_char, match_variable, match_whitespace, Token, Tokenizer}, SHORTEN_GLOBAL_FUNCTIONS, SHORTEN_NORMAL_VARIABLES, SHORTEN_OVERRIDES};
+        use super::{shader_tokeniser::{match_function_block, match_until_char, match_variable, match_whitespace, Token, Tokenizer}, SHORTEN_GLOBAL_FUNCTIONS, SHORTEN_NORMAL_FUNCTIONS, SHORTEN_NORMAL_VARIABLES, SHORTEN_OVERRIDES};
         pub struct ShaderInfo{
-            pub global_functions : HashMap<String, String>,
+            pub global_functions : Vec<(String, String)>,
             pub global_overrides : HashMap<String, String>,
             pub global_function_counter : usize,
             pub global_overrides_counter : usize,
         }
 
         impl ShaderInfo{
+            pub fn contains_function(&self, name: &str) -> bool{
+                for (k, _v) in &self.global_functions{
+                    if k == name{
+                        return true;
+                    }
+                }
+                false
+            }
+        }
+
+        impl ShaderInfo{
             pub fn new() -> ShaderInfo{
-                ShaderInfo{ global_functions: HashMap::new(), global_overrides: HashMap::new(), global_function_counter: 1, global_overrides_counter: 1 }
+                ShaderInfo{ global_functions: Vec::new(), global_overrides: HashMap::new(), global_function_counter: 1, global_overrides_counter: 1 }
             }
 
             pub fn shorten_variable_names(&mut self, shader_code: &str) -> String {
@@ -1108,8 +1120,8 @@ mod shader_loader{
                                 if is_compute_fn{
 
                                     let short_name;
-                                    if self.global_functions.contains_key(&var_name){
-                                        short_name = self.global_functions.get(&var_name).unwrap().to_string();
+                                    if self.contains_function(&var_name){
+                                        short_name = self.global_functions.iter().find(|(k, _)| k == &var_name).unwrap().1.to_string();
                                     }
                                     else{
                                         if SHORTEN_GLOBAL_FUNCTIONS{
@@ -1121,17 +1133,22 @@ mod shader_loader{
                                         else{
                                             short_name = var_name.clone();
                                         }
-                                        self.global_functions.insert(var_name.to_string(), short_name.to_string());          
+                                        self.global_functions.push((var_name.to_string(), short_name.to_string()));          
                                     }
                                     result.push_str(&short_name);
                                     is_compute_fn = false;
                                 }
                                 else{
-                                    let short_name = functions.entry(var_name).or_insert_with(||
+                                    let short_name = functions.entry(var_name.to_string()).or_insert_with(||
                                         {
-                                            let (name, new_counter ) = generate_short_name(var_counter);
-                                            var_counter = new_counter;
-                                            name
+                                            if SHORTEN_NORMAL_FUNCTIONS{
+                                                let (name, new_counter ) = generate_short_name(var_counter);
+                                                var_counter = new_counter;
+                                                name
+                                            }
+                                            else{
+                                                var_name.to_string()
+                                            }
                                         });
                                         
                                     result.push_str(short_name);
@@ -1306,6 +1323,16 @@ mod shader_loader{
                                     result.push_str(&current_item);
                                 }
                                 is_compute_fn = false;
+                                current_item = String::new();
+                            }
+                            else if w == "struct"{ //we are a struct
+                                current_item.push_str(w);
+                                let var_name = match_variable(&mut tokens, &mut current_item);
+                                current_item.push_str(&var_name);
+                                match_function_block(&mut tokens, &mut current_item);
+                                if used_variables.contains(&var_name){
+                                    result.push_str(&current_item);
+                                }
                                 current_item = String::new();
                             }
                             else{

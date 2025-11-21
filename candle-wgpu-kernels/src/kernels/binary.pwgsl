@@ -51,13 +51,13 @@ override USE_Z : bool = false;
 #define op_binary_contiguous_both_is_input1_offset_zero     CONSTV_1
 #define op_binary_contiguous_both_is_input2_offset_zero     CONSTV_2
 
-#define op_binary_contiguous_both_input1_offset             select(op_binary_contiguous_both_is_input1_offset_zero, 0u, op_meta[1])
-#define op_binary_contiguous_both_input2_offset             select(op_binary_contiguous_both_is_input2_offset_zero, 0u, op_meta[2])
+#define op_binary_contiguous_both_input1_offset             select(op_meta[1], 0u,op_binary_contiguous_both_is_input1_offset_zero)
+#define op_binary_contiguous_both_input2_offset             select(op_meta[2], 0u,op_binary_contiguous_both_is_input2_offset_zero)
 
 @compute
 @workgroup_size(64,1,1)
 fn binary_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
 
     let input2_layout = op_binary_input1_layout + get_size1();
 
@@ -72,7 +72,7 @@ fn binary_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>
 @compute
 @workgroup_size(64,1,1)
 fn binary_buffer_from_buffer_contiguous_both(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
     if (id >= op_binary_contiguous_both_input1_length){
         return;
     }
@@ -82,7 +82,7 @@ fn binary_buffer_from_buffer_contiguous_both(@builtin(global_invocation_id) glob
 @compute
 @workgroup_size(64,1,1)
 fn binary_buffer_inplace1_contiguous_both(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
     if (id >= op_binary_contiguous_both_input1_length){
         return;
     }
@@ -93,7 +93,7 @@ fn binary_buffer_inplace1_contiguous_both(@builtin(global_invocation_id) global_
 @compute
 @workgroup_size(64,1,1)
 fn binary_buffer_inplace2_contiguous_both(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
     if (id >= op_binary_contiguous_both_input1_length){
         return;
     }

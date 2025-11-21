@@ -13,7 +13,7 @@ override CONSTV_3 : bool = true;
 #define op_copy_2d_input1_stride1    op_meta[2]
 #define op_copy_2d_dest_stride1      op_meta[3]
 #define op_copy_2d_dest_offset       op_meta[4]
-#define op_copy_2d_input1_offset    select(op_copy_2d_is_input1_offset_zero, 0u, op_meta[5])
+#define op_copy_2d_input1_offset    select(op_meta[5], 0u,op_copy_2d_is_input1_offset_zero)
 
 
 
@@ -29,7 +29,7 @@ override USE_Z : bool = false;
 @compute
 @workgroup_size(64,1,1)
 fn copy_strided(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
     let pos1 = get_index1(op_copy_strided_input1_layout, id);
     if(pos1.is_valid){
         let x = v_input1[pos1.id];
@@ -44,10 +44,10 @@ fn copy_strided(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute
 @workgroup_size(64,1,1)
 fn copy(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
 
-    let dest_offset = select(op_copy_is_dest_offset_zero, 0u, op_copy_dest_offset);
-    let src_offset = select(op_copy_is_src_offset_zero, 0u, op_copy_src_offset);
+    let dest_offset = select(op_copy_dest_offset, 0u,op_copy_is_dest_offset_zero);
+    let src_offset = select(op_copy_src_offset, 0u,op_copy_is_src_offset_zero);
 
     if(id < op_copy_copy_size){
         v_dest[dest_offset + id] = v_input1[src_offset + id];
@@ -57,10 +57,10 @@ fn copy(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute
 @workgroup_size(64,1,1)
 fn copy_4(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x + select(USE_Z, global_id.y * 65535 * 64, 0u);
+    let id = global_id.x + select(0u, global_id.y * 65535 * 64,USE_Z);
 
-    let dest_offset = select(op_copy_is_dest_offset_zero, 0u, op_copy_dest_offset);
-    let src_offset = select(op_copy_is_src_offset_zero, 0u, op_copy_src_offset);
+    let dest_offset = select(op_copy_dest_offset, 0u,op_copy_is_dest_offset_zero);
+    let src_offset = select(op_copy_src_offset, 0u,op_copy_is_src_offset_zero);
 
     if(id < op_copy_copy_size){
         v_dest_4[dest_offset + id] = v_input1_4[src_offset + id];
@@ -70,7 +70,7 @@ fn copy_4(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute
 @workgroup_size(16,16,1)
 fn copy2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let i1 = global_id.x + select(USE_Z, global_id.z * 65535 * 16, 0u);
+    let i1 = global_id.x + select(0u, global_id.z * 65535 * 16,USE_Z);
     let i2 = global_id.y;
 
     if (i1 >= op_copy_2d_d1){
@@ -82,7 +82,7 @@ fn copy2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let dest_stride = op_copy_2d_dest_stride1;
     let input1_stride = op_copy_2d_input1_stride1;
 
-    let dest_offset = select(op_copy_2d_is_dest_offset_zero, 0u, op_copy_2d_dest_offset);
+    let dest_offset = select(op_copy_2d_dest_offset, 0u,op_copy_2d_is_dest_offset_zero);
 
     v_dest[dest_offset + dest_stride * i1 + i2] = v_input1[op_copy_2d_input1_offset + input1_stride * i1 + i2];
 }
@@ -91,7 +91,7 @@ fn copy2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @workgroup_size(16,16,1)
 fn copy2d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let i1 = global_id.y;
-    let i2 = global_id.x + select(USE_Z, global_id.z * 65535 * 16, 0u);
+    let i2 = global_id.x + select(0u, global_id.z * 65535 * 16,USE_Z);
 
     if(i1 >= op_copy_2d_d1){
         return;
@@ -103,7 +103,7 @@ fn copy2d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     let dest_stride = op_copy_2d_dest_stride1;
     let input1_stride = op_copy_2d_input1_stride1;
-    let dest_offset = select(op_copy_2d_is_dest_offset_zero, 0u, op_copy_2d_dest_offset);
+    let dest_offset = select(op_copy_2d_dest_offset, 0u,op_copy_2d_is_dest_offset_zero);
     v_dest[dest_offset + dest_stride * i1 + i2] = v_input1[op_copy_2d_input1_offset + input1_stride * i1 + i2];
 }
 
@@ -133,12 +133,12 @@ override CONSTV_6 : bool = true;
 #define op_copy_3d_input_stride2    op_meta[6]
 #define op_copy_3d_input_stride3    op_meta[7]
 
-#define op_copy_3d_input1_offset    select(op_copy_3d_is_input1_offset_zero, 0u, op_meta[8])
+#define op_copy_3d_input1_offset    select(op_meta[8], 0u,op_copy_3d_is_input1_offset_zero)
 
 #define op_copy_3d_size_d1          op_meta[8]
 #define op_copy_3d_size_d2          op_meta[9]
 
-#define op_copy_3d_padded_input1_offset    select(op_copy_3d_is_input1_offset_zero, 0u, op_meta[10])
+#define op_copy_3d_padded_input1_offset    select(op_meta[10], 0u,op_copy_3d_is_input1_offset_zero)
 
 @compute
 @workgroup_size(16,16,1)
@@ -153,13 +153,13 @@ fn copy3d(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let dest_stride1 = select(op_copy_3d_is_dest_stride1, op_copy_3d_dest_stride1, 1u);
-    let dest_stride2 = select(op_copy_3d_is_dest_stride2, op_copy_3d_dest_stride2, 1u);
-    let dest_stride3 = select(op_copy_3d_is_dest_stride3, op_copy_3d_dest_stride3, 1u);
+    let dest_stride1 = select(1u, op_copy_3d_dest_stride1,op_copy_3d_is_dest_stride1);
+    let dest_stride2 = select(1u, op_copy_3d_dest_stride2,op_copy_3d_is_dest_stride2);
+    let dest_stride3 = select(1u, op_copy_3d_dest_stride3,op_copy_3d_is_dest_stride3);
 
-    let input_stride1 = select(op_copy_3d_is_input_stride1, op_copy_3d_input_stride1, 1u);
-    let input_stride2 = select(op_copy_3d_is_input_stride2, op_copy_3d_input_stride2, 1u);
-    let input_stride3 = select(op_copy_3d_is_input_stride3, op_copy_3d_input_stride3, 1u);
+    let input_stride1 = select(1u, op_copy_3d_input_stride1,op_copy_3d_is_input_stride1);
+    let input_stride2 = select(1u, op_copy_3d_input_stride2,op_copy_3d_is_input_stride2);
+    let input_stride3 = select(1u, op_copy_3d_input_stride3,op_copy_3d_is_input_stride3);
 
 
     v_dest[d1 * dest_stride1 + d2 * dest_stride2 + d3 * dest_stride3] = v_input1[op_copy_3d_input1_offset + d1 * input_stride1 + d2 * input_stride2 + d3 * input_stride3];
@@ -172,13 +172,13 @@ fn copy3d_padded(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let d2 = global_id.y;
     let d3 = global_id.z; //batch
 
-    let dest_stride1 = select(op_copy_3d_is_dest_stride1, op_copy_3d_dest_stride1, 1u);
-    let dest_stride2 = select(op_copy_3d_is_dest_stride2, op_copy_3d_dest_stride2, 1u);
-    let dest_stride3 = select(op_copy_3d_is_dest_stride3, op_copy_3d_dest_stride3, 1u);
+    let dest_stride1 = select(1u, op_copy_3d_dest_stride1,op_copy_3d_is_dest_stride1);
+    let dest_stride2 = select(1u, op_copy_3d_dest_stride2,op_copy_3d_is_dest_stride2);
+    let dest_stride3 = select(1u, op_copy_3d_dest_stride3,op_copy_3d_is_dest_stride3);
 
-    let input_stride1 = select(op_copy_3d_is_input_stride1, op_copy_3d_input_stride1, 1u);
-    let input_stride2 = select(op_copy_3d_is_input_stride2, op_copy_3d_input_stride2, 1u);
-    let input_stride3 = select(op_copy_3d_is_input_stride3, op_copy_3d_input_stride3, 1u);
+    let input_stride1 = select(1u, op_copy_3d_input_stride1,op_copy_3d_is_input_stride1);
+    let input_stride2 = select(1u, op_copy_3d_input_stride2,op_copy_3d_is_input_stride2);
+    let input_stride3 = select(1u, op_copy_3d_input_stride3,op_copy_3d_is_input_stride3);
 
     if(d1 >= op_copy_3d_size_d1){
         return;
@@ -216,8 +216,8 @@ fn transpose_batched(
     @builtin(workgroup_id) workgroup_id: vec3<u32>,
 ) {
     // Get the batch index from the z-dimension of the global ID
-    let batch = select(op_transpose_use_batch,  global_id.z, 0u);
-    let input_offset = select(op_transpose_input_offset_is_zero, 0u, op_transpose_input_offset);
+    let batch = select(0u,  global_id.z,op_transpose_use_batch);
+    let input_offset = select(op_transpose_input_offset, 0u,op_transpose_input_offset_is_zero);
 
 
     // Compute global indices for the input matrix within the batch
@@ -258,13 +258,13 @@ fn copy3d_padded_nobatch(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let d1 = global_id.x; 
     let d2 = global_id.y;
 
-    let dest_stride1 = select(op_copy_3d_is_dest_stride1, op_copy_3d_dest_stride1, 1u);
-    let dest_stride2 = select(op_copy_3d_is_dest_stride2, op_copy_3d_dest_stride2, 1u);
-    let dest_stride3 = select(op_copy_3d_is_dest_stride3, op_copy_3d_dest_stride3, 1u); //is only used so that the shader compiles if op_copy_3d_is_dest_stride3 is set
+    let dest_stride1 = select(1u, op_copy_3d_dest_stride1,op_copy_3d_is_dest_stride1);
+    let dest_stride2 = select(1u, op_copy_3d_dest_stride2,op_copy_3d_is_dest_stride2);
+    let dest_stride3 = select(1u, op_copy_3d_dest_stride3,op_copy_3d_is_dest_stride3); //is only used so that the shader compiles if op_copy_3d_is_dest_stride3 is set
 
-    let input_stride1 = select(op_copy_3d_is_input_stride1, op_copy_3d_input_stride1, 1u);
-    let input_stride2 = select(op_copy_3d_is_input_stride2, op_copy_3d_input_stride2, 1u);
-    let input_stride3 = select(op_copy_3d_is_input_stride3, op_copy_3d_input_stride3, 1u);//is only used so that the shader compiles if op_copy_3d_is_dest_stride3 is set
+    let input_stride1 = select(1u, op_copy_3d_input_stride1,op_copy_3d_is_input_stride1);
+    let input_stride2 = select(1u, op_copy_3d_input_stride2,op_copy_3d_is_input_stride2);
+    let input_stride3 = select(1u, op_copy_3d_input_stride3,op_copy_3d_is_input_stride3);//is only used so that the shader compiles if op_copy_3d_is_dest_stride3 is set
 
     if(d1 >= op_copy_3d_size_d1){
         return;
@@ -313,7 +313,7 @@ override CONSTV_9 : u32 = 1u;
 #define op_copy_4d_input_stride4    op_meta[11]
 #define op_copy_4d_size_d1          op_meta[12]
 #define op_copy_4d_size_d2          op_meta[13]
-#define op_copy_4d_input1_offset    select(op_copy_4d_is_input1_offset_zero, 0u, op_meta[14])
+#define op_copy_4d_input1_offset    select(op_meta[14], 0u,op_copy_4d_is_input1_offset_zero)
 
 
 @compute
@@ -324,15 +324,15 @@ fn copy4d_padded(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let d3 = global_id.z % op_copy_4d_channels; //channels
     let d4 = global_id.z / op_copy_4d_channels; //batch
 
-    let dest_stride1 = select(op_copy_4d_is_dest_stride1, op_copy_4d_dest_stride1, 1u);
-    let dest_stride2 = select(op_copy_4d_is_dest_stride2, op_copy_4d_dest_stride2, 1u);
-    let dest_stride3 = select(op_copy_4d_is_dest_stride3, op_copy_4d_dest_stride3, 1u);
-    let dest_stride4 = select(op_copy_4d_is_dest_stride4, op_copy_4d_dest_stride4, 1u);
+    let dest_stride1 = select(1u, op_copy_4d_dest_stride1,op_copy_4d_is_dest_stride1);
+    let dest_stride2 = select(1u, op_copy_4d_dest_stride2,op_copy_4d_is_dest_stride2);
+    let dest_stride3 = select(1u, op_copy_4d_dest_stride3,op_copy_4d_is_dest_stride3);
+    let dest_stride4 = select(1u, op_copy_4d_dest_stride4,op_copy_4d_is_dest_stride4);
 
-    let input_stride1 = select(op_copy_4d_is_input_stride1, op_copy_4d_input_stride1, 1u);
-    let input_stride2 = select(op_copy_4d_is_input_stride2, op_copy_4d_input_stride2, 1u);
-    let input_stride3 = select(op_copy_4d_is_input_stride3, op_copy_4d_input_stride3, 1u);
-    let input_stride4 = select(op_copy_4d_is_input_stride4, op_copy_4d_input_stride4, 1u);
+    let input_stride1 = select(1u, op_copy_4d_input_stride1,op_copy_4d_is_input_stride1);
+    let input_stride2 = select(1u, op_copy_4d_input_stride2,op_copy_4d_is_input_stride2);
+    let input_stride3 = select(1u, op_copy_4d_input_stride3,op_copy_4d_is_input_stride3);
+    let input_stride4 = select(1u, op_copy_4d_input_stride4,op_copy_4d_is_input_stride4);
 
     if(d1 >= op_copy_4d_size_d1){
         return;

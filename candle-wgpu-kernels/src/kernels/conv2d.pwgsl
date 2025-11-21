@@ -484,11 +484,11 @@ fn conv2d5(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let out_x = i_out_x * stride_conv;
     let out_y = i_out_y * stride_conv;
     
-    let start_x : u32 = select(padding > out_x, (padding - out_x) / dialation_conv, 0u);
-    let start_y : u32 = select(padding > out_y, (padding - out_y) / dialation_conv, 0u);
+    let start_x : u32 = select(0u, (padding - out_x) / dialation_conv,padding > out_x);
+    let start_y : u32 = select(0u, (padding - out_y) / dialation_conv,padding > out_y);
 
-    let end_x : u32 = select(out_x + dialation_conv * (kernel_size_x-1) >= u32(size_in_x) + padding, (u32(size_in_x) + padding - out_x ) / dialation_conv,  kernel_size_x);
-    let end_y : u32 = select(out_y + dialation_conv * (kernel_size_y-1) >= u32(size_in_y) + padding, (u32(size_in_y) + padding - out_y ) / dialation_conv,  kernel_size_y);
+    let end_x : u32 = select( kernel_size_x, (u32(size_in_x) + padding - out_x ) / dialation_conv,out_x + dialation_conv * (kernel_size_x-1) >= u32(size_in_x) + padding);
+    let end_y : u32 = select( kernel_size_y, (u32(size_in_y) + padding - out_y ) / dialation_conv,out_y + dialation_conv * (kernel_size_y-1) >= u32(size_in_y) + padding);
 
 
 
@@ -1008,7 +1008,7 @@ fn conv2d_2(@builtin(global_invocation_id) global_id: vec3<u32>,@builtin(local_i
 #define op_im2col_src_s1          op_meta[7]
 #define op_im2col_src_s2          op_meta[8]
 #define op_im2col_src_s3          op_meta[9]
-#define op_im2col_input_offset          select(op_im2col_input_offset_is_zero == 1, 0u, op_meta[10])
+#define op_im2col_input_offset          select(op_meta[10], 0u,op_im2col_input_offset_is_zero == 1)
 
 @compute @workgroup_size(256)
 fn im2col(@builtin(global_invocation_id) global_id : vec3<u32>) {

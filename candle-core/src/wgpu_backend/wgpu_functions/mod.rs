@@ -80,7 +80,7 @@ impl<'a> WgpuTensor<'a> {
 
 ///Helper Type MetaArray, for constructing the MetaBuffer
 ///The MetaBuffer is used to pass Parameters to the Kernel. 
-///Paramerters for multiple Commands will are grouped together in this MetaArray.
+///Paramerters for multiple Commands are grouped together in this MetaArray.
 #[derive(Debug)]
 pub struct MetaArray(pub Vec<u32>);
 
@@ -395,8 +395,9 @@ fn get_command_buffer(
                                 global_index + debug_index * 8,
                                 crate::wgpu_backend::debug_info::ShaderDebugInfo{
                                     pipeline: format!(
-                                        "Pipeline: {:?}, {}",
-                                        q.pipeline.0,
+                                        "Shader: '{}', Pipeline: '{}', {}",
+                                        cache.shader.loader_cache.get_shader_name(q.pipeline.0.get_shader()),
+                                        cache.shader.loader_cache.get_entry_point(q.pipeline.0),
                                         q.debug.to_owned().map_or("".to_string(), |s| s)
                                     ),
                                     workload_size: q.workload_size as u64,

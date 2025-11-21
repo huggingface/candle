@@ -16,13 +16,13 @@ fn gather(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let dim = op_gather_dim;
 
     let dims1 = CONST_DIMS1;
-    let start_offset1 = select(CONST_IS_STARTOFFSET_ZERO1, 0u, op_meta[input_offset1]);
+    let start_offset1 = select(op_meta[input_offset1], 0u,CONST_IS_STARTOFFSET_ZERO1);
 
     let dims2 = CONST_DIMS2;
-    let start_offset2 = select(CONST_IS_STARTOFFSET_ZERO2, 0u, op_meta[input_offset2]);
+    let start_offset2 = select(op_meta[input_offset2], 0u,CONST_IS_STARTOFFSET_ZERO2);
 
-    let start_shape_offset1 = input_offset1 + select(CONST_IS_STARTOFFSET_ZERO1, 0u, 1u);
-    let start_shape_offset2 = input_offset2 + select(CONST_IS_STARTOFFSET_ZERO2, 0u, 1u);
+    let start_shape_offset1 = input_offset1 + select(1u, 0u,CONST_IS_STARTOFFSET_ZERO1);
+    let start_shape_offset2 = input_offset2 + select(1u, 0u,CONST_IS_STARTOFFSET_ZERO2);
 
     var shapes_i = 1u;
     var new_index1 = start_offset1;
@@ -74,17 +74,17 @@ fn scatter_add_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
     let dims1 = CONST_DIMS1;
-    let start_offset1 = select(CONST_IS_STARTOFFSET_ZERO1, 0u, op_meta[input_offset1]);
+    let start_offset1 = select(op_meta[input_offset1], 0u,CONST_IS_STARTOFFSET_ZERO1);
 
     let dims2 = CONST_DIMS2;
-    let start_offset2 = select(CONST_IS_STARTOFFSET_ZERO2, 0u, op_meta[input_offset2]);
+    let start_offset2 = select(op_meta[input_offset2], 0u,CONST_IS_STARTOFFSET_ZERO2);
 
     let dims3 = CONST_DIMS3;
-    let start_offset3 = select(CONST_IS_STARTOFFSET_ZERO3, 0u, op_meta[input_offset3]);
+    let start_offset3 = select(op_meta[input_offset3], 0u,CONST_IS_STARTOFFSET_ZERO3);
 
-    let start_shape_offset1 = input_offset1 + select(CONST_IS_STARTOFFSET_ZERO1, 0u, 1u);
-    let start_shape_offset2 = input_offset2 + select(CONST_IS_STARTOFFSET_ZERO2, 0u, 1u);
-    let start_shape_offset3 = input_offset3 + select(CONST_IS_STARTOFFSET_ZERO3, 0u, 1u);
+    let start_shape_offset1 = input_offset1 + select(1u, 0u,CONST_IS_STARTOFFSET_ZERO1);
+    let start_shape_offset2 = input_offset2 + select(1u, 0u,CONST_IS_STARTOFFSET_ZERO2);
+    let start_shape_offset3 = input_offset3 + select(1u, 0u,CONST_IS_STARTOFFSET_ZERO3);
 
     let unused = CONST_IS_CONTIGUOUS3;
    
@@ -140,17 +140,17 @@ fn scatter_set_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
     let dims1 = CONST_DIMS1;
-    let start_offset1 = select(CONST_IS_STARTOFFSET_ZERO1, 0u, op_meta[input_offset1]);
+    let start_offset1 = select(op_meta[input_offset1], 0u,CONST_IS_STARTOFFSET_ZERO1);
 
     let dims2 = CONST_DIMS2;
-    let start_offset2 = select(CONST_IS_STARTOFFSET_ZERO2, 0u, op_meta[input_offset2]);
+    let start_offset2 = select(op_meta[input_offset2], 0u,CONST_IS_STARTOFFSET_ZERO2);
 
     let dims3 = CONST_DIMS3;
-    let start_offset3 = select(CONST_IS_STARTOFFSET_ZERO3, 0u, op_meta[input_offset3]);
+    let start_offset3 = select(op_meta[input_offset3], 0u,CONST_IS_STARTOFFSET_ZERO3);
 
-    let start_shape_offset1 = input_offset1 + select(CONST_IS_STARTOFFSET_ZERO1, 0u, 1u);
-    let start_shape_offset2 = input_offset2 + select(CONST_IS_STARTOFFSET_ZERO2, 0u, 1u);
-    let start_shape_offset3 = input_offset3 + select(CONST_IS_STARTOFFSET_ZERO3, 0u, 1u);
+    let start_shape_offset1 = input_offset1 + select(1u, 0u,CONST_IS_STARTOFFSET_ZERO1);
+    let start_shape_offset2 = input_offset2 + select(1u, 0u,CONST_IS_STARTOFFSET_ZERO2);
+    let start_shape_offset3 = input_offset3 + select(1u, 0u,CONST_IS_STARTOFFSET_ZERO3);
 
     let unused = CONST_IS_CONTIGUOUS3;
    
@@ -206,17 +206,17 @@ fn index_add_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let unused = CONST_IS_CONTIGUOUS3;
     
     let dims1 = CONST_DIMS1;
-    let start_offset1 = select(CONST_IS_STARTOFFSET_ZERO1, 0u, op_meta[input_offset1]);
+    let start_offset1 = select(op_meta[input_offset1], 0u,CONST_IS_STARTOFFSET_ZERO1);
 
     let dims2 = CONST_DIMS2;
-    let start_offset2 = select(CONST_IS_STARTOFFSET_ZERO2, 0u, op_meta[input_offset2]);
+    let start_offset2 = select(op_meta[input_offset2], 0u,CONST_IS_STARTOFFSET_ZERO2);
 
     let dims3 = CONST_DIMS3;
-    let start_offset3 = select(CONST_IS_STARTOFFSET_ZERO3, 0u, op_meta[input_offset3]);
+    let start_offset3 = select(op_meta[input_offset3], 0u,CONST_IS_STARTOFFSET_ZERO3);
 
-    let start_shape_offset1 = input_offset1 + select(CONST_IS_STARTOFFSET_ZERO1, 0u, 1u);
-    let start_shape_offset2 = input_offset2 + select(CONST_IS_STARTOFFSET_ZERO2, 0u, 1u);
-    let start_shape_offset3 = input_offset3 + select(CONST_IS_STARTOFFSET_ZERO3, 0u, 1u);
+    let start_shape_offset1 = input_offset1 + select(1u, 0u,CONST_IS_STARTOFFSET_ZERO1);
+    let start_shape_offset2 = input_offset2 + select(1u, 0u,CONST_IS_STARTOFFSET_ZERO2);
+    let start_shape_offset3 = input_offset3 + select(1u, 0u,CONST_IS_STARTOFFSET_ZERO3);
    
     let selected_index_length = op_meta[start_shape_offset2];
 
