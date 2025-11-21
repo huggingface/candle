@@ -67,11 +67,9 @@ pub const RESOURCE_OPTIONS: MTLResourceOptions =
 
 // Resource options used for `new_private_buffer`. This uses `private` where supported.
 #[cfg(target_os = "ios")]
-pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions =
-    objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModeShared.bits());
+pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions = MTLResourceOptions::StorageModeShared;
 #[cfg(not(target_os = "ios"))]
-pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions =
-    objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModePrivate.bits());
+pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions = MTLResourceOptions::StorageModePrivate;
 
 impl std::fmt::Debug for MetalDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
