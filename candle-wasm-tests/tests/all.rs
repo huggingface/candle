@@ -1,4 +1,10 @@
-pub mod convert_tests {#![allow(unused_imports, unexpected_cfgs)]
+pub mod convert_tests {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -37,7 +43,13 @@ candle_wasm_tests::test_device!(
     convert, convert_cpu, convert_gpu, convert_metal, convert_wgpu
 );
 candle_wasm_tests::test_device!(alloc, alloc_cpu, alloc_gpu, alloc_metal, alloc_wgpu);
-}pub mod conv_tests {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod conv_tests {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -1191,7 +1203,13 @@ candle_wasm_tests::test_device!(
 candle_wasm_tests::test_device!(
     conv2d_grad, conv2d_grad_cpu, conv2d_grad_gpu, conv2_grad_metal, conv2_grad_wgpu
 );
-}pub mod custom_op_tests {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod custom_op_tests {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -1357,7 +1375,13 @@ async fn ug_op() -> Result<()> {
     );
     Ok(())
 }
-}pub mod display_tests {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod display_tests {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -1441,7 +1465,13 @@ Tensor[[2, 1, 1, 100, 100], f32]"#;
     assert_eq!(& t, expected);
     Ok(())
 }
-}pub mod grad_tests {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod grad_tests {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 #![allow(clippy::approx_constant)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
@@ -1952,7 +1982,13 @@ candle_wasm_tests::test_device!(
 candle_wasm_tests::test_device!(
     binary_grad, binary_grad_cpu, binary_grad_gpu, binary_grad_metal, binary_grad_wgpu
 );
-}pub mod indexing_tests {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod indexing_tests {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -2050,7 +2086,13 @@ async fn slice_assign() -> Result<()> {
     );
     Ok(())
 }
-}pub mod layout_tests {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod layout_tests {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -2208,7 +2250,13 @@ async fn layout(device: &Device) -> Result<()> {
 candle_wasm_tests::test_device!(
     layout, layout_cpu, layout_gpu, layout_metal, layout_wgpu
 );
-}pub mod matmul_tests {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod matmul_tests {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -2445,7 +2493,13 @@ async fn big_matmul_wgpu(
     assert_eq!(m, m2);
     Ok(())
 }
-}pub mod pool_tests {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod pool_tests {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -2584,7 +2638,13 @@ candle_wasm_tests::test_device!(
     upsample_nearest2d, upsample_nearest2d_cpu, upsample_nearest2d_gpu,
     upsample_nearest2d_metal, upsample_nearest2d_wgpu
 );
-}pub mod tensor_tests {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod tensor_tests {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -3316,22 +3376,17 @@ async fn embeddings(device: &Device) -> Result<()> {
     assert_eq!(
         hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]
     );
-    let hs = t.index_select(&ids.to_dtype(DType::I64)?, 0)?;
-    assert_eq!(
-        hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]
-    );
-    let ids = Tensor::new(&[u32::MAX, 2u32, u32::MAX], device)?;
-    let hs = t.index_select(&ids, 0)?;
-    if device.is_wgpu() {
+    if device.is_dtype_available(DType::I64) {
+        let hs = t.index_select(&ids.to_dtype(DType::I64)?, 0)?;
         assert_eq!(
-            hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 0.0], [4.0, 5.0], [1e-45,
-            0.0]]
-        );
-    } else {
-        assert_eq!(
-            hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 0.0], [4.0, 5.0], [0.0, 0.0]]
+            hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]
         );
     }
+    let ids = Tensor::new(&[u32::MAX, 2u32, u32::MAX], device)?;
+    let hs = t.index_select(&ids, 0)?;
+    assert_eq!(
+        hs.to_vec2_async::< f32 > (). await ?, & [[0.0, 0.0], [4.0, 5.0], [0.0, 0.0]]
+    );
     Ok(())
 }
 #[test]
@@ -4186,7 +4241,13 @@ async fn tensor_norm() -> Result<()> {
     assert_eq!(norm.to_scalar_async::< f64 > (). await ?, 5.);
     Ok(())
 }
-}pub mod batch_norm {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod batch_norm {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -4401,7 +4462,13 @@ async fn train_batch_norm() -> Result<()> {
     );
     Ok(())
 }
-}pub mod cpu_flash_attn {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod cpu_flash_attn {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -4446,7 +4513,13 @@ async fn cpu_flash_attn() -> Result<()> {
     }
     Ok(())
 }
-}pub mod group_norm {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod group_norm {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -4509,7 +4582,13 @@ async fn group_norm() -> Result<()> {
     );
     Ok(())
 }
-}pub mod kv_cache {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod kv_cache {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -4634,7 +4713,13 @@ async fn rotating_kv_cache() -> Result<()> {
     }
     Ok(())
 }
-}pub mod layer_norm {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod layer_norm {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -4684,7 +4769,13 @@ async fn layer_norm() -> Result<()> {
     assert_eq!(to_vec3_round_async(& std, 4). await ?, [[[1.7321], [1.7321], [1.7321]]]);
     Ok(())
 }
-}pub mod loss {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod loss {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -4741,7 +4832,13 @@ async fn binary_cross_entropy_with_logit() -> Result<()> {
     assert_eq!(to_vec0_round_async(& loss, 4). await ?, 0.8224);
     Ok(())
 }
-}pub mod one_hot {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod one_hot {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -4830,7 +4927,13 @@ async fn test_iter() -> Result<()> {
     }
     Ok(())
 }
-}pub mod ops {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod ops {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -5128,7 +5231,13 @@ candle_wasm_tests::test_device!(layer_norml, lnl_cpu, lnl_gpu, lnl_metal, lnl_wg
 candle_wasm_tests::test_device!(
     sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal, sigmoid_wgpu
 );
-}pub mod optim {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod optim {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -5240,7 +5349,13 @@ async fn adamw_linear_regression_varmap() -> Result<()> {
     assert_eq!(to_vec0_round_async(lin.bias().unwrap(), 4). await ?, 1.);
     Ok(())
 }
-}pub mod rnn {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod rnn {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
@@ -5316,7 +5431,13 @@ async fn gru() -> Result<()> {
     assert_eq!(to_vec2_round_async(h, 4). await ?, & [[0.0579, 0.8836, - 0.9991]]);
     Ok(())
 }
-}pub mod sdpa {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod sdpa {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 #[cfg(feature = "metal")]
 mod metal_sdpa_tests {
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
@@ -5504,7 +5625,13 @@ mod metal_sdpa_tests {
         Ok(())
     }
 }
-}pub mod generation_tests {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod generation_tests {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
@@ -5588,7 +5715,13 @@ async fn sample_gumbel() -> Result<()> {
     }
     Ok(())
 }
-}pub mod nms_tests {#![allow(unused_imports, unexpected_cfgs)]
+}pub mod nms_tests {
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
+#![allow(unused_imports, unexpected_cfgs)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test as test;

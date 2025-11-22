@@ -33,6 +33,9 @@ fn index_select_u32(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if(pos1.is_valid){
                 v_dest[output_id]  = v_input2[pos1.id];
             }
+            else{
+                v_dest[output_id] = ZERO;
+            }
         }
     }
 }

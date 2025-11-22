@@ -903,17 +903,13 @@ fn embeddings(device: &Device) -> Result<()> {
     assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]);
     let hs = t.index_select(&ids, 0)?;
     assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]);
-    let hs = t.index_select(&ids.to_dtype(DType::I64)?, 0)?;
-    assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]);
+    if device.is_dtype_available(DType::I64){
+        let hs = t.index_select(&ids.to_dtype(DType::I64)?, 0)?;
+        assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]);
+    }
     let ids = Tensor::new(&[u32::MAX, 2u32, u32::MAX], device)?;
     let hs = t.index_select(&ids, 0)?;
-
-    if device.is_wgpu() {
-        assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 0.0], [4.0, 5.0], [1e-45, 0.0]]);
-    }
-    else{
-        assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 0.0], [4.0, 5.0], [0.0, 0.0]]);
-    }
+    assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 0.0], [4.0, 5.0], [0.0, 0.0]]);
 
     Ok(())
 }

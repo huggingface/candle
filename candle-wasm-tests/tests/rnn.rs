@@ -1,3 +1,9 @@
+
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
 #![allow(unused_imports, unexpected_cfgs)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;

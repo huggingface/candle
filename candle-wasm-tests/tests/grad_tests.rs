@@ -1,3 +1,9 @@
+
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+
 #![allow(unused_imports, unexpected_cfgs)]
 #![allow(clippy::approx_constant)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);

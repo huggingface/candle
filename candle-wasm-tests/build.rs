@@ -45,6 +45,13 @@ fn copy_test_folders(source_dir: &str, crate_replace: &str) -> io::Result<Vec<(S
             // Process the content.
             let new_content = process_content(&content, crate_replace);
 
+            let header = r#"
+// ============================================================================
+// === THIS FILE IS AUTO-GENERATED. DO NOT EDIT BY HAND. ======================
+// === CHANGES WILL BE OVERWRITTEN THE NEXT TIME THE GENERATOR RUNS. ==========
+// ============================================================================
+"#;
+            let new_content = format!("{header}\n{new_content}");
             // Get the filename and create the destination path.
             if let Some(file_name) = path.file_name() {
                 data.push((
@@ -123,7 +130,6 @@ fn process_content(content: &str, crate_replace: &str) -> String {
     let global_start = "#![allow(unused_imports, unexpected_cfgs)]".to_string();
 
     let header = "
-// THIS FILE IS AUTO GENERATED, DO NOT EDIT
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg(target_arch=\"wasm32\")]
 use wasm_bindgen_test::wasm_bindgen_test as test;
