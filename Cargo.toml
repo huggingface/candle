@@ -55,7 +55,7 @@ cudarc = { version = "0.17.3", features = [
     "f16",
     "f8",
     "cuda-version-from-build-system",
-    "dynamic-linking",
+    "dynamic-loading",
 ], default-features = false }
 fancy-regex = "0.13.0"
 gemm = { version = "0.18.2", features = ["wasm-simd128-enable"] }
