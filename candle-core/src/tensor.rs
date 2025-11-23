@@ -2372,8 +2372,12 @@ impl Tensor {
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
                 (Storage::Wgpu(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 _ => {
-                    bail!("not implemented yet")
-                } 
+                    bail!(
+                        "not implemented yet, self.device: {:?}, device: {:?}",
+                        self.device(),
+                        device
+                    )
+                }
             };
             let op = BackpropOp::new1(self, Op::ToDevice);
             let tensor_ = Tensor_ {

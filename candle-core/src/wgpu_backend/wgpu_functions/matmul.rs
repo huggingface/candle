@@ -100,7 +100,6 @@ mod sgemm {
     use super::*;
     use crate::Shape;
 
-    //#[cfg(feature = "wgpu_debug")]
     fn get_debug_string(params: &SGEMMParams) -> String {
         let b = params.b;
         let m = params.m;

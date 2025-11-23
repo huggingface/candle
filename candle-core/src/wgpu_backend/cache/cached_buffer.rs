@@ -164,29 +164,6 @@ impl BufferCacheStorage {
         }
     }
 
-    // //will save the currently free buffers and not free buffers
-    // pub fn store_usage(&mut self){
-    //     for b in self.storage.iter_mut_option(){
-    //         b.stored_free  = b.is_free;
-    //     }
-    // }
-
-    // //will reset all buffers usage to last storage usage
-    // pub fn reset_usage(&mut self){
-    //     for (id, b) in self.storage.enumerate_mut_option(){
-    //         if b.stored_free && !b.is_free{
-    //             self.order.insert(OrderedIndex::new(id.id(), b.buffer.size()));
-    //             b.is_free = true;
-    //             self.buffer_memory_free += b.buffer.size()
-    //         }
-    //         else if !b.stored_free  && b.is_free{
-    //             self.order.remove(&OrderedIndex::new(id.id(), b.buffer.size()));
-    //             b.is_free = false;
-    //             self.buffer_memory_free -= b.buffer.size()
-    //         }
-    //     }
-    // }
-
     //the length, this buffer should be used for(if a buffer is only used temporary we may use a way bigger buffer for just one command)
     pub(crate) fn max_cached_size(size: u64, length: u32) -> u64 {
         let length = (length + 1).min(100);

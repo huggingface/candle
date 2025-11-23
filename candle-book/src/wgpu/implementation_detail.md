@@ -2,8 +2,8 @@
 
 ## Kernels:
 This implementation uses a custom wgsl kernel system in candle-wgpu-kernels.
-For the syntax look at 
-At compile time, files ending in `.pwgsl`(TODO link to "pwgsl_filed.md") are processed by the build.rs and included with the following DTYPE-Variants:
+For the syntax look at [`.pwgsl files`](./pwgsl_files.md)
+At compile time, files ending in `.pwgsl` are processed by the build.rs and included with the following DTYPE-Variants:
 ["F32", "U32", "I64", "F64", "F16", "U8"] defining the TYPE name as global defines. 
 
 

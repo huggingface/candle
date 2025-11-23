@@ -164,15 +164,3 @@ impl QWgpuStorage {
         Ok((dst, dst_shape))
     }
 }
-
-// pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
-//     device: &WgpuDevice,
-//     data: &[T],
-// ) -> Result<QStorage> {
-//     let storage = device.alloc_from_slice(DType::F32, data)?;
-//     let device = device.clone();
-//     Ok(QStorage::Wgpu(QWgpuStorage {
-//         dtype: T::DTYPE,
-//         storage,
-//     }))
-// }

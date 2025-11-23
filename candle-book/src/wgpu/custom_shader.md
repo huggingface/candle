@@ -44,17 +44,17 @@ For example, if you enqueue (Loader=13, Shader=0, EntryPoint=0), the wgpu system
     1. Define a reference to the metastructure. 
         Here we can pass additional meta information for the operation
         ```rust
-        let mut meta = candle_core::wgpu::wgpu_functions::get_meta(&wgpu_device);
-        meta.add(42);
-        meta.add(13);
+        let mut queue = wgpu_device.get_queue();
+        queue.add(42);
+        queue.add(13);
         ..
         ```
     2.  Define the pipeline to use. 
         Use your ShaderLoaderIndex to define which pipeline and entry point to use.
         ```rust
-        let pipeline = meta.get_pipeline(PipelineIndex::new(ShaderIndex::new(MyCustomLoader::LOADER_INDEX, 0), 0));
+        let pipeline = queue.get_pipeline(PipelineIndex::new(ShaderIndex::new(MyCustomLoader::LOADER_INDEX, 0), 0));
         //or
-        let pipeline = meta.get_pipeline_const(PipelineIndex::new(ShaderIndex::new(MyCustomLoader::LOADER_INDEX, 0), 0), [42, 12]); //CONSTV_0 = 42, CONSTV_1 = 12
+        let pipeline = queue.get_pipeline_const(PipelineIndex::new(ShaderIndex::new(MyCustomLoader::LOADER_INDEX, 0), 0), [42, 12]); //CONSTV_0 = 42, CONSTV_1 = 12
         ```
         It is also possible to define webgpu override const values using the get_pipeline_const function.
         Each time this const parameter changes, a new shader is compiled. The constant is compiled into the shader. This can improve performance. 
@@ -65,7 +65,7 @@ For example, if you enqueue (Loader=13, Shader=0, EntryPoint=0), the wgpu system
     3. Define the Bindgroup
         The bindgroup defines the input and output buffers for your operations.
         ```rust
-        let bind_group = candle_core::wgpu::wgpu_functions::create_bind_group_input0(*output_buffer.buffer(), candle_core::DType::U32.into());
+        let bing_group = wgpu_device.create_bind_group_input0(*output_buffer.buffer(), candle_core::DType::U32.into());
         ```
         In general, there are 4 possible Bindgroup types:
         - Bindgroup0 - V_Dest(Binding 0), V_Meta(Binding 1)
@@ -75,11 +75,12 @@ For example, if you enqueue (Loader=13, Shader=0, EntryPoint=0), the wgpu system
 
     4. add the command to the queue:
         ```rust
-        candle_core::wgpu::wgpu_functions::enqueue(
-                    meta,
+        queue.enqueue_workgroups(
                     pipeline,
                     bind_group,
-                    1,
-                    1,
+                    x,
+                    y,
+                    z,
+                    workloadestimate //e.g. m*k*n for a matmul
                 );
         ```

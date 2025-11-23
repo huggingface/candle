@@ -4,7 +4,6 @@ use float8::F8E4M3;
 use half::{bf16, f16, slice::HalfFloatSliceExt};
 use std::convert::TryFrom;
 
-//#[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="Use an asynchronous method for WASM support"))]
 impl<T: WithDType> TryFrom<&Tensor> for Vec<T> {
     type Error = Error;
     fn try_from(tensor: &Tensor) -> Result<Self, Self::Error> {
@@ -25,7 +24,6 @@ impl<T: WithDType> TryFrom<&Tensor> for Vec<Vec<Vec<T>>> {
         tensor.to_vec3::<T>()
     }
 }
-
 
 impl<T: WithDType> TryFrom<Tensor> for Vec<T> {
     type Error = Error;
@@ -67,7 +65,7 @@ macro_rules! from_tensor {
     ($typ:ident) => {
         impl TryFrom<&Tensor> for $typ {
             type Error = Error;
-            
+
             fn try_from(tensor: &Tensor) -> Result<Self, Self::Error> {
                 tensor.to_scalar::<$typ>()
             }

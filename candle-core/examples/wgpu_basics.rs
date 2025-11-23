@@ -68,7 +68,7 @@ fn main() -> Result<()> {
     );
 
     //4. add the command to the queue:
-    queue.enqueue_64(pipeline, bind_group, 1, 1);
+    queue.enqueue_workgroups(pipeline, bind_group, 1, 1, 1, 1);
 
     let cpu_storage_data = output_buffer.to_cpu_storage()?;
 
@@ -135,7 +135,7 @@ impl CustomOp1 for CustomExampleOp {
         );
 
         //5. queue the command to the queue:
-        queue.enqueue_64(pipeline, bind_group, 1, 1);
+        queue.enqueue_workgroups(pipeline, bind_group, 1, 1, 1, 1);
 
         Ok((output_buffer, ().into()))
     }
