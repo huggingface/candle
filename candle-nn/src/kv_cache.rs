@@ -631,6 +631,174 @@ impl ScatteredCacheBuilder {
     }
 }
 
+/// KV-Cache using concatenation for append operations
+///
+/// This implementation uses `Tensor::cat` instead of `slice_set` for updates,
+/// providing significant GPU performance improvements for autoregressive generation.
+///
+/// # When to Use
+///
+/// **Recommended for:**
+/// - GPU inference (CUDA, Metal)
+/// - Autoregressive generation (token-by-token decoding)
+///
+/// **Use `KvCache` instead for:**
+/// - CPU-only inference
+/// - When you need fixed memory allocation upfront
+///
+/// # Example
+///
+/// ```ignore
+/// use candle_nn::kv_cache::ConcatKvCache;
+///
+/// let mut cache = ConcatKvCache::new(2); // dim=2 for sequence dimension
+///
+/// // First token (prefill)
+/// let k1 = Tensor::randn(0f32, 1., (1, 8, 10, 64), &device)?;
+/// let v1 = Tensor::randn(0f32, 1., (1, 8, 10, 64), &device)?;
+/// let (k, v) = cache.append(&k1, &v1)?;
+///
+/// // Subsequent tokens (decode)
+/// let k_new = Tensor::randn(0f32, 1., (1, 8, 1, 64), &device)?;
+/// let v_new = Tensor::randn(0f32, 1., (1, 8, 1, 64), &device)?;
+/// let (k, v) = cache.append(&k_new, &v_new)?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct ConcatKvCache {
+    k: Option<Tensor>,
+    v: Option<Tensor>,
+    dim: usize,
+}
+
+impl ConcatKvCache {
+    /// Create a new empty concatenation-based KV-cache
+    ///
+    /// # Arguments
+    /// * `dim` - The dimension along which to concatenate
+    ///   - For attention with shape `[batch, heads, seq, head_dim]`, use `dim=2`
+    ///   - For attention with shape `[batch, seq, heads, head_dim]`, use `dim=1`
+    ///
+    /// # Example
+    /// ```ignore
+    /// // For standard transformer attention: [B, H, S, D]
+    /// let cache = ConcatKvCache::new(2);
+    /// ```
+    pub fn new(dim: usize) -> Self {
+        Self {
+            k: None,
+            v: None,
+            dim,
+        }
+    }
+
+    /// Get current sequence length in the cache
+    ///
+    /// Returns 0 if the cache is empty.
+    pub fn current_seq_len(&self) -> usize {
+        self.k
+            .as_ref()
+            .and_then(|k| k.dims().get(self.dim).copied())
+            .unwrap_or(0)
+    }
+
+    /// Check if cache is empty
+    pub fn is_empty(&self) -> bool {
+        self.k.is_none()
+    }
+
+    /// Get the concatenation dimension
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    /// Append key and value tensors to the cache
+    ///
+    /// This is the core operation that uses optimized concatenation kernels.
+    ///
+    /// # Arguments
+    /// * `k` - Key tensor to append (shape: [..., seq_len, ...])
+    /// * `v` - Value tensor to append (shape: [..., seq_len, ...])
+    ///
+    /// # Returns
+    /// Tuple of `(full_k, full_v)` containing all cached keys and values,
+    /// including the newly appended data.
+    pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        // Ensure inputs are contiguous for optimal concatenation performance
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
+        // Update K cache using concatenation
+        self.k = Some(match &self.k {
+            None => k.clone(),
+            Some(k_cache) => {
+                // Concatenate along the sequence dimension
+                // GPU kernel for cat is highly optimized:
+                // - Fused allocation + copy
+                // - Coalesced memory access
+                // - Single kernel launch
+                Tensor::cat(&[k_cache, &k], self.dim)?
+            }
+        });
+
+        // Update V cache using concatenation
+        self.v = Some(match &self.v {
+            None => v.clone(),
+            Some(v_cache) => Tensor::cat(&[v_cache, &v], self.dim)?,
+        });
+
+        Ok((
+            self.k.as_ref().unwrap().clone(),
+            self.v.as_ref().unwrap().clone(),
+        ))
+    }
+
+    /// Reset the cache (clear all stored keys and values)
+    ///
+    /// After calling this, `is_empty()` will return `true` and
+    /// `current_seq_len()` will return 0.
+    pub fn reset(&mut self) {
+        self.k = None;
+        self.v = None;
+    }
+
+    /// Get reference to current K cache data
+    ///
+    /// Returns `None` if the cache is empty.
+    pub fn k(&self) -> Option<&Tensor> {
+        self.k.as_ref()
+    }
+
+    /// Get reference to current V cache data
+    ///
+    /// Returns `None` if the cache is empty.
+    pub fn v(&self) -> Option<&Tensor> {
+        self.v.as_ref()
+    }
+
+    /// Get mutable reference to K cache data
+    ///
+    /// Returns `None` if the cache is empty.
+    pub fn k_mut(&mut self) -> Option<&mut Tensor> {
+        self.k.as_mut()
+    }
+
+    /// Get mutable reference to V cache data
+    ///
+    /// Returns `None` if the cache is empty.
+    pub fn v_mut(&mut self) -> Option<&mut Tensor> {
+        self.v.as_mut()
+    }
+
+    /// Get owned K and V tensors, consuming the cache
+    ///
+    /// Returns `None` if the cache is empty.
+    pub fn into_inner(self) -> Option<(Tensor, Tensor)> {
+        match (self.k, self.v) {
+            (Some(k), Some(v)) => Some((k, v)),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,6 +882,104 @@ mod tests {
                 [[0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0]]
             ]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_concat_cache_basic() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cache = ConcatKvCache::new(2);
+
+        assert!(cache.is_empty());
+        assert_eq!(cache.current_seq_len(), 0);
+
+        // First append
+        let k1 = Tensor::zeros((1, 8, 3, 64), DType::F32, &device)?;
+        let v1 = Tensor::zeros((1, 8, 3, 64), DType::F32, &device)?;
+        let (k, v) = cache.append(&k1, &v1)?;
+
+        assert_eq!(k.dims(), &[1, 8, 3, 64]);
+        assert_eq!(v.dims(), &[1, 8, 3, 64]);
+        assert_eq!(cache.current_seq_len(), 3);
+        assert!(!cache.is_empty());
+
+        // Second append
+        let k2 = Tensor::zeros((1, 8, 2, 64), DType::F32, &device)?;
+        let v2 = Tensor::zeros((1, 8, 2, 64), DType::F32, &device)?;
+        let (k, v) = cache.append(&k2, &v2)?;
+
+        assert_eq!(k.dims(), &[1, 8, 5, 64]); // 3 + 2
+        assert_eq!(v.dims(), &[1, 8, 5, 64]);
+        assert_eq!(cache.current_seq_len(), 5);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_concat_cache_reset() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cache = ConcatKvCache::new(2);
+
+        let k = Tensor::zeros((1, 8, 10, 64), DType::F32, &device)?;
+        let v = Tensor::zeros((1, 8, 10, 64), DType::F32, &device)?;
+        cache.append(&k, &v)?;
+
+        assert_eq!(cache.current_seq_len(), 10);
+
+        cache.reset();
+
+        assert!(cache.is_empty());
+        assert_eq!(cache.current_seq_len(), 0);
+        assert!(cache.k().is_none());
+        assert!(cache.v().is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_concat_cache_multiple_appends() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cache = ConcatKvCache::new(2);
+
+        // Simulate autoregressive generation
+        let k_prefill = Tensor::zeros((1, 8, 10, 64), DType::F32, &device)?;
+        let v_prefill = Tensor::zeros((1, 8, 10, 64), DType::F32, &device)?;
+        cache.append(&k_prefill, &v_prefill)?;
+
+        assert_eq!(cache.current_seq_len(), 10);
+
+        // Decode phase: append one token at a time
+        for i in 1..=5 {
+            let k_token = Tensor::zeros((1, 8, 1, 64), DType::F32, &device)?;
+            let v_token = Tensor::zeros((1, 8, 1, 64), DType::F32, &device)?;
+            let (k, v) = cache.append(&k_token, &v_token)?;
+            assert_eq!(k.dims()[2], 10 + i);
+            assert_eq!(v.dims()[2], 10 + i);
+        }
+
+        assert_eq!(cache.current_seq_len(), 15);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_concat_cache_different_dim() -> Result<()> {
+        let device = Device::Cpu;
+        let mut cache = ConcatKvCache::new(1); // Concatenate on dim 1 instead of 2
+
+        let k1 = Tensor::zeros((1, 3, 8, 64), DType::F32, &device)?;
+        let v1 = Tensor::zeros((1, 3, 8, 64), DType::F32, &device)?;
+        let (k, _v) = cache.append(&k1, &v1)?;
+
+        assert_eq!(k.dims(), &[1, 3, 8, 64]);
+
+        let k2 = Tensor::zeros((1, 2, 8, 64), DType::F32, &device)?;
+        let v2 = Tensor::zeros((1, 2, 8, 64), DType::F32, &device)?;
+        let (k, _v) = cache.append(&k2, &v2)?;
+
+        assert_eq!(k.dims(), &[1, 5, 8, 64]); // Concatenated on dim 1
+        assert_eq!(cache.current_seq_len(), 5);
 
         Ok(())
     }

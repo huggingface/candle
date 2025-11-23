@@ -1,7 +1,8 @@
 use crate::{DType, Result};
 use candle_metal_kernels::{
     metal::{
-        Buffer, BufferMap, CommandBuffer, Commands, ComputePipeline, Device, MTLResourceOptions,
+        BlitCommandEncoder, Buffer, BufferMap, Commands, ComputeCommandEncoder, ComputePipeline,
+        Device, MTLResourceOptions,
     },
     Kernels,
 };
@@ -123,17 +124,26 @@ impl MetalDevice {
         Ok(())
     }
 
-    pub fn command_buffer(&self) -> Result<CommandBuffer> {
-        let mut commands = self.commands.write().map_err(MetalError::from)?;
-        let (flushed, command_buffer) = commands.command_buffer().map_err(MetalError::from)?;
-        if flushed {
+    pub fn command_encoder(&self) -> Result<ComputeCommandEncoder> {
+        let commands = self.commands.write().map_err(MetalError::from)?;
+        let (flush, command_encoder) = commands.command_encoder().map_err(MetalError::from)?;
+        if flush {
             self.drop_unused_buffers()?
         }
-        Ok(command_buffer.clone())
+        Ok(command_encoder)
+    }
+
+    pub fn blit_command_encoder(&self) -> Result<BlitCommandEncoder> {
+        let commands = self.commands.write().map_err(MetalError::from)?;
+        let (flush, command_encoder) = commands.blit_command_encoder().map_err(MetalError::from)?;
+        if flush {
+            self.drop_unused_buffers()?
+        }
+        Ok(command_encoder)
     }
 
     pub fn wait_until_completed(&self) -> Result<()> {
-        let mut commands = self.commands.write().map_err(MetalError::from)?;
+        let commands = self.commands.write().map_err(MetalError::from)?;
         commands.wait_until_completed().map_err(MetalError::from)?;
         Ok(())
     }
@@ -178,9 +188,8 @@ impl MetalDevice {
 
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
         let buffer = self.allocate_buffer(size_in_bytes)?;
-        let command_buffer = self.command_buffer()?;
-        command_buffer.set_label("zeros");
-        let blit = command_buffer.blit_command_encoder();
+        let blit = self.blit_command_encoder()?;
+        blit.set_label("zeros");
         blit.fill_buffer(&buffer, (0, buffer.length()), 0);
         blit.end_encoding();
         Ok(buffer)

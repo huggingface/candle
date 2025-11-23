@@ -606,11 +606,11 @@ impl UnaryOpT for Erf {
     }
     #[inline(always)]
     fn f32(v: f32) -> f32 {
-        Self::f64(v as f64) as f32
+        crate::cpu::erf::erf_f32(v)
     }
     #[inline(always)]
     fn f64(v: f64) -> f64 {
-        crate::cpu::erf::erf(v)
+        crate::cpu::erf::erf_f64(v)
     }
     #[inline(always)]
     fn u8(_: u8) -> u8 {
@@ -871,11 +871,11 @@ impl UnaryOpT for GeluErf {
     }
     #[inline(always)]
     fn f32(v: f32) -> f32 {
-        Self::f64(v as f64) as f32
+        (crate::cpu::erf::erf_f32(v * std::f32::consts::FRAC_1_SQRT_2) + 1.) * 0.5 * v
     }
     #[inline(always)]
     fn f64(v: f64) -> f64 {
-        (crate::cpu::erf::erf(v / 2f64.sqrt()) + 1.) * 0.5 * v
+        (crate::cpu::erf::erf_f64(v * std::f64::consts::FRAC_1_SQRT_2) + 1.) * 0.5 * v
     }
     #[inline(always)]
     fn u8(_: u8) -> u8 {

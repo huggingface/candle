@@ -2,32 +2,89 @@ use crate::{BlitCommandEncoder, ComputeCommandEncoder};
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::NSString;
 use objc2_metal::{MTLCommandBuffer, MTLCommandBufferStatus};
-use std::{borrow::Cow, collections::HashMap, thread};
+use std::borrow::Cow;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CommandStatus {
+    Available,
+    Encoding,
+    Done,
+}
+
+#[derive(Debug)]
+pub struct CommandSemaphore {
+    pub cond: Condvar,
+    pub status: Mutex<CommandStatus>,
+}
+
+impl CommandSemaphore {
+    pub fn new() -> CommandSemaphore {
+        CommandSemaphore {
+            cond: Condvar::new(),
+            status: Mutex::new(CommandStatus::Available),
+        }
+    }
+
+    pub fn wait_until<F: FnMut(&mut CommandStatus) -> bool>(
+        &self,
+        mut f: F,
+    ) -> MutexGuard<'_, CommandStatus> {
+        self.cond
+            .wait_while(self.status.lock().unwrap(), |s| !f(s))
+            .unwrap()
+    }
+
+    pub fn set_status(&self, status: CommandStatus) {
+        *self.status.lock().unwrap() = status;
+        // We notify the condvar that the value has changed.
+        self.cond.notify_one();
+    }
+
+    pub fn when<T, B: FnMut(&mut CommandStatus) -> bool, F: FnMut() -> T>(
+        &self,
+        b: B,
+        mut f: F,
+        next: Option<CommandStatus>,
+    ) -> T {
+        let mut guard = self.wait_until(b);
+        let v = f();
+        if let Some(status) = next {
+            *guard = status;
+            self.cond.notify_one();
+        }
+        v
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct CommandBuffer {
     raw: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
+    semaphore: Arc<CommandSemaphore>,
 }
 
 unsafe impl Send for CommandBuffer {}
 unsafe impl Sync for CommandBuffer {}
 
 impl CommandBuffer {
-    pub fn new(raw: Retained<ProtocolObject<dyn MTLCommandBuffer>>) -> Self {
-        Self { raw }
+    pub fn new(
+        raw: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
+        semaphore: Arc<CommandSemaphore>,
+    ) -> Self {
+        Self { raw, semaphore }
     }
 
     pub fn compute_command_encoder(&self) -> ComputeCommandEncoder {
         self.as_ref()
             .computeCommandEncoder()
-            .map(ComputeCommandEncoder::new)
+            .map(|raw| ComputeCommandEncoder::new(raw, Arc::clone(&self.semaphore)))
             .unwrap()
     }
 
     pub fn blit_command_encoder(&self) -> BlitCommandEncoder {
         self.as_ref()
             .blitCommandEncoder()
-            .map(BlitCommandEncoder::new)
+            .map(|raw| BlitCommandEncoder::new(raw, Arc::clone(&self.semaphore)))
             .unwrap()
     }
 
@@ -58,36 +115,12 @@ impl CommandBuffer {
     }
 
     pub fn wait_until_completed(&self) {
-        self.raw.waitUntilCompleted()
+        self.raw.waitUntilCompleted();
     }
 }
 
 impl AsRef<ProtocolObject<dyn MTLCommandBuffer>> for CommandBuffer {
     fn as_ref(&self) -> &ProtocolObject<dyn MTLCommandBuffer> {
         &self.raw
-    }
-}
-
-pub struct CommandBufferThreadMap {
-    inner: HashMap<thread::ThreadId, CommandBuffer>,
-}
-
-impl CommandBufferThreadMap {
-    pub fn new() -> Self {
-        Self {
-            inner: HashMap::new(),
-        }
-    }
-
-    pub fn get(&self) -> Option<&CommandBuffer> {
-        self.inner.get(&thread::current().id())
-    }
-
-    pub fn get_mut(&mut self) -> Option<&mut CommandBuffer> {
-        self.inner.get_mut(&thread::current().id())
-    }
-
-    pub fn insert(&mut self, command_buffer: CommandBuffer) -> Option<CommandBuffer> {
-        self.inner.insert(thread::current().id(), command_buffer)
     }
 }

@@ -94,6 +94,18 @@ impl CudaDevice {
         self.stream.memcpy_dtod(src, dst).w()
     }
 
+    pub fn memcpy_dtoh<
+        T: cudarc::driver::DeviceRepr,
+        Src: cudarc::driver::DevicePtr<T>,
+        Dst: cudarc::driver::HostSlice<T>,
+    >(
+        &self,
+        src: &Src,
+        dst: &mut Dst,
+    ) -> Result<()> {
+        self.stream.memcpy_dtoh(src, dst).w()
+    }
+
     pub fn memcpy_stod<
         T: cudarc::driver::DeviceRepr,
         Src: cudarc::driver::HostSlice<T> + ?Sized,
@@ -143,6 +155,10 @@ impl CudaFunc {
 impl CudaDevice {
     pub fn cuda_stream(&self) -> Arc<cudarc::driver::CudaStream> {
         self.stream.clone()
+    }
+
+    pub fn cublas_handle(&self) -> Arc<cudarc::cublas::CudaBlas> {
+        self.blas.clone()
     }
 
     /// When turned on, all cuda tensors **created after calling this function** will

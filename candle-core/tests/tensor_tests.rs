@@ -1830,6 +1830,21 @@ fn tensor_send_sync(device: &Device) -> Result<()> {
             assert_eq!(result, vec![2.0f32, 4.0, 6.0]);
         });
     }
+    let result: Vec<f32> = tensor.to_vec1().unwrap();
+    assert_eq!(result, vec![1.0f32, 2.0, 3.0]);
+
+    let tensor = Tensor::new(vec![1.0f32, 2.0, 3.0], device)?;
+    tensor.device().synchronize().unwrap();
+
+    let new = std::thread::spawn(move || {
+        let new = tensor.add(&tensor).unwrap();
+        new.device().synchronize().unwrap();
+        new
+    })
+    .join()
+    .unwrap();
+    let result: Vec<f32> = new.to_vec1().unwrap();
+    assert_eq!(result, vec![2.0f32, 4.0, 6.0]);
 
     Ok(())
 }
