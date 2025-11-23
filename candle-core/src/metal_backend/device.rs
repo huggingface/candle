@@ -54,7 +54,8 @@ impl Default for AllocationPolicy {
                 .and_then(|value| value.trim().parse::<usize>().ok())
                 .and_then(|mb| mb.checked_mul(1024 * 1024))
         }
-        fn sysctl_u64(name: &CStr) -> Option<u64> {
+
+        fn sysctl_usize(name: &CStr) -> Option<usize> {
             use libc::c_void;
             unsafe {
                 let mut value: u64 = 0;
@@ -72,7 +73,7 @@ impl Default for AllocationPolicy {
                 if len == 0 {
                     None
                 } else {
-                    Some(value)
+                    Some(value as usize)
                 }
             }
         }
@@ -82,13 +83,7 @@ impl Default for AllocationPolicy {
             const SYSTEM_RESERVE_FRACTION: usize = 4; // Keep at least 25% for the OS.
             const SYSTEM_RESERVE_MIN: usize = 2 * 1024 * 1024 * 1024; // 2 GiB floor.
 
-            let hw_total = sysctl_u64(HW_MEMSIZE_KEY).and_then(|bytes| {
-                if bytes == 0 {
-                    None
-                } else {
-                    Some(bytes as usize)
-                }
-            })?;
+            let hw_total = sysctl_usize(HW_MEMSIZE_KEY)?;
 
             let reserve = std::cmp::max(hw_total / SYSTEM_RESERVE_FRACTION, SYSTEM_RESERVE_MIN);
             let hw_budget = hw_total.saturating_sub(reserve);
@@ -96,11 +91,12 @@ impl Default for AllocationPolicy {
                 return None;
             }
 
-            let wired_limit_bytes = sysctl_u64(IOGPU_WIRED_LIMIT_MB_KEY).and_then(|limit_mb| {
+            let wired_limit_bytes = sysctl_usize(IOGPU_WIRED_LIMIT_MB_KEY).and_then(|limit_mb| {
                 if limit_mb == 0 {
-                    return None;
+                    None
+                } else {
+                    limit_mb.checked_mul(MEBIBYTE)
                 }
-                (limit_mb as usize).checked_mul(MEBIBYTE)
             });
 
             if let Some(wired) = wired_limit_bytes {
