@@ -1,6 +1,6 @@
 #![allow(unused)]
 use super::GgmlDType;
-use crate::{WgpuDevice, WgpuStorage, Error, Result};
+use crate::{Error, Result, WgpuDevice, WgpuStorage, quantized::QStorage};
 
 pub struct QWgpuStorage {
     dtype: GgmlDType,
@@ -44,11 +44,16 @@ impl QWgpuStorage {
     ) -> Result<(WgpuStorage, crate::Shape)> {
         Err(Error::NotCompiledWithWgpuSupport)
     }
+
+    pub fn data(&self) -> Result<Vec<u8>> {
+        Err(Error::NotCompiledWithWgpuSupport)
+    }
 }
 
-pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
-    _device: &WgpuDevice,
-    _data: &[T],
-) -> Result<super::QStorage> {
+pub fn load_quantized(
+    device: &WgpuDevice,
+    dtype : GgmlDType,
+    data: &[u8],
+) -> Result<QStorage> {
     Err(Error::NotCompiledWithWgpuSupport)
 }

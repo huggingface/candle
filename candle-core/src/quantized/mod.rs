@@ -131,6 +131,7 @@ impl QStorage {
                 GgmlDType::Q8K => cuda::load_quantized(d, as_t_slice::<BlockQ8K>(data)),
                 GgmlDType::BF16 => cuda::load_quantized(d, as_t_slice::<bf16>(data)),
             },
+            Device::Wgpu(d) => wgpu::load_quantized(d, dtype, &data),
         }
     }
 
@@ -256,7 +257,7 @@ impl QStorage {
             }
             QStorage::Cuda(storage) => Ok(Cow::from(storage.data()?)),
             QStorage::Metal(storage) => Ok(Cow::from(storage.data()?)),
-            QStorage::Wgpu(_) => crate::bail!("not implemented");
+            QStorage::Wgpu(storage) => Ok(Cow::from(storage.data()?)),
         }
     }
 }

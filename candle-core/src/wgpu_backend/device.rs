@@ -582,6 +582,15 @@ impl WgpuDevice {
         data: &[T],
     ) -> crate::Result<WgpuStorage> {
         let data: &[u8] = bytemuck::cast_slice(data);
+        self.alloc_from_bytes(dtype, data)
+    }
+
+    #[instrument(skip(self, data))]
+    pub fn alloc_from_bytes(
+        &self,
+        dtype: crate::DType,
+        data: &[u8],
+    ) -> crate::Result<WgpuStorage> {
         let size = data.len();
         let buffer;
         {

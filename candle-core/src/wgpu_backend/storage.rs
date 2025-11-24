@@ -248,8 +248,14 @@ impl crate::backend::BackendStorage for WgpuStorage {
             strides.reverse();
             strides
         }
+
+        let output_dtype = match reduce_op {
+            crate::op::ReduceOp::ArgMin | crate::op::ReduceOp::ArgMax => crate::DType::U32,
+            _ => self.dtype,
+        };
+
         let buffer_dest = self.device().alloc_uninit_size(
-            self.dtype,
+            output_dtype,
             dst_shape.elem_count(),
         );
 

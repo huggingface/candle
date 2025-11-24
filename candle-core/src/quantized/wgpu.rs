@@ -1,5 +1,5 @@
 use super::GgmlDType;
-use crate::{backend::{BackendDevice, BackendStorage}, DType, Result, Shape, WgpuDevice, WgpuStorage};
+use crate::{DType, Result, Shape, WgpuDevice, WgpuStorage, backend::{BackendDevice, BackendStorage}, quantized::QStorage, wgpu_backend::wgpu_functions};
 use crate::wgpu_backend::cache::BufferReferenceId;
 
 pub struct QWgpuStorage {
@@ -163,4 +163,30 @@ impl QWgpuStorage {
     
         Ok((dst, dst_shape))
     }
+
+    pub async fn data_async(&self) -> Result<Vec<u8>> {
+        wgpu_functions::read_from_buffer_reference_async(self.device(), *self.buffer()).await
+    }
+
+    pub fn data(&self) -> Result<Vec<u8>> {
+        #[cfg(not(target_arch = "wasm32"))]{
+            pollster::block_on(self.data_async())
+        }
+         #[cfg(target_arch = "wasm32")]{
+            crate::bail!("Synchronous read not supported on wasm32");
+        }
+    }
+}
+
+
+pub fn load_quantized(
+    device: &WgpuDevice,
+    dtype : GgmlDType,
+    data: &[u8],
+) -> Result<QStorage> {
+    let storage = device.alloc_from_bytes(DType::U8, data)?;
+    Ok(QStorage::Wgpu(QWgpuStorage {
+        dtype,
+        storage,
+    }))
 }
