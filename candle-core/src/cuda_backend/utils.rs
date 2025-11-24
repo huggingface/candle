@@ -26,7 +26,7 @@ pub trait Map1 {
             S::F16(s) => S::F16(self.f(s, d, l)?),
             S::F32(s) => S::F32(self.f(s, d, l)?),
             S::F64(s) => S::F64(self.f(s, d, l)?),
-            S::F8E4M3(s) => self.f(s, d, l, S::F8E4M3)?,
+            S::F8E4M3(s) => S::F8E4M3(self.f(s, d, l)?),
             S::F4(_) | S::F6E2M3(_) | S::F6E3M2(_) | S::F8E8M0(_) => {
                 crate::bail!("Map1 does not uspport this dtype.");
             }
@@ -56,7 +56,7 @@ pub trait Map2 {
             (S::F16(s1), S::F16(s2)) => S::F16(self.f(s1, l1, s2, l2, d)?),
             (S::F32(s1), S::F32(s2)) => S::F32(self.f(s1, l1, s2, l2, d)?),
             (S::F64(s1), S::F64(s2)) => S::F64(self.f(s1, l1, s2, l2, d)?),
-            (S::F8E4M3(s1), S::F8E4M3(s2)) => self.f(s1, l1, s2, l2, d)?,
+            (S::F8E4M3(s1), S::F8E4M3(s2)) => S::F8E4M3(self.f(s1, l1, s2, l2, d)?),
             _ => Err(CudaError::InternalError("dtype mismatch in binary op"))?,
         };
         Ok(out)
@@ -95,6 +95,9 @@ pub trait Map3 {
             (S::F16(s1), S::F16(s2), S::F16(s3)) => S::F16(self.f(s1, l1, s2, l2, s3, l3, d)?),
             (S::F32(s1), S::F32(s2), S::F32(s3)) => S::F32(self.f(s1, l1, s2, l2, s3, l3, d)?),
             (S::F64(s1), S::F64(s2), S::F64(s3)) => S::F64(self.f(s1, l1, s2, l2, s3, l3, d)?),
+            (S::F8E4M3(s1), S::F8E4M3(s2), S::F8E4M3(s3)) => {
+                S::F8E4M3(self.f(s1, l1, s2, l2, s3, l3, d)?)
+            }
             _ => Err(CudaError::InternalError("dtype mismatch in ternary op"))?,
         };
         Ok(out)
@@ -129,9 +132,7 @@ pub trait Map2InPlace {
             (S::F16(dst), S::F16(src)) => self.f(dst, dst_l, src, src_l, d),
             (S::F32(dst), S::F32(src)) => self.f(dst, dst_l, src, src_l, d),
             (S::F64(dst), S::F64(src)) => self.f(dst, dst_l, src, src_l, d),
-            (S::F8E4M3(_), S::F8E4M3(_)) => Err(CudaError::InternalError(
-                "Map2InPlace not supported for F8E4M3",
-            ))?,
+            (S::F8E4M3(dst), S::F8E4M3(src)) => self.f(dst, dst_l, src, src_l, d),
             _ => Err(CudaError::InternalError("dtype mismatch in binary op"))?,
         }
     }
