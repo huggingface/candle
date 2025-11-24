@@ -41,37 +41,55 @@ impl Linear {
 
 impl super::Module for Linear {
     fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
+        // On CPU, promote bf16/f16 matmuls to f32 for correctness until native kernels arrive.
+        let promote = matches!(x.device(), candle::Device::Cpu)
+            && (matches!(x.dtype(), candle::DType::F16 | candle::DType::BF16)
+                || matches!(self.weight.dtype(), candle::DType::F16 | candle::DType::BF16));
+        let x = if promote { x.to_dtype(candle::DType::F32)? } else { x.clone() };
+        let weight = if promote {
+            self.weight.to_dtype(candle::DType::F32)?
+        } else {
+            self.weight.clone()
+        };
+        let bias = if promote {
+            self.bias
+                .as_ref()
+                .map(|b| b.to_dtype(candle::DType::F32))
+                .transpose()?
+        } else {
+            self.bias.clone()
+        };
         // When possible, we avoid using a broadcasted matmul as it is much slower
         // than the standard matmul for the cuda and cpu backends.
         let x = match *x.dims() {
             [b1, b2, m, k] => {
                 if x.is_contiguous() {
-                    let w = self.weight.t()?;
+                    let w = weight.t()?;
                     x.reshape((b1 * b2 * m, k))?
                         .matmul(&w)?
                         .reshape((b1, b2, m, ()))?
                 } else {
-                    let w = self.weight.broadcast_left((b1, b2))?.t()?;
+                    let w = weight.broadcast_left((b1, b2))?.t()?;
                     x.matmul(&w)?
                 }
             }
             [bsize, m, k] => {
                 if x.is_contiguous() {
-                    let w = self.weight.t()?;
+                    let w = weight.t()?;
                     x.reshape((bsize * m, k))?
                         .matmul(&w)?
                         .reshape((bsize, m, ()))?
                 } else {
-                    let w = self.weight.broadcast_left(bsize)?.t()?;
+                    let w = weight.broadcast_left(bsize)?.t()?;
                     x.matmul(&w)?
                 }
             }
             _ => {
-                let w = self.weight.t()?;
+                let w = weight.t()?;
                 x.matmul(&w)?
             }
         };
-        match &self.bias {
+        match &bias {
             None => Ok(x),
             Some(bias) => x.broadcast_add(bias),
         }

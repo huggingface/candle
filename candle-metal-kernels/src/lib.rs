@@ -21,10 +21,15 @@ use source::Source;
 pub use utils::BufferOffset;
 use utils::{get_block_dims, linear_split, EncoderParam, EncoderProvider};
 
+/// Default resource options for performance-critical GPU buffers.
+/// Currently uses Private storage; can be tuned or made configurable in the future.
 pub const RESOURCE_OPTIONS: MTLResourceOptions =
+    objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModePrivate.bits());
+
+/// Resource options for CPU-visible/readback buffers (tests, diagnostics, etc.).
+/// Using Shared storage ensures `contents()` can be safely used.
+pub const RESOURCE_OPTIONS_SHARED: MTLResourceOptions =
     objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModeShared.bits());
-//| MTLResourceOptions::HazardTrackingModeUntracked.bits(),
-//);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DType {

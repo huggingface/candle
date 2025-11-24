@@ -17,6 +17,7 @@ fn run_gemm(f32: bool, n: usize) -> Result<()> {
     let (b, m, n, k) = (1, n, n, n);
     let kernels = candle_metal_kernels::Kernels::new();
     let command_queue = device.new_command_queue().unwrap();
+    // Use performance-oriented default resource options (Private) for GEMM benchmarks.
     let options = RESOURCE_OPTIONS;
 
     let (lhs, rhs) = if f32 {

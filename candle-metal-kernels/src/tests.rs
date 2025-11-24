@@ -7,6 +7,33 @@ use rand::{rng, Rng};
 use std::sync::Arc;
 use std::thread;
 
+#[test]
+fn with_command_buffer_respects_compute_per_buffer() {
+    // Use a very small pool and compute_per_buffer=1 to force frequent commits.
+    std::env::set_var("CANDLE_METAL_COMMAND_POOL_SIZE", "1");
+    std::env::set_var("CANDLE_METAL_COMPUTE_PER_BUFFER", "1");
+
+    let device = device();
+    let command_queue = device.new_command_queue().unwrap();
+    let commands = Commands::new(command_queue).unwrap();
+
+    // Doing two calls should trigger at least one flush/commit path internally.
+    for _ in 0..2 {
+        commands
+            .with_command_buffer(|_cb| {
+                // We don't actually encode here; just ensure the buffer is valid
+                // and that the pool machinery does not deadlock or panic.
+                // Intentionally avoid calling any methods so we don't depend on
+                // additional trait imports here.
+            })
+            .unwrap();
+    }
+
+    // Finally ensure we can flush and wait on all in-flight command buffers.
+    commands.wait_until_completed().unwrap();
+}
+
+
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     let ptr = buffer.contents() as *const T;
     assert!(!ptr.is_null());
@@ -15,7 +42,7 @@ fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
 }
 
 fn new_buffer<T>(device: &Device, data: &[T]) -> Buffer {
-    let options = RESOURCE_OPTIONS;
+    let options = RESOURCE_OPTIONS_SHARED;
     let ptr = data.as_ptr() as *const c_void;
     let size = std::mem::size_of_val(data);
     device.new_buffer_with_data(ptr, size, options).unwrap()
@@ -319,7 +346,7 @@ fn run_cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
     let semaphore = Arc::new(CommandSemaphore::new());
     let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
     let input = new_buffer(&device, v);
-    let options = RESOURCE_OPTIONS;
+    let options = RESOURCE_OPTIONS_SHARED;
     let size = v.len() * std::mem::size_of::<U>();
     let output = device.new_buffer(size, options).unwrap();
 
@@ -1481,7 +1508,8 @@ fn run_random<T: Clone>(name: &'static str, seed: u64, length: usize, a: f32, b:
     let semaphore = Arc::new(CommandSemaphore::new());
     let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
 
-    let options = RESOURCE_OPTIONS;
+    // Use a CPU-visible buffer for random tests so we can validate via `contents()`.
+    let options = RESOURCE_OPTIONS_SHARED;
     let output = device
         .new_buffer(length * core::mem::size_of::<T>(), options)
         .unwrap();

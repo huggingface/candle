@@ -59,8 +59,13 @@ pub struct MetalDevice {
     pub(crate) seed: Arc<Mutex<Buffer>>,
 }
 
-// Resource options used for creating buffers. Shared storage mode allows both CPU and GPU to access the buffer.
-pub const RESOURCE_OPTIONS: MTLResourceOptions =
+// Resource options used for creating buffers.
+// - `RESOURCE_OPTIONS_DEFAULT`: performance-oriented GPU storage (Private).
+// - `RESOURCE_OPTIONS_SHARED`: CPU-visible storage used for readback or small control data.
+pub const RESOURCE_OPTIONS_DEFAULT: MTLResourceOptions =
+    objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModePrivate.bits());
+
+pub const RESOURCE_OPTIONS_SHARED: MTLResourceOptions =
     objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModeShared.bits());
 //| MTLResourceOptions::HazardTrackingModeUntracked.bits(),
 //);
@@ -185,7 +190,7 @@ impl MetalDevice {
         let size = core::mem::size_of_val(data);
         let new_buffer = self
             .device
-            .new_buffer_with_data(data.as_ptr().cast(), size, RESOURCE_OPTIONS)
+            .new_buffer_with_data(data.as_ptr().cast(), size, RESOURCE_OPTIONS_DEFAULT)
             .map_err(MetalError::from)?;
         let mut buffers = self.buffers.write().map_err(MetalError::from)?;
 
@@ -217,11 +222,20 @@ impl MetalDevice {
 
         let new_buffer = self
             .device
-            .new_buffer(size, RESOURCE_OPTIONS)
+            .new_buffer(size, RESOURCE_OPTIONS_DEFAULT)
             .map_err(MetalError::from)?;
         let new_buffer = Arc::new(new_buffer);
         subbuffers.push(new_buffer.clone());
         Ok(new_buffer)
+    }
+
+    /// Allocate a CPU-visible buffer for readback (Shared storage).
+    pub fn allocate_shared_buffer(&self, size: usize) -> Result<Arc<Buffer>> {
+        let new_buffer = self
+            .device
+            .new_buffer(size, RESOURCE_OPTIONS_SHARED)
+            .map_err(MetalError::from)?;
+        Ok(Arc::new(new_buffer))
     }
 
     /// Create a metal GPU capture trace on [`path`].
