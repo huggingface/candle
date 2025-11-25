@@ -8,8 +8,8 @@ categories.workspace = true
 
 [dependencies]
 candle = { workspace = true }
-candle-nn = { workspace = true , features = ["wgpu"]}
-candle-transformers = { workspace = true , features = ["wgpu"]}
+candle-nn = { workspace = true}
+candle-transformers = { workspace = true}
 rand = { workspace = true }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 anyhow = { workspace = true }
@@ -34,4 +34,3 @@ prettyplease = "0.2"
 
 [features]
 wgpu = ["candle-nn/wgpu", "candle/wgpu", "candle-transformers/wgpu"]
-default=["wgpu"]

@@ -12,8 +12,8 @@ license.workspace = true
 
 [dependencies]
 
-candle = { workspace = true, features = ["wgpu"]} #error
-candle-nn = { workspace = true , features = ["wgpu"]}
+candle = { workspace = true} #error
+candle-nn = { workspace = true}
 safetensors = { workspace = true }
 yoke = { workspace = true }
 memmap2 = { workspace = true }
@@ -62,3 +62,7 @@ features = [
   'ReadableStream',
   'Blob'
 ]
+
+
+[features]
+wgpu = ["candle-nn/wgpu", "candle/wgpu"]

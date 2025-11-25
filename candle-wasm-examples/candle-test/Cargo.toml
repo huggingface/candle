@@ -77,4 +77,3 @@ tokio = { version = "1.41.0", features = ["full"] }
 
 [features]
 wgpu = ["candle-nn/wgpu", "candle/wgpu", "candle-transformers/wgpu"]
-default=["wgpu"]

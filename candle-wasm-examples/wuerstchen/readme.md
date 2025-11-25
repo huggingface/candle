@@ -3,7 +3,7 @@
 ### Xtask
 one can compile this example for wasm and start a web server with the following command:
 ```bash
-cargo xtask run-wasm -- --release
+cargo xtask run-wasm --release --features=wgpu
 ```
 Then open `http://localhost:80` in your browser.
 

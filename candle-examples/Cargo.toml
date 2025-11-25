@@ -91,10 +91,10 @@ mimi = ["cpal", "symphonia", "rubato"]
 snac = ["cpal", "symphonia", "rubato"]
 wgpu = ["candle/wgpu", "candle-nn/wgpu"]
 wgpu_debug = ["wgpu", "candle/wgpu_debug"]
-default = []
 depth_anything_v2 = ["palette", "enterpolation"]
 tekken = ["tekken-rs"]
 buildtime-download = []
+default = []
 
 [[example]]
 name = "llama_multiprocess"

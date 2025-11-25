@@ -9,9 +9,9 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-candle = { workspace = true, features = ["wgpu"]}
-candle-nn = { workspace = true , features = ["wgpu"]}
-candle-transformers = { workspace = true, features = ["wgpu"]}
+candle = { workspace = true}
+candle-nn = { workspace = true}
+candle-transformers = { workspace = true}
 num-traits = { workspace = true }
 
 # App crates.
@@ -29,3 +29,7 @@ console_error_panic_hook = "0.1.7"
 wasm-bindgen = "0.2.87"
 wasm-bindgen-futures = "0.4.37"
 serde-wasm-bindgen = "0.6.0"
+
+[features]
+default = []
+wgpu = ["candle/wgpu", "candle-nn/wgpu", "candle-transformers/wgpu"]

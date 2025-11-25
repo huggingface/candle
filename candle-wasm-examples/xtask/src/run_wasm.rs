@@ -46,7 +46,7 @@ fn compile(shell: &Shell, mut args: Arguments, name : &str, is_bench : bool) -> 
 
     let cargo_args = args.finish();
 
-    
+    log::info!("running cargo build with: '{cargo_args:?}'");
 
     xshell::cmd!(
         shell,
@@ -96,8 +96,6 @@ pub(crate) fn run_wasm(shell: Shell, mut args: Arguments) -> Result<(), anyhow::
     else {
         name = "m".to_owned();
     }
-
-    //let name : String = args.value_from_str("--bin").unwrap_or("m".to_owned());
 
     let programs_needed: &[_] = if no_serve {
         &[Program {

@@ -103,7 +103,7 @@ pub fn queue_copy(
             }
 
             let pipeline = queue.get_pipeline_const_inplace(
-                Pipelines::Copy(dev.get_dtype(dtype)?, Functions::Copy4),
+                Pipelines::Copy(DType::U32, Functions::Copy4),
                 const_vec,
                 inplaceble,
             );
@@ -121,7 +121,7 @@ pub fn queue_copy(
                 queue.add_const(candle_wgpu_kernels::Constants::UseZ, true);
             }
             let pipeline = queue.get_pipeline_const_inplace(
-                Pipelines::Copy(dev.get_dtype(dtype)?, Functions::Copy),
+                Pipelines::Copy(DType::U32, Functions::Copy),
                 const_vec,
                 inplaceble,
             );

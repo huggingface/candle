@@ -342,6 +342,7 @@ shader_info.global_overrides.iter().map(|(k, v)| format!("\t\t\tConstants::{} =>
 
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("generated.rs");
+    println!("Write generated.rs to {:?}", dest_path);
     fs::write(dest_path, shader_content).expect("Failed to write shader map file");
 
 

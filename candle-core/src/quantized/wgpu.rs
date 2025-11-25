@@ -28,13 +28,19 @@ impl QWgpuStorage {
     }
 
     pub fn storage_size_in_bytes(&self) -> usize {
-        self.storage.get_length()
+        self.storage.size_in_bytes()
     }
 
     pub fn dequantize(&self, elem_count: usize) -> Result<WgpuStorage> {
         let dev = self.device();
         let dst = dev.alloc_uninit_size(DType::F32, elem_count);
-      
+
+        if self.dtype == GgmlDType::F32 {
+            //no need to dequantize
+            wgpu_functions::queue_copy(dev, *dst.buffer(), *self.storage.buffer(), 0, 0, self.storage.size_in_bytes() / 4, DType::U32)?;
+            return Ok(dst);
+        }
+
         let mut queue = dev.get_queue();
         queue.add(elem_count);
         let pipeline = match self.dtype(){

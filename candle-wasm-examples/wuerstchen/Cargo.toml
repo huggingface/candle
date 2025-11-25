@@ -11,9 +11,9 @@ license.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-candle = { workspace = true, features = ["wgpu"]}
-candle-nn = { workspace = true , features = ["wgpu"]}
-candle-transformers = { workspace = true , features = ["wgpu"]}
+candle = { workspace = true}
+candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
 num-traits = { workspace = true }
 tokenizers = { workspace = true, features = ["unstable_wasm"] }
 
@@ -62,3 +62,7 @@ features = [
   'FileSystemDirectoryEntry',
   'FileSystemRemoveOptions'
 ]
+
+
+[features]
+wgpu = ["candle-nn/wgpu", "candle/wgpu", "candle-transformers/wgpu"]

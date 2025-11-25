@@ -5227,9 +5227,11 @@ async fn sigmoid(device: &Device) -> Result<()> {
     assert_eq!(diff, 0.);
     Ok(())
 }
-candle_wasm_tests::test_device!(ropei, ropei_cpu, ropei_gpu, ropei_metal);
-candle_wasm_tests::test_device!(rope, rope_cpu, rope_gpu, rope_metal);
-candle_wasm_tests::test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal);
+candle_wasm_tests::test_device!(ropei, ropei_cpu, ropei_gpu, ropei_metal, ropei_wgpu);
+candle_wasm_tests::test_device!(rope, rope_cpu, rope_gpu, rope_metal, rope_wgpu);
+candle_wasm_tests::test_device!(
+    rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal, rope_thd_wgpu
+);
 candle_wasm_tests::test_device!(
     softmax, softmax_cpu, softmax_gpu, softmax_metal, softmax_wgpu
 );

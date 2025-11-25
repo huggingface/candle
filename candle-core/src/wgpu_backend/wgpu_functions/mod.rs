@@ -13,6 +13,7 @@ pub mod softmax;
 pub mod unary;
 pub mod upsample;
 pub mod where_cond;
+pub mod rotary_emb_i;
 
 use rustc_hash::FxHasher;
 use std::{
@@ -57,6 +58,7 @@ pub use softmax::queue_softmax;
 pub use unary::{queue_unary_from_buffer_op, queue_unary_inplace_op};
 pub use upsample::{queue_upsample1d, queue_upsample2d};
 pub use where_cond::queue_where_cond;
+pub use rotary_emb_i::queue_rotary_emb_i;
 
 #[derive(Debug, Copy, Clone)]
 pub struct WgpuTensor<'a>{

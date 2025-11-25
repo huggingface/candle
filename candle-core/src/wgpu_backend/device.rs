@@ -765,19 +765,9 @@ impl crate::backend::BackendDevice for WgpuDevice {
     }
 
     fn storage_from_slice<T: crate::WithDType>(&self, data: &[T]) -> crate::Result<Self::Storage> {
-        let buffer;
-        if T::DTYPE == crate::DType::F32 {
-            let data =
-                unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, data.len()) };
-            buffer = self.alloc_from_slice(T::DTYPE, data)?;
-        } else if T::DTYPE == crate::DType::U32 {
-            let data =
-                unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u32, data.len()) };
-            buffer = self.alloc_from_slice(T::DTYPE, data)?;
-        } else {
-            // Panic if T is not f32 or u32
-            wrongType!(storage_from_slice, T::DTYPE);
-        }
+        let data =
+                unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len()) };
+        let buffer = self.alloc_from_bytes(T::DTYPE, data)?;
         Ok(buffer)
     }
 

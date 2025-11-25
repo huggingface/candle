@@ -82,8 +82,8 @@ impl WgpuStorage {
         }
     }
 
-    pub fn get_length(&self) -> usize {
-        (self.size / 4) as usize //f32
+    pub fn size_in_bytes(&self) -> usize {
+        self.size as usize
     }
 
     fn try_clone_layout(&self, layout: &crate::Layout) -> crate::Result<Self> {

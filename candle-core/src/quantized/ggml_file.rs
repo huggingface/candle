@@ -1,7 +1,7 @@
 //! Support for the GGML file format.
 
 use super::{k_quants, GgmlDType, QStorage};
-use crate::{Device, Error, Result};
+use crate::{Device, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
 
@@ -130,7 +130,7 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
         Device::Cpu => QStorage::Cpu(Box::new(data.to_vec())),
         Device::Metal(metal) => super::metal::load_quantized(metal, data)?,
         Device::Cuda(cuda) => super::cuda::load_quantized(cuda, data)?,
-        Device::Wgpu(_) => return Err(Error::Wgpu("no wgpu implementation for QTensor".to_string().into()))
+        Device::Wgpu(wgpu) => super::wgpu::load_quantized(wgpu, T::DTYPE, raw_data)?
     };
     super::QTensor::new(data, dims)
 }
