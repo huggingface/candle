@@ -147,7 +147,7 @@ impl Module for MLP {
 
 #[derive(Debug, Clone)]
 enum KvCache {
-    Normal(candle_nn::kv_cache::KvCache),
+    Normal(candle_nn::kv_cache::IncrementalKvCache),
     Rotating(candle_nn::kv_cache::RotatingKvCache),
 }
 
@@ -192,7 +192,7 @@ impl Attention {
         let kv_cache = if let Some(sliding_window) = sliding_window {
             KvCache::Rotating(candle_nn::kv_cache::RotatingKvCache::new(2, sliding_window))
         } else {
-            KvCache::Normal(candle_nn::kv_cache::KvCache::new(
+            KvCache::Normal(candle_nn::kv_cache::IncrementalKvCache::new(
                 2,
                 cfg.max_position_embeddings,
             ))
