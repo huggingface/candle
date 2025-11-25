@@ -2914,3 +2914,95 @@ impl<S: Into<Shape>> From<(Storage, S)> for Tensor {
         from_storage(storage, shape, BackpropOp::none(), false)
     }
 }
+
+struct TensorResult(Result<Tensor>);
+
+impl TensorResult {
+    fn ok(self) -> Result<Tensor> {
+        self.0
+    }
+}
+
+impl From<Result<Tensor>> for TensorResult {
+    fn from(t: Result<Tensor>) -> Self {
+        TensorResult(t)
+    }
+}
+
+impl From<Tensor> for TensorResult {
+    fn from(t: Tensor) -> Self {
+        TensorResult(Ok(t))
+    }
+}
+
+impl From<TensorResult> for Result<Tensor> {
+    fn from(t: TensorResult) -> Self {
+        t.0
+    }
+}
+
+impl std::ops::Add<Tensor> for TensorResult {
+    type Output = TensorResult;
+
+    fn add(self, rhs: Tensor) -> Self::Output {
+        match self.0 {
+            Ok(lhs) => TensorResult(lhs + rhs),
+            Err(e) => TensorResult(Err(e)),
+        }
+    }
+}
+
+impl std::ops::Add<TensorResult> for TensorResult {
+    type Output = TensorResult;
+
+    fn add(self, rhs: TensorResult) -> Self::Output {
+        self.add(rhs.0)
+    }
+}
+
+impl std::ops::Add<TensorResult> for Tensor {
+    type Output = TensorResult;
+
+    fn add(self, rhs: TensorResult) -> Self::Output {
+        rhs.add(self)
+    }
+}
+
+impl<B: std::borrow::Borrow<Tensor>> std::ops::Add<Result<B>> for TensorResult {
+    type Output = TensorResult;
+
+    fn add(self, rhs: Result<B>) -> Self::Output {
+        match (self.0, rhs) {
+            (Ok(lhs), Ok(rhs)) => TensorResult(lhs + rhs),
+            (Ok(_), Err(e)) => TensorResult(Err(e)),
+            (Err(e), Ok(_)) => TensorResult(Err(e)),
+            (Err(e), Err(_)) => TensorResult(Err(e)),
+        }
+    }
+}
+
+#[test]
+fn test_tensor_result() -> Result<()> {
+    let t = Tensor::ones((2, 3), DType::F32, &Device::Cpu)?;
+
+    let a = TensorResult::from(t.ones_like());
+    let b = TensorResult::from(t.ones_like());
+    let c = t.ones_like();
+    let d = t.clone();
+
+    // New API would allow this
+    let e = a + b + c + d;
+    let result = e.ok()?;
+    assert_eq!(result.to_vec2::<f32>()?, [[4., 4., 4.], [4., 4., 4.]]);
+
+    let a = t.ones_like();
+    let b = t.ones_like();
+    let c = t.ones_like();
+    let d = t.clone();
+
+    // Current API for comparison
+    let e = a? + b? + c? + d;
+    let result = e?;
+    assert_eq!(result.to_vec2::<f32>()?, [[4., 4., 4.], [4., 4., 4.]]);
+    Ok(())
+}
