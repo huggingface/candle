@@ -67,6 +67,12 @@ pub const RESOURCE_OPTIONS: MTLResourceOptions =
 //| MTLResourceOptions::HazardTrackingModeUntracked.bits(),
 //);
 
+// Resource options used for `new_private_buffer`. This uses `private` where supported.
+#[cfg(target_os = "ios")]
+pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions = MTLResourceOptions::StorageModeShared;
+#[cfg(not(target_os = "ios"))]
+pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions = MTLResourceOptions::StorageModePrivate;
+
 impl std::fmt::Debug for MetalDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "MetalDevice({:?})", self.id)
@@ -167,6 +173,23 @@ impl MetalDevice {
     ) -> Result<Arc<Buffer>> {
         let size = element_count * dtype.size_in_bytes();
         self.allocate_buffer(size)
+    }
+
+    /// Creates a new private buffer (not necessarily zeroed).
+    ///
+    /// This is intentionally not in the Metal buffer pool to allow the efficient implementation of persistent buffers.
+    pub fn new_private_buffer(
+        &self,
+        element_count: usize,
+        dtype: DType,
+        _name: &str,
+    ) -> Result<Arc<Buffer>> {
+        let size = element_count * dtype.size_in_bytes();
+        let buffer = self
+            .device
+            .new_buffer(size, PRIVATE_RESOURCE_OPTIONS)
+            .map_err(MetalError::from)?;
+        Ok(Arc::new(buffer))
     }
 
     /// Creates a new buffer from data.
