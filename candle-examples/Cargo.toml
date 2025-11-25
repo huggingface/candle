@@ -27,7 +27,7 @@ intel-mkl-src = { workspace = true, optional = true }
 num-traits = { workspace = true }
 palette = { version = "0.7.6", optional = true }
 enterpolation = { version = "0.2.1", optional = true }
-pyo3 = { version = "0.22.0", features = [
+pyo3 = { version = "0.27", features = [
     "auto-initialize",
     "abi3-py311",
 ], optional = true }
