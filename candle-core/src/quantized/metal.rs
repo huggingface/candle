@@ -35,6 +35,7 @@ impl QMetalStorage {
 
     pub fn dequantize(&self, elem_count: usize) -> Result<MetalStorage> {
         use crate::quantized::k_quants::GgmlType;
+
         let buffer = self.device.allocate_buffer(self.buffer.length())?;
         let blit = self.device.blit_command_encoder()?;
         blit.set_label("blit_to_cpu");
@@ -122,6 +123,60 @@ impl QMetalStorage {
         let src = crate::Storage::Cpu(crate::CpuStorage::F32(src));
         let mut qcpu_storage = crate::Device::Cpu.qzeros(elem_count, self.dtype)?;
         qcpu_storage.quantize(&src)?;
+        let buffer = self.device.new_buffer_with_data(&qcpu_storage.data()?)?;
+        self.buffer = buffer;
+        Ok(())
+    }
+
+    pub fn quantize_imatrix(
+        &mut self,
+        src: &MetalStorage,
+        imatrix_weights: &[f32],
+        n_per_row: usize,
+    ) -> Result<()> {
+        // Quantization only happens on CPU for now.
+        let src = src.to_cpu::<f32>()?;
+        let elem_count = src.len();
+        let src = crate::Storage::Cpu(crate::CpuStorage::F32(src));
+        let mut qcpu_storage = crate::Device::Cpu.qzeros(elem_count, self.dtype)?;
+        qcpu_storage.quantize_imatrix(&src, imatrix_weights, n_per_row)?;
+        let buffer = self.device.new_buffer_with_data(&qcpu_storage.data()?)?;
+        self.buffer = buffer;
+        Ok(())
+    }
+
+    pub fn quantize_imatrix_onto(
+        &mut self,
+        src: &crate::CpuStorage,
+        imatrix_weights: &[f32],
+        n_per_row: usize,
+    ) -> Result<()> {
+        // Quantization only happens on CPU for now.
+        let elem_count = src.as_slice::<f32>()?.len();
+        let mut qcpu_storage = crate::Device::Cpu.qzeros(elem_count, self.dtype)?;
+
+        if let QStorage::Cpu(storage) = &mut qcpu_storage {
+            storage.from_float_imatrix(src.as_slice::<f32>()?, imatrix_weights, n_per_row);
+        } else {
+            unreachable!()
+        }
+
+        let buffer = self.device.new_buffer_with_data(&qcpu_storage.data()?)?;
+        self.buffer = buffer;
+        Ok(())
+    }
+
+    pub fn quantize_onto(&mut self, src: &crate::CpuStorage) -> Result<()> {
+        // Quantization only happens on CPU for now.
+        let elem_count = src.as_slice::<f32>()?.len();
+        let mut qcpu_storage = crate::Device::Cpu.qzeros(elem_count, self.dtype)?;
+
+        if let QStorage::Cpu(storage) = &mut qcpu_storage {
+            storage.from_float(src.as_slice::<f32>()?);
+        } else {
+            unreachable!()
+        }
+
         let buffer = self.device.new_buffer_with_data(&qcpu_storage.data()?)?;
         self.buffer = buffer;
         Ok(())

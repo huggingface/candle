@@ -233,6 +233,10 @@ impl AttentionWeights {
             .reshape((b, l, self.num_heads * self.head_dim))?;
         self.o_proj.forward(&reshaped_ctx)
     }
+
+    fn clear_kv_cache(&mut self) {
+        self.kv_cache.reset();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -282,6 +286,10 @@ impl LayerWeights {
         let h2 = self.ln2.forward(&x)?;
         let h2 = h2.apply(&self.mlp)?;
         x + h2
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.self_attn.clear_kv_cache();
     }
 }
 
@@ -415,5 +423,11 @@ impl ModelWeights {
         let _enter = self.span_output.enter();
         let last_hidden = h.narrow(1, l - 1, 1)?;
         self.lm_head.forward(&last_hidden)?.squeeze(1)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in &mut self.layers {
+            layer.clear_kv_cache();
+        }
     }
 }
