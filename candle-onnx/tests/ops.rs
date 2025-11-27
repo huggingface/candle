@@ -12,6 +12,8 @@ const INPUT_X: &str = "x";
 const INPUT_Y: &str = "y";
 const INPUT_A: &str = "a";
 const OUTPUT_Z: &str = "z";
+const COS_CACHE: &str = "cos_cache";
+const SIN_CACHE: &str = "sin_cache";
 
 fn create_model_proto_with_graph(graph: Option<GraphProto>) -> ModelProto {
     ModelProto {
@@ -7223,6 +7225,217 @@ fn test_one_hot() -> Result<()> {
         let y = eval.get("y").unwrap();
         assert_eq!(y.dims(), &[3, 12]);
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_rotary_embedding_basic() -> Result<()> {
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "RotaryEmbedding".to_string(),
+            domain: "".to_string(),
+            attribute: vec![],
+            input: vec![
+                INPUT_X.to_string(),
+                COS_CACHE.to_string(),
+                SIN_CACHE.to_string(),
+            ],
+            output: vec![OUTPUT_Z.to_string()],
+            name: "".to_string(),
+            doc_string: "".to_string(),
+        }],
+        name: "".to_string(),
+        initializer: vec![],
+        input: vec![],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            doc_string: "".to_string(),
+            r#type: None,
+        }],
+        value_info: vec![],
+        doc_string: "".to_string(),
+        sparse_initializer: vec![],
+        quantization_annotation: vec![],
+    }));
+
+    let batch_size = 2;
+    let num_heads = 4;
+    let seq_len = 3;
+    let head_size = 8;
+
+    let input_data: Vec<f32> = (0..batch_size * num_heads * seq_len * head_size)
+        .map(|i| i as f32 * 0.1)
+        .collect();
+    let input = Tensor::from_vec(
+        input_data,
+        (batch_size, num_heads, seq_len, head_size),
+        &Device::Cpu,
+    )?;
+
+    let cos_data: Vec<f32> = (0..seq_len * (head_size / 2))
+        .map(|i| (i as f32 * 0.1).cos())
+        .collect();
+    let cos_cache = Tensor::from_vec(cos_data, (seq_len, head_size / 2), &Device::Cpu)?;
+
+    let sin_data: Vec<f32> = (0..seq_len * (head_size / 2))
+        .map(|i| (i as f32 * 0.1).sin())
+        .collect();
+    let sin_cache = Tensor::from_vec(sin_data, (seq_len, head_size / 2), &Device::Cpu)?;
+
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), input.clone());
+    inputs.insert(COS_CACHE.to_string(), cos_cache);
+    inputs.insert(SIN_CACHE.to_string(), sin_cache);
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    assert_eq!(eval.len(), 1);
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert_eq!(z.dims(), &[batch_size, num_heads, seq_len, head_size]);
+
+    Ok(())
+}
+
+#[test]
+fn test_rotary_embedding_3d_input() -> Result<()> {
+    let num_heads = 4;
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "RotaryEmbedding".to_string(),
+            domain: "".to_string(),
+            attribute: vec![AttributeProto {
+                name: "num_heads".to_string(),
+                r#type: AttributeType::Int.into(),
+                i: num_heads as i64,
+                ..AttributeProto::default()
+            }],
+            input: vec![
+                INPUT_X.to_string(),
+                COS_CACHE.to_string(),
+                SIN_CACHE.to_string(),
+            ],
+            output: vec![OUTPUT_Z.to_string()],
+            name: "".to_string(),
+            doc_string: "".to_string(),
+        }],
+        name: "".to_string(),
+        initializer: vec![],
+        input: vec![],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            doc_string: "".to_string(),
+            r#type: None,
+        }],
+        value_info: vec![],
+        doc_string: "".to_string(),
+        sparse_initializer: vec![],
+        quantization_annotation: vec![],
+    }));
+
+    let batch_size = 2;
+    let seq_len = 3;
+    let hidden_size = 32;
+    let head_size = hidden_size / num_heads;
+
+    let input_data: Vec<f32> = (0..batch_size * seq_len * hidden_size)
+        .map(|i| i as f32 * 0.1)
+        .collect();
+    let input = Tensor::from_vec(input_data, (batch_size, seq_len, hidden_size), &Device::Cpu)?;
+
+    let cos_data: Vec<f32> = (0..seq_len * (head_size / 2))
+        .map(|i| (i as f32 * 0.1).cos())
+        .collect();
+    let cos_cache = Tensor::from_vec(cos_data, (seq_len, head_size / 2), &Device::Cpu)?;
+
+    let sin_data: Vec<f32> = (0..seq_len * (head_size / 2))
+        .map(|i| (i as f32 * 0.1).sin())
+        .collect();
+    let sin_cache = Tensor::from_vec(sin_data, (seq_len, head_size / 2), &Device::Cpu)?;
+
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), input.clone());
+    inputs.insert(COS_CACHE.to_string(), cos_cache);
+    inputs.insert(SIN_CACHE.to_string(), sin_cache);
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    assert_eq!(eval.len(), 1);
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert_eq!(z.dims(), &[batch_size, seq_len, hidden_size]);
+
+    Ok(())
+}
+
+#[test]
+fn test_rotary_embedding_interleaved() -> Result<()> {
+    let manual_graph = create_model_proto_with_graph(Some(GraphProto {
+        node: vec![NodeProto {
+            op_type: "RotaryEmbedding".to_string(),
+            domain: "".to_string(),
+            attribute: vec![AttributeProto {
+                name: "interleaved".to_string(),
+                r#type: AttributeType::Int.into(),
+                i: 1,
+                ..AttributeProto::default()
+            }],
+            input: vec![
+                INPUT_X.to_string(),
+                COS_CACHE.to_string(),
+                SIN_CACHE.to_string(),
+            ],
+            output: vec![OUTPUT_Z.to_string()],
+            name: "".to_string(),
+            doc_string: "".to_string(),
+        }],
+        name: "".to_string(),
+        initializer: vec![],
+        input: vec![],
+        output: vec![ValueInfoProto {
+            name: OUTPUT_Z.to_string(),
+            doc_string: "".to_string(),
+            r#type: None,
+        }],
+        value_info: vec![],
+        doc_string: "".to_string(),
+        sparse_initializer: vec![],
+        quantization_annotation: vec![],
+    }));
+
+    let batch_size = 2;
+    let num_heads = 4;
+    let seq_len = 3;
+    let head_size = 8;
+
+    let input_data: Vec<f32> = (0..batch_size * num_heads * seq_len * head_size)
+        .map(|i| i as f32 * 0.1)
+        .collect();
+    let input = Tensor::from_vec(
+        input_data,
+        (batch_size, num_heads, seq_len, head_size),
+        &Device::Cpu,
+    )?;
+
+    let cos_data: Vec<f32> = (0..seq_len * (head_size / 2))
+        .map(|i| (i as f32 * 0.1).cos())
+        .collect();
+    let cos_cache = Tensor::from_vec(cos_data, (seq_len, head_size / 2), &Device::Cpu)?;
+
+    let sin_data: Vec<f32> = (0..seq_len * (head_size / 2))
+        .map(|i| (i as f32 * 0.1).sin())
+        .collect();
+    let sin_cache = Tensor::from_vec(sin_data, (seq_len, head_size / 2), &Device::Cpu)?;
+
+    let mut inputs: HashMap<String, Tensor> = HashMap::new();
+    inputs.insert(INPUT_X.to_string(), input.clone());
+    inputs.insert(COS_CACHE.to_string(), cos_cache);
+    inputs.insert(SIN_CACHE.to_string(), sin_cache);
+
+    let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
+    assert_eq!(eval.len(), 1);
+
+    let z = eval.get(OUTPUT_Z).expect("Output 'z' not found");
+    assert_eq!(z.dims(), &[batch_size, num_heads, seq_len, head_size]);
 
     Ok(())
 }

@@ -2452,6 +2452,128 @@ fn simple_eval_(
 
                 values.insert(node.output[0].clone(), output);
             }
+            "RotaryEmbedding" => {
+                let interleaved = get_attr_opt::<i64>(node, "interleaved")?
+                    .copied()
+                    .unwrap_or(0);
+                let num_heads = get_attr_opt::<i64>(node, "num_heads")?;
+                let rotary_embedding_dim = get_attr_opt::<i64>(node, "rotary_embedding_dim")?
+                    .copied()
+                    .unwrap_or(0);
+
+                let input = get(&node.input[0])?;
+                let cos_cache = get(&node.input[1])?;
+                let sin_cache = get(&node.input[2])?;
+                let position_ids = get_opt(3).transpose()?;
+
+                let original_shape = input.dims().to_vec();
+                let original_rank = original_shape.len();
+
+                let (input, batch_size, sequence_length, head_size) = match original_rank {
+                    4 => {
+                        let input = input.transpose(1, 2)?.contiguous()?;
+                        let (batch_size, sequence_length, _, head_size) = input.dims4()?;
+                        (input, batch_size, sequence_length, head_size)
+                    }
+                    3 => {
+                        let dims = input.dims();
+                        let batch_size = dims[0];
+                        let sequence_length = dims[1];
+                        let hidden_size = dims[2];
+
+                        let num_heads_val = match num_heads {
+                            Some(&n) => n as usize,
+                            None => bail!("num_heads attribute is required when input is 3D"),
+                        };
+
+                        if hidden_size % num_heads_val != 0 {
+                            bail!(
+                                "hidden_size ({}) must be divisible by num_heads ({})",
+                                hidden_size,
+                                num_heads_val
+                            );
+                        }
+
+                        let head_size = hidden_size / num_heads_val;
+                        let input = input.reshape((batch_size, sequence_length, num_heads_val, head_size))?;
+                        (input, batch_size, sequence_length, head_size)
+                    }
+                    _ => bail!("Input must be 3D or 4D, got {}D", original_rank),
+                };
+
+                let rotary_embedding_dim = if rotary_embedding_dim == 0 {
+                    head_size
+                } else {
+                    rotary_embedding_dim as usize
+                };
+
+                if rotary_embedding_dim % 2 != 0 {
+                    bail!("rotary_embedding_dim must be even, got {}", rotary_embedding_dim);
+                }
+
+                let rotary_embedding_dim_half = rotary_embedding_dim / 2;
+
+                let (cos_cache, sin_cache) = if let Some(pos_ids) = position_ids {
+                    let pos_ids_flat = pos_ids.flatten_all()?;
+                    let cos = cos_cache.index_select(&pos_ids_flat, 0)?;
+                    let sin = sin_cache.index_select(&pos_ids_flat, 0)?;
+                    let cos = cos.reshape((batch_size, sequence_length, rotary_embedding_dim_half))?;
+                    let sin = sin.reshape((batch_size, sequence_length, rotary_embedding_dim_half))?;
+                    (cos, sin)
+                } else {
+                    (cos_cache.clone(), sin_cache.clone())
+                };
+
+                let cos_dims = cos_cache.dims();
+                let sin_dims = sin_cache.dims();
+
+                if cos_dims[cos_dims.len() - 1] != rotary_embedding_dim_half {
+                    bail!(
+                        "Last dimension of cos_cache ({}) does not match rotary_embedding_dim/2 ({})",
+                        cos_dims[cos_dims.len() - 1],
+                        rotary_embedding_dim_half
+                    );
+                }
+
+                if sin_dims[sin_dims.len() - 1] != rotary_embedding_dim_half {
+                    bail!(
+                        "Last dimension of sin_cache ({}) does not match rotary_embedding_dim/2 ({})",
+                        sin_dims[sin_dims.len() - 1],
+                        rotary_embedding_dim_half
+                    );
+                }
+
+                let output = if rotary_embedding_dim == head_size {
+                    if interleaved != 0 {
+                        let input_bhtd = input.transpose(1, 2)?.contiguous()?;
+                        let result = candle_nn::rotary_emb::rope_i(&input_bhtd, &cos_cache, &sin_cache)?;
+                        result.transpose(1, 2)?
+                    } else {
+                        candle_nn::rotary_emb::rope_thd(&input, &cos_cache, &sin_cache)?
+                    }
+                } else {
+                    let x_rotate = input.narrow(3, 0, rotary_embedding_dim)?;
+                    let x_not_rotate = input.narrow(3, rotary_embedding_dim, head_size - rotary_embedding_dim)?;
+
+                    let x_rotate_result = if interleaved != 0 {
+                        let x_rotate_bhtd = x_rotate.transpose(1, 2)?.contiguous()?;
+                        let result = candle_nn::rotary_emb::rope_i(&x_rotate_bhtd, &cos_cache, &sin_cache)?;
+                        result.transpose(1, 2)?
+                    } else {
+                        candle_nn::rotary_emb::rope_thd(&x_rotate, &cos_cache, &sin_cache)?
+                    };
+
+                    Tensor::cat(&[x_rotate_result, x_not_rotate], 3)?
+                };
+
+                let output = if original_rank == 3 {
+                    output.reshape(original_shape.as_slice())?
+                } else {
+                    output.transpose(1, 2)?
+                };
+
+                values.insert(node.output[0].clone(), output);
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
