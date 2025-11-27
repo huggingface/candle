@@ -1,8 +1,9 @@
 #![cfg(feature = "pinned-memory")]
 
-use candle_core::{utils, Device, Result, Tensor};
+use candle_core::{backend::BackendStorage, utils, Device, Result, Storage, Tensor};
 
 #[test]
+#[cfg(all(feature = "pinned-memory", feature = "cuda"))]
 fn pinned_memory_roundtrip() -> Result<()> {
     if !utils::cuda_is_available() {
         return Ok(());
@@ -208,6 +209,7 @@ fn cpu_storage_operations_work_as_usual() -> Result<()> {
 }
 
 #[test]
+#[cfg(all(feature = "pinned-memory", feature = "cuda"))]
 fn pinned_memory_with_different_dtypes() -> Result<()> {
     if !utils::cuda_is_available() {
         return Ok(());
@@ -247,6 +249,7 @@ fn pinned_memory_with_different_dtypes() -> Result<()> {
 }
 
 #[test]
+#[cfg(all(feature = "pinned-memory", feature = "cuda"))]
 fn pinned_memory_with_shape() -> Result<()> {
     if !utils::cuda_is_available() {
         return Ok(());
@@ -273,6 +276,154 @@ fn pinned_memory_with_shape() -> Result<()> {
 
     let tensor_3d = Tensor::from_pinned_host(&pinned, (2, 2, 3))?;
     assert_eq!(tensor_3d.shape().dims(), &[2, 2, 3]);
+
+    Ok(())
+}
+
+#[test]
+#[cfg(all(feature = "pinned-memory", feature = "cuda"))]
+fn pinned_memory_performance_test() -> Result<()> {
+    if !utils::cuda_is_available() {
+        return Ok(());
+    }
+
+    let cuda_device = Device::new_cuda(0)?;
+    let len = 10_000_000_usize; // 10M elements = ~40MB for f32
+
+    // Prepare test data
+    let data: Vec<f32> = (0..len).map(|i| i as f32).collect();
+
+    // ===== Warmup: Initialize CUDA context and drivers =====
+    // Do a warmup transfer to ensure any initialization overhead is excluded from measurements
+    let warmup_data: Vec<f32> = (0..1000).map(|i| i as f32).collect();
+    let warmup_tensor = Tensor::from_slice(&warmup_data, 1000, &Device::Cpu)?;
+    let _warmup_cuda = warmup_tensor.to_device(&cuda_device)?;
+    cuda_device.synchronize()?;
+    
+    // Also warmup pinned memory path
+    let mut warmup_pinned = unsafe { cuda_device.cuda_alloc_pinned::<f32>(1000)? };
+    warmup_pinned
+        .as_mut_slice()
+        .expect("pinned slice")
+        .copy_from_slice(&warmup_data);
+    let warmup_pinned_tensor = Tensor::new_pinned(&warmup_pinned)?;
+    let _warmup_pinned_cuda = warmup_pinned_tensor.to_device(&cuda_device)?;
+    cuda_device.synchronize()?;
+
+    // ===== Test 1: Host → GPU (HTOD) transfers =====
+
+    // Test 1a: Copy from regular host memory to GPU
+    let tensor_cpu_regular = Tensor::from_slice(&data, len, &Device::Cpu)?;
+    let start = std::time::Instant::now();
+    let _tensor_cuda_regular = tensor_cpu_regular.to_device(&cuda_device)?;
+    cuda_device.synchronize()?;
+    let regular_htod_time = start.elapsed();
+
+    // Test 1b: Copy from pinned host memory to GPU
+    let mut pinned_in = unsafe { cuda_device.cuda_alloc_pinned::<f32>(len)? };
+    pinned_in
+        .as_mut_slice()
+        .expect("pinned slice")
+        .copy_from_slice(&data);
+    let tensor_cpu_pinned = Tensor::new_pinned(&pinned_in)?;
+    let start = std::time::Instant::now();
+    let _tensor_cuda_pinned = tensor_cpu_pinned.to_device(&cuda_device)?;
+    cuda_device.synchronize()?;
+    let pinned_htod_time = start.elapsed();
+
+    // ===== Test 2: GPU → Host (DTOH) transfers =====
+    
+    // Create a CUDA tensor for testing GPU→host transfers
+    let tensor_cuda = Tensor::from_slice(&data, len, &cuda_device)?;
+    cuda_device.synchronize()?;
+    
+    // Warmup the DTOH paths
+    let (warmup_storage, _) = tensor_cuda.storage_and_layout();
+    let warmup_cuda_storage = match &*warmup_storage {
+        Storage::Cuda(s) => s,
+        _ => unreachable!(),
+    };
+    let _warmup_cpu = warmup_cuda_storage.to_cpu_storage()?;
+    cuda_device.synchronize()?;
+    
+    let mut warmup_pinned_out = unsafe { cuda_device.cuda_alloc_pinned::<f32>(len)? };
+    tensor_cuda.copy_to_pinned_host(&mut warmup_pinned_out)?;
+    cuda_device.synchronize()?;
+
+    // Test 2a: Copy from GPU to regular host memory
+    // Use memcpy_dtoh directly to a pre-allocated regular buffer for fair comparison
+    let (storage, _layout) = tensor_cuda.storage_and_layout();
+    let cuda_storage = match &*storage {
+        Storage::Cuda(s) => s,
+        _ => unreachable!(),
+    };
+    
+    // Pre-allocate regular host memory buffer
+    let mut regular_host_buf = vec![999.0f32; len]; // Initialize with wrong values to verify copy
+    let cuda_slice = cuda_storage.as_cuda_slice::<f32>()?;
+    let start = std::time::Instant::now();
+    // Use memcpy_dtoh directly to regular host memory (same API as pinned, different memory type)
+    cuda_storage.device().memcpy_dtoh(cuda_slice, regular_host_buf.as_mut_slice())?;
+    cuda_device.synchronize()?;
+    let regular_dtoh_time = start.elapsed();
+    
+    // Verify the copy actually happened by checking the data
+    assert_eq!(regular_host_buf.len(), len);
+    assert!((regular_host_buf[0] - 0.0).abs() < 1e-5, "Regular copy data mismatch at index 0 (got {}, expected 0.0)", regular_host_buf[0]);
+    assert!((regular_host_buf[len / 2] - (len / 2) as f32).abs() < 1e-5, "Regular copy data mismatch at middle");
+
+    // Test 2b: Copy from GPU to pinned host memory
+    // Pre-allocate pinned memory (this is part of the pinned memory workflow)
+    let mut pinned_out = unsafe { cuda_device.cuda_alloc_pinned::<f32>(len)? };
+    // Initialize with zeros to ensure we're actually copying
+    pinned_out
+        .as_mut_slice()
+        .expect("pinned slice")
+        .fill(999.0f32);
+    let start = std::time::Instant::now();
+    // This uses memcpy_dtoh which copies directly to pinned memory (can use DMA)
+    tensor_cuda.copy_to_pinned_host(&mut pinned_out)?;
+    cuda_device.synchronize()?;
+    let pinned_dtoh_time = start.elapsed();
+
+    // Verify the copy actually happened by checking the data
+    let pinned_data = pinned_out.as_slice().expect("pinned slice");
+    assert_eq!(pinned_data.len(), len);
+    assert!((pinned_data[0] - 0.0).abs() < 1e-5, "Pinned copy data mismatch at index 0 (got {}, expected 0.0)", pinned_data[0]);
+    assert!((pinned_data[len / 2] - (len / 2) as f32).abs() < 1e-5, "Pinned copy data mismatch at middle");
+    assert!((pinned_data[len - 1] - (len - 1) as f32).abs() < 1e-5, "Pinned copy data mismatch at last index");
+    
+    // Verify both copies got the same data
+    assert!((pinned_data[0] - regular_host_buf[0]).abs() < 1e-5, "Data mismatch between regular and pinned copies");
+    assert!((pinned_data[len / 2] - regular_host_buf[len / 2]).abs() < 1e-5, "Data mismatch between regular and pinned copies");
+
+    // Print performance results
+    println!("\n=== Host → GPU (HTOD) ===");
+    println!(
+        "Regular memory: {:?}, Pinned memory: {:?} (speedup: {:.2}x)",
+        regular_htod_time,
+        pinned_htod_time,
+        regular_htod_time.as_secs_f64() / pinned_htod_time.as_secs_f64()
+    );
+    
+    println!("\n=== GPU → Host (DTOH) ===");
+    println!(
+        "Regular memory: {:?}, Pinned memory: {:?} (speedup: {:.2}x)",
+        regular_dtoh_time,
+        pinned_dtoh_time,
+        regular_dtoh_time.as_secs_f64() / pinned_dtoh_time.as_secs_f64()
+    );
+    
+    // Assert that pinned memory is at least as fast (HTOD speedup is typically small after warmup)
+    // and significantly faster for DTOH (where pinned memory really shines)
+    let htod_speedup = regular_htod_time.as_secs_f64() / pinned_htod_time.as_secs_f64();
+    let dtoh_speedup = regular_dtoh_time.as_secs_f64() / pinned_dtoh_time.as_secs_f64();
+
+    // HTOD speedup
+    println!("HTOD speedup: {:.2}x", htod_speedup);
+
+    // DTOH speedup
+    println!("DTOH speedup: {:.2}x", dtoh_speedup);
 
     Ok(())
 }
