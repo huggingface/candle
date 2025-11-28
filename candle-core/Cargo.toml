@@ -49,8 +49,8 @@ default = []
 cuda = ["cudarc", "dep:candle-kernels", "dep:ug-cuda", "float8/cuda"]
 cudnn = ["cuda", "cudarc/cudnn"]
 nccl = ["cuda", "cudarc/nccl"]
-# pinned-memory requires cuda because it uses CUDA APIs for pinned host memory allocation
-pinned-memory = ["cuda", "dep:allocator-api2"]
+# cuda-pinned-memory requires cuda because it uses CUDA APIs for pinned host memory allocation
+cuda-pinned-memory = ["cuda", "dep:allocator-api2"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
 metal = [

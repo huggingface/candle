@@ -1,12 +1,7 @@
 /// Helper functions to write CPU kernels.
 use crate::backend::BackendStorage;
+use crate::vec::Vec;
 use crate::{Error, Layout, Result, WithDType};
-
-#[cfg(not(feature = "pinned-memory"))]
-use std::vec::Vec;
-
-#[cfg(feature = "pinned-memory")]
-use allocator_api2::vec::Vec;
 
 type C = super::CpuStorage;
 

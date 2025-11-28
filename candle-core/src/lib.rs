@@ -81,6 +81,7 @@ pub mod scalar;
 pub mod shape;
 mod sort;
 mod storage;
+pub mod vec;
 pub mod streaming;
 mod strided_index;
 mod tensor;

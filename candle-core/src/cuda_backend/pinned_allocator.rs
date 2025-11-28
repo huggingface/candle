@@ -1,23 +1,22 @@
 //! CUDA pinned memory allocator support.
 //!
-//! This module is only available when both `pinned-memory` and `cuda` features are enabled.
-//! The `pinned-memory` feature automatically enables `cuda` (see Cargo.toml), so checking
-//! for `pinned-memory` is sufficient.
+//! This module is only available when both `cuda-pinned-memory` and `cuda` features are enabled.
+//! The `cuda-pinned-memory` feature automatically enables `cuda` (see Cargo.toml), so checking
+//! for `cuda-pinned-memory` is sufficient.
 
-#[cfg(feature = "pinned-memory")]
+#![cfg(feature = "cuda-pinned-memory")]
+
 use cudarc::driver::PinnedHostSlice;
 
 /// A wrapper around PinnedHostSlice that provides Vec-like functionality.
 ///
 /// This type allows us to use CUDA pinned memory as if it were a regular Vec,
 /// while ensuring proper deallocation through the PinnedHostSlice's Drop implementation.
-#[cfg(feature = "pinned-memory")]
 pub struct PinnedVec<T> {
     pinned: PinnedHostSlice<T>,
     len: usize,
 }
 
-#[cfg(feature = "pinned-memory")]
 impl<T> PinnedVec<T> {
     /// Create a new PinnedVec from a PinnedHostSlice.
     ///
@@ -37,7 +36,6 @@ impl<T> PinnedVec<T> {
     }
 }
 
-#[cfg(feature = "pinned-memory")]
 impl<T: cudarc::driver::ValidAsZeroBits> PinnedVec<T> {
     /// Get a slice of the data.
     pub fn as_slice(&self) -> &[T] {
@@ -83,7 +81,6 @@ impl<T: cudarc::driver::ValidAsZeroBits> PinnedVec<T> {
     }
 }
 
-#[cfg(feature = "pinned-memory")]
 impl<T> Clone for PinnedVec<T>
 where
     T: Clone,
@@ -96,7 +93,6 @@ where
     }
 }
 
-#[cfg(feature = "pinned-memory")]
 impl<T> std::fmt::Debug for PinnedVec<T>
 where
     T: std::fmt::Debug,

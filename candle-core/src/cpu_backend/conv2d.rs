@@ -6,14 +6,9 @@ use crate::{
     conv::ParamsConv2D,
     cpu_backend::{copy_strided_src_, Im2Col, Map1, Map2, MatMul},
     shape::dims4,
+    vec::Vec,
     Layout, Result, WithDType,
 };
-
-#[cfg(not(feature = "pinned-memory"))]
-use std::vec::Vec;
-
-#[cfg(feature = "pinned-memory")]
-use allocator_api2::vec::Vec;
 
 pub(super) struct Conv2D<'a>(pub(super) &'a crate::conv::ParamsConv2D);
 
@@ -76,7 +71,7 @@ fn conv2d_1x1<T: WithDType + num_traits::Num + Copy + 'static>(
     let (out_h, out_w) = (p.out_h(), p.out_w());
 
     let spatial_size = out_h * out_w;
-    let dst = storage_vec![T::zero(); p.b_size * p.c_out * spatial_size];
+    let dst = crate::storage_vec![T::zero(); p.b_size * p.c_out * spatial_size];
     let k_reshaped: Cow<[T]> = if k_s0 == p.c_in && k_s1 == 1 {
         // Already contiguous, use slice directly
         Cow::Borrowed(&k[..p.c_out * p.c_in])
@@ -89,9 +84,9 @@ fn conv2d_1x1<T: WithDType + num_traits::Num + Copy + 'static>(
                 k_reshaped.push(k[k_idx]);
             });
         });
-        #[cfg(not(feature = "pinned-memory"))]
+        #[cfg(not(feature = "cuda-pinned-memory"))]
         let k_reshaped_std = k_reshaped;
-        #[cfg(feature = "pinned-memory")]
+        #[cfg(feature = "cuda-pinned-memory")]
         let k_reshaped_std: std::vec::Vec<T> = k_reshaped.as_slice().to_vec();
         Cow::Owned(k_reshaped_std)
     };
@@ -147,7 +142,7 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
     let (out_h, out_w) = (p.out_h(), p.out_w());
 
     // Output shape: [b_size, c_out, out_h, out_w].
-    let dst = storage_vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
+    let dst = crate::storage_vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
 
     // Make contiguous input copy if needed.
     let cont_s0 = p.i_h * p.i_w * p.c_in;
@@ -157,7 +152,7 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
     let inp_cont: Cow<[T]> = if layout_is_valid {
         Cow::Borrowed(inp)
     } else {
-        let mut inp_cont = storage_vec![T::zero(); p.b_size * p.c_in * p.i_h * p.i_w];
+        let mut inp_cont = crate::storage_vec![T::zero(); p.b_size * p.c_in * p.i_h * p.i_w];
         for b_idx in 0..p.b_size {
             for h_idx in 0..p.i_h {
                 for w_idx in 0..p.i_w {
@@ -170,9 +165,9 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
                 }
             }
         }
-        #[cfg(not(feature = "pinned-memory"))]
+        #[cfg(not(feature = "cuda-pinned-memory"))]
         let inp_cont_std = inp_cont;
-        #[cfg(feature = "pinned-memory")]
+        #[cfg(feature = "cuda-pinned-memory")]
         let inp_cont_std: std::vec::Vec<T> = inp_cont.as_slice().to_vec();
         Cow::Owned(inp_cont_std)
     };
@@ -224,7 +219,7 @@ fn conv2d_tiled<T: WithDType + num_traits::Num + Copy + 'static>(
 
             // Build im2col tile: [k_size, tile_size]
             // This represents the input patches needed for this tile of outputs
-            let mut col_tile = storage_vec![T::zero(); k_size * tile_size];
+            let mut col_tile = crate::storage_vec![T::zero(); k_size * tile_size];
 
             for (tile_idx, (out_y, out_x)) in out_coords.iter().enumerate() {
                 // Extract the im2col patch for this output position
@@ -305,7 +300,7 @@ fn conv2d_direct<T: WithDType + num_traits::Num + Copy + 'static>(
     let (out_h, out_w) = (p.out_h(), p.out_w());
 
     // Output shape: [b_size, c_out, out_h, out_w].
-    let dst = storage_vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
+    let dst = crate::storage_vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
 
     // Make contiguous input copy if needed.
     let cont_s0 = p.i_h * p.i_w * p.c_in;
@@ -315,7 +310,7 @@ fn conv2d_direct<T: WithDType + num_traits::Num + Copy + 'static>(
     let inp_cont: Cow<[T]> = if layout_is_valid {
         Cow::Borrowed(inp)
     } else {
-        let mut inp_cont = storage_vec![T::zero(); p.b_size * p.c_in * p.i_h * p.i_w];
+        let mut inp_cont = crate::storage_vec![T::zero(); p.b_size * p.c_in * p.i_h * p.i_w];
         for b_idx in 0..p.b_size {
             for h_idx in 0..p.i_h {
                 for w_idx in 0..p.i_w {
@@ -328,9 +323,9 @@ fn conv2d_direct<T: WithDType + num_traits::Num + Copy + 'static>(
                 }
             }
         }
-        #[cfg(not(feature = "pinned-memory"))]
+        #[cfg(not(feature = "cuda-pinned-memory"))]
         let inp_cont_std = inp_cont;
-        #[cfg(feature = "pinned-memory")]
+        #[cfg(feature = "cuda-pinned-memory")]
         let inp_cont_std: std::vec::Vec<T> = inp_cont.as_slice().to_vec();
         Cow::Owned(inp_cont_std)
     };

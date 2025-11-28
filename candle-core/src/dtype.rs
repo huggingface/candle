@@ -119,9 +119,9 @@ pub trait WithDType:
 
     fn to_cpu_storage(data: &[Self]) -> CpuStorage {
         let vec_std = data.to_vec();
-        #[cfg(not(feature = "pinned-memory"))]
+        #[cfg(not(feature = "cuda-pinned-memory"))]
         let vec = vec_std;
-        #[cfg(feature = "pinned-memory")]
+        #[cfg(feature = "cuda-pinned-memory")]
         let vec: crate::cpu_backend::StorageVec<Self> = vec_std.into_iter().collect();
         Self::to_cpu_storage_owned(vec)
     }
@@ -158,9 +158,9 @@ macro_rules! with_dtype {
             fn cpu_storage_data(s: CpuStorage) -> Result<Vec<Self>> {
                 match s {
                     CpuStorage::$dtype(data) => {
-                        #[cfg(not(feature = "pinned-memory"))]
+                        #[cfg(not(feature = "cuda-pinned-memory"))]
                         let vec = data;
-                        #[cfg(feature = "pinned-memory")]
+                        #[cfg(feature = "cuda-pinned-memory")]
                         let vec: std::vec::Vec<Self> = data.into_iter().collect();
                         Ok(vec)
                     }

@@ -1,9 +1,9 @@
-#![cfg(feature = "pinned-memory")]
+#![cfg(feature = "cuda-pinned-memory")]
 
 use candle_core::{backend::BackendStorage, utils, Device, Result, Storage, Tensor};
 
 #[test]
-#[cfg(all(feature = "pinned-memory", feature = "cuda"))]
+#[cfg(all(feature = "cuda-pinned-memory", feature = "cuda"))]
 fn pinned_memory_roundtrip() -> Result<()> {
     if !utils::cuda_is_available() {
         return Ok(());
@@ -70,7 +70,7 @@ fn pinned_memory_roundtrip() -> Result<()> {
 }
 
 #[test]
-#[cfg(all(feature = "pinned-memory", feature = "cuda"))]
+#[cfg(all(feature = "cuda-pinned-memory", feature = "cuda"))]
 fn cpu_storage_operations_work_as_usual() -> Result<()> {
     // This test verifies that CpuStorage operations work correctly
     // with pinned memory backed tensors. It creates tensors from pinned memory
@@ -209,7 +209,7 @@ fn cpu_storage_operations_work_as_usual() -> Result<()> {
 }
 
 #[test]
-#[cfg(all(feature = "pinned-memory", feature = "cuda"))]
+#[cfg(all(feature = "cuda-pinned-memory", feature = "cuda"))]
 fn pinned_memory_with_different_dtypes() -> Result<()> {
     if !utils::cuda_is_available() {
         return Ok(());
@@ -249,7 +249,7 @@ fn pinned_memory_with_different_dtypes() -> Result<()> {
 }
 
 #[test]
-#[cfg(all(feature = "pinned-memory", feature = "cuda"))]
+#[cfg(all(feature = "cuda-pinned-memory", feature = "cuda"))]
 fn pinned_memory_with_shape() -> Result<()> {
     if !utils::cuda_is_available() {
         return Ok(());
@@ -281,7 +281,7 @@ fn pinned_memory_with_shape() -> Result<()> {
 }
 
 #[test]
-#[cfg(all(feature = "pinned-memory", feature = "cuda"))]
+#[cfg(all(feature = "cuda-pinned-memory", feature = "cuda"))]
 fn pinned_memory_performance_test() -> Result<()> {
     if !utils::cuda_is_available() {
         return Ok(());

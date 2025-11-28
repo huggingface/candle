@@ -16,7 +16,7 @@ use half::{bf16, f16};
 pub mod cudnn;
 mod device;
 mod error;
-#[cfg(feature = "pinned-memory")]
+#[cfg(feature = "cuda-pinned-memory")]
 pub mod pinned_allocator;
 mod utils;
 pub use device::{CudaDevice, DeviceId};

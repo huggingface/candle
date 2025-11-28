@@ -334,9 +334,9 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
     fn dequantize(&self, elem_count: usize) -> Result<CpuStorage> {
         let mut ys_std: std::vec::Vec<f32> = (0..elem_count).map(|_| 0.0f32).collect();
         T::to_float(self.as_slice(), &mut ys_std);
-        #[cfg(not(feature = "pinned-memory"))]
+        #[cfg(not(feature = "cuda-pinned-memory"))]
         let ys = ys_std;
-        #[cfg(feature = "pinned-memory")]
+        #[cfg(feature = "cuda-pinned-memory")]
         let ys: crate::cpu_backend::StorageVec<f32> = ys_std.into_iter().collect();
         Ok(CpuStorage::F32(ys))
     }
@@ -551,9 +551,9 @@ impl crate::CustomOp1 for QTensor {
         let slice = &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
         let mut dst_storage_std: std::vec::Vec<f32> = (0..dst_shape.elem_count()).map(|_| 0f32).collect();
         self_storage.matmul_t((dst_shape.elem_count() / n, k, n), slice, &mut dst_storage_std)?;
-        #[cfg(not(feature = "pinned-memory"))]
+        #[cfg(not(feature = "cuda-pinned-memory"))]
         let dst_storage = dst_storage_std;
-        #[cfg(feature = "pinned-memory")]
+        #[cfg(feature = "cuda-pinned-memory")]
         let dst_storage: crate::cpu_backend::StorageVec<f32> = dst_storage_std.into_iter().collect();
         Ok((crate::CpuStorage::F32(dst_storage), dst_shape))
     }
