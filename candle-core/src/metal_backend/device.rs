@@ -1,7 +1,8 @@
 use crate::{DType, Result};
 use candle_metal_kernels::{
     metal::{
-        Buffer, BufferMap, CommandBuffer, Commands, ComputePipeline, Device, MTLResourceOptions,
+        BlitCommandEncoder, Buffer, BufferMap, Commands, ComputeCommandEncoder, ComputePipeline,
+        Device, MTLResourceOptions,
     },
     Kernels,
 };
@@ -56,6 +57,8 @@ pub struct MetalDevice {
     pub(crate) kernels: Arc<Kernels>,
     /// Seed for random number generation.
     pub(crate) seed: Arc<Mutex<Buffer>>,
+    /// Last seed value set on this device.
+    pub(crate) seed_value: Arc<RwLock<u64>>,
 }
 
 // Resource options used for creating buffers. Shared storage mode allows both CPU and GPU to access the buffer.
@@ -63,6 +66,12 @@ pub const RESOURCE_OPTIONS: MTLResourceOptions =
     objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModeShared.bits());
 //| MTLResourceOptions::HazardTrackingModeUntracked.bits(),
 //);
+
+// Resource options used for `new_private_buffer`. This uses `private` where supported.
+#[cfg(target_os = "ios")]
+pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions = MTLResourceOptions::StorageModeShared;
+#[cfg(not(target_os = "ios"))]
+pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions = MTLResourceOptions::StorageModePrivate;
 
 impl std::fmt::Debug for MetalDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -123,17 +132,26 @@ impl MetalDevice {
         Ok(())
     }
 
-    pub fn command_buffer(&self) -> Result<CommandBuffer> {
-        let mut commands = self.commands.write().map_err(MetalError::from)?;
-        let (flushed, command_buffer) = commands.command_buffer().map_err(MetalError::from)?;
-        if flushed {
+    pub fn command_encoder(&self) -> Result<ComputeCommandEncoder> {
+        let commands = self.commands.write().map_err(MetalError::from)?;
+        let (flush, command_encoder) = commands.command_encoder().map_err(MetalError::from)?;
+        if flush {
             self.drop_unused_buffers()?
         }
-        Ok(command_buffer.clone())
+        Ok(command_encoder)
+    }
+
+    pub fn blit_command_encoder(&self) -> Result<BlitCommandEncoder> {
+        let commands = self.commands.write().map_err(MetalError::from)?;
+        let (flush, command_encoder) = commands.blit_command_encoder().map_err(MetalError::from)?;
+        if flush {
+            self.drop_unused_buffers()?
+        }
+        Ok(command_encoder)
     }
 
     pub fn wait_until_completed(&self) -> Result<()> {
-        let mut commands = self.commands.write().map_err(MetalError::from)?;
+        let commands = self.commands.write().map_err(MetalError::from)?;
         commands.wait_until_completed().map_err(MetalError::from)?;
         Ok(())
     }
@@ -157,6 +175,23 @@ impl MetalDevice {
         self.allocate_buffer(size)
     }
 
+    /// Creates a new private buffer (not necessarily zeroed).
+    ///
+    /// This is intentionally not in the Metal buffer pool to allow the efficient implementation of persistent buffers.
+    pub fn new_private_buffer(
+        &self,
+        element_count: usize,
+        dtype: DType,
+        _name: &str,
+    ) -> Result<Arc<Buffer>> {
+        let size = element_count * dtype.size_in_bytes();
+        let buffer = self
+            .device
+            .new_buffer(size, PRIVATE_RESOURCE_OPTIONS)
+            .map_err(MetalError::from)?;
+        Ok(Arc::new(buffer))
+    }
+
     /// Creates a new buffer from data.
     ///
     /// Does not require synchronization, as [newBufferWithBytes](https://developer.apple.com/documentation/metal/mtldevice/1433429-newbufferwithbytes)
@@ -178,9 +213,8 @@ impl MetalDevice {
 
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
         let buffer = self.allocate_buffer(size_in_bytes)?;
-        let command_buffer = self.command_buffer()?;
-        command_buffer.set_label("zeros");
-        let blit = command_buffer.blit_command_encoder();
+        let blit = self.blit_command_encoder()?;
+        blit.set_label("zeros");
         blit.fill_buffer(&buffer, (0, buffer.length()), 0);
         blit.end_encoding();
         Ok(buffer)

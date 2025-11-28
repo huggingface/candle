@@ -1,5 +1,7 @@
 use crate::metal::{Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipeline};
 use objc2_metal::MTLSize;
+use std::ops::Deref;
+use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 /// Most kernels apply similarly across the tensors
 /// This creates a strategy that uses the maximum amount of threads per threadgroup (capped at the
@@ -204,5 +206,33 @@ impl EncoderProvider for &ComputeCommandEncoder {
             inner: self,
             end_encoding_on_drop: false,
         }
+    }
+}
+
+pub enum RwLockGuard<'a, T> {
+    Read(RwLockReadGuard<'a, T>),
+    Write(RwLockWriteGuard<'a, T>),
+}
+
+impl<'a, T> Deref for RwLockGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            RwLockGuard::Read(g) => g.deref(),
+            RwLockGuard::Write(g) => g.deref(),
+        }
+    }
+}
+
+impl<'a, T> From<RwLockReadGuard<'a, T>> for RwLockGuard<'a, T> {
+    fn from(g: RwLockReadGuard<'a, T>) -> Self {
+        RwLockGuard::Read(g)
+    }
+}
+
+impl<'a, T> From<RwLockWriteGuard<'a, T>> for RwLockGuard<'a, T> {
+    fn from(g: RwLockWriteGuard<'a, T>) -> Self {
+        RwLockGuard::Write(g)
     }
 }

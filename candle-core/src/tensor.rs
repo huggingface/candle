@@ -272,6 +272,51 @@ impl Tensor {
         Tensor::zeros(self.shape(), self.dtype(), self.device())
     }
 
+    // Do not expose outside of the crate, the `is_variable=true` case should only be accessed from
+    // the variable module.
+    pub(crate) unsafe fn empty_impl<S: Into<Shape>>(
+        shape: S,
+        dtype: DType,
+        device: &Device,
+        is_variable: bool,
+    ) -> Result<Self> {
+        let none = BackpropOp::none();
+        let shape = shape.into();
+        let storage = device.alloc_uninit(&shape, dtype)?;
+        Ok(from_storage(storage, shape, none, is_variable))
+    }
+
+    /// Creates a new tensor filled with uninitialized memory.
+    ///
+    /// # Safety
+    /// This returns uninitialized memory.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, DType, Device};
+    /// let a = unsafe { Tensor::empty((2, 3), DType::F32, &Device::Cpu)? };
+    /// // a == b
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub unsafe fn empty<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
+        Self::empty_impl(shape, dtype, device, false)
+    }
+
+    /// Creates a new tensor filled with uninitialized memory of the same shape, dtype, and device as the other
+    /// tensor.
+    ///
+    /// # Safety
+    /// This returns uninitialized memory.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, DType, Device};
+    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// let b = unsafe { a.empty_like()? };
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub unsafe fn empty_like(&self) -> Result<Self> {
+        Tensor::empty(self.shape(), self.dtype(), self.device())
+    }
+
     pub(crate) fn rand_impl<S: Into<Shape>, T: crate::FloatDType>(
         lo: T,
         up: T,
@@ -2839,6 +2884,49 @@ impl Tensor {
             result = result.index_select(&indices_tensor, dim)?;
         }
         Ok(result)
+    }
+
+    /// Returns a view of which contains all slices of size `size` from self tensor in the dimension
+    /// `dim` and stepped by `step`.
+    pub fn unfold<D: Dim>(&self, dim: D, size: usize, step: usize) -> Result<Self> {
+        // https://github.com/pytorch/pytorch/blob/75b0720a97ac5d82e8a7a1a6ae7c5f7a87d7183d/aten/src/ATen/native/TensorShape.cpp#L3785-L3804
+        let mut sizes = self.dims().to_vec();
+        let mut strides = self.stride().to_vec();
+
+        let dim = dim.to_index(self.shape(), "unfold")?;
+
+        let max_len = if self.dims().is_empty() {
+            1
+        } else {
+            sizes[dim]
+        };
+        if size > max_len {
+            bail!(
+                "unsqueeze: maximum size for tensor at dimension {dim} is {max_len} but size is {size}"
+            )
+        }
+        sizes.push(size);
+        strides.push(if self.dims().is_empty() {
+            1
+        } else {
+            strides[dim]
+        });
+
+        if !self.dims().is_empty() {
+            sizes[dim] = ((sizes[dim] as f32 - size as f32) / step as f32 + 1.) as usize;
+            strides[dim] *= step;
+        }
+
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: self.storage.clone(),
+            layout: Layout::new(sizes.into(), strides, self.layout.start_offset()),
+            op: BackpropOp::new1(self, Op::Reshape),
+            is_variable: false,
+            dtype: self.dtype,
+            device: self.device.clone(),
+        };
+        Ok(Tensor(Arc::new(tensor_)))
     }
 }
 
