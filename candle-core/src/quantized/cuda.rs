@@ -577,25 +577,29 @@ impl QCudaStorage {
         let buffer = self
             .device
             .memcpy_dtov(&self.data.inner.slice(..self.data.len))?;
-        let mut out = vec![0.0; elem_count];
+        let mut out_std = vec![0f32; elem_count];
         let block_len = elem_count / self.dtype.block_size();
         match self.dtype {
-            GgmlDType::F32 => deq::<f32>(&buffer, block_len, &mut out),
-            GgmlDType::F16 => deq::<half::f16>(&buffer, block_len, &mut out),
-            GgmlDType::BF16 => deq::<half::bf16>(&buffer, block_len, &mut out),
-            GgmlDType::Q4_0 => deq::<crate::quantized::BlockQ4_0>(&buffer, block_len, &mut out),
-            GgmlDType::Q4_1 => deq::<crate::quantized::BlockQ4_1>(&buffer, block_len, &mut out),
-            GgmlDType::Q5_0 => deq::<crate::quantized::BlockQ5_0>(&buffer, block_len, &mut out),
-            GgmlDType::Q5_1 => deq::<crate::quantized::BlockQ5_1>(&buffer, block_len, &mut out),
-            GgmlDType::Q8_0 => deq::<crate::quantized::BlockQ8_0>(&buffer, block_len, &mut out),
-            GgmlDType::Q8_1 => deq::<crate::quantized::BlockQ8_1>(&buffer, block_len, &mut out),
-            GgmlDType::Q2K => deq::<crate::quantized::BlockQ2K>(&buffer, block_len, &mut out),
-            GgmlDType::Q3K => deq::<crate::quantized::BlockQ3K>(&buffer, block_len, &mut out),
-            GgmlDType::Q4K => deq::<crate::quantized::BlockQ4K>(&buffer, block_len, &mut out),
-            GgmlDType::Q5K => deq::<crate::quantized::BlockQ5K>(&buffer, block_len, &mut out),
-            GgmlDType::Q6K => deq::<crate::quantized::BlockQ6K>(&buffer, block_len, &mut out),
-            GgmlDType::Q8K => deq::<crate::quantized::BlockQ8K>(&buffer, block_len, &mut out),
+            GgmlDType::F32 => deq::<f32>(&buffer, block_len, &mut out_std),
+            GgmlDType::F16 => deq::<half::f16>(&buffer, block_len, &mut out_std),
+            GgmlDType::BF16 => deq::<half::bf16>(&buffer, block_len, &mut out_std),
+            GgmlDType::Q4_0 => deq::<crate::quantized::BlockQ4_0>(&buffer, block_len, &mut out_std),
+            GgmlDType::Q4_1 => deq::<crate::quantized::BlockQ4_1>(&buffer, block_len, &mut out_std),
+            GgmlDType::Q5_0 => deq::<crate::quantized::BlockQ5_0>(&buffer, block_len, &mut out_std),
+            GgmlDType::Q5_1 => deq::<crate::quantized::BlockQ5_1>(&buffer, block_len, &mut out_std),
+            GgmlDType::Q8_0 => deq::<crate::quantized::BlockQ8_0>(&buffer, block_len, &mut out_std),
+            GgmlDType::Q8_1 => deq::<crate::quantized::BlockQ8_1>(&buffer, block_len, &mut out_std),
+            GgmlDType::Q2K => deq::<crate::quantized::BlockQ2K>(&buffer, block_len, &mut out_std),
+            GgmlDType::Q3K => deq::<crate::quantized::BlockQ3K>(&buffer, block_len, &mut out_std),
+            GgmlDType::Q4K => deq::<crate::quantized::BlockQ4K>(&buffer, block_len, &mut out_std),
+            GgmlDType::Q5K => deq::<crate::quantized::BlockQ5K>(&buffer, block_len, &mut out_std),
+            GgmlDType::Q6K => deq::<crate::quantized::BlockQ6K>(&buffer, block_len, &mut out_std),
+            GgmlDType::Q8K => deq::<crate::quantized::BlockQ8K>(&buffer, block_len, &mut out_std),
         }
+        #[cfg(not(feature = "cuda-pinned-memory"))]
+        let out = out_std;
+        #[cfg(feature = "cuda-pinned-memory")]
+        let out: crate::cpu_backend::StorageVec<f32> = out_std.into_iter().collect();
 
         self.device
             .storage_from_cpu_storage(&crate::CpuStorage::F32(out))
@@ -607,12 +611,16 @@ impl QCudaStorage {
 
     pub fn quantize(&mut self, src: &CudaStorage) -> Result<()> {
         // Run the quantization on cpu.
-        let src = match &src.slice {
+        let src_std = match &src.slice {
             crate::cuda_backend::CudaStorageSlice::F32(data) => self.device.memcpy_dtov(data)?,
             _ => crate::bail!("only f32 can be quantized"),
         };
-        let src_len = src.len();
-        let src = crate::Storage::Cpu(crate::CpuStorage::F32(src));
+        let src_len = src_std.len();
+        #[cfg(not(feature = "cuda-pinned-memory"))]
+        let src_vec = src_std;
+        #[cfg(feature = "cuda-pinned-memory")]
+        let src_vec: crate::cpu_backend::StorageVec<f32> = src_std.into_iter().collect();
+        let src = crate::Storage::Cpu(crate::CpuStorage::F32(src_vec));
         let mut qcpu_storage = crate::Device::Cpu.qzeros(src_len, self.dtype)?;
         qcpu_storage.quantize(&src)?;
         let data = qcpu_storage.data()?;
@@ -635,12 +643,14 @@ impl QCudaStorage {
         n_per_row: usize,
     ) -> Result<()> {
         // Run the quantization on cpu.
-        let src = match &src.slice {
+        let src_vec = match &src.slice {
             crate::cuda_backend::CudaStorageSlice::F32(data) => self.device.memcpy_dtov(data)?,
             _ => crate::bail!("only f32 can be quantized"),
         };
-        let src_len = src.len();
-        let src = crate::Storage::Cpu(crate::CpuStorage::F32(src));
+        let src_len = src_vec.len();
+        let src = crate::Storage::Cpu(crate::CpuStorage::F32(
+            crate::cpu_backend::to_storage_vec(src_vec),
+        ));
         let mut qcpu_storage = crate::Device::Cpu.qzeros(src_len, self.dtype)?;
         qcpu_storage.quantize_imatrix(&src, imatrix_weights, n_per_row)?;
         let data = qcpu_storage.data()?;

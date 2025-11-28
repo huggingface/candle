@@ -93,7 +93,8 @@ impl candle::CustomOp3 for Add3 {
                     }
                 }
             });
-        let dst = candle::WithDType::to_cpu_storage_owned(dst);
+        let dst_storage = candle::cpu_backend::to_storage_vec(dst);
+        let dst = candle::WithDType::to_cpu_storage_owned(dst_storage);
         Ok((dst, (b, q_h * q_w, k_h * k_w).into()))
     }
 }
