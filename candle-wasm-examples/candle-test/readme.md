@@ -3,7 +3,7 @@ This is a test project to test performance with wasm and to run candle core test
 
 ### Native
 ```bash
-cargo run --bin candle-test --release
+cargo run --bin candle-test --release --features=wgpu
 ```
 
 ### Xtask

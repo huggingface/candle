@@ -49,7 +49,7 @@ impl SafeTensors {
 
         let data = buffer.get_bytes(8, n).await?;
 
-        let string = std::str::from_utf8(&data).map_err(|_| SafeTensorError::InvalidHeader)?;
+        let string = std::str::from_utf8(&data).map_err(SafeTensorError::InvalidHeader)?;
 
         // Assert the string starts with {
         // NOTE: Add when we move to 0.4.0
@@ -57,7 +57,7 @@ impl SafeTensors {
         //     return Err(SafeTensorError::InvalidHeaderStart);
         // }
         let metadata: Metadata = serde_json::from_str(string)
-            .map_err(|_| SafeTensorError::InvalidHeaderDeserialization)?;
+            .map_err(SafeTensorError::InvalidHeaderDeserialization)?;
         let buffer_end = metadata.validate()?;
         if buffer_end + 8 + n != buffer_len {
             return Err(SafeTensorError::MetadataIncompleteBuffer.into());
@@ -344,7 +344,12 @@ impl TensorView {
     pub fn new(dtype: Dtype, shape: Vec<usize>, data: Vec<u8>) -> Result<Self, SafeTensorError> {
         let n = data.len();
         let n_elements: usize = shape.iter().product();
-        if n != n_elements * dtype.size() {
+
+        if !dtype.bitsize().is_multiple_of(8) {
+            return Err(SafeTensorError::InvalidTensorView(dtype, shape, n));
+        }
+
+        if n != n_elements * (dtype.bitsize() / 8) {
             Err(SafeTensorError::InvalidTensorView(dtype, shape, n))
         } else {
             Ok(Self { dtype, shape, data })
