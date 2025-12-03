@@ -1,11 +1,12 @@
 use anyhow::Result;
 use candle_metal_kernels::{
-    metal::{create_command_buffer, Device},
+    metal::{create_command_buffer, CommandSemaphore, Device},
     GemmDType, RESOURCE_OPTIONS,
 };
 /// This example contains some simple benchmarks so that it's easy to run them in perf etc.
 use clap::{Parser, Subcommand};
 use half::f16;
+use std::sync::Arc;
 
 fn run_gemm(f32: bool, n: usize) -> Result<()> {
     const WARMUP_ITERS: usize = 2;
@@ -65,7 +66,8 @@ fn run_gemm(f32: bool, n: usize) -> Result<()> {
     let mut sum_dt = 0f64;
     let mut iters = 0usize;
     for idx in 0.. {
-        let command_buffer = create_command_buffer(&command_queue).unwrap();
+        let semaphore = Arc::new(CommandSemaphore::new());
+        let command_buffer = create_command_buffer(&command_queue, semaphore).unwrap();
         let start_time = std::time::Instant::now();
         candle_metal_kernels::call_mlx_gemm(
             &device,
