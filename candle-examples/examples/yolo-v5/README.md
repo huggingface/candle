@@ -5,7 +5,7 @@ Candle implementation of [YOLOv5](https://github.com/ultralytics/yolov5) for obj
 ## Running an example
 
 ```bash
-$ cargo run --example yolo-v5 --release -- candle-examples/examples/yolo-v5/assets/bike.jpg
+$ cargo run --example yolo-v5 --release -- candle-examples/examples/yolo-v8/assets/bike.jpg
 ```
 
 ## Command line flags
