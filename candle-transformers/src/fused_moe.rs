@@ -40,7 +40,7 @@ impl FusedMoe {
 
         //pack experts
         for i in 0..num_experts {
-            let experts_vb = experts_vb.pp(format!("{}", i).as_str());
+            let experts_vb = experts_vb.pp(format!("{i}").as_str());
 
             let (gate_up_expert, down_expert) = {
                 // n x k format
@@ -156,7 +156,7 @@ impl FusedMoe {
         .reshape((num_tokens, (), hidden_dim))?
         .sum(D::Minus2)?;
 
-        Ok(ys.reshape((batch, seq_len, hidden_dim))?)
+        ys.reshape((batch, seq_len, hidden_dim))
     }
 }
 
@@ -183,7 +183,7 @@ impl FusedMoeGGUF {
         let gate_ws = vb
             .pp("ffn_gate_inp")
             .get((num_experts, cfg.hidden_size), "weight")?
-            .dequantize_f16(&vb.device())?
+            .dequantize(vb.device())?
             .to_dtype(DType::F32)?;
 
         let gate = Linear::new(gate_ws, None);
@@ -297,6 +297,6 @@ impl FusedMoeGGUF {
         if ys.dtype() != original_dtype {
             ys = ys.to_dtype(original_dtype)?;
         }
-        Ok(ys.reshape((batch, seq_len, hidden_dim))?)
+        ys.reshape((batch, seq_len, hidden_dim))
     }
 }

@@ -41,7 +41,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let handler = BenchDeviceHandler::new().unwrap();
     for device in handler.devices {
         for dtype in [DType::F32, DType::BF16, DType::F16] {
-            let name = format!("sqrt_{:?}", dtype);
+            let name = format!("sqrt_{dtype:?}");
             run_unary_benchmark(c, &device, dtype, &name);
         }
     }

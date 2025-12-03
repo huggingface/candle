@@ -59,6 +59,7 @@ pub struct QuantizedAttention {
 }
 
 impl QuantizedAttention {
+    #[allow(clippy::too_many_arguments)]
     pub fn new<R: std::io::Seek + std::io::Read>(
         gg: &mut Gguf<R>,
         prefix: &str,
@@ -340,7 +341,7 @@ impl GGUFQWenMoE {
             {
                 let gate_ws = gg
                     .tensor(&format!("{prefix}.ffn_gate_inp.weight"))?
-                    .dequantize(&device)?
+                    .dequantize(device)?
                     .to_dtype(DType::F32)?;
                 let gate = Linear::new(gate_ws, None);
                 let gate_experts = Arc::new(gg.tensor(&format!("{prefix}.ffn_gate_exps.weight"))?);

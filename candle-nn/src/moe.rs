@@ -46,7 +46,7 @@ pub fn moe_gemm(
             DType::F16 => 0,
             DType::BF16 => 1,
             _ => {
-                candle::bail!("moe_gemm_wmma only accept f16/bf16 inputs!")
+                candle::bail!("moe_gemm_wmma only accepts f16/bf16 inputs")
             }
         };
 
@@ -146,7 +146,7 @@ pub fn moe_gemm(
             is_prefill,
         ),
         _ => {
-            candle::bail!("moe_gemm only accept f16/bf16 inputs!")
+            candle::bail!("moe_gemm only accepts f16/bf16 inputs")
         }
     }
 }
@@ -161,7 +161,7 @@ pub fn moe_gemm(
     _: usize,
     _: bool,
 ) -> Result<Tensor> {
-    candle::bail!("moe_gemm is not implemented on this platform!")
+    candle::bail!("moe_gemm is only implemented for the cuda backend")
 }
 
 #[cfg(feature = "cuda")]
@@ -329,12 +329,13 @@ pub fn moe_gemm_gguf(
             dtype,
         ),
         _ => {
-            candle::bail!("moe_gemm_gguf only accept f16/bf16 inputs!")
+            candle::bail!("moe_gemm_gguf only accepts f32 inputs")
         }
     }
 }
 
 #[cfg(not(feature = "cuda"))]
+#[allow(clippy::too_many_arguments)]
 pub fn moe_gemm_gguf(
     _: &Tensor,
     _: &QTensor,
@@ -345,5 +346,5 @@ pub fn moe_gemm_gguf(
     _: bool,
     _: candle::DType,
 ) -> Result<Tensor> {
-    candle::bail!("moe_gemm_gguf is not implemented on this platform!")
+    candle::bail!("moe_gemm_gguf is only implemented for the cuda backend")
 }

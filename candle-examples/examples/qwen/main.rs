@@ -308,7 +308,7 @@ fn main() -> Result<()> {
             {
                 candle_examples::hub_load_local_safetensors(path, "model.safetensors.index.json")?
             } else {
-                vec!["model.safetensors".into()].into()
+                vec!["model.safetensors".into()]
             }
         }
         None => match args.model {
