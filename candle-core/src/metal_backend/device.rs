@@ -157,6 +157,8 @@ pub struct MetalDevice {
     pub(crate) pending_allocation_bytes: Arc<AtomicUsize>,
     /// Allocation thresholds and cache budget.
     pub(crate) allocation_policy: AllocationPolicy,
+    /// Last seed value set on this device.
+    pub(crate) seed_value: Arc<RwLock<u64>>,
 }
 
 // Resource options used for creating buffers. Shared storage mode allows both CPU and GPU to access the buffer.
@@ -164,6 +166,12 @@ pub const RESOURCE_OPTIONS: MTLResourceOptions =
     objc2_metal::MTLResourceOptions(MTLResourceOptions::StorageModeShared.bits());
 //| MTLResourceOptions::HazardTrackingModeUntracked.bits(),
 //);
+
+// Resource options used for `new_private_buffer`. This uses `private` where supported.
+#[cfg(target_os = "ios")]
+pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions = MTLResourceOptions::StorageModeShared;
+#[cfg(not(target_os = "ios"))]
+pub const PRIVATE_RESOURCE_OPTIONS: MTLResourceOptions = MTLResourceOptions::StorageModePrivate;
 
 impl std::fmt::Debug for MetalDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -290,6 +298,23 @@ impl MetalDevice {
     ) -> Result<Arc<Buffer>> {
         let size = element_count * dtype.size_in_bytes();
         self.allocate_buffer(size)
+    }
+
+    /// Creates a new private buffer (not necessarily zeroed).
+    ///
+    /// This is intentionally not in the Metal buffer pool to allow the efficient implementation of persistent buffers.
+    pub fn new_private_buffer(
+        &self,
+        element_count: usize,
+        dtype: DType,
+        _name: &str,
+    ) -> Result<Arc<Buffer>> {
+        let size = element_count * dtype.size_in_bytes();
+        let buffer = self
+            .device
+            .new_buffer(size, PRIVATE_RESOURCE_OPTIONS)
+            .map_err(MetalError::from)?;
+        Ok(Arc::new(buffer))
     }
 
     /// Creates a new buffer from data.

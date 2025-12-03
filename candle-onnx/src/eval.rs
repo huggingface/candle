@@ -774,6 +774,14 @@ fn simple_eval_(
                     DType::F32 => arange_step!(f32),
                     DType::F64 => arange_step!(f64),
                     DType::F8E4M3 => arange_step!(f32),
+                    DType::I32
+                    | DType::I16
+                    | DType::F6E2M3
+                    | DType::F6E3M2
+                    | DType::F4
+                    | DType::F8E8M0 => {
+                        bail!("unsupported Range type i32/i16/f6e2m3/f6e3m2/f4/f8e8m0")
+                    }
                 };
 
                 values.insert(node.output[0].clone(), output);
@@ -1695,7 +1703,15 @@ fn simple_eval_(
                 let input = get(&node.input[0])?;
                 let dt = input.dtype();
                 match dt {
-                    DType::U8 | DType::U32 | DType::I64 => {
+                    DType::U8
+                    | DType::U32
+                    | DType::I64
+                    | DType::I32
+                    | DType::I16
+                    | DType::F6E2M3
+                    | DType::F6E3M2
+                    | DType::F4
+                    | DType::F8E8M0 => {
                         bail!(
                             "unsupported dtype {}, only float types are allowed for LeakyRelu",
                             dt.as_str()
