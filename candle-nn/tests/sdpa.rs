@@ -38,7 +38,7 @@ mod metal_sdpa_tests {
                 .to_dtype(q.dtype())?;
             att.matmul(&v.clone())?
         };
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, 1.)?;
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
         let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
             .sum_all()?
@@ -68,7 +68,7 @@ mod metal_sdpa_tests {
                 .to_dtype(q.dtype())?;
             att.matmul(&v.clone())?
         };
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, 1.)?;
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
         let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
             .sum_all()?
@@ -104,7 +104,8 @@ mod metal_sdpa_tests {
             .to_dtype(q.dtype())?;
             att.matmul(&v.clone())?
         };
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, SOFTCAP as f32)?;
+        let sdpa_output =
+            candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, SOFTCAP as f32)?;
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
         let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
             .sum_all()?
@@ -140,7 +141,8 @@ mod metal_sdpa_tests {
             .to_dtype(q.dtype())?;
             att.matmul(&v.clone())?
         };
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, SOFTCAP as f32)?;
+        let sdpa_output =
+            candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, SOFTCAP as f32)?;
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
         let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
             .sum_all()?
@@ -170,7 +172,7 @@ mod metal_sdpa_tests {
                 .to_dtype(q.dtype())?;
             att.matmul(&v.clone())?
         };
-        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, scale as f32, 1.)?;
+        let sdpa_output = candle_nn::ops::sdpa(&q, &k, &v, None, false, scale as f32, 1.)?;
         assert_eq!(ground_truth.shape(), sdpa_output.shape());
         let error: f32 = ((&ground_truth - &sdpa_output)?.abs()? / &ground_truth.abs()?)?
             .sum_all()?
