@@ -1,6 +1,7 @@
 use candle::quantized::gguf_file;
 use candle::{DType, Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
+use candle_wasm_chat_template::{ChatTemplate, ChatTemplateOptions, Conversation, Message};
 use js_sys::Date;
 use std::io::Cursor;
 use tokenizers::Tokenizer;
@@ -15,11 +16,25 @@ pub struct Model {
     model: QuantizedQwen3,
     tokenizer: Tokenizer,
     logits_processor: LogitsProcessor,
-    tokens: Vec<u32>,
     repeat_penalty: f32,
     repeat_last_n: usize,
     eos_token: u32,
     enable_thinking: bool,
+
+    // === KV Cache Management ===
+    /// Tokens that have been processed and are currently in the KV cache.
+    /// This includes: system prompt + all user/assistant turns + any generated tokens.
+    processed_tokens: Vec<u32>,
+
+    /// Tokens generated during the current assistant turn (for repeat penalty).
+    /// These are a subset of processed_tokens, tracking just the current generation.
+    current_gen_tokens: Vec<u32>,
+
+    // === Conversation State ===
+    conversation: Option<Conversation>,
+
+    /// Accumulator for current assistant response text during generation.
+    current_response: String,
 }
 
 #[wasm_bindgen]
@@ -28,71 +43,394 @@ impl Model {
     pub fn load(
         weights: Vec<u8>,
         tokenizer: Vec<u8>,
-        _config: Vec<u8>, // Not used for GGUF, but keep for compatibility
+        _config: Vec<u8>,
     ) -> Result<Model, JsError> {
         let _prof = ProfileGuard::new("total_load");
         console_error_panic_hook::set_once();
 
         let device = Device::Cpu;
 
-        // Tokenizer loading
-        {
-            let _prof = ProfileGuard::new("load_tokenizer");
-            console_log!("Loading tokenizer...");
-            let tokenizer =
-                Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
+        let _prof = ProfileGuard::new("load_tokenizer");
+        console_log!("Loading tokenizer...");
+        let tokenizer =
+            Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
 
-            // Get EOS token
-            let eos_token = match tokenizer.get_vocab(true).get("<|endoftext|>") {
+        // Get EOS token
+        let eos_token = match tokenizer.get_vocab(true).get("<|endoftext|>") {
+            Some(&token) => token,
+            None => match tokenizer.get_vocab(true).get("<|im_end|>") {
                 Some(&token) => token,
-                None => match tokenizer.get_vocab(true).get("<|im_end|>") {
-                    Some(&token) => token,
-                    None => {
-                        console_log!("Warning: no EOS token found, using 0");
-                        0
-                    }
-                },
-            };
+                None => {
+                    console_log!("Warning: no EOS token found, using 0");
+                    0
+                }
+            },
+        };
 
-            let start = Date::now();
+        let start = Date::now();
+        console_log!(
+            "Weights size: {} bytes ({:.2} MB)",
+            weights.len(),
+            weights.len() as f64 / 1_048_576.0
+        );
+
+        let model = {
+            let _prof = ProfileGuard::new("parse_gguf");
+
+            let mut cursor = Cursor::new(weights);
+            let content = gguf_file::Content::read(&mut cursor)
+                .map_err(|e| JsError::new(&format!("Failed to read GGUF: {}", e)))?;
+
+            console_log!("GGUF file parsed, loading model weights...");
+
+            QuantizedQwen3::from_gguf(content, &mut cursor, &device)?
+        };
+
+        let load_time = (Date::now() - start) / 1000.0;
+        console_log!("Quantized model loaded in {:.2}s", load_time);
+
+        let logits_processor = LogitsProcessor::new(299792458, None, None);
+
+        Ok(Self {
+            model,
+            tokenizer,
+            logits_processor,
+            repeat_penalty: 1.,
+            repeat_last_n: 64,
+            eos_token,
+            enable_thinking: true,
+            processed_tokens: Vec::new(),
+            current_gen_tokens: Vec::new(),
+            conversation: None,
+            current_response: String::new(),
+        })
+    }
+
+    // ========================================================================
+    // Conversation Management
+    // ========================================================================
+
+    /// Initialize a new conversation with system prompt and options.
+    /// This clears the KV cache and starts fresh.
+    #[wasm_bindgen]
+    pub fn start_conversation(&mut self, system_prompt: Option<String>, enable_thinking: bool) {
+        let _prof = ProfileGuard::new("start_conversation");
+
+        self.enable_thinking = enable_thinking;
+
+        // Clear KV cache for new conversation
+        self.model.clear_kv_cache();
+        self.processed_tokens.clear();
+        self.current_gen_tokens.clear();
+        self.current_response.clear();
+
+        let template = ChatTemplate::chatml_with_thinking();
+        let options = ChatTemplateOptions::for_generation().thinking(enable_thinking);
+
+        let conv = match system_prompt {
+            Some(prompt) => Conversation::new(template, prompt).with_options(options),
+            None => {
+                let default_system = if enable_thinking { "/think" } else { "/no_think" };
+                Conversation::new(template, default_system).with_options(options)
+            }
+        };
+
+        self.conversation = Some(conv);
+
+        console_log!(
+            "Conversation started (thinking: {})",
+            if enable_thinking { "enabled" } else { "disabled" }
+        );
+    }
+
+    /// Load conversation template from tokenizer_config.json content.
+    #[wasm_bindgen]
+    pub fn start_conversation_from_config(
+        &mut self,
+        tokenizer_config_json: &str,
+        system_prompt: Option<String>,
+        enable_thinking: bool,
+    ) -> Result<(), JsError> {
+        let _prof = ProfileGuard::new("start_conversation_from_config");
+
+        self.enable_thinking = enable_thinking;
+
+        // Clear KV cache for new conversation
+        self.model.clear_kv_cache();
+        self.processed_tokens.clear();
+        self.current_gen_tokens.clear();
+        self.current_response.clear();
+
+        let template = ChatTemplate::from_config_json(tokenizer_config_json)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        let options = ChatTemplateOptions::for_generation().thinking(enable_thinking);
+
+        let conv = match system_prompt {
+            Some(prompt) => Conversation::new(template, prompt).with_options(options),
+            None => Conversation::without_system(template).with_options(options),
+        };
+
+        self.conversation = Some(conv);
+
+        console_log!("Conversation started from config");
+        Ok(())
+    }
+
+    /// Send a user message and prepare for generation.
+    ///
+    /// This method efficiently reuses the KV cache - only new tokens are processed.
+    /// Returns the first generated token(s).
+    #[wasm_bindgen]
+    pub fn chat(
+        &mut self,
+        user_message: String,
+        temp: f64,
+        top_p: f64,
+        repeat_penalty: f32,
+        repeat_last_n: usize,
+        seed: f64,
+    ) -> Result<String, JsError> {
+        let _prof = ProfileGuard::new("chat");
+
+        // Ensure conversation exists
+        if self.conversation.is_none() {
+            self.start_conversation(None, self.enable_thinking);
+        }
+
+        let conv = self.conversation.as_mut().unwrap();
+
+        // Get formatted prompt with full conversation history
+        let prompt = conv
+            .user_turn(&user_message)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+
+        // Tokenize full conversation
+        let all_tokens = {
+            let _prof = ProfileGuard::new("tokenize_prompt");
+            self.tokenizer
+                .encode(prompt, true)
+                .map_err(|m| JsError::new(&m.to_string()))?
+                .get_ids()
+                .to_vec()
+        };
+
+        // Clear generation state for new turn
+        self.current_gen_tokens.clear();
+        self.current_response.clear();
+
+        // Setup logits processor
+        let temp = if temp <= 0. { None } else { Some(temp) };
+        let top_p = if top_p <= 0. || top_p >= 1. {
+            None
+        } else {
+            Some(top_p)
+        };
+        self.logits_processor = LogitsProcessor::new(seed as u64, temp, top_p);
+        self.repeat_penalty = repeat_penalty;
+        self.repeat_last_n = repeat_last_n;
+
+        // === KV Cache Optimization ===
+        // Only process tokens that aren't already in the KV cache
+        let num_cached = self.processed_tokens.len();
+        let num_total = all_tokens.len();
+
+        if num_cached > num_total {
+            // This shouldn't happen, but handle gracefully by resetting
             console_log!(
-                "Weights size: {} bytes ({:.2} MB)",
-                weights.len(),
-                weights.len() as f64 / 1_048_576.0
+                "Warning: cached tokens ({}) > total tokens ({}), resetting cache",
+                num_cached,
+                num_total
             );
+            self.model.clear_kv_cache();
+            self.processed_tokens.clear();
+        }
 
-            // Load GGUF quantized model with SIMD optimizations
-            let model = {
-                let _prof = ProfileGuard::new("parse_gguf");
+        // Verify token alignment (cached tokens should match prefix of all_tokens)
+        let cache_valid = self.processed_tokens.len() <= all_tokens.len()
+            && self
+                .processed_tokens
+                .iter()
+                .zip(all_tokens.iter())
+                .all(|(a, b)| a == b);
 
-                let mut cursor = Cursor::new(weights);
-                let content = gguf_file::Content::read(&mut cursor)
-                    .map_err(|e| JsError::new(&format!("Failed to read GGUF: {}", e)))?;
+        if !cache_valid && !self.processed_tokens.is_empty() {
+            console_log!(
+                "Warning: token mismatch detected, resetting cache (had {} tokens)",
+                self.processed_tokens.len()
+            );
+            self.model.clear_kv_cache();
+            self.processed_tokens.clear();
+        }
 
-                console_log!("GGUF file parsed, loading model weights...");
+        let new_tokens = &all_tokens[self.processed_tokens.len()..];
+        let start_pos = self.processed_tokens.len();
 
-                // Use the new integrated API with optimizations
-                QuantizedQwen3::from_gguf(content, &mut cursor, &device)?
-            };
+        console_log!(
+            "Chat: {} messages, {} total tokens, {} cached, {} new",
+            conv.len(),
+            all_tokens.len(),
+            self.processed_tokens.len(),
+            new_tokens.len()
+        );
 
-            let load_time = (Date::now() - start) / 1000.0;
-            console_log!("Quantized model loaded in {:.2}s", load_time);
+        if new_tokens.is_empty() {
+            // Edge case: no new tokens (shouldn't happen normally)
+            return Ok(String::new());
+        }
 
-            let logits_processor = LogitsProcessor::new(299792458, None, None);
+        // Process new tokens and get first generated token
+        let (text, first_gen_token) = self
+            .process_prompt(new_tokens, start_pos)
+            .map_err(|m| JsError::new(&m.to_string()))?;
 
-            Ok(Self {
-                model,
-                tokenizer,
-                tokens: vec![],
-                logits_processor,
-                repeat_penalty: 1.,
-                repeat_last_n: 64,
-                eos_token,
-                enable_thinking: true,
-            })
+        // Update processed tokens: first the prompt tokens, then the generated token
+        // This maintains correct order for KV cache alignment
+        self.processed_tokens.extend_from_slice(new_tokens);
+        self.processed_tokens.push(first_gen_token);
+        self.current_gen_tokens.push(first_gen_token);
+
+        // Accumulate response
+        self.current_response.push_str(&text);
+
+        Ok(text)
+    }
+
+    /// Complete the current turn and record the assistant response.
+    /// The generated tokens remain in the KV cache for the next turn.
+    #[wasm_bindgen]
+    pub fn end_turn(&mut self) {
+        let _prof = ProfileGuard::new("end_turn");
+
+        if let Some(conv) = self.conversation.as_mut() {
+            // Record the full response text in conversation history
+            let response = self.current_response.clone();
+            conv.assistant_response(&response);
+
+            console_log!(
+                "Turn ended: {} messages, {} tokens in cache ({} generated this turn)",
+                conv.len(),
+                self.processed_tokens.len(),
+                self.current_gen_tokens.len()
+            );
+        }
+
+        self.current_response.clear();
+        self.current_gen_tokens.clear();
+    }
+
+    /// Clear conversation history but keep system prompt.
+    /// Also clears KV cache since we're starting fresh.
+    #[wasm_bindgen]
+    pub fn clear_conversation(&mut self) {
+        if let Some(conv) = self.conversation.as_mut() {
+            conv.clear();
+        }
+        self.model.clear_kv_cache();
+        self.processed_tokens.clear();
+        self.current_gen_tokens.clear();
+        self.current_response.clear();
+        console_log!("Conversation cleared");
+    }
+
+    /// Get conversation history as JSON.
+    #[wasm_bindgen]
+    pub fn get_conversation_json(&self) -> String {
+        match &self.conversation {
+            Some(conv) => conv.to_json(),
+            None => "[]".to_string(),
         }
     }
 
+    /// Get number of messages in conversation.
+    #[wasm_bindgen]
+    pub fn get_message_count(&self) -> usize {
+        match &self.conversation {
+            Some(conv) => conv.len(),
+            None => 0,
+        }
+    }
+
+    /// Get number of tokens currently in KV cache.
+    #[wasm_bindgen]
+    pub fn get_cached_token_count(&self) -> usize {
+        self.processed_tokens.len()
+    }
+
+    // ========================================================================
+    // Token Generation
+    // ========================================================================
+
+    /// Generate the next token.
+    #[wasm_bindgen]
+    pub fn next_token(&mut self) -> Result<String, JsError> {
+        let _prof = ProfileGuard::new("next_token");
+
+        let last_token = *self.current_gen_tokens.last().unwrap_or(
+            self.processed_tokens
+                .last()
+                .ok_or_else(|| JsError::new("No tokens to continue from"))?,
+        );
+
+        let text = self
+            .process_generation(last_token)
+            .map_err(|m| JsError::new(&m.to_string()))?;
+
+        // Accumulate response
+        self.current_response.push_str(&text);
+
+        Ok(text)
+    }
+
+    /// Check if the last generated token was EOS.
+    #[wasm_bindgen]
+    pub fn is_eos(&self) -> bool {
+        self.current_gen_tokens
+            .last()
+            .or_else(|| self.processed_tokens.last())
+            .map_or(false, |&t| t == self.eos_token)
+    }
+
+    /// Get total token count (cached + generated).
+    #[wasm_bindgen]
+    pub fn get_token_count(&self) -> usize {
+        self.processed_tokens.len()
+    }
+
+    /// Generate multiple tokens at once.
+    #[wasm_bindgen]
+    pub fn generate_tokens(&mut self, count: usize) -> Result<String, JsError> {
+        let _prof = ProfileGuard::new("generate_tokens_batch");
+
+        let mut result = String::new();
+
+        for _ in 0..count {
+            if self.is_eos() {
+                break;
+            }
+
+            let text = self.next_token()?;
+            result.push_str(&text);
+        }
+
+        Ok(result)
+    }
+
+    /// Reset the model completely (clears KV cache and all state).
+    #[wasm_bindgen]
+    pub fn reset(&mut self) {
+        let _prof = ProfileGuard::new("reset_model");
+        self.processed_tokens.clear();
+        self.current_gen_tokens.clear();
+        self.current_response.clear();
+        self.conversation = None;
+        self.model.clear_kv_cache();
+    }
+
+    // ========================================================================
+    // Legacy API (single-turn, backward compatible)
+    // ========================================================================
+
+    /// Legacy single-turn API. Use `chat()` for multi-turn conversations.
     #[wasm_bindgen]
     pub fn init_with_prompt(
         &mut self,
@@ -108,11 +446,12 @@ impl Model {
 
         self.enable_thinking = enable_thinking;
 
-        // Clear KV cache
-        {
-            let _prof = ProfileGuard::new("clear_kv_cache");
-            self.model.clear_kv_cache();
-        }
+        // Clear everything for legacy single-turn mode
+        self.model.clear_kv_cache();
+        self.processed_tokens.clear();
+        self.current_gen_tokens.clear();
+        self.current_response.clear();
+        self.conversation = None;
 
         let temp = if temp <= 0. { None } else { Some(temp) };
         let top_p = if top_p <= 0. || top_p >= 1. {
@@ -121,13 +460,12 @@ impl Model {
             Some(top_p)
         };
 
-        let seed = seed as u64;
-        self.logits_processor = LogitsProcessor::new(seed, temp, top_p);
+        self.logits_processor = LogitsProcessor::new(seed as u64, temp, top_p);
         self.repeat_penalty = repeat_penalty;
         self.repeat_last_n = repeat_last_n;
-        self.tokens.clear();
 
-        let formatted_prompt = format_prompt(&prompt, enable_thinking);
+        // Format prompt using chat template
+        let formatted_prompt = self.format_single_turn(&prompt);
 
         let tokens = {
             let _prof = ProfileGuard::new("tokenize_prompt");
@@ -140,82 +478,52 @@ impl Model {
 
         console_log!("Prompt encoded to {} tokens", tokens.len());
 
-        let text = self
-            .process(&tokens)
+        let (text, first_gen_token) = self
+            .process_prompt(&tokens, 0)
             .map_err(|m| JsError::new(&m.to_string()))?;
+
+        // Track tokens: prompt tokens first, then the generated token
+        self.processed_tokens = tokens;
+        self.processed_tokens.push(first_gen_token);
+        self.current_gen_tokens.push(first_gen_token);
+        self.current_response.push_str(&text);
 
         Ok(text)
     }
-
-    #[wasm_bindgen]
-    pub fn next_token(&mut self) -> Result<String, JsError> {
-        let _prof = ProfileGuard::new("next_token");
-
-        let last_token = *self.tokens.last().unwrap();
-        let text = self
-            .process(&[last_token])
-            .map_err(|m| JsError::new(&m.to_string()))?;
-        Ok(text)
-    }
-
-    #[wasm_bindgen]
-    pub fn is_eos(&self) -> bool {
-        self.tokens.last().map_or(false, |&t| t == self.eos_token)
-    }
-
-    #[wasm_bindgen]
-    pub fn get_token_count(&self) -> usize {
-        self.tokens.len()
-    }
-
-    #[wasm_bindgen]
-    pub fn reset(&mut self) {
-        let _prof = ProfileGuard::new("reset_model");
-        self.tokens.clear();
-        self.model.clear_kv_cache();
-    }
-
-    #[wasm_bindgen]
-    pub fn generate_tokens(&mut self, count: usize) -> Result<String, JsError> {
-        let _prof = ProfileGuard::new("generate_tokens_batch");
-
-        let mut result = String::new();
-
-        for _ in 0..count {
-            if self.is_eos() {
-                break;
-            }
-
-            let last_token = *self.tokens.last().unwrap();
-            let text = self
-                .process(&[last_token])
-                .map_err(|m| JsError::new(&m.to_string()))?;
-            result.push_str(&text);
-        }
-
-        Ok(result)
-    }
 }
 
-fn format_prompt(prompt: &str, enable_thinking: bool) -> String {
-    // Set reasoning mode based on thinking flag
-    let reasoning_mode = if enable_thinking {
-        "/think"
-    } else {
-        "/no_think"
-    };
-
-    format!(
-        "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n{}",
-        reasoning_mode,
-        prompt,
-        if !enable_thinking { "\n</think>\n" } else { "" }
-    )
-}
+// ============================================================================
+// Private Implementation
+// ============================================================================
 
 impl Model {
-    fn process(&mut self, tokens: &[u32]) -> candle::Result<String> {
-        let _prof = ProfileGuard::new("process_token");
+    /// Format a single-turn prompt using chat template.
+    fn format_single_turn(&self, prompt: &str) -> String {
+        let template = ChatTemplate::chatml_with_thinking();
+
+        let system_content = if self.enable_thinking {
+            "/think"
+        } else {
+            "/no_think"
+        };
+
+        let messages = vec![Message::system(system_content), Message::user(prompt)];
+
+        let options = ChatTemplateOptions::for_generation().thinking(self.enable_thinking);
+
+        template.apply(&messages, &options).unwrap_or_else(|_| {
+            format!(
+                "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+                system_content, prompt
+            )
+        })
+    }
+
+    /// Process prompt tokens and return the first generated token.
+    /// Note: This updates KV cache internally but does NOT modify processed_tokens.
+    /// The caller (chat/init_with_prompt) is responsible for token tracking.
+    fn process_prompt(&mut self, tokens: &[u32], start_pos: usize) -> candle::Result<(String, u32)> {
+        let _prof = ProfileGuard::new("process_prompt");
 
         let dev = Device::Cpu;
 
@@ -224,13 +532,10 @@ impl Model {
             Tensor::new(tokens, &dev)?.unsqueeze(0)?
         };
 
-        // Calculate offset (position in sequence)
-        let offset = self.tokens.len();
-
-        // Forward pass - this is where most time is spent
+        // Forward pass through all prompt tokens
         let logits = {
-            let _prof = ProfileGuard::new("model_forward");
-            self.model.forward(&input, offset)?
+            let _prof = ProfileGuard::new("model_forward_prompt");
+            self.model.forward(&input, start_pos)?
         };
 
         let logits = {
@@ -238,34 +543,109 @@ impl Model {
             logits.squeeze(0)?.to_dtype(DType::F32)?
         };
 
-        // Apply repeat penalty if enabled
+        // Apply repeat penalty using all tokens (cached + new prompt tokens)
+        let all_context: Vec<u32> = self
+            .processed_tokens
+            .iter()
+            .chain(tokens.iter())
+            .copied()
+            .collect();
+
         let logits = if self.repeat_penalty == 1. {
             logits
         } else {
             let _prof = ProfileGuard::new("apply_repeat_penalty");
-            let start_at = self.tokens.len().saturating_sub(self.repeat_last_n);
-            let context = &self.tokens[start_at..];
-            candle_transformers::utils::apply_repeat_penalty(&logits, self.repeat_penalty, context)?
+            let start_at = all_context.len().saturating_sub(self.repeat_last_n);
+            candle_transformers::utils::apply_repeat_penalty(
+                &logits,
+                self.repeat_penalty,
+                &all_context[start_at..],
+            )?
         };
 
+        // Sample first token
         let next_token = {
             let _prof = ProfileGuard::new("sample_token");
             self.logits_processor.sample(&logits)?
         };
 
-        self.tokens.push(next_token);
-
-        let token = {
+        // Decode token
+        let token_str = {
             let _prof = ProfileGuard::new("decode_token");
             match self.tokenizer.decode(&[next_token], false) {
-                Ok(token) => token,
+                Ok(s) => s,
                 Err(e) => {
                     console_log!("Error decoding token: {:?}", e);
-                    "".to_string()
+                    String::new()
                 }
             }
         };
 
-        Ok(token)
+        Ok((token_str, next_token))
+    }
+
+    /// Process a single token during generation.
+    /// Note: The last_token should already be in processed_tokens when this is called.
+    fn process_generation(&mut self, last_token: u32) -> candle::Result<String> {
+        let _prof = ProfileGuard::new("process_generation");
+
+        let dev = Device::Cpu;
+
+        let input = {
+            let _prof = ProfileGuard::new("create_input_tensor");
+            Tensor::new(&[last_token], &dev)?.unsqueeze(0)?
+        };
+
+        // Position is where we're placing this token in the sequence.
+        // Since last_token is already in processed_tokens, its position is len-1.
+        let pos = self.processed_tokens.len() - 1;
+
+        // Forward pass for single token
+        let logits = {
+            let _prof = ProfileGuard::new("model_forward_gen");
+            self.model.forward(&input, pos)?
+        };
+
+        let logits = {
+            let _prof = ProfileGuard::new("logits_post_process");
+            logits.squeeze(0)?.to_dtype(DType::F32)?
+        };
+
+        // Apply repeat penalty
+        let logits = if self.repeat_penalty == 1. {
+            logits
+        } else {
+            let _prof = ProfileGuard::new("apply_repeat_penalty");
+            let start_at = self.processed_tokens.len().saturating_sub(self.repeat_last_n);
+            candle_transformers::utils::apply_repeat_penalty(
+                &logits,
+                self.repeat_penalty,
+                &self.processed_tokens[start_at..],
+            )?
+        };
+
+        // Sample next token
+        let next_token = {
+            let _prof = ProfileGuard::new("sample_token");
+            self.logits_processor.sample(&logits)?
+        };
+
+        // Track generated token
+        self.current_gen_tokens.push(next_token);
+        self.processed_tokens.push(next_token);
+
+        // Decode token
+        let token_str = {
+            let _prof = ProfileGuard::new("decode_token");
+            match self.tokenizer.decode(&[next_token], false) {
+                Ok(s) => s,
+                Err(e) => {
+                    console_log!("Error decoding token: {:?}", e);
+                    String::new()
+                }
+            }
+        };
+
+        Ok(token_str)
     }
 }

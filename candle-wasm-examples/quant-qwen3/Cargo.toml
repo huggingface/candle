@@ -22,6 +22,9 @@ candle-transformers = { workspace = true} #, features = ["simd-flash-attn"] }
 tokenizers = { workspace = true, features = ["unstable_wasm"] }
 num-traits = { workspace = true }
 
+# Shared chat template support
+candle-wasm-chat-template = { path = "../chat-template" }
+
 # App crates.
 anyhow = { workspace = true }
 byteorder = { workspace = true }
