@@ -65,7 +65,7 @@ half = { version = "2.5.0", features = [
     "use-intrinsics",
     "rand_distr",
 ] }
-float8 = { version = "0.4.2", features = [
+float8 = { version = "0.5.0", features = [
     "num-traits",
     "rand_distr",
 ] }
