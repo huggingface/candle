@@ -10,6 +10,8 @@ use std::io::Write;
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
+use candle_examples::chat_template::{ChatTemplate, Message, ChatTemplateOptions};
+
 use candle_nn::VarBuilder;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use hf_hub::{api::sync::Api, Repo, RepoType};
@@ -310,45 +312,39 @@ fn load_full_model(args: &Args, device: &Device) -> Result<SmolLM3Model> {
 // ==================== Text Generation ====================
 
 fn format_prompt(prompt: &str, use_chat_template: bool, enable_thinking: bool) -> String {
-    if use_chat_template {
-        // Generate current date dynamically
-        let now = chrono::Local::now();
-        let today_date = now.format("%d %B %Y").to_string();
-
-        // Set reasoning mode based on thinking flag
-        let reasoning_mode = if enable_thinking {
-            "/think"
-        } else {
-            "/no_think"
-        };
-
-        // Build the assistant start with or without thinking tags
-        let assistant_start = if enable_thinking {
-            "<|im_start|>assistant\n<think>\n" // Open for reasoning
-        } else {
-            "<|im_start|>assistant\n<think>\n\n</think>\n" // Empty = skip reasoning
-        };
-
-        format!(
-            "<|im_start|>system\n\
-## Metadata\n\
-\n\
-Knowledge Cutoff Date: June 2025\n\
-Today Date: {}\n\
-Reasoning Mode: {}\n\
-\n\
-## Custom Instructions\n\
-\n\
-You are a helpful AI assistant named SmolLM, trained by Hugging Face.\n\
-\n\
-<|im_start|>user\n\
-{}<|im_end|>\n\
-{}",
-            today_date, reasoning_mode, prompt, assistant_start
-        )
-    } else {
-        prompt.to_string()
+    if !use_chat_template {
+        return prompt.to_string();
     }
+
+    let template = ChatTemplate::chatml_with_thinking();
+
+    // Build system message with SmolLM3's metadata format
+    let now = chrono::Local::now();
+    let today_date = now.format("%d %B %Y").to_string();
+    let reasoning_mode = if enable_thinking { "/think" } else { "/no_think" };
+
+    let system_content = format!(
+        "## Metadata\n\n\
+         Knowledge Cutoff Date: June 2025\n\
+         Today Date: {}\n\
+         Reasoning Mode: {}\n\n\
+         ## Custom Instructions\n\n\
+         You are a helpful AI assistant named SmolLM, trained by Hugging Face.",
+        today_date, reasoning_mode
+    );
+
+    let messages = vec![
+        Message::system(system_content),
+        Message::user(prompt),
+    ];
+
+    let options = if enable_thinking {
+        ChatTemplateOptions::for_generation().with_thinking()
+    } else {
+        ChatTemplateOptions::for_generation()
+    };
+
+    template.apply(&messages, &options).unwrap()
 }
 
 fn get_eos_token(tokenizer: &Tokenizer, config: &ModelConfig) -> u32 {
